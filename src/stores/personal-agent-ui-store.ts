@@ -1,5 +1,7 @@
 import { create } from "zustand"
 
+import { stamp } from "@/lib/stamp"
+
 import type {
   AgentType,
   DispatchMode,
@@ -7,8 +9,37 @@ import type {
   RoutineDraft,
 } from "@/lib/types"
 
-/** Where the activity's routines' card keeps whether it is folded. */
-export const ROUTINES_FOLD = "activity.routines"
+/** The activity's groups (C1), in order: what waits on the owner, what is
+ *  under way, what comes next, what was done today. */
+export type ActivityGroup = "needs" | "watching" | "next" | "done"
+
+/** Where each of the activity's groups keeps whether it is folded. */
+export const ACTIVITY_FOLD: Record<ActivityGroup, string> = {
+  needs: "activity.needs",
+  watching: "activity.watching",
+  next: "activity.next",
+  done: "activity.done",
+}
+
+/** A row of the activity to bring into view once it is read: the pill's
+ *  first (C6), a routine asked for (C4) — its group unfolded, shown whole,
+ *  the row scrolled to and opened; `row` `null`, the group's head. */
+export interface ActivityAsk {
+  /** Unique for the window's life: one asked again is a new ask. */
+  key: number
+  /** When it was asked (`stamp`): a routine is looked for in a list read
+   *  after it, not one read before it was made. */
+  at: number
+  /** The assistant whose activity it is in (`null`: the primary): the page
+   *  shown when it was asked — another one being switched to, its list
+   *  waits for that one's. */
+  bot: number | null
+  group: ActivityGroup
+  /** The row's key in the list (`routine:{id}` for a routine). */
+  row: string | null
+  /** A routine was asked for: one not in the list was deleted. */
+  routine: boolean
+}
 
 /**
  * The personal agent page's view state that other branches of the tree read:
@@ -141,10 +172,18 @@ interface PersonalAgentUiState {
   routineEditor: RoutineEditorRequest | null
   openRoutineEditor: (req: Omit<RoutineEditorRequest, "key">) => void
   closeRoutineEditor: () => void
-  /** Bumped to bring the activity's routines into view (`pa.open`),
-   *  their card unfolded. */
-  routinesAsked: number
-  showRoutines: () => void
+  /** The activity's rows the owner opened (C3), by the thing each is
+   *  (`ActivityRow.thing`): kept here, not in the row, so a row that moves
+   *  to another group, or is drawn again, stays as they left it. */
+  activityOpen: Record<string, boolean>
+  setActivityOpen: (thing: string, open: boolean) => void
+  /** A row of the activity to bring into view, until the list does. */
+  activityAsk: ActivityAsk | null
+  /** Done with `key`'s ask: a later one is kept. */
+  clearActivityAsk: (key: number) => void
+  /** Bring the routines into view (`pa.open`, a routine's card): the
+   *  activity's "coming up", at `routineId`'s row when given (C4). */
+  showRoutines: (routineId?: number | null) => void
   /** The assistant the page shows (`null`: the primary), picked in the
    *  roster. Switching closes what was open about the other one — its page
    *  and the settings with it. */
@@ -160,13 +199,40 @@ interface PersonalAgentUiState {
    *  followed (1.13). */
   pendingJump: { bot: number; row: number } | null
   setPendingJump: (jump: { bot: number; row: number } | null) => void
-  /** Bumped to bring "Today" into view (the primary's pill, 1.14): the
-   *  panel opens on its activity, scrolled to it. */
-  todayAsked: number
-  showToday: () => void
+  /** What waits on the owner, brought into view (the primary's pill, C6):
+   *  the panel open on its activity, at `first` (a row's key) when given. */
+  showWaiting: (first: string | null) => void
   /** The time machine's search is open (8.2). */
   searchOpen: boolean
   setSearchOpen: (open: boolean) => void
+}
+
+let asks = 0
+
+/** The panel open on the activity, `group` unfolded as it is asked for —
+ *  not again each time it is drawn, a fold the owner made since kept — and
+ *  `row` to be brought into view once the list has it. */
+function ask(
+  s: PersonalAgentUiState,
+  group: ActivityGroup,
+  row: string | null,
+  routine: boolean
+): Partial<PersonalAgentUiState> {
+  return {
+    auxOpen: true,
+    auxTab: "activity",
+    settings: null,
+    botPage: null,
+    auxFolds: { ...s.auxFolds, [ACTIVITY_FOLD[group]]: true },
+    activityAsk: {
+      key: ++asks,
+      at: stamp(),
+      bot: s.viewBot,
+      group,
+      row,
+      routine,
+    },
+  }
 }
 
 export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
@@ -216,18 +282,14 @@ export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
       routineEditor: { ...req, key: (s.routineEditor?.key ?? 0) + 1 },
     })),
   closeRoutineEditor: () => set({ routineEditor: null }),
-  routinesAsked: 0,
-  showRoutines: () =>
-    set((s) => ({
-      auxOpen: true,
-      auxTab: "activity",
-      settings: null,
-      botPage: null,
-      routinesAsked: s.routinesAsked + 1,
-      // The routines' card unfolded, as it is asked for: not again each time
-      // it is drawn, a fold the owner made since kept.
-      auxFolds: { ...s.auxFolds, [ROUTINES_FOLD]: true },
-    })),
+  activityOpen: {},
+  setActivityOpen: (thing, open) =>
+    set((s) => ({ activityOpen: { ...s.activityOpen, [thing]: open } })),
+  activityAsk: null,
+  clearActivityAsk: (key) =>
+    set((s) => (s.activityAsk?.key === key ? { activityAsk: null } : s)),
+  showRoutines: (routineId) =>
+    set((s) => ask(s, "next", routineId != null ? `routine:${routineId}` : null, true)),
   viewBot: null,
   setViewBot: (viewBot) =>
     set((s) =>
@@ -246,15 +308,7 @@ export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
     set((s) => (s.viewing === viewing ? s : { viewing })),
   pendingJump: null,
   setPendingJump: (pendingJump) => set({ pendingJump }),
-  todayAsked: 0,
-  showToday: () =>
-    set((s) => ({
-      auxOpen: true,
-      auxTab: "activity",
-      settings: null,
-      botPage: null,
-      todayAsked: s.todayAsked + 1,
-    })),
+  showWaiting: (first) => set((s) => ask(s, "needs", first, false)),
   searchOpen: false,
   setSearchOpen: (searchOpen) => set({ searchOpen }),
 }))

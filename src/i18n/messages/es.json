@@ -11729,6 +11729,28 @@
     "notify": {
       "open": "Abrir"
     },
+    "feed": {
+      "groups": {
+        "needs": "Esperándote",
+        "watching": "En curso",
+        "next": "Próximamente",
+        "done": "Hecho hoy"
+      },
+      "empty": "No hay nada que hacer ni nada en marcha.",
+      "failed": "No se pudo leer la actividad ahora mismo.",
+      "handed": "Pasado a {name}",
+      "checking": "En revisión · ronda {round}",
+      "queued": "en cola para fusionar",
+      "waitsAgent": "Esperando a que {name} lo gestione",
+      "routineRunning": "En marcha",
+      "routineLast": "Última ejecución: {outcome}",
+      "fold": "Ocultar detalles",
+      "unfold": "Mostrar detalles",
+      "viewReminder": "Ver el recordatorio",
+      "viewCheck": "Ver la sesión de aceptación",
+      "openTask": "Abrir la tarea",
+      "routineDeleted": "Esta rutina se ha eliminado."
+    },
     "today": {
       "title": "Hoy",
       "empty": "Hoy no hay nada que te necesite",

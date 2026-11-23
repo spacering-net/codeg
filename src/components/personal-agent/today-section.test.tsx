@@ -1,7 +1,9 @@
 /**
- * "Today" on the primary's details (1.14): its groups, each row under the
+ * The activity's list (C1–C5): its four groups, each row under the
  * assistant it is about (or the owner's project), opening what it is about
- * where the owner can act, and the acts on the rows themselves.
+ * where the owner can act, the acts on the rows themselves, what a row
+ * unfolds to, and a row asked for brought into view; and a morning brief's
+ * rows, drawn as "today"'s are.
  */
 import {
   act,
@@ -17,8 +19,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
 import type {
+  ActivityRow,
   DispatchInfo,
+  ItemInfo,
+  PersonalAgentActivity,
   PersonalAgentToday,
+  Routine,
   RosterEntry,
   TodayRow,
 } from "@/lib/types"
@@ -35,7 +41,7 @@ vi.mock("@/lib/platform", () => ({
   subscribe: () => Promise.resolve(() => {}),
   onTransportReconnect: () => () => {},
 }))
-const toasts = vi.hoisted(() => ({ error: vi.fn() }))
+const toasts = vi.hoisted(() => ({ error: vi.fn(), message: vi.fn() }))
 vi.mock("sonner", () => ({ toast: toasts }))
 const tasksView = vi.hoisted(() => ({
   tasks: [] as unknown[],
@@ -54,8 +60,13 @@ vi.mock("./session-link", () => ({
   useSessionLinkOpener: () => sessions.open,
 }))
 const feed = vi.hoisted(() => ({ refresh: vi.fn() }))
-vi.mock("@/stores/personal-agent-today-store", () => ({
-  refreshToday: feed.refresh,
+vi.mock("@/stores/personal-agent-activity-store", () => ({
+  refreshActivity: feed.refresh,
+}))
+// The primary's page: its real id 1.
+vi.mock("@/contexts/personal-agent-context", () => ({
+  useBotId: () => null,
+  usePersonalAgent: () => ({ botId: null, snapshot: { agent: { id: 1 } } }),
 }))
 
 import {
@@ -63,7 +74,8 @@ import {
   usePersonalAgentRoster,
 } from "@/stores/personal-agent-roster-store"
 
-import { BriefRows, TodaySection } from "./today-section"
+import { ActivityList } from "./aux/activity/activity-tab"
+import { BriefRows } from "./today-section"
 
 function row(
   patch: Partial<TodayRow> & Pick<TodayRow, "key" | "kind">
@@ -182,17 +194,81 @@ function work(patch: Partial<DispatchInfo>): DispatchInfo {
   } as DispatchInfo
 }
 
+/** "Today"'s row of a thing, as the activity lists it: the matter it
+ *  stands for with it, when it has one. */
+function thing(r: TodayRow, patch: Partial<ActivityRow> = {}): ActivityRow {
+  return {
+    key: r.key,
+    bot_id: r.bot_id,
+    thing: r.key,
+    today: r,
+    item: null,
+    routine: null,
+    card_row_id: null,
+    ...patch,
+  }
+}
+
+function matter(patch: Partial<ItemInfo> & Pick<ItemInfo, "id">): ItemInfo {
+  return {
+    kind: "reminder",
+    dispatch_id: null,
+    status: "open",
+    waits_for: "owner",
+    summary: "",
+    on_done: null,
+    origin_timeline_id: null,
+    created_at: "2026-11-11T07:00:00Z",
+    updated_at: "2026-11-11T07:30:00Z",
+    dispatch_state: null,
+    due_at: null,
+    repeat: null,
+    at_due: null,
+    act_spec: null,
+    fired_at: null,
+    ...patch,
+  } as ItemInfo
+}
+
+/** The activity of "today"'s groups — its schedule what comes next — and
+ *  rows of its own (`extra`) after them. */
+function activityOf(
+  data: PersonalAgentToday,
+  extra: Partial<Record<"needs" | "watching" | "next" | "done", ActivityRow[]>> = {}
+): PersonalAgentActivity {
+  const needs = [...data.needs.map((r) => thing(r)), ...(extra.needs ?? [])]
+  return {
+    needs,
+    watching: [...data.watching.map((r) => thing(r)), ...(extra.watching ?? [])],
+    next: [...data.schedule.map((r) => thing(r)), ...(extra.next ?? [])],
+    done: [...data.done.map((r) => thing(r)), ...(extra.done ?? [])],
+    waiting: needs.length,
+    pill: {
+      count: data.needs.length,
+      first: data.needs[0]?.key ?? null,
+    },
+    brief: data.brief ?? null,
+    stale_acceptance: data.stale_acceptance ?? [],
+    dispatches: data.dispatches,
+    day_start: data.day_start,
+    day_end: data.day_end,
+    as_of: data.at,
+  }
+}
+
 function draw(
-  data: PersonalAgentToday | null,
-  { inDrawer = false, readOnly = false } = {}
+  data: PersonalAgentToday | PersonalAgentActivity | null,
+  { inDrawer = false, readOnly = false, at = 1 } = {}
 ) {
+  const view =
+    data == null ? null : "schedule" in data ? activityOf(data) : data
   return render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
-      <TodaySection
-        title="Today"
-        today={data}
+      <ActivityList
+        read={view ? { bot: null, view, at } : null}
         inDrawer={inDrawer}
         readOnly={readOnly}
+        openTask={dialogs.openDetail}
       />
     </NextIntlClientProvider>
   )
@@ -215,8 +291,11 @@ beforeEach(() => {
     auxOpen: true,
     work: null,
     workOpen: false,
-    todayAsked: 0,
-    auxFolds: {},
+    activityAsk: null,
+    activityOpen: {},
+    routineEditor: null,
+    // Done today starts folded (C2): open here, to look at its rows.
+    auxFolds: { "activity.done": true },
   })
   for (const f of [
     api.personalAgentItemAct,
@@ -224,6 +303,7 @@ beforeEach(() => {
     dialogs.openDetail,
     sessions.open,
     feed.refresh,
+    toasts.message,
   ]) {
     f.mockClear()
   }
@@ -231,11 +311,18 @@ beforeEach(() => {
 
 afterEach(() => cleanup())
 
-describe("today", () => {
-  it("says nothing needs the owner when every group is empty", () => {
+describe("the activity's list", () => {
+  it("is one row when every group is empty, with the way to make a routine (C5)", () => {
     draw(today())
-    expect(screen.getByText("Nothing needs you today")).toBeTruthy()
-    expect(document.querySelector("[data-pa-today-group]")).toBeNull()
+    expect(
+      screen.getByText("Nothing for you to do, and nothing running.")
+    ).toBeTruthy()
+    expect(document.querySelector("[data-pa-activity-group]")).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "New routine" }))
+    expect(usePersonalAgentUi.getState().routineEditor?.routineId).toBeNull()
+    cleanup()
+    draw(today(), { readOnly: true })
+    expect(screen.queryByRole("button", { name: "New routine" })).toBeNull()
   })
 
   it("says what a task waits on the owner for, with the button that does it", () => {
@@ -396,37 +483,19 @@ describe("today", () => {
         ],
       })
     )
-    const groups = [...document.querySelectorAll("[data-pa-today-group]")].map(
-      (g) => g.getAttribute("data-pa-today-group")
-    )
+    const groups = [
+      ...document.querySelectorAll("[data-pa-activity-group]"),
+    ].map((g) => g.getAttribute("data-pa-activity-group"))
     expect(groups).toEqual(["needs", "done"])
     const needs = document.querySelector(
-      '[data-pa-today-group="needs"]'
+      '[data-pa-activity-group="needs"]'
     ) as HTMLElement
-    // No head over the part: its title leads every group's bar, before
-    // the group's own name — and is still its heading to a screen reader.
-    expect(document.querySelector(".border-dashed")).toBeNull()
-    expect(screen.getByRole("heading", { name: "Today" }).className).toContain(
-      "sr-only"
-    )
-    for (const g of document.querySelectorAll("[data-pa-today-group]")) {
-      const bar = g.querySelector("button")!
-      const section = bar.querySelector("[data-pa-group-section]")!
-      expect(section.textContent).toBe("Today")
-      expect(bar.textContent!.indexOf("Today")).toBeLessThan(
-        bar.textContent!.indexOf(
-          g.getAttribute("data-pa-today-group") === "needs"
-            ? "Needs you"
-            : "Done today"
-        )
-      )
-    }
-    expect(within(needs).getByText("Needs you")).toBeTruthy()
+    expect(within(needs).getByText("Waiting for you")).toBeTruthy()
     expect(within(needs).getByText("1")).toBeTruthy()
     // One card: its head the bar across its top, the chevron at its end;
     // its rows on one list, flat on the card.
     expect(needs.className).toContain("rounded-2xl")
-    const head = within(needs).getByRole("button", { name: /Needs you/ })
+    const head = within(needs).getByRole("button", { name: /Waiting for you/ })
     expect(head.className).toMatch(/(^| )w-full( |$)/)
     expect(head.lastElementChild!.getAttribute("class")).toContain(
       "lucide-chevron-down"
@@ -435,6 +504,31 @@ describe("today", () => {
     const items = within(list).getAllByRole("listitem")
     expect(items).toHaveLength(1)
     expect(items[0].className).toContain("rounded-none")
+  })
+
+  it("keeps what was done today to one line until opened, no routine that found nothing in it (C2)", () => {
+    usePersonalAgentUi.setState({ auxFolds: {} })
+    draw(
+      today({
+        done: [
+          row({ key: "finished:1", kind: "finished", title: "Docs", bot_id: 2, dispatch_id: 1 }),
+          row({ key: "finished:2", kind: "finished", title: "Notes", bot_id: 2, dispatch_id: 2 }),
+          row({ key: "routine_report:3", kind: "routine_report", title: "Night CI", bot_id: 1, state: "silent" }),
+        ],
+      })
+    )
+    const done = document.querySelector(
+      '[data-pa-activity-group="done"]'
+    ) as HTMLElement
+    const head = within(done).getByRole("button", { name: /Done today/ })
+    expect(head.getAttribute("aria-expanded")).toBe("false")
+    expect(within(done).getByText("2")).toBeTruthy()
+    expect(screen.queryByText("Docs")).toBeNull()
+    fireEvent.click(head)
+    expect(screen.getByText("Docs")).toBeTruthy()
+    expect(screen.queryByText("Night CI")).toBeNull()
+    // Opened, it stays so, and the line stays where it was.
+    expect(usePersonalAgentUi.getState().auxFolds["activity.done"]).toBe(true)
   })
 
   it("draws a row with something to say or settle as a card, a plain one as a row", () => {
@@ -619,31 +713,123 @@ describe("today", () => {
     expect(ui.work?.conversationId).toBe(40)
   })
 
-  it("settles a reminder on its row", async () => {
+  it("settles a reminder on its row, its matter folded in", async () => {
+    const r = row({
+      key: "reminder:4",
+      kind: "reminder",
+      bot_id: 1,
+      item_id: 4,
+      row_id: 8,
+      title: "Stretch",
+    })
     draw(
-      today({
+      activityOf(today(), {
         needs: [
-          row({
-            key: "reminder:4",
-            kind: "reminder",
-            bot_id: 1,
-            item_id: 4,
-            row_id: 8,
-            title: "Stretch",
+          thing(r, {
+            thing: "item:4",
+            item: matter({ id: 4, summary: "Stretch", origin_timeline_id: 3 }),
           }),
         ],
       })
     )
-    fireEvent.click(screen.getByRole("button", { name: "Done" }))
+    const el = document.querySelector('[data-key="reminder:4"]') as HTMLElement
+    fireEvent.click(within(el).getByRole("button", { name: "Done" }))
     await waitFor(() =>
-      expect(api.personalAgentItemAct).toHaveBeenCalledWith(
-        1,
-        4,
-        "done",
-        undefined
-      )
+      expect(api.personalAgentItemAct).toHaveBeenCalledWith(1, 4, "done")
     )
     await waitFor(() => expect(feed.refresh).toHaveBeenCalled())
+    // Its [Later] too: the matter's whole menu (its own tests elsewhere).
+    expect(within(el).getByRole("button", { name: "Later" })).toBeTruthy()
+    // The row opens the message it came from; its card unfolded.
+    fireEvent.click(within(el).getAllByRole("button")[0])
+    expect(usePersonalAgentUi.getState().pendingJump).toEqual({ bot: 1, row: 3 })
+    fireEvent.click(within(el).getByRole("button", { name: "Show details" }))
+    fireEvent.click(within(el).getByRole("button", { name: "View the reminder" }))
+    expect(usePersonalAgentUi.getState().pendingJump).toEqual({ bot: 1, row: 8 })
+  })
+
+  it("says a reminder handed to its assistant is theirs, a task under check its round, a merge queued", () => {
+    draw(
+      today({
+        needs: [
+          row({
+            key: "acceptance:5",
+            kind: "acceptance",
+            bot_id: 2,
+            row_id: 50,
+            task_id: 7,
+            dispatch_id: 5,
+            title: "Fix title",
+            queued: true,
+          }),
+        ],
+        watching: [
+          row({
+            key: "reminder:4",
+            kind: "reminder",
+            bot_id: 2,
+            item_id: 4,
+            row_id: 8,
+            state: "handed",
+            title: "Stretch",
+          }),
+          row({
+            key: "task:9",
+            kind: "task",
+            task_id: 9,
+            state: "checking",
+            check_dispatch_id: 12,
+            round: 2,
+            title: "Docs",
+          }),
+        ],
+        dispatches: [work({ id: 12, mode: "session", conversation_id: 70 })],
+      })
+    )
+    expect(
+      document.querySelector('[data-key="reminder:4"]')!.textContent
+    ).toContain("Handed to Dev")
+    const task = document.querySelector('[data-key="task:9"]') as HTMLElement
+    expect(task.textContent).toContain("Being checked · round 2")
+    // Its check's session, unfolded.
+    fireEvent.click(within(task).getByRole("button", { name: "Show details" }))
+    fireEvent.click(
+      within(task).getByRole("button", { name: "View the acceptance session" })
+    )
+    expect(usePersonalAgentUi.getState().work?.dispatchId).toBe(12)
+    const acceptance = document.querySelector(
+      '[data-key="acceptance:5"]'
+    ) as HTMLElement
+    expect(acceptance.textContent).toContain("queued to merge")
+    // Its board task, unfolded: the row itself opens the card.
+    fireEvent.click(within(acceptance).getByRole("button", { name: "Show details" }))
+    fireEvent.click(within(acceptance).getByRole("button", { name: "Open the task" }))
+    expect(dialogs.openDetail).toHaveBeenLastCalledWith(7)
+  })
+
+  it("lists a matter with no row of today on its own, its assistant's, waiting on it", () => {
+    draw(
+      activityOf(today(), {
+        watching: [
+          {
+            key: "item:6",
+            bot_id: 2,
+            thing: "item:6",
+            today: null,
+            item: matter({
+              id: 6,
+              kind: "followup",
+              waits_for: "agent",
+              summary: "Chase the vendor",
+            }),
+            routine: null,
+            card_row_id: null,
+          },
+        ],
+      })
+    )
+    const el = document.querySelector('[data-pa-activity-row="item:6"]')!
+    expect(el.textContent).toContain("follow-up · Waiting for Dev to handle it")
   })
 
   it("takes back a change made for the owner, once", async () => {
@@ -868,32 +1054,34 @@ describe("today", () => {
   })
 
   it("acts on nothing where the assistants run elsewhere", () => {
+    const r = row({
+      key: "reminder:4",
+      kind: "reminder",
+      bot_id: 1,
+      item_id: 4,
+      title: "Stretch",
+    })
     draw(
-      today({
-        needs: [
-          row({
-            key: "reminder:4",
-            kind: "reminder",
-            bot_id: 1,
-            item_id: 4,
-            title: "Stretch",
-          }),
-        ],
-        done: [
-          row({
-            key: "changed:6",
-            kind: "changed",
-            bot_id: 2,
-            notice_id: 6,
-            undo: true,
-            state: "acted",
-          }),
-        ],
-      }),
+      activityOf(
+        today({
+          done: [
+            row({
+              key: "changed:6",
+              kind: "changed",
+              bot_id: 2,
+              notice_id: 6,
+              undo: true,
+              state: "acted",
+            }),
+          ],
+        }),
+        { needs: [thing(r, { item: matter({ id: 4 }) })] }
+      ),
       { readOnly: true }
     )
     expect(screen.queryByRole("button", { name: "Done" })).toBeNull()
     expect(screen.queryByRole("button", { name: "Undo" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "New routine" })).toBeNull()
   })
 
   it("shows the first rows of a long group, then all on asking", () => {
@@ -952,17 +1140,20 @@ describe("today", () => {
   })
 
   it("settles a matter still to come on its row, and opens its assistant when it has no message", async () => {
+    const r = row({
+      key: "item:4",
+      kind: "item",
+      bot_id: 2,
+      item_id: 4,
+      title: "Check CI",
+      at: "2026-11-11T10:00:00Z",
+      state: "followup:act",
+    })
     draw(
-      today({
-        schedule: [
-          row({
-            key: "item:4",
-            kind: "item",
-            bot_id: 2,
-            item_id: 4,
-            title: "Check CI",
-            at: "2026-11-11T10:00:00Z",
-            state: "followup:act",
+      activityOf(today(), {
+        next: [
+          thing(r, {
+            item: matter({ id: 4, kind: "followup", waits_for: "time" }),
           }),
         ],
       })
@@ -974,24 +1165,121 @@ describe("today", () => {
     expect(ui.pendingJump).toBeNull()
     fireEvent.click(within(card).getByRole("button", { name: "Done" }))
     await waitFor(() =>
-      expect(api.personalAgentItemAct).toHaveBeenCalledWith(
-        2,
-        4,
-        "done",
-        undefined
-      )
+      expect(api.personalAgentItemAct).toHaveBeenCalledWith(2, 4, "done")
     )
   })
 
-  it("comes into view when the primary's pill asks for it", () => {
+  it("brings the first of what waits into view when the pill asks, shown whole when it is further down (C6)", async () => {
     const scroll = vi.fn()
     Element.prototype.scrollIntoView = scroll
-    draw(today())
+    const many = Array.from({ length: 10 }, (_, i) =>
+      row({
+        key: `session:${i}`,
+        kind: "session",
+        conversation_id: i,
+        title: `S${i}`,
+        state: "question",
+      })
+    )
+    usePersonalAgentUi.setState({ viewBot: null })
+    draw(today({ needs: many }))
     expect(scroll).not.toHaveBeenCalled()
-    act(() => usePersonalAgentUi.getState().showToday())
-    expect(scroll).toHaveBeenCalled()
+    act(() => usePersonalAgentUi.getState().showWaiting("session:9"))
+    await waitFor(() => expect(scroll).toHaveBeenCalled())
+    expect(document.querySelectorAll("[data-pa-today-row]")).toHaveLength(10)
+    expect(
+      (scroll.mock.contexts[0] as HTMLElement).getAttribute("data-pa-activity-row")
+    ).toBe("session:9")
     const ui = usePersonalAgentUi.getState()
-    expect([ui.auxOpen, ui.auxTab]).toEqual([true, "activity"])
+    expect([ui.auxOpen, ui.auxTab, ui.activityAsk]).toEqual([
+      true,
+      "activity",
+      null,
+    ])
+    // Asked again: again.
+    scroll.mockClear()
+    act(() => usePersonalAgentUi.getState().showWaiting("session:1"))
+    await waitFor(() => expect(scroll).toHaveBeenCalled())
+  })
+
+  it("opens a routine asked for at its row, once read since; one not there was deleted (C4)", async () => {
+    const scroll = vi.fn()
+    Element.prototype.scrollIntoView = scroll
+    usePersonalAgentUi.setState({ viewBot: null })
+    const night: Routine = {
+      id: 5,
+      bot_id: 1,
+      title: "Night CI",
+      what: "Look at CI",
+      kind: "brain",
+      trigger: "schedule",
+      cron: "0 9 * * *",
+      timezone: null,
+      zone: "UTC",
+      event: null,
+      dispatch: null,
+      precheck: null,
+      enabled: true,
+      paused_reason: null,
+      source: "owner",
+      next_run_at: "2026-11-13T09:00:00Z",
+      last_run_at: null,
+      runs: 0,
+      failures: 0,
+      created_at: "2026-11-10T09:00:00Z",
+      last: [],
+    } as unknown as Routine
+    const view = activityOf(today(), {
+      next: [
+        {
+          key: "routine:5",
+          bot_id: 1,
+          thing: "routine:5",
+          today: null,
+          item: null,
+          routine: night,
+          card_row_id: null,
+        },
+      ],
+    })
+    // Read before it was asked: read again first.
+    const { rerender } = draw(view, { at: 0 })
+    act(() => usePersonalAgentUi.getState().showRoutines(5))
+    await waitFor(() => expect(feed.refresh).toHaveBeenCalled())
+    expect(scroll).not.toHaveBeenCalled()
+    const asked = usePersonalAgentUi.getState().activityAsk!
+    rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <ActivityList
+          read={{ bot: null, view, at: asked.at + 1 }}
+          inDrawer={false}
+          readOnly={false}
+          openTask={dialogs.openDetail}
+        />
+      </NextIntlClientProvider>
+    )
+    await waitFor(() => expect(scroll).toHaveBeenCalled())
+    expect(usePersonalAgentUi.getState().activityOpen["routine:5"]).toBe(true)
+    expect(document.querySelector("[data-pa-routine-facts]")).toBeTruthy()
+    expect(toasts.message).not.toHaveBeenCalled()
+    // One not in a list read since: deleted, its group's head shown.
+    act(() => usePersonalAgentUi.getState().showRoutines(99))
+    const again = usePersonalAgentUi.getState().activityAsk!
+    rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <ActivityList
+          read={{ bot: null, view, at: again.at + 1 }}
+          inDrawer={false}
+          readOnly={false}
+          openTask={dialogs.openDetail}
+        />
+      </NextIntlClientProvider>
+    )
+    await waitFor(() =>
+      expect(toasts.message).toHaveBeenCalledWith(
+        "This routine has been deleted."
+      )
+    )
   })
 })
 
@@ -1003,7 +1291,10 @@ describe("the morning brief (6.4)", () => {
       })
     )
     expect(screen.getByText("Preparing your morning brief…")).toBeTruthy()
-    expect(screen.getByText("Nothing needs you today")).toBeTruthy()
+    // Being written: not "nothing at all".
+    expect(
+      screen.queryByText("Nothing for you to do, and nothing running.")
+    ).toBeNull()
   })
 
   it("opens what a brief's rows are about, as today's do", () => {

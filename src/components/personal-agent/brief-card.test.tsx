@@ -26,8 +26,8 @@ vi.mock("@/contexts/tasks-view-context", () => ({
 vi.mock("./session-link", () => ({
   useSessionLinkOpener: () => vi.fn(),
 }))
-vi.mock("@/stores/personal-agent-today-store", () => ({
-  refreshToday: vi.fn(),
+vi.mock("@/stores/personal-agent-activity-store", () => ({
+  refreshActivity: vi.fn(),
 }))
 
 import { __resetRosterForTests } from "@/stores/personal-agent-roster-store"

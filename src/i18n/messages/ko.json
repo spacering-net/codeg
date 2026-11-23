@@ -11729,6 +11729,28 @@
     "notify": {
       "open": "열기"
     },
+    "feed": {
+      "groups": {
+        "needs": "당신을 기다림",
+        "watching": "진행 중",
+        "next": "다음 예정",
+        "done": "오늘 완료"
+      },
+      "empty": "할 일도, 실행 중인 것도 없습니다.",
+      "failed": "지금은 활동을 읽을 수 없습니다.",
+      "handed": "{name}에게 맡겼습니다",
+      "checking": "검수 중 · {round}차",
+      "queued": "병합 대기 중",
+      "waitsAgent": "{name}의 처리를 기다리는 중",
+      "routineRunning": "실행 중",
+      "routineLast": "지난 실행: {outcome}",
+      "fold": "세부 정보 숨기기",
+      "unfold": "세부 정보 보기",
+      "viewReminder": "알림 보기",
+      "viewCheck": "검수 세션 보기",
+      "openTask": "작업 열기",
+      "routineDeleted": "이 루틴은 삭제되었습니다."
+    },
     "today": {
       "title": "오늘",
       "empty": "오늘은 당신이 처리할 일이 없습니다",

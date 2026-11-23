@@ -11729,6 +11729,28 @@
     "notify": {
       "open": "開啟"
     },
+    "feed": {
+      "groups": {
+        "needs": "等你",
+        "watching": "進行中",
+        "next": "接下來",
+        "done": "今天完成"
+      },
+      "empty": "沒有要你做的，也沒有在跑的。",
+      "failed": "暫時讀不到動態。",
+      "handed": "交給{name}了",
+      "checking": "驗收中 · 第 {round} 輪",
+      "queued": "已排隊合併",
+      "waitsAgent": "等{name}處理",
+      "routineRunning": "在跑",
+      "routineLast": "上次：{outcome}",
+      "fold": "收起詳情",
+      "unfold": "展開詳情",
+      "viewReminder": "查看提醒",
+      "viewCheck": "查看驗收會話",
+      "openTask": "開啟任務",
+      "routineDeleted": "這個例程已經刪除了。"
+    },
     "today": {
       "title": "今日",
       "empty": "今天沒有需要你的事",

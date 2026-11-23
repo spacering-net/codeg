@@ -857,7 +857,8 @@ function PaCard({
         nav.showAux("activity")
         return
       case "routine":
-        usePersonalAgentUi.getState().showRoutines()
+        // At its row (C4); one deleted since lands on the group's head.
+        usePersonalAgentUi.getState().showRoutines(isId(id) ? id : null)
         return
       case "task":
         if (isId(id)) {

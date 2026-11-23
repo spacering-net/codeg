@@ -203,13 +203,18 @@ export function TaskStrip({
   d,
   chip = false,
   compact = false,
+  bot,
 }: {
   d: DispatchInfo
   chip?: boolean
   compact?: boolean
+  /** The assistant the work is of, when it is not the page's (another's
+   *  row on the primary's activity): what stopping it goes to. */
+  bot?: number | null
 }) {
   const t = useTranslations("PersonalAgent.taskCard")
-  const botId = useBotId()
+  const pageBot = useBotId()
+  const botId = bot !== undefined ? bot : pageBot
   const { readOnly } = usePageScope()
   const [stopping, setStopping] = useState(false)
   const task = d.task

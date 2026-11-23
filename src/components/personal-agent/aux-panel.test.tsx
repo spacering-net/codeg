@@ -18,6 +18,8 @@ import type {
   PersonalAgentSnapshot,
   PersonalAgentStats,
   TimelineRow,
+  ActivityRow,
+  PersonalAgentActivity,
 } from "@/lib/types"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
@@ -97,20 +99,22 @@ vi.mock("@/contexts/workbench-route-context", () => ({
 vi.mock("@/contexts/tab-context", () => ({
   useTabActions: () => ({ openTab: vi.fn() }),
 }))
-// "Today" has its own tests: here, only where it stands.
-const todayFeed = vi.hoisted(() => ({ active: [] as boolean[] }))
-vi.mock("@/stores/personal-agent-today-store", () => ({
-  useToday: (active = true) => {
-    todayFeed.active.push(active)
-    return null
+// The activity's read has its own tests: here, what the panel draws of it.
+const feed = vi.hoisted(() => ({
+  read: null as null | {
+    bot: number | null
+    view: PersonalAgentActivity | null
+    at: number
   },
+  refresh: vi.fn(),
 }))
-vi.mock("./today-section", () => ({
-  TodaySection: ({ title }: { title: string }) => (
-    <section data-pa-detail="today">
-      <h3>{title}</h3>
-    </section>
-  ),
+vi.mock("@/components/tasks/use-task-dialogs", () => ({
+  useTaskDialogs: () => ({ openDetail: vi.fn(), dialogs: null }),
+}))
+vi.mock("@/stores/personal-agent-activity-store", () => ({
+  useActivity: () => feed.read?.view ?? null,
+  useActivityRead: () => feed.read,
+  refreshActivity: feed.refresh,
 }))
 // The charts measure their box, which jsdom has none of: their own tests
 // cover them.
@@ -343,6 +347,7 @@ beforeEach(() => {
     },
   ])
   api.personalAgentOutputs.mockResolvedValue([])
+  feed.read = null
   api.personalAgentItems.mockResolvedValue([])
   api.personalAgentDispatches.mockResolvedValue([])
   api.personalAgentStats.mockResolvedValue({
@@ -615,14 +620,18 @@ describe("the panel", () => {
   })
 
   it("is the same in the drawer, its count of what waits on the owner on its activity", async () => {
-    api.personalAgentItems.mockResolvedValue([
-      item({
-        id: 11,
-        kind: "question",
-        waits_for: "owner",
-        summary: "Which branch?",
-      }),
-    ])
+    show({
+      needs: [
+        matter(
+          item({
+            id: 11,
+            kind: "question",
+            waits_for: "owner",
+            summary: "Which branch?",
+          })
+        ),
+      ],
+    })
     draw({ inDrawer: true })
     const list = screen.getByRole("tablist")
     expect(list.getAttribute("aria-orientation")).toBe("horizontal")
@@ -637,375 +646,235 @@ describe("the panel", () => {
   })
 })
 
-describe("the activity's matters", () => {
-  it("groups what is open by whom it waits on, each piece once; what ended is output", async () => {
-    api.personalAgentDispatches.mockResolvedValue([
-      dispatch({ id: 1, title: "Review the login fix", state: "review" }),
-      dispatch({ id: 2, title: "Run the build", state: "running" }),
-      dispatch({
-        id: 3,
-        title: "Write the notes",
-        state: "completed",
-        finished_at: "2026-11-04T11:00:00Z",
-      }),
-      dispatch({ id: 4, title: "Fix the flaky test", state: "failed" }),
-      // Moving, its entry dropped: still listed.
-      dispatch({ id: 5, title: "Queue the deploy", state: "queued" }),
-    ])
-    api.personalAgentItems.mockResolvedValue([
-      item({
-        id: 11,
-        dispatch_id: 1,
-        waits_for: "owner",
-        status: "waiting",
-        dispatch_state: "review",
-        summary: "Review the login fix",
-      }),
-      item({
-        id: 12,
-        dispatch_id: 2,
-        summary: "Run the build",
-        dispatch_state: "running",
-        on_done: "tell the owner",
-      }),
-      item({
-        id: 14,
-        dispatch_id: 4,
-        waits_for: "agent",
-        summary: "Fix the flaky test",
-        dispatch_state: "failed",
-      }),
-      item({
-        id: 15,
-        kind: "reminder",
-        waits_for: "time",
-        summary: "Look at the merge request at 10",
-        origin_timeline_id: 40,
-      }),
-    ])
+/** The page's activity, as read (C1): its groups, what waits, the rows
+ *  their work points at. */
+function show(patch: Partial<PersonalAgentActivity> = {}) {
+  const view: PersonalAgentActivity = {
+    needs: [],
+    watching: [],
+    next: [],
+    done: [],
+    waiting: 0,
+    pill: { count: 0, first: null },
+    brief: null,
+    stale_acceptance: [],
+    dispatches: [],
+    day_start: "2026-11-04T00:00:00Z",
+    day_end: "2026-11-05T00:00:00Z",
+    as_of: "2026-11-04T10:00:00Z",
+    ...patch,
+  }
+  if (patch.waiting === undefined) view.waiting = view.needs.length
+  feed.read = { bot: null, view, at: 1 }
+}
+
+/** A matter with no row of "today": its own row, its assistant's. */
+function matter(i: ItemInfo, bot = 1): ActivityRow {
+  return {
+    key: `item:${i.id}`,
+    bot_id: bot,
+    thing: `item:${i.id}`,
+    today: null,
+    item: i,
+    routine: null,
+    card_row_id: null,
+  }
+}
+
+describe("the activity", () => {
+  it("lists its four groups from one read, what waits on the owner first; its status is the stats'", async () => {
+    show({
+      needs: [matter(item({ id: 11, kind: "question", waits_for: "owner", summary: "Which branch?" }))],
+      next: [matter(item({ id: 15, kind: "reminder", waits_for: "time", summary: "Look at the merge request" }))],
+    })
     const { container } = draw()
-    await screen.findByText("Review the login fix")
-    const groups = [...container.querySelectorAll("[data-pa-group]")].map((g) =>
-      g.getAttribute("data-pa-group")
-    )
-    expect(groups).toEqual(["owner", "external", "agent", "time"])
-    const group = (g: string) =>
-      container.querySelector<HTMLElement>(`[data-pa-group='${g}']`)!
-    // No pill over the matters: "Matters" leads each group's bar, before
-    // its own name.
-    const part = container.querySelector<HTMLElement>(
-      '[data-pa-detail="matters"]'
-    )!
-    expect(part.querySelector(".border-dashed")).toBeNull()
-    for (const g of groups) {
-      const bar = group(g!).querySelector("button")!
-      expect(bar.querySelector("[data-pa-group-section]")!.textContent).toBe(
-        "Matters"
+    await screen.findByText("Which branch?")
+    expect(
+      [...container.querySelectorAll("[data-pa-activity-group]")].map((g) =>
+        g.getAttribute("data-pa-activity-group")
       )
-      expect(bar.textContent).toMatch(/^Matters·/)
-    }
+    ).toEqual(["needs", "next"])
     expect(
-      within(group("owner")).getByText("Review the login fix")
+      within(
+        container.querySelector('[data-pa-activity-group="needs"]') as HTMLElement
+      ).getByText("Waiting for you")
     ).toBeTruthy()
-    expect(group("external").textContent).toContain("Run the build")
-    expect(group("external").textContent).toContain("Queue the deploy")
-    // What it will do once done, from its entry.
-    expect(group("external").textContent).toContain("When done: tell the owner")
-    expect(group("agent").textContent).toContain("Fix the flaky test")
-    expect(group("time").textContent).toContain("Look at the merge request")
-    // A group folds from its head: its marker, name and count, its chevron
-    // at the end.
-    const head = within(group("owner")).getByRole("button", { name: /Waiting/ })
-    expect(head.getAttribute("aria-expanded")).toBe("true")
-    expect(head.textContent).toContain("1")
-    expect(head.lastElementChild!.getAttribute("class")).toContain(
-      "lucide-chevron-down"
-    )
-    // Each piece of work once; what ended is not among them.
-    for (const title of [
-      "Review the login fix",
-      "Run the build",
-      "Fix the flaky test",
-      "Queue the deploy",
-    ]) {
-      expect(screen.getAllByText(title)).toHaveLength(1)
-    }
-    expect(screen.queryByText("Write the notes")).toBeNull()
-    // Its tab counts what waits on the owner, and says it.
-    const tab = screen.getByRole("tab", { name: /Activity/ })
-    expect(tab.textContent).toBe("Activity1")
-    expect(tab.getAttribute("aria-label")).toBe(
-      "Activity · 1 thing waits for you"
-    )
-    // What ended is the output.
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Output" }), {
-      button: 0,
-    })
-    expect(await screen.findByText("Write the notes")).toBeTruthy()
+    // No "Status" heading, no card of it here.
+    expect(screen.queryByText("Status")).toBeNull()
+    expect(container.querySelector("[data-pa-status]")).toBeNull()
   })
 
-  it("opens a piece of work in the drawer, and goes to where a reminder came from", async () => {
-    api.personalAgentDispatches.mockResolvedValue([
-      dispatch({ id: 2, title: "Run the build", state: "running" }),
-    ])
-    api.personalAgentItems.mockResolvedValue([
-      item({ id: 12, dispatch_id: 2, summary: "Run the build" }),
-      item({
-        id: 15,
-        kind: "reminder",
-        waits_for: "time",
-        summary: "Look at the merge request at 10",
-        origin_timeline_id: 40,
-      }),
-    ])
+  it("says nothing waits and nothing runs in one row, with the way to make a routine", async () => {
+    show()
     draw()
-    fireEvent.click(
-      (await screen.findByText("Run the build")).closest("button")!
-    )
-    expect(usePersonalAgentUi.getState().work).toMatchObject({
-      dispatchId: 2,
-      workTaskId: 7,
-    })
-    const reminder = screen
-      .getByText("Look at the merge request at 10")
-      .closest("button")!
-    expect(reminder.title).toBe("Show the message it came from")
-    fireEvent.click(reminder)
-    expect(jumpTo).toHaveBeenCalledWith(40)
-  })
-
-  it("says when nothing is open", async () => {
-    draw()
-    expect(await screen.findByText("Nothing open right now.")).toBeTruthy()
     expect(
-      screen.getByRole("tab", { name: /Activity/ }).getAttribute("aria-label")
-    ).toBe("Activity")
-  })
-
-  it("puts no open matters and no routines on one card, a row each with no head over it", async () => {
-    draw()
-    await screen.findByText("Nothing open right now.")
-    await screen.findByText(
-      "No routines yet. Ask it in the conversation to set one up."
-    )
-    const matters = document.querySelector<HTMLElement>(
-      '[data-pa-detail="matters"]'
-    )!
-    const routines = document.querySelector<HTMLElement>(
-      '[data-pa-detail="routines"]'
-    )!
-    // Rows, next to one another in one stack: drawn as one card.
-    expect(matters.getAttribute("data-pa-shape")).toBe("row")
-    expect(routines.getAttribute("data-pa-shape")).toBe("row")
-    expect(matters.parentElement).toBe(routines.parentElement)
-    expect(matters.nextElementSibling).toBe(routines)
-    // No heads over them, the names on the rows.
-    expect(screen.queryByRole("heading", { name: "Matters" })).toBeNull()
-    expect(within(matters).getByText("Matters")).toBeTruthy()
-    fireEvent.click(
-      within(routines).getByRole("button", { name: "New routine" })
-    )
+      await screen.findByText("Nothing for you to do, and nothing running.")
+    ).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "New routine" }))
     expect(usePersonalAgentUi.getState().routineEditor?.routineId).toBeNull()
   })
 
-  it("keeps routines in their own part while matters are open, the head over them", async () => {
-    api.personalAgentRoutines.mockResolvedValue([])
-    api.personalAgentItems.mockResolvedValue([
-      item({
-        id: 11,
-        kind: "reminder",
-        summary: "Call back",
-        waits_for: "time",
-      }),
-    ])
-    draw()
-    expect(await screen.findByText("Call back")).toBeTruthy()
-    expect(screen.getByRole("heading", { name: "Matters" })).toBeTruthy()
-    const routines = await waitFor(() => {
-      const el = document.querySelector('[data-pa-detail="routines"]')
-      expect(el).toBeTruthy()
-      return el as HTMLElement
+  it("says why a piece of work failed in a red box, and unfolds who runs it and what done looks like", async () => {
+    show({
+      needs: [matter(item({ id: 12, dispatch_id: 1, waits_for: "owner" }))],
+      dispatches: [
+        dispatch({
+          id: 1,
+          title: "Fix the login",
+          state: "failed",
+          ladder: "failed",
+          error: "worktree add failed: Branch already exists\nat git worktree",
+          done_when: "The login works on Safari",
+        }),
+      ],
     })
-    expect(routines.getAttribute("data-pa-shape")).toBe("row")
-  })
-
-  it("says why a piece of work failed in a red box, and folds what done looks like", async () => {
-    api.personalAgentItems.mockResolvedValue([
-      item({ id: 12, dispatch_id: 1, waits_for: "owner" }),
-    ])
-    api.personalAgentDispatches.mockResolvedValue([
-      dispatch({
-        id: 1,
-        title: "Fix the login",
-        state: "failed",
-        ladder: "failed",
-        error: "worktree add failed: Branch already exists",
-        done_when: "The login works on Safari",
-      }),
-    ])
     draw()
+    // Its first line in the box, in the code face.
     const error = await screen.findByText(
       "worktree add failed: Branch already exists"
     )
     const box = error.closest("[data-pa-callout]")!
     expect(box.getAttribute("data-pa-callout")).toBe("error")
-    // An error's own text: in the code face.
     expect(box.className).toContain("font-mono")
-    const card = error.closest<HTMLElement>("[data-slot='item']")!
-    expect(card.getAttribute("data-pa-shape")).toBe("card")
-    // Done when: folded under its label, open on asking.
-    const fold = card.querySelector<HTMLElement>("[data-pa-done-when]")!
-    expect(within(fold).queryByText("The login works on Safari")).toBeNull()
-    fireEvent.click(within(fold).getByRole("button", { name: "Done when" }))
-    expect(within(fold).getByText("The login works on Safari")).toBeTruthy()
+    const row = error.closest<HTMLElement>("[data-pa-activity-row]")!
+    // Who runs it, what done looks like, the whole error: unfolded.
+    expect(within(row).queryByText("The login works on Safari")).toBeNull()
+    fireEvent.click(within(row).getByRole("button", { name: "Show details" }))
+    const details = row.querySelector<HTMLElement>("[data-pa-row-details]")!
+    expect(details.textContent).toContain("Builder")
+    expect(details.textContent).toContain("my-app")
+    expect(within(details).getByText("The login works on Safari")).toBeTruthy()
+    expect(details.querySelector("[data-pa-row-error]")!.textContent).toContain(
+      "at git worktree"
+    )
+    // Kept open as the owner left it, by the thing it is.
+    expect(usePersonalAgentUi.getState().activityOpen["item:12"]).toBe(true)
   })
 
-  it("settles a matter from its card: done, put off, later, dropped", async () => {
-    api.personalAgentItems.mockResolvedValue([
-      item({
-        id: 11,
-        kind: "question",
-        waits_for: "owner",
-        summary: "Which branch?",
-      }),
-      item({
-        id: 15,
-        kind: "reminder",
-        waits_for: "time",
-        summary: "Look at the merge request at 10",
-      }),
-    ])
+  it("settles a matter on its row, at its own assistant: done, put off, later, dropped", async () => {
+    show({
+      needs: [
+        matter(
+          item({ id: 11, kind: "question", waits_for: "owner", summary: "Which branch?" }),
+          2
+        ),
+      ],
+      next: [
+        matter(item({ id: 15, kind: "reminder", waits_for: "time", summary: "Look at the merge request at 10" })),
+      ],
+    })
     const { container } = draw()
     await screen.findByText("Which branch?")
     const question = container.querySelector<HTMLElement>(
-      "[data-pa-group='owner']"
+      '[data-pa-activity-row="item:11"]'
     )!
-    // [Later] is a menu: a set time, or none.
-    await userEvent.click(
-      within(question).getByRole("button", { name: "Later" })
-    )
-    await userEvent.click(
-      await screen.findByRole("menuitem", { name: "In 1 hour" })
-    )
-    expect(api.personalAgentItemAct).toHaveBeenCalledWith(
-      null,
-      11,
-      "snooze",
-      "1h"
-    )
+    // [Later] is a menu: a set time, or none — sent to the assistant whose
+    // matter it is, another one's on the primary's page.
+    await userEvent.click(within(question).getByRole("button", { name: "Later" }))
+    await userEvent.click(await screen.findByRole("menuitem", { name: "In 1 hour" }))
+    expect(api.personalAgentItemAct).toHaveBeenCalledWith(2, 11, "snooze", "1h")
     await waitFor(() =>
       expect(
-        within(question)
-          .getByRole("button", { name: "Later" })
-          .hasAttribute("disabled")
+        within(question).getByRole("button", { name: "Later" }).hasAttribute("disabled")
       ).toBe(false)
     )
-    await userEvent.click(
-      within(question).getByRole("button", { name: "Later" })
-    )
-    await userEvent.click(
-      await screen.findByRole("menuitem", { name: "No set time" })
-    )
-    expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(null, 11, "later")
+    await userEvent.click(within(question).getByRole("button", { name: "Later" }))
+    await userEvent.click(await screen.findByRole("menuitem", { name: "No set time" }))
+    expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(2, 11, "later")
     const done = within(question).getByRole("button", { name: "Done" })
     await waitFor(() => expect(done.hasAttribute("disabled")).toBe(false))
     fireEvent.click(done)
-    expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(null, 11, "done")
+    expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(2, 11, "done")
+    await waitFor(() => expect(feed.refresh).toHaveBeenCalled())
     // One already waiting on time has no "later".
     const reminder = container.querySelector<HTMLElement>(
-      "[data-pa-group='time']"
+      '[data-pa-activity-row="item:15"]'
     )!
     expect(within(reminder).queryByRole("button", { name: "Later" })).toBeNull()
     fireEvent.click(within(reminder).getByRole("button", { name: "Drop" }))
-    expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(null, 15, "drop")
+    expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(1, 15, "drop")
   })
 
   it("says what brings a reminder on a mention up, and puts it off no time (6.8)", async () => {
-    api.personalAgentItems.mockResolvedValue([
-      item({
-        id: 31,
-        kind: "when_mentioned",
-        waits_for: null,
-        summary: "Update the Homebrew formula first",
-        mention: {
-          keywords: ["release", "发版"],
-          cooldown_hours: 24,
-          max_times: 3,
-          expires_at: "2027-02-11T00:00:00Z",
-          times: 1,
-          last_at: "2026-11-13T00:00:00Z",
-        },
-      }),
-    ])
+    show({
+      next: [
+        matter(
+          item({
+            id: 31,
+            kind: "when_mentioned",
+            waits_for: null,
+            summary: "Update the Homebrew formula first",
+            mention: {
+              keywords: ["release", "发版"],
+              cooldown_hours: 24,
+              max_times: 3,
+              expires_at: "2027-02-11T00:00:00Z",
+              times: 1,
+              last_at: "2026-11-13T00:00:00Z",
+            },
+          })
+        ),
+      ],
+    })
     const { container } = draw()
     await screen.findByText("Update the Homebrew formula first")
     expect(
-      screen.getByText(
-        /^When you mention “release”, “发版” · 1 of 3 times · until /
-      )
+      screen.getByText(/^When you mention “release”, “发版” · 1 of 3 times · until /)
     ).toBeTruthy()
-    const card = container.querySelector<HTMLElement>("[data-pa-group='none']")!
-    expect(within(card).queryByRole("button", { name: "Later" })).toBeNull()
-    fireEvent.click(within(card).getByRole("button", { name: "Drop" }))
-    expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(null, 31, "drop")
+    const row = container.querySelector<HTMLElement>('[data-pa-activity-row="item:31"]')!
+    expect(within(row).queryByRole("button", { name: "Later" })).toBeNull()
+    fireEvent.click(within(row).getByRole("button", { name: "Drop" }))
+    expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(1, 31, "drop")
   })
 
-  it("says when a matter is due, how it comes back, and puts off one waiting on time", async () => {
+  it("says when a matter is due and how it comes back; what is done once a reminder is, unfolded", async () => {
     const hour = 3_600_000
-    api.personalAgentItems.mockResolvedValue([
-      item({
-        id: 21,
-        kind: "reminder",
-        waits_for: "time",
-        summary: "Stand-up notes",
-        due_at: new Date(Date.now() + hour).toISOString(),
-        repeat: { every: "weekdays", at: "09:00" },
-        at_due: "notify",
-      }),
-      item({
-        id: 22,
-        kind: "followup",
-        waits_for: "time",
-        summary: "Check the release",
-        due_at: new Date(Date.now() - hour).toISOString(),
-        at_due: "act",
-      }),
-      item({
-        id: 23,
-        kind: "reminder",
-        waits_for: "owner",
-        summary: "Call the bank",
-        due_at: new Date(Date.now() - hour).toISOString(),
-        fired_at: new Date(Date.now() - hour + 5_000).toISOString(),
-        at_due: "notify",
-      }),
-    ])
-    const { container } = draw()
+    show({
+      next: [
+        matter(
+          item({
+            id: 21,
+            kind: "reminder",
+            waits_for: "time",
+            summary: "Stand-up notes",
+            due_at: new Date(Date.now() + hour).toISOString(),
+            repeat: { every: "weekdays", at: "09:00" },
+            at_due: "notify",
+            on_done: "Post them in #team",
+          })
+        ),
+      ],
+      needs: [
+        matter(
+          item({
+            id: 23,
+            kind: "reminder",
+            waits_for: "owner",
+            summary: "Call the bank",
+            due_at: new Date(Date.now() - hour).toISOString(),
+            fired_at: new Date(Date.now() - hour + 5_000).toISOString(),
+            at_due: "notify",
+          })
+        ),
+      ],
+    })
+    draw()
     await screen.findByText("Stand-up notes")
     expect(screen.getByText(/^Due .+ · Every weekday 09:00$/)).toBeTruthy()
-    expect(screen.getByText(/^Overdue · due /)).toBeTruthy()
     expect(screen.getByText(/^Reminded · due /)).toBeTruthy()
-    // The one the assistant does itself says so.
-    expect(
-      container.querySelectorAll("[data-pa-item-at-due='act']")
-    ).toHaveLength(1)
-    // Waiting on time with a due time, it can still be put off.
-    const card = screen
+    const row = screen
       .getByText("Stand-up notes")
-      .closest<HTMLElement>("[data-slot='item']")!
-    await userEvent.click(within(card).getByRole("button", { name: "Later" }))
-    await userEvent.click(
-      await screen.findByRole("menuitem", { name: "Tomorrow morning" })
+      .closest<HTMLElement>("[data-pa-activity-row]")!
+    fireEvent.click(within(row).getByRole("button", { name: "Show details" }))
+    expect(row.querySelector("[data-pa-item-on-done]")!.textContent).toContain(
+      "Post them in #team"
     )
-    expect(api.personalAgentItemAct).toHaveBeenCalledWith(
-      null,
-      21,
-      "snooze",
-      "tomorrow"
-    )
+    await userEvent.click(within(row).getByRole("button", { name: "Later" }))
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Tomorrow morning" }))
+    expect(api.personalAgentItemAct).toHaveBeenCalledWith(1, 21, "snooze", "tomorrow")
   })
 
-  it("carries a task's card, and lets the owner close a pull request codeg does not follow", async () => {
+  it("carries a task's strip, and lets the owner close a pull request codeg does not follow", async () => {
     const facts = {
       task_id: 7,
       status: "review" as const,
@@ -1024,113 +893,92 @@ describe("the activity's matters", () => {
       finished_at: null,
       pr: null,
     }
-    api.personalAgentDispatches.mockResolvedValue([
-      dispatch({
-        id: 1,
-        title: "Fix the login",
-        state: "review",
-        ladder: "mergeable",
-        task: facts,
-      }),
-      dispatch({
-        id: 2,
-        title: "Ship the notes",
-        state: "completed",
-        ladder: "pr_open",
-        task: {
-          ...facts,
-          task_id: 8,
-          status: "done",
-          completion_kind: "delivered_pr",
-          pr_url: "https://github.com/o/r/pull/9",
-          pr_number: 9,
-        },
-        work_task_id: 8,
-      }),
-    ])
-    api.personalAgentItems.mockResolvedValue([
-      item({
-        id: 11,
-        dispatch_id: 1,
-        waits_for: "owner",
-        status: "waiting",
-        dispatch_state: "review",
-      }),
-      item({
-        id: 12,
-        dispatch_id: 2,
-        waits_for: "external",
-        status: "waiting",
-        dispatch_state: "completed",
-      }),
-    ])
-    const { container } = draw()
+    show({
+      needs: [
+        matter(
+          item({
+            id: 11,
+            dispatch_id: 1,
+            waits_for: "owner",
+            status: "waiting",
+            dispatch_state: "review",
+            on_done: "Tell the team",
+          }),
+          2
+        ),
+      ],
+      watching: [
+        matter(
+          item({
+            id: 12,
+            dispatch_id: 2,
+            waits_for: "external",
+            status: "waiting",
+            dispatch_state: "completed",
+          })
+        ),
+      ],
+      dispatches: [
+        dispatch({
+          id: 1,
+          title: "Fix the login",
+          state: "review",
+          ladder: "mergeable",
+          task: facts,
+        }),
+        dispatch({
+          id: 2,
+          title: "Ship the notes",
+          state: "completed",
+          ladder: "pr_open",
+          task: {
+            ...facts,
+            task_id: 8,
+            status: "done",
+            completion_kind: "delivered_pr",
+            pr_url: "https://github.com/o/r/pull/9",
+            pr_number: 9,
+          },
+          work_task_id: 8,
+        }),
+      ],
+    })
+    draw()
     await screen.findByText("Fix the login")
-    const card = (title: string) =>
-      screen.getByText(title).closest<HTMLElement>("[data-slot='item']")!
-    // In review: ready to merge, with its branch a chip and its diff after
-    // it on one line (its project is the row's line), and the way to stop
-    // it, red at the line's end — no way to close its entry by hand, nor
-    // [Open session]: the row opens it.
-    const review = card("Fix the login")
+    const row = (title: string) =>
+      screen.getByText(title).closest<HTMLElement>("[data-pa-activity-row]")!
+    // In review: where it stands its line's chip; its task's strip on the
+    // row, the way to stop it at the strip's end — at the work's own
+    // assistant; no way to close its matter by hand while it moves.
+    const review = row("Fix the login")
     expect(review.querySelector("[data-pa-ladder]")?.textContent).toBe(
       "Ready to merge"
     )
-    expect(review.getAttribute("role")).toBe("listitem")
     const strip = review.querySelector("[data-pa-task-strip]")!
-    expect(strip.textContent).toBe("pa/fix-login+214 −37, 6 filesStop")
-    expect(
-      strip.querySelector("[data-pa-task-branch]")?.getAttribute("title")
-    ).toBe("pa/fix-login")
-    expect(
-      within(review)
-        .getByRole("button", { name: "Stop" })
-        .getAttribute("data-variant")
-    ).toBe("destructive")
     expect(strip.querySelector("[data-pa-task-diff]")?.textContent).toBe(
       "+214 −37, 6 files"
     )
-    expect(review.textContent).toContain("my-app")
-    expect(
-      within(review).queryByRole("button", { name: "Open session" })
-    ).toBeNull()
     expect(within(review).queryByRole("button", { name: "Done" })).toBeNull()
     fireEvent.click(within(review).getByRole("button", { name: "Stop" }))
-    expect(api.personalAgentDispatchStop).toHaveBeenCalledWith(null, 1)
-    // Delivered as a pull request: said so, not stoppable, and its entry the
-    // owner's to close.
-    const pr = card("Ship the notes")
+    expect(api.personalAgentDispatchStop).toHaveBeenCalledWith(2, 1)
+    // What happens once handed-out work is done is its assistant's to know,
+    // not said here (B5).
+    fireEvent.click(within(review).getByRole("button", { name: "Show details" }))
+    expect(review.querySelector("[data-pa-item-on-done]")).toBeNull()
+    expect(review.textContent).not.toContain("Tell the team")
+    // Delivered as a pull request: not stoppable, its matter the owner's to
+    // close.
+    const pr = row("Ship the notes")
     expect(pr.querySelector("[data-pa-task-pr]")?.textContent).toBe(
       "PR opened · codeg is not watching it"
     )
-    expect(within(pr).getByRole("button", { name: "View PR" })).toBeTruthy()
     expect(within(pr).queryByRole("button", { name: "Stop" })).toBeNull()
     fireEvent.click(within(pr).getByRole("button", { name: "Done" }))
-    expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(null, 12, "done")
-    expect(container.querySelector("[data-pa-group='external']")).toBeTruthy()
-  })
-
-  it("shows Today first on the primary, before its matters; its status is the stats'", async () => {
-    todayFeed.active = []
-    const { container } = draw()
-    await screen.findByRole("button", { name: "Notify me" })
-    const order = [...container.querySelectorAll("[data-pa-detail]")].map(
-      (el) => el.getAttribute("data-pa-detail")
-    )
-    expect(order).toEqual(["today", "matters", "routines"])
-    // No "Status" heading, no card of it here.
-    expect(screen.queryByText("Status")).toBeNull()
-    expect(container.querySelector("[data-pa-status]")).toBeNull()
-    expect(
-      within(
-        container.querySelector('[data-pa-detail="today"]') as HTMLElement
-      ).getByText("Today")
-    ).toBeTruthy()
-    // Held while the primary's activity shows.
-    expect(todayFeed.active).toContain(true)
+    expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(1, 12, "done")
   })
 
   it("has the bell to be told at the panel's top, nothing of it at the activity's end", async () => {
+    show()
     draw()
     const bell = await screen.findByRole("button", { name: "Notify me" })
     await waitFor(() => expect(bell.hasAttribute("disabled")).toBe(false))
@@ -1147,7 +995,6 @@ describe("the activity's matters", () => {
       act: "notify",
       on: false,
     })
-    // Neither the switch nor [Settings] under the routines any more.
     expect(screen.queryByRole("switch")).toBeNull()
     expect(screen.queryByRole("button", { name: "Settings" })).toBeNull()
   })

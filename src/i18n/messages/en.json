@@ -11729,6 +11729,28 @@
     "notify": {
       "open": "Open"
     },
+    "feed": {
+      "groups": {
+        "needs": "Waiting for you",
+        "watching": "In progress",
+        "next": "Coming up",
+        "done": "Done today"
+      },
+      "empty": "Nothing for you to do, and nothing running.",
+      "failed": "The activity could not be read just now.",
+      "handed": "Handed to {name}",
+      "checking": "Being checked · round {round}",
+      "queued": "queued to merge",
+      "waitsAgent": "Waiting for {name} to handle it",
+      "routineRunning": "Running",
+      "routineLast": "Last run: {outcome}",
+      "fold": "Hide details",
+      "unfold": "Show details",
+      "viewReminder": "View the reminder",
+      "viewCheck": "View the acceptance session",
+      "openTask": "Open the task",
+      "routineDeleted": "This routine has been deleted."
+    },
     "today": {
       "title": "Today",
       "empty": "Nothing needs you today",

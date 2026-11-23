@@ -81,7 +81,7 @@ import { useChatMotion, useReducedMotion } from "@/hooks/use-chat-motion"
 import { toErrorMessage } from "@/lib/app-error"
 import type { TimelineRow } from "@/lib/types"
 import { cn } from "@/lib/utils"
-import { useToday } from "@/stores/personal-agent-today-store"
+import { useActivity } from "@/stores/personal-agent-activity-store"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 import { EventCard } from "./event-card"
 import { ExchangeRow } from "./exchange-row"
@@ -298,9 +298,10 @@ function rowIdOf(item: MessageItem): number | null {
  *  shown first, a reminder that came due — not a suggestion), an
  *  executor's question forwarded to them. */
 /** The "N items need you" pill: on the primary, what waits on the owner
- *  anywhere ("Today"'s first group, `todayNeeds`), opening "Today";
- *  otherwise — or with nothing there — the cards waiting in this
- *  conversation, scrolled to. `null`: no pill. */
+ *  anywhere ("today"'s, `todayNeeds`, from the activity's read), opening
+ *  the activity at the first of it (C6); otherwise — or with nothing there
+ *  — the cards waiting in this conversation, scrolled to. `null`: no
+ *  pill. */
 export function attentionPill(
   todayNeeds: number,
   waits: number
@@ -376,15 +377,21 @@ export function waitsForOwner(row: TimelineRow): boolean {
 }
 
 /** Where each card waiting for the owner is drawn, in order: a reply's
- *  question is in its bubble. */
-export function ownerWaitTargets(items: readonly MessageItem[]): number[] {
+ *  question is in its bubble. Not an acceptance card nothing can be done
+ *  on any more (`stale`, C6): its card still reads open, but the board has
+ *  moved on — the pill would lead to a card that does nothing. */
+export function ownerWaitTargets(
+  items: readonly MessageItem[],
+  stale: ReadonlySet<number> = new Set()
+): number[] {
+  const waits = (row: TimelineRow) => !stale.has(row.id) && waitsForOwner(row)
   const out: number[] = []
   for (const item of items) {
     if (item.kind === "reply") {
-      if (item.attached.some(waitsForOwner)) out.push(item.anchor.id)
+      if (item.attached.some(waits)) out.push(item.anchor.id)
     } else if (
       (item.kind === "notice" || item.kind === "mirror") &&
-      waitsForOwner(item.row)
+      waits(item.row)
     ) {
       out.push(item.row.id)
     }
@@ -983,13 +990,22 @@ export function MessageList({
   if (bottomed && leftAt != null) setLeftAt(null)
   else if (!bottomed && leftAt == null) setLeftAt(lastId)
   const newBelow = leftAt != null && lastId > leftAt
-  const waits = useMemo(() => ownerWaitTargets(items), [items])
+  // The page's activity, read once for the list, the badge and this.
+  const activity = useActivity(botId)
+  const stale = useMemo(
+    () => new Set(activity?.stale_acceptance ?? []),
+    [activity]
+  )
+  const waits = useMemo(() => ownerWaitTargets(items, stale), [items, stale])
   // On the primary the pill counts what waits on the owner anywhere —
-  // "Today"'s first group — and opens "Today" (10.7, 1.14); elsewhere, or
-  // before it is read, the cards here, scrolled to.
-  const today = useToday(botId == null)
-  const pill = attentionPill(today?.needs.length ?? 0, waits.length)
-  const showToday = usePersonalAgentUi((s) => s.showToday)
+  // "today"'s, from the same read as the list — and opens the activity at
+  // the first of it (10.7, C6); elsewhere, or with none, the cards here,
+  // scrolled to.
+  const pill = attentionPill(
+    botId == null ? (activity?.pill.count ?? 0) : 0,
+    waits.length
+  )
+  const showWaiting = usePersonalAgentUi((s) => s.showWaiting)
   // The message right above the "new messages" line is the last before a
   // line, as one above a time line is: it closes its run with a round
   // corner, and shows its actions on hover.
@@ -1297,7 +1313,7 @@ export function MessageList({
           className="top-2"
           onClick={() => {
             if (pill?.today) {
-              showToday()
+              showWaiting(activity?.pill.first ?? null)
               return
             }
             const first = waits[0]

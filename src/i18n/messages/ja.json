@@ -11729,6 +11729,28 @@
     "notify": {
       "open": "開く"
     },
+    "feed": {
+      "groups": {
+        "needs": "あなた待ち",
+        "watching": "進行中",
+        "next": "これから",
+        "done": "今日完了"
+      },
+      "empty": "あなたのやることも、実行中のものもありません。",
+      "failed": "アクティビティを今は読み込めません。",
+      "handed": "{name}に任せました",
+      "checking": "検収中 · 第 {round} ラウンド",
+      "queued": "マージ待ち",
+      "waitsAgent": "{name}の対応待ち",
+      "routineRunning": "実行中",
+      "routineLast": "前回：{outcome}",
+      "fold": "詳細を閉じる",
+      "unfold": "詳細を表示",
+      "viewReminder": "リマインダーを見る",
+      "viewCheck": "検収セッションを見る",
+      "openTask": "タスクを開く",
+      "routineDeleted": "このルーティンは削除されています。"
+    },
     "today": {
       "title": "今日",
       "empty": "今日あなたが対応することはありません",

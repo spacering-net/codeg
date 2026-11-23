@@ -7,19 +7,14 @@
  * one corner and the "⋯" of what acts on it in the other; under them
  * shadcn's tabs (10.1), the first open by
  * default — each tab of shadcn's pieces (`panel-section.tsx`):
- * - Activity: on the primary, "Today": every assistant's day in four groups
- *   (6.3, `today-section.tsx`); its open matters, as the workspace's task
- *   tab shows a board: sections by whom each piece waits on — the owner
- *   first, then the work still moving, what the agent has to pick up, what
- *   comes later — each piece once, as a card. A piece of handed-out work
- *   says where it stands on the PR ladder and opens its session in the
- *   drawer; a task carries its task card (8.5), and an entry whose work has
- *   ended (a pull request codeg does not follow yet) the owner closes there:
- *   done or dropped. A reminder, a follow-up or a question jumps to the
- *   message it came from, says when it is due and how it comes back, and the
- *   owner can settle it there: done, put off (15 minutes, an hour, tomorrow
- *   morning, or with no set time), dropped. Then its routines. The tab
- *   counts what waits on the owner.
+ * - Activity: one list, in four groups by what each thing means to the
+ *   owner — what waits on them, what is under way, what comes next (its
+ *   routines among it), what was done today — each thing once, as a row
+ *   that unfolds (C1, `activity/activity-tab.tsx`): on the primary,
+ *   every assistant's and the owner's own; on a work assistant's page,
+ *   its own. A matter is settled on its row — done, put off (15 minutes,
+ *   an hour, tomorrow morning, or with no set time), dropped. The tab
+ *   counts what waits on the owner, from the same read (C6).
  * - Output: what it made, newest first — the work that ended (tasks, the
  *   reports of the rest) and the documents it wrote in its working
  *   directory — filtered by kind.
@@ -40,7 +35,9 @@ import { useLayoutEffect, useRef } from "react"
 import { useTranslations } from "next-intl"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { usePersonalAgent } from "@/contexts/personal-agent-context"
 import type { PersonalAgentSnapshot } from "@/lib/types"
+import { useActivity } from "@/stores/personal-agent-activity-store"
 import { useChatMotion } from "@/hooks/use-chat-motion"
 import {
   usePersonalAgentUi,
@@ -70,7 +67,12 @@ export function PersonalAgentAuxPanel({
   const tab = usePersonalAgentUi((s) => s.auxTab)
   const setTab = usePersonalAgentUi((s) => s.setAuxTab)
   const work = useWork()
-  const waiting = work?.open.filter((m) => m.group === "owner").length ?? 0
+  const { botId, itemVersion, dispatchVersion, routineVersion } =
+    usePersonalAgent()
+  // What waits on the owner: the activity's own count (C6).
+  const waiting =
+    useActivity(botId, [itemVersion, dispatchVersion, routineVersion])
+      ?.waiting ?? 0
   // Another assistant shown: its panel comes in, as its conversation does.
   const asideRef = useRef<HTMLElement | null>(null)
   const motion = useChatMotion()
@@ -138,7 +140,7 @@ export function PersonalAgentAuxPanel({
           </TabsList>
         </AuxHead>
         <TabsContent value="activity" className="mt-0 min-h-0 flex-1">
-          <ActivityTab snapshot={snapshot} work={work} inDrawer={inDrawer} />
+          <ActivityTab snapshot={snapshot} inDrawer={inDrawer} />
         </TabsContent>
         <TabsContent value="output" className="mt-0 min-h-0 flex-1">
           <OutputTab work={work} workdir={snapshot.status.workdir ?? null} />

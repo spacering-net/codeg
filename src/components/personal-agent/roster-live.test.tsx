@@ -1241,4 +1241,18 @@ describe("the pill of what needs the owner", () => {
     ])
     expect(ownerWaitTargets(items)).toEqual([10])
   })
+
+  it("leaves out an acceptance card nothing can be done on any more (C6)", () => {
+    const row = (id: number, state: string) =>
+      ownerRow({
+        id,
+        kind: "notice",
+        data: { notice: "acceptance", state },
+        status: null,
+        body: "x",
+      })
+    const items = buildMessageItems([row(20, "open"), row(21, "changed")])
+    expect(ownerWaitTargets(items)).toEqual([20, 21])
+    expect(ownerWaitTargets(items, new Set([21]))).toEqual([20])
+  })
 })

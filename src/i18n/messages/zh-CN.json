@@ -11729,6 +11729,28 @@
     "notify": {
       "open": "打开"
     },
+    "feed": {
+      "groups": {
+        "needs": "等你",
+        "watching": "进行中",
+        "next": "接下来",
+        "done": "今天完成"
+      },
+      "empty": "没有要你做的，也没有在跑的。",
+      "failed": "暂时读不到动态。",
+      "handed": "交给{name}了",
+      "checking": "验收中 · 第 {round} 轮",
+      "queued": "已排队合并",
+      "waitsAgent": "等{name}处理",
+      "routineRunning": "在跑",
+      "routineLast": "上次：{outcome}",
+      "fold": "收起详情",
+      "unfold": "展开详情",
+      "viewReminder": "查看提醒",
+      "viewCheck": "查看验收会话",
+      "openTask": "打开任务",
+      "routineDeleted": "这个例程已经删除了。"
+    },
     "today": {
       "title": "今日",
       "empty": "今天没有需要你的事",

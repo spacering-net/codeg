@@ -1,14 +1,16 @@
 "use client"
 
-/** The activity's matters as cards — handed-out work, a reminder, a
- *  follow-up, a question — and the ways to settle them from the panel. */
+/** The activity's rows (C1, C3): one for each thing — "today"'s row of it,
+ *  the matter it stands for, or a routine — in one shape: who or what it is,
+ *  its title, one line of where it stands and when, at most one box (why it
+ *  failed, why it waits on the owner), the buttons that settle it, and a ›
+ *  at its end that unfolds the rest of it in place. */
 
 import { useState, type ReactNode } from "react"
 import { useLocale, useTranslations } from "next-intl"
 import {
   Bell,
   ChevronDown,
-  ChevronRight,
   Ear,
   Forward,
   ListTodo,
@@ -20,56 +22,48 @@ import { toast } from "sonner"
 import { formatRelative } from "@/components/conversations/sidebar-conversation-grouping"
 import { Button } from "@/components/ui/button"
 import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible"
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { usePersonalAgent } from "@/contexts/personal-agent-context"
 import { personalAgentItemAct } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
-import type { DispatchInfo, ItemInfo, ItemKind } from "@/lib/types"
-import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
-
+import type {
+  ActivityRow,
+  DispatchInfo,
+  ItemInfo,
+  ItemKind,
+  TodayRow,
+} from "@/lib/types"
+import { cn } from "@/lib/utils"
+import { refreshActivity } from "@/stores/personal-agent-activity-store"
+import { useRoster } from "@/stores/personal-agent-roster-store"
 import {
-  PanelGroup,
-  PanelIcon,
-  PanelItem,
-  type PanelTone,
-} from "../../panel-section"
+  usePersonalAgentUi,
+  type ActivityGroup,
+} from "@/stores/personal-agent-ui-store"
+
+import { PanelIcon, PanelItem, type PanelItemProps } from "../../panel-section"
+import { RoutineRow, UnfoldButton } from "../../routines-section"
 import {
   canOpenWork,
   ExecutorAvatar,
+  useBotName,
   useOpenWork,
-  usePageScope,
   useWorkMeta,
   workTargetOf,
 } from "../../shared"
-import { CheckLabel } from "../../acceptance-bits"
 import { useActivityTranslate } from "../../activity-text"
 import { dueWhen, repeatText } from "../../due-text"
 import { AnsweredForYou } from "../../event-card"
 import { LadderChip, TaskStrip } from "../../task-strip"
-import { MOVING, type Group, type Matter } from "../use-work"
+import { useTodayRowProps, type Opener } from "../../today-section"
+import { MOVING } from "../use-work"
 
 /** An executor's avatar leading a row, in px at 100% zoom: as a kind's
  *  icon tile. */
 export const ROW_AVATAR_SIZE = 24
-
-/** A section's marker, as the task tab marks its columns: what waits on the
- *  owner amber, what moves the theme's colour. */
-const GROUP_TONE: Record<Group, PanelTone> = {
-  owner: "amber",
-  external: "primary",
-  agent: "violet",
-  time: "muted",
-  none: "faint",
-}
 
 /** The icon of a matter that is not handed-out work. */
 const KIND_ICON: Record<Exclude<ItemKind, "dispatch">, LucideIcon> = {
@@ -80,157 +74,39 @@ const KIND_ICON: Record<Exclude<ItemKind, "dispatch">, LucideIcon> = {
   when_mentioned: Ear,
 }
 
-/** A section of the work tab, as the task tab draws its columns: its
- *  marker, its name and how many it holds — the count amber where the
- *  owner is waited on — folding. */
-export function WorkSection({
-  group,
-  label,
-  count,
-  children,
-}: {
-  group: Group
-  label: string
-  count: number
-  children: ReactNode
-}) {
-  return (
-    <PanelGroup
-      fold={`work.${group}`}
-      tone={GROUP_TONE[group]}
-      label={label}
-      count={count}
-      data-pa-group={group}
-    >
-      {children}
-    </PanelGroup>
-  )
-}
-
-/** A piece of handed-out work: who runs it, titled as in the list, where it
- *  stands; opening its session in the drawer. */
-export function DispatchCard({
-  d,
-  notes,
-  now,
-  time,
-  actions,
-}: {
-  d: DispatchInfo
-  /** What its entry says beyond the title: how the agent sums it up now,
-   *  what it will do once the work is done. */
-  notes?: string[]
+/** Where the rows open, and what they are drawn with: the page around the
+ *  list. */
+export interface RowScope {
   now: number
-  /** When, as the list it is in says it: how long ago by default. */
-  time?: string
-  /** Settling its entry, once the work no longer moves. */
-  actions?: ReactNode
-}) {
-  const t = useTranslations("PersonalAgent")
-  const openWork = useOpenWork()
-  const meta = useWorkMeta()
-  const target = workTargetOf(d)
-  const canOpen = canOpenWork(target)
-  return (
-    <PanelItem
-      media={
-        <ExecutorAvatar
-          id={d.executor.assistant_id}
-          name={d.executor.name}
-          size={ROW_AVATAR_SIZE}
-        />
-      }
-      title={d.title}
-      time={time ?? formatRelative(d.updated_at, now)}
-      chip={<LadderChip ladder={d.ladder ?? null} />}
-      meta={meta({
-        executor: d.executor.name,
-        mode: d.mode,
-        folder: d.folder_name,
-      })}
-      // Why it failed, in a red box.
-      callout={
-        d.state === "failed" && d.error?.trim()
-          ? { tone: "error", mono: true, text: d.error.trim() }
-          : null
-      }
-      notes={notes}
-      onOpen={canOpen ? () => openWork(target) : null}
-      openLabel={canOpen ? t("timeline.viewSession") : undefined}
-      extra={
-        d.task ||
-        d.answered_for_you > 0 ||
-        d.done_when?.trim() ||
-        d.check_for != null ? (
-          <div className="flex min-w-0 flex-col gap-2">
-            {d.check_for != null ? (
-              <CheckLabel round={d.check_round ?? null} />
-            ) : null}
-            <DoneWhenFold text={d.done_when} />
-            {d.task ? <TaskStrip d={d} compact /> : null}
-            {d.answered_for_you > 0 ? (
-              <AnsweredForYou count={d.answered_for_you} />
-            ) : null}
-          </div>
-        ) : undefined
-      }
-      actions={actions}
-    />
-  )
+  readOnly: boolean
+  inDrawer: boolean
+  opener: Opener
+  /** The board task's detail sheet. */
+  openTask: ((id: number) => void) | null
+  dispatches: DispatchInfo[]
 }
 
-/** What done looks like (7.5), folded under its label: a quiet bar that
- *  opens to the words the assistant wrote. */
-function DoneWhenFold({ text }: { text: string | null | undefined }) {
-  const t = useTranslations("PersonalAgent.dispatchCard")
-  const body = text?.trim()
-  if (!body) return null
-  return (
-    <Collapsible data-pa-done-when className="min-w-0">
-      <CollapsibleTrigger className="group/done relative z-10 flex h-8 w-full min-w-0 items-center gap-1.5 rounded-lg bg-muted px-2.5 text-start text-xs font-medium text-foreground/80 transition-colors outline-none hover:bg-muted/70 focus-visible:ring-2 focus-visible:ring-ring/50 data-[state=open]:rounded-b-none">
-        <ChevronRight
-          aria-hidden
-          className="size-3.5 shrink-0 text-muted-foreground transition-transform group-data-[state=open]/done:rotate-90 rtl:-scale-x-100 rtl:group-data-[state=open]/done:rotate-90"
-        />
-        <span className="min-w-0 truncate">{t("doneWhen")}</span>
-      </CollapsibleTrigger>
-      <CollapsibleContent className="rounded-b-lg bg-muted px-2.5 pb-2.5 text-xs leading-5 break-words whitespace-pre-line text-muted-foreground">
-        {body}
-      </CollapsibleContent>
-    </Collapsible>
-  )
-}
-
-/** The way to settle a matter on the panel: done, dropped, or — for one
- *  that is not handed-out work — later, or put off until `until`. */
-function useSettle(item: ItemInfo | null) {
-  const { botId } = usePersonalAgent()
-  const [acting, setActing] = useState(false)
-  const settle = (
-    act: "done" | "drop" | "later" | "snooze",
-    until?: "15m" | "1h" | "tomorrow"
-  ) => {
-    if (!item) return
-    setActing(true)
-    const call =
-      act === "snooze"
-        ? personalAgentItemAct(botId, item.id, act, until)
-        : personalAgentItemAct(botId, item.id, act)
-    call
-      .catch((e) => toast.error(toErrorMessage(e)))
-      .finally(() => setActing(false))
+/** A card in an assistant's conversation, shown: the page switched to it,
+ *  the drawer out of the way. */
+function useJumpTo(inDrawer: boolean): (bot: number, rowId: number) => void {
+  const entries = useRoster()
+  return (bot, rowId) => {
+    const primary = entries?.find((e) => e.id === bot)?.kind === "primary"
+    const ui = usePersonalAgentUi.getState()
+    ui.setViewBot(primary ? null : bot)
+    ui.showConversation()
+    ui.setPendingJump({ bot, row: rowId })
+    if (inDrawer) ui.setAuxOpen(false)
   }
-  return { acting, settle }
 }
 
 /** When a matter is due, in a few words: due, overdue, reminded — and how
- *  it comes back when it repeats. Nothing for one with no due time. */
+ *  it comes back when it repeats; what brings up one on a mention. */
 function useDueNotes(): (item: ItemInfo, now: number) => string[] {
   const tw = useActivityTranslate()
   const t = useTranslations("PersonalAgent.items")
   const locale = useLocale()
   return (item, now) => {
-    // Brought up by a mention (6.8): its words, its times, its last day.
     if (item.mention) {
       const m = item.mention
       return [
@@ -266,188 +142,515 @@ const SNOOZE_CHOICES = [
   { until: "tomorrow", label: "tomorrow" },
 ] as const
 
-/** [Later], as a menu: in 15 minutes, in an hour, tomorrow morning, or
- *  with no set time (it waits on time). */
-function LaterMenu({
-  disabled,
-  onSnooze,
-  onLater,
+/** The way to settle a matter on its row (C1): done, dropped — and one that
+ *  is not handed-out work later: in 15 minutes, in an hour, tomorrow
+ *  morning, or with no set time. Handed-out work settles itself as it
+ *  ends; once it no longer moves, the owner closes its matter. Each goes to
+ *  the matter's own assistant. */
+function ItemActions({
+  item,
+  bot,
+  dispatch,
 }: {
-  disabled: boolean
-  onSnooze: (until: "15m" | "1h" | "tomorrow") => void
-  onLater: () => void
+  item: ItemInfo
+  bot: number | null
+  dispatch: DispatchInfo | null
 }) {
   const td = useTranslations("PersonalAgent.detail.item")
+  const [acting, setActing] = useState(false)
+  const settle = (
+    act: "done" | "drop" | "later" | "snooze",
+    until?: "15m" | "1h" | "tomorrow"
+  ) => {
+    setActing(true)
+    const call =
+      act === "snooze"
+        ? personalAgentItemAct(bot, item.id, act, until)
+        : personalAgentItemAct(bot, item.id, act)
+    call
+      .then(() => refreshActivity())
+      .catch((e) => toast.error(toErrorMessage(e)))
+      .finally(() => setActing(false))
+  }
+  const work = item.kind === "dispatch"
+  const state = dispatch?.state ?? item.dispatch_state
+  if (work && state != null && MOVING.has(state)) return null
+  const later =
+    !work &&
+    item.kind !== "when_mentioned" &&
+    (item.waits_for !== "time" || item.due_at != null)
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={disabled}
-          data-pa-item-act="later-menu"
-        >
-          {td("later")}
-          <ChevronDown className="size-3" aria-hidden />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start">
-        {SNOOZE_CHOICES.map((c) => (
-          <DropdownMenuItem
-            key={c.until}
-            onSelect={() => onSnooze(c.until)}
-            data-pa-item-act={`snooze-${c.until}`}
-          >
-            {td(c.label)}
-          </DropdownMenuItem>
-        ))}
-        <DropdownMenuItem onSelect={onLater} data-pa-item-act="later">
-          {td("untimed")}
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <>
+      <Button
+        size="sm"
+        variant="outline"
+        disabled={acting}
+        onClick={() => settle("done")}
+        data-pa-item-act="done"
+      >
+        {td("done")}
+      </Button>
+      {later ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={acting}
+              data-pa-item-act="later-menu"
+            >
+              {td("later")}
+              <ChevronDown className="size-3" aria-hidden />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            {SNOOZE_CHOICES.map((c) => (
+              <DropdownMenuItem
+                key={c.until}
+                onSelect={() => settle("snooze", c.until)}
+                data-pa-item-act={`snooze-${c.until}`}
+              >
+                {td(c.label)}
+              </DropdownMenuItem>
+            ))}
+            <DropdownMenuItem
+              onSelect={() => settle("later")}
+              data-pa-item-act="later"
+            >
+              {td("untimed")}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
+      <Button
+        size="sm"
+        variant="ghost"
+        disabled={acting}
+        className="text-muted-foreground"
+        onClick={() => settle("drop")}
+        data-pa-item-act="drop"
+      >
+        {td("drop")}
+      </Button>
+    </>
   )
 }
 
-/** A reminder, a follow-up or a question: its kind's icon, and the way to
- *  the message it came from. */
-function ItemCard({
+/** What a row unfolds to (C3): who runs its work, how and where; what done
+ *  looks like; how often its assistant answered for the owner; its matter's
+ *  notes; the whole of an error; and the other ways in — its reminder's
+ *  card, its acceptance check's session, its board task. Nothing: no ›. */
+function useDetails({
+  row,
+  today,
   item,
-  inDrawer,
-  now,
+  dispatch,
+  scope,
 }: {
-  item: ItemInfo
-  inDrawer: boolean
-  now: number
-}) {
+  row: ActivityRow
+  today: TodayRow | null
+  item: ItemInfo | null
+  dispatch: DispatchInfo | null
+  scope: RowScope
+}): ReactNode {
   const t = useTranslations("PersonalAgent")
-  const td = useTranslations("PersonalAgent.detail.item")
-  const { jumpTo, readOnly } = usePageScope()
-  const setAuxOpen = usePersonalAgentUi((s) => s.setAuxOpen)
-  const { acting, settle } = useSettle(item)
-  const dueNotes = useDueNotes()
-  const Icon =
-    item.kind === "dispatch" ? ListTodo : (KIND_ICON[item.kind] ?? ListTodo)
-  const origin = item.origin_timeline_id
-  const actions =
-    readOnly || item.kind === "dispatch" ? null : (
-      <>
+  const tf = useTranslations("PersonalAgent.feed")
+  const meta = useWorkMeta()
+  const openWork = useOpenWork()
+  const jumpTo = useJumpTo(scope.inDrawer)
+  const lines: ReactNode[] = []
+  if (dispatch) {
+    const who = meta({
+      executor: dispatch.executor.name,
+      mode: dispatch.mode,
+      folder: dispatch.folder_name,
+    })
+    if (who) lines.push(<p key="who">{who}</p>)
+    if (dispatch.done_when?.trim()) {
+      lines.push(
+        <div key="done-when" data-pa-done-when>
+          <p className="font-medium text-foreground/80">
+            {t("dispatchCard.doneWhen")}
+          </p>
+          <p className="break-words whitespace-pre-line">
+            {dispatch.done_when.trim()}
+          </p>
+        </div>
+      )
+    }
+    if (dispatch.answered_for_you > 0) {
+      lines.push(
+        <AnsweredForYou key="answered" count={dispatch.answered_for_you} />
+      )
+    }
+    if (dispatch.state === "failed" && dispatch.error?.trim()) {
+      lines.push(
+        <p
+          key="error"
+          className="font-mono break-words whitespace-pre-wrap text-red-700 dark:text-red-300"
+          data-pa-row-error
+        >
+          {dispatch.error.trim()}
+        </p>
+      )
+    }
+  }
+  if (item) {
+    const summary = item.summary.trim()
+    const title = today?.title.trim() ?? dispatch?.title.trim()
+    if (summary && title && summary !== title) {
+      lines.push(<p key="summary">{summary}</p>)
+    }
+    // What happens once it is done: a reminder's, a follow-up's — not
+    // handed-out work's, which its assistant is told itself (B5).
+    if (item.kind !== "dispatch" && item.on_done) {
+      lines.push(
+        <p key="on-done" data-pa-item-on-done>
+          {t("items.onDone", { text: item.on_done })}
+        </p>
+      )
+    }
+  }
+  const links: ReactNode[] = []
+  const bot = row.bot_id
+  // Its reminder's card: from another day's firing, or today's — not a
+  // matter coming up, whose row is the message it came from.
+  const card =
+    row.card_row_id ?? (today?.kind === "reminder" ? today.row_id : null)
+  // The row opens the message its matter came from; its reminder's card
+  // here (C1): both ways in.
+  if (bot != null && card != null) {
+    links.push(
+      <Button
+        key="reminder"
+        size="sm"
+        variant="outline"
+        onClick={() => jumpTo(bot, card)}
+        data-pa-row-link="reminder"
+      >
+        {tf("viewReminder")}
+      </Button>
+    )
+  }
+  if (today?.check_dispatch_id != null) {
+    const info = scope.dispatches.find((d) => d.id === today.check_dispatch_id)
+    const target = workTargetOf(info)
+    if (info && canOpenWork(target)) {
+      links.push(
         <Button
+          key="check"
           size="sm"
           variant="outline"
-          disabled={acting}
-          onClick={() => settle("done")}
-          data-pa-item-act="done"
+          onClick={() => openWork(target)}
+          data-pa-row-link="check"
         >
-          {td("done")}
+          {tf("viewCheck")}
         </Button>
-        {item.kind !== "when_mentioned" &&
-        (item.waits_for !== "time" || item.due_at != null) ? (
-          <LaterMenu
-            disabled={acting}
-            onSnooze={(until) => settle("snooze", until)}
-            onLater={() => settle("later")}
-          />
-        ) : null}
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={acting}
-          className="text-muted-foreground"
-          onClick={() => settle("drop")}
-          data-pa-item-act="drop"
-        >
-          {td("drop")}
-        </Button>
-      </>
+      )
+    }
+  }
+  if (today?.kind === "acceptance" && today.task_id != null && scope.openTask) {
+    const id = today.task_id
+    const open = scope.openTask
+    links.push(
+      <Button
+        key="task"
+        size="sm"
+        variant="outline"
+        onClick={() => open(id)}
+        data-pa-row-link="task"
+      >
+        {tf("openTask")}
+      </Button>
     )
+  }
+  if (lines.length === 0 && links.length === 0) return null
   return (
-    <PanelItem
-      media={<PanelIcon icon={Icon} />}
-      title={item.summary}
-      chip={
-        item.at_due === "act" && item.due_at ? (
-          <span
-            className="shrink-0 rounded-full bg-muted px-1.5 py-px text-[0.625rem] leading-4 text-muted-foreground"
-            data-pa-item-at-due="act"
-          >
-            {td("act")}
-          </span>
-        ) : undefined
-      }
-      time={formatRelative(item.updated_at, now)}
-      meta={t(`items.kind.${item.kind}`)}
-      notes={[
-        ...dueNotes(item, now),
-        ...(item.on_done ? [t("items.onDone", { text: item.on_done })] : []),
-      ]}
-      onOpen={
-        origin != null
-          ? () => {
-              jumpTo(origin)
-              // The drawer would cover the message it jumped to.
-              if (inDrawer) setAuxOpen(false)
-            }
-          : null
-      }
-      openLabel={origin != null ? t("matters.origin") : undefined}
-      actions={actions}
+    <div
+      className="flex min-w-0 flex-col gap-2 text-xs leading-5 text-muted-foreground"
+      data-pa-row-details
+    >
+      {lines}
+      {links.length > 0 ? (
+        <div className="flex flex-wrap gap-2">{links}</div>
+      ) : null}
+    </div>
+  )
+}
+
+/** One row of the activity, as what it is. */
+export function ActivityRowView({
+  row,
+  group,
+  scope,
+  flash,
+}: {
+  row: ActivityRow
+  group: ActivityGroup
+  scope: RowScope
+  /** Just brought into view: marked for a moment. */
+  flash: boolean
+}) {
+  const open = usePersonalAgentUi((s) => s.activityOpen[row.thing] ?? false)
+  const setOpen = usePersonalAgentUi((s) => s.setActivityOpen)
+  const onOpenChange = (o: boolean) => setOpen(row.thing, o)
+  if (row.routine) {
+    return (
+      <RoutineRow
+        r={row.routine}
+        readOnly={scope.readOnly}
+        open={open}
+        onOpenChange={onOpenChange}
+        flash={flash}
+      />
+    )
+  }
+  return (
+    <ThingRow
+      row={row}
+      group={group}
+      scope={scope}
+      open={open}
+      onOpenChange={onOpenChange}
+      flash={flash}
     />
   )
 }
 
-export function MatterCard({
-  m,
-  inDrawer,
-  now,
+function ThingRow({
+  row,
+  group,
+  scope,
+  open,
+  onOpenChange,
+  flash,
 }: {
-  m: Matter
-  inDrawer: boolean
-  now: number
+  row: ActivityRow
+  group: ActivityGroup
+  scope: RowScope
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  flash: boolean
 }) {
+  const today = row.today
+  const item = row.item
+  const dispatchId = today?.dispatch_id ?? item?.dispatch_id ?? null
+  const dispatch =
+    dispatchId != null
+      ? (scope.dispatches.find((d) => d.id === dispatchId) ?? null)
+      : null
+  const details = useDetails({ row, today, item, dispatch, scope })
+  const actions =
+    item && !scope.readOnly ? (
+      <ItemActions item={item} bot={row.bot_id} dispatch={dispatch} />
+    ) : undefined
+  const unfold = details ? (
+    <UnfoldButton open={open} onOpenChange={onOpenChange} />
+  ) : null
+  const props = {
+    open: open && details != null,
+    details,
+    unfold,
+    flash,
+    dispatch,
+  }
+  const shell = { ...props, row, scope, actions }
+  if (today) return <TodayRowShell {...shell} today={today} group={group} />
+  if (item && dispatch) return <DispatchRowShell {...shell} item={item} />
+  if (item) return <ItemRowShell {...shell} item={item} />
+  return null
+}
+
+/** What every row adds to its own: the › at its end (after a button of
+ *  its own), its task's strip, what it unfolds to, its key and its mark. */
+function finish(
+  props: PanelItemProps,
+  {
+    row,
+    open,
+    details,
+    unfold,
+    flash,
+    strip,
+  }: {
+    row: ActivityRow
+    open: boolean
+    details: ReactNode
+    unfold: ReactNode
+    flash: boolean
+    strip?: ReactNode
+  }
+): PanelItemProps {
+  const action =
+    props.action && unfold ? (
+      <span className="flex items-center gap-1">
+        {props.action}
+        {unfold}
+      </span>
+    ) : (
+      (props.action ?? unfold)
+    )
+  const extra =
+    strip || open ? (
+      <div className="flex min-w-0 flex-col gap-2">
+        {strip}
+        {open ? details : null}
+      </div>
+    ) : undefined
+  return {
+    ...props,
+    action,
+    extra,
+    className: cn(
+      "scroll-mt-12 transition-colors",
+      flash && "bg-primary/10",
+      props.className
+    ),
+    "data-pa-activity-row": row.key,
+  } as PanelItemProps
+}
+
+interface ShellProps {
+  row: ActivityRow
+  scope: RowScope
+  actions: ReactNode | undefined
+  open: boolean
+  details: ReactNode
+  unfold: ReactNode
+  flash: boolean
+  dispatch: DispatchInfo | null
+}
+
+/** "Today"'s row of it, the matter's buttons and due line on it — opening,
+ *  as the matter did, the message it came from. */
+function TodayRowShell({
+  today,
+  group,
+  ...p
+}: ShellProps & { today: TodayRow; group: ActivityGroup }) {
+  const dueNotes = useDueNotes()
+  const jumpTo = useJumpTo(p.scope.inDrawer)
+  const item = p.row.item
+  const bot = p.row.bot_id
+  const origin =
+    item && item.kind !== "dispatch" ? item.origin_timeline_id : null
+  const props = useTodayRowProps({
+    row: today,
+    waiting: group === "needs",
+    now: p.scope.now,
+    onOpen:
+      origin != null && bot != null
+        ? () => jumpTo(bot, origin)
+        : p.scope.opener(today),
+    readOnly: p.scope.readOnly,
+    actions: p.actions,
+  })
+  const notes =
+    item && item.kind !== "dispatch"
+      ? [...(props.notes ?? []), ...dueNotes(item, p.scope.now)]
+      : props.notes
+  const strip = p.dispatch?.task ? (
+    <TaskStrip d={p.dispatch} compact bot={p.row.bot_id} />
+  ) : null
+  // Where its work stands on the ladder, as its card said it (a pull
+  // request stuck on a conflict, not just "finished").
+  const chip =
+    props.chip ??
+    (p.dispatch?.ladder ? <LadderChip ladder={p.dispatch.ladder} /> : undefined)
+  return <PanelItem {...finish({ ...props, notes, chip }, { ...p, strip })} />
+}
+
+/** A matter's line under its title: its kind (or nothing, for work), whose
+ *  on the primary's page, and that its assistant has it. */
+function useMatterMeta(): (row: ActivityRow, item: ItemInfo) => string {
+  const t = useTranslations("PersonalAgent")
+  const tf = useTranslations("PersonalAgent.feed")
+  const entries = useRoster()
+  const botName = useBotName()
+  return (row, item) => {
+    const entry =
+      row.bot_id != null ? entries?.find((e) => e.id === row.bot_id) : undefined
+    const name =
+      row.bot_id != null
+        ? botName(entry ?? { id: row.bot_id, kind: "worker" })
+        : ""
+    const parts: string[] = []
+    if (item.kind !== "dispatch") parts.push(t(`items.kind.${item.kind}`))
+    // Its assistant has it: said as waiting on it, not that it is on it
+    // now — the ledger cannot say that.
+    if (item.waits_for === "agent" && name) {
+      parts.push(tf("waitsAgent", { name }))
+    } else if (name) {
+      parts.push(name)
+    }
+    return parts.join(" · ")
+  }
+}
+
+/** Handed-out work with no row of "today": who runs it, where it stands. */
+function DispatchRowShell({
+  item,
+  ...p
+}: ShellProps & { item: ItemInfo }) {
+  const t = useTranslations("PersonalAgent")
+  const openWork = useOpenWork()
+  const matterMeta = useMatterMeta()
+  const d = p.dispatch!
+  const target = workTargetOf(d)
+  const canOpen = canOpenWork(target)
+  const error = d.state === "failed" ? d.error?.trim().split("\n")[0] : null
+  const props: PanelItemProps = {
+    media: (
+      <ExecutorAvatar
+        id={d.executor.assistant_id}
+        name={d.executor.name}
+        size={ROW_AVATAR_SIZE}
+      />
+    ),
+    title: d.title,
+    time: formatRelative(d.updated_at, p.scope.now),
+    chip: <LadderChip ladder={d.ladder ?? null} />,
+    meta: matterMeta(p.row, item) || undefined,
+    // Why it failed, its first line; the whole of it unfolded.
+    callout: error ? { tone: "error", mono: true, text: error } : null,
+    onOpen: canOpen ? () => openWork(target) : null,
+    openLabel: canOpen ? t("timeline.viewSession") : undefined,
+    actions: p.actions,
+  }
+  const strip = d.task ? <TaskStrip d={d} compact bot={p.row.bot_id} /> : null
+  return <PanelItem {...finish(props, { ...p, strip })} />
+}
+
+/** A reminder, a follow-up, a question: its kind's icon, when it is due,
+ *  and the way to the message it came from. */
+function ItemRowShell({ item, ...p }: ShellProps & { item: ItemInfo }) {
   const t = useTranslations("PersonalAgent")
   const td = useTranslations("PersonalAgent.detail.item")
-  const { readOnly } = usePageScope()
-  const { acting, settle } = useSettle(m.item)
-  if (m.dispatch) {
-    const summary = m.item?.summary?.trim()
-    const onDone = m.item?.on_done ?? m.dispatch.on_done
-    const notes = [
-      summary && summary !== m.dispatch.title ? summary : null,
-      onDone ? t("items.onDone", { text: onDone }) : null,
-    ].filter((n): n is string => n != null)
-    // Handed-out work settles itself as it ends — but for a pull request
-    // codeg does not follow yet, which the owner closes once merged.
-    const settled = m.item != null && !MOVING.has(m.dispatch.state)
-    const actions =
-      settled && !readOnly ? (
-        <>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={acting}
-            onClick={() => settle("done")}
-            data-pa-item-act="done"
-          >
-            {td("done")}
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={acting}
-            className="text-muted-foreground"
-            onClick={() => settle("drop")}
-            data-pa-item-act="drop"
-          >
-            {td("drop")}
-          </Button>
-        </>
-      ) : undefined
-    return (
-      <DispatchCard d={m.dispatch} notes={notes} now={now} actions={actions} />
-    )
+  const dueNotes = useDueNotes()
+  const matterMeta = useMatterMeta()
+  const jumpTo = useJumpTo(p.scope.inDrawer)
+  const Icon =
+    item.kind === "dispatch" ? ListTodo : (KIND_ICON[item.kind] ?? ListTodo)
+  const origin = item.origin_timeline_id
+  const bot = p.row.bot_id
+  const props: PanelItemProps = {
+    media: <PanelIcon icon={Icon} />,
+    title: item.summary,
+    chip:
+      item.at_due === "act" && item.due_at ? (
+        <span
+          className="shrink-0 rounded-full bg-muted px-1.5 py-px text-[0.625rem] leading-4 text-muted-foreground"
+          data-pa-item-at-due="act"
+        >
+          {td("act")}
+        </span>
+      ) : undefined,
+    time: formatRelative(item.updated_at, p.scope.now),
+    meta: matterMeta(p.row, item),
+    notes: dueNotes(item, p.scope.now),
+    onOpen: origin != null && bot != null ? () => jumpTo(bot, origin) : null,
+    openLabel: origin != null ? t("matters.origin") : undefined,
+    actions: p.actions,
   }
-  return m.item ? (
-    <ItemCard item={m.item} inDrawer={inDrawer} now={now} />
-  ) : null
+  return <PanelItem {...finish(props, p)} />
 }

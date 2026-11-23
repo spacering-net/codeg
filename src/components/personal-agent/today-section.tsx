@@ -1,61 +1,45 @@
 "use client"
 
 /**
- * "Today" (6.3, 1.14), first on the primary's activity tab: every
- * assistant's at once, in four groups — what waits on the owner anywhere in
- * codeg, what the assistants keep an eye on, the rest of the day, what was
- * done today — each shown only when it has something, and "nothing needs
- * you today" when none has.
- *
- * Each row leads with the assistant it is about, or the project of the
- * owner's own session or task, and opens what it is about where the owner
- * can act on it: a card in its assistant's conversation, a session as a
- * conversation tab, a board task's detail sheet, handed-out work in the
- * drawer; one with nothing of its own, its assistant. A matter is settled
- * on its row (done, later) — one that came due and one still to come — and
- * a change an assistant made for the owner is taken back on its row. None of it goes
- * through an assistant's brain.
+ * The rows of "today" (6.3, 1.14, C1): what each says — the assistant it is
+ * about, or the project of the owner's own session or task; what it is and
+ * where it stands; why it waits on the owner — and where it opens, where the
+ * owner can act on it: a card in its assistant's conversation, a session as
+ * a conversation tab, a board task's detail sheet, handed-out work in the
+ * drawer; one with nothing of its own, its assistant. A change an assistant
+ * made for the owner is taken back on its row, a draft taken in or let go.
+ * The activity's list draws them (`useTodayRowProps`), and a morning brief
+ * its rows (`BriefRows`). None of it goes through an assistant's brain.
  */
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { useEffect, useMemo, useState, type ReactNode } from "react"
 import { useLocale, useTranslations } from "next-intl"
-import { ChevronDown, Folder, Sun } from "lucide-react"
+import { Folder } from "lucide-react"
 import { toast } from "sonner"
 
 import { formatRelative } from "@/components/conversations/sidebar-conversation-grouping"
 import { useTaskDialogs } from "@/components/tasks/use-task-dialogs"
 import { Button } from "@/components/ui/button"
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import { Skeleton } from "@/components/ui/skeleton"
-import {
   useOptionalTasksView,
   useTasksView,
 } from "@/contexts/tasks-view-context"
-import { personalAgentItemAct, personalAgentNoticeAct } from "@/lib/api"
+import { personalAgentNoticeAct } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
-import type { DispatchInfo, PersonalAgentToday, TodayRow } from "@/lib/types"
+import type { DispatchInfo, TodayRow } from "@/lib/types"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
+import { refreshActivity } from "@/stores/personal-agent-activity-store"
 import { useRoster } from "@/stores/personal-agent-roster-store"
-import { refreshToday } from "@/stores/personal-agent-today-store"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import { BotAvatar } from "./bot-avatar"
 import { ChangesText } from "./change-text"
 import {
-  PanelEmpty,
-  PanelGroup,
   PanelIcon,
   PanelItem,
   PanelList,
-  PanelMoreRow,
-  PanelSection,
   useInPanelList,
-  type PanelTone,
+  type PanelItemProps,
 } from "./panel-section"
 import { useSessionLinkOpener } from "./session-link"
 import { canOpenWork, useBotName, useOpenWork, workTargetOf } from "./shared"
@@ -64,22 +48,8 @@ import { canOpenWork, useBotName, useOpenWork, workTargetOf } from "./shared"
  *  card of its own (the morning brief's), as a work card's avatar. */
 const LEAD_SIZE = 24
 const CARD_LEAD_SIZE = 20
-/** Rows a group shows before "show all". */
-const GROUP_SHOWN = 8
-
-type GroupKey = "needs" | "watching" | "schedule" | "done"
-const GROUPS: readonly GroupKey[] = ["needs", "watching", "schedule", "done"]
-
-/** A group's marker, as the matters' sections mark theirs. */
-const GROUP_TONE: Record<GroupKey, PanelTone> = {
-  needs: "amber",
-  watching: "primary",
-  schedule: "muted",
-  done: "green",
-}
-
 /** Where a row opens: its card, a session, a task, a piece of work. */
-type Opener = (row: TodayRow) => (() => void) | null
+export type Opener = (row: TodayRow) => (() => void) | null
 
 /** How a tidy-up's and a process skill's rows can stand (7.7, 7.8). */
 const TIDY_ROW_STATES = new Set([
@@ -101,8 +71,8 @@ const GO_OF: Record<string, "merge" | "board" | "review" | undefined> = {
 }
 
 /** The way each row opens, from the page around it. */
-function useOpener(
-  today: Pick<PersonalAgentToday, "dispatches">,
+export function useOpener(
+  today: { dispatches: DispatchInfo[] },
   inDrawer: boolean,
   openTask: ((id: number) => void) | null
 ): Opener {
@@ -156,12 +126,12 @@ function useOpener(
       case "pr":
       case "pr_merged":
         return work ?? task ?? bot
-      // A routine: its assistant's routines.
+      // A routine: its assistant's, at its row.
       case "routine":
         return bot
           ? () => {
               bot()
-              usePersonalAgentUi.getState().showRoutines()
+              usePersonalAgentUi.getState().showRoutines(row.routine_id)
             }
           : null
       case "routine_run":
@@ -239,166 +209,13 @@ function useRowWords() {
 }
 
 /** A minute-at-a-time clock, for the rows' "3 min". */
-function useNow(): number {
+export function useNow(): number {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 60_000)
     return () => window.clearInterval(id)
   }, [])
   return now
-}
-
-export function TodaySection({
-  title,
-  today,
-  inDrawer,
-  readOnly,
-}: {
-  /** The section's title, as the activity's others have theirs. */
-  title: string
-  today: PersonalAgentToday | null
-  inDrawer: boolean
-  /** The assistants run in another process: nothing is acted on here. */
-  readOnly: boolean
-}) {
-  const { tasks, refetch } = useTasksView()
-  const allFolders = useAppWorkspaceStore((s) => s.allFolders)
-  const folderNames = useMemo(() => {
-    const map = new Map<number, string>()
-    for (const f of allFolders) map.set(f.id, f.alias ?? f.name)
-    return map
-  }, [allFolders])
-  const { openDetail, dialogs } = useTaskDialogs({
-    tasks,
-    refetch,
-    folderNames,
-    defaultFolderId: null,
-  })
-  // The primary's pill asks for it: brought into view.
-  const asked = usePersonalAgentUi((s) => s.todayAsked)
-  const ref = useRef<HTMLElement | null>(null)
-  useEffect(() => {
-    if (asked > 0) ref.current?.scrollIntoView({ block: "start" })
-  }, [asked])
-
-  return (
-    <PanelSection
-      ref={ref}
-      title={title}
-      titleInCards
-      className="scroll-mt-3"
-      data-pa-detail="today"
-    >
-      {today == null ? (
-        <div className="flex flex-col gap-1.5" aria-hidden>
-          <Skeleton className="h-4 w-24 rounded-md" />
-          <Skeleton className="h-16 w-full rounded-xl" />
-        </div>
-      ) : (
-        <TodayBody
-          today={today}
-          inDrawer={inDrawer}
-          readOnly={readOnly}
-          openTask={openDetail}
-        />
-      )}
-      {dialogs}
-    </PanelSection>
-  )
-}
-
-function TodayBody({
-  today,
-  inDrawer,
-  readOnly,
-  openTask,
-}: {
-  today: PersonalAgentToday
-  inDrawer: boolean
-  readOnly: boolean
-  openTask: (id: number) => void
-}) {
-  const t = useTranslations("PersonalAgent.today")
-  const now = useNow()
-  const opener = useOpener(today, inDrawer, openTask)
-  const shown = GROUPS.filter((g) => today[g].length > 0)
-  // The morning brief or the wrap-up, while it is being written (6.4).
-  const preparing =
-    today.brief?.state === "preparing" ? (
-      <p
-        className="text-xs leading-5 text-muted-foreground"
-        data-pa-today-brief={today.brief.kind}
-      >
-        <span className="activity-shimmer">
-          {t(today.brief.kind === "wrap" ? "preparingWrap" : "preparingBrief")}
-        </span>
-      </p>
-    ) : null
-  if (shown.length === 0) {
-    return (
-      <div className="flex flex-col gap-1.5">
-        {preparing}
-        <PanelEmpty icon={Sun} data-pa-today-empty>
-          {t("empty")}
-        </PanelEmpty>
-      </div>
-    )
-  }
-  return (
-    <div className="flex flex-col gap-4">
-      {preparing}
-      {shown.map((g) => (
-        <TodayGroup key={g} group={g} count={today[g].length}>
-          {(all) =>
-            (all ? today[g] : today[g].slice(0, GROUP_SHOWN)).map((row) => (
-              <TodayRowCard
-                key={row.key}
-                row={row}
-                group={g}
-                now={now}
-                onOpen={opener(row)}
-                readOnly={readOnly}
-              />
-            ))
-          }
-        </TodayGroup>
-      ))}
-    </div>
-  )
-}
-
-/** A group: its marker, its name and how many it holds — amber where the
- *  owner is waited on — folding; the rows under it, the first few until
- *  "show all". */
-function TodayGroup({
-  group,
-  count,
-  children,
-}: {
-  group: GroupKey
-  count: number
-  children: (all: boolean) => ReactNode
-}) {
-  const t = useTranslations("PersonalAgent.today")
-  const [all, setAll] = useState(false)
-  return (
-    <PanelGroup
-      fold={`today.${group}`}
-      tone={GROUP_TONE[group]}
-      label={t(`groups.${group}`)}
-      count={count}
-      more={
-        !all && count > GROUP_SHOWN ? (
-          <PanelMoreRow onClick={() => setAll(true)} data-pa-today-more={group}>
-            {t("more", { count: count - GROUP_SHOWN })}
-          </PanelMoreRow>
-        ) : null
-      }
-      data-pa-today-group={group}
-    >
-      {children(all)}
-    </PanelGroup>
-  )
 }
 
 /** What leads a row: the assistant it is about, or the project of the
@@ -427,59 +244,6 @@ function RowLead({ row }: { row: TodayRow }) {
   )
 }
 
-/** The way to settle a matter from its row: done, or later. */
-function MatterActions({ row }: { row: TodayRow }) {
-  const td = useTranslations("PersonalAgent.detail.item")
-  const [acting, setActing] = useState(false)
-  const act = (kind: "done" | "snooze", until?: "15m" | "1h" | "tomorrow") => {
-    if (row.item_id == null) return
-    setActing(true)
-    personalAgentItemAct(row.bot_id, row.item_id, kind, until)
-      .then(() => refreshToday())
-      .catch((e) => toast.error(toErrorMessage(e)))
-      .finally(() => setActing(false))
-  }
-  return (
-    <>
-      <Button
-        size="sm"
-        variant="outline"
-        disabled={acting}
-        onClick={() => act("done")}
-        data-pa-today-act="done"
-      >
-        {td("done")}
-      </Button>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={acting}
-            data-pa-today-act="later"
-          >
-            {td("later")}
-            <ChevronDown className="size-3" aria-hidden />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start">
-          {(["15m", "1h", "tomorrow"] as const).map((until) => (
-            <DropdownMenuItem
-              key={until}
-              onSelect={() => act("snooze", until)}
-              data-pa-today-act={`snooze-${until}`}
-            >
-              {td(
-                until === "15m" ? "in15m" : until === "1h" ? "in1h" : "tomorrow"
-              )}
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </>
-  )
-}
-
 /** [Undo] on a change an assistant made for the owner. */
 function UndoAction({ row }: { row: TodayRow }) {
   const t = useTranslations("PersonalAgent.today")
@@ -493,7 +257,7 @@ function UndoAction({ row }: { row: TodayRow }) {
         if (row.notice_id == null) return
         setActing(true)
         personalAgentNoticeAct(row.notice_id, "undo", row.bot_id)
-          .then(() => refreshToday())
+          .then(() => refreshActivity())
           .catch((e) => toast.error(toErrorMessage(e)))
           .finally(() => setActing(false))
       }}
@@ -513,7 +277,7 @@ function DraftActions({ row }: { row: TodayRow }) {
     if (row.notice_id == null) return
     setActing(true)
     personalAgentNoticeAct(row.notice_id, action, row.bot_id)
-      .then(() => refreshToday())
+      .then(() => refreshActivity())
       .catch((e) => toast.error(toErrorMessage(e)))
       .finally(() => setActing(false))
   }
@@ -540,34 +304,47 @@ function DraftActions({ row }: { row: TodayRow }) {
   )
 }
 
-function TodayRowCard({
+/** What a row of "today" shows, as a `PanelItem`'s props: in the
+ *  activity's list (`waiting`: in what waits on the owner — the reason in a
+ *  box, the button that does it), or in a morning brief. `actions` given
+ *  take the place of its own (a matter's, settled on its row). */
+export function useTodayRowProps({
   row,
-  group,
+  waiting,
   now,
   onOpen,
   readOnly,
+  actions: given,
 }: {
   row: TodayRow
-  /** The group of today it is in; none in a morning brief. */
-  group?: GroupKey
+  waiting: boolean
   now: number
   onOpen: (() => void) | null
   readOnly: boolean
-}) {
+  actions?: ReactNode
+}): PanelItemProps {
   const t = useTranslations("PersonalAgent.today")
+  const ta = useTranslations("PersonalAgent.feed")
   const words = useRowWords()
   const entries = useRoster()
   const botName = useBotName()
-  const what = words(row)
   const entry =
     row.bot_id != null ? entries?.find((e) => e.id === row.bot_id) : undefined
   const who =
     row.bot_id != null
       ? botName(entry ?? { id: row.bot_id, kind: "worker" })
       : (row.project?.name ?? t("yours"))
+  // A reminder handed to its assistant says so; a task being checked, its
+  // round (C1).
+  const what =
+    row.kind === "reminder" && row.state === "handed"
+      ? ta("handed", { name: who })
+      : row.kind === "task" && row.check_dispatch_id != null
+        ? ta("checking", { round: row.round ?? 1 })
+        : words(row)
   const when = row.kind === "item" ? null : formatRelative(row.at, now)
   // What it is first — red when it failed, the word to look for — then
-  // whose; when, at the title's end.
+  // whose; a merge queued meanwhile; when, at the title's end.
   const meta = (
     <>
       <span
@@ -577,6 +354,7 @@ function TodayRowCard({
       >
         {what}
       </span>
+      {row.queued ? ` · ${ta("queued")}` : null}
       {who ? ` · ${who}` : null}
     </>
   )
@@ -593,22 +371,29 @@ function TodayRowCard({
       ? t(`reason.${row.reason}` as "reason.looking", { name: who })
       : null
   // Where to do it: the task's details, which merge and deliver it.
-  const go = group === "needs" && onOpen ? GO_OF[row.reason ?? ""] : undefined
-  // A matter is settled on its row: one that came due, one still to come.
-  const actions = go ? (
-    <Button
-      size="sm"
-      variant="outline"
-      onClick={onOpen ?? undefined}
-      data-pa-today-act={`go-${row.reason}`}
-    >
-      {t(`go.${go}` as "go.review")}
-    </Button>
-  ) : readOnly ? null : row.kind === "reminder" || row.kind === "item" ? (
-    <MatterActions row={row} />
+  const go = waiting && onOpen ? GO_OF[row.reason ?? ""] : undefined
+  // Its own — a matter's, settled here; a draft's — after it.
+  const own = readOnly ? null : given !== undefined ? (
+    given
   ) : (row.kind === "tidy" || row.kind === "skill") && row.state === "draft" ? (
     <DraftActions row={row} />
   ) : null
+  const actions =
+    go || own ? (
+      <>
+        {go ? (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onOpen ?? undefined}
+            data-pa-today-act={`go-${row.reason}`}
+          >
+            {t(`go.${go}` as "go.review")}
+          </Button>
+        ) : null}
+        {own}
+      </>
+    ) : null
   // Taking a change back: one button, at a row's end.
   const action =
     !readOnly &&
@@ -630,26 +415,41 @@ function TodayRowCard({
       ? (row.text ?? reason)
       : (reason ?? row.text)
   const callout =
-    group === "needs" && said
+    waiting && said
       ? {
           tone: failed ? ("error" as const) : ("wait" as const),
           text: said,
         }
       : null
+  return {
+    media: <RowLead row={row} />,
+    title,
+    time: when,
+    meta,
+    callout,
+    notes: said && !callout ? [said] : [],
+    onOpen,
+    openLabel: t("open"),
+    actions,
+    action,
+    "data-pa-today-row": row.kind,
+    "data-key": row.key,
+  } as PanelItemProps
+}
+
+/** A row of a morning brief: as "today" draws it, nothing settled on it. */
+function TodayRowCard({
+  row,
+  now,
+  onOpen,
+}: {
+  row: TodayRow
+  now: number
+  onOpen: (() => void) | null
+}) {
   return (
     <PanelItem
-      media={<RowLead row={row} />}
-      title={title}
-      time={when}
-      meta={meta}
-      callout={callout}
-      notes={said && !callout ? [said] : []}
-      onOpen={onOpen}
-      openLabel={t("open")}
-      actions={actions}
-      action={action}
-      data-pa-today-row={row.kind}
-      data-key={row.key}
+      {...useTodayRowProps({ row, waiting: false, now, onOpen, readOnly: true })}
     />
   )
 }
@@ -724,7 +524,6 @@ function BriefRowList({
           row={row}
           now={now}
           onOpen={opener(row)}
-          readOnly
         />
       ))}
     </PanelList>

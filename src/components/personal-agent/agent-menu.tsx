@@ -6,7 +6,8 @@
  * it), then the session it runs on underneath, compacting that
  * session's context (or, while a turn runs, stopping it: the reply being
  * written, or the compaction), starting a new one, and stopping everything
- * it has going.
+ * it has going. With nothing coming up in its activity — the group that
+ * holds [New routine] not shown — the way to make one is here (C4).
  */
 
 import { useState } from "react"
@@ -16,6 +17,7 @@ import {
   IdCard,
   MoreHorizontal,
   OctagonX,
+  Plus,
   RotateCcw,
   Shrink,
   Square,
@@ -38,6 +40,7 @@ import {
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import { cn } from "@/lib/utils"
+import { useActivity } from "@/stores/personal-agent-activity-store"
 import {
   PERSONAL_AGENT_EVENTS,
   usePersonalAgentUi,
@@ -47,7 +50,10 @@ export function AgentMenu({ className }: { className?: string }) {
   const t = useTranslations("PersonalAgent.menu")
   const tr = useTranslations("PersonalAgent.bots.roster.menu")
   const { snapshot, botId } = usePersonalAgent()
+  const tro = useTranslations("PersonalAgent.routines")
   const openBotPage = usePersonalAgentUi((s) => s.openBotPage)
+  const openRoutineEditor = usePersonalAgentUi((s) => s.openRoutineEditor)
+  const activity = useActivity(botId)
   const [acting, setActing] = useState(false)
   const status = snapshot?.status ?? null
   const readOnly = status?.engine !== "here"
@@ -89,6 +95,22 @@ export function AgentMenu({ className }: { className?: string }) {
           <IdCard className="size-4" />
           {tr("details")}
         </DropdownMenuItem>
+        {!readOnly && activity != null && activity.next.length === 0 ? (
+          <DropdownMenuItem
+            onSelect={() =>
+              openRoutineEditor({
+                botId,
+                routineId: null,
+                draft: null,
+                noticeId: null,
+              })
+            }
+            data-pa-agent-menu-new-routine
+          >
+            <Plus className="size-4" />
+            {tro("new")}
+          </DropdownMenuItem>
+        ) : null}
         <DropdownMenuSeparator />
         <DropdownMenuItem
           disabled={!hasSession}

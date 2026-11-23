@@ -63,6 +63,8 @@ import { Callout, type CalloutTone } from "./aux/kit/callout"
 
 /** The folding parts that start folded; every other one starts open. */
 const FOLDED_AT_FIRST: ReadonlySet<string> = new Set([
+  // What was done today, a line until opened (C2).
+  "activity.done",
   "stats.executors",
   "stats.tokens",
   "stats.usage",

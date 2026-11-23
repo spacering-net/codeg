@@ -1,28 +1,24 @@
 "use client"
 
 /**
- * The activity tab's "Routines" (6.9, 10.1): this assistant's routines on
- * one folding card, as the tab's other groups are — its bar the part's
- * title, how many, [+] and the chevron; no head over it. Each a row: what
- * it is called and its switch, when it runs and what it does, and one
- * quiet line of where it stands — its next run or that it is paused (why,
- * in the caution's colour, when codeg paused it) and how its last run went.
- * [Run now] [Edit] [Delete] in its menu; its title opens it to edit.
- * Empty: one row — its name, a line saying to ask for one in the
- * conversation, and [New routine] at its end.
+ * A routine in the activity's "coming up" (C4, 6.9): one row — what it is
+ * called (opening it to edit), whether it is paused, its menu ([Run now]
+ * [Pause/Resume] [Edit] [Delete]) and the way to unfold it; under it when
+ * it runs and its next run, or that it is running; a second line, in the
+ * caution's colour, only when something is wrong — codeg paused it, its
+ * last run failed, was missed, or waits on the owner. Unfolded: its facts,
+ * one to a line, as the panel had them.
  */
 
-import { useEffect, useRef, useState, type RefObject } from "react"
+import { useState } from "react"
 import { useTranslations } from "next-intl"
 import {
-  CalendarClock,
+  ChevronRight,
   CirclePlay,
   MoreHorizontal,
   Pause,
   Pencil,
   Play,
-  Plus,
-  Repeat,
   Trash2,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -45,18 +41,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Skeleton } from "@/components/ui/skeleton"
 import { usePersonalAgent } from "@/contexts/personal-agent-context"
-import { personalAgentRoutineAct, personalAgentRoutines } from "@/lib/api"
+import { personalAgentRoutineAct } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import type { Routine, RoutineAction } from "@/lib/types"
 import { cn } from "@/lib/utils"
-import {
-  ROUTINES_FOLD,
-  usePersonalAgentUi,
-} from "@/stores/personal-agent-ui-store"
+import { refreshActivity } from "@/stores/personal-agent-activity-store"
+import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
-import { PanelGroup, PanelIcon, PanelItem, PanelStack } from "./panel-section"
 import {
   eventWords,
   OutcomeWord,
@@ -67,162 +59,26 @@ import {
 import { SheetField, SheetFields } from "./shared"
 import { StatusPill } from "./aux/kit/status-pill"
 
-/** An assistant's routines, kept fresh as they change — read only while
- *  `active` (the page above may have read them already). */
-export function useRoutines(active = true): Routine[] | null {
-  const { botId, routineVersion } = usePersonalAgent()
-  // Kept with the assistant they are of: another one shown waits for its
-  // own, never listing the last one's.
-  const [read, setRead] = useState<{
-    bot: number | null
-    list: Routine[]
-  } | null>(null)
-  useEffect(() => {
-    if (!active) return
-    let alive = true
-    personalAgentRoutines(botId)
-      .then((l) => {
-        if (alive) setRead({ bot: botId, list: l })
-      })
-      .catch(() => {
-        if (alive) setRead({ bot: botId, list: [] })
-      })
-    return () => {
-      alive = false
-    }
-  }, [botId, routineVersion, active])
-  return read?.bot === botId ? read.list : null
-}
+/** A last run that says something is wrong, on the row's second line. */
+const WRONG_OUTCOMES = new Set(["failed", "missed", "asked", "declined"])
 
-/** `pa.open` on a routine, or "open its routines", brings them into view —
- *  the card (`showRoutines` unfolds it), or the row that says there are
- *  none. */
-function useRoutinesAsked(ref: RefObject<HTMLElement | null>) {
-  const asked = usePersonalAgentUi((s) => s.routinesAsked)
-  useEffect(() => {
-    if (asked > 0) ref.current?.scrollIntoView({ block: "start" })
-  }, [asked, ref])
-}
-
-/** No routines yet: one row — its name, how to get one, [New routine] at
- *  its end — to sit in a stack, alone or under the matters' own. */
-export function RoutinesEmptyRow({
-  title,
+export function RoutineRow({
+  r,
   readOnly,
+  open,
+  onOpenChange,
+  flash = false,
 }: {
-  title: string
+  r: Routine
   readOnly: boolean
+  /** Its facts unfolded under it. */
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  /** Just brought into view: marked for a moment. */
+  flash?: boolean
 }) {
   const t = useTranslations("PersonalAgent.routines")
-  const { botId } = usePersonalAgent()
-  const openEditor = usePersonalAgentUi((s) => s.openRoutineEditor)
-  const ref = useRef<HTMLDivElement | null>(null)
-  useRoutinesAsked(ref)
-  return (
-    <PanelItem
-      ref={ref}
-      media={<PanelIcon icon={CalendarClock} />}
-      title={title}
-      meta={<span data-pa-routines-empty>{t("empty")}</span>}
-      action={
-        readOnly ? null : (
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() =>
-              openEditor({
-                botId,
-                routineId: null,
-                draft: null,
-                noticeId: null,
-              })
-            }
-          >
-            <Plus aria-hidden />
-            {t("new")}
-          </Button>
-        )
-      }
-      className="scroll-mt-3"
-      data-pa-detail="routines"
-    />
-  )
-}
-
-export function RoutinesSection({
-  title,
-  readOnly,
-  list: given,
-}: {
-  title: string
-  /** The assistants run in another process: nothing is acted on here. */
-  readOnly: boolean
-  /** Its routines, when the page above has read them; read here if not. */
-  list?: Routine[] | null
-}) {
-  const t = useTranslations("PersonalAgent.routines")
-  const { botId } = usePersonalAgent()
-  const read = useRoutines(given === undefined)
-  const list = given === undefined ? read : given
-  const openEditor = usePersonalAgentUi((s) => s.openRoutineEditor)
-  const ref = useRef<HTMLElement | null>(null)
-  useRoutinesAsked(ref)
-  const add = () =>
-    openEditor({ botId, routineId: null, draft: null, noticeId: null })
-  // None: the row that says so, no head over it.
-  if (list != null && list.length === 0) {
-    return (
-      <PanelStack>
-        <RoutinesEmptyRow title={title} readOnly={readOnly} />
-      </PanelStack>
-    )
-  }
-  if (list == null) {
-    return (
-      <Skeleton
-        ref={ref as RefObject<HTMLDivElement | null>}
-        className="h-16 w-full scroll-mt-3 rounded-2xl"
-        aria-hidden
-        data-pa-detail="routines"
-      />
-    )
-  }
-  return (
-    <PanelGroup
-      ref={ref}
-      fold={ROUTINES_FOLD}
-      tone="muted"
-      icon={Repeat}
-      label={title}
-      count={list.length}
-      titled
-      action={
-        readOnly ? null : (
-          <Button
-            size="icon-xs"
-            variant="ghost"
-            className="text-muted-foreground"
-            onClick={add}
-            title={t("new")}
-            aria-label={t("new")}
-            data-pa-routine-new
-          >
-            <Plus aria-hidden />
-          </Button>
-        )
-      }
-      className="scroll-mt-3"
-      data-pa-detail="routines"
-    >
-      {list.map((r) => (
-        <RoutineRow key={r.id} r={r} readOnly={readOnly} />
-      ))}
-    </PanelGroup>
-  )
-}
-
-function RoutineRow({ r, readOnly }: { r: Routine; readOnly: boolean }) {
-  const t = useTranslations("PersonalAgent.routines")
+  const ta = useTranslations("PersonalAgent.feed")
   const { botId } = usePersonalAgent()
   const openEditor = usePersonalAgentUi((s) => s.openRoutineEditor)
   const when = useWhen()
@@ -233,6 +89,7 @@ function RoutineRow({ r, readOnly }: { r: Routine; readOnly: boolean }) {
     setBusy(a)
     try {
       await personalAgentRoutineAct(botId, r.id, a)
+      refreshActivity()
     } catch (e) {
       toast.error(toErrorMessage(e))
     } finally {
@@ -245,20 +102,49 @@ function RoutineRow({ r, readOnly }: { r: Routine; readOnly: boolean }) {
   const codegPaused =
     !r.enabled &&
     (r.paused_reason === "failures" || r.paused_reason === "executor")
+  // Running: not one waiting on the owner to confirm, which has not ended
+  // either and says so on its warning line.
+  const running = last?.outcome === "running"
   const edit = () =>
     openEditor({ botId, routineId: r.id, draft: null, noticeId: null })
   const titleClass =
     "line-clamp-2 max-w-full min-w-0 text-sm leading-5 font-semibold break-words text-foreground"
+  // When it runs, then where it stands: running, or its next run.
+  const whenText = r.cron ? (
+    <RoutineWhen cron={r.cron} event={null} zone={r.timezone} />
+  ) : r.event ? (
+    eventWords(t, r.event)
+  ) : null
+  const status = running ? (
+    <span className="text-primary" data-pa-routine-status="running">
+      {ta("routineRunning")}
+    </span>
+  ) : r.enabled && r.trigger === "schedule" && r.next_run_at ? (
+    <span className="tabular-nums" data-pa-routine-status="next">
+      {when(r.next_run_at)}
+    </span>
+  ) : null
+  // Something wrong: one line in the caution's colour.
+  const wrong = codegPaused
+    ? r.paused_reason === "executor"
+      ? t("card.pausedExecutor")
+      : t("card.pausedFailures")
+    : last && WRONG_OUTCOMES.has(last.outcome)
+      ? ta("routineLast", { outcome: t(`outcome.${last.outcome}` as "outcome.failed") })
+      : null
   return (
     <>
       <div
         role="listitem"
         className={cn(
-          "relative flex min-w-0 flex-col gap-2 border-b border-border/50 px-4 py-3 last:border-b-0",
-          !readOnly && "has-[[data-pa-item-open]:hover]:bg-muted/40"
+          "relative flex min-w-0 scroll-mt-12 flex-col gap-1 border-b border-border/50 px-4 py-3 transition-colors last:border-b-0",
+          !readOnly && "has-[[data-pa-item-open]:hover]:bg-muted/40",
+          !r.enabled && "opacity-70",
+          flash && "bg-primary/10"
         )}
         data-pa-routine={r.id}
         data-pa-routine-enabled={r.enabled ? "on" : "off"}
+        data-pa-activity-row={`routine:${r.id}`}
       >
         {/* Its head: what it is called, whether it is paused, and its
             controls at the end. Narrow, the pill goes under the name: the
@@ -289,11 +175,11 @@ function RoutineRow({ r, readOnly }: { r: Routine; readOnly: boolean }) {
               </StatusPill>
             ) : null}
           </div>
-          {readOnly ? null : (
-            // One button at its end: what can be done with it — run it,
-            // pause or resume it, edit, delete — in its menu; whether it is
-            // paused the pill after its name says.
-            <span className="relative z-10 -me-1.5 flex h-5 shrink-0 items-center">
+          <span className="relative z-10 -me-1.5 flex h-5 shrink-0 items-center">
+            {readOnly ? null : (
+              // What can be done with it — run it, pause or resume it,
+              // edit, delete — in its menu; whether it is paused the pill
+              // after its name says.
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
@@ -343,12 +229,32 @@ function RoutineRow({ r, readOnly }: { r: Routine; readOnly: boolean }) {
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
-            </span>
-          )}
+            )}
+            <UnfoldButton open={open} onOpenChange={onOpenChange} />
+          </span>
         </div>
-        {/* Its facts, one to a line: what each is quiet on the left, the
-            values lined up after them. */}
-        <SheetFields className="gap-y-1" data-pa-routine-facts>
+        {whenText || status ? (
+          <p
+            className="min-w-0 text-xs leading-5 text-muted-foreground"
+            data-pa-routine-line
+          >
+            {whenText}
+            {whenText && status ? " · " : null}
+            {status}
+          </p>
+        ) : null}
+        {wrong ? (
+          <p
+            className="min-w-0 text-xs leading-5 text-amber-700 dark:text-amber-300"
+            data-pa-routine-wrong
+          >
+            {wrong}
+          </p>
+        ) : null}
+        {/* Unfolded: its facts, one to a line — what each is quiet on the
+            left, the values lined up after them. */}
+        {open ? (
+          <SheetFields className="mt-1 gap-y-1" data-pa-routine-facts>
           {r.cron || r.event ? (
             <SheetField
               label={t(r.cron ? "row.when" : "row.trigger")}
@@ -406,6 +312,7 @@ function RoutineRow({ r, readOnly }: { r: Routine; readOnly: boolean }) {
             </SheetField>
           ) : null}
         </SheetFields>
+        ) : null}
       </div>
       <AlertDialog open={deleting} onOpenChange={setDeleting}>
         <AlertDialogContent>
@@ -427,5 +334,38 @@ function RoutineRow({ r, readOnly }: { r: Routine; readOnly: boolean }) {
         </AlertDialogContent>
       </AlertDialog>
     </>
+  )
+}
+
+/** The way to unfold a row of the activity (C3): a chevron at its end,
+ *  turned while it is open — a button of its own, reached by the keyboard,
+ *  saying whether it is open. */
+export function UnfoldButton({
+  open,
+  onOpenChange,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  const t = useTranslations("PersonalAgent.feed")
+  return (
+    <Button
+      size="icon-xs"
+      variant="ghost"
+      className="relative z-10 text-muted-foreground hover:text-foreground"
+      aria-expanded={open}
+      aria-label={open ? t("fold") : t("unfold")}
+      title={open ? t("fold") : t("unfold")}
+      onClick={() => onOpenChange(!open)}
+      data-pa-unfold
+    >
+      <ChevronRight
+        aria-hidden
+        className={cn(
+          "size-4 transition-transform rtl:-scale-x-100",
+          open && "rotate-90 rtl:rotate-90"
+        )}
+      />
+    </Button>
   )
 }

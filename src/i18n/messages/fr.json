@@ -11729,6 +11729,28 @@
     "notify": {
       "open": "Ouvrir"
     },
+    "feed": {
+      "groups": {
+        "needs": "En attente de vous",
+        "watching": "En cours",
+        "next": "À venir",
+        "done": "Fait aujourd’hui"
+      },
+      "empty": "Rien à faire pour vous, et rien en cours.",
+      "failed": "L’activité n’a pas pu être lue pour l’instant.",
+      "handed": "Confié à {name}",
+      "checking": "En vérification · tour {round}",
+      "queued": "en file pour la fusion",
+      "waitsAgent": "En attente que {name} s’en occupe",
+      "routineRunning": "En cours",
+      "routineLast": "Dernière exécution : {outcome}",
+      "fold": "Masquer les détails",
+      "unfold": "Afficher les détails",
+      "viewReminder": "Voir le rappel",
+      "viewCheck": "Voir la session de recette",
+      "openTask": "Ouvrir la tâche",
+      "routineDeleted": "Cette routine a été supprimée."
+    },
     "today": {
       "title": "Aujourd’hui",
       "empty": "Rien ne vous attend aujourd’hui",

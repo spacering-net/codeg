@@ -379,7 +379,7 @@ export function RoutineCard({ item }: { item: NoticeItem }) {
                 <Button
                   size="sm"
                   variant="ghost"
-                  onClick={() => showRoutines()}
+                  onClick={() => showRoutines(routineId)}
                   data-pa-routine-card-act="open"
                 >
                   {t("open")}

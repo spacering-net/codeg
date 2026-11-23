@@ -1,14 +1,15 @@
 /**
- * "Today" for the window (1.14): read on the first holder, again when what
- * it lists may have moved — coalesced, one read at a time, never starved —
- * and dropped with the last holder.
+ * The page's activity (C1): read on the first holder, again when what it
+ * lists may have moved — coalesced, one read at a time, never starved —
+ * kept by assistant, kept on a failed read, and dropped with the last
+ * holder.
  */
 import { act, cleanup, renderHook } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import type { BotLive, PersonalAgentToday } from "@/lib/types"
+import type { BotLive, PersonalAgentActivity } from "@/lib/types"
 
-const api = vi.hoisted(() => ({ personalAgentToday: vi.fn() }))
+const api = vi.hoisted(() => ({ personalAgentActivity: vi.fn() }))
 const bus = vi.hoisted(() => ({
   handlers: new Map<string, Set<(p: unknown) => void>>(),
   transport: new Set<() => void>(),
@@ -35,19 +36,24 @@ vi.mock("@/lib/transport", () => ({
 }))
 
 import {
-  __resetTodayForTests,
-  refreshToday,
-  TODAY_GAP_MS,
-  TODAY_POLL_MS,
-  usePersonalAgentToday,
-  useToday,
-} from "./personal-agent-today-store"
+  __resetActivityForTests,
+  ACTIVITY_GAP_MS as TODAY_GAP_MS,
+  ACTIVITY_POLL_MS as TODAY_POLL_MS,
+  botKey,
+  refreshActivity as refreshToday,
+  useActivity,
+  useActivityRead,
+  usePersonalAgentActivity,
+} from "./personal-agent-activity-store"
+
+/** The primary's activity, held. */
+const useToday = (active = true) => useActivity(null, [], active)
 
 function emit(event: string, payload: unknown) {
   for (const h of bus.handlers.get(event) ?? []) h(payload)
 }
 
-function view(n: number): PersonalAgentToday {
+function view(n: number): PersonalAgentActivity {
   return {
     needs: Array.from({ length: n }, (_, i) => ({
       key: `session:${i}`,
@@ -66,15 +72,27 @@ function view(n: number): PersonalAgentToday {
       notice_id: null,
       agent_type: "codex",
       undo: false,
+    })).map((r) => ({
+      key: r.key,
+      bot_id: r.bot_id,
+      thing: r.key,
+      today: r,
+      item: null,
+      routine: null,
+      card_row_id: null,
     })),
     watching: [],
-    schedule: [],
+    next: [],
     done: [],
+    waiting: n,
+    pill: { count: n, first: n > 0 ? "session:0" : null },
+    brief: null,
+    stale_acceptance: [],
+    dispatches: [],
     day_start: "2026-11-10T20:00:00Z",
     day_end: "2026-11-11T20:00:00Z",
-    at: "2026-11-11T08:00:00Z",
-    dispatches: [],
-  }
+    as_of: "2026-11-11T08:00:00Z",
+  } as PersonalAgentActivity
 }
 
 function live(bot: number, patch: Partial<BotLive> = {}): BotLive {
@@ -111,44 +129,44 @@ beforeEach(() => {
   bus.handlers.clear()
   bus.transport.clear()
   bus.reconnect.clear()
-  api.personalAgentToday.mockReset()
-  api.personalAgentToday.mockImplementation(async () => view(1))
+  api.personalAgentActivity.mockReset()
+  api.personalAgentActivity.mockImplementation(async () => view(1))
 })
 
 afterEach(() => {
   cleanup()
-  __resetTodayForTests()
+  __resetActivityForTests()
   vi.useRealTimers()
 })
 
-describe("today's feed", () => {
+describe("the activity's read", () => {
   it("reads at once for the first holder, once for many, and stops with the last", async () => {
     const a = renderHook(() => useToday())
     const b = renderHook(() => useToday())
     await settle()
-    expect(api.personalAgentToday).toHaveBeenCalledTimes(1)
+    expect(api.personalAgentActivity).toHaveBeenCalledTimes(1)
     expect(a.result.current?.needs).toHaveLength(1)
     expect(b.result.current?.needs).toHaveLength(1)
     a.unmount()
     b.unmount()
     await settle(TODAY_POLL_MS * 3)
-    expect(api.personalAgentToday).toHaveBeenCalledTimes(1)
+    expect(api.personalAgentActivity).toHaveBeenCalledTimes(1)
     refreshToday()
     await settle(TODAY_GAP_MS)
-    expect(api.personalAgentToday).toHaveBeenCalledTimes(1)
+    expect(api.personalAgentActivity).toHaveBeenCalledTimes(1)
   })
 
   it("is not held by a caller that is not active", async () => {
     const { result } = renderHook(() => useToday(false))
     await settle(TODAY_POLL_MS)
-    expect(api.personalAgentToday).not.toHaveBeenCalled()
+    expect(api.personalAgentActivity).not.toHaveBeenCalled()
     expect(result.current).toBeNull()
   })
 
   it("reads again on what can move it, not on a reply streaming in or a step of activity", async () => {
     renderHook(() => useToday())
     await settle()
-    const calls = () => api.personalAgentToday.mock.calls.length
+    const calls = () => api.personalAgentActivity.mock.calls.length
     expect(calls()).toBe(1)
 
     emit("personal-agent://changed", {
@@ -204,7 +222,7 @@ describe("today's feed", () => {
     let finish: (() => void) | null = null
     renderHook(() => useToday())
     await settle()
-    const calls = () => api.personalAgentToday.mock.calls.length
+    const calls = () => api.personalAgentActivity.mock.calls.length
     expect(calls()).toBe(1)
 
     for (let i = 0; i < 5; i++) refreshToday()
@@ -212,9 +230,9 @@ describe("today's feed", () => {
     expect(calls()).toBe(2)
 
     // A slow read: asks meanwhile are one read after it.
-    api.personalAgentToday.mockImplementation(
+    api.personalAgentActivity.mockImplementation(
       () =>
-        new Promise<PersonalAgentToday>((resolve) => {
+        new Promise<PersonalAgentActivity>((resolve) => {
           finish = () => resolve(view(2))
         })
     )
@@ -225,13 +243,15 @@ describe("today's feed", () => {
     refreshToday()
     await settle(TODAY_GAP_MS * 3)
     expect(calls()).toBe(3)
-    api.personalAgentToday.mockImplementation(async () => view(3))
+    api.personalAgentActivity.mockImplementation(async () => view(3))
     await act(async () => {
       finish?.()
     })
     await settle(TODAY_GAP_MS)
     expect(calls()).toBe(4)
-    expect(usePersonalAgentToday.getState().today?.needs).toHaveLength(3)
+    expect(
+      usePersonalAgentActivity.getState().reads[botKey(null)]?.view?.needs
+    ).toHaveLength(3)
 
     // Asked every 100 ms for two seconds: still read once a gap.
     const before = calls()
@@ -246,18 +266,81 @@ describe("today's feed", () => {
     renderHook(() => useToday())
     await settle()
     await settle(TODAY_POLL_MS + TODAY_GAP_MS)
-    expect(api.personalAgentToday).toHaveBeenCalledTimes(2)
+    expect(api.personalAgentActivity).toHaveBeenCalledTimes(2)
   })
 
   it("forgets another backend's day when the transport changes, and reads the new one", async () => {
     const { result } = renderHook(() => useToday())
     await settle()
     expect(result.current?.needs).toHaveLength(1)
-    api.personalAgentToday.mockImplementation(async () => view(4))
+    api.personalAgentActivity.mockImplementation(async () => view(4))
     await act(async () => {
       for (const cb of bus.transport) cb()
     })
     await settle()
     expect(result.current?.needs).toHaveLength(4)
+  })
+
+  it("reads the assistant shown, at once when another is, each kept apart — a late answer for one shown before takes no other's place", async () => {
+    let finish: ((v: PersonalAgentActivity) => void) | null = null
+    const { result, rerender } = renderHook(
+      ({ bot }: { bot: number | null }) => useActivity(bot),
+      { initialProps: { bot: null as number | null } }
+    )
+    await settle()
+    expect(api.personalAgentActivity).toHaveBeenLastCalledWith(null)
+    expect(result.current?.needs).toHaveLength(1)
+    // Another shown: read at once; nothing of the primary's drawn for it.
+    api.personalAgentActivity.mockImplementation(
+      () =>
+        new Promise<PersonalAgentActivity>((resolve) => {
+          finish = resolve
+        })
+    )
+    rerender({ bot: 2 })
+    await settle()
+    expect(api.personalAgentActivity).toHaveBeenLastCalledWith(2)
+    expect(result.current).toBeNull()
+    // Back before its answer: the primary's as read, the late answer kept
+    // as the worker's.
+    api.personalAgentActivity.mockImplementation(async () => view(5))
+    rerender({ bot: null })
+    expect(result.current?.needs).toHaveLength(1)
+    await act(async () => {
+      finish?.(view(2))
+    })
+    await settle(TODAY_GAP_MS)
+    expect(result.current?.needs).toHaveLength(5)
+    expect(
+      usePersonalAgentActivity.getState().reads[botKey(2)]?.view?.needs
+    ).toHaveLength(2)
+  })
+
+  it("keeps what was read when a read fails; one never read says so", async () => {
+    const { result } = renderHook(() => useActivityRead(null))
+    await settle()
+    expect(result.current?.view?.needs).toHaveLength(1)
+    const at = result.current!.at
+    api.personalAgentActivity.mockRejectedValue(new Error("db busy"))
+    refreshToday()
+    await settle(TODAY_GAP_MS)
+    expect(result.current?.view?.needs).toHaveLength(1)
+    expect(result.current?.failedAt).toBeGreaterThan(at)
+    const other = renderHook(() => useActivityRead(3))
+    await settle()
+    expect(other.result.current).not.toBeNull()
+    expect(other.result.current?.view).toBeNull()
+  })
+
+  it("reads again when the page's matters, work or routines are read again", async () => {
+    const { rerender } = renderHook(
+      ({ v }: { v: number }) => useActivity(null, [v, 0, 0]),
+      { initialProps: { v: 0 } }
+    )
+    await settle()
+    expect(api.personalAgentActivity).toHaveBeenCalledTimes(1)
+    rerender({ v: 1 })
+    await settle(TODAY_GAP_MS)
+    expect(api.personalAgentActivity).toHaveBeenCalledTimes(2)
   })
 })

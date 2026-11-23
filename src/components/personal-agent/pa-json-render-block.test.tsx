@@ -440,8 +440,7 @@ describe("an assistant's card: pa.open", () => {
     })
   })
 
-  it("opens the activity's routines (6.9)", () => {
-    const asked = usePersonalAgentUi.getState().routinesAsked
+  it("opens the activity's routines at the routine's row (6.9, C4)", () => {
     draw(
       card({
         a: button("See the routine", {
@@ -450,7 +449,11 @@ describe("an assistant's card: pa.open", () => {
       })
     )
     fireEvent.click(screen.getByRole("button", { name: "See the routine" }))
-    expect(usePersonalAgentUi.getState().routinesAsked).toBe(asked + 1)
+    expect(usePersonalAgentUi.getState().activityAsk).toMatchObject({
+      group: "next",
+      row: "routine:2",
+      routine: true,
+    })
     expect(usePersonalAgentUi.getState().auxTab).toBe("activity")
   })
 

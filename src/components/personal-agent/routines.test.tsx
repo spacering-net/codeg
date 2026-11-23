@@ -13,6 +13,7 @@ import {
   within,
 } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import * as React from "react"
 import { NextIntlClientProvider } from "next-intl"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -63,7 +64,7 @@ import {
 } from "./message-items"
 import { NoticeCard } from "./notice-card"
 import { RoutineEditor } from "./routine-editor"
-import { RoutinesSection } from "./routines-section"
+import { RoutineRow } from "./routines-section"
 import { PageScopeContext, type PageScope } from "./shared"
 
 function row(
@@ -145,7 +146,7 @@ beforeEach(() => {
   api.automationComputeNextRun.mockResolvedValue(null)
   usePersonalAgentUi.setState({
     routineEditor: null,
-    routinesAsked: 0,
+    activityAsk: null,
     auxFolds: {},
   })
   ctx.dispatchById = new Map()
@@ -291,7 +292,11 @@ describe("routine cards", () => {
     )
     api.personalAgentNoticeAct.mockClear()
     fireEvent.click(screen.getByText("Open routines"))
-    expect(usePersonalAgentUi.getState().routinesAsked).toBe(1)
+    // At its row in the activity's "coming up" (C4).
+    expect(usePersonalAgentUi.getState().activityAsk).toMatchObject({
+      group: "next",
+      routine: true,
+    })
     cleanup()
     draw(
       row({
@@ -372,29 +377,38 @@ function routine(patch: Partial<Routine> = {}): Routine {
   }
 }
 
-describe("the details' routines", () => {
-  it("lists each with when it runs, its look first and how its last run went", async () => {
-    api.personalAgentRoutines.mockResolvedValue([routine()])
+/** A routine's row in the activity's "coming up" (C4), its unfolding kept
+ *  by the test as the list keeps it. */
+function RowUnder({ r, readOnly = false }: { r: Routine; readOnly?: boolean }) {
+  const [open, setOpen] = React.useState(false)
+  return (
+    <div role="list">
+      <RoutineRow r={r} readOnly={readOnly} open={open} onOpenChange={setOpen} />
+    </div>
+  )
+}
+
+describe("a routine in coming up (C4)", () => {
+  it("is one row: its name, when it runs and its next run; its facts unfolded", async () => {
     const user = userEvent.setup()
-    wrap(<RoutinesSection title="Routines" readOnly={false} />)
-    expect(await screen.findByText("Night CI")).toBeTruthy()
-    // One card, as the tab's groups are: no dashed head over it — its bar
-    // the part's title, how many, [+] and the chevron.
-    const part = document.querySelector<HTMLElement>(
-      '[data-pa-detail="routines"]'
-    )!
-    expect(part.querySelector(".border-dashed")).toBeNull()
-    expect(screen.getByRole("heading", { name: /^Routines/ })).toBeTruthy()
-    expect(part.querySelector("[data-pa-group-label]")!.textContent).toBe(
-      "Routines"
+    wrap(<RowUnder r={routine()} />)
+    const row = document.querySelector<HTMLElement>("[data-pa-routine]")!
+    expect(row.getAttribute("data-pa-activity-row")).toBe("routine:5")
+    expect(within(row).getByText("Night CI").className).toContain(
+      "font-semibold"
     )
-    expect(
-      within(part).getByRole("button", { name: "New routine" })
-    ).toBeTruthy()
-    expect(screen.getByText(/only with matters waiting over 4 h/)).toBeTruthy()
-    // Its facts, one to a line, each named: when, how, next, last.
+    // When it runs, then its next run; nothing wrong, no second line.
+    const line = row.querySelector<HTMLElement>("[data-pa-routine-line]")!
+    expect(line.querySelector('[data-pa-routine-status="next"]')).toBeTruthy()
+    expect(row.querySelector("[data-pa-routine-wrong]")).toBeNull()
+    // Its facts only unfolded: when, how, next, last.
+    expect(row.querySelector("[data-pa-routine-facts]")).toBeNull()
+    const unfold = within(row).getByRole("button", { name: "Show details" })
+    expect(unfold.getAttribute("aria-expanded")).toBe("false")
+    await user.click(unfold)
+    expect(unfold.getAttribute("aria-expanded")).toBe("true")
     const facts = [
-      ...part.querySelectorAll<HTMLElement>("[data-pa-routine-fact]"),
+      ...row.querySelectorAll<HTMLElement>("[data-pa-routine-fact]"),
     ]
     expect(facts.map((f) => f.getAttribute("data-pa-routine-fact"))).toEqual([
       "when",
@@ -402,52 +416,23 @@ describe("the details' routines", () => {
       "next",
       "last",
     ])
-    const fact = (k: string) =>
-      part.querySelector<HTMLElement>(`[data-pa-routine-fact="${k}"]`)!
-    expect(fact("when").querySelector("dt")!.textContent).toBe("When")
-    expect(fact("how").textContent).toMatch(
-      /^HowThe assistant looks · only with matters waiting over 4 h$/
-    )
-    const lastRun = fact("last")
-    expect(lastRun.querySelector("dt")!.textContent).toBe("Last")
+    expect(screen.getByText(/only with matters waiting over 4 h/)).toBeTruthy()
     expect(
-      lastRun.querySelector('[data-pa-routine-outcome="silent"]')
-    ).toBeTruthy()
-    expect(lastRun.textContent).toContain("3 runs in all")
-    // How it went a word on the line's baseline as the words round it are:
-    // inline, no dot before it.
-    const outcome = lastRun.querySelector<HTMLElement>(
-      "[data-pa-routine-outcome]"
-    )!
-    expect(outcome.className).not.toMatch(/(^| )(inline-)?flex( |$)/)
-    expect(outcome.children).toHaveLength(0)
-    expect(outcome.textContent).toBe("No change")
-    // One control at its end, its menu: no switch beside it.
-    expect(screen.queryByRole("switch")).toBeNull()
-    const row = part.querySelector<HTMLElement>("[data-pa-routine]")!
-    expect(
-      row.querySelectorAll("button:not([data-pa-item-open])")
-    ).toHaveLength(1)
-    expect(lastRun.textContent).toContain("no change")
-    // Running: no pill saying it is paused.
-    expect(part.querySelector("[data-pa-routine-state]")).toBeNull()
-    // Run now, from its menu.
+      row.querySelector('[data-pa-routine-fact="last"]')!.textContent
+    ).toContain("3 runs in all")
+    // Run now, paused, edited, deleted: from its menu.
     await user.click(screen.getByRole("button", { name: "More actions" }))
     await user.click(await screen.findByRole("menuitem", { name: "Run now" }))
     await waitFor(() =>
       expect(api.personalAgentRoutineAct).toHaveBeenCalledWith(7, 5, "run_now")
     )
-    // Paused from its menu.
     await user.click(screen.getByRole("button", { name: "More actions" }))
-    expect(screen.queryByRole("menuitem", { name: "Resume" })).toBeNull()
     await user.click(await screen.findByRole("menuitem", { name: "Pause" }))
     await waitFor(() =>
       expect(api.personalAgentRoutineAct).toHaveBeenCalledWith(7, 5, "pause")
     )
-    // Its title opens it to edit.
     fireEvent.click(screen.getByText("Night CI").closest("button")!)
     expect(usePersonalAgentUi.getState().routineEditor?.routineId).toBe(5)
-    // Deleted from its menu, once confirmed.
     await user.click(screen.getByRole("button", { name: "More actions" }))
     await user.click(await screen.findByRole("menuitem", { name: "Delete" }))
     fireEvent.click(
@@ -458,23 +443,40 @@ describe("the details' routines", () => {
     )
   })
 
-  it("a paused one says why and resumes", async () => {
-    api.personalAgentRoutines.mockResolvedValue([
-      routine({ enabled: false, paused_reason: "failures" }),
-    ])
-    wrap(<RoutinesSection title="例程" readOnly={false} />, { zh: true })
-    const why = await screen.findByText("连续失败了 3 次。")
-    // Paused by codeg: its pill and why, in the caution's colour.
-    expect(why.className).toContain("text-amber-700")
+  it("says it is running while it runs — not one waiting on the owner", () => {
+    const run = routine().last[0]
+    wrap(
+      <RowUnder
+        r={routine({ last: [{ ...run, ended_at: null, outcome: "running" }] })}
+      />
+    )
     expect(
-      why.closest("[data-pa-routine-fact]")!.querySelector("dt")!.textContent
-    ).toBe("原因")
+      document.querySelector('[data-pa-routine-status="running"]')!.textContent
+    ).toBe("Running")
+    cleanup()
+    wrap(
+      <RowUnder
+        r={routine({ last: [{ ...run, ended_at: null, outcome: "asked" }] })}
+      />
+    )
+    expect(document.querySelector('[data-pa-routine-status="running"]')).toBeNull()
+    const wrong = document.querySelector<HTMLElement>("[data-pa-routine-wrong]")!
+    expect(wrong.textContent).toBe("Last run: Waiting for you")
+    expect(wrong.className).toContain("text-amber-700")
+  })
+
+  it("a second line only when something is wrong: paused by codeg, or a failed run", async () => {
+    wrap(
+      <RowUnder r={routine({ enabled: false, paused_reason: "failures" })} />,
+      { zh: true }
+    )
+    const wrong = document.querySelector<HTMLElement>("[data-pa-routine-wrong]")!
+    expect(wrong.textContent).toBe("连续失败了 3 次。")
     const pill = document.querySelector<HTMLElement>("[data-pa-routine-state]")!
     expect(pill.textContent).toBe("已暂停")
     expect(pill.className).toContain("text-amber-700")
     // Paused: no next run.
-    expect(document.querySelector('[data-pa-routine-fact="next"]')).toBeNull()
-    // Resumed from its menu, where it cannot be run now.
+    expect(document.querySelector("[data-pa-routine-status]")).toBeNull()
     const user = userEvent.setup()
     await user.click(screen.getByRole("button", { name: "更多操作" }))
     expect(
@@ -482,111 +484,49 @@ describe("the details' routines", () => {
         "aria-disabled"
       )
     ).toBe("true")
-    expect(screen.queryByRole("menuitem", { name: "暂停" })).toBeNull()
     await user.click(screen.getByRole("menuitem", { name: "恢复" }))
     await waitFor(() =>
       expect(api.personalAgentRoutineAct).toHaveBeenCalledWith(7, 5, "resume")
     )
+    cleanup()
+    const run = routine().last[0]
+    wrap(<RowUnder r={routine({ last: [{ ...run, outcome: "failed" }] })} />)
+    expect(
+      document.querySelector("[data-pa-routine-wrong]")!.textContent
+    ).toBe("Last run: Failed")
   })
 
-  it("one paused by its owner: its name as ever, a quiet pill after it, no reason", async () => {
-    api.personalAgentRoutines.mockResolvedValue([
-      routine({ enabled: false, paused_reason: "owner" }),
-    ])
-    wrap(<RoutinesSection title="Routines" readOnly={false} />)
-    const name = await screen.findByText("Night CI")
-    // The name keeps its weight and colour: the head of its row.
-    expect(name.className).toContain("font-semibold")
-    expect(name.className).toContain("text-foreground")
+  it("one paused by its owner: a quiet pill, no reason", () => {
+    wrap(<RowUnder r={routine({ enabled: false, paused_reason: "owner" })} />)
     const pill = document.querySelector<HTMLElement>("[data-pa-routine-state]")!
     expect(pill.textContent).toBe("Paused")
     expect(pill.className).not.toContain("text-amber")
-    expect(document.querySelector('[data-pa-routine-fact="why"]')).toBeNull()
+    expect(document.querySelector("[data-pa-routine-wrong]")).toBeNull()
   })
 
-  it("one run on an event says what it runs on", async () => {
-    api.personalAgentRoutines.mockResolvedValue([
-      routine({
-        trigger: "event",
-        cron: null,
-        next_run_at: null,
-        event: { kind: "pr_merged" },
-      }),
-    ])
-    wrap(<RoutinesSection title="Routines" readOnly={false} />)
-    await screen.findByText("Night CI")
-    const when = document.querySelector<HTMLElement>(
-      '[data-pa-routine-fact="when"]'
-    )!
-    expect(when.querySelector("dt")!.textContent).toBe("Trigger")
-    expect(when.querySelector("dd")!.textContent).toBe("A watched PR is merged")
-    expect(document.querySelector('[data-pa-routine-fact="next"]')).toBeNull()
-  })
-
-  it("folds from its bar, the way to add one apart from it", async () => {
-    api.personalAgentRoutines.mockResolvedValue([routine()])
-    wrap(<RoutinesSection title="Routines" readOnly={false} />)
-    await screen.findByText("Night CI")
-    fireEvent.click(screen.getByRole("button", { name: "New routine" }))
-    expect(usePersonalAgentUi.getState().routineEditor?.routineId).toBeNull()
-    // Adding one does not fold it.
-    expect(screen.getByText("Night CI")).toBeTruthy()
-    const fold = document.querySelector<HTMLElement>("[data-pa-fold]")!
-    expect(fold.getAttribute("aria-expanded")).toBe("true")
-    fireEvent.click(fold)
-    expect(fold.getAttribute("aria-expanded")).toBe("false")
-    expect(screen.queryByText("Night CI")).toBeNull()
-  })
-
-  it("asked to open its routines, unfolds the card", async () => {
-    api.personalAgentRoutines.mockResolvedValue([routine()])
-    usePersonalAgentUi.setState({ auxFolds: { "activity.routines": false } })
-    wrap(<RoutinesSection title="Routines" readOnly={false} />)
-    const fold = await waitFor(() => {
-      const el = document.querySelector<HTMLElement>("[data-pa-fold]")
-      expect(el).toBeTruthy()
-      return el!
-    })
-    expect(fold.getAttribute("aria-expanded")).toBe("false")
-    expect(screen.queryByText("Night CI")).toBeNull()
-    act(() => usePersonalAgentUi.getState().showRoutines())
-    expect(fold.getAttribute("aria-expanded")).toBe("true")
-    expect(screen.getByText("Night CI")).toBeTruthy()
-    // Folded since, drawn again: it stays as the owner left it.
-    fireEvent.click(fold)
-    cleanup()
-    wrap(<RoutinesSection title="Routines" readOnly={false} />)
-    await screen.findByText("Routines")
+  it("one run on an event says what it runs on", () => {
+    wrap(
+      <RowUnder
+        r={routine({
+          trigger: "event",
+          cron: null,
+          next_run_at: null,
+          event: { kind: "pr_merged" },
+        })}
+      />
+    )
     expect(
-      document
-        .querySelector<HTMLElement>("[data-pa-fold]")!
-        .getAttribute("aria-expanded")
-    ).toBe("false")
+      document.querySelector("[data-pa-routine-line]")!.textContent
+    ).toBe("A watched PR is merged")
   })
 
-  it("read-only: no [+], no menu", async () => {
-    api.personalAgentRoutines.mockResolvedValue([routine()])
-    wrap(<RoutinesSection title="Routines" readOnly />)
-    await screen.findByText("Night CI")
-    expect(document.querySelector("[data-pa-routine-new]")).toBeNull()
+  it("read-only: no menu, its facts still there to unfold", () => {
+    wrap(<RowUnder r={routine()} readOnly />)
     expect(document.querySelector("[data-pa-routine-menu]")).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "Show details" }))
     expect(
       document.querySelector('[data-pa-routine-outcome="silent"]')
     ).toBeTruthy()
-  })
-
-  it("none yet: how to get one", async () => {
-    api.personalAgentRoutines.mockResolvedValue([])
-    wrap(<RoutinesSection title="Routines" readOnly={false} />)
-    expect(
-      await screen.findByText(
-        "No routines yet. Ask it in the conversation to set one up."
-      )
-    ).toBeTruthy()
-    // No [+] at the head while the empty line offers it.
-    expect(document.querySelector("[data-pa-routine-new]")).toBeNull()
-    fireEvent.click(screen.getByText("New routine"))
-    expect(usePersonalAgentUi.getState().routineEditor?.routineId).toBeNull()
   })
 })
 

@@ -11729,6 +11729,28 @@
     "notify": {
       "open": "Öffnen"
     },
+    "feed": {
+      "groups": {
+        "needs": "Wartet auf dich",
+        "watching": "In Arbeit",
+        "next": "Als Nächstes",
+        "done": "Heute erledigt"
+      },
+      "empty": "Nichts für dich zu tun, und nichts läuft.",
+      "failed": "Die Aktivität konnte gerade nicht gelesen werden.",
+      "handed": "An {name} übergeben",
+      "checking": "Wird geprüft · Runde {round}",
+      "queued": "zum Mergen eingereiht",
+      "waitsAgent": "Wartet darauf, dass {name} es erledigt",
+      "routineRunning": "Läuft",
+      "routineLast": "Letzter Lauf: {outcome}",
+      "fold": "Details ausblenden",
+      "unfold": "Details anzeigen",
+      "viewReminder": "Erinnerung ansehen",
+      "viewCheck": "Abnahme-Sitzung ansehen",
+      "openTask": "Aufgabe öffnen",
+      "routineDeleted": "Diese Routine wurde gelöscht."
+    },
     "today": {
       "title": "Heute",
       "empty": "Heute braucht dich nichts",
