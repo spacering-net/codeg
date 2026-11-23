@@ -382,4 +382,38 @@ describe("MarkdownDocumentPreview local images", () => {
       nested.split("\n").slice(1, -1).join("")
     )
   })
+
+  it.each([
+    ["an empty fence", "~~~txt\n~~~"],
+    ["a fence-like line inside an HTML comment", "<!--\n~~~ notes\n-->"],
+    ["a fence in a list item that ends on dedent", "- item\n\n  ```\n  code"],
+  ])("does not mask live content after %s", async (_label, before) => {
+    const { container } = renderDocument(
+      `${before}\n\n![logo](./assets/logo.png)\n`
+    )
+
+    await waitFor(() =>
+      expect(container.querySelector("img")?.getAttribute("src")).toBe(
+        "data:image/png;base64,QUFB"
+      )
+    )
+    expect(mocks.readFileBase64.mock.calls.map(([path]) => path)).toEqual([
+      "/repo/docs/assets/logo.png",
+    ])
+  })
+
+  it("leaves indented code blocks untouched", async () => {
+    const { container } = renderDocument(
+      'Example:\n\n    <img src = "//localhost:8080/logo.png">\n    ![a](./img/a.png)\n'
+    )
+
+    await waitFor(() => expect(container.querySelector("pre")).not.toBeNull())
+    expect(container.querySelector("pre")?.textContent).toContain(
+      '<img src = "//localhost:8080/logo.png">'
+    )
+    expect(container.querySelector("pre")?.textContent).toContain(
+      "![a](./img/a.png)"
+    )
+    expect(mocks.readFileBase64).not.toHaveBeenCalled()
+  })
 })

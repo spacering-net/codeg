@@ -1,9 +1,10 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
+import type { Nodes } from "mdast"
+import { fromMarkdown } from "mdast-util-from-markdown"
 import { Streamdown } from "streamdown"
 import { readFileBase64 } from "@/lib/api"
-import { maskLiteralSpans } from "@/components/ai-elements/markdown-mask"
 import { normalizeMathDelimiters } from "@/components/ai-elements/message"
 import { scrollportComponents } from "@/components/ai-elements/markdown-scrollport"
 import { mermaidComponents } from "@/components/ai-elements/mermaid-block"
@@ -67,16 +68,56 @@ function joinUnder(base: string, relative: string): string {
 }
 
 /**
- * Fenced code blocks and inline code spans of a Markdown DOCUMENT. Stricter
- * than the chat's `CODE_SPANS`, which is unanchored: here a fence opens only
- * at the start of a line (up to three spaces of indent; a backtick fence's
- * info string has no backtick) and closes only on a line holding a run of the
- * same character at least as long — so `~~~` mentioned in prose masks
- * nothing, and a ```` fence wrapping a ``` example is masked whole. An
- * unclosed fence runs to the end of the document, as in CommonMark.
+ * Take the document's code — fenced and indented code blocks, inline code — out
+ * of the path rewrites below, returning the masked text and the inverse. The
+ * spans come from a real CommonMark parse (the parser family Streamdown renders
+ * with), not a line scanner: only a parser knows where a fence inside a list
+ * item or blockquote ends, that a `~~~` mentioned in prose or inside an HTML
+ * comment opens nothing, and that a ```` fence wrapping a ``` example is one
+ * block (same reasoning as `unescapeComposerText` in lib/composer-copy-text.ts).
+ * On a parse failure nothing is masked — the pre-masking behavior.
  */
-const DOCUMENT_CODE =
-  /^ {0,3}(`{3,})[^`\n]*(?:\n[\s\S]*?)?(?:\n {0,3}\1`*[ \t]*(?=\n|$)|(?![\s\S]))|^ {0,3}(~{3,})[^\n]*(?:\n[\s\S]*?)?(?:\n {0,3}\2~*[ \t]*(?=\n|$)|(?![\s\S]))|`[^`\n]+`/gm
+function maskDocumentCode(content: string): {
+  masked: string
+  restore: (rewritten: string) => string
+} {
+  const ranges: Array<[number, number]> = []
+  const walk = (node: Nodes) => {
+    if (node.type === "code" || node.type === "inlineCode") {
+      const start = node.position?.start.offset
+      const end = node.position?.end.offset
+      if (start !== undefined && end !== undefined) ranges.push([start, end])
+      return
+    }
+    if ("children" in node) for (const child of node.children) walk(child)
+  }
+  try {
+    walk(fromMarkdown(content))
+  } catch {
+    return { masked: content, restore: (rewritten) => rewritten }
+  }
+  ranges.sort((x, y) => x[0] - y[0])
+
+  // NUL-delimited, so no rewrite below can produce or match a placeholder.
+  const saved: string[] = []
+  let masked = ""
+  let cursor = 0
+  for (const [start, end] of ranges) {
+    if (start < cursor) continue
+    masked += content.slice(cursor, start) + `\0MDCODE${saved.length}\0`
+    saved.push(content.slice(start, end))
+    cursor = end
+  }
+  masked += content.slice(cursor)
+  return {
+    masked,
+    restore: (rewritten) =>
+      rewritten.replace(
+        /\0MDCODE(\d+)\0/g,
+        (_m, i: string) => saved[Number(i)]
+      ),
+  }
+}
 
 /**
  * Pre-resolve local paths in markdown image/link syntax before Streamdown.
@@ -102,11 +143,10 @@ const DOCUMENT_CODE =
  *
  * Fenced code blocks and inline code are masked first: their bytes are what
  * the author means to show (and what Copy Code hands out), not references.
- * This is a source-level pass, not a Markdown parser: indented code blocks,
- * fences inside list items / blockquotes and multi-line reference
- * definitions are not recognized, so those keep the pre-existing behavior
- * (rewritten, or for a protocol-relative destination, host-stripped by
- * rehype-harden).
+ * The rewrites themselves are a source-level pass, not a Markdown parser:
+ * code inside raw HTML (`<pre><code>`) and multi-line reference definitions
+ * are not recognized, so those keep the pre-existing behavior (rewritten, or
+ * for a protocol-relative destination, host-stripped by rehype-harden).
  *
  * Known limitation: documents living under a Windows UNC root
  * ("//server/share/…") lose the double-slash prefix in this pipeline (the
@@ -158,7 +198,7 @@ function preprocessMarkdownPaths(
     return "./" + resolveAgainst(fileDir, pathPart) + fragment
   }
 
-  const { masked, restore } = maskLiteralSpans(content, DOCUMENT_CODE)
+  const { masked, restore } = maskDocumentCode(content)
 
   // Pre-resolve image paths: ![alt](url) or ![alt](url "title")
   let result = masked.replace(
@@ -369,10 +409,15 @@ export function MarkdownDocumentPreview({
   // ai-elements/windows-path-escape.ts): this renders a real Markdown
   // DOCUMENT, where `\.` → `.` is correct CommonMark and the author's escapes
   // are theirs to keep. That transform is for agent-authored chat text only.
-  const preprocessed = normalizeMathDelimiters(
-    localRefsEnabled
-      ? preprocessMarkdownPaths(content, baseDir ?? "", previewRoot)
-      : content
+  // Memoized: the pass parses the document once to find its code spans.
+  const preprocessed = useMemo(
+    () =>
+      normalizeMathDelimiters(
+        localRefsEnabled
+          ? preprocessMarkdownPaths(content, baseDir ?? "", previewRoot)
+          : content
+      ),
+    [content, baseDir, previewRoot, localRefsEnabled]
   )
   const plugins = useStreamdownPlugins(preprocessed)
   // Web links go through the app's link decision like every other click on
