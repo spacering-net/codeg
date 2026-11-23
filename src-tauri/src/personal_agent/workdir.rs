@@ -731,6 +731,141 @@ pub fn set_marker_seed_version(path: &Path, version: i32) -> std::io::Result<()>
     std::fs::rename(&tmp, &marker)
 }
 
+/// Add `line` to the log of `day` (`log/<YYYY-MM-DD>.md`, made when
+/// missing) and commit it — under the log's own message, which a tidy-up
+/// counts as something new to look at. Appended, never read and written
+/// back: the assistant may be writing the same file (its notes before a
+/// compaction), and both lines stay. Never through a link (see
+/// [`append_line_in_folder`]): a `log`, or a day's file, that is a link
+/// refuses the line.
+pub async fn append_log_line(path: &Path, day: &str, line: &str) -> std::io::Result<()> {
+    if day.len() != 10 || !day.chars().all(|c| c.is_ascii_digit() || c == '-') {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("not a day: {day}"),
+        ));
+    }
+    let folder = path.join(LOG_DIR);
+    match std::fs::create_dir(&folder) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e),
+    }
+    let name = format!("{day}.md");
+    append_line_in_folder(&folder, &name, line.trim_end())?;
+    let rel = format!("{LOG_DIR}/{name}");
+    commit_only(path, "log: @-mentioned in a conversation", &[rel.as_str()]).await;
+    Ok(())
+}
+
+/// Append `line` as a line of its own (after a line break when the file
+/// does not end in one) to the file `name` in `folder` of a working
+/// directory, made when missing, never through a link — and nothing read
+/// but the file's last byte, through the very handle written. On Unix the
+/// folder is opened as itself (`O_DIRECTORY | O_NOFOLLOW`) and the file
+/// inside that very folder (`openat`, `O_NOFOLLOW`); on Windows the folder
+/// is held open as itself (`FILE_FLAG_OPEN_REPARSE_POINT`) without
+/// `FILE_SHARE_DELETE` — so it cannot be renamed, removed or swapped for a
+/// junction until the write is done — and the file opened as itself. A
+/// link at either refuses the line.
+fn append_line_in_folder(folder: &Path, name: &str, line: &str) -> std::io::Result<()> {
+    use std::io::{Read, Seek, SeekFrom, Write};
+    let refused = |why: &str| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{}: {why}", folder.join(name).display()),
+        )
+    };
+    if name.is_empty() || name.contains(['/', '\\', '\0']) {
+        return Err(refused("not a file name"));
+    }
+    #[cfg(unix)]
+    let mut file = {
+        use std::ffi::CString;
+        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+        use std::os::unix::ffi::OsStrExt;
+        let dir = CString::new(folder.as_os_str().as_bytes())
+            .map_err(|_| refused("not a path"))?;
+        let file = CString::new(name).map_err(|_| refused("not a file name"))?;
+        // SAFETY: a NUL-terminated path; the descriptor is owned at once.
+        let dfd = unsafe {
+            libc::open(
+                dir.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if dfd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: a descriptor just opened, owned by nothing else.
+        let dfd = unsafe { OwnedFd::from_raw_fd(dfd) };
+        // SAFETY: a live directory descriptor and a NUL-terminated name
+        // with no separator; the mode is the variadic third argument.
+        let fd = unsafe {
+            libc::openat(
+                dfd.as_raw_fd(),
+                file.as_ptr(),
+                libc::O_RDWR
+                    | libc::O_APPEND
+                    | libc::O_CREAT
+                    | libc::O_NOFOLLOW
+                    | libc::O_NONBLOCK
+                    | libc::O_CLOEXEC,
+                0o644 as libc::c_uint,
+            )
+        };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: a descriptor just opened, owned by nothing else.
+        unsafe { std::fs::File::from_raw_fd(fd) }
+    };
+    #[cfg(windows)]
+    let (_held, mut file) = {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
+            FILE_SHARE_WRITE,
+        };
+        let held = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(folder)?;
+        if !held.metadata()?.is_dir() || odd_reparse(&held) {
+            return Err(refused("its folder is not a folder of its own"));
+        }
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .append(true)
+            .create(true)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(folder.join(name))?;
+        if odd_reparse(&file) {
+            return Err(refused("a link"));
+        }
+        (held, file)
+    };
+    #[cfg(not(any(unix, windows)))]
+    let mut file: std::fs::File = return Err(refused("not supported here"));
+    if !file.metadata()?.file_type().is_file() {
+        return Err(refused("not a file of its own"));
+    }
+    let mut text = String::new();
+    if file.metadata()?.len() > 0 {
+        let mut last = [0u8; 1];
+        file.seek(SeekFrom::End(-1))?;
+        file.read_exact(&mut last)?;
+        if last[0] != b'\n' {
+            text.push('\n');
+        }
+    }
+    text.push_str(line);
+    text.push('\n');
+    file.write_all(text.as_bytes())?;
+    file.sync_all()
+}
+
 /// Whether the directory has a history of its own with a commit in it —
 /// it is the top of the repository git finds there (a `.git` directory or
 /// file of its own, not a repository it sits inside), and that has a HEAD.
@@ -5721,6 +5856,38 @@ mod tests {
     }
 
     // ── the fixed files, never through a link ──────────────────────────────
+
+    /// A line for a delegation that ran as the assistant goes into the day's
+    /// log and is committed; never through a link — a day's file or a `log`
+    /// that leads out refuses the line, and what is outside stays.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_delegation_log_line_is_written_in_the_directory_only() {
+        let (tmp, dir) = memory_repo().await;
+        append_log_line(&dir, "2026-11-23", "- 10:00 one").await.unwrap();
+        append_log_line(&dir, "2026-11-23", "- 11:00 two").await.unwrap();
+        assert_eq!(log_of(&dir, "2026-11-23"), "- 10:00 one\n- 11:00 two\n");
+        assert!(committed_text(&dir, "log/2026-11-23.md").await.is_some());
+        assert!(append_log_line(&dir, "../x", "- no").await.is_err());
+
+        let outside = tmp.path().join("outside.md");
+        std::fs::write(&outside, "kept\n").unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join("log/2026-11-24.md")).unwrap();
+        assert!(append_log_line(&dir, "2026-11-24", "- 09:00 three").await.is_err());
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "kept\n");
+        // A day's file the assistant left without a last line break: the
+        // line still goes on a line of its own, after what is there.
+        std::fs::write(dir.join("log/2026-11-26.md"), "- 08:00 mine").unwrap();
+        append_log_line(&dir, "2026-11-26", "- 09:00 four").await.unwrap();
+        assert_eq!(log_of(&dir, "2026-11-26"), "- 08:00 mine\n- 09:00 four\n");
+
+        let elsewhere = tmp.path().join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        std::fs::remove_dir_all(dir.join(LOG_DIR)).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, dir.join(LOG_DIR)).unwrap();
+        assert!(append_log_line(&dir, "2026-11-25", "- no").await.is_err());
+        assert!(std::fs::read_dir(&elsewhere).unwrap().next().is_none());
+    }
 
     /// A fixed file an assistant made a link to a file outside its
     /// directory reads as no file — wherever codeg reads it — and a write

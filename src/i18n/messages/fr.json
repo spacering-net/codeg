@@ -5557,6 +5557,7 @@
     "passphrasePlaceholder": "Phrase secrète de chiffrement",
     "passphraseHint": "Conservée dans le trousseau de cette machine et jamais envoyée. Saisissez la même phrase sur vos autres machines.",
     "assistantsRenamed": "{count, plural, one {# assistant a été renommé : un autre portait déjà son nom ici.} other {# assistants ont été renommés : d’autres portaient déjà leurs noms ici.}}",
+    "assistantsPersonaKept": "{count, plural, one {# assistant garde sa propre persona : il a déjà écrit son fichier de persona ici, qu’une importation n’écrase pas.} other {# assistants gardent leur propre persona : ils ont déjà écrit leurs fichiers de persona ici, qu’une importation n’écrase pas.}}",
     "conflictTitle": "Envoi automatique en pause",
     "conflictBody": "Le serveur contient un instantané de {device}, pris le {time}, que cette machine n’a pas restauré. L’envoyer le remplacerait, et le serveur ne garde aucune copie antérieure.",
     "conflictRestore": "Le restaurer",

@@ -1506,6 +1506,7 @@ impl PersonalAgentEngine {
             agent_options: work.agent_options.clone(),
             // A resumed conversation is told who handed it out again.
             instructions: work.brief_text(),
+            avatar: None,
         };
         // The assistant whose work it is, as it handed the work out — not
         // the one following it after a handover (`bot_id`).

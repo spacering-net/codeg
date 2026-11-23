@@ -5557,6 +5557,7 @@
     "passphrasePlaceholder": "Encryption passphrase",
     "passphraseHint": "Kept in this machine's keychain and never uploaded. Enter the same passphrase on your other machines.",
     "assistantsRenamed": "{count, plural, one {# assistant was renamed: one here already had its name.} other {# assistants were renamed: ones here already had their names.}}",
+    "assistantsPersonaKept": "{count, plural, one {# assistant kept its own persona: it has written its persona file here, which an import does not overwrite.} other {# assistants kept their own personas: they have written their persona files here, which an import does not overwrite.}}",
     "conflictTitle": "Automatic upload is paused",
     "conflictBody": "The server holds a snapshot from {device}, taken {time}, that this machine has not restored. Uploading would replace it, and the server keeps no earlier copy.",
     "conflictRestore": "Restore it",

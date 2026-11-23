@@ -218,6 +218,7 @@ function ConversationWork({
         agentType,
         assistantId: null,
         assistantName: now.assistantName,
+        botUid: null,
       }}
       kickoffTask={now.prompt}
       headerActions={<WayOut target={now} label={t("openConversation")} />}

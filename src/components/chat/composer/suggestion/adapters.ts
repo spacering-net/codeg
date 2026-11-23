@@ -3,9 +3,9 @@ import { formatConversationTitle } from "@/lib/conversation-title"
 import { buildFileUri } from "@/lib/reference-link"
 import {
   type AcpAgentInfo,
-  type AssistantInfo,
   type DbConversationSummary,
   type GitLogEntry,
+  type RosterEntry,
 } from "@/lib/types"
 import { getAgentLabel } from "@/lib/custom-agents"
 
@@ -57,26 +57,29 @@ export function agentToSuggestion(agent: AcpAgentInfo): SuggestionItem {
 }
 
 /**
- * Assistant → assistant reference, routed like an agent: it serializes inline
- * as `[@name](codeg://assistant/<id>)`, from which the backend derives the
- * delegation reminder at send time. The second line is the description the
- * delegating agent also reads, or the agent it runs on when there is none; the
- * agent's name and slug are searchable too.
+ * Personal assistant → assistant reference, routed like an agent: it
+ * serializes inline as `[@name](codeg://bot/<uid>)`, from which the backend
+ * derives the delegation reminder at send time. The second line is its
+ * persona's head (`detail`, as the roster reads it), or the agent its work
+ * runs on when it has none written; that agent's name and slug are
+ * searchable too.
  */
 export function assistantToSuggestion(
-  assistant: AssistantInfo
+  entry: RosterEntry & { uid: string },
+  detail?: string | null
 ): SuggestionItem {
-  const agentLabel = getAgentLabel(assistant.agent_type)
+  const agentType = entry.work_agent_type ?? null
+  const agentLabel = agentType ? getAgentLabel(agentType) : ""
   return {
     reference: {
       refType: "assistant",
-      id: String(assistant.id),
-      label: assistant.name,
-      uri: `codeg://assistant/${assistant.id}`,
-      meta: { assistantId: assistant.id },
+      id: entry.uid,
+      label: entry.name,
+      uri: `codeg://bot/${entry.uid}`,
+      meta: { botUid: entry.uid },
     },
-    detail: assistant.description || agentLabel,
-    keywords: `${agentLabel} ${assistant.agent_type}`,
+    detail: detail || agentLabel || null,
+    keywords: agentType ? `${agentLabel} ${agentType}` : "",
   }
 }
 

@@ -5557,6 +5557,7 @@
     "passphrasePlaceholder": "Frase-passe de cifra",
     "passphraseHint": "Fica no porta-chaves desta máquina e nunca é enviada. Introduza a mesma frase-passe nas suas outras máquinas.",
     "assistantsRenamed": "{count, plural, one {# assistente foi renomeado: já havia um com o mesmo nome aqui.} other {# assistentes foram renomeados: já havia outros com os mesmos nomes aqui.}}",
+    "assistantsPersonaKept": "{count, plural, one {# assistente manteve a própria persona: ele já escreveu aqui o seu arquivo de persona, que uma importação não sobrescreve.} other {# assistentes mantiveram as próprias personas: eles já escreveram aqui os seus arquivos de persona, que uma importação não sobrescreve.}}",
     "conflictTitle": "Envio automático pausado",
     "conflictBody": "O servidor tem um instantâneo de {device}, criado em {time}, que esta máquina não restaurou. Enviar o substituiria, e o servidor não guarda nenhuma cópia anterior.",
     "conflictRestore": "Restaurá-lo",

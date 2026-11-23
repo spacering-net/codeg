@@ -138,7 +138,8 @@ export function MarkdownLink({
         </button>
       )
     }
-    if (reference) return <ReferenceBadge data={reference} />
+    // An assistant's opens its conversation (D8).
+    if (reference) return <ReferenceBadge data={reference} openable />
   }
 
   const kind = classifyResourceKind(href)

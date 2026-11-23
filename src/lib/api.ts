@@ -34,9 +34,7 @@ import type {
   CliToolStatus,
   AgentDelegationDefaults,
   AgentOptionsSnapshot,
-  AssistantDraft,
   AssistantInfo,
-  AssistantPatch,
   AskAnswerOutcome,
   AskPlanDecision,
   ConversationTarget,
@@ -2468,32 +2466,6 @@ export async function assistantList(): Promise<AssistantInfo[]> {
   return getTransport().call("assistant_list", {})
 }
 
-export async function assistantCreate(
-  draft: AssistantDraft
-): Promise<AssistantInfo> {
-  return getTransport().call("assistant_create", { draft })
-}
-
-/** Apply an edit; only the fields present change. */
-export async function assistantUpdate(
-  id: number,
-  patch: AssistantPatch
-): Promise<AssistantInfo> {
-  return getTransport().call("assistant_update", { id, patch })
-}
-
-/** Soft-delete; resolves to the tombstone. */
-export async function assistantDelete(id: number): Promise<AssistantInfo> {
-  return getTransport().call("assistant_delete", { id })
-}
-
-/** Persist the order after a drag (the complete list, first to last);
- *  resolves to the rows whose position changed. */
-export async function assistantReorder(
-  ids: number[]
-): Promise<AssistantInfo[]> {
-  return getTransport().call("assistant_reorder", { ids })
-}
 
 // ─── Personal agent ────────────────────────────────────────────────────────
 // Reads work in every process; actions go to the process running the agent

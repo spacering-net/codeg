@@ -192,6 +192,50 @@ fn first_line(text: &str, max: usize) -> String {
 
 /// An assistant's name as the brains read it: the primary may have none
 /// (the page then calls it by its role).
+/// An assistant the owner @-mentioned, as their composer writes it:
+/// `[@name](codeg://bot/<uid>)`, the name backslash-escaped.
+static BOT_LINK: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"\[@((?:\\.|[^\]\\\n])*)\]\(codeg://bot/([0-9a-z_-]{1,64})\)")
+        .expect("a valid pattern")
+});
+
+/// The owner's words as an assistant's brain reads them (D8): each
+/// assistant they @-mentioned as "@name (#N)" — its name as it is now, N
+/// its number on the team list — and one no longer on it as "@name". No
+/// link or routing in it: whether to hand anything over is the brain's own
+/// call (`bot_message`). What a queued delivery and a message steered into
+/// a turn carry, and what [`PersonalAgentEngine::owner_typed_it`] also
+/// takes a quote from.
+pub fn owner_text_for_brain(body: &str, bots: &[agent_entity::Model]) -> String {
+    if !body.contains("codeg://bot/") {
+        return body.to_string();
+    }
+    BOT_LINK
+        .replace_all(body, |caps: &regex::Captures<'_>| {
+            let uid = &caps[2];
+            match bots
+                .iter()
+                .find(|b| b.deleted_at.is_none() && b.uid.as_deref() == Some(uid))
+            {
+                Some(b) => format!("@{} (#{})", display_name(b), b.id),
+                None => {
+                    let mut label = String::new();
+                    let mut escaped = false;
+                    for c in caps[1].chars() {
+                        if escaped || c != '\\' {
+                            label.push(c);
+                            escaped = false;
+                        } else {
+                            escaped = true;
+                        }
+                    }
+                    format!("@{label}")
+                }
+            }
+        })
+        .into_owned()
+}
+
 pub fn display_name(b: &agent_entity::Model) -> String {
     let name = b.name.trim();
     if !name.is_empty() {
@@ -514,7 +558,17 @@ impl PersonalAgentEngine {
             .filter(typed_row)
             .map(|r| r.body)
             .collect();
-        quote_in(quote, &typed)
+        if quote_in(quote, &typed) {
+            return true;
+        }
+        // Or as the brain read them: an assistant @-mentioned is "@name
+        // (#N)" there, not the link stored.
+        let bots = svc::list_bots(&self.db.conn).await.unwrap_or_default();
+        let read: Vec<String> = typed
+            .iter()
+            .map(|body| owner_text_for_brain(body, &bots))
+            .collect();
+        quote_in(quote, &read)
     }
 
     /// What an action for `input` inherits; with none, the chain starts at
@@ -1837,4 +1891,40 @@ mod tests {
         assert_eq!(message_ref("message:12"), Some(12));
         assert_eq!(message_ref("x"), None);
     }
+
+    /// The brain reads an assistant the owner @-mentioned by its name now
+    /// and its number; one gone by the name the link had, unescaped; and a
+    /// quote of either the stored words or the ones it read is theirs.
+    #[tokio::test]
+    async fn an_assistant_mentioned_reads_as_its_name_and_number() {
+        use crate::db::service::personal_agent_service::{self as pa, AgentColumns, NewWorker};
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let cols = AgentColumns {
+            agent_type: "codex".into(),
+            agent_options_json: "{}".into(),
+            label_snapshot_json: "{}".into(),
+        };
+        let made = |name: &str| {
+            NewWorker::made(name.into(), "{}".into(), cols.clone(), cols.clone(), "{}".into())
+        };
+        let dev = pa::create_worker(&db.conn, made("研发")).await.unwrap();
+        let gone = pa::create_worker(&db.conn, made("Gone")).await.unwrap();
+        pa::delete_worker(&db.conn, gone.id).await.unwrap();
+        let bots = pa::list_bots(&db.conn).await.unwrap();
+        let body = format!(
+            "ask [@Dev](codeg://bot/{}) and [@R\\&D\\_old](codeg://bot/{}), not [x](codeg://bot/)",
+            dev.uid.clone().unwrap(),
+            gone.uid.clone().unwrap()
+        );
+        let read = owner_text_for_brain(&body, &bots);
+        assert_eq!(
+            read,
+            format!("ask @研发 (#{}) and @R&D_old, not [x](codeg://bot/)", dev.id)
+        );
+        assert_eq!(owner_text_for_brain("plain words", &bots), "plain words");
+        let typed = vec![body.clone()];
+        assert!(!quote_in(&format!("@研发 (#{})", dev.id), &typed));
+        assert!(quote_in(&format!("@研发 (#{})", dev.id), &[read]));
+    }
+
 }

@@ -1208,11 +1208,14 @@ mod tauri_app {
                         chat_authoring_config,
                         browser_tools_config,
                         computer_tools_config,
-                    ) = crate::app_state::build_delegation_stack(
-                        &cm_state,
-                        db_conn.clone(),
-                        effective_data_dir.clone(),
-                    );
+                    ) = {
+                        crate::personal_agent::host::pin_data_dir(effective_data_dir.clone());
+                        crate::app_state::build_delegation_stack(
+                            &cm_state,
+                            db_conn.clone(),
+                            effective_data_dir.clone(),
+                        )
+                    };
                     app.manage(broker.clone());
                     app.manage(tokens.clone());
                     app.manage(feedback_config.clone());
@@ -1902,10 +1905,6 @@ mod tauri_app {
                 conversations::update_conversation_title,
                 conversations::update_conversation_pinned,
                 assistant_commands::assistant_list,
-                assistant_commands::assistant_create,
-                assistant_commands::assistant_update,
-                assistant_commands::assistant_delete,
-                assistant_commands::assistant_reorder,
                 crate::commands::personal_agent::personal_agent_get,
                 crate::commands::personal_agent::personal_agent_timeline,
                 crate::commands::personal_agent::personal_agent_timeline_rows,

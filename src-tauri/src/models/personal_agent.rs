@@ -705,6 +705,10 @@ pub struct BotSummary {
     /// Whether it has a brain yet (D3).
     pub has_brain: bool,
     pub legacy_assistant_id: Option<i32>,
+    /// The agent its work runs on; `None` when it names one codeg does not
+    /// know. What an @-mention hands work to (the composer offers it while
+    /// that agent is on).
+    pub work_agent_type: Option<crate::models::AgentType>,
     pub created_at: DateTime<Utc>,
 }
 

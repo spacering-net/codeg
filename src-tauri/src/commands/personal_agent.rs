@@ -1154,6 +1154,7 @@ fn bot_summary(
         hidden: b.hidden,
         has_brain: b.agent_type.is_some(),
         legacy_assistant_id: b.legacy_assistant_id,
+        work_agent_type: crate::models::AgentType::from_wire(&b.work_agent_type),
         created_at: b.created_at,
     }
 }

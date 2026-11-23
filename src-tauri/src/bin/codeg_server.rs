@@ -368,11 +368,14 @@ async fn async_main(
         chat_authoring_config,
         browser_tools_config,
         computer_tools_config,
-    ) = codeg_lib::app_state::build_delegation_stack(
-        &connection_manager,
-        db.conn.clone(),
-        data_dir.clone(),
-    );
+    ) = {
+        codeg_lib::personal_agent::host::pin_data_dir(data_dir.clone());
+        codeg_lib::app_state::build_delegation_stack(
+            &connection_manager,
+            db.conn.clone(),
+            data_dir.clone(),
+        )
+    };
     let state = Arc::new(AppState {
         db,
         connection_manager,

@@ -5557,6 +5557,7 @@
     "passphrasePlaceholder": "加密口令",
     "passphraseHint": "只保存在这台设备的钥匙串里，不会上传。请在你的其他设备上输入同一个口令。",
     "assistantsRenamed": "有 {count} 个助手与本机已有的助手重名，已自动改名。",
+    "assistantsPersonaKept": "有 {count} 个助手保留了本机的人设：它们已经在本机写好了人设文件，导入不会覆盖。",
     "conflictTitle": "自动上传已暂停",
     "conflictBody": "服务器上有一份来自 {device}、{time} 的快照，本机还没有恢复过。上传会替换它，而服务器不保留旧版本。",
     "conflictRestore": "恢复它",

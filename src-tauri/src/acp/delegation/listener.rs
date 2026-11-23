@@ -454,7 +454,7 @@ impl DelegationListener {
                 // `assistants: true` is the capability the companion checks
                 // before it forwards an `assistant_id` call — see
                 // `BrokerMessage::Ping`.
-                outcome: serde_json::json!({ "ok": true, "assistants": true }),
+                outcome: serde_json::json!({ "ok": true, "assistants": true, "bots": true }),
             },
             BrokerMessage::ListAssistants(req) => BrokerResponse {
                 outcome: self.process_list_assistants(req).await,
@@ -1277,7 +1277,11 @@ impl DelegationListener {
         if self.tokens.lookup(&req.token).await.is_none() {
             return serde_json::json!({ "assistants": [], "error": "invalid token" });
         }
-        serde_json::json!({ "assistants": self.broker.assistant_roster().await })
+        let roster = crate::acp::delegation::assistants::roster_for_companion(
+            self.broker.assistant_roster().await,
+            req.bots,
+        );
+        serde_json::json!({ "assistants": roster })
     }
 
     async fn process(&self, req: BrokerRequest) -> DelegationTaskReport {
@@ -1308,21 +1312,34 @@ impl DelegationListener {
         //    `assistant_id` wins over `agent_type` and is resolved NOW, from
         //    the database: the assistant supplies the agent, its options and
         //    its brief, frozen for this run.
-        let (agent_type, assistant) = match delegation_target_from_args(&req.input) {
-            Ok(DelegationTarget::Agent(agent_type)) => (agent_type, None),
-            Ok(DelegationTarget::Assistant(id)) => match self.broker.resolve_assistant(id).await {
-                Some((agent_type, assistant)) => (agent_type, Some(assistant)),
-                None => return self.assistant_not_found(&id.to_string()).await,
-            },
-            Err(DelegationTargetError::InvalidAssistantId(raw)) => {
+        //    `bot` (one of the owner's assistants, by uid) wins, then an old
+        //    link's `assistant_id` (the assistant converted from it); neither
+        //    found is refused, never run on a bare agent.
+        let asked = match delegation_target_from_args(&req.input) {
+            Ok(t) => t,
+            Err(DelegationTargetError::InvalidBot(raw))
+            | Err(DelegationTargetError::InvalidAssistantId(raw)) => {
                 return self.assistant_not_found(&raw).await;
             }
             Err(DelegationTargetError::InvalidAgentType(raw)) => return invalid_agent_type(&raw),
             Err(DelegationTargetError::Missing) => {
                 return report_failed(
                     "invalid_agent_type",
-                    "missing agent_type (or assistant_id, to delegate to an assistant)",
+                    "missing agent_type (or bot, to delegate to an assistant)",
                 );
+            }
+        };
+        let (agent_type, assistant) = match &asked {
+            DelegationTarget::Agent(agent_type) => (*agent_type, None),
+            DelegationTarget::Bot(uid) => match self.broker.resolve_bot(uid).await {
+                Some((agent_type, assistant)) => (agent_type, Some(assistant)),
+                None => return self.assistant_not_found(uid).await,
+            },
+            DelegationTarget::Assistant(id) => {
+                match self.broker.resolve_legacy_assistant(*id).await {
+                    Some((agent_type, assistant)) => (agent_type, Some(assistant)),
+                    None => return self.assistant_not_found(&id.to_string()).await,
+                }
             }
         };
         let task = match req.input.get("task").and_then(|v| v.as_str()) {
@@ -1353,6 +1370,7 @@ impl DelegationListener {
             requested_working_dir,
             external_handle: req.external_handle,
             assistant,
+            asked: Some(asked),
         };
         self.broker.start_delegation(delegation_req).await
     }
@@ -1618,6 +1636,7 @@ fn report_canceled(message: &str) -> DelegationTaskReport {
         blocked_on: None,
         assistant_id: None,
         assistant_name: None,
+        bot: None,
         progress: None,
     }
 }
@@ -1636,6 +1655,7 @@ fn report_failed(error_code: &str, message: &str) -> DelegationTaskReport {
         blocked_on: None,
         assistant_id: None,
         assistant_name: None,
+        bot: None,
         progress: None,
     }
 }
@@ -1655,6 +1675,7 @@ fn unknown_report(task_id: &str) -> DelegationTaskReport {
         blocked_on: None,
         assistant_id: None,
         assistant_name: None,
+        bot: None,
         progress: None,
     }
 }
@@ -2459,6 +2480,7 @@ mod tests {
                 requested_working_dir: None,
                 external_handle: None,
                 assistant: None,
+                asked: None,
             })
             .await;
         let task_id = ack.task_id.clone().expect("running task carries an id");
@@ -2614,6 +2636,7 @@ mod tests {
                         requested_working_dir: None,
                         external_handle: None,
                         assistant: None,
+                        asked: None,
                     })
                     .await
                     .task_id
@@ -2718,6 +2741,7 @@ mod tests {
                 requested_working_dir: None,
                 external_handle: None,
                 assistant: None,
+                asked: None,
             })
             .await;
         let task_id = ack.task_id.clone().unwrap();
@@ -2771,6 +2795,7 @@ mod tests {
                     requested_working_dir: None,
                     external_handle: Some("h-1".into()),
                     assistant: None,
+                    asked: None,
                 };
                 broker.handle_request(req).await
             })
@@ -4533,6 +4558,7 @@ mod tests {
             listener.clone(),
             BrokerMessage::ListAssistants(BrokerListAssistantsRequest {
                 token: "tok".into(),
+                bots: true,
             }),
         )
         .await;
@@ -4551,6 +4577,7 @@ mod tests {
             listener,
             BrokerMessage::ListAssistants(BrokerListAssistantsRequest {
                 token: "nope".into(),
+                bots: true,
             }),
         )
         .await;

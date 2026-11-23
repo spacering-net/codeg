@@ -3406,6 +3406,12 @@ impl PersonalAgentEngine {
         };
         let mut owner_lines = Vec::with_capacity(owners.len());
         let me = self.bot().await;
+        // The assistants they @-mentioned, by name and number (D8).
+        let team = if owners.iter().any(|o| o.body.contains("codeg://bot/")) {
+            svc::list_bots(&self.db.conn).await.unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         for o in &owners {
             let data = o
                 .data
@@ -3418,7 +3424,7 @@ impl PersonalAgentEngine {
                     None => None,
                 },
                 clicked: super::card_acts::clicked_of(o),
-                text: o.body.clone(),
+                text: super::messages::owner_text_for_brain(&o.body, &team),
                 notes: super::mentions::hits_in(data.as_ref())
                     .iter()
                     .map(|h| super::mentions::delivery_note(h, me))
@@ -4758,11 +4764,16 @@ impl PersonalAgentEngine {
             None => None,
         };
         let me = self.bot().await;
+        let team = if row.body.contains("codeg://bot/") {
+            svc::list_bots(&self.db.conn).await.unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         let line = OwnerLine {
             id: row.id,
             quote,
             clicked: row.data.as_ref().and_then(super::card_acts::clicked_in),
-            text: row.body.clone(),
+            text: super::messages::owner_text_for_brain(&row.body, &team),
             notes: super::mentions::hits_in(row.data.as_ref())
                 .iter()
                 .map(|h| super::mentions::delivery_note(h, me))

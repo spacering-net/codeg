@@ -1029,6 +1029,7 @@ mod tests {
                 task_id: "task-pet-1".into(),
                 assistant_id: None,
                 assistant_name: None,
+                bot_uid: None,
             },
         )
     }
@@ -1048,6 +1049,7 @@ mod tests {
                 },
                 assistant_id: None,
                 assistant_name: None,
+                bot_uid: None,
             },
         )
     }

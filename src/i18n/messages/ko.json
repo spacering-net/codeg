@@ -5557,6 +5557,7 @@
     "passphrasePlaceholder": "암호화 암호구",
     "passphraseHint": "이 기기의 키체인에만 저장되며 업로드되지 않습니다. 다른 기기에도 같은 암호구를 입력하세요.",
     "assistantsRenamed": "어시스턴트 {count}개가 이 기기의 기존 것과 이름이 같아 자동으로 이름을 바꿨어요.",
+    "assistantsPersonaKept": "어시스턴트 {count}개는 이 기기의 페르소나를 그대로 유지했어요. 이미 이 기기에서 페르소나 파일을 작성했기 때문에 가져오기로 덮어쓰지 않아요.",
     "conflictTitle": "자동 업로드가 일시 중지되었습니다",
     "conflictBody": "서버에 {device}에서 {time}에 만든 스냅샷이 있으며 이 기기에서는 아직 복원하지 않았습니다. 업로드하면 이 스냅샷이 교체되며 서버에는 이전 사본이 남지 않습니다.",
     "conflictRestore": "복원",

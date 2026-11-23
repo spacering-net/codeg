@@ -388,22 +388,6 @@ pub fn build_router_with_srn(
             post(handlers::assistants::assistant_list),
         )
         .route(
-            "/assistant_create",
-            post(handlers::assistants::assistant_create),
-        )
-        .route(
-            "/assistant_update",
-            post(handlers::assistants::assistant_update),
-        )
-        .route(
-            "/assistant_delete",
-            post(handlers::assistants::assistant_delete),
-        )
-        .route(
-            "/assistant_reorder",
-            post(handlers::assistants::assistant_reorder),
-        )
-        .route(
             "/personal_agent_get",
             post(handlers::personal_agent::personal_agent_get),
         )

@@ -375,6 +375,227 @@ pub async fn fill_missing_brains(
     Ok(filled)
 }
 
+/// One work assistant as a configuration snapshot carries it (the
+/// `assistants` domain, §6.3), already checked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedWorker {
+    /// The package's uid: a collaboration assistant's from an older build,
+    /// or the one an assistant was exported under (`legacy_assistant_uid`,
+    /// else its own).
+    pub key: String,
+    pub name: String,
+    /// Its persona, for one whose directory is not made yet; empty: none.
+    pub persona: String,
+    pub work: AgentColumns,
+    pub instructions: String,
+    pub hidden: bool,
+    pub sort_order: i32,
+}
+
+/// What [`import_workers`] wrote.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WorkerImport {
+    pub written: usize,
+    /// Stored under another name than the package's: another assistant
+    /// here already had it.
+    pub renamed: usize,
+    /// Matched one whose directory is made, the package's persona another
+    /// than its own: its `SOUL.md` is its own, and stays.
+    pub persona_kept: usize,
+}
+
+/// Write a package's work assistants inside the config-sync transaction
+/// (§6.3). Each is matched among the live workers only — by
+/// `legacy_assistant_uid`, then (for those still unmatched) by `uid` — and
+/// overwritten: its name, the agent its work runs on, its standing
+/// instructions, hidden, its place; its persona only while its directory is
+/// not made (`seed_version` moved on, so the one being made takes it). Its
+/// brain is not in a package and stays. One that matches none is made: a
+/// new uid and face, the package's uid kept as its `legacy_assistant_uid`
+/// (taken off any deleted one first), the primary's brain when there is
+/// one, its directory made when first needed; one `created_at` for all made
+/// at once. A deleted one is never brought back: its directory may be going
+/// away under it, or be another's by now. Nothing is deleted.
+///
+/// Names are settled for the whole batch first, as `assistant_service::
+/// import_into` does: the package's unless an assistant the batch does not
+/// write — or one earlier in it — has it, and then with a suffix.
+/// `persona_of` reads a made one's persona as a package carries it (`None`
+/// when it cannot be read: not counted as kept).
+pub async fn import_workers(
+    tx: &sea_orm::DatabaseTransaction,
+    rows: Vec<ImportedWorker>,
+    persona_of: &(dyn Fn(&agent::Model) -> Option<String> + Send + Sync),
+) -> Result<WorkerImport, DbError> {
+    use crate::db::service::assistant_service::{deduplicated_name, name_key};
+    use std::collections::{HashMap, HashSet};
+
+    // Last entry per key, in the order the keys first appear.
+    let mut batch: Vec<ImportedWorker> = Vec::with_capacity(rows.len());
+    for row in rows {
+        match batch.iter_mut().find(|held| held.key == row.key) {
+            Some(held) => *held = row,
+            None => batch.push(row),
+        }
+    }
+    if batch.is_empty() {
+        return Ok(WorkerImport::default());
+    }
+
+    let live: Vec<agent::Model> = agent::Entity::find()
+        .filter(agent::Column::DeletedAt.is_null())
+        .all(tx)
+        .await?;
+    let workers: Vec<&agent::Model> = live.iter().filter(|b| b.kind == BotKind::Worker).collect();
+    // Matched by `legacy_assistant_uid` first for the whole batch, so a row
+    // another entry names by its own uid is not taken from the entry its
+    // legacy uid names.
+    let mut matched: HashMap<usize, &agent::Model> = HashMap::new();
+    let mut used: HashSet<i32> = HashSet::new();
+    for (i, row) in batch.iter().enumerate() {
+        if let Some(b) = workers
+            .iter()
+            .find(|b| b.legacy_assistant_uid.as_deref() == Some(row.key.as_str()))
+        {
+            used.insert(b.id);
+            matched.insert(i, *b);
+        }
+    }
+    for (i, row) in batch.iter().enumerate() {
+        if matched.contains_key(&i) {
+            continue;
+        }
+        if let Some(b) = workers
+            .iter()
+            .find(|b| !used.contains(&b.id) && b.uid.as_deref() == Some(row.key.as_str()))
+        {
+            used.insert(b.id);
+            matched.insert(i, *b);
+        }
+    }
+
+    let mut taken: HashSet<String> = live
+        .iter()
+        .filter(|b| !used.contains(&b.id))
+        .map(|b| name_key(b.name.trim()))
+        .collect();
+    let names: Vec<String> = batch
+        .iter()
+        .map(|row| {
+            let name = deduplicated_name(&row.name, &taken);
+            taken.insert(name_key(&name));
+            name
+        })
+        .collect();
+
+    let brain = live
+        .iter()
+        .filter(|b| b.kind == BotKind::Primary)
+        .min_by_key(|b| b.id)
+        .and_then(|p| {
+            Some(AgentColumns {
+                agent_type: p.agent_type.clone()?,
+                agent_options_json: p.agent_options.clone().unwrap_or_else(|| "{}".into()),
+                label_snapshot_json: p.label_snapshot.clone().unwrap_or_else(|| "{}".into()),
+            })
+        });
+
+    let mut outcome = WorkerImport::default();
+    let now = Utc::now();
+    for (i, (row, name)) in batch.into_iter().zip(names).enumerate() {
+        if name != row.name {
+            outcome.renamed += 1;
+        }
+        let persona = Some(row.persona.trim())
+            .filter(|p| !p.is_empty())
+            .map(str::to_string);
+        let instructions = Some(row.instructions).filter(|i| !i.trim().is_empty());
+        match matched.get(&i) {
+            Some(existing) => {
+                let mut update = agent::Entity::update_many()
+                    .col_expr(agent::Column::Name, Expr::value(name))
+                    .col_expr(agent::Column::WorkAgentType, Expr::value(row.work.agent_type))
+                    .col_expr(
+                        agent::Column::WorkAgentOptions,
+                        Expr::value(row.work.agent_options_json),
+                    )
+                    .col_expr(
+                        agent::Column::WorkLabelSnapshot,
+                        Expr::value(row.work.label_snapshot_json),
+                    )
+                    .col_expr(agent::Column::WorkInstructions, Expr::value(instructions))
+                    .col_expr(agent::Column::Hidden, Expr::value(row.hidden))
+                    .col_expr(agent::Column::SortOrder, Expr::value(row.sort_order))
+                    .col_expr(
+                        agent::Column::Revision,
+                        Expr::col(agent::Column::Revision).add(1),
+                    )
+                    .col_expr(agent::Column::UpdatedAt, Expr::value(now));
+                if existing.workdir_ready {
+                    let folded = |t: &str| t.split_whitespace().collect::<Vec<_>>().join(" ");
+                    let given = folded(persona.as_deref().unwrap_or_default());
+                    if persona_of(existing).is_some_and(|own| folded(&own) != given) {
+                        outcome.persona_kept += 1;
+                    }
+                } else {
+                    // The directory being made takes this one (§6.2): its
+                    // version moves on, so the one made with the old is not
+                    // marked ready on it.
+                    update = update
+                        .col_expr(agent::Column::SeedPersona, Expr::value(persona))
+                        .col_expr(
+                            agent::Column::SeedVersion,
+                            Expr::col(agent::Column::SeedVersion).add(1),
+                        );
+                }
+                update
+                    .filter(agent::Column::Id.eq(existing.id))
+                    .exec(tx)
+                    .await?;
+            }
+            None => {
+                // A deleted one's legacy uid is the new one's now.
+                agent::Entity::update_many()
+                    .col_expr(
+                        agent::Column::LegacyAssistantUid,
+                        Expr::value(Option::<String>::None),
+                    )
+                    .filter(agent::Column::LegacyAssistantUid.eq(row.key.as_str()))
+                    .filter(agent::Column::DeletedAt.is_not_null())
+                    .exec(tx)
+                    .await?;
+                let uid = new_bot_uid();
+                let avatar = serde_json::to_string(
+                    &crate::models::personal_agent_bots::BotAvatar::default_for(&uid),
+                )
+                .unwrap_or_else(|_| "{}".into());
+                create_worker(
+                    tx,
+                    NewWorker {
+                        uid: Some(uid),
+                        notify: true,
+                        name,
+                        avatar_json: avatar,
+                        brain: brain.clone(),
+                        work: row.work,
+                        work_instructions: instructions,
+                        settings_json: "{}".into(),
+                        workdir_ready: false,
+                        seed_persona: persona,
+                        legacy_assistant_uid: Some(row.key),
+                        sort_order: Some(row.sort_order),
+                        hidden: row.hidden,
+                        created_at: Some(now),
+                    },
+                )
+                .await?;
+            }
+        }
+        outcome.written += 1;
+    }
+    Ok(outcome)
+}
+
 /// The SQL that applies a merge patch to the stored settings: whatever is
 /// stored that is not an object reads as an empty one.
 const SETTINGS_PATCH_SQL: &str =

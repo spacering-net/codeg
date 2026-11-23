@@ -525,6 +525,11 @@ pub enum BrokerMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrokerListAssistantsRequest {
     pub token: String,
+    /// The companion names assistants by uid (`bot`). One from before them
+    /// leaves it out, and is sent only the assistants it can name by
+    /// `assistant_id`.
+    #[serde(default)]
+    pub bots: bool,
 }
 
 /// The wrapped outcome the main process returns over the same socket.

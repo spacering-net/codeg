@@ -5557,6 +5557,7 @@
     "passphrasePlaceholder": "Frase de contraseña de cifrado",
     "passphraseHint": "Se guarda en el llavero de este equipo y nunca se sube. Introduce la misma frase en tus otros equipos.",
     "assistantsRenamed": "{count, plural, one {Se renombró # asistente: aquí ya había uno con su nombre.} other {Se renombraron # asistentes: aquí ya había otros con sus nombres.}}",
+    "assistantsPersonaKept": "{count, plural, one {# asistente conservó su propia personalidad: ya escribió aquí su archivo de personalidad, que una importación no sobrescribe.} other {# asistentes conservaron sus propias personalidades: ya escribieron aquí sus archivos de personalidad, que una importación no sobrescribe.}}",
     "conflictTitle": "Subida automática en pausa",
     "conflictBody": "El servidor tiene una instantánea de {device}, creada el {time}, que este equipo no ha restaurado. Subir la reemplazaría, y el servidor no guarda ninguna copia anterior.",
     "conflictRestore": "Restaurarla",

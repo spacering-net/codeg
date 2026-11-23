@@ -7,11 +7,11 @@ import type { FlatFileEntry } from "@/hooks/use-file-tree"
 import { gitLog, listAllConversations, searchWorkspaceFiles } from "@/lib/api"
 import type {
   AcpAgentInfo,
-  AssistantInfo,
   DbConversationSummary,
   GitLogEntry,
+  RosterEntry,
 } from "@/lib/types"
-import { useAssistants } from "@/stores/assistants-store"
+import { useRoster } from "@/stores/personal-agent-roster-store"
 import { randomUUID } from "@/lib/utils"
 
 import {
@@ -41,6 +41,7 @@ const MAX_PER_GROUP = 50
 const GIT_LOG_LIMIT = 100
 const EMPTY_SESSIONS: Promise<DbConversationSummary[]> = Promise.resolve([])
 const EMPTY_COMMITS: Promise<GitLogEntry[]> = Promise.resolve([])
+const NO_ASSISTANTS: RosterEntry[] = []
 
 /** Display headings for each group; injected so the host can localize them. */
 export interface ReferenceGroupLabels {
@@ -71,8 +72,11 @@ export interface ReferenceSearchSources {
   /** Workspace root the `files` were loaded under; null disables the group. */
   workspaceRoot: string | null
   agents: AcpAgentInfo[]
-  /** Live assistants in display order (the store's `useAssistants`). */
-  assistants: AssistantInfo[]
+  /** The owner's personal assistants (the roster, `useRoster`). */
+  assistants: RosterEntry[]
+  /** An assistant not offered: the one whose conversation the composer is
+   *  in. */
+  excludeAssistantUid?: string | null
   /** The agents an assistant's own agent is checked against; `agents` when
    *  omitted. Separate so a hidden agent tab need not be built to fill the
    *  assistant one. */
@@ -136,9 +140,10 @@ export function buildReferenceGroups(
     .filter((item) => suggestionMatches(item, q))
   const agentItems = agentMatches.slice(0, MAX_PER_GROUP)
 
-  // Only an assistant that can be delegated to is mentionable: enabled, and
-  // on an agent that is enabled too (a delegation to one that is not is
-  // refused). The live list already leaves deleted ones out.
+  // Only an assistant that can be handed work is mentionable: not hidden, and
+  // its work on an agent that is enabled (a delegation to one that is not is
+  // refused). One with no brain yet is (D3): its work needs none. The
+  // primary first, then the roster's order.
   const enabledAgents = new Set(
     (sources.assistantAgents ?? sources.agents)
       .filter((agent) => agent.enabled)
@@ -146,12 +151,27 @@ export function buildReferenceGroups(
   )
   const assistantMatches = sources.assistants
     .filter(
-      (assistant) =>
-        assistant.enabled &&
-        assistant.deleted_at === null &&
-        enabledAgents.has(assistant.agent_type)
+      (entry): entry is RosterEntry & { uid: string } =>
+        !!entry.uid &&
+        entry.uid !== sources.excludeAssistantUid &&
+        !entry.roster.hidden &&
+        !!entry.work_agent_type &&
+        enabledAgents.has(entry.work_agent_type)
     )
-    .map(assistantToSuggestion)
+    .sort(
+      (a, b) =>
+        Number(b.kind === "primary") - Number(a.kind === "primary") ||
+        a.roster.sort_order - b.roster.sort_order ||
+        a.id - b.id
+    )
+    .map((entry) =>
+      assistantToSuggestion(
+        entry,
+        entry.persona_unwritten
+          ? null
+          : entry.persona.replace(/^\s*#+\s*/u, "").trim()
+      )
+    )
     .filter((item) => suggestionMatches(item, q))
   const assistantItems = assistantMatches.slice(0, MAX_PER_GROUP)
 
@@ -223,6 +243,8 @@ export interface UseReferenceSearchOptions {
   enabled?: boolean
   /** Localized group headings; English fallbacks when omitted. */
   labels?: ReferenceGroupLabels
+  /** The assistant whose conversation the composer is in: not offered. */
+  excludeAssistantUid?: string | null
 }
 
 /**
@@ -252,11 +274,12 @@ export function useReferenceSearch({
   defaultPath,
   enabled = true,
   labels,
+  excludeAssistantUid = null,
 }: UseReferenceSearchOptions): ReferenceSearch {
   const path = defaultPath || null
 
   const { agents } = useAcpAgents()
-  const assistants = useAssistants()
+  const assistants = useRoster() ?? NO_ASSISTANTS
 
   // Mirror every changing source into a ref so `search` can stay identity-stable
   // (see the doc comment). Initialized from the first render so the refs are
@@ -266,6 +289,7 @@ export function useReferenceSearch({
   const generationRef = useRef(0)
   const agentsRef = useRef(agents)
   const assistantsRef = useRef(assistants)
+  const excludeRef = useRef(excludeAssistantUid)
   const pathRef = useRef(path)
   const enabledRef = useRef(enabled)
   const labelsRef = useRef(labels)
@@ -288,8 +312,9 @@ export function useReferenceSearch({
   useEffect(() => {
     agentsRef.current = agents
     assistantsRef.current = assistants
+    excludeRef.current = excludeAssistantUid
     labelsRef.current = labels
-  }, [agents, assistants, labels])
+  }, [agents, assistants, excludeAssistantUid, labels])
 
   // Lazily-fetched network sources, key-cached so repeat searches reuse the
   // in-flight/resolved promise while a folder switch refetches.
@@ -416,6 +441,7 @@ export function useReferenceSearch({
             workspaceRoot: path,
             agents: wants("agent") ? agentsRef.current : [],
             assistants: wants("assistant") ? assistantsRef.current : [],
+            excludeAssistantUid: excludeRef.current,
             assistantAgents: wants("assistant") ? agentsRef.current : [],
             sessions,
             commits,

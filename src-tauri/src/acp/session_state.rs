@@ -236,6 +236,8 @@ pub struct ActiveDelegationState {
     pub assistant_id: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assistant_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot_uid: Option<String>,
 }
 
 /// The in-flight user prompt for the current turn. Captured from
@@ -1808,6 +1810,7 @@ impl SessionState {
                 task_id,
                 assistant_id,
                 assistant_name,
+                bot_uid,
                 ..
             } => {
                 // Record the running delegation so the binding is snapshot-
@@ -1827,6 +1830,7 @@ impl SessionState {
                         task_id: task_id.clone(),
                         assistant_id: *assistant_id,
                         assistant_name: assistant_name.clone(),
+                        bot_uid: bot_uid.clone(),
                     },
                 );
             }
@@ -5238,6 +5242,7 @@ mod tests {
             task_id: "task-ss-1".into(),
             assistant_id: None,
             assistant_name: None,
+            bot_uid: None,
         }
     }
 
@@ -5254,6 +5259,7 @@ mod tests {
             },
             assistant_id: None,
             assistant_name: None,
+            bot_uid: None,
         }
     }
 

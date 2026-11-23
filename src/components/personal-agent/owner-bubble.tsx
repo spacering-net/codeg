@@ -21,6 +21,7 @@ import { useTranslations } from "next-intl"
 import { Bell, CornerDownRight, RotateCcw } from "lucide-react"
 import { toast } from "sonner"
 
+import { PlainTextWithBadges } from "@/components/message/plain-text-with-badges"
 import { personalAgentResend } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import { useBotId, usePersonalAgent } from "@/contexts/personal-agent-context"
@@ -214,7 +215,9 @@ export function OwnerBubble({ item }: { item: OwnerItem }) {
           <QuoteBar targetId={row.reply_to} tone="light" className="mb-1.5" />
         ) : null}
         {row.body ? (
-          <div className="whitespace-pre-wrap break-words">{row.body}</div>
+          // As in any conversation: what they @-mentioned is a pill — an
+          // assistant's opens its conversation (D8).
+          <PlainTextWithBadges text={row.body} />
         ) : null}
         {images.length > 0 ? (
           <div

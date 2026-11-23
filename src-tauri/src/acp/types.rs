@@ -834,6 +834,10 @@ pub enum AcpEvent {
         assistant_id: Option<i32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         assistant_name: Option<String>,
+        /// The owner's assistant it runs as (its uid); with it, `assistant_id`
+        /// is that assistant's row. Absent for one from before them.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bot_uid: Option<String>,
     },
     /// The child sub-session has finished (or errored / timed out / been
     /// canceled). The MCP tool_result has been delivered to the parent agent.
@@ -855,6 +859,10 @@ pub enum AcpEvent {
         assistant_id: Option<i32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         assistant_name: Option<String>,
+        /// The owner's assistant it runs as (its uid); with it, `assistant_id`
+        /// is that assistant's row. Absent for one from before them.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bot_uid: Option<String>,
     },
     /// A codeg delegation of this (parent) connection started (`running`) or
     /// reached a terminal state. Lifecycle accounting only, so unlike

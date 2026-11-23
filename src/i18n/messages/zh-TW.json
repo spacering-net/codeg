@@ -5557,6 +5557,7 @@
     "passphrasePlaceholder": "加密通行密語",
     "passphraseHint": "只保存在這台裝置的鑰匙圈中，不會上傳。請在你的其他裝置上輸入同一組。",
     "assistantsRenamed": "有 {count} 個助手與本機已有的助手重名，已自動改名。",
+    "assistantsPersonaKept": "有 {count} 個助手保留了本機的人設：它們已經在本機寫好了人設檔案，匯入不會覆蓋。",
     "conflictTitle": "自動上傳已暫停",
     "conflictBody": "伺服器上有一份來自 {device}、{time} 的快照，本機尚未還原過。上傳會取代它，而伺服器不保留舊版本。",
     "conflictRestore": "還原它",

@@ -31,6 +31,11 @@ const MAX_AGENT_REFERENCE_OCCURRENCES: usize = 256;
 const ASSISTANT_ROUTE_FRAME_KIND: &str = "codeg_internal_assistant_routes";
 const ASSISTANT_ROUTE_FRAME_BODY_PREFIX: &str = "{\"kind\":\"codeg_internal_assistant_routes\"";
 const ASSISTANT_ROUTE_FRAME_VERSION: u8 = 1;
+/// The same frame routing the owner's assistants by uid (`codeg://bot/<uid>`
+/// links): version 2 of the kind, so frames of either version are read and
+/// stripped alike; version 1 still routes an old `codeg://assistant/<id>`
+/// link by its id (the assistant converted from it answers it).
+const BOT_ROUTE_FRAME_VERSION: u8 = 2;
 const ASSISTANT_ROUTES_LINE_PREFIX: &str =
     "Codeg composer assistant routing metadata (authoritative): ";
 /// Routes per assistant frame. Unlike agents there is no cap on how many
@@ -293,6 +298,45 @@ struct AssistantRoute {
     assistant_id: i32,
 }
 
+/// One routed assistant of the owner's — nothing but its uid. Serializes as
+/// `{"bot":"9f2c…"}`; the frame's bytes are its identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BotRoute {
+    bot: String,
+}
+
+fn bot_reference_regex() -> &'static Regex {
+    // An assistant's uid as codeg writes one: lowercase hex (and the few
+    // more characters an imported one may carry), with a visible label.
+    static PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\[(?:\\.|[^\]\\\r\n])+\]\(codeg://bot/([0-9a-z_-]{1,64})\)")
+            .expect("bot reference regex is valid")
+    });
+    &PATTERN
+}
+
+/// Every one of the owner's assistants the prompt visibly links, in
+/// first-mention order, once each.
+fn visible_bot_reference_uids(blocks: &[PromptInputBlock]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut uids = Vec::new();
+    for block in blocks {
+        let PromptInputBlock::Text { text } = block else {
+            continue;
+        };
+        for capture in bot_reference_regex().captures_iter(text) {
+            let Some(uid) = capture.get(1).map(|m| m.as_str().to_string()) else {
+                continue;
+            };
+            if seen.insert(uid.clone()) {
+                uids.push(uid);
+            }
+        }
+    }
+    uids
+}
+
 fn assistant_reference_regex() -> &'static Regex {
     // Assistant ids are positive integers, never zero-padded — the same shape
     // the frontend serializer writes and its URI parser accepts. A visible
@@ -345,10 +389,24 @@ pub(crate) fn append_assistant_routes(blocks: &mut Vec<PromptInputBlock>, delega
     if !delegation_enabled {
         return;
     }
+    // The owner's assistants by uid (version 2), then old links by id.
+    let bots: Vec<BotRoute> = visible_bot_reference_uids(blocks)
+        .into_iter()
+        .map(|bot| BotRoute { bot })
+        .collect();
     let routes: Vec<AssistantRoute> = visible_assistant_reference_ids(blocks)
         .into_iter()
         .map(|assistant_id| AssistantRoute { assistant_id })
         .collect();
+    for chunk in bots.chunks(MAX_ASSISTANT_ROUTES_PER_FRAME) {
+        let descriptor = FrameDescriptor::fresh(ASSISTANT_ROUTE_FRAME_KIND, BOT_ROUTE_FRAME_VERSION);
+        blocks.push(PromptInputBlock::Text {
+            text: format!(
+                "{ROUTE_FRAME_SEPARATOR}{}{ROUTE_FRAME_SEPARATOR}",
+                render_bot_routes_body(&descriptor, chunk)
+            ),
+        });
+    }
     for chunk in routes.chunks(MAX_ASSISTANT_ROUTES_PER_FRAME) {
         let descriptor =
             FrameDescriptor::fresh(ASSISTANT_ROUTE_FRAME_KIND, ASSISTANT_ROUTE_FRAME_VERSION);
@@ -377,6 +435,45 @@ from the matching route and without `agent_type`: do not substitute your own \
 native sub-agent, task, or spawn mechanism, and do not route it through any \
 other delegation tool.\n"
     )
+}
+
+/// Version 2: the owner's assistants by uid. The same three-line shape;
+/// editing the wording orphans every frame already in a transcript, so it
+/// must bump [`BOT_ROUTE_FRAME_VERSION`].
+fn render_bot_routes_body(descriptor: &FrameDescriptor, routes: &[BotRoute]) -> String {
+    let descriptor =
+        serde_json::to_string(descriptor).expect("frame descriptor is serializable");
+    let routes = serde_json::to_string(routes).expect("bot routes are serializable");
+    format!(
+        "{descriptor}\n\
+{ASSISTANT_ROUTES_LINE_PREFIX}{routes}\n\
+When you delegate any of this work to a linked assistant, call the \
+`delegate_to_agent` tool from the `codeg-mcp` server with `bot` taken from the \
+matching route and without `agent_type`: do not substitute your own native \
+sub-agent, task, or spawn mechanism, and do not route it through any other \
+delegation tool.\n"
+    )
+}
+
+fn parse_bot_routes_body(candidate: &str) -> Option<Vec<BotRoute>> {
+    if candidate.len() > MAX_ROUTE_FRAME_BYTES {
+        return None;
+    }
+    let (descriptor_line, remainder) = candidate.split_once('\n')?;
+    let descriptor: FrameDescriptor = serde_json::from_str(descriptor_line).ok()?;
+    let routes_json = remainder
+        .lines()
+        .next()?
+        .strip_prefix(ASSISTANT_ROUTES_LINE_PREFIX)?;
+    let routes: Vec<BotRoute> = serde_json::from_str(routes_json).ok()?;
+    if !descriptor.is(ASSISTANT_ROUTE_FRAME_KIND, BOT_ROUTE_FRAME_VERSION)
+        || routes.is_empty()
+        || routes.iter().any(|route| route.bot.is_empty())
+        || render_bot_routes_body(&descriptor, &routes) != candidate
+    {
+        return None;
+    }
+    Some(routes)
 }
 
 fn parse_assistant_routes_body(candidate: &str) -> Option<Vec<AssistantRoute>> {
@@ -599,7 +696,10 @@ impl FrameKind {
     fn accepts_body(self, body: &str) -> bool {
         match self {
             FrameKind::AgentRoutes => parse_internal_agent_routes_body(body).is_some(),
-            FrameKind::AssistantRoutes => parse_assistant_routes_body(body).is_some(),
+            FrameKind::AssistantRoutes => {
+                parse_assistant_routes_body(body).is_some()
+                    || parse_bot_routes_body(body).is_some()
+            }
             FrameKind::AssistantBrief => parse_assistant_brief_body(body).is_some(),
             FrameKind::Operation => parse_operation_body(body).is_some(),
         }

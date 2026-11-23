@@ -49,7 +49,6 @@ import { useComposerAttachments } from "@/components/chat/composer/use-composer-
 import { useComposerChromeFocus } from "@/components/chat/composer/use-composer-chrome-focus"
 import { useComposerMentionLabels } from "@/components/chat/composer/use-composer-mention-labels"
 import { useReferenceSearch } from "@/components/chat/composer/use-reference-search"
-import type { ReferenceKind } from "@/components/chat/composer/types"
 import { ServerFileBrowserDialog } from "@/components/shared/server-file-browser-dialog"
 import { useReducedMotion } from "@/hooks/use-chat-motion"
 import { useShortcutSettings } from "@/hooks/use-shortcut-settings"
@@ -74,9 +73,6 @@ const ASSUMED_PROMPT_CAPABILITIES: PromptCapabilitiesInfo = {
   embedded_context: true,
 }
 const HEIGHT_MS = 180
-/** The executor configs are not the assistants' to name (D8): no `@` tab
- *  of them here. */
-const NO_EXECUTOR_MENTIONS: readonly ReferenceKind[] = ["assistant"]
 
 /** The "+": a wash of the text colour — apart from the box's own surface
  *  and from the theme colour the send button carries, translucent so it
@@ -135,10 +131,13 @@ export function PersonalAgentComposer({
   const [sending, setSending] = useState(false)
 
   const { groupLabels, uiLabels } = useComposerMentionLabels()
+  // The other assistants are named with `@` (D8): the brain reads each as
+  // its name and number, and hands work over itself if it should.
   const referenceSearch = useReferenceSearch({
     defaultPath: agent.workdir,
     enabled: true,
     labels: groupLabels,
+    excludeAssistantUid: agent.uid,
   })
   const attach = useComposerAttachments({
     editorRef,
@@ -428,7 +427,6 @@ export function PersonalAgentComposer({
                   referenceSearch={referenceSearch}
                   mentionUiLabels={uiLabels}
                   tabLabels={groupLabels}
-                  hiddenMentionTabs={NO_EXECUTOR_MENTIONS}
                   mentionAnchorRef={containerRef}
                   submitShortcut={shortcuts.send_message}
                   newlineShortcut={shortcuts.newline_in_message}

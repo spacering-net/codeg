@@ -494,37 +494,54 @@ const TOOLS_LIST_ASSISTANT_BUDGET: Duration = Duration::from_secs(2);
 /// process); [`AssistantSupport::Unknown`] is probed again next time.
 #[derive(Debug, Clone, Default)]
 pub struct AssistantSupportProbe {
-    known: Arc<Mutex<Option<bool>>>,
+    /// `(assistants, bots)`: whether the listener takes `assistant_id`, and
+    /// whether it takes `bot` (the owner's assistants by uid).
+    known: Arc<Mutex<Option<(bool, bool)>>>,
+}
+
+fn support_of(supported: bool) -> AssistantSupport {
+    if supported {
+        AssistantSupport::Supported
+    } else {
+        AssistantSupport::Unsupported
+    }
 }
 
 impl AssistantSupportProbe {
-    /// The current answer, probing the listener when none is known yet.
-    pub async fn resolve(&self, socket_path: &str) -> AssistantSupport {
+    /// The current answers, probing the listener when none is known yet.
+    async fn answers(&self, socket_path: &str) -> Option<(bool, bool)> {
         let mut known = self.known.lock().await;
-        if let Some(supported) = *known {
-            return if supported {
-                AssistantSupport::Supported
-            } else {
-                AssistantSupport::Unsupported
-            };
+        if let Some(answers) = *known {
+            return Some(answers);
         }
-        match probe_assistant_support(socket_path).await {
-            Some(supported) => {
-                *known = Some(supported);
-                if supported {
-                    AssistantSupport::Supported
-                } else {
-                    AssistantSupport::Unsupported
-                }
-            }
+        let answers = probe_assistant_support(socket_path).await?;
+        *known = Some(answers);
+        Some(answers)
+    }
+
+    /// Whether the listener takes `assistant_id`, probing it when none is
+    /// known yet.
+    pub async fn resolve(&self, socket_path: &str) -> AssistantSupport {
+        match self.answers(socket_path).await {
+            Some((assistants, _)) => support_of(assistants),
+            None => AssistantSupport::Unknown,
+        }
+    }
+
+    /// Whether the listener takes `bot` — one of the owner's assistants by
+    /// uid. A listener from before them reads only `assistant_id` and
+    /// `agent_type`, and would run a `bot` call on the bare agent.
+    pub async fn resolve_bots(&self, socket_path: &str) -> AssistantSupport {
+        match self.answers(socket_path).await {
+            Some((_, bots)) => support_of(bots),
             None => AssistantSupport::Unknown,
         }
     }
 }
 
-/// `Some(true/false)` for a listener that answered `Ping`, `None` for no
-/// answer at all.
-async fn probe_assistant_support(socket_path: &str) -> Option<bool> {
+/// `Some((assistants, bots))` for a listener that answered `Ping`, `None`
+/// for no answer at all.
+async fn probe_assistant_support(socket_path: &str) -> Option<(bool, bool)> {
     let resp = tokio::time::timeout(ASSISTANT_PROBE_BUDGET, client_ping(socket_path))
         .await
         .ok()?
@@ -532,7 +549,8 @@ async fn probe_assistant_support(socket_path: &str) -> Option<bool> {
     if resp.outcome.get("ok").and_then(Value::as_bool) != Some(true) {
         return None;
     }
-    Some(resp.outcome.get("assistants").and_then(Value::as_bool) == Some(true))
+    let flag = |k: &str| resp.outcome.get(k).and_then(Value::as_bool) == Some(true);
+    Some((flag("assistants"), flag("bots")))
 }
 
 /// Per-in-flight-call state. The companion stashes one of these per
@@ -815,23 +833,30 @@ async fn offer_assistants_in_delegate_schema(ctx: &CompanionContext, tools: &mut
     let lookup = async {
         match ctx.assistant_support.resolve(&ctx.socket_path).await {
             AssistantSupport::Unsupported => None,
-            AssistantSupport::Unknown => Some(None),
-            AssistantSupport::Supported => Some(fetch_assistant_roster(ctx).await),
+            AssistantSupport::Unknown => Some((None, true)),
+            AssistantSupport::Supported => {
+                // `bot` only for a listener that takes it: one from before
+                // the owner's assistants keeps `assistant_id` alone.
+                let bots = ctx.assistant_support.resolve_bots(&ctx.socket_path).await
+                    != AssistantSupport::Unsupported;
+                Some((fetch_assistant_roster(ctx).await, bots))
+            }
         }
     };
-    let roster = match tokio::time::timeout(TOOLS_LIST_ASSISTANT_BUDGET, lookup).await {
+    let (roster, bots) = match tokio::time::timeout(TOOLS_LIST_ASSISTANT_BUDGET, lookup).await {
         Ok(None) => return,
-        Ok(Some(roster)) => roster,
-        // Out of time: offer the parameter without a roster — calls by id do
-        // not depend on it.
-        Err(_) => None,
+        Ok(Some(found)) => found,
+        // Out of time: offer the parameters without a roster — calls by uid
+        // do not depend on it.
+        Err(_) => (None, true),
     };
-    describe_assistants_in_delegate_schema(tools, roster.as_deref());
+    describe_assistants_in_delegate_schema(tools, roster.as_deref(), bots);
 }
 
 async fn fetch_assistant_roster(ctx: &CompanionContext) -> Option<Vec<AssistantRosterEntry>> {
     let req = BrokerListAssistantsRequest {
         token: ctx.token.clone(),
+        bots: true,
     };
     let resp = client_list_assistants_round_trip(&ctx.socket_path, &req)
         .await
@@ -842,13 +867,36 @@ async fn fetch_assistant_roster(ctx: &CompanionContext) -> Option<Vec<AssistantR
     serde_json::from_value(resp.outcome.get("assistants")?.clone()).ok()
 }
 
-/// Sentence appended to `delegate_to_agent`'s description: how an assistant
-/// mention looks, and what to do with one.
+/// Sentence appended to `delegate_to_agent`'s description (a listener from
+/// before the owner's assistants): how an assistant mention looks, and what
+/// to do with one.
 pub(crate) const ASSISTANT_MENTION_SENTENCE: &str = " A user-defined ASSISTANT is named the \
 same way — `@AssistantName` or `[@AssistantName](codeg://assistant/<number>)` — and that \
 mention is likewise an explicit instruction to delegate to it: pass `assistant_id` set to that \
 number and leave `agent_type` out. An assistant brings its own agent, options and standing \
 instructions.";
+
+/// The same, once the listener takes `bot`: the owner's assistants are named
+/// by uid, an old `codeg://assistant/<number>` link still by its number.
+pub(crate) const BOT_MENTION_SENTENCE: &str = " One of the user's ASSISTANTS is named the \
+same way — `@AssistantName` or `[@AssistantName](codeg://bot/<uid>)` — and that mention is \
+likewise an explicit instruction to delegate to it: pass `bot` set to that uid and leave \
+`agent_type` out (an older `[@Name](codeg://assistant/<number>)` link: pass `assistant_id` set \
+to that number). An assistant brings its own agent, options and standing instructions.";
+
+/// Prefix put on `agent_type`'s description once `bot` exists.
+pub(crate) const AGENT_TYPE_UNLESS_BOT: &str = "Required unless `bot` (or `assistant_id`) is given. ";
+
+/// `bot`'s description, before the roster sentence.
+pub(crate) const BOT_DESCRIPTION: &str = "Delegate to one of the user's assistants instead of \
+picking an agent yourself. Take the uid from a `codeg://bot/<uid>` link in the user's message \
+(e.g. `codeg://bot/9f2c` means \"9f2c\"). When set, `agent_type` is ignored: the assistant decides \
+which agent runs, with which options and instructions.";
+
+/// `assistant_id`'s description beside `bot`: for an old link only.
+pub(crate) const LEGACY_ASSISTANT_ID_DESCRIPTION: &str = "Only for an older \
+`codeg://assistant/<number>` link in the user's message (e.g. `codeg://assistant/3` means 3): \
+the assistant it names. Use `bot` for every other assistant.";
 
 /// Prefix put on `agent_type`'s description once `assistant_id` exists.
 pub(crate) const AGENT_TYPE_UNLESS_ASSISTANT: &str = "Required unless `assistant_id` is given. ";
@@ -869,6 +917,7 @@ assistant decides which agent runs, with which options and instructions.";
 fn describe_assistants_in_delegate_schema(
     tools: &mut Value,
     roster: Option<&[AssistantRosterEntry]>,
+    bots: bool,
 ) {
     let Some(tool) = tools.as_array_mut().and_then(|arr| {
         arr.iter_mut()
@@ -882,30 +931,61 @@ fn describe_assistants_in_delegate_schema(
     let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) else {
         return;
     };
+    let prefix = if bots {
+        AGENT_TYPE_UNLESS_BOT
+    } else {
+        AGENT_TYPE_UNLESS_ASSISTANT
+    };
     if let Some(Value::String(description)) = properties
         .get_mut("agent_type")
         .and_then(|p| p.get_mut("description"))
     {
-        if !description.starts_with(AGENT_TYPE_UNLESS_ASSISTANT) {
-            description.insert_str(0, AGENT_TYPE_UNLESS_ASSISTANT);
+        if !description.starts_with(prefix) {
+            description.insert_str(0, prefix);
         }
     }
-    let mut id_description = ASSISTANT_ID_DESCRIPTION.to_string();
-    if let Some(roster) = roster {
-        id_description.push_str(&roster_for_schema(roster));
+    if bots {
+        let mut bot_description = BOT_DESCRIPTION.to_string();
+        if let Some(roster) = roster {
+            bot_description.push_str(&roster_for_schema(roster));
+        }
+        properties.insert(
+            "bot".to_string(),
+            json!({ "type": "string", "description": bot_description }),
+        );
+        properties.insert(
+            "assistant_id".to_string(),
+            json!({
+                "type": "integer",
+                "minimum": 1,
+                "description": LEGACY_ASSISTANT_ID_DESCRIPTION,
+            }),
+        );
+    } else {
+        // A listener from before the owner's assistants: its roster is of
+        // its own assistants, by id.
+        let mut id_description = ASSISTANT_ID_DESCRIPTION.to_string();
+        if let Some(roster) = roster {
+            id_description.push_str(&roster_for_schema(roster));
+        }
+        properties.insert(
+            "assistant_id".to_string(),
+            json!({
+                "type": "integer",
+                "minimum": 1,
+                "description": id_description,
+            }),
+        );
     }
-    properties.insert(
-        "assistant_id".to_string(),
-        json!({
-            "type": "integer",
-            "minimum": 1,
-            "description": id_description,
-        }),
-    );
     schema.insert("required".to_string(), json!(["task"]));
+    let sentence = if bots {
+        BOT_MENTION_SENTENCE
+    } else {
+        ASSISTANT_MENTION_SENTENCE
+    };
     if let Some(Value::String(description)) = tool.get_mut("description") {
-        if !description.ends_with(ASSISTANT_MENTION_SENTENCE) {
-            description.push_str(ASSISTANT_MENTION_SENTENCE);
+        if !description.ends_with(sentence) {
+            description.push_str(sentence);
         }
     }
 }
@@ -964,13 +1044,23 @@ async fn build_tools_call_spawn(
             // Mint an external_handle so a `notifications/cancelled` during setup
             // tears down the just-started child via `cancel_by_external_handle`.
             let external_handle = uuid::Uuid::new_v4().to_string();
-            // Any `assistant_id` at all — even one the listener would refuse
-            // as invalid — makes this an assistant call, which is forwarded
-            // only to a parent known to understand it (see
-            // `AssistantSupport`). Agent calls are never held up by the probe.
-            let names_assistant = arguments
-                .get("assistant_id")
-                .is_some_and(|v| !v.is_null());
+            // What the call names, by the listener's own parser: a `bot` (or
+            // one the listener would refuse as invalid) is forwarded only to a
+            // parent known to take `bot`, an `assistant_id` only to one known
+            // to take that (see `AssistantSupport`) — never to one that would
+            // drop it and run the bare agent. Agent calls are never held up
+            // by the probe.
+            use crate::acp::delegation::types::{
+                delegation_target_from_args, DelegationTarget, DelegationTargetError,
+            };
+            let needs = match delegation_target_from_args(&arguments) {
+                Ok(DelegationTarget::Bot(_)) | Err(DelegationTargetError::InvalidBot(_)) => {
+                    Some(true)
+                }
+                Ok(DelegationTarget::Assistant(_))
+                | Err(DelegationTargetError::InvalidAssistantId(_)) => Some(false),
+                _ => None,
+            };
             let support = ctx.assistant_support.clone();
             let req = BrokerRequest {
                 token: ctx.token.clone(),
@@ -980,8 +1070,13 @@ async fn build_tools_call_spawn(
                 input: arguments,
             };
             let round_trip = Box::pin(async move {
-                if names_assistant {
-                    match support.resolve(&socket).await {
+                if let Some(bot) = needs {
+                    let answer = if bot {
+                        support.resolve_bots(&socket).await
+                    } else {
+                        support.resolve(&socket).await
+                    };
+                    match answer {
                         AssistantSupport::Supported => {}
                         AssistantSupport::Unsupported => {
                             return Ok(local_delegation_refusal(

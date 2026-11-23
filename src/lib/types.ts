@@ -3698,6 +3698,9 @@ export interface PersonalAgentBotSummary {
   has_brain: boolean
   /** The collaboration settings' assistant it was converted from. */
   legacy_assistant_id: number | null
+  /** The agent its work runs on (what an @-mention hands work to); null
+   *  when codeg does not know it. Absent from an older backend. */
+  work_agent_type?: AgentType | null
   created_at: string
 }
 
@@ -5760,6 +5763,9 @@ export type AcpEvent =
        *  Absent for a plain agent delegation. */
       assistant_id?: number | null
       assistant_name?: string | null
+      /** The owner's assistant it runs as (its uid); with it, `assistant_id`
+       *  is that assistant's row. */
+      bot_uid?: string | null
     }
   /**
    * The child sub-session has finished (or errored / timed out / been
@@ -5780,6 +5786,7 @@ export type AcpEvent =
       /** Mirrors `delegation_started`'s assistant identity. */
       assistant_id?: number | null
       assistant_name?: string | null
+      bot_uid?: string | null
     }
   /**
    * A codeg delegation of this (parent) connection started (`running`) or
@@ -6031,6 +6038,7 @@ export interface ActiveDelegationState {
   /** The assistant the child runs as, mirrored for the same reason. */
   assistant_id?: number | null
   assistant_name?: string | null
+  bot_uid?: string | null
 }
 
 /** Lifecycle of a live-feedback note (mirror of Rust `FeedbackStatus`). */

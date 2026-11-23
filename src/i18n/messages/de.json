@@ -5557,6 +5557,7 @@
     "passphrasePlaceholder": "Passphrase zur Verschlüsselung",
     "passphraseHint": "Bleibt im Schlüsselbund dieses Geräts und wird nie hochgeladen. Gib auf deinen anderen Geräten dieselbe Passphrase ein.",
     "assistantsRenamed": "{count, plural, one {# Assistent wurde umbenannt: Hier gab es schon einen mit seinem Namen.} other {# Assistenten wurden umbenannt: Hier gab es schon welche mit ihren Namen.}}",
+    "assistantsPersonaKept": "{count, plural, one {# Assistent behält seine eigene Persona: Er hat seine Persona-Datei hier schon geschrieben, ein Import überschreibt sie nicht.} other {# Assistenten behalten ihre eigene Persona: Sie haben ihre Persona-Dateien hier schon geschrieben, ein Import überschreibt sie nicht.}}",
     "conflictTitle": "Automatisches Hochladen pausiert",
     "conflictBody": "Auf dem Server liegt ein Snapshot von {device} vom {time}, den dieses Gerät nicht wiederhergestellt hat. Hochladen würde ihn ersetzen, und der Server behält keine ältere Kopie.",
     "conflictRestore": "Wiederherstellen",

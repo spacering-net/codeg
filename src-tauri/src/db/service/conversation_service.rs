@@ -149,15 +149,16 @@ async fn create_inner(
         ),
         None => (None, None, None, None),
     };
-    let (assistant_id, assistant_snapshot) = match assistant {
+    let (assistant_id, bot_uid, assistant_snapshot) = match assistant {
         Some(a) => (
-            Some(a.id),
+            a.id,
+            a.bot_uid,
             Some(
                 serde_json::to_string(&a.snapshot)
                     .map_err(|e| DbError::Migration(format!("assistant snapshot: {e}")))?,
             ),
         ),
-        None => (None, None),
+        None => (None, None, None),
     };
     let model = conversation::ActiveModel {
         id: NotSet,
@@ -181,7 +182,7 @@ async fn create_inner(
         origin_cwd: Set(None),
         assistant_id: Set(assistant_id),
         assistant_snapshot: Set(assistant_snapshot),
-        bot_uid: Set(None),
+        bot_uid: Set(bot_uid),
         source: Set(None),
     };
     Ok(model.insert(conn).await?)
@@ -1680,23 +1681,25 @@ pub async fn get_by_delegation_call_id(
     Ok(conv.map(conv_to_summary))
 }
 
-/// The assistant a delegation child ran as, with the snapshot its row was
-/// written with. `None` for any row that is not an assistant child (or no
-/// row); `Some((id, None))` for an assistant child whose snapshot is missing or
-/// no longer parses — the caller must not mistake that for "no options".
+/// The snapshot an assistant delegation child's row was written with — one
+/// of the owner's assistants (`bot_uid`), or a collaboration settings'
+/// assistant from before them (`assistant_id`). `None` for any row that is
+/// not an assistant child (or no row); `Some(None)` for an assistant child
+/// whose snapshot is missing or no longer parses — the caller must not
+/// mistake that for "no options".
 pub async fn get_assistant_run(
     conn: &DatabaseConnection,
     conversation_id: i32,
-) -> Result<Option<(i32, Option<AssistantRunSnapshot>)>, DbError> {
+) -> Result<Option<Option<AssistantRunSnapshot>>, DbError> {
     let Some(row) = conversation::Entity::find_by_id(conversation_id)
         .one(conn)
         .await?
     else {
         return Ok(None);
     };
-    let Some(assistant_id) = row.assistant_id else {
+    if row.assistant_id.is_none() && row.bot_uid.is_none() {
         return Ok(None);
-    };
+    }
     let snapshot = row.assistant_snapshot.as_deref().and_then(|raw| {
         serde_json::from_str::<AssistantRunSnapshot>(raw)
             .map_err(|e| {
@@ -1707,7 +1710,7 @@ pub async fn get_assistant_run(
             })
             .ok()
     });
-    Ok(Some((assistant_id, snapshot)))
+    Ok(Some(snapshot))
 }
 
 pub async fn list_by_folder(

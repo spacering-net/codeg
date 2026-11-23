@@ -42,6 +42,25 @@ pub fn host() -> Option<Arc<EngineHost>> {
     HOST.get().cloned()
 }
 
+static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// The process's data directory, said once at startup (desktop and server
+/// both) — what [`data_dir_hint`] reads where this process runs no host. A
+/// test never says it, so nothing it runs writes under a real data dir.
+pub fn pin_data_dir(dir: PathBuf) {
+    let _ = DATA_DIR.set(dir);
+}
+
+/// The data directory the assistants' own directories are in: this
+/// process's host's, else the one pinned at startup. `None` where neither
+/// is there (a test).
+pub fn data_dir_hint() -> Option<PathBuf> {
+    if let Some(host) = host() {
+        return Some(host.data_dir.clone());
+    }
+    DATA_DIR.get().cloned()
+}
+
 /// A worker's engine with the task driving it.
 struct Running {
     engine: Arc<PersonalAgentEngine>,
