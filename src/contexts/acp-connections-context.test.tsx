@@ -744,7 +744,7 @@ describe("AcpConnectionsProvider preview-tab release (disconnectIfIdle)", () => 
     await act(async () => {
       await h.actions!.disconnectIfIdle(TAB)
     })
-    expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn")
+    expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn", true)
   })
 
   it("keeps an owner alive while Remote Control is on", async () => {
@@ -796,7 +796,7 @@ describe("AcpConnectionsProvider preview-tab release (disconnectIfIdle)", () => 
     await act(async () => {
       await h.actions!.disconnectIfIdle(TAB)
     })
-    expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn")
+    expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn", true)
   })
 
   // A client that attaches mid-delegation (a reload, a second window) never
@@ -833,7 +833,7 @@ describe("AcpConnectionsProvider preview-tab release (disconnectIfIdle)", () => 
       await h.actions!.disconnectIfIdle(TAB)
     })
 
-    expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn")
+    expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn", true)
     expect(h.store!.getConnection(TAB)).toBeUndefined()
   })
 
@@ -945,7 +945,7 @@ describe("AcpConnectionsProvider unmount teardown (desktop)", () => {
 
     unmount()
 
-    expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn")
+    expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn", true)
   })
 })
 
@@ -1032,7 +1032,7 @@ describe("AcpConnectionsProvider active key across a view's lifetime", () => {
           CONNECTION_IDLE_TIMEOUT_MS + IDLE_SWEEP_INTERVAL_MS + 1000
         )
       })
-      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn")
+      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn", true)
     } finally {
       vi.useRealTimers()
     }
@@ -1081,7 +1081,7 @@ describe("AcpConnectionsProvider active key across a view's lifetime", () => {
           CONNECTION_IDLE_TIMEOUT_MS + IDLE_SWEEP_INTERVAL_MS + 1000
         )
       })
-      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn")
+      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn", true)
     } finally {
       vi.useRealTimers()
     }
@@ -6550,7 +6550,7 @@ describe("Claude Code's Remote Control (claude-agent-acp 0.93.0)", () => {
           CONNECTION_IDLE_TIMEOUT_MS + IDLE_SWEEP_INTERVAL_MS + 1000
         )
       })
-      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn")
+      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn", true)
     } finally {
       vi.useRealTimers()
     }
@@ -8595,7 +8595,23 @@ describe("live surfaces that are not tabs", () => {
       await connectOwner()
       h.actions!.setActiveKey("some-other-surface")
       await sweepPastIdleTimeout()
-      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn")
+      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn", true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("retains the route when the backend found work after the client's last frame", async () => {
+    vi.useFakeTimers()
+    try {
+      await connectOwner()
+      h.actions!.setActiveKey("some-other-surface")
+      h.acpDisconnect.mockResolvedValue(false)
+      await sweepPastIdleTimeout()
+      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn", true)
+      h.acpDisconnect.mockClear()
+      await sweepPastIdleTimeout()
+      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn", true)
     } finally {
       vi.useRealTimers()
     }
@@ -8615,7 +8631,7 @@ describe("live surfaces that are not tabs", () => {
       // the connection goes back to being sweepable.
       h.actions!.registerLiveSurfaceKeys("canvas", new Set())
       await sweepPastIdleTimeout()
-      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn")
+      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn", true)
     } finally {
       vi.useRealTimers()
     }

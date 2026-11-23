@@ -652,6 +652,11 @@ pub struct SessionState {
     /// the id prefix alone says nothing about who minted it
     /// (`connection.rs::speaks_antigravity_interactions`). Backend-only.
     pub antigravity_interactions: bool,
+    /// Configured Gemini home for this launch's trajectory (backend only).
+    pub(crate) antigravity_sessions_dir: Option<std::path::PathBuf>,
+    /// A transiently unreadable task DB at the foreground boundary. Passive
+    /// releases wait for the next successful read (bounded if the DB is lost).
+    pub(crate) antigravity_reconcile_at: Option<DateTime<Utc>>,
 
     /// Whether live-feedback notes for THIS session go over the native ACP
     /// `_session/steering` push channel instead of the `check_user_feedback`
@@ -1018,6 +1023,8 @@ impl SessionState {
             result_tool_available: false,
             antigravity_answered_interactions: BTreeSet::new(),
             antigravity_interactions: agent_type == AgentType::Antigravity,
+            antigravity_sessions_dir: None,
+            antigravity_reconcile_at: None,
             native_steering_available: false,
             codex_user_input_shape: None,
             neutral_goal_channel: false,
@@ -2042,6 +2049,9 @@ impl SessionState {
             return true;
         }
         self.watcher_counts_work(now)
+            || self
+                .antigravity_reconcile_at
+                .is_some_and(|at| now.signed_duration_since(at) < background_keepalive_max_age())
     }
 
     /// Whether the transcript watcher (or another `BackgroundActivity`

@@ -449,7 +449,7 @@ export function useConnectionLifecycle({
           transientUnmount,
         })
       ) {
-        connDisconnectRef.current().catch(() => {})
+        connDisconnectRef.current(true).catch(() => {})
       }
       // The active key names the view on screen, and this one is gone. Left
       // claimed, it would hold the busy owner kept running above out of both
