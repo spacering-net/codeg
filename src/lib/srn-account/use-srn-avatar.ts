@@ -22,29 +22,38 @@ const IMAGE_TYPES: ReadonlySet<string> = new Set([
   "image/avif",
 ])
 
-// The bytes per path, shared by the status bar's glyph and the popover's
-// larger copy; each mints and revokes a blob URL of its own. Avatar paths
-// change with the picture, so a path's bytes never go stale. One account, a
-// handful of pictures over a session: no eviction needed beyond failures.
-const cache = new Map<string, Promise<SrnAsset>>()
+// Share the current picture between the status bar and the account popover.
+// Keep active requests until they settle so changing the picture does not
+// duplicate a fetch. Older settled pictures need no cache entry.
+let cached: { path: string; request: Promise<SrnAsset> } | undefined
+const pending = new Map<string, Promise<SrnAsset>>()
 
 function load(
   path: string,
   fetch: (path: string) => Promise<SrnAsset>
 ): Promise<SrnAsset> {
-  const cached = cache.get(path)
-  if (cached) return cached
-  const promise = fetch(path).then((asset) => {
-    const mime = asset.mime.split(";")[0].trim().toLowerCase()
-    if (!IMAGE_TYPES.has(mime)) throw new Error(`Not an avatar: ${mime}`)
-    return { mime, dataBase64: asset.dataBase64 }
+  if (cached?.path === path) return cached.request
+  const active = pending.get(path)
+  if (active) {
+    cached = { path, request: active }
+    return active
+  }
+
+  const request: Promise<SrnAsset> = fetch(path)
+    .then((asset) => {
+      const mime = asset.mime.split(";")[0].trim().toLowerCase()
+      if (!IMAGE_TYPES.has(mime)) throw new Error(`Not an avatar: ${mime}`)
+      return { mime, dataBase64: asset.dataBase64 }
+    })
+    .finally(() => {
+      if (pending.get(path) === request) pending.delete(path)
+    })
+  pending.set(path, request)
+  cached = { path, request }
+  request.catch(() => {
+    if (cached?.request === request) cached = undefined
   })
-  cache.set(path, promise)
-  // A failure is not kept: the next mount tries again.
-  promise.catch(() => {
-    if (cache.get(path) === promise) cache.delete(path)
-  })
-  return promise
+  return request
 }
 
 /**
@@ -86,5 +95,6 @@ export function useSrnAvatar(
 
 /** Test-only: forget the cached bytes. */
 export function __resetSrnAvatarCacheForTests(): void {
-  cache.clear()
+  cached = undefined
+  pending.clear()
 }
