@@ -1354,6 +1354,24 @@ struct SavedPetOrigin {
     y: f64,
 }
 
+/// Pick the monitor a saved pet origin belongs to: the one containing the
+/// origin itself, or — only when no monitor does (an origin just off a
+/// monitor's top/left edge) — one containing the pet's center. `hit(m, center)`
+/// tests the origin (`center == false`) or the center against monitor `m`.
+/// Testing both per monitor in a single pass let an earlier monitor claim the
+/// pet through a center computed at *that* monitor's scale factor (e.g. a 350%
+/// primary claiming a pet saved on the 1× display above it).
+fn pick_pet_monitor(
+    monitors: &[(i32, i32, u32, u32, f64)],
+    hit: impl Fn((i32, i32, u32, u32, f64), bool) -> bool,
+) -> Option<(i32, i32, u32, u32, f64)> {
+    monitors
+        .iter()
+        .copied()
+        .find(|&m| hit(m, false))
+        .or_else(|| monitors.iter().copied().find(|&m| hit(m, true)))
+}
+
 /// Resolve a persisted `(x, y)` (captured from `outer_position`) into a clamped
 /// Cocoa **logical** origin on macOS.
 ///
@@ -1380,7 +1398,7 @@ fn resolve_saved_pet_origin_macos(
     if let Some(saved_sf) = saved_scale_factor.filter(|sf| sf.is_finite() && *sf > 0.0) {
         let lx = x / saved_sf;
         let ly = y / saved_sf;
-        let &(mx, my, mw, mh, msf) = monitors.iter().find(|&&(mx, my, mw, mh, msf)| {
+        let (mx, my, mw, mh, msf) = pick_pet_monitor(monitors, |(mx, my, mw, mh, msf), center| {
             if !msf.is_finite() || msf <= 0.0 || mw == 0 || mh == 0 {
                 return false;
             }
@@ -1390,8 +1408,8 @@ fn resolve_saved_pet_origin_macos(
             let mlh = f64::from(mh) / msf;
             let cx = lx + pet_w / 2.0;
             let cy = ly + pet_h / 2.0;
-            (lx >= mlx && lx < mlx + mlw && ly >= mly && ly < mly + mlh)
-                || (cx >= mlx && cx < mlx + mlw && cy >= mly && cy < mly + mlh)
+            let (px, py) = if center { (cx, cy) } else { (lx, ly) };
+            px >= mlx && px < mlx + mlw && py >= mly && py < mly + mlh
         })?;
         let mlx = f64::from(mx) / msf;
         let mly = f64::from(my) / msf;
@@ -1407,7 +1425,7 @@ fn resolve_saved_pet_origin_macos(
 
     // Legacy row (no recorded scale factor): match raw physical monitor rect
     // and convert into that monitor's logical coordinates.
-    let &(mx, my, mw, mh, msf) = monitors.iter().find(|&&(mx, my, mw, mh, msf)| {
+    let (mx, my, mw, mh, msf) = pick_pet_monitor(monitors, |(mx, my, mw, mh, msf), center| {
         if !msf.is_finite() || msf <= 0.0 || mw == 0 || mh == 0 {
             return false;
         }
@@ -1417,8 +1435,8 @@ fn resolve_saved_pet_origin_macos(
         let mh = f64::from(mh);
         let cx = x + (pet_w * msf) / 2.0;
         let cy = y + (pet_h * msf) / 2.0;
-        (x >= mx && x < mx + mw && y >= my && y < my + mh)
-            || (cx >= mx && cx < mx + mw && cy >= my && cy < my + mh)
+        let (px, py) = if center { (cx, cy) } else { (x, y) };
+        px >= mx && px < mx + mw && py >= my && py < my + mh
     })?;
     let mlx = f64::from(mx) / msf;
     let mly = f64::from(my) / msf;
@@ -1447,7 +1465,7 @@ fn resolve_saved_pet_origin_physical(
         return None;
     }
 
-    let &(mx, my, mw, mh, sf) = monitors.iter().find(|&&(mx, my, mw, mh, sf)| {
+    let (mx, my, mw, mh, sf) = pick_pet_monitor(monitors, |(mx, my, mw, mh, sf), center| {
         if !sf.is_finite() || sf <= 0.0 || mw == 0 || mh == 0 {
             return false;
         }
@@ -1457,8 +1475,8 @@ fn resolve_saved_pet_origin_physical(
         let mh = f64::from(mh);
         let cx = x + (pet_w * sf) / 2.0;
         let cy = y + (pet_h * sf) / 2.0;
-        (x >= mx && x < mx + mw && y >= my && y < my + mh)
-            || (cx >= mx && cx < mx + mw && cy >= my && cy < my + mh)
+        let (px, py) = if center { (cx, cy) } else { (x, y) };
+        px >= mx && px < mx + mw && py >= my && py < my + mh
     })?;
 
     let mx = f64::from(mx);
@@ -1492,13 +1510,15 @@ pub(crate) fn pet_window_live_origin(
     Some((f64::from(pos.x), f64::from(pos.y), scale_factor))
 }
 
-/// Physical top-left of the monitor holding a resolved (already clamped)
-/// physical origin, for Windows / Linux where physical monitor rects do not
-/// overlap.
+/// Physical top-left that centers a `box_w × box_h` (physical px) staging
+/// window on the monitor holding a resolved (already clamped) physical
+/// origin, for Windows / Linux where physical monitor rects do not overlap.
 #[cfg_attr(target_os = "macos", allow(dead_code))]
-fn pet_origin_monitor_corner(
+fn pet_staging_origin(
     origin: SavedPetOrigin,
     monitors: &[(i32, i32, u32, u32, f64)],
+    box_w: f64,
+    box_h: f64,
 ) -> Option<(i32, i32)> {
     monitors
         .iter()
@@ -1509,7 +1529,11 @@ fn pet_origin_monitor_corner(
                 && origin.y >= my
                 && origin.y < my + f64::from(mh)
         })
-        .map(|&(mx, my, ..)| (mx, my))
+        .map(|&(mx, my, mw, mh, _)| {
+            let x = f64::from(mx) + (f64::from(mw) - box_w) / 2.0;
+            let y = f64::from(my) + (f64::from(mh) - box_h) / 2.0;
+            (x.round() as i32, y.round() as i32)
+        })
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1620,16 +1644,25 @@ pub async fn open_pet_window(
     #[cfg(not(target_os = "macos"))]
     if let Some(saved) = saved_origin {
         let origin = tauri::PhysicalPosition::new(saved.x.round() as i32, saved.y.round() as i32);
-        // Stage at the target monitor's own top-left first. The window still
-        // has the build monitor's physical size here, so moving it straight
-        // to a saved origin near a seam can leave most of it on the build
-        // monitor — Windows then keeps that monitor's DPI and the logical
-        // resize below lands at the wrong physical size. Starting from the
-        // target monitor's corner puts the window wholly on it, the DPI
-        // switches, and the final move is to an origin already clamped to fit.
-        let staging = pet_origin_monitor_corner(saved, &monitors)
+        // Stage wholly on the target monitor first. The window still has the
+        // build monitor's physical size here, and near a seam — or when the
+        // target monitor is smaller than that size — moving it straight to
+        // the saved origin can leave most of it on the build monitor, so
+        // Windows keeps that monitor's DPI and the logical resize below lands
+        // at the wrong physical size. Shrinking to the minimum logical size
+        // and centering that on the target monitor puts the whole window on
+        // it; the DPI switches, and the resize + final move (to an origin
+        // already clamped to fit) then use the target monitor's scale.
+        let (stage_w, stage_h) = (PET_BASE_WIDTH * 0.5, PET_BASE_HEIGHT * 0.5);
+        let build_sf = window
+            .scale_factor()
+            .ok()
+            .filter(|sf| sf.is_finite() && *sf > 0.0)
+            .unwrap_or(1.0);
+        let staging = pet_staging_origin(saved, &monitors, stage_w * build_sf, stage_h * build_sf)
             .map(|(x, y)| tauri::PhysicalPosition::new(x, y))
             .unwrap_or(origin);
+        let _ = window.set_size(LogicalSize::new(stage_w, stage_h));
         let _ = window.set_position(staging);
         let _ = window.set_size(LogicalSize::new(pet_w, pet_h));
         let _ = window.set_position(origin);
@@ -3071,8 +3104,8 @@ mod macos_fullscreen_close_tests {
 #[cfg(test)]
 mod pet_window_origin_tests {
     use super::{
-        pet_origin_monitor_corner, resolve_saved_pet_origin_macos,
-        resolve_saved_pet_origin_physical, SavedPetOrigin, PET_BASE_HEIGHT, PET_BASE_WIDTH,
+        pet_staging_origin, resolve_saved_pet_origin_macos, resolve_saved_pet_origin_physical,
+        SavedPetOrigin, PET_BASE_HEIGHT, PET_BASE_WIDTH,
     };
 
     // Mixed-DPI setup: 2× primary Retina at (0, 0) + 1× external monitor to its left.
@@ -3189,14 +3222,15 @@ mod pet_window_origin_tests {
     }
 
     #[test]
-    fn physical_restore_stages_at_the_target_monitor_corner() {
+    fn physical_restore_stages_centered_on_the_target_monitor() {
         let pet_w = PET_BASE_WIDTH * 0.75; // 144 logical
         let pet_h = PET_BASE_HEIGHT * 0.75; // 156 logical
 
         // 250% primary with a 100% display directly to its left. Saved just
         // left of the seam: fits on the 1x display (144 px wide), but a window
         // still carrying the primary's 360 px width would straddle the seam
-        // with most of itself on the primary. Staging goes to the 1x corner.
+        // with most of itself on the primary. The staging box (min size at
+        // the build monitor's 2.5x = 240×260) is centered on the 1x display.
         let seam = [(0, 0, 3840, 2160, 2.5), (-1920, 0, 1920, 1080, 1.0)];
         let origin = resolve_saved_pet_origin_physical(Some((-160.0, 500.0)), pet_w, pet_h, &seam)
             .expect("origin on the 1x display");
@@ -3207,14 +3241,41 @@ mod pet_window_origin_tests {
                 y: 500.0
             }
         );
-        assert_eq!(pet_origin_monitor_corner(origin, &seam), Some((-1920, 0)));
+        assert_eq!(
+            pet_staging_origin(origin, &seam, 240.0, 260.0),
+            Some((-1920 + (1920 - 240) / 2, (1080 - 260) / 2))
+        );
+
+        // A target monitor smaller than the pet at the build DPI (350% 4K
+        // primary, 1280×720 at 100% above it, pet at 2×): the staging box
+        // (96×104 logical at 3.5x = 336×364) still fits wholly inside it.
+        let stacked = [(0, 0, 3840, 2160, 3.5), (0, -720, 1280, 720, 1.0)];
+        let big_w = PET_BASE_WIDTH * 2.0;
+        let big_h = PET_BASE_HEIGHT * 2.0;
+        let origin =
+            resolve_saved_pet_origin_physical(Some((100.0, -700.0)), big_w, big_h, &stacked)
+                .expect("origin on the upper display");
+        // The origin lies on the upper display; the primary must not claim it
+        // through a center computed at its own 3.5x scale.
+        assert_eq!(
+            origin,
+            SavedPetOrigin {
+                x: 100.0,
+                y: -700.0
+            }
+        );
+        let (sx, sy) = pet_staging_origin(origin, &stacked, 336.0, 364.0).expect("staging");
+        assert!(
+            sx >= 0 && sx + 336 <= 1280,
+            "staging x inside upper display"
+        );
+        assert!(
+            sy >= -720 && sy + 364 <= 0,
+            "staging y inside upper display"
+        );
 
         assert_eq!(
-            pet_origin_monitor_corner(SavedPetOrigin { x: 10.0, y: 10.0 }, &seam),
-            Some((0, 0))
-        );
-        assert_eq!(
-            pet_origin_monitor_corner(SavedPetOrigin { x: 5000.0, y: 10.0 }, &seam),
+            pet_staging_origin(SavedPetOrigin { x: 5000.0, y: 10.0 }, &seam, 240.0, 260.0),
             None
         );
     }
