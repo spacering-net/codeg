@@ -535,7 +535,10 @@ function foldOf(list: readonly TimelineRow[]): AcceptanceFold | null {
   const latest = (kind: TimelineRow["kind"]) =>
     list
       .filter((r) => r.kind === kind)
-      .reduce<TimelineRow | null>((a, r) => (a == null || r.id > a.id ? r : a), null)
+      .reduce<TimelineRow | null>(
+        (a, r) => (a == null || r.id > a.id ? r : a),
+        null
+      )
   const check = latest("dispatch")
   const result = latest("result")
   return {
@@ -544,7 +547,8 @@ function foldOf(list: readonly TimelineRow[]): AcceptanceFold | null {
     // checked again (its number kept): what the last one found is not what
     // this one found. A check is its own work: its result is its row's.
     result:
-      result != null && (check == null || result.dispatch_id === check.dispatch_id)
+      result != null &&
+      (check == null || result.dispatch_id === check.dispatch_id)
         ? result
         : null,
     card: latest("notice"),

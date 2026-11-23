@@ -121,13 +121,24 @@ function itemOf(rows: TimelineRow[], kind: MessageItem["kind"]) {
   return item
 }
 
-/** The dispatch the work cards point at: a task on the board, run by an
- *  assistant on Codex. */
+/** What a piece of work runs on: the page's own assistant's work agent,
+ *  Codex. */
+const WORK: DispatchInfo["work"] = {
+  name: "Aide",
+  bot_uid: "u-aide",
+  agent_type: "codex",
+  agent_options: { config_values: {} },
+  label_snapshot: null,
+  instructions: "",
+}
+
+/** The dispatch the work cards point at: a task on the board, the
+ *  assistant's own, run on Codex. */
 function dispatchInfo(patch: Partial<DispatchInfo> = {}): DispatchInfo {
   return {
     id: 5,
     mode: "task",
-    executor: { assistant_id: 3, name: "Builder", agent_type: "codex" },
+    work: WORK,
     folder_id: 2,
     folder_name: "my-app",
     title: "Add a test page",
@@ -155,6 +166,7 @@ beforeEach(() => {
   pa.dispatchById = new Map()
   pa.liveReplies = new Map()
   pa.liveTexts = new Map()
+  pa.snapshot = null
   usePersonalAgentUi.setState({ work: null, workOpen: false })
 })
 
@@ -974,14 +986,13 @@ describe("the bubbles", () => {
     )
   })
 
-  it("draws a card's speaker inside it, on the work's row, with no avatar beside the card", () => {
+  it("draws the work's row inside the card, led by how it runs, with no face beside the card or on it", () => {
     const item = itemOf(
       [
         row(6, "result", {
           body: "Build the page",
           data: {
-            executor: "Builder",
-            executor_id: 3,
+            agent_type: "codex",
             title: "Build the page",
             mode: "task",
             state: "completed",
@@ -992,22 +1003,26 @@ describe("the bubbles", () => {
     ) as Extract<MessageItem, { kind: "event" }>
     const { container } = draw(<EventCard item={item} />)
     const frame = container.querySelector("[data-row-id='6']")!
-    const avatars = frame.querySelectorAll("[data-slot='assistant-avatar']")
-    expect(avatars).toHaveLength(1)
+    // Only the assistant speaks: no avatar beside the card, none on it.
+    expect(
+      frame.querySelectorAll("[data-slot='assistant-avatar']")
+    ).toHaveLength(0)
     const work = frame.querySelector("[data-pa-work]")!
     expect(frame.querySelector("[data-bubble]")!.contains(work)).toBe(true)
-    // The row a reply's card is: the avatar, the title over who ran it as
-    // what, how it stood — in the words the reply's card uses.
-    expect(work.firstElementChild).toBe(avatars[0])
+    // The row a reply's card is: how it runs (its glyph), the title over
+    // what and where, how it stood — in the words the reply's card uses.
+    expect(work.firstElementChild?.getAttribute("data-pa-work-glyph")).toBe(
+      "task"
+    )
     const [title, meta] = Array.from(work.children[1].children)
     expect(title.textContent).toBe("Build the page")
-    expect(meta.textContent).toBe("Builder · Kanban task")
+    expect(meta.textContent).toBe("Kanban task")
     expect(work.children[2].textContent).toBe("Done")
     // Unread until the assistant starts on it, beside the card.
     expect(frame.querySelector("[data-pa-aside]")?.textContent).toBe("Unread")
   })
 
-  it("keeps a reply's work to a pill, and leaves the agent's mark and the rest to the news", () => {
+  it("keeps a reply's work to a pill, and leaves where it runs and the rest to the news", () => {
     pa.dispatchById = new Map([[5, dispatchInfo({ state: "completed" })]])
     const reply = draw(
       <DispatchAttachments
@@ -1015,7 +1030,7 @@ describe("the bubbles", () => {
           row(20, "dispatch", {
             body: "Add a test page",
             dispatch_id: 5,
-            data: { mode: "task", executor: "Builder", executor_id: 3 },
+            data: { mode: "task", agent_type: "codex" },
           }),
         ]}
       />
@@ -1023,18 +1038,17 @@ describe("the bubbles", () => {
     const pill = reply.container.querySelector<HTMLElement>(
       "[data-pa-work-pill]"
     )!
-    // Who runs it (their avatar, without the agent's mark, and name) and
-    // what it is, then how it stands as an icon (its word for a screen
-    // reader and a pointer) — no kind or place.
-    const avatar = pill.querySelector<HTMLElement>(
-      "[data-slot='assistant-avatar']"
-    )!
-    expect(avatar.style.width).toBe("1.25rem")
-    expect(pill.firstElementChild).toBe(avatar)
-    expect(pill.querySelector("[data-pa-agent-badge]")).toBeNull()
+    // How it runs (its glyph — no face, no agent's mark) and what it is,
+    // then how it stands as an icon (its word for a screen reader and a
+    // pointer) — no kind or place, no one named on the assistant's own.
+    const glyph = pill.querySelector<HTMLElement>("[data-pa-work-glyph]")!
+    expect(glyph.getAttribute("data-pa-work-glyph")).toBe("task")
+    expect(glyph.style.width).toBe("1.25rem")
+    expect(pill.firstElementChild).toBe(glyph)
+    expect(pill.querySelector("[data-slot='assistant-avatar']")).toBeNull()
     expect(pill.querySelector("[title='Done'] svg")).not.toBeNull()
     expect(pill.querySelector(".sr-only")?.textContent).toBe("Done")
-    expect(pill.textContent).toBe("BBuilder·Add a test pageDone")
+    expect(pill.textContent).toBe("Add a test pageDone")
     expect(pill.title).toBe("View session")
     const news = draw(
       <EventCard
@@ -1045,8 +1059,7 @@ describe("the bubbles", () => {
                 body: "Add a test page",
                 dispatch_id: 5,
                 data: {
-                  executor: "Builder",
-                  executor_id: 3,
+                  agent_type: "codex",
                   title: "Add a test page",
                   mode: "task",
                   state: "completed",
@@ -1061,13 +1074,19 @@ describe("the bubbles", () => {
         }
       />
     )
-    // The news says the rest: the avatar with its agent's mark, the kind of
-    // work and where, the state in a chip — its result under that.
+    // The news says the rest: the kind of work and where, the state in a
+    // chip — its result under that. Still no face, nor the agent it runs
+    // on (a fact of the side panel's, not a speaker).
     const head = news.container.querySelector("[data-pa-work]")!
-    expect(head.querySelector("[data-pa-agent-badge] title")?.textContent).toBe(
-      "Codex"
-    )
-    expect(head.textContent).toContain("Builder · Kanban task · my-app")
+    expect(
+      head
+        .querySelector("[data-pa-work-glyph]")
+        ?.getAttribute("data-pa-work-glyph")
+    ).toBe("task")
+    expect(head.querySelector("[data-slot='assistant-avatar']")).toBeNull()
+    expect(head.textContent).toContain("Kanban task · my-app")
+    expect(head.textContent).not.toContain("Codex")
+    expect(head.textContent).not.toContain("Aide")
     expect(head.textContent).toContain("Done")
     // Done, and not a routine's: its menu makes it one (D1).
     expect(head.querySelector("[data-pa-work-menu]")).not.toBeNull()
@@ -1091,7 +1110,7 @@ describe("the bubbles", () => {
               row(21, "result", {
                 body: "Add a test page",
                 dispatch_id: 5,
-                data: { executor: "Builder", state: "running", mode: "task" },
+                data: { agent_type: "codex", state: "running", mode: "task" },
               }),
             ],
             "event"
@@ -1122,7 +1141,7 @@ describe("the bubbles", () => {
           row(20, "dispatch", {
             body: "Add a test page",
             dispatch_id: 5,
-            data: { mode: "task", executor: "Builder", executor_id: 3 },
+            data: { mode: "task", agent_type: "codex" },
           }),
         ]}
       />
@@ -1179,45 +1198,42 @@ describe("the bubbles", () => {
     ).toBe(true)
   })
 
-  it("marks an executor's avatar with its agent, at the avatar's foot", () => {
+  it("leads the work's row with how it runs, on a quiet disc — never a face or the agent's mark", () => {
     const card = (id: number, data: Record<string, unknown>) =>
       itemOf(
         [
           row(id, "result", {
             body: "Work",
-            data: { executor: "Builder", title: "Work", ...data },
+            data: { agent_type: "codex", title: "Work", ...data },
           }),
         ],
         "event"
       ) as Extract<MessageItem, { kind: "event" }>
-    const { container } = draw(
-      <EventCard item={card(16, { agent_type: "codex" })} />
-    )
-    const work = container.querySelector("[data-pa-work]")!
-    const badged = work.firstElementChild as HTMLElement
-    expect(badged.hasAttribute("data-pa-badged")).toBe(true)
-    expect(badged.firstElementChild?.getAttribute("data-slot")).toBe(
-      "assistant-avatar"
-    )
-    const badge = badged.querySelector<HTMLElement>("[data-pa-agent-badge]")!
-    expect(badge.querySelector("title")?.textContent).toBe("Codex")
-    // 14px on the 32px avatar, 2px out past its bottom end corner, in rem;
-    // the hole cut around it 1.5px wider (globals.css reads the variables).
-    expect(badge.style.width).toBe("0.875rem")
-    expect(badge.style.bottom).toBe("-0.125rem")
-    expect(badge.style.insetInlineEnd).toBe("-0.125rem")
-    expect(badged.style.getPropertyValue("--pa-badge-center")).toBe("0.3125rem")
-    expect(badged.style.getPropertyValue("--pa-badge-hole")).toBe("0.53125rem")
-    // Out of the accessible name: the line beside it names the assistant.
-    expect(badge.getAttribute("aria-hidden")).toBe("true")
-    cleanup()
-    // An agent the row never recorded: the avatar alone.
+    for (const mode of ["task", "chat", "session"] as const) {
+      const { container, unmount } = draw(
+        <EventCard item={card(16, { mode })} />
+      )
+      const work = container.querySelector("[data-pa-work]")!
+      const glyph = work.firstElementChild as HTMLElement
+      expect(glyph.getAttribute("data-pa-work-glyph")).toBe(mode)
+      // As tall as the row's two lines, in rem; out of the accessible
+      // name, the line beside it says how it runs.
+      expect(glyph.style.width).toBe("2rem")
+      expect(glyph.style.height).toBe("2rem")
+      expect(glyph.getAttribute("aria-hidden")).toBe("true")
+      expect(glyph.querySelector("svg")).not.toBeNull()
+      // The agent it ran on is recorded, and not drawn: no avatar, no mark.
+      expect(work.querySelector("[data-slot='assistant-avatar']")).toBeNull()
+      expect(work.querySelector("[data-pa-badged]")).toBeNull()
+      expect(work.querySelector("[data-pa-agent-badge]")).toBeNull()
+      expect(work.textContent).not.toContain("Codex")
+      unmount()
+    }
+    // A kind the row never recorded: a glyph all the same.
     const bare = draw(<EventCard item={card(17, {})} />)
     const plain = bare.container.querySelector("[data-pa-work]")!
-    expect(plain.querySelector("[data-pa-badged]")).toBeNull()
-    expect(plain.firstElementChild?.getAttribute("data-slot")).toBe(
-      "assistant-avatar"
-    )
+    expect(plain.firstElementChild?.getAttribute("data-pa-work-glyph")).toBe("")
+    expect(plain.firstElementChild?.querySelector("svg")).not.toBeNull()
   })
 
   it("draws a card's result as markdown, not as its marks", () => {
@@ -1226,7 +1242,7 @@ describe("the bubbles", () => {
         row(10, "result", {
           body: "Build",
           data: {
-            executor: "Builder",
+            agent_type: "codex",
             title: "Run the build",
             excerpt: "## Build: ok\n\n**Exit code**: `0`\n\n- one\n- two",
           },
@@ -1256,7 +1272,7 @@ describe("the bubbles", () => {
         {
           id: 9,
           mode: "chat",
-          executor: { assistant_id: 3, name: "Scout", agent_type: "codex" },
+          work: WORK,
           folder_id: null,
           title: "Research the topic",
           prompt: "Look into it",
@@ -1274,14 +1290,12 @@ describe("the bubbles", () => {
           body: "Research",
           dispatch_id: 9,
           data: {
-            executor: "Scout",
             title: "Research the topic",
             mode: "chat",
             state: "completed",
             conversation_id: 41,
             conversation_folder_id: 7,
             agent_type: "codex",
-            executor_id: 3,
           },
         }),
       ],
@@ -1305,8 +1319,9 @@ describe("the bubbles", () => {
       folderId: 7,
       agentType: "codex",
       title: "Research the topic",
-      executorId: 3,
-      executorName: "Scout",
+      // The assistant whose work it is, as it handed it out: the drawer
+      // names it, the conversation never does.
+      assistantName: "Aide",
       prompt: "Look into it",
       connectionId: "c-1",
       state: "running",
@@ -1349,7 +1364,7 @@ describe("the bubbles", () => {
       [
         row(12, "result", {
           body: "Task",
-          data: { executor: "Builder", title: "Task", mode: "task" },
+          data: { agent_type: "codex", title: "Task", mode: "task" },
         }),
       ],
       "event"
@@ -1460,15 +1475,31 @@ describe("the bubbles", () => {
 })
 
 describe("DispatchAttachments", () => {
-  it("shows how the work stands, who runs it and what, and opens it", () => {
-    pa.dispatchById = new Map([[5, dispatchInfo({ state: "review" })]])
+  it("shows how the work stands and what it is, whose when another's, and opens it", () => {
+    pa.snapshot = { agent: { id: 1, uid: "u-aide", name: "Aide" } }
+    pa.dispatchById = new Map([
+      [5, dispatchInfo({ state: "review" })],
+      [
+        6,
+        dispatchInfo({
+          id: 6,
+          state: "running",
+          work: { ...WORK, name: "Scout", bot_uid: "u-scout" },
+        }),
+      ],
+    ])
     const { container } = draw(
       <DispatchAttachments
         rows={[
           row(20, "dispatch", {
             body: "Add a test page",
             dispatch_id: 5,
-            data: { mode: "task", executor: "Builder", executor_id: 3 },
+            data: { mode: "task", agent_type: "codex" },
+          }),
+          row(22, "dispatch", {
+            body: "Add a test page",
+            dispatch_id: 6,
+            data: { mode: "task", agent_type: "codex" },
           }),
         ]}
       />
@@ -1478,8 +1509,14 @@ describe("DispatchAttachments", () => {
     )!
     expect(pill.hasAttribute("data-pa-work-pill")).toBe(true)
     expect(pill.querySelector("[title='In review'] svg")).not.toBeNull()
-    expect(pill.textContent).toBe("BBuilder·Add a test pageIn review")
+    // The assistant's own work: no one named, nor the agent it runs on.
+    expect(pill.textContent).toBe("Add a test pageIn review")
     expect(pill.textContent).not.toContain("Kanban task")
+    // Work handed over to it: the assistant whose it is, before what it is.
+    expect(
+      container.querySelector<HTMLElement>("button[data-row-id='22']")!
+        .textContent
+    ).toMatch(/^Scout·Add a test page/)
     fireEvent.click(pill)
     expect(usePersonalAgentUi.getState().work).toMatchObject({
       dispatchId: 5,
@@ -1527,7 +1564,7 @@ describe("DispatchAttachments", () => {
     const rows = [30, 31, 32, 33, 34].map((id) =>
       row(id, "dispatch", {
         body: `Work ${id}`,
-        data: { executor: "Builder", state: "queued" },
+        data: { agent_type: "codex", state: "queued" },
       })
     )
     const { container } = draw(<DispatchAttachments rows={rows} />)
@@ -1558,6 +1595,8 @@ describe("no kind of work, no why this executor (R7)", () => {
     expect(container.querySelector("[data-pa-work-pill]")).toBeTruthy()
     expect(container.textContent).not.toContain("research jobs")
     expect(container.textContent).not.toContain("Why")
+    // Nor the executor config it once named: only the assistant speaks.
+    expect(container.textContent).not.toContain("Researcher")
   })
 })
 
@@ -1593,7 +1632,7 @@ describe("acceptance on the work handed out (7.5)", () => {
           row(20, "dispatch", {
             body: "Add a test page",
             data: {
-              executor: "Builder",
+              agent_type: "codex",
               state: "queued",
               done_when: "It builds",
             },
@@ -1608,7 +1647,7 @@ describe("acceptance on the work handed out (7.5)", () => {
     expect(container.querySelectorAll("[data-pa-done-when]")).toHaveLength(1)
   })
 
-  it("says a check is the acceptance check of a round, and names no executor config", () => {
+  it("says a check is the acceptance check of a round, and names no one, whatever an old card carries", () => {
     pa.dispatchById = new Map()
     const { container } = draw(
       <DispatchAttachments
@@ -1629,6 +1668,8 @@ describe("acceptance on the work handed out (7.5)", () => {
     const label = container.querySelector("[data-pa-check-label]")!
     expect(label.textContent).toBe("Acceptance check · round 2")
     expect(container.querySelector("[data-pa-work-pill]")).toBeTruthy()
+    expect(container.textContent).not.toContain("Checker")
+    expect(container.textContent).not.toContain("Ace")
   })
 })
 
@@ -1642,7 +1683,6 @@ describe("a result card and the reply that reports it (A1, A2)", () => {
     row(30, "result", {
       body: "Analyse my-app",
       data: {
-        executor: "Builder",
         agent_type: "codex",
         title: "Analyse my-app",
         mode: "session",
@@ -1857,20 +1897,40 @@ describe("a result card and the reply that reports it (A1, A2)", () => {
     expect(read.container.querySelector("[data-pa-work-menu]")).toBeNull()
   })
 
-  it("names the agent that ran it, not its executor, when that is its assistant's own name", () => {
-    pa.snapshot = { agent: { id: 2, name: "Builder", kind: "worker" } }
-    const own = draw(<EventCard item={eventOf([card()])} />)
-    expect(
-      own.container.querySelector("[data-pa-work]")?.textContent
-    ).toContain("Codex · Work session")
-    expect(
-      own.container.querySelector("[data-pa-work]")?.textContent
-    ).not.toContain("Builder")
-    cleanup()
-    pa.snapshot = { agent: { id: 2, name: "Scout", kind: "worker" } }
-    const other = draw(<EventCard item={eventOf([card()])} />)
-    expect(
-      other.container.querySelector("[data-pa-work]")?.textContent
-    ).toContain("Builder · Work session")
+  it("names no one on its own work — not the agent it ran on — and the assistant whose it is when handed over, told apart by uid", () => {
+    pa.snapshot = { agent: { id: 2, uid: "u-aide", name: "Aide" } }
+    const metaOf = (work: DispatchInfo["work"]) => {
+      pa.dispatchById = new Map([
+        [
+          40,
+          dispatchInfo({
+            id: 40,
+            mode: "session",
+            state: "failed",
+            work_task_id: null,
+            task: null,
+            work,
+          } as Partial<DispatchInfo>),
+        ],
+      ])
+      const { container, unmount } = draw(
+        <EventCard item={eventOf([card({}, { dispatch_id: 40 })])} />
+      )
+      const head = container.querySelector("[data-pa-work]")!
+      const line = head.children[1].children[1].textContent
+      unmount()
+      return line
+    }
+    // Its own work: how it runs and where, no name.
+    expect(metaOf(WORK)).toBe("Work session · my-app")
+    // Renamed since: still its own, by its uid.
+    expect(metaOf({ ...WORK, name: "Old name" })).toBe("Work session · my-app")
+    // Another assistant's work, handed over — even one of the same name.
+    expect(metaOf({ ...WORK, name: "Scout", bot_uid: "u-scout" })).toBe(
+      "Scout · Work session · my-app"
+    )
+    expect(metaOf({ ...WORK, bot_uid: "u-other" })).toBe(
+      "Aide · Work session · my-app"
+    )
   })
 })

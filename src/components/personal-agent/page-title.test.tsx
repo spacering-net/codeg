@@ -69,7 +69,9 @@ const entry = (id: number, kind: "primary" | "worker", name: string) =>
     avatar: { kind: "face", shape: "donut", color: "teal" },
     persona: "",
     persona_unwritten: false,
-    executor_assistant_id: null,
+    hidden: false,
+    has_brain: true,
+    legacy_assistant_id: null,
     created_at: "2026-11-10T10:00:00Z",
     roster: {
       sort_order: 0,

@@ -4399,43 +4399,49 @@ mod tests {
     }
     // ── Assistants ──────────────────────────────────────────────────────────
 
-    /// In-memory assistants: `delegatable` answers only for the ids listed as
-    /// usable, the way the database lookup filters deleted / disabled rows.
-    struct StubAssistants(Vec<crate::models::AssistantInfo>);
+    /// In-memory assistants: only those listed are usable, the way the
+    /// database lookup leaves deleted / hidden ones out.
+    struct StubAssistants(Vec<crate::acp::delegation::assistants::DelegatableAssistant>);
 
     #[async_trait]
     impl crate::acp::delegation::assistants::AssistantLookup for StubAssistants {
-        async fn delegatable(&self, id: i32) -> Option<crate::models::AssistantInfo> {
-            self.0.iter().find(|a| a.id == id).cloned()
+        async fn by_uid(
+            &self,
+            uid: &str,
+        ) -> Option<crate::acp::delegation::assistants::DelegatableAssistant> {
+            self.0.iter().find(|a| a.uid == uid).cloned()
         }
-        async fn roster(&self) -> Vec<crate::models::AssistantInfo> {
+        async fn by_legacy_id(
+            &self,
+            legacy_id: i32,
+        ) -> Option<crate::acp::delegation::assistants::DelegatableAssistant> {
+            self.0.iter().find(|a| a.legacy_id == Some(legacy_id)).cloned()
+        }
+        async fn roster(&self) -> Vec<crate::acp::delegation::assistants::DelegatableAssistant> {
             self.0.clone()
         }
     }
 
-    fn assistant_info(id: i32, name: &str) -> crate::models::AssistantInfo {
-        let now = chrono::Utc::now();
-        crate::models::AssistantInfo {
+    /// Assistant row `id` (uid `u-<id>`), converted from the collaboration
+    /// settings' assistant `legacy_id` when given.
+    fn assistant_info(
+        id: i32,
+        name: &str,
+        legacy_id: Option<i32>,
+    ) -> crate::acp::delegation::assistants::DelegatableAssistant {
+        crate::acp::delegation::assistants::DelegatableAssistant {
             id,
             uid: format!("u-{id}"),
             name: name.into(),
-            description: format!("{name} description"),
-            avatar: crate::models::AssistantAvatar::Monogram {
-                color: "teal".into(),
-            },
+            persona: format!("{name} description"),
             agent_type: AgentType::Codex,
             agent_options: crate::acp::delegation::types::AgentDelegationDefaults {
                 mode_id: None,
                 config_values: [("model".to_string(), "gpt-5.5".to_string())].into(),
             },
-            label_snapshot: Default::default(),
             instructions: "Cite line numbers.".into(),
-            enabled: true,
-            sort_order: id,
-            revision: 1,
-            created_at: now,
-            updated_at: now,
-            deleted_at: None,
+            avatar: crate::models::personal_agent_bots::BotAvatar::default_for("u"),
+            legacy_id,
         }
     }
 
@@ -4447,7 +4453,10 @@ mod tests {
                 mock as Arc<dyn ConnectionSpawner>,
                 Arc::new(AlwaysRootLookup) as Arc<dyn ConversationDepthLookup>,
             )
-            .with_assistants(Arc::new(StubAssistants(vec![assistant_info(3, "Reviewer")]))),
+            .with_assistants(Arc::new(StubAssistants(vec![
+                assistant_info(7, "Reviewer", Some(3)),
+                assistant_info(8, "Writer", None),
+            ]))),
         );
         broker
             .set_config(DelegationConfig {
@@ -4496,8 +4505,10 @@ mod tests {
         mock.queue_spawn(Ok("child-1".into())).await;
         mock.queue_send(Ok(42)).await;
         let (listener, _tokens) = assistant_listener(mock.clone()).await;
-        // `agent_type` is ignored once `assistant_id` is given — even a bogus
-        // one, and even with the id as a string.
+        // `agent_type` is ignored once an old link's `assistant_id` is given
+        // — even a bogus one, and even with the id as a string: it is the
+        // assistant converted from it, named by its uid (never its row id,
+        // which a caller could not pass back).
         let ack = serve(
             listener,
             call(json!({"assistant_id": "3", "agent_type": "not-an-agent", "task": "review"})),
@@ -4505,7 +4516,8 @@ mod tests {
         .await;
         assert_eq!(ack["status"], "running");
         assert_eq!(ack["agent_type"], "codex");
-        assert_eq!(ack["assistant_id"], 3);
+        assert_eq!(ack["bot"], "u-7");
+        assert!(ack.get("assistant_id").is_none(), "{ack}");
         assert_eq!(ack["assistant_name"], "Reviewer");
         let spawn = mock.spawn_args.lock().await[0].clone();
         assert_eq!(spawn.agent_type, AgentType::Codex);
@@ -4518,6 +4530,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_call_by_uid_runs_as_that_assistant_whatever_else_it_names() {
+        let mock = Arc::new(MockSpawner::new());
+        mock.queue_spawn(Ok("child-1".into())).await;
+        mock.queue_send(Ok(42)).await;
+        let (listener, _tokens) = assistant_listener(mock.clone()).await;
+        let ack = serve(
+            listener,
+            call(json!({"bot": "u-8", "assistant_id": 3, "agent_type": "claude_code", "task": "write"})),
+        )
+        .await;
+        assert_eq!(ack["status"], "running", "{ack}");
+        assert_eq!(ack["bot"], "u-8");
+        assert_eq!(ack["assistant_name"], "Writer");
+        assert_eq!(mock.spawn_args.lock().await[0].agent_type, AgentType::Codex);
+    }
+
+    #[tokio::test]
     async fn an_unusable_assistant_is_refused_with_the_usable_roster() {
         let mock = Arc::new(MockSpawner::new());
         let (listener, _tokens) = assistant_listener(mock.clone()).await;
@@ -4526,8 +4555,19 @@ mod tests {
         assert_eq!(refusal["error_code"], "assistant_not_found");
         let message = refusal["message"].as_str().unwrap();
         assert!(message.contains("No usable assistant 9"));
-        assert!(message.contains("3: Reviewer [Codex CLI]"));
+        assert!(message.contains("u-7: Reviewer [Codex CLI]"));
         assert!(message.contains("Do not delegate this to another agent instead"));
+
+        // A uid that is none — or not one at all — likewise, never run on the
+        // `agent_type` beside it.
+        for bot in [json!("u-99"), json!("Not A Uid"), json!(5)] {
+            let refusal = serve(
+                listener.clone(),
+                call(json!({"bot": bot, "agent_type": "codex", "task": "x"})),
+            )
+            .await;
+            assert_eq!(refusal["error_code"], "assistant_not_found", "{bot}");
+        }
 
         // An id that is not one at all is refused the same way — never run on
         // the `agent_type` the call also carried.
@@ -4541,14 +4581,14 @@ mod tests {
 
         let missing = serve(listener, call(json!({"task": "x"}))).await;
         assert_eq!(missing["error_code"], "invalid_agent_type");
-        assert!(missing["message"].as_str().unwrap().contains("assistant_id"));
+        assert!(missing["message"].as_str().unwrap().contains("bot"));
     }
 
     #[tokio::test]
     async fn ping_announces_assistant_support() {
         let (listener, _tokens) = assistant_listener(Arc::new(MockSpawner::new())).await;
         let pong = serve(listener, BrokerMessage::Ping).await;
-        assert_eq!(pong, json!({"ok": true, "assistants": true}));
+        assert_eq!(pong, json!({"ok": true, "assistants": true, "bots": true}));
     }
 
     #[tokio::test]
@@ -4566,11 +4606,30 @@ mod tests {
             roster,
             json!({"assistants": [{
                 "id": 3,
+                "uid": "u-7",
                 "name": "Reviewer",
                 "description": "Reviewer description",
                 "agent_type": "codex"
+            }, {
+                "id": 0,
+                "uid": "u-8",
+                "name": "Writer",
+                "description": "Writer description",
+                "agent_type": "codex"
             }]})
         );
+        // A companion from before uids is sent only those it can name, by
+        // the id it knows them by.
+        let old = serve(
+            listener.clone(),
+            BrokerMessage::ListAssistants(BrokerListAssistantsRequest {
+                token: "tok".into(),
+                bots: false,
+            }),
+        )
+        .await;
+        assert_eq!(old["assistants"].as_array().unwrap().len(), 1);
+        assert_eq!(old["assistants"][0]["id"], 3);
         // A bad token still gets an answer — never a dropped connection, which
         // a companion could mistake for a listener that predates the message.
         let refused = serve(

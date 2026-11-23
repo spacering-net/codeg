@@ -144,8 +144,6 @@ export function useAssistant(
 export function resetAssistantsStore(): void {
   fetchSeq = 0
   lastAppliedFetch = 0
-  reorderSeq = 0
-  reorderTail = Promise.resolve()
   useAssistantsStore.setState(useAssistantsStore.getInitialState(), true)
 }
 

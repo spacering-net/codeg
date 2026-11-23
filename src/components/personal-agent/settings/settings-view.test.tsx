@@ -79,7 +79,6 @@ const api = vi.hoisted(() => ({
   personalAgentSettingsPatch: vi.fn(async () => []),
   personalAgentBots: vi.fn(async () => []),
   personalAgentGet: vi.fn(),
-  getDelegationSettings: vi.fn(async () => ({ enabled: true })),
   openSettingsWindow: vi.fn(async () => {}),
   personalAgentTemplates: vi.fn(async () => []),
   personalAgentBotCopy: vi.fn(),
@@ -682,7 +681,7 @@ describe("the settings view", () => {
     // It says where it goes, in words; the title is under it.
     expect(back.textContent).toBe("Back to the conversation")
     const title = back.parentElement!.querySelector("[data-pa-settings-title]")!
-    expect(title.querySelector("h1")?.textContent).toBe("Settings")
+    expect(title.querySelector("h1")?.textContent).toBe("Assistant preferences")
     expect(
       back.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()

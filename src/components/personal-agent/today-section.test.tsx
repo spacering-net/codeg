@@ -126,7 +126,9 @@ function entry(
     avatar: { kind: "face", shape: "ring", color: "blue" },
     persona: "",
     persona_unwritten: false,
-    executor_assistant_id: null,
+    hidden: false,
+    has_brain: true,
+    legacy_assistant_id: null,
     created_at: "2026-11-01T00:00:00Z",
     roster: {
       sort_order: 0,
@@ -162,9 +164,9 @@ function work(patch: Partial<DispatchInfo>): DispatchInfo {
   return {
     id: 1,
     mode: "session",
-    executor: {
-      assistant_id: 3,
-      name: "Builder",
+    work: {
+      name: "Dev",
+      bot_uid: "u2",
       agent_type: "codex",
       agent_options: { mode_id: null, config_values: {} },
       label_snapshot: null,
@@ -234,12 +236,17 @@ function matter(patch: Partial<ItemInfo> & Pick<ItemInfo, "id">): ItemInfo {
  *  rows of its own (`extra`) after them. */
 function activityOf(
   data: PersonalAgentToday,
-  extra: Partial<Record<"needs" | "watching" | "next" | "done", ActivityRow[]>> = {}
+  extra: Partial<
+    Record<"needs" | "watching" | "next" | "done", ActivityRow[]>
+  > = {}
 ): PersonalAgentActivity {
   const needs = [...data.needs.map((r) => thing(r)), ...(extra.needs ?? [])]
   return {
     needs,
-    watching: [...data.watching.map((r) => thing(r)), ...(extra.watching ?? [])],
+    watching: [
+      ...data.watching.map((r) => thing(r)),
+      ...(extra.watching ?? []),
+    ],
     next: [...data.schedule.map((r) => thing(r)), ...(extra.next ?? [])],
     done: [...data.done.map((r) => thing(r)), ...(extra.done ?? [])],
     waiting: needs.length,
@@ -511,9 +518,27 @@ describe("the activity's list", () => {
     draw(
       today({
         done: [
-          row({ key: "finished:1", kind: "finished", title: "Docs", bot_id: 2, dispatch_id: 1 }),
-          row({ key: "finished:2", kind: "finished", title: "Notes", bot_id: 2, dispatch_id: 2 }),
-          row({ key: "routine_report:3", kind: "routine_report", title: "Night CI", bot_id: 1, state: "silent" }),
+          row({
+            key: "finished:1",
+            kind: "finished",
+            title: "Docs",
+            bot_id: 2,
+            dispatch_id: 1,
+          }),
+          row({
+            key: "finished:2",
+            kind: "finished",
+            title: "Notes",
+            bot_id: 2,
+            dispatch_id: 2,
+          }),
+          row({
+            key: "routine_report:3",
+            kind: "routine_report",
+            title: "Night CI",
+            bot_id: 1,
+            state: "silent",
+          }),
         ],
       })
     )
@@ -742,10 +767,18 @@ describe("the activity's list", () => {
     expect(within(el).getByRole("button", { name: "Later" })).toBeTruthy()
     // The row opens the message it came from; its card unfolded.
     fireEvent.click(within(el).getAllByRole("button")[0])
-    expect(usePersonalAgentUi.getState().pendingJump).toEqual({ bot: 1, row: 3 })
+    expect(usePersonalAgentUi.getState().pendingJump).toEqual({
+      bot: 1,
+      row: 3,
+    })
     fireEvent.click(within(el).getByRole("button", { name: "Show details" }))
-    fireEvent.click(within(el).getByRole("button", { name: "View the reminder" }))
-    expect(usePersonalAgentUi.getState().pendingJump).toEqual({ bot: 1, row: 8 })
+    fireEvent.click(
+      within(el).getByRole("button", { name: "View the reminder" })
+    )
+    expect(usePersonalAgentUi.getState().pendingJump).toEqual({
+      bot: 1,
+      row: 8,
+    })
   })
 
   it("says a reminder handed to its assistant is theirs, a task under check its round, a merge queued", () => {
@@ -802,8 +835,12 @@ describe("the activity's list", () => {
     ) as HTMLElement
     expect(acceptance.textContent).toContain("queued to merge")
     // Its board task, unfolded: the row itself opens the card.
-    fireEvent.click(within(acceptance).getByRole("button", { name: "Show details" }))
-    fireEvent.click(within(acceptance).getByRole("button", { name: "Open the task" }))
+    fireEvent.click(
+      within(acceptance).getByRole("button", { name: "Show details" })
+    )
+    fireEvent.click(
+      within(acceptance).getByRole("button", { name: "Open the task" })
+    )
     expect(dialogs.openDetail).toHaveBeenLastCalledWith(7)
   })
 
@@ -1188,7 +1225,9 @@ describe("the activity's list", () => {
     await waitFor(() => expect(scroll).toHaveBeenCalled())
     expect(document.querySelectorAll("[data-pa-today-row]")).toHaveLength(10)
     expect(
-      (scroll.mock.contexts[0] as HTMLElement).getAttribute("data-pa-activity-row")
+      (scroll.mock.contexts[0] as HTMLElement).getAttribute(
+        "data-pa-activity-row"
+      )
     ).toBe("session:9")
     const ui = usePersonalAgentUi.getState()
     expect([ui.auxOpen, ui.auxTab, ui.activityAsk]).toEqual([

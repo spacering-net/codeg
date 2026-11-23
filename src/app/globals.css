@@ -4976,31 +4976,6 @@ button.pa-choice:enabled:not(.pa-choice-chosen):hover {
   animation: pa-delayed-in 200ms ease-out 150ms both;
 }
 
-/* Personal agent: an executor's avatar with its agent's mark at its bottom
-   end corner (`ExecutorAvatar`) — a round hole cut in the avatar around the
-   mark, rather than a ring of some surface colour, so the two read apart on
-   any surface: a card's well, a translucent bubble over a workspace image.
-   The wrapper sets the hole's radius and its centre's distance from the
-   avatar's bottom and end edges. */
-[data-pa-badged] {
-  --pa-badge-x: calc(100% - var(--pa-badge-center));
-}
-[dir="rtl"] [data-pa-badged] {
-  --pa-badge-x: var(--pa-badge-center);
-}
-[data-pa-badged] > [data-slot="assistant-avatar"] {
-  -webkit-mask-image: radial-gradient(
-    circle at var(--pa-badge-x) calc(100% - var(--pa-badge-center)),
-    transparent var(--pa-badge-hole),
-    #000 calc(var(--pa-badge-hole) + 0.5px)
-  );
-  mask-image: radial-gradient(
-    circle at var(--pa-badge-x) calc(100% - var(--pa-badge-center)),
-    transparent var(--pa-badge-hole),
-    #000 calc(var(--pa-badge-hole) + 0.5px)
-  );
-}
-
 /* The personal agent's input box scrolls inside its round box: the
    OverlayScrollbars look of `.field-scrollbar` (the side panel's bar), with
    the gutter kept so the text does not re-wrap when the bar appears. Text

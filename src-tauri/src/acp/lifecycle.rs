@@ -2260,7 +2260,7 @@ mod delegation_title_tests {
         // An `assistant_id` alone still bails: never guessed as the agent.
         let code = r#"await tools["codeg-mcp"].delegate_to_agent({ assistant_id: 3, agent_type: "codex", task: "t" })"#;
         let raw = serde_json::json!({ "code": code }).to_string();
-        assert!(extract_code_mode_match_key(Some(&raw)).is_none());
+        assert!(extract_delegation_match_key(Some(&raw)).is_none());
     }
 
     #[test]

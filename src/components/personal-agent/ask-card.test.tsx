@@ -70,8 +70,6 @@ function ask(data: Record<string, unknown>, id = 40): TimelineRow {
       bot_id: 1,
       dispatch_id: 5,
       title: "Fix the cold start",
-      executor: "Builder",
-      executor_id: 3,
       agent_type: "codex",
       mode: "session",
       conversation_id: 77,
@@ -138,7 +136,15 @@ afterEach(() => {
 describe("AskCard", () => {
   it("says the assistant is answering, with the question and nothing to answer", () => {
     const { container } = draw(ask({}))
-    expect(screen.getByText("Builder is asking")).toBeTruthy()
+    // Only the assistant speaks: the work asks, unnamed — its head leads
+    // with how it runs, not the agent's mark or a face.
+    expect(screen.getByText("A question from the work")).toBeTruthy()
+    expect(
+      container
+        .querySelector('[data-pa-work="head"] [data-pa-work-glyph]')
+        ?.getAttribute("data-pa-work-glyph")
+    ).toBe("session")
+    expect(screen.getByText("Work session")).toBeTruthy()
     expect(screen.getByText("Aide is answering this for you…")).toBeTruthy()
     expect(screen.getByText("Use A or B?")).toBeTruthy()
     expect(
@@ -325,7 +331,7 @@ describe("the work's card", () => {
         mode: "session",
         state: "interrupted",
         title: "Fix the cold start",
-        executor: "Builder",
+        agent_type: "codex",
         cause: "boot",
         note: "codeg restarted",
         auto_retry: autoRetry,

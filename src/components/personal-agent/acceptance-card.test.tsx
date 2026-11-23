@@ -56,9 +56,7 @@ function card(data: Record<string, unknown>): TimelineRow {
       title: "Fix cold start",
       work_task_id: 9,
       folder_id: 2,
-      executor: "Coder",
-      executor_agent: "claude_code",
-      checker: "Checker",
+      work_agent: "claude_code",
       checker_agent: "codex",
       check_dispatch_id: 5,
       verdict: "fail",
@@ -128,8 +126,11 @@ describe("an acceptance card", () => {
   it("puts the owner's call to them with the question, the check and what sending it back says", async () => {
     api.personalAgentNoticeAct.mockResolvedValue(card({}))
     const { container } = draw(card({}))
-    expect(screen.getByText("Acceptance · round 1 of at most 3")).toBeTruthy()
-    expect(screen.getByText("Coder did it · Checker checked it")).toBeTruthy()
+    // Its head says the round alone: only the assistant speaks, no one did
+    // or checked it by name.
+    expect(container.querySelector("[data-pa-sheet-head]")?.textContent).toBe(
+      "Acceptance · round 1 of at most 3"
+    )
     expect(container.querySelector("[data-pa-verdict]")?.textContent).toBe(
       "Not passed"
     )
@@ -297,13 +298,15 @@ describe("an acceptance card", () => {
         phase: "accepted",
         decision: "accept",
         unchecked: true,
-        checker: null,
+        checker_agent: null,
         verdict: null,
         merge_commit: "def4567890",
       })
     )
     expect(screen.getByText("Not checked independently")).toBeTruthy()
-    expect(screen.getByText("Coder did it")).toBeTruthy()
+    expect(
+      unchecked.container.querySelector("[data-pa-sheet-head]")?.textContent
+    ).toBe("Acceptance · round 1 of at most 3")
     expect(screen.getByText("Merged def4567")).toBeTruthy()
     unchecked.unmount()
     draw(

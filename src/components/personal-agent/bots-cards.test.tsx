@@ -196,22 +196,35 @@ describe("the card about work assistants made", () => {
       bots,
       ...extra,
     })
-  const bot = (id: number, state = "made") => ({
+  const bot = (
+    id: number,
+    state = "made",
+    picked: { from: string }[] = []
+  ) => ({
     bot_id: id,
     name: `Bot ${id}`,
     face: { id, name: `Bot ${id}`, avatar: null, kind: "worker" },
-    executor_name: `Exec ${id}`,
-    executor_agent: "Codex",
-    executor_created: false,
-    picked: [],
+    work_agent: "Codex",
+    picked,
     state,
   })
 
   it("undoes one of them, or all", async () => {
-    api.personalAgentNoticeAct.mockResolvedValue(made([bot(1), bot(2)]))
-    draw(made([bot(1), bot(2)]))
-    expect(screen.getByText("Made a work assistant")).toBeTruthy()
-    expect(screen.getByText(/keeps Exec 1/)).toBeTruthy()
+    const two = [
+      bot(1),
+      bot(2, "made", [{ from: "given" }, { from: "agent" }, { from: "agent" }]),
+    ]
+    api.personalAgentNoticeAct.mockResolvedValue(made(two))
+    draw(made(two))
+    expect(screen.getByText("Made an assistant")).toBeTruthy()
+    // The agent each one's work runs on, and how many of its options codeg
+    // picked (the owner's own words not counted).
+    expect(
+      document.querySelector("[data-pa-bot-made='1']")?.textContent
+    ).toContain("Works with Codex")
+    expect(
+      document.querySelector("[data-pa-bot-made='2']")?.textContent
+    ).toContain("Works with Codex; 2 options filled in")
     fireEvent.click(
       document.querySelector("[data-pa-undo-bot='2']") as HTMLElement
     )
@@ -250,7 +263,7 @@ describe("the card about work assistants made", () => {
         reason: "you keep asking for cleanups",
       })
     )
-    expect(screen.getByText("Suggestion: a new work assistant")).toBeTruthy()
+    expect(screen.getByText("Suggestion: make a new assistant")).toBeTruthy()
     expect(screen.getByText("Night cleaner")).toBeTruthy()
     expect(screen.getByText("Why: you keep asking for cleanups")).toBeTruthy()
     // What it would make, why, and the buttons: a band each, buttons last.

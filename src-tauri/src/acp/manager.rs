@@ -7279,11 +7279,13 @@ mod tests {
                     parent_tool_use_id: "pt-brief".into(),
                     delegation_call_id: "call-brief".into(),
                     assistant: Some(AssistantLink {
-                        id: 3,
+                        id: Some(3),
+                        bot_uid: None,
                         snapshot: crate::models::AssistantRunSnapshot {
                             name: "Reviewer".into(),
                             agent_options: Default::default(),
                             instructions: "Cite lines.".into(),
+                            avatar: None,
                         },
                     }),
                 }),
@@ -7321,12 +7323,11 @@ mod tests {
         assert_eq!(row.title.as_deref(), Some("Review the diff"));
         assert_eq!(row.assistant_id, Some(3));
         assert_eq!(row.assistant_name.as_deref(), Some("Reviewer"));
-        let (assistant_id, snapshot) =
+        let snapshot =
             crate::db::service::conversation_service::get_assistant_run(&db.conn, child_id)
                 .await
                 .unwrap()
                 .expect("assistant run recorded");
-        assert_eq!(assistant_id, 3);
         assert_eq!(
             snapshot.expect("snapshot readable").instructions,
             "Cite lines."

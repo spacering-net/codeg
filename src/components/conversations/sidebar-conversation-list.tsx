@@ -2887,44 +2887,47 @@ export function SidebarConversationList({
   )
 
   const workspaceEmptyActions = (
-    <div className="flex flex-col items-center justify-center gap-2 px-3 pt-6 pb-3" data-sidebar-workspace-empty>
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full max-w-[14rem] justify-start"
-            onClick={handleOpenFolderAction}
-          >
-            <FolderOpenDot className="h-3.5 w-3.5 mr-1.5" />
-            {tFolderDropdown("openFolder")}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full max-w-[14rem] justify-start"
-            onClick={handleOpenCloneDialog}
-          >
-            <FolderGit2 className="h-3.5 w-3.5 mr-1.5" />
-            {tFolderDropdown("cloneRepository")}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full max-w-[14rem] justify-start"
-            onClick={handleProjectBoot}
-          >
-            <Rocket className="h-3.5 w-3.5 mr-1.5" />
-            {tFolderDropdown("projectBoot")}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full max-w-[14rem] justify-start"
-            onClick={handleOpenImportWindow}
-          >
-            <Download className="h-3.5 w-3.5 mr-1.5" />
-            {t("importLocalSessions")}
-          </Button>
-        </div>
+    <div
+      className="flex flex-col items-center justify-center gap-2 px-3 pt-6 pb-3"
+      data-sidebar-workspace-empty
+    >
+      <Button
+        variant="outline"
+        size="sm"
+        className="w-full max-w-[14rem] justify-start"
+        onClick={handleOpenFolderAction}
+      >
+        <FolderOpenDot className="h-3.5 w-3.5 mr-1.5" />
+        {tFolderDropdown("openFolder")}
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        className="w-full max-w-[14rem] justify-start"
+        onClick={handleOpenCloneDialog}
+      >
+        <FolderGit2 className="h-3.5 w-3.5 mr-1.5" />
+        {tFolderDropdown("cloneRepository")}
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        className="w-full max-w-[14rem] justify-start"
+        onClick={handleProjectBoot}
+      >
+        <Rocket className="h-3.5 w-3.5 mr-1.5" />
+        {tFolderDropdown("projectBoot")}
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        className="w-full max-w-[14rem] justify-start"
+        onClick={handleOpenImportWindow}
+      >
+        <Download className="h-3.5 w-3.5 mr-1.5" />
+        {t("importLocalSessions")}
+      </Button>
+    </div>
   )
 
   // A folder's chosen colour, for the header's colour picker and for the tint

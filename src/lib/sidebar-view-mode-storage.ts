@@ -141,9 +141,12 @@ export function normalizeSectionOrder(value: unknown): SidebarSectionOrder {
     seen.add(entry)
     out.push(entry)
   }
-  if (!seen.has("assistants")) {
-    const at = out.indexOf("folders")
-    out.splice(at < 0 ? 0 : at, 0, "assistants")
+  // A store from before the assistants' section: right above the folders —
+  // where they are; with none either, both follow in the default order,
+  // the assistants first.
+  const folders = out.indexOf("folders")
+  if (!seen.has("assistants") && folders >= 0) {
+    out.splice(folders, 0, "assistants")
     seen.add("assistants")
   }
   for (const id of SIDEBAR_SECTION_IDS) {

@@ -1034,7 +1034,8 @@ function parseCodeModeInput(parsed: unknown): ParsedInput | null {
       assistantAt !== null && botAt === null
         ? coerceAssistantId(readAssistantIdValue(code, assistantAt))
         : null,
-    botUid: botAt !== null ? coerceBotUid(objectStringValue(code, botAt)) : null,
+    botUid:
+      botAt !== null ? coerceBotUid(objectStringValue(code, botAt)) : null,
     task: taskAt !== null ? objectTaskValue(code, taskAt) : null,
     workingDir: workingAt !== null ? objectStringValue(code, workingAt) : null,
   }

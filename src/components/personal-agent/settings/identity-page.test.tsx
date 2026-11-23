@@ -18,9 +18,26 @@ vi.mock("sonner", () => ({ toast: { message: vi.fn(), error: vi.fn() } }))
 vi.mock("@/contexts/personal-agent-context", () => ({ useBotId: () => null }))
 // The tiles offer these.
 const acp = vi.hoisted(() => ({
-  agents: [] as { agent_type: string; enabled: boolean; available: boolean }[],
+  agents: [] as {
+    agent_type: string
+    enabled: boolean
+    available: boolean
+    installed_version?: string | null
+  }[],
 }))
-const CLAUDE = { agent_type: "claude_code", enabled: true, available: true }
+// Installed, as the agent picker reads it: available and a version.
+const CLAUDE = {
+  agent_type: "claude_code",
+  enabled: true,
+  available: true,
+  installed_version: "2.1.0",
+}
+const CODEX = {
+  agent_type: "codex",
+  enabled: true,
+  available: true,
+  installed_version: "0.170.0",
+}
 vi.mock("@/hooks/use-acp-agents", () => ({
   useAcpAgents: () => ({ agents: acp.agents }),
 }))
@@ -143,10 +160,7 @@ describe("the identity tab", () => {
   })
 
   it("picks its brain's agent from tiles, as the first setup does — from the list for one not among them", () => {
-    acp.agents = [
-      CLAUDE,
-      { agent_type: "codex", enabled: true, available: true },
-    ]
+    acp.agents = [CLAUDE, CODEX]
     render(page(agent("Nova")))
     const brainCard = document.querySelector("[data-pa-identity-brain]")!
     const tile = brainCard.querySelector(
@@ -166,7 +180,7 @@ describe("the identity tab", () => {
     cleanup()
     // Its agent gone from the list (or the list not read yet): the list,
     // which names the one saved.
-    acp.agents = [{ agent_type: "codex", enabled: true, available: true }]
+    acp.agents = [CODEX]
     render(page(agent("Nova")))
     expect(brainSelect()).not.toBeNull()
     expect(
@@ -187,26 +201,30 @@ describe("the identity tab", () => {
         agent("Nova", {
           work: {
             agent_type: "codex",
-            agent_options: {},
+            agent_options: { config_values: {} },
             label_snapshot: { agent: "Codex", mode: null, options: [] },
           },
         })
       )
     )
-    expect(
-      document.querySelector("[data-pa-work-off]")?.textContent
-    ).toContain("Codex")
+    expect(document.querySelector("[data-pa-work-off]")?.textContent).toContain(
+      "Codex"
+    )
     cleanup()
     render(page(agent("Nova")))
     expect(document.querySelector("[data-pa-work-off]")).toBeNull()
+    cleanup()
+    // Listed, but not installed: no version.
+    acp.agents = [{ ...CLAUDE, installed_version: null }]
+    render(page(agent("Nova")))
+    expect(document.querySelector("[data-pa-work-off]")?.textContent).toContain(
+      "Claude Code"
+    )
   })
 
   it("changes the agent its work runs on apart from its brain (D1)", async () => {
     brain.ready = true
-    acp.agents = [
-      CLAUDE,
-      { agent_type: "codex", enabled: true, available: true },
-    ]
+    acp.agents = [CLAUDE, CODEX]
     api.personalAgentSave.mockResolvedValue({})
     // Its work on Codex; the list picks Claude Code for it.
     render(
@@ -214,7 +232,7 @@ describe("the identity tab", () => {
         agent("Nova", {
           work: {
             agent_type: "codex",
-            agent_options: {},
+            agent_options: { config_values: {} },
             label_snapshot: { agent: "Codex", mode: null, options: [] },
           },
         })

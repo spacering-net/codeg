@@ -594,10 +594,7 @@ function useMatterMeta(): (row: ActivityRow, item: ItemInfo) => string {
 }
 
 /** Handed-out work with no row of "today": who runs it, where it stands. */
-function DispatchRowShell({
-  item,
-  ...p
-}: ShellProps & { item: ItemInfo }) {
+function DispatchRowShell({ item, ...p }: ShellProps & { item: ItemInfo }) {
   const t = useTranslations("PersonalAgent")
   const openWork = useOpenWork()
   const matterMeta = useMatterMeta()
@@ -606,9 +603,7 @@ function DispatchRowShell({
   const canOpen = canOpenWork(target)
   const error = d.state === "failed" ? d.error?.trim().split("\n")[0] : null
   const props: PanelItemProps = {
-    media: (
-      <WorkGlyph mode={d.mode} size={ROW_AVATAR_SIZE} />
-    ),
+    media: <WorkGlyph mode={d.mode} size={ROW_AVATAR_SIZE} />,
     title: d.title,
     time: formatRelative(d.updated_at, p.scope.now),
     chip: <LadderChip ladder={d.ladder ?? null} />,

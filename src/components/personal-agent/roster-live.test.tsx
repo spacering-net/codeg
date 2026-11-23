@@ -63,13 +63,17 @@ import { OwnerBubble } from "./owner-bubble"
 import { buildMessageItems, type MessageItem } from "./message-items"
 import { ownerWaitTargets, waitsForOwner } from "./message-list"
 import { PersonalAgentRoster, useRosterUpkeep } from "./roster"
+import {
+  resetShowHiddenAssistantsForTest,
+  setShowHiddenAssistants,
+} from "./roster-filter"
 import { PageScopeContext, type PageScope } from "./shared"
 import { StatusLine, VAGUE_DELAY_MS } from "./status-line"
 
-/** The roster's column with the upkeep the page keeps for it. */
+/** The sidebar's roster with the upkeep the page keeps for it. */
 function RosterWithUpkeep() {
   useRosterUpkeep(false)
-  return <PersonalAgentRoster variant="column" readOnly={false} />
+  return <PersonalAgentRoster variant="sidebar" readOnly={false} />
 }
 
 const NOW = Date.now()
@@ -111,7 +115,9 @@ function entry(
     avatar: { kind: "face", shape: "ring", color: id === 1 ? "black" : "teal" },
     persona: id === 2 ? "# Persona I fix the white screens." : "",
     persona_unwritten: id === 3,
-    executor_assistant_id: null,
+    hidden: roster.hidden ?? false,
+    has_brain: true,
+    legacy_assistant_id: null,
     created_at: iso(-86_400_000),
     roster: {
       sort_order: 0,
@@ -181,6 +187,8 @@ afterEach(() => {
   cleanup()
   vi.clearAllMocks()
   vi.useRealTimers()
+  setShowHiddenAssistants(false)
+  resetShowHiddenAssistantsForTest()
 })
 
 describe("the roster", () => {
@@ -226,7 +234,7 @@ describe("the roster", () => {
         },
       }),
     ])
-    wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
+    wrap(<PersonalAgentRoster variant="sidebar" readOnly={false} />)
     await screen.findByText("Dev")
     const rows = [...document.querySelectorAll("[data-pa-roster-bot]")]
     // The primary on top, then the waiting, then the working.
@@ -239,8 +247,8 @@ describe("the roster", () => {
       document.querySelector(
         `[data-pa-roster-bot='${id}'] [data-pa-roster-line]`
       )?.textContent
-    // The primary says no more than its name: its line is on its card.
-    expect(line(1)).toBeUndefined()
+    // The primary a row as the others are: its last words under its name.
+    expect(line(1)).toBe("All set.")
     expect(line(3)).toBe("Needs your answer: Keep the old layer?")
     expect(line(2)).toBe("#234 Fix the white screen: Editing startup.rs")
     // Its face is its state, its dot what it wants.
@@ -252,11 +260,11 @@ describe("the roster", () => {
       face(3).querySelector("[data-bot-dot]")?.getAttribute("data-bot-dot")
     ).toBe("waiting")
     expect(face(3).getAttribute("aria-label")).toBe("Rev, waiting for you")
+    // Its card: who it is — its line not said again, the row says it.
     await hoverOpen(document.querySelector("[data-pa-roster-bot='1']")!)
     const card = document.querySelector("[data-pa-roster-hover='1']")!
-    expect(card.querySelector("[data-pa-roster-line]")?.textContent).toBe(
-      "All set."
-    )
+    expect(card.textContent).toContain("Nova")
+    expect(card.querySelector("[data-pa-roster-line]")).toBeNull()
   })
 
   it("shows the head of each one's persona on its card, or that it has none yet", async () => {
@@ -265,7 +273,7 @@ describe("the roster", () => {
       entry(2, "Dev"),
       entry(3, "Rev"),
     ])
-    wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
+    wrap(<PersonalAgentRoster variant="sidebar" readOnly={false} />)
     await screen.findByText("Dev")
     const persona = (id: number) =>
       document.querySelector(`[data-pa-roster-persona='${id}']`)?.textContent
@@ -274,7 +282,7 @@ describe("the roster", () => {
     expect(persona(2)).toBe("Persona I fix the white screens.")
     fireEvent.pointerLeave(document.querySelector("[data-pa-roster-bot='2']")!)
     cleanup()
-    wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
+    wrap(<PersonalAgentRoster variant="sidebar" readOnly={false} />)
     await screen.findByText("Rev")
     await hoverOpen(document.querySelector("[data-pa-roster-bot='3']")!)
     expect(persona(3)).toBe("No persona written yet")
@@ -310,7 +318,7 @@ describe("the roster", () => {
         work_on_hand: [hand(233, "working"), hand(234, "mergeable")],
       }),
     ])
-    wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
+    wrap(<PersonalAgentRoster variant="sidebar" readOnly={false} />)
     await screen.findByText("Dev")
     const line = document.querySelector(
       "[data-pa-roster-bot='2'] [data-pa-roster-line]"
@@ -322,7 +330,7 @@ describe("the roster", () => {
 
   it("follows each one's state as it is pushed, and lets a stale one rest", async () => {
     api.personalAgentBots.mockResolvedValue([entry(1, "Nova"), entry(2, "Dev")])
-    wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
+    wrap(<PersonalAgentRoster variant="sidebar" readOnly={false} />)
     await screen.findByText("Dev")
     act(() =>
       events.handlers.get("personal-agent://bots")?.({
@@ -383,7 +391,7 @@ describe("the roster", () => {
     expect(screen.getByText("Running the tests")).toBeTruthy()
   })
 
-  it("arranges one from its menu, and hides the hidden ones under a count", async () => {
+  it("arranges one from its menu, and lists the hidden ones only when the filter asks for them", async () => {
     api.personalAgentBots.mockResolvedValue([
       entry(1, "Nova"),
       entry(2, "Dev", {}, { pinned_at: iso(-100) }),
@@ -391,7 +399,7 @@ describe("the roster", () => {
       entry(4, "Old", {}, { hidden: true }),
       entry(5, "Ann"),
     ])
-    wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
+    wrap(<PersonalAgentRoster variant="sidebar" readOnly={false} />)
     await screen.findByText("Dev")
     // Each group's name where its rows' faces are, a folding one's chevron
     // after its name; one class for their heads. A folding one is pressed
@@ -405,16 +413,24 @@ describe("the roster", () => {
     expect(screen.getByText("Others").parentElement!.className).toBe(
       pinned.className
     )
-    // The hidden ones under a count after the list, the same kind of head.
+    // The hidden ones not listed, and no count of them in the list…
     expect(screen.queryByText("Old")).toBeNull()
-    const hidden = screen.getByText("1 hidden").closest("button")!
-    expect(hidden.closest("[data-pa-roster-foot]")).toBeNull()
-    expect(hidden.parentElement!.className).toBe(pinned.className)
-    expect(hidden.className).toBe(fold.className)
-    expect(hidden.getAttribute("aria-expanded")).toBe("false")
-    fireEvent.click(hidden)
-    expect(hidden.getAttribute("aria-expanded")).toBe("true")
-    expect(screen.getByText("Old")).toBeTruthy()
+    expect(screen.queryByText(/\d+ hidden/)).toBeNull()
+    // …until the filter (on the sidebar section's head) asks for them:
+    // then last, faint, marked — and never dragged.
+    act(() => setShowHiddenAssistants(true))
+    const old = rowOf("Old")
+    const listed = [...document.querySelectorAll("[data-pa-roster-bot]")]
+    expect(listed[listed.length - 1]).toBe(old)
+    expect(old.getAttribute("data-pa-roster-hidden")).toBe("true")
+    expect(old.className).toContain("opacity-60")
+    expect(within(old).getByLabelText("Hidden")).toBeTruthy()
+    dragRow("Old", () => screen.getByText("Ops"))
+    expect(document.querySelector("[data-pa-roster-ghost]")).toBeNull()
+    await act(async () => {})
+    expect(api.personalAgentRosterAct).not.toHaveBeenCalled()
+    act(() => setShowHiddenAssistants(false))
+    expect(screen.queryByText("Old")).toBeNull()
     // Its menu.
     fireEvent.contextMenu(screen.getByText("Ops"))
     const menu = await screen.findByRole("menu")
@@ -436,21 +452,38 @@ describe("the roster", () => {
     expect(screen.getByText("Ops")).toBeTruthy()
   })
 
-  it("puts the primary in a square on top, no title row over it, and the new one at the foot", async () => {
+  it("puts the primary first, a row as the others are, no title row over it and no foot — a new one is made from the section's head", async () => {
     api.personalAgentBots.mockResolvedValue([
       entry(1, "Nova", { last_line: { text: "All set.", at: iso(-5000) } }),
       entry(2, "Dev"),
       entry(3, "Ops"),
     ])
-    wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
+    wrap(<PersonalAgentRoster variant="sidebar" readOnly={false} />)
     await screen.findByText("Dev")
     const nav = document.querySelector("[data-pa-roster]")!
+    expect(nav.hasAttribute("data-pa-roster-sidebar")).toBe(true)
     // No title, no search: the primary first.
     expect(within(nav as HTMLElement).queryByText("Assistants")).toBeNull()
     expect(screen.queryByRole("button", { name: /search/i })).toBeNull()
-    const primary = nav.querySelector("[data-pa-roster-primary]")!
-    expect(primary.querySelector(".size-24")).toBeTruthy()
-    expect(primary.textContent).toBe("Nova")
+    const ids = [...nav.querySelectorAll("[data-pa-roster-bot]")].map((r) =>
+      r.getAttribute("data-pa-roster-bot")
+    )
+    expect(ids[0]).toBe("1")
+    // Not a square tile: a row, drawn as the others' are (the one shown
+    // marked chosen).
+    expect(nav.querySelector(".size-24")).toBeNull()
+    const primary = nav.querySelector<HTMLElement>("[data-pa-roster-bot='1']")!
+    const row = nav.querySelector<HTMLElement>("[data-pa-roster-bot='2']")!
+    for (const cls of ["w-full", "gap-2.5", "px-2", "py-1.5", "rounded-xl"]) {
+      expect(primary.className).toContain(cls)
+      expect(row.className).toContain(cls)
+    }
+    expect(primary.getAttribute("aria-current")).toBe("page")
+    expect(primary.textContent).toContain("Nova")
+    expect(primary.querySelector("[data-pa-roster-line]")?.textContent).toBe(
+      "All set."
+    )
+    expect(primary.parentElement!.className).toContain("py-0.5")
     // A little room between the rows.
     // (inside what folds, which itself has none, so it shuts to nothing).
     const rows = nav.querySelectorAll("[data-pa-roster-row-state] > div")
@@ -459,29 +492,37 @@ describe("the roster", () => {
       expect(r.className).toBe("")
       expect((r.firstElementChild as HTMLElement).className).toContain("py-0.5")
     })
-    // One measure of room: the list as far from the top as the primary's
-    // tile from the rows under it.
-    const list = nav.firstElementChild as HTMLElement
-    expect(list.className).toContain("pt-4")
-    expect((primary.closest("div") as HTMLElement).className).toContain("pb-3")
-    // [+ New work assistant] at the foot, a row as the rows are: a circle
-    // with a plus where a face would be (drawn, not dashed), its name.
-    const foot = nav.querySelector("[data-pa-roster-foot]")!
-    const add = foot.querySelector("[data-pa-roster-add]")!
-    expect(add.textContent).toBe("New work assistant")
-    expect(nav.lastElementChild).toBe(foot)
-    const row = nav.querySelector("[data-pa-roster-bot='2']")!
-    for (const cls of ["gap-2.5", "px-2", "py-1.5", "rounded-xl"]) {
-      expect(add.className).toContain(cls)
-      expect(row.className).toContain(cls)
-    }
-    const circle = add.firstElementChild!
-    expect(circle.className).toContain("size-7")
-    expect(circle.className).toContain("border")
-    expect(circle.className).not.toContain("border-dashed")
-    // The foot's room as the list's: its row on the rows' edge.
-    expect(foot.className).toContain("p-2")
-    expect(list.className).toContain("px-2")
+    // No [+ new] at a foot: the section's head has it.
+    expect(nav.querySelector("[data-pa-roster-foot]")).toBeNull()
+    expect(document.querySelector("[data-pa-roster-add]")).toBeNull()
+  })
+
+  it("before the primary is set up, has the row that sets it up first, the others waiting for it", async () => {
+    usePersonalAgentUi.setState({ viewBot: 2, botPage: { tab: "notify" } })
+    api.personalAgentBots.mockResolvedValue([
+      { ...entry(2, "Dev"), has_brain: false },
+    ])
+    const onPick = vi.fn()
+    wrap(
+      <PersonalAgentRoster variant="sidebar" readOnly={false} onPick={onPick} />
+    )
+    await screen.findByText("Dev")
+    const nav = document.querySelector("[data-pa-roster]")!
+    const setup = nav.querySelector<HTMLElement>("[data-pa-roster-setup]")!
+    expect(setup.textContent).toBe("Set up the primary assistant")
+    expect(
+      setup.compareDocumentPosition(rowOf("Dev")) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    // One with no brain yet says what it waits for.
+    expect(
+      rowOf("Dev").querySelector("[data-pa-roster-line]")?.textContent
+    ).toBe("Set up the primary assistant to talk to it")
+    // Pressed: the primary's conversation, where its first setup is.
+    fireEvent.click(setup)
+    expect(usePersonalAgentUi.getState().viewBot).toBeNull()
+    expect(usePersonalAgentUi.getState().botPage).toBeNull()
+    expect(onPick).toHaveBeenCalledTimes(1)
   })
 
   it("gives a row's time as short as a chat list does", async () => {
@@ -491,7 +532,7 @@ describe("the roster", () => {
       entry(2, "Dev", { last_activity_at: iso(-day) }),
       entry(3, "Ops", { last_activity_at: iso(-30 * day) }),
     ])
-    wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
+    wrap(<PersonalAgentRoster variant="sidebar" readOnly={false} />)
     await screen.findByText("Dev")
     const time = (id: number) =>
       document.querySelector(`[data-pa-roster-bot='${id}'] .tabular-nums`)
@@ -499,56 +540,6 @@ describe("the roster", () => {
     expect(time(2)).toBe("Yesterday")
     // A month back: its day and month, no time of day.
     expect(time(3)).not.toMatch(/:/)
-  })
-
-  it("folds to a rail of faces: the primary's, a rule, the rest's, each one's line on its card", async () => {
-    window.localStorage.setItem("pa:roster:rail:v1", "1")
-    api.personalAgentBots.mockResolvedValue([
-      entry(1, "Nova"),
-      entry(2, "Dev", { last_line: { text: "Done.", at: iso(-5000) } }),
-      entry(3, "Ops", {}, { pinned_at: iso(-100) }),
-      entry(4, "Old", {}, { hidden: true }),
-    ])
-    try {
-      wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
-      const tiles = await waitFor(() => {
-        const found = [...document.querySelectorAll("[data-pa-rail-tile]")]
-        expect(found.length).toBe(3)
-        return found
-      })
-      const rail = document.querySelector("[data-pa-roster-rail]")!
-      // The tiles as far from the top as from the rail's sides; the rule
-      // as wide as a tile, as far from the faces either side.
-      expect(rail.firstElementChild!.className).toContain("pt-4")
-      const rule = rail.querySelector("[aria-hidden].h-px")!
-      expect(rule.className).toContain("w-13")
-      expect(rule.className).toContain("my-2")
-      // The primary, then the pinned, then the rest; faces alone.
-      expect(tiles.map((t) => t.getAttribute("data-pa-roster-bot"))).toEqual([
-        "1",
-        "3",
-        "2",
-      ])
-      expect(screen.queryByText("Dev")).toBeNull()
-      expect(tiles[2].getAttribute("aria-label")).toBe("Dev, idle")
-      // Its line, on its card.
-      await hoverOpen(tiles[2])
-      expect(
-        document.querySelector(
-          "[data-pa-roster-hover='2'] [data-pa-roster-line]"
-        )?.textContent
-      ).toBe("Done.")
-      fireEvent.click(tiles[2])
-      expect(usePersonalAgentUi.getState().viewBot).toBe(2)
-      // The hidden ones under their count; the new one at the foot.
-      fireEvent.click(screen.getByRole("button", { name: "1 hidden" }))
-      expect(document.querySelectorAll("[data-pa-rail-tile]").length).toBe(4)
-      expect(
-        screen.getByRole("button", { name: "New work assistant" })
-      ).toBeTruthy()
-    } finally {
-      window.localStorage.removeItem("pa:roster:rail:v1")
-    }
   })
 
   it("opens one on a click, which takes the owner's unread mark away", async () => {
@@ -628,7 +619,7 @@ function dragRow(from: string, to: () => Element | null, y = 30, fromY = 10) {
 describe("the roster's menu and drags (polish round 4)", () => {
   it("opens an assistant's page from its menu, each item with its icon — no [Open] (a click on the row does it) and no [Edit basic info] (its page and the side panel's head change its name and face)", async () => {
     api.personalAgentBots.mockResolvedValue([entry(1, "Nova"), entry(2, "Dev")])
-    wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
+    wrap(<PersonalAgentRoster variant="sidebar" readOnly={false} />)
     await screen.findByText("Dev")
     for (const who of ["Nova", "Dev"]) {
       fireEvent.contextMenu(screen.getByText(who))
@@ -670,7 +661,7 @@ describe("the roster's menu and drags (polish round 4)", () => {
       entry(3, "Ops", {}, { section: "codeg" }),
       entry(5, "Ann"),
     ])
-    wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
+    wrap(<PersonalAgentRoster variant="sidebar" readOnly={false} />)
     await screen.findByText("Ann")
     const group = (name: string) =>
       document.querySelector(`[data-pa-roster-group="${name}"]`)!
@@ -716,7 +707,7 @@ describe("the roster's menu and drags (polish round 4)", () => {
       entry(3, "Ops", {}, { pinned_at: iso(-200), sort_order: 1 }),
       entry(5, "Ann"),
     ])
-    wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
+    wrap(<PersonalAgentRoster variant="sidebar" readOnly={false} />)
     await screen.findByText("Ann")
     // Dev's row from 0 to 40, Ops's from 40 to 80.
     for (const [name, top] of [
@@ -772,7 +763,7 @@ describe("the roster's menu and drags (polish round 4)", () => {
       entry(3, "Ops", {}, { pinned_at: iso(-200), sort_order: 1 }),
       entry(5, "Ann", {}, { pinned_at: iso(-100), sort_order: 2 }),
     ])
-    wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
+    wrap(<PersonalAgentRoster variant="sidebar" readOnly={false} />)
     await screen.findByText("Ann")
     for (const [name, top] of [
       ["Dev", 0],
@@ -802,7 +793,7 @@ describe("the roster's menu and drags (polish round 4)", () => {
       entry(2, "Dev", {}, { pinned_at: iso(-100) }),
       entry(5, "Ann"),
     ])
-    wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
+    wrap(<PersonalAgentRoster variant="sidebar" readOnly={false} />)
     await screen.findByText("Ann")
     dragRow("Dev", () => document.querySelector('[data-pa-drop="new"]'))
     const dialog = await screen.findByRole("dialog", { name: "New group" })
@@ -825,7 +816,7 @@ describe("the roster's menu and drags (polish round 4)", () => {
       entry(5, "Ann"),
     ])
     const { unmount } = wrap(
-      <PersonalAgentRoster variant="column" readOnly={false} />
+      <PersonalAgentRoster variant="sidebar" readOnly={false} />
     )
     await screen.findByText("Ann")
     const row = rowOf("Ann")
@@ -857,7 +848,7 @@ describe("the roster's menu and drags (polish round 4)", () => {
     })
     unmount()
     // Read-only: no drag at all.
-    wrap(<PersonalAgentRoster variant="column" readOnly />)
+    wrap(<PersonalAgentRoster variant="sidebar" readOnly />)
     await screen.findByText("Ann")
     dragRow("Ann", () => screen.getByText("Ops"))
     await act(async () => {})
@@ -873,7 +864,7 @@ describe("the roster's menu and drags (polish round 4)", () => {
       entry(2, "Dev", {}, { pinned_at: iso(-100), section: "codeg" }),
       entry(3, "Ops", {}, { section: "codeg" }),
     ])
-    wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
+    wrap(<PersonalAgentRoster variant="sidebar" readOnly={false} />)
     await screen.findByText("Dev")
     fireEvent.contextMenu(screen.getByText("Dev"))
     const menu = await screen.findByRole("menu")
@@ -935,7 +926,7 @@ describe("the roster's store (review round 1)", () => {
     api.personalAgentBots.mockResolvedValue([
       entry(1, "Nova", { activity_known: false }),
     ])
-    wrap(<PersonalAgentRoster variant="column" readOnly />)
+    wrap(<PersonalAgentRoster variant="sidebar" readOnly />)
     await screen.findByText("Nova")
     const reads = api.personalAgentBots.mock.calls.length
     await act(async () => {

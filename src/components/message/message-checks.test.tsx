@@ -61,7 +61,6 @@ function check(over: Partial<MessageCheck>): MessageCheck {
     note: null,
     dispatch_id: 9,
     check_conversation_id: 77,
-    executor: "Claude checker",
     notice_id: 5,
     row_id: 11,
     created_at: "2026-11-15T08:00:00Z",
@@ -143,7 +142,8 @@ describe("MessageChecks (10.3)", () => {
       fireEvent.click(whole)
     })
     expect(await screen.findByText("- src/build.rs:3 still fails")).toBeTruthy()
-    expect(screen.getByText("Checked by Claude checker")).toBeTruthy()
+    // Nobody's name: the assistant checks it, on what its work runs on.
+    expect(screen.queryByText(/Checked by/)).toBeNull()
     // In the assistant's conversation: its card.
     act(() => {
       fireEvent.click(
@@ -188,7 +188,7 @@ describe("MessageChecks (10.3)", () => {
     expect(await screen.findByText("Check: Checking…")).toBeTruthy()
   })
 
-  it("hands a new one out, says who checks it, and follows its end", async () => {
+  it("hands a new one out, says it is being checked, and follows its end", async () => {
     api.checks.mockResolvedValue([])
     renderIn(<Probe text={REPLY} quote="The tests pass." />)
     await waitFor(() => expect(api.checks).toHaveBeenCalled())
@@ -207,7 +207,7 @@ describe("MessageChecks (10.3)", () => {
     })
     await waitFor(() =>
       expect(toasts.success).toHaveBeenCalledWith(
-        "Claude checker is checking it; the result shows under the message."
+        "Checking it; the result shows under the message."
       )
     )
     expect(api.checkMessage.mock.calls[0][0]).toMatchObject({

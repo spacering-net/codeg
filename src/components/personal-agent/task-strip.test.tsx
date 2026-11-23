@@ -72,10 +72,13 @@ function dispatch(patch: Partial<DispatchInfo> = {}): DispatchInfo {
   return {
     id: 234,
     mode: "task",
-    executor: {
-      assistant_id: 3,
-      name: "Builder",
+    work: {
+      name: "Nova",
+      bot_uid: "u4",
       agent_type: "codex",
+      agent_options: { config_values: {} },
+      label_snapshot: null,
+      instructions: "",
     },
     folder_id: 2,
     folder_name: "my-app",
@@ -139,8 +142,7 @@ function result(id: number, data: Record<string, unknown>): TimelineRow {
     status: null,
     body: "Fix the cold start",
     data: {
-      executor: "Builder",
-      executor_id: 3,
+      agent_type: "codex",
       title: "Fix the cold start",
       mode: "task",
       work_task_id: 7,
@@ -477,8 +479,7 @@ describe("the acceptance on its work's head (A4)", () => {
           work_task_id: null,
           task: null,
           conversation_id: 50,
-          executor: { assistant_id: 3, name: "Checker", agent_type: "codex" },
-        } as Partial<DispatchInfo>),
+        }),
       ],
     ])
     const { container } = draw(<EventCard item={chain(false)} />)

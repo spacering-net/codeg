@@ -403,8 +403,10 @@ function usePersonalAgentStore(
       // A read takes so many at most: in turns.
       if (want.length > DISPATCH_READ) {
         await Promise.all(
-          Array.from({ length: Math.ceil(want.length / DISPATCH_READ) }, (_, i) =>
-            fetch(want.slice(i * DISPATCH_READ, (i + 1) * DISPATCH_READ))
+          Array.from(
+            { length: Math.ceil(want.length / DISPATCH_READ) },
+            (_, i) =>
+              fetch(want.slice(i * DISPATCH_READ, (i + 1) * DISPATCH_READ))
           )
         )
         return
@@ -480,7 +482,6 @@ function usePersonalAgentStore(
   }, [refreshSnapshot])
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- the first fetch, paired with the change subscription below
     void refresh()
     let unsub: (() => void) | undefined
     let cancelled = false

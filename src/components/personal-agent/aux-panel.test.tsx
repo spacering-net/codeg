@@ -133,8 +133,7 @@ function dispatch(patch: Partial<DispatchInfo>): DispatchInfo {
   return {
     id: 1,
     mode: "task",
-    executor: {
-      assistant_id: 3,
+    work: {
       name: "Builder",
       agent_type: "codex",
       agent_options: { mode_id: null, config_values: {} },
@@ -332,7 +331,9 @@ beforeEach(() => {
       avatar: { kind: "emoji", emoji: "🧭", color: "violet" },
       persona: "",
       persona_unwritten: false,
-      executor_assistant_id: null,
+      hidden: false,
+      has_brain: true,
+      legacy_assistant_id: null,
       created_at: "2026-11-01T00:00:00Z",
       roster: {
         sort_order: 0,
@@ -352,7 +353,7 @@ beforeEach(() => {
   api.personalAgentDispatches.mockResolvedValue([])
   api.personalAgentStats.mockResolvedValue({
     days: [],
-    executors: [],
+    agents: [],
     usage: [],
     tokens_synced_at: null,
   })
@@ -684,8 +685,26 @@ function matter(i: ItemInfo, bot = 1): ActivityRow {
 describe("the activity", () => {
   it("lists its four groups from one read, what waits on the owner first; its status is the stats'", async () => {
     show({
-      needs: [matter(item({ id: 11, kind: "question", waits_for: "owner", summary: "Which branch?" }))],
-      next: [matter(item({ id: 15, kind: "reminder", waits_for: "time", summary: "Look at the merge request" }))],
+      needs: [
+        matter(
+          item({
+            id: 11,
+            kind: "question",
+            waits_for: "owner",
+            summary: "Which branch?",
+          })
+        ),
+      ],
+      next: [
+        matter(
+          item({
+            id: 15,
+            kind: "reminder",
+            waits_for: "time",
+            summary: "Look at the merge request",
+          })
+        ),
+      ],
     })
     const { container } = draw()
     await screen.findByText("Which branch?")
@@ -696,7 +715,9 @@ describe("the activity", () => {
     ).toEqual(["needs", "next"])
     expect(
       within(
-        container.querySelector('[data-pa-activity-group="needs"]') as HTMLElement
+        container.querySelector(
+          '[data-pa-activity-group="needs"]'
+        ) as HTMLElement
       ).getByText("Waiting for you")
     ).toBeTruthy()
     // No "Status" heading, no card of it here.
@@ -737,11 +758,11 @@ describe("the activity", () => {
     expect(box.getAttribute("data-pa-callout")).toBe("error")
     expect(box.className).toContain("font-mono")
     const row = error.closest<HTMLElement>("[data-pa-activity-row]")!
-    // Who runs it, what done looks like, the whole error: unfolded.
+    // What it runs on, what done looks like, the whole error: unfolded.
     expect(within(row).queryByText("The login works on Safari")).toBeNull()
     fireEvent.click(within(row).getByRole("button", { name: "Show details" }))
     const details = row.querySelector<HTMLElement>("[data-pa-row-details]")!
-    expect(details.textContent).toContain("Builder")
+    expect(details.textContent).toContain("Ran on Codex")
     expect(details.textContent).toContain("my-app")
     expect(within(details).getByText("The login works on Safari")).toBeTruthy()
     expect(details.querySelector("[data-pa-row-error]")!.textContent).toContain(
@@ -755,12 +776,24 @@ describe("the activity", () => {
     show({
       needs: [
         matter(
-          item({ id: 11, kind: "question", waits_for: "owner", summary: "Which branch?" }),
+          item({
+            id: 11,
+            kind: "question",
+            waits_for: "owner",
+            summary: "Which branch?",
+          }),
           2
         ),
       ],
       next: [
-        matter(item({ id: 15, kind: "reminder", waits_for: "time", summary: "Look at the merge request at 10" })),
+        matter(
+          item({
+            id: 15,
+            kind: "reminder",
+            waits_for: "time",
+            summary: "Look at the merge request at 10",
+          })
+        ),
       ],
     })
     const { container } = draw()
@@ -770,16 +803,26 @@ describe("the activity", () => {
     )!
     // [Later] is a menu: a set time, or none — sent to the assistant whose
     // matter it is, another one's on the primary's page.
-    await userEvent.click(within(question).getByRole("button", { name: "Later" }))
-    await userEvent.click(await screen.findByRole("menuitem", { name: "In 1 hour" }))
+    await userEvent.click(
+      within(question).getByRole("button", { name: "Later" })
+    )
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "In 1 hour" })
+    )
     expect(api.personalAgentItemAct).toHaveBeenCalledWith(2, 11, "snooze", "1h")
     await waitFor(() =>
       expect(
-        within(question).getByRole("button", { name: "Later" }).hasAttribute("disabled")
+        within(question)
+          .getByRole("button", { name: "Later" })
+          .hasAttribute("disabled")
       ).toBe(false)
     )
-    await userEvent.click(within(question).getByRole("button", { name: "Later" }))
-    await userEvent.click(await screen.findByRole("menuitem", { name: "No set time" }))
+    await userEvent.click(
+      within(question).getByRole("button", { name: "Later" })
+    )
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "No set time" })
+    )
     expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(2, 11, "later")
     const done = within(question).getByRole("button", { name: "Done" })
     await waitFor(() => expect(done.hasAttribute("disabled")).toBe(false))
@@ -819,9 +862,13 @@ describe("the activity", () => {
     const { container } = draw()
     await screen.findByText("Update the Homebrew formula first")
     expect(
-      screen.getByText(/^When you mention “release”, “发版” · 1 of 3 times · until /)
+      screen.getByText(
+        /^When you mention “release”, “发版” · 1 of 3 times · until /
+      )
     ).toBeTruthy()
-    const row = container.querySelector<HTMLElement>('[data-pa-activity-row="item:31"]')!
+    const row = container.querySelector<HTMLElement>(
+      '[data-pa-activity-row="item:31"]'
+    )!
     expect(within(row).queryByRole("button", { name: "Later" })).toBeNull()
     fireEvent.click(within(row).getByRole("button", { name: "Drop" }))
     expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(1, 31, "drop")
@@ -870,8 +917,15 @@ describe("the activity", () => {
       "Post them in #team"
     )
     await userEvent.click(within(row).getByRole("button", { name: "Later" }))
-    await userEvent.click(await screen.findByRole("menuitem", { name: "Tomorrow morning" }))
-    expect(api.personalAgentItemAct).toHaveBeenCalledWith(1, 21, "snooze", "tomorrow")
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "Tomorrow morning" })
+    )
+    expect(api.personalAgentItemAct).toHaveBeenCalledWith(
+      1,
+      21,
+      "snooze",
+      "tomorrow"
+    )
   })
 
   it("carries a task's strip, and lets the owner close a pull request codeg does not follow", async () => {
@@ -963,7 +1017,9 @@ describe("the activity", () => {
     expect(api.personalAgentDispatchStop).toHaveBeenCalledWith(2, 1)
     // What happens once handed-out work is done is its assistant's to know,
     // not said here (B5).
-    fireEvent.click(within(review).getByRole("button", { name: "Show details" }))
+    fireEvent.click(
+      within(review).getByRole("button", { name: "Show details" })
+    )
     expect(review.querySelector("[data-pa-item-on-done]")).toBeNull()
     expect(review.textContent).not.toContain("Tell the team")
     // Delivered as a pull request: not stoppable, its matter the owner's to
@@ -1472,7 +1528,7 @@ describe("the stats tab's data", () => {
           dispatches_failed: 0,
         },
       ],
-      executors: [],
+      agents: [],
       usage: [],
       tokens_synced_at: "2026-11-04T12:00:00Z",
     } satisfies PersonalAgentStats)
@@ -1523,7 +1579,7 @@ describe("the stats tab's data", () => {
     // The rest folded at first, on one card; open on asking, and kept so
     // across a switch of tabs.
     expect(document.querySelector("[data-chart='ranked']")).toBeNull()
-    fireEvent.click(screen.getByRole("button", { name: /By executor config/ }))
+    fireEvent.click(screen.getByRole("button", { name: /By agent/ }))
     expect(document.querySelector("[data-chart='ranked']")).toBeTruthy()
     act(() => usePersonalAgentUi.setState({ auxTab: "output" }))
     act(() => usePersonalAgentUi.setState({ auxTab: "stats" }))
@@ -1554,7 +1610,7 @@ describe("the stats tab's data", () => {
           dispatch_tokens: 0,
         },
       ],
-      executors: [],
+      agents: [],
       usage: [],
       tokens_synced_at: null,
     } satisfies PersonalAgentStats)
@@ -1589,7 +1645,7 @@ describe("the stats tab's data", () => {
     usePersonalAgentUi.setState({ auxTab: "stats" })
     api.personalAgentStats.mockResolvedValue({
       days: [],
-      executors: [],
+      agents: [],
       usage: [],
       tokens_synced_at: null,
     } satisfies PersonalAgentStats)

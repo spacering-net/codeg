@@ -63,6 +63,10 @@ vi.mock("@/components/settings/required-agent-options", () => ({
 import { BotDeleteDialog } from "./bot-delete-dialog"
 import { NewBotDialog } from "./new-bot-dialog"
 import { PersonalAgentRoster, useRosterUpkeep } from "./roster"
+import {
+  resetShowHiddenAssistantsForTest,
+  setShowHiddenAssistants,
+} from "./roster-filter"
 
 function wrap(node: React.ReactNode) {
   return render(
@@ -131,7 +135,7 @@ describe("a new work assistant", () => {
     usePersonalAgentUi.setState({ botPage: { tab: "notify" } })
     wrap(
       <>
-        <PersonalAgentRoster variant="column" readOnly={false} />
+        <PersonalAgentRoster variant="sidebar" readOnly={false} />
         <NewBotDialog open onOpenChange={() => {}} />
       </>
     )
@@ -165,7 +169,7 @@ describe("a new work assistant", () => {
     api.personalAgentBots.mockResolvedValue([bot(1, "primary", "Nova")])
     wrap(
       <>
-        <PersonalAgentRoster variant="column" readOnly={false} />
+        <PersonalAgentRoster variant="sidebar" readOnly={false} />
         <NewBotDialog open onOpenChange={() => {}} />
       </>
     )
@@ -285,7 +289,7 @@ describe("the roster", () => {
       bot(1, "primary", "Nova"),
       bot(9, "worker", "Reviewer"),
     ])
-    wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
+    wrap(<PersonalAgentRoster variant="sidebar" readOnly={false} />)
     const reviewer = await screen.findByText("Reviewer")
     fireEvent.click(reviewer)
     expect(usePersonalAgentUi.getState().viewBot).toBe(9)
@@ -296,7 +300,8 @@ describe("the roster", () => {
   it("goes back to the primary when the one shown is gone, drawn or not", async () => {
     usePersonalAgentUi.setState({ viewBot: 42 })
     api.personalAgentBots.mockResolvedValue([bot(1, "primary", "Nova")])
-    // The page keeps it, with no roster drawn (it is off at first).
+    // The page keeps it, with no roster drawn (the sidebar's section
+    // folded, the title's popover closed).
     function Upkeep() {
       useRosterUpkeep(false)
       return null
@@ -337,21 +342,21 @@ describe("the roster in the title capsule's popover", () => {
         r.getAttribute("data-pa-roster-bot")
       )
     ).toEqual(["1", "9"])
-    // The column's tile, as on the sidebar — no hover card in a popover.
+    // The primary's square tile on top — no hover card in a popover.
     const tile = document.querySelector<HTMLElement>("[data-pa-roster-primary]")
     expect(tile?.getAttribute("data-pa-roster-bot")).toBe("1")
     expect(tile?.textContent).toContain("Nova")
-    expect(tile?.hasAttribute("data-pa-rail-tile")).toBe(false)
     fireEvent.click(reviewer)
     expect(usePersonalAgentUi.getState().viewBot).toBe(9)
     expect(onPick).toHaveBeenCalledTimes(1)
-    // The foot, one row: the sidebar's switch at its start, a new one at
-    // its end — the dialog its holder keeps, the popover closing.
+    // The foot: a new one, alone — no switch to show the roster beside the
+    // conversation (it is on the workspace's sidebar); the dialog its
+    // holder keeps, the popover closing.
     const foot = document.querySelector<HTMLElement>("[data-pa-roster-foot]")!
-    const [first, last] = [...foot.children]
-    expect(first.querySelector("[data-pa-roster-shown]")).not.toBeNull()
-    expect(first.textContent).toBe("Sidebar")
-    expect(last.textContent).toBe("New assistant")
+    expect(foot.querySelector("[role=switch]")).toBeNull()
+    expect([...foot.children].map((c) => c.textContent)).toEqual([
+      "New assistant",
+    ])
     fireEvent.click(screen.getByRole("button", { name: "New assistant" }))
     expect(held.add).toHaveBeenCalledTimes(1)
     expect(screen.queryByRole("dialog")).toBeNull()
@@ -398,28 +403,55 @@ describe("the roster in the title capsule's popover", () => {
     }
   })
 
-  it("shows the roster beside the conversation from its switch, kept for next time", async () => {
-    window.localStorage.removeItem("pa:roster:shown:v1")
-    api.personalAgentBots.mockResolvedValue([bot(1, "primary", "Nova")])
-    wrap(
-      <PersonalAgentRoster
-        variant="popover"
-        readOnly={false}
-        dialogs={dialogs()}
-      />
-    )
-    await screen.findByText("Nova")
-    const shown = screen.getByRole("switch", { name: "Show in a sidebar" })
-    // Off at first: the workspace has its own sidebar.
-    expect(shown.getAttribute("aria-checked")).toBe("false")
-    try {
-      fireEvent.click(shown)
-      expect(window.localStorage.getItem("pa:roster:shown:v1")).toBe("1")
-      await waitFor(() =>
-        expect(shown.getAttribute("aria-checked")).toBe("true")
+  it("lists the hidden ones only while the sidebar's filter shows them, the one setting both read", async () => {
+    resetShowHiddenAssistantsForTest()
+    window.localStorage.removeItem("pa:roster:show-hidden:v1")
+    api.personalAgentBots.mockResolvedValue([
+      bot(1, "primary", "Nova"),
+      bot(9, "worker", "Reviewer"),
+      {
+        ...bot(10, "worker", "Archivist"),
+        hidden: true,
+        roster: {
+          sort_order: 0,
+          pinned_at: null,
+          section: null,
+          hidden: true,
+          muted: false,
+          unread_mark: false,
+          notify: true,
+        },
+      },
+    ])
+    const listed = () =>
+      [...document.querySelectorAll("[data-pa-roster-bot]")].map((r) =>
+        r.getAttribute("data-pa-roster-bot")
       )
+    try {
+      wrap(
+        <PersonalAgentRoster
+          variant="popover"
+          readOnly={false}
+          dialogs={dialogs()}
+        />
+      )
+      await screen.findByText("Reviewer")
+      // Off at first: not listed.
+      expect(listed()).toEqual(["1", "9"])
+      expect(screen.queryByText("Archivist")).toBeNull()
+      // Turned on (by the sidebar's filter): listed at once, last, marked.
+      act(() => setShowHiddenAssistants(true))
+      expect(listed()).toEqual(["1", "9", "10"])
+      expect(
+        document
+          .querySelector('[data-pa-roster-bot="10"]')
+          ?.getAttribute("data-pa-roster-hidden")
+      ).toBe("true")
+      act(() => setShowHiddenAssistants(false))
+      expect(listed()).toEqual(["1", "9"])
     } finally {
-      window.localStorage.removeItem("pa:roster:shown:v1")
+      setShowHiddenAssistants(false)
+      resetShowHiddenAssistantsForTest()
     }
   })
 })

@@ -2466,7 +2466,6 @@ export async function assistantList(): Promise<AssistantInfo[]> {
   return getTransport().call("assistant_list", {})
 }
 
-
 // ─── Personal agent ────────────────────────────────────────────────────────
 // Reads work in every process; actions go to the process running the agent
 // and fail elsewhere with `errors.engineElsewhere`.

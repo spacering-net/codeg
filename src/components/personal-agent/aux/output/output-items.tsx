@@ -150,9 +150,7 @@ export function TaskItem({ d, time }: { d: DispatchInfo; time: string }) {
   const branch = d.task?.branch ?? null
   return (
     <PanelItem
-      media={
-        <WorkGlyph mode={d.mode} size={ROW_AVATAR_SIZE} />
-      }
+      media={<WorkGlyph mode={d.mode} size={ROW_AVATAR_SIZE} />}
       title={d.title}
       time={time}
       chip={<LadderChip ladder={d.ladder ?? null} />}

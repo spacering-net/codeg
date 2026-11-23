@@ -122,7 +122,7 @@ async fn a_compact_command_is_cleared_when_the_agent_type_changes() {
         })
         .await
         .unwrap();
-    assert_eq!(info.agent_type, AgentType::Codex);
+    assert_eq!(info.agent_type, Some(AgentType::Codex));
     assert_eq!(info.settings.compact_command, None);
 }
 
@@ -360,8 +360,12 @@ async fn a_dispatch_is_recorded_with_its_card_and_ledger_entry() {
         .await
         .unwrap();
     assert_eq!(d.mode, DispatchMode::Chat);
-    let snapshot = super::dispatch::executor_of(&d);
-    assert_eq!(snapshot.name, "Coder");
+    // Its own work agent, with its standing instructions, as it was then.
+    let snapshot = super::dispatch::work_of(&d);
+    let me = svc::get_bot(&engine.db.conn, engine.bot().await).await.unwrap().unwrap();
+    assert_eq!(snapshot.name, super::messages::display_name(&me));
+    assert_eq!(snapshot.bot_uid, me.uid);
+    assert_eq!(snapshot.agent_type, AgentType::Codex);
     assert_eq!(snapshot.instructions, "Cite lines.");
     let item = svc::item_of_dispatch(&engine.db.conn, d.id).await.unwrap().unwrap();
     assert_eq!(item.on_done.as_deref(), Some("remind the owner"));
@@ -374,14 +378,13 @@ async fn a_dispatch_is_recorded_with_its_card_and_ledger_entry() {
 #[tokio::test]
 async fn the_owner_writing_in_a_dispatched_conversation_takes_it_over() {
     let (engine, _tmp) = configured().await;
-    let coder = role_assistant(&engine, "Coder", true).await;
+    role_assistant(&engine, "Coder", true).await;
     let d = svc::create_dispatch(
         &engine.db.conn,
         NewDispatch {
             bot_id: engine.bot().await,
             mode: DispatchMode::Session,
-            executor_assistant_id: coder,
-            executor_snapshot_json: "{}".into(),
+            work_snapshot_json: "{}".into(),
             folder_id: None,
             deliverable: None,
             title: "Investigate".into(),
@@ -522,14 +525,13 @@ fn compaction_report(tool_call_id: &str, failed: bool) -> AcpEvent {
 
 async fn session_dispatch(engine: &PersonalAgentEngine, state: DispatchState, conn: &str) -> i32 {
     // An executor config of its own, not bound: the work keeps its snapshot.
-    let coder = typed_assistant(engine, &format!("Coder on {conn}"), AgentType::Codex).await;
+    typed_assistant(engine, &format!("Coder on {conn}"), AgentType::Codex).await;
     let d = svc::create_dispatch(
         &engine.db.conn,
         NewDispatch {
             bot_id: engine.bot().await,
             mode: DispatchMode::Session,
-            executor_assistant_id: coder,
-            executor_snapshot_json: "{}".into(),
+            work_snapshot_json: "{}".into(),
             folder_id: None,
             deliverable: None,
             title: "Investigate".into(),
@@ -613,14 +615,13 @@ async fn a_put_back_event_lists_what_the_interrupted_turn_dispatched() {
     .await
     .unwrap();
     // What that turn dispatched before the restart cut it off.
-    let coder = role_assistant(&engine, "Coder", true).await;
+    role_assistant(&engine, "Coder", true).await;
     svc::create_dispatch(
         &engine.db.conn,
         NewDispatch {
             bot_id: engine.bot().await,
             mode: DispatchMode::Chat,
-            executor_assistant_id: coder,
-            executor_snapshot_json: "{}".into(),
+            work_snapshot_json: "{}".into(),
             folder_id: None,
             deliverable: None,
             title: "Fix the login".into(),
@@ -1173,7 +1174,8 @@ async fn bot_list_reads_each_persona_from_its_first_line_with_what_it_works_with
     let out = call_tool(&engine, "bot_list", json!({})).await;
     assert!(out.ok, "{}", out.text);
     assert!(out.text.contains("Dev — (persona not written yet)"), "{}", out.text);
-    assert!(out.text.contains("cannot do work itself yet"), "the primary has none bound: {}", out.text);
+    assert!(out.text.contains("#1 the primary assistant (you)"), "{}", out.text);
+    assert!(out.text.contains("· works with ClaudeCode"), "the primary works on its own: {}", out.text);
     assert!(!out.text.contains("executor"), "no executor config named: {}", out.text);
     std::fs::write(dir.join(workdir::SOUL_FILE), "# Persona\n\nYou fix CI.\nNot releases.\n").unwrap();
     let worker = engine_of(&engine, &tmp, made.bot.id);
@@ -2391,14 +2393,13 @@ async fn live_session_dispatch(
     let conversation =
         crate::db::test_helpers::seed_conversation(&engine.db, folder, AgentType::ClaudeCode).await;
     // An executor config of its own, not bound: the work keeps its snapshot.
-    let coder = typed_assistant(engine, &format!("Coder on {conn}"), AgentType::Codex).await;
+    typed_assistant(engine, &format!("Coder on {conn}"), AgentType::Codex).await;
     let d = svc::create_dispatch(
         &engine.db.conn,
         NewDispatch {
             bot_id: engine.bot().await,
             mode: DispatchMode::Session,
-            executor_assistant_id: coder,
-            executor_snapshot_json: "{}".into(),
+            work_snapshot_json: "{}".into(),
             folder_id: Some(folder),
             deliverable: None,
             title: "Investigate".into(),
@@ -2679,7 +2680,7 @@ fn old_settings_with_an_unattended_mode_still_read() {
 #[tokio::test]
 async fn the_ledger_hands_a_redelivered_batch_its_dispatch_back() {
     let (engine, _tmp) = configured().await;
-    let coder = role_assistant(&engine, "Coder", true).await;
+    role_assistant(&engine, "Coder", true).await;
     let (_, first_batch) = owner_turn(&engine, "pa-l1").await;
     let args = json!({ "mode": "chat", "title": "Fix the bug", "prompt": "Do it." });
     let a = call(&engine, "dispatch", args.clone()).await;
@@ -2702,21 +2703,21 @@ async fn the_ledger_hands_a_redelivered_batch_its_dispatch_back() {
     let c = call(&engine, "dispatch", args.clone()).await;
     assert_eq!(c.data["earlier"], json!(true), "{}", c.text);
     assert_eq!(all_dispatches(&engine).await.len(), 1);
-    // Its executor config gone since: still that one — the ledger is read
-    // before what the work runs on, and its key names no executor config.
-    crate::commands::assistants::assistant_delete_core(&crate::web::event_bridge::EventEmitter::Noop, &engine.db, coder)
-        .await
-        .unwrap();
+    // The agent its work runs on turned off since: still that one — the
+    // ledger is read before what the work runs on.
+    agent_on(&engine, AgentType::Codex, false).await;
     let again = call(&engine, "dispatch", args.clone()).await;
     assert_eq!(again.data["earlier"], json!(true), "{}", again.text);
     // A delivery of its own: a dispatch of its own, on what it has now.
-    let other = role_assistant(&engine, "Other", true).await;
+    role_assistant(&engine, "Other", true).await;
     owner_turn(&engine, "pa-l1").await;
     let d = call(&engine, "dispatch", args).await;
     assert_eq!(d.data["earlier"], json!(false), "{}", d.text);
     let all = all_dispatches(&engine).await;
     assert_eq!(all.len(), 2);
-    assert!(all.iter().any(|x| x.executor_assistant_id == other));
+    assert!(all
+        .iter()
+        .all(|x| super::dispatch::work_of(x).agent_type == AgentType::Codex));
 }
 
 #[tokio::test]
@@ -3169,7 +3170,7 @@ async fn a_task_follow_up_is_settled_by_the_claim_record() {
     use crate::db::service::work_task_service;
     use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
     let (engine, tmp) = configured().await;
-    let coder = role_assistant(&engine, "Coder", true).await;
+    role_assistant(&engine, "Coder", true).await;
     let folder = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("board").to_string_lossy()).await;
     let task = work_task_service::create(
         &engine.db.conn,
@@ -3195,8 +3196,7 @@ async fn a_task_follow_up_is_settled_by_the_claim_record() {
         NewDispatch {
             bot_id: engine.bot().await,
             mode: DispatchMode::Task,
-            executor_assistant_id: coder,
-            executor_snapshot_json: "{}".into(),
+            work_snapshot_json: "{}".into(),
             folder_id: Some(folder),
             deliverable: Some("change".into()),
             title: "Fix".into(),
@@ -3558,17 +3558,13 @@ async fn worker(
     let brain = brain(AgentType::ClaudeCode);
     let row = svc::create_worker(
         &engine.db.conn,
-        svc::NewWorker {
-            uid: None,
-            notify: true,
-            name: name.into(),
-            avatar_json: r#"{"kind":"emoji","emoji":"🔧","color":"blue"}"#.into(),
-            agent_type: brain.agent_type.as_wire().into_owned(),
-            agent_options_json: "{}".into(),
-            label_snapshot_json: serde_json::to_string(&brain.label_snapshot).unwrap(),
-            settings_json: "{}".into(),
-            executor_assistant_id: None,
-        },
+        svc::NewWorker::made(
+            name.into(),
+            r#"{"kind":"emoji","emoji":"🔧","color":"blue"}"#.into(),
+            svc::AgentColumns::of(&brain),
+            svc::AgentColumns::of(&brain),
+            "{}".into(),
+        ),
     )
     .await
     .unwrap();
@@ -3624,9 +3620,9 @@ async fn a_second_primary_is_refused_by_the_database() {
         id: NotSet,
         name: Set("Two".into()),
         avatar: Set("{}".into()),
-        agent_type: Set("claude_code".into()),
-        agent_options: Set("{}".into()),
-        label_snapshot: Set("{}".into()),
+        agent_type: Set(Some("claude_code".into())),
+        agent_options: Set(Some("{}".into())),
+        label_snapshot: Set(Some("{}".into())),
         settings: Set("{}".into()),
         workdir: Set(None),
         folder_id: Set(None),
@@ -3635,7 +3631,6 @@ async fn a_second_primary_is_refused_by_the_database() {
         updated_at: Set(now),
         kind: Set(BotKind::Primary),
         uid: Set(Some(svc::new_bot_uid())),
-        executor_assistant_id: Set(None),
         sort_order: Set(0),
         pinned_at: Set(None),
         section: Set(None),
@@ -3644,6 +3639,15 @@ async fn a_second_primary_is_refused_by_the_database() {
         unread_mark: Set(false),
         notify: Set(true),
         deleted_at: Set(None),
+        work_agent_type: Set("claude_code".into()),
+        work_agent_options: Set("{}".into()),
+        work_label_snapshot: Set("{}".into()),
+        work_instructions: Set(None),
+        seed_persona: Set(None),
+        seed_version: Set(0),
+        workdir_ready: Set(true),
+        legacy_assistant_id: Set(None),
+        legacy_assistant_uid: Set(None),
     }
     .insert(&engine.db.conn)
     .await;
@@ -3696,14 +3700,13 @@ async fn two_workers_keep_their_records_apart() {
         .await
         .unwrap();
     }
-    let coder = role_assistant(&primary, "Coder", true).await;
+    role_assistant(&primary, "Coder", true).await;
     svc::create_dispatch(
         &a.db.conn,
         NewDispatch {
             bot_id: pa,
             mode: DispatchMode::Chat,
-            executor_assistant_id: coder,
-            executor_snapshot_json: "{}".into(),
+            work_snapshot_json: "{}".into(),
             folder_id: None,
             deliverable: None,
             title: "a's dispatch".into(),
@@ -5603,52 +5606,6 @@ async fn a_work_assistants_change_of_the_account_is_recorded_for_the_primary() {
 }
 
 #[tokio::test]
-async fn the_executor_view_shows_what_each_runs_and_what_keeps_failing() {
-    let (engine, _tmp) = configured().await;
-    let coder = role_assistant(&engine, "Coder", true).await;
-    let mut ids = Vec::new();
-    for _ in 0..4 {
-        let d = engine
-            .dispatch(DispatchRequest {
-                mode: DispatchMode::Chat,
-                title: "Research".into(),
-                prompt: "Find out X.".into(),
-                project_id: None,
-                report: false,
-                on_done: None,
-                done_when: None,
-                replaces: None,
-            })
-            .await
-            .unwrap();
-        ids.push(d.id);
-    }
-    for (i, id) in ids.iter().enumerate() {
-        let state = if i == 0 { DispatchState::Running } else { DispatchState::Failed };
-        svc::update_dispatch(
-            &engine.db.conn,
-            *id,
-            None,
-            DispatchWrite {
-                state: Some(state),
-                error: Some(Some(format!("boom {i}"))),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-    }
-    let view = crate::commands::personal_agent::personal_agent_executors_core(&engine.db).await.unwrap();
-    let v = view.iter().find(|v| v.assistant_id == coder).unwrap();
-    assert_eq!(v.running.len(), 1);
-    assert_eq!(v.running[0].dispatch_id, ids[0]);
-    let failing = v.failing.as_ref().expect("the last three failed");
-    assert_eq!(failing.dispatch_id, ids[3]);
-    assert_eq!(failing.error.as_deref(), Some("boom 3"));
-    assert_eq!(v.dispatches_14d, 4);
-}
-
-#[tokio::test]
 async fn a_replayed_turn_gets_what_it_got_whatever_the_owner_switched_since() {
     let (host, w, _tmp) = hosted().await;
     let primary = host.primary();
@@ -5726,7 +5683,7 @@ async fn a_replayed_settings_change_never_overwrites_a_newer_edit() {
 
 // ── 1.6: new work assistants and their templates ────────────────────────────
 
-use super::bots::{BotSpec, CreateError, ExecutorSpec};
+use super::bots::{BotSpec, CreateError, WorkSpec};
 use crate::models::personal_agent_bots::{BotAvatar, BotDeleteOptions, PickedFrom};
 
 /// The primary set up, and its agent's options readable.
@@ -5747,16 +5704,12 @@ fn engine_of(engine: &PersonalAgentEngine, tmp: &tempfile::TempDir, id: i32) -> 
     )
 }
 
-async fn executor(engine: &PersonalAgentEngine, id: i32) -> crate::models::AssistantInfo {
-    crate::db::service::assistant_service::get(&engine.db.conn, id).await.unwrap().unwrap()
-}
-
 /// A new work assistant: its persona — the one given, else the default
-/// sentence, written in no one's name — its brain the primary's, an executor
-/// config of its own with every option filled in and nothing of codeg's in
-/// it; no role guessed, no division taken, no opening card, nothing run.
+/// sentence, written in no one's name — its brain the primary's, its work on
+/// a copy of that brain (D1), every option the same; no role guessed, no
+/// opening card, nothing run.
 #[tokio::test]
-async fn a_new_work_assistant_has_its_persona_brain_and_executor() {
+async fn a_new_work_assistant_has_its_persona_brain_and_work() {
     let (engine, tmp) = ready().await;
     let mut spec = BotSpec::named("代码评审");
     spec.persona = Some("Reviews pull requests; never changes code.".into());
@@ -5767,17 +5720,14 @@ async fn a_new_work_assistant_has_its_persona_brain_and_executor() {
     let uid = bot.uid.clone().unwrap();
     assert_eq!(BotAvatar::parse(&bot.avatar), BotAvatar::default_for(&uid));
     let primary = svc::primary_bot(&engine.db.conn).await.unwrap().unwrap();
-    assert_eq!((bot.agent_type.as_str(), bot.agent_options.as_str()), (primary.agent_type.as_str(), primary.agent_options.as_str()));
-    // Its executor config, made with it: same name, every option filled in
-    // from what the agent reports, no description or instructions of codeg's.
-    let exec = executor(&engine, made.executor.id).await;
-    assert_eq!(bot.executor_assistant_id, Some(exec.id));
-    assert_eq!(exec.name, "代码评审");
-    assert_eq!(exec.agent_type, AgentType::ClaudeCode);
-    assert_eq!((exec.description.as_str(), exec.instructions.as_str()), ("", ""));
-    assert_eq!(exec.agent_options.config_values["model"], "sonnet");
-    assert_eq!(made.picked.len(), 3);
-    assert!(made.picked.iter().all(|p| p.from == PickedFrom::Agent));
+    assert_eq!((&bot.agent_type, &bot.agent_options), (&primary.agent_type, &primary.agent_options));
+    // Its work: a copy of that brain, every option the same, no standing
+    // instructions of codeg's, nothing picked.
+    let brain = super::engine::brain_of(&primary).unwrap();
+    assert_eq!(made.work, brain);
+    assert_eq!(super::engine::work_of_row(bot).unwrap(), brain);
+    assert_eq!(bot.work_instructions, None);
+    assert!(made.picked.is_empty());
     // Its directory: its persona under the heading, its rules, no owner file.
     let dir = workdir::workdir_of_bot(tmp.path(), bot);
     let locale = engine.locale_now().await;
@@ -5796,13 +5746,10 @@ async fn a_new_work_assistant_has_its_persona_brain_and_executor() {
     let soul = workdir::read_text(&workdir::workdir_of_bot(tmp.path(), &blank.bot), workdir::SOUL_FILE);
     assert!(super::templates::persona_unwritten(&soul), "{soul}");
     assert!(!soul.contains("Alfred"), "no name in it: {soul}");
-    // A second one of the same name gets an executor config of its own name.
-    let again = engine.create_bot(BotSpec::named("代码评审")).await.unwrap();
-    assert_eq!(executor(&engine, again.executor.id).await.name, "代码评审 (2)");
 }
 
 #[tokio::test]
-async fn another_config_on_the_same_agent_lends_its_choices() {
+async fn another_assistants_work_on_the_same_agent_lends_its_choices() {
     let (engine, _tmp) = ready().await;
     let mut config = brain(AgentType::ClaudeCode);
     config.agent_options.config_values = BTreeMap::from([("effort".to_string(), "high".to_string())]);
@@ -5812,20 +5759,22 @@ async fn another_config_on_the_same_agent_lends_its_choices() {
         name: "Effort".into(),
         value_label: "HIGH".into(),
     }];
-    crate::db::service::assistant_service::create(
+    svc::save_bot(
         &engine.db.conn,
-        &crate::models::AssistantDraft {
-            name: "Old".into(),
-            description: String::new(),
-            avatar: crate::models::AssistantAvatar::Monogram { color: "blue".into() },
-            agent_config: config,
-            instructions: String::new(),
-            enabled: true,
+        engine.bot().await,
+        svc::AgentWrite {
+            work: Some(svc::AgentColumns::of(&config)),
+            ..Default::default()
         },
     )
     .await
     .unwrap();
-    let made = engine.create_bot(BotSpec::named("Dev")).await.unwrap();
+    let mut spec = BotSpec::named("Dev");
+    spec.work = WorkSpec::Fill {
+        agent_type: AgentType::ClaudeCode,
+        given: Default::default(),
+    };
+    let made = engine.create_bot(spec).await.unwrap();
     let effort = made.picked.iter().find(|p| p.id == "effort").unwrap();
     assert_eq!((effort.value.as_str(), effort.from), ("high", PickedFrom::OtherConfig));
 }
@@ -5833,10 +5782,9 @@ async fn another_config_on_the_same_agent_lends_its_choices() {
 #[tokio::test]
 async fn when_the_agents_options_cannot_be_read_nothing_is_made() {
     let (engine, _tmp) = configured().await;
-    let before = crate::db::service::assistant_service::list_all(&engine.db.conn).await.unwrap().len();
     let mut spec = BotSpec::named("Researcher");
-    spec.executor = ExecutorSpec::Fill {
-        agent_type: Some(AgentType::Gemini),
+    spec.work = WorkSpec::Fill {
+        agent_type: AgentType::Gemini,
         given: Default::default(),
     };
     match engine.create_bot(spec).await {
@@ -5846,12 +5794,12 @@ async fn when_the_agents_options_cannot_be_read_nothing_is_made() {
         other => panic!("{:?}", other.map(|m| m.bot.id)),
     }
     assert_eq!(svc::list_bots(&engine.db.conn).await.unwrap().len(), 1, "no worker");
-    assert_eq!(crate::db::service::assistant_service::list_all(&engine.db.conn).await.unwrap().len(), before);
     // With the editor's selection it is made.
     let mut spec = BotSpec::named("Researcher");
-    spec.executor = ExecutorSpec::Config(brain(AgentType::Gemini));
+    spec.work = WorkSpec::Config(brain(AgentType::Gemini));
     let made = engine.create_bot(spec).await.unwrap();
-    assert_eq!(executor(&engine, made.executor.id).await.agent_type, AgentType::Gemini);
+    assert_eq!(made.work.agent_type, AgentType::Gemini);
+    assert_eq!(made.bot.work_agent_type, "gemini");
 }
 
 #[tokio::test]
@@ -5865,18 +5813,15 @@ async fn bot_create_on_the_owners_word_makes_it_and_the_card_undoes_it() {
     assert!(out.ok, "{}", out.text);
     // Nothing of an executor config in what the assistant reads back.
     assert!(!out.text.contains("executor config") && out.data.get("executor_assistant_id").is_none(), "{}", out.text);
-    assert!(out.text.contains("options codeg picked for the owner: Model = SONNET"), "{}", out.text);
     let bot = out.data["bot_id"].as_i64().unwrap() as i32;
-    let exec = svc::get_bot(&engine.db.conn, out.data["bot_id"].as_i64().unwrap() as i32).await.unwrap().unwrap().executor_assistant_id.unwrap();
     let card = last_card(&engine, "changed").await;
     let data = data_of(&card);
     assert_eq!((data["what"].as_str(), data["state"].as_str()), (Some("bots"), Some("applied")));
     assert_eq!(data["bots"][0]["bot_id"], bot);
     assert_eq!(data["quote"], "make one that fixes CI");
-    // [Undo]: it is deleted, and the executor config made with it too.
+    // [Undo]: it is deleted.
     engine.act_on_notice(card_id(&card), "undo").await.unwrap();
     assert!(svc::get_bot(&engine.db.conn, bot).await.unwrap().is_none());
-    assert!(!executor(&engine, exec).await.is_live());
     assert_eq!(data_of(&last_card(&engine, "changed").await)["state"], "undone");
 
     // Its own idea: a card that makes it when the owner accepts.
@@ -6273,12 +6218,10 @@ async fn bot_update_replaces_the_persona_paragraph_and_its_card_takes_it_back_st
     assert!(!out.ok && out.text.contains("prefs_update"), "{}", out.text);
 }
 
-/// The agent an assistant's work runs on (D2): changed in place when it
-/// alone is bound to its executor config; a shared one is left to the
-/// others and it gets one of its own; the card undoes it — back on the
-/// executor config it was bound to, or on none.
+/// The agent an assistant's work runs on (D1): its own, changed in its own
+/// row — a copy's stays as it is — and the card undoes it.
 #[test]
-fn bot_update_changes_the_agent_its_work_runs_on_without_touching_a_shared_config() {
+fn bot_update_changes_the_agent_its_work_runs_on_and_no_one_elses() {
     // A thread of its own with room: in a debug build the steps' poll keeps a
     // slot for every future it starts, more than a test thread's stack.
     std::thread::Builder::new()
@@ -6288,86 +6231,41 @@ fn bot_update_changes_the_agent_its_work_runs_on_without_touching_a_shared_confi
                 .enable_all()
                 .build()
                 .unwrap()
-                .block_on(bot_update_changes_the_agent_its_work_runs_on_without_touching_a_shared_config_steps())
+                .block_on(bot_update_changes_the_agent_its_work_runs_on_and_no_one_elses_steps())
         })
         .unwrap()
         .join()
         .unwrap();
 }
 
-async fn bot_update_changes_the_agent_its_work_runs_on_without_touching_a_shared_config_steps() {
+async fn bot_update_changes_the_agent_its_work_runs_on_and_no_one_elses_steps() {
     super::options::test_support::install(AgentType::ClaudeCode);
     super::options::test_support::install(AgentType::Codex);
     let (host, _w, _tmp) = hosted().await;
     let engine = host.primary();
     let dev = engine.create_bot(BotSpec::named("Coder")).await.unwrap();
-    let exec = dev.executor.id;
+    let work_of = |b: &bot_entity::Model| b.work_agent_type.clone();
     let codex = json!({ "bot": "Coder", "work_agent": { "agent_type": "codex" }, "quote": "Coder works on Codex" });
     let out = call_tool(&engine, "bot_update", codex.clone()).await;
     assert!(out.ok && out.data["state"] == "applied", "{}", out.text);
     assert!(out.data["changes"][0].get("executor_before").is_none(), "no executor config in what it reads");
     let bot = svc::get_bot(&engine.db.conn, dev.bot.id).await.unwrap().unwrap();
-    assert_eq!(bot.executor_assistant_id, Some(exec), "its own, changed in place");
-    assert_eq!(executor(&engine, exec).await.agent_type, AgentType::Codex);
-    // Undone: back on what it was, in place.
+    assert_eq!(work_of(&bot), "codex");
+    assert_eq!(bot.agent_type, dev.bot.agent_type, "its brain stays");
+    // Undone: back on what it was.
     let card = last_card(&engine, "changed").await;
     engine.act_on_notice(card_id(&card), "undo").await.unwrap();
-    assert_eq!(executor(&engine, exec).await.agent_type, AgentType::ClaudeCode);
-    // Shared with a copy: the copy keeps it, Coder gets one of its own.
+    let bot = svc::get_bot(&engine.db.conn, dev.bot.id).await.unwrap().unwrap();
+    assert_eq!(work_of(&bot), "claude_code");
+    // A copy has one of its own: Coder's changed, the copy's stays.
     let copy = engine.copy_bot(dev.bot.id, "Coder 2", None).await.unwrap();
-    assert_eq!(copy.executor.id, exec);
-    let out = call_tool(&engine, "bot_update", codex.clone()).await;
-    assert!(out.ok && out.data["state"] == "applied", "{}", out.text);
-    let bot = svc::get_bot(&engine.db.conn, dev.bot.id).await.unwrap().unwrap();
-    let own = bot.executor_assistant_id.unwrap();
-    assert_ne!(own, exec);
-    assert_eq!(executor(&engine, own).await.agent_type, AgentType::Codex);
-    assert_eq!(executor(&engine, exec).await.agent_type, AgentType::ClaudeCode);
-    let copy_row = svc::get_bot(&engine.db.conn, copy.bot.id).await.unwrap().unwrap();
-    assert_eq!(copy_row.executor_assistant_id, Some(exec));
-    // Undone: bound to the shared one again, the one made for it untouched.
-    let card = last_card(&engine, "changed").await;
-    engine.act_on_notice(card_id(&card), "undo").await.unwrap();
-    let bot = svc::get_bot(&engine.db.conn, dev.bot.id).await.unwrap().unwrap();
-    assert_eq!(bot.executor_assistant_id, Some(exec));
-    assert_eq!(executor(&engine, exec).await.agent_type, AgentType::ClaudeCode);
-    // The shared one changed since: undone onto it would run something
-    // else — the one made for it goes back instead.
-    let out = call_tool(&engine, "bot_update", codex.clone()).await;
-    assert!(out.ok && out.data["state"] == "applied", "{}", out.text);
-    let fork = svc::get_bot(&engine.db.conn, dev.bot.id).await.unwrap().unwrap().executor_assistant_id.unwrap();
-    assert_ne!(fork, exec);
-    let shared = executor(&engine, exec).await;
-    let mut other = crate::models::AssistantAgentConfig {
-        agent_type: shared.agent_type,
-        agent_options: shared.agent_options,
-        label_snapshot: shared.label_snapshot,
-    };
-    other.agent_options.config_values.insert("model".into(), "opus".into());
-    crate::db::service::assistant_service::update(
-        &engine.db.conn,
-        exec,
-        &crate::models::assistant::AssistantPatch { agent_config: Some(other), ..Default::default() },
-    )
-    .await
-    .unwrap();
-    let card = last_card(&engine, "changed").await;
-    engine.act_on_notice(card_id(&card), "undo").await.unwrap();
-    let bot = svc::get_bot(&engine.db.conn, dev.bot.id).await.unwrap().unwrap();
-    assert_eq!(bot.executor_assistant_id, Some(fork));
-    assert_eq!(executor(&engine, fork).await.agent_type, AgentType::ClaudeCode);
-    assert_eq!(executor(&engine, exec).await.agent_options.config_values["model"], "opus");
-    // None to work with before: given one, and undone, none again.
-    svc::set_executor_binding(&engine.db.conn, dev.bot.id, None).await.unwrap();
+    assert_eq!(work_of(&copy.bot), "claude_code");
     let out = call_tool(&engine, "bot_update", codex).await;
     assert!(out.ok && out.data["state"] == "applied", "{}", out.text);
     let bot = svc::get_bot(&engine.db.conn, dev.bot.id).await.unwrap().unwrap();
-    let given = bot.executor_assistant_id.unwrap();
-    assert_eq!(executor(&engine, given).await.agent_type, AgentType::Codex);
-    let card = last_card(&engine, "changed").await;
-    engine.act_on_notice(card_id(&card), "undo").await.unwrap();
-    let bot = svc::get_bot(&engine.db.conn, dev.bot.id).await.unwrap().unwrap();
-    assert_eq!(bot.executor_assistant_id, None);
+    assert_eq!(work_of(&bot), "codex");
+    let copy_row = svc::get_bot(&engine.db.conn, copy.bot.id).await.unwrap().unwrap();
+    assert_eq!(work_of(&copy_row), "claude_code");
 }
 
 #[tokio::test]
@@ -6381,13 +6279,13 @@ async fn copying_a_work_assistant_copies_its_setup_not_its_memory() {
     let cdir = workdir::workdir_of_bot(tmp.path(), &copy.bot);
     assert_eq!(workdir::read_text(&cdir, workdir::SOUL_FILE), "# Persona\n\nOnly the my-app repo.\n");
     assert!(workdir::list_entries(&cdir).is_empty(), "memory is not copied");
-    assert_eq!(copy.executor.id, made.executor.id, "the same executor config, shared");
-    assert!(!copy.executor_created);
-    // One whose executor config is gone gets one of its own.
-    crate::db::service::assistant_service::soft_delete(&engine.db.conn, made.executor.id).await.unwrap();
-    let again = engine.copy_bot(made.bot.id, "Developer 3", None).await.unwrap();
-    assert_ne!(again.executor.id, made.executor.id);
-    assert!(again.executor_created);
+    // What its work runs on, and its standing instructions, copied — its own
+    // from then on.
+    assert_eq!(
+        (&copy.bot.work_agent_type, &copy.bot.work_agent_options, &copy.bot.work_instructions),
+        (&made.bot.work_agent_type, &made.bot.work_agent_options, &made.bot.work_instructions)
+    );
+    assert_eq!(copy.work, made.work);
 }
 
 #[tokio::test]
@@ -6409,7 +6307,6 @@ async fn deleting_a_work_assistant_hands_its_work_on_and_returns_its_messages() 
     let impact = engine.bot_impact(w).await.unwrap();
     assert_eq!(impact.running.len(), 1);
     assert_eq!(impact.unanswered_messages, 1);
-    assert_eq!(impact.executor.as_ref().unwrap().id, made.executor.id);
     engine.delete_bot(w, &BotDeleteOptions { hand_over: true, ..Default::default() }, Some(worker.clone())).await.unwrap();
     assert!(svc::get_bot(&engine.db.conn, w).await.unwrap().is_none());
     // Its running work is the primary's to follow now.
@@ -6418,20 +6315,18 @@ async fn deleting_a_work_assistant_hands_its_work_on_and_returns_its_messages() 
     assert!(events.iter().any(|e| e.kind == "handed_over"), "{events:?}");
     // The message it never answered went back.
     assert!(events.iter().any(|e| e.kind == "bot_gone" && e.summary.contains(&format!("m{}", sent.message.id))), "{events:?}");
-    // Its executor config and directory stay.
-    assert!(executor(&engine, made.executor.id).await.is_live());
+    // Its directory stays.
     assert!(workdir::is_workdir(&workdir::workdir_of_bot(tmp.path(), &made.bot)));
-    // Asked to, they go too.
+    // Asked to, it goes too.
     let other = engine.create_bot(BotSpec::named("Reviewer")).await.unwrap();
     engine
         .delete_bot(
             other.bot.id,
-            &BotDeleteOptions { hand_over: false, delete_executor: true, delete_workdir: true },
+            &BotDeleteOptions { hand_over: false, delete_workdir: true },
             None,
         )
         .await
         .unwrap();
-    assert!(!executor(&engine, other.executor.id).await.is_live());
     assert!(!workdir::workdir_of_bot(tmp.path(), &other.bot).exists());
     // The primary is never deleted.
     assert!(engine.delete_bot(primary, &BotDeleteOptions::default(), None).await.is_err());
@@ -6529,7 +6424,7 @@ async fn deleting_an_assistant_keeps_a_directory_another_one_shares() {
     engine
         .delete_bot(
             made.bot.id,
-            &BotDeleteOptions { hand_over: false, delete_executor: false, delete_workdir: true },
+            &BotDeleteOptions { hand_over: false, delete_workdir: true },
             None,
         )
         .await
@@ -6558,7 +6453,7 @@ async fn deleting_an_assistant_never_takes_a_directory_it_moved_off() {
     engine
         .delete_bot(
             made.bot.id,
-            &BotDeleteOptions { hand_over: false, delete_executor: false, delete_workdir: true },
+            &BotDeleteOptions { hand_over: false, delete_workdir: true },
             None,
         )
         .await
@@ -6584,7 +6479,7 @@ async fn moving_the_workdir_waits_for_the_last_turn_to_settle() {
 }
 
 #[tokio::test]
-async fn a_work_assistants_dispatch_runs_on_its_own_executor_and_says_who_sent_it() {
+async fn a_work_assistants_dispatch_runs_on_its_own_work_agent_and_says_who_sent_it() {
     let (engine, tmp) = ready().await;
     let made = engine.create_bot(BotSpec::named("Developer")).await.unwrap();
     let worker = engine_of(&engine, &tmp, made.bot.id);
@@ -6598,15 +6493,16 @@ async fn a_work_assistants_dispatch_runs_on_its_own_executor_and_says_who_sent_i
     .await;
     assert!(out.ok, "{}", out.text);
     let d = dispatch_state(&engine, out.data["dispatch_id"].as_i64().unwrap() as i32).await;
-    assert_eq!(d.executor_assistant_id, made.executor.id, "its own executor config");
-    let snap = super::dispatch::executor_of(&d);
+    let snap = super::dispatch::work_of(&d);
+    assert_eq!(snap.bot_uid, made.bot.uid, "its own work");
+    assert_eq!(snap.agent_type, made.work.agent_type);
     let brief = snap.dispatcher.clone().unwrap();
     assert!(brief.starts_with("<codeg-dispatcher>"), "{brief}");
     assert!(brief.contains("handed out by Developer, one of the owner's work assistants"), "{brief}");
     assert!(brief.contains("hand it over with `bot_message`"), "its rules: {brief}");
     assert!(brief.contains("Answer first](memory/answer-first.md) — the answer before the steps"), "its lessons: {brief}");
     assert!(brief.chars().count() <= workdir::DISPATCHER_BRIEF_CHARS);
-    assert!(snap.brief_text().contains(&snap.instructions), "with the executor config's own");
+    assert!(snap.brief_text().contains(&snap.instructions), "with its own standing instructions");
     // Work of its own running on the project's checkout: a new session
     // there is reminded of follow-ups (and still goes out).
     let running = svc::create_dispatch(
@@ -6614,8 +6510,7 @@ async fn a_work_assistants_dispatch_runs_on_its_own_executor_and_says_who_sent_i
         NewDispatch {
             bot_id: made.bot.id,
             mode: DispatchMode::Session,
-            executor_assistant_id: made.executor.id,
-            executor_snapshot_json: "{}".into(),
+            work_snapshot_json: "{}".into(),
             folder_id: Some(project),
             deliverable: None,
             title: "Investigate login".into(),
@@ -6638,16 +6533,17 @@ async fn a_work_assistants_dispatch_runs_on_its_own_executor_and_says_who_sent_i
     assert!(note.contains("`dispatch_followup`"), "{note}");
     assert!(worker.same_line_note(DispatchMode::Chat, None).await.is_none());
     assert!(engine.same_line_note(DispatchMode::Session, Some(project)).await.is_none(), "another assistant's work is not its line");
-    // Its executor config deleted: it cannot start work itself, told in
-    // words that name no executor config; nor can the primary with none.
-    crate::db::service::assistant_service::soft_delete(&engine.db.conn, made.executor.id).await.unwrap();
+    // The agent its work runs on turned off: it cannot start work itself,
+    // told in words that name no setting; nor can the primary on the same.
+    agent_on(&engine, made.work.agent_type, false).await;
     let out = call_tool(&worker, "dispatch", json!({ "mode": "chat", "title": "t", "prompt": "p" })).await;
-    assert!(!out.ok && out.text.contains(super::dispatch::NO_EXECUTOR), "{}", out.text);
+    assert!(!out.ok && out.text.contains(super::dispatch::NO_WORK_AGENT), "{}", out.text);
     assert!(!out.text.contains("executor config"), "{}", out.text);
     let out = call_tool(&engine, "dispatch", json!({ "mode": "chat", "title": "t", "prompt": "p" })).await;
-    assert!(!out.ok && out.text.contains(super::dispatch::NO_EXECUTOR), "{}", out.text);
-    // Naming one is no part of a dispatch any more.
-    let out = call_tool(&engine, "dispatch", json!({ "mode": "chat", "assistant_id": made.executor.id, "title": "t", "prompt": "p" })).await;
+    assert!(!out.ok && out.text.contains(super::dispatch::NO_WORK_AGENT), "{}", out.text);
+    // Naming an executor config is no part of a dispatch any more.
+    agent_on(&engine, made.work.agent_type, true).await;
+    let out = call_tool(&engine, "dispatch", json!({ "mode": "chat", "assistant_id": 1, "title": "t", "prompt": "p" })).await;
     assert!(!out.ok, "{}", out.text);
 }
 
@@ -6662,9 +6558,10 @@ async fn the_owners_words_switch_the_brain_with_its_options_filled_in() {
     .await;
     assert!(out.ok, "{}", out.text);
     let now = engine.snapshot().await.agent.unwrap();
-    assert_eq!(now.agent_type, AgentType::Codex);
-    assert_eq!(now.agent_options.config_values["model"], "opus", "as said");
-    assert_eq!(now.agent_options.config_values["effort"], "medium", "the rest filled in");
+    assert_eq!(now.agent_type, Some(AgentType::Codex));
+    let options = now.agent_options.clone().unwrap();
+    assert_eq!(options.config_values["model"], "opus", "as said");
+    assert_eq!(options.config_values["effort"], "medium", "the rest filled in");
     // The card undoes it: back to the brain it had.
     let card = last_card(&engine, "changed").await;
     engine.act_on_notice(card_id(&card), "undo").await.unwrap();
@@ -6680,25 +6577,6 @@ async fn the_owners_words_switch_the_brain_with_its_options_filled_in() {
 }
 
 // ── 1.6 review: regressions ──────────────────────────────────────────────────
-
-#[tokio::test]
-async fn undoing_a_made_assistant_deletes_only_the_executor_config_made_with_it() {
-    let (engine, tmp) = ready().await;
-    let out = call_tool(&engine, "bot_create", json!({ "name": "Developer", "persona": "Writes code.", "quote": "a developer" })).await;
-    let bot = out.data["bot_id"].as_i64().unwrap() as i32;
-    let made = svc::get_bot(&engine.db.conn, out.data["bot_id"].as_i64().unwrap() as i32).await.unwrap().unwrap().executor_assistant_id.unwrap();
-    // The owner binds it to an executor config there was before.
-    let other = role_assistant(&engine, "Old coder", true).await;
-    engine_of(&engine, &tmp, bot)
-        .save(PersonalAgentDraft { executor_assistant_id: Some(other), ..Default::default() })
-        .await
-        .unwrap();
-    let card = last_card(&engine, "changed").await;
-    engine.act_on_notice(card_id(&card), "undo").await.unwrap();
-    assert!(svc::get_bot(&engine.db.conn, bot).await.unwrap().is_none());
-    assert!(executor(&engine, other).await.is_live(), "the one bound now was there before: it stays");
-    assert!(!executor(&engine, made).await.is_live(), "the one made with it goes");
-}
 
 #[tokio::test]
 async fn an_inherited_model_is_read_again_for_the_options_that_hang_off_it() {
@@ -6727,23 +6605,26 @@ async fn an_inherited_model_is_read_again_for_the_options_that_hang_off_it() {
             value_label: id.to_string(),
         })
         .collect();
-    crate::db::service::assistant_service::create(
+    // Another assistant's work on the same agent (the primary's, here).
+    svc::save_bot(
         &engine.db.conn,
-        &crate::models::AssistantDraft {
-            name: "Opus coder".into(),
-            description: String::new(),
-            avatar: crate::models::AssistantAvatar::Monogram { color: "blue".into() },
-            agent_config: config,
-            instructions: String::new(),
-            enabled: true,
+        engine.bot().await,
+        svc::AgentWrite {
+            work: Some(svc::AgentColumns::of(&config)),
+            ..Default::default()
         },
     )
     .await
     .unwrap();
-    let made = engine.create_bot(BotSpec::named("Developer")).await.unwrap();
-    let values = &executor(&engine, made.executor.id).await.agent_options.config_values;
+    let mut spec = BotSpec::named("Developer");
+    spec.work = WorkSpec::Fill {
+        agent_type: AgentType::ClaudeCode,
+        given: Default::default(),
+    };
+    let made = engine.create_bot(spec).await.unwrap();
+    let values = &made.work.agent_options.config_values;
     assert_eq!(values["model"], "opus");
-    assert_eq!(values["effort"], "xhigh", "what opus offers, as the other config picked");
+    assert_eq!(values["effort"], "xhigh", "what opus offers, as the other one picked");
 }
 
 #[tokio::test]
@@ -6786,15 +6667,13 @@ async fn an_option_only_the_inherited_model_offers_can_be_named() {
         name: "Model".into(),
         value_label: "OPUS".into(),
     }];
-    crate::db::service::assistant_service::create(
+    // Another assistant's work on the same agent (the primary's, here).
+    svc::save_bot(
         &engine.db.conn,
-        &crate::models::AssistantDraft {
-            name: "Opus coder".into(),
-            description: String::new(),
-            avatar: crate::models::AssistantAvatar::Monogram { color: "blue".into() },
-            agent_config: config,
-            instructions: String::new(),
-            enabled: true,
+        engine.bot().await,
+        svc::AgentWrite {
+            work: Some(svc::AgentColumns::of(&config)),
+            ..Default::default()
         },
     )
     .await
@@ -6805,9 +6684,10 @@ async fn an_option_only_the_inherited_model_offers_can_be_named() {
     }))
     .await;
     assert!(out.ok, "{}", out.text);
-    let exec = executor(&engine, svc::get_bot(&engine.db.conn, out.data["bot_id"].as_i64().unwrap() as i32).await.unwrap().unwrap().executor_assistant_id.unwrap()).await;
-    assert_eq!(exec.agent_options.config_values["model"], "opus");
-    assert_eq!(exec.agent_options.config_values["effort"], "xhigh");
+    let row = svc::get_bot(&engine.db.conn, out.data["bot_id"].as_i64().unwrap() as i32).await.unwrap().unwrap();
+    let work = super::engine::work_of_row(&row).unwrap();
+    assert_eq!(work.agent_options.config_values["model"], "opus");
+    assert_eq!(work.agent_options.config_values["effort"], "xhigh");
 }
 
 #[tokio::test]
@@ -7173,7 +7053,7 @@ async fn board_task(
 /// A task dispatch of `engine`'s on board task `task`, in `state`.
 async fn task_dispatch(
     engine: &PersonalAgentEngine,
-    executor: i32,
+    _executor: i32,
     folder: i32,
     task: i32,
     title: &str,
@@ -7185,8 +7065,7 @@ async fn task_dispatch(
         NewDispatch {
             bot_id: engine.bot().await,
             mode: DispatchMode::Task,
-            executor_assistant_id: executor,
-            executor_snapshot_json: "{}".into(),
+            work_snapshot_json: "{}".into(),
             folder_id: Some(folder),
             deliverable: Some("change".into()),
             title: title.into(),
@@ -8133,7 +8012,7 @@ async fn grok_gets_plan_feedback_as_a_message_and_cursor_with_the_answer() {
         let id = session_dispatch(&engine, DispatchState::Running, conn).await;
         let row = svc::get_dispatch(&engine.db.conn, id).await.unwrap().unwrap();
         let mut am: crate::db::entities::personal_agent_dispatch::ActiveModel = row.into();
-        am.executor_snapshot = Set(json!({ "assistant_id": 1, "name": "Planner", "agent_type": agent }).to_string());
+        am.work_snapshot = Set(json!({ "name": "Planner", "agent_type": agent }).to_string());
         am.update(&engine.db.conn).await.unwrap();
         exec_conn(&engine, conn).await;
         engine.open_round(conn, id).await;
@@ -10837,8 +10716,7 @@ async fn stuck_work_that_took_a_failure_over_is_settled_and_seen() {
                 NewDispatch {
                     bot_id: engine.bot().await,
                     mode: DispatchMode::Task,
-                    executor_assistant_id: coder,
-                    executor_snapshot_json: "{}".into(),
+                    work_snapshot_json: "{}".into(),
                     folder_id: Some(project),
                     deliverable: Some("change".into()),
                     title: title.into(),
@@ -11457,21 +11335,19 @@ fn git_in(dir: &std::path::Path, args: &[&str]) {
 }
 
 /// Code work of `engine`'s ready for review: a task whose worktree is a
-/// real checkout, its dispatch with acceptance criteria, an executor
-/// (`Coder`) and another executor config to check it (`Checker`). The
-/// conversation slots are taken, so the check codeg sends out stays queued
-/// and a test finishes it itself.
+/// real checkout, its dispatch with acceptance criteria, its assistant's
+/// work on Codex (what the check runs on too). The conversation slots are
+/// taken, so the check codeg sends out stays queued and a test finishes it
+/// itself.
 struct Work {
     d: crate::db::entities::personal_agent_dispatch::Model,
     task: work_task_entity::Model,
     wt: std::path::PathBuf,
-    checker: i32,
 }
 
 async fn work_in_review(engine: &Arc<PersonalAgentEngine>, tmp: &tempfile::TempDir) -> Work {
     use sea_orm::{ActiveModelTrait, Set};
     let coder = role_assistant(engine, "Coder", true).await;
-    let checker = role_assistant(engine, "Checker", true).await;
     let project = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("app").to_string_lossy()).await;
     let wt = tmp.path().join("app-task");
     git_checkout(&wt);
@@ -11495,8 +11371,7 @@ async fn work_in_review(engine: &Arc<PersonalAgentEngine>, tmp: &tempfile::TempD
             NewDispatch {
                 bot_id: engine.bot().await,
                 mode: DispatchMode::Chat,
-                executor_assistant_id: coder,
-                executor_snapshot_json: "{}".into(),
+                work_snapshot_json: "{}".into(),
                 folder_id: None,
                 deliverable: None,
                 title: format!("busy {i}"),
@@ -11524,7 +11399,7 @@ async fn work_in_review(engine: &Arc<PersonalAgentEngine>, tmp: &tempfile::TempD
         .unwrap();
     }
     let task = crate::db::service::work_task_service::get_model(&engine.db.conn, task.id).await.unwrap();
-    Work { d, task, wt, checker }
+    Work { d, task, wt }
 }
 
 async fn rounds_of(engine: &PersonalAgentEngine, d: i32) -> Vec<crate::db::entities::personal_agent_verification::Model> {
@@ -11561,7 +11436,7 @@ async fn bump_run(engine: &PersonalAgentEngine, task: i32) {
 }
 
 #[tokio::test]
-async fn code_work_is_checked_by_another_executor_and_its_assistant_concludes() {
+async fn code_work_is_checked_on_its_assistants_work_agent_and_its_assistant_concludes() {
     use crate::db::entities::personal_agent_verification::{CheckVerdict, VerificationState};
     let (engine, tmp) = configured().await;
     let w = work_in_review(&engine, &tmp).await;
@@ -11578,13 +11453,14 @@ async fn code_work_is_checked_by_another_executor_and_its_assistant_concludes() 
     let card = rows.iter().rfind(|r| r.kind == TimelineKind::Result && r.dispatch_id == Some(w.d.id)).unwrap();
     assert_eq!(data_of(card)["ladder"], "checking");
     let ev = svc::pending_events(conn, bot).await.unwrap();
-    let review = ev.iter().find(|e| e.summary.contains("check it (read-only)")).unwrap();
+    let review = ev.iter().find(|e| e.summary.contains("checked (read-only)")).unwrap();
     assert!(!review.wake, "nothing to read until the check is back");
     let item = svc::item_of_dispatch(conn, w.d.id).await.unwrap().unwrap();
     assert_eq!((item.status, item.waits_for), (ItemStatus::Open, Some(WaitsFor::External)));
 
-    // codeg sends the check out: another executor config, in the task's
-    // worktree, read only, held to the criteria — bound to this version.
+    // codeg sends the check out: on what its assistant works with, in the
+    // task's worktree, read only, held to the criteria — bound to this
+    // version.
     engine.acceptance_tick().await;
     let r = rounds_of(&engine, w.d.id).await;
     assert_eq!(r.len(), 1);
@@ -11592,7 +11468,8 @@ async fn code_work_is_checked_by_another_executor_and_its_assistant_concludes() 
     let fp = crate::work_task::git::worktree_fingerprint(&w.wt.to_string_lossy()).await.unwrap();
     assert_eq!(r[0].fingerprint, fp);
     let check = svc::get_dispatch(conn, r[0].check_dispatch_id.unwrap()).await.unwrap().unwrap();
-    assert_eq!((check.mode, check.executor_assistant_id, check.bot_id), (DispatchMode::Session, w.checker, Some(bot)));
+    assert_eq!((check.mode, check.bot_id), (DispatchMode::Session, Some(bot)));
+    assert_eq!(super::dispatch::work_of(&check).agent_type, AgentType::Codex);
     assert_eq!(check.folder_id, w.task.worktree_folder_id);
     assert!(check.prompt.contains("READ-ONLY") && check.prompt.contains("no blank screen on a cold start"), "{}", check.prompt);
     assert!(check.prompt.contains("a.txt"), "the changed files: {}", check.prompt);
@@ -11648,7 +11525,9 @@ async fn code_work_is_checked_by_another_executor_and_its_assistant_concludes() 
     let data = data_of(&card);
     assert_eq!((data["verdict"].as_str(), data["decision"].as_str()), (Some("fail"), Some("accept")));
     assert_eq!(data["reason"], "a.txt is meant to say two.");
-    assert_eq!(data["checker"], "Checker");
+    // What the check ran on — no one else's name.
+    assert_eq!(data["checker_agent"], "codex");
+    assert!(data.get("checker").is_none(), "{data}");
     // Concluded once: again is refused, and nothing changes.
     let again = call(&engine, "acceptance_decide", json!({ "dispatch_id": w.d.id, "decision": "accept", "reason": "x" })).await;
     assert!(!again.ok, "{}", again.text);
@@ -11889,12 +11768,22 @@ async fn the_check_runs_on_what_the_works_assistant_works_with_now() {
     use crate::db::entities::personal_agent_verification::VerificationState;
     let (engine, tmp) = configured().await;
     let w = work_in_review(&engine, &tmp).await;
-    assert_eq!(engine.pick_checker(&w.d, &w.task).await.unwrap().id, w.checker);
-    // Bound to another since: that one.
-    let third = role_assistant(&engine, "Reviewer", true).await;
-    assert_eq!(engine.pick_checker(&w.d, &w.task).await.unwrap().id, third);
-    // Nothing to work with: no check; the assistant decides on what there is.
-    crate::db::service::assistant_service::soft_delete(&engine.db.conn, third).await.unwrap();
+    assert_eq!(engine.pick_checker(&w.d, &w.task).await.unwrap().agent_type, AgentType::Codex);
+    // Its work on another agent since: that one.
+    svc::save_bot(
+        &engine.db.conn,
+        engine.bot().await,
+        svc::AgentWrite {
+            work: Some(svc::AgentColumns::of(&brain(AgentType::ClaudeCode))),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(engine.pick_checker(&w.d, &w.task).await.unwrap().agent_type, AgentType::ClaudeCode);
+    // Nothing to work with (that agent turned off): no check; the assistant
+    // decides on what there is.
+    agent_on(&engine, AgentType::ClaudeCode, false).await;
     assert!(engine.pick_checker(&w.d, &w.task).await.is_none());
     engine.acceptance_tick().await;
     let r = &rounds_of(&engine, w.d.id).await[0];
@@ -12210,7 +12099,7 @@ async fn the_owner_changes_a_work_assistant_in_words_and_the_card_undoes_it() {
     assert!(out.ok, "{}", out.text);
     let now = svc::get_bot(&engine.db.conn, w).await.unwrap().unwrap();
     assert_eq!(now.name, "Yan");
-    assert_eq!(now.agent_type, "codex");
+    assert_eq!(now.agent_type.as_deref(), Some("codex"));
     let card = last_card(&engine, "changed").await;
     let data = data_of(&card);
     assert_eq!(data["state"], "applied");
@@ -12230,7 +12119,7 @@ async fn the_owner_changes_a_work_assistant_in_words_and_the_card_undoes_it() {
     // [Undo]: its name and brain are back.
     engine.act_on_notice(card_id(&card), "undo").await.unwrap();
     let back = svc::get_bot(&engine.db.conn, w).await.unwrap().unwrap();
-    assert_eq!((back.name.as_str(), back.agent_type.as_str()), (row.name.as_str(), row.agent_type.as_str()));
+    assert_eq!((back.name.as_str(), back.agent_type.as_deref()), (row.name.as_str(), row.agent_type.as_deref()));
 
     // Its notifications, as the roster's own menu turns them.
     let out = call_tool(&engine, "bot_update", json!({ "bot": w, "muted": true, "quote": "mute Dev" })).await;
@@ -14318,7 +14207,7 @@ async fn a_look_first_that_finds_nothing_wakes_no_one_and_a_time_slept_through_i
 #[tokio::test]
 async fn a_dispatch_routine_hands_out_its_work_itself_or_asks_first_when_the_owner_says_so() {
     let (engine, _tmp) = configured().await;
-    let researcher = role_assistant(&engine, "Researcher", true).await;
+    role_assistant(&engine, "Researcher", true).await;
     let out = call(
         &engine,
         "routine_create",
@@ -14332,7 +14221,7 @@ async fn a_dispatch_routine_hands_out_its_work_itself_or_asks_first_when_the_own
     let run = rsvc::runs_of(&engine.db.conn, id, 1).await.unwrap().remove(0);
     let d_id = run.dispatch_id.expect("handed out");
     let d = dispatch_state(&engine, d_id).await;
-    assert_eq!(d.executor_assistant_id, researcher);
+    assert_eq!(super::dispatch::work_of(&d).agent_type, AgentType::Codex, "on its own work agent");
     assert!(d.prompt.contains("This is run 1 of the routine \"Deps check\""), "{}", d.prompt);
     assert!(routine_events(&engine).await.is_empty(), "no one woken");
     let card = svc::page(&engine.db.conn, engine.bot().await, None, 100)
@@ -14378,9 +14267,9 @@ async fn a_dispatch_routine_hands_out_its_work_itself_or_asks_first_when_the_own
 }
 
 #[tokio::test]
-async fn three_failed_runs_in_a_row_or_an_executor_that_is_gone_pause_a_routine() {
+async fn three_failed_runs_in_a_row_or_a_work_agent_turned_off_pause_a_routine() {
     let (engine, _tmp) = configured().await;
-    let researcher = role_assistant(&engine, "Researcher", true).await;
+    role_assistant(&engine, "Researcher", true).await;
     let out = call(
         &engine,
         "routine_create",
@@ -14422,15 +14311,15 @@ async fn three_failed_runs_in_a_row_or_an_executor_that_is_gone_pause_a_routine(
     engine.act_on_notice(notice.id, "resume").await.unwrap();
     let r = rsvc::get(&engine.db.conn, id).await.unwrap().unwrap();
     assert!(r.enabled && r.failures == 0 && r.paused_reason.is_none());
-    // Its executor config deleted: paused at the clock's next look, and it
-    // cannot be resumed while that stands.
-    crate::db::service::assistant_service::soft_delete(&engine.db.conn, researcher).await.unwrap();
+    // The agent its work runs on turned off: paused at the clock's next
+    // look, and it cannot be resumed while that stands.
+    agent_on(&engine, AgentType::Codex, false).await;
     engine.routine_tick(super::clock::now()).await;
     let r = rsvc::get(&engine.db.conn, id).await.unwrap().unwrap();
-    assert_eq!((r.enabled, r.paused_reason.as_deref()), (false, Some("executor")));
+    assert_eq!((r.enabled, r.paused_reason.as_deref()), (false, Some("work_agent")));
     let paused = routine_cards(&engine, "paused").await;
     let last = paused.last().unwrap();
-    assert_eq!(data_of(last)["reason"], "executor");
+    assert_eq!(data_of(last)["reason"], "work_agent");
     assert!(engine.act_on_notice(notice_id_of(last), "resume").await.is_err());
 }
 
@@ -14715,12 +14604,13 @@ async fn a_work_assistants_routine_runs_on_what_it_works_with_when_it_runs() {
     let r = rsvc::get(&engine.db.conn, id).await.unwrap().unwrap();
     let template = r.dispatch.clone().unwrap_or_default();
     assert!(!template.contains("assistant"), "no executor config in it: {template}");
-    // Bound to another since: the run goes out on that one.
-    let other = role_assistant(&engine, "Other", true).await;
-    bind(&worker, other).await;
+    // Its work on another agent since: the run goes out on that one.
+    assert_ne!(made.work.agent_type, AgentType::Codex);
+    role_assistant(&worker, "Other", true).await;
     let run = worker.run_now(r, "now").await.unwrap();
     let d = dispatch_state(&engine, run.dispatch_id.expect("handed out")).await;
-    assert_eq!(d.executor_assistant_id, other);
+    assert_eq!(super::dispatch::work_of(&d).agent_type, AgentType::Codex);
+    assert_eq!(super::dispatch::work_of(&d).bot_uid, made.bot.uid);
 }
 
 // ── 2.5: proposal rules ─────────────────────────────────────────────────────
@@ -14728,7 +14618,7 @@ async fn a_work_assistants_routine_runs_on_what_it_works_with_when_it_runs() {
 /// A chat dispatch of `engine`'s that failed `hours_ago`.
 async fn failed_dispatch(
     engine: &PersonalAgentEngine,
-    executor: i32,
+    _executor: i32,
     title: &str,
     hours_ago: i64,
 ) -> crate::db::entities::personal_agent_dispatch::Model {
@@ -14738,8 +14628,7 @@ async fn failed_dispatch(
         NewDispatch {
             bot_id: engine.bot().await,
             mode: DispatchMode::Chat,
-            executor_assistant_id: executor,
-            executor_snapshot_json: "{}".into(),
+            work_snapshot_json: "{}".into(),
             folder_id: None,
             deliverable: None,
             title: title.into(),
@@ -15818,7 +15707,7 @@ async fn with_nothing_to_say_no_brief_and_with_no_brain_codegs_own_card() {
             .unwrap()
             .unwrap();
         let mut a: crate::db::entities::personal_agent::ActiveModel = row.into();
-        a.agent_type = Set("no-such-agent".into());
+        a.agent_type = Set(Some("no-such-agent".into()));
         a.update(&host.db.conn).await.unwrap();
     }
     let tomorrow = now + chrono::Duration::days(1);
@@ -17166,8 +17055,7 @@ async fn time_machine_steps() {
             NewDispatch {
                 bot_id: p,
                 mode: DispatchMode::Chat,
-                executor_assistant_id: 1,
-                executor_snapshot_json: "{}".into(),
+                work_snapshot_json: "{}".into(),
                 folder_id: Some(folder),
                 deliverable: None,
                 title: "packaging".into(),
@@ -17675,9 +17563,7 @@ async fn profile_steps() {
     let new = |title: &str, bot: i32| NewDispatch {
         bot_id: bot,
         mode: DispatchMode::Chat,
-        executor_assistant_id: 7,
-        executor_snapshot_json: json!({ "assistant_id": 7, "name": "Dev", "agent_type": "codex" })
-            .to_string(),
+        work_snapshot_json: json!({ "name": "Dev", "agent_type": "codex" }).to_string(),
         folder_id: Some(a),
         deliverable: None,
         title: title.into(),
@@ -17708,25 +17594,24 @@ async fn profile_steps() {
         am.update(conn).await.unwrap();
         made.push(d.id);
     }
-    let (by_bot, by_exec) = profile::grades(db, Utc::now()).await;
+    let by_bot = profile::grades(db, Utc::now()).await;
     let g = &by_bot[&w];
     assert_eq!((g.dispatches, g.settled, g.first_pass), (3, 3, 1));
     assert_eq!(g.first_pass_rate, Some(33));
     assert_eq!(g.avg_minutes, Some(30));
-    assert_eq!(by_exec[&7].dispatches, 3);
-    let executors = crate::commands::personal_agent::personal_agent_grades_core(db).await;
-    assert_eq!(executors.bots[&w].first_pass, 1);
-    // Apart (7.9): this assistant's chats on Dev, one cell.
-    assert_eq!(executors.cells.len(), 1);
+    let grades = crate::commands::personal_agent::personal_agent_grades_core(db).await;
+    assert_eq!(grades.bots[&w].first_pass, 1);
+    // Apart (7.9): this assistant's chats on Codex, one cell.
+    assert_eq!(grades.cells.len(), 1);
     assert_eq!(
         (
-            executors.cells[0].bot_id,
-            executors.cells[0].executor,
-            executors.cells[0].mode
+            grades.cells[0].bot_id,
+            grades.cells[0].agent_type,
+            grades.cells[0].mode
         ),
-        (Some(w), 7, DispatchMode::Chat)
+        (Some(w), AgentType::Codex, DispatchMode::Chat)
     );
-    assert_eq!(executors.cells[0].grade.settled, 3);
+    assert_eq!(grades.cells[0].grade.settled, 3);
 
     // ── 4. the week ────────────────────────────────────────────────────────
     // Four changes made at the owner's word, three undone.
@@ -17895,7 +17780,6 @@ async fn profile_steps() {
         (2, 1, 1, 3)
     );
     assert_eq!(week.by_bot[0].id, w);
-    assert_eq!(week.by_executor[0].name, "Dev");
     assert_eq!((week.changes, week.changes_undone), (4, 3));
     assert_eq!(week.ci_fixed, 1, "this week's round on its checks");
     assert!(weekly::lines(&week)[0].contains("fixed by codeg 1"));
@@ -19657,7 +19541,7 @@ async fn work_that_went_well_becomes_a_process_skill_installed_turned_off_change
         || {},
     )
     .await;
-    let releaser = role_assistant(&primary, "Releaser", true).await;
+    role_assistant(&primary, "Releaser", true).await;
     let mut ids = Vec::new();
     for title in ["Write the notes", "Fix the red CI", "Tag rc1"] {
         let d = svc::create_dispatch(
@@ -19665,8 +19549,7 @@ async fn work_that_went_well_becomes_a_process_skill_installed_turned_off_change
             NewDispatch {
                 bot_id: primary.bot().await,
                 mode: DispatchMode::Chat,
-                executor_assistant_id: releaser,
-                executor_snapshot_json: "{}".into(),
+                work_snapshot_json: "{}".into(),
                 folder_id: None,
                 deliverable: None,
                 title: title.into(),
@@ -19890,7 +19773,7 @@ async fn a_chain_is_looked_back_at_by_its_lead_and_the_same_steps_twice_too() {
     async fn chain(
         host: &EngineHost,
         bot: i32,
-        exec: i32,
+        _exec: i32,
         row: i32,
         steps: &[(&str, DispatchState)],
     ) {
@@ -19900,8 +19783,7 @@ async fn a_chain_is_looked_back_at_by_its_lead_and_the_same_steps_twice_too() {
                 NewDispatch {
                     bot_id: bot,
                     mode: DispatchMode::Chat,
-                    executor_assistant_id: exec,
-                    executor_snapshot_json: "{}".into(),
+                    work_snapshot_json: "{}".into(),
                     folder_id: None,
                     deliverable: None,
                     title: (*title).into(),
@@ -20361,37 +20243,32 @@ async fn switched_off_a_queued_tidy_up_is_let_go_and_one_running_is_kept_aside()
 
 // ── 3.5: "is this right?" (10.3) ─────────────────────────────────────────────
 
-/// An executor config running `agent`.
-async fn typed_assistant(engine: &PersonalAgentEngine, name: &str, agent: AgentType) -> i32 {
-    crate::db::service::assistant_service::create(
+/// `engine`'s own work on `agent` (what it hands out, and what a check of
+/// a message runs on, D1), with standing instructions; its id.
+async fn typed_assistant(engine: &PersonalAgentEngine, _name: &str, agent: AgentType) -> i32 {
+    let bot = engine.bot().await;
+    svc::save_bot(
         &engine.db.conn,
-        &crate::models::AssistantDraft {
-            name: name.into(),
-            description: "reads code".into(),
-            avatar: crate::models::AssistantAvatar::Monogram {
-                color: "green".into(),
-            },
-            agent_config: brain(agent),
-            instructions: "Cite lines.".into(),
-            enabled: true,
+        bot,
+        svc::AgentWrite {
+            work: Some(svc::AgentColumns::of(&brain(agent))),
+            work_instructions: Some(Some("Cite lines.".into())),
+            ..Default::default()
         },
     )
     .await
-    .unwrap()
-    .id
+    .unwrap();
+    bot
 }
 
-/// Every slot taken: what is handed out waits in the queue (nothing is
-/// started in a test).
-async fn slots_taken(engine: &PersonalAgentEngine, by: i32) {
+async fn slots_taken(engine: &PersonalAgentEngine, _by: i32) {
     for i in 0..crate::models::personal_agent::DEFAULT_DISPATCH_CONCURRENCY {
         let busy = svc::create_dispatch(
             &engine.db.conn,
             NewDispatch {
                 bot_id: engine.bot().await,
                 mode: DispatchMode::Chat,
-                executor_assistant_id: by,
-                executor_snapshot_json: "{}".into(),
+                work_snapshot_json: "{}".into(),
                 folder_id: None,
                 deliverable: None,
                 title: format!("busy {i}"),
@@ -20476,7 +20353,6 @@ async fn a_message_is_checked_on_what_the_primary_works_with_and_its_verdict_mar
         .await
         .unwrap();
     assert_eq!(first.state, FactCheckState::Checking);
-    assert_eq!(first.executor.as_deref(), Some("Claude checker"));
     assert_eq!(
         first.message_fp,
         super::fact_check::fingerprint("The build passes now.\nI changed src/build.rs.")
@@ -20492,7 +20368,7 @@ async fn a_message_is_checked_on_what_the_primary_works_with_and_its_verdict_mar
         (d.mode, d.state, d.folder_id),
         (DispatchMode::Session, DispatchState::Queued, Some(project))
     );
-    assert_eq!(d.executor_assistant_id, other);
+    assert_eq!(super::dispatch::work_of(&d).agent_type, AgentType::ClaudeCode);
     assert_eq!(d.bot_id, Some(engine.bot().await));
     assert!(d.is_check);
     assert!(
@@ -20513,7 +20389,7 @@ async fn a_message_is_checked_on_what_the_primary_works_with_and_its_verdict_mar
     let card = check_card(&engine, first.id).await;
     assert_eq!(Some(card.id), first.row_id);
     assert_eq!(data_of(&card)["state"], "checking");
-    assert_eq!(data_of(&card)["executor"], "Claude checker");
+    assert_eq!(data_of(&card)["agent_type"], "claude_code");
     assert_eq!(data_of(&card)["conversation_title"], "Fix the build");
     assert!(
         card.body
@@ -20564,11 +20440,7 @@ async fn a_message_is_checked_on_what_the_primary_works_with_and_its_verdict_mar
     let card = check_card(&engine, first.id).await;
     assert_eq!(data_of(&card)["state"], "done");
     assert_eq!(data_of(&card)["verdict"], "false");
-    assert_eq!(
-        data_of(&card)["executor"],
-        "Claude checker",
-        "what it had stays"
-    );
+    assert_eq!(data_of(&card)["agent_type"], "claude_code", "what it had stays");
     assert_eq!(card.body, "Checked a message of \"Fix the build\": FALSE");
     let told = svc::events_in_flight(conn, super::fact_check::CHECK_EVENT)
         .await
@@ -20651,7 +20523,6 @@ async fn a_sentence_is_its_own_check_and_a_check_that_did_not_finish_says_why() 
         .check_message(check_of(conv, message, None, false))
         .await
         .unwrap();
-    assert_eq!(whole.executor.as_deref(), Some("Claude checker"));
     let sentence = engine
         .check_message(check_of(conv, message, Some("The tests pass."), false))
         .await
@@ -20781,13 +20652,14 @@ async fn a_chat_is_checked_in_a_chat_and_nobody_to_check_it_is_said_at_once() {
     assert_eq!((d.mode, d.folder_id), (DispatchMode::Chat, None));
     assert!(!d.prompt.contains("working directory"), "{}", d.prompt);
 
-    // Nothing to run it on: refused at once in the owner's words, nothing made.
-    crate::db::service::assistant_service::soft_delete(conn, checker).await.unwrap();
+    // Nothing to run it on (the agent its work runs on turned off):
+    // refused at once in the owner's words, nothing made.
+    agent_on(&engine, AgentType::ClaudeCode, false).await;
     let err = engine
         .check_message(check_of(conv, "Another claim.", None, false))
         .await
         .unwrap_err();
-    assert!(err.contains("pick it in the assistant's settings"), "{err}");
+    assert!(err.contains("pick another in the assistant's settings"), "{err}");
     assert!(engine
         .check_message(check_of(conv, "  \n ", None, false))
         .await
@@ -21825,7 +21697,7 @@ async fn the_primarys_first_save_gives_the_brainless_its_brain_and_not_its_work(
 async fn an_assistant_with_no_brain_takes_no_message() {
     let (engine, _tmp) = configured().await;
     let id = converted_worker(&engine, "Reviewer", None).await;
-    let err = engine
+    let Err(err) = engine
         .resolve_message(super::messages::MessageCall {
             to: Some(id.to_string()),
             text: "Have a look".into(),
@@ -21834,8 +21706,9 @@ async fn an_assistant_with_no_brain_takes_no_message() {
             for_input: None,
         })
         .await
-        .err()
-        .expect("refused");
+    else {
+        panic!("refused");
+    };
     assert!(err.contains("no brain yet"), "{err}");
 }
 

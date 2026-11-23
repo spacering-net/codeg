@@ -288,7 +288,9 @@ export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
   clearActivityAsk: (key) =>
     set((s) => (s.activityAsk?.key === key ? { activityAsk: null } : s)),
   showRoutines: (routineId) =>
-    set((s) => ask(s, "next", routineId != null ? `routine:${routineId}` : null, true)),
+    set((s) =>
+      ask(s, "next", routineId != null ? `routine:${routineId}` : null, true)
+    ),
   viewBot: null,
   setViewBot: (viewBot) =>
     set((s) =>

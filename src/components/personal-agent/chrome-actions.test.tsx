@@ -65,7 +65,9 @@ describe("the top band's buttons", () => {
       name: "Personal agent settings",
     })
     await user.click(settings)
-    expect(usePersonalAgentUi.getState().settings).toEqual({ page: "workers" })
+    expect(usePersonalAgentUi.getState().settings).toEqual({
+      page: "communication",
+    })
     expect(usePersonalAgentUi.getState().botPage).toBeNull()
     // Pressed while open, the panel standing aside; pressed again, back to
     // the conversation.

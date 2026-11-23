@@ -786,7 +786,7 @@ export function PersonalAgentRoster({
     // A press that never moved: its click opens the row.
     if (!d) return
     stopEdge()
-    delete document.documentElement.dataset.paRosterDragging
+    document.documentElement.removeAttribute("data-pa-roster-dragging")
     setDrag(null)
     setTarget(null)
     if (!held) swallowNextClick()
@@ -813,7 +813,7 @@ export function PersonalAgentRoster({
   // Gone mid-drag (the page left): nothing kept dragging.
   useEffect(
     () => () => {
-      delete document.documentElement.dataset.paRosterDragging
+      document.documentElement.removeAttribute("data-pa-roster-dragging")
     },
     []
   )
@@ -851,7 +851,10 @@ export function PersonalAgentRoster({
                 // Not capturable: the moves still come while over the row.
               }
               dragRef.current = { id: p.id, target: null }
-              document.documentElement.dataset.paRosterDragging = ""
+              document.documentElement.setAttribute(
+                "data-pa-roster-dragging",
+                ""
+              )
             }
             const d = dragRef.current
             lastPointer.current = { x: e.clientX, y: e.clientY }

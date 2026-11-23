@@ -100,10 +100,11 @@ describe("a page asked for in the address (`?pa=`)", () => {
     expect(window.location.search).toBe("?x=1")
     expect(h.setRoute).toHaveBeenCalledWith("personalAgent")
     cleanup()
+    // An old link to a team page that is gone: the settings' first page.
     window.history.replaceState(null, "", "/workspace?pa=executors")
     render(<PersonalAgentOpenBridge />)
     expect(usePersonalAgentUi.getState().settings).toEqual({
-      page: "executors",
+      page: "communication",
     })
     expect(usePersonalAgentUi.getState().botPage).toBeNull()
     cleanup()
@@ -112,6 +113,24 @@ describe("a page asked for in the address (`?pa=`)", () => {
     expect(usePersonalAgentUi.getState().settings).toEqual({
       page: "projects",
     })
+  })
+
+  it("opens the assistants: the primary's conversation, and the sidebar's group of them", () => {
+    const shown = vi.fn()
+    window.addEventListener("codeg:sidebar-show-assistants", shown)
+    try {
+      window.history.replaceState(null, "", "/workspace?pa=assistants")
+      render(<PersonalAgentOpenBridge />)
+      const ui = usePersonalAgentUi.getState()
+      expect(ui.viewBot).toBeNull()
+      expect(ui.botPage).toBeNull()
+      expect(ui.settings).toBeNull()
+      expect(shown).toHaveBeenCalledTimes(1)
+      expect(window.location.search).toBe("")
+      expect(h.setRoute).toHaveBeenCalledWith("personalAgent")
+    } finally {
+      window.removeEventListener("codeg:sidebar-show-assistants", shown)
+    }
   })
 
   it("leaves one it does not know", () => {

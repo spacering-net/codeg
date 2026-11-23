@@ -51,7 +51,7 @@ function row(data: Record<string, unknown>): TimelineRow {
       asked: "Does it build?",
       quote: null,
       dispatch_id: 9,
-      executor: "Claude checker",
+      agent_type: "claude_code",
       ...data,
     },
     dispatch_id: null,
@@ -102,7 +102,7 @@ beforeEach(() => {
 afterEach(() => cleanup())
 
 describe("the check's card", () => {
-  it("while checking, says who checks it and offers no check again yet", () => {
+  it("while checking, names no checker and offers no check again yet", () => {
     dispatches.byId = new Map([[9, { id: 9, conversation_id: 77 }]])
     const { container } = wrap(row({ state: "checking" }))
     expect(
@@ -111,7 +111,10 @@ describe("the check's card", () => {
     expect(
       screen.getByText("Checking a message in “Fix the build”")
     ).toBeTruthy()
-    expect(screen.getByText("Checked by Claude checker")).toBeTruthy()
+    // Only the assistant speaks: the check runs on its own work agent,
+    // unnamed.
+    expect(screen.queryByText(/Checked by/)).toBeNull()
+    expect(container.querySelector("[data-pa-check-note]")).toBeNull()
     expect(
       (screen.getByRole("button", { name: "Check again" }) as HTMLButtonElement)
         .disabled

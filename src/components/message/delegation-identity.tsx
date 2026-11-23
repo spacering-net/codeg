@@ -30,7 +30,7 @@ import { getAgentLabel } from "@/lib/custom-agents"
 import type { AssistantAvatar, BotAvatar as BotAvatarValue } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { useAssistant } from "@/stores/assistants-store"
-import { useRoster } from "@/stores/personal-agent-roster-store"
+import { usePersonalAgentRoster } from "@/stores/personal-agent-roster-store"
 
 /** The assistant a delegation ran as, as this window has it. */
 export interface IdentityAssistant {
@@ -48,10 +48,12 @@ export function useIdentityAssistant(
   identity: Pick<DelegationIdentity, "assistantId" | "botUid">
 ): IdentityAssistant | null {
   const t = useTranslations("PersonalAgent")
-  const roster = useRoster()
-  const legacyId = identity.botUid ? null : identity.assistantId
+  // Read, not held: the workspace holds the roster (its sidebar, the open
+  // bridge); a card anywhere must not start reading it.
+  const roster = usePersonalAgentRoster((s) => s.entries)
+  const legacyId = identity.botUid ? null : (identity.assistantId ?? null)
   const legacy = useAssistant(legacyId)
-  if (!identity.botUid && identity.assistantId === null) return null
+  if (!identity.botUid && identity.assistantId == null) return null
   const bot = identity.botUid
     ? roster?.find((e) => e.uid === identity.botUid)
     : roster?.find((e) => e.legacy_assistant_id === legacyId)
@@ -61,8 +63,7 @@ export function useIdentityAssistant(
       // As its page names it: the primary with no name of its own by its
       // role, a work assistant with none by its number.
       name:
-        bot.name.trim() ||
-        (bot.kind === "primary" ? t("title") : `#${bot.id}`),
+        bot.name.trim() || (bot.kind === "primary" ? t("title") : `#${bot.id}`),
       deleted: false,
       primary: bot.kind === "primary",
     }
@@ -80,7 +81,8 @@ export function useIdentityAssistant(
 
 /** Whether an identity is an assistant's (else a bare agent's). */
 function isAssistantIdentity(identity: DelegationIdentity): boolean {
-  return identity.botUid !== null || identity.assistantId !== null
+  // Loosely: an identity built before `botUid` existed has none at all.
+  return identity.botUid != null || identity.assistantId != null
 }
 
 export type DelegationIdentitySize = "header" | "overlay"

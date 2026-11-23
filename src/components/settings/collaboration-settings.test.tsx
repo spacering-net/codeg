@@ -82,16 +82,18 @@ describe("CollaborationSettings", () => {
     expect(screen.getByLabelText("Create to-do tasks")).toBeInTheDocument()
   })
 
-  it("points to the assistants page for the executor configs, which moved there", async () => {
+  it("points to the sidebar's assistants, where the assistants moved", async () => {
     renderSettings()
     await screen.findByRole("heading", { name: "Multi-Agent Collaboration" })
     // The tab and the personal agent's working directory are gone from here.
     expect(screen.queryByRole("tab", { name: "Assistants" })).toBeNull()
     expect(screen.queryByLabelText("Working directory")).toBeNull()
     expect(
-      screen.getByText("Executor configs: moved to the assistants page")
+      screen.getByText(
+        'Assistants: in the sidebar\'s "Personal assistants" group'
+      )
     ).toBeInTheDocument()
     fireEvent.click(screen.getByRole("button", { name: "Open" }))
-    expect(openPage).toHaveBeenCalledWith("executors")
+    expect(openPage).toHaveBeenCalledWith("assistants")
   })
 })

@@ -49,8 +49,6 @@ function card(data: Record<string, unknown>): TimelineRow {
       notice: "proposal",
       action: "dispatch",
       display: {
-        executor: "Researcher",
-        executor_id: 3,
         agent_type: "codex",
         mode: "chat",
         project: null,
@@ -106,7 +104,15 @@ describe("NoticeCard", () => {
     draw(card({ state: "open" }))
     expect(screen.getByText("Proposal · waiting for you")).toBeTruthy()
     expect(screen.getByText("Research X")).toBeTruthy()
-    expect(screen.getByText("Researcher · Chat")).toBeTruthy()
+    // How it runs, not who: only the assistant speaks on its page.
+    expect(screen.getByText("Chat")).toBeTruthy()
+    expect(
+      screen
+        .getByText("Research X")
+        .closest("[data-pa-work]")
+        ?.querySelector("[data-pa-work-glyph]")
+        ?.getAttribute("data-pa-work-glyph")
+    ).toBe("chat")
     expect(screen.getByText("Find out X.")).toBeTruthy()
     // On one sheet in parts: the work's row its head, what it is to do a
     // band of its own, its buttons the last.
@@ -145,8 +151,6 @@ describe("NoticeCard", () => {
         action: "followup",
         why: "confirm",
         display: {
-          executor: "Researcher",
-          executor_id: 3,
           agent_type: "codex",
           mode: "session",
           title: "Research X",
@@ -201,8 +205,6 @@ describe("NoticeCard", () => {
         state,
         display: {
           dispatch_id: 12,
-          executor: "Researcher",
-          executor_id: 3,
           agent_type: "codex",
           mode: "session",
           conversation_id: 40,

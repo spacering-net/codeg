@@ -79,7 +79,8 @@ export function AcceptanceFacts({
   const info = checkId != null ? dispatchById.get(checkId) : undefined
   const target = workTargetOf(info, check ?? result ?? undefined)
   const session =
-    checkId != null && (info != null || check != null || result != null) &&
+    checkId != null &&
+    (info != null || check != null || result != null) &&
     canOpenWork(target)
       ? target
       : null
@@ -153,8 +154,7 @@ function BoardNext({ now }: { now: DispatchInfo }) {
   if (next == null) return null
   // No board on the page: the work in the drawer, which opens its task.
   const target = workTargetOf(now)
-  const press =
-    !readOnly && canOpenWork(target) ? () => openWork(target) : null
+  const press = !readOnly && canOpenWork(target) ? () => openWork(target) : null
   return <BoardNextLine next={next} press={press} />
 }
 

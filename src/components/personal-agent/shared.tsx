@@ -215,9 +215,9 @@ export function useWorkMeta(): (parts: {
 /** The assistant whose work a dispatch is, when it is not the page's own
  *  (work handed over): its name as it handed the work out — told apart by
  *  its uid, never by a name, which may have changed or be the default. */
-export function useOtherAssistant(): (info: DispatchInfo | undefined) =>
-  | string
-  | null {
+export function useOtherAssistant(): (
+  info: DispatchInfo | undefined
+) => string | null {
   const { snapshot } = usePersonalAgent()
   const own = snapshot?.agent?.uid ?? null
   return (info) => {
@@ -482,7 +482,10 @@ export function WorkAgentFact({ agentType }: { agentType: AgentType | null }) {
   const t = useTranslations("PersonalAgent")
   if (!agentType) return null
   return (
-    <span className="inline-flex min-w-0 items-center gap-1.5" data-pa-work-agent>
+    <span
+      className="inline-flex min-w-0 items-center gap-1.5"
+      data-pa-work-agent
+    >
       <AgentIcon agentType={agentType} className="size-3.5 shrink-0" />
       <span className="truncate">
         {t("workRanOn", { agent: getAgentLabel(agentType) ?? agentType })}

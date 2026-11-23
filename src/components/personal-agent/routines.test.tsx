@@ -275,15 +275,18 @@ describe("routine cards", () => {
         notice: "routine",
         what: "paused",
         state: "open",
-        reason: "executor",
-        why: "it has nothing to work with yet",
+        reason: "work_agent",
+        why: "Codex is turned off",
         routine: ROUTINE,
       })
     )
     expect(screen.getByText("Routine paused")).toBeTruthy()
-    expect(screen.getByText(/Its work has nothing set to run on/)).toBeTruthy()
+    expect(
+      screen.getByText(/The agent its work runs on can't be used/)
+    ).toBeTruthy()
+    expect(screen.getByText(/Codex is turned off/)).toBeTruthy()
     expect(screen.queryByText("Use another")).toBeNull()
-    fireEvent.click(screen.getByText("Set its executor config"))
+    fireEvent.click(screen.getByText("Pick the agent for its work"))
     expect(usePersonalAgentUi.getState().botPage).toEqual({ tab: "identity" })
     usePersonalAgentUi.getState().showConversation()
     fireEvent.click(screen.getByText("Resume"))
@@ -383,7 +386,12 @@ function RowUnder({ r, readOnly = false }: { r: Routine; readOnly?: boolean }) {
   const [open, setOpen] = React.useState(false)
   return (
     <div role="list">
-      <RoutineRow r={r} readOnly={readOnly} open={open} onOpenChange={setOpen} />
+      <RoutineRow
+        r={r}
+        readOnly={readOnly}
+        open={open}
+        onOpenChange={setOpen}
+      />
     </div>
   )
 }
@@ -459,8 +467,12 @@ describe("a routine in coming up (C4)", () => {
         r={routine({ last: [{ ...run, ended_at: null, outcome: "asked" }] })}
       />
     )
-    expect(document.querySelector('[data-pa-routine-status="running"]')).toBeNull()
-    const wrong = document.querySelector<HTMLElement>("[data-pa-routine-wrong]")!
+    expect(
+      document.querySelector('[data-pa-routine-status="running"]')
+    ).toBeNull()
+    const wrong = document.querySelector<HTMLElement>(
+      "[data-pa-routine-wrong]"
+    )!
     expect(wrong.textContent).toBe("Last run: Waiting for you")
     expect(wrong.className).toContain("text-amber-700")
   })
@@ -470,7 +482,9 @@ describe("a routine in coming up (C4)", () => {
       <RowUnder r={routine({ enabled: false, paused_reason: "failures" })} />,
       { zh: true }
     )
-    const wrong = document.querySelector<HTMLElement>("[data-pa-routine-wrong]")!
+    const wrong = document.querySelector<HTMLElement>(
+      "[data-pa-routine-wrong]"
+    )!
     expect(wrong.textContent).toBe("连续失败了 3 次。")
     const pill = document.querySelector<HTMLElement>("[data-pa-routine-state]")!
     expect(pill.textContent).toBe("已暂停")
@@ -491,9 +505,9 @@ describe("a routine in coming up (C4)", () => {
     cleanup()
     const run = routine().last[0]
     wrap(<RowUnder r={routine({ last: [{ ...run, outcome: "failed" }] })} />)
-    expect(
-      document.querySelector("[data-pa-routine-wrong]")!.textContent
-    ).toBe("Last run: Failed")
+    expect(document.querySelector("[data-pa-routine-wrong]")!.textContent).toBe(
+      "Last run: Failed"
+    )
   })
 
   it("one paused by its owner: a quiet pill, no reason", () => {
@@ -515,9 +529,9 @@ describe("a routine in coming up (C4)", () => {
         })}
       />
     )
-    expect(
-      document.querySelector("[data-pa-routine-line]")!.textContent
-    ).toBe("A watched PR is merged")
+    expect(document.querySelector("[data-pa-routine-line]")!.textContent).toBe(
+      "A watched PR is merged"
+    )
   })
 
   it("read-only: no menu, its facts still there to unfold", () => {
@@ -590,15 +604,14 @@ function info(patch: Partial<DispatchInfo> = {}): DispatchInfo {
   return {
     id: 12,
     mode: "chat",
-    executor: {
-      assistant_id: 3,
+    work: {
       name: "Researcher",
+      bot_uid: "u-researcher",
       agent_type: "codex",
-      agent_options: {},
+      agent_options: { config_values: {} },
       label_snapshot: null,
       instructions: "",
-      dispatcher: null,
-    } as unknown as DispatchInfo["executor"],
+    },
     folder_id: null,
     folder_name: null,
     deliverable: null,
@@ -656,8 +669,10 @@ describe("a result card", () => {
       dispatch: { mode: "chat", project_id: null },
     })
     expect(req?.draft?.cron).toMatch(/^\d+ \d+ \* \* [0-6]$/)
-    // What its work runs on is taken as it runs: no executor config named.
+    // What its work runs on is its assistant's own work agent as it runs:
+    // no agent or old executor config pinned in the draft.
     expect(req?.draft?.dispatch).not.toHaveProperty("assistant_id")
+    expect(req?.draft?.dispatch).not.toHaveProperty("agent_type")
   })
 
   it("not on a routine's own work", () => {

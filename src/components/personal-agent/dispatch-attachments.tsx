@@ -1,16 +1,17 @@
 "use client"
 
 /**
- * The work a reply handed out, as pills under its text (`WorkPill`): who
- * runs each piece (their avatar and name) and what it is, how it stands as
- * an icon, and how long it has been going while it runs — read from the
+ * The work a reply handed out, as pills under its text (`WorkPill`): what
+ * each piece is — and, for work handed over from another assistant, that
+ * one's name — how it stands as an icon, and how long it has been going
+ * while it runs — read from the
  * dispatch itself, so a pill in an old reply shows today's state, and the
  * same work in two replies (dispatched in one, continued in another) reads
  * the same. A follow-up's pill says so. A pill opens the work's session in
  * the drawer on the right (a task's own, or the conversation a chat or
- * session dispatch runs in); a chevron says it does. The rest — the agent's
- * mark and where — is the news card's, from the assistant
- * that ran it, which comes later in the list. Under a pill, the
+ * session dispatch runs in); a chevron says it does. The rest — how it
+ * runs and where — is the news card's, which comes later in the list.
+ * Under a pill, the
  * assistant's acceptance criteria when it wrote them (7.5); over the pill of
  * the check codeg sent out for an acceptance, which round it checks; over a
  * round codeg runs on a watched pull request, which and why (7.4).

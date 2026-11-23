@@ -548,6 +548,7 @@ mod tests {
             name: "Reviewer".to_string(),
             agent_options: selection(None, &[("model", "m")]),
             instructions: "x".repeat(10_000),
+            avatar: None,
         })
         .unwrap();
         assert_eq!(

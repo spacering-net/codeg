@@ -449,7 +449,13 @@ function TodayRowCard({
 }) {
   return (
     <PanelItem
-      {...useTodayRowProps({ row, waiting: false, now, onOpen, readOnly: true })}
+      {...useTodayRowProps({
+        row,
+        waiting: false,
+        now,
+        onOpen,
+        readOnly: true,
+      })}
     />
   )
 }
@@ -519,12 +525,7 @@ function BriefRowList({
       className="rounded-none border-0 bg-transparent [&>[role=listitem]]:border-t! [&>[role=listitem]]:border-t-border/60! [&>[role=listitem]]:border-b-0! [&>[role=listitem]]:px-0! [&>[role=listitem]]:py-3! [&>[role=listitem]:last-child]:border-b!"
     >
       {rows.map((row) => (
-        <TodayRowCard
-          key={row.key}
-          row={row}
-          now={now}
-          onOpen={opener(row)}
-        />
+        <TodayRowCard key={row.key} row={row} now={now} onOpen={opener(row)} />
       ))}
     </PanelList>
   )

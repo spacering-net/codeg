@@ -182,6 +182,9 @@ export function ActivityList({
     const rows = groups?.[ask.group] ?? []
     const at = ask.row != null ? rows.findIndex((r) => r.key === ask.row) : -1
     const found = at >= 0 ? rows[at] : null
+    // An ask from outside (the pill, a routine's link) unfolds its group
+    // once, as it is taken.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- answering an ask from outside
     if (at >= GROUP_SHOWN) setAll((a) => ({ ...a, [ask.group]: true }))
     if (found && ask.routine) setOpen(found.thing, true)
     if (ask.routine && ask.row != null && found == null && !failed && !stale) {

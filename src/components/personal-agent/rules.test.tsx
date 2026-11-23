@@ -196,14 +196,14 @@ describe("the weekly review's questions (2.11)", () => {
     )
   })
 
-  it("hides an idle work assistant, or deletes it through the usual confirmation", async () => {
+  it("hides an idle assistant, or deletes it through the usual confirmation", async () => {
     api.personalAgentBotImpact.mockResolvedValue({
       bot_id: 9,
       name: "Docs",
       running: [],
       unanswered_messages: 0,
-      executor: null,
-      division: [],
+      plans: [],
+      plan_steps: [],
       workdir: "/tmp/docs",
       workdir_custom: false,
     })
@@ -218,7 +218,7 @@ describe("the weekly review's questions (2.11)", () => {
       facts: { bot_id: 9, name: "Docs", since: "2026-10-20T01:00:00Z" },
     }
     const { container } = draw(row(idle))
-    expect(screen.getByText("An idle work assistant")).toBeTruthy()
+    expect(screen.getByText("Idle assistants")).toBeTruthy()
     expect(screen.getByText("Docs")).toBeTruthy()
     fireEvent.click(
       container.querySelector('[data-pa-rule-act="hide"]') as HTMLElement
@@ -247,7 +247,6 @@ describe("the weekly review's questions (2.11)", () => {
     await waitFor(() =>
       expect(api.personalAgentBotDelete).toHaveBeenCalledWith(9, {
         hand_over: true,
-        delete_executor: false,
         delete_workdir: false,
       })
     )
@@ -392,7 +391,7 @@ describe("an assistant's suggestion", () => {
       action: "dispatch",
       why,
       display: {
-        executor: "Researcher",
+        agent_type: "codex",
         mode: "chat",
         title: "Look at the release notes",
         prompt: "Summarize them.",

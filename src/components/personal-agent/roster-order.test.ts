@@ -52,7 +52,9 @@ function entry(
     avatar: { kind: "face", shape: "ring", color: "teal" },
     persona: "",
     persona_unwritten: false,
-    executor_assistant_id: null,
+    hidden: roster.hidden ?? false,
+    has_brain: true,
+    legacy_assistant_id: null,
     created_at: at(-86_400_000),
     roster: {
       sort_order: 0,

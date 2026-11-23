@@ -112,8 +112,7 @@ export function AssistantsSectionActions({
   const hiddenCount = (roster ?? []).filter((e) => e.roster.hidden).length
   // A new one needs the primary set up (its brain is the primary's), and
   // the engine here.
-  const canAdd =
-    snapshot?.agent != null && snapshot.status.engine === "here"
+  const canAdd = snapshot?.agent != null && snapshot.status.engine === "here"
   return (
     <>
       <DropdownMenu>

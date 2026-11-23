@@ -105,8 +105,7 @@ function target(patch: Partial<WorkTarget> = {}): WorkTarget {
     folderId: 7,
     agentType: "codex",
     title: "Research the topic",
-    executorId: 3,
-    executorName: "Scout",
+    assistantName: "Scout",
     prompt: "Look into it",
     connectionId: "c-1",
     state: "running",
@@ -118,10 +117,13 @@ function dispatch(patch: Partial<DispatchInfo> = {}): DispatchInfo {
   return {
     id: 9,
     mode: "chat",
-    executor: {
-      assistant_id: 3,
+    work: {
       name: "Scout",
+      bot_uid: "u-scout",
       agent_type: "codex",
+      agent_options: { config_values: {} },
+      label_snapshot: null,
+      instructions: "",
     },
     folder_id: null,
     folder_name: null,

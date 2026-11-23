@@ -130,7 +130,9 @@ export function RoutineRow({
       ? t("card.pausedWorkAgent")
       : t("card.pausedFailures")
     : last && WRONG_OUTCOMES.has(last.outcome)
-      ? ta("routineLast", { outcome: t(`outcome.${last.outcome}` as "outcome.failed") })
+      ? ta("routineLast", {
+          outcome: t(`outcome.${last.outcome}` as "outcome.failed"),
+        })
       : null
   return (
     <>
@@ -255,63 +257,63 @@ export function RoutineRow({
             left, the values lined up after them. */}
         {open ? (
           <SheetFields className="mt-1 gap-y-1" data-pa-routine-facts>
-          {r.cron || r.event ? (
-            <SheetField
-              label={t(r.cron ? "row.when" : "row.trigger")}
-              data-pa-routine-fact="when"
-            >
+            {r.cron || r.event ? (
+              <SheetField
+                label={t(r.cron ? "row.when" : "row.trigger")}
+                data-pa-routine-fact="when"
+              >
+                <span>
+                  {r.cron ? (
+                    <RoutineWhen cron={r.cron} event={null} zone={r.timezone} />
+                  ) : (
+                    eventWords(t, r.event!)
+                  )}
+                </span>
+              </SheetField>
+            ) : null}
+            <SheetField label={t("row.how")} data-pa-routine-fact="how">
               <span>
-                {r.cron ? (
-                  <RoutineWhen cron={r.cron} event={null} zone={r.timezone} />
-                ) : (
-                  eventWords(t, r.event!)
-                )}
+                {t(`kind.${r.kind}` as "kind.brain")}
+                {precheck ? ` · ${precheck}` : null}
               </span>
             </SheetField>
-          ) : null}
-          <SheetField label={t("row.how")} data-pa-routine-fact="how">
-            <span>
-              {t(`kind.${r.kind}` as "kind.brain")}
-              {precheck ? ` · ${precheck}` : null}
-            </span>
-          </SheetField>
-          {r.enabled && r.trigger === "schedule" && r.next_run_at ? (
-            <SheetField label={t("row.next")} data-pa-routine-fact="next">
-              <span className="tabular-nums">{when(r.next_run_at)}</span>
-            </SheetField>
-          ) : null}
-          {last ? (
-            <SheetField label={t("row.last")} data-pa-routine-fact="last">
-              {/* Each fact kept whole on its line: it wraps between them. */}
-              <span>
-                <span className="whitespace-nowrap tabular-nums">
-                  {when(last.ended_at ?? last.started_at)}
-                </span>
-                {" · "}
-                <OutcomeWord outcome={last.outcome} />
-                {" · "}
-                <span className="whitespace-nowrap tabular-nums">
-                  {t("row.runs", { n: r.runs })}
-                </span>
-                {last.note && last.outcome !== "reported" ? (
-                  <span className="text-muted-foreground">
-                    {" · "}
-                    {last.note}
+            {r.enabled && r.trigger === "schedule" && r.next_run_at ? (
+              <SheetField label={t("row.next")} data-pa-routine-fact="next">
+                <span className="tabular-nums">{when(r.next_run_at)}</span>
+              </SheetField>
+            ) : null}
+            {last ? (
+              <SheetField label={t("row.last")} data-pa-routine-fact="last">
+                {/* Each fact kept whole on its line: it wraps between them. */}
+                <span>
+                  <span className="whitespace-nowrap tabular-nums">
+                    {when(last.ended_at ?? last.started_at)}
                   </span>
-                ) : null}
-              </span>
-            </SheetField>
-          ) : null}
-          {codegPaused ? (
-            <SheetField label={t("row.why")} data-pa-routine-fact="why">
-              <span className="text-amber-700 dark:text-amber-300">
-                {r.paused_reason === "work_agent"
-                  ? t("card.pausedWorkAgent")
-                  : t("card.pausedFailures")}
-              </span>
-            </SheetField>
-          ) : null}
-        </SheetFields>
+                  {" · "}
+                  <OutcomeWord outcome={last.outcome} />
+                  {" · "}
+                  <span className="whitespace-nowrap tabular-nums">
+                    {t("row.runs", { n: r.runs })}
+                  </span>
+                  {last.note && last.outcome !== "reported" ? (
+                    <span className="text-muted-foreground">
+                      {" · "}
+                      {last.note}
+                    </span>
+                  ) : null}
+                </span>
+              </SheetField>
+            ) : null}
+            {codegPaused ? (
+              <SheetField label={t("row.why")} data-pa-routine-fact="why">
+                <span className="text-amber-700 dark:text-amber-300">
+                  {r.paused_reason === "work_agent"
+                    ? t("card.pausedWorkAgent")
+                    : t("card.pausedFailures")}
+                </span>
+              </SheetField>
+            ) : null}
+          </SheetFields>
         ) : null}
       </div>
       <AlertDialog open={deleting} onOpenChange={setDeleting}>

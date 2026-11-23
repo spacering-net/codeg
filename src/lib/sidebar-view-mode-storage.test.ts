@@ -127,19 +127,34 @@ describe("section-order persistence", () => {
   beforeEach(() => localStorage.clear())
 
   it("round-trips through localStorage", () => {
-    saveSectionOrder(["recent", "folders", "chats"])
-    expect(loadSectionOrder()).toEqual(["recent", "folders", "chats"])
+    saveSectionOrder(["recent", "folders", "assistants", "chats"])
+    expect(loadSectionOrder()).toEqual([
+      "recent",
+      "folders",
+      "assistants",
+      "chats",
+    ])
   })
 
-  it("defaults to Folders → Chat → Recent with nothing stored", () => {
-    expect(loadSectionOrder()).toEqual(["folders", "chats", "recent"])
+  it("defaults to Assistants → Folders → Chat → Recent with nothing stored", () => {
+    expect(loadSectionOrder()).toEqual([
+      "assistants",
+      "folders",
+      "chats",
+      "recent",
+    ])
   })
 
   it("migrates a legacy bare string left by an older build", () => {
     // The old format was not JSON, so the loader must survive the parse failure
     // rather than resetting the user's preference.
     localStorage.setItem(SECTION_ORDER_KEY, "chats-first")
-    expect(loadSectionOrder()).toEqual(["chats", "folders", "recent"])
+    expect(loadSectionOrder()).toEqual([
+      "chats",
+      "assistants",
+      "folders",
+      "recent",
+    ])
   })
 
   it("falls back to the default for corrupt JSON", () => {
@@ -209,8 +224,8 @@ describe("sidebar nav items", () => {
   beforeEach(() => localStorage.clear())
 
   it("lists the route rows top to bottom, Harness after the canvas", () => {
+    // The assistants have a section of their own, no row here.
     expect(SIDEBAR_NAV_ITEM_IDS).toEqual([
-      "personalAgent",
       "automations",
       "tasks",
       "forge",

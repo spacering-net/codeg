@@ -10538,6 +10538,8 @@ mod tests {
     fn reviewer() -> DelegationAssistant {
         DelegationAssistant {
             id: 3,
+            bot_uid: None,
+            avatar: None,
             name: "Reviewer".into(),
             agent_options: AgentDelegationDefaults {
                 mode_id: Some("read-only".into()),
@@ -10611,7 +10613,7 @@ mod tests {
         let brief = send.brief.expect("the brief rides the first prompt");
         assert!(brief.contains(r#"{"name":"Reviewer","instructions":"Cite line numbers."}"#));
         let link = send.link.assistant.expect("the child row learns its assistant");
-        assert_eq!(link.id, 3);
+        assert_eq!(link.id, Some(3));
         assert_eq!(link.snapshot, reviewer().run_snapshot());
 
         let started = emitter.started_snapshot().await;
@@ -10767,6 +10769,7 @@ mod tests {
             agent_type: AgentType::Codex,
             assistant: ResumeAssistant::Unrecoverable {
                 id: 3,
+                bot_uid: None,
                 name: Some("Reviewer".into()),
             },
             ..resume_ctx(TaskStatus::Canceled)
@@ -10847,7 +10850,8 @@ mod tests {
             Some(link(
                 "call-a",
                 Some(AssistantLink {
-                    id: 3,
+                    id: Some(3),
+                    bot_uid: None,
                     snapshot: reviewer().run_snapshot(),
                 }),
             )),

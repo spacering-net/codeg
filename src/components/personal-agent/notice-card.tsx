@@ -1226,9 +1226,7 @@ function ChangedCard({ item }: { item: NoticeItem }) {
                 const page = pageOf(changes[0].key)
                 const uid = botUidOf(changes[0].key)
                 // Another assistant's item: its own page.
-                const of = uid
-                  ? entries?.find((e) => e.uid === uid)
-                  : undefined
+                const of = uid ? entries?.find((e) => e.uid === uid) : undefined
                 if (of && isBotTab(page)) {
                   openBotPage(page, {
                     bot: of.kind === "primary" ? null : of.id,

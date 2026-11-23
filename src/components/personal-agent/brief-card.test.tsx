@@ -231,7 +231,6 @@ describe("the brief codeg wrote itself", () => {
             so_far: false,
             dispatched: 5,
             by_bot: [{ id: 2, name: "Dev", n: 4 }],
-            by_executor: [{ id: 7, name: "Codex", n: 5 }],
             by_mode: { task: 3, session: 2 },
             completed: 4,
             failed: 1,

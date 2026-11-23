@@ -17,7 +17,7 @@ import { followPersonalAgentLink } from "@/lib/personal-agent-notify"
 import { type AgentType, type RosterEntry } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { useAssistant } from "@/stores/assistants-store"
-import { useRoster } from "@/stores/personal-agent-roster-store"
+import { usePersonalAgentRoster } from "@/stores/personal-agent-roster-store"
 
 import type { ReferenceAttrs } from "../types"
 
@@ -29,8 +29,12 @@ const ICON_PX = 14
  *  its uid (`codeg://bot/<uid>`), or — an old `codeg://assistant/<id>`
  *  link — the one converted from that assistant. `undefined` until the
  *  roster is read, `null` for one not on it (deleted, another device's). */
-function useReferencedBot(data: ReferenceAttrs): RosterEntry | null | undefined {
-  const roster = useRoster()
+function useReferencedBot(
+  data: ReferenceAttrs
+): RosterEntry | null | undefined {
+  // Read, not held: the workspace holds the roster (its sidebar, the open
+  // bridge); a pill anywhere must not start reading it.
+  const roster = usePersonalAgentRoster((s) => s.entries)
   if (!roster) return undefined
   const uid = data.meta?.botUid
   if (uid) return roster.find((e) => e.uid === uid) ?? null

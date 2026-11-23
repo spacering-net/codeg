@@ -8735,13 +8735,15 @@ mod tests {
             _ => None,
         });
         let ctx = ctx_on(&sock);
-        // Unknown still offers the parameter (calls re-check), without a roster.
+        // Unknown still offers the parameters (calls re-check), without a
+        // roster: `bot`, and `assistant_id` for an old link.
         let delegate = delegate_schema(&ctx).await;
         let id_description = delegate["inputSchema"]["properties"]["assistant_id"]["description"]
             .as_str()
             .unwrap()
             .to_string();
-        assert_eq!(id_description, ASSISTANT_ID_DESCRIPTION);
+        assert_eq!(id_description, LEGACY_ASSISTANT_ID_DESCRIPTION);
+        assert!(delegate["inputSchema"]["properties"]["bot"].is_object());
         assert_eq!(
             ctx.assistant_support.resolve(&sock).await,
             AssistantSupport::Supported,

@@ -49,8 +49,7 @@ export function PersonalAgentOpenBridge() {
         ui.setViewBot(null)
         ui.showConversation()
         showSidebarAssistants()
-      }
-      else if (isBotTab(page)) ui.openBotPage(page)
+      } else if (isBotTab(page)) ui.openBotPage(page)
       else ui.openSettings(page)
       setRoute("personalAgent")
     }

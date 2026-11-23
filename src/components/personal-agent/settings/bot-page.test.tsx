@@ -96,7 +96,9 @@ function entry(
     uid: `u${id}`,
     name,
     avatar: { kind: "face", shape: "ring", color: "blue" },
-    executor_assistant_id: null,
+    hidden: false,
+    has_brain: true,
+    legacy_assistant_id: null,
     created_at: "2026-11-10T00:00:00Z",
     persona: kind === "worker" ? "# Persona Default sentence." : "",
     persona_unwritten: kind === "worker",
@@ -131,7 +133,13 @@ function snapshot(
       created_at: "2026-11-10T00:00:00Z",
       updated_at: "2026-11-10T00:00:00Z",
       uid: `u${agent.id}`,
-      executor_assistant_id: null,
+      work: {
+        agent_type: "claude_code",
+        agent_options: {},
+        label_snapshot: { agent: "Claude Code", mode: null, options: [] },
+      },
+      work_instructions: "",
+      legacy_assistant_id: null,
     },
     status: { engine } as PersonalAgentSnapshot["status"],
     account: null,
@@ -171,7 +179,7 @@ afterEach(() => {
 })
 
 describe("an assistant's own page", () => {
-  it("shows whose it is beside its tabs, on “Brain & executor config” first", () => {
+  it("shows whose it is beside its tabs, on “Identity & brain” first", () => {
     draw()
     const head = document.querySelector("[data-pa-bot-page-head]")!
     expect(within(head as HTMLElement).getByRole("heading").textContent).toBe(
@@ -182,13 +190,13 @@ describe("an assistant's own page", () => {
     ).toBe("Primary assistant · Claude Code")
     // No title over a tab's body: the tab names it.
     expect(tabNames()).toEqual([
-      "Brain & executor config",
+      "Identity & brain",
       "Persona & memory",
       "Notifications",
       "Advanced",
     ])
     expect(screen.getByRole("tab", { selected: true }).textContent).toBe(
-      "Brain & executor config"
+      "Identity & brain"
     )
     expect(screen.getByTestId("identity-page")).toBeInTheDocument()
     expect(identity.props).toMatchObject({ bot: null, disabled: false })
@@ -224,12 +232,12 @@ describe("an assistant's own page", () => {
     await waitFor(() =>
       expect(
         document.querySelector("[data-pa-bot-page-subtitle]")?.textContent
-      ).toBe("Work assistant · Claude Code")
+      ).toBe("Assistant · Claude Code")
     )
-    // Its executor config is on "Brain & executor config": no "Execution"
+    // The agent its work runs on is on "Identity & brain": no "Execution"
     // tab.
     expect(tabNames()).toEqual([
-      "Brain & executor config",
+      "Identity & brain",
       "Persona & memory",
       "Notifications",
       "Advanced",
@@ -566,7 +574,7 @@ describe("opening an assistant's own page", () => {
   it("switches to the assistant asked for, closing what was open of the last one", () => {
     usePersonalAgentUi.setState({
       viewBot: null,
-      settings: { page: "workers" },
+      settings: { page: "communication" },
       workOpen: true,
     })
     usePersonalAgentUi.getState().openBotPage("identity", { bot: 7 })
