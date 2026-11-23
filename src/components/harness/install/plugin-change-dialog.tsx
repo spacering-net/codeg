@@ -5,7 +5,6 @@ import { RefreshCw } from "lucide-react"
 import { useTranslations } from "next-intl"
 
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
 import { useHarnessSlot, useHarnessView } from "@/contexts/harness-view-context"
 import {
   closeHarnessDialog,
@@ -256,31 +255,22 @@ export function PluginChangeDialog({
                 aside={consentShown ? plugin?.autorun.length : undefined}
               >
                 <div className="min-w-0 space-y-2">
-                  {consentShown && plugin && (
-                    <AutorunList parts={plugin.autorun} pkg={null} />
-                  )}
                   {consentShown ? (
-                    <div className="flex min-w-0 items-start gap-2.5 rounded-lg border border-tone-warning/30 bg-tone-warning/10 px-3 py-2.5">
-                      <Checkbox
-                        id={consentId}
-                        checked={changeConsentGiven(preflight, dialog.input)}
-                        onCheckedChange={(next) =>
+                    <AutorunList
+                      parts={plugin?.autorun ?? []}
+                      pkg={null}
+                      consent={{
+                        id: consentId,
+                        checked: changeConsentGiven(preflight, dialog.input),
+                        onChange: (agree) =>
                           setPluginChangeConsent(
                             slots,
                             dialog.id,
-                            next === true,
+                            agree,
                             shownExec
-                          )
-                        }
-                        className="mt-0.5 bg-background max-md:size-5"
-                      />
-                      <label
-                        htmlFor={consentId}
-                        className="min-w-0 cursor-pointer text-sm font-medium"
-                      >
-                        {tAutorun("consent")}
-                      </label>
-                    </div>
+                          ),
+                      }}
+                    />
                   ) : (
                     <Button
                       type="button"

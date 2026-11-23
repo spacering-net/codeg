@@ -5,7 +5,6 @@ import { Loader2, RefreshCw, TriangleAlert } from "lucide-react"
 import { useTranslations } from "next-intl"
 
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { useHarnessView } from "@/contexts/harness-view-context"
 import { pickLocalized } from "@/lib/harness/display"
@@ -20,12 +19,14 @@ import {
   pluginConsentNeeded,
   pluginInstallBlockersOf,
   pluginPreviewIsStale,
+  pluginRowsToSetAll,
   pluginTargetOf,
   pluginTargetSnapshot,
   PLUGIN_MODES,
   setPluginAcceptYanked,
   setPluginConsent,
   setPluginHostMode,
+  setPluginModeForAll,
   type PluginInstallBlocker,
   type PluginInstallInput,
 } from "@/lib/harness/plugin-install"
@@ -42,12 +43,10 @@ import type {
   HarnessPluginInstallResult,
   HarnessPluginPlan,
   HarnessPluginPlanHost,
-  HarnessPluginRevision,
   PluginMode,
 } from "@/lib/harness/plugin-install-types"
 import { notableOps, reachesOthers } from "@/lib/skills/ops"
 import { cn } from "@/lib/utils"
-import { DiscoverMark } from "../discover/discover-card"
 import { useDiscoverLabels } from "../discover/use-discover-labels"
 import { MachineText } from "../machine-text"
 import { AgentGlyph } from "../mcp/mcp-bits"
@@ -60,6 +59,7 @@ import {
   InstallChangeList,
   InstallFailureNotice,
   InstallItemLine,
+  InstallPackagePart,
   InstallPart,
   InstallReasonList,
   InstallSnapshot,
@@ -71,14 +71,6 @@ import {
   PluginVersionsLine,
 } from "./plugin-parts"
 import { usePluginInstallLabels } from "./use-plugin-install-labels"
-import { useSkillInstallLabels } from "./use-skill-install-labels"
-
-/** A machine name inside a sentence. */
-const machine = (chunks: ReactNode) => (
-  <bdi dir="ltr">
-    <MachineText>{chunks}</MachineText>
-  </bdi>
-)
 
 /** A short line under a row: an error, or a word on what it reaches. */
 export function RowNote({
@@ -151,67 +143,6 @@ export function NamesNote({
 
 // ─── The input's parts ────────────────────────────────────────────────
 
-/** What will be put in Codeg's plugin store: where the files come from, and
- *  the files themselves. */
-function PackagePart({ revision }: { revision: HarnessPluginRevision }) {
-  const t = useTranslations("Harness.skillInstall.package")
-  const labels = useSkillInstallLabels()
-  return (
-    <InstallPart
-      title={t("title")}
-      aside={t("size", {
-        count: revision.files.length,
-        size: labels.bytes(revision.total_bytes),
-      })}
-    >
-      <div className="min-w-0 space-y-2 rounded-lg border px-3 py-2.5 text-xs">
-        <p className="text-muted-foreground">
-          {revision.archive
-            ? t.rich("archive", {
-                hash: revision.archive.sha256.slice(0, 16),
-                code: machine,
-              })
-            : revision.source
-              ? t.rich("source", {
-                  repository: revision.source.repository,
-                  commit: revision.source.commit.slice(0, 12),
-                  path: revision.source.path || "/",
-                  code: machine,
-                })
-              : t("noSource")}
-        </p>
-        {revision.files.length > 0 && (
-          <details className="group min-w-0">
-            <summary className="cursor-pointer text-muted-foreground select-none hover:text-foreground">
-              {t("files", { count: revision.files.length })}
-            </summary>
-            <ul className="mt-1.5 min-w-0 space-y-0.5">
-              {revision.files.map((file) => (
-                <li
-                  key={file.path}
-                  className="flex min-w-0 flex-wrap items-baseline gap-x-2"
-                >
-                  <bdi dir="ltr" className="min-w-0 font-mono">
-                    <MachineText>{file.path}</MachineText>
-                  </bdi>
-                  <span className="shrink-0 text-muted-foreground tabular-nums">
-                    {labels.bytes(file.size)}
-                  </span>
-                  {file.executable && (
-                    <DiscoverMark tone="warning">
-                      {t("executable")}
-                    </DiscoverMark>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </details>
-        )}
-      </div>
-    </InstallPart>
-  )
-}
-
 /** What a row's plan says of the mode chosen: the Experts pack's skills it
  *  takes over (and who else stops seeing them), Codex's trust of the hooks,
  *  and — its skills only — what holds a name, what goes to the backups and
@@ -219,9 +150,13 @@ function PackagePart({ revision }: { revision: HarnessPluginRevision }) {
 function RowEffects({
   row,
   mode,
+  stale,
 }: {
   row: HarnessPluginPlanHost
   mode: PluginMode
+  /** A new plan is on its way: what this one says stays on show, dimmed,
+   *  so the rows keep their height until the answer replaces it. */
+  stale: boolean
 }) {
   const t = useTranslations("Harness.pluginInstall.hosts")
   const tAgents = useTranslations("Harness.skillInstall.agents")
@@ -235,7 +170,13 @@ function RowEffects({
   const ops = skills?.links ? notableOps(skills.links) : []
   const showOps = ops.some((op) => op.status === "blocked" || reachesOthers(op))
   return (
-    <div className="min-w-0 space-y-1">
+    <div
+      aria-busy={stale || undefined}
+      className={cn(
+        "min-w-0 space-y-1 transition-opacity empty:hidden",
+        stale && "opacity-50"
+      )}
+    >
       {mode === "native" && row.codex_hooks_need_trust && (
         <RowNote tone="warning">{t("codexTrust")}</RowNote>
       )}
@@ -297,15 +238,23 @@ function HostRow({
   row: HarnessPluginPlanHost
 }) {
   const tAgents = useTranslations("Harness.skillInstall.agents")
+  const tReasons = useTranslations("Harness.pluginInstall.reasons")
   const labels = usePluginInstallLabels()
   const { slots } = useHarnessView()
   const baseId = useId()
   const mode = input.modes[row.agent] ?? "none"
   const detect = row.detect
+  // "This agent cannot have plugins at all" says nothing the disabled option
+  // does not: it goes on that option, not under the row — so rows whose
+  // only news is that stay one line, like the rest. A reason that is news
+  // (a version too old, the plugin not listing it) stays under the row.
+  const noAdapter = row.why_not?.code === "plugin_no_adapter"
+  const nativeOff =
+    !isModeOffered(row, "native") && row.why_not ? row.why_not : null
   return (
-    <li className="min-w-0 space-y-1.5 px-3 py-2.5">
-      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5">
-        <span className="flex min-w-0 items-center gap-2 text-sm">
+    <li className="flex min-w-0 flex-col gap-1.5 px-3 py-2.5">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+        <span className="flex min-h-5 min-w-0 items-center gap-2 text-sm">
           <AgentGlyph agent={row.agent} />
           <span className="font-medium whitespace-nowrap">
             {labels.agent(row.agent)}
@@ -342,6 +291,13 @@ function HostRow({
                 <RadioGroupItem id={id} value={option} disabled={!offered} />
                 <label
                   htmlFor={id}
+                  title={
+                    option === "native" && !offered && noAdapter
+                      ? tReasons("plugin_no_adapter", {
+                          agent: labels.agent(row.agent),
+                        })
+                      : undefined
+                  }
                   className={cn(
                     "text-xs whitespace-nowrap",
                     offered
@@ -356,10 +312,8 @@ function HostRow({
           })}
         </RadioGroup>
       </div>
-      {!isModeOffered(row, "native") && row.why_not && (
-        <RowNote>{labels.reason(row.why_not)}</RowNote>
-      )}
-      {!dialog.replanning && <RowEffects row={row} mode={mode} />}
+      {nativeOff && !noAdapter && <RowNote>{labels.reason(nativeOff)}</RowNote>}
+      <RowEffects row={row} mode={mode} stale={dialog.replanning} />
     </li>
   )
 }
@@ -376,10 +330,53 @@ function HostsPart({
   const t = useTranslations("Harness.pluginInstall.hosts")
   const tAgents = useTranslations("Harness.skillInstall.agents")
   const tInstall = useTranslations("Harness.install")
+  const labels = usePluginInstallLabels()
   const { slots } = useHarnessView()
   const stale = pluginPreviewIsStale(plan, input)
+  const setAll =
+    plan.hosts.length > 1 ? (
+      <span
+        role="group"
+        aria-label={t("setAll")}
+        className="inline-flex items-center gap-1.5"
+      >
+        <span aria-hidden="true">{t("setAll")}</span>
+        <span className="inline-flex items-center rounded-md bg-muted/60 p-0.5">
+          {PLUGIN_MODES.map((mode) => {
+            // Every agent has it already: shown as the state it is in.
+            const every = plan.hosts.every(
+              (row) => (input.modes[row.agent] ?? "none") === mode
+            )
+            const changes = pluginRowsToSetAll(plan, input, mode).length > 0
+            return (
+              <Button
+                key={mode}
+                type="button"
+                variant="ghost"
+                size="xs"
+                aria-pressed={every}
+                disabled={!changes}
+                onClick={() =>
+                  updatePluginInput(slots, dialog.id, (prev, current) =>
+                    setPluginModeForAll(current, prev, mode)
+                  )
+                }
+                className={cn(
+                  "h-6 rounded-sm px-2 text-2xs font-normal text-foreground max-md:h-9",
+                  every
+                    ? "bg-background font-medium shadow-xs disabled:opacity-100"
+                    : "disabled:text-muted-foreground"
+                )}
+              >
+                {labels.mode(mode)}
+              </Button>
+            )
+          })}
+        </span>
+      </span>
+    ) : undefined
   return (
-    <InstallPart title={t("title")}>
+    <InstallPart title={t("title")} aside={setAll}>
       <div className="min-w-0 space-y-2">
         {plan.hosts.length === 0 ? (
           <p className="text-xs text-muted-foreground">{t("none")}</p>
@@ -442,30 +439,23 @@ function AutorunPart({
   const needed = pluginConsentNeeded(plan, input)
   return (
     <InstallPart title={t("title")} aside={parts.length}>
-      <div className="min-w-0 space-y-2">
-        <AutorunList parts={parts} pkg={plan.full} />
-        {needed && (
-          <div className="flex min-w-0 items-start gap-2.5 rounded-lg border border-tone-warning/30 bg-tone-warning/10 px-3 py-2.5">
-            <Checkbox
-              id={id}
-              checked={pluginConsentGiven(plan, input)}
-              disabled={plan.consent_exec === null || dialog.replanning}
-              onCheckedChange={(next) =>
-                updatePluginInput(slots, dialog.id, (prev, current) =>
-                  setPluginConsent(current, prev, next === true)
-                )
+      <AutorunList
+        parts={parts}
+        pkg={plan.full}
+        consent={
+          needed
+            ? {
+                id,
+                checked: pluginConsentGiven(plan, input),
+                disabled: plan.consent_exec === null || dialog.replanning,
+                onChange: (agree) =>
+                  updatePluginInput(slots, dialog.id, (prev, current) =>
+                    setPluginConsent(current, prev, agree)
+                  ),
               }
-              className="mt-0.5 bg-background max-md:size-5"
-            />
-            <label
-              htmlFor={id}
-              className="min-w-0 cursor-pointer text-sm font-medium"
-            >
-              {t("consent")}
-            </label>
-          </div>
-        )}
-      </div>
+            : undefined
+        }
+      />
     </InstallPart>
   )
 }
@@ -613,7 +603,7 @@ function InputBody({
           </InstallPart>
           <HostsPart dialog={dialog} plan={plan} input={input} />
           <AutorunPart dialog={dialog} plan={plan} input={input} />
-          <PackagePart revision={target} />
+          <InstallPackagePart pkg={target} />
           <MissingSummary dialog={dialog} plan={plan} input={input} />
         </>
       )}

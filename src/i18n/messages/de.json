@@ -8454,7 +8454,11 @@
         "permissionsNotStated": "SRN Harness hat nicht gesagt, was er verlangt.",
         "noPermissions": "Nichts Besonderes.",
         "undeclared": "gefunden, nicht angegeben",
-        "declaredOnly": "angegeben, nicht gefunden"
+        "declaredOnly": "angegeben, nicht gefunden",
+        "undeclaredCount": "{count, plural, other {# nicht angegeben}}",
+        "moreValues": "{count, plural, other {# weitere}}",
+        "fewerValues": "Weniger anzeigen",
+        "noneDeclared": "Der Herausgeber hat nichts davon angegeben; alles wurde von den Prüfungen gefunden."
       },
       "blocked": {
         "title": "Das kann nicht installiert werden",
@@ -9315,8 +9319,9 @@
         "archive": "Aus der Kopie von SRN Harness geladen, gegen deren SHA-256-Hash <code>{hash}</code>… geprüft, dann Datei für Datei.",
         "source": "Von GitHub geholt: <code>{repository}</code> bei Commit <code>{commit}</code>, Ordner <code>{path}</code>. Jede Datei wird gegen ihren SHA-256-Hash geprüft.",
         "noSource": "SRN Harness bietet weder eine Kopie der Dateien noch eine Quelle, um sie zu holen.",
-        "files": "{count, plural, one {Die Datei anzeigen} other {Die # Dateien anzeigen}}",
-        "executable": "ausführbar"
+        "executable": "ausführbar",
+        "fileList": "Dateiliste",
+        "executableCount": "{count, plural, other {# ausführbar}}"
       },
       "name": {
         "title": "Installationsname",
@@ -9583,7 +9588,9 @@
           "monitor": "Monitor",
           "bin": "Befehl",
           "unknown": "Sonstiges"
-        }
+        },
+        "consentNote": "Mit dem Haken stimmst du zu, dass {count, plural, one {der obige Eintrag} other {die # obigen Einträge}} in den Agenten, die es als Plugin haben, automatisch ausgeführt {count, plural, one {wird} other {werden}}.",
+        "consentNoteNoList": "Mit dem Haken stimmst du zu, dass das, was dieses Plugin mitbringt, in den Agenten, die es als Plugin haben, automatisch ausgeführt wird."
       },
       "modes": {
         "native": "Als Plugin",
@@ -9598,7 +9605,8 @@
         "experts": "Übernimmt Experten-Skills {count, number}",
         "held": "Namen vergeben {count, number}",
         "copiesToTake": "In die Sicherungen verschobene Kopien:",
-        "noPreview": "Auswirkungen der Verlinkung nicht lesbar"
+        "noPreview": "Auswirkungen der Verlinkung nicht lesbar",
+        "setAll": "Alle"
       },
       "missing": {
         "noHosts": "Wähle für mindestens einen Agenten eine Installationsart.",

@@ -15,7 +15,9 @@ import {
   pluginVersionsOf,
   setPluginAcceptYanked,
   setPluginConsent,
+  pluginRowsToSetAll,
   setPluginHostMode,
+  setPluginModeForAll,
   type PluginInstallInput,
 } from "./plugin-install"
 import {
@@ -129,6 +131,26 @@ describe("the modes each agent starts with", () => {
     expect(
       setPluginHostMode(planned, input, "claude_code", "none").touched
     ).toEqual(["claude_code"])
+  })
+
+  it("sets every agent that offers a mode at once, and leaves the rest", () => {
+    const planned = plan()
+    const input = initialPluginInput(planned)
+    // Kiro cannot have it as a plugin: only Claude Code would change, and
+    // it already has.
+    expect(pluginRowsToSetAll(planned, input, "native")).toEqual([])
+    expect(setPluginModeForAll(planned, input, "native")).toBe(input)
+    expect(pluginRowsToSetAll(planned, input, "skills")).toEqual([
+      "claude_code",
+    ])
+    const none = setPluginModeForAll(planned, input, "none")
+    expect(none.modes).toEqual({ claude_code: "none", kiro: "none" })
+    expect(none.touched).toEqual(["claude_code", "kiro"])
+    // Back to plugins: Kiro keeps "not at all".
+    expect(setPluginModeForAll(planned, none, "native").modes).toEqual({
+      claude_code: "native",
+      kiro: "none",
+    })
   })
 })
 

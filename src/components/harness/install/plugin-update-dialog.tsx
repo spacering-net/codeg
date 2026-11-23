@@ -5,7 +5,6 @@ import { RefreshCw } from "lucide-react"
 import { useTranslations } from "next-intl"
 
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
 import { useHarnessView } from "@/contexts/harness-view-context"
 import { isRetryableFailure } from "@/lib/harness/errors"
 import { oneOf, pickLocalized } from "@/lib/harness/display"
@@ -275,31 +274,24 @@ function InputBody({
       )}
       {(plan.needs_consent || plan.autorun.length > 0) && (
         <InstallPart title={tAutorun("title")} aside={plan.autorun.length}>
-          <div className="min-w-0 space-y-2">
-            <AutorunList parts={plan.autorun} pkg={target} />
-            {plan.needs_consent && (
-              <div className="flex min-w-0 items-start gap-2.5 rounded-lg border border-tone-warning/30 bg-tone-warning/10 px-3 py-2.5">
-                <Checkbox
-                  id={consentId}
-                  checked={updateConsentGiven(plan, dialog.input)}
-                  disabled={plan.consent_exec === null}
-                  onCheckedChange={(next) =>
-                    updatePluginUpdateInput(slots, dialog.id, (prev) => ({
-                      ...prev,
-                      consentExec: next === true ? plan.consent_exec : null,
-                    }))
+          <AutorunList
+            parts={plan.autorun}
+            pkg={target}
+            consent={
+              plan.needs_consent
+                ? {
+                    id: consentId,
+                    checked: updateConsentGiven(plan, dialog.input),
+                    disabled: plan.consent_exec === null,
+                    onChange: (agree) =>
+                      updatePluginUpdateInput(slots, dialog.id, (prev) => ({
+                        ...prev,
+                        consentExec: agree ? plan.consent_exec : null,
+                      })),
                   }
-                  className="mt-0.5 bg-background max-md:size-5"
-                />
-                <label
-                  htmlFor={consentId}
-                  className="min-w-0 cursor-pointer text-sm font-medium"
-                >
-                  {tAutorun("consent")}
-                </label>
-              </div>
-            )}
-          </div>
+                : undefined
+            }
+          />
         </InstallPart>
       )}
       {!plan.up_to_date && blockers.length > 0 && (

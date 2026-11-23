@@ -8454,7 +8454,11 @@
         "permissionsNotStated": "O SRN Harness não informou o que ele pede.",
         "noPermissions": "Nada em particular.",
         "undeclared": "encontrado, não declarado",
-        "declaredOnly": "declarado, não encontrado"
+        "declaredOnly": "declarado, não encontrado",
+        "undeclaredCount": "{count, plural, one {# não declarado} other {# não declarados}}",
+        "moreValues": "{count, plural, other {mais #}}",
+        "fewerValues": "Mostrar menos",
+        "noneDeclared": "O publicador não declarou nenhum; todos foram encontrados pelas verificações."
       },
       "blocked": {
         "title": "Isto não pode ser instalado",
@@ -9315,8 +9319,9 @@
         "archive": "Baixado da cópia do SRN Harness, verificado pelo SHA-256 <code>{hash}</code>… e depois arquivo por arquivo.",
         "source": "Obtido do GitHub: <code>{repository}</code> no commit <code>{commit}</code>, pasta <code>{path}</code>. Cada arquivo é verificado pelo seu SHA-256.",
         "noSource": "O SRN Harness não oferece nem uma cópia dos arquivos nem uma origem de onde obtê-los.",
-        "files": "Mostrar {count, plural, one {o arquivo} other {os # arquivos}}",
-        "executable": "executável"
+        "executable": "executável",
+        "fileList": "Lista de arquivos",
+        "executableCount": "{count, plural, one {# executável} other {# executáveis}}"
       },
       "name": {
         "title": "Nome de instalação",
@@ -9583,7 +9588,9 @@
           "monitor": "Monitor",
           "bin": "Comando",
           "unknown": "Outro"
-        }
+        },
+        "consentNote": "Ao marcar isto, você concorda que {count, plural, one {o item acima execute} other {os # itens acima executem}} sozinhos nos agentes que o têm como plugin.",
+        "consentNoteNoList": "Ao marcar isto, você concorda que o que este plugin traz execute sozinho nos agentes que o têm como plugin."
       },
       "modes": {
         "native": "Como plugin",
@@ -9598,7 +9605,8 @@
         "experts": "Assume habilidades de Especialistas {count, number}",
         "held": "Nomes em uso {count, number}",
         "copiesToTake": "Cópias movidas para os backups:",
-        "noPreview": "Não foi possível ler o que o vínculo muda"
+        "noPreview": "Não foi possível ler o que o vínculo muda",
+        "setAll": "Todos"
       },
       "missing": {
         "noHosts": "Escolha como pelo menos um agente vai instalá-lo.",

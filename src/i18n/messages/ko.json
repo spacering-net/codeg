@@ -8454,7 +8454,11 @@
         "permissionsNotStated": "무엇을 요구하는지 SRN Harness가 알려 주지 않았습니다.",
         "noPermissions": "특별히 요구하는 것은 없습니다.",
         "undeclared": "감지됨, 선언되지 않음",
-        "declaredOnly": "선언됨, 감지되지 않음"
+        "declaredOnly": "선언됨, 감지되지 않음",
+        "undeclaredCount": "{count, plural, other {#개 선언되지 않음}}",
+        "moreValues": "{count, plural, other {#개 더 보기}}",
+        "fewerValues": "접기",
+        "noneDeclared": "게시자가 아무것도 선언하지 않았습니다. 아래는 모두 감지된 항목입니다."
       },
       "blocked": {
         "title": "설치할 수 없습니다",
@@ -9315,8 +9319,9 @@
         "archive": "SRN Harness의 사본에서 내려받아 SHA-256 <code>{hash}</code>…로 확인한 뒤, 파일 하나하나를 확인합니다.",
         "source": "GitHub에서 가져옵니다: 저장소 <code>{repository}</code>, 커밋 <code>{commit}</code>, 폴더 <code>{path}</code>. 파일마다 SHA-256으로 확인합니다.",
         "noSource": "SRN Harness가 파일 사본도, 파일을 가져올 출처도 제공하지 않습니다.",
-        "files": "{count, plural, other {파일 #개 보기}}",
-        "executable": "실행 가능"
+        "executable": "실행 가능",
+        "fileList": "파일 목록",
+        "executableCount": "{count, plural, other {실행 가능 #개}}"
       },
       "name": {
         "title": "설치 이름",
@@ -9583,7 +9588,9 @@
           "monitor": "모니터",
           "bin": "명령",
           "unknown": "기타"
-        }
+        },
+        "consentNote": "체크하면 위의 {count, plural, other {#개 항목}}이 플러그인으로 설치한 에이전트에서 자동으로 실행되는 데 동의하는 것입니다.",
+        "consentNoteNoList": "체크하면 이 플러그인의 내용이 플러그인으로 설치한 에이전트에서 자동으로 실행되는 데 동의하는 것입니다."
       },
       "modes": {
         "native": "플러그인으로 설치",
@@ -9598,7 +9605,8 @@
         "experts": "전문가 스킬 넘겨받기 {count, number}",
         "held": "이미 사용 중인 이름 {count, number}",
         "copiesToTake": "백업으로 옮길 사본:",
-        "noPreview": "링크의 영향을 읽을 수 없습니다"
+        "noPreview": "링크의 영향을 읽을 수 없습니다",
+        "setAll": "모두"
       },
       "missing": {
         "noHosts": "에이전트를 하나 이상 골라 설치 방식을 정하세요.",

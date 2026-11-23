@@ -146,6 +146,33 @@ export function setPluginHostMode(
   }
 }
 
+/** The agents "every agent: `mode`" would change: the rows that offer it
+ *  and are not in it already. A row that does not offer it keeps its own. */
+export function pluginRowsToSetAll(
+  plan: HarnessPluginPlan,
+  input: PluginInstallInput,
+  mode: PluginMode
+): string[] {
+  return plan.hosts
+    .filter(
+      (row) =>
+        isModeOffered(row, mode) && (input.modes[row.agent] ?? "none") !== mode
+    )
+    .map((row) => row.agent)
+}
+
+/** Every agent that offers `mode` set to it, as if chosen one by one. */
+export function setPluginModeForAll(
+  plan: HarnessPluginPlan,
+  input: PluginInstallInput,
+  mode: PluginMode
+): PluginInstallInput {
+  return pluginRowsToSetAll(plan, input, mode).reduce(
+    (next, agent) => setPluginHostMode(plan, next, agent, mode),
+    input
+  )
+}
+
 /** Agree (or not) to what runs on its own — as the plan has it now. */
 export function setPluginConsent(
   plan: HarnessPluginPlan,

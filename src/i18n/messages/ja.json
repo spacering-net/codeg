@@ -8454,7 +8454,11 @@
         "permissionsNotStated": "何を求めるかを SRN Harness は示していません。",
         "noPermissions": "特にありません。",
         "undeclared": "検出、未申告",
-        "declaredOnly": "申告、未検出"
+        "declaredOnly": "申告、未検出",
+        "undeclaredCount": "{count, plural, other {# 件が未申告}}",
+        "moreValues": "ほか {count, plural, other {# 件}}",
+        "fewerValues": "折りたたむ",
+        "noneDeclared": "公開者は何も申告していません。以下はすべて検出されたものです。"
       },
       "blocked": {
         "title": "これはインストールできません",
@@ -9315,8 +9319,9 @@
         "archive": "SRN Harness が保管するコピーからダウンロードし、SHA-256 <code>{hash}</code>… で照合してから、ファイルごとにチェックします。",
         "source": "GitHub から取得します（<code>{repository}</code>、コミット <code>{commit}</code>、フォルダー <code>{path}</code>）。各ファイルを SHA-256 で照合します。",
         "noSource": "SRN Harness は、ファイルのコピーも、ファイルの取得元も示していません。",
-        "files": "{count, plural, other {# 個のファイルを表示}}",
-        "executable": "実行可能"
+        "executable": "実行可能",
+        "fileList": "ファイル一覧",
+        "executableCount": "{count, plural, other {# 件が実行可能}}"
       },
       "name": {
         "title": "インストール名",
@@ -9583,7 +9588,9 @@
           "monitor": "モニター",
           "bin": "コマンド",
           "unknown": "その他"
-        }
+        },
+        "consentNote": "チェックすると、上の {count, plural, other {# 件}}がプラグインとして入れたエージェントで自動実行されることに同意したことになります。",
+        "consentNoteNoList": "チェックすると、このプラグインの内容がプラグインとして入れたエージェントで自動実行されることに同意したことになります。"
       },
       "modes": {
         "native": "プラグインとして",
@@ -9598,7 +9605,8 @@
         "experts": "エキスパートスキルを引き継ぐ {count, number}",
         "held": "使用中の名前 {count, number}",
         "copiesToTake": "バックアップに移すコピー：",
-        "noPreview": "リンクの影響を読み取れません"
+        "noPreview": "リンクの影響を読み取れません",
+        "setAll": "すべて"
       },
       "missing": {
         "noHosts": "少なくとも 1 つのエージェントのインストール方法を選んでください。",

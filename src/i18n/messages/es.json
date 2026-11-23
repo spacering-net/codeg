@@ -8454,7 +8454,11 @@
         "permissionsNotStated": "SRN Harness no indicó lo que pide.",
         "noPermissions": "Nada en particular.",
         "undeclared": "encontrado, no declarado",
-        "declaredOnly": "declarado, no encontrado"
+        "declaredOnly": "declarado, no encontrado",
+        "undeclaredCount": "{count, plural, one {# sin declarar} other {# sin declarar}}",
+        "moreValues": "{count, plural, one {# más} other {# más}}",
+        "fewerValues": "Mostrar menos",
+        "noneDeclared": "El editor no declaró ninguno; todos los encontraron las comprobaciones."
       },
       "blocked": {
         "title": "Esto no se puede instalar",
@@ -9315,8 +9319,9 @@
         "archive": "Se descarga de la copia de SRN Harness, se comprueba con su SHA-256 <code>{hash}</code>… y luego archivo por archivo.",
         "source": "Se obtiene de GitHub: <code>{repository}</code> en el commit <code>{commit}</code>, carpeta <code>{path}</code>. Cada archivo se comprueba con su SHA-256.",
         "noSource": "SRN Harness no ofrece ni una copia de sus archivos ni un origen del que obtenerlos.",
-        "files": "Mostrar {count, plural, one {el archivo} other {los # archivos}}",
-        "executable": "ejecutable"
+        "executable": "ejecutable",
+        "fileList": "Lista de archivos",
+        "executableCount": "{count, plural, one {# ejecutable} other {# ejecutables}}"
       },
       "name": {
         "title": "Nombre de instalación",
@@ -9583,7 +9588,9 @@
           "monitor": "Monitor",
           "bin": "Comando",
           "unknown": "Otro"
-        }
+        },
+        "consentNote": "Al marcar esto, aceptas que {count, plural, one {el elemento de arriba se ejecute} other {los # elementos de arriba se ejecuten}} por sí solos en los agentes que lo tengan como plugin.",
+        "consentNoteNoList": "Al marcar esto, aceptas que lo que trae este plugin se ejecute por sí solo en los agentes que lo tengan como plugin."
       },
       "modes": {
         "native": "Como plugin",
@@ -9598,7 +9605,8 @@
         "experts": "Sustituye habilidades de Expertos {count, number}",
         "held": "Nombres ocupados {count, number}",
         "copiesToTake": "Copias que pasan a las copias de seguridad:",
-        "noPreview": "No se pudo leer qué cambia el enlace"
+        "noPreview": "No se pudo leer qué cambia el enlace",
+        "setAll": "Todos"
       },
       "missing": {
         "noHosts": "Elige cómo lo instala al menos un agente.",

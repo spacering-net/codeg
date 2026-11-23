@@ -8454,7 +8454,11 @@
         "permissionsNotStated": "SRN Harness 沒有說明它要求哪些權限。",
         "noPermissions": "沒有特別的要求。",
         "undeclared": "偵測到，但未聲明",
-        "declaredOnly": "已聲明，但未偵測到"
+        "declaredOnly": "已聲明，但未偵測到",
+        "undeclaredCount": "{count, plural, other {# 項未聲明}}",
+        "moreValues": "還有 {count, plural, other {# 項}}",
+        "fewerValues": "收起",
+        "noneDeclared": "發布者沒有聲明任何權限，下面都是偵測到的。"
       },
       "blocked": {
         "title": "無法安裝",
@@ -9315,8 +9319,9 @@
         "archive": "從 SRN Harness 保存的副本下載，先按 SHA-256 <code>{hash}</code>… 核對整個壓縮檔，再逐一核對檔案。",
         "source": "從 GitHub 取得：儲存庫 <code>{repository}</code>，提交 <code>{commit}</code>，資料夾 <code>{path}</code>。每個檔案都按它的 SHA-256 核對。",
         "noSource": "SRN Harness 既沒有提供檔案的副本，也沒有提供取得檔案的來源。",
-        "files": "顯示 {count, plural, other {# 個檔案}}",
-        "executable": "可執行"
+        "executable": "可執行",
+        "fileList": "檔案清單",
+        "executableCount": "{count, plural, other {# 個可執行}}"
       },
       "name": {
         "title": "安裝名稱",
@@ -9583,7 +9588,9 @@
           "monitor": "監視器",
           "bin": "指令",
           "unknown": "其他"
-        }
+        },
+        "consentNote": "勾選即表示你同意上面 {count, plural, other {# 項}}在以外掛安裝的智能體裡自動執行。",
+        "consentNoteNoList": "勾選即表示你同意這個外掛帶的內容在以外掛安裝的智能體裡自動執行。"
       },
       "modes": {
         "native": "以外掛安裝",
@@ -9598,7 +9605,8 @@
         "experts": "接管專家技能 {count, number}",
         "held": "名稱已被占用 {count, number}",
         "copiesToTake": "移入備份的副本：",
-        "noPreview": "無法讀取連結的影響"
+        "noPreview": "無法讀取連結的影響",
+        "setAll": "全部設為"
       },
       "missing": {
         "noHosts": "為至少一個智能體選擇安裝方式。",

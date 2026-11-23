@@ -8454,7 +8454,11 @@
         "permissionsNotStated": "SRN Harness did not say what it asks for.",
         "noPermissions": "Nothing in particular.",
         "undeclared": "found, not declared",
-        "declaredOnly": "declared, not found"
+        "declaredOnly": "declared, not found",
+        "undeclaredCount": "{count, plural, other {# not declared}}",
+        "moreValues": "{count, plural, other {# more}}",
+        "fewerValues": "Show fewer",
+        "noneDeclared": "The publisher declared none of these; all were found by the checks."
       },
       "blocked": {
         "title": "This cannot be installed",
@@ -9315,8 +9319,9 @@
         "archive": "Downloaded from SRN Harness's copy, checked against its SHA-256 <code>{hash}</code>…, then file by file.",
         "source": "Fetched from GitHub, <code>{repository}</code> at commit <code>{commit}</code>, folder <code>{path}</code>. Each file is checked against its SHA-256.",
         "noSource": "SRN Harness gives neither a copy of its files nor a source to fetch them from.",
-        "files": "Show {count, plural, one {the file} other {the # files}}",
-        "executable": "executable"
+        "executable": "executable",
+        "fileList": "File list",
+        "executableCount": "{count, plural, other {# executable}}"
       },
       "name": {
         "title": "Install name",
@@ -9583,7 +9588,9 @@
           "monitor": "Monitor",
           "bin": "Command",
           "unknown": "Other"
-        }
+        },
+        "consentNote": "By ticking this, you agree to {count, plural, one {the item above} other {the # items above}} running on their own in the agents that have it as a plugin.",
+        "consentNoteNoList": "By ticking this, you agree to what this plugin brings running on its own in the agents that have it as a plugin."
       },
       "modes": {
         "native": "As a plugin",
@@ -9598,7 +9605,8 @@
         "experts": "Takes over Experts skills {count, number}",
         "held": "Names taken {count, number}",
         "copiesToTake": "Copies moved to backups:",
-        "noPreview": "Could not read what linking changes"
+        "noPreview": "Could not read what linking changes",
+        "setAll": "Set all"
       },
       "missing": {
         "noHosts": "Choose how at least one agent installs it.",

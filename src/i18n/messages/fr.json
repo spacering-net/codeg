@@ -8454,7 +8454,11 @@
         "permissionsNotStated": "SRN Harness n’a pas indiqué ce qu’il demande.",
         "noPermissions": "Rien de particulier.",
         "undeclared": "trouvé, non déclaré",
-        "declaredOnly": "déclaré, non trouvé"
+        "declaredOnly": "déclaré, non trouvé",
+        "undeclaredCount": "{count, plural, one {# non déclaré} other {# non déclarés}}",
+        "moreValues": "{count, plural, other {# de plus}}",
+        "fewerValues": "Afficher moins",
+        "noneDeclared": "L’éditeur n’en a déclaré aucun ; tous ont été trouvés par les vérifications."
       },
       "blocked": {
         "title": "Impossible d’installer ceci",
@@ -9315,8 +9319,9 @@
         "archive": "Téléchargé depuis la copie de SRN Harness, vérifié avec son SHA-256 <code>{hash}</code>…, puis fichier par fichier.",
         "source": "Récupéré depuis GitHub : <code>{repository}</code> au commit <code>{commit}</code>, dossier <code>{path}</code>. Chaque fichier est vérifié avec son SHA-256.",
         "noSource": "SRN Harness ne fournit ni copie de ses fichiers, ni source d’où les récupérer.",
-        "files": "Afficher {count, plural, one {le fichier} other {les # fichiers}}",
-        "executable": "exécutable"
+        "executable": "exécutable",
+        "fileList": "Liste des fichiers",
+        "executableCount": "{count, plural, one {# exécutable} other {# exécutables}}"
       },
       "name": {
         "title": "Nom d’installation",
@@ -9583,7 +9588,9 @@
           "monitor": "Moniteur",
           "bin": "Commande",
           "unknown": "Autre"
-        }
+        },
+        "consentNote": "En cochant ceci, vous acceptez que {count, plural, one {l’élément ci-dessus s’exécute} other {les # éléments ci-dessus s’exécutent}} tout seuls dans les agents qui l’ont en plugin.",
+        "consentNoteNoList": "En cochant ceci, vous acceptez que ce qu’apporte ce plugin s’exécute tout seul dans les agents qui l’ont en plugin."
       },
       "modes": {
         "native": "En plugin",
@@ -9598,7 +9605,8 @@
         "experts": "Remplace des compétences Experts {count, number}",
         "held": "Noms déjà pris {count, number}",
         "copiesToTake": "Copies placées dans les sauvegardes :",
-        "noPreview": "Impossible de lire ce que change le lien"
+        "noPreview": "Impossible de lire ce que change le lien",
+        "setAll": "Tous"
       },
       "missing": {
         "noHosts": "Choisissez comment au moins un agent l’installe.",
