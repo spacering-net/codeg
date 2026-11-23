@@ -62,18 +62,20 @@ export function FeedbackNotesDisplay({
       <div className="flex flex-col gap-0.5">
         {ordered.map((note) => {
           const delivered = note.status === "delivered"
+          const failed = note.status === "failed"
+          const recoverable = expired || failed
           return (
             <div
               key={note.id}
               className={cn(
                 "flex items-center gap-1 rounded-md border px-1.5 py-1 text-3xs leading-none select-none [text-box-trim:both] [text-box-edge:cap_alphabetic]",
-                expired
+                recoverable
                   ? "border-amber-500/40 bg-amber-500/5"
                   : "bg-muted/40 border-border/70"
               )}
-              title={note.text}
+              title={note.delivery_error ?? note.text}
             >
-              {expired ? (
+              {recoverable ? (
                 <CircleAlert className="h-3 w-3 shrink-0 text-amber-500" />
               ) : delivered ? (
                 <Check
@@ -86,10 +88,11 @@ export function FeedbackNotesDisplay({
                   aria-hidden
                 />
               )}
+              {failed && <span className="shrink-0">{t("submitFailed")}</span>}
               <span className="min-w-0 flex-1 truncate text-3xs text-foreground/80">
                 {note.text}
               </span>
-              {expired ? (
+              {recoverable ? (
                 <>
                   <button
                     type="button"

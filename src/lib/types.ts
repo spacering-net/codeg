@@ -3590,6 +3590,7 @@ export type AcpEvent =
       ids: string[]
       delivered_at: string
     }
+  | { type: "feedback_failed"; id: string; message: string }
   /**
    * An agent called `ask_user_question`: a blocking multiple-choice prompt the
    * user must answer. Broadcast so every client renders the interactive card
@@ -3780,7 +3781,7 @@ export interface ActiveDelegationState {
 }
 
 /** Lifecycle of a live-feedback note (mirror of Rust `FeedbackStatus`). */
-export type FeedbackStatus = "pending" | "delivered"
+export type FeedbackStatus = "pending" | "sent" | "delivered" | "failed"
 
 /**
  * A user-submitted live-feedback ("steering") note (mirror of Rust
@@ -3792,6 +3793,7 @@ export interface FeedbackItem {
   text: string
   created_at: string
   status: FeedbackStatus
+  delivery_error?: string | null
   delivered_at?: string | null
   /** What the user actually sent, when the note carried more than plain text
    *  (image attachments). Absent for a text-only note — every pull-channel one,

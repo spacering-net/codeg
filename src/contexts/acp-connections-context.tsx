@@ -5415,18 +5415,9 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           scheduleToolCallUpdateFlush()
           break
         case "feedback_submitted": {
-          // A note that is ALREADY `delivered` when it is submitted was pushed
-          // into the running turn over the native `_session/steering` channel
-          // (`FeedbackItem::new_delivered` is that path's only producer). The
-          // agent has the text as a user message, so the transcript shows it
-          // as one: it closes the assistant turn at this point in the stream
-          // and the reply to it starts a new turn.
-          //
-          // A `pending` note is the cooperative `check_user_feedback` pull
-          // channel — the agent has not read it, and when it does it arrives
-          // as a tool result, never a user message. Those stay in the notes
-          // list above the composer, which is where a reload leaves them too.
-          if (e.item.status !== "delivered") break
+          // Native inputs are user messages. Some adapters acknowledge them
+          // at turn end; a pull note is only ever displayed as a note.
+          if (e.item.status !== "delivered" && e.item.status !== "sent") break
           flushStreamingQueue(contextKey)
           dispatch({
             type: "STEERING_MESSAGE",

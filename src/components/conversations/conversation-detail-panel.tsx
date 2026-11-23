@@ -2227,9 +2227,9 @@ const ConversationTabView = memo(function ConversationTabView({
   // the user's note is never lost.
   const feedbackEnabled = useFeedbackEnabled()
   const resendFeedbackAsPrompt = useCallback(
-    (text: string) => {
+    (text: string, blocks?: PromptInputBlock[]) => {
       mqEnqueue(
-        { blocks: [{ type: "text", text }], displayText: text },
+        { blocks: blocks ?? [{ type: "text", text }], displayText: text },
         selectedModeId
       )
     },

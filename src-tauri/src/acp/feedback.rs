@@ -28,14 +28,31 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
+/// Wire protocol negotiated with an adapter that can accept input mid-turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeSteering {
+    SessionSteering,
+    MidTurnPrompt(MidTurnAdapter),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MidTurnAdapter {
+    Devin,
+    AntigravityCli,
+}
+
 /// Lifecycle of a single feedback note.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FeedbackStatus {
     /// Submitted by the user, not yet read by the agent.
     Pending,
-    /// Returned to the agent by a `check_user_feedback` call.
+    /// Submitted as a native prompt whose RPC is still in flight.
+    Sent,
+    /// Acknowledged by the adapter or returned by the pull tool.
     Delivered,
+    /// A native prompt was rejected after submission.
+    Failed,
 }
 
 /// A user-submitted live-feedback note, stored on `SessionState.feedback`.
@@ -50,9 +67,10 @@ pub struct FeedbackItem {
     pub text: String,
     pub created_at: DateTime<Utc>,
     pub status: FeedbackStatus,
-    /// When the agent read this note. `None` while `Pending`. On the native
-    /// push path it is the submit instant (see [`Self::new_delivered`]) — a
-    /// lower bound on the read rather than the read itself.
+    /// The adapter's rejection, retained for viewers that reconnect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_error: Option<String>,
+    /// Absent until the adapter or MCP tool acknowledges delivery.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivered_at: Option<DateTime<Utc>>,
     /// What the user actually sent, when the note carried more than plain text
@@ -84,39 +102,28 @@ impl FeedbackItem {
             text,
             created_at,
             status: FeedbackStatus::Pending,
+            delivery_error: None,
             delivered_at: None,
             blocks: None,
         }
     }
 
-    /// Build a note that is `Delivered` from birth — the native
-    /// `_session/steering` path, where the adapter has ALREADY consumed the
-    /// content by the time the note is recorded. Never `Pending`: that would
-    /// let `read_pending_feedback` hand the same text to a `check_user_feedback`
-    /// call and double-deliver it (the Pending-only read is the mutual
-    /// exclusion between the push and pull channels).
-    ///
-    /// `at` is the SUBMIT instant, taken before the injection is handed to the
-    /// adapter (`submit_feedback_native`), so `created_at` is provably earlier
-    /// than the agent's own transcript copy of the message — the ordering the
-    /// frontend needs to recognize that copy. `delivered_at` shares it, and is
-    /// therefore a lower bound on the read rather than the read itself.
-    ///
-    /// `blocks` is `Some` only when the draft carried more than plain text; see
-    /// the field's own doc for why `text` alone cannot stand in for it. Passing
-    /// `None` reproduces the historical text-only note byte for byte.
-    pub fn new_delivered(
+    /// Native notes are never eligible for the MCP pull tool. An adapter may
+    /// acknowledge the input immediately or return its receipt at turn end.
+    pub fn new_native(
         id: String,
         text: String,
         at: DateTime<Utc>,
         blocks: Option<Vec<crate::acp::types::UserMessageBlock>>,
+        acknowledged: bool,
     ) -> Self {
         Self {
             id,
             text,
             created_at: at,
-            status: FeedbackStatus::Delivered,
-            delivered_at: Some(at),
+            status: if acknowledged { FeedbackStatus::Delivered } else { FeedbackStatus::Sent },
+            delivered_at: acknowledged.then_some(at),
+            delivery_error: None,
             blocks,
         }
     }

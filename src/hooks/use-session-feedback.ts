@@ -48,6 +48,10 @@ import type {
   PromptInputBlock,
 } from "@/lib/types"
 
+type FeedbackSettlement =
+  | { status: "delivered"; delivered_at: string }
+  | { status: "failed"; delivery_error: string }
+
 /** Merge snapshot-hydrated notes with live ones, keyed by id; live entries win
  *  (they carry the most recent status). Snapshot order first, live-only after. */
 function mergeNotes(
@@ -56,7 +60,15 @@ function mergeNotes(
 ): FeedbackItem[] {
   const byId = new Map<string, FeedbackItem>()
   for (const n of base) byId.set(n.id, n)
-  for (const n of live) byId.set(n.id, n)
+  for (const n of live) {
+    const stored = byId.get(n.id)
+    if (
+      (stored?.status === "delivered" || stored?.status === "failed") &&
+      (n.status === "pending" || n.status === "sent")
+    )
+      continue
+    byId.set(n.id, n)
+  }
   return [...byId.values()]
 }
 
@@ -79,7 +91,7 @@ export interface UseSessionFeedbackArgs {
   steeredMessageIds?: readonly string[]
   /** Reroute a note as an ordinary prompt when the turn ended before it could be
    *  submitted (turn-end race). */
-  onResendAsPrompt?: (text: string) => void
+  onResendAsPrompt?: (text: string, blocks?: PromptInputBlock[]) => void
 }
 
 export interface UseSessionFeedback {
@@ -169,15 +181,14 @@ export function useSessionFeedback({
   // verify read that resolves after the user switched connections must not
   // latch the NEW connection's state.
   const connectionIdRef = useRef(connectionId)
-  // Tombstones for notes consumed via `feedback_consumed` whose
-  // `feedback_submitted` we never held (a consume event that lands BEFORE the
-  // matching submit — e.g. before snapshot hydration resolves, or out-of-order
-  // broadcast). Applied so a stale snapshot or a late submit can't resurrect a
-  // note as `pending` after the agent already read it.
-  const consumedRef = useRef<Map<string, string>>(new Map())
+  // Settlement events may precede the submit result or snapshot containing the note.
+  const settlements = useRef(new Map<string, FeedbackSettlement>())
+  // Keep the sender's original attachment blocks for an explicit retry if the
+  // adapter rejects a submitted prompt. Snapshots may trim large attachments.
+  const submittedBlocks = useRef(new Map<string, PromptInputBlock[]>())
   // Ids the user retired from the expired list (resent as a message, or
   // dismissed). Tombstoned rather than merely filtered out of `notes` for the
-  // same reason as `consumedRef`: a reconnect re-hydrates from the snapshot,
+  // same reason as the settlement records: a reconnect re-hydrates from the snapshot,
   // which still carries the note until the next turn clears it backend-side,
   // and a row the user already dealt with must not come back.
   const dismissedRef = useRef<Set<string>>(new Set())
@@ -201,6 +212,14 @@ export function useSessionFeedback({
 
   const isPrompting = connStatus === "prompting"
 
+  const rememberNote = useCallback((item: FeedbackItem) => {
+    if (dismissedRef.current.has(item.id)) return
+    const reconciled = { ...item, ...settlements.current.get(item.id) }
+    setNotes((prev) =>
+      prev.some((n) => n.id === item.id) ? prev : [...prev, reconciled]
+    )
+  }, [])
+
   // Reset on connection change, then hydrate from the snapshot: recover pending
   // notes (a refresh / second mid-turn viewer won't get the one-shot
   // `feedback_submitted` events) AND read the agent's real feedback-tool
@@ -215,7 +234,8 @@ export function useSessionFeedback({
     setNativeSteering(false)
     /* eslint-enable react-hooks/set-state-in-effect */
     steeringDowngradedRef.current = false
-    consumedRef.current = new Map()
+    settlements.current.clear()
+    submittedBlocks.current.clear()
     // `dismissedRef` deliberately survives this reset: note ids are uuids, so a
     // carried-over tombstone can never suppress another connection's row, and
     // keeping it is what stops a re-hydrate (same connection, feature flag
@@ -242,12 +262,10 @@ export function useSessionFeedback({
           (n) => !dismissedRef.current.has(n.id)
         )
         if (hydrated.length === 0) return
-        const reconciled = hydrated.map((n) => {
-          const at = consumedRef.current.get(n.id)
-          return at
-            ? { ...n, status: "delivered" as const, delivered_at: at }
-            : n
-        })
+        const reconciled = hydrated.map((n) => ({
+          ...n,
+          ...settlements.current.get(n.id),
+        }))
         setNotes((prev) => mergeNotes(reconciled, prev))
       })
       .catch(() => {})
@@ -289,24 +307,19 @@ export function useSessionFeedback({
         if (envelope.connection_id !== connectionId) return
         switch (envelope.type) {
           case "feedback_submitted": {
-            // A broadcast that lands after the user retired the row (dismissed
-            // or resent) must not re-add it.
-            if (dismissedRef.current.has(envelope.item.id)) break
-            // If a consume already arrived for this id (out-of-order broadcast),
-            // honor the tombstone so it never shows as pending.
-            const at = consumedRef.current.get(envelope.item.id)
-            const item: FeedbackItem = at
-              ? { ...envelope.item, status: "delivered", delivered_at: at }
-              : envelope.item
-            setNotes((prev) =>
-              prev.some((n) => n.id === item.id) ? prev : [...prev, item]
-            )
+            rememberNote(envelope.item)
             break
           }
           case "feedback_consumed": {
             const ids = new Set(envelope.ids)
             const at = envelope.delivered_at
-            for (const id of envelope.ids) consumedRef.current.set(id, at)
+            for (const id of ids) {
+              settlements.current.set(id, {
+                status: "delivered",
+                delivered_at: at,
+              })
+              submittedBlocks.current.delete(id)
+            }
             setNotes((prev) =>
               prev.map((n) =>
                 ids.has(n.id)
@@ -316,13 +329,39 @@ export function useSessionFeedback({
             )
             break
           }
+          case "feedback_failed": {
+            const failure = {
+              status: "failed" as const,
+              delivery_error: envelope.message,
+            }
+            settlements.current.set(envelope.id, failure)
+            setNotes((prev) =>
+              prev.map((n) => (n.id === envelope.id ? { ...n, ...failure } : n))
+            )
+            break
+          }
           case "user_message": {
             // A new turn started — notes are turn-scoped, mirror the backend
             // clear so a fresh turn begins empty. Bump the generation so an
             // in-flight snapshot fetch from the previous turn can't re-add them.
+            //
+            // Except a rejected native prompt: the composer cleared its draft
+            // on submit, so the note is the user's only copy, and a queued
+            // message can start this turn before they saw the rejection. It
+            // stays here (with its blocks) until resent or dismissed.
             turnGenRef.current += 1
-            setNotes([])
-            consumedRef.current = new Map()
+            const failed = new Set(
+              [...settlements.current]
+                .filter(([, settlement]) => settlement.status === "failed")
+                .map(([id]) => id)
+            )
+            setNotes((prev) =>
+              prev.filter((n) => n.status === "failed" || failed.has(n.id))
+            )
+            for (const id of settlements.current.keys())
+              if (!failed.has(id)) settlements.current.delete(id)
+            for (const id of submittedBlocks.current.keys())
+              if (!failed.has(id)) submittedBlocks.current.delete(id)
             // The backend cleared these notes too, so their tombstones have
             // nothing left to guard — dropping them bounds the set.
             dismissedRef.current = new Set()
@@ -330,7 +369,7 @@ export function useSessionFeedback({
           }
         }
       },
-      [connectionId]
+      [connectionId, rememberNote]
     )
   )
 
@@ -401,13 +440,16 @@ export function useSessionFeedback({
         return
       }
       setSubmitting(true)
+      const generation = turnGenRef.current
       try {
         const item = await submitSessionFeedback(connectionId, text)
-        reconcileChannel(item)
-        // Optimistically add; the broadcast event dedups against this by id.
-        setNotes((prev) =>
-          prev.some((n) => n.id === item.id) ? prev : [...prev, item]
-        )
+        if (
+          connectionIdRef.current === connectionId &&
+          generation === turnGenRef.current
+        ) {
+          reconcileChannel(item)
+          rememberNote(item)
+        }
         setDialogOpen(false)
       } catch (err: unknown) {
         if (isNoActiveTurnRejection(err) && onResendAsPrompt) {
@@ -436,6 +478,7 @@ export function useSessionFeedback({
       nativeSteering,
       onResendAsPrompt,
       reconcileChannel,
+      rememberNote,
       t,
     ]
   )
@@ -454,20 +497,31 @@ export function useSessionFeedback({
       if (!text || !connectionId) {
         throw new Error("nothing to steer")
       }
+      const generation = turnGenRef.current
       const item = await submitSessionFeedback(connectionId, text, blocks)
       // A resolution that landed after a connection switch must not touch the
       // new connection's channel state or note list (reconcileChannel guards
       // itself too; the append needs the same protection).
-      if (connectionIdRef.current === connectionId) {
+      if (connectionIdRef.current !== connectionId) return item
+      // A rejection can arrive, and a queued message start the next turn,
+      // before this response does. The failed note outlives that turn, so it
+      // still needs the original draft for its retry.
+      const failed = settlements.current.get(item.id)?.status === "failed"
+      if (generation === turnGenRef.current || failed) {
         reconcileChannel(item)
         // Optimistically add; the broadcast event dedups against this by id.
-        setNotes((prev) =>
-          prev.some((n) => n.id === item.id) ? prev : [...prev, item]
-        )
+        if (
+          blocks &&
+          item.status === "sent" &&
+          settlements.current.get(item.id)?.status !== "delivered"
+        ) {
+          submittedBlocks.current.set(item.id, blocks)
+        }
+        rememberNote(item)
       }
       return item
     },
-    [connectionId, reconcileChannel]
+    [connectionId, reconcileChannel, rememberNote]
   )
 
   const openDialog = useCallback(() => setDialogOpen(true), [])
@@ -478,6 +532,10 @@ export function useSessionFeedback({
   // the user is still being asked about.
   const dismissNote = useCallback((id: string) => {
     dismissedRef.current.add(id)
+    // Retired for good: a failure settlement would otherwise carry the row
+    // past the next turn, whose reset drops this tombstone.
+    settlements.current.delete(id)
+    submittedBlocks.current.delete(id)
     setNotes((prev) => prev.filter((n) => n.id !== id))
   }, [])
 
@@ -494,8 +552,12 @@ export function useSessionFeedback({
       const note = notesRef.current.find((n) => n.id === id)
       if (!note) return
       dismissedRef.current.add(id)
+      settlements.current.delete(id)
       setNotes((prev) => prev.filter((n) => n.id !== id))
-      onResendAsPrompt?.(note.text)
+      const blocks = submittedBlocks.current.get(id) ?? note.blocks
+      submittedBlocks.current.delete(id)
+      if (blocks?.length) onResendAsPrompt?.(note.text, blocks)
+      else onResendAsPrompt?.(note.text)
     },
     [onResendAsPrompt]
   )
@@ -514,7 +576,9 @@ export function useSessionFeedback({
   const unadoptedNotes = useMemo(() => {
     if (!steeredMessageIds || steeredMessageIds.length === 0) return notes
     const adopted = new Set(steeredMessageIds)
-    const remaining = notes.filter((n) => !adopted.has(n.id))
+    const remaining = notes.filter(
+      (n) => n.status === "failed" || !adopted.has(n.id)
+    )
     return remaining.length === notes.length ? notes : remaining
   }, [notes, steeredMessageIds])
   // Past the turn, only an UNREAD note still has something to offer: a
@@ -522,8 +586,11 @@ export function useSessionFeedback({
   // ones stay up in the expired form — the list used to require `isPrompting`
   // outright, which is how a note the agent never got to vanished without a
   // word (and the next turn then cleared it for good).
-  const unreadNotes = useMemo(
-    () => unadoptedNotes.filter((n) => n.status === "pending"),
+  const unsettledNotes = useMemo(
+    () =>
+      unadoptedNotes.filter(
+        (n) => n.status === "pending" || n.status === "failed"
+      ),
     [unadoptedNotes]
   )
   // A live, IDLE session is the only proof the turn actually ended. Not merely
@@ -535,9 +602,10 @@ export function useSessionFeedback({
   // resends a copy, the agent then reads the original, and the same
   // instruction lands twice. So the ambiguous states keep the historical hide.
   const turnEnded = connStatus === "connected"
-  const visibleNotes = turnEnded ? unreadNotes : unadoptedNotes
+  const visibleNotes = turnEnded ? unsettledNotes : unadoptedNotes
   const showList = visibleNotes.length > 0 && (isPrompting || turnEnded)
-  const notesExpired = turnEnded && visibleNotes.length > 0
+  const notesExpired =
+    turnEnded && visibleNotes.some((n) => n.status === "pending")
 
   return useMemo(
     () => ({
