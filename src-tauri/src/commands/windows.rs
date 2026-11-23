@@ -1473,6 +1473,45 @@ fn resolve_saved_pet_origin_physical(
     })
 }
 
+/// The pet window's live `(outer x, outer y, scale factor)` in the same shape
+/// `pet_window_record_position` stores, for saving on quit. `None` when the
+/// window can't report it or is minimized (Windows parks minimized windows at
+/// -32000, which must not overwrite a real saved position).
+#[cfg(feature = "tauri-runtime")]
+pub(crate) fn pet_window_live_origin(
+    window: &tauri::WebviewWindow,
+) -> Option<(f64, f64, Option<f64>)> {
+    if window.is_minimized().unwrap_or(false) {
+        return None;
+    }
+    let pos = window.outer_position().ok()?;
+    let scale_factor = window
+        .scale_factor()
+        .ok()
+        .filter(|sf| sf.is_finite() && *sf > 0.0);
+    Some((f64::from(pos.x), f64::from(pos.y), scale_factor))
+}
+
+/// Physical top-left of the monitor holding a resolved (already clamped)
+/// physical origin, for Windows / Linux where physical monitor rects do not
+/// overlap.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn pet_origin_monitor_corner(
+    origin: SavedPetOrigin,
+    monitors: &[(i32, i32, u32, u32, f64)],
+) -> Option<(i32, i32)> {
+    monitors
+        .iter()
+        .find(|&&(mx, my, mw, mh, _)| {
+            let (mx, my) = (f64::from(mx), f64::from(my));
+            origin.x >= mx
+                && origin.x < mx + f64::from(mw)
+                && origin.y >= my
+                && origin.y < my + f64::from(mh)
+        })
+        .map(|&(mx, my, ..)| (mx, my))
+}
+
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn open_pet_window(
@@ -1581,7 +1620,17 @@ pub async fn open_pet_window(
     #[cfg(not(target_os = "macos"))]
     if let Some(saved) = saved_origin {
         let origin = tauri::PhysicalPosition::new(saved.x.round() as i32, saved.y.round() as i32);
-        let _ = window.set_position(origin);
+        // Stage at the target monitor's own top-left first. The window still
+        // has the build monitor's physical size here, so moving it straight
+        // to a saved origin near a seam can leave most of it on the build
+        // monitor — Windows then keeps that monitor's DPI and the logical
+        // resize below lands at the wrong physical size. Starting from the
+        // target monitor's corner puts the window wholly on it, the DPI
+        // switches, and the final move is to an origin already clamped to fit.
+        let staging = pet_origin_monitor_corner(saved, &monitors)
+            .map(|(x, y)| tauri::PhysicalPosition::new(x, y))
+            .unwrap_or(origin);
+        let _ = window.set_position(staging);
         let _ = window.set_size(LogicalSize::new(pet_w, pet_h));
         let _ = window.set_position(origin);
     }
@@ -1921,9 +1970,17 @@ fn open_pet_panel_window(app: &AppHandle) -> Result<(), AppCommandError> {
         .focused(true)
         .accept_first_mouse(true);
 
-    apply_pet_window_style(builder)
+    let panel = apply_pet_window_style(builder)
         .build()
         .map_err(|e| AppCommandError::window("Failed to open pet panel", e.to_string()))?;
+
+    // Show it here rather than waiting for the renderer's first
+    // `resize_pet_panel`: that call is scheduled from `requestAnimationFrame`,
+    // which a hidden WKWebView never runs, so a panel left hidden would stay
+    // hidden. `tauri-plugin-window-state` used to do this show + focus for us
+    // on window-ready; the panel is now on its denylist.
+    let _ = panel.show();
+    let _ = panel.set_focus();
 
     Ok(())
 }
@@ -3014,8 +3071,8 @@ mod macos_fullscreen_close_tests {
 #[cfg(test)]
 mod pet_window_origin_tests {
     use super::{
-        resolve_saved_pet_origin_macos, resolve_saved_pet_origin_physical, SavedPetOrigin,
-        PET_BASE_HEIGHT, PET_BASE_WIDTH,
+        pet_origin_monitor_corner, resolve_saved_pet_origin_macos,
+        resolve_saved_pet_origin_physical, SavedPetOrigin, PET_BASE_HEIGHT, PET_BASE_WIDTH,
     };
 
     // Mixed-DPI setup: 2× primary Retina at (0, 0) + 1× external monitor to its left.
@@ -3127,6 +3184,37 @@ mod pet_window_origin_tests {
                 pet_h,
                 &MIXED_DPI_LEFT,
             ),
+            None
+        );
+    }
+
+    #[test]
+    fn physical_restore_stages_at_the_target_monitor_corner() {
+        let pet_w = PET_BASE_WIDTH * 0.75; // 144 logical
+        let pet_h = PET_BASE_HEIGHT * 0.75; // 156 logical
+
+        // 250% primary with a 100% display directly to its left. Saved just
+        // left of the seam: fits on the 1x display (144 px wide), but a window
+        // still carrying the primary's 360 px width would straddle the seam
+        // with most of itself on the primary. Staging goes to the 1x corner.
+        let seam = [(0, 0, 3840, 2160, 2.5), (-1920, 0, 1920, 1080, 1.0)];
+        let origin = resolve_saved_pet_origin_physical(Some((-160.0, 500.0)), pet_w, pet_h, &seam)
+            .expect("origin on the 1x display");
+        assert_eq!(
+            origin,
+            SavedPetOrigin {
+                x: -160.0,
+                y: 500.0
+            }
+        );
+        assert_eq!(pet_origin_monitor_corner(origin, &seam), Some((-1920, 0)));
+
+        assert_eq!(
+            pet_origin_monitor_corner(SavedPetOrigin { x: 10.0, y: 10.0 }, &seam),
+            Some((0, 0))
+        );
+        assert_eq!(
+            pet_origin_monitor_corner(SavedPetOrigin { x: 5000.0, y: 10.0 }, &seam),
             None
         );
     }
