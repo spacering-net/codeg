@@ -211,17 +211,24 @@ function useLocalImageSrc(
     const mime = MIME_BY_EXT[ext] ?? "image/png"
 
     void (async () => {
+      let lastError: unknown = null
       for (const candidate of candidates) {
+        // Unmounted or src changed: don't keep issuing reads for a stale ref.
+        if (cancelled) return
         try {
           const b64 = await readFileBase64(candidate)
           if (!cancelled) setDataUrl(`data:${mime};base64,${b64}`)
           return
-        } catch {
+        } catch (err) {
           // Try the next interpretation of this destination.
+          lastError = err
         }
       }
       if (!cancelled) {
-        console.error(`[PreviewImage] readFileBase64 failed for "${cleaned}"`)
+        console.error(
+          `[PreviewImage] readFileBase64 failed for "${cleaned}" (tried ${candidates.join(", ") || "nothing"}):`,
+          typeof lastError === "object" ? JSON.stringify(lastError) : lastError
+        )
       }
     })()
     return () => {
