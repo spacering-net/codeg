@@ -7983,6 +7983,9 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   // Selector setters per contextKey (see `trackSetter`).
   const inflightSettersRef = useRef(new Map<string, Set<Promise<unknown>>>())
   const setterTailRef = useRef(new Map<string, Promise<unknown>>())
+  // Prompts sent per contextKey, so a close that waited can tell a send made
+  // meanwhile from ordinary event traffic.
+  const promptSeqRef = useRef(new Map<string, number>())
 
   const disconnect = useCallback(
     async (contextKey: string): Promise<boolean> => {
@@ -8055,7 +8058,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         ...(inflightSettersRef.current.get(contextKey) ?? []),
       ]
       if (pendingSetters.length > 0) {
-        const activityBefore = lastActivityRef.current.get(contextKey)
+        const promptsBefore = promptSeqRef.current.get(contextKey) ?? 0
         await Promise.race([
           Promise.allSettled(pendingSetters),
           new Promise((resolve) => setTimeout(resolve, 5000)),
@@ -8067,7 +8070,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         const current = storeRef.current.connections.get(contextKey)
         const movedOrReused =
           current?.connectionId !== conn.connectionId ||
-          lastActivityRef.current.get(contextKey) !== activityBefore ||
+          (promptSeqRef.current.get(contextKey) ?? 0) !== promptsBefore ||
           Array.from(storeRef.current.connections).some(
             ([key, other]) =>
               key !== contextKey && other.connectionId === conn.connectionId
@@ -8384,6 +8387,10 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       const conn = storeRef.current.connections.get(contextKey)
       if (!conn) return
       lastActivityRef.current.set(contextKey, Date.now())
+      promptSeqRef.current.set(
+        contextKey,
+        (promptSeqRef.current.get(contextKey) ?? 0) + 1
+      )
       try {
         await acpPrompt(
           conn.connectionId,
