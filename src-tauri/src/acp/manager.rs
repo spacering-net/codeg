@@ -2434,9 +2434,7 @@ impl ConnectionManager {
         link_conversation_id: Option<i32>,
         link_folder_id: Option<i32>,
         // Fork at this rendered turn instead of at the tail ("fork from here").
-        // Resolved to an agent-specific `ForkPoint` below; a turn this agent
-        // cannot name simply forks at the tail, which is what fork-send has
-        // always done.
+        // Resolved to an agent-specific `ForkPoint` below.
         fork_from_turn_id: Option<String>,
     ) -> Result<ForkResultInfo, AcpError> {
         let (state_arc, cmd_tx, emitter) = {
@@ -2501,24 +2499,24 @@ impl ConnectionManager {
 
         // Resolve the fork point BEFORE the cancellation shield below: this is
         // a read-only parse, so a caller that disappears here has changed
-        // nothing. Failing to resolve is not an error — it degrades to the tail
-        // fork rather than refusing the user's click.
+        // nothing. A historical Codex point must not silently select a later tail.
         let fork_point = match fork_from_turn_id {
             None => None,
             Some(turn_id) => {
                 let agent_type = state_arc.read().await.agent_type;
-                match crate::commands::conversations::get_folder_conversation_core(
+                match crate::commands::conversations::get_folder_conversation_with_text(
                     &db.conn,
                     conversation_id,
+                    crate::parsers::codex::CodexText::Fork,
                 )
                 .await
                 {
                     Ok((detail, _)) => {
-                        let point = crate::acp::fork::resolve_fork_point(
+                        let point = crate::acp::fork::requested_fork_point(
                             &detail.turns,
                             &turn_id,
                             agent_type,
-                        );
+                        )?;
                         if point.is_none() {
                             tracing::info!(
                                 connection_id = %conn_id,
@@ -2530,13 +2528,23 @@ impl ConnectionManager {
                         point
                     }
                     Err(e) => {
+                        // A historical Codex point refuses rather than tail-forks;
+                        // say why it could not be located, not just that it wasn't.
+                        let point =
+                            crate::acp::fork::requested_fork_point(&[], &turn_id, agent_type)
+                                .map_err(|_| {
+                                    AcpError::protocol(format!(
+                                        "Cannot read the conversation to locate the selected \
+                                         Codex fork point {turn_id}: {e}"
+                                    ))
+                                })?;
                         tracing::warn!(
                             connection_id = %conn_id,
                             turn_id = %turn_id,
                             "[ACP] could not read the conversation to resolve a fork point \
                              ({e}); forking at the tail"
                         );
-                        None
+                        point
                     }
                 }
             }
