@@ -255,4 +255,25 @@ describe("useAgentOptions cache retention", () => {
       null
     )
   })
+
+  it("keeps the original freshness timestamp when a hit refreshes recency", async () => {
+    const { result } = renderHook(() =>
+      useAgentOptions("open_code", "/workspaces/options-cache-ttl", false)
+    )
+
+    await result.current.ensure()
+    expect(describeAgentOptions).toHaveBeenCalledTimes(1)
+
+    // A hit inside the TTL is served from cache and moves the entry to the
+    // most-recent end...
+    vi.advanceTimersByTime(20_000)
+    await result.current.ensure()
+    expect(describeAgentOptions).toHaveBeenCalledTimes(1)
+
+    // ...but must not restart its 30s clock: 31s after the PROBE it is stale,
+    // even though it was read only 11s ago.
+    vi.advanceTimersByTime(11_000)
+    await result.current.ensure()
+    expect(describeAgentOptions).toHaveBeenCalledTimes(2)
+  })
 })
