@@ -725,6 +725,55 @@ mod tests {
         );
     }
 
+    /// Codex builds a multi-part reply's item from its parts concatenated as-is,
+    /// while codeg renders them joined by newlines. The completion twin must be
+    /// matched on Codex's text, or an id-less record loses the only id it has
+    /// and falls back to a fingerprint no Codex item carries.
+    #[test]
+    fn codex_multi_part_reply_takes_its_completion_id() {
+        use crate::parsers::{
+            codex::{CodexParser, CodexText},
+            AgentParser,
+        };
+        use serde_json::json;
+
+        let records = [
+            ("session_meta", json!({"id":"multi-part","cwd":"/repo"})),
+            (
+                "event_msg",
+                json!({"type":"item_completed", "thread_id":"multi-part",
+                "item":{"type":"AgentMessage", "id":"msg-completed",
+                "content":[{"type":"Text","text":"Read this."}]}}),
+            ),
+            (
+                "response_item",
+                json!({"type":"message", "role":"assistant", "content":[
+                    {"type":"output_text", "text":"Read "},
+                    {"type":"output_text",
+                     "text":"<oai-mem-citation>memory</oai-mem-citation>this."}
+                ]}),
+            ),
+        ];
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = records
+            .into_iter()
+            .map(|(kind, payload)| {
+                json!({"timestamp":"2026-10-29T10:00:00Z","type":kind,"payload":payload})
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(dir.path().join("multi-part.jsonl"), transcript).unwrap();
+        let native = CodexParser::with_base_dir(dir.path().to_owned())
+            .with_text(CodexText::Fork)
+            .get_conversation("multi-part")
+            .unwrap();
+        let point = requested_fork_point(&native.turns, &native.turns[0].id, AgentType::Codex)
+            .unwrap()
+            .unwrap();
+        assert_eq!(point.message_id, "msg-completed");
+    }
+
     /// A failed round's closing line (and a turn with nothing to render) is
     /// stepped over by the UI's tail marker, so the text-less reply before it
     /// is still the tail and must still tail-fork, as it did before.

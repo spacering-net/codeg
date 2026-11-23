@@ -5119,8 +5119,12 @@ impl CodexParser {
                                 let source_id = if is_user {
                                     None
                                 } else {
-                                    agent_message_id(payload)
-                                        .or_else(|| completed_twin_id(preceding_agent, &text))
+                                    agent_message_id(payload).or_else(|| {
+                                        completed_twin_id(
+                                            preceding_agent,
+                                            &codex_item_text(payload),
+                                        )
+                                    })
                                 };
                                 let mut blocks = blocks;
                                 // A reply to codex's async questions folds into
@@ -6021,6 +6025,27 @@ fn completed_twin_id(anchor: Option<(String, String)>, text: &str) -> Option<Str
     let (id, fingerprint) = anchor?;
     (crate::acp::fork::fingerprint_agent_message(&without_memory_citations(text)) == fingerprint)
         .then_some(id)
+}
+
+/// An assistant record's text the way Codex builds its item from it: every
+/// text part concatenated as-is (`parse_agent_message`, `finalize_turn_item`).
+/// Not the `"\n"`-joined text [`extract_response_item_message_blocks`]
+/// renders, which would miss the twin of a multi-part reply.
+fn codex_item_text(payload: &serde_json::Value) -> String {
+    match payload.get("content") {
+        Some(serde_json::Value::String(text)) => text.clone(),
+        Some(serde_json::Value::Array(parts)) => parts
+            .iter()
+            .filter(|part| {
+                matches!(
+                    part.get("type").and_then(|t| t.as_str()),
+                    Some("output_text" | "input_text")
+                )
+            })
+            .filter_map(|part| part.get("text")?.as_str())
+            .collect(),
+        _ => String::new(),
+    }
 }
 
 fn agent_message_id(payload: &serde_json::Value) -> Option<String> {
