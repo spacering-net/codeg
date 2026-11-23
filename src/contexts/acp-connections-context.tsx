@@ -7980,13 +7980,6 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   )
   connectRef.current = connect
 
-  // Selector setters per contextKey (see `trackSetter`).
-  const inflightSettersRef = useRef(new Map<string, Set<Promise<unknown>>>())
-  const setterTailRef = useRef(new Map<string, Promise<unknown>>())
-  // Prompts sent per contextKey, so a close that waited can tell a send made
-  // meanwhile from ordinary event traffic.
-  const promptSeqRef = useRef(new Map<string, number>())
-
   const disconnect = useCallback(
     async (contextKey: string): Promise<boolean> => {
       pendingConnectRequestsRef.current.delete(contextKey)
@@ -8050,33 +8043,6 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       // a caller that announces "restarted" on one of those would be wrong —
       // the follow-up connect can re-attach to the process it believed it had
       // replaced. Report which happened and let the caller decide.
-      // A pick still queued behind a slow earlier setter must reach the
-      // agent before the connection goes, or the conversation's stored
-      // selection ends on the earlier pick (codeg#1179). Bounded: a hung
-      // setter never holds a close.
-      const pendingSetters = [
-        ...(inflightSettersRef.current.get(contextKey) ?? []),
-      ]
-      if (pendingSetters.length > 0) {
-        const promptsBefore = promptSeqRef.current.get(contextKey) ?? 0
-        await Promise.race([
-          Promise.allSettled(pendingSetters),
-          new Promise((resolve) => setTimeout(resolve, 5000)),
-        ])
-        // The wait yielded: the connection may have been picked up again
-        // meanwhile (a reopen re-keying it to a new tab, or a send on this
-        // key). Tearing it down then would end work the user just started —
-        // leave it to whoever holds it now.
-        const current = storeRef.current.connections.get(contextKey)
-        const movedOrReused =
-          current?.connectionId !== conn.connectionId ||
-          (promptSeqRef.current.get(contextKey) ?? 0) !== promptsBefore ||
-          Array.from(storeRef.current.connections).some(
-            ([key, other]) =>
-              key !== contextKey && other.connectionId === conn.connectionId
-          )
-        if (movedOrReused) return true
-      }
       let tornDown = true
       await acpDisconnect(conn.connectionId).catch((error: unknown) => {
         if (isConnectionGoneError(error)) return
@@ -8336,21 +8302,19 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   // Selector setters still in flight per contextKey. A setter's IPC returns
   // once its command is enqueued on the connection, and the prompt goes
   // through the same queue — so a prompt issued after every earlier setter's
-  // IPC returned runs with what the composer showed (codeg#1179). Setters for
-  // one contextKey are also issued one after another: two independent
-  // requests (the web transport) could otherwise reach the backend out of
-  // order and leave an earlier pick applied.
+  // IPC returned runs with what the composer showed (codeg#1179). Each setter
+  // carries a client sequence number, so the backend drops one that arrives
+  // after a newer pick of the same selector (independent web requests can be
+  // delivered out of order).
+  const inflightSettersRef = useRef(new Map<string, Set<Promise<unknown>>>())
+  const setterSeqRef = useRef(0)
   const trackSetter = useCallback(
-    <T,>(contextKey: string, run: () => Promise<T>): Promise<T> => {
-      const prev = setterTailRef.current.get(contextKey) ?? Promise.resolve()
-      const p = prev.catch(() => {}).then(run)
-      const tail = p.catch(() => {})
-      setterTailRef.current.set(contextKey, tail)
-      void tail.then(() => {
-        if (setterTailRef.current.get(contextKey) === tail) {
-          setterTailRef.current.delete(contextKey)
-        }
-      })
+    <T,>(
+      contextKey: string,
+      run: (clientSeq: number) => Promise<T>
+    ): Promise<T> => {
+      setterSeqRef.current += 1
+      const p = run(setterSeqRef.current)
       let set = inflightSettersRef.current.get(contextKey)
       if (!set) {
         set = new Set()
@@ -8387,10 +8351,6 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       const conn = storeRef.current.connections.get(contextKey)
       if (!conn) return
       lastActivityRef.current.set(contextKey, Date.now())
-      promptSeqRef.current.set(
-        contextKey,
-        (promptSeqRef.current.get(contextKey) ?? 0) + 1
-      )
       try {
         await acpPrompt(
           conn.connectionId,
@@ -8421,7 +8381,9 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       const conn = storeRef.current.connections.get(contextKey)
       if (!conn) return
       lastActivityRef.current.set(contextKey, Date.now())
-      await trackSetter(contextKey, () => acpSetMode(conn.connectionId, modeId))
+      await trackSetter(contextKey, (seq) =>
+        acpSetMode(conn.connectionId, modeId, seq)
+      )
     },
     [trackSetter]
   )
@@ -8448,8 +8410,8 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         saveConfigPreference(conn.agentType, configId, valueId)
       }
       lastActivityRef.current.set(contextKey, Date.now())
-      await trackSetter(contextKey, () =>
-        acpSetConfigOption(conn.connectionId, configId, valueId)
+      await trackSetter(contextKey, (seq) =>
+        acpSetConfigOption(conn.connectionId, configId, valueId, seq)
       )
     },
     [dispatch, trackSetter]

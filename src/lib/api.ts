@@ -374,22 +374,33 @@ export async function acpPrompt(
   }
 }
 
+/** `clientSeq`: this client's setter sequence number — the backend drops a
+ *  setter older than one it already enqueued for the same selector, so two
+ *  picks whose requests arrive out of order never leave the earlier applied
+ *  (codeg#1179). Older servers ignore it. */
 export async function acpSetMode(
   connectionId: string,
-  modeId: string
+  modeId: string,
+  clientSeq?: number | null
 ): Promise<void> {
-  return getTransport().call("acp_set_mode", { connectionId, modeId })
+  return getTransport().call("acp_set_mode", {
+    connectionId,
+    modeId,
+    clientSeq: clientSeq ?? null,
+  })
 }
 
 export async function acpSetConfigOption(
   connectionId: string,
   configId: string,
-  valueId: string
+  valueId: string,
+  clientSeq?: number | null
 ): Promise<void> {
   return getTransport().call("acp_set_config_option", {
     connectionId,
     configId,
     valueId,
+    clientSeq: clientSeq ?? null,
   })
 }
 
