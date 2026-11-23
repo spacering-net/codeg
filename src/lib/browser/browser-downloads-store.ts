@@ -127,6 +127,11 @@ export function useBrowserTabDownloads(
   )
 }
 
+/** How many workspace tabs currently hold a memoised snapshot. */
+export function browserDownloadsCachedTabCountForTests(): number {
+  return cache.size
+}
+
 export function resetBrowserDownloadsForTests(): void {
   downloads = []
   dismissed.clear()
