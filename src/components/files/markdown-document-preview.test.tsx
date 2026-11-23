@@ -255,11 +255,14 @@ describe("MarkdownDocumentPreview local images", () => {
         "![md](//cdn.invalid/assets/logo.png)",
         '<img src="//cdn.invalid/raw.png" alt="raw">',
         "[page](//cdn.invalid/page)",
+        "![ref][logo]",
+        '<img src = "//cdn.invalid/spaced.png" alt="spaced">',
+        "[logo]: //cdn.invalid/ref.png",
       ].join("\n\n")
     )
 
     await waitFor(() =>
-      expect(container.querySelectorAll("img")).toHaveLength(2)
+      expect(container.querySelectorAll("img")).toHaveLength(4)
     )
     expect(mocks.readFileBase64).not.toHaveBeenCalled()
     expect(
@@ -269,6 +272,8 @@ describe("MarkdownDocumentPreview local images", () => {
     ).toEqual([
       "https://cdn.invalid/assets/logo.png",
       "https://cdn.invalid/raw.png",
+      "https://cdn.invalid/ref.png",
+      "https://cdn.invalid/spaced.png",
     ])
     expect(container.querySelector("a")?.getAttribute("href")).toBe(
       "https://cdn.invalid/page"
@@ -319,5 +324,26 @@ describe("MarkdownDocumentPreview local images", () => {
       "C:/other/x.png",
     ])
     errorSpy.mockRestore()
+  })
+
+  it("leaves references inside code blocks and inline code untouched", async () => {
+    const fenced = [
+      '<img src="//localhost:8080/logo.png">',
+      "![a](./img/a.png)",
+      "[b](/guide.md)",
+    ].join("\n")
+    const { container } = renderDocument(
+      ["```html", fenced, "```", "", "Inline `![c](./img/c.png)` here."].join(
+        "\n"
+      )
+    )
+
+    await waitFor(() => expect(container.querySelector("pre")).not.toBeNull())
+    // The highlighter renders each line as its own span, without newlines.
+    expect(container.querySelector("pre")?.textContent).toBe(
+      fenced.replace(/\n/g, "")
+    )
+    expect(container.textContent).toContain("![c](./img/c.png)")
+    expect(mocks.readFileBase64).not.toHaveBeenCalled()
   })
 })

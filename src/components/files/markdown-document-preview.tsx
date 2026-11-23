@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react"
 import { Streamdown } from "streamdown"
 import { readFileBase64 } from "@/lib/api"
+import { maskLiteralSpans } from "@/components/ai-elements/markdown-mask"
 import { normalizeMathDelimiters } from "@/components/ai-elements/message"
 import { scrollportComponents } from "@/components/ai-elements/markdown-scrollport"
 import { mermaidComponents } from "@/components/ai-elements/mermaid-block"
@@ -87,6 +88,9 @@ function joinUnder(base: string, relative: string): string {
  * path such as "/repo/data/workspace/d.png" and a broken image. The image
  * loader tries the literal path first and falls back to the preview root.
  *
+ * Fenced code blocks and inline code are masked first: their bytes are what
+ * the author means to show (and what Copy Code hands out), not references.
+ *
  * Known limitation: documents living under a Windows UNC root
  * ("//server/share/…") lose the double-slash prefix in this pipeline (the
  * "./…" → rehype-harden → "/…" round trip cannot carry an authority), so
@@ -137,8 +141,10 @@ function preprocessMarkdownPaths(
     return "./" + resolveAgainst(fileDir, pathPart) + fragment
   }
 
+  const { masked, restore } = maskLiteralSpans(content)
+
   // Pre-resolve image paths: ![alt](url) or ![alt](url "title")
-  let result = content.replace(
+  let result = masked.replace(
     /!\[([^\]]*)\]\(([^)\s"']+)([^)]*)\)/g,
     (match, alt, url, rest) => {
       const resolved = resolveUrl(url, "image")
@@ -167,17 +173,24 @@ function preprocessMarkdownPaths(
     }
   )
 
+  // Reference definitions: [id]: url — used by images and links alike, so
+  // only the kind-independent rewrite applies (protocol-relative → https).
+  result = result.replace(
+    /^( {0,3}\[[^\]]+\]:[ \t]*<?)(\/\/[^\s>]+)/gm,
+    (_match, head, url) => `${head}https:${url}`
+  )
+
   // Pre-resolve HTML <a href="..."> and <img src="..."> tags
   result = result.replace(
-    /<(a\s[^>]*?href|img\s[^>]*?src)=(["'])([^"']+)\2/gi,
-    (match, prefix, quote, url) => {
+    /<(a\s[^>]*?href|img\s[^>]*?src)(\s*=\s*)(["'])([^"']+)\3/gi,
+    (match, prefix, eq, quote, url) => {
       const resolved = resolveUrl(url, /^img/i.test(prefix) ? "image" : "link")
       if (resolved === url) return match
-      return `<${prefix}=${quote}${resolved}${quote}`
+      return `<${prefix}${eq}${quote}${resolved}${quote}`
     }
   )
 
-  return result
+  return restore(result)
 }
 
 const MIME_BY_EXT: Record<string, string> = {
