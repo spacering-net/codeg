@@ -416,4 +416,36 @@ describe("MarkdownDocumentPreview local images", () => {
     )
     expect(mocks.readFileBase64).not.toHaveBeenCalled()
   })
+
+  it("rewrites images in a GFM footnote's indented paragraph", async () => {
+    const { container } = renderDocument(
+      "Note[^1].\n\n[^1]: First.\n\n    ![logo](./assets/logo.png)\n"
+    )
+
+    await waitFor(() =>
+      expect(container.querySelector("img")?.getAttribute("src")).toBe(
+        "data:image/png;base64,QUFB"
+      )
+    )
+    expect(mocks.readFileBase64.mock.calls.map(([path]) => path)).toEqual([
+      "/repo/docs/assets/logo.png",
+    ])
+  })
+
+  it("keeps code-span offsets right in a document with a byte-order mark", () => {
+    const openFilePreview = vi.fn()
+    const { container } = render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <MarkdownDocumentPreview
+          content={"\uFEFF[`guide.md`](./guide.md)"}
+          fileDir="/repo/docs"
+          previewRoot="/repo"
+          openFilePreview={openFilePreview}
+        />
+      </NextIntlClientProvider>
+    )
+
+    fireEvent.click(container.querySelector("a")!)
+    expect(openFilePreview).toHaveBeenCalledWith("/repo/docs/guide.md")
+  })
 })

@@ -2,7 +2,9 @@
 
 import { useEffect, useMemo, useState } from "react"
 import type { Nodes } from "mdast"
-import { fromMarkdown } from "mdast-util-from-markdown"
+import remarkGfm from "remark-gfm"
+import remarkParse from "remark-parse"
+import { unified } from "unified"
 import { Streamdown } from "streamdown"
 import { readFileBase64 } from "@/lib/api"
 import { normalizeMathDelimiters } from "@/components/ai-elements/message"
@@ -75,24 +77,32 @@ function joinUnder(base: string, relative: string): string {
  * item or blockquote ends, that a `~~~` mentioned in prose or inside an HTML
  * comment opens nothing, and that a ```` fence wrapping a ``` example is one
  * block (same reasoning as `unescapeComposerText` in lib/composer-copy-text.ts).
+ * GFM is on because Streamdown renders with it: without it an indented second
+ * paragraph of a footnote reads as an indented code block.
  * On a parse failure nothing is masked — the pre-masking behavior.
  */
+const documentParser = unified().use(remarkParse).use(remarkGfm)
+
 function maskDocumentCode(content: string): {
   masked: string
   restore: (rewritten: string) => string
 } {
   const ranges: Array<[number, number]> = []
+  // The parser drops a leading byte-order mark before counting offsets.
+  const shift = content.startsWith("\uFEFF") ? 1 : 0
   const walk = (node: Nodes) => {
     if (node.type === "code" || node.type === "inlineCode") {
       const start = node.position?.start.offset
       const end = node.position?.end.offset
-      if (start !== undefined && end !== undefined) ranges.push([start, end])
+      if (start !== undefined && end !== undefined) {
+        ranges.push([start + shift, end + shift])
+      }
       return
     }
     if ("children" in node) for (const child of node.children) walk(child)
   }
   try {
-    walk(fromMarkdown(content))
+    walk(documentParser.parse(content))
   } catch {
     return { masked: content, restore: (rewritten) => rewritten }
   }
