@@ -583,6 +583,13 @@ pub struct WorkTaskPreflight {
     /// Trailing combined output (capped) — shown when the light is red.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_tail: Option<String>,
+    /// Which run of the command this light belongs to — minted when the run
+    /// writes its `running` light. The run's verdict is only written while the
+    /// row still holds that exact light, so a run whose light was cleared
+    /// (the task's content changed under it) or replaced by a newer run cannot
+    /// put a stale verdict back. `None` on lights written before this existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
 }
 
 /// Changed file of a task worktree vs. its recorded base (`git diff --numstat`).

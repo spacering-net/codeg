@@ -2838,6 +2838,8 @@ export interface WorkTaskPreflight {
   exit_code?: number | null
   /** Trailing combined output — present when the light is red. */
   output_tail?: string | null
+  /** Which run of the command wrote this light (engine bookkeeping). */
+  run_id?: string | null
 }
 
 /** One append-only timeline entry ("how the task advanced"). */

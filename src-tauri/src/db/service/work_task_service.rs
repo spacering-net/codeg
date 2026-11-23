@@ -21,9 +21,9 @@
 use chrono::Utc;
 use sea_orm::sea_query::Expr;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, ConnectionTrait, DatabaseConnection,
-    EntityTrait, IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set,
-    TransactionTrait,
+    ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, Condition, ConnectionTrait,
+    DatabaseConnection, EntityTrait, IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder,
+    QuerySelect, Set, TransactionTrait,
 };
 
 use crate::db::entities::work_task::WorkTaskStatus;
@@ -2479,24 +2479,35 @@ pub async fn set_writeback(
     Ok(res.rows_affected == 1)
 }
 
-/// Re-write the diff counters of a task that is ALREADY in review, without
-/// touching anything else about it (no status change, no timeline entry — the
-/// `diff_stat` event records what the settle measured and stays as it was).
-///
-/// Bound to the generation whose counters these are: a task that started
+/// Re-write the diff counters of a task that is ALREADY in review because its
+/// worktree's content may have changed since they were measured — a turn sent
+/// to its session from outside the engine, a commit the user made by hand.
+/// No status change and no timeline entry — the `diff_stat` event records what
+/// the settle measured and stays as it was. Bound to the generation whose
+/// counters these are (review, `run_seq`, not deleted): a task that started
 /// another round between the read and this write must not be stamped with
 /// numbers taken from the previous one.
-pub async fn refresh_diff_stats(
+///
+/// `invalidate_preflight` clears the acceptance light in the same update: a
+/// light measured on the old content says nothing about the new one, and a
+/// green one left in place would let the auto-merge sweep land work no
+/// preflight ever ran on. The caller re-runs the preflight afterwards.
+pub async fn refresh_review_content(
     conn: &DatabaseConnection,
     id: i32,
     run_seq: i32,
     stats: (i32, i32, i32),
+    invalidate_preflight: bool,
 ) -> Result<bool, DbError> {
-    let res = work_task::Entity::update_many()
+    let mut update = work_task::Entity::update_many()
         .col_expr(work_task::Column::FilesChanged, Expr::value(Some(stats.0)))
         .col_expr(work_task::Column::Additions, Expr::value(Some(stats.1)))
         .col_expr(work_task::Column::Deletions, Expr::value(Some(stats.2)))
-        .col_expr(work_task::Column::UpdatedAt, Expr::value(Utc::now()))
+        .col_expr(work_task::Column::UpdatedAt, Expr::value(Utc::now()));
+    if invalidate_preflight {
+        update = update.col_expr(work_task::Column::Preflight, Expr::value(None::<String>));
+    }
+    let res = update
         .filter(work_task::Column::Id.eq(id))
         .filter(work_task::Column::Status.eq(WorkTaskStatus::Review))
         .filter(work_task::Column::RunSeq.eq(run_seq))
@@ -2504,6 +2515,34 @@ pub async fn refresh_diff_stats(
         .exec(conn)
         .await?;
     Ok(res.rows_affected == 1)
+}
+
+/// Tasks in review that a session's turn could have touched: the one whose
+/// session it is (`conversation_id`), and any whose worktree the session runs
+/// in (`folder_id` — another conversation opened inside the task's worktree).
+/// Either id may be absent; with both absent nothing matches.
+pub async fn list_review_tasks_for_session(
+    conn: &DatabaseConnection,
+    conversation_id: Option<i32>,
+    folder_id: Option<i32>,
+) -> Result<Vec<work_task::Model>, DbError> {
+    if conversation_id.is_none() && folder_id.is_none() {
+        return Ok(Vec::new());
+    }
+    let mut any = Condition::any();
+    if let Some(conv) = conversation_id {
+        any = any.add(work_task::Column::ConversationId.eq(conv));
+    }
+    if let Some(folder) = folder_id {
+        any = any.add(work_task::Column::WorktreeFolderId.eq(folder));
+    }
+    Ok(work_task::Entity::find()
+        .filter(any)
+        .filter(work_task::Column::Status.eq(WorkTaskStatus::Review))
+        .filter(work_task::Column::DeletedAt.is_null())
+        .order_by_asc(work_task::Column::Id)
+        .all(conn)
+        .await?)
 }
 
 /// What a push-back learned as its push landed: the counters it measured (what
@@ -3348,19 +3387,47 @@ pub async fn set_preflight(
     run_seq: i32,
     preflight: &crate::models::WorkTaskPreflight,
 ) -> Result<bool, DbError> {
+    write_preflight(conn, id, run_seq, preflight, None).await
+}
+
+/// Write a preflight run's verdict — only while the row still holds the exact
+/// `running` light that run wrote (`running_json`, as stored). Within one
+/// review generation the light can be cleared because the task's content
+/// changed (see [`refresh_review_content`]) or replaced by a newer run of the
+/// command; either way this run measured something the row no longer
+/// describes, and its verdict must not land.
+pub async fn finish_preflight(
+    conn: &DatabaseConnection,
+    id: i32,
+    run_seq: i32,
+    running_json: &str,
+    preflight: &crate::models::WorkTaskPreflight,
+) -> Result<bool, DbError> {
+    write_preflight(conn, id, run_seq, preflight, Some(running_json)).await
+}
+
+async fn write_preflight(
+    conn: &DatabaseConnection,
+    id: i32,
+    run_seq: i32,
+    preflight: &crate::models::WorkTaskPreflight,
+    expect: Option<&str>,
+) -> Result<bool, DbError> {
     let json = serde_json::to_string(preflight)
         .map_err(|e| DbError::Validation(format!("preflight not serializable: {e}")))?;
     let now = Utc::now();
     let txn = conn.begin().await?;
-    let res = work_task::Entity::update_many()
+    let mut update = work_task::Entity::update_many()
         .col_expr(work_task::Column::Preflight, Expr::value(Some(json)))
         .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
         .filter(work_task::Column::Id.eq(id))
         .filter(work_task::Column::Status.eq(WorkTaskStatus::Review))
         .filter(work_task::Column::RunSeq.eq(run_seq))
-        .filter(work_task::Column::DeletedAt.is_null())
-        .exec(&txn)
-        .await?;
+        .filter(work_task::Column::DeletedAt.is_null());
+    if let Some(expect) = expect {
+        update = update.filter(work_task::Column::Preflight.eq(expect));
+    }
+    let res = update.exec(&txn).await?;
     if res.rows_affected != 1 {
         txn.rollback().await?;
         return Ok(false);
@@ -5783,6 +5850,7 @@ mod tests {
             command: "tests".into(),
             exit_code: None,
             output_tail: None,
+            run_id: None,
         };
         // Stale generation / wrong status writes are no-ops.
         assert!(!set_preflight(&db.conn, t.id, seq + 1, &light).await.unwrap());
@@ -5810,6 +5878,168 @@ mod tests {
         assert!(settle_review(&db.conn, t.id, seq2, None, None).await.unwrap());
         assert!(!set_preflight(&db.conn, t.id, seq, &light).await.unwrap());
         assert!(get_model(&db.conn, t.id).await.unwrap().preflight.is_none());
+    }
+
+    /// A run's verdict lands only on the `running` light that run wrote: a
+    /// content refresh that cleared it, or a newer run that replaced it, makes
+    /// the old run's finish a no-op — no stale verdict, no timeline entry.
+    #[tokio::test]
+    async fn a_preflight_verdict_needs_its_own_running_light() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-preflight-run").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+        let seq = to_review(&db, t.id).await;
+        let running = |run: &str| crate::models::WorkTaskPreflight {
+            status: "running".into(),
+            command: "tests".into(),
+            exit_code: None,
+            output_tail: None,
+            run_id: Some(run.into()),
+        };
+        let passed = |run: &str| crate::models::WorkTaskPreflight {
+            status: "passed".into(),
+            exit_code: Some(0),
+            ..running(run)
+        };
+        let json = |p: &crate::models::WorkTaskPreflight| serde_json::to_string(p).unwrap();
+        let verdicts = |events: Vec<crate::models::WorkTaskEventInfo>| {
+            events
+                .iter()
+                .filter(|e| e.kind == "preflight_result")
+                .count()
+        };
+
+        // Cleared by a content refresh while the run was going.
+        assert!(set_preflight(&db.conn, t.id, seq, &running("a"))
+            .await
+            .unwrap());
+        assert!(refresh_review_content(&db.conn, t.id, seq, (1, 1, 0), true)
+            .await
+            .unwrap());
+        assert!(
+            !finish_preflight(&db.conn, t.id, seq, &json(&running("a")), &passed("a"))
+                .await
+                .unwrap()
+        );
+        assert!(get_model(&db.conn, t.id).await.unwrap().preflight.is_none());
+
+        // Replaced by a newer run: only the newer one's verdict lands.
+        assert!(set_preflight(&db.conn, t.id, seq, &running("b"))
+            .await
+            .unwrap());
+        assert!(set_preflight(&db.conn, t.id, seq, &running("c"))
+            .await
+            .unwrap());
+        assert!(
+            !finish_preflight(&db.conn, t.id, seq, &json(&running("b")), &passed("b"))
+                .await
+                .unwrap()
+        );
+        assert_eq!(verdicts(list_events(&db.conn, t.id, 100).await.unwrap()), 0);
+        assert!(
+            finish_preflight(&db.conn, t.id, seq, &json(&running("c")), &passed("c"))
+                .await
+                .unwrap()
+        );
+        let stored = get_model(&db.conn, t.id).await.unwrap().preflight.unwrap();
+        assert_eq!(stored, json(&passed("c")));
+        assert_eq!(verdicts(list_events(&db.conn, t.id, 100).await.unwrap()), 1);
+    }
+
+    /// The content refresh is bound to the generation it measured: a task
+    /// that started another round meanwhile is not stamped. Without
+    /// `invalidate_preflight` the light survives the counters.
+    #[tokio::test]
+    async fn a_content_refresh_is_generation_guarded() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-refresh-content").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+        let seq = to_review(&db, t.id).await;
+        let light = crate::models::WorkTaskPreflight {
+            status: "passed".into(),
+            command: "tests".into(),
+            exit_code: Some(0),
+            output_tail: None,
+            run_id: None,
+        };
+        assert!(set_preflight(&db.conn, t.id, seq, &light).await.unwrap());
+
+        assert!(
+            !refresh_review_content(&db.conn, t.id, seq + 1, (9, 9, 9), true)
+                .await
+                .unwrap()
+        );
+        assert!(
+            refresh_review_content(&db.conn, t.id, seq, (2, 3, 4), false)
+                .await
+                .unwrap()
+        );
+        let row = get_model(&db.conn, t.id).await.unwrap();
+        assert_eq!(
+            (row.files_changed, row.additions, row.deletions),
+            (Some(2), Some(3), Some(4))
+        );
+        assert!(row.preflight.is_some(), "kept when not asked to clear it");
+
+        claim_for_run(&db.conn, t.id, WorkTaskStatus::Review, "user")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            !refresh_review_content(&db.conn, t.id, seq, (5, 5, 5), true)
+                .await
+                .unwrap(),
+            "a task that left review is its new round's to measure"
+        );
+    }
+
+    #[tokio::test]
+    async fn review_tasks_for_a_session_match_its_conversation_or_its_folder() {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-session-match").await;
+        let wt_a = seed_folder(&db, "/tmp/wt-session-match/a").await;
+        let wt_b = seed_folder(&db, "/tmp/wt-session-match/b").await;
+        let mut ids = Vec::new();
+        for (conv, wt) in [
+            (Some(11), Some(wt_a)),
+            (Some(12), Some(wt_b)),
+            (Some(13), None),
+        ] {
+            let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+            to_review(&db, t.id).await;
+            let mut active = get_model(&db.conn, t.id).await.unwrap().into_active_model();
+            active.conversation_id = Set(conv);
+            active.worktree_folder_id = Set(wt);
+            active.update(&db.conn).await.unwrap();
+            ids.push(t.id);
+        }
+        let found = |conv, folder| {
+            let conn = db.conn.clone();
+            async move {
+                list_review_tasks_for_session(&conn, conv, folder)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|t| t.id)
+                    .collect::<Vec<_>>()
+            }
+        };
+
+        assert_eq!(found(None, None).await, Vec::<i32>::new());
+        assert_eq!(found(Some(12), None).await, vec![ids[1]]);
+        assert_eq!(found(None, Some(wt_a)).await, vec![ids[0]]);
+        // One task matching both ways is listed once; the OR also picks up a
+        // second task through the other id.
+        assert_eq!(found(Some(11), Some(wt_a)).await, vec![ids[0]]);
+        assert_eq!(found(Some(13), Some(wt_b)).await, vec![ids[1], ids[2]]);
+
+        // Only review rows.
+        claim_for_run(&db.conn, ids[1], WorkTaskStatus::Review, "user")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(found(Some(12), None).await, Vec::<i32>::new());
     }
 
     #[tokio::test]
