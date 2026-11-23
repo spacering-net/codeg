@@ -983,15 +983,20 @@ async fn ensure_binary_with_progress(
         std::fs::create_dir_all(&extract_dir)
             .map_err(|e| AcpError::DownloadFailed(format!("failed to create extract dir: {e}")))?;
 
+        let dir_entry = dir_entry_for_agent_id(agent_id);
+        let stage_name = dir_entry
+            .map(|entry| entry.for_current_platform().to_string())
+            .unwrap_or_else(|| bin_name.clone());
+
         unpack_download(
             archive_url,
             &archive_path,
             &extract_dir,
-            &bin_name,
+            &stage_name,
             &on_progress,
         )?;
 
-        if let Some(entry) = dir_entry_for_agent_id(agent_id) {
+        if let Some(entry) = dir_entry {
             return install_extracted_tree(&extract_dir, &dir, entry, &on_progress);
         }
 
@@ -1246,7 +1251,13 @@ fn unpack_download(
     } else if archive_url.ends_with(".zip") {
         extract_zip
     } else if is_binary_file_compatible(archive_path) {
-        return std::fs::rename(archive_path, extract_dir.join(bin_name))
+        let dest = extract_dir.join(bin_name);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                AcpError::DownloadFailed(format!("failed to create stage dir: {e}"))
+            })?;
+        }
+        return std::fs::rename(archive_path, &dest)
             .map_err(|e| AcpError::DownloadFailed(format!("failed to stage binary: {e}")));
     } else {
         return Err(AcpError::DownloadFailed(format!(
@@ -1770,6 +1781,47 @@ mod tests {
         };
         let err = install_extracted_tree(&extract, &final_dir, entry, &|_| {}).unwrap_err();
         assert!(err.to_string().contains("not found in archive"), "{err}");
+    }
+
+    // A dir_entry agent whose platform release is a bare native executable
+    // (such as Antigravity CLI's Windows `.exe` while Unix ships `.tar.gz`)
+    // stages straight to `entry.for_current_platform()` so `install_extracted_tree`
+    // finds it even when `cmd` differs from `dir_entry`.
+    #[test]
+    fn raw_executable_stages_to_dir_entry_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let download = tmp.path().join("archive");
+        let magic: &[u8] = if cfg!(target_os = "macos") {
+            &[0xCF, 0xFA, 0xED, 0xFE]
+        } else if cfg!(target_os = "windows") {
+            b"MZ\x90\x00"
+        } else {
+            b"\x7fELF"
+        };
+        std::fs::write(&download, magic).unwrap();
+
+        let extract = tmp.path().join("extracted");
+        let final_dir = tmp.path().join("final");
+        std::fs::create_dir_all(&extract).unwrap();
+        std::fs::create_dir_all(&final_dir).unwrap();
+
+        let entry = registry::BinaryDirEntry {
+            unix: "antigravity",
+            windows: "antigravity.exe",
+            required_siblings: registry::PlatformFiles::NONE,
+        };
+        unpack_download(
+            "https://example.invalid/cli_windows_x64.exe",
+            &download,
+            &extract,
+            entry.for_current_platform(),
+            &|_| {},
+        )
+        .expect("bare native executable should stage cleanly");
+
+        let installed = install_extracted_tree(&extract, &final_dir, entry, &|_| {})
+            .expect("dir_entry should locate the staged executable");
+        assert_eq!(installed, final_dir.join(entry.for_current_platform()));
     }
 
     #[test]
