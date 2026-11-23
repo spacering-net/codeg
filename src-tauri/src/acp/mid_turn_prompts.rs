@@ -13,11 +13,20 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use futures::FutureExt;
 use tokio::sync::oneshot;
 
-use super::{agent_error_text, map_prompt_blocks, record_steer, version_at_least, SteerOutcome};
+use std::sync::Arc;
+
+use tokio::sync::RwLock;
+
+use super::{
+    agent_error_text, map_prompt_blocks, prompt_rejection_is_terminal, record_steer,
+    version_at_least, SteerOutcome,
+};
+use crate::acp::session_state::SessionState;
+use crate::web::event_bridge::{emit_with_state_gated, EventEmitter};
 use crate::acp::background_watch::PromptLedger;
 use crate::acp::error::AcpError;
-use crate::acp::feedback::MidTurnAdapter;
-use crate::acp::types::AcpEvent;
+use crate::acp::feedback::{FeedbackStatus, MidTurnAdapter};
+use crate::acp::types::{AcpEvent, ConnectionStatus};
 use crate::acp::types::PromptInputBlock;
 use crate::models::AgentType;
 
@@ -202,21 +211,12 @@ impl MidTurnPrompts {
     ) -> Option<AcpEvent> {
         let mut event = None;
         match receipt {
-            Receipt::Submitted(Some(id)) => match &response {
-                Ok(r) if r.stop_reason != StopReason::Cancelled => {
-                    event = Some(AcpEvent::FeedbackConsumed {
-                        ids: vec![id],
-                        delivered_at: chrono::Utc::now(),
-                    });
+            Receipt::Submitted(Some(id)) => {
+                event = submitted_settlement(id, &response);
+                if response.is_err() {
+                    return event;
                 }
-                Err(error) => {
-                    return Some(AcpEvent::FeedbackFailed {
-                        id,
-                        message: AcpError::protocol(agent_error_text(error)).to_string(),
-                    })
-                }
-                Ok(_) => {}
-            },
+            }
             Receipt::Submitted(None) => {}
             Receipt::ClientEcho(id) => {
                 if let Some(submission) = self.submissions.remove(&id).flatten() {
@@ -251,22 +251,68 @@ impl MidTurnPrompts {
     }
 
     pub(super) fn turn_result(&mut self, original: Response) -> Response {
-        original.and_then(|r| {
-            self.last_response
-                .take()
-                .map_or(Ok(r), |(_, response)| response)
-        })
+        match (original, self.last_response.take()) {
+            // A dead connection stays fatal whatever the later prompts answered.
+            (Err(error), _) if prompt_rejection_is_terminal(&error) => Err(error),
+            // A turn-scoped rejection of the original prompt does not void a
+            // later prompt that the agent accepted and answered.
+            (_, Some((_, latest))) => latest,
+            (original, None) => original,
+        }
     }
 
-    pub(super) async fn drain_cancelled(mut self) {
-        for submission in self.submissions.into_values().flatten() {
+    /// Runs detached after Stop, once the turn has already ended for the UI.
+    pub(super) async fn drain_cancelled(
+        mut self,
+        state: Arc<RwLock<SessionState>>,
+        emitter: EventEmitter,
+    ) {
+        for submission in self.submissions.drain().filter_map(|(_, s)| s) {
             let _ = submission.reply.send(Err(AcpError::protocol(
                 "Turn cancelled before Devin acknowledged the message",
             )));
         }
         // session/cancel is already on the wire. Dropping outstanding requests
-        // would issue additional request cancellations.
-        while self.responses.next().await.is_some() {}
+        // would issue additional request cancellations. Keep settling the
+        // submitted notes: the composer already cleared their drafts, so a
+        // rejection must still reach the notes list.
+        while let Some(Completion {
+            receipt, response, ..
+        }) = self.responses.next().await
+        {
+            if let Receipt::Submitted(Some(id)) = receipt {
+                let still_sent = |s: &SessionState| {
+                    s.status != ConnectionStatus::Prompting
+                        && s.feedback
+                            .iter()
+                            .any(|f| f.id == id && f.status == FeedbackStatus::Sent)
+                };
+                if let Some(event) = submitted_settlement(id.clone(), &response) {
+                    // Only until the next turn opens (`StatusChanged(Prompting)`,
+                    // sequenced under the same lock): from there its events own
+                    // the stream and its `UserMessage` clears the notes. A prompt
+                    // still held for this drain has not opened its turn yet.
+                    emit_with_state_gated(&state, &emitter, event, still_sent).await;
+                }
+            }
+        }
+    }
+}
+
+/// Settle a note whose prompt had no early receipt. A cancelled reply is left
+/// `Sent`: the agent may or may not have read it, so neither a receipt nor a
+/// retry offer would be honest.
+fn submitted_settlement(id: String, response: &Response) -> Option<AcpEvent> {
+    match response {
+        Ok(r) if r.stop_reason != StopReason::Cancelled => Some(AcpEvent::FeedbackConsumed {
+            ids: vec![id],
+            delivered_at: chrono::Utc::now(),
+        }),
+        Ok(_) => None,
+        Err(error) => Some(AcpEvent::FeedbackFailed {
+            id,
+            message: AcpError::protocol(agent_error_text(error)).to_string(),
+        }),
     }
 }
 
@@ -306,6 +352,28 @@ mod tests {
                 expected.then_some(MidTurnAdapter::AntigravityCli)
             );
         }
+    }
+
+    #[test]
+    fn a_later_accepted_prompt_outlives_a_turn_scoped_rejection_of_the_original() {
+        let accepted = || Some((1, Ok(PromptResponse::new(StopReason::EndTurn))));
+        let mut prompts = MidTurnPrompts {
+            last_response: accepted(),
+            ..Default::default()
+        };
+        let rejected = agent_client_protocol::Error::invalid_params().data("busy");
+        assert_eq!(
+            prompts.turn_result(Err(rejected)).unwrap().stop_reason,
+            StopReason::EndTurn
+        );
+        prompts.last_response = accepted();
+        let gone = agent_client_protocol::Error::resource_not_found(None);
+        assert!(prompts.turn_result(Err(gone)).is_err(), "a lost session stays fatal");
+        assert!(
+            prompts.turn_result(Ok(PromptResponse::new(StopReason::Cancelled)))
+                .is_ok_and(|r| r.stop_reason == StopReason::Cancelled),
+            "without concurrent prompts the original answer stands"
+        );
     }
 
     #[test]

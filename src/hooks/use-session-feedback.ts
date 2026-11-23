@@ -344,10 +344,24 @@ export function useSessionFeedback({
             // A new turn started — notes are turn-scoped, mirror the backend
             // clear so a fresh turn begins empty. Bump the generation so an
             // in-flight snapshot fetch from the previous turn can't re-add them.
+            //
+            // Except a rejected native prompt: the composer cleared its draft
+            // on submit, so the note is the user's only copy, and a queued
+            // message can start this turn before they saw the rejection. It
+            // stays here (with its blocks) until resent or dismissed.
             turnGenRef.current += 1
-            setNotes([])
-            settlements.current.clear()
-            submittedBlocks.current.clear()
+            const failed = new Set(
+              [...settlements.current]
+                .filter(([, settlement]) => settlement.status === "failed")
+                .map(([id]) => id)
+            )
+            setNotes((prev) =>
+              prev.filter((n) => n.status === "failed" || failed.has(n.id))
+            )
+            for (const id of settlements.current.keys())
+              if (!failed.has(id)) settlements.current.delete(id)
+            for (const id of submittedBlocks.current.keys())
+              if (!failed.has(id)) submittedBlocks.current.delete(id)
             // The backend cleared these notes too, so their tombstones have
             // nothing left to guard — dropping them bounds the set.
             dismissedRef.current = new Set()
@@ -488,10 +502,12 @@ export function useSessionFeedback({
       // A resolution that landed after a connection switch must not touch the
       // new connection's channel state or note list (reconcileChannel guards
       // itself too; the append needs the same protection).
-      if (
-        connectionIdRef.current === connectionId &&
-        generation === turnGenRef.current
-      ) {
+      if (connectionIdRef.current !== connectionId) return item
+      // A rejection can arrive, and a queued message start the next turn,
+      // before this response does. The failed note outlives that turn, so it
+      // still needs the original draft for its retry.
+      const failed = settlements.current.get(item.id)?.status === "failed"
+      if (generation === turnGenRef.current || failed) {
         reconcileChannel(item)
         // Optimistically add; the broadcast event dedups against this by id.
         if (
@@ -516,6 +532,9 @@ export function useSessionFeedback({
   // the user is still being asked about.
   const dismissNote = useCallback((id: string) => {
     dismissedRef.current.add(id)
+    // Retired for good: a failure settlement would otherwise carry the row
+    // past the next turn, whose reset drops this tombstone.
+    settlements.current.delete(id)
     submittedBlocks.current.delete(id)
     setNotes((prev) => prev.filter((n) => n.id !== id))
   }, [])
@@ -533,6 +552,7 @@ export function useSessionFeedback({
       const note = notesRef.current.find((n) => n.id === id)
       if (!note) return
       dismissedRef.current.add(id)
+      settlements.current.delete(id)
       setNotes((prev) => prev.filter((n) => n.id !== id))
       const blocks = submittedBlocks.current.get(id) ?? note.blocks
       submittedBlocks.current.delete(id)

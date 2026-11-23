@@ -15478,6 +15478,12 @@ async fn run_conversation_loop(
                 // Use Box::pin (heap) instead of tokio::pin! (stack) so the
                 // future can be moved into a background task on cancel.
                 let retry_stop = CancellationToken::new();
+                // The Antigravity CLI gives no receipt for a prompt it admits,
+                // and the first prompt after Stop may be refused and re-sent. A
+                // steer that reached the CLI between a refusal and the re-send
+                // would run ahead of the prompt it was meant to steer, so steers
+                // in this turn take the queue fallback and follow it instead.
+                let steer_via_queue = after_antigravity_cancel;
                 let mut prompt_response: futures::future::BoxFuture<'static, _> =
                     if std::mem::take(&mut after_antigravity_cancel) {
                         Box::pin(mid_turn_prompts::prompt_after_antigravity_cancel(
@@ -16229,7 +16235,9 @@ async fn run_conversation_loop(
                                 Some(ConnectionCommand::Steer { admitted_turns_completed, blocks, reply, recorded }) => {
                                     let native_steering = {
                                         let s = state.read().await;
-                                        if s.turns_completed != admitted_turns_completed {
+                                        let unadmitted_follow_up = steer_via_queue
+                                            && matches!(s.native_steering, Some(NativeSteering::MidTurnPrompt(_)));
+                                        if s.turns_completed != admitted_turns_completed || unadmitted_follow_up {
                                             let _ = reply.send(Err(AcpError::NoActiveTurn));
                                             continue;
                                         }
@@ -16463,8 +16471,12 @@ async fn run_conversation_loop(
                                         });
                                         answered
                                     });
+                                    let drain = mid_turn.drain_cancelled(
+                                        Arc::clone(state),
+                                        emitter.clone(),
+                                    );
                                     tokio::spawn(async move {
-                                        let _ = tokio::join!(prompt_response, mid_turn.drain_cancelled());
+                                        let _ = tokio::join!(prompt_response, drain);
                                         if let Some(answered) = answered {
                                             let _ = answered.send(tokio::time::Instant::now());
                                         }
@@ -52110,6 +52122,141 @@ mod tests {
         assert!(matches!(
             lp.seen.last(), Some(AcpEvent::TurnComplete { stop_reason, .. }) if stop_reason == "end_turn"
         ));
+        lp.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn antigravity_queues_steers_in_the_follow_up_after_stop() {
+        use agent_client_protocol::schema::v1::PromptResponse;
+
+        let mut lp = CustomLoop::start_with_results(
+            AgentType::Antigravity,
+            vec![
+                vec![custom_text("working")],
+                vec![],
+                vec![custom_text("next accepted")],
+            ],
+            vec![
+                Ok(PromptResponse::new(StopReason::Cancelled)),
+                Err(agent_client_protocol::Error::invalid_params().data(
+                    "Can't add this prompt to session s1: the running prompt is being cancelled; wait for it to finish, then send this prompt again",
+                )),
+                Ok(PromptResponse::new(StopReason::EndTurn)),
+            ],
+        )
+        .await;
+        lp.state.write().await.native_steering = Some(NativeSteering::MidTurnPrompt(
+            crate::acp::feedback::MidTurnAdapter::AntigravityCli,
+        ));
+        lp.open_turn("one", "working").await;
+        lp.cmd_tx.send(ConnectionCommand::Cancel).await.unwrap();
+        lp.until("stop", |e| {
+            matches!(e, AcpEvent::TurnComplete { stop_reason, .. } if stop_reason == "cancelled")
+        })
+        .await;
+        lp.state.write().await.turn_in_flight = true;
+        lp.cmd_tx.send(prompt_command("two")).await.unwrap();
+        // Queued behind the held follow-up, so it reaches the loop while the
+        // CLI is still refusing that follow-up.
+        let (reply, outcome) = oneshot::channel();
+        lp.cmd_tx
+            .send(ConnectionCommand::Steer {
+                admitted_turns_completed: lp.state.read().await.turns_completed,
+                recorded: oneshot::channel().1,
+                blocks: vec![PromptInputBlock::Text { text: "steer".into() }],
+                reply,
+            })
+            .await
+            .unwrap();
+        lp.respond.notify_one(); // let the cancelled RPC settle
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(5), outcome)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(outcome, Err(AcpError::NoActiveTurn)),
+            "a steer must not overtake the follow-up it was meant to steer: {outcome:?}"
+        );
+        lp.until_text("next accepted").await;
+        assert!(
+            matches!(lp.steer("later").await, Err(AcpError::NoActiveTurn)),
+            "the CLI never confirms admission, so the whole follow-up queues steers"
+        );
+        lp.close_turn().await;
+        lp.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn antigravity_settles_a_steer_whose_reply_arrives_after_stop() {
+        use crate::acp::feedback::{FeedbackItem, FeedbackStatus};
+
+        let mut lp = CustomLoop::start_for(
+            AgentType::Antigravity,
+            vec![vec![custom_text("Working.")], vec![]],
+        )
+        .await;
+        lp.state.write().await.native_steering = Some(NativeSteering::MidTurnPrompt(
+            crate::acp::feedback::MidTurnAdapter::AntigravityCli,
+        ));
+        lp.open_turn("start", "Working.").await;
+        let (reply, outcome) = oneshot::channel();
+        let (published, recorded) = oneshot::channel();
+        lp.cmd_tx
+            .send(ConnectionCommand::Steer {
+                admitted_turns_completed: 0,
+                blocks: vec![PromptInputBlock::Text { text: "fix".into() }],
+                reply,
+                recorded,
+            })
+            .await
+            .unwrap();
+        let receipt = tokio::time::timeout(std::time::Duration::from_secs(5), outcome)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(receipt, SteerOutcome::Submitted);
+        emit_with_state(
+            &lp.state,
+            &EventEmitter::Noop,
+            AcpEvent::FeedbackSubmitted {
+                item: FeedbackItem::new_native(
+                    "s".into(),
+                    "fix".into(),
+                    chrono::Utc::now(),
+                    None,
+                    false,
+                ),
+            },
+        )
+        .await;
+        published.send("s".into()).unwrap();
+        lp.cmd_tx.send(ConnectionCommand::Cancel).await.unwrap();
+        lp.until("stop", |e| {
+            matches!(e, AcpEvent::TurnComplete { stop_reason, .. } if stop_reason == "cancelled")
+        })
+        .await;
+        // A follow-up the manager already admitted, still held for the drain,
+        // has not opened its turn: the receipt still belongs to this one.
+        lp.state.write().await.turn_in_flight = true;
+        // Both replies are held by the mock; keep releasing until the
+        // detached drain has seen them.
+        let respond = Arc::clone(&lp.respond);
+        let release = tokio::spawn(async move {
+            loop {
+                respond.notify_waiters();
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        });
+        lp.until("the late receipt", |e| {
+            matches!(e, AcpEvent::FeedbackConsumed { ids, .. } if ids == &["s".to_string()])
+        })
+        .await;
+        release.abort();
+        assert_eq!(
+            lp.state.read().await.feedback[0].status,
+            FeedbackStatus::Delivered
+        );
         lp.shutdown().await;
     }
 
