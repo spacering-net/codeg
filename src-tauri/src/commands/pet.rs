@@ -260,10 +260,14 @@ pub async fn pet_save_window_state_core(
     if let Some(y) = patch.y {
         config.y = Some(y);
     }
-    if let Some(sf) = patch.position_scale_factor {
-        if sf.is_finite() && sf > 0.0 {
-            config.position_scale_factor = Some(sf);
-        }
+    // The scale factor only means something next to the `(x, y)` it was
+    // captured with: any patch that moves the origin replaces it, so an origin
+    // written without one (or with an invalid one) never inherits a stale
+    // factor from an earlier position and is restored via the legacy path.
+    if patch.x.is_some() || patch.y.is_some() {
+        config.position_scale_factor = patch
+            .position_scale_factor
+            .filter(|sf| sf.is_finite() && *sf > 0.0);
     }
     if let Some(scale) = patch.scale {
         config.scale = scale.clamp(0.5, 3.0);
@@ -623,6 +627,63 @@ mod tests {
             .await
             .expect("save 2");
         assert_eq!(cfg2.scale, 0.5, "scale clamped to lower bound");
+    }
+
+    #[tokio::test]
+    async fn pet_save_window_state_keeps_scale_factor_paired_with_origin() {
+        let db = fresh_in_memory_db().await;
+        let cfg = pet_save_window_state_core(
+            &db.conn,
+            PetWindowStatePatch {
+                x: Some(1800.0),
+                y: Some(500.0),
+                position_scale_factor: Some(1.0),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("save");
+        assert_eq!(cfg.position_scale_factor, Some(1.0));
+
+        // A patch that leaves the origin alone keeps its factor.
+        let cfg = pet_save_window_state_core(
+            &db.conn,
+            PetWindowStatePatch {
+                scale: Some(1.0),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("save 2");
+        assert_eq!(cfg.position_scale_factor, Some(1.0));
+
+        // A new origin without a factor must not inherit the old one.
+        let cfg = pet_save_window_state_core(
+            &db.conn,
+            PetWindowStatePatch {
+                x: Some(100.0),
+                y: Some(100.0),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("save 3");
+        assert_eq!(cfg.x, Some(100.0));
+        assert_eq!(cfg.position_scale_factor, None);
+
+        // An invalid factor is dropped rather than stored.
+        let cfg = pet_save_window_state_core(
+            &db.conn,
+            PetWindowStatePatch {
+                x: Some(200.0),
+                y: Some(200.0),
+                position_scale_factor: Some(f64::NAN),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("save 4");
+        assert_eq!(cfg.position_scale_factor, None);
     }
 
     /// A parent conversation + a delegated child of it, each on its own live

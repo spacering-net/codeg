@@ -3019,18 +3019,14 @@ mod pet_window_origin_tests {
     };
 
     // Mixed-DPI setup: 2× primary Retina at (0, 0) + 1× external monitor to its left.
-    const MIXED_DPI_LEFT: [(i32, i32, u32, u32, f64); 2] = [
-        (0, 0, 3024, 1964, 2.0),
-        (-1920, 0, 1920, 1080, 1.0),
-    ];
+    const MIXED_DPI_LEFT: [(i32, i32, u32, u32, f64); 2] =
+        [(0, 0, 3024, 1964, 2.0), (-1920, 0, 1920, 1080, 1.0)];
 
     // Mixed-DPI setup where tao's physical rects overlap on macOS:
     // 2× primary Retina `[0, 3024)` (logical `[0, 1512)`) + 1× display on its
     // right `[1512, 3432)` (logical `[1512, 3432)`).
-    const MIXED_DPI_RIGHT: [(i32, i32, u32, u32, f64); 2] = [
-        (0, 0, 3024, 1964, 2.0),
-        (1512, 0, 1920, 1080, 1.0),
-    ];
+    const MIXED_DPI_RIGHT: [(i32, i32, u32, u32, f64); 2] =
+        [(0, 0, 3024, 1964, 2.0), (1512, 0, 1920, 1080, 1.0)];
 
     #[test]
     fn macos_resolves_right_1x_monitor_without_colliding_with_2x_primary() {
@@ -3047,7 +3043,13 @@ mod pet_window_origin_tests {
             pet_h,
             &MIXED_DPI_RIGHT,
         );
-        assert_eq!(origin, Some(SavedPetOrigin { x: 1800.0, y: 500.0 }));
+        assert_eq!(
+            origin,
+            Some(SavedPetOrigin {
+                x: 1800.0,
+                y: 500.0
+            })
+        );
     }
 
     #[test]
@@ -3063,7 +3065,10 @@ mod pet_window_origin_tests {
                 pet_h,
                 &MIXED_DPI_LEFT,
             ),
-            Some(SavedPetOrigin { x: -215.0, y: 708.0 })
+            Some(SavedPetOrigin {
+                x: -215.0,
+                y: 708.0
+            })
         );
 
         // Near bottom-right of 2× primary (logical 1512×982): clamped in logical pts.
@@ -3112,12 +3117,7 @@ mod pet_window_origin_tests {
             None
         );
         assert_eq!(
-            resolve_saved_pet_origin_physical(
-                Some((-215.0, 708.0)),
-                pet_w,
-                pet_h,
-                &only_primary,
-            ),
+            resolve_saved_pet_origin_physical(Some((-215.0, 708.0)), pet_w, pet_h, &only_primary,),
             None
         );
         assert_eq!(
