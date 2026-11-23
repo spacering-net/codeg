@@ -474,6 +474,12 @@ describe("AskQuestionResultCard", () => {
     // The capsule echoes the typed answer — NOT the noSelection fallback.
     expect(screen.getByText(typed)).toBeInTheDocument()
     expect(screen.queryByText(result.noSelection)).toBeNull()
+    // Expanded, the id-matched answer refills the Other field, not an option.
+    expand()
+    expect(screen.getByDisplayValue(typed)).toBeInTheDocument()
+    expect(
+      screen.getByRole("radio", { name: "排除，只走付费节点" })
+    ).not.toBeChecked()
   })
 
   it("re-checks DSH's picked option, matched through the answer's id", () => {
