@@ -706,7 +706,7 @@ pub async fn backfill_frozen_config(
         .col_expr(work_task::Column::Config, Expr::value(text))
         .filter(work_task::Column::Id.eq(task.id))
         .filter(work_task::Column::Config.eq(task.config.clone()))
-        .filter(work_task::Column::Status.eq(task.status.clone()))
+        .filter(work_task::Column::Status.eq(task.status))
         .filter(work_task::Column::RunSeq.eq(task.run_seq))
         .filter(work_task::Column::DeletedAt.is_null())
         .exec(conn)
@@ -6764,8 +6764,10 @@ mod tests {
     // ── codeg#1179: frozen task configs and bound tasks ────────────────────
 
     async fn settings_with(db: &crate::db::AppDatabase, folder_id: i32, agent: &str, model: &str) {
-        let mut st = WorkTaskFolderSettings::default();
-        st.default_agent_type = Some(agent.to_string());
+        let mut st = WorkTaskFolderSettings {
+            default_agent_type: Some(agent.to_string()),
+            ..Default::default()
+        };
         st.config_values.insert("model".into(), model.into());
         settings_set(&db.conn, folder_id, &st).await.unwrap();
     }

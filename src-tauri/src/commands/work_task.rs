@@ -1086,6 +1086,7 @@ pub async fn work_task_create(
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
+#[allow(clippy::too_many_arguments)]
 pub async fn work_task_update(
     app: tauri::AppHandle,
     db: tauri::State<'_, AppDatabase>,
@@ -1446,7 +1447,8 @@ mod tests {
 
     /// The list must name each task's agent the way the ENGINE would pick it
     /// (`effective_agent_config`), or the views draw a mark for an agent that
-    /// never runs. Walks the layering from the outside in.
+    /// never runs. A task keeps the agent it was created with (codeg#1179):
+    /// later task settings never move it.
     #[tokio::test]
     async fn agent_type_is_stamped_with_the_engines_own_layering() {
         let db = fresh_in_memory_db().await;
@@ -1473,8 +1475,8 @@ mod tests {
             Some("claude_code")
         );
 
-        // The folder's task settings sit between the two — and only the
-        // inheriting task feels them.
+        // Task settings saved afterwards move neither: both were frozen with
+        // what they were created with.
         let settings = WorkTaskFolderSettings {
             default_agent_type: Some("grok".to_string()),
             ..Default::default()
@@ -1483,7 +1485,15 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(agent_of(&db, overridden.id).await.as_deref(), Some("codex"));
-        assert_eq!(agent_of(&db, inheriting.id).await.as_deref(), Some("grok"));
+        assert_eq!(
+            agent_of(&db, inheriting.id).await.as_deref(),
+            Some("claude_code")
+        );
+        // A task created now takes them.
+        let later = work_task_service::create(&db.conn, draft(folder_id, "c", None))
+            .await
+            .unwrap();
+        assert_eq!(agent_of(&db, later.id).await.as_deref(), Some("grok"));
 
         // Once the task has actually run, the agent that ran it wins over
         // every configured layer — including the task's own override.
@@ -1511,7 +1521,8 @@ mod tests {
 
     /// A folder with no default and no settings anywhere leaves the field
     /// empty rather than guessing — the same state the engine refuses to
-    /// launch, which both views draw as a placeholder.
+    /// launch, which both views draw as a placeholder. Settings added later
+    /// do not configure it silently (it was frozen with no agent).
     #[tokio::test]
     async fn agent_type_is_none_when_nothing_is_configured() {
         let db = fresh_in_memory_db().await;
@@ -1533,7 +1544,11 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(agent_of(&db, task.id).await.as_deref(), Some("cursor"));
+        assert_eq!(agent_of(&db, task.id).await, None);
+        let later = work_task_service::create(&db.conn, draft(folder_id, "b", None))
+            .await
+            .unwrap();
+        assert_eq!(agent_of(&db, later.id).await.as_deref(), Some("cursor"));
     }
 
     fn test_emitter() -> EventEmitter {
