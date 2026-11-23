@@ -24,6 +24,7 @@ const pa = vi.hoisted(() => ({
   dispatchById: new Map<number, unknown>(),
   liveReplies: new Map<number, unknown>(),
   liveTexts: new Map<number, { n: number; text: string }>(),
+  snapshot: null as unknown,
 }))
 const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }))
 vi.mock("@/lib/api", () => api)
@@ -38,6 +39,7 @@ vi.mock("@/contexts/personal-agent-context", () => ({
     liveReplies: pa.liveReplies,
     liveTexts: pa.liveTexts,
     dispatchById: pa.dispatchById,
+    snapshot: pa.snapshot,
     quoted: new Map(),
     requestQuoted: () => {},
     rows: [],
@@ -1050,6 +1052,7 @@ describe("the bubbles", () => {
                   state: "completed",
                   work_task_id: 7,
                   excerpt: "Added it.",
+                  gist: "Added it.",
                 },
               }),
             ],
@@ -1065,12 +1068,16 @@ describe("the bubbles", () => {
       "Codex"
     )
     expect(head.textContent).toContain("Builder · Kanban task · my-app")
-    expect(head.children[2].textContent).toBe("Done")
-    // On one card: the work its head, its result under a hairline.
-    const result = news.container.querySelector("[data-pa-result]")!
-    expect(result.parentElement?.previousElementSibling).toBe(head)
+    expect(head.textContent).toContain("Done")
+    // Done, and not a routine's: its menu makes it one (D1).
+    expect(head.querySelector("[data-pa-work-menu]")).not.toBeNull()
+    // On one card: the work its head, its result's gist under a hairline —
+    // the whole of it, nothing more to open.
+    const result = news.container.querySelector("[data-pa-result-text]")!
+    expect(result.previousElementSibling).toBe(head)
     expect(head.parentElement?.hasAttribute("data-pa-surface")).toBe(true)
     expect(result.textContent).toBe("Added it.")
+    expect(result.querySelector("[data-pa-show-text]")).toBeNull()
   })
 
   it("tints the assistant's side with no border, and draws what sits on it as a card of its own", () => {
@@ -1229,6 +1236,9 @@ describe("the bubbles", () => {
     ) as Extract<MessageItem, { kind: "event" }>
     const { container } = draw(<EventCard item={item} />)
     const bubble = container.querySelector("[data-bubble]")!
+    // Folded to its gist (none here), opened to the whole of it.
+    expect(bubble.querySelector("h2")).toBeNull()
+    fireEvent.click(bubble.querySelector("[data-pa-show-text]")!)
     expect(bubble.querySelector("h2")?.textContent).toBe("Build: ok")
     expect(
       bubble.querySelector('[data-streamdown="strong"]')?.textContent
@@ -1619,5 +1629,248 @@ describe("acceptance on the work handed out (7.5)", () => {
     const label = container.querySelector("[data-pa-check-label]")!
     expect(label.textContent).toBe("Acceptance check · round 2")
     expect(container.querySelector("[data-pa-work-pill]")).toBeTruthy()
+  })
+})
+
+describe("a result card and the reply that reports it (A1, A2)", () => {
+  afterEach(() => {
+    cleanup()
+    pa.snapshot = null
+    usePersonalAgentUi.setState({ openResults: {} })
+  })
+  const card = (patch: Record<string, unknown> = {}, rowPatch = {}) =>
+    row(30, "result", {
+      body: "Analyse my-app",
+      data: {
+        executor: "Builder",
+        agent_type: "codex",
+        title: "Analyse my-app",
+        mode: "session",
+        state: "failed",
+        note: "the model ran out of credit",
+        excerpt: "## Overview\n\nmy-app is a demo. It uses the App Router.",
+        gist: "my-app is a demo.",
+        ...patch,
+      },
+      ...rowPatch,
+    })
+  const eventOf = (rows: TimelineRow[]) =>
+    itemOf(rows, "event") as Extract<MessageItem, { kind: "event" }>
+
+  it("says its gist and why it failed until a reply reports it, the whole a click away", () => {
+    const { container } = draw(<EventCard item={eventOf([card()])} />)
+    expect(container.querySelector("[data-pa-gist]")?.textContent).toBe(
+      "my-app is a demo."
+    )
+    expect(container.textContent).toContain("the model ran out of credit")
+    expect(container.querySelector("h2")).toBeNull()
+    fireEvent.click(container.querySelector("[data-pa-show-text]")!)
+    expect(container.querySelector("h2")?.textContent).toBe("Overview")
+    expect(container.querySelector("[data-pa-gist]")).toBeNull()
+  })
+
+  it("folds its text and note away once reported, its head and buttons kept, opened as left after a remount", () => {
+    pa.dispatchById = new Map()
+    const rows = [
+      card({}, { dispatch_id: null }),
+      row(31, "reply", {
+        batch_id: 9,
+        body: "It failed for credit; top it up.",
+        data: { state: "done", covers: [30] },
+      }),
+    ]
+    const first = draw(<EventCard item={eventOf(rows)} />)
+    const c = first.container
+    expect(c.querySelector("[data-pa-work]")?.textContent).toContain(
+      "Analyse my-app"
+    )
+    expect(c.querySelector("[data-pa-gist]")).toBeNull()
+    expect(c.textContent).not.toContain("the model ran out of credit")
+    const show = c.querySelector<HTMLButtonElement>("[data-pa-show-text]")!
+    expect(show.getAttribute("aria-expanded")).toBe("false")
+    fireEvent.click(show)
+    expect(c.textContent).toContain("the model ran out of credit")
+    expect(c.querySelector("h2")?.textContent).toBe("Overview")
+    // The list unmounts it (scrolled away) and mounts it again.
+    first.unmount()
+    const again = draw(<EventCard item={eventOf(rows)} />)
+    expect(again.container.querySelector("h2")?.textContent).toBe("Overview")
+  })
+
+  it("never cuts a gist that is all there is, and closes a note it opened", () => {
+    const short = draw(
+      <EventCard
+        item={eventOf([card({ excerpt: "my-app is a demo.", note: null })])}
+      />
+    )
+    const gist = short.container.querySelector("[data-pa-gist]")!
+    expect(gist.className).not.toContain("line-clamp")
+    expect(short.container.querySelector("[data-pa-show-text]")).toBeNull()
+    cleanup()
+    // Reported, with nothing but its note to open: opened, it closes again.
+    const rows = [
+      card({ excerpt: null, gist: null }),
+      row(31, "reply", {
+        batch_id: 9,
+        body: "It ran out of credit.",
+        data: { state: "done", covers: [30] },
+      }),
+    ]
+    const { container } = draw(<EventCard item={eventOf(rows)} />)
+    fireEvent.click(container.querySelector("[data-pa-show-text]")!)
+    expect(container.textContent).toContain("the model ran out of credit")
+    const hide = container.querySelector<HTMLButtonElement>(
+      "[data-pa-show-text]"
+    )!
+    expect(hide.getAttribute("aria-expanded")).toBe("true")
+    fireEvent.click(hide)
+    expect(container.textContent).not.toContain("the model ran out of credit")
+  })
+
+  it("opens to the whole text, not a preview cut again", () => {
+    const long = Array.from({ length: 40 }, (_, i) => `Line ${i}.`).join("\n\n")
+    const { container } = draw(
+      <EventCard item={eventOf([card({ excerpt: long, gist: "Line 0." })])} />
+    )
+    fireEvent.click(container.querySelector("[data-pa-show-text]")!)
+    const whole = container.querySelector("[data-pa-result]")!
+    expect(whole.className).not.toContain("max-h-")
+    expect(whole.textContent).toContain("Line 39.")
+  })
+
+  it("leads a check's evidence until a reply reports it", () => {
+    const check = card({
+      check_for: 7,
+      check_round: 1,
+      verdict: "fail",
+      evidence: "- a.txt:1 still says two",
+      note: null,
+    })
+    const open = draw(<EventCard item={eventOf([check])} />)
+    expect(open.container.textContent).toContain("a.txt:1 still says two")
+    expect(open.container.querySelector("[data-pa-show-text]")).toBeNull()
+    cleanup()
+    const folded = draw(
+      <EventCard
+        item={eventOf([
+          check,
+          row(31, "reply", {
+            batch_id: 9,
+            body: "The check found a.txt wrong.",
+            data: { state: "done", covers: [30] },
+          }),
+        ])}
+      />
+    )
+    expect(folded.container.textContent).not.toContain("a.txt:1")
+    expect(folded.container.querySelector("[data-pa-show-text]")).not.toBeNull()
+  })
+
+  it("draws no quote over it: the way to what it answers ends its head's line, a button of its own", () => {
+    const jumpTo = vi.fn()
+    const { container } = draw(
+      <EventCard item={eventOf([card({}, { reply_to: 5 })])} />,
+      { jumpTo }
+    )
+    // The card starts with the work: no quote over it.
+    expect(
+      container
+        .querySelector("[data-bubble]")!
+        .firstElementChild?.hasAttribute("data-pa-work")
+    ).toBe(true)
+    const source = container.querySelector<HTMLButtonElement>(
+      "[data-pa-work] [data-pa-work-source]"
+    )!
+    expect(source.textContent).toBe("Source")
+    expect(source.closest("button")).toBe(source)
+    fireEvent.click(source)
+    expect(jumpTo).toHaveBeenCalledWith(5)
+    cleanup()
+    // What it answers is the message right above: no way to it.
+    const items = buildMessageItems([
+      row(5, "reply", { batch_id: 2, body: "On it.", data: { state: "done" } }),
+      card({}, { reply_to: 5 }),
+    ])
+    const news = items.find((i) => i.kind === "event") as Extract<
+      MessageItem,
+      { kind: "event" }
+    >
+    expect(news.quotesPrevious).toBe(true)
+    const plain = draw(<EventCard item={news} />)
+    expect(plain.container.querySelector("[data-pa-work-source]")).toBeNull()
+  })
+
+  it("draws the news of a merge as the work's head with its commit, its text a click away (A5)", () => {
+    const { container } = draw(
+      <EventCard
+        item={eventOf([
+          card({
+            state: "completed",
+            ladder: "merged",
+            merge_commit: "a325330e1f",
+            note: null,
+            gist: "Updated the title.",
+            excerpt: "Updated the title.\n\nAnd the test.",
+          }),
+        ])}
+      />
+    )
+    expect(container.querySelector("[data-pa-work]")?.textContent).toContain(
+      "Work session · a325330"
+    )
+    expect(container.textContent).not.toContain("a325330e1f")
+    expect(container.querySelector("[data-pa-gist]")).toBeNull()
+    expect(container.textContent).not.toContain("And the test.")
+    fireEvent.click(container.querySelector("[data-pa-show-text]")!)
+    expect(container.textContent).toContain("And the test.")
+  })
+
+  it("puts making it a routine in its head's menu, not a button under it (D1)", () => {
+    pa.dispatchById = new Map([
+      [
+        40,
+        dispatchInfo({
+          id: 40,
+          state: "completed",
+          task: null,
+          routine_id: null,
+        } as Partial<DispatchInfo>),
+      ],
+    ])
+    const { container } = draw(
+      <EventCard
+        item={eventOf([card({ state: "completed" }, { dispatch_id: 40 })])}
+      />
+    )
+    expect(
+      container.querySelector("[data-pa-work] [data-pa-work-menu]")
+    ).not.toBeNull()
+    expect(container.querySelector("[data-pa-event-actions]")).toBeNull()
+    cleanup()
+    // Read only: no menu.
+    const read = draw(
+      <EventCard
+        item={eventOf([card({ state: "completed" }, { dispatch_id: 40 })])}
+      />,
+      { readOnly: true }
+    )
+    expect(read.container.querySelector("[data-pa-work-menu]")).toBeNull()
+  })
+
+  it("names the agent that ran it, not its executor, when that is its assistant's own name", () => {
+    pa.snapshot = { agent: { id: 2, name: "Builder", kind: "worker" } }
+    const own = draw(<EventCard item={eventOf([card()])} />)
+    expect(
+      own.container.querySelector("[data-pa-work]")?.textContent
+    ).toContain("Codex · Work session")
+    expect(
+      own.container.querySelector("[data-pa-work]")?.textContent
+    ).not.toContain("Builder")
+    cleanup()
+    pa.snapshot = { agent: { id: 2, name: "Scout", kind: "worker" } }
+    const other = draw(<EventCard item={eventOf([card()])} />)
+    expect(
+      other.container.querySelector("[data-pa-work]")?.textContent
+    ).toContain("Builder · Work session")
   })
 })

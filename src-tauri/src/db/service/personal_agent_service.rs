@@ -885,6 +885,21 @@ pub async fn batches_since(
 // ── timeline ────────────────────────────────────────────────────────────────
 
 pub fn to_row(m: timeline::Model) -> TimelineRow {
+    let mut data: Option<serde_json::Value> =
+        m.data.as_deref().and_then(|d| serde_json::from_str(d).ok());
+    // A result card written before its gist was (A1): the gist of its
+    // excerpt, read now.
+    if m.kind == TimelineKind::Result {
+        if let Some(map) = data.as_mut().and_then(|d| d.as_object_mut()) {
+            if !map.contains_key("gist") {
+                let gist = map
+                    .get("excerpt")
+                    .and_then(|e| e.as_str())
+                    .and_then(crate::personal_agent::gist::plain_gist);
+                map.insert("gist".into(), serde_json::json!(gist));
+            }
+        }
+    }
     TimelineRow {
         id: m.id,
         segment_id: m.segment_id,
@@ -892,7 +907,7 @@ pub fn to_row(m: timeline::Model) -> TimelineRow {
         kind: m.kind,
         status: m.status,
         body: m.body,
-        data: m.data.as_deref().and_then(|d| serde_json::from_str(d).ok()),
+        data,
         dispatch_id: m.dispatch_id,
         ref_id: m.ref_id,
         reply_to: m.reply_to,

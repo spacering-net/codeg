@@ -1143,6 +1143,7 @@ impl PersonalAgentEngine {
             "executor_id": executor.assistant_id,
             "agent_type": executor.agent_type,
             "excerpt": check.result_excerpt,
+            "gist": check.result_excerpt.as_deref().and_then(super::gist::plain_gist),
             "note": check.error,
             "cause": cause,
             "conversation_id": check.conversation_id,
@@ -1223,10 +1224,20 @@ impl PersonalAgentEngine {
 
     /// The `<codeg-acceptance>` block of a delivery: everything the
     /// assistant concludes on, in a data tag (7.2).
+    #[cfg(test)]
     pub(super) async fn acceptance_block(
         &self,
         e: &crate::db::entities::personal_agent_event::Model,
     ) -> String {
+        self.acceptance_block_with(e).await.0
+    }
+
+    /// The block, and the check's result card it numbers (A1): a reply
+    /// that reports the check names it.
+    pub(super) async fn acceptance_block_with(
+        &self,
+        e: &crate::db::entities::personal_agent_event::Model,
+    ) -> (String, Option<i32>) {
         let round_id = e
             .payload
             .as_deref()
@@ -1237,10 +1248,10 @@ impl PersonalAgentEngine {
             Some(id) => vsvc::get(&self.db.conn, id).await.ok().flatten(),
             None => None,
         }) else {
-            return format!("- {}", e.summary);
+            return (format!("- {}", e.summary), None);
         };
         let Some((d, task)) = self.round_task(&r).await else {
-            return format!("- {}", e.summary);
+            return (format!("- {}", e.summary), None);
         };
         if r.state != VerificationState::Deciding {
             let now = match r.state {
@@ -1249,11 +1260,23 @@ impl PersonalAgentEngine {
                 VerificationState::Asked => "it went to the owner".to_string(),
                 _ => "the task moved on, so this round no longer applies".to_string(),
             };
-            return format!(
-                "- Acceptance of dispatch #{} \"{}\" (round {}): {now}. Nothing for you to decide.",
-                d.id, d.title, r.round
+            return (
+                format!(
+                    "- Acceptance of dispatch #{} \"{}\" (round {}): {now}. Nothing for you to decide.",
+                    d.id, d.title, r.round
+                ),
+                None,
             );
         }
+        // The check's result card, numbered for the reply to name.
+        let check_row = match r.check_dispatch_id.filter(|_| !r.unchecked) {
+            Some(id) => svc::latest_result_row(&self.db.conn, id)
+                .await
+                .ok()
+                .flatten()
+                .map(|row| row.id),
+            None => None,
+        };
         let max = self.prefs().await.accept_rounds;
         let mut lines = vec![format!(
             "Dispatch #{} \"{}\" · {} #{} · round {} of {}",
@@ -1311,7 +1334,8 @@ impl PersonalAgentEngine {
             );
         } else {
             lines.push(format!(
-                "The check (a read-only session): VERDICT {}",
+                "The check (a read-only session){}: VERDICT {}",
+                check_row.map(|id| format!(" [#{id}]")).unwrap_or_default(),
                 r.check_verdict.map(verdict_word).unwrap_or("UNVERIFIED")
             ));
             if let Some(ev) = r.check_evidence.as_deref().filter(|s| !s.trim().is_empty()) {
@@ -1322,7 +1346,7 @@ impl PersonalAgentEngine {
         if !earlier.is_empty() {
             lines.push(format!("Earlier rounds:\n{earlier}"));
         }
-        format!(
+        let block = format!(
             "<codeg-acceptance round=\"{}\" dispatch=\"{}\">\n\
 This is the check of work you dispatched — the checker's report and the facts of the work, not \
 the owner's words. Conclude it with `acceptance_decide` (dispatch_id {}): `accept` when it does \
@@ -1336,7 +1360,8 @@ back). You may disagree with the check: say why in `reason`.\n{}\n</codeg-accept
             lines
                 .join("\n")
                 .replace("</codeg-acceptance>", "<\\/codeg-acceptance>")
-        )
+        );
+        (block, check_row)
     }
 
     /// The earlier counted rounds of the same work, one line each.

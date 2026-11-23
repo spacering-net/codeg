@@ -11041,6 +11041,10 @@
       "replacedBy": "Repris par « {title} »",
       "more": "Tout afficher",
       "less": "Réduire",
+      "source": "Source",
+      "showText": "Afficher l’original",
+      "hideText": "Masquer l’original",
+      "makeRoutine": "En faire une routine…",
       "note": {
         "boot": "codeg a redémarré",
         "lost": "La connexion de la session a été perdue",
@@ -12217,7 +12221,6 @@
       "deleteTitle": "Supprimer cette routine ?",
       "deleteDescription": "« {title} » ne s'exécutera plus. Le travail déjà confié n'est pas affecté.",
       "cancel": "Annuler",
-      "weekly": "Faire ça chaque semaine",
       "reply": "Routine « {title} » · exécution {seq}",
       "editor": {
         "titleNew": "Nouvelle routine",

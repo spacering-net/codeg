@@ -16,13 +16,20 @@
  */
 
 import { useTranslations } from "next-intl"
-import { ChevronDown, ChevronUp, Repeat } from "lucide-react"
+import { ChevronDown, ChevronUp, MoreHorizontal, Repeat } from "lucide-react"
 
 import { JsonRenderScope } from "@/components/ai-elements/json-render-pre"
 import { MessageResponse } from "@/components/ai-elements/message"
 import { usePersonalAgent } from "@/contexts/personal-agent-context"
+import { getAgentLabel } from "@/lib/custom-agents"
 import { useCollapsibleOverflow } from "@/hooks/use-collapsible-overflow"
 import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import type { AgentType, DispatchInfo, RoutineDraft } from "@/lib/types"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 import { cn } from "@/lib/utils"
@@ -30,7 +37,6 @@ import { cn } from "@/lib/utils"
 import { asVerdict, CheckLabel, VerdictChip } from "./acceptance-bits"
 import type { MessageItem } from "./message-items"
 import { MessageRow } from "./message-row"
-import { QuoteBar } from "./quote-bar"
 import {
   asDispatchState,
   asMode,
@@ -44,6 +50,7 @@ import {
   SheetPart,
   str,
   UnreadMark,
+  useBotName,
   useOpenWork,
   usePageScope,
   useWorkMeta,
@@ -209,26 +216,152 @@ function weeklyDraft(info: DispatchInfo): RoutineDraft {
 
 /** The news's buttons, its card's last band: the task card's, then its
  *  own — none of it when there is no button to show. */
-function EventActions({
-  strip,
-  children,
-}: {
-  strip: DispatchInfo | null
-  children: React.ReactNode
-}) {
+function EventActions({ strip }: { strip: DispatchInfo }) {
   return (
     <SheetActions data-pa-event-actions>
-      {strip ? <TaskActions d={strip} /> : null}
-      {children}
+      <TaskActions d={strip} />
     </SheetActions>
+  )
+}
+
+/** The work head's ⋯ (D1): done, and not a routine's already — make it
+ *  one, every week at this weekday and time to start with (6.9). */
+function WorkMenu({
+  info,
+  botId,
+}: {
+  info: DispatchInfo
+  botId: number | null
+}) {
+  const t = useTranslations("PersonalAgent")
+  const openRoutineEditor = usePersonalAgentUi((s) => s.openRoutineEditor)
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          className="text-muted-foreground hover:text-foreground"
+          aria-label={t("routines.more")}
+          title={t("routines.more")}
+          data-pa-work-menu
+        >
+          <MoreHorizontal aria-hidden className="size-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-36">
+        <DropdownMenuItem
+          onSelect={() =>
+            openRoutineEditor({
+              botId,
+              routineId: null,
+              draft: weeklyDraft(info),
+              noticeId: null,
+            })
+          }
+          data-pa-weekly
+        >
+          <Repeat aria-hidden />
+          {t("event.makeRoutine")}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+/** The whole of a result's text, as the message's markdown. */
+function WholeText({ text }: { text: string }) {
+  return (
+    <div data-pa-result className={cn("break-words", MARKDOWN_LIST_ROOM)}>
+      <JsonRenderScope>
+        <MessageResponse
+          parseIncompleteMarkdown
+          className={cn("text-sm", BUBBLE_MARKDOWN)}
+        >
+          {text}
+        </MessageResponse>
+      </JsonRenderScope>
+    </div>
+  )
+}
+
+/** The result's text, folded to its gist until asked for (A1): the gist in a
+ *  line or two and the way to the whole — and, once a reply said what came
+ *  of it (`covered`), the way to the whole alone, the gist and the note it
+ *  ended with folded in with the text. Opened, it stays open while the
+ *  list holds the card, kept by row in the store. A text that is itself
+ *  the point (`whole`: a check's evidence) shows until a reply said it. */
+function ResultText({
+  rowId,
+  gist,
+  note,
+  text,
+  covered,
+  whole = false,
+}: {
+  rowId: number
+  gist: string | null
+  /** The note it ended with (a failure's reason). */
+  note: string | null
+  text: string | null
+  covered: boolean
+  whole?: boolean
+}) {
+  const t = useTranslations("PersonalAgent.event")
+  const asked = usePersonalAgentUi((s) => s.openResults[rowId] === true)
+  const setOpen = usePersonalAgentUi((s) => s.setResultOpen)
+  const leads = whole && !covered
+  const open = asked || leads
+  const folded = covered && !open
+  // Nothing more to open: the gist is the whole of it.
+  const more = text != null && text.trim() !== "" && text.trim() !== gist
+  if (folded && !more && !gist && !note) return null
+  return (
+    <SheetPart className="flex flex-col gap-1.5" data-pa-result-text>
+      {note && !folded ? (
+        <p className="text-xs break-words text-muted-foreground">{note}</p>
+      ) : null}
+      {gist && !folded && !open ? (
+        <p
+          className={cn(
+            "text-sm leading-5 break-words text-foreground",
+            // Cut only when the whole is a click away.
+            more && "line-clamp-2"
+          )}
+          data-pa-gist
+        >
+          {gist}
+        </p>
+      ) : null}
+      {/* A text that leads shows as a result always did, cut at a few lines;
+          one the owner opened shows whole — the click was for all of it. */}
+      {leads && text ? <CollapsedText text={text} /> : null}
+      {asked && text ? <WholeText text={text} /> : null}
+      {!leads && (more || (covered && (gist || note))) ? (
+        <button
+          type="button"
+          onClick={() => setOpen(rowId, !open)}
+          aria-expanded={open}
+          data-pa-show-text
+          className="inline-flex items-center gap-0.5 self-start rounded-sm text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        >
+          {open ? t("hideText") : t("showText")}
+          {open ? (
+            <ChevronUp className="size-3.5" aria-hidden />
+          ) : (
+            <ChevronDown className="size-3.5" aria-hidden />
+          )}
+        </button>
+      ) : null}
+    </SheetPart>
   )
 }
 
 export function EventCard({ item }: { item: EventItem }) {
   const t = useTranslations("PersonalAgent")
-  const { dispatchById, botId } = usePersonalAgent()
+  const { dispatchById, botId, snapshot } = usePersonalAgent()
   const { readOnly, jumpTo } = usePageScope()
-  const openRoutineEditor = usePersonalAgentUi((s) => s.openRoutineEditor)
+  const botName = useBotName()
   const openWork = useOpenWork()
   const meta = useWorkMeta()
   const row = item.row
@@ -263,6 +396,19 @@ export function EventCard({ item }: { item: EventItem }) {
   const verdict = asVerdict(data?.verdict)
   const evidence = str(data, "evidence")
   const shown = checkFor != null && evidence ? evidence : excerpt
+  // What came of it in a sentence (A1), as the server read it; a check's
+  // verdict says it, its evidence is the text.
+  const gist = checkFor == null ? str(data, "gist") : null
+  // Its executor, named after its assistant (its own work): the agent that
+  // ran it says more (A2).
+  const ownName =
+    executor != null &&
+    snapshot?.agent != null &&
+    executor === botName(snapshot.agent)
+  const ranBy = ownName && agentType ? getAgentLabel(agentType) : executor
+  // The commit it landed as, on the news of the merge (A5).
+  const mergeCommit = newsLadder === "merged" ? str(data, "merge_commit") : null
+  const mergedAs = mergeCommit ? mergeCommit.slice(0, 7) : null
   // The task card, on the latest news of its work: where it stands now,
   // said again on the strip when the row above says otherwise.
   const strip = item.latest && info?.task ? info : null
@@ -279,7 +425,6 @@ export function EventCard({ item }: { item: EventItem }) {
   const facts =
     strip != null ||
     answered > 0 ||
-    note != null ||
     retry != null ||
     replacedBy != null ||
     checkFor != null
@@ -299,29 +444,38 @@ export function EventCard({ item }: { item: EventItem }) {
       }}
       aside={unread ? <UnreadMark /> : null}
     >
-      {/* The work and its news one card, no bubble round it: the reply it
-          answers (when not the message above), the work its head, then
-          where it stands, what came of it and its buttons, a hairline
-          between. */}
-      <CardMessage
-        data-pa-event-card
-        head={
-          row.reply_to != null && !item.quotesPrevious ? (
-            <QuoteBar targetId={row.reply_to} tone="light" className="w-full" />
-          ) : null
-        }
-      >
+      {/* The work and its news one card, no bubble round it: the work its
+          head — the way to the reply it answers at the end of its line,
+          when that is not the message above (A2) — then where it stands,
+          what came of it and its buttons, a hairline between. */}
+      <CardMessage data-pa-event-card>
         <WorkRow
           flat
           executorId={info?.executor.assistant_id ?? num(data, "executor_id")}
           executor={executor}
           agentType={agentType}
           title={title}
-          meta={meta({
-            executor,
-            mode: info?.mode ?? asMode(data?.mode),
-            folder: info?.folder_name ?? null,
-          })}
+          // The commit a merge landed as ends the line under the title
+          // (A5), where a narrow card cuts it rather than the menu.
+          meta={[
+            meta({
+              executor: ranBy,
+              mode: info?.mode ?? asMode(data?.mode),
+              folder: info?.folder_name ?? null,
+            }),
+            mergedAs,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+          menu={weekly ? <WorkMenu info={weekly} botId={botId} /> : null}
+          source={
+            row.reply_to != null && !item.quotesPrevious
+              ? {
+                  label: t("event.source"),
+                  onClick: () => jumpTo(row.reply_to!),
+                }
+              : null
+          }
           chip={
             newsLadder ? (
               <LadderChip ladder={newsLadder} />
@@ -338,11 +492,6 @@ export function EventCard({ item }: { item: EventItem }) {
               <TaskStrip d={strip} chip={newsLadder !== strip.ladder} />
             ) : null}
             {answered > 0 ? <AnsweredForYou count={answered} /> : null}
-            {note ? (
-              <p className="text-xs break-words text-muted-foreground">
-                {note}
-              </p>
-            ) : null}
             {retry ? (
               <p
                 className="text-xs break-words text-muted-foreground"
@@ -382,35 +531,21 @@ export function EventCard({ item }: { item: EventItem }) {
             ) : null}
           </SheetPart>
         ) : null}
-        {/* What came of it, as the message's text. */}
-        {shown ? (
-          <SheetPart>
-            <CollapsedText text={shown} />
-          </SheetPart>
-        ) : null}
-        {/* The task card's buttons; done, and not a routine's already:
-              make it one (6.9). */}
-        {(strip && hasTaskActions(strip, readOnly)) || weekly ? (
-          <EventActions strip={strip}>
-            {weekly ? (
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() =>
-                  openRoutineEditor({
-                    botId,
-                    routineId: null,
-                    draft: weeklyDraft(weekly),
-                    noticeId: null,
-                  })
-                }
-                data-pa-weekly
-              >
-                <Repeat aria-hidden />
-                {t("routines.weekly")}
-              </Button>
-            ) : null}
-          </EventActions>
+        {/* What came of it: its gist, the note it ended with, the way to
+            the whole text. */}
+        <ResultText
+          rowId={row.id}
+          gist={gist}
+          note={note}
+          text={shown}
+          // The news of a merge is the work's head alone (A5): what came of
+          // the work its earlier card said, and the owner merged it.
+          covered={item.covered || newsLadder === "merged"}
+          whole={checkFor != null}
+        />
+        {/* The task card's buttons. */}
+        {strip && hasTaskActions(strip, readOnly) ? (
+          <EventActions strip={strip} />
         ) : null}
       </CardMessage>
     </MessageRow>

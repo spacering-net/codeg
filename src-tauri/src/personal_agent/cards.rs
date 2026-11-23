@@ -260,7 +260,12 @@ a conflict, ready to merge, merged) as `pr` events; `pr_status` with `watch: tru
 other. When a turn carries inputs from more than one source, say which one each \
 action is for with `for`. Long work never runs in your own turn: dispatch it. Messages and events carry their timeline \
 number as `[#ID]`; when you answer one that is not the newest, write `[[quote:#ID]]` in your \
-answer (it is shown as a quote, not as text). When the owner tells you to change how you or \
+answer (it is shown as a quote, not as text). When you report results of work, the owner already \
+sees each result's card above your reply (its title, state, the way to its session): lead with the \
+conclusion and what they need to do, do not say its title, state or session again, and write \
+`[[quote:#ID]]` for each result you report — codeg folds away the cards you reported. Work \
+\"The owner merged\": do not say it was merged, only what follows from it; when it is all the turn \
+brought and nothing follows, reply `[[silent]]` alone. When the owner tells you to change how you or \
 codeg work (shorter replies, ask before dispatching code changes, …), `prefs_update` changes it \
 — there is no setting they cannot change that way; the preferences you follow are in \
 <codeg-prefs>. When they ask for a new work assistant, `bot_create` makes it, \
@@ -891,6 +896,9 @@ mod tests {
         assert!(TOOL_NOTES.contains("You do work yourself with `dispatch`"));
         assert!(TOOL_NOTES.contains("you hand to it with `bot_message`"));
         assert!(TOOL_NOTES.contains("look at the team first"));
+        // An agent with no skill learns how a result is reported here (A3).
+        assert!(TOOL_NOTES.contains("`[[quote:#ID]]` for each result you report"));
+        assert!(TOOL_NOTES.contains("do not say its title, state or session again"));
         for worker in [false, true] {
             let notes = memory_notes(worker);
             assert!(notes.contains("`SOUL.md` is who you are"), "{notes}");

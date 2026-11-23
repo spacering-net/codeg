@@ -11041,6 +11041,10 @@
       "replacedBy": "已由「{title}」接手",
       "more": "展开",
       "less": "收起",
+      "source": "来源",
+      "showText": "展开原文",
+      "hideText": "收起原文",
+      "makeRoutine": "设成例程…",
       "note": {
         "boot": "codeg 重启了",
         "lost": "会话连接断开了",
@@ -12217,7 +12221,6 @@
       "deleteTitle": "删除这个例程？",
       "deleteDescription": "「{title}」将不再运行。它已经派出的活不受影响。",
       "cancel": "取消",
-      "weekly": "每周这样做",
       "reply": "例程「{title}」· 第 {seq} 次",
       "editor": {
         "titleNew": "新建例程",

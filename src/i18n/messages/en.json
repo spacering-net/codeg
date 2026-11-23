@@ -11041,6 +11041,10 @@
       "replacedBy": "Taken over by “{title}”",
       "more": "Show all",
       "less": "Show less",
+      "source": "Source",
+      "showText": "Show original",
+      "hideText": "Hide original",
+      "makeRoutine": "Make it a routine…",
       "note": {
         "boot": "codeg restarted",
         "lost": "The session's connection was lost",
@@ -12217,7 +12221,6 @@
       "deleteTitle": "Delete this routine?",
       "deleteDescription": "“{title}” stops running. The work it already handed out is not affected.",
       "cancel": "Cancel",
-      "weekly": "Do this every week",
       "reply": "Routine “{title}” · run {seq}",
       "editor": {
         "titleNew": "New routine",

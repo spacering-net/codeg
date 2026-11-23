@@ -1909,6 +1909,23 @@ impl PersonalAgentEngine {
                  verdict to accept it — nothing to do until then.",
             );
         }
+        // Who landed it (A5), as the merge that landed this run recorded —
+        // not the project's setting now, which may have changed since, or
+        // be on while the owner merged by hand. Unknown: nothing said.
+        let merged_by = match (ladder, task.as_ref()) {
+            (crate::models::personal_agent_overview::Ladder::Merged, Some(t)) => {
+                crate::db::service::work_task_service::merge_actor(&self.db.conn, t.id, t.run_seq)
+                    .await
+                    .ok()
+                    .flatten()
+            }
+            _ => None,
+        };
+        match merged_by.as_deref() {
+            Some("user") => summary.push_str(" The owner merged it."),
+            Some("auto") => summary.push_str(" The board merged it on its own (auto-merge)."),
+            _ => {}
+        }
         // A pull request is not the end of code work: merged is (8.5).
         if ladder == crate::models::personal_agent_overview::Ladder::PrOpen {
             let pr = task.as_ref().map(super::ladder::pr_of).and_then(|(url, _)| url);
@@ -1993,6 +2010,8 @@ impl PersonalAgentEngine {
             "executor_id": executor.assistant_id,
             "agent_type": executor.agent_type,
             "excerpt": excerpt,
+            // What came of it in a plain sentence (A1).
+            "gist": excerpt.as_deref().and_then(super::gist::plain_gist),
             "note": note,
             // What brought the news (`boot`, `lost`, `gone`, `turn`…): the
             // page words the notes codeg writes itself in the owner's
@@ -2003,6 +2022,11 @@ impl PersonalAgentEngine {
             // its work it tells of (B6).
             "run": task.as_ref().map(|t| t.run_seq),
             "round": round,
+            // The commit it landed as, for a card of the merge (A5).
+            "merge_commit": task
+                .as_ref()
+                .filter(|_| ladder == crate::models::personal_agent_overview::Ladder::Merged)
+                .and_then(|t| t.merge_commit.clone()),
             "conversation_id": d.conversation_id,
             "conversation_folder_id": conversation_folder_id,
             "folder_id": d.folder_id,

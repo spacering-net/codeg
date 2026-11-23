@@ -699,10 +699,14 @@ describe("a result card", () => {
     )
   }
 
-  it("offers to do the same work every week", () => {
+  it("offers to do the same work every week, in its head's menu", async () => {
     ctx.dispatchById = new Map([[12, info()]])
     drawResult()
-    fireEvent.click(screen.getByText("Do this every week"))
+    const user = userEvent.setup()
+    await user.click(document.querySelector("[data-pa-work-menu]")!)
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Make it a routine…" })
+    )
     const req = usePersonalAgentUi.getState().routineEditor
     expect(req?.routineId).toBeNull()
     expect(req?.draft).toMatchObject({
@@ -719,6 +723,6 @@ describe("a result card", () => {
   it("not on a routine's own work", () => {
     ctx.dispatchById = new Map([[12, info({ routine_id: 5 })]])
     drawResult()
-    expect(screen.queryByText("Do this every week")).toBeNull()
+    expect(document.querySelector("[data-pa-work-menu]")).toBeNull()
   })
 })

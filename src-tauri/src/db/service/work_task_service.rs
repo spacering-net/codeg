@@ -158,6 +158,35 @@ pub async fn record_event<C: ConnectionTrait>(
     Ok(())
 }
 
+/// Who started the merge that landed generation `run_seq`: `"user"` or
+/// `"auto"`, as its `merge_attempt` recorded — `None` when no attempt is
+/// known to be that run's (an older record names no run: the task's latest
+/// attempt stands for it, a later run's never does).
+pub async fn merge_actor(
+    conn: &DatabaseConnection,
+    task_id: i32,
+    run_seq: i32,
+) -> Result<Option<String>, DbError> {
+    let Some(e) = work_task_event::Entity::find()
+        .filter(work_task_event::Column::TaskId.eq(task_id))
+        .filter(work_task_event::Column::Kind.eq("merge_attempt"))
+        .order_by_desc(work_task_event::Column::Id)
+        .one(conn)
+        .await?
+    else {
+        return Ok(None);
+    };
+    let run = e
+        .payload
+        .as_deref()
+        .and_then(|p| serde_json::from_str::<serde_json::Value>(p).ok())
+        .and_then(|p| p.get("run_seq").and_then(serde_json::Value::as_i64));
+    if run.is_some_and(|r| r != i64::from(run_seq)) {
+        return Ok(None);
+    }
+    Ok(matches!(e.actor.as_str(), "user" | "auto").then_some(e.actor))
+}
+
 /// The payload of generation `run_seq`'s `background_wait` when no
 /// `background_wait_end` followed it: the engine was holding that run open for
 /// its agent's background work when the process went away. `None` when the
@@ -2422,6 +2451,9 @@ pub async fn begin_merge(
             "strategy": state.strategy,
             "pre_merge_head": state.pre_merge_head,
             "auto": auto,
+            // The generation it merges in: who landed THIS run is read off
+            // it (the personal agent's "merged" news, A5).
+            "run_seq": run_seq,
         })),
     )
     .await?;

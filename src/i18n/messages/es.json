@@ -11041,6 +11041,10 @@
       "replacedBy": "Lo retomó «{title}»",
       "more": "Ver todo",
       "less": "Ver menos",
+      "source": "Origen",
+      "showText": "Ver original",
+      "hideText": "Ocultar original",
+      "makeRoutine": "Convertir en rutina…",
       "note": {
         "boot": "codeg se reinició",
         "lost": "Se perdió la conexión de la sesión",
@@ -12217,7 +12221,6 @@
       "deleteTitle": "¿Eliminar esta rutina?",
       "deleteDescription": "«{title}» deja de ejecutarse. El trabajo que ya encargó no se ve afectado.",
       "cancel": "Cancelar",
-      "weekly": "Hacer esto cada semana",
       "reply": "Rutina «{title}» · ejecución {seq}",
       "editor": {
         "titleNew": "Nueva rutina",

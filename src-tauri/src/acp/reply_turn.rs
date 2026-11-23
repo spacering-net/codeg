@@ -94,6 +94,11 @@ impl ReplyStep {
 pub struct ReplyText {
     pub n: u32,
     pub text: String,
+    /// The ids of the quote markers this run wrote, in order — what the
+    /// reply's body names, apart from the runs before it (progress notes,
+    /// text a later run replaced).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub quotes: Vec<i64>,
 }
 
 /// One reply turn, as the engine reads it.
@@ -519,11 +524,13 @@ impl ReplyTurn {
             return Some(ReplyText {
                 n,
                 text: display_text(&self.run),
+                quotes: quote_ids(&self.run),
             });
         }
         self.last_closed.as_ref().map(|(n, raw)| ReplyText {
             n: *n,
             text: display_text(raw),
+            quotes: quote_ids(raw),
         })
     }
 
@@ -1276,6 +1283,16 @@ mod tests {
         ]);
         assert_eq!(s.quotes, vec![3, 5]);
         assert_eq!(last(&s), Some((3, "Here it is .")));
+        // The body's own markers are the last run's alone.
+        assert_eq!(s.last_text.as_ref().map(|t| t.quotes.clone()), Some(vec![5]));
+        // A run with none names nothing, whatever the runs before it named.
+        let s = run(&[
+            text("[[quote:#3]] On it."),
+            tool("t1", "Read", "completed"),
+            text("Done."),
+            done(),
+        ]);
+        assert_eq!(s.last_text.map(|t| t.quotes), Some(Vec::<i64>::new()));
     }
 
     #[test]

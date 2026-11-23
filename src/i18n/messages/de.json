@@ -11041,6 +11041,10 @@
       "replacedBy": "Übernommen von „{title}“",
       "more": "Alles anzeigen",
       "less": "Weniger anzeigen",
+      "source": "Quelle",
+      "showText": "Original anzeigen",
+      "hideText": "Original ausblenden",
+      "makeRoutine": "Als Routine einrichten…",
       "note": {
         "boot": "codeg wurde neu gestartet",
         "lost": "Die Verbindung der Sitzung ging verloren",
@@ -12217,7 +12221,6 @@
       "deleteTitle": "Diese Routine löschen?",
       "deleteDescription": "„{title}“ läuft nicht mehr. Bereits vergebene Arbeit ist nicht betroffen.",
       "cancel": "Abbrechen",
-      "weekly": "Jede Woche so machen",
       "reply": "Routine „{title}“ · Lauf {seq}",
       "editor": {
         "titleNew": "Neue Routine",

@@ -84,6 +84,9 @@ export type MessageItem =
       /** The latest news of its work among the rows held: it carries the
        *  work's task card (8.5); earlier news keeps how it stood then. */
       latest: boolean
+      /** A reply said in full reported it (its `covers`, A1): the reply
+       *  says what came of it, so its own text folds away. */
+      covered: boolean
     })
   /** A native card codeg wrote itself (a proposal): on the assistants'
    *  side, standing alone. */
@@ -236,6 +239,16 @@ export function buildMessageItems(rows: readonly TimelineRow[]): MessageItem[] {
       ownersByBatch.set(r.batch_id, list)
     }
   }
+  // The result cards a reply said in full reported (A1); a reply that did
+  // not finish, or was not shown, reports none.
+  const covered = new Set<number>()
+  for (const r of rows) {
+    if (r.kind !== "reply" || replyState(r) !== "done" || r.body.trim() === "")
+      continue
+    const covers = r.data?.covers
+    if (!Array.isArray(covers)) continue
+    for (const id of covers) if (typeof id === "number") covered.add(id)
+  }
   const items: MessageItem[] = []
   let prev: { at: number; item: MessageItem } | null = null
   const place = (item: Placed) => {
@@ -363,6 +376,7 @@ export function buildMessageItems(rows: readonly TimelineRow[]): MessageItem[] {
         quotesPrevious: false,
         row: r,
         latest: false,
+        covered: covered.has(r.id),
       }
     } else if (r.kind === "notice") {
       item = {

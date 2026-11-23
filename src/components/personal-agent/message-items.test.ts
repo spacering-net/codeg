@@ -584,3 +584,49 @@ describe("an executor's question (7.3.1)", () => {
     expect(news?.kind === "event" && news.latest).toBe(true)
   })
 })
+
+describe("result cards a reply reported (A1)", () => {
+  const reply = (
+    id: number,
+    state: string,
+    covers: unknown,
+    body = "It is done."
+  ) =>
+    row(id, "reply", {
+      batch_id: id,
+      body,
+      data: { state, ...(covers === undefined ? {} : { covers }) },
+    })
+  const covered = (rows: TimelineRow[]) =>
+    Object.fromEntries(
+      buildMessageItems(rows)
+        .filter((i) => i.kind === "event")
+        .map((i) => [i.row.id, i.kind === "event" && i.covered])
+    )
+
+  it("folds what a reply said in full reported, one reply many cards", () => {
+    expect(
+      covered([
+        row(1, "result"),
+        row(2, "result"),
+        row(3, "result"),
+        reply(4, "done", [1, 2]),
+      ])
+    ).toEqual({ 1: true, 2: true, 3: false })
+  })
+
+  it("keeps what an unfinished, unshown or older reply came after", () => {
+    for (const r of [
+      reply(4, "running", [1]),
+      reply(4, "interrupted", [1]),
+      reply(4, "canceled", [1]),
+      reply(4, "silent", [1]),
+      reply(4, "discarded", [1]),
+      reply(4, "done", [1], "  "),
+      // Written before replies said what they reported.
+      reply(4, "done", undefined),
+    ]) {
+      expect(covered([row(1, "result"), r])).toEqual({ 1: false })
+    }
+  })
+})

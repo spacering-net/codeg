@@ -107,6 +107,11 @@ interface PersonalAgentUiState {
    *  from and back keeps them. */
   auxFolds: Record<string, boolean>
   setAuxFold: (key: string, open: boolean) => void
+  /** The result cards whose full text the owner opened, by row id: kept
+   *  here, not in the card, so a card the list unmounts and mounts again
+   *  (scrolled away and back) stays as they left it (A1). */
+  openResults: Record<number, boolean>
+  setResultOpen: (rowId: number, open: boolean) => void
   /** The page is open in this window, the window has focus, and the list is
    *  at its bottom: what comes in is seen as it lands. */
   watching: boolean
@@ -176,6 +181,9 @@ export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
   auxFolds: {},
   setAuxFold: (key, open) =>
     set((s) => ({ auxFolds: { ...s.auxFolds, [key]: open } })),
+  openResults: {},
+  setResultOpen: (rowId, open) =>
+    set((s) => ({ openResults: { ...s.openResults, [rowId]: open } })),
   watching: false,
   setWatching: (watching) => set({ watching }),
   work: null,

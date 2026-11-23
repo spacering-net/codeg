@@ -11041,6 +11041,10 @@
       "replacedBy": "「{title}」が引き継ぎました",
       "more": "すべて表示",
       "less": "折りたたむ",
+      "source": "元のメッセージ",
+      "showText": "原文を表示",
+      "hideText": "原文を隠す",
+      "makeRoutine": "ルーティンにする…",
       "note": {
         "boot": "codeg が再起動しました",
         "lost": "セッションの接続が切れました",
@@ -12217,7 +12221,6 @@
       "deleteTitle": "このルーティンを削除しますか？",
       "deleteDescription": "「{title}」は実行されなくなります。すでに依頼した作業には影響しません。",
       "cancel": "キャンセル",
-      "weekly": "毎週これをやる",
       "reply": "ルーティン「{title}」· {seq} 回目",
       "editor": {
         "titleNew": "新しいルーティン",

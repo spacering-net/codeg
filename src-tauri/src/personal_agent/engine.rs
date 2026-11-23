@@ -224,6 +224,8 @@ struct ActiveTurn {
     /// For a delivery of one event and no message: the event's result card,
     /// which the reply quotes unless it names another row itself.
     auto_quote: Option<i32>,
+    /// For a delivery: the result cards its reply may report (A1).
+    covers_from: Covers,
     /// For a delivery: the batches whose ledger entries count as its own —
     /// itself, and those it re-delivers what they carried of.
     ledger_scope: Vec<i32>,
@@ -238,6 +240,36 @@ struct ActiveTurn {
     /// tidy-up (7.7) or a look back at work (7.8) — with no reply shown;
     /// what it is says what its commit is and which card it brings.
     internal: Option<Internal>,
+}
+
+/// The result cards a delivery's reply may report (A1): what it put in the
+/// prompt, so a reply is never taken to report a card it was not given.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct Covers {
+    /// The cards its events were numbered with, and the check result of a
+    /// round of acceptance it carried.
+    rows: Vec<i32>,
+    /// The one card that was all it carried — no other event, block or
+    /// message: a reply to it reports it, marker or not.
+    sole: Option<i32>,
+}
+
+impl Covers {
+    /// What a reply whose body names `named` reports: what it names and was
+    /// given, and the sole card it was given.
+    fn of(&self, named: &[i64]) -> Vec<i32> {
+        let mut out: Vec<i32> = Vec::new();
+        for id in named
+            .iter()
+            .filter_map(|q| i32::try_from(*q).ok())
+            .chain(self.sole)
+        {
+            if self.rows.contains(&id) && !out.contains(&id) {
+                out.push(id);
+            }
+        }
+        out
+    }
 }
 
 /// What an internal turn is for (7.7, 7.8).
@@ -294,6 +326,9 @@ struct ReplyContent {
     last_text_n: Option<u32>,
     step_count: u32,
     quotes: Vec<i64>,
+    /// The markers of its body alone (the last text run), not of the runs
+    /// before it: what it reports (A1).
+    body_quotes: Vec<i64>,
     /// The paths its `read` calls named (7.7).
     reads: Vec<String>,
 }
@@ -305,6 +340,7 @@ impl ReplyContent {
             last_text_n: s.last_text.as_ref().map(|t| t.n),
             step_count: s.step_count,
             quotes: s.quotes.clone(),
+            body_quotes: s.last_text.as_ref().map(|t| t.quotes.clone()).unwrap_or_default(),
             reads: s.reads.clone(),
         }
     }
@@ -332,6 +368,13 @@ impl ReplyContent {
                 .unwrap_or(0),
             quotes: data
                 .get("quotes")
+                .and_then(|q| q.as_array())
+                .map(|q| q.iter().filter_map(|v| v.as_i64()).collect())
+                .unwrap_or_default(),
+            // The checkpoint's body has its markers taken out: the ids it
+            // wrote are kept beside it.
+            body_quotes: last
+                .and_then(|t| t.get("quotes"))
                 .and_then(|q| q.as_array())
                 .map(|q| q.iter().filter_map(|v| v.as_i64()).collect())
                 .unwrap_or_default(),
@@ -656,6 +699,7 @@ impl PersonalAgentEngine {
             reply_row_id: None,
             reply_token: None,
             auto_quote: None,
+            covers_from: Covers::default(),
             ledger_scope: vec![batch_id],
             preempted: false,
             flush: None,
@@ -703,6 +747,7 @@ impl PersonalAgentEngine {
             reply_row_id: Some(row.id),
             reply_token: Some(token.to_string()),
             auto_quote: None,
+            covers_from: Covers::default(),
             ledger_scope: vec![batch_id],
             preempted: false,
             flush: None,
@@ -1119,6 +1164,7 @@ impl PersonalAgentEngine {
                     },
                     content,
                     None,
+                    &Covers::default(),
                 )
                 .await;
             }
@@ -1960,7 +2006,12 @@ impl PersonalAgentEngine {
         outcome: ReplyOutcome,
         content: ReplyContent,
         auto_quote: Option<i32>,
+        covers: &Covers,
     ) {
+        // The result cards it reports (A1): only a reply that was said in
+        // full, to the cards it was given.
+        let covers = (outcome.state == "done" && !content.text.trim().is_empty())
+            .then(|| covers.of(&content.body_quotes));
         let reply_to = match self.resolve_quote(row_id, &content.quotes).await {
             Some(id) => Some(id),
             None => auto_quote,
@@ -2005,6 +2056,10 @@ impl PersonalAgentEngine {
             "finished_at": finished_at,
             "duration_ms": (finished_at - started_at).num_milliseconds().max(0),
         });
+        let mut data = data;
+        if let (Some(covers), Some(map)) = (covers, data.as_object_mut()) {
+            map.insert("covers".into(), serde_json::json!(covers));
+        }
         if let Ok(Some(row)) =
             svc::settle_reply_row(&self.db.conn, row_id, content.text, data, reply_to).await
         {
@@ -2663,6 +2718,7 @@ impl PersonalAgentEngine {
                 reply_row_id: None,
                 reply_token: None,
                 auto_quote: None,
+                covers_from: Covers::default(),
                 ledger_scope: vec![batch.id],
                 preempted: false,
                 flush: Some(FlushRun {
@@ -2860,6 +2916,7 @@ impl PersonalAgentEngine {
                 reply_row_id: None,
                 reply_token: None,
                 auto_quote: None,
+                covers_from: Covers::default(),
                 ledger_scope: Vec::new(),
                 preempted: false,
                 flush: None,
@@ -3265,11 +3322,14 @@ impl PersonalAgentEngine {
             asks.push(self.ask_block(e).await);
         }
         // The rounds of acceptance to conclude, each with its materials (7.5).
+        let mut check_rows = Vec::new();
         for e in events
             .iter()
             .filter(|e| e.kind == super::acceptance::ACCEPT_EVENT)
         {
-            asks.push(self.acceptance_block(e).await);
+            let (block, check_row) = self.acceptance_block_with(e).await;
+            asks.push(block);
+            check_rows.extend(check_row);
         }
         // The morning brief or the wrap-up: its materials, and what to
         // write (6.4, 6.5).
@@ -3371,6 +3431,16 @@ impl PersonalAgentEngine {
             event_lines[0].row_id
         } else {
             None
+        };
+        // The cards its reply may report (A1): those the prompt numbered.
+        // One that is all it carried is reported by any reply to it.
+        let covers_from = Covers {
+            rows: event_lines
+                .iter()
+                .filter_map(|l| l.row_id)
+                .chain(check_rows.iter().copied())
+                .collect(),
+            sole: auto_quote.filter(|_| asks.is_empty()),
         };
 
         // Attachments ride after the text, in message order.
@@ -3550,6 +3620,7 @@ impl PersonalAgentEngine {
                 // other's, though no row shows its reply.
                 reply_token: (reply.is_some() || internal.is_some()).then(|| token.clone()),
                 auto_quote,
+                covers_from,
                 ledger_scope,
                 preempted: false,
                 flush: None,
@@ -3897,6 +3968,8 @@ impl PersonalAgentEngine {
             }
         };
         let has_text = !content.text.trim().is_empty();
+        let said_in_full =
+            matches!(stop.as_deref(), None | Some("end_turn")) && turn.error.is_none();
         let reply_words = super::reach::reply_glimpse(&content.text);
         // Nothing worth saying, and nothing of the owner's to answer: the
         // reply is not shown (6.9).
@@ -3957,6 +4030,19 @@ impl PersonalAgentEngine {
                 },
                 content,
                 turn.auto_quote,
+                // Only a reply the agent ended itself, with no error on the
+                // way, said what it meant to (a turn cut off at its request
+                // or token limit, or refused, may have said only "I'll look").
+                // A message the owner steered in is answered too: the card
+                // is no longer all it was given.
+                &if said_in_full {
+                    Covers {
+                        sole: turn.covers_from.sole.filter(|_| turn.owner_row_ids.is_empty()),
+                        ..turn.covers_from.clone()
+                    }
+                } else {
+                    Covers::default()
+                },
             )
             .await;
         }
@@ -5834,5 +5920,27 @@ mod tests {
         use crate::db::entities::personal_agent_dispatch::DispatchState;
         assert_eq!(enum_str(&DispatchState::WaitingInput), "waiting_input");
         assert_eq!(enum_str(&SegmentReason::OptionRestart), "option_restart");
+    }
+
+    #[test]
+    fn a_reply_reports_what_it_names_of_what_it_was_given_and_its_sole_card() {
+        let many = Covers { rows: vec![20, 22], sole: None };
+        assert_eq!(many.of(&[22, 99, 22]), vec![22], "named and given, once");
+        assert!(many.of(&[]).is_empty(), "among many, only what it names");
+        let one = Covers { rows: vec![20], sole: Some(20) };
+        assert_eq!(one.of(&[]), vec![20]);
+        assert_eq!(one.of(&[20]), vec![20]);
+        assert!(Covers::default().of(&[20]).is_empty(), "never a card it was not given");
+    }
+
+    #[test]
+    fn a_checkpoint_keeps_the_markers_of_its_body_apart_from_the_turn_s() {
+        let c = ReplyContent::from_checkpoint(Some(
+            r#"{"last_text":{"n":3,"text":"The first is done.","quotes":[20]},"quotes":[22,20]}"#,
+        ));
+        assert_eq!((c.text.as_str(), c.body_quotes, c.quotes), ("The first is done.", vec![20], vec![22, 20]));
+        // One written before the body's markers were kept names none.
+        let old = ReplyContent::from_checkpoint(Some(r#"{"last_text":{"n":1,"text":"Hi"},"quotes":[22]}"#));
+        assert!(old.body_quotes.is_empty());
     }
 }

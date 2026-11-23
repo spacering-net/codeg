@@ -69,6 +69,8 @@ export function WorkRow({
   chip,
   onOpen,
   flat = false,
+  source,
+  menu,
 }: {
   executorId: number | null
   executor: string | null
@@ -82,8 +84,30 @@ export function WorkRow({
   onOpen: (() => void) | null
   /** The head of a card of its own (`PaSheet`): no surface of its own. */
   flat?: boolean
+  /** The way to the message it follows up on, at the end of the line under
+   *  the title (A2): a button of its own, reachable by keyboard and touch. */
+  source?: { label: string; onClick: () => void } | null
+  /** A menu of what else can be done with the work (a ⋯ button), after its
+   *  state. */
+  menu?: React.ReactNode
 }) {
   const t = useTranslations("PersonalAgent")
+  if (source || menu) {
+    return (
+      <WorkRowWithControls
+        executorId={executorId}
+        executor={executor}
+        agentType={agentType}
+        title={title}
+        meta={meta}
+        chip={chip}
+        onOpen={onOpen}
+        flat={flat}
+        source={source ?? null}
+        menu={menu ?? null}
+      />
+    )
+  }
   return (
     <button
       type="button"
@@ -127,6 +151,111 @@ export function WorkRow({
         />
       ) : null}
     </button>
+  )
+}
+
+/** The row with more controls on it: a button holds no other, so the row's
+ *  own (opening the session) lies under it all, the full size of the row,
+ *  and what the row shows sits over it, letting the pointer through — but
+ *  for the way to the source and the menu, controls of their own. */
+function WorkRowWithControls({
+  executorId,
+  executor,
+  agentType,
+  title,
+  meta,
+  chip,
+  onOpen,
+  flat,
+  source,
+  menu,
+}: {
+  executorId: number | null
+  executor: string | null
+  agentType: AgentType | null
+  title: string
+  meta: string
+  chip: React.ReactNode
+  onOpen: (() => void) | null
+  flat: boolean
+  source: { label: string; onClick: () => void } | null
+  menu: React.ReactNode
+}) {
+  const t = useTranslations("PersonalAgent")
+  return (
+    <div
+      data-pa-work={flat ? "head" : ""}
+      className={cn(
+        "group/work relative flex w-full min-w-0 items-center text-start",
+        !flat && INSET_SURFACE
+      )}
+    >
+      {onOpen ? (
+        <button
+          type="button"
+          data-pa-work-open
+          onClick={onOpen}
+          aria-label={title}
+          title={t("timeline.viewSession")}
+          className={cn(
+            "absolute inset-0 transition-colors focus-visible:outline-none",
+            flat ? SHEET_ROW_HOVER : INSET_HOVER,
+            !flat && "focus-visible:bg-(--pa-object-hover)"
+          )}
+        />
+      ) : null}
+      <span
+        className={cn(
+          "pointer-events-none relative flex w-full min-w-0 items-center gap-2.5",
+          flat ? "px-3.5 py-3" : "py-2.5 ps-2.5 pe-2"
+        )}
+      >
+        <ExecutorAvatar
+          id={executorId}
+          name={executor ?? t("event.someone")}
+          agentType={agentType}
+          size={AVATAR_SIZE}
+        />
+        <span className="min-w-0 flex-1">
+          <span className="line-clamp-2 text-sm leading-5 font-medium break-words text-foreground">
+            {title}
+          </span>
+          <span className="flex min-w-0 items-center gap-1 text-xs leading-5 text-muted-foreground">
+            <span className="truncate">{meta}</span>
+            {source ? (
+              <>
+                <span aria-hidden className="shrink-0">
+                  ·
+                </span>
+                <button
+                  type="button"
+                  data-pa-work-source
+                  onClick={source.onClick}
+                  className="pointer-events-auto shrink-0 rounded-sm underline-offset-2 hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                >
+                  {source.label}
+                </button>
+              </>
+            ) : null}
+          </span>
+        </span>
+        {chip}
+        {menu ? (
+          <span className="pointer-events-auto flex shrink-0 items-center">
+            {menu}
+          </span>
+        ) : null}
+        {onOpen ? (
+          <ChevronRight
+            className={cn(
+              "size-4 shrink-0 text-muted-foreground/50 transition-colors rtl:-scale-x-100",
+              "group-hover/work:text-muted-foreground"
+            )}
+            aria-hidden
+          />
+        ) : null}
+      </span>
+    </div>
   )
 }
 

@@ -11041,6 +11041,10 @@
       "replacedBy": "“{title}”이(가) 이어받았습니다",
       "more": "전체 보기",
       "less": "접기",
+      "source": "출처",
+      "showText": "원문 보기",
+      "hideText": "원문 접기",
+      "makeRoutine": "루틴으로 만들기…",
       "note": {
         "boot": "codeg가 다시 시작되었습니다",
         "lost": "세션 연결이 끊어졌습니다",
@@ -12217,7 +12221,6 @@
       "deleteTitle": "이 루틴을 삭제할까요?",
       "deleteDescription": "“{title}”은(는) 더 이상 실행되지 않아요. 이미 맡긴 작업에는 영향이 없어요.",
       "cancel": "취소",
-      "weekly": "매주 이렇게 하기",
       "reply": "루틴 “{title}” · {seq}번째",
       "editor": {
         "titleNew": "새 루틴",

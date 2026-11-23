@@ -11041,6 +11041,10 @@
       "replacedBy": "Retomado por “{title}”",
       "more": "Ver tudo",
       "less": "Ver menos",
+      "source": "Origem",
+      "showText": "Ver original",
+      "hideText": "Ocultar original",
+      "makeRoutine": "Tornar uma rotina…",
       "note": {
         "boot": "O codeg reiniciou",
         "lost": "A conexão da sessão caiu",
@@ -12217,7 +12221,6 @@
       "deleteTitle": "Excluir esta rotina?",
       "deleteDescription": "“{title}” deixa de rodar. O trabalho já delegado não é afetado.",
       "cancel": "Cancelar",
-      "weekly": "Fazer isso toda semana",
       "reply": "Rotina “{title}” · execução {seq}",
       "editor": {
         "titleNew": "Nova rotina",

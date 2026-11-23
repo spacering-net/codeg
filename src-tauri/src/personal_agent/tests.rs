@@ -1890,6 +1890,101 @@ async fn a_result_card_is_quoted_numbered_and_read() {
     assert_eq!(replies[0].reply_to, Some(card.id), "an event alone is answered");
 }
 
+/// A reply reports the result cards it was given (A1): the one card that
+/// was all a delivery carried, marker or not; among several, those its body
+/// names — not a progress note's marker, not a card it was not given. A reply
+/// that did not finish reports none.
+#[tokio::test]
+async fn a_reply_reports_the_cards_its_body_names_or_the_one_it_was_given() {
+    let (engine, _tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let bot = engine.bot().await;
+    let card_of = |id: i32| {
+        let engine = engine.clone();
+        async move {
+            svc::latest_result_row(&engine.db.conn, id).await.unwrap().unwrap()
+        }
+    };
+
+    // One card, no message: a reply to it reports it.
+    let one = session_dispatch(&engine, DispatchState::Completed, "conn-c1").await;
+    let d = dispatch_state(&engine, one).await;
+    engine
+        .record_progress(&d, Some("## Report\n\nThe cache is cold on start. More.".into()), None, "turn")
+        .await;
+    let card = card_of(one).await;
+    assert_eq!(data_of(&card)["gist"], "The cache is cold on start.");
+    let (mut rx, state) = live_connection(&engine, seg, "pa-c1").await;
+    engine.pump().await;
+    let (_, token) = take_prompt(&mut rx);
+    start_prompt(&state, Some(&token)).await;
+    emit(&engine, &state, "pa-c1", text("Warm it first."), true).await;
+    emit(&engine, &state, "pa-c1", turn_complete("end_turn"), true).await;
+    let replies = svc::page(&engine.db.conn, bot, None, 100).await.unwrap().0;
+    let reply = replies.iter().rfind(|r| r.kind == TimelineKind::Reply).unwrap();
+    assert_eq!(data_of(reply)["covers"], json!([card.id]));
+
+    // Two cards: what the body names, of what it was given.
+    let a = session_dispatch(&engine, DispatchState::Completed, "conn-c2").await;
+    let b = session_dispatch(&engine, DispatchState::Failed, "conn-c3").await;
+    for id in [a, b] {
+        let d = dispatch_state(&engine, id).await;
+        engine.record_progress(&d, Some("Done.".into()), None, "turn").await;
+    }
+    let (card_a, card_b) = (card_of(a).await, card_of(b).await);
+    let (mut rx, state) = live_connection(&engine, seg, "pa-c2").await;
+    engine.pump().await;
+    let (prompt, token) = take_prompt(&mut rx);
+    assert!(prompt.contains(&format!("[#{}]", card_b.id)), "{prompt}");
+    start_prompt(&state, Some(&token)).await;
+    emit(&engine, &state, "pa-c2", text(&format!("[[quote:#{}]] Looking at it.", card_b.id)), true).await;
+    emit(&engine, &state, "pa-c2", tool("t1", "Read"), true).await;
+    emit(
+        &engine,
+        &state,
+        "pa-c2",
+        text(&format!("[[quote:#{}]] The first is done. [[quote:#{}]]", card_a.id, reply.id)),
+        true,
+    )
+    .await;
+    emit(&engine, &state, "pa-c2", turn_complete("end_turn"), true).await;
+    let replies = svc::page(&engine.db.conn, bot, None, 100).await.unwrap().0;
+    let reply2 = replies.iter().rfind(|r| r.kind == TimelineKind::Reply).unwrap();
+    assert_ne!(reply2.id, reply.id);
+    assert_eq!(data_of(reply2)["covers"], json!([card_a.id]), "the body's own marker, of the cards given");
+
+    // A reply the owner stopped reports nothing.
+    let c = session_dispatch(&engine, DispatchState::Completed, "conn-c4").await;
+    let d = dispatch_state(&engine, c).await;
+    engine.record_progress(&d, Some("Done.".into()), None, "turn").await;
+    let (mut rx, state) = live_connection(&engine, seg, "pa-c3").await;
+    engine.pump().await;
+    let (_, token) = take_prompt(&mut rx);
+    start_prompt(&state, Some(&token)).await;
+    emit(&engine, &state, "pa-c3", text("Half a"), true).await;
+    emit(&engine, &state, "pa-c3", turn_complete("cancelled"), true).await;
+    let replies = svc::page(&engine.db.conn, bot, None, 100).await.unwrap().0;
+    let reply3 = replies.iter().rfind(|r| r.kind == TimelineKind::Reply).unwrap();
+    assert_eq!(data_of(reply3)["state"], "canceled");
+    assert!(data_of(reply3).get("covers").is_none());
+
+    // A turn cut off at its limit, a word said: shown, and reports nothing.
+    let e = session_dispatch(&engine, DispatchState::Failed, "conn-c5").await;
+    let d = dispatch_state(&engine, e).await;
+    engine.record_progress(&d, Some("Failed.".into()), None, "turn").await;
+    let (mut rx, state) = live_connection(&engine, seg, "pa-c4").await;
+    engine.pump().await;
+    let (_, token) = take_prompt(&mut rx);
+    start_prompt(&state, Some(&token)).await;
+    emit(&engine, &state, "pa-c4", text("I'll check what failed."), true).await;
+    emit(&engine, &state, "pa-c4", turn_complete("max_turn_requests"), true).await;
+    let replies = svc::page(&engine.db.conn, bot, None, 100).await.unwrap().0;
+    let reply4 = replies.iter().rfind(|r| r.kind == TimelineKind::Reply).unwrap();
+    assert_ne!(reply4.id, reply3.id);
+    let covers = data_of(reply4)["covers"].clone();
+    assert!(covers.is_null() || covers == json!([]), "{:?}", reply4.data);
+}
+
 /// Interrupted: a put-back event's card is unread again; one put back once
 /// already is settled and stays read. The reply keeps its last checkpoint.
 #[tokio::test]
@@ -3703,6 +3798,39 @@ async fn workers_have_their_own_git_repositories_and_no_owner_file() {
     assert!(!workdir::editable_files(true).contains(&workdir::USER_FILE));
     assert!(workdir::skill_md(true, Default::default()).contains("primary assistant"));
     assert!(!workdir::skill_md(false, Default::default()).contains("You have no `USER.md`"));
+}
+
+/// The skill says how a result is reported (A3): the card above the reply
+/// says what the work is and how it stands, the reply what it means, a
+/// marker for each result reported — with many findings, in the shape the
+/// owner's preference for cards asks.
+#[test]
+fn the_skill_says_how_a_result_is_reported_under_each_preference_for_cards() {
+    use crate::models::personal_agent_prefs::CardUse;
+    for cards in [CardUse::Prefer, CardUse::Decisions, CardUse::Never] {
+        let skill = workdir::skill_md(false, cards);
+        for want in [
+            "### Reporting a result",
+            "Lead with the conclusion and what the owner needs to do",
+            "do not link\n  the work's session",
+            "Write `[[quote:#N]]` for each result you report",
+            "but for the results of work you report (below)",
+            "so do not say it was merged",
+            "reply\n  `[[silent]]` alone",
+            "leave\n  the merge out and answer the rest",
+            "Work the board merged on its own (auto-merge)",
+            "not already a routine's: suggest making it a routine",
+        ] {
+            assert!(skill.contains(want), "{cards:?}: {want}");
+        }
+    }
+    let prefer = workdir::skill_md(false, CardUse::Prefer);
+    assert!(prefer.contains("Title it with the\n  conclusion, never \"Summary of X\""));
+    let decisions = workdir::skill_md(false, CardUse::Decisions);
+    assert!(decisions.contains("A result with many findings is text"));
+    let never = workdir::skill_md(false, CardUse::Never);
+    assert!(never.contains("as a short Markdown list"));
+    assert!(!never.contains("Title it with"));
 }
 
 #[tokio::test]
@@ -11478,8 +11606,12 @@ async fn code_work_is_checked_by_another_executor_and_its_assistant_concludes() 
     let ev = svc::pending_events(conn, bot).await.unwrap();
     let accept = ev.iter().find(|e| e.kind == super::acceptance::ACCEPT_EVENT).unwrap();
     assert!(accept.wake);
-    let block = engine.acceptance_block(accept).await;
+    let (block, check_row) = engine.acceptance_block_with(accept).await;
     assert!(block.starts_with("<codeg-acceptance"), "{block}");
+    // The check's result card is numbered, for the reply to name (A1).
+    let check_card = svc::latest_result_row(conn, check.id).await.unwrap().unwrap();
+    assert_eq!(check_row, Some(check_card.id));
+    assert!(block.contains(&format!("[#{}]: VERDICT FAIL", check_card.id)), "{block}");
     for want in ["VERDICT FAIL", "a.txt:1", "no blank screen", "Fixed the blank screen.", "round 1 of 3", "acceptance_decide"] {
         assert!(block.contains(want), "{want}: {block}");
     }
@@ -11628,6 +11760,54 @@ async fn the_version_accepted_is_the_one_delivered_and_merged() {
         .unwrap();
     engine.record_progress(&d, None, None, "task").await;
     assert_eq!(rounds_of(&engine, w.d.id).await[0].merge_commit.as_deref(), Some("def456"));
+}
+
+/// The news that work merged says who merged it (A5), as the attempt that
+/// landed that run recorded — the owner, or the board on its own; unknown
+/// (no attempt of that run), it says neither. Its card keeps the commit.
+#[tokio::test]
+async fn the_news_of_a_merge_says_who_merged_it_as_the_run_s_attempt_recorded() {
+    use crate::db::service::work_task_service as wts;
+    use sea_orm::{ActiveModelTrait, Set};
+    for (actor, attempt_run, says) in [
+        (Some("user"), Some(0), Some("The owner merged it.")),
+        (Some("auto"), Some(0), Some("The board merged it on its own (auto-merge).")),
+        // An attempt recorded before attempts named their run.
+        (Some("user"), None, Some("The owner merged it.")),
+        // Another run's attempt is not this landing's.
+        (Some("user"), Some(-1), None),
+        (None, None, None),
+    ] {
+        let (engine, tmp) = configured().await;
+        let w = work_in_review(&engine, &tmp).await;
+        let conn = &engine.db.conn;
+        let t = wts::get_model(conn, w.task.id).await.unwrap();
+        let run = t.run_seq;
+        if let Some(actor) = actor {
+            let payload = match attempt_run {
+                Some(off) => json!({ "auto": actor == "auto", "run_seq": run + off }),
+                None => json!({ "auto": actor == "auto" }),
+            };
+            wts::record_event(conn, t.id, "merge_attempt", actor, Some(payload)).await.unwrap();
+        }
+        let mut am: work_task_entity::ActiveModel = t.into();
+        am.status = Set(WorkTaskStatus::Done);
+        am.merge_commit = Set(Some("a325330".into()));
+        am.completion_kind = Set(Some("merged".into()));
+        am.update(conn).await.unwrap();
+        let d = svc::update_dispatch(conn, w.d.id, None, DispatchWrite { state: Some(DispatchState::Completed), ..Default::default() })
+            .await
+            .unwrap()
+            .unwrap();
+        engine.record_progress(&d, Some("Updated the title.".into()), None, "task").await;
+        let ev = svc::pending_events(conn, engine.bot().await).await.unwrap();
+        let news = ev.iter().rfind(|e| e.kind == "dispatch_status").unwrap();
+        for sentence in ["The owner merged it.", "The board merged it on its own (auto-merge)."] {
+            assert_eq!(news.summary.contains(sentence), says == Some(sentence), "{actor:?} {attempt_run:?}: {}", news.summary);
+        }
+        let card = svc::latest_result_row(conn, w.d.id).await.unwrap().unwrap();
+        assert_eq!((data_of(&card)["ladder"].clone(), data_of(&card)["merge_commit"].clone()), (json!("merged"), json!("a325330")));
+    }
 }
 
 #[tokio::test]
@@ -17628,7 +17808,12 @@ async fn routines_the_owner_asked_to_see_first_wait_on_a_card_and_count_among_th
     let bot = engine.bot().await;
     let db = &engine.db;
     let prefs = engine.prefs().await;
-    let today = super::presence::hours_day(chrono::Utc::now(), chrono_tz::UTC);
+    // The owner's day, in the zone the week is gathered in: in UTC, early on
+    // a Monday in a zone ahead of it is still last week.
+    let today = super::presence::hours_day(
+        chrono::Utc::now(),
+        super::clock::zone_of(&prefs.time_zone),
+    );
     let span = super::weekly::WeekSpan {
         first: super::weekly::monday_of(today),
         end: super::weekly::monday_of(today) + chrono::Duration::days(7),
