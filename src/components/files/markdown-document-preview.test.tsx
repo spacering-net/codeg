@@ -257,12 +257,13 @@ describe("MarkdownDocumentPreview local images", () => {
         "[page](//cdn.invalid/page)",
         "![ref][logo]",
         '<img src = "//cdn.invalid/spaced.png" alt="spaced">',
+        '<img data-src = "./placeholder.png" src="//cdn.invalid/data.png">',
         "[logo]: //cdn.invalid/ref.png",
       ].join("\n\n")
     )
 
     await waitFor(() =>
-      expect(container.querySelectorAll("img")).toHaveLength(4)
+      expect(container.querySelectorAll("img")).toHaveLength(5)
     )
     expect(mocks.readFileBase64).not.toHaveBeenCalled()
     expect(
@@ -274,6 +275,7 @@ describe("MarkdownDocumentPreview local images", () => {
       "https://cdn.invalid/raw.png",
       "https://cdn.invalid/ref.png",
       "https://cdn.invalid/spaced.png",
+      "https://cdn.invalid/data.png",
     ])
     expect(container.querySelector("a")?.getAttribute("href")).toBe(
       "https://cdn.invalid/page"

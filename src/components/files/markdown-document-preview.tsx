@@ -90,6 +90,10 @@ function joinUnder(base: string, relative: string): string {
  *
  * Fenced code blocks and inline code are masked first: their bytes are what
  * the author means to show (and what Copy Code hands out), not references.
+ * This is a source-level pass, not a Markdown parser: indented code blocks,
+ * fences nested in longer fences and multi-line reference definitions are
+ * not recognized, so those keep the pre-existing behavior (rewritten, or for
+ * a protocol-relative destination, host-stripped by rehype-harden).
  *
  * Known limitation: documents living under a Windows UNC root
  * ("//server/share/…") lose the double-slash prefix in this pipeline (the
@@ -180,9 +184,10 @@ function preprocessMarkdownPaths(
     (_match, head, url) => `${head}https:${url}`
   )
 
-  // Pre-resolve HTML <a href="..."> and <img src="..."> tags
+  // Pre-resolve HTML <a href="..."> and <img src="..."> tags. The attribute
+  // name must start after whitespace, so `data-src` / `data-href` are skipped.
   result = result.replace(
-    /<(a\s[^>]*?href|img\s[^>]*?src)(\s*=\s*)(["'])([^"']+)\3/gi,
+    /<(a\s(?:[^>]*?\s)?href|img\s(?:[^>]*?\s)?src)(\s*=\s*)(["'])([^"']+)\3/gi,
     (match, prefix, eq, quote, url) => {
       const resolved = resolveUrl(url, /^img/i.test(prefix) ? "image" : "link")
       if (resolved === url) return match
