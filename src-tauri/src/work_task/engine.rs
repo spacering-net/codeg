@@ -1740,14 +1740,19 @@ impl TaskEngine {
                 .await;
                 Ok(())
             }
-            // Refused because another prompt holds the connection's turn: a
-            // resumed session's connection is shared with the conversation it
-            // belongs to, and someone sent it a turn after this launch's last
-            // check (a reply queued in the conversation view, say). That turn
-            // is theirs — tearing the connection down would kill it. Let go of
-            // the connection and fail this launch only; when the turn ends, it
-            // is an ordinary turn outside the task again.
-            Err(crate::acp::error::AcpError::TurnInProgress) if resumed => {
+            // A MERGE generation refused because another prompt holds the
+            // connection's turn: a resumed session's connection is shared with
+            // the conversation it belongs to, and someone sent it a turn after
+            // the dispatch's last check (a reply queued in the conversation
+            // view, say). That turn is theirs — tearing the connection down
+            // would kill it. Let go of the connection and fail this launch
+            // only: the merge launcher puts the task back in review, and the
+            // turn's end is an ordinary turn outside the task again. Only a
+            // merge: the other modes have already marked the row `running` on
+            // this connection, and their failure path is the teardown below.
+            Err(crate::acp::error::AcpError::TurnInProgress)
+                if resumed && matches!(mode, LaunchMode::Merge { .. }) =>
+            {
                 self.forget_connection(&conn_id).await;
                 Err(crate::acp::error::AcpError::TurnInProgress.to_string())
             }
