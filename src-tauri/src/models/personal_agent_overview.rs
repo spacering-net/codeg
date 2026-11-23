@@ -136,4 +136,10 @@ pub struct TaskFacts {
     pub finished_at: Option<DateTime<Utc>>,
     /// Its pull request as the watch last read it.
     pub pr: Option<PrFacts>,
+    /// What the board's next step for it is, in review — as "today" words
+    /// it (`today::task_reason`: `merge_ready`, `needs_delivery`,
+    /// `accepted_queued`, …): what its work's head offers (A4). Where it is
+    /// read with its acceptance.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<&'static str>,
 }

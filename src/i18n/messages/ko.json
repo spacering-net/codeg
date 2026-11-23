@@ -11037,6 +11037,7 @@
       "checkRound": "검수 확인 · {round}차"
     },
     "event": {
+      "acceptanceEvidence": "검수 근거",
       "someone": "어시스턴트",
       "replacedBy": "“{title}”이(가) 이어받았습니다",
       "more": "전체 보기",

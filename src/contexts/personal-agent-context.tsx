@@ -206,6 +206,15 @@ export function changeBelongs(
   return of === primaryId ? "yes" : "no"
 }
 
+/** The board's news of its tasks (`web/event_bridge.rs`). */
+const WORK_TASK_CHANGED_EVENT = "task://changed"
+/** The board tasks whose work's head can move with the board alone (A4):
+ *  in review (queued, taken off the queue) or merging (landed, failed
+ *  back). */
+const BOARD_MOVES: ReadonlySet<string> = new Set(["review", "merging"])
+/** Dispatches asked for in one read: well under what a read takes (500). */
+const DISPATCH_READ = 200
+
 /** The dispatches the rows' cards point at. */
 function dispatchIdsOf(rows: readonly TimelineRow[]): number[] {
   const ids = new Set<number>()
@@ -219,6 +228,14 @@ function dispatchIdsOf(rows: readonly TimelineRow[]): number[] {
       typeof r.data.dispatch_id === "number"
     ) {
       ids.add(r.data.dispatch_id)
+    } else if (
+      // A round of acceptance (A4): its check's work, whose session its
+      // work's head opens — its rows may be on another page.
+      r.kind === "notice" &&
+      r.data?.notice === "acceptance" &&
+      typeof r.data.check_dispatch_id === "number"
+    ) {
+      ids.add(r.data.check_dispatch_id)
     }
   }
   return [...ids]
@@ -371,6 +388,10 @@ function usePersonalAgentStore(
   /** Asked for again while a read of them was out: that read may predate
    *  the change, so they are read once more when it lands. */
   const staleDispatches = useRef(new Set<number>())
+  /** What was read, as soon as it lands — what the state shows on the
+   *  next render: a read asked for meanwhile (the board's news, A4) sees
+   *  it. The only writer of both. */
+  const dispatchByIdRef = useRef(dispatchById)
   const fetchDispatches = useCallback(
     async function fetch(ids: number[]) {
       const want: number[] = []
@@ -379,14 +400,22 @@ function usePersonalAgentStore(
         else want.push(id)
       }
       if (want.length === 0) return
+      // A read takes so many at most: in turns.
+      if (want.length > DISPATCH_READ) {
+        await Promise.all(
+          Array.from({ length: Math.ceil(want.length / DISPATCH_READ) }, (_, i) =>
+            fetch(want.slice(i * DISPATCH_READ, (i + 1) * DISPATCH_READ))
+          )
+        )
+        return
+      }
       for (const id of want) fetchingDispatches.current.add(id)
       try {
         const list = await personalAgentDispatches(null, null, want, botId)
-        setDispatchById((held) => {
-          const next = new Map(held)
-          for (const d of list) next.set(d.id, d)
-          return next
-        })
+        const next = new Map(dispatchByIdRef.current)
+        for (const d of list) next.set(d.id, d)
+        dispatchByIdRef.current = next
+        setDispatchById(next)
       } catch {
         // the row's own data draws the card meanwhile
       } finally {
@@ -397,10 +426,6 @@ function usePersonalAgentStore(
     },
     [botId]
   )
-  const dispatchByIdRef = useRef(dispatchById)
-  useEffect(() => {
-    dispatchByIdRef.current = dispatchById
-  }, [dispatchById])
   useEffect(() => {
     const missing = dispatchIdsOf(rows).filter(
       (id) => !dispatchByIdRef.current.has(id)
@@ -507,6 +532,30 @@ function usePersonalAgentStore(
       if (cancelled) u()
       else unsub = u
     })
+    // A board task queued to merge, or taken off the queue, stays in
+    // review and its work does not move; a merge that fails goes back to
+    // review the same way: what its head offers next (A4) is read again
+    // from the board's own news — every held piece of work on a task not
+    // ended, and any being read now (read again once it lands), a burst
+    // at once.
+    let boardTimer: ReturnType<typeof setTimeout> | null = null
+    let unsubBoard: (() => void) | null = null
+    void subscribe(WORK_TASK_CHANGED_EVENT, () => {
+      if (cancelled || boardTimer != null) return
+      boardTimer = setTimeout(() => {
+        boardTimer = null
+        if (cancelled) return
+        const ids = new Set(fetchingDispatches.current)
+        for (const d of dispatchByIdRef.current.values()) {
+          const status = d.task?.status
+          if (status != null && BOARD_MOVES.has(status)) ids.add(d.id)
+        }
+        if (ids.size > 0) void fetchDispatches([...ids])
+      }, 400)
+    }).then((u: () => void) => {
+      if (cancelled) u()
+      else unsubBoard = u
+    })
     const offReconnect = onTransportReconnect(() => {
       void refresh()
       setDispatchVersion((v) => v + 1)
@@ -518,6 +567,8 @@ function usePersonalAgentStore(
     return () => {
       cancelled = true
       unsub?.()
+      unsubBoard?.()
+      if (boardTimer != null) clearTimeout(boardTimer)
       offReconnect?.()
       if (statusTimer.current) clearTimeout(statusTimer.current)
       if (quoteTimer.current) clearTimeout(quoteTimer.current)

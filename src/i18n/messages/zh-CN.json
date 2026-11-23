@@ -11037,6 +11037,7 @@
       "checkRound": "验收检查 · 第 {round} 轮"
     },
     "event": {
+      "acceptanceEvidence": "验收依据",
       "someone": "岗位助手",
       "replacedBy": "已由「{title}」接手",
       "more": "展开",

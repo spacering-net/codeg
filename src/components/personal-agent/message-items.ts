@@ -87,6 +87,10 @@ export type MessageItem =
       /** A reply said in full reported it (its `covers`, A1): the reply
        *  says what came of it, so its own text folds away. */
       covered: boolean
+      /** The acceptance of its work, folded into it as its head (A4): its
+       *  check and what the check found, and the card of a round its
+       *  assistant accepted on a pass — `null` for none on the page. */
+      acceptance: AcceptanceFold | null
     })
   /** A native card codeg wrote itself (a proposal): on the assistants'
    *  side, standing alone. */
@@ -101,6 +105,50 @@ export type MessageItem =
   /** Another assistant's question or permission request, shown where what
    *  it is for began. */
   | (ItemBase & { kind: "mirror"; row: TimelineRow })
+
+/** The acceptance of a piece of work, drawn on its head (A4). */
+export interface AcceptanceFold {
+  /** The latest round's check: its own work's row. */
+  check: TimelineRow | null
+  /** What that check found: its result row. */
+  result: TimelineRow | null
+  /** The latest round's card, its assistant having accepted it on a pass:
+   *  nothing to decide, so no card of its own. */
+  card: TimelineRow | null
+  /** Every row folded in — earlier rounds' too: a jump to any lands on
+   *  the head. */
+  rows: TimelineRow[]
+}
+
+function numIn(row: TimelineRow, key: string): number | null {
+  const v = row.data?.[key]
+  return typeof v === "number" ? v : null
+}
+
+/** An acceptance card with nothing for the owner on it (A4, D2): the
+ *  latest round, accepted by its assistant on a check that passed — not
+ *  one passed unverified, the owner's to decide, or to check again. */
+export function foldsIntoHead(row: TimelineRow): boolean {
+  const d = row.data
+  return (
+    row.kind === "notice" &&
+    d?.notice === "acceptance" &&
+    d.superseded !== true &&
+    d.phase === "accepted" &&
+    d.decided_by === "assistant" &&
+    d.verdict === "pass" &&
+    d.unchecked !== true
+  )
+}
+
+/** The work a row is of the acceptance of (A4): a check's work and its
+ *  result (`check_for`), a card to fold; `null` for any other. */
+function acceptanceOf(row: TimelineRow): number | null {
+  if (row.kind === "dispatch" || row.kind === "result") {
+    return numIn(row, "check_for")
+  }
+  return foldsIntoHead(row) ? numIn(row, "dispatch_id") : null
+}
 
 /** A reply row's `data.state`; `null` on a phase-one row, which has none. */
 export function replyState(row: TimelineRow): string | null {
@@ -217,12 +265,33 @@ function sameDay(a: number, b: number): boolean {
 }
 
 export function buildMessageItems(rows: readonly TimelineRow[]): MessageItem[] {
+  // The head of each piece of work on the page: its latest news — not a
+  // check's. What its acceptance wrote folds into it (A4); with no head
+  // here (another page), it stands on its own.
+  const heads = new Map<number, number>()
+  for (const r of rows) {
+    if (r.kind !== "result" || r.dispatch_id == null || isDiscarded(r)) continue
+    if (numIn(r, "check_for") != null) continue
+    const held = heads.get(r.dispatch_id)
+    if (held == null || held < r.id) heads.set(r.dispatch_id, r.id)
+  }
+  const folded = new Map<number, TimelineRow[]>()
+  const foldedIds = new Set<number>()
+  for (const r of rows) {
+    if (isDiscarded(r)) continue
+    const work = acceptanceOf(r)
+    if (work == null || !heads.has(work)) continue
+    const list = folded.get(work) ?? []
+    list.push(r)
+    folded.set(work, list)
+    foldedIds.add(r.id)
+  }
   const replyByBatch = new Map<number, TimelineRow>()
   const attachedByBatch = new Map<number, TimelineRow[]>()
   const ownersByBatch = new Map<number, TimelineRow[]>()
   const exchangesByBatch = new Map<number, TimelineRow[]>()
   for (const r of rows) {
-    if (r.batch_id == null) continue
+    if (r.batch_id == null || foldedIds.has(r.id)) continue
     if (r.kind === "reply" && !isDiscarded(r)) {
       if (!replyByBatch.has(r.batch_id)) replyByBatch.set(r.batch_id, r)
     } else if (r.kind === "exchange") {
@@ -341,6 +410,8 @@ export function buildMessageItems(rows: readonly TimelineRow[]): MessageItem[] {
   for (const r of rows) {
     let item: Placed | null = null
     if (r.kind === "marker" || isDiscarded(r)) continue
+    // Drawn on its work's head (A4).
+    if (foldedIds.has(r.id)) continue
     if (r.kind === "exchange") {
       // A turn's own lines come with its reply.
       if (r.batch_id != null && replyByBatch.has(r.batch_id)) continue
@@ -377,6 +448,10 @@ export function buildMessageItems(rows: readonly TimelineRow[]): MessageItem[] {
         row: r,
         latest: false,
         covered: covered.has(r.id),
+        acceptance:
+          r.dispatch_id != null && heads.get(r.dispatch_id) === r.id
+            ? foldOf(folded.get(r.dispatch_id) ?? [])
+            : null,
       }
     } else if (r.kind === "notice") {
       item = {
@@ -452,6 +527,31 @@ export function buildMessageItems(rows: readonly TimelineRow[]): MessageItem[] {
   return items
 }
 
+/** What a piece of work's acceptance folds into its head: the latest
+ *  round's check, what it found (that round's), the card of a round with
+ *  nothing to decide. `null` for nothing. */
+function foldOf(list: readonly TimelineRow[]): AcceptanceFold | null {
+  if (list.length === 0) return null
+  const latest = (kind: TimelineRow["kind"]) =>
+    list
+      .filter((r) => r.kind === kind)
+      .reduce<TimelineRow | null>((a, r) => (a == null || r.id > a.id ? r : a), null)
+  const check = latest("dispatch")
+  const result = latest("result")
+  return {
+    check,
+    // Another check under way since — a later round, or the same round
+    // checked again (its number kept): what the last one found is not what
+    // this one found. A check is its own work: its result is its row's.
+    result:
+      result != null && (check == null || result.dispatch_id === check.dispatch_id)
+        ? result
+        : null,
+    card: latest("notice"),
+    rows: [...list],
+  }
+}
+
 /** The row ids an item draws (a turn's cards included): what a jump can
  *  land on. */
 export function itemRowIds(item: MessageItem): number[] {
@@ -465,6 +565,10 @@ export function itemRowIds(item: MessageItem): number[] {
     ]
   }
   if (item.kind === "exchange") return item.rows.map((r) => r.id)
+  // A work's head draws what its acceptance folded into it (A4).
+  if (item.kind === "event" && item.acceptance) {
+    return [item.row.id, ...item.acceptance.rows.map((r) => r.id)]
+  }
   return [item.row.id]
 }
 
@@ -517,7 +621,9 @@ export function newLineIndex(
         ? item.anchor.id === rowId || item.row?.id === rowId
         : item.kind === "exchange"
           ? item.rows.some((r) => r.id === rowId)
-          : item.row.id === rowId
+          : item.row.id === rowId ||
+            (item.kind === "event" &&
+              (item.acceptance?.rows.some((r) => r.id === rowId) ?? false))
   )
   if (i <= 0) return i
   return items[i - 1].kind === "time" ? i - 1 : i

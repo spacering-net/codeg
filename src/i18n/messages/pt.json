@@ -11037,6 +11037,7 @@
       "checkRound": "Verificação de aceitação · rodada {round}"
     },
     "event": {
+      "acceptanceEvidence": "Evidências da aceitação",
       "someone": "Um assistente",
       "replacedBy": "Retomado por “{title}”",
       "more": "Ver tudo",

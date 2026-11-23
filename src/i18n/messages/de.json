@@ -11037,6 +11037,7 @@
       "checkRound": "Abnahmeprüfung · Runde {round}"
     },
     "event": {
+      "acceptanceEvidence": "Belege der Abnahme",
       "someone": "Ein Assistent",
       "replacedBy": "Übernommen von „{title}“",
       "more": "Alles anzeigen",

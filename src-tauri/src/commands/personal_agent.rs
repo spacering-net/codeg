@@ -281,7 +281,19 @@ pub(crate) async fn dispatch_infos(
             });
         let check = checks.get(&d.id);
         let answered_for_you = answered.get(&d.id).copied().unwrap_or(0);
-        let task = task.map(|t| crate::personal_agent::ladder::task_facts_with(t, pr));
+        // The board's next step for it, as "today" words it (A4).
+        let next = match task {
+            Some(t) if t.status == crate::db::entities::work_task::WorkTaskStatus::Review => {
+                let gone = crate::personal_agent::today::worktree_gone(db, t).await;
+                crate::personal_agent::today::task_reason(t, latest.get(&d.id), gone)
+            }
+            _ => None,
+        };
+        let task = task.map(|t| {
+            let mut facts = crate::personal_agent::ladder::task_facts_with(t, pr);
+            facts.next = next;
+            facts
+        });
         let folder_name = match d.folder_id {
             Some(fid) => {
                 if let std::collections::hash_map::Entry::Vacant(slot) = folder_names.entry(fid) {

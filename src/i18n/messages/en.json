@@ -11037,6 +11037,7 @@
       "checkRound": "Acceptance check · round {round}"
     },
     "event": {
+      "acceptanceEvidence": "Acceptance evidence",
       "someone": "An assistant",
       "replacedBy": "Taken over by “{title}”",
       "more": "Show all",

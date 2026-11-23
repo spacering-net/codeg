@@ -24,8 +24,10 @@ const bus = vi.hoisted(() => ({
   handler: null as ((change: PersonalAgentChange) => void) | null,
 }))
 vi.mock("@/lib/platform", () => ({
+  // The assistants' news here; the board's (`task://changed`) apart.
   subscribe: vi.fn(
-    async (_event: string, handler: (change: PersonalAgentChange) => void) => {
+    async (event: string, handler: (change: PersonalAgentChange) => void) => {
+      if (event === "task://changed") return () => {}
       bus.handler = handler
       return () => {
         bus.handler = null

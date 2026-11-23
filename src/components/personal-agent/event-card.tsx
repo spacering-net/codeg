@@ -35,6 +35,7 @@ import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 import { cn } from "@/lib/utils"
 
 import { asVerdict, CheckLabel, VerdictChip } from "./acceptance-bits"
+import { AcceptanceFacts } from "./acceptance-fold"
 import type { MessageItem } from "./message-items"
 import { MessageRow } from "./message-row"
 import {
@@ -422,12 +423,15 @@ export function EventCard({ item }: { item: EventItem }) {
     !readOnly
       ? info
       : null
+  // Its acceptance, folded into it as its head (A4).
+  const acceptance = item.acceptance
   const facts =
     strip != null ||
     answered > 0 ||
     retry != null ||
     replacedBy != null ||
-    checkFor != null
+    checkFor != null ||
+    acceptance != null
   return (
     <MessageRow
       rowId={row.id}
@@ -528,6 +532,12 @@ export function EventCard({ item }: { item: EventItem }) {
                   <VerdictChip verdict={verdict} />
                 ) : null}
               </div>
+            ) : null}
+            {acceptance ? (
+              <AcceptanceFacts
+                fold={acceptance}
+                now={item.latest ? (info ?? null) : null}
+              />
             ) : null}
           </SheetPart>
         ) : null}

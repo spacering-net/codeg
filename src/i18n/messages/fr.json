@@ -11037,6 +11037,7 @@
       "checkRound": "Vérification de validation · tour {round}"
     },
     "event": {
+      "acceptanceEvidence": "Éléments de la recette",
       "someone": "Un assistant",
       "replacedBy": "Repris par « {title} »",
       "more": "Tout afficher",

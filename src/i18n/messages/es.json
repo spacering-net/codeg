@@ -11037,6 +11037,7 @@
       "checkRound": "Revisión de aceptación · ronda {round}"
     },
     "event": {
+      "acceptanceEvidence": "Pruebas de la aceptación",
       "someone": "Un asistente",
       "replacedBy": "Lo retomó «{title}»",
       "more": "Ver todo",

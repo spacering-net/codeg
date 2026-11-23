@@ -181,6 +181,7 @@ pub fn task_facts_with(
         started_at: t.started_at,
         finished_at: t.finished_at,
         pr,
+        next: None,
     }
 }
 

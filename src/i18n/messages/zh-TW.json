@@ -11037,6 +11037,7 @@
       "checkRound": "驗收檢查 · 第 {round} 輪"
     },
     "event": {
+      "acceptanceEvidence": "驗收依據",
       "someone": "職務助理",
       "replacedBy": "已由「{title}」接手",
       "more": "展開",

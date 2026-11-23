@@ -630,3 +630,112 @@ describe("result cards a reply reported (A1)", () => {
     }
   })
 })
+
+describe("the acceptance chain on its work's head (A4)", () => {
+  const accepted = {
+    notice: "acceptance",
+    state: "acted",
+    superseded: false,
+    phase: "accepted",
+    decided_by: "assistant",
+    verdict: "pass",
+    unchecked: false,
+    dispatch_id: 3,
+    round: 1,
+  }
+  const chain = (card: Record<string, unknown> = accepted) => [
+    row(20, "result", { dispatch_id: 3, data: { state: "review" } }),
+    row(21, "dispatch", {
+      dispatch_id: 4,
+      data: { check_for: 3, check_round: 1 },
+    }),
+    row(22, "result", {
+      dispatch_id: 4,
+      data: { check_for: 3, check_round: 1, verdict: "pass", evidence: "ok" },
+    }),
+    row(23, "reply", { batch_id: 9, data: { state: "done" }, body: "Passed." }),
+    row(24, "notice", { data: card }),
+  ]
+
+  it("folds the check, what it found and a passed round's card into the head", () => {
+    const items = buildMessageItems(chain())
+    expect(shape(items).filter((s) => s !== "time")).toEqual([
+      "event:20",
+      "reply:23[]",
+    ])
+    const head = items.find((i) => i.kind === "event")!
+    if (head.kind !== "event") throw new Error()
+    expect(head.acceptance?.check?.id).toBe(21)
+    expect(head.acceptance?.result?.id).toBe(22)
+    expect(head.acceptance?.card?.id).toBe(24)
+    // A jump to any of them lands on the head.
+    const drawn = drawnRowIds(items)
+    for (const id of [20, 21, 22, 24]) expect(drawn.has(id)).toBe(true)
+  })
+
+  it("keeps a card that asks the owner, one passed unverified or theirs to check again", () => {
+    for (const card of [
+      { ...accepted, state: "open", phase: "asked" },
+      { ...accepted, unchecked: true },
+      { ...accepted, state: "changed", phase: "changed" },
+      { ...accepted, decided_by: "owner" },
+      { ...accepted, superseded: true },
+    ]) {
+      const items = buildMessageItems(chain(card))
+      expect(shape(items)).toContain("notice:24")
+      // The check still folds.
+      expect(shape(items)).not.toContain("event:22")
+    }
+  })
+
+  it("stands on its own with its work's head on another page; a check of a message is not folded", () => {
+    const [, check, result, reply, card] = chain()
+    expect(
+      shape(buildMessageItems([check, result, reply, card])).filter(
+        (s) => s !== "time"
+      )
+    ).toEqual(["reply:21[21]!", "event:22", "reply:23[]", "notice:24"])
+    const fact = row(30, "result", {
+      dispatch_id: 8,
+      data: { verdict: "pass" },
+    })
+    expect(shape(buildMessageItems([fact]))).toContain("event:30")
+  })
+
+  it("shows a later round's check under way without the last one's finding", () => {
+    const items = buildMessageItems([
+      ...chain(),
+      row(25, "dispatch", {
+        dispatch_id: 5,
+        data: { check_for: 3, check_round: 2 },
+      }),
+    ])
+    const head = items.find((i) => i.kind === "event")!
+    if (head.kind !== "event") throw new Error()
+    expect(head.acceptance?.check?.id).toBe(25)
+    expect(head.acceptance?.result).toBeNull()
+  })
+
+  it("does not take a check run again in the same round for the one that passed", () => {
+    // Checked again (the worktree changed): the same round, another check.
+    const items = buildMessageItems([
+      ...chain(),
+      row(26, "dispatch", {
+        dispatch_id: 6,
+        data: { check_for: 3, check_round: 1 },
+      }),
+    ])
+    const head = items.find((i) => i.kind === "event")!
+    if (head.kind !== "event") throw new Error()
+    expect(head.acceptance?.check?.id).toBe(26)
+    expect(head.acceptance?.result).toBeNull()
+  })
+
+  it("marks the new-messages line at a work's head for what folded into it", () => {
+    const items = buildMessageItems(chain())
+    const at = newLineIndex(items, 22)
+    expect(at).toBeGreaterThanOrEqual(0)
+    const item = items[at].kind === "time" ? items[at + 1] : items[at]
+    expect(item.kind === "event" && item.row.id).toBe(20)
+  })
+})

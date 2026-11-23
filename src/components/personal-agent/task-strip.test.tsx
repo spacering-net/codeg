@@ -421,3 +421,173 @@ describe("acceptance on the news (7.5)", () => {
     expect(container.querySelector("[data-pa-verdict]")).toBeNull()
   })
 })
+
+describe("the acceptance on its work's head (A4)", () => {
+  function chain(card: boolean) {
+    const head = result(20, { state: "review", ladder: "mergeable" })
+    const check: TimelineRow = {
+      ...result(21, { check_for: 234, check_round: 1 }),
+      kind: "dispatch",
+      dispatch_id: 235,
+      data: { check_for: 234, check_round: 1, mode: "session" },
+    }
+    const found: TimelineRow = {
+      ...result(22, {}),
+      dispatch_id: 235,
+      data: {
+        check_for: 234,
+        check_round: 1,
+        verdict: "pass",
+        evidence: "- the title reads right",
+      },
+    }
+    const accepted: TimelineRow = {
+      ...result(24, {}),
+      kind: "notice",
+      dispatch_id: null,
+      data: {
+        notice: "acceptance",
+        state: "acted",
+        superseded: false,
+        phase: "accepted",
+        decided_by: "assistant",
+        verdict: "pass",
+        unchecked: false,
+        dispatch_id: 234,
+        round: 1,
+      },
+    }
+    const items = buildMessageItems(
+      card ? [head, check, found, accepted] : [head, check]
+    )
+    return items.find((i) => i.kind === "event") as Extract<
+      MessageItem,
+      { kind: "event" }
+    >
+  }
+
+  it("says the check is under way, its round, and opens its session", () => {
+    pa.dispatchById = new Map([
+      [234, dispatch({ ladder: "checking", state: "review" })],
+      [
+        235,
+        dispatch({
+          id: 235,
+          mode: "session",
+          work_task_id: null,
+          task: null,
+          conversation_id: 50,
+          executor: { assistant_id: 3, name: "Checker", agent_type: "codex" },
+        } as Partial<DispatchInfo>),
+      ],
+    ])
+    const { container } = draw(<EventCard item={chain(false)} />)
+    expect(
+      container.querySelector("[data-pa-acceptance-checking]")!.textContent
+    ).toBe("Being checked · round 1")
+    fireEvent.click(
+      container.querySelector("[data-pa-acceptance-session]") as Element
+    )
+    expect(usePersonalAgentUi.getState().work?.dispatchId).toBe(235)
+  })
+
+  it("carries what the check found, its evidence a click away, and the board's next step once accepted", () => {
+    pa.dispatchById = new Map([
+      [
+        234,
+        dispatch({
+          ladder: "mergeable",
+          state: "review",
+          task: facts({ status: "review", next: "merge_ready" }),
+        }),
+      ],
+    ])
+    const { container } = draw(<EventCard item={chain(true)} />)
+    const fold = container.querySelector("[data-pa-acceptance-fold]")!
+    expect(fold.querySelector('[data-pa-verdict="pass"]')).toBeTruthy()
+    expect(fold.textContent).not.toContain("the title reads right")
+    fireEvent.click(
+      fold.querySelector("[data-pa-acceptance-evidence]") as Element
+    )
+    expect(fold.textContent).toContain("the title reads right")
+    // [Merge…]: with no board on the page, the work in the drawer.
+    const go = container.querySelector(
+      '[data-pa-acceptance-go="merge"]'
+    ) as HTMLElement
+    expect(go.textContent).toBe("Merge…")
+    fireEvent.click(go)
+    expect(usePersonalAgentUi.getState().work?.dispatchId).toBe(234)
+    cleanup()
+    // Read-only: said, no button.
+    draw(<EventCard item={chain(true)} />, { readOnly: true })
+    expect(document.querySelector("[data-pa-acceptance-go]")).toBeNull()
+    cleanup()
+    // Queued to merge: said so, nothing to press.
+    pa.dispatchById = new Map([
+      [
+        234,
+        dispatch({
+          ladder: "mergeable",
+          state: "review",
+          task: facts({ status: "review", next: "accepted_queued" }),
+        }),
+      ],
+    ])
+    draw(<EventCard item={chain(true)} />)
+    expect(document.querySelector("[data-pa-acceptance-go]")).toBeNull()
+    expect(
+      document.querySelector('[data-pa-acceptance-next="accepted_queued"]')!
+        .textContent
+    ).toBe("Accepted — queued to merge")
+    cleanup()
+    // Merging: the board's own word on the strip, no step of its own.
+    pa.dispatchById = new Map([
+      [
+        234,
+        dispatch({
+          ladder: "merging",
+          state: "review",
+          task: facts({ status: "merging" }),
+        }),
+      ],
+    ])
+    draw(<EventCard item={chain(true)} />)
+    expect(document.querySelector("[data-pa-acceptance-next]")).toBeNull()
+  })
+
+  it("says what a round was accepted on from its card when its check is on another page", () => {
+    pa.dispatchById = new Map([
+      [234, dispatch({ ladder: "mergeable", state: "review" })],
+    ])
+    const items = buildMessageItems([
+      result(20, { state: "review", ladder: "mergeable" }),
+      {
+        ...result(24, {}),
+        kind: "notice",
+        dispatch_id: null,
+        data: {
+          notice: "acceptance",
+          state: "acted",
+          superseded: false,
+          phase: "accepted",
+          decided_by: "assistant",
+          verdict: "pass",
+          unchecked: false,
+          dispatch_id: 234,
+          round: 2,
+          check_dispatch_id: 235,
+          evidence: "- it builds",
+        },
+      },
+    ])
+    const head = items.find((i) => i.kind === "event") as Extract<
+      MessageItem,
+      { kind: "event" }
+    >
+    const { container } = draw(<EventCard item={head} />)
+    const fold = container.querySelector("[data-pa-acceptance-fold]")!
+    expect(fold.querySelector("[data-pa-acceptance-checking]")).toBeNull()
+    expect(fold.querySelector('[data-pa-verdict="pass"]')).toBeTruthy()
+    expect(fold.querySelector("[data-pa-acceptance-evidence]")).toBeTruthy()
+  })
+})

@@ -260,7 +260,7 @@ fn level_rank(l: Option<Level>) -> u8 {
 ///
 /// `worktree_gone`: its worktree's folder or directory is gone, as the board
 /// reads it (`annotate_worktree_missing`).
-pub(super) fn task_reason(
+pub(crate) fn task_reason(
     t: &crate::db::entities::work_task::Model,
     latest: Option<&crate::db::entities::personal_agent_verification::Model>,
     worktree_gone: bool,
@@ -305,7 +305,10 @@ fn just_failed(at: DateTime<Utc>, now: DateTime<Utc>) -> bool {
 /// Whether a task's recorded worktree can no longer serve a merge: its
 /// folder row is removed, or its directory is gone from disk — as the board
 /// reads it, offering "complete" instead.
-async fn worktree_gone(db: &AppDatabase, t: &crate::db::entities::work_task::Model) -> bool {
+pub(crate) async fn worktree_gone(
+    db: &AppDatabase,
+    t: &crate::db::entities::work_task::Model,
+) -> bool {
     if t.status != WorkTaskStatus::Review {
         return false;
     }

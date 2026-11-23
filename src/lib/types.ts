@@ -2703,6 +2703,9 @@ export interface TaskFacts {
   finished_at: string | null
   /** Its pull request, as the watch last read it. */
   pr: PrFacts | null
+  /** The board's next step for it in review, as "today" words it (A4):
+   *  what its work's head offers. Absent where it was not read. */
+  next?: TodayReason | null
 }
 
 export type ItemKind =

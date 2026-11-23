@@ -11037,6 +11037,7 @@
       "checkRound": "検収の確認 · {round} 回目"
     },
     "event": {
+      "acceptanceEvidence": "検収の根拠",
       "someone": "アシスタント",
       "replacedBy": "「{title}」が引き継ぎました",
       "more": "すべて表示",

@@ -933,6 +933,8 @@ export function MessageList({
   const newLineAt = newFrom != null ? newLineIndex(items, newFrom) : -1
 
   // ── what rises into place, and the pills ────────────────────────────────
+  // Not what folds into a work's head (A4): that head is where it shows,
+  // as a card that moves on in place — not "new below".
   const lastId = useMemo(() => {
     let max = 0
     for (const item of items) max = Math.max(max, rowIdOf(item) ?? 0)

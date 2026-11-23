@@ -11037,6 +11037,7 @@
       "checkRound": "فحص القبول · الجولة {round}"
     },
     "event": {
+      "acceptanceEvidence": "أدلة القبول",
       "someone": "مساعد",
       "replacedBy": "تولّاه «{title}»",
       "more": "عرض الكل",
