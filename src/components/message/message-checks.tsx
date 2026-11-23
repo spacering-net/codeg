@@ -232,11 +232,7 @@ function ChecksOf({
           // check answered from its last time).
           reload()
           if (made.state === "checking") {
-            toast.success(
-              made.executor
-                ? t("sent", { executor: made.executor })
-                : t("sentNoName")
-            )
+            toast.success(t("sentNoName"))
           } else {
             setOpenId(made.id)
           }
@@ -429,11 +425,6 @@ function CheckMark({
         {note ? (
           <p className="text-xs text-muted-foreground" data-check-note>
             {note}
-          </p>
-        ) : null}
-        {check.executor ? (
-          <p className="text-xs text-muted-foreground">
-            {t("by", { executor: check.executor })}
           </p>
         ) : null}
         <div className="flex flex-wrap items-center gap-1.5">

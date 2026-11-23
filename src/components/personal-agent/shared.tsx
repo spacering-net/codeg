@@ -3,16 +3,26 @@
 /**
  * Small pieces the personal agent's page, its message list and its panel
  * share: reading a row's JSON, the dispatch states as chips, the unread
- * mark, an executor's avatar and the line that says who runs a piece of work
- * where, and opening the work a card points at — in the drawer on the
+ * mark, a piece of work's glyph and the line that says how and where it
+ * runs, and opening the work a card points at — in the drawer on the
  * right, or out of the page (the board, a conversation tab).
+ *
+ * Only an assistant speaks in its conversation: a piece of work is its own
+ * news, drawn with no one else's face or name — not the agent it ran on —
+ * but another assistant's work (handed over) names that assistant.
  */
 
 import { createContext, useContext, useEffect, useState } from "react"
 import { useTranslations } from "next-intl"
 
+import {
+  LayoutDashboard,
+  MessagesSquare,
+  SquareTerminal,
+  type LucideIcon,
+} from "lucide-react"
+
 import { AgentIcon } from "@/components/agent-icon"
-import { AssistantAvatar as AvatarDisc } from "@/components/assistants/assistant-avatar"
 import { usePersonalAgent } from "@/contexts/personal-agent-context"
 import { useTabActions } from "@/contexts/tab-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
@@ -24,10 +34,9 @@ import type {
   DispatchState,
   TimelineRow,
 } from "@/lib/types"
-import { defaultAvatarFor } from "@/lib/assistant-avatar"
+import { getAgentLabel } from "@/lib/custom-agents"
 import { cn } from "@/lib/utils"
 import { requestTasksFocus } from "@/lib/workbench-focus"
-import { useAssistant } from "@/stores/assistants-store"
 import { useBotLive } from "@/stores/personal-agent-roster-store"
 import {
   usePersonalAgentUi,
@@ -190,16 +199,32 @@ export function useStatusWord(): string | null {
   return t("idle")
 }
 
-/** Who runs a piece of work and where, as one quiet line: "Builder · Kanban
- *  task · my-app". */
+/** How a piece of work runs and where, as one quiet line: "Kanban task ·
+ *  my-app" — after the name of the assistant whose work it is when that is
+ *  another one (`by`: work handed over). */
 export function useWorkMeta(): (parts: {
-  executor: string | null
+  by?: string | null
   mode: DispatchMode | null
   folder: string | null
 }) => string {
   const t = useTranslations("PersonalAgent.mode")
-  return ({ executor, mode, folder }) =>
-    [executor, mode ? t(mode) : null, folder].filter(Boolean).join(" · ")
+  return ({ by, mode, folder }) =>
+    [by, mode ? t(mode) : null, folder].filter(Boolean).join(" · ")
+}
+
+/** The assistant whose work a dispatch is, when it is not the page's own
+ *  (work handed over): its name as it handed the work out — told apart by
+ *  its uid, never by a name, which may have changed or be the default. */
+export function useOtherAssistant(): (info: DispatchInfo | undefined) =>
+  | string
+  | null {
+  const { snapshot } = usePersonalAgent()
+  const own = snapshot?.agent?.uid ?? null
+  return (info) => {
+    const uid = info?.work.bot_uid ?? null
+    if (!uid || !own || uid === own) return null
+    return info?.work.name?.trim() || null
+  }
 }
 
 /** The surface of the assistant's bubbles and of the news cards: a plain
@@ -415,80 +440,52 @@ function rem(px: number): string {
   return `${px / 16}rem`
 }
 
-/** The agent's mark at the foot of an executor's avatar of `size` px (at
- *  100% zoom): a disc about seven sixteenths of it — 14px on a 32px avatar —
- *  standing out past the avatar's corner by a sixteenth, so its centre sits
- *  on the avatar's rim; and the hole cut around it in the avatar, 1.5px
- *  wider. `center` is the centre's distance from the avatar's bottom and
- *  end edges. */
-function badgeOf(size: number) {
-  const disc = Math.round((size * 7) / 16)
-  const out = size / 16
-  return { disc, out, center: disc / 2 - out, hole: disc / 2 + 1.5 }
+/** How a piece of work runs, as the glyph its rows lead with. */
+const MODE_GLYPH: Record<DispatchMode, LucideIcon> = {
+  task: LayoutDashboard,
+  chat: MessagesSquare,
+  session: SquareTerminal,
 }
 
-/** The avatar of the assistant that ran a piece of work, as it is now (a
- *  deleted one is still known); one this window never saw draws the
- *  monogram of the name it was dispatched under. With the agent it runs on,
- *  that agent's mark sits at the avatar's bottom end corner, in a hole cut
- *  around it (globals.css), so the two read apart on any surface — a card's
- *  well, a translucent bubble over a workspace image. */
-export function ExecutorAvatar({
-  id,
-  name,
-  agentType,
+/** What a piece of work's row leads with: how it runs (a task, a chat, a
+ *  session in a project), on a quiet disc — never a face: the work is its
+ *  assistant's own news. */
+export function WorkGlyph({
+  mode,
   size,
   className,
 }: {
-  id: number | null
-  name: string | null
-  /** The agent it runs on: its mark at the avatar's foot. */
-  agentType?: AgentType | null
+  mode: DispatchMode | null
   /** In px at 100% zoom. */
   size: number
   className?: string
 }) {
-  const known = useAssistant(id)
-  const shown = known?.name ?? name ?? ""
-  const disc = (
-    <AvatarDisc
-      avatar={known?.avatar ?? (shown ? defaultAvatarFor(shown) : null)}
-      name={shown}
-      size={size}
-      className={agentType ? undefined : className}
-    />
-  )
-  if (!agentType) return disc
-  const badge = badgeOf(size)
+  const Icon = mode ? MODE_GLYPH[mode] : SquareTerminal
   return (
     <span
-      data-pa-badged
-      className={cn("relative inline-flex shrink-0", className)}
-      style={
-        {
-          "--pa-badge-center": rem(badge.center),
-          "--pa-badge-hole": rem(badge.hole),
-        } as React.CSSProperties
-      }
+      data-pa-work-glyph={mode ?? ""}
+      aria-hidden
+      className={cn(
+        "inline-flex shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground",
+        className
+      )}
+      style={{ width: rem(size), height: rem(size) }}
     >
-      {disc}
-      {/* The agent's name is on the mark's own title (the icons carry one),
-          for a pointer; the line beside the avatar names the assistant. */}
-      {/* No disc of its own under the mark: the surface around the avatar
-          shows through the hole (a card's white disc was a white spot on a
-          bubble's grey). */}
-      <span
-        data-pa-agent-badge
-        aria-hidden
-        className="absolute inline-flex items-center justify-center rounded-full"
-        style={{
-          width: rem(badge.disc),
-          height: rem(badge.disc),
-          bottom: rem(-badge.out),
-          insetInlineEnd: rem(-badge.out),
-        }}
-      >
-        <AgentIcon agentType={agentType} className="size-[72%]" />
+      <Icon style={{ width: rem(size * 0.5), height: rem(size * 0.5) }} />
+    </span>
+  )
+}
+
+/** The agent a piece of work ran on, as a fact (the side panel's details,
+ *  never a speaker): its mark and its name. */
+export function WorkAgentFact({ agentType }: { agentType: AgentType | null }) {
+  const t = useTranslations("PersonalAgent")
+  if (!agentType) return null
+  return (
+    <span className="inline-flex min-w-0 items-center gap-1.5" data-pa-work-agent>
+      <AgentIcon agentType={agentType} className="size-3.5 shrink-0" />
+      <span className="truncate">
+        {t("workRanOn", { agent: getAgentLabel(agentType) ?? agentType })}
       </span>
     </span>
   )
@@ -513,11 +510,9 @@ export function workTargetOf(
       num(data, "conversation_folder_id") ??
       num(data, "folder_id"),
     agentType:
-      info?.executor.agent_type ??
-      (str(data, "agent_type") as AgentType | null),
+      info?.work.agent_type ?? (str(data, "agent_type") as AgentType | null),
     title: info?.title ?? str(data, "title") ?? (row?.body || null),
-    executorId: info?.executor.assistant_id ?? num(data, "executor_id"),
-    executorName: info?.executor.name ?? str(data, "executor"),
+    assistantName: info?.work.name || null,
     prompt: info?.prompt ?? null,
     connectionId: info?.connection_id ?? null,
     state: info?.state ?? asDispatchState(data?.state),

@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use serde_json::json;
 
-use super::dispatch::{executor_of, FollowupAuth};
+use super::dispatch::{work_of, FollowupAuth};
 use super::engine::PersonalAgentEngine;
 use super::notices::ProposalAction;
 use crate::db::entities::personal_agent_dispatch::{self as dispatch_entity, DispatchMode, DispatchState};
@@ -184,13 +184,11 @@ impl PersonalAgentEngine {
         {
             return;
         }
-        let executor = executor_of(d);
+        let work = work_of(d);
         let display = json!({
             "dispatch_id": d.id,
             "title": d.title,
-            "executor": executor.name,
-            "executor_id": executor.assistant_id,
-            "agent_type": executor.agent_type,
+            "agent_type": work.agent_type,
             "mode": d.mode,
             "message": RETRY_MESSAGE,
             "intent": null,

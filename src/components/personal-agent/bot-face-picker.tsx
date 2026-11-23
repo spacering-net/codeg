@@ -25,7 +25,6 @@ import {
   AssistantAvatar,
   SWATCH_CLASSES,
 } from "@/components/assistants/assistant-avatar"
-import { EMOJI_CHOICES } from "@/components/settings/assistant-avatar-picker"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -85,7 +84,32 @@ const NEAREST: Record<BotColor, AssistantAvatarColor> = {
 
 /** The emoji the "Generate" page offers beside the name's first
  *  character; any other can be typed. */
-const EMOJI_OFFERED = EMOJI_CHOICES.slice(0, 23)
+/** The emoji offered as faces; anything else can be typed or pasted. */
+const EMOJI_OFFERED = [
+  "🤖",
+  "🧠",
+  "🦉",
+  "🦊",
+  "🐙",
+  "🐝",
+  "🦄",
+  "🐳",
+  "🧑‍💻",
+  "👩‍🔬",
+  "🕵️",
+  "🧙",
+  "🥷",
+  "🧑‍🏫",
+  "🧑‍🎨",
+  "🧑‍🔧",
+  "🔍",
+  "🛠️",
+  "🧪",
+  "📝",
+  "📚",
+  "🗂️",
+  "📊",
+] as const
 
 type Page = "bot" | "make" | "upload"
 

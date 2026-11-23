@@ -1,16 +1,15 @@
 "use client"
 
 /**
- * [+] on the roster, [New work assistant] in the settings (4.12): its face
- * and its name under it, as its own page shows them — the face a default
- * from the new assistant's uid, which the backend gives it the same way,
- * or one the owner picks in the face editor behind it; the first lines
- * of its persona, which may be left empty — it introduces itself, and
- * writes its own from what it is given and does; and the executor config
- * its work runs on: by default one made with it on the brain's agent (the
- * primary's), its options filled in, or one there is, shared. Only when
- * codeg cannot read the agent's options does the executor config editor
- * open, and the assistant is made with what is picked there.
+ * [+] on the sidebar's assistants (4.12): its face and its name under it,
+ * as its own page shows them — the face a default from the new assistant's
+ * uid, which the backend gives it the same way, or one the owner picks in
+ * the face editor behind it; the first lines of its persona, which may be
+ * left empty — it introduces itself, and writes its own from what it is
+ * given and does; and the agent its work runs on (D1): the same as its
+ * brain (the primary's) by default, copied with every option — its own
+ * from then on — or another one picked, with its options. Its brain and
+ * its work's standing instructions are changed on its own page.
  *
  * Made, the page goes to its conversation — once the roster has it: the
  * page takes an assistant the roster does not have for one deleted, and
@@ -20,9 +19,8 @@
 import { useMemo, useState } from "react"
 import { useLocale, useTranslations } from "next-intl"
 
+import { AgentSelect } from "@/components/settings/agent-options-editor"
 import { SyncedSpinner } from "@/components/ui/synced-spinner"
-import type { AssistantPrefill } from "@/components/settings/assistant-editor-dialog"
-import { AssistantEditorDialog } from "@/components/settings/assistant-editor-dialog"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -34,23 +32,21 @@ import {
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import { useAcpAgents } from "@/hooks/use-acp-agents"
 import { personalAgentBotCreate } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import type {
-  AssistantInfo,
   BotAvatar as BotAvatarValue,
   BotMade,
+  WorkChoice,
 } from "@/lib/types"
 import { readRosterNow } from "@/stores/personal-agent-roster-store"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import { defaultBotFace, newBotUid } from "./bot-avatar"
 import { BotFacePicker } from "./bot-face-picker"
-import {
-  assistantAvatarOf,
-  ExecutorPick,
-  type ExecutorChoice,
-} from "./settings/executor-pick"
+import { useAgentConfig } from "./settings/use-agent-config"
 
 const NAME_MAX = 40
 /** Its face at the head of the box, in px at 100% zoom. */
@@ -89,18 +85,22 @@ function NewBotBody({
   onMade?: (made: BotMade) => void
 }) {
   const t = useTranslations("PersonalAgent.bots.create")
+  const ts = useTranslations("PersonalAgent.settings")
+  const ta = useTranslations("AcpAgentSettings.multiAgent.assistants")
   const locale = useLocale()
+  const { agents } = useAcpAgents()
   const uid = useMemo(() => newBotUid(), [])
   const [name, setName] = useState("")
   const [persona, setPersona] = useState("")
-  const [executor, setExecutor] = useState<ExecutorChoice>({ kind: "new" })
+  const [workMode, setWorkMode] = useState<"same" | "other">("same")
   const [face, setFace] = useState<BotAvatarValue | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [editor, setEditor] = useState<{
-    prefill: AssistantPrefill
-    why: string
-  } | null>(null)
+  const work = useAgentConfig({
+    saved: null,
+    disabled: busy,
+    missingText: (count) => ta("missingCount", { count }),
+  })
   const shown = face ?? defaultBotFace(uid)
   const trimmed = name.trim()
 
@@ -117,33 +117,32 @@ function NewBotBody({
     onClose()
   }
 
-  /** Make it; `madeForIt` is the executor config the editor just made. */
-  const create = async (madeForIt?: AssistantInfo) => {
+  const create = async () => {
     if (!trimmed || busy) return
-    setBusy(true)
     setError(null)
+    let workChoice: WorkChoice = { kind: "same_as_brain" }
+    if (workMode === "other") {
+      const w = work.toSave()
+      if (!w.ok) {
+        setError(w.error)
+        return
+      }
+      if (!w.config) {
+        setError(ta("pickAgentFirst"))
+        return
+      }
+      workChoice = { kind: "config", config: w.config }
+    }
+    setBusy(true)
     try {
-      const picked = executor.kind === "existing" ? executor.id : null
       const made = await personalAgentBotCreate({
         name: trimmed,
         uid,
         avatar: face,
         locale,
         persona: persona.trim() || null,
-        executor_assistant_id: madeForIt?.id ?? picked,
-        executor_made_for_it: madeForIt != null,
+        work: workChoice,
       })
-      if (made.options_unavailable) {
-        setEditor({
-          why: made.options_unavailable.why,
-          prefill: {
-            name: trimmed,
-            avatar: assistantAvatarOf(shown),
-            agentType: made.options_unavailable.agent_type,
-          },
-        })
-        return
-      }
       await done(made)
     } catch (e) {
       setError(toErrorMessage(e))
@@ -221,18 +220,48 @@ function NewBotBody({
             {t("personaHint")}
           </p>
         </div>
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="pa-new-bot-executor">{t("executor")}</Label>
-          <ExecutorPick
-            id="pa-new-bot-executor"
-            value={executor}
-            onChange={setExecutor}
-            disabled={busy}
-            className="w-full"
-          />
-          <p className="text-xs leading-5 text-muted-foreground">
-            {executor.kind === "new" ? t("executorNewHint") : t("executorHint")}
-          </p>
+        <div className="flex flex-col gap-1.5" data-pa-new-bot-work>
+          <div className="flex items-center justify-between gap-3">
+            <Label>{ts("workTitle")}</Label>
+            <ToggleGroup
+              type="single"
+              size="sm"
+              variant="outline"
+              value={workMode}
+              onValueChange={(v) => {
+                if (v === "same" || v === "other") setWorkMode(v)
+              }}
+              disabled={busy}
+            >
+              <ToggleGroupItem value="same" data-pa-new-bot-work-mode="same">
+                {ts("workSame")}
+              </ToggleGroupItem>
+              <ToggleGroupItem value="other" data-pa-new-bot-work-mode="other">
+                {ts("workOther")}
+              </ToggleGroupItem>
+            </ToggleGroup>
+          </div>
+          {workMode === "same" ? (
+            <p className="text-xs leading-5 text-muted-foreground">
+              {t("workSameHint")}
+            </p>
+          ) : (
+            <div className="flex flex-col gap-2">
+              <AgentSelect
+                value={work.agentType}
+                onChange={work.pickAgent}
+                agents={agents.filter(
+                  (a) => a.enabled || a.agent_type === work.agentType
+                )}
+                disabled={busy}
+              />
+              {work.options ? (
+                <div className="divide-y divide-border/60 overflow-hidden rounded-xl border border-border/70 bg-muted/40">
+                  {work.options}
+                </div>
+              ) : null}
+            </div>
+          )}
         </div>
         {error ? (
           <p role="alert" className="text-xs break-words text-destructive">
@@ -253,25 +282,6 @@ function NewBotBody({
           </Button>
         </DialogFooter>
       </form>
-      {editor ? (
-        <AssistantEditorDialog
-          open
-          onOpenChange={(o) => {
-            if (!o) setEditor(null)
-          }}
-          assistant={null}
-          prefill={editor.prefill}
-          extraSection={
-            <p className="px-1 text-xs leading-5 text-muted-foreground">
-              {t("editorNote", { why: editor.why })}
-            </p>
-          }
-          onSaved={(made) => {
-            setEditor(null)
-            void create(made)
-          }}
-        />
-      ) : null}
     </>
   )
 }

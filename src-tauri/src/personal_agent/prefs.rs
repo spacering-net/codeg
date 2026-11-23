@@ -80,13 +80,7 @@ pub struct Applied {
     /// each (10.5 "fill five").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub picked: Option<Vec<crate::models::personal_agent_bots::PickedOption>>,
-    /// For the agent an assistant's work runs on: the executor config it
-    /// was bound to when the change was planned — what an undo binds it to
-    /// again. The owner's; never in what an assistant reads.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub executor_before: Option<i32>,
-    /// Written by an undo: an assistant's work goes back onto
-    /// `executor_before`, when that one still is what it was.
+    /// Written by an undo.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub undo: bool,
     /// For the projects watched: the change as it was asked (`ProjectsOp`)
@@ -97,12 +91,11 @@ pub struct Applied {
 }
 
 impl Applied {
-    /// As an assistant reads it: no executor config in it.
+    /// As an assistant reads it.
     pub(super) fn for_assistant(plan: &[Applied]) -> Vec<Applied> {
         plan.iter()
             .cloned()
             .map(|mut a| {
-                a.executor_before = None;
                 a.undo = false;
                 a
             })
@@ -379,19 +372,11 @@ impl PersonalAgentEngine {
             if from == to || !seen.insert(c.key.clone()) {
                 continue;
             }
-            let executor_before = match c.key.strip_prefix("bot.") {
-                Some(rest) if rest.ends_with(".work_agent") => {
-                    self.bound_executor_of_uid(rest.trim_end_matches(".work_agent"))
-                        .await
-                }
-                _ => None,
-            };
             out.push(Applied {
                 key: c.key,
                 from,
                 to,
                 picked,
-                executor_before,
                 undo: false,
                 op,
             });
@@ -734,11 +719,8 @@ impl PersonalAgentEngine {
         let mut kept = Vec::new();
         for a in applied {
             match current.iter().find(|c| c.key == a.key) {
-                // Still what the change made it: back it goes — the agent
-                // an assistant's work runs on, onto the executor config it
-                // was bound to.
+                // Still what the change made it: back it goes.
                 Some(c) if c.from == a.to => back.push(Applied {
-                    executor_before: a.executor_before,
                     undo: true,
                     // The projects go back only while still what the change
                     // made them, checked as they are written.
@@ -1469,21 +1451,3 @@ impl PersonalAgentEngine {
     }
 }
 
-/// An executor config was deleted: the assistants it was bound to now have
-/// none to work with, which their settings pages show. The work it is
-/// running keeps running — it runs on its snapshot.
-pub async fn executor_gone(
-    db: &crate::db::AppDatabase,
-    emitter: &crate::web::event_bridge::EventEmitter,
-    id: i32,
-) {
-    for b in svc::list_bots(&db.conn).await.unwrap_or_default() {
-        if b.executor_assistant_id == Some(id) {
-            crate::web::event_bridge::emit_event(
-                emitter,
-                super::engine::PERSONAL_AGENT_CHANGED_EVENT,
-                super::engine::change_payload(b.id, &PersonalAgentChange::Agent),
-            );
-        }
-    }
-}

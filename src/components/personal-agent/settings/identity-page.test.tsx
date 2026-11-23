@@ -14,66 +14,6 @@ import type { PersonalAgentInfo } from "@/lib/types"
 
 const api = vi.hoisted(() => ({ personalAgentSave: vi.fn() }))
 vi.mock("@/lib/api", () => api)
-const assistants = vi.hoisted(() => ({
-  list: [] as { id: number; name: string; enabled: boolean }[],
-}))
-vi.mock("@/stores/assistants-store", () => ({
-  useAssistants: () => assistants.list,
-}))
-// The executor config picked with a plain select; the editor as a button
-// that "makes" one.
-vi.mock("./executor-pick", async (importOriginal) => {
-  const real = await importOriginal<typeof import("./executor-pick")>()
-  return {
-    ...real,
-    ExecutorPick: ({
-      value,
-      onChange,
-    }: {
-      value: { kind: string; id?: number }
-      onChange: (v: unknown) => void
-    }) => (
-      <select
-        data-testid="executor-pick"
-        value={value.kind === "existing" ? String(value.id) : value.kind}
-        onChange={(e) =>
-          onChange(
-            e.target.value === "new"
-              ? { kind: "new" }
-              : { kind: "existing", id: Number(e.target.value) }
-          )
-        }
-      >
-        <option value="none">none</option>
-        <option value="new">new</option>
-        <option value="5">Dev</option>
-        <option value="6">Off one</option>
-      </select>
-    ),
-  }
-})
-vi.mock("@/components/settings/assistant-editor-dialog", () => ({
-  AssistantEditorDialog: ({
-    onSaved,
-    prefill,
-  }: {
-    onSaved: (a: { id: number }) => void
-    prefill: { agentType: string; name: string }
-  }) => (
-    <form
-      data-testid="executor-editor-form"
-      onSubmit={(e) => e.preventDefault()}
-    >
-      <button
-        type="button"
-        data-testid="executor-editor"
-        data-agent={prefill.agentType}
-        data-name={prefill.name}
-        onClick={() => onSaved({ id: 9 })}
-      />
-    </form>
-  ),
-}))
 vi.mock("sonner", () => ({ toast: { message: vi.fn(), error: vi.fn() } }))
 vi.mock("@/contexts/personal-agent-context", () => ({ useBotId: () => null }))
 // The tiles offer these.
@@ -135,19 +75,25 @@ import { IdentityPage } from "./identity-page"
 
 function agent(
   name: string,
-  color = "blue",
-  executor: number | null = null
+  over: Partial<PersonalAgentInfo> = {}
 ): PersonalAgentInfo {
   return {
     id: 1,
     kind: "primary",
     name,
-    avatar: { kind: "face", shape: "ring", color },
+    avatar: { kind: "face", shape: "ring", color: "blue" },
     agent_type: "claude_code",
     agent_options: {},
     label_snapshot: { agent: "Claude Code", mode: null, options: [] },
+    work: {
+      agent_type: "claude_code",
+      agent_options: {},
+      label_snapshot: { agent: "Claude Code", mode: null, options: [] },
+    },
+    work_instructions: "",
     revision: 1,
-    executor_assistant_id: executor,
+    legacy_assistant_id: null,
+    ...over,
   } as unknown as PersonalAgentInfo
 }
 
@@ -166,7 +112,6 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
-  assistants.list = []
   brain.missing = false
   brain.pickModel = false
   brain.ready = false
@@ -187,6 +132,14 @@ describe("the identity tab", () => {
     await waitFor(() => expect(api.personalAgentSave).toHaveBeenCalledTimes(1))
     expect(api.personalAgentSave.mock.calls[0][0]).not.toHaveProperty("name")
     expect(api.personalAgentSave.mock.calls[0][0]).not.toHaveProperty("avatar")
+    // Nothing changed: neither its brain nor its work rides along.
+    expect(api.personalAgentSave.mock.calls[0][0]).not.toHaveProperty(
+      "agent_config"
+    )
+    expect(api.personalAgentSave.mock.calls[0][0]).not.toHaveProperty("work")
+    expect(api.personalAgentSave.mock.calls[0][0]).not.toHaveProperty(
+      "work_instructions"
+    )
   })
 
   it("picks its brain's agent from tiles, as the first setup does — from the list for one not among them", () => {
@@ -205,119 +158,116 @@ describe("the identity tab", () => {
         .querySelector('[data-pa-setup-agent-tile="codex"]')!
         .getAttribute("aria-checked")
     ).toBe("false")
-    expect(screen.queryByTestId("agent-select")).toBeNull()
+    const brainSelect = () =>
+      document.querySelector(
+        '[data-pa-identity-brain] [data-testid="agent-select"]'
+      )
+    expect(brainSelect()).toBeNull()
     cleanup()
     // Its agent gone from the list (or the list not read yet): the list,
     // which names the one saved.
     acp.agents = [{ agent_type: "codex", enabled: true, available: true }]
     render(page(agent("Nova")))
-    expect(screen.getByTestId("agent-select")).toBeInTheDocument()
-    expect(document.querySelector("[data-pa-setup-agent-tile]")).toBeNull()
+    expect(brainSelect()).not.toBeNull()
+    expect(
+      document.querySelector(
+        "[data-pa-identity-brain] [data-pa-setup-agent-tile]"
+      )
+    ).toBeNull()
     cleanup()
     acp.agents = []
     render(page(agent("Nova")))
-    expect(screen.getByTestId("agent-select")).toBeInTheDocument()
+    expect(brainSelect()).not.toBeNull()
   })
 
-  it("says when there is nothing for its work to run on, and binds the one picked", async () => {
-    assistants.list = [
-      { id: 5, name: "Dev", enabled: true },
-      { id: 6, name: "Off one", enabled: false },
+  it("says when the agent its work runs on can't be used", () => {
+    // Its work on Codex, which is not among the agents codeg has on.
+    render(
+      page(
+        agent("Nova", {
+          work: {
+            agent_type: "codex",
+            agent_options: {},
+            label_snapshot: { agent: "Codex", mode: null, options: [] },
+          },
+        })
+      )
+    )
+    expect(
+      document.querySelector("[data-pa-work-off]")?.textContent
+    ).toContain("Codex")
+    cleanup()
+    render(page(agent("Nova")))
+    expect(document.querySelector("[data-pa-work-off]")).toBeNull()
+  })
+
+  it("changes the agent its work runs on apart from its brain (D1)", async () => {
+    brain.ready = true
+    acp.agents = [
+      CLAUDE,
+      { agent_type: "codex", enabled: true, available: true },
     ]
     api.personalAgentSave.mockResolvedValue({})
-    render(page(agent("Nova")))
-    expect(document.querySelector("[data-pa-executor-missing]")).not.toBeNull()
-    // Saved as it is: nothing about the executor config rides along.
+    // Its work on Codex; the list picks Claude Code for it.
+    render(
+      page(
+        agent("Nova", {
+          work: {
+            agent_type: "codex",
+            agent_options: {},
+            label_snapshot: { agent: "Codex", mode: null, options: [] },
+          },
+        })
+      )
+    )
+    const work = document.querySelector("[data-pa-identity-work]")!
+    fireEvent.click(
+      work.querySelector<HTMLElement>('[data-testid="agent-select"]')!
+    )
     save()
     await waitFor(() => expect(api.personalAgentSave).toHaveBeenCalledTimes(1))
-    expect(api.personalAgentSave.mock.calls[0][0]).not.toHaveProperty(
-      "executor_assistant_id"
-    )
-    expect(api.personalAgentSave.mock.calls[0][0]).not.toHaveProperty(
-      "executor_new"
-    )
-    fireEvent.change(screen.getByTestId("executor-pick"), {
-      target: { value: "5" },
+    const draft = api.personalAgentSave.mock.calls[0][0]
+    expect(draft).toMatchObject({
+      work: { kind: "config", config: { agent_type: "claude_code" } },
     })
-    expect(document.querySelector("[data-pa-executor-missing]")).toBeNull()
-    save()
-    await waitFor(() => expect(api.personalAgentSave).toHaveBeenCalledTimes(2))
-    expect(api.personalAgentSave.mock.calls[1][0]).toMatchObject({
-      executor_assistant_id: 5,
-    })
+    expect(draft).not.toHaveProperty("agent_config")
   })
 
-  it("warns of one turned off", () => {
-    assistants.list = [{ id: 6, name: "Off one", enabled: false }]
-    render(page(agent("Nova", "blue", 6)))
-    expect(
-      document.querySelector("[data-pa-executor-missing]")?.textContent
-    ).toMatch(/turned off/)
-  })
-
-  it("makes a new one on the brain's agent, and opens the editor when its options cannot be read", async () => {
-    assistants.list = [{ id: 5, name: "Dev", enabled: true }]
-    api.personalAgentSave
-      .mockRejectedValueOnce(
-        new Error("executor options unavailable: the agent did not answer")
-      )
-      .mockResolvedValueOnce({})
-    render(page(agent("Nova", "blue", 5)))
-    fireEvent.change(screen.getByTestId("executor-pick"), {
-      target: { value: "new" },
-    })
+  it("saves its work's standing instructions", async () => {
+    api.personalAgentSave.mockResolvedValue({})
+    render(page(agent("Nova", { work_instructions: "Be brief." })))
+    const box = document.querySelector<HTMLTextAreaElement>(
+      "[data-pa-work-instructions]"
+    )!
+    expect(box.value).toBe("Be brief.")
+    fireEvent.change(box, { target: { value: "Cite lines." } })
     save()
     await waitFor(() => expect(api.personalAgentSave).toHaveBeenCalledTimes(1))
     expect(api.personalAgentSave.mock.calls[0][0]).toMatchObject({
-      executor_new: true,
+      work_instructions: "Cite lines.",
     })
-    // Nothing saved: the editor, on the brain's agent, made one, saved
-    // again with it.
-    const editor = await screen.findByTestId("executor-editor")
-    // The editor's own submit never saves the page.
-    fireEvent.submit(screen.getByTestId("executor-editor-form"))
-    expect(api.personalAgentSave).toHaveBeenCalledTimes(1)
-    expect(editor.getAttribute("data-agent")).toBe("claude_code")
-    expect(editor.getAttribute("data-name")).toBe("Nova")
-    fireEvent.click(editor)
-    await waitFor(() => expect(api.personalAgentSave).toHaveBeenCalledTimes(2))
-    expect(api.personalAgentSave.mock.calls[1][0]).toMatchObject({
-      executor_assistant_id: 9,
-    })
-    expect(api.personalAgentSave.mock.calls[1][0]).not.toHaveProperty(
-      "executor_new"
+  })
+
+  it("has no brain to pick for one with none yet: it gets the primary's", async () => {
+    api.personalAgentSave.mockResolvedValue({})
+    render(
+      page(
+        agent("Reviewer", {
+          kind: "worker",
+          agent_type: null,
+          agent_options: null,
+          label_snapshot: null,
+        })
+      )
     )
-    expect(screen.queryByTestId("executor-editor")).toBeNull()
-  })
-
-  it("binds another executor config with the brain left as saved, an option it lacks since or not", async () => {
-    brain.missing = true
-    assistants.list = [{ id: 5, name: "Dev", enabled: true }]
-    api.personalAgentSave.mockResolvedValue({})
-    render(page(agent("Nova")))
-    fireEvent.change(screen.getByTestId("executor-pick"), {
-      target: { value: "5" },
-    })
+    expect(document.querySelector("[data-pa-identity-brain]")).toBeNull()
+    expect(screen.getByText(/no brain yet/)).toBeInTheDocument()
+    expect(document.querySelector("[data-pa-identity-work]")).not.toBeNull()
     save()
     await waitFor(() => expect(api.personalAgentSave).toHaveBeenCalledTimes(1))
-    const draft = api.personalAgentSave.mock.calls[0][0]
-    expect(draft).toMatchObject({ executor_assistant_id: 5 })
-    expect(draft).not.toHaveProperty("agent_config")
-  })
-
-  it("binds another executor config while the brain's agent asks for a model to be picked, the brain left as saved", async () => {
-    brain.pickModel = true
-    assistants.list = [{ id: 5, name: "Dev", enabled: true }]
-    api.personalAgentSave.mockResolvedValue({})
-    render(page(agent("Nova")))
-    fireEvent.change(screen.getByTestId("executor-pick"), {
-      target: { value: "5" },
-    })
-    save()
-    await waitFor(() => expect(api.personalAgentSave).toHaveBeenCalledTimes(1))
-    const draft = api.personalAgentSave.mock.calls[0][0]
-    expect(draft).toMatchObject({ executor_assistant_id: 5 })
-    expect(draft).not.toHaveProperty("agent_config")
+    expect(api.personalAgentSave.mock.calls[0][0]).not.toHaveProperty(
+      "agent_config"
+    )
   })
 })
 
@@ -336,7 +286,7 @@ describe("the first setup", () => {
   const start = () =>
     document.querySelector<HTMLButtonElement>("[data-pa-setup-start]")!
 
-  it("takes its face, its name and its agent — no executor config to pick — and goes on to its conversation", async () => {
+  it("takes its face, its name and its agent — its work the same as its brain by default — and goes on to its conversation", async () => {
     brain.ready = true
     api.personalAgentSave.mockResolvedValue({})
     // Come in by a link to its persona: the page asked for waits on the
@@ -345,7 +295,6 @@ describe("the first setup", () => {
     const onSaved = vi.fn()
     setup({ onSaved })
     expect(document.querySelector("[data-pa-setup]")).not.toBeNull()
-    expect(screen.queryByTestId("executor-pick")).toBeNull()
     expect(start().textContent).toBe("Chat with your agent")
     // Its agent's card says what the agent is for: its brain.
     expect(
@@ -359,10 +308,10 @@ describe("the first setup", () => {
     })
     fireEvent.click(start())
     await waitFor(() => expect(api.personalAgentSave).toHaveBeenCalledTimes(1))
-    // Its work runs on a new executor config on the brain's agent.
+    // Its work on a copy of its brain.
     expect(api.personalAgentSave.mock.calls[0][0]).toMatchObject({
       name: "Nova",
-      executor_new: true,
+      work: { kind: "same_as_brain" },
       agent_config: { agent_type: "claude_code" },
     })
     await waitFor(() => expect(onSaved).toHaveBeenCalled())
@@ -378,26 +327,21 @@ describe("the first setup", () => {
     expect(api.personalAgentSave).not.toHaveBeenCalled()
   })
 
-  it("opens the executor config editor when the agent's options cannot be read, and saves again with the one made", async () => {
+  it("runs its work on another agent picked apart from its brain", async () => {
     brain.ready = true
-    api.personalAgentSave
-      .mockRejectedValueOnce(
-        new Error("executor options unavailable: the agent did not answer")
-      )
-      .mockResolvedValueOnce({})
+    api.personalAgentSave.mockResolvedValue({})
     setup()
     fireEvent.click(
       document.querySelector('[data-pa-setup-agent-tile="claude_code"]')!
     )
+    fireEvent.click(
+      document.querySelector('[data-pa-setup-work-mode="other"]')!
+    )
+    fireEvent.click(screen.getByTestId("agent-select"))
     fireEvent.click(start())
-    const editor = await screen.findByTestId("executor-editor")
-    expect(editor.getAttribute("data-agent")).toBe("claude_code")
-    // The default name while the field is empty.
-    expect(editor.getAttribute("data-name")).toBe("Personal agent")
-    fireEvent.click(editor)
-    await waitFor(() => expect(api.personalAgentSave).toHaveBeenCalledTimes(2))
-    expect(api.personalAgentSave.mock.calls[1][0]).toMatchObject({
-      executor_assistant_id: 9,
+    await waitFor(() => expect(api.personalAgentSave).toHaveBeenCalledTimes(1))
+    expect(api.personalAgentSave.mock.calls[0][0]).toMatchObject({
+      work: { kind: "config", config: { agent_type: "claude_code" } },
     })
   })
 

@@ -27,13 +27,14 @@ import type {
   DispatchState,
   PersonalAgentSnapshot,
 } from "@/lib/types"
+import { getAgentLabel } from "@/lib/custom-agents"
 import { cn } from "@/lib/utils"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import { PANEL_SURFACE, PanelBar } from "../../panel-section"
 import {
   canOpenWork,
-  ExecutorAvatar,
+  WorkGlyph,
   useOpenWork,
   useWorkMeta,
   workTargetOf,
@@ -57,7 +58,7 @@ const STREAMING: ReadonlySet<DispatchState> = new Set([
  *  drawer does. */
 function ConversationPreview({ d }: { d: DispatchInfo }) {
   const { attachDelegationChild, detachDelegationChild } = useAcpActions()
-  const agentType = d.executor.agent_type
+  const agentType = d.work.agent_type
   const liveId = STREAMING.has(d.state) ? d.connection_id : null
   const [attachId, setAttachId] = useState<string | null>(liveId)
   if (liveId !== null && liveId !== attachId) setAttachId(liveId)
@@ -172,11 +173,7 @@ export function WorkspaceTab({
               className={cn(PANEL_SURFACE, "min-w-0 gap-0 py-0 ring-0")}
             >
               <WindowBar className="h-auto items-start gap-2.5 py-2">
-                <ExecutorAvatar
-                  id={d.executor.assistant_id}
-                  name={d.executor.name}
-                  size={ROW_AVATAR_SIZE}
-                />
+                <WorkGlyph mode={d.mode} size={ROW_AVATAR_SIZE} />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-[0.8125rem] leading-5 font-medium">
                     #{d.id} {d.title}
@@ -186,10 +183,10 @@ export function WorkspaceTab({
                     <span className="min-w-0 truncate text-xs leading-5 text-muted-foreground">
                       {[
                         meta({
-                          executor: d.executor.name,
                           mode: d.mode,
                           folder: d.folder_name,
                         }),
+                        getAgentLabel(d.work.agent_type) ?? d.work.agent_type,
                         formatRelative(d.updated_at, now),
                       ]
                         .filter(Boolean)

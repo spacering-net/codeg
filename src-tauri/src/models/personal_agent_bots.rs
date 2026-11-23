@@ -54,8 +54,8 @@ pub const DEFAULT_COLORS: [&str; 10] = [
 ];
 
 /// An assistant's avatar as its row stores it: a face (shape and colour), or
-/// one of the executor configs' avatars, which the rows made before 1.6
-/// carry and which the owner may still pick.
+/// one of the avatars the assistants of the collaboration settings had,
+/// which the rows made before 1.6 carry and which the owner may still pick.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum BotAvatar {
@@ -86,7 +86,7 @@ impl BotAvatar {
     }
 
     /// Whether a face names a shape and a colour codeg draws; the other
-    /// kinds are an executor config's and are checked as such.
+    /// kinds are checked as the collaboration settings' avatars were.
     pub fn validate(&self) -> Result<(), String> {
         match self {
             BotAvatar::Face { shape, color } => {
@@ -103,8 +103,8 @@ impl BotAvatar {
         }
     }
 
-    /// The executor config's avatar that stands for this one: itself when
-    /// it is one, else a monogram in the nearest of their colours.
+    /// The collaboration settings' avatar that stands for this one: itself
+    /// when it is one, else a monogram in the nearest of their colours.
     pub fn as_assistant(&self) -> AssistantAvatar {
         match self {
             BotAvatar::Face { color, .. } => AssistantAvatar::Monogram {
@@ -134,7 +134,7 @@ impl From<AssistantAvatar> for BotAvatar {
     }
 }
 
-/// The executor configs' colour nearest to a face's.
+/// The collaboration settings' avatar colour nearest to a face's.
 fn assistant_color(color: &str) -> &'static str {
     match color {
         "red" => "red",
@@ -164,7 +164,7 @@ fn fnv1a(s: &str) -> u32 {
 pub enum PickedFrom {
     /// The owner (or the assistant on their word) named it.
     Given,
-    /// Another executor config on the same agent picked it.
+    /// Another assistant's work on the same agent picked it.
     OtherConfig,
     /// The agent's own current value.
     Agent,
@@ -191,8 +191,6 @@ pub struct BotImpact {
     pub running: Vec<ImpactWork>,
     /// Messages to it not answered yet: they go back to their senders.
     pub unanswered_messages: u32,
-    /// The executor config it is bound to.
-    pub executor: Option<ImpactExecutor>,
     /// Its plans still going: they stop (7.6).
     pub plans: Vec<ImpactPlan>,
     /// Steps of other assistants' plans handed to it, not done yet: their
@@ -227,14 +225,6 @@ pub struct ImpactWork {
     pub state: DispatchState,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct ImpactExecutor {
-    pub id: i32,
-    pub name: String,
-    /// Other work assistants bound to it too.
-    pub shared_with: Vec<String>,
-}
-
 /// What to do with a work assistant's things when it is deleted.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct BotDeleteOptions {
@@ -242,8 +232,6 @@ pub struct BotDeleteOptions {
     /// default), `false` stops it.
     #[serde(default = "yes")]
     pub hand_over: bool,
-    #[serde(default)]
-    pub delete_executor: bool,
     #[serde(default)]
     pub delete_workdir: bool,
 }
@@ -265,18 +253,9 @@ pub struct BotCreateDraft {
     pub persona: Option<String>,
     #[serde(default)]
     pub avatar: Option<BotAvatar>,
-    /// A complete executor selection, from the editor the page opened when
-    /// codeg could not read the agent's options.
+    /// What its work runs on (D1); absent: a copy of its brain.
     #[serde(default)]
-    pub executor_config: Option<super::assistant::AssistantAgentConfig>,
-    /// An executor config to bind instead of making one.
-    #[serde(default)]
-    pub executor_assistant_id: Option<i32>,
-    /// That executor config was made for this assistant just now (in the
-    /// editor the page opened): it is the assistant's as one codeg made —
-    /// undoing the assistant deletes it.
-    #[serde(default)]
-    pub executor_made_for_it: bool,
+    pub work: Option<super::personal_agent::WorkChoice>,
     #[serde(default)]
     pub locale: Option<String>,
 }

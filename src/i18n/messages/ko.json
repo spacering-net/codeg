@@ -864,7 +864,7 @@
       "agentDefaultHint": "에이전트 기본값: {value}",
       "defaultOptionLabel": "기본값 ({value})",
       "overrideCount": "재정의 {count}개",
-      "tabAssistants": "실행 구성",
+      "tabAssistants": "어시스턴트",
       "booleanOn": "켜기",
       "booleanOff": "끄기",
       "modelNotSwitched": "에이전트가 선택한 모델로 전환되지 않아 아래 옵션은 다른 모델의 것일 수 있습니다.",
@@ -950,8 +950,8 @@
         "disableTitle": "{name}을(를) 사용 중지할까요?",
         "disableConfirm": "사용 중지"
       },
-      "assistantsMoved": "실행 구성: 어시스턴트 페이지로 이동했습니다",
-      "assistantsMovedHint": "어시스턴트 페이지의 설정 → 팀 → 실행 구성에서 관리합니다. 대화에서 @로 호출하는 것도 같은 것입니다.",
+      "assistantsMoved": "어시스턴트: 사이드바의 ‘개인 에이전트’ 그룹에서 관리",
+      "assistantsMovedHint": "대화에서 @하는 것은 내 어시스턴트예요. 각자 자기 작업 에이전트와 상시 지침으로 일해요.",
       "assistantsMovedOpen": "열기"
     },
     "actions": {
@@ -2455,7 +2455,7 @@
       "none": "—",
       "copyField": "{field} 복사",
       "copiedField": "{field} 복사됨",
-      "assistant": "실행 구성"
+      "assistant": "어시스턴트"
     },
     "conversationCard": {
       "untitledConversation": "제목 없는 대화",
@@ -3619,8 +3619,8 @@
         "mentionGroupSession": "세션",
         "mentionGroupCommit": "커밋",
         "mentionGroupSkill": "스킬",
-        "mentionGroupAssistant": "실행 구성",
-        "mentionManageAssistants": "실행 구성 관리…"
+        "mentionGroupAssistant": "어시스턴트",
+        "mentionManageAssistants": "어시스턴트 관리…"
       },
       "messageQueue": {
         "addToQueue": "대기열에 추가",
@@ -3961,12 +3961,12 @@
             "child_rejected": "서브에이전트 요청 거부",
             "child_unknown": "서브에이전트: 오류",
             "unknown": "알 수 없는 작업",
-            "assistant_not_found": "실행 구성 없음",
+            "assistant_not_found": "어시스턴트를 찾을 수 없어요",
             "assistants_unsupported": "재시작 필요",
             "assistant_support_unknown": "응답 없음"
           }
         },
-        "unknownAssistant": "실행 구성 #{id}",
+        "unknownAssistant": "어시스턴트 #{id}",
         "deletedAssistant": "(삭제됨)"
       },
       "contentParts": {
@@ -5464,7 +5464,7 @@
       "quickMessages": "빠른 메시지",
       "taskTemplates": "작업 템플릿",
       "preferences": "앱 기본 설정(언어, 토글)",
-      "assistants": "실행 구성",
+      "assistants": "어시스턴트",
       "appearance": "모양(라이트/다크 모드, 테마 색상, 확대/축소, 글꼴, 배경 설정, 사용자 지정 스타일)"
     },
     "scopeExcluded": {
@@ -5537,7 +5537,7 @@
       "quickMessages": "빠른 메시지 {count}개",
       "taskTemplates": "작업 템플릿 {count}개",
       "preferences": "앱 환경설정 {count}개",
-      "assistants": "실행 구성 {count}개",
+      "assistants": "어시스턴트 {count}개",
       "appearance": "모양 설정 {count}개"
     },
     "rollbackTitle": "가져오기 되돌리기",
@@ -5555,7 +5555,7 @@
     "passphraseKeep": "비워 두면 저장된 암호구를 사용합니다",
     "passphrasePlaceholder": "암호화 암호구",
     "passphraseHint": "이 기기의 키체인에만 저장되며 업로드되지 않습니다. 다른 기기에도 같은 암호구를 입력하세요.",
-    "assistantsRenamed": "이 기기에 같은 이름의 실행 구성이 있어 {count}개의 이름을 바꿨습니다.",
+    "assistantsRenamed": "어시스턴트 {count}개가 이 기기의 기존 것과 이름이 같아 자동으로 이름을 바꿨어요.",
     "conflictTitle": "자동 업로드가 일시 중지되었습니다",
     "conflictBody": "서버에 {device}에서 {time}에 만든 스냅샷이 있으며 이 기기에서는 아직 복원하지 않았습니다. 업로드하면 이 스냅샷이 교체되며 서버에는 이전 사본이 남지 않습니다.",
     "conflictRestore": "복원",
@@ -10047,7 +10047,6 @@
       "completed": "완료",
       "other": "기타",
       "failed": "실패",
-      "executors": "실행 구성별",
       "completedHint": "{count}개 완료",
       "tokens": "일별 토큰",
       "agentTokens": "개인 에이전트",
@@ -10068,7 +10067,8 @@
         "tokens": "토큰",
         "tokensSub": "에이전트 {agent} · 배정 {dispatch}",
         "tokensUnsynced": "사용량 동기화 후 표시"
-      }
+      },
+      "agents": "에이전트별"
     },
     "settings": {
       "setupStart": "에이전트와 대화하기",
@@ -10085,7 +10085,7 @@
       "name": "이름",
       "nameHint": "페이지와 메시지에 표시되는 이름과 아바타입니다. 에이전트도 자기 이름을 압니다. 이름을 비워 두면 기본 이름을 씁니다.",
       "namePlaceholder": "개인 에이전트",
-      "agentHint": "실행할 에이전트와 모든 옵션입니다. 실행 구성과 같은 방식으로 설정합니다.",
+      "agentHint": "생각하고 대화할 때 쓰는 에이전트와 모든 옵션이에요.",
       "switchNote": "다른 에이전트로 바꾸면 다음 메시지부터 새 세션이 시작됩니다. 이전 세션을 재개하지 않고, 대신 codeg가 타임라인을 새 세션에 넘겨줍니다.",
       "autoCompact": "자동 압축 임계값",
       "autoCompactHint": "컨텍스트가 이 비율 이상 차면 codeg가 다음 메시지 전에 압축 명령을 보냅니다. 0이면 꺼집니다. 에이전트 자체의 자동 압축 시점보다 낮게 설정하세요.",
@@ -10130,18 +10130,15 @@
       "saveFailed": "저장하지 못했습니다",
       "restoreDefaults": "기본값으로 복원",
       "back": "대화로 돌아가기",
-      "viewTitle": "설정",
-      "readOnly": "어시스턴트가 다른 codeg 프로세스에서 실행 중이라 여기서는 설정이 읽기 전용입니다. 실행 구성 자체는 계속 편집할 수 있습니다.",
+      "viewTitle": "어시스턴트 환경설정",
+      "readOnly": "어시스턴트가 다른 codeg 프로세스에서 실행 중이라 여기 설정은 읽기 전용이에요.",
       "setUpFirst": "먼저 메인 어시스턴트를 설정하세요.",
       "nav": {
-        "team": "팀",
         "prefs": "환경설정",
-        "identity": "두뇌와 실행 구성",
+        "identity": "정체성과 두뇌",
         "persona": "페르소나와 메모리",
         "notify": "알림",
         "advanced": "고급",
-        "workers": "작업 어시스턴트",
-        "executors": "실행 구성",
         "communication": "소통",
         "proactive": "능동 기능과 알림",
         "automation": "배정 및 자동화",
@@ -10388,7 +10385,7 @@
         },
         "auto_accept": {
           "title": "자동 검수",
-          "hint": "어시스턴트가 맡긴 코드 변경 작업이 검토 대기가 되면 다른 실행 구성이 읽기 전용으로 확인하고, 어시스턴트가 검수 기준에 따라 결론을 내려요. 끄면 직접 검수해요.",
+          "hint": "어시스턴트가 맡긴 코드 작업이 검토 대기가 되면 작업에 쓰는 에이전트가 읽기 전용으로 확인하고, 어시스턴트가 기준에 비춰 결론을 내려요. 끄면 직접 검토해요.",
           "on": "켬",
           "off": "끔"
         },
@@ -10481,7 +10478,7 @@
         },
         "level_routine_paused": {
           "title": "루틴 일시 중지",
-          "hint": "3번 연속 실패했거나 실행 구성을 쓸 수 없을 때."
+          "hint": "3번 연속 실패했거나 작업에 쓰는 에이전트를 쓸 수 없어요."
         },
         "level_proposal": {
           "title": "제안: 당신을 기다리는 것",
@@ -10552,8 +10549,8 @@
           "off": "끄기"
         },
         "rule_idle_bot": {
-          "title": "쉬고 있는 작업 어시스턴트",
-          "hint": "주간 회고에서: 2주 동안 한 번도 깨우지 않은 작업 어시스턴트를 숨길지 삭제할지 물어봐요.",
+          "title": "쉬고 있는 어시스턴트",
+          "hint": "주간 회고에서: 2주 동안 깨어나지 않은 어시스턴트를 숨길지 삭제할지 물어봐요.",
           "on": "켜기",
           "off": "끄기"
         },
@@ -10614,8 +10611,8 @@
           "off": "끄기"
         },
         "brief_bots": {
-          "title": "어시스턴트별",
-          "hint": "한 줄씩: 끝낸 일, 하고 있는 일, 막힌 곳. 숨긴 어시스턴트는 빼요.",
+          "title": "각 어시스턴트",
+          "hint": "어시스턴트마다 한 줄: 끝낸 일, 하는 일, 막힌 곳. 숨긴 것은 빼요.",
           "on": "켜기",
           "off": "끄기"
         },
@@ -10741,24 +10738,6 @@
         "apply": "옮기기",
         "saved": "작업 디렉터리를 옮겼습니다."
       },
-      "team": {
-        "noWorkers": "아직 작업 어시스턴트가 없습니다",
-        "noWorkersHint": "작업 어시스턴트는 자기 몫의 일을 맡아 끝까지 해냅니다. 필요하면 메인 어시스턴트에게 말하거나 여기서 만드세요.",
-        "boundTo": "{name}(으)로 작업",
-        "unbound": "실행 구성 없음: 아직 직접 작업할 수 없음",
-        "sameBatch": "여기의 실행 구성은 대화에서 @로 호출하는 것과 같습니다. 여기서 바꾸면 양쪽 모두 바뀝니다.",
-        "delegationOff": "다중 에이전트 협업이 꺼져 있어 지금은 대화에서 @로 호출할 수 없습니다. 어시스턴트의 배정에는 영향이 없습니다.",
-        "openCollaboration": "협업 설정 열기"
-      },
-      "executor": {
-        "running": "{count}개 실행 중",
-        "fortnight": "2주: {dispatches}건 배정 · {completed}건 완료",
-        "failing": "최근 {count}건의 배정이 모두 실패했습니다: {error}",
-        "impactRunning": "실행 중인 작업 {count}개는 계속 진행됩니다.",
-        "usedBy": "사용하는 어시스턴트: {names}",
-        "nameJoin": ", ",
-        "impactBots": "다음 어시스턴트는 당분간 직접 작업할 수 없습니다: {names}."
-      },
       "changed": {
         "on": "켜짐",
         "off": "꺼짐",
@@ -10862,8 +10841,7 @@
         "average": "평균 {time}",
         "minutes": "{n}분",
         "hours": "{h}시간 {m}분",
-        "apart": "실행 구성·방식별",
-        "byExecutor": "실행 구성·방식별",
+        "apart": "에이전트와 방식별",
         "byBot": "어시스턴트·방식별",
         "someone": "예전 작업",
         "unjudged": "{count}건 맡김, 아직 끝난 일 없음"
@@ -10879,17 +10857,6 @@
       "skillDeleted": "{name}을(를) 삭제했어요",
       "viewSubtitle": "모든 어시스턴트 공통",
       "personaUnwritten": "아직 페르소나가 없습니다. 자기소개할 때, 일을 맡길 때, 매일 밤 정리할 때 스스로 채웁니다. 여기서 직접 써도 됩니다.",
-      "executorPick": {
-        "title": "실행 구성",
-        "hint": "두뇌는 생각하고, 실행 구성은 일을 합니다. 직접 하는 작업은 모두 여기서 실행됩니다. 여러 어시스턴트가 하나를 함께 쓸 수 있습니다.",
-        "newHint": "저장할 때 두뇌와 같은 에이전트로 새로 만들고 옵션은 자동으로 채웁니다.",
-        "missing": "실행 구성이 없습니다. 지금은 직접 작업할 수 없습니다. 하나를 고르거나 새로 만드세요.",
-        "disabled": "이 실행 구성은 꺼져 있습니다. 당분간 직접 작업할 수 없습니다.",
-        "editorNote": "codeg가 이 에이전트의 옵션을 읽지 못했습니다({why}). 여기서 골라 주세요. 저장하면 이 실행 구성을 사용합니다.",
-        "new": "새로 만들기(두뇌와 같은 에이전트)",
-        "none": "없음",
-        "off": "(꺼짐)"
-      },
       "projects": {
         "about": "어시스턴트가 이 프로젝트들에서 검토를 기다리는 PR을 지켜보고, 처음 도와줄 일도 여기서 찾아요.",
         "scope": "지켜볼 프로젝트",
@@ -10905,7 +10872,18 @@
         "noForge": "코드 호스팅 없음",
         "connectAccount": "계정 연결",
         "note": "닫은 프로젝트는 지켜보지 않아요. 다시 열면 자동으로 돌아와요."
-      }
+      },
+      "workTitle": "작업에 쓰는 에이전트",
+      "workHint": "두뇌는 생각하고 대화하고, 이 에이전트는 코드를 쓰고 명령을 실행해요. 두뇌를 바꿔도 여기는 바뀌지 않아요.",
+      "workSame": "두뇌와 같게",
+      "workOther": "따로 고르기",
+      "workSameHint": "두뇌의 에이전트와 모든 옵션을 그대로 복사해요. 그 뒤로는 서로 독립적이에요.",
+      "workUnavailable": "{agent}를 쓸 수 없어요(설치 안 됨 또는 꺼짐). 다른 것을 고르세요.",
+      "instructionsTitle": "작업할 때의 상시 지침",
+      "instructionsHint": "작업 세션을 시작할 때마다(일을 맡길 때, 대화에서 @될 때) 함께 보내요. 두뇌는 읽지 않아요.",
+      "instructionsPlaceholder": "작업할 때 지킬 규칙, 확인할 것, 피할 것…",
+      "instructionsTooLong": "상시 지침은 최대 {max}자까지예요.",
+      "noBrainYet": "아직 두뇌가 없어요. 메인 어시스턴트를 설정하면 메인의 두뇌를 그대로 복사해 받아요."
     },
     "statusWord": {
       "idle": "대기 중",
@@ -11224,7 +11202,7 @@
       "resolved": "처리됨"
     },
     "bots": {
-      "new": "새 작업 어시스턴트",
+      "new": "새 어시스턴트",
       "copyName": "{name} (사본)",
       "copied": "복제본 {name}을(를) 만들었습니다",
       "copy": "복제",
@@ -11283,23 +11261,20 @@
         "useIt": "사용"
       },
       "create": {
-        "title": "새 작업 어시스턴트",
+        "title": "새 어시스턴트",
         "description": "이름과 어떤 어시스턴트인지 몇 줄. 두뇌는 메인 어시스턴트와 같습니다.",
         "name": "이름",
         "namePlaceholder": "예: 코드 리뷰",
         "cancel": "취소",
         "create": "만들기",
-        "editorNote": "codeg가 이 에이전트의 옵션을 읽지 못했습니다({why}). 여기서 골라 주세요. 작업 어시스턴트는 이 실행 구성으로 만들어집니다.",
         "persona": "페르소나",
         "personaPlaceholder": "예: 코드 변경을 리뷰합니다. 맞는지, 테스트가 충분한지 봅니다.",
         "personaHint": "한두 줄로: 누구이고 어떤 일을 맡길지. 비워 둬도 됩니다. 먼저 자기소개를 하고, 이후 당신이 맡긴 일과 해낸 일을 바탕으로 스스로 채웁니다.",
-        "executor": "실행 구성",
-        "executorNewHint": "두뇌와 같은 에이전트로 새로 만들고 옵션은 자동으로 채웁니다.",
-        "executorHint": "여러 어시스턴트가 실행 구성 하나를 함께 쓸 수 있습니다."
+        "workSameHint": "두뇌는 메인 것을 쓰고, 작업은 두뇌를 그대로 복사해 옵션도 모두 같아요. 그 뒤로는 독립적이에요. 둘 다 해당 페이지에서 바꿀 수 있어요."
       },
       "roster": {
         "title": "어시스턴트",
-        "add": "새 작업 어시스턴트",
+        "add": "새 어시스턴트",
         "pinned": "고정됨",
         "others": "기타",
         "hiddenCount": "{count}명 숨김",
@@ -11353,7 +11328,7 @@
         "noProjects": "codeg에 열려 있는 프로젝트가 없습니다.",
         "from": {
           "given": "말씀하신 대로",
-          "other_config": "다른 실행 구성에서",
+          "other_config": "다른 어시스턴트의 작업 설정에서",
           "agent": "에이전트 기본값"
         },
         "progress": "{at} / {total}",
@@ -11366,14 +11341,11 @@
         "otherWrote": "기타: {text}"
       },
       "changed": {
-        "applied": "작업 어시스턴트를 만듦",
-        "show": "작업 어시스턴트를 만들까요? (이런 변경은 먼저 확인하도록 설정하셨습니다)",
-        "suggested": "제안: 새 작업 어시스턴트",
+        "applied": "어시스턴트를 만들었어요",
+        "show": "이 어시스턴트를 만들까요? (이런 변경은 먼저 보여 달라고 하셨어요)",
+        "suggested": "제안: 새 어시스턴트 만들기",
         "dismissed": "만들지 않음",
         "undone": "되돌림",
-        "executorFilled": "실행 구성: {agent}, 옵션 {count}개 자동 선택",
-        "executorMade": "실행 구성: {agent}",
-        "executorBound": "{name} 유지",
         "open": "열기",
         "undoOne": "되돌리기",
         "undoneOne": "되돌림",
@@ -11384,7 +11356,9 @@
         "undo": "되돌리기",
         "undoAll": "모두 되돌리기",
         "uncheckedQuote": "메인 어시스턴트가 당신이 말했다고 합니다: “{quote}” — 하지만 이번 턴에 직접 입력한 말은 아닙니다",
-        "persona": "페르소나"
+        "persona": "페르소나",
+        "workFilled": "작업은 {agent}, 옵션 {count}개 채움",
+        "workOn": "작업은 {agent}"
       },
       "delete": {
         "title": "{name}을(를) 삭제할까요?",
@@ -11394,9 +11368,6 @@
         "stop": "중지하기",
         "messages": "이 어시스턴트에게 온 메시지 {count}건에 아직 답하지 않았습니다. 보낸 쪽으로 돌려보냅니다.",
         "listJoiner": ", ",
-        "dropExecutor": "실행 구성 {name}도 삭제",
-        "executorKept": "기본적으로 유지됩니다. 계속 @로 호출할 수 있고 codeg-cli에서도 쓸 수 있습니다.",
-        "executorShared": "유지됩니다. {names}도 사용 중입니다.",
         "dropWorkdir": "작업 디렉터리도 삭제",
         "workdirCustom": "직접 고른 디렉터리이므로 codeg는 건드리지 않습니다.",
         "cancel": "취소",
@@ -11618,8 +11589,8 @@
     },
     "ask": {
       "heading": {
-        "question": "{executor}이(가) 묻고 있습니다",
-        "plan": "{executor}이(가) 계획 승인을 요청합니다"
+        "question": "작업 중에 질문이 생겼어요",
+        "plan": "작업이 계획 승인을 요청해요"
       },
       "someone": "실행자",
       "mirror": "{name}이(가) 대신 맡은 작업에서",
@@ -11971,7 +11942,7 @@
           },
           "auto_accept": {
             "title": "맡긴 코드 변경 작업을 확인하고 검수하기",
-            "hint": "다른 실행 구성이 읽기 전용으로 확인하고, 요청하신 대로인지 제가 판단해요."
+            "hint": "작업에 쓰는 에이전트가 읽기 전용으로 확인하고, 요청에 비춰 제가 판단해요."
           }
         },
         "prefs": "환경설정 조정",
@@ -11989,8 +11960,6 @@
     "acceptance": {
       "title": "검수 · {round}차",
       "titleMax": "검수 · {round}차 (최대 {max}차)",
-      "people": "{executor} 작업 · {checker} 확인",
-      "peopleUnchecked": "{executor} 작업",
       "check": "확인:",
       "verdict": {
         "pass": "통과",
@@ -12322,7 +12291,7 @@
           "edit": "변경"
         },
         "repeatBody": "30일 동안 비슷한 요청을 {count}번 했어요.",
-        "pausedExecutor": "작업을 실행할 곳이 설정되지 않았습니다. 실행 구성이 없거나, 쓰던 것이 삭제되거나 꺼졌습니다.",
+        "pausedWorkAgent": "작업에 쓰는 에이전트를 쓸 수 없어요. 설치되지 않았거나 꺼져 있어요.",
         "pausedFailures": "3번 연속 실패했어요.",
         "trial": "시험 실행을 시작했어요.",
         "reason": "이유: {reason}",
@@ -12336,7 +12305,7 @@
         "open": "루틴 열기",
         "confirm": "확인할 루틴",
         "confirmChange": "확인할 루틴 변경",
-        "setExecutor": "실행 구성 설정"
+        "setWorkAgent": "작업에 쓸 에이전트 고르기"
       },
       "more": "추가 작업"
     },
@@ -12364,7 +12333,7 @@
         "idle": "한동안 진행이 없는 항목",
         "behind": "브랜치가 뒤처지고 충돌이 있어요",
         "undo": "되돌린 변경",
-        "idle_bot": "쉬고 있는 작업 어시스턴트"
+        "idle_bot": "쉬고 있는 어시스턴트"
       },
       "wait": {
         "permission": "승인 대기",
@@ -12479,8 +12448,8 @@
           "hint": "주간 회고에서: 말씀대로 바로 한 변경을 여러 번 되돌렸다면, 먼저 보여 드릴지 물어봐요."
         },
         "idle_bot": {
-          "title": "쉬고 있는 작업 어시스턴트",
-          "hint": "주간 회고에서: 2주 동안 한 번도 깨우지 않은 작업 어시스턴트를 숨길지 삭제할지 물어봐요."
+          "title": "쉬고 있는 어시스턴트",
+          "hint": "주간 회고에서: 2주 동안 깨어나지 않은 어시스턴트를 숨길지 삭제할지 물어봐요."
         }
       },
       "undoDetail": "최근 2주 동안 말씀대로 바로 한 변경 {made}개 중 {undone}개를 되돌렸어요.",
@@ -12738,11 +12707,17 @@
     },
     "botPage": {
       "primary": "메인 어시스턴트",
-      "worker": "작업 어시스턴트",
+      "worker": "어시스턴트",
       "chat": "대화하기"
     },
-    "noExecutor": "쓸 수 있는 실행 구성이 없어 지금은 직접 작업할 수 없습니다.",
-    "setExecutor": "실행 구성 설정"
+    "workRanOn": "{agent}(으)로 작업",
+    "workOff": "{agent}(작업에 쓰는 에이전트)를 쓸 수 없어요. 설치되지 않았거나 꺼져 있어서 지금은 직접 작업할 수 없어요.",
+    "setWork": "다른 것 고르기",
+    "noBrain": {
+      "title": "{name}에게는 아직 두뇌가 없어요",
+      "body": "협업 설정에서 옮겨 온 어시스턴트예요. 메인 어시스턴트를 설정하면 메인의 두뇌를 그대로 복사해 받아서 대화할 수 있어요. 그 전에도 대화에서 @할 수는 있어요.",
+      "setUp": "메인 어시스턴트 설정"
+    }
   },
   "MessageCheck": {
     "action": "어시스턴트에게 확인 맡기기",
@@ -12757,12 +12732,10 @@
     "unfinished": "확인 못 끝남",
     "mark": "어시스턴트 확인: {verdict}",
     "markQuote": "‘{quote}’ 확인: {verdict}",
-    "by": "확인: {executor}",
     "again": "다시 확인",
     "inAssistant": "어시스턴트 대화에서 보기",
     "process": "확인 과정 보기",
     "openConversation": "원래 대화 열기",
-    "sent": "{executor}에게 확인을 맡겼어요. 결과는 이 메시지 아래에 나와요",
     "sentNoName": "확인을 시작했어요. 결과는 이 메시지 아래에 나와요",
     "startFailed": "확인을 시작하지 못했어요: {message}",
     "evidence": "근거",

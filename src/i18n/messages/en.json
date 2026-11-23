@@ -864,7 +864,7 @@
       "agentDefaultHint": "Agent default: {value}",
       "defaultOptionLabel": "Default ({value})",
       "overrideCount": "{count, plural, one {# override} other {# overrides}}",
-      "tabAssistants": "Executor configs",
+      "tabAssistants": "Assistants",
       "booleanOn": "On",
       "booleanOff": "Off",
       "modelNotSwitched": "The agent didn't switch to the selected model, so these options may belong to another model.",
@@ -950,8 +950,8 @@
         "disableTitle": "Turn off {name}?",
         "disableConfirm": "Turn off"
       },
-      "assistantsMoved": "Executor configs: moved to the assistants page",
-      "assistantsMovedHint": "Manage them on the assistants page, under Settings → Team → Executor configs. The ones you @ in conversations are the same.",
+      "assistantsMoved": "Assistants: in the sidebar's \"Personal assistants\" group",
+      "assistantsMovedHint": "The assistants you @ in conversations are your personal assistants: each works on its own agent, with its own standing instructions.",
       "assistantsMovedOpen": "Open"
     },
     "actions": {
@@ -2455,7 +2455,7 @@
       "none": "—",
       "copyField": "Copy {field}",
       "copiedField": "Copied {field}",
-      "assistant": "Executor config"
+      "assistant": "Assistant"
     },
     "conversationCard": {
       "untitledConversation": "Untitled conversation",
@@ -3619,8 +3619,8 @@
         "mentionGroupSession": "Sessions",
         "mentionGroupCommit": "Commits",
         "mentionGroupSkill": "Skills",
-        "mentionGroupAssistant": "Executor configs",
-        "mentionManageAssistants": "Manage executor configs…"
+        "mentionGroupAssistant": "Assistants",
+        "mentionManageAssistants": "Manage assistants…"
       },
       "messageQueue": {
         "addToQueue": "Queue message",
@@ -3961,12 +3961,12 @@
             "child_rejected": "subagent rejected",
             "child_unknown": "subagent unknown error",
             "unknown": "unknown task",
-            "assistant_not_found": "executor config not found",
+            "assistant_not_found": "Assistant not found",
             "assistants_unsupported": "needs restart",
             "assistant_support_unknown": "no answer"
           }
         },
-        "unknownAssistant": "Executor config #{id}",
+        "unknownAssistant": "Assistant #{id}",
         "deletedAssistant": "(deleted)"
       },
       "contentParts": {
@@ -5464,7 +5464,7 @@
       "quickMessages": "Quick messages",
       "taskTemplates": "Task templates",
       "preferences": "App preferences (language, toggles)",
-      "assistants": "Executor configs",
+      "assistants": "Assistants",
       "appearance": "Appearance (light/dark mode, theme colour, zoom, fonts, background settings, custom styles)"
     },
     "scopeExcluded": {
@@ -5537,7 +5537,7 @@
       "quickMessages": "{count, plural, one {# quick message} other {# quick messages}}",
       "taskTemplates": "{count, plural, one {# task template} other {# task templates}}",
       "preferences": "{count, plural, one {# preference} other {# preferences}}",
-      "assistants": "{count, plural, one {# executor config} other {# executor configs}}",
+      "assistants": "{count, plural, one {# assistant} other {# assistants}}",
       "appearance": "{count, plural, one {# appearance setting} other {# appearance settings}}"
     },
     "rollbackTitle": "Undo an import",
@@ -5555,7 +5555,7 @@
     "passphraseKeep": "Leave empty to keep the saved passphrase",
     "passphrasePlaceholder": "Encryption passphrase",
     "passphraseHint": "Kept in this machine's keychain and never uploaded. Enter the same passphrase on your other machines.",
-    "assistantsRenamed": "{count, plural, one {# executor config was renamed: one here already had its name.} other {# executor configs were renamed: ones here already had their names.}}",
+    "assistantsRenamed": "{count, plural, one {# assistant was renamed: one here already had its name.} other {# assistants were renamed: ones here already had their names.}}",
     "conflictTitle": "Automatic upload is paused",
     "conflictBody": "The server holds a snapshot from {device}, taken {time}, that this machine has not restored. Uploading would replace it, and the server keeps no earlier copy.",
     "conflictRestore": "Restore it",
@@ -10047,7 +10047,6 @@
       "completed": "Done",
       "other": "Other",
       "failed": "Failed",
-      "executors": "By executor config",
       "completedHint": "{count} done",
       "tokens": "Daily tokens",
       "agentTokens": "Personal agent",
@@ -10068,7 +10067,8 @@
         "tokens": "Tokens",
         "tokensSub": "Agent {agent} · work {dispatch}",
         "tokensUnsynced": "After the next usage sync"
-      }
+      },
+      "agents": "By agent"
     },
     "settings": {
       "setupStart": "Chat with your agent",
@@ -10084,7 +10084,7 @@
       "name": "Name",
       "nameHint": "The name and picture it goes by on its page and in its messages; the agent knows the name too. An empty name uses the default.",
       "namePlaceholder": "Personal agent",
-      "agentHint": "The agent and every option it runs with, like an executor config's.",
+      "agentHint": "The agent it thinks and talks on, with every option it runs with.",
       "switchNote": "Switching to another agent starts a new session with your next message. It does not resume an old one; codeg hands the new session the timeline instead.",
       "autoCompact": "Auto-compact threshold",
       "autoCompactHint": "When the context is at least this full, codeg sends the compact command before the next message. 0 turns it off. Keep it below the agent's own trigger.",
@@ -10129,18 +10129,15 @@
       "saveFailed": "Could not save",
       "restoreDefaults": "Restore defaults",
       "back": "Back to the conversation",
-      "viewTitle": "Settings",
-      "readOnly": "The assistants run in another codeg process, so their settings are read-only here. Executor configs themselves can still be edited.",
+      "viewTitle": "Assistant preferences",
+      "readOnly": "The assistants run in another codeg process, so their settings are read-only here.",
       "setUpFirst": "Set up the primary assistant first.",
       "nav": {
-        "team": "Team",
         "prefs": "Preferences",
-        "identity": "Brain & executor config",
+        "identity": "Identity & brain",
         "persona": "Persona & memory",
         "notify": "Notifications",
         "advanced": "Advanced",
-        "workers": "Work assistants",
-        "executors": "Executor configs",
         "communication": "Communication",
         "proactive": "Proactive & notifications",
         "automation": "Dispatch & automation",
@@ -10387,7 +10384,7 @@
         },
         "auto_accept": {
           "title": "Automatic acceptance",
-          "hint": "When code work an assistant handed out is ready for review, another executor config checks it (read-only) and the assistant accepts it against its criteria. Off: you review it yourself.",
+          "hint": "When code work an assistant handed out is ready for review, the agent its work runs on checks it (read-only) and the assistant accepts it against its criteria. Off: you review it yourself.",
           "on": "On",
           "off": "Off"
         },
@@ -10480,7 +10477,7 @@
         },
         "level_routine_paused": {
           "title": "A routine paused",
-          "hint": "Failed three times in a row, or its executor config can't be used."
+          "hint": "Failed three times in a row, or the agent its work runs on can't be used."
         },
         "level_proposal": {
           "title": "codeg's proposals: stuck on you",
@@ -10551,8 +10548,8 @@
           "off": "Off"
         },
         "rule_idle_bot": {
-          "title": "Idle work assistants",
-          "hint": "In the weekly review: a work assistant nobody woke for two weeks — hide it or delete it?",
+          "title": "Idle assistants",
+          "hint": "In the weekly review: an assistant not woken for two weeks — ask you whether to hide or delete it.",
           "on": "On",
           "off": "Off"
         },
@@ -10613,8 +10610,8 @@
           "off": "Off"
         },
         "brief_bots": {
-          "title": "Each work assistant",
-          "hint": "A line each: what it finished, what it is on, where it is stuck. Hidden ones are left out.",
+          "title": "Each assistant",
+          "hint": "One line per assistant: what it finished, what it's on, where it's stuck. Hidden ones are left out.",
           "on": "On",
           "off": "Off"
         },
@@ -10740,24 +10737,6 @@
         "apply": "Move",
         "saved": "Working directory moved."
       },
-      "team": {
-        "noWorkers": "No work assistants yet",
-        "noWorkersHint": "A work assistant takes the work that is its own and sees it through; tell the primary assistant when you want one, or make one here.",
-        "boundTo": "works on {name}",
-        "unbound": "no executor config: cannot do work itself yet",
-        "sameBatch": "These executor configs are the ones you @ in conversations: change one here and it changes in both places.",
-        "delegationOff": "Multi-agent collaboration is off: they cannot be @-mentioned in conversations for now. The assistants' dispatches are not affected.",
-        "openCollaboration": "Open Collaboration settings"
-      },
-      "executor": {
-        "running": "{count} running",
-        "fortnight": "2 weeks: {dispatches} dispatched · {completed} done",
-        "failing": "The last {count} dispatches to it all failed: {error}",
-        "impactRunning": "{count, plural, one {# piece of work it runs goes on.} other {# pieces of work it runs go on.}}",
-        "usedBy": "Used by {names}",
-        "nameJoin": ", ",
-        "impactBots": "{names} will not be able to do work themselves for now."
-      },
       "changed": {
         "on": "on",
         "off": "off",
@@ -10862,8 +10841,7 @@
         "average": "{time} on average",
         "minutes": "{n} min",
         "hours": "{h} h {m} min",
-        "apart": "By executor config and mode",
-        "byExecutor": "By executor config and mode",
+        "apart": "By agent and how",
         "byBot": "By assistant and mode",
         "someone": "Earlier work",
         "unjudged": "{count} handed out, none done yet"
@@ -10879,17 +10857,6 @@
       "skillDeleted": "Deleted {name}",
       "viewSubtitle": "Shared by every assistant",
       "personaUnwritten": "No persona written yet. It fills it in itself — when it introduces itself, as you give it work, and in the nightly tidy-up — or you can write it here.",
-      "executorPick": {
-        "title": "Executor config",
-        "hint": "The brain thinks; the executor config does the work — whatever it does itself runs on it. Several assistants can share one.",
-        "newHint": "Saving makes one on the brain's agent, its options filled in.",
-        "missing": "No executor config: it cannot do work itself for now. Pick one, or make a new one.",
-        "disabled": "This executor config is turned off: it cannot do work itself for now.",
-        "editorNote": "codeg could not read this agent's options ({why}), so pick them here; it is set up with this executor config.",
-        "new": "New, on the brain's agent",
-        "none": "None",
-        "off": "(off)"
-      },
       "projects": {
         "about": "The assistants keep an eye on these projects for PRs waiting for your review, and look in them for the first thing they can help with.",
         "scope": "Which projects to watch",
@@ -10905,7 +10872,18 @@
         "noForge": "No code host",
         "connectAccount": "Connect account",
         "note": "A closed project isn't watched; it's back when you open it again."
-      }
+      },
+      "workTitle": "Agent for its work",
+      "workHint": "The brain thinks and talks with you; this agent writes code and runs commands. Changing the brain doesn't change this.",
+      "workSame": "Same as the brain",
+      "workOther": "Pick another",
+      "workSameHint": "A copy of the brain's agent and every option. After that the two are separate.",
+      "workUnavailable": "{agent} can't be used (not installed or turned off): pick another.",
+      "instructionsTitle": "Standing instructions for its work",
+      "instructionsHint": "Sent along every time it starts a work session — work it hands out, or being @-mentioned in a conversation. Its brain doesn't read them.",
+      "instructionsPlaceholder": "How it should work: conventions, what to check, what to avoid…",
+      "instructionsTooLong": "The standing instructions can be at most {max} characters.",
+      "noBrainYet": "It has no brain yet: once the primary assistant is set up, it gets a copy of the primary's."
     },
     "statusWord": {
       "idle": "Idle",
@@ -11224,7 +11202,7 @@
       "resolved": "Settled"
     },
     "bots": {
-      "new": "New work assistant",
+      "new": "New assistant",
       "copyName": "{name} (copy)",
       "copied": "Made {name}, a copy",
       "copy": "Copy",
@@ -11283,23 +11261,20 @@
         "useIt": "Use it"
       },
       "create": {
-        "title": "New work assistant",
+        "title": "New assistant",
         "description": "A name and a few words on who it is; its brain is the same as the primary assistant's.",
         "name": "Name",
         "namePlaceholder": "e.g. Code review",
         "cancel": "Cancel",
         "create": "Create",
-        "editorNote": "codeg could not read this agent's options ({why}), so pick them here; the work assistant is made with this executor config.",
         "persona": "Persona",
         "personaPlaceholder": "e.g. I review code changes: whether they are right and well tested.",
         "personaHint": "A line or two: who it is, what work to give it. You can leave it empty — it introduces itself first, then fills it in from what you tell it and the work it does.",
-        "executor": "Executor config",
-        "executorNewHint": "Made with it on the brain's agent, its options filled in.",
-        "executorHint": "Several assistants can share one executor config."
+        "workSameHint": "Its brain is the primary's; its work runs on a copy of it, every option the same — its own from then on. Change either on its page."
       },
       "roster": {
         "title": "Assistants",
-        "add": "New work assistant",
+        "add": "New assistant",
         "pinned": "Pinned",
         "others": "Others",
         "hiddenCount": "{count, plural, one {# hidden} other {# hidden}}",
@@ -11353,7 +11328,7 @@
         "noProjects": "No projects are open in codeg.",
         "from": {
           "given": "as said",
-          "other_config": "from another config",
+          "other_config": "from another assistant's work",
           "agent": "agent's default"
         },
         "progress": "{at} / {total}",
@@ -11366,14 +11341,11 @@
         "otherWrote": "Other: {text}"
       },
       "changed": {
-        "applied": "Made a work assistant",
-        "show": "Make a work assistant? (you asked to see such changes first)",
-        "suggested": "Suggestion: a new work assistant",
+        "applied": "Made an assistant",
+        "show": "Make this assistant? (You asked to see such changes first.)",
+        "suggested": "Suggestion: make a new assistant",
         "dismissed": "Not made",
         "undone": "Undone",
-        "executorFilled": "executor config on {agent}, {count, plural, one {# option} other {# options}} picked for you",
-        "executorMade": "executor config on {agent}",
-        "executorBound": "keeps {name}",
         "open": "Open",
         "undoOne": "Undo",
         "undoneOne": "Undone",
@@ -11384,7 +11356,9 @@
         "undo": "Undo",
         "undoAll": "Undo all",
         "uncheckedQuote": "The primary says you said “{quote}” — but you didn't type it this turn",
-        "persona": "Persona"
+        "persona": "Persona",
+        "workFilled": "Works with {agent}; {count} options filled in",
+        "workOn": "Works with {agent}"
       },
       "delete": {
         "title": "Delete {name}?",
@@ -11394,9 +11368,6 @@
         "stop": "Stop them",
         "messages": "{count, plural, one {# message to it has} other {# messages to it have}} not been answered: they go back to their senders.",
         "listJoiner": ", ",
-        "dropExecutor": "Also delete its executor config {name}",
-        "executorKept": "Kept by default: it can still be @-mentioned and used by codeg-cli.",
-        "executorShared": "Kept: {names} use it too.",
         "dropWorkdir": "Also delete its working directory",
         "workdirCustom": "You picked this directory, so codeg leaves it alone.",
         "cancel": "Cancel",
@@ -11618,8 +11589,8 @@
     },
     "ask": {
       "heading": {
-        "question": "{executor} is asking",
-        "plan": "{executor} wants its plan approved"
+        "question": "A question from the work",
+        "plan": "The work asks you to approve a plan"
       },
       "someone": "The executor",
       "mirror": "From the work {name} took on for you here",
@@ -11971,7 +11942,7 @@
           },
           "auto_accept": {
             "title": "Check and accept the code work I hand out",
-            "hint": "Another executor config checks it read-only; I judge it against what you asked."
+            "hint": "The agent its work runs on checks it read-only; I judge it against what you asked."
           }
         },
         "prefs": "Adjust preferences",
@@ -11989,8 +11960,6 @@
     "acceptance": {
       "title": "Acceptance · round {round}",
       "titleMax": "Acceptance · round {round} of at most {max}",
-      "people": "{executor} did it · {checker} checked it",
-      "peopleUnchecked": "{executor} did it",
       "check": "Check:",
       "verdict": {
         "pass": "Passed",
@@ -12322,7 +12291,7 @@
           "edit": "change it"
         },
         "repeatBody": "You asked for something like this {count} times in 30 days.",
-        "pausedExecutor": "Its work has nothing set to run on: no executor config, or the one it has is deleted or turned off.",
+        "pausedWorkAgent": "The agent its work runs on can't be used: it's not installed, or turned off.",
         "pausedFailures": "It failed three times in a row.",
         "trial": "Its trial run has started.",
         "reason": "Why: {reason}",
@@ -12336,7 +12305,7 @@
         "open": "Open routines",
         "confirm": "Routine to confirm",
         "confirmChange": "Routine change to confirm",
-        "setExecutor": "Set its executor config"
+        "setWorkAgent": "Pick the agent for its work"
       },
       "more": "More actions"
     },
@@ -12364,7 +12333,7 @@
         "idle": "A matter gone quiet",
         "behind": "A branch behind, with conflicts",
         "undo": "Changes you undid",
-        "idle_bot": "An idle work assistant"
+        "idle_bot": "Idle assistants"
       },
       "wait": {
         "permission": "Waiting for your approval",
@@ -12479,8 +12448,8 @@
           "hint": "In the weekly review: when you undid many of the changes made at your word, ask whether to show such changes first."
         },
         "idle_bot": {
-          "title": "Idle work assistants",
-          "hint": "In the weekly review: a work assistant nobody woke for two weeks — hide it or delete it?"
+          "title": "Idle assistants",
+          "hint": "In the weekly review: an assistant not woken for two weeks — ask you whether to hide or delete it."
         }
       },
       "undoDetail": "You undid {undone} of the {made} changes made at your word in the last two weeks.",
@@ -12738,11 +12707,17 @@
     },
     "botPage": {
       "primary": "Primary assistant",
-      "worker": "Work assistant",
+      "worker": "Assistant",
       "chat": "Chat with it"
     },
-    "noExecutor": "It has no executor config to work on: it cannot do work itself for now.",
-    "setExecutor": "Set executor config"
+    "workRanOn": "Ran on {agent}",
+    "workOff": "{agent}, the agent its work runs on, can't be used (not installed or turned off): it can't do work itself for now.",
+    "setWork": "Pick another",
+    "noBrain": {
+      "title": "{name} has no brain yet",
+      "body": "It came from the collaboration settings. Set up the primary assistant and it gets a copy of the primary's brain — then you can talk to it. Until then you can still @ it in conversations.",
+      "setUp": "Set up the primary assistant"
+    }
   },
   "MessageCheck": {
     "action": "Have the assistant check this",
@@ -12757,12 +12732,10 @@
     "unfinished": "Not finished",
     "mark": "Check: {verdict}",
     "markQuote": "“{quote}”: {verdict}",
-    "by": "Checked by {executor}",
     "again": "Check again",
     "inAssistant": "View in the assistant's conversation",
     "process": "See the check",
     "openConversation": "Open the conversation",
-    "sent": "{executor} is checking it; the result shows under the message.",
     "sentNoName": "Checking it; the result shows under the message.",
     "startFailed": "The check could not start: {message}",
     "evidence": "Evidence",

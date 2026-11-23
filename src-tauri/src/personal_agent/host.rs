@@ -242,6 +242,13 @@ impl EngineHost {
     /// made before now (a page asked for one while the task engine was
     /// still reconciling) included.
     async fn start(self: &Arc<Self>) {
+        // The assistants converted on upgrade or imported: a copy of the
+        // primary's brain for each with none, where there is a primary, and
+        // a directory for each not made yet (§5, §6.2). One that cannot be
+        // made is tried again at the next start, and when it is first
+        // needed — where why it cannot is said.
+        super::ready::fill_brains(&self.db, &self.emitter).await;
+        super::ready::ensure_all_ready(&self.db, &self.data_dir).await;
         self.primary.boot().await;
         self.running.store(true, Ordering::SeqCst);
         tokio::spawn(self.primary.clone().drive());

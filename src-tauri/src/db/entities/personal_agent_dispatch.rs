@@ -52,10 +52,10 @@ pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
     pub mode: DispatchMode,
-    pub executor_assistant_id: i32,
-    /// JSON `DispatchExecutorSnapshot`.
+    /// JSON `DispatchWorkSnapshot`: what its work runs on, frozen when it
+    /// was handed out.
     #[sea_orm(column_type = "Text")]
-    pub executor_snapshot: String,
+    pub work_snapshot: String,
     pub folder_id: Option<i32>,
     #[sea_orm(column_type = "Text", nullable)]
     pub deliverable: Option<String>,

@@ -474,6 +474,18 @@ pub fn workdir_of_bot(data_dir: &Path, row: &crate::db::entities::personal_agent
     }
 }
 
+/// An assistant's SOUL.md as it reads now. A worker whose directory is not
+/// made yet (converted on upgrade, imported) reads as the one it will be
+/// made with: its persona as it came — in English until it is written in
+/// the owner's language.
+pub fn soul_text(data_dir: &Path, row: &crate::db::entities::personal_agent::Model) -> String {
+    use crate::db::entities::personal_agent::BotKind;
+    if row.kind == BotKind::Worker && !row.workdir_ready {
+        return super::templates::worker_soul(AppLocale::En, row.seed_persona.as_deref());
+    }
+    read_text(&workdir_of_bot(data_dir, row), SOUL_FILE)
+}
+
 /// The files the owner may edit in an assistant's directory. A worker has no
 /// `USER.md`: the facts about the owner are the primary's, one copy only.
 pub fn editable_files(worker: bool) -> &'static [&'static str] {
@@ -670,7 +682,112 @@ pub async fn ensure_role_workdir(
     .await
 }
 
+/// A worker's directory made whole at `path` — not there yet, a staging
+/// directory its caller renames into place (`super::ready`) — with the
+/// version of the persona it was given recorded in its marker.
+pub async fn build_role_workdir(
+    path: &Path,
+    locale: AppLocale,
+    soul: &str,
+    rules: &str,
+    seed_version: i32,
+) -> Result<(), WorkdirError> {
+    let [_, _, _, memory] = super::templates::template_texts(locale);
+    init_workdir_with(
+        path,
+        &[
+            (SOUL_FILE, soul.to_string()),
+            (RULES_FILE, rules.to_string()),
+            (MEMORY_FILE, memory.to_string()),
+        ],
+        Some(seed_version),
+    )
+    .await
+    .map(|_| ())
+}
+
+/// The version of the persona a worker's directory was last given, as its
+/// marker records it (`None`: not recorded — one made on the page).
+pub fn marker_seed_version(path: &Path) -> Option<i32> {
+    let raw = std::fs::read_to_string(path.join(MARKER_FILE)).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    v.get("seed_version")?.as_i64().map(|n| n as i32)
+}
+
+/// Record that a worker's directory has persona version `version` now:
+/// the marker rewritten whole (a temporary file renamed over it), never
+/// half.
+pub fn set_marker_seed_version(path: &Path, version: i32) -> std::io::Result<()> {
+    let marker = path.join(MARKER_FILE);
+    let mut v: serde_json::Value = std::fs::read_to_string(&marker)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_else(|| serde_json::json!({ "version": 1 }));
+    if let Some(map) = v.as_object_mut() {
+        map.insert("seed_version".into(), version.into());
+    }
+    let tmp = path.join(format!("{MARKER_FILE}.tmp"));
+    std::fs::write(&tmp, v.to_string())?;
+    std::fs::rename(&tmp, &marker)
+}
+
+/// Whether the directory has a history of its own with a commit in it —
+/// it is the top of the repository git finds there (a `.git` directory or
+/// file of its own, not a repository it sits inside), and that has a HEAD.
+pub async fn has_commit(path: &Path) -> bool {
+    let Ok(top) = git(path, &["rev-parse", "--show-toplevel"]).await else {
+        return false;
+    };
+    // Only the line's end: a path may end with a space.
+    let top = String::from_utf8_lossy(&top.stdout)
+        .trim_end_matches(['\n', '\r'])
+        .to_string();
+    if normalized(Path::new(&top)) != normalized(path) {
+        return false;
+    }
+    git(path, &["rev-parse", "--verify", "-q", "HEAD"]).await.is_ok()
+}
+
+/// A file as the directory's latest commit has it.
+pub async fn committed_text(path: &Path, name: &str) -> Option<String> {
+    show_at(path, "HEAD", name).await
+}
+
+/// Put the directory under git, its files in a first commit. An error when
+/// either fails: a directory with no history is not made.
+async fn put_under_git(path: &Path) -> Result<(), WorkdirError> {
+    // Always: `git init` on a repository there is safe, and makes good one
+    // an earlier init left half made. `--initial-branch` is git 2.28's, as
+    // the hook is: an older git makes its own default branch, which the
+    // guard then records.
+    let made = git(path, &["init", "-q", "--initial-branch", BRANCH]).await.is_ok()
+        || git(path, &["init", "-q"]).await.is_ok();
+    if !made {
+        return Err(WorkdirError::Io(std::io::Error::other(format!(
+            "git could not make a repository in {}",
+            path.display()
+        ))));
+    }
+    ensure_guard(path).await;
+    if !commit_all(path, "init: personal agent working directory").await && !has_commit(path).await
+    {
+        return Err(WorkdirError::Io(std::io::Error::other(format!(
+            "git could not make the first commit in {}",
+            path.display()
+        ))));
+    }
+    Ok(())
+}
+
 async fn init_workdir(path: &Path, files: &[(&str, String)]) -> Result<bool, WorkdirError> {
+    init_workdir_with(path, files, None).await
+}
+
+async fn init_workdir_with(
+    path: &Path,
+    files: &[(&str, String)],
+    seed_version: Option<i32>,
+) -> Result<bool, WorkdirError> {
     if !path.is_absolute() {
         return Err(WorkdirError::NotAbsolute);
     }
@@ -678,6 +795,12 @@ async fn init_workdir(path: &Path, files: &[(&str, String)]) -> Result<bool, Wor
         return Err(WorkdirError::NotADirectory(path.display().to_string()));
     }
     if is_workdir(path) {
+        // Made before, but its history never was (git failed, or the
+        // process stopped in between): it is finished now, not taken for
+        // whole.
+        if !has_commit(path).await {
+            put_under_git(path).await?;
+        }
         return Ok(false);
     }
     if path.is_dir() && std::fs::read_dir(path)?.next().is_some() {
@@ -698,18 +821,12 @@ async fn init_workdir(path: &Path, files: &[(&str, String)]) -> Result<bool, Wor
     // Agent CLIs keep their own per-project state beside the files (settings,
     // the skill codeg installs); none of it is the owner's content.
     std::fs::write(path.join(".gitignore"), ignore_lines())?;
-    std::fs::write(
-        path.join(MARKER_FILE),
-        serde_json::json!({ "version": 1, "created_at": chrono::Utc::now() }).to_string(),
-    )?;
-    // `--initial-branch` is git 2.28's, as the hook is: an older git makes
-    // its own default branch, which the guard then records.
-    let made = git(path, &["init", "-q", "--initial-branch", BRANCH]).await.is_ok()
-        || git(path, &["init", "-q"]).await.is_ok();
-    if made {
-        ensure_guard(path).await;
-        commit_all(path, "init: personal agent working directory").await;
+    let mut marker = serde_json::json!({ "version": 1, "created_at": chrono::Utc::now() });
+    if let (Some(v), Some(map)) = (seed_version, marker.as_object_mut()) {
+        map.insert("seed_version".into(), v.into());
     }
+    std::fs::write(path.join(MARKER_FILE), marker.to_string())?;
+    put_under_git(path).await?;
     Ok(true)
 }
 

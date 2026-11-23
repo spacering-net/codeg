@@ -1,28 +1,24 @@
 "use client"
 
 /**
- * The settings every assistant shares (13.1), across the assistants page in
- * place of the conversation, the roster and the side panel: the team — the
- * work assistants and the executor configs their work runs on — and the
- * preferences. An assistant's own settings are on its own page
- * (`bot-page.tsx`). The navigation down the side under the title — its
- * rows pills — and [← Back to the conversation] over the title; on a
- * narrow screen it folds into a select at the top.
+ * The preferences every assistant shares (13.1) — "Assistant preferences"
+ * — across the assistants page in place of the conversation and the side
+ * panel. The assistants themselves are on the sidebar's group of them, an
+ * assistant's own settings on its own page (`bot-page.tsx`). The
+ * navigation down the side under the title — its rows pills — and [← Back
+ * to the conversation] over the title; on a narrow screen it folds into a
+ * select at the top.
  *
- * Read-only while the engine runs in another codeg process — except the
- * executor configs themselves, which are not the engine's.
+ * Read-only while the engine runs in another codeg process.
  */
 
-import { useEffect, useState } from "react"
 import { useTranslations } from "next-intl"
 import {
   ArrowLeft,
   BellRing,
-  Bot,
   FolderGit2,
   MessagesSquare,
   UserRound,
-  Users,
   Zap,
   type LucideIcon,
 } from "lucide-react"
@@ -40,7 +36,6 @@ import {
 } from "@/components/ui/select"
 import { usePersonalAgent } from "@/contexts/personal-agent-context"
 import { useIsMobile } from "@/hooks/use-mobile"
-import { getDelegationSettings } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import {
   usePersonalAgentUi,
@@ -50,11 +45,9 @@ import {
 import { AboutPage } from "./about-page"
 import { AutomationPage, CommunicationPage, ProactivePage } from "./pref-pages"
 import { ProjectsPage } from "./projects-page"
-import { ExecutorsPage, WorkersPage } from "./team-pages"
 
-/** The navigation: the team, then the preferences. */
-const GROUPS: { label: "team" | "prefs"; pages: SettingsPage[] }[] = [
-  { label: "team", pages: ["workers", "executors"] },
+/** The navigation: the preferences. */
+const GROUPS: { label: "prefs"; pages: SettingsPage[] }[] = [
   {
     label: "prefs",
     pages: ["communication", "projects", "proactive", "automation", "about"],
@@ -62,8 +55,6 @@ const GROUPS: { label: "team" | "prefs"; pages: SettingsPage[] }[] = [
 ]
 
 const PAGE_ICONS: Record<SettingsPage, LucideIcon> = {
-  workers: Users,
-  executors: Bot,
   communication: MessagesSquare,
   projects: FolderGit2,
   proactive: BellRing,
@@ -78,31 +69,16 @@ export function SettingsView() {
   const openSettings = usePersonalAgentUi((s) => s.openSettings)
   const showConversation = usePersonalAgentUi((s) => s.showConversation)
   const { snapshot } = usePersonalAgent()
-  const [delegation, setDelegation] = useState<boolean | null>(null)
-  useEffect(() => {
-    getDelegationSettings()
-      .then((s) => setDelegation(s.enabled))
-      .catch(() => setDelegation(null))
-  }, [])
 
-  const page = settings?.page ?? "workers"
+  const page = settings?.page ?? "communication"
   const account = snapshot?.account ?? null
   const readOnly = snapshot?.status.engine !== "here"
   // The account's items need the primary set up, and the engine here.
   const primarySet = snapshot?.agent != null
   const accountLocked = readOnly || !primarySet
-  const accountWhy = readOnly
-    ? t("readOnly")
-    : !primarySet
-      ? t("setUpFirst")
-      : null
 
   const body = (() => {
     switch (page) {
-      case "workers":
-        return <WorkersPage readOnly={accountLocked} readOnlyWhy={accountWhy} />
-      case "executors":
-        return <ExecutorsPage delegationEnabled={delegation} />
       case "communication":
         return account ? (
           <CommunicationPage account={account} disabled={accountLocked} />

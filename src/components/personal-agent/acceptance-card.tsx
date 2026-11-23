@@ -179,8 +179,6 @@ export function AcceptanceCard({ item }: { item: NoticeItem }) {
   const message = str(data, "message")
   const question = str(data, "question")
   const evidence = str(data, "evidence")
-  const executor = str(data, "executor")
-  const checker = str(data, "checker")
   const title = str(data, "title") ?? row.body.split("\n")[0]
   const mergeCommit = str(data, "merge_commit")
   const deliveredHead = str(data, "delivered_head")
@@ -216,12 +214,6 @@ export function AcceptanceCard({ item }: { item: NoticeItem }) {
   const disabled = readOnly || busy != null
 
   const head = max > 0 ? t("titleMax", { round, max }) : t("title", { round })
-  const people =
-    executor && checker
-      ? t("people", { executor, checker })
-      : executor
-        ? t("peopleUnchecked", { executor })
-        : null
   const decisionWord = decision ? t(`decision.${decision}`) : null
   // What the conclusion was, and on whose word: whose as a fact's label
   // (the owner's, the assistant's — the check's verdict stands over it,
@@ -288,11 +280,6 @@ export function AcceptanceCard({ item }: { item: NoticeItem }) {
           <>
             <ClipboardCheck aria-hidden />
             <span className="font-medium">{head}</span>
-            {people ? (
-              <span className="before:me-1.5 before:content-['·']">
-                {people}
-              </span>
-            ) : null}
           </>
         }
       >

@@ -31,11 +31,13 @@ import { cn } from "@/lib/utils"
 
 import {
   asDispatchState,
+  asMode,
   canOpenWork,
   INSET_HOVER,
   num,
   str,
   useOpenWork,
+  useOtherAssistant,
   workTargetOf,
 } from "./shared"
 import { CheckLabel, DoneWhen } from "./acceptance-bits"
@@ -97,6 +99,7 @@ function DispatchPill({
 }) {
   const t = useTranslations("PersonalAgent.dispatchCard")
   const openWork = useOpenWork()
+  const otherAssistant = useOtherAssistant()
   const elapsedLabel = useElapsedLabel()
   const data = row.data
   // A follow-up that never went out says so, whatever the work is doing.
@@ -119,8 +122,8 @@ function DispatchPill({
       rowId={row.id}
       state={state}
       notSent={notSent}
-      executorId={info?.executor.assistant_id ?? num(data, "executor_id")}
-      executor={info?.executor.name ?? str(data, "executor")}
+      mode={info?.mode ?? asMode(data?.mode)}
+      by={otherAssistant(info)}
       title={data?.followup === true ? t("continue", { title }) : title}
       elapsed={elapsed}
       onOpen={canOpenWork(target) ? () => openWork(target) : null}

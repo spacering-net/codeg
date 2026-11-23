@@ -1090,7 +1090,7 @@ impl PersonalAgentEngine {
             }),
             // Nothing to run it on yet: the card asks, to be clicked once
             // the assistant has something to work with.
-            Err(e) if e == super::dispatch::NO_EXECUTOR => json!({
+            Err(e) if e == super::dispatch::NO_WORK_AGENT => json!({
                 "state": "ask",
                 "cause": cause,
                 "n": data["fix"]["n"].clone(),

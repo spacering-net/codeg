@@ -3362,6 +3362,7 @@ mod tests {
             assistant_id: None,
             source: None,
             assistant_name: None,
+            bot_uid: None,
             tag_ids: Vec::new(),
         }
     }
@@ -7720,6 +7721,7 @@ mod tests {
                 assistant_id: None,
                 source: None,
                 assistant_name: None,
+                bot_uid: None,
                 tag_ids: Vec::new(),
             },
             turns,

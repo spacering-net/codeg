@@ -22,13 +22,12 @@ const CHANNEL = "codeg:personal-agent-open"
 /** How long an open workspace tab has to answer. */
 const ANSWER_MS = 600
 
-/** What another window may ask for: a page of the settings, or a tab of the
- *  page's assistant's own page. */
-export type PersonalAgentPage = SettingsPage | BotTab
+/** What another window may ask for: a page of the settings, a tab of the
+ *  page's assistant's own page, or the assistants themselves (the
+ *  sidebar's group of them, and the primary's conversation). */
+export type PersonalAgentPage = SettingsPage | BotTab | "assistants"
 
 const SETTINGS_PAGES: readonly SettingsPage[] = [
-  "workers",
-  "executors",
   "communication",
   "projects",
   "proactive",
@@ -54,7 +53,20 @@ export function isBotTab(v: unknown): v is BotTab {
 }
 
 export function isPersonalAgentPage(v: unknown): v is PersonalAgentPage {
-  return isSettingsPage(v) || isBotTab(v)
+  return v === "assistants" || isSettingsPage(v) || isBotTab(v)
+}
+
+/** The pages the team had before every assistant was one on the sidebar
+ *  (`?pa=workers` in an old link): the settings' first page now. */
+const RETIRED_PAGES: readonly string[] = ["workers", "executors"]
+
+/** The page `v` asks for — a retired one as the settings' first page —
+ *  or `null` for none. */
+export function personalAgentPageOf(v: unknown): PersonalAgentPage | null {
+  if (isPersonalAgentPage(v)) return v
+  return typeof v === "string" && RETIRED_PAGES.includes(v)
+    ? "communication"
+    : null
 }
 
 type ChannelMessage =
@@ -110,7 +122,8 @@ export function listenPersonalAgentOpen(
   if (isDesktop()) {
     void getShellTransport()
       .subscribe<{ page?: string }>(PERSONAL_AGENT_OPEN_EVENT, (payload) => {
-        if (isPersonalAgentPage(payload?.page)) onOpen(payload.page)
+        const page = personalAgentPageOf(payload?.page)
+        if (page) onOpen(page)
       })
       .then((off) => {
         if (cancelled) off()
@@ -120,12 +133,14 @@ export function listenPersonalAgentOpen(
   } else if (typeof BroadcastChannel !== "undefined") {
     const channel = new BroadcastChannel(CHANNEL)
     channel.onmessage = (e: MessageEvent<ChannelMessage>) => {
-      if (e.data?.type !== "open" || !isPersonalAgentPage(e.data.page)) return
+      const page =
+        e.data?.type === "open" ? personalAgentPageOf(e.data.page) : null
+      if (!page) return
       channel.postMessage({
         type: "taken",
         id: e.data.id,
       } satisfies ChannelMessage)
-      onOpen(e.data.page)
+      onOpen(page)
       window.focus()
     }
     disposers.push(() => channel.close())

@@ -11,9 +11,9 @@
 //! - **chat**: a chat-mode conversation in a scratch directory.
 //! - **session**: a conversation in the project's current checkout.
 //!
-//! The executor is a role assistant, frozen at dispatch: its agent, options
-//! and standing instructions (appended to its first input as the same brief
-//! delegation uses). Conversation dispatches run like the automation engine's
+//! The work runs on its assistant's work agent, frozen at dispatch: the
+//! agent, its options and the assistant's standing instructions for its
+//! work (appended to its first input as the same brief delegation uses). Conversation dispatches run like the automation engine's
 //! runs: the connection is registered before its first prompt, each turn is
 //! settled from `TurnComplete`, and a reconcile tick settles the ones whose
 //! event was lost. Every state change lands as an event for the agent and a
@@ -36,7 +36,7 @@ use crate::db::service::personal_agent_service as svc;
 use crate::db::service::personal_agent_service::{
     CardSettle, DispatchWrite, ItemWrite, LedgerSlot, Ledgered, NewDispatch, NewEvent, NewOp, NewRow,
 };
-use crate::models::personal_agent::{DispatchExecutorSnapshot, PersonalAgentChange};
+use crate::models::personal_agent::{DispatchWorkSnapshot, PersonalAgentChange};
 use crate::models::{AgentType, AssistantRunSnapshot, FollowUpIntent, WorkTaskConfig, WorkTaskDraft};
 
 /// Longest result excerpt kept on a dispatch, in characters.
@@ -49,14 +49,24 @@ pub const MAX_TITLE_CHARS: usize = 120;
 pub const MAX_PROMPT_CHARS: usize = 20_000;
 /// Longest acceptance criteria (7.5).
 pub const MAX_DONE_WHEN_CHARS: usize = 4_000;
-/// What an assistant hears when it has nothing to do its work with.
-pub const NO_EXECUTOR: &str = "you cannot start work yourself yet: nothing is set for your work to run \
-     on. Ask the owner to pick it in your settings; until then, hand the work to \
-     another assistant with `bot_message`, or tell the owner.";
+/// What an assistant hears when the agent its work runs on cannot run.
+pub const NO_WORK_AGENT: &str = "you cannot start work yourself right now: the agent your work runs \
+     on is not installed, or turned off in the agents' settings. Ask the owner to pick another \
+     in your settings; until then, hand the work to another assistant with `bot_message`, or \
+     tell the owner.";
 /// What an assistant works with, as it reads it: the agent, its mode and
-/// options — never the executor config's name or id.
-pub fn work_words(w: &DispatchExecutorSnapshot) -> String {
+/// options.
+pub fn work_words(w: &DispatchWorkSnapshot) -> String {
     label_words(w.agent_type, w.label_snapshot.as_ref())
+}
+
+/// The name of the agent a piece of work ran on.
+pub fn agent_words(w: &DispatchWorkSnapshot) -> String {
+    w.label_snapshot
+        .as_ref()
+        .map(|l| l.agent.clone())
+        .filter(|a| !a.trim().is_empty())
+        .unwrap_or_else(|| crate::acp::registry::get_agent_meta(w.agent_type).name.to_string())
 }
 
 /// An agent and its picked mode and options, in words.
@@ -96,8 +106,8 @@ pub struct DispatchRequest {
 }
 
 /// A dispatch checked against the projects, ready to record. What runs it
-/// is not here: the executor config of the assistant that records it, as it
-/// is the moment it is recorded.
+/// is not here: the work agent of the assistant that records it, as it is
+/// the moment it is recorded.
 #[derive(Debug, Clone)]
 pub struct ValidDispatch {
     pub mode: DispatchMode,
@@ -189,7 +199,7 @@ pub enum FollowupAuth {
     Op { op_id: String },
 }
 
-/// The states in which a dispatch still holds or waits for its executor.
+/// The states in which a dispatch still holds or waits for its session.
 pub(super) const LIVE_STATES: &[DispatchState] = &[
     DispatchState::Queued,
     DispatchState::Running,
@@ -359,7 +369,7 @@ impl RoundEnd {
                 other => (
                     DispatchState::Failed,
                     Some(format!(
-                        "the executor's turn stopped: {}",
+                        "the work's turn stopped: {}",
                         if other.is_empty() { "unknown" } else { other }
                     )),
                 ),
@@ -369,7 +379,7 @@ impl RoundEnd {
             }
             RoundEnd::Missed { abnormal: true } => (
                 DispatchState::Failed,
-                Some("the executor's turn ended abnormally".into()),
+                Some("the work's turn ended abnormally".into()),
             ),
             RoundEnd::Gone { canceled: true } => (DispatchState::Canceled, None),
         }
@@ -443,10 +453,34 @@ fn state_sentence(state: DispatchState) -> &'static str {
     }
 }
 
-pub fn executor_of(d: &dispatch_entity::Model) -> DispatchExecutorSnapshot {
-    serde_json::from_str(&d.executor_snapshot).unwrap_or(DispatchExecutorSnapshot {
-        assistant_id: d.executor_assistant_id,
-        name: format!("#{}", d.executor_assistant_id),
+/// An assistant's work agent when it can run now: one codeg knows, not
+/// turned off in the agents' settings. (One not installed fails when its
+/// session starts, as a launch of it anywhere does.)
+pub async fn usable_work(
+    db: &crate::db::AppDatabase,
+    row: &crate::db::entities::personal_agent::Model,
+) -> Option<crate::models::AssistantAgentConfig> {
+    let work = super::engine::work_of_row(row)?;
+    if !work_agent_on(db, work.agent_type).await {
+        return None;
+    }
+    Some(work)
+}
+
+/// Whether `agent_type` is not turned off in the agents' settings (an
+/// agent with no settings row is on).
+pub async fn work_agent_on(db: &crate::db::AppDatabase, agent_type: AgentType) -> bool {
+    crate::db::service::agent_setting_service::get_by_agent_type(&db.conn, agent_type)
+        .await
+        .ok()
+        .flatten()
+        .is_none_or(|s| s.enabled)
+}
+
+pub fn work_of(d: &dispatch_entity::Model) -> DispatchWorkSnapshot {
+    serde_json::from_str(&d.work_snapshot).unwrap_or(DispatchWorkSnapshot {
+        name: String::new(),
+        bot_uid: None,
         agent_type: AgentType::ClaudeCode,
         agent_options: Default::default(),
         label_snapshot: None,
@@ -544,26 +578,21 @@ impl PersonalAgentEngine {
         })
     }
 
-    /// What runs this assistant's work, as it is now: its executor config,
-    /// frozen into the dispatch with who handed it out. None it can use —
-    /// none bound, or the one bound deleted or switched off — is said so,
-    /// for the owner to set in its settings.
-    pub(super) async fn work_snapshot(&self) -> Result<DispatchExecutorSnapshot, String> {
+    /// What runs this assistant's work, as it is now: its work agent and
+    /// options and its standing instructions for its work, frozen into the
+    /// dispatch with who handed it out. An agent that cannot run — not
+    /// known, not installed, turned off — is said so, for the owner to pick
+    /// another in its settings.
+    pub(super) async fn work_snapshot(&self) -> Result<DispatchWorkSnapshot, String> {
         let row = self.agent_row().await.ok_or("not set up")?;
-        let assistant = match row.executor_assistant_id {
-            Some(id) => crate::db::service::assistant_service::get_live_enabled(&self.db.conn, id)
-                .await
-                .map_err(|e| e.to_string())?,
-            None => None,
-        }
-        .ok_or(NO_EXECUTOR)?;
-        Ok(DispatchExecutorSnapshot {
-            assistant_id: assistant.id,
-            name: assistant.name.clone(),
-            agent_type: assistant.agent_type,
-            agent_options: assistant.agent_options.clone(),
-            label_snapshot: Some(assistant.label_snapshot.clone()),
-            instructions: assistant.instructions.clone(),
+        let work = usable_work(&self.db, &row).await.ok_or(NO_WORK_AGENT)?;
+        Ok(DispatchWorkSnapshot {
+            name: super::messages::display_name(&row),
+            bot_uid: row.uid.clone(),
+            agent_type: work.agent_type,
+            agent_options: work.agent_options,
+            label_snapshot: Some(work.label_snapshot),
+            instructions: row.work_instructions.clone().unwrap_or_default(),
             dispatcher: Some(self.dispatcher_brief().await),
         })
     }
@@ -652,8 +681,7 @@ impl PersonalAgentEngine {
         let new = NewDispatch {
             bot_id: self.bot().await,
             mode,
-            executor_assistant_id: snapshot.assistant_id,
-            executor_snapshot_json: serde_json::to_string(&snapshot).map_err(|e| e.to_string())?,
+            work_snapshot_json: serde_json::to_string(&snapshot).map_err(|e| e.to_string())?,
             folder_id,
             deliverable: if mode == DispatchMode::Task {
                 Some(if report { "report" } else { "change" }.to_string())
@@ -780,8 +808,6 @@ impl PersonalAgentEngine {
         card.batch_id = row.origin_batch_id;
         card.data = Some(serde_json::json!({
             "mode": row.mode,
-            "executor": snapshot.name,
-            "executor_id": snapshot.assistant_id,
             "agent_type": snapshot.agent_type,
             "folder_id": folder_id,
             "deliverable": row.deliverable,
@@ -905,15 +931,13 @@ impl PersonalAgentEngine {
                 return None;
             }
             None => {
-                let executor = executor_of(d);
+                let work = work_of(d);
                 let mut card = NewRow::new(TimelineKind::Dispatch, d.title.clone());
                 card.dispatch_id = Some(d.id);
                 card.batch_id = d.origin_batch_id;
                 card.data = Some(serde_json::json!({
                     "mode": d.mode,
-                    "executor": executor.name,
-                    "executor_id": executor.assistant_id,
-                    "agent_type": executor.agent_type,
+                    "agent_type": work.agent_type,
                     "folder_id": d.folder_id,
                     "deliverable": d.deliverable,
                     "state": d.state,
@@ -1116,28 +1140,28 @@ impl PersonalAgentEngine {
     }
 
     async fn start_task_dispatch(&self, d: &dispatch_entity::Model) -> Result<(), String> {
-        let executor = executor_of(d);
+        let work = work_of(d);
         let folder_id = d.folder_id.ok_or("a task dispatch without a project")?;
         let mut blocks = vec![serde_json::json!({ "type": "text", "text": d.prompt })];
         if let Some(brief) =
-            crate::acp::agent_mentions::render_assistant_brief(&executor.name, &executor.brief_text())
+            crate::acp::agent_mentions::render_assistant_brief(&work.name, &work.brief_text())
         {
             blocks.push(serde_json::json!({ "type": "text", "text": brief }));
         }
         let config = WorkTaskConfig {
             prompt_blocks: blocks,
             display_text: d.prompt.clone(),
-            agent_type: Some(executor.agent_type.as_wire().into_owned()),
-            mode_id: executor.agent_options.mode_id.clone(),
-            config_values: executor.agent_options.config_values.clone(),
-            label_snapshot: executor
+            agent_type: Some(work.agent_type.as_wire().into_owned()),
+            mode_id: work.agent_options.mode_id.clone(),
+            config_values: work.agent_options.config_values.clone(),
+            label_snapshot: work
                 .label_snapshot
                 .as_ref()
                 .and_then(|l| serde_json::to_value(l).ok()),
             deliverable: (d.deliverable.as_deref() == Some("report"))
                 .then(|| crate::models::DELIVERABLE_REPORT.to_string()),
             base_branch: None,
-            executor_name: Some(executor.name.clone()),
+            executor_name: Some(work.name.clone()),
         };
         let draft = WorkTaskDraft {
             folder_id,
@@ -1444,8 +1468,8 @@ impl PersonalAgentEngine {
         else {
             return Ok(());
         };
-        let executor = executor_of(&d);
-        let agent_type = executor.agent_type;
+        let work = work_of(&d);
+        let agent_type = work.agent_type;
         let (folder_id, cwd, conversation_id) = match d.mode {
             DispatchMode::Chat => {
                 let created = crate::commands::conversations::create_chat_conversation_core(
@@ -1478,15 +1502,24 @@ impl PersonalAgentEngine {
             }
         };
         let snapshot = AssistantRunSnapshot {
-            name: executor.name.clone(),
-            agent_options: executor.agent_options.clone(),
+            name: work.name.clone(),
+            agent_options: work.agent_options.clone(),
             // A resumed conversation is told who handed it out again.
-            instructions: executor.brief_text(),
+            instructions: work.brief_text(),
+        };
+        // The assistant whose work it is, as it handed the work out — not
+        // the one following it after a handover (`bot_id`).
+        let bot_uid = match (work.bot_uid.clone(), d.bot_id) {
+            (Some(uid), _) => Some(uid),
+            (None, Some(b)) => {
+                svc::get_bot_any(&self.db.conn, b).await.ok().flatten().and_then(|r| r.uid)
+            }
+            (None, None) => None,
         };
         let _ = crate::db::service::conversation_service::set_dispatch_provenance(
             &self.db.conn,
             conversation_id,
-            executor.assistant_id,
+            bot_uid.as_deref(),
             &snapshot,
         )
         .await;
@@ -1523,8 +1556,8 @@ impl PersonalAgentEngine {
                 env,
                 DISPATCH_OWNER_LABEL.to_string(),
                 self.emitter.clone(),
-                executor.agent_options.mode_id.clone(),
-                executor.agent_options.config_values.clone(),
+                work.agent_options.mode_id.clone(),
+                work.agent_options.config_values.clone(),
             )
             .await
             .map_err(|e| e.to_string())?;
@@ -1548,8 +1581,8 @@ impl PersonalAgentEngine {
             return Ok(());
         }
         let suffix = crate::acp::agent_mentions::render_assistant_brief(
-            &executor.name,
-            &executor.brief_text(),
+            &work.name,
+            &work.brief_text(),
         )
         .map(|text| vec![PromptInputBlock::Text { text }])
         .unwrap_or_default();
@@ -1816,7 +1849,7 @@ impl PersonalAgentEngine {
             }
             _ => {}
         }
-        let executor = executor_of(d);
+        let work = work_of(d);
         let task = match (d.mode, d.work_task_id, seen) {
             (DispatchMode::Task, Some(tid), Some(t)) if t.id == tid => Some(t),
             (DispatchMode::Task, Some(tid), _) => {
@@ -1907,8 +1940,8 @@ impl PersonalAgentEngine {
         }
         if accepting {
             summary.push_str(
-                " codeg has another executor check it (read-only) first; you get the check's \
-                 verdict to accept it — nothing to do until then.",
+                " codeg has it checked (read-only) first; you get the check's verdict to \
+                 accept it — nothing to do until then.",
             );
         }
         // Who landed it (A5), as the merge that landed this run recorded —
@@ -2008,9 +2041,7 @@ impl PersonalAgentEngine {
             // Where it stood on the PR ladder when the news came (8.5).
             "ladder": ladder,
             "title": d.title,
-            "executor": executor.name,
-            "executor_id": executor.assistant_id,
-            "agent_type": executor.agent_type,
+            "agent_type": work.agent_type,
             "excerpt": excerpt,
             // What came of it in a plain sentence (A1).
             "gist": excerpt.as_deref().and_then(super::gist::plain_gist),
@@ -3085,7 +3116,7 @@ impl PersonalAgentEngine {
             )
             .await;
         }
-        let executor = executor_of(d);
+        let work = work_of(d);
         let mut card = NewRow::new(TimelineKind::Dispatch, d.title.clone());
         card.dispatch_id = Some(d.id);
         card.segment_id = self.state.lock().await.connection_segment;
@@ -3094,9 +3125,7 @@ impl PersonalAgentEngine {
             "followup": true,
             "excerpt": cut(message, 200),
             "mode": d.mode,
-            "executor": executor.name,
-            "executor_id": executor.assistant_id,
-            "agent_type": executor.agent_type,
+            "agent_type": work.agent_type,
             "folder_id": d.folder_id,
             "state": d.state,
         }));
@@ -3301,7 +3330,7 @@ impl PersonalAgentEngine {
         op_id: &str,
     ) -> Result<String, String> {
         let conversation_id = d.conversation_id.ok_or("this dispatch never started a conversation")?;
-        let executor = executor_of(d);
+        let work = work_of(d);
         let summary = crate::db::service::conversation_service::get_by_id(&self.db.conn, conversation_id)
             .await
             .map_err(|e| e.to_string())?;
@@ -3339,7 +3368,7 @@ impl PersonalAgentEngine {
                     .ok_or("the conversation has no session to resume")?;
                 let env = crate::commands::acp::build_session_runtime_env(
                     &self.db,
-                    executor.agent_type,
+                    work.agent_type,
                     Some(&session_id),
                     &self.data_dir,
                 )
@@ -3347,14 +3376,14 @@ impl PersonalAgentEngine {
                 .map_err(|e| e.to_string())?;
                 self.manager
                     .spawn_agent(
-                        executor.agent_type,
+                        work.agent_type,
                         Some(folder.path.clone()),
                         Some(session_id),
                         env,
                         DISPATCH_OWNER_LABEL.to_string(),
                         self.emitter.clone(),
-                        executor.agent_options.mode_id.clone(),
-                        executor.agent_options.config_values.clone(),
+                        work.agent_options.mode_id.clone(),
+                        work.agent_options.config_values.clone(),
                     )
                     .await
                     .map_err(|e| e.to_string())?

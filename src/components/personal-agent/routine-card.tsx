@@ -244,8 +244,8 @@ export function RoutineCard({ item }: { item: NoticeItem }) {
             ) : null}
             {what === "paused" ? (
               <OutcomeLine tone="warn">
-                {pausedWhy === "executor"
-                  ? t("pausedExecutor")
+                {pausedWhy === "work_agent"
+                  ? t("pausedWorkAgent")
                   : t("pausedFailures")}
                 {str(data, "why") ? ` — ${str(data, "why")}` : null}
               </OutcomeLine>
@@ -357,18 +357,18 @@ export function RoutineCard({ item }: { item: NoticeItem }) {
             ) : null}
             {what === "paused" && open ? (
               <>
-                {pausedWhy === "executor" ? (
+                {pausedWhy === "work_agent" ? (
                   <Button
                     size="sm"
                     onClick={() => openBotPage("identity")}
-                    data-pa-routine-card-act="executor"
+                    data-pa-routine-card-act="work_agent"
                   >
-                    {t("setExecutor")}
+                    {t("setWorkAgent")}
                   </Button>
                 ) : null}
                 <Button
                   size="sm"
-                  variant={pausedWhy === "executor" ? "secondary" : "default"}
+                  variant={pausedWhy === "work_agent" ? "secondary" : "default"}
                   disabled={busy != null}
                   onClick={() => void answer("resume")}
                   data-pa-routine-card-act="resume"

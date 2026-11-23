@@ -615,6 +615,9 @@ export interface DbConversationSummary {
    *  row. Prefer the assistant store's current name when it knows the id. */
   assistant_id?: number
   assistant_name?: string
+  /** The owner's assistant (`uid`) a delegation child or a piece of its
+   *  work ran as. */
+  bot_uid?: string
   /** Where the conversation was started from, when not the window: `"cli"`
    *  for a `codeg-cli` run. Absent on every other row; another value (from a
    *  newer build) is shown as nothing. */
@@ -1973,8 +1976,9 @@ export type BotColor =
   | "magenta"
   | "gray"
 
-/** An assistant's avatar: a face (shape and colour), or one of the executor
- *  configs' avatars, which the assistants made before 1.6 carry. */
+/** An assistant's avatar: a face (shape and colour), or one of the avatars
+ *  the collaboration settings' assistants had, which the assistants made
+ *  before 1.6 carry. */
 export type BotAvatar =
   | { kind: "face"; shape: BotShape; color: BotColor }
   | AssistantAvatar
@@ -1984,9 +1988,17 @@ export interface PersonalAgentInfo {
   /** Empty: use the localized default name. */
   name: string
   avatar: BotAvatar
-  agent_type: AgentType
-  agent_options: AgentDelegationDefaults
-  label_snapshot: AssistantLabelSnapshot
+  /** Its brain; `null` (all three) for an assistant converted on upgrade
+   *  before there was a primary to copy one from: it can be @-mentioned,
+   *  not talked to (D3). */
+  agent_type: AgentType | null
+  agent_options: AgentDelegationDefaults | null
+  label_snapshot: AssistantLabelSnapshot | null
+  /** The agent its work runs on, every option picked — its own (D1);
+   *  `null` when what is stored names no agent codeg knows. */
+  work: AssistantAgentConfig | null
+  /** What every session its work runs in is told first; "" for none. */
+  work_instructions: string
   settings: PersonalAgentSettings
   workdir: string
   workdir_custom: boolean
@@ -1997,8 +2009,8 @@ export interface PersonalAgentInfo {
   /** The primary assistant, or a worker. */
   kind: PersonalAgentBotKind
   uid: string | null
-  /** The executor config its work runs on (the primary's too). */
-  executor_assistant_id: number | null
+  /** The collaboration settings' assistant it was converted from. */
+  legacy_assistant_id: number | null
 }
 
 export type PersonalAgentBotKind = "primary" | "worker"
@@ -2009,19 +2021,23 @@ export interface PersonalAgentDraft {
   agent_config?: AssistantAgentConfig
   settings?: PersonalAgentSettings
   locale?: string
-  /** The executor config its work runs on, one the owner picked. */
-  executor_assistant_id?: number
-  /** Make it one with this complete selection. */
-  executor_config?: AssistantAgentConfig
-  /** Make it one on the brain's agent, its options filled in. When they
-   *  cannot be read nothing is saved and the error starts with
-   *  `EXECUTOR_OPTIONS_UNAVAILABLE`. */
-  executor_new?: boolean
+  /** The agent its work runs on (D1). The primary's first save copies the
+   *  brain unless told otherwise; later saves send it only to change it. */
+  work?: WorkChoice
+  /** Its work's standing instructions; "" clears them. */
+  work_instructions?: string
 }
 
-/** How a save that was to make an executor config answers when the brain's
- *  agent's options cannot be read (Rust `EXECUTOR_OPTIONS_UNAVAILABLE`). */
-export const EXECUTOR_OPTIONS_UNAVAILABLE = "executor options unavailable: "
+/** The agent an assistant's work runs on, as a page picks it (D1): a copy
+ *  of the brain as it is saved — every option the same, its own from then
+ *  on — or one picked apart (Rust `WorkChoice`). */
+export type WorkChoice =
+  | { kind: "same_as_brain" }
+  | { kind: "config"; config: AssistantAgentConfig }
+
+/** Longest standing instructions for an assistant's work, in characters
+ *  (Rust `MAX_WORK_INSTRUCTIONS_CHARS`). */
+export const MAX_WORK_INSTRUCTIONS_CHARS = 20_000
 
 export type SegmentReason =
   | "first"
@@ -2164,9 +2180,14 @@ export type DispatchState =
   | "interrupted"
   | "handed_over"
 
-export interface DispatchExecutorSnapshot {
-  assistant_id: number
+/** What a dispatch's work runs on — its assistant's work agent, options and
+ *  standing instructions — frozen when it was handed out (Rust
+ *  `DispatchWorkSnapshot`). */
+export interface DispatchWorkSnapshot {
+  /** Its assistant's name then. */
   name: string
+  /** Its assistant's uid: whose work it is, after a handover too. */
+  bot_uid?: string
   agent_type: AgentType
   agent_options: AgentDelegationDefaults
   label_snapshot: AssistantLabelSnapshot | null
@@ -2231,7 +2252,7 @@ export interface ThreadView {
 export interface DispatchInfo {
   id: number
   mode: DispatchMode
-  executor: DispatchExecutorSnapshot
+  work: DispatchWorkSnapshot
   folder_id: number | null
   folder_name: string | null
   deliverable: string | null
@@ -2255,7 +2276,7 @@ export interface DispatchInfo {
   ladder: Ladder
   /** The kanban task behind a task dispatch, while it exists. */
   task: TaskFacts | null
-  /** How many of its executor's questions and plan approvals its assistant
+  /** How many of its work's questions and plan approvals its assistant
    *  answered for the owner (7.3.1). */
   answered_for_you: number
   /** What done looks like, as its assistant wrote it (7.5). */
@@ -2316,9 +2337,8 @@ export interface AcceptanceCardData {
   title: string
   work_task_id: number | null
   folder_id: number | null
-  executor: string | null
-  executor_agent: AgentType | null
-  checker: string | null
+  /** The agent the work ran on. */
+  work_agent: AgentType | null
   checker_agent: AgentType | null
   check_dispatch_id: number | null
   verdict: CheckVerdict | null
@@ -2572,17 +2592,15 @@ export type AskAnsweredBy =
   | { kind: "channel" }
   | { kind: "policy" }
 
-/** An executor's question or plan approval, answered by the assistant that
- *  dispatched the work or forwarded to the owner: an ask card's `data`
- *  (Rust `AskCard`). */
+/** A question or plan approval of a piece of handed-out work, answered by
+ *  the assistant that dispatched it or forwarded to the owner: an ask
+ *  card's `data` (Rust `AskCard`). */
 export interface AskCardData {
   notice: "ask"
   ask_id: number
   bot_id: number
   dispatch_id: number
   title: string
-  executor: string
-  executor_id: number
   agent_type: AgentType | null
   mode: DispatchMode | null
   folder_id: number | null
@@ -2882,10 +2900,10 @@ export interface PersonalAgentPrefs {
   interrupt_retry: "auto" | "ask"
   /** Automatic retries of one dispatch; 0 = never. */
   retry_rounds: number
-  /** An executor's questions: the dispatching assistant answers, or the
+  /** A piece of work's questions: the dispatching assistant answers, or the
    *  owner. */
   exec_questions: "assistant" | "owner"
-  /** An executor's plan approvals. */
+  /** A piece of work's plan approvals. */
   exec_plans: "assistant" | "owner"
   /** Code work an assistant dispatched is checked and accepted on its own
    *  (7.5). */
@@ -3381,7 +3399,6 @@ export interface BriefWeek {
   so_far: boolean
   dispatched: number
   by_bot: BriefWeekCount[]
-  by_executor: BriefWeekCount[]
   by_mode: Record<string, number>
   completed: number
   failed: number
@@ -3573,8 +3590,7 @@ export interface PersonalAgentCardReaction {
   act_minutes: number | null
 }
 
-/** How an assistant's or an executor config's handed-out work went over
- *  the last 30 days (2.11). */
+/** How an assistant's handed-out work went over the last 30 days (2.11). */
 export interface PersonalAgentGrade {
   dispatches: number
   settled: number
@@ -3584,13 +3600,13 @@ export interface PersonalAgentGrade {
   avg_minutes: number | null
 }
 
-/** The work one assistant handed to one executor config one way (7.9). */
+/** The work one assistant handed out on one agent one way (7.9). */
 export interface PersonalAgentGradeCell {
   /** Who handed it out; `null` from before there were several. */
   bot_id: number | null
-  executor: number
-  /** The executor config's name when the work was handed out. */
-  executor_name: string
+  agent_type: AgentType
+  /** The agent's name, the latest one it went by. */
+  agent: string
   mode: DispatchMode
   grade: PersonalAgentGrade
 }
@@ -3598,9 +3614,7 @@ export interface PersonalAgentGradeCell {
 export interface PersonalAgentGrades {
   /** By assistant id. */
   bots: Record<string, PersonalAgentGrade>
-  /** By executor config id. */
-  executors: Record<string, PersonalAgentGrade>
-  /** Apart: assistant × executor config × mode, the most work first. */
+  /** Apart: assistant × agent × mode, the most work first. */
   cells: PersonalAgentGradeCell[]
 }
 
@@ -3679,7 +3693,11 @@ export interface PersonalAgentBotSummary {
   uid: string | null
   name: string
   avatar: BotAvatar
-  executor_assistant_id: number | null
+  hidden: boolean
+  /** Whether it has a brain yet (D3). */
+  has_brain: boolean
+  /** The collaboration settings' assistant it was converted from. */
+  legacy_assistant_id: number | null
   created_at: string
 }
 
@@ -3865,10 +3883,8 @@ export interface BotCreateDraft {
    *  writes its own. */
   persona?: string | null
   avatar?: BotAvatar | null
-  executor_config?: AssistantAgentConfig | null
-  executor_assistant_id?: number | null
-  /** That executor config was made for it just now, in the editor. */
-  executor_made_for_it?: boolean
+  /** What its work runs on (D1); absent: a copy of its brain. */
+  work?: WorkChoice | null
   locale?: string | null
 }
 
@@ -3876,7 +3892,6 @@ export interface BotCreateDraft {
  *  what the editor opens with instead. */
 export interface BotMade {
   bot: PersonalAgentBotSummary | null
-  executor_assistant_id: number | null
   options_unavailable: { agent_type: AgentType; why: string } | null
 }
 
@@ -3891,7 +3906,6 @@ export interface BotImpact {
     state: DispatchState
   }[]
   unanswered_messages: number
-  executor: { id: number; name: string; shared_with: string[] } | null
   /** Its plans still going: they stop (7.6). */
   plans: { plan_id: number; title: string }[]
   /** Steps of other assistants' plans handed to it, not done yet. */
@@ -3994,42 +4008,7 @@ export interface PlanView {
 
 export interface BotDeleteOptions {
   hand_over: boolean
-  delete_executor: boolean
   delete_workdir: boolean
-}
-
-export interface ExecutorWork {
-  dispatch_id: number
-  bot_id: number | null
-  title: string
-  mode: DispatchMode
-  state: DispatchState
-  work_task_id: number | null
-  conversation_id: number | null
-}
-
-export interface ExecutorFailing {
-  dispatch_id: number
-  bot_id: number | null
-  title: string
-  error: string | null
-  count: number
-}
-
-/** An executor config as the assistants' work runs on it. */
-export interface ExecutorView {
-  assistant_id: number
-  uid: string
-  running: ExecutorWork[]
-  failing: ExecutorFailing | null
-  dispatches_14d: number
-  completed_14d: number
-  /** The assistants whose work runs on it, the primary too. */
-  workers: PersonalAgentBotSummary[]
-  /** How its work went over the last 30 days (2.11). */
-  grade: PersonalAgentGrade
-  /** And apart, by who handed it out and how (7.9). */
-  grade_cells: PersonalAgentGradeCell[]
 }
 
 /** One of the personal agent's files: a fixed one (`SOUL.md`, `AGENTS.md`,
@@ -4056,8 +4035,10 @@ export interface PersonalAgentDayStat {
   dispatch_tokens: number
 }
 
-export interface PersonalAgentExecutorStat {
-  assistant_id: number
+/** The work handed out on one agent. */
+export interface PersonalAgentWorkStat {
+  agent_type: AgentType
+  /** The agent's name. */
   name: string
   dispatches: number
   completed: number
@@ -4072,7 +4053,7 @@ export interface PersonalAgentUsagePoint {
 
 export interface PersonalAgentStats {
   days: PersonalAgentDayStat[]
-  executors: PersonalAgentExecutorStat[]
+  agents: PersonalAgentWorkStat[]
   usage: PersonalAgentUsagePoint[]
   tokens_synced_at: string | null
 }
@@ -4119,7 +4100,6 @@ export interface MessageCheck {
   dispatch_id: number | null
   /** The checker's session, once it has one. */
   check_conversation_id: number | null
-  executor: string | null
   notice_id: number | null
   /** Its card on the primary's timeline. */
   row_id: number | null
@@ -8802,7 +8782,7 @@ export interface Routine {
   dispatch: RoutineDispatchTemplate | null
   precheck: RoutinePrecheck | null
   enabled: boolean
-  /** `failures` | `executor` | `owner` */
+  /** `failures` | `work_agent` | `owner` */
   paused_reason: string | null
   source: string
   next_run_at: string | null

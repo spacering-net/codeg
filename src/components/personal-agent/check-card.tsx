@@ -82,7 +82,6 @@ export function CheckCard({ item }: { item: NoticeItem }) {
   const asked = str(data, "asked")
   const evidence = str(data, "evidence")
   const note = noteOf(str(data, "note"))
-  const executor = str(data, "executor")
   const conversationId = num(data, "conversation_id")
   const realTitle = str(data, "conversation_title")?.trim()
   const title = realTitle
@@ -183,10 +182,9 @@ export function CheckCard({ item }: { item: NoticeItem }) {
               </span>
             ) : null}
           </div>
-          {note || executor ? (
+          {note ? (
             <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
-              {note ? <p data-pa-check-note>{note}</p> : null}
-              {executor ? <p>{t("by", { executor })}</p> : null}
+              <p data-pa-check-note>{note}</p>
             </div>
           ) : null}
         </SheetPart>

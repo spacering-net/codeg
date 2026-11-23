@@ -75,21 +75,21 @@ pub async fn create_personal(
     .await
 }
 
-/// Stamp a conversation the personal agent dispatched: the role assistant it
-/// runs as (what the sidebar draws its avatar and name from) and
-/// [`conversation::SOURCE_PERSONAL_AGENT`]. Written once, right after the row
-/// is created and before it is first broadcast.
+/// Stamp a conversation an assistant dispatched: the assistant whose work it
+/// is (what the sidebar draws its avatar and name from), what the work ran
+/// on, and [`conversation::SOURCE_PERSONAL_AGENT`]. Written once, right after
+/// the row is created and before it is first broadcast.
 pub async fn set_dispatch_provenance(
     conn: &DatabaseConnection,
     conversation_id: i32,
-    assistant_id: i32,
+    bot_uid: Option<&str>,
     snapshot: &AssistantRunSnapshot,
 ) -> Result<(), DbError> {
     use sea_orm::sea_query::Expr;
     let snapshot = serde_json::to_string(snapshot)
         .map_err(|e| DbError::Validation(format!("assistant snapshot: {e}")))?;
     conversation::Entity::update_many()
-        .col_expr(conversation::Column::AssistantId, Expr::value(assistant_id))
+        .col_expr(conversation::Column::BotUid, Expr::value(bot_uid))
         .col_expr(conversation::Column::AssistantSnapshot, Expr::value(snapshot))
         .col_expr(
             conversation::Column::Source,
@@ -181,6 +181,7 @@ async fn create_inner(
         origin_cwd: Set(None),
         assistant_id: Set(assistant_id),
         assistant_snapshot: Set(assistant_snapshot),
+        bot_uid: Set(None),
         source: Set(None),
     };
     Ok(model.insert(conn).await?)
@@ -986,6 +987,7 @@ struct CarriedOverRow {
     origin_cwd: Option<String>,
     assistant_id: Option<i32>,
     assistant_snapshot: Option<String>,
+    bot_uid: Option<String>,
     source: Option<String>,
 }
 
@@ -1029,6 +1031,7 @@ impl CarriedOverRow {
             // so it keeps drawing as it.
             assistant_id: row.assistant_id,
             assistant_snapshot: row.assistant_snapshot.clone(),
+            bot_uid: row.bot_uid.clone(),
             // Carried: the history was started where the conversation was.
             source: row.source.clone(),
         }
@@ -1062,6 +1065,7 @@ impl CarriedOverRow {
             origin_cwd: Set(self.origin_cwd),
             assistant_id: Set(self.assistant_id),
             assistant_snapshot: Set(self.assistant_snapshot),
+            bot_uid: Set(self.bot_uid),
             source: Set(self.source),
         }
     }
@@ -1527,6 +1531,7 @@ fn conv_to_summary(r: conversation::Model) -> DbConversationSummary {
             .as_deref()
             .and_then(AssistantRunSnapshot::name_from_json),
         assistant_id: r.assistant_id,
+        bot_uid: r.bot_uid,
         source: r.source,
         // Backfilled by `fill_summary_extras`, like `child_count`.
         tag_ids: Vec::new(),

@@ -657,6 +657,14 @@ impl PersonalAgentEngine {
         if to.id == me.id {
             return Err("that is you; write to another assistant".into());
         }
+        // One with no brain yet reads nothing (D3); it gets one when the
+        // primary has one, so this is only before the primary is set up.
+        if to.agent_type.is_none() {
+            return Err(format!(
+                "{} has no brain yet and reads no messages; hand the work to another assistant",
+                display_name(&to)
+            ));
+        }
         if let Some(m) = &answered {
             if m.from_bot_id != to.id {
                 return Err(format!(

@@ -175,7 +175,7 @@ impl PersonalAgentEngine {
         rows.sort_by_key(|b| b.id);
         rows.iter()
             .map(|b| {
-                let soul = workdir::read_text(&self.workdir_of(b), workdir::SOUL_FILE);
+                let soul = workdir::soul_text(&self.data_dir, b);
                 Member {
                     id: b.id,
                     name: display_name(b),

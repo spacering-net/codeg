@@ -80,12 +80,12 @@ import {
   usePersonalAgent,
   usePersonalAgentSwitch,
 } from "@/contexts/personal-agent-context"
+import { useAcpAgents } from "@/hooks/use-acp-agents"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { personalAgentKeepalive, personalAgentNewSession } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import type { TimelineRow } from "@/lib/types"
 import { cn } from "@/lib/utils"
-import { useAssistants, useAssistantsStore } from "@/stores/assistants-store"
 import { usePersonalAgentRoster } from "@/stores/personal-agent-roster-store"
 import { usePaAccent } from "@/lib/personal-agent-accent"
 import {
@@ -359,8 +359,7 @@ export function PersonalAgentPage() {
   // Session links in its replies open their conversations.
   const openSession = useSessionLinkOpener()
   const { botId, snapshot, rows, loading } = usePersonalAgent()
-  const assistants = useAssistants()
-  const assistantsRead = useAssistantsStore((s) => s.hydrated)
+  const { agents: acpAgents } = useAcpAgents()
   const isMobile = useIsMobile()
   const auxOpen = usePersonalAgentUi((s) => s.auxOpen)
   const setAuxOpen = usePersonalAgentUi((s) => s.setAuxOpen)
@@ -506,11 +505,27 @@ export function PersonalAgentPage() {
     )
   }
 
-  // Nothing set for its own work to run on — none bound, or the one bound
-  // gone or turned off: it cannot do work itself until one is.
-  const noExecutor =
-    assistantsRead &&
-    !assistants.some((a) => a.enabled && a.id === agent.executor_assistant_id)
+  // One converted from the collaboration settings before there was a
+  // primary: it can be @-mentioned in conversations, not talked to, until
+  // the primary is set up and its brain copied to it (D3).
+  if (agent.agent_type === null && !settingsOpen && !botPageOpen) {
+    return <NoBrainYet name={agentName} />
+  }
+
+  // The agent its own work runs on cannot run — not there any more, not
+  // installed, or turned off: it cannot do work itself until another is
+  // picked.
+  const workInfo = agent.work
+    ? acpAgents.find((a) => a.agent_type === agent.work?.agent_type)
+    : undefined
+  const workOff =
+    acpAgents.length > 0 &&
+    (agent.work == null ||
+      !(
+        workInfo?.enabled &&
+        workInfo.available &&
+        workInfo.installed_version != null
+      ))
   const conversation = settingsOpen ? (
     <SettingsView />
   ) : (
@@ -535,27 +550,31 @@ export function PersonalAgentPage() {
             {isMobile && rosterShown ? (
               <PersonalAgentRoster variant="strip" readOnly={readOnly} />
             ) : null}
-            {readOnly || noExecutor ? (
+            {readOnly || workOff ? (
               <div className="mx-auto flex w-full chat-content-w shrink-0 flex-col gap-1 px-4 pt-2">
                 {readOnly ? (
                   <p className="rounded-lg bg-amber-500/10 px-3 py-1.5 text-xs text-amber-800 dark:text-amber-200">
                     {t("readOnly")}
                   </p>
                 ) : null}
-                {noExecutor ? (
+                {workOff ? (
                   <p
                     className="flex items-center justify-between gap-2 rounded-lg bg-muted px-3 py-1.5 text-xs text-muted-foreground"
-                    data-pa-no-executor
+                    data-pa-work-off
                   >
-                    <span>{t("noExecutor")}</span>
+                    <span>
+                      {t("workOff", {
+                        agent: agent.work?.label_snapshot.agent ?? "",
+                      })}
+                    </span>
                     <Button
                       size="xs"
                       variant="outline"
                       className="shrink-0 bg-background"
-                      data-pa-set-executor
+                      data-pa-set-work
                       onClick={() => openBotPage("identity")}
                     >
-                      {t("setExecutor")}
+                      {t("setWork")}
                     </Button>
                   </p>
                 ) : null}
@@ -698,5 +717,34 @@ export function PersonalAgentPage() {
         ) : null}
       </SessionLinkOpenerContext.Provider>
     </PageScopeContext.Provider>
+  )
+}
+
+/** The page of an assistant with no brain yet (D3): what it is, and the
+ *  way to the primary's first setup — which gives it a brain. */
+function NoBrainYet({ name }: { name: string }) {
+  const t = useTranslations("PersonalAgent.noBrain")
+  const setViewBot = usePersonalAgentUi((s) => s.setViewBot)
+  return (
+    <div
+      className="flex h-full min-h-0 flex-col items-center justify-center gap-3 px-6 text-center"
+      data-pa-no-brain
+    >
+      <p className="text-base font-medium">{t("title", { name })}</p>
+      <p className="max-w-md text-sm leading-6 text-muted-foreground">
+        {t("body")}
+      </p>
+      <Button
+        size="sm"
+        onClick={() => {
+          // The primary's page is its first setup while there is none.
+          setViewBot(null)
+          usePersonalAgentUi.getState().showConversation()
+        }}
+        data-pa-no-brain-setup
+      >
+        {t("setUp")}
+      </Button>
+    </div>
   )
 }

@@ -22,9 +22,8 @@
  *   an issue, a merge (`./forge-card.tsx`, 7.4).
  * - **pr**: what a pull request an assistant watches came to — checks
  *   failed, a conflict, ready to merge, merged (`./pr-card.tsx`, 7.4).
- * - **changed**: a settings change from the conversation (13.3), the work
- *   assistants and executor configs among them (10.5); work assistants made
- *   (4.12), an executor config made or to make.
+ * - **changed**: a settings change from the conversation (13.3), the
+ *   assistants' own among them (10.5); assistants made (4.12).
  * - **memory**: what a turn changed in the assistant's memory, persona or
  *   rules, with its diff and [Undo] (`./memory-card.tsx`, 7.7); **tidy**, the
  *   nightly tidy-up, the same card undone as a whole or applied as a draft.
@@ -69,7 +68,6 @@ import { useBotId, usePersonalAgent } from "@/contexts/personal-agent-context"
 import { personalAgentNoticeAct } from "@/lib/api"
 import { isBotTab, type PersonalAgentPage } from "@/lib/personal-agent-open"
 import type {
-  AgentType,
   BotFace,
   PersonalAgentPrefKey,
   PickedOption,
@@ -364,8 +362,6 @@ function ActionCard({
   const error = str(data, "error")
   const { busy, failed, answer } = useAnswer(Number(row.ref_id))
 
-  const executor = str(display, "executor")
-  const agentType = str(display, "agent_type") as AgentType | null
   const mode = asMode(display?.mode)
   // The work it is about: the dispatch it made, or the one it continues.
   const workId =
@@ -498,9 +494,7 @@ function ActionCard({
         ) : (
           <WorkRow
             flat
-            executorId={num(display, "executor_id")}
-            executor={executor}
-            agentType={agentType}
+            mode={mode}
             title={
               retry
                 ? t("retryOf", { title: str(display, "title") ?? "" })
@@ -509,7 +503,6 @@ function ActionCard({
                   : (str(display, "title") ?? row.body)
             }
             meta={meta({
-              executor,
               mode,
               folder: str(display, "project"),
             })}
@@ -979,12 +972,23 @@ function bareLabel(label: string): string {
 export function pageOf(key: string): PersonalAgentPage {
   if (key === "own.brain") return "identity"
   if (key.startsWith("own.")) return "advanced"
-  if (key.startsWith("bot.")) return "workers"
+  // An assistant's own item: on its own page (whose — `botUidOf`).
+  if (key.startsWith("bot.")) {
+    const field = key.split(".")[2] ?? ""
+    if (field === "persona") return "persona"
+    if (field === "notify" || field === "muted") return "notify"
+    return "identity"
+  }
   const item = key.replace(/^prefs\./, "") as PersonalAgentPrefKey
   if (item === "projects") return "projects"
   if (ABOUT_ITEMS.includes(item)) return "about"
   if (PROACTIVE_ITEMS.includes(item)) return "proactive"
   return COMMUNICATION_ITEMS.includes(item) ? "communication" : "automation"
+}
+
+/** The assistant a `bot.<uid>.<item>` key is about. */
+export function botUidOf(key: string): string | null {
+  return key.startsWith("bot.") ? (key.split(".")[1] ?? null) : null
 }
 
 /** The options codeg picked for the owner on a brain or an agent, and who
@@ -1042,6 +1046,7 @@ function ChangedCard({ item }: { item: NoticeItem }) {
   const { readOnly } = usePageScope()
   const openSettings = usePersonalAgentUi((s) => s.openSettings)
   const openBotPage = usePersonalAgentUi((s) => s.openBotPage)
+  const entries = usePersonalAgentRoster((st) => st.entries)
   const botName = useBotName()
   const row = item.row
   const data = row.data
@@ -1219,8 +1224,17 @@ function ChangedCard({ item }: { item: NoticeItem }) {
               variant="ghost"
               onClick={() => {
                 const page = pageOf(changes[0].key)
-                if (isBotTab(page)) openBotPage(page)
-                else openSettings(page)
+                const uid = botUidOf(changes[0].key)
+                // Another assistant's item: its own page.
+                const of = uid
+                  ? entries?.find((e) => e.uid === uid)
+                  : undefined
+                if (of && isBotTab(page)) {
+                  openBotPage(page, {
+                    bot: of.kind === "primary" ? null : of.id,
+                  })
+                } else if (isBotTab(page)) openBotPage(page)
+                else if (page !== "assistants") openSettings(page)
               }}
             >
               {t("seeSettings")}
@@ -1236,9 +1250,8 @@ interface MadeBot {
   bot_id: number
   name: string
   face: BotFace | null
-  executor_name: string | null
-  executor_agent: string | null
-  executor_created: boolean
+  /** The agent its work runs on. */
+  work_agent?: string | null
   picked: { from: string }[]
   state: "made" | "undone"
 }
@@ -1353,18 +1366,14 @@ function BotsChangedCard({ item }: { item: NoticeItem }) {
                       >
                         {b.name}
                       </span>
-                      {b.executor_name ? (
+                      {b.work_agent ? (
                         <span className="block truncate text-xs leading-4 text-muted-foreground">
-                          {b.executor_created
-                            ? filled > 0
-                              ? t("executorFilled", {
-                                  agent: b.executor_agent ?? "",
-                                  count: filled,
-                                })
-                              : t("executorMade", {
-                                  agent: b.executor_agent ?? "",
-                                })
-                            : t("executorBound", { name: b.executor_name })}
+                          {filled > 0
+                            ? t("workFilled", {
+                                agent: b.work_agent,
+                                count: filled,
+                              })
+                            : t("workOn", { agent: b.work_agent })}
                         </span>
                       ) : null}
                     </span>

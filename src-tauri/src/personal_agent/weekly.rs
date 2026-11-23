@@ -222,7 +222,6 @@ pub struct Week {
     // The work handed out.
     pub dispatched: u32,
     pub by_bot: Vec<Count>,
-    pub by_executor: Vec<Count>,
     /// `task`, `chat`, `session`.
     pub by_mode: BTreeMap<String, u32>,
     pub completed: u32,
@@ -475,7 +474,6 @@ pub async fn gather(db: &AppDatabase, prefs: &Prefs, w: WeekSpan, now: DateTime<
     // The work handed out.
     let work = profile::graded_between(db, from, to).await;
     let mut by_bot: HashMap<i32, (String, u32)> = HashMap::new();
-    let mut by_exec: HashMap<i32, (String, u32)> = HashMap::new();
     for g in &work {
         week.dispatched += 1;
         if let Some(b) = g.bot_id {
@@ -484,10 +482,6 @@ pub async fn gather(db: &AppDatabase, prefs: &Prefs, w: WeekSpan, now: DateTime<
                 .or_insert_with(|| (name_of(&all_bots, b), 0))
                 .1 += 1;
         }
-        by_exec
-            .entry(g.executor)
-            .or_insert_with(|| (g.executor_name.clone(), 0))
-            .1 += 1;
         let mode = match g.mode {
             DispatchMode::Task => "task",
             DispatchMode::Chat => "chat",
@@ -504,7 +498,6 @@ pub async fn gather(db: &AppDatabase, prefs: &Prefs, w: WeekSpan, now: DateTime<
     week.settled = grade.settled;
     week.first_pass = grade.first_pass;
     week.by_bot = ranked(by_bot);
-    week.by_executor = ranked(by_exec);
     week.caught = round_entity::Entity::find()
         .filter(round_entity::Column::State.eq(VerificationState::Revised))
         .filter(round_entity::Column::UpdatedAt.gte(from))

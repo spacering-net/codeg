@@ -67,7 +67,7 @@ export function clip(text: string, max = 80): string {
 }
 
 /** An item's name and its values, as the settings view words them;
- *  `names` names the work assistants and executor configs by uid. */
+ *  `names` names the assistants by uid. */
 export function useChangeText(names: Names = {}) {
   const ts = useTranslations("PersonalAgent.settings")
   const tp = useTranslations("PersonalAgent.settings.prefs")

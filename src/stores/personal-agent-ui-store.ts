@@ -64,11 +64,9 @@ export const PERSONAL_AGENT_EVENTS = {
   newSession: "codeg:personal-agent-new-session",
 } as const
 
-/** The pages of the settings view (13.1): what every assistant shares —
- *  the team, then the preferences. */
+/** The pages of the settings view (13.1): the preferences every assistant
+ *  shares. */
 export type SettingsPage =
-  | "workers"
-  | "executors"
   | "communication"
   | "projects"
   | "proactive"
@@ -76,8 +74,8 @@ export type SettingsPage =
   | "about"
 
 /** The tabs of an assistant's own page (13.1): who it is, the agent it
- *  runs on and the executor config its work runs on, its persona and
- *  memory, its notifications, the advanced. */
+ *  thinks on and the one its work runs on, its persona and memory, its
+ *  notifications, the advanced. */
 export type BotTab = "identity" | "persona" | "notify" | "advanced"
 
 /** The settings view, while it is open: on which page. */
@@ -106,8 +104,9 @@ export interface WorkTarget {
   folderId: number | null
   agentType: AgentType | null
   title: string | null
-  executorId: number | null
-  executorName: string | null
+  /** The assistant whose work it is, as it was named when it handed it
+   *  out. */
+  assistantName: string | null
   /** What the work was handed out with: the conversation's first message. */
   prompt: string | null
   connectionId: string | null
@@ -257,7 +256,7 @@ export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
   openWork: (work) => set({ work, workOpen: true }),
   setWorkOpen: (workOpen) => set({ workOpen }),
   settings: null,
-  openSettings: (page = "workers") =>
+  openSettings: (page = "communication") =>
     set({ settings: { page }, botPage: null }),
   botPage: null,
   openBotPage: (tab = "identity", opts = {}) =>

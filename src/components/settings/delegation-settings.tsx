@@ -390,8 +390,8 @@ export function DelegationSettingsSection() {
               }
             />
           </SettingCard>
-          {/* The assistants (executor configs) live on the assistants page
-              now; @ and the personal assistants use the same ones. */}
+          {/* The assistants @ hands work to are the owner's assistants,
+              managed in the sidebar's group of them. */}
           <SettingCard className="mt-3">
             <SettingRow
               icon={Users}
@@ -403,7 +403,7 @@ export function DelegationSettingsSection() {
                   variant="outline"
                   data-assistants-moved
                   onClick={() =>
-                    void openPersonalAgentPage("executors").catch((err) =>
+                    void openPersonalAgentPage("assistants").catch((err) =>
                       toast.error(toErrorMessage(err))
                     )
                   }

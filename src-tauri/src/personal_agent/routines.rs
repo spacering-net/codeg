@@ -5,8 +5,8 @@
 //! do (a `routine` event, the batch's trigger `routine`); one that finds
 //! nothing worth saying replies `[[silent]]` alone, and codeg shows nothing
 //! and records "no change". A `dispatch` routine hands out the work its
-//! template says — the assistant's own executor config when it names none —
-//! without waking anyone; what comes back is read as any dispatch's news.
+//! template says — on the agent its assistant's work runs on — without
+//! waking anyone; what comes back is read as any dispatch's news.
 //! "Routine dispatches: ask me first" turns that into a confirm card.
 //!
 //! **When.** On a 5-field cron in the owner's zone (or one of its own), or
@@ -24,9 +24,9 @@
 //! anyway, and says why. A run the owner asked for, and the trial run every
 //! new routine gets, do not look — they only note what is there now.
 //!
-//! **Settling.** Three failed runs in a row, or an executor config the
-//! template names that is gone, off or no longer to be used by the
-//! assistants: the routine is paused, with an urgent card.
+//! **Settling.** Three failed runs in a row, or the agent its assistant's
+//! work runs on turned off: the routine is paused, with an urgent card
+//! (`work_agent`).
 //!
 //! The rhythm is codeg's alone: a run's prompt says which run it is and that
 //! codeg keeps the schedule.
@@ -81,8 +81,8 @@ pub const MAX_LATE_SECS: i64 = 2 * 3600;
 pub const FAILURES_TO_PAUSE: i32 = 3;
 /// How often a forge's newest issues or pull requests are read.
 pub const FORGE_POLL_SECS: i64 = 300;
-/// How often the executor configs the templates name are looked at.
-const EXECUTOR_CHECK_SECS: i64 = 60;
+/// How often the agents the routines' work runs on are looked at.
+const WORK_AGENT_CHECK_SECS: i64 = 60;
 /// Coding events read in one look.
 const SIGNAL_BATCH: u64 = 200;
 pub const MAX_TITLE_CHARS: usize = 120;
@@ -278,8 +278,8 @@ pub fn precheck_of(r: &routine_entity::Model) -> Option<Precheck> {
 
 /// A draft over what a routine was (`base`; none for a new one), checked as
 /// data: the fields it needs are there and in bounds, it has one trigger,
-/// a dispatch routine has its work. Projects, executors and the cron are
-/// checked against codeg by the engine.
+/// a dispatch routine has its work. Projects and the cron are checked
+/// against codeg by the engine.
 pub fn spec_of(draft: &Draft, base: Option<&Draft>) -> Result<Spec, String> {
     let empty = Draft::default();
     let base = base.unwrap_or(&empty);
@@ -843,10 +843,26 @@ impl PersonalAgentEngine {
         });
     }
 
+    /// Whether this assistant has a brain (D3): one converted on upgrade
+    /// before there was a primary has none, and runs no routine.
+    async fn has_a_brain(&self) -> Result<(), String> {
+        match self.agent_row().await {
+            Some(row) if super::engine::brain_of(&row).is_some() => Ok(()),
+            Some(_) => Err(
+                "this assistant has no brain yet: set the primary assistant up first".into(),
+            ),
+            None => Err("configure the personal agent first".into()),
+        }
+    }
+
     /// The clock's look at this assistant's routines (with its matters).
     pub(crate) async fn routine_tick(self: &Arc<Self>, now: DateTime<Utc>) {
         let bot = self.bot().await;
         if bot <= 0 || self.retired.load(Ordering::SeqCst) {
+            return;
+        }
+        // None run for one with no brain yet (D3, §5).
+        if self.has_a_brain().await.is_err() {
             return;
         }
         let owner = self.owner_tz().await;
@@ -861,14 +877,14 @@ impl PersonalAgentEngine {
                 .routine_check_at
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
-            let due = last.is_none_or(|t| (now - t).num_seconds() >= EXECUTOR_CHECK_SECS);
+            let due = last.is_none_or(|t| (now - t).num_seconds() >= WORK_AGENT_CHECK_SECS);
             if due {
                 *last = Some(now);
             }
             due
         };
         if check {
-            self.check_executors(bot).await;
+            self.check_work_agents(bot).await;
         }
     }
 
@@ -1259,7 +1275,7 @@ impl PersonalAgentEngine {
 
     /// A dispatch routine whose assistant has nothing its work runs on is
     /// paused ahead of its time, with an urgent card.
-    async fn check_executors(self: &Arc<Self>, bot: i32) {
+    async fn check_work_agents(self: &Arc<Self>, bot: i32) {
         for r in rsvc::enabled_of(&self.db.conn, bot)
             .await
             .unwrap_or_default()
@@ -1267,8 +1283,8 @@ impl PersonalAgentEngine {
             if r.kind != RoutineKind::Dispatch {
                 continue;
             }
-            if let Err(e) = self.template_executor(&r).await {
-                self.pause_routine(&r, "executor", &e).await;
+            if let Err(e) = self.template_work(&r).await {
+                self.pause_routine(&r, "work_agent", &e).await;
             }
         }
     }
@@ -1276,7 +1292,7 @@ impl PersonalAgentEngine {
     /// Whether a dispatch routine's work can go out: it has work to hand
     /// out, and its assistant has something its work runs on now — what the
     /// run takes when it goes.
-    async fn template_executor(&self, r: &routine_entity::Model) -> Result<(), String> {
+    async fn template_work(&self, r: &routine_entity::Model) -> Result<(), String> {
         template_of(r).ok_or("the routine has no work to hand out")?;
         self.work_snapshot()
             .await
@@ -1293,6 +1309,7 @@ impl PersonalAgentEngine {
         r: routine_entity::Model,
         trigger: &str,
     ) -> Result<run_entity::Model, String> {
+        self.has_a_brain().await?;
         let run = rsvc::insert_run(
             &self.db.conn,
             NewRun {
@@ -1610,10 +1627,10 @@ impl PersonalAgentEngine {
         run: &run_entity::Model,
         seq: i32,
     ) {
-        match self.template_executor(r).await {
+        match self.template_work(r).await {
             Ok(()) => {}
             Err(e) => {
-                self.pause_routine(r, "executor", &e).await;
+                self.pause_routine(r, "work_agent", &e).await;
                 let _ = rsvc::update_run(
                     &self.db.conn,
                     run.id,
@@ -2100,6 +2117,7 @@ impl PersonalAgentEngine {
         source: &str,
         auth: MakeAuth,
     ) -> Result<(routine_entity::Model, Option<run_entity::Model>, bool), String> {
+        self.has_a_brain().await?;
         self.check_spec(spec).await?;
         let new = self.new_of(spec, source, false).await;
         let key = format!("routine_create:{}", spec.title.to_lowercase());
@@ -2517,7 +2535,7 @@ impl PersonalAgentEngine {
                     .map_err(|e| e.to_string())?
                     .ok_or_else(|| format!("routine #{id} is gone"))?;
                 if r.kind == RoutineKind::Dispatch {
-                    self.template_executor(&r).await?;
+                    self.template_work(&r).await?;
                 }
                 if !svc::move_notice(
                     &self.db.conn,
@@ -3116,7 +3134,7 @@ impl PersonalAgentEngine {
             Some(s) => self.apply_spec(&r, s).await,
             None => {
                 if action == "resume" && r.kind == RoutineKind::Dispatch {
-                    if let Err(e) = self.template_executor(&r).await {
+                    if let Err(e) = self.template_work(&r).await {
                         return ToolOutcome::refused(e);
                     }
                 }
@@ -3178,6 +3196,7 @@ impl PersonalAgentEngine {
         notice_id: Option<i32>,
     ) -> Result<RoutineView, String> {
         let bot = self.bot().await;
+        self.has_a_brain().await?;
         let owner = self.owner_tz().await;
         let card = match notice_id {
             Some(n) => {
@@ -3286,7 +3305,7 @@ impl PersonalAgentEngine {
                     .unwrap_or(r)
             }
             "resume" if r.kind == RoutineKind::Dispatch => {
-                self.template_executor(&r).await?;
+                self.template_work(&r).await?;
                 self.routine_switch(&r, action).await?
             }
             _ => self.routine_switch(&r, action).await?,

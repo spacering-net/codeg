@@ -21,7 +21,6 @@ import { ChevronDown, ChevronUp, MoreHorizontal, Repeat } from "lucide-react"
 import { JsonRenderScope } from "@/components/ai-elements/json-render-pre"
 import { MessageResponse } from "@/components/ai-elements/message"
 import { usePersonalAgent } from "@/contexts/personal-agent-context"
-import { getAgentLabel } from "@/lib/custom-agents"
 import { useCollapsibleOverflow } from "@/hooks/use-collapsible-overflow"
 import { Button } from "@/components/ui/button"
 import {
@@ -30,7 +29,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import type { AgentType, DispatchInfo, RoutineDraft } from "@/lib/types"
+import type { DispatchInfo, RoutineDraft } from "@/lib/types"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 import { cn } from "@/lib/utils"
 
@@ -51,8 +50,8 @@ import {
   SheetPart,
   str,
   UnreadMark,
-  useBotName,
   useOpenWork,
+  useOtherAssistant,
   usePageScope,
   useWorkMeta,
   workTargetOf,
@@ -360,9 +359,9 @@ function ResultText({
 
 export function EventCard({ item }: { item: EventItem }) {
   const t = useTranslations("PersonalAgent")
-  const { dispatchById, botId, snapshot } = usePersonalAgent()
+  const { dispatchById, botId } = usePersonalAgent()
   const { readOnly, jumpTo } = usePageScope()
-  const botName = useBotName()
+  const otherAssistant = useOtherAssistant()
   const openWork = useOpenWork()
   const meta = useWorkMeta()
   const row = item.row
@@ -374,9 +373,7 @@ export function EventCard({ item }: { item: EventItem }) {
   const state = asDispatchState(data?.state)
   // Where it stood on the PR ladder then (8.5); older news says its state.
   const newsLadder = asLadder(data?.ladder)
-  const executor = info?.executor.name ?? str(data, "executor")
-  const agentType =
-    info?.executor.agent_type ?? (str(data, "agent_type") as AgentType | null)
+  const mode = info?.mode ?? asMode(data?.mode)
   const excerpt = str(data, "excerpt")
   const cause = str(data, "cause")
   const rawNote = str(data, "note")
@@ -400,13 +397,8 @@ export function EventCard({ item }: { item: EventItem }) {
   // What came of it in a sentence (A1), as the server read it; a check's
   // verdict says it, its evidence is the text.
   const gist = checkFor == null ? str(data, "gist") : null
-  // Its executor, named after its assistant (its own work): the agent that
-  // ran it says more (A2).
-  const ownName =
-    executor != null &&
-    snapshot?.agent != null &&
-    executor === botName(snapshot.agent)
-  const ranBy = ownName && agentType ? getAgentLabel(agentType) : executor
+  // Another assistant's work (handed over) is named so; its own is not.
+  const by = otherAssistant(info)
   // The commit it landed as, on the news of the merge (A5).
   const mergeCommit = newsLadder === "merged" ? str(data, "merge_commit") : null
   const mergedAs = mergeCommit ? mergeCommit.slice(0, 7) : null
@@ -455,16 +447,14 @@ export function EventCard({ item }: { item: EventItem }) {
       <CardMessage data-pa-event-card>
         <WorkRow
           flat
-          executorId={info?.executor.assistant_id ?? num(data, "executor_id")}
-          executor={executor}
-          agentType={agentType}
+          mode={mode}
           title={title}
           // The commit a merge landed as ends the line under the title
           // (A5), where a narrow card cuts it rather than the menu.
           meta={[
             meta({
-              executor: ranBy,
-              mode: info?.mode ?? asMode(data?.mode),
+              by,
+              mode,
               folder: info?.folder_name ?? null,
             }),
             mergedAs,

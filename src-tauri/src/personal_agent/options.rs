@@ -1,9 +1,9 @@
-//! Fill an agent's selection in for the owner (10.5 "fill five"): a work
-//! assistant made from a name alone, an executor config made with it, a
-//! brain switched to another agent in the conversation. What the owner said
-//! is kept; the rest is taken from another executor config on the same
-//! agent, else from what the agent reports as its current value. Every value
-//! codeg picked is listed, so the card can say which.
+//! Fill an agent's selection in for the owner (10.5 "fill five"): the agent
+//! a new assistant's work runs on when only some of it is named, a brain
+//! switched to another agent in the conversation. What the owner said is
+//! kept; the rest is taken from another assistant's work on the same agent,
+//! else from what the agent reports as its current value. Every value codeg
+//! picked is listed, so the card can say which.
 //!
 //! The option list comes from the agent itself, the way the editor reads it
 //! (`acp_describe_agent_options_core`): a transient connection. When it

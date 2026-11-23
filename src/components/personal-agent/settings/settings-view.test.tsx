@@ -78,7 +78,6 @@ const HISTORY = vi.hoisted(() => ({
 const api = vi.hoisted(() => ({
   personalAgentSettingsPatch: vi.fn(async () => []),
   personalAgentBots: vi.fn(async () => []),
-  personalAgentExecutors: vi.fn(async () => []),
   personalAgentGet: vi.fn(),
   getDelegationSettings: vi.fn(async () => ({ enabled: true })),
   openSettingsWindow: vi.fn(async () => {}),
@@ -98,7 +97,6 @@ const api = vi.hoisted(() => ({
   personalAgentGrades: vi.fn(
     async (): Promise<PersonalAgentGrades> => ({
       bots: {},
-      executors: {},
       cells: [],
     })
   ),
@@ -129,20 +127,6 @@ vi.mock("@/components/layout/workspace-folder-dialog", () => ({
   WorkspaceFolderDialog: ({ open }: { open: boolean }) =>
     open ? <div data-testid="folder-dialog" /> : null,
 }))
-// The pages with editors of their own are tested where they live.
-vi.mock("@/components/settings/assistants-panel", () => ({
-  AssistantsPanel: ({
-    head,
-  }: {
-    head?: (create: React.ReactNode | null) => React.ReactNode
-  }) => (
-    <>
-      {head?.(<button data-testid="executors-create">New</button>)}
-      <div data-testid="executors-list" />
-    </>
-  ),
-}))
-
 const ctx = vi.hoisted(() => ({
   snapshot: null as unknown,
   botId: null as number | null,
@@ -190,7 +174,13 @@ function snapshot(
       updated_at: "2026-11-10T00:00:00Z",
       kind: "primary",
       uid: "u1",
-      executor_assistant_id: null,
+      work: {
+        agent_type: "claude_code",
+        agent_options: {},
+        label_snapshot: { agent: "Claude Code", mode: null, options: [] },
+      },
+      work_instructions: "",
+      legacy_assistant_id: null,
     },
     status: { engine } as PersonalAgentSnapshot["status"],
     account: {
@@ -223,22 +213,22 @@ afterEach(() => {
 })
 
 describe("the settings view", () => {
-  it("has the pages every assistant shares, the team's and the preferences, and none of an assistant's own", () => {
+  it("has the preferences every assistant shares — no team pages any more — and none of an assistant's own", () => {
     draw()
     const nav = document.querySelector("[data-pa-settings-nav]") as HTMLElement
-    expect(within(nav).getByRole("heading").textContent).toBe("Settings")
+    expect(within(nav).getByRole("heading").textContent).toBe(
+      "Assistant preferences"
+    )
     expect(within(nav).getByText("Shared by every assistant")).toBeTruthy()
     const groups = within(nav).getAllByRole("group")
     expect(groups.map((g) => g.getAttribute("aria-label"))).toEqual([
-      "Team",
       "Preferences",
     ])
     const pages = (g: HTMLElement) =>
       [...g.querySelectorAll("[data-pa-nav]")].map((b) =>
         b.getAttribute("data-pa-nav")
       )
-    expect(pages(groups[0])).toEqual(["workers", "executors"])
-    expect(pages(groups[1])).toEqual([
+    expect(pages(groups[0])).toEqual([
       "communication",
       "projects",
       "proactive",
@@ -249,34 +239,24 @@ describe("the settings view", () => {
     for (const b of nav.querySelectorAll("[data-pa-nav]")) {
       expect(b.querySelector("svg")).not.toBeNull()
     }
-    // An assistant's own pages are on its page now.
-    for (const page of ["identity", "persona", "notify", "advanced"]) {
+    // An assistant's own pages are on its page, the assistants themselves
+    // on the sidebar.
+    for (const page of [
+      "identity",
+      "persona",
+      "notify",
+      "advanced",
+      "workers",
+      "executors",
+    ]) {
       expect(document.querySelector(`[data-pa-nav="${page}"]`)).toBeNull()
     }
-    // It opens on the work assistants.
+    // It opens on the first preferences page.
     expect(
       document
-        .querySelector('[data-pa-nav="workers"]')
+        .querySelector('[data-pa-nav="communication"]')
         ?.getAttribute("aria-current")
     ).toBe("page")
-    expect(
-      document.querySelector('[data-pa-settings-page="workers"]')
-    ).not.toBeNull()
-    fireEvent.click(document.querySelector('[data-pa-nav="executors"]')!)
-    expect(screen.getByTestId("executors-list")).toBeInTheDocument()
-    // [New] is at the end of the page's title bar, the note under it.
-    const execPage = document.querySelector(
-      '[data-pa-settings-page="executors"]'
-    )!
-    const titleBar = within(execPage as HTMLElement)
-      .getByRole("heading", { level: 2, name: "Executor configs" })
-      .closest("div")!
-    expect(within(titleBar).getByTestId("executors-create")).toBeTruthy()
-    expect(
-      screen.getByText(
-        /These executor configs are the ones you @ in conversations/
-      )
-    ).toBeInTheDocument()
   })
 
   it("watches every project by default; picking some is sent as what it asks, never a whole list", async () => {
@@ -846,208 +826,5 @@ describe("the settings view", () => {
     } finally {
       shell.desktop = false
     }
-  })
-
-  it("opens a work assistant's page from the team's list by its [View details] — its row is no link, and has no [Open] or ⋯", async () => {
-    const flags = {
-      sort_order: 0,
-      pinned_at: null,
-      section: null,
-      hidden: false,
-      muted: false,
-      unread_mark: false,
-      notify: true,
-    }
-    api.personalAgentBots.mockResolvedValue([
-      {
-        id: 7,
-        kind: "worker",
-        uid: "u7",
-        name: "Reviewer",
-        avatar: { kind: "face", shape: "ring", color: "blue" },
-        executor_assistant_id: null,
-        created_at: "2026-11-10T00:00:00Z",
-        persona: "# Persona I review changes.",
-        persona_unwritten: false,
-        roster: flags,
-        live: { bot_id: 7, updated_at: "2026-11-10T00:00:00Z" },
-      },
-    ] as never)
-    draw()
-    const row = await waitFor(() => {
-      const el = document.querySelector('[data-pa-worker="7"]')
-      expect(el).not.toBeNull()
-      return el as HTMLElement
-    })
-    // Its persona's head, the heading's marks left out — and that it has
-    // nothing to work on yet.
-    expect(row.querySelector('[data-pa-worker-persona="7"]')?.textContent).toBe(
-      "Persona I review changes."
-    )
-    expect(row.querySelector('[data-pa-worker-unbound="7"]')).not.toBeNull()
-    // Its name is no link.
-    fireEvent.click(within(row).getByText("Reviewer"))
-    let ui = usePersonalAgentUi.getState()
-    expect(ui.viewBot).toBeNull()
-    expect(ui.settings).toEqual({ page: "workers" })
-    // What acts on it, side by side on its row.
-    expect(
-      within(row)
-        .getAllByRole("button")
-        .map((b) => b.textContent)
-    ).toEqual(["View details", "Copy", "Delete"])
-    expect(row.querySelector("[data-pa-worker-open]")).toBeNull()
-    expect(row.querySelector("[data-pa-worker-menu]")).toBeNull()
-    api.personalAgentBotCopy.mockResolvedValueOnce({ bot: null } as never)
-    fireEvent.click(within(row).getByRole("button", { name: "Copy" }))
-    await waitFor(() =>
-      expect(api.personalAgentBotCopy).toHaveBeenCalledWith(
-        7,
-        expect.stringContaining("Reviewer"),
-        "en"
-      )
-    )
-    api.personalAgentBotImpact.mockReturnValueOnce(new Promise(() => {}))
-    fireEvent.click(within(row).getByRole("button", { name: "Delete" }))
-    expect(await screen.findByRole("alertdialog")).toBeTruthy()
-    fireEvent.keyDown(screen.getByRole("alertdialog"), { key: "Escape" })
-    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull())
-    fireEvent.click(within(row).getByRole("button", { name: "View details" }))
-    ui = usePersonalAgentUi.getState()
-    expect(ui.viewBot).toBe(7)
-    expect(ui.botPage).toEqual({ tab: "identity" })
-    expect(ui.settings).toBeNull()
-    usePersonalAgentUi.setState({ viewBot: null })
-    api.personalAgentBots.mockResolvedValue([])
-  })
-
-  it("shows each work assistant's grade (2.11)", async () => {
-    const flags = {
-      sort_order: 0,
-      pinned_at: null,
-      section: null,
-      hidden: false,
-      muted: false,
-      unread_mark: false,
-      notify: true,
-    }
-    api.personalAgentBots.mockResolvedValue([
-      {
-        id: 7,
-        kind: "worker",
-        uid: "u7",
-        name: "Reviewer",
-        avatar: { kind: "face", shape: "ring", color: "blue" },
-        executor_assistant_id: null,
-        created_at: "2026-11-10T00:00:00Z",
-        persona: "# Persona I review changes.",
-        persona_unwritten: false,
-        roster: flags,
-        live: { bot_id: 7, updated_at: "2026-11-10T00:00:00Z" },
-      },
-    ] as never)
-    api.personalAgentGrades.mockResolvedValue({
-      bots: {
-        "7": {
-          dispatches: 12,
-          settled: 10,
-          first_pass: 8,
-          first_pass_rate: 80,
-          avg_minutes: 75,
-        },
-      },
-      executors: {},
-      cells: [],
-    })
-    usePersonalAgentUi.getState().openSettings("workers")
-    draw()
-    const grade = await waitFor(() => {
-      const el = document.querySelector('[data-pa-worker-grade="7"]')
-      expect(el).not.toBeNull()
-      return el!
-    })
-    expect(grade.textContent).toBe(
-      "first time 80% (8/10) · 1 h 15 min on average"
-    )
-    // Apart (3.3): by executor config and mode.
-    api.personalAgentGrades.mockResolvedValue({
-      bots: {
-        "7": {
-          dispatches: 12,
-          settled: 10,
-          first_pass: 8,
-          first_pass_rate: 80,
-          avg_minutes: 75,
-        },
-      },
-      executors: {},
-      cells: [
-        {
-          bot_id: 7,
-          executor: 3,
-          executor_name: "Codex Review",
-          mode: "session",
-          grade: {
-            dispatches: 9,
-            settled: 8,
-            first_pass: 7,
-            first_pass_rate: 88,
-            avg_minutes: 20,
-          },
-        },
-        {
-          bot_id: 7,
-          executor: 4,
-          executor_name: "Claude Dev",
-          mode: "task",
-          grade: {
-            dispatches: 3,
-            settled: 0,
-            first_pass: 0,
-            first_pass_rate: null,
-            avg_minutes: null,
-          },
-        },
-        {
-          bot_id: 8,
-          executor: 4,
-          executor_name: "Claude Dev",
-          mode: "chat",
-          grade: {
-            dispatches: 1,
-            settled: 1,
-            first_pass: 1,
-            first_pass_rate: 100,
-            avg_minutes: 5,
-          },
-        },
-      ],
-    })
-    cleanup()
-    usePersonalAgentUi.getState().openSettings("workers")
-    draw()
-    const open = await waitFor(() => {
-      const el = document.querySelector('[data-pa-worker-cells="7"]')
-      expect(el).not.toBeNull()
-      return el as HTMLElement
-    })
-    fireEvent.click(open)
-    const cells = await waitFor(() => {
-      const els = document.querySelectorAll("[data-pa-grade-cell]")
-      expect(els.length).toBe(2)
-      return els
-    })
-    expect(cells[0].textContent).toBe(
-      "Codex Review · Work sessionfirst time 88% (7/8) · 20 min on average"
-    )
-    expect(cells[1].textContent).toBe(
-      "Claude Dev · Kanban task3 handed out, none done yet"
-    )
-    api.personalAgentBots.mockResolvedValue([])
-    api.personalAgentGrades.mockResolvedValue({
-      bots: {},
-      executors: {},
-      cells: [],
-    })
   })
 })

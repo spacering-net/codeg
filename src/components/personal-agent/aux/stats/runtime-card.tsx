@@ -80,7 +80,7 @@ export function RuntimeCard({
   const markers = useRunLogMarkers()
   const { agent, status } = snapshot
   const seg = status.segment
-  const model = agent?.label_snapshot.options.find(
+  const model = agent?.label_snapshot?.options.find(
     (o) => o.id === "model"
   )?.value_label
   const segment = seg
@@ -108,7 +108,7 @@ export function RuntimeCard({
             aria-hidden
             className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted"
           >
-            {agent ? (
+            {agent?.agent_type ? (
               <AgentIcon
                 agentType={agent.agent_type}
                 className="size-[1.125rem]"
@@ -119,12 +119,12 @@ export function RuntimeCard({
             <p
               data-pa-runtime-agent
               className="min-w-0 truncate text-sm leading-5"
-              title={[agent?.label_snapshot.agent, model]
+              title={[agent?.label_snapshot?.agent, model]
                 .filter(Boolean)
                 .join(" · ")}
             >
               <span className="font-semibold">
-                {agent?.label_snapshot.agent ?? "—"}
+                {agent?.label_snapshot?.agent ?? "—"}
               </span>
               {model ? (
                 <span className="text-muted-foreground"> · {model}</span>

@@ -8,7 +8,7 @@
 //!   session's or task's connection each get one ask card, keyed by the
 //!   connection and the request id — however often the dispatch flips
 //!   between waiting and running. Every other permission request stays the
-//!   owner's, as the executor config says.
+//!   owner's, as the work's own settings say.
 //! - **The assistant answers, or forwards.** The card's event wakes the
 //!   dispatching assistant with the request as a `<codeg-ask>` block; it
 //!   answers with `dispatch_answer` or forwards it. The owner's settings,
@@ -33,7 +33,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use super::dispatch::{cut, executor_of, mode_label, FollowupAuth};
+use super::dispatch::{cut, mode_label, work_of, FollowupAuth};
 use super::engine::{brain_of, PersonalAgentEngine};
 use super::read_check::OrFailed;
 use crate::acp::plan_approval::{PlanApprovalAnswer, PlanApprovalDecision};
@@ -71,8 +71,6 @@ pub struct AskCard {
     pub bot_id: i32,
     pub dispatch_id: i32,
     pub title: String,
-    pub executor: String,
-    pub executor_id: i32,
     pub agent_type: Option<AgentType>,
     pub mode: Option<DispatchMode>,
     pub folder_id: Option<i32>,
@@ -91,7 +89,7 @@ pub struct AskCard {
     /// A plan permission's options, as offered.
     pub options: Vec<PermissionOptionInfo>,
     pub flavor: Option<PlanPermission>,
-    /// The executor config's own permission mode: what Claude Code goes on
+    /// The work's own permission mode: what Claude Code goes on
     /// in once its plan is approved.
     pub exec_mode: Option<String>,
     /// `asking` (the assistant answers), `forwarded` (the owner does),
@@ -340,7 +338,7 @@ fn answer_words(card: &AskCard, answer: &Value) -> String {
 }
 
 /// The option of a plan permission that answers `decision` (7.3.1):
-/// approving goes on in the executor config's own mode — the default one
+/// approving goes on in the work's own mode — the default one
 /// when it was set to plan — never in one that clears the context; sending
 /// back keeps planning.
 fn plan_option(card: &AskCard, decision: PlanApprovalDecision) -> Option<String> {
@@ -778,26 +776,24 @@ impl PersonalAgentEngine {
             return;
         }
         let prefs = self.prefs().await;
-        let executor = executor_of(d);
+        let work = work_of(d);
         let mut card = AskCard {
             notice: "ask".into(),
             bot_id: bot,
             dispatch_id: d.id,
             title: d.title.clone(),
-            executor: executor.name.clone(),
-            executor_id: executor.assistant_id,
-            agent_type: Some(executor.agent_type),
+            agent_type: Some(work.agent_type),
             mode: Some(d.mode),
             folder_id: d.folder_id,
             conversation_id: d.conversation_id,
             work_task_id: d.work_task_id,
             conn: conn.to_string(),
             request_id: req.id().to_string(),
-            exec_mode: executor
+            exec_mode: work
                 .agent_options
                 .mode_id
                 .clone()
-                .or_else(|| executor.agent_options.config_values.get("mode").cloned()),
+                .or_else(|| work.agent_options.config_values.get("mode").cloned()),
             asked_at: Some(Utc::now()),
             ..Default::default()
         };

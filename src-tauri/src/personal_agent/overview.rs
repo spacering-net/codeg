@@ -600,10 +600,10 @@ impl PersonalAgentEngine {
         let mut text = Vec::new();
         let mut data = Vec::new();
         // How each one's handed-out work went lately (5.1).
-        let (grades, _) = super::profile::grades(&self.db, Utc::now()).await;
+        let grades = super::profile::grades(&self.db, Utc::now()).await;
         for (row, live, needs) in all {
             // Its persona's head, from the first line of its SOUL.md as it is.
-            let soul = super::workdir::read_text(&self.workdir_of(row), super::workdir::SOUL_FILE);
+            let soul = super::workdir::soul_text(&self.data_dir, row);
             let unwritten = super::team::unwritten(row.kind, &soul);
             let persona = super::team::persona_head(&soul, super::team::HEAD_LIST_CHARS);
             let you = if row.id == me { " (you)" } else { "" };
@@ -623,19 +623,17 @@ impl PersonalAgentEngine {
                     format!(" — {about}")
                 }
             )];
-            // What it works with when it does a thing itself — never the
-            // executor config itself.
-            let works_with = match row.executor_assistant_id {
-                Some(id) => crate::db::service::assistant_service::get_live_enabled(&self.db.conn, id)
-                    .await
-                    .or_failed()
-                    .map(|a| super::dispatch::label_words(a.agent_type, Some(&a.label_snapshot))),
-                None => None,
-            };
+            // What it works with when it does a thing itself.
+            let works_with = super::dispatch::usable_work(&self.db, row)
+                .await
+                .map(|w| super::dispatch::label_words(w.agent_type, Some(&w.label_snapshot)));
             parts.push(match &works_with {
                 Some(w) => format!("works with {w}"),
-                None => "cannot do work itself yet".into(),
+                None => "cannot do work itself right now (the agent its work runs on is off)".into(),
             });
+            if row.agent_type.is_none() {
+                parts.push("can be @-mentioned in conversations, not talked to yet".into());
+            }
             let busy = live.work == WorkState::Busy;
             let state = match (&live.activity, busy) {
                 (Some(a), true) => format!("working: {}", activity_phrase(a)),

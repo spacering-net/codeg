@@ -25,7 +25,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use super::dispatch::{executor_of, DispatchAuth, DispatchRequest, FollowupAuth, ValidDispatch};
+use super::dispatch::{work_of, DispatchAuth, DispatchRequest, FollowupAuth, ValidDispatch};
 use super::engine::{enum_str, PersonalAgentEngine};
 use super::ledger;
 use super::messages::{MessageAuth, ResolvedMessage};
@@ -231,13 +231,11 @@ impl PersonalAgentEngine {
         if message.trim().is_empty() {
             return Err("`message` is required".into());
         }
-        let executor = executor_of(&d);
+        let work = work_of(&d);
         let display = json!({
             "dispatch_id": d.id,
             "title": d.title,
-            "executor": executor.name,
-            "executor_id": executor.assistant_id,
-            "agent_type": executor.agent_type,
+            "agent_type": work.agent_type,
             "mode": d.mode,
             "message": message,
             "intent": intent,
@@ -378,13 +376,11 @@ impl PersonalAgentEngine {
             .await
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("dispatch #{dispatch_id} does not exist"))?;
-        let executor = executor_of(&d);
+        let work = work_of(&d);
         let display = json!({
             "dispatch_id": d.id,
             "title": d.title,
-            "executor": executor.name,
-            "executor_id": executor.assistant_id,
-            "agent_type": executor.agent_type,
+            "agent_type": work.agent_type,
             "mode": d.mode,
             "message": message,
             "intent": intent,
@@ -774,14 +770,15 @@ impl PersonalAgentEngine {
         }
     }
 
-    /// What an assistant hears when it has nothing its work runs on, said to
-    /// the owner instead on a card they accepted; anything else as it is.
+    /// What an assistant hears when the agent its work runs on cannot run,
+    /// said to the owner instead on a card they accepted; anything else as
+    /// it is.
     pub(super) fn for_the_owner(&self, e: String) -> String {
-        if e != super::dispatch::NO_EXECUTOR {
+        if e != super::dispatch::NO_WORK_AGENT {
             return e;
         }
-        "nothing is set for this assistant's work to run on: pick it in the assistant's settings \
-         (Brain & executor config), then try again"
+        "the agent this assistant's work runs on is not installed or is turned off: pick another \
+         in the assistant's settings (Identity & brain), then try again"
             .into()
     }
 

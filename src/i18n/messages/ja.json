@@ -864,7 +864,7 @@
       "agentDefaultHint": "エージェント既定: {value}",
       "defaultOptionLabel": "既定（{value}）",
       "overrideCount": "上書き {count} 件",
-      "tabAssistants": "実行設定",
+      "tabAssistants": "アシスタント",
       "booleanOn": "オン",
       "booleanOff": "オフ",
       "modelNotSwitched": "エージェントが選択したモデルに切り替わらなかったため、これらのオプションは別のモデルのものである可能性があります。",
@@ -950,8 +950,8 @@
         "disableTitle": "{name} を無効にしますか？",
         "disableConfirm": "無効にする"
       },
-      "assistantsMoved": "実行設定：アシスタントのページに移動しました",
-      "assistantsMovedHint": "アシスタントのページの「設定 → チーム → 実行設定」で管理します。会話で @ するものも同じです。",
+      "assistantsMoved": "アシスタント：サイドバーの「パーソナルエージェント」グループで管理",
+      "assistantsMovedHint": "会話で @ するのはあなたのアシスタントです。それぞれ自分の作業用エージェントと常駐指示で動きます。",
       "assistantsMovedOpen": "開く"
     },
     "actions": {
@@ -2455,7 +2455,7 @@
       "none": "—",
       "copyField": "{field}をコピー",
       "copiedField": "{field}をコピーしました",
-      "assistant": "実行設定"
+      "assistant": "アシスタント"
     },
     "conversationCard": {
       "untitledConversation": "無題の会話",
@@ -3619,8 +3619,8 @@
         "mentionGroupSession": "セッション",
         "mentionGroupCommit": "コミット",
         "mentionGroupSkill": "スキル",
-        "mentionGroupAssistant": "実行設定",
-        "mentionManageAssistants": "実行設定を管理…"
+        "mentionGroupAssistant": "アシスタント",
+        "mentionManageAssistants": "アシスタントを管理…"
       },
       "messageQueue": {
         "addToQueue": "キューに追加",
@@ -3961,12 +3961,12 @@
             "child_rejected": "サブエージェント: 要求拒否",
             "child_unknown": "サブエージェント: エラー",
             "unknown": "不明なタスク",
-            "assistant_not_found": "実行設定なし",
+            "assistant_not_found": "アシスタントが見つかりません",
             "assistants_unsupported": "再起動が必要",
             "assistant_support_unknown": "応答なし"
           }
         },
-        "unknownAssistant": "実行設定 #{id}",
+        "unknownAssistant": "アシスタント #{id}",
         "deletedAssistant": "（削除済み）"
       },
       "contentParts": {
@@ -5464,7 +5464,7 @@
       "quickMessages": "クイックメッセージ",
       "taskTemplates": "タスクテンプレート",
       "preferences": "アプリ設定（言語・切り替え）",
-      "assistants": "実行設定",
+      "assistants": "アシスタント",
       "appearance": "外観（ライト／ダーク、テーマカラー、ズーム、フォント、背景の設定、カスタムスタイル）"
     },
     "scopeExcluded": {
@@ -5537,7 +5537,7 @@
       "quickMessages": "クイックメッセージ {count} 件",
       "taskTemplates": "タスクテンプレート {count} 件",
       "preferences": "アプリ設定 {count} 件",
-      "assistants": "実行設定 {count} 件",
+      "assistants": "{count} 件のアシスタント",
       "appearance": "外観設定 {count} 件"
     },
     "rollbackTitle": "インポートを元に戻す",
@@ -5555,7 +5555,7 @@
     "passphraseKeep": "空のままにすると保存済みのパスフレーズを使います",
     "passphrasePlaceholder": "暗号化パスフレーズ",
     "passphraseHint": "このマシンのキーチェーンにのみ保存され、アップロードされません。他のマシンでも同じパスフレーズを入力してください。",
-    "assistantsRenamed": "このマシンに同じ名前の実行設定があったため、{count} 件の名前を変更しました。",
+    "assistantsRenamed": "{count} 件のアシスタントがこの端末の既存のものと同名だったため、名前を変更しました。",
     "conflictTitle": "自動アップロードを一時停止しています",
     "conflictBody": "サーバーには {device} が {time} に作成した、このマシンでまだ復元していないスナップショットがあります。アップロードするとそれを置き換え、サーバーには以前のコピーが残りません。",
     "conflictRestore": "復元する",
@@ -10047,7 +10047,6 @@
       "completed": "完了",
       "other": "その他",
       "failed": "失敗",
-      "executors": "実行設定別",
       "completedHint": "{count} 件完了",
       "tokens": "日別のトークン",
       "agentTokens": "パーソナルエージェント",
@@ -10068,7 +10067,8 @@
         "tokens": "トークン",
         "tokensSub": "エージェント {agent} · 依頼 {dispatch}",
         "tokensUnsynced": "使用量の同期後に表示"
-      }
+      },
+      "agents": "エージェント別"
     },
     "settings": {
       "setupStart": "エージェントと話す",
@@ -10085,7 +10085,7 @@
       "name": "名前",
       "nameHint": "ページとメッセージに表示される名前とアイコンです。エージェント自身もこの名前を知っています。名前が空欄なら既定の名前を使います。",
       "namePlaceholder": "パーソナルエージェント",
-      "agentHint": "動かすエージェントとそのすべてのオプション。実行設定と同じように設定します。",
+      "agentHint": "考えたりあなたと話したりするのに使うエージェントと、そのすべてのオプション。",
       "switchNote": "別のエージェントに切り替えると、次のメッセージから新しいセッションが始まります。古いセッションは再開せず、代わりに codeg がタイムラインを新しいセッションに引き継ぎます。",
       "autoCompact": "自動圧縮のしきい値",
       "autoCompactHint": "コンテキストの使用率がこの値以上になると、codeg は次のメッセージの前に圧縮コマンドを送信します。0 でオフ。エージェント自身の自動圧縮が発動する値より低くしてください。",
@@ -10130,18 +10130,15 @@
       "saveFailed": "保存できませんでした",
       "restoreDefaults": "既定に戻す",
       "back": "会話に戻る",
-      "viewTitle": "設定",
-      "readOnly": "アシスタントは別の codeg プロセスで動作しているため、ここでは設定は読み取り専用です。実行設定そのものは引き続き編集できます。",
+      "viewTitle": "アシスタントの設定",
+      "readOnly": "アシスタントは別の codeg プロセスで動作しているため、ここでの設定は読み取り専用です。",
       "setUpFirst": "先にメインアシスタントを設定してください。",
       "nav": {
-        "team": "チーム",
         "prefs": "環境設定",
-        "identity": "頭脳と実行設定",
+        "identity": "アイデンティティと頭脳",
         "persona": "ペルソナとメモリ",
         "notify": "通知",
         "advanced": "詳細設定",
-        "workers": "作業アシスタント",
-        "executors": "実行設定",
         "communication": "コミュニケーション",
         "proactive": "プロアクティブと通知",
         "automation": "依頼と自動化",
@@ -10388,7 +10385,7 @@
         },
         "auto_accept": {
           "title": "自動検収",
-          "hint": "アシスタントが出したコード変更の作業がレビュー待ちになると、別の実行設定が読み取り専用で確認し、アシスタントが完了条件に照らして判断します。オフにすると自分で確認します。",
+          "hint": "アシスタントが渡したコード変更の作業がレビュー待ちになると、作業に使うエージェントが読み取り専用で確認し、アシスタントが受け入れ基準に照らして判断します。オフにするとあなた自身がレビューします。",
           "on": "オン",
           "off": "オフ"
         },
@@ -10481,7 +10478,7 @@
         },
         "level_routine_paused": {
           "title": "ルーティンの一時停止",
-          "hint": "3 回続けて失敗したか、実行設定が使えなくなったとき。"
+          "hint": "3 回続けて失敗したか、作業に使うエージェントが使えなくなりました。"
         },
         "level_proposal": {
           "title": "提案：あなた待ちのもの",
@@ -10552,8 +10549,8 @@
           "off": "オフ"
         },
         "rule_idle_bot": {
-          "title": "使われていない作業アシスタント",
-          "hint": "週の振り返りで：2 週間呼ばれていない作業アシスタントを、非表示にするか削除するか尋ねます。",
+          "title": "使われていないアシスタント",
+          "hint": "週次の振り返りで：2 週間起こされていないアシスタントを、非表示にするか削除するか尋ねます。",
           "on": "オン",
           "off": "オフ"
         },
@@ -10615,7 +10612,7 @@
         },
         "brief_bots": {
           "title": "各アシスタント",
-          "hint": "1 行ずつ：終えたこと、取り組み中のこと、止まっているところ。非表示のものは載せません。",
+          "hint": "アシスタントごとに 1 行：終わったこと、取り組み中のこと、詰まっているところ。非表示のものは載せません。",
           "on": "オン",
           "off": "オフ"
         },
@@ -10741,24 +10738,6 @@
         "apply": "移動",
         "saved": "作業ディレクトリを移動しました。"
       },
-      "team": {
-        "noWorkers": "作業アシスタントはまだいません",
-        "noWorkersHint": "作業アシスタントは自分の担当の仕事を引き受け、最後までやり遂げます。必要になったらメインアシスタントに伝えるか、ここで作成してください。",
-        "boundTo": "{name} で作業",
-        "unbound": "実行設定なし：まだ自分で作業できません",
-        "sameBatch": "ここの実行設定は、会話で @ するものと同じです。ここで変更すると両方に反映されます。",
-        "delegationOff": "マルチエージェント連携がオフのため、今は会話で @ で呼び出せません。アシスタントの依頼には影響しません。",
-        "openCollaboration": "コラボレーション設定を開く"
-      },
-      "executor": {
-        "running": "{count} 件実行中",
-        "fortnight": "2 週間：依頼 {dispatches} 件 · 完了 {completed} 件",
-        "failing": "直近 {count} 件の依頼がすべて失敗しました：{error}",
-        "impactRunning": "実行中の {count} 件の作業はそのまま続きます。",
-        "usedBy": "使っているアシスタント：{names}",
-        "nameJoin": "、",
-        "impactBots": "次のアシスタントはしばらく自分で作業できなくなります：{names}。"
-      },
       "changed": {
         "on": "オン",
         "off": "オフ",
@@ -10862,8 +10841,7 @@
         "average": "平均 {time}",
         "minutes": "{n} 分",
         "hours": "{h} 時間 {m} 分",
-        "apart": "実行設定・方法別",
-        "byExecutor": "実行設定・方法別",
+        "apart": "エージェントと方法別",
         "byBot": "アシスタント・方法別",
         "someone": "以前の依頼",
         "unjudged": "{count} 件依頼、まだ完了なし"
@@ -10879,17 +10857,6 @@
       "skillDeleted": "{name} を削除しました",
       "viewSubtitle": "すべてのアシスタントで共通",
       "personaUnwritten": "ペルソナはまだ書かれていません。自己紹介のとき、あなたが仕事を任せたとき、毎晩の整理のときに自分で書き足します。ここで直接書くこともできます。",
-      "executorPick": {
-        "title": "実行設定",
-        "hint": "頭脳は考え、実行設定は作業をします。自分で行う作業はすべてこの上で動きます。複数のアシスタントで共有できます。",
-        "newHint": "保存時に頭脳と同じエージェントで新しく作成し、オプションは自動で補います。",
-        "missing": "実行設定がありません。今は自分で作業できません。選ぶか、新しく作成してください。",
-        "disabled": "この実行設定は無効です。しばらく自分で作業できません。",
-        "editorNote": "codeg はこのエージェントのオプションを読み取れませんでした（{why}）。ここで選んでください。保存するとこの実行設定を使います。",
-        "new": "新規（頭脳と同じエージェント）",
-        "none": "なし",
-        "off": "（無効）"
-      },
       "projects": {
         "about": "アシスタントはこれらのプロジェクトでレビュー待ちの PR を見ておき、最初に手伝えることもここから探します。",
         "scope": "見るプロジェクト",
@@ -10905,7 +10872,18 @@
         "noForge": "コードホスティングなし",
         "connectAccount": "アカウントを接続",
         "note": "閉じたプロジェクトは見ません。開き直せば自動で戻ります。"
-      }
+      },
+      "workTitle": "作業に使うエージェント",
+      "workHint": "頭脳は考えてあなたと話し、このエージェントはコードを書いてコマンドを実行します。頭脳を変えてもここは変わりません。",
+      "workSame": "頭脳と同じ",
+      "workOther": "別に選ぶ",
+      "workSameHint": "頭脳のエージェントとすべてのオプションをそのままコピーします。その後はそれぞれ独立します。",
+      "workUnavailable": "{agent} は使えません（未インストールか無効）。別のものを選んでください。",
+      "instructionsTitle": "作業時の常駐指示",
+      "instructionsHint": "作業セッションを始めるたび（仕事を渡すとき、会話で @ されたとき）に送られます。頭脳は読みません。",
+      "instructionsPlaceholder": "作業時の決まりごと、確認すること、避けること…",
+      "instructionsTooLong": "常駐指示は最大 {max} 文字です。",
+      "noBrainYet": "まだ頭脳がありません。メインアシスタントを設定すると、メインの頭脳のコピーを受け取ります。"
     },
     "statusWord": {
       "idle": "待機中",
@@ -11224,7 +11202,7 @@
       "resolved": "解決済み"
     },
     "bots": {
-      "new": "新しい作業アシスタント",
+      "new": "新しいアシスタント",
       "copyName": "{name}（コピー）",
       "copied": "{name} として複製しました",
       "copy": "複製",
@@ -11283,23 +11261,20 @@
         "useIt": "使う"
       },
       "create": {
-        "title": "新しい作業アシスタント",
+        "title": "新しいアシスタント",
         "description": "名前と、どんなアシスタントかを数行。頭脳はメインアシスタントと同じです。",
         "name": "名前",
         "namePlaceholder": "例：コードレビュー",
         "cancel": "キャンセル",
         "create": "作成",
-        "editorNote": "codeg はこのエージェントのオプションを読み取れませんでした（{why}）。ここで選んでください。作業アシスタントはこの実行設定で作成されます。",
         "persona": "ペルソナ",
         "personaPlaceholder": "例：コードの変更をレビューします。正しいか、テストは十分かを見ます。",
         "personaHint": "1〜2行で：どんなアシスタントで、どんな仕事を任せるか。空欄でも構いません。まず自己紹介し、その後あなたの指示とこなした仕事から自分で書き足します。",
-        "executor": "実行設定",
-        "executorNewHint": "頭脳と同じエージェントで新しく作成し、オプションは自動で補います。",
-        "executorHint": "複数のアシスタントで 1 つの実行設定を共有できます。"
+        "workSameHint": "頭脳はメインと同じ。作業は頭脳をコピーし、オプションもすべて同じで、その後は独立します。どちらもそのページで変更できます。"
       },
       "roster": {
         "title": "アシスタント",
-        "add": "新しい作業アシスタント",
+        "add": "新しいアシスタント",
         "pinned": "ピン留め",
         "others": "その他",
         "hiddenCount": "非表示 {count} 人",
@@ -11353,7 +11328,7 @@
         "noProjects": "codeg で開いているプロジェクトはありません。",
         "from": {
           "given": "指示どおり",
-          "other_config": "別の実行設定から",
+          "other_config": "別のアシスタントの作業設定から",
           "agent": "エージェントの既定値"
         },
         "progress": "{at} / {total}",
@@ -11366,14 +11341,11 @@
         "otherWrote": "その他：{text}"
       },
       "changed": {
-        "applied": "作業アシスタントを作成しました",
-        "show": "作業アシスタントを作成しますか？（この種の変更は先に確認する設定です）",
-        "suggested": "提案：新しい作業アシスタント",
+        "applied": "アシスタントを作成しました",
+        "show": "このアシスタントを作りますか？（この種の変更は先に見せるよう指定されています）",
+        "suggested": "提案：新しいアシスタントを作る",
         "dismissed": "作成しませんでした",
         "undone": "元に戻しました",
-        "executorFilled": "実行設定は {agent}（オプション {count} 件を補完）",
-        "executorMade": "実行設定は {agent}",
-        "executorBound": "{name} を引き続き使用",
         "open": "開く",
         "undoOne": "元に戻す",
         "undoneOne": "元に戻しました",
@@ -11384,7 +11356,9 @@
         "undo": "元に戻す",
         "undoAll": "すべて元に戻す",
         "uncheckedQuote": "メインアシスタントはあなたの発言だとしています：「{quote}」。ただし今回あなたはこう入力していません",
-        "persona": "ペルソナ"
+        "persona": "ペルソナ",
+        "workFilled": "作業は {agent}、オプションを {count} 件補完",
+        "workOn": "作業は {agent}"
       },
       "delete": {
         "title": "{name} を削除しますか？",
@@ -11394,9 +11368,6 @@
         "stop": "停止する",
         "messages": "このアシスタント宛てのメッセージ {count} 件が未返信です。送信元に戻されます。",
         "listJoiner": "、",
-        "dropExecutor": "実行設定 {name} も削除する",
-        "executorKept": "既定では残します。引き続き @ で呼び出せ、codeg-cli からも使えます。",
-        "executorShared": "残します：{names} も使っています。",
         "dropWorkdir": "作業ディレクトリも削除する",
         "workdirCustom": "このディレクトリはあなたが選んだものなので、codeg は手を付けません。",
         "cancel": "キャンセル",
@@ -11618,8 +11589,8 @@
     },
     "ask": {
       "heading": {
-        "question": "{executor} が質問しています",
-        "plan": "{executor} がプランの承認を求めています"
+        "question": "作業中の質問です",
+        "plan": "作業がプランの承認を求めています"
       },
       "someone": "実行者",
       "mirror": "{name} があなたの代わりに引き受けた作業から",
@@ -11971,7 +11942,7 @@
           },
           "auto_accept": {
             "title": "出したコード変更の作業を確認して検収する",
-            "hint": "別の実行設定が読み取り専用で確認し、あなたの要望に照らして私が判断します。"
+            "hint": "作業に使うエージェントが読み取り専用で確認し、あなたの要望に照らして私が判断します。"
           }
         },
         "prefs": "設定を調整",
@@ -11989,8 +11960,6 @@
     "acceptance": {
       "title": "検収 · {round} 回目",
       "titleMax": "検収 · {round} 回目（最大 {max} 回）",
-      "people": "{executor} が作業 · {checker} が確認",
-      "peopleUnchecked": "{executor} が作業",
       "check": "確認：",
       "verdict": {
         "pass": "合格",
@@ -12322,7 +12291,7 @@
           "edit": "変更"
         },
         "repeatBody": "30 日間で {count} 回、似たことを頼んでいます。",
-        "pausedExecutor": "作業を動かす先が設定されていません。実行設定がないか、使っているものが削除または無効化されました。",
+        "pausedWorkAgent": "作業に使うエージェントが使えません。未インストールか無効になっています。",
         "pausedFailures": "3 回続けて失敗しました。",
         "trial": "試しの実行を始めました。",
         "reason": "理由：{reason}",
@@ -12336,7 +12305,7 @@
         "open": "ルーティンを開く",
         "confirm": "確認待ちのルーチン",
         "confirmChange": "確認待ちのルーチン変更",
-        "setExecutor": "実行設定を設定"
+        "setWorkAgent": "作業に使うエージェントを選ぶ"
       },
       "more": "その他の操作"
     },
@@ -12364,7 +12333,7 @@
         "idle": "しばらく動きのない事項",
         "behind": "ブランチが遅れていて競合あり",
         "undo": "取り消した変更",
-        "idle_bot": "使われていない作業アシスタント"
+        "idle_bot": "使われていないアシスタント"
       },
       "wait": {
         "permission": "承認待ち",
@@ -12479,8 +12448,8 @@
           "hint": "週の振り返りで：言われたとおりに行った変更を何度も取り消したとき、先に見せるようにするか尋ねます。"
         },
         "idle_bot": {
-          "title": "使われていない作業アシスタント",
-          "hint": "週の振り返りで：2 週間呼ばれていない作業アシスタントを、非表示にするか削除するか尋ねます。"
+          "title": "使われていないアシスタント",
+          "hint": "週次の振り返りで：2 週間起こされていないアシスタントを、非表示にするか削除するか尋ねます。"
         }
       },
       "undoDetail": "この 2 週間、言われたとおりに行った変更 {made} 件のうち {undone} 件を取り消しました。",
@@ -12738,11 +12707,17 @@
     },
     "botPage": {
       "primary": "メインアシスタント",
-      "worker": "作業アシスタント",
+      "worker": "アシスタント",
       "chat": "話しかける"
     },
-    "noExecutor": "使える実行設定がないため、今は自分で作業できません。",
-    "setExecutor": "実行設定を設定"
+    "workRanOn": "{agent} で作業",
+    "workOff": "{agent}（作業に使うエージェント）が使えません。未インストールか無効になっているため、今は自分で作業できません。",
+    "setWork": "別のものを選ぶ",
+    "noBrain": {
+      "title": "{name} にはまだ頭脳がありません",
+      "body": "コラボレーション設定から移行したアシスタントです。メインアシスタントを設定すると、メインの頭脳のコピーを受け取り、会話できるようになります。それまでも会話で @ することはできます。",
+      "setUp": "メインアシスタントを設定"
+    }
   },
   "MessageCheck": {
     "action": "アシスタントに確認してもらう",
@@ -12757,12 +12732,10 @@
     "unfinished": "確認が終わっていません",
     "mark": "アシスタントの確認：{verdict}",
     "markQuote": "「{quote}」の確認：{verdict}",
-    "by": "{executor} が確認",
     "again": "もう一度確認",
     "inAssistant": "アシスタントの会話で見る",
     "process": "確認の様子を見る",
     "openConversation": "元の会話を開く",
-    "sent": "{executor} が確認しています。結果はこのメッセージの下に出ます",
     "sentNoName": "確認を始めました。結果はこのメッセージの下に出ます",
     "startFailed": "確認を始められませんでした：{message}",
     "evidence": "根拠",

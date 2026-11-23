@@ -1939,7 +1939,6 @@ mod tauri_app {
                 crate::commands::personal_agent::personal_agent_dispatch_stop,
                 crate::commands::personal_agent::personal_agent_ask_answer,
                 crate::commands::personal_agent::personal_agent_conversation_target,
-                crate::commands::personal_agent::personal_agent_executors,
                 crate::commands::personal_agent::personal_agent_settings_patch,
                 crate::commands::personal_agent::personal_agent_bot_create,
                 crate::commands::personal_agent::personal_agent_bot_copy,

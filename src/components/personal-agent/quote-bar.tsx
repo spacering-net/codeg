@@ -32,8 +32,6 @@ export function useQuoteAuthor(): (row: TimelineRow) => string {
     switch (row.kind) {
       case "owner":
         return t("you")
-      case "result":
-        return str(row.data, "executor") ?? agentName
       default:
         return agentName
     }

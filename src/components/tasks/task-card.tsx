@@ -405,9 +405,8 @@ export function ScheduleChip({ task }: { task: WorkTask }) {
 }
 
 /**
- * A task the personal agent dispatched: who handed it out, and which role
- * assistant runs it. It lands as the board's settings say, like any other
- * task.
+ * A task an assistant dispatched: that it did, and which assistant. It
+ * lands as the board's settings say, like any other task.
  */
 export function PersonalAgentChip({ task }: { task: WorkTask }) {
   const t = useTranslations("Tasks")

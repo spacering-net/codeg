@@ -367,7 +367,6 @@ fn view_of(
         note: c.note,
         dispatch_id: c.dispatch_id,
         check_conversation_id: d.and_then(|d| d.conversation_id),
-        executor: d.map(|d| super::dispatch::executor_of(d).name),
         notice_id: c.notice_id,
         row_id,
         created_at: c.created_at,
@@ -459,8 +458,7 @@ impl PersonalAgentEngine {
             NewDispatch {
                 bot_id: bot,
                 mode,
-                executor_assistant_id: snapshot.assistant_id,
-                executor_snapshot_json: serde_json::to_string(&snapshot)
+                work_snapshot_json: serde_json::to_string(&snapshot)
                     .map_err(|e| e.to_string())?,
                 folder_id: subject.folder.as_ref().map(|f| f.id),
                 deliverable: None,
@@ -479,8 +477,6 @@ impl PersonalAgentEngine {
         let card = json!({
             "conversation_title": subject.conversation.title,
             "conversation_agent": subject.conversation.agent_type,
-            "executor": snapshot.name,
-            "executor_id": snapshot.assistant_id,
             "agent_type": snapshot.agent_type,
         });
         self.raise_check_card(&check, card).await;
@@ -748,15 +744,13 @@ impl PersonalAgentEngine {
     ) -> Result<i32, String> {
         let Some(row_id) = self.card_notice(check).await.and_then(|n| n.timeline_id) else {
             let subject = self.subject_of(check.conversation_id).await.ok();
-            let executor = d.map(super::dispatch::executor_of);
+            let work = d.map(super::dispatch::work_of);
             self.raise_check_card(
                 check,
                 json!({
                     "conversation_title": subject.as_ref().and_then(|s| s.conversation.title.clone()),
                     "conversation_agent": subject.as_ref().map(|s| s.conversation.agent_type),
-                    "executor": executor.as_ref().map(|e| e.name.clone()),
-                    "executor_id": executor.as_ref().map(|e| e.assistant_id),
-                    "agent_type": executor.as_ref().map(|e| e.agent_type),
+                    "agent_type": work.as_ref().map(|e| e.agent_type),
                 }),
             )
             .await;

@@ -101,7 +101,7 @@ export function RoutineRow({
   // Paused by codeg: why, in the caution's colour — and its pill so.
   const codegPaused =
     !r.enabled &&
-    (r.paused_reason === "failures" || r.paused_reason === "executor")
+    (r.paused_reason === "failures" || r.paused_reason === "work_agent")
   // Running: not one waiting on the owner to confirm, which has not ended
   // either and says so on its warning line.
   const running = last?.outcome === "running"
@@ -126,8 +126,8 @@ export function RoutineRow({
   ) : null
   // Something wrong: one line in the caution's colour.
   const wrong = codegPaused
-    ? r.paused_reason === "executor"
-      ? t("card.pausedExecutor")
+    ? r.paused_reason === "work_agent"
+      ? t("card.pausedWorkAgent")
       : t("card.pausedFailures")
     : last && WRONG_OUTCOMES.has(last.outcome)
       ? ta("routineLast", { outcome: t(`outcome.${last.outcome}` as "outcome.failed") })
@@ -305,8 +305,8 @@ export function RoutineRow({
           {codegPaused ? (
             <SheetField label={t("row.why")} data-pa-routine-fact="why">
               <span className="text-amber-700 dark:text-amber-300">
-                {r.paused_reason === "executor"
-                  ? t("card.pausedExecutor")
+                {r.paused_reason === "work_agent"
+                  ? t("card.pausedWorkAgent")
                   : t("card.pausedFailures")}
               </span>
             </SheetField>

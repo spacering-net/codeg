@@ -1784,7 +1784,7 @@ impl PersonalAgentEngine {
                 view.conversation_id = d.conversation_id;
                 // The agent the step's work ran on: what its conversation
                 // opens with (an agent, never an executor config's name).
-                view.agent_type = Some(super::dispatch::executor_of(&d).agent_type);
+                view.agent_type = Some(super::dispatch::work_of(&d).agent_type);
                 if let Some(cid) = d.conversation_id {
                     view.conversation_folder_id =
                         crate::db::service::conversation_service::get_by_id(&self.db.conn, cid)
@@ -3294,8 +3294,7 @@ mod tests {
         dispatch_entity::Model {
             id: 1,
             mode,
-            executor_assistant_id: 1,
-            executor_snapshot: "{}".into(),
+            work_snapshot: "{}".into(),
             folder_id: Some(1),
             deliverable: (mode == DispatchMode::Task).then(|| "change".into()),
             title: "t".into(),

@@ -3013,6 +3013,7 @@ impl ConnectionManager {
                         origin_cwd: Set(origin_cwd),
                         assistant_id: Set(None),
                         assistant_snapshot: Set(None),
+                        bot_uid: Set(None),
                         source: Set(source),
                     };
                     let inserted = sibling.insert(txn).await?;

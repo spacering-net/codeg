@@ -536,10 +536,6 @@ pub fn build_router_with_srn(
             post(handlers::personal_agent::personal_agent_conversation_target),
         )
         .route(
-            "/personal_agent_executors",
-            post(handlers::personal_agent::personal_agent_executors),
-        )
-        .route(
             "/personal_agent_settings_patch",
             post(handlers::personal_agent::personal_agent_settings_patch),
         )

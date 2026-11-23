@@ -1,11 +1,11 @@
 "use client"
 
 /**
- * Deleting a work assistant (4.14): the confirmation says what it touches —
+ * Deleting an assistant (4.14): the confirmation says what it touches —
  * its running work (handed to the primary to follow, by default, or
  * stopped), the messages it has not answered (they go back to their
- * senders), its executor config (kept unless ticked) and its working
- * directory (kept unless ticked) — its whole path shown, wrapped.
+ * senders) and its working directory (kept unless ticked) — its whole
+ * path shown, wrapped.
  */
 
 import { useEffect, useState } from "react"
@@ -46,7 +46,6 @@ export function BotDeleteDialog({
   const setViewBot = usePersonalAgentUi((s) => s.setViewBot)
   const [impact, setImpact] = useState<BotImpact | null>(null)
   const [handOver, setHandOver] = useState(true)
-  const [dropExecutor, setDropExecutor] = useState(false)
   const [dropWorkdir, setDropWorkdir] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -55,7 +54,6 @@ export function BotDeleteDialog({
     // eslint-disable-next-line react-hooks/set-state-in-effect -- reset paired with the impact fetch for the assistant now named
     setImpact(null)
     setHandOver(true)
-    setDropExecutor(false)
     setDropWorkdir(false)
     setError(null)
     if (botId == null) return
@@ -79,7 +77,6 @@ export function BotDeleteDialog({
     try {
       await personalAgentBotDelete(botId, {
         hand_over: handOver,
-        delete_executor: dropExecutor,
         delete_workdir: dropWorkdir,
       })
       if (viewBot === botId) setViewBot(null)
@@ -92,7 +89,6 @@ export function BotDeleteDialog({
     }
   }
 
-  const shared = (impact?.executor?.shared_with.length ?? 0) > 0
   return (
     <AlertDialog open={botId != null} onOpenChange={onOpenChange}>
       <AlertDialogContent data-pa-bot-delete>
@@ -163,28 +159,6 @@ export function BotDeleteDialog({
                     .join(t("listJoiner")),
                 })}
               </p>
-            ) : null}
-            {impact.executor ? (
-              <Label className="flex items-start gap-2 font-normal">
-                <Checkbox
-                  checked={dropExecutor}
-                  disabled={shared}
-                  onCheckedChange={(v) => setDropExecutor(v === true)}
-                  className="mt-0.5"
-                />
-                <span>
-                  {t("dropExecutor", { name: impact.executor.name })}
-                  <span className="block text-xs text-muted-foreground">
-                    {shared
-                      ? t("executorShared", {
-                          names: impact.executor.shared_with.join(
-                            t("listJoiner")
-                          ),
-                        })
-                      : t("executorKept")}
-                  </span>
-                </span>
-              </Label>
             ) : null}
             <Label className="flex items-start gap-2 font-normal">
               <Checkbox

@@ -8,7 +8,7 @@
  * - wide enough (56rem of its own), two parts: on the left who it is — its
  *   face and its name, changed where they are, what it is and what it does
  *   now, and [Chat with it] — held in the middle of the height; on the
- *   right its tabs, "Brain & executor config", "Persona & memory",
+ *   right its tabs, "Identity & brain", "Persona & memory",
  *   "Notifications", "Advanced", which alone scroll;
  * - narrow, one column: who it is, then the tabs, the page scrolling.
  *
@@ -93,7 +93,7 @@ export function BotPage() {
   // Not known yet (an assistant being read with no roster yet): nothing.
   const name = setUp ? botName(entry ?? agent) : ""
   const role = worker ? tp("worker") : tp("primary")
-  const brain = agent?.label_snapshot.agent ?? null
+  const brain = agent?.label_snapshot?.agent ?? null
   const subtitle = setUp ? [role, brain].filter(Boolean).join(" · ") : ""
 
   const tabs: BotTab[] = ["identity", "persona", "notify", "advanced"]

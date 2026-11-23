@@ -140,7 +140,7 @@ export function DetailsList({ snapshot }: { snapshot: PersonalAgentSnapshot }) {
   const { agent, status } = snapshot
   const seg = status.segment
   const check = status.last_check
-  const mode = agent?.label_snapshot.mode
+  const mode = agent?.label_snapshot?.mode
   return (
     <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 text-xs">
       {mode ? <DetailRow label={t("mode")}>{mode}</DetailRow> : null}

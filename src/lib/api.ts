@@ -74,7 +74,6 @@ import type {
   RoutineRun,
   PersonalAgentMeetProject,
   PersonalAgentChoicePick,
-  ExecutorView,
   PersonalAgentStats,
   TimelineChanges,
   TimelineCursor,
@@ -2812,7 +2811,7 @@ export async function personalAgentProfileUpdate(
   return getTransport().call("personal_agent_profile_update", { op })
 }
 
-/** Each assistant's and executor config's grade over the last 30 days. */
+/** Each assistant's grade over the last 30 days. */
 export async function personalAgentGrades(): Promise<PersonalAgentGrades> {
   return getTransport().call("personal_agent_grades", {})
 }
@@ -2857,7 +2856,7 @@ export async function personalAgentDispatchStop(
   })
 }
 
-/** The owner answers an executor's question or plan approval on an ask
+/** The owner answers a piece of work's question or plan approval on an ask
  *  card (7.3.1): the card of the assistant answering it, or its mirror.
  *  The first answer wins; a late one is told whose did. */
 export async function personalAgentAskAnswer(params: {
@@ -2960,11 +2959,6 @@ export async function personalAgentStarter(
     noticeId,
     botId: bot ?? null,
   })
-}
-
-/** Every executor config as the assistants use it. */
-export async function personalAgentExecutors(): Promise<ExecutorView[]> {
-  return getTransport().call("personal_agent_executors", {})
 }
 
 /** A thread between assistants, as assistant `bot` sees it. */

@@ -1,7 +1,7 @@
 "use client"
 
 /**
- * An executor's question or plan approval (7.3.1): the session of work an
+ * A piece of work's question or plan approval (7.3.1): the session of work an
  * assistant handed out stopped to ask, and that assistant answers it for the
  * owner — or forwards it to them. One card per request, following it:
  *
@@ -11,7 +11,7 @@
  *   field of their own, or the plan with [Approve] [Request changes]
  *   [Abandon]; with why it came to them and, when the assistant forwarded
  *   it, what it leans to and why;
- * - **submitting**: a plan approval's answer on its way to the executor;
+ * - **submitting**: a plan approval's answer on its way to the work;
  * - **answered**: who answered (the assistant, the owner in the session or
  *   here, a chat channel) and what — the answer that took effect, whoever
  *   was second;
@@ -38,7 +38,6 @@ import { Button } from "@/components/ui/button"
 import { personalAgentAskAnswer } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import type {
-  AgentType,
   AskAnsweredBy,
   AskCardData,
   AskPlanDecision,
@@ -207,7 +206,6 @@ export function AskCard({ item }: { item: NoticeItem }) {
   // The assistant answering it: this page's, or — on a mirror — the one
   // the work was handed on to.
   const assistant = text(mirror?.name) ?? agentName
-  const executor = text(data.executor)
   const questions: QuestionSpec[] = Array.isArray(data.questions)
     ? data.questions
     : []
@@ -242,9 +240,8 @@ export function AskCard({ item }: { item: NoticeItem }) {
 
   const answerable = state === "forwarded" && !readOnly && askId != null
   const Icon = question ? MessageCircleQuestion : ListTodo
-  const heading = question
-    ? t("heading.question", { executor: executor ?? t("someone") })
-    : t("heading.plan", { executor: executor ?? t("someone") })
+  // Only the assistant speaks here: the work asks, unnamed.
+  const heading = question ? t("heading.question") : t("heading.plan")
   // The assistant's grounds: while it is the owner's to answer, or when
   // the assistant answered it.
   const shownReason =
@@ -279,12 +276,9 @@ export function AskCard({ item }: { item: NoticeItem }) {
         {/* The work that asks: the card's head. */}
         <WorkRow
           flat
-          executorId={data.executor_id ?? null}
-          executor={executor}
-          agentType={(data.agent_type as AgentType | null) ?? null}
+          mode={asMode(data.mode)}
           title={text(data.title) ?? row.body}
           meta={meta({
-            executor,
             mode: asMode(data.mode),
             folder: null,
           })}

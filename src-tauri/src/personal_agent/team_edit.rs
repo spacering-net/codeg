@@ -12,13 +12,12 @@
 //!
 //! `persona` is the first paragraph of its persona (under the heading of
 //! its SOUL.md): replaced in the file as it is when the change is made, the
-//! rest left to the assistant. `work_agent` is the agent its work runs on:
-//! the executor config it is bound to changed in place when no other
-//! assistant is bound to it, else one made for it with the new agent (D2).
+//! rest left to the assistant. `work_agent` is the agent its work runs on,
+//! its own (D1): changing it changes no other assistant's, nor its brain.
 //!
 //! A brain changed with only some of its options named has the rest filled
 //! in (10.5 "fill five"): this one's own choices on the same agent first,
-//! then another executor config's, then what the agent itself reports. The
+//! then another assistant's work on it, then what the agent itself reports. The
 //! card lists each option and who picked it. Another work assistant's brain
 //! is changed through its own engine, so its next delivery starts a new
 //! session segment with a handover card.
@@ -117,7 +116,7 @@ impl PersonalAgentEngine {
                 if to.lines().any(|l| l.starts_with('#')) {
                     return Err("`persona` is plain lines, without a heading".into());
                 }
-                let soul = workdir::read_text(&self.workdir_of(&bot), workdir::SOUL_FILE);
+                let soul = workdir::soul_text(&self.data_dir, &bot);
                 (json!(super::team::persona_paragraph(&soul)), json!(to), None)
             }
             "work_agent" => {
@@ -168,40 +167,12 @@ impl PersonalAgentEngine {
         })
     }
 
-    /// The executor config the assistant of `uid` is bound to, when it is
-    /// there to work with.
-    pub(super) async fn bound_executor_of_uid(&self, uid: &str) -> Option<i32> {
-        let bot = svc::list_bots(&self.db.conn)
-            .await
-            .ok()?
-            .into_iter()
-            .find(|b| b.uid.as_deref() == Some(uid))?;
-        let id = bot.executor_assistant_id?;
-        crate::db::service::assistant_service::get(&self.db.conn, id)
-            .await
-            .ok()
-            .flatten()
-            .filter(|a| a.is_live())
-            .map(|a| a.id)
-    }
-
-    /// The agent and options `bot`'s work runs on: its executor config's,
-    /// when it has one to work with.
+    /// The agent and options `bot`'s work runs on.
     async fn work_agent_of(
         &self,
         bot: &crate::db::entities::personal_agent::Model,
     ) -> Option<crate::models::AssistantAgentConfig> {
-        let id = bot.executor_assistant_id?;
-        crate::db::service::assistant_service::get(&self.db.conn, id)
-            .await
-            .ok()
-            .flatten()
-            .filter(|a| a.is_live())
-            .map(|a| crate::models::AssistantAgentConfig {
-                agent_type: a.agent_type,
-                agent_options: a.agent_options,
-                label_snapshot: a.label_snapshot,
-            })
+        super::engine::work_of_row(bot)
     }
 
     /// What a change of the agent `bot`'s work runs on comes to: a whole
@@ -252,89 +223,16 @@ impl PersonalAgentEngine {
         Ok((config, picked))
     }
 
-    /// Point `bot`'s work at `config`: its executor config changed in
-    /// place when it is the only assistant bound to it; else (shared, or
-    /// none to work with) one made for it now, through `save`.
+    /// Point `bot`'s work at `config`, through `save`: its own row, no
+    /// other assistant's.
     async fn write_work_agent(
         &self,
-        bot: &crate::db::entities::personal_agent::Model,
+        _bot: &crate::db::entities::personal_agent::Model,
         config: crate::models::AssistantAgentConfig,
         draft: &mut crate::models::personal_agent::PersonalAgentDraft,
     ) -> Result<(), String> {
-        // Whether another assistant is bound to it, and the change in place,
-        // in one hold with every binding of an existing executor config to
-        // a new assistant (made, copied): none comes between.
-        let _claim = workdir::WORKDIR_CLAIM.lock().await;
-        let bot = svc::get_bot(&self.db.conn, bot.id)
-            .await
-            .map_err(|e| e.to_string())?
-            .ok_or("the assistant is gone")?;
-        let live = match bot.executor_assistant_id {
-            Some(id) => crate::db::service::assistant_service::get(&self.db.conn, id)
-                .await
-                .map_err(|e| e.to_string())?
-                .filter(|a| a.is_live()),
-            None => None,
-        };
-        if let Some(a) = live {
-            let shared = svc::list_bots(&self.db.conn)
-                .await
-                .map_err(|e| e.to_string())?
-                .iter()
-                .any(|b| b.id != bot.id && b.executor_assistant_id == Some(a.id));
-            if !shared {
-                crate::commands::assistants::assistant_update_core(
-                    &self.emitter,
-                    &self.db,
-                    a.id,
-                    crate::models::assistant::AssistantPatch {
-                        agent_config: Some(config),
-                        ..Default::default()
-                    },
-                )
-                .await
-                .map_err(|e| e.to_string())?;
-                return Ok(());
-            }
-        }
-        draft.executor_config = Some(config);
+        draft.work = Some(crate::models::personal_agent::WorkChoice::Config { config });
         Ok(())
-    }
-
-    /// Bind `bot` back onto executor config `id` if it is still there and
-    /// still runs `config` — looked at and bound in the one hold every
-    /// change of who is bound to what, and every change in place, is made
-    /// in. Whether it was.
-    async fn bind_back(
-        &self,
-        bot: &crate::db::entities::personal_agent::Model,
-        id: i32,
-        config: &Value,
-    ) -> Result<bool, String> {
-        if config.is_null() {
-            return Ok(false);
-        }
-        let _claim = workdir::WORKDIR_CLAIM.lock().await;
-        let same = crate::db::service::assistant_service::get(&self.db.conn, id)
-            .await
-            .map_err(|e| e.to_string())?
-            .filter(|a| a.is_live())
-            .is_some_and(|a| {
-                serde_json::to_value(crate::models::AssistantAgentConfig {
-                    agent_type: a.agent_type,
-                    agent_options: a.agent_options,
-                    label_snapshot: a.label_snapshot,
-                })
-                .ok()
-                .as_ref()
-                    == Some(config)
-            });
-        if same {
-            svc::set_executor_binding(&self.db.conn, bot.id, Some(id))
-                .await
-                .map_err(|e| e.to_string())?;
-        }
-        Ok(same)
     }
 
     // ── writing ─────────────────────────────────────────────────────────────
@@ -373,6 +271,9 @@ impl PersonalAgentEngine {
                 let field = item.key.rsplit('.').next().unwrap_or_default();
                 match field {
                     "persona" => {
+                        // Into its SOUL.md: one not made yet is made first.
+                        super::ready::ensure_worker_ready(&self.db, &self.data_dir, bot.id)
+                            .await?;
                         let paragraph = item.to.as_str().unwrap_or_default().to_string();
                         let update = move |now: Option<&str>| {
                             Some(super::team::with_persona_paragraph(
@@ -395,21 +296,9 @@ impl PersonalAgentEngine {
                         }
                     }
                     "work_agent" => {
-                        // An undo: back onto the executor config it was bound
-                        // to — when that is another, still there, and still
-                        // runs what the undo puts back.
-                        let back = match item
-                            .executor_before
-                            .filter(|b| item.undo && Some(*b) != bot.executor_assistant_id)
-                        {
-                            Some(b) => self.bind_back(&bot, b, &item.to).await?,
-                            None => false,
-                        };
-                        if item.to.is_null() {
-                            svc::set_executor_binding(&self.db.conn, bot.id, None)
-                                .await
-                                .map_err(|e| e.to_string())?;
-                        } else if !back {
+                        // Nothing to put back when what it was could not be
+                        // read.
+                        if !item.to.is_null() {
                             let config = serde_json::from_value(item.to.clone())
                                 .map_err(|e| e.to_string())?;
                             self.write_work_agent(&bot, config, &mut draft).await?;
@@ -435,7 +324,7 @@ impl PersonalAgentEngine {
             let saves = draft.name.is_some()
                 || draft.avatar.is_some()
                 || draft.agent_config.is_some()
-                || draft.executor_config.is_some();
+                || draft.work.is_some();
             if saves {
                 // Through its own engine: a brain switched there starts its
                 // next delivery in a new segment, with a handover card.

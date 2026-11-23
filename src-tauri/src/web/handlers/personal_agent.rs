@@ -519,12 +519,6 @@ pub async fn personal_agent_conversation_target(
     ))
 }
 
-pub async fn personal_agent_executors(
-    Extension(state): Extension<Arc<AppState>>,
-) -> Result<Json<Vec<crate::models::personal_agent::ExecutorView>>, AppCommandError> {
-    Ok(Json(pa::personal_agent_executors_core(&state.db).await?))
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsPatchParams {

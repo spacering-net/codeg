@@ -251,9 +251,9 @@ export function StatsBody({
       ].join(" · "),
     }
   })
-  const totalDispatches = stats.executors.reduce((n, e) => n + e.dispatches, 0)
-  const executors: RankedDatum[] = stats.executors.map((e) => ({
-    key: String(e.assistant_id),
+  const totalDispatches = stats.agents.reduce((n, e) => n + e.dispatches, 0)
+  const byAgent: RankedDatum[] = stats.agents.map((e) => ({
+    key: e.agent_type,
     label: e.name,
     value: e.dispatches,
     share: totalDispatches > 0 ? e.dispatches / totalDispatches : null,
@@ -353,11 +353,11 @@ export function StatsBody({
       {/* The rest, folded on one card. */}
       <PanelFolds>
         <PanelFold
-          fold="stats.executors"
-          title={t("executors")}
-          summary={stats.executors.length}
+          fold="stats.agents"
+          title={t("agents")}
+          summary={stats.agents.length}
         >
-          <RankedBars data={executors} emptyLabel={t("empty")} />
+          <RankedBars data={byAgent} emptyLabel={t("empty")} />
         </PanelFold>
         <PanelFold
           fold="stats.tokens"

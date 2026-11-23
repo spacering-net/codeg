@@ -216,8 +216,8 @@ function ConversationWork({
       childConnectionId={attachId}
       identity={{
         agentType,
-        assistantId: now.executorId,
-        assistantName: now.executorName,
+        assistantId: null,
+        assistantName: now.assistantName,
       }}
       kickoffTask={now.prompt}
       headerActions={<WayOut target={now} label={t("openConversation")} />}

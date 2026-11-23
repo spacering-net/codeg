@@ -65,7 +65,7 @@ import { Callout, type CalloutTone } from "./aux/kit/callout"
 const FOLDED_AT_FIRST: ReadonlySet<string> = new Set([
   // What was done today, a line until opened (C2).
   "activity.done",
-  "stats.executors",
+  "stats.agents",
   "stats.tokens",
   "stats.usage",
 ])

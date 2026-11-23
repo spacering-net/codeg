@@ -162,8 +162,6 @@ pub async fn assistant_delete_core(
             assistant: Box::new(tombstone.clone()),
         },
     );
-    // The assistants bound to it have none to work with now.
-    crate::personal_agent::prefs::executor_gone(db, emitter, id).await;
     Ok(tombstone)
 }
 

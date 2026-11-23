@@ -90,6 +90,13 @@ pub struct Model {
     /// instructions as they were when the delegation started. A resume replays
     /// this, never the assistant's current row.
     pub assistant_snapshot: Option<String>,
+    /// The owner's assistant (`personal_agent.uid`) a delegation child or a
+    /// piece of an assistant's work ran as; `None` for every other row, and
+    /// for the children of the collaboration settings' assistants from
+    /// before (`assistant_id`). Written once, never updated, no foreign key,
+    /// like `assistant_id`. See `m20261125_000001_personal_agent`.
+    #[sea_orm(column_type = "Text", nullable)]
+    pub bot_uid: Option<String>,
     /// Where the conversation was started from, when not the window:
     /// [`SOURCE_CLI`] for a `codeg-cli` run. `None` otherwise. Text, so a
     /// value from a newer build never stops an older one decoding the row.

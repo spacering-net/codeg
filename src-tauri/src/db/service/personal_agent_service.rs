@@ -82,7 +82,29 @@ pub async fn list_bots(conn: &DatabaseConnection) -> Result<Vec<agent::Model>, D
     Ok(bots)
 }
 
-/// A worker to make: its identity and brain, the profile it is bound to.
+/// An agent with every option picked, as a row stores it: the brain's
+/// columns, or the work's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentColumns {
+    pub agent_type: String,
+    pub agent_options_json: String,
+    pub label_snapshot_json: String,
+}
+
+impl AgentColumns {
+    pub fn of(config: &crate::models::AssistantAgentConfig) -> Self {
+        Self {
+            agent_type: config.agent_type.as_wire().into_owned(),
+            agent_options_json: serde_json::to_string(&config.agent_options)
+                .unwrap_or_else(|_| "{}".into()),
+            label_snapshot_json: serde_json::to_string(&config.label_snapshot)
+                .unwrap_or_else(|_| "{}".into()),
+        }
+    }
+}
+
+/// A worker to make: its identity, its brain and the agent its work runs
+/// on.
 #[derive(Debug, Clone)]
 pub struct NewWorker {
     /// Its uid when the caller has one ready (the page previewed its face
@@ -91,50 +113,103 @@ pub struct NewWorker {
     pub notify: bool,
     pub name: String,
     pub avatar_json: String,
-    pub agent_type: String,
-    pub agent_options_json: String,
-    pub label_snapshot_json: String,
+    /// `None`: no brain yet (an import with no primary to copy one from).
+    pub brain: Option<AgentColumns>,
+    pub work: AgentColumns,
+    pub work_instructions: Option<String>,
     pub settings_json: String,
-    pub executor_assistant_id: Option<i32>,
+    /// Its directory is made with it; `false` — an import's — leaves it to
+    /// be made when it is first needed, `seed_persona` written into it then.
+    pub workdir_ready: bool,
+    pub seed_persona: Option<String>,
+    pub legacy_assistant_uid: Option<String>,
+    /// Its place in the roster; `None`: last.
+    pub sort_order: Option<i32>,
+    pub hidden: bool,
+    /// When it was made; `None`: now.
+    pub created_at: Option<DateTime<Utc>>,
 }
 
-/// Make a worker, with a fresh uid, last in the roster.
+impl NewWorker {
+    /// A worker made on the page or by a tool, its directory made with it.
+    pub fn made(
+        name: String,
+        avatar_json: String,
+        brain: AgentColumns,
+        work: AgentColumns,
+        settings_json: String,
+    ) -> Self {
+        Self {
+            uid: None,
+            notify: true,
+            name,
+            avatar_json,
+            brain: Some(brain),
+            work,
+            work_instructions: None,
+            settings_json,
+            workdir_ready: true,
+            seed_persona: None,
+            legacy_assistant_uid: None,
+            sort_order: None,
+            hidden: false,
+            created_at: None,
+        }
+    }
+}
+
+/// Make a worker, with a fresh uid, last in the roster unless placed.
 pub async fn create_worker(
-    conn: &DatabaseConnection,
+    conn: &impl ConnectionTrait,
     new: NewWorker,
 ) -> Result<agent::Model, DbError> {
     let now = Utc::now();
-    let last = agent::Entity::find()
-        .filter(agent::Column::DeletedAt.is_null())
-        .order_by_desc(agent::Column::SortOrder)
-        .one(conn)
-        .await?
-        .map(|b| b.sort_order)
-        .unwrap_or(0);
+    let sort_order = match new.sort_order {
+        Some(s) => s,
+        None => {
+            agent::Entity::find()
+                .filter(agent::Column::DeletedAt.is_null())
+                .order_by_desc(agent::Column::SortOrder)
+                .one(conn)
+                .await?
+                .map(|b| b.sort_order)
+                .unwrap_or(0)
+                + 1
+        }
+    };
+    let created_at = new.created_at.unwrap_or(now);
     let row = agent::ActiveModel {
         id: NotSet,
         name: Set(new.name),
         avatar: Set(new.avatar_json),
-        agent_type: Set(new.agent_type),
-        agent_options: Set(new.agent_options_json),
-        label_snapshot: Set(new.label_snapshot_json),
+        agent_type: Set(new.brain.as_ref().map(|b| b.agent_type.clone())),
+        agent_options: Set(new.brain.as_ref().map(|b| b.agent_options_json.clone())),
+        label_snapshot: Set(new.brain.as_ref().map(|b| b.label_snapshot_json.clone())),
         settings: Set(new.settings_json),
         workdir: Set(None),
         folder_id: Set(None),
         revision: Set(1),
-        created_at: Set(now),
-        updated_at: Set(now),
+        created_at: Set(created_at),
+        updated_at: Set(created_at),
         kind: Set(BotKind::Worker),
         uid: Set(Some(new.uid.unwrap_or_else(new_bot_uid))),
-        executor_assistant_id: Set(new.executor_assistant_id),
-        sort_order: Set(last + 1),
+        sort_order: Set(sort_order),
         pinned_at: Set(None),
         section: Set(None),
-        hidden: Set(false),
+        hidden: Set(new.hidden),
         muted: Set(false),
         unread_mark: Set(false),
         notify: Set(new.notify),
         deleted_at: Set(None),
+        work_agent_type: Set(new.work.agent_type),
+        work_agent_options: Set(new.work.agent_options_json),
+        work_label_snapshot: Set(new.work.label_snapshot_json),
+        work_instructions: Set(new.work_instructions.filter(|i| !i.trim().is_empty())),
+        seed_persona: Set(new.seed_persona),
+        seed_version: Set(if new.workdir_ready { 0 } else { 1 }),
+        workdir_ready: Set(new.workdir_ready),
+        legacy_assistant_id: Set(None),
+        legacy_assistant_uid: Set(new.legacy_assistant_uid),
     };
     Ok(row.insert(conn).await?)
 }
@@ -219,42 +294,85 @@ pub async fn delete_worker(conn: &DatabaseConnection, id: i32) -> Result<bool, D
 }
 
 /// The columns a save writes. `None` leaves a column as it is (an update) —
-/// an insert needs every brain column.
+/// an insert needs the brain and the work.
 #[derive(Debug, Default, Clone)]
 pub struct AgentWrite {
     pub name: Option<String>,
     pub avatar_json: Option<String>,
-    pub agent_type: Option<String>,
-    pub agent_options_json: Option<String>,
-    pub label_snapshot_json: Option<String>,
+    pub brain: Option<AgentColumns>,
     pub settings_json: Option<String>,
     /// A JSON merge patch (RFC 7396) applied to the stored settings in the
     /// same statement, so keys it leaves out — another window's, another
     /// part of codeg's — stay as they are. Wins over `settings_json` on an
     /// update; an insert takes `settings_json`.
     pub settings_patch: Option<serde_json::Value>,
-    /// The executor config its work runs on.
-    pub executor_assistant_id: Option<i32>,
+    /// The agent its work runs on.
+    pub work: Option<AgentColumns>,
+    /// Its work's standing instructions; `Some(None)` clears them.
+    pub work_instructions: Option<Option<String>>,
 }
 
-/// Bind an assistant to an executor config, or to none.
-pub async fn set_executor_binding(
-    conn: &DatabaseConnection,
+/// Mark a worker's directory made, with the persona version `version` in
+/// it — only while that is the version stored: one a sync package wrote
+/// since is not cleared (`seed_persona` goes, now in SOUL.md). Whether it
+/// was marked.
+pub async fn mark_workdir_ready(
+    conn: &impl ConnectionTrait,
     id: i32,
-    executor: Option<i32>,
-) -> Result<(), DbError> {
-    agent::Entity::update_many()
-        .col_expr(agent::Column::ExecutorAssistantId, Expr::value(executor))
-        .col_expr(agent::Column::UpdatedAt, Expr::value(Utc::now()))
-        .col_expr(
-            agent::Column::Revision,
-            Expr::col(agent::Column::Revision).add(1),
-        )
+    version: i32,
+) -> Result<bool, DbError> {
+    let res = agent::Entity::update_many()
+        .col_expr(agent::Column::WorkdirReady, Expr::value(true))
+        .col_expr(agent::Column::SeedPersona, Expr::value(Option::<String>::None))
         .filter(agent::Column::Id.eq(id))
-        .filter(agent::Column::DeletedAt.is_null())
+        .filter(agent::Column::SeedVersion.eq(version))
         .exec(conn)
         .await?;
-    Ok(())
+    Ok(res.rows_affected > 0)
+}
+
+/// Give every assistant with no brain yet a copy of `brain` (the
+/// primary's, D3) — only the brain: what its work runs on stays. One with a
+/// brain already is not touched, so this is the same however often it
+/// runs. The ids given one.
+pub async fn fill_missing_brains(
+    conn: &impl ConnectionTrait,
+    brain: &AgentColumns,
+) -> Result<Vec<i32>, DbError> {
+    let missing: Vec<i32> = agent::Entity::find()
+        .filter(agent::Column::DeletedAt.is_null())
+        .filter(agent::Column::AgentType.is_null())
+        .all(conn)
+        .await?
+        .into_iter()
+        .map(|b| b.id)
+        .collect();
+    let mut filled = Vec::new();
+    for id in missing {
+        let res = agent::Entity::update_many()
+            .col_expr(agent::Column::AgentType, Expr::value(brain.agent_type.clone()))
+            .col_expr(
+                agent::Column::AgentOptions,
+                Expr::value(brain.agent_options_json.clone()),
+            )
+            .col_expr(
+                agent::Column::LabelSnapshot,
+                Expr::value(brain.label_snapshot_json.clone()),
+            )
+            .col_expr(agent::Column::UpdatedAt, Expr::value(Utc::now()))
+            .col_expr(
+                agent::Column::Revision,
+                Expr::col(agent::Column::Revision).add(1),
+            )
+            .filter(agent::Column::Id.eq(id))
+            .filter(agent::Column::AgentType.is_null())
+            .exec(conn)
+            .await?;
+        if res.rows_affected > 0 {
+            filled.push(id);
+        }
+    }
+    Ok(filled)
 }
 
 /// The SQL that applies a merge patch to the stored settings: whatever is
@@ -413,13 +531,14 @@ async fn insert_primary(
     write: AgentWrite,
 ) -> Result<agent::Model, DbError> {
     let now = Utc::now();
-    let (Some(agent_type), Some(options), Some(labels)) = (
-        write.agent_type,
-        write.agent_options_json,
-        write.label_snapshot_json,
-    ) else {
+    let Some(brain) = write.brain else {
         return Err(DbError::Validation(
             "the personal agent needs an agent to run on".into(),
+        ));
+    };
+    let Some(work) = write.work else {
+        return Err(DbError::Validation(
+            "the personal agent needs an agent for its work".into(),
         ));
     };
     let row = agent::ActiveModel {
@@ -428,9 +547,9 @@ async fn insert_primary(
         avatar: Set(write
             .avatar_json
             .unwrap_or_else(|| r#"{"kind":"emoji","emoji":"🧭","color":"violet"}"#.into())),
-        agent_type: Set(agent_type),
-        agent_options: Set(options),
-        label_snapshot: Set(labels),
+        agent_type: Set(Some(brain.agent_type)),
+        agent_options: Set(Some(brain.agent_options_json)),
+        label_snapshot: Set(Some(brain.label_snapshot_json)),
         settings: Set(write.settings_json.unwrap_or_else(|| "{}".into())),
         workdir: Set(None),
         folder_id: Set(None),
@@ -439,7 +558,6 @@ async fn insert_primary(
         updated_at: Set(now),
         kind: Set(BotKind::Primary),
         uid: Set(Some(new_bot_uid())),
-        executor_assistant_id: Set(write.executor_assistant_id),
         sort_order: Set(0),
         pinned_at: Set(None),
         section: Set(None),
@@ -448,6 +566,15 @@ async fn insert_primary(
         unread_mark: Set(false),
         notify: Set(true),
         deleted_at: Set(None),
+        work_agent_type: Set(work.agent_type),
+        work_agent_options: Set(work.agent_options_json),
+        work_label_snapshot: Set(work.label_snapshot_json),
+        work_instructions: Set(write.work_instructions.flatten()),
+        seed_persona: Set(None),
+        seed_version: Set(0),
+        workdir_ready: Set(true),
+        legacy_assistant_id: Set(None),
+        legacy_assistant_uid: Set(None),
     };
     Ok(row.insert(conn).await?)
 }
@@ -473,17 +600,23 @@ pub async fn save_bot(
     if let Some(v) = write.avatar_json {
         update = update.col_expr(agent::Column::Avatar, Expr::value(v));
     }
-    if let Some(v) = write.agent_type {
-        update = update.col_expr(agent::Column::AgentType, Expr::value(v));
+    if let Some(b) = write.brain {
+        update = update
+            .col_expr(agent::Column::AgentType, Expr::value(Some(b.agent_type)))
+            .col_expr(agent::Column::AgentOptions, Expr::value(Some(b.agent_options_json)))
+            .col_expr(agent::Column::LabelSnapshot, Expr::value(Some(b.label_snapshot_json)));
     }
-    if let Some(v) = write.agent_options_json {
-        update = update.col_expr(agent::Column::AgentOptions, Expr::value(v));
+    if let Some(w) = write.work {
+        update = update
+            .col_expr(agent::Column::WorkAgentType, Expr::value(w.agent_type))
+            .col_expr(agent::Column::WorkAgentOptions, Expr::value(w.agent_options_json))
+            .col_expr(agent::Column::WorkLabelSnapshot, Expr::value(w.label_snapshot_json));
     }
-    if let Some(v) = write.label_snapshot_json {
-        update = update.col_expr(agent::Column::LabelSnapshot, Expr::value(v));
-    }
-    if let Some(v) = write.executor_assistant_id {
-        update = update.col_expr(agent::Column::ExecutorAssistantId, Expr::value(Some(v)));
+    if let Some(v) = write.work_instructions {
+        update = update.col_expr(
+            agent::Column::WorkInstructions,
+            Expr::value(v.filter(|i| !i.trim().is_empty())),
+        );
     }
     if let Some(patch) = write.settings_patch {
         update = update.col_expr(
@@ -2771,8 +2904,7 @@ pub struct NewDispatch {
     /// The assistant dispatching it.
     pub bot_id: i32,
     pub mode: DispatchMode,
-    pub executor_assistant_id: i32,
-    pub executor_snapshot_json: String,
+    pub work_snapshot_json: String,
     pub folder_id: Option<i32>,
     pub deliverable: Option<String>,
     pub title: String,
@@ -2829,8 +2961,7 @@ fn dispatch_active(new: NewDispatch) -> dispatch::ActiveModel {
         thread_id: Set(new.lineage.thread_id),
         for_input: Set(new.lineage.for_input),
         mode: Set(new.mode),
-        executor_assistant_id: Set(new.executor_assistant_id),
-        executor_snapshot: Set(new.executor_snapshot_json),
+        work_snapshot: Set(new.work_snapshot_json),
         folder_id: Set(new.folder_id),
         deliverable: Set(new.deliverable),
         title: Set(new.title),
@@ -3942,18 +4073,6 @@ pub async fn done_since(
             sea_orm::Order::Asc,
         )
         .order_by_asc(dispatch::Column::Id)
-        .limit(limit)
-        .all(conn)
-        .await?)
-}
-
-/// Every assistant's dispatches, newest first, up to `limit`.
-pub async fn dispatches_to_executors(
-    conn: &DatabaseConnection,
-    limit: u64,
-) -> Result<Vec<dispatch::Model>, DbError> {
-    Ok(dispatch::Entity::find()
-        .order_by_desc(dispatch::Column::Id)
         .limit(limit)
         .all(conn)
         .await?)

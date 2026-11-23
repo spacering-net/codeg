@@ -41,7 +41,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use super::dispatch::executor_of;
+use super::dispatch::work_of;
 use super::engine::{enum_str, PersonalAgentEngine};
 use crate::acp::prompt_receipt::{PromptReceiptSink, ReceiptVia};
 use crate::db::entities::personal_agent_action::{self as action_entity, ActionState};
@@ -489,7 +489,7 @@ impl PersonalAgentEngine {
             .await
             .ok()?;
         let session = conv.external_id?;
-        let agent_type = executor_of(d).agent_type;
+        let agent_type = work_of(d).agent_type;
         let env =
             crate::db::service::agent_setting_service::load_agent_env(&self.db.conn, agent_type)
                 .await;
@@ -659,7 +659,7 @@ impl PersonalAgentEngine {
             .await
             .ok()
             .flatten();
-        let executor = d.as_ref().map(executor_of);
+        let work = d.as_ref().map(work_of);
         let title = d
             .as_ref()
             .map(|d| d.title.clone())
@@ -674,9 +674,7 @@ impl PersonalAgentEngine {
             "display": {
                 "dispatch_id": call.dispatch_id,
                 "title": title,
-                "executor": executor.as_ref().map(|e| e.name.clone()),
-                "executor_id": executor.as_ref().map(|e| e.assistant_id),
-                "agent_type": executor.as_ref().map(|e| e.agent_type),
+                "agent_type": work.as_ref().map(|e| e.agent_type),
                 "mode": d.as_ref().map(|d| d.mode),
                 "conversation_id": d.as_ref().and_then(|d| d.conversation_id),
                 "folder_id": d.as_ref().and_then(|d| d.folder_id),

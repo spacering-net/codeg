@@ -1,17 +1,17 @@
 "use client"
 
 /**
- * A piece of work handed out, in the two places the list shows it:
- * - the news about it, from the assistant that ran it, leads with the full
- *   row (`WorkRow`): that assistant's avatar with its agent's mark at its
- *   foot, what the work is, who runs it as what and where ("Builder ·
- *   Kanban task · my-app"), where it stands, and a chevron when the row
- *   opens the work's session (in the drawer on the right) — in a well of
- *   its own (`WORK_WELL`);
- * - the reply that handed it out carries a pill (`WorkPill`): who runs it
- *   (their avatar and name) and what it is, then how it stands as an icon
- *   and how long it has been going while it runs, and the same chevron — no
- *   more, as the news below says the rest.
+ * A piece of work handed out, in the two places the list shows it — the
+ * assistant's own news, so with no one else's face or name on it:
+ * - the news about it leads with the full row (`WorkRow`): how it runs (its
+ *   glyph), what the work is, how and where ("Kanban task · my-app" —
+ *   after the assistant's name when it is another's, handed over), where
+ *   it stands, and a chevron when the row opens the work's session (in the
+ *   drawer on the right) — in a well of its own (`WORK_WELL`);
+ * - the reply that handed it out carries a pill (`WorkPill`): its glyph and
+ *   what it is, then how it stands as an icon and how long it has been
+ *   going while it runs, and the same chevron — no more, as the news below
+ *   says the rest.
  *
  * Both are a thing on the bubble (`INSET_SURFACE`: a white card on its
  * grey, a wash on a card), a step deeper under the pointer and when pressed
@@ -37,33 +37,30 @@ import {
   type LucideIcon,
 } from "lucide-react"
 
-import type { AgentType, DispatchState } from "@/lib/types"
+import type { DispatchMode, DispatchState } from "@/lib/types"
 import { useSyncedSpin } from "@/lib/motion/synced-spin"
 import { cn } from "@/lib/utils"
 
 import {
-  ExecutorAvatar,
   INSET_HOVER,
   INSET_SURFACE,
   SHEET_ROW_HOVER,
+  WorkGlyph,
 } from "./shared"
 
 /** The well the news's row sits in, inside its bubble: its rounded clip —
  *  the row, which fills it, carries the surface and its states. */
 export const WORK_WELL = "overflow-hidden rounded-xl"
 
-/** The executor's avatar, in px at 100% zoom: as tall as the row's two
- *  lines. */
+/** The work's glyph, in px at 100% zoom: as tall as the row's two lines. */
 const AVATAR_SIZE = 32
 
-/** The executor's avatar in a pill, in px at 100% zoom: 4px inside the
- *  28px pill all round, so its circle sits concentric with the pill's end. */
+/** The work's glyph in a pill, in px at 100% zoom: 4px inside the 28px
+ *  pill all round, so its circle sits concentric with the pill's end. */
 const PILL_AVATAR_SIZE = 20
 
 export function WorkRow({
-  executorId,
-  executor,
-  agentType,
+  mode,
   title,
   meta,
   chip,
@@ -72,11 +69,10 @@ export function WorkRow({
   source,
   menu,
 }: {
-  executorId: number | null
-  executor: string | null
-  agentType: AgentType | null
+  /** How it runs: what its glyph is. */
+  mode: DispatchMode | null
   title: string
-  /** Who runs it as what and where. */
+  /** How and where it runs. */
   meta: string
   /** Where it stands. */
   chip: React.ReactNode
@@ -95,9 +91,7 @@ export function WorkRow({
   if (source || menu) {
     return (
       <WorkRowWithControls
-        executorId={executorId}
-        executor={executor}
-        agentType={agentType}
+        mode={mode}
         title={title}
         meta={meta}
         chip={chip}
@@ -124,12 +118,7 @@ export function WorkRow({
       )}
       title={onOpen ? t("timeline.viewSession") : undefined}
     >
-      <ExecutorAvatar
-        id={executorId}
-        name={executor ?? t("event.someone")}
-        agentType={agentType}
-        size={AVATAR_SIZE}
-      />
+      <WorkGlyph mode={mode} size={AVATAR_SIZE} />
       <span className="min-w-0 flex-1">
         {/* Up to two lines: a long title in a narrow column (a phone) still
             reads whole, where one line would leave a stub. */}
@@ -159,9 +148,7 @@ export function WorkRow({
  *  and what the row shows sits over it, letting the pointer through — but
  *  for the way to the source and the menu, controls of their own. */
 function WorkRowWithControls({
-  executorId,
-  executor,
-  agentType,
+  mode,
   title,
   meta,
   chip,
@@ -170,9 +157,7 @@ function WorkRowWithControls({
   source,
   menu,
 }: {
-  executorId: number | null
-  executor: string | null
-  agentType: AgentType | null
+  mode: DispatchMode | null
   title: string
   meta: string
   chip: React.ReactNode
@@ -210,12 +195,7 @@ function WorkRowWithControls({
           flat ? "px-3.5 py-3" : "py-2.5 ps-2.5 pe-2"
         )}
       >
-        <ExecutorAvatar
-          id={executorId}
-          name={executor ?? t("event.someone")}
-          agentType={agentType}
-          size={AVATAR_SIZE}
-        />
+        <WorkGlyph mode={mode} size={AVATAR_SIZE} />
         <span className="min-w-0 flex-1">
           <span className="line-clamp-2 text-sm leading-5 font-medium break-words text-foreground">
             {title}
@@ -296,8 +276,8 @@ export function WorkPill({
   rowId,
   state,
   notSent,
-  executorId,
-  executor,
+  mode,
+  by,
   title,
   elapsed,
   onOpen,
@@ -307,8 +287,9 @@ export function WorkPill({
   state: DispatchState | null
   /** A follow-up that never went out: that, rather than the work's state. */
   notSent?: boolean
-  executorId: number | null
-  executor: string | null
+  mode: DispatchMode | null
+  /** The assistant whose work it is, when it is another's (handed over). */
+  by?: string | null
   title: string
   /** How long it has been going, while it runs. */
   elapsed?: string | null
@@ -330,7 +311,6 @@ export function WorkPill({
     : state
       ? t(`state.${state}` as "state.completed")
       : null
-  const name = executor ?? t("event.someone")
   return (
     <button
       type="button"
@@ -345,11 +325,15 @@ export function WorkPill({
       )}
       title={onOpen ? t("timeline.viewSession") : undefined}
     >
-      <ExecutorAvatar id={executorId} name={name} size={PILL_AVATAR_SIZE} />
-      <span className="shrink-0 font-medium text-foreground">{name}</span>
-      <span aria-hidden className="shrink-0 text-muted-foreground">
-        ·
-      </span>
+      <WorkGlyph mode={mode} size={PILL_AVATAR_SIZE} />
+      {by ? (
+        <>
+          <span className="shrink-0 font-medium text-foreground">{by}</span>
+          <span aria-hidden className="shrink-0 text-muted-foreground">
+            ·
+          </span>
+        </>
+      ) : null}
       <span className="min-w-0 truncate text-foreground/80">{title}</span>
       <span className="ms-0.5 inline-flex shrink-0 items-center gap-1">
         <span className="inline-flex" title={word ?? undefined}>

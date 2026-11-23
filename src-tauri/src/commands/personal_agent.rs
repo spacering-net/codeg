@@ -26,7 +26,7 @@ use crate::db::entities::personal_agent_timeline::TimelineKind;
 use crate::db::service::personal_agent_service as svc;
 use crate::db::AppDatabase;
 use crate::models::personal_agent::{
-    DispatchInfo, ItemInfo, PersonalAgentDayStat, PersonalAgentDraft, PersonalAgentExecutorStat,
+    DispatchInfo, ItemInfo, PersonalAgentDayStat, PersonalAgentDraft, PersonalAgentWorkStat,
     PersonalAgentFile, PersonalAgentInfo, PersonalAgentSnapshot, PersonalAgentStats,
     PersonalAgentUsagePoint, TimelineChanges, TimelineCursor, TimelinePage, TimelineRow,
 };
@@ -319,7 +319,7 @@ pub(crate) async fn dispatch_infos(
         out.push(DispatchInfo {
             id: d.id,
             mode: d.mode,
-            executor: crate::personal_agent::dispatch::executor_of(&d),
+            work: crate::personal_agent::dispatch::work_of(&d),
             folder_id: d.folder_id,
             folder_name,
             deliverable: d.deliverable,
@@ -433,7 +433,8 @@ pub async fn personal_agent_output_read_core(
         .ok_or_else(|| refused(format!("{shown} is not a document of this assistant that can be shown")))
 }
 
-/// The data tab: daily counts, executors, the context-usage curve. Token
+/// The data tab: daily counts, the agents the work ran on, the context-usage
+/// curve. Token
 /// figures come from the usage dashboard's synced table, so they are as fresh
 /// as its last sync.
 pub async fn personal_agent_stats_core(
@@ -478,7 +479,7 @@ pub async fn personal_agent_stats_core(
         }
     }
     let dispatches = svc::dispatches_since(&db.conn, bot, since).await?;
-    let mut executors: BTreeMap<i32, PersonalAgentExecutorStat> = BTreeMap::new();
+    let mut agents: BTreeMap<String, PersonalAgentWorkStat> = BTreeMap::new();
     let mut dispatch_conversations: HashSet<i32> = HashSet::new();
     for d in &dispatches {
         if let Some(day) = by_day.get_mut(&key(d.created_at)) {
@@ -497,12 +498,12 @@ pub async fn personal_agent_stats_core(
                 }
             }
         }
-        let executor = crate::personal_agent::dispatch::executor_of(d);
-        let e = executors
-            .entry(executor.assistant_id)
-            .or_insert_with(|| PersonalAgentExecutorStat {
-                assistant_id: executor.assistant_id,
-                name: executor.name.clone(),
+        let work = crate::personal_agent::dispatch::work_of(d);
+        let e = agents
+            .entry(work.agent_type.as_wire().into_owned())
+            .or_insert_with(|| PersonalAgentWorkStat {
+                agent_type: work.agent_type,
+                name: crate::personal_agent::dispatch::agent_words(&work),
                 dispatches: 0,
                 completed: 0,
             });
@@ -612,7 +613,7 @@ pub async fn personal_agent_stats_core(
     usage.sort_by_key(|p| p.at);
     Ok(PersonalAgentStats {
         days: by_day.into_values().collect(),
-        executors: executors.into_values().collect(),
+        agents: agents.into_values().collect(),
         usage,
         tokens_synced_at,
     })
@@ -635,7 +636,7 @@ pub async fn personal_agent_bots_core(
             None => live::live_from_db(db, &row).await,
         };
         // Its persona's head, as the team list has it.
-        let soul = workdir::read_text(&workdir::workdir_of_bot(data_dir, &row), workdir::SOUL_FILE);
+        let soul = workdir::soul_text(data_dir, &row);
         out.push(crate::models::personal_agent_roster::RosterEntry {
             bot: bot_summary(&row),
             roster: live::roster_flags(&row),
@@ -985,23 +986,19 @@ pub async fn personal_agent_profile_update_core(
     Ok(personal_agent_profile_core(db).await)
 }
 
-/// Each assistant's and each executor config's grade (2.11): how its work
-/// went over the last 30 days — and apart, by who handed it out, who ran
-/// it and how (7.9).
+/// Each assistant's grade (2.11): how its work went over the last 30 days
+/// — and apart, by who handed it out, the agent it ran on and how (7.9).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct GradesView {
     pub bots: HashMap<i32, crate::personal_agent::profile::Grade>,
-    pub executors: HashMap<i32, crate::personal_agent::profile::Grade>,
     pub cells: Vec<crate::personal_agent::profile::GradeCell>,
 }
 
 pub async fn personal_agent_grades_core(db: &AppDatabase) -> GradesView {
     use crate::personal_agent::profile;
     let work = profile::graded_recent(db, crate::personal_agent::clock::now()).await;
-    let (bots, executors) = profile::grades_of(&work);
     GradesView {
-        bots,
-        executors,
+        bots: profile::grades_of(&work),
         cells: profile::cells(&work),
     }
 }
@@ -1082,7 +1079,7 @@ pub struct AskAnswerOutcome {
     pub text: String,
 }
 
-/// The owner answers an executor's question or plan approval on a card on
+/// The owner answers a question or plan approval of a piece of work on a card on
 /// the assistants page — the card of the assistant answering it, or its
 /// mirror. Through the same settle point as every answer: the first wins,
 /// and a late one is told whose did.
@@ -1154,100 +1151,11 @@ fn bot_summary(
             serde_json::from_str(r#"{"kind":"emoji","emoji":"🧭","color":"violet"}"#)
                 .expect("the default avatar")
         }),
-        executor_assistant_id: b.executor_assistant_id,
+        hidden: b.hidden,
+        has_brain: b.agent_type.is_some(),
+        legacy_assistant_id: b.legacy_assistant_id,
         created_at: b.created_at,
     }
-}
-
-/// How many of the latest finished dispatches to an executor config have
-/// to have failed for it to be marked (10.5, 补齐四).
-const FAILING_RUN: usize = 3;
-
-/// Every live executor config as the assistants use it: what it runs now,
-/// whether its last dispatches all failed, its last two weeks, the work
-/// assistants bound to it, the kinds of work that name it first, and how
-/// the assistants may use it. Read-only, across every assistant.
-pub async fn personal_agent_executors_core(
-    db: &AppDatabase,
-) -> Result<Vec<crate::models::personal_agent::ExecutorView>, AppCommandError> {
-    use crate::models::personal_agent::{ExecutorFailing, ExecutorView, ExecutorWork};
-    let assistants = crate::db::service::assistant_service::list_all(&db.conn).await?;
-    let bots = svc::list_bots(&db.conn).await?;
-    let recent = svc::dispatches_to_executors(&db.conn, 5_000).await?;
-    let since = Utc::now() - Duration::days(14);
-    let work = crate::personal_agent::profile::graded_recent(db, Utc::now()).await;
-    let (_, grades) = crate::personal_agent::profile::grades_of(&work);
-    let cells = crate::personal_agent::profile::cells(&work);
-    let live = [
-        DispatchState::Queued,
-        DispatchState::Running,
-        DispatchState::WaitingInput,
-        DispatchState::Review,
-    ];
-    let mut out = Vec::new();
-    for a in assistants.into_iter().filter(|a| a.is_live()) {
-        let mine: Vec<_> = recent
-            .iter()
-            .filter(|d| d.executor_assistant_id == a.id)
-            .collect();
-        let running = mine
-            .iter()
-            .filter(|d| live.contains(&d.state))
-            .map(|d| ExecutorWork {
-                dispatch_id: d.id,
-                bot_id: d.bot_id,
-                title: d.title.clone(),
-                mode: d.mode,
-                state: d.state,
-                work_task_id: d.work_task_id,
-                conversation_id: d.conversation_id,
-            })
-            .collect();
-        // The latest ones that ended, newest first: all failed?
-        let ended: Vec<_> = mine
-            .iter()
-            .filter(|d| {
-                matches!(
-                    d.state,
-                    DispatchState::Completed | DispatchState::Failed | DispatchState::Canceled
-                )
-            })
-            .take(FAILING_RUN)
-            .collect();
-        let failing = (ended.len() == FAILING_RUN
-            && ended.iter().all(|d| d.state == DispatchState::Failed))
-        .then(|| ExecutorFailing {
-            dispatch_id: ended[0].id,
-            bot_id: ended[0].bot_id,
-            title: ended[0].title.clone(),
-            error: ended[0].error.clone(),
-            count: FAILING_RUN as u32,
-        });
-        let fortnight: Vec<_> = mine.iter().filter(|d| d.created_at >= since).collect();
-        out.push(ExecutorView {
-            assistant_id: a.id,
-            uid: a.uid.clone(),
-            running,
-            failing,
-            dispatches_14d: fortnight.len() as u32,
-            completed_14d: fortnight
-                .iter()
-                .filter(|d| d.state == DispatchState::Completed)
-                .count() as u32,
-            workers: bots
-                .iter()
-                .filter(|b| b.executor_assistant_id == Some(a.id))
-                .map(bot_summary)
-                .collect(),
-            grade: grades.get(&a.id).cloned().unwrap_or_default(),
-            grade_cells: cells
-                .iter()
-                .filter(|c| c.executor == a.id)
-                .cloned()
-                .collect(),
-        });
-    }
-    Ok(out)
 }
 
 // ── actions (engine only) ───────────────────────────────────────────────────
@@ -1384,7 +1292,7 @@ pub async fn personal_agent_thread_core(
         dispatches.push(crate::models::personal_agent::ThreadDispatch {
             id: d.id,
             bot_id: d.bot_id,
-            agent_type: crate::personal_agent::dispatch::executor_of(&d).agent_type,
+            agent_type: crate::personal_agent::dispatch::work_of(&d).agent_type,
             title: d.title,
             mode: d.mode,
             state: d.state,
@@ -1656,9 +1564,9 @@ pub async fn personal_agent_set_workdir_core(
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct BotMade {
     pub bot: Option<crate::models::personal_agent::BotSummary>,
-    pub executor_assistant_id: Option<i32>,
-    /// The agent's options could not be read: the page opens the executor
-    /// config editor and makes it again with the selection.
+    /// The agent's options could not be read (options left to codeg to
+    /// fill in): the page opens the editor and makes it again with the
+    /// selection.
     pub options_unavailable: Option<OptionsUnavailable>,
 }
 
@@ -1675,23 +1583,23 @@ fn made_answer(
     match r {
         Ok(m) => Ok(BotMade {
             bot: Some(bot_summary(&m.bot)),
-            executor_assistant_id: Some(m.executor.id),
             options_unavailable: None,
         }),
         Err(CreateError::OptionsUnavailable { agent_type, why }) => Ok(BotMade {
             bot: None,
-            executor_assistant_id: None,
             options_unavailable: Some(OptionsUnavailable { agent_type, why }),
         }),
         Err(CreateError::Refused(e)) => Err(refused(e)),
     }
 }
 
-/// [+] with a name (4.12): made at once, with its executor config.
+/// [+] with a name (4.12): made at once, its work on a copy of its brain or
+/// on the agent picked (D1).
 pub async fn personal_agent_bot_create_core(
     draft: crate::models::personal_agent_bots::BotCreateDraft,
 ) -> Result<BotMade, AppCommandError> {
-    use crate::personal_agent::bots::{BotSpec, ExecutorSpec};
+    use crate::models::personal_agent::WorkChoice;
+    use crate::personal_agent::bots::{BotSpec, WorkSpec};
     let engine = engine(None).await?;
     let mut spec = BotSpec::named(draft.name);
     spec.uid = draft.uid;
@@ -1700,15 +1608,10 @@ pub async fn personal_agent_bot_create_core(
     spec.persona = draft.persona;
     spec.avatar = draft.avatar;
     spec.locale = draft.locale;
-    if let Some(id) = draft.executor_assistant_id {
-        spec.executor = if draft.executor_made_for_it {
-            ExecutorSpec::Adopt(id)
-        } else {
-            ExecutorSpec::Existing(id)
-        };
-    } else if let Some(config) = draft.executor_config {
-        spec.executor = ExecutorSpec::Config(config);
-    }
+    spec.work = match draft.work {
+        Some(WorkChoice::Config { config }) => WorkSpec::Config(config),
+        Some(WorkChoice::SameAsBrain) | None => WorkSpec::SameAsBrain,
+    };
     made_answer(engine.create_bot(spec).await)
 }
 
@@ -1999,14 +1902,6 @@ pub async fn personal_agent_conversation_target(
     conversation_id: i32,
 ) -> Result<crate::models::personal_agent::ConversationTarget, AppCommandError> {
     personal_agent_conversation_target_core(&db, conversation_id).await
-}
-
-#[cfg(feature = "tauri-runtime")]
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn personal_agent_executors(
-    db: State<'_, AppDatabase>,
-) -> Result<Vec<crate::models::personal_agent::ExecutorView>, AppCommandError> {
-    personal_agent_executors_core(&db).await
 }
 
 #[cfg(feature = "tauri-runtime")]

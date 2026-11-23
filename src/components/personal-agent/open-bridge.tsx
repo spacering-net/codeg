@@ -20,7 +20,7 @@ import { uploadAvatarPngs } from "@/lib/personal-agent-avatar-png"
 import { listenPersonalAgentFollow } from "@/lib/personal-agent-notify"
 import {
   isBotTab,
-  isPersonalAgentPage,
+  personalAgentPageOf,
   listenPersonalAgentOpen,
   PERSONAL_AGENT_OPEN_PARAM,
   type PersonalAgentPage,
@@ -42,7 +42,12 @@ export function PersonalAgentOpenBridge() {
   useEffect(() => {
     const open = (page: PersonalAgentPage) => {
       const ui = usePersonalAgentUi.getState()
-      if (isBotTab(page)) ui.openBotPage(page)
+      if (page === "assistants") {
+        // The primary's conversation, whichever one the page showed last.
+        ui.setViewBot(null)
+        ui.showConversation()
+      }
+      else if (isBotTab(page)) ui.openBotPage(page)
       else ui.openSettings(page)
       setRoute("personalAgent")
     }
@@ -56,7 +61,8 @@ export function PersonalAgentOpenBridge() {
         "",
         `${window.location.pathname}${rest ? `?${rest}` : ""}${window.location.hash}`
       )
-      if (isPersonalAgentPage(asked)) open(asked)
+      const page = personalAgentPageOf(asked)
+      if (page) open(page)
     }
     return listenPersonalAgentOpen(open)
   }, [setRoute])

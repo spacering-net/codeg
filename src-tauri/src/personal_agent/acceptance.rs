@@ -29,7 +29,7 @@ use chrono::Utc;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::{json, Value};
 
-use super::dispatch::{cut, executor_of, mode_label};
+use super::dispatch::{cut, mode_label, work_of};
 use super::engine::PersonalAgentEngine;
 use super::read_check::OrFailed;
 use super::tools::ToolOutcome;
@@ -47,7 +47,7 @@ use crate::db::service::personal_agent_service::{NewDispatch, NewEvent, NewNotic
 use crate::db::service::personal_agent_verification_service as vsvc;
 use crate::db::service::personal_agent_verification_service::{NewRound, RoundWrite, TaskAt};
 use crate::db::AppDatabase;
-use crate::models::personal_agent::{DispatchExecutorSnapshot, PersonalAgentChange};
+use crate::models::personal_agent::{DispatchWorkSnapshot, PersonalAgentChange};
 use crate::models::personal_agent_overview::Ladder;
 use crate::models::personal_agent_prefs::{AccountView, AskFirst, Prefs};
 use crate::models::WorkTaskPreflight;
@@ -757,18 +757,24 @@ impl PersonalAgentEngine {
 
     /// Who checks this work (7.5, D1): what the assistant the work is now
     /// with runs its work on — the one that dispatched it, or the primary
-    /// it was handed to. `None`: nothing it can use.
+    /// it was handed to — with its standing instructions for its work.
+    /// `None`: that agent cannot run now.
     pub(super) async fn pick_checker(
         &self,
         d: &dispatch_entity::Model,
         _task: &work_task::Model,
-    ) -> Option<crate::models::assistant::AssistantInfo> {
+    ) -> Option<DispatchWorkSnapshot> {
         let owner = svc::get_bot(&self.db.conn, d.bot_id?).await.ok().flatten()?;
-        let id = owner.executor_assistant_id?;
-        crate::db::service::assistant_service::get_live_enabled(&self.db.conn, id)
-            .await
-            .ok()
-            .flatten()
+        let work = super::dispatch::usable_work(&self.db, &owner).await?;
+        Some(DispatchWorkSnapshot {
+            name: super::messages::display_name(&owner),
+            bot_uid: owner.uid.clone(),
+            agent_type: work.agent_type,
+            agent_options: work.agent_options,
+            label_snapshot: Some(work.label_snapshot),
+            instructions: owner.work_instructions.clone().unwrap_or_default(),
+            dispatcher: None,
+        })
     }
 
     /// Send the check out: a work session in the task's worktree, as the
@@ -780,25 +786,19 @@ impl PersonalAgentEngine {
         task: &work_task::Model,
         wt: &crate::models::FolderDetail,
         round: &round_entity::Model,
-        checker: crate::models::assistant::AssistantInfo,
+        checker: DispatchWorkSnapshot,
     ) -> Result<i32, String> {
         let prompt = self.check_prompt(d, task, wt, round).await;
-        let snapshot = DispatchExecutorSnapshot {
-            assistant_id: checker.id,
-            name: checker.name.clone(),
-            agent_type: checker.agent_type,
-            agent_options: checker.agent_options.clone(),
-            label_snapshot: Some(checker.label_snapshot.clone()),
-            instructions: checker.instructions.clone(),
+        let snapshot = DispatchWorkSnapshot {
             dispatcher: Some(self.dispatcher_brief().await),
+            ..checker
         };
         let row = svc::create_dispatch(
             &self.db.conn,
             NewDispatch {
                 bot_id: self.bot().await,
                 mode: DispatchMode::Session,
-                executor_assistant_id: checker.id,
-                executor_snapshot_json: serde_json::to_string(&snapshot)
+                work_snapshot_json: serde_json::to_string(&snapshot)
                     .map_err(|e| e.to_string())?,
                 folder_id: Some(wt.id),
                 deliverable: None,
@@ -824,8 +824,6 @@ impl PersonalAgentEngine {
         card.segment_id = self.state.lock().await.connection_segment;
         card.data = Some(json!({
             "mode": row.mode,
-            "executor": snapshot.name,
-            "executor_id": snapshot.assistant_id,
             "agent_type": snapshot.agent_type,
             "folder_id": d.folder_id,
             "deliverable": Value::Null,
@@ -1120,7 +1118,7 @@ impl PersonalAgentEngine {
         report: Option<&CheckReport>,
         cause: &str,
     ) -> NewRow {
-        let executor = executor_of(check);
+        let work = work_of(check);
         let body = match report {
             Some(r) => format!(
                 "Check of dispatch #{} (round {}): {}",
@@ -1140,9 +1138,7 @@ impl PersonalAgentEngine {
             "state": check.state,
             "ladder": Ladder::Done,
             "title": check.title,
-            "executor": executor.name,
-            "executor_id": executor.assistant_id,
-            "agent_type": executor.agent_type,
+            "agent_type": work.agent_type,
             "excerpt": check.result_excerpt,
             "gist": check.result_excerpt.as_deref().and_then(super::gist::plain_gist),
             "note": check.error,
@@ -1316,7 +1312,7 @@ impl PersonalAgentEngine {
             .filter(|s| !s.trim().is_empty())
         {
             lines.push(format!(
-                "The executor's own summary: {}",
+                "The work session's own summary: {}",
                 cut(&super::spec_text::cards_as_text(x), 1_500)
             ));
         }
@@ -2186,7 +2182,7 @@ back). You may disagree with the check: say why in `reason`.\n{}\n</codeg-accept
         r: &round_entity::Model,
         d: &dispatch_entity::Model,
     ) -> Value {
-        let executor = executor_of(d);
+        let work = work_of(d);
         let check = match r.check_dispatch_id {
             Some(id) => svc::get_dispatch(&self.db.conn, id).await.ok().flatten(),
             None => None,
@@ -2232,10 +2228,8 @@ back). You may disagree with the check: say why in `reason`.\n{}\n</codeg-accept
             "title": d.title,
             "work_task_id": d.work_task_id,
             "folder_id": d.folder_id,
-            "executor": executor.name,
-            "executor_agent": executor.agent_type,
-            "checker": check.as_ref().map(|c| executor_of(c).name),
-            "checker_agent": check.as_ref().map(|c| executor_of(c).agent_type),
+            "work_agent": work.agent_type,
+            "checker_agent": check.as_ref().map(|c| work_of(c).agent_type),
             "check_dispatch_id": r.check_dispatch_id,
             "verdict": r.check_verdict,
             "evidence": r.check_evidence,

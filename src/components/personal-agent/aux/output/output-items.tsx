@@ -29,7 +29,7 @@ import { cn } from "@/lib/utils"
 import { PanelIcon, PanelItem, PanelMoreRow } from "../../panel-section"
 import {
   canOpenWork,
-  ExecutorAvatar,
+  WorkGlyph,
   useOpenWork,
   useWorkMeta,
   workTargetOf,
@@ -99,7 +99,6 @@ export function ReportItem({
       time={time}
       chip={<LadderChip ladder={d.ladder ?? null} />}
       meta={meta({
-        executor: d.executor.name,
         mode: d.mode,
         folder: d.folder_name,
       })}
@@ -152,17 +151,12 @@ export function TaskItem({ d, time }: { d: DispatchInfo; time: string }) {
   return (
     <PanelItem
       media={
-        <ExecutorAvatar
-          id={d.executor.assistant_id}
-          name={d.executor.name}
-          size={ROW_AVATAR_SIZE}
-        />
+        <WorkGlyph mode={d.mode} size={ROW_AVATAR_SIZE} />
       }
       title={d.title}
       time={time}
       chip={<LadderChip ladder={d.ladder ?? null} />}
       meta={meta({
-        executor: d.executor.name,
         mode: d.mode,
         folder: d.folder_name,
       })}

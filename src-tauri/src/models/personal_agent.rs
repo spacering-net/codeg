@@ -1,10 +1,10 @@
 //! The personal agent as the UI and its own engine see it.
 //!
-//! One long-lived assistant per data dir: the owner talks to it on its own
-//! page, it hands work to the role assistants of 协作 → 助手 (as a kanban task,
-//! a chat conversation, or a work conversation in a project's checkout), and it
-//! keeps one continuous timeline across the agent sessions ("segments") it
-//! runs on underneath.
+//! The owner's assistants, each with a brain (the agent it thinks and talks
+//! on) and the agent its work runs on: the owner talks to one on its own
+//! page, it hands work out (as a kanban task, a chat conversation, or a work
+//! conversation in a project's checkout), and it keeps one continuous
+//! timeline across the agent sessions ("segments") it runs on underneath.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -219,9 +219,17 @@ pub struct PersonalAgentInfo {
     /// Empty means "use the localized default name".
     pub name: String,
     pub avatar: BotAvatar,
-    pub agent_type: AgentType,
-    pub agent_options: AgentDelegationDefaults,
-    pub label_snapshot: AssistantLabelSnapshot,
+    /// Its brain; `None` (all three) for an assistant converted on upgrade
+    /// before there was a primary to copy one from (it can be @-mentioned,
+    /// not talked to).
+    pub agent_type: Option<AgentType>,
+    pub agent_options: Option<AgentDelegationDefaults>,
+    pub label_snapshot: Option<AssistantLabelSnapshot>,
+    /// The agent its work runs on, with every option picked; `None` when
+    /// what is stored names no agent codeg knows.
+    pub work: Option<AssistantAgentConfig>,
+    /// What every session its work runs in is told first; "" for none.
+    pub work_instructions: String,
     pub settings: PersonalAgentSettings,
     /// The working directory in effect.
     pub workdir: String,
@@ -234,8 +242,8 @@ pub struct PersonalAgentInfo {
     /// The primary assistant, or a worker.
     pub kind: crate::db::entities::personal_agent::BotKind,
     pub uid: Option<String>,
-    /// The executor profile a worker is bound to.
-    pub executor_assistant_id: Option<i32>,
+    /// The assistant of the collaboration settings it was converted from.
+    pub legacy_assistant_id: Option<i32>,
 }
 
 /// What the settings dialog saves. Absent fields stay as they are; the first
@@ -255,25 +263,29 @@ pub struct PersonalAgentDraft {
     /// in the settings (`PersonalAgentSettings::locale`).
     #[serde(default)]
     pub locale: Option<String>,
-    /// The executor config its work runs on, one the owner picked (the
-    /// primary's or a work assistant's alike).
+    /// The agent its work runs on. The first save of the primary needs it
+    /// (the page sends `same_as_brain` by default); later ones send it only
+    /// when it changes — a save of the brain alone leaves it as it is.
     #[serde(default)]
-    pub executor_assistant_id: Option<i32>,
-    /// Make it one with this complete selection (the editor's).
+    pub work: Option<WorkChoice>,
+    /// Its work's standing instructions; `Some("")` clears them.
     #[serde(default)]
-    pub executor_config: Option<AssistantAgentConfig>,
-    /// Make it one on the brain's agent, its options filled in as a new work
-    /// assistant's are — what setting the primary up does by default. When
-    /// the agent's options cannot be read nothing is saved and the answer
-    /// starts with `EXECUTOR_OPTIONS_UNAVAILABLE`: the page opens the editor
-    /// and saves again with `executor_config`.
-    #[serde(default)]
-    pub executor_new: bool,
+    pub work_instructions: Option<String>,
 }
 
-/// How a save that was to make an executor config on the brain's agent
-/// answers when that agent's options cannot be read.
-pub const EXECUTOR_OPTIONS_UNAVAILABLE: &str = "executor options unavailable: ";
+/// The agent an assistant's work runs on, as a page picks it (D1): copied
+/// from the brain when it is saved — every option the same, and its own
+/// from then on — or one picked apart.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WorkChoice {
+    SameAsBrain,
+    Config { config: AssistantAgentConfig },
+}
+
+/// Longest standing instructions for an assistant's work, in characters
+/// (what an assistant of the collaboration settings could have).
+pub const MAX_WORK_INSTRUCTIONS_CHARS: usize = 20_000;
 
 /// One timeline row.
 #[derive(Debug, Clone, Serialize)]
@@ -391,8 +403,6 @@ pub struct MessageCheckView {
     pub dispatch_id: Option<i32>,
     /// The checker's session, once it has one.
     pub check_conversation_id: Option<i32>,
-    /// Who checked it.
-    pub executor: Option<String>,
     pub notice_id: Option<i32>,
     /// Its card on the primary's timeline.
     pub row_id: Option<i32>,
@@ -400,11 +410,18 @@ pub struct MessageCheckView {
     pub updated_at: DateTime<Utc>,
 }
 
-/// What the executor of a dispatch was, frozen when it was dispatched.
+/// What a dispatch's work runs on — its assistant's work agent, options and
+/// standing instructions — frozen when it was handed out.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DispatchExecutorSnapshot {
-    pub assistant_id: i32,
+pub struct DispatchWorkSnapshot {
+    /// Its assistant's name then: what the work's standing instructions are
+    /// introduced as.
+    #[serde(default)]
     pub name: String,
+    /// Its assistant's uid: whose work it is, after a handover too (the
+    /// dispatch's `bot_id` is then the one following it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot_uid: Option<String>,
     pub agent_type: AgentType,
     #[serde(default)]
     pub agent_options: AgentDelegationDefaults,
@@ -418,9 +435,9 @@ pub struct DispatchExecutorSnapshot {
     pub dispatcher: Option<String>,
 }
 
-impl DispatchExecutorSnapshot {
-    /// The standing instructions the execution gets: the executor config's,
-    /// then who handed the work out.
+impl DispatchWorkSnapshot {
+    /// The standing instructions the work gets: its assistant's, then who
+    /// handed the work out.
     pub fn brief_text(&self) -> String {
         match self.dispatcher.as_deref().filter(|d| !d.trim().is_empty()) {
             Some(d) if self.instructions.trim().is_empty() => d.to_string(),
@@ -477,7 +494,7 @@ pub struct ThreadView {
 pub struct DispatchInfo {
     pub id: i32,
     pub mode: DispatchMode,
-    pub executor: DispatchExecutorSnapshot,
+    pub work: DispatchWorkSnapshot,
     pub folder_id: Option<i32>,
     pub folder_name: Option<String>,
     pub deliverable: Option<String>,
@@ -503,7 +520,7 @@ pub struct DispatchInfo {
     pub ladder: super::personal_agent_overview::Ladder,
     /// The kanban task behind a task dispatch, while it exists.
     pub task: Option<super::personal_agent_overview::TaskFacts>,
-    /// How many of its executor's questions and plan approvals its assistant
+    /// How many of its work's questions and plan approvals its assistant
     /// answered for the owner (7.3.1).
     pub answered_for_you: u32,
     /// What done looks like, as its assistant wrote it (7.5).
@@ -684,48 +701,11 @@ pub struct BotSummary {
     pub uid: Option<String>,
     pub name: String,
     pub avatar: BotAvatar,
-    pub executor_assistant_id: Option<i32>,
+    pub hidden: bool,
+    /// Whether it has a brain yet (D3).
+    pub has_brain: bool,
+    pub legacy_assistant_id: Option<i32>,
     pub created_at: DateTime<Utc>,
-}
-
-/// A piece of work an executor config is running.
-#[derive(Debug, Clone, Serialize)]
-pub struct ExecutorWork {
-    pub dispatch_id: i32,
-    pub bot_id: Option<i32>,
-    pub title: String,
-    pub mode: DispatchMode,
-    pub state: DispatchState,
-    pub work_task_id: Option<i32>,
-    pub conversation_id: Option<i32>,
-}
-
-/// The last dispatches to an executor config all failed: the latest one.
-#[derive(Debug, Clone, Serialize)]
-pub struct ExecutorFailing {
-    pub dispatch_id: i32,
-    pub bot_id: Option<i32>,
-    pub title: String,
-    pub error: Option<String>,
-    pub count: u32,
-}
-
-/// An executor config as the assistants' work runs on it (10.5, 补齐四 and
-/// 六): what it is running, whether it keeps failing, its last two weeks,
-/// and the assistants — the primary too — whose work runs on it.
-#[derive(Debug, Clone, Serialize)]
-pub struct ExecutorView {
-    pub assistant_id: i32,
-    pub uid: String,
-    pub running: Vec<ExecutorWork>,
-    pub failing: Option<ExecutorFailing>,
-    pub dispatches_14d: u32,
-    pub completed_14d: u32,
-    pub workers: Vec<BotSummary>,
-    /// How its work went over the last 30 days (2.11).
-    pub grade: crate::personal_agent::profile::Grade,
-    /// And apart, by who handed it out and how (7.9), the most work first.
-    pub grade_cells: Vec<crate::personal_agent::profile::GradeCell>,
 }
 
 /// One of the persona/memory files of the working directory.
@@ -756,9 +736,11 @@ pub struct PersonalAgentDayStat {
     pub dispatch_tokens: i64,
 }
 
+/// The work handed out on one agent.
 #[derive(Debug, Clone, Serialize)]
-pub struct PersonalAgentExecutorStat {
-    pub assistant_id: i32,
+pub struct PersonalAgentWorkStat {
+    pub agent_type: AgentType,
+    /// The agent's name.
     pub name: String,
     pub dispatches: u32,
     pub completed: u32,
@@ -778,7 +760,7 @@ pub struct PersonalAgentUsagePoint {
 #[derive(Debug, Clone, Serialize)]
 pub struct PersonalAgentStats {
     pub days: Vec<PersonalAgentDayStat>,
-    pub executors: Vec<PersonalAgentExecutorStat>,
+    pub agents: Vec<PersonalAgentWorkStat>,
     pub usage: Vec<PersonalAgentUsagePoint>,
     /// When the token figures were last synced from the agents' transcripts.
     pub tokens_synced_at: Option<DateTime<Utc>>,

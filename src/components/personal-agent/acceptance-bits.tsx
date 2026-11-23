@@ -6,7 +6,7 @@
  * - `DoneWhen`: the assistant's acceptance criteria, on the work it handed
  *   out;
  * - `CheckLabel`: the line that says a piece of work is the acceptance check
- *   of another — which round, and whose executor config checks it.
+ *   of another — which round.
  */
 
 import { useTranslations } from "next-intl"

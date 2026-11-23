@@ -511,7 +511,7 @@ pub struct PersonalAgentEngine {
     /// The owner's zone at the clock's last look: a change moves the
     /// repeating matters with it (1.12).
     pub(super) clock_zone: std::sync::Mutex<Option<chrono_tz::Tz>>,
-    /// When the routines' executor configs were last looked at (6.9).
+    /// When the agents the routines' work runs on were last looked at (6.9).
     pub(super) routine_check_at: std::sync::Mutex<Option<DateTime<Utc>>>,
     /// The clock's look at the routines is running (`spawn_routine_tick`).
     pub(super) routine_busy: AtomicBool,
@@ -2320,6 +2320,9 @@ impl PersonalAgentEngine {
         // directory removed in the same hold — never gets it made again.
         // Its folder taken in the same hold, from the row as it is now — never
         // a directory it was on before, which another may have since.
+        // A worker converted on upgrade or imported has its own made first,
+        // with the persona it came with.
+        super::ready::ensure_worker_ready(&self.db, &self.data_dir, self.bot().await).await?;
         let (workdir, folder_id) = {
             let _claim = workdir::WORKDIR_CLAIM.lock().await;
             let now = self.agent_row().await.ok_or("this assistant was deleted")?;
@@ -3855,8 +3858,7 @@ impl PersonalAgentEngine {
                 },
             })
             .collect();
-        // What it works with when it does a thing itself, in words: never
-        // the executor config itself.
+        // What it works with when it does a thing itself, in words.
         let own_work = self.work_snapshot().await.ok().map(|w| work_words(&w));
         let previous = svc::list_segments(&self.db.conn, self.bot().await)
             .await
@@ -4503,8 +4505,16 @@ impl PersonalAgentEngine {
         card_click: Option<serde_json::Value>,
         reply_data: Option<serde_json::Value>,
     ) -> Result<TimelineRow, String> {
-        if self.agent_row().await.is_none() {
+        let Some(me) = self.agent_row().await else {
             return Err("configure the personal agent first".into());
+        };
+        // One with no brain yet (converted on upgrade before the primary
+        // was set up) is not talked to: nothing would read it (D3).
+        if brain_of(&me).is_none() {
+            return Err(
+                "set the primary assistant up first: this assistant has no brain to read it yet"
+                    .into(),
+            );
         }
         let text = text.trim().to_string();
         if text.is_empty() && blocks.is_empty() {
@@ -4965,11 +4975,7 @@ impl PersonalAgentEngine {
                     config.label_snapshot.agent
                 ));
             }
-            write.agent_type = Some(config.agent_type.as_wire().into_owned());
-            write.agent_options_json =
-                Some(serde_json::to_string(&config.agent_options).map_err(|e| e.to_string())?);
-            write.label_snapshot_json =
-                Some(serde_json::to_string(&config.label_snapshot).map_err(|e| e.to_string())?);
+            write.brain = Some(svc::AgentColumns::of(config));
             // A compact command belongs to the agent it was written for.
             if old_config.as_ref().is_some_and(|o| o.agent_type != config.agent_type)
                 && draft.settings.is_none()
@@ -4989,62 +4995,39 @@ impl PersonalAgentEngine {
             settings.compact_command_agent = effective_agent.map(|a| a.as_wire().into_owned());
         }
         let worker = existing.as_ref().is_some_and(|r| r.kind == BotKind::Worker);
-        // The executor config its work runs on: one the owner picked, or one
-        // made for it now — removed again when the save does not go through.
-        let mut made_executor: Option<i32> = None;
-        // Binding one that is there: in the hold every check of who is bound
-        // to an executor config is made in (one changed in place for its
-        // only assistant), until the row is written.
-        let binding = match draft.executor_assistant_id {
-            Some(_) => Some(workdir::WORKDIR_CLAIM.lock().await),
-            None => None,
+        // The agent its work runs on (D1): a copy of the brain as it is
+        // saved — every option the same, its own from then on — or one
+        // picked apart. The first save copies the brain unless told
+        // otherwise; a later one changes it only when asked, a change of the
+        // brain alone leaving it as it is.
+        let work_choice = match (draft.work.clone(), existing.is_none()) {
+            (Some(w), _) => Some(w),
+            (None, true) => Some(crate::models::personal_agent::WorkChoice::SameAsBrain),
+            (None, false) => None,
         };
-        if let Some(id) = draft.executor_assistant_id {
-            crate::db::service::assistant_service::get(&self.db.conn, id)
-                .await
-                .map_err(|e| e.to_string())?
-                .filter(|a| a.is_live())
-                .ok_or_else(|| format!("no executor config #{id}"))?;
-            write.executor_assistant_id = Some(id);
-        } else if draft.executor_config.is_some() || draft.executor_new {
-            let config = match draft.executor_config.clone() {
-                Some(c) => c,
-                None => {
-                    let agent_type = effective_agent
-                        .ok_or("pick the agent the personal agent runs on")?;
-                    self.fill_options(agent_type, &Default::default(), &[])
-                        .await
-                        .map_err(|e| match e {
-                            super::bots::FillError::Unavailable(why) => format!(
-                                "{}{why}",
-                                crate::models::personal_agent::EXECUTOR_OPTIONS_UNAVAILABLE
-                            ),
-                            super::bots::FillError::Refused(e) => e,
-                        })?
-                        .0
-                }
-            };
-            let name = write
-                .name
-                .clone()
-                .or_else(|| existing.as_ref().map(|r| r.name.clone()))
-                .filter(|n| !n.trim().is_empty())
-                .unwrap_or_else(|| "Personal agent".into());
-            let avatar = draft
-                .avatar
-                .clone()
-                .or_else(|| {
-                    existing
-                        .as_ref()
-                        .and_then(|r| serde_json::from_str::<BotAvatar>(&r.avatar).ok())
-                })
-                .unwrap_or(BotAvatar::Emoji {
-                    emoji: "🧭".into(),
-                    color: "violet".into(),
-                });
-            let made = self.make_executor(&name, &avatar, config).await?;
-            write.executor_assistant_id = Some(made.id);
-            made_executor = Some(made.id);
+        match work_choice {
+            Some(crate::models::personal_agent::WorkChoice::SameAsBrain) => {
+                let brain = new_config
+                    .clone()
+                    .or_else(|| old_config.clone())
+                    .ok_or("pick the agent the personal agent runs on")?;
+                write.work = Some(svc::AgentColumns::of(&brain));
+            }
+            Some(crate::models::personal_agent::WorkChoice::Config { config }) => {
+                crate::db::service::assistant_service::validate_agent_config(&config)
+                    .map_err(|e| e.to_string())?;
+                write.work = Some(svc::AgentColumns::of(&config));
+            }
+            None => {}
+        }
+        if let Some(text) = draft.work_instructions.as_deref() {
+            if text.chars().count() > crate::models::personal_agent::MAX_WORK_INSTRUCTIONS_CHARS {
+                return Err(format!(
+                    "the standing instructions for its work are longer than {} characters",
+                    crate::models::personal_agent::MAX_WORK_INSTRUCTIONS_CHARS
+                ));
+            }
+            write.work_instructions = Some(Some(text.to_string()).filter(|t| !t.trim().is_empty()));
         }
         if worker {
             // The owner's language is the account's, on the primary's row.
@@ -5095,31 +5078,34 @@ impl PersonalAgentEngine {
             (Some(id), _) => svc::save_bot(&self.db.conn, id, write).await,
             (None, Some(row)) => svc::save_bot(&self.db.conn, row.id, write).await,
             (None, None) => svc::save_primary(&self.db.conn, write).await,
-        };
-        drop(binding);
-        let saved = match saved {
-            Ok(s) => s,
-            Err(e) => {
-                if let Some(id) = made_executor {
-                    let _ = crate::commands::assistants::assistant_delete_core(
-                        &self.emitter,
-                        &self.db,
-                        id,
-                    )
-                    .await;
-                }
-                return Err(e.to_string());
-            }
-        };
+        }
+        .map_err(|e| e.to_string())?;
         if renamed {
             if let Ok(Some(seg)) = svc::open_segment(&self.db.conn, self.bot().await).await {
                 self.update_segment_state(seg.id, |s| s.persona_resend = true).await;
             }
         }
+        // The primary set up (or saved again after a setup whose directory
+        // failed): every assistant with no brain yet gets a copy of its
+        // brain (D3, §5) — before the directory, which may fail and is
+        // made again on the next save; with none missing it changes
+        // nothing.
+        if saved.kind == BotKind::Primary {
+            super::ready::fill_brains(&self.db, &self.emitter).await;
+        }
         // The first save sets the working directory up — a worker's row is
         // made before its engine first saves, so "first" is the directory's
-        // state, not the row's.
-        if first_save || !workdir::is_workdir(&self.workdir_of(&saved)) {
+        // state, not the row's — and a save after one whose history failed
+        // finishes it. A worker converted on upgrade or imported has its
+        // own made the one way (with the persona it came with).
+        let workdir_now = self.workdir_of(&saved);
+        if saved.kind == BotKind::Worker && !saved.workdir_ready {
+            super::ready::ensure_worker_ready(&self.db, &self.data_dir, saved.id).await?;
+        } else if first_save
+            || !workdir::is_workdir(&workdir_now)
+            // The primary's setup whose history failed, saved again.
+            || (saved.kind == BotKind::Primary && !workdir::has_commit(&workdir_now).await)
+        {
             let workdir = self.workdir_of(&saved);
             workdir::ensure_bot_workdir(
                 &workdir,
@@ -5132,7 +5118,12 @@ impl PersonalAgentEngine {
         if let (Some(old), Some(new)) = (old_config.as_ref(), new_config.as_ref()) {
             self.apply_brain_change(old, new).await;
         }
-        let saved = self.agent_row().await.unwrap_or(saved);
+        // Deleted meanwhile: nothing more is written for it (its directory
+        // is gone with it).
+        let saved = self
+            .agent_row()
+            .await
+            .ok_or("this assistant was deleted")?;
         let workdir = self.workdir_of(&saved);
         if let Some(agent_type) = effective_agent {
             workdir::sync_bot_skill(
@@ -5281,6 +5272,10 @@ impl PersonalAgentEngine {
         path: Option<String>,
         locale: Option<&str>,
     ) -> Result<PersonalAgentInfo, String> {
+        // A worker converted on upgrade or imported has its own directory
+        // made first, with the persona it came with — the move leaves that
+        // one as any move leaves the old one, never the persona unwritten.
+        super::ready::ensure_worker_ready(&self.db, &self.data_dir, self.bot().await).await?;
         // Settled first: a turn's commit, taken after its turn is done, goes
         // to the directory the turn worked in — never to the new one.
         let moved = {
@@ -5675,22 +5670,43 @@ pub fn skills_off(row: &agent_entity::Model) -> std::collections::BTreeSet<Strin
         .unwrap_or_default()
 }
 
-/// The brain, as an assistant stores one.
-pub(super) fn brain_of(row: &agent_entity::Model) -> Option<AssistantAgentConfig> {
+/// An agent with every option picked, out of the columns a row keeps one in.
+fn agent_config_of(agent_type: &str, options: &str, labels: &str) -> Option<AssistantAgentConfig> {
     Some(AssistantAgentConfig {
-        agent_type: AgentType::from_wire(&row.agent_type)?,
-        agent_options: serde_json::from_str(&row.agent_options).unwrap_or_default(),
-        label_snapshot: serde_json::from_str::<AssistantLabelSnapshot>(&row.label_snapshot)
-            .unwrap_or_else(|_| AssistantLabelSnapshot {
-                agent: row.agent_type.clone(),
+        agent_type: AgentType::from_wire(agent_type)?,
+        agent_options: serde_json::from_str(options).unwrap_or_default(),
+        label_snapshot: serde_json::from_str::<AssistantLabelSnapshot>(labels).unwrap_or_else(|_| {
+            AssistantLabelSnapshot {
+                agent: agent_type.to_string(),
                 mode: None,
                 options: Vec::new(),
-            }),
+            }
+        }),
     })
 }
 
+/// The brain, as an assistant stores one; `None` for one with no brain yet
+/// (converted on upgrade before there was a primary, D3).
+pub(super) fn brain_of(row: &agent_entity::Model) -> Option<AssistantAgentConfig> {
+    agent_config_of(
+        row.agent_type.as_deref()?,
+        row.agent_options.as_deref().unwrap_or("{}"),
+        row.label_snapshot.as_deref().unwrap_or("{}"),
+    )
+}
+
+/// The agent an assistant's work runs on, as it stores it; `None` when it
+/// names no agent codeg knows.
+pub fn work_of_row(row: &agent_entity::Model) -> Option<AssistantAgentConfig> {
+    agent_config_of(
+        &row.work_agent_type,
+        &row.work_agent_options,
+        &row.work_label_snapshot,
+    )
+}
+
 pub(super) fn to_info(row: &agent_entity::Model, workdir: &std::path::Path) -> Option<PersonalAgentInfo> {
-    let brain = brain_of(row)?;
+    let brain = brain_of(row);
     Some(PersonalAgentInfo {
         id: row.id,
         name: row.name.clone(),
@@ -5698,9 +5714,11 @@ pub(super) fn to_info(row: &agent_entity::Model, workdir: &std::path::Path) -> O
             emoji: "🧭".into(),
             color: "violet".into(),
         }),
-        agent_type: brain.agent_type,
-        agent_options: brain.agent_options,
-        label_snapshot: brain.label_snapshot,
+        agent_type: brain.as_ref().map(|b| b.agent_type),
+        agent_options: brain.as_ref().map(|b| b.agent_options.clone()),
+        label_snapshot: brain.map(|b| b.label_snapshot),
+        work: work_of_row(row),
+        work_instructions: row.work_instructions.clone().unwrap_or_default(),
         settings: settings_of(row),
         workdir: workdir.to_string_lossy().to_string(),
         workdir_custom: row.workdir.as_deref().is_some_and(|w| !w.trim().is_empty()),
@@ -5710,7 +5728,7 @@ pub(super) fn to_info(row: &agent_entity::Model, workdir: &std::path::Path) -> O
         updated_at: row.updated_at,
         kind: row.kind,
         uid: row.uid.clone(),
-        executor_assistant_id: row.executor_assistant_id,
+        legacy_assistant_id: row.legacy_assistant_id,
     })
 }
 

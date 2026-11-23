@@ -1,13 +1,13 @@
-//! Work assistants come and go (4.12, 4.14): made from a name and, when
-//! given, a persona — its brain the primary's, an executor config made with
-//! it and its options filled in, or one already there — copied and deleted.
-//! Its brain first wakes when it has something to do.
+//! Assistants come and go (4.12, 4.14): made from a name and, when given, a
+//! persona — its brain the primary's, the agent its work runs on a copy of
+//! the brain or one picked (D1: copied when it is made, its own from then
+//! on) — copied and deleted. Its brain first wakes when it has something to
+//! do.
 //!
 //! The assistants make them too (`bot_create`): on the owner's word at
 //! once, with a card that undoes it; on their own idea, as a card that
 //! makes it when the owner says so.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use serde_json::{json, Value};
@@ -25,11 +25,13 @@ use crate::db::entities::personal_agent_notice::{
 use crate::db::entities::personal_agent_timeline::TimelineKind;
 use crate::db::service::personal_agent_message_service as msvc;
 use crate::db::service::personal_agent_service as svc;
-use crate::db::service::personal_agent_service::{ItemWrite, NewNotice, NewRow, NewWorker};
-use crate::models::assistant::{AssistantAgentConfig, AssistantDraft, AssistantInfo};
+use crate::db::service::personal_agent_service::{
+    AgentColumns, ItemWrite, NewNotice, NewRow, NewWorker,
+};
+use crate::models::assistant::AssistantAgentConfig;
 use crate::models::personal_agent::{PersonalAgentChange, PersonalAgentSettings, TimelineRow};
 use crate::models::personal_agent_bots::{
-    BotAvatar, BotDeleteOptions, BotImpact, ImpactExecutor, ImpactWork, PickedFrom, PickedOption,
+    BotAvatar, BotDeleteOptions, BotImpact, ImpactWork, PickedFrom, PickedOption,
 };
 use crate::models::system::AppLocale;
 use crate::models::AgentType;
@@ -39,23 +41,17 @@ const SUGGEST_MUTE_DAYS: i64 = 7;
 /// Longest name.
 const MAX_NAME_CHARS: usize = 40;
 
-/// Where a new work assistant's executor config comes from.
-#[derive(Debug, Clone)]
-pub enum ExecutorSpec {
-    /// Make one, on `agent_type` (the brain's when `None`), keeping what
-    /// `given` names and filling the rest in.
-    Fill {
-        agent_type: Option<AgentType>,
-        given: Partial,
-    },
-    /// Make one with this complete selection (the editor's).
+/// What a new assistant's work runs on (D1), written into its own row: its
+/// own from then on, whatever happens to its brain.
+#[derive(Debug, Clone, PartialEq)]
+pub enum WorkSpec {
+    /// A copy of its brain: the agent and every option the same.
+    SameAsBrain,
+    /// This complete selection (the page's editor).
     Config(AssistantAgentConfig),
-    /// Bind this one (one the owner picked, or the one a copied assistant
-    /// had: an executor config can serve several assistants).
-    Existing(i32),
-    /// Bind this one, made for the new assistant just now (in the editor):
-    /// as one codeg made.
-    Adopt(i32),
+    /// On `agent_type`, keeping what `given` names and filling the rest in
+    /// (the `bot_create` tool's).
+    Fill { agent_type: AgentType, given: Partial },
 }
 
 /// A work assistant to make.
@@ -71,7 +67,9 @@ pub struct BotSpec {
     pub brain: Option<AssistantAgentConfig>,
     /// The options picked for the brain, when codeg filled them in.
     pub brain_picked: Vec<PickedOption>,
-    pub executor: ExecutorSpec,
+    pub work: WorkSpec,
+    /// Its work's standing instructions (a copy's).
+    pub work_instructions: Option<String>,
     pub locale: Option<String>,
     /// Its own settings to start from (a copy's), and its files.
     pub settings: Option<PersonalAgentSettings>,
@@ -209,10 +207,8 @@ impl BotSpec {
             avatar: None,
             brain: None,
             brain_picked: Vec::new(),
-            executor: ExecutorSpec::Fill {
-                agent_type: None,
-                given: Partial::default(),
-            },
+            work: WorkSpec::SameAsBrain,
+            work_instructions: None,
             locale: None,
             settings: None,
             files: None,
@@ -226,9 +222,9 @@ impl BotSpec {
 #[derive(Debug, Clone)]
 pub struct Made {
     pub bot: agent_entity::Model,
-    pub executor: AssistantInfo,
-    pub executor_created: bool,
-    /// What codeg picked for the owner on the executor config.
+    /// What its work runs on.
+    pub work: AssistantAgentConfig,
+    /// What codeg picked for the owner on it.
     pub picked: Vec<PickedOption>,
     pub brain_picked: Vec<PickedOption>,
 }
@@ -306,8 +302,8 @@ fn picked_text(picked: &[PickedOption]) -> String {
 impl PersonalAgentEngine {
     // ── making one ──────────────────────────────────────────────────────────
 
-    /// Make a work assistant: its executor config (made, copied or bound),
-    /// its row with the primary's brain, its working directory with its
+    /// Make a work assistant: its row with the primary's brain (or the one
+    /// given) and what its work runs on, its working directory with its
     /// role's files, and — when asked — its opening card. Its brain does
     /// not run until it has something to do.
     pub async fn create_bot(&self, spec: BotSpec) -> Result<Made, CreateError> {
@@ -341,75 +337,45 @@ impl PersonalAgentEngine {
             None => BotAvatar::default_for(&uid),
         };
 
-        // Its executor config.
-        let (executor, created, picked) = match spec.executor.clone() {
-            ExecutorSpec::Existing(id) | ExecutorSpec::Adopt(id) => {
-                let a = crate::db::service::assistant_service::get(&self.db.conn, id)
-                    .await
-                    .map_err(|e| refused(e.to_string()))?
-                    .filter(|a| a.is_live())
-                    .ok_or_else(|| refused(format!("no executor config #{id}")))?;
-                (
-                    a,
-                    matches!(spec.executor, ExecutorSpec::Adopt(_)),
-                    Vec::new(),
-                )
+        // What its work runs on (D1): the brain copied, every option the
+        // same, or one picked — its own from now on.
+        let (work, picked) = match spec.work.clone() {
+            WorkSpec::SameAsBrain => (brain.clone(), Vec::new()),
+            WorkSpec::Config(config) => {
+                crate::db::service::assistant_service::validate_agent_config(&config)
+                    .map_err(|e| refused(e.to_string()))?;
+                (config, Vec::new())
             }
-            ExecutorSpec::Config(config) => {
-                let a = self
-                    .make_executor(&name, &avatar, config)
-                    .await
-                    .map_err(refused)?;
-                (a, true, Vec::new())
-            }
-            ExecutorSpec::Fill { agent_type, given } => {
-                let agent_type = agent_type.unwrap_or(brain.agent_type);
-                let (config, picked) =
-                    self.fill_options(agent_type, &given, &[])
-                        .await
-                        .map_err(|e| match e {
-                            FillError::Unavailable(why) => {
-                                CreateError::OptionsUnavailable { agent_type, why }
-                            }
-                            FillError::Refused(e) => refused(e),
-                        })?;
-                let a = self
-                    .make_executor(&name, &avatar, config)
-                    .await
-                    .map_err(refused)?;
-                (a, true, picked)
-            }
+            WorkSpec::Fill { agent_type, given } => self
+                .fill_options(agent_type, &given, &[])
+                .await
+                .map_err(|e| match e {
+                    FillError::Unavailable(why) => {
+                        CreateError::OptionsUnavailable { agent_type, why }
+                    }
+                    FillError::Refused(e) => refused(e),
+                })?,
         };
-        // One made in the editor for it stays if this fails: the owner's work.
-        let adopted = matches!(spec.executor, ExecutorSpec::Adopt(_));
-        let undo_executor = |engine: &Self, a: &AssistantInfo| {
-            let emitter = engine.emitter.clone();
-            let db = crate::db::AppDatabase {
-                conn: engine.db.conn.clone(),
-            };
-            let id = a.id;
-            async move {
-                let _ = crate::commands::assistants::assistant_delete_core(&emitter, &db, id).await;
+        if let Some(text) = spec.work_instructions.as_deref() {
+            if text.chars().count() > crate::models::personal_agent::MAX_WORK_INSTRUCTIONS_CHARS {
+                return Err(refused(
+                    "the standing instructions for its work are too long".into(),
+                ));
             }
-        };
+        }
 
         // The row.
         let settings = spec.settings.clone().unwrap_or_default().normalized();
-        let new = NewWorker {
-            uid: Some(uid.clone()),
-            notify: spec.notify,
-            name: name.clone(),
-            avatar_json: serde_json::to_string(&avatar).unwrap_or_else(|_| "{}".into()),
-            agent_type: brain.agent_type.as_wire().into_owned(),
-            agent_options_json: serde_json::to_string(&brain.agent_options)
-                .unwrap_or_else(|_| "{}".into()),
-            label_snapshot_json: serde_json::to_string(&brain.label_snapshot)
-                .unwrap_or_else(|_| "{}".into()),
-            settings_json: crate::models::personal_agent::merge_settings_json(
-                "{}", &settings, false,
-            ),
-            executor_assistant_id: Some(executor.id),
-        };
+        let mut new = NewWorker::made(
+            name.clone(),
+            serde_json::to_string(&avatar).unwrap_or_else(|_| "{}".into()),
+            AgentColumns::of(&brain),
+            AgentColumns::of(&work),
+            crate::models::personal_agent::merge_settings_json("{}", &settings, false),
+        );
+        new.uid = Some(uid.clone());
+        new.notify = spec.notify;
+        new.work_instructions = spec.work_instructions.clone();
         // Its directory looked at and taken in one hold, before the row is
         // there for anything to start it: no other assistant's directory,
         // nor one inside or around it.
@@ -423,34 +389,13 @@ impl PersonalAgentEngine {
             Ok(None) => None,
             Err(e) => Some(e),
         };
-        // An executor config it shares, still there in this hold — one
-        // deleted as unbound takes the same hold.
-        let gone = match spec.executor {
-            ExecutorSpec::Existing(id) | ExecutorSpec::Adopt(id) => {
-                !crate::db::service::assistant_service::get(&self.db.conn, id)
-                    .await
-                    .ok()
-                    .flatten()
-                    .is_some_and(|a| a.is_live())
-            }
-            _ => false,
-        };
-        let taken = taken.or_else(|| gone.then(|| format!("executor config #{} is gone", executor.id)));
         if let Some(why) = taken {
             drop(claim);
-            if created && !adopted {
-                undo_executor(self, &executor).await;
-            }
             return Err(refused(why));
         }
         let bot = match svc::create_worker(&self.db.conn, new).await {
             Ok(b) => b,
-            Err(e) => {
-                if created && !adopted {
-                    undo_executor(self, &executor).await;
-                }
-                return Err(refused(e.to_string()));
-            }
+            Err(e) => return Err(refused(e.to_string())),
         };
 
         // Its working directory: its own persona and rules — a copy's as
@@ -471,9 +416,6 @@ impl PersonalAgentEngine {
         drop(claim);
         if let Err(e) = made {
             let _ = svc::delete_worker(&self.db.conn, bot.id).await;
-            if created && !adopted {
-                undo_executor(self, &executor).await;
-            }
             return Err(refused(e));
         }
         let cards = self.prefs().await.cards;
@@ -489,8 +431,7 @@ impl PersonalAgentEngine {
 
         let made = Made {
             bot,
-            executor,
-            executor_created: created,
+            work,
             picked,
             brain_picked: spec.brain_picked.clone(),
         };
@@ -597,43 +538,8 @@ impl PersonalAgentEngine {
         }
     }
 
-    /// An executor config's name not taken yet: `name`, or `name (2)`…
-    pub(super) async fn free_executor_name(&self, name: &str) -> String {
-        let taken: HashSet<String> = crate::db::service::assistant_service::list_all(&self.db.conn)
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|a| a.is_live())
-            .map(|a| crate::db::service::assistant_service::name_key(&a.name))
-            .collect();
-        crate::db::service::assistant_service::deduplicated_name(name, &taken)
-    }
-
-    /// Make the executor config a new work assistant is bound to: its name
-    /// and face; no description, no standing instructions of codeg's.
-    pub(super) async fn make_executor(
-        &self,
-        name: &str,
-        avatar: &BotAvatar,
-        config: AssistantAgentConfig,
-    ) -> Result<AssistantInfo, String> {
-        crate::db::service::assistant_service::validate_agent_config(&config)
-            .map_err(|e| e.to_string())?;
-        let draft = AssistantDraft {
-            name: self.free_executor_name(name).await,
-            description: String::new(),
-            avatar: avatar.as_assistant(),
-            agent_config: config,
-            instructions: String::new(),
-            enabled: true,
-        };
-        crate::commands::assistants::assistant_create_core(&self.emitter, &self.db, draft)
-            .await
-            .map_err(|e| e.to_string())
-    }
-
     /// A complete selection for `agent_type`: what is given, then another
-    /// executor config's on the same agent (the newest first), then the
+    /// assistant's work on the same agent (the newest first), then the
     /// agent's own (10.5 "fill five").
     pub(super) async fn fill_options(
         &self,
@@ -641,16 +547,17 @@ impl PersonalAgentEngine {
         given: &Partial,
         extra_others: &[crate::acp::delegation::types::AgentDelegationDefaults],
     ) -> Result<(AssistantAgentConfig, Vec<PickedOption>), FillError> {
-        let mut others: Vec<AssistantInfo> =
-            crate::db::service::assistant_service::list_all(&self.db.conn)
+        let mut others: Vec<(chrono::DateTime<chrono::Utc>, AssistantAgentConfig)> =
+            svc::list_bots(&self.db.conn)
                 .await
                 .unwrap_or_default()
-                .into_iter()
-                .filter(|a| a.is_live() && a.agent_type == agent_type)
+                .iter()
+                .filter_map(|b| super::engine::work_of_row(b).map(|w| (b.updated_at, w)))
+                .filter(|(_, w)| w.agent_type == agent_type)
                 .collect();
-        others.sort_by_key(|a| std::cmp::Reverse(a.updated_at));
+        others.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
         let mut selections: Vec<_> = extra_others.to_vec();
-        selections.extend(others.into_iter().map(|a| a.agent_options));
+        selections.extend(others.into_iter().map(|(_, w)| w.agent_options));
         let model = given
             .config_values
             .get(options::MODEL_ID)
@@ -816,9 +723,9 @@ impl PersonalAgentEngine {
 
     // ── copying one ─────────────────────────────────────────────────────────
 
-    /// Copy work assistant `id` (4.14): its brain, persona, rules and own
-    /// settings, and the executor config it has (shared: one can serve
-    /// several); not its memory, sessions or routines.
+    /// Copy work assistant `id` (4.14): its brain, what its work runs on and
+    /// its work's standing instructions, its persona, rules and own
+    /// settings; not its memory, sessions or routines.
     pub async fn copy_bot(
         &self,
         id: i32,
@@ -834,28 +741,22 @@ impl PersonalAgentEngine {
         let dir = workdir::workdir_of_bot(&self.data_dir, &src);
         let mut spec = BotSpec::named(name);
         spec.brain = brain_of(&src);
-        let live = match src.executor_assistant_id {
-            Some(e) => crate::db::service::assistant_service::get(&self.db.conn, e)
-                .await
-                .ok()
-                .flatten()
-                .filter(|a| a.is_live())
-                .map(|a| a.id),
-            None => None,
+        spec.work = match super::engine::work_of_row(&src) {
+            Some(w) => WorkSpec::Config(w),
+            None => WorkSpec::SameAsBrain,
         };
-        spec.executor = match live {
-            Some(e) => ExecutorSpec::Existing(e),
-            None => ExecutorSpec::Fill {
-                agent_type: None,
-                given: Partial::default(),
-            },
-        };
+        spec.work_instructions = src.work_instructions.clone();
         spec.locale = locale.map(str::to_string);
         spec.settings = Some(settings_of(&src));
-        spec.files = Some((
-            workdir::read_text(&dir, workdir::SOUL_FILE),
-            workdir::read_text(&dir, workdir::RULES_FILE),
-        ));
+        // Its persona as it is — one not written into a directory yet
+        // (converted, imported) as it came, written in the owner's language.
+        let soul = if src.workdir_ready {
+            workdir::read_text(&dir, workdir::SOUL_FILE)
+        } else {
+            spec.persona = src.seed_persona.clone();
+            String::new()
+        };
+        spec.files = Some((soul, workdir::read_text(&dir, workdir::RULES_FILE)));
         spec.notify = src.notify;
         spec.intro.copied_from = Some(display_name(&src));
         self.create_bot(spec).await
@@ -890,26 +791,6 @@ impl PersonalAgentEngine {
         .await
         .map_err(|e| e.to_string())?
         .len() as u32;
-        let executor = match row.executor_assistant_id {
-            Some(e) => match crate::db::service::assistant_service::get(&self.db.conn, e).await {
-                Ok(Some(a)) if a.is_live() => {
-                    let shared_with = svc::list_bots(&self.db.conn)
-                        .await
-                        .unwrap_or_default()
-                        .into_iter()
-                        .filter(|b| b.id != id && b.executor_assistant_id == Some(e))
-                        .map(|b| display_name(&b))
-                        .collect();
-                    Some(ImpactExecutor {
-                        id: a.id,
-                        name: a.name,
-                        shared_with,
-                    })
-                }
-                _ => None,
-            },
-            None => None,
-        };
         let dir = workdir::workdir_of_bot(&self.data_dir, &row);
         // Its plans stop; steps of other plans handed to it are picked
         // again by their plans' assistants (7.6).
@@ -920,7 +801,6 @@ impl PersonalAgentEngine {
             name: display_name(&row),
             running,
             unanswered_messages: unanswered,
-            executor,
             plans,
             plan_steps,
             workdir: dir.to_string_lossy().into_owned(),
@@ -930,9 +810,10 @@ impl PersonalAgentEngine {
 
     /// Delete work assistant `id` (4.14): its running work handed to the
     /// primary to follow (or stopped), the messages it has not answered sent
-    /// back to their senders, its
-    /// engine stopped; its executor config and directory kept unless asked.
-    /// `worker` is its engine when one runs.
+    /// back to their senders, its engine stopped; its directory kept unless
+    /// asked. With no primary yet (one converted on upgrade before it was
+    /// set up, which cannot have handed work out) there is nobody to hand
+    /// anything to: it is stopped. `worker` is its engine when one runs.
     pub async fn delete_bot(
         &self,
         id: i32,
@@ -946,8 +827,8 @@ impl PersonalAgentEngine {
             .ok_or("only a work assistant can be deleted")?;
         let primary = svc::primary_bot(&self.db.conn)
             .await
-            .map_err(|e| e.to_string())?
-            .ok_or("no primary assistant")?;
+            .map_err(|e| e.to_string())?;
+        let hand_to = primary.as_ref().filter(|_| opts.hand_over).map(|p| p.id);
         let name = display_name(&row);
         // Its engine first: nothing new starts while it goes.
         if let Some(h) = self.host_ref() {
@@ -962,8 +843,8 @@ impl PersonalAgentEngine {
         // its work, or they are let go with it.
         {
             use crate::db::service::personal_agent_watch_service as wsvc;
-            let moved = if opts.hand_over {
-                wsvc::move_bot(&self.db.conn, id, primary.id).await
+            let moved = if let Some(to) = hand_to {
+                wsvc::move_bot(&self.db.conn, id, to).await
             } else {
                 wsvc::end_of_bot(&self.db.conn, id, "stopped").await
             };
@@ -978,21 +859,21 @@ impl PersonalAgentEngine {
         {
             tracing::warn!("[personal_agent] routines of #{id} not deleted: {e}");
         }
-        if opts.hand_over {
+        if let Some(primary_id) = hand_to {
             let ids: Vec<i32> = live.iter().map(|d| d.id).collect();
             // Their sessions' events go to the primary now (a session still
             // starting registers with it itself: `register_conn`) — one
             // route change at a time, the owner and the route together, so
             // neither overwrites the other's.
             let routes = super::dispatch::ROUTES.lock().await;
-            svc::move_dispatches_to(&self.db.conn, &ids, primary.id)
+            svc::move_dispatches_to(&self.db.conn, &ids, primary_id)
                 .await
                 .map_err(|e| e.to_string())?;
             if let Some(w) = worker.as_ref() {
                 let conns = w.take_dispatch_conns(&ids).await;
                 match self.host_ref() {
                     Some(h) => h.primary().adopt_dispatch_conns(conns).await,
-                    None if self.bot().await == primary.id => {
+                    None if self.bot().await == primary_id => {
                         self.adopt_dispatch_conns(conns).await
                     }
                     None => {}
@@ -1002,7 +883,7 @@ impl PersonalAgentEngine {
             // Their acceptance cards are the primary's now (7.5).
             match self.host_ref() {
                 Some(h) => h.primary().adopt_acceptances(&ids).await,
-                None if self.bot().await == primary.id => self.adopt_acceptances(&ids).await,
+                None if self.bot().await == primary_id => self.adopt_acceptances(&ids).await,
                 None => {}
             }
             if !live.is_empty() {
@@ -1013,7 +894,7 @@ impl PersonalAgentEngine {
                     .join(", ");
                 let _ = svc::insert_event(
                     &self.db.conn,
-                    primary.id,
+                    primary_id,
                     "handed_over",
                     &format!("bot-deleted:{id}"),
                     None,
@@ -1028,7 +909,7 @@ impl PersonalAgentEngine {
                 if let Some(h) = self.host_ref() {
                     h.primary().nudge();
                 }
-                self.emit_for(primary.id, PersonalAgentChange::Status);
+                self.emit_for(primary_id, PersonalAgentChange::Status);
             }
         } else if let Some(w) = worker.as_ref() {
             for d in &live {
@@ -1104,31 +985,11 @@ impl PersonalAgentEngine {
                 }
             }
         }
-        if opts.delete_executor {
-            if let Some(e) = row.executor_assistant_id {
-                self.delete_executor_if_unbound(e).await;
-            }
-        }
         self.emit_for(id, PersonalAgentChange::Agent);
-        self.emit_for(primary.id, PersonalAgentChange::Agent);
-        Ok(())
-    }
-
-    /// Delete executor config `id` unless a work assistant still on the
-    /// roster is bound to it.
-    async fn delete_executor_if_unbound(&self, id: i32) {
-        // In the claim's hold: a copy binding it meanwhile (it checks the
-        // config is there in the same hold) is never left bound to one gone.
-        let _claim = workdir::WORKDIR_CLAIM.lock().await;
-        let bound = svc::list_bots(&self.db.conn)
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .any(|b| b.executor_assistant_id == Some(id));
-        if !bound {
-            let _ = crate::commands::assistants::assistant_delete_core(&self.emitter, &self.db, id)
-                .await;
+        if let Some(p) = primary.as_ref() {
+            self.emit_for(p.id, PersonalAgentChange::Agent);
         }
+        Ok(())
     }
 
     /// A message the deleted `receiver` will never answer: its sender hears
@@ -1268,9 +1129,8 @@ impl PersonalAgentEngine {
     }
 
     /// The owner's answer on a card about work assistants: `undo` (all) or
-    /// `undo:<id>` (one) deletes what it made — the executor config made
-    /// with it too, one that was there before stays; `accept` makes what
-    /// waits; `dismiss` lets it be.
+    /// `undo:<id>` (one) deletes what it made; `accept` makes what waits;
+    /// `dismiss` lets it be.
     pub(super) async fn act_on_bots_card(
         &self,
         notice: &notice_entity::Model,
@@ -1304,17 +1164,10 @@ impl PersonalAgentEngine {
                     if only.is_some_and(|o| o != id) || b["state"].as_str() == Some("undone") {
                         continue;
                     }
-                    // The executor config is deleted only by its own id —
-                    // the one made with it, not whichever the assistant is
-                    // bound to now — and below, once the assistant is gone.
                     let opts = BotDeleteOptions {
                         hand_over: true,
-                        delete_executor: false,
                         delete_workdir: false,
                     };
-                    let made_executor = (b["executor_created"].as_bool() == Some(true))
-                        .then(|| b["executor_id"].as_i64().map(|e| e as i32))
-                        .flatten();
                     let worker = match self.host_ref() {
                         Some(h) => h.existing_worker(id).await,
                         None => None,
@@ -1328,9 +1181,6 @@ impl PersonalAgentEngine {
                                 continue;
                             }
                         }
-                    }
-                    if let Some(e) = made_executor {
-                        self.delete_executor_if_unbound(e).await;
                     }
                     b["state"] = "undone".into();
                     undone.push(b["name"].as_str().unwrap_or_default().to_string());
@@ -1631,8 +1481,8 @@ impl PersonalAgentEngine {
                              undo it there.",
                             display_name(&m.bot),
                             m.bot.id,
-                            m.bot.agent_type,
-                            m.executor.label_snapshot.agent,
+                            m.bot.agent_type.as_deref().unwrap_or("(none)"),
+                            m.work.label_snapshot.agent,
                             if picked.is_empty() {
                                 String::new()
                             } else {
@@ -1821,12 +1671,26 @@ impl PersonalAgentEngine {
                 }
             }
         }
-        // The agent its work runs on: an executor config made for it, never
-        // one named — the assistants do not know them.
+        // The agent its work runs on (D1): a copy of its brain, unless
+        // another agent, or options of its own, are named — then those, the
+        // rest filled in.
         if let Some(e) = call.get("work_agent").filter(|e| !e.is_null()) {
-            spec.executor = ExecutorSpec::Fill {
-                agent_type: agent(e)?,
-                given: Partial::from_json(e.get("options")).map_err(refused)?,
+            let given = Partial::from_json(e.get("options")).map_err(refused)?;
+            let brain_agent = match spec.brain.as_ref() {
+                Some(b) => Some(b.agent_type),
+                None => svc::primary_bot(&self.db.conn)
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|p| brain_of(&p))
+                    .map(|b| b.agent_type),
+            };
+            spec.work = match agent(e)?.or(brain_agent) {
+                Some(a) if Some(a) == brain_agent && given == Partial::default() => {
+                    WorkSpec::SameAsBrain
+                }
+                Some(agent_type) => WorkSpec::Fill { agent_type, given },
+                None => WorkSpec::SameAsBrain,
             };
         }
         self.create_bot(spec).await
@@ -1961,10 +1825,7 @@ pub(super) fn made_json(m: &Made) -> Value {
         "uid": m.bot.uid,
         "name": display_name(&m.bot),
         "face": bot_face(&m.bot),
-        "executor_id": m.executor.id,
-        "executor_name": m.executor.name,
-        "executor_agent": m.executor.label_snapshot.agent,
-        "executor_created": m.executor_created,
+        "work_agent": m.work.label_snapshot.agent,
         "picked": picked_json(&m.picked),
         "brain_picked": picked_json(&m.brain_picked),
         "state": "made",

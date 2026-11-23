@@ -254,42 +254,48 @@ async fn resending_an_interrupted_message_queues_a_copy() {
     assert!(old.data.unwrap().contains(&format!("\"resent_as\":{}", copy.id)));
 }
 
-/// An executor config; an enabled one is what `engine`'s assistant works
-/// with from now on.
-async fn role_assistant(engine: &PersonalAgentEngine, name: &str, enabled: bool) -> i32 {
-    let info = crate::db::service::assistant_service::create(
-        &engine.db.conn,
-        &crate::models::AssistantDraft {
-            name: name.into(),
-            description: "code changes".into(),
-            avatar: crate::models::AssistantAvatar::Monogram {
-                color: "blue".into(),
-            },
-            agent_config: brain(AgentType::Codex),
-            instructions: "Cite lines.".into(),
-            enabled,
-        },
-    )
-    .await
-    .unwrap();
-    if enabled {
-        bind(engine, info.id).await;
-    }
-    info.id
-}
-
-/// Bind `engine`'s assistant to executor config `id`.
-async fn bind(engine: &PersonalAgentEngine, id: i32) {
+/// What `engine`'s assistant works with from now on: its work on Codex,
+/// with standing instructions; `enabled: false` turns Codex off in the
+/// agents' settings, so its work cannot run. Its id.
+async fn role_assistant(engine: &PersonalAgentEngine, _name: &str, enabled: bool) -> i32 {
+    let bot = engine.bot().await;
     svc::save_bot(
         &engine.db.conn,
-        engine.bot().await,
+        bot,
         svc::AgentWrite {
-            executor_assistant_id: Some(id),
+            work: Some(svc::AgentColumns::of(&brain(AgentType::Codex))),
+            work_instructions: Some(Some("Cite lines.".into())),
             ..Default::default()
         },
     )
     .await
     .unwrap();
+    agent_on(engine, AgentType::Codex, enabled).await;
+    bot
+}
+
+/// Turn `agent_type` on or off in the agents' settings.
+async fn agent_on(engine: &PersonalAgentEngine, agent_type: AgentType, on: bool) {
+    use crate::db::service::agent_setting_service as asvc;
+    asvc::ensure_defaults(
+        &engine.db.conn,
+        &[asvc::AgentDefaultInput {
+            agent_type,
+            registry_id: format!("{agent_type:?}"),
+            default_sort_order: 0,
+        }],
+    )
+    .await
+    .unwrap();
+    asvc::update_preferences(&engine.db.conn, agent_type, on, None)
+        .await
+        .unwrap();
+}
+
+/// The agent `engine`'s assistant's work runs on is turned off, then on
+/// again (`id` is the assistant's, as `role_assistant` gave it).
+async fn bind(engine: &PersonalAgentEngine, _id: i32) {
+    agent_on(engine, AgentType::Codex, true).await;
 }
 
 fn request(mode: DispatchMode, project_id: Option<i32>) -> DispatchRequest {
@@ -306,23 +312,16 @@ fn request(mode: DispatchMode, project_id: Option<i32>) -> DispatchRequest {
 }
 
 #[tokio::test]
-async fn dispatch_runs_on_its_own_enabled_executor_and_takes_real_projects() {
+async fn dispatch_runs_on_its_own_work_agent_and_takes_real_projects() {
     let (engine, tmp) = configured().await;
     let project = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("repo").to_string_lossy()).await;
-    // Nothing to work with yet, or only a disabled one: refused in words
-    // that name no executor config.
+    // Its work's agent turned off: refused in words that name no setting.
+    role_assistant(&engine, "Off", false).await;
     let err = engine
         .dispatch(request(DispatchMode::Task, Some(project)))
         .await
         .unwrap_err();
-    assert_eq!(err, super::dispatch::NO_EXECUTOR);
-    let off = role_assistant(&engine, "Off", false).await;
-    bind(&engine, off).await;
-    let err = engine
-        .dispatch(request(DispatchMode::Task, Some(project)))
-        .await
-        .unwrap_err();
-    assert_eq!(err, super::dispatch::NO_EXECUTOR);
+    assert_eq!(err, super::dispatch::NO_WORK_AGENT);
     role_assistant(&engine, "Coder", true).await;
     let err = engine
         .dispatch(request(DispatchMode::Session, None))
@@ -3940,24 +3939,38 @@ use super::host::EngineHost;
 /// A worker's row on `engine`'s database (no engine of its own: the host
 /// makes that).
 async fn worker_row(engine: &PersonalAgentEngine, name: &str) -> i32 {
-    let brain = brain(AgentType::ClaudeCode);
+    let brain = svc::AgentColumns::of(&brain(AgentType::ClaudeCode));
     svc::create_worker(
         &engine.db.conn,
-        svc::NewWorker {
-            uid: None,
-            notify: true,
-            name: name.into(),
-            avatar_json: r#"{"kind":"emoji","emoji":"🔧","color":"blue"}"#.into(),
-            agent_type: brain.agent_type.as_wire().into_owned(),
-            agent_options_json: "{}".into(),
-            label_snapshot_json: serde_json::to_string(&brain.label_snapshot).unwrap(),
-            settings_json: "{}".into(),
-            executor_assistant_id: None,
-        },
+        svc::NewWorker::made(
+            name.into(),
+            r#"{"kind":"emoji","emoji":"🔧","color":"blue"}"#.into(),
+            brain.clone(),
+            brain,
+            "{}".into(),
+        ),
     )
     .await
     .unwrap()
     .id
+}
+
+/// A worker as the upgrade converts one, or an import makes one: no
+/// directory yet, its persona waiting in the row, no brain while there is
+/// no primary; its work on Codex.
+async fn converted_worker(engine: &PersonalAgentEngine, name: &str, persona: Option<&str>) -> i32 {
+    let mut new = svc::NewWorker::made(
+        name.into(),
+        r#"{"kind":"face","shape":"gear","color":"teal"}"#.into(),
+        svc::AgentColumns::of(&brain(AgentType::ClaudeCode)),
+        svc::AgentColumns::of(&brain(AgentType::Codex)),
+        "{}".into(),
+    );
+    new.brain = None;
+    new.workdir_ready = false;
+    new.seed_persona = persona.map(str::to_string);
+    new.work_instructions = Some("Be strict.".into());
+    svc::create_worker(&engine.db.conn, new).await.unwrap().id
 }
 
 /// A host whose primary is set up, with a worker on the roster.
@@ -21661,4 +21674,180 @@ async fn another_one_looks_only_in_the_projects_still_watched() {
     engine.act_on_notice(card_id(&card), "next").await.unwrap();
     let card = starter_settled(&engine).await;
     assert_eq!(data_of(&card)["state"], "none", "{:?}", data_of(&card));
+}
+
+// ── the assistants' own work, and the converted ones (11-23 unify, U1) ────
+
+/// D1: a new assistant's work is a copy of its brain when it is made —
+/// every option the same — and its own from then on: changing a brain
+/// later changes no work.
+#[tokio::test]
+async fn a_new_assistants_work_is_its_brain_copied_and_its_own_after() {
+    let (engine, _tmp) = configured().await;
+    let primary = engine.agent_row().await.unwrap();
+    assert_eq!(primary.work_agent_type, "claude_code", "the first save copies the brain");
+    let made = engine.create_bot(super::bots::BotSpec::named("Dev")).await.unwrap();
+    assert_eq!(made.bot.work_agent_type, "claude_code");
+    assert_eq!(made.bot.work_agent_options, made.bot.agent_options.clone().unwrap());
+    // The primary's brain on another agent: neither work follows it.
+    engine
+        .save(PersonalAgentDraft {
+            agent_config: Some(brain(AgentType::Codex)),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let primary = engine.agent_row().await.unwrap();
+    assert_eq!(primary.agent_type.as_deref(), Some("codex"));
+    assert_eq!(primary.work_agent_type, "claude_code");
+    let dev = svc::get_bot(&engine.db.conn, made.bot.id).await.unwrap().unwrap();
+    assert_eq!(dev.work_agent_type, "claude_code");
+    // Its work changed on its own, with its standing instructions.
+    engine
+        .save(PersonalAgentDraft {
+            work: Some(crate::models::personal_agent::WorkChoice::Config {
+                config: brain(AgentType::Codex),
+            }),
+            work_instructions: Some("Cite lines.".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let primary = engine.agent_row().await.unwrap();
+    assert_eq!(primary.work_agent_type, "codex");
+    assert_eq!(primary.work_instructions.as_deref(), Some("Cite lines."));
+    // What it dispatches runs on that, with those instructions.
+    let work = engine.work_snapshot().await.unwrap();
+    assert_eq!(work.agent_type, AgentType::Codex);
+    assert!(work.brief_text().starts_with("Cite lines."), "{}", work.brief_text());
+}
+
+/// `bot_create`'s `work_agent`: none, or the brain's agent with no option
+/// named, is the brain copied; options named are filled in on that agent
+/// (which needs the agent's own list — none here, so codeg says so).
+#[tokio::test]
+async fn bot_create_copies_the_brain_unless_its_work_is_named_apart() {
+    let (engine, _tmp) = configured().await;
+    let same = engine
+        .create_from_call(&json!({ "name": "Same", "work_agent": { "agent_type": "claude_code" } }), None)
+        .await
+        .unwrap();
+    assert_eq!(same.bot.work_agent_type, "claude_code");
+    assert!(same.picked.is_empty(), "nothing filled in");
+    let apart = engine
+        .create_from_call(
+            &json!({ "name": "Apart", "work_agent": { "agent_type": "claude_code", "options": { "model": "opus" } } }),
+            None,
+        )
+        .await;
+    assert!(
+        matches!(apart, Err(super::bots::CreateError::OptionsUnavailable { .. })),
+        "options named are filled in from the agent's list: {apart:?}"
+    );
+}
+
+/// A converted worker's directory is made once, with the persona it came
+/// with; a persona written since the directory was built (an import) is
+/// put in before it is marked made; a build cut short is cleaned up.
+#[tokio::test]
+async fn a_converted_workers_directory_is_made_once_with_its_persona() {
+    let (engine, tmp) = configured().await;
+    let id = converted_worker(&engine, "Reviewer", Some("Reads diffs closely.")).await;
+    let row = svc::get_bot(&engine.db.conn, id).await.unwrap().unwrap();
+    let uid = row.uid.clone().unwrap();
+    let bots = tmp.path().join(workdir::BOTS_DIR);
+    // A build cut short before.
+    std::fs::create_dir_all(bots.join(format!("{uid}.staging-old"))).unwrap();
+    super::ready::ensure_worker_ready(&engine.db, tmp.path(), id).await.unwrap();
+    let dir = bots.join(&uid);
+    let soul = workdir::read_text(&dir, workdir::SOUL_FILE);
+    assert!(soul.contains("Reads diffs closely."), "{soul}");
+    assert!(workdir::has_commit(&dir).await);
+    assert!(!bots.join(format!("{uid}.staging-old")).exists());
+    let row = svc::get_bot(&engine.db.conn, id).await.unwrap().unwrap();
+    assert!(row.workdir_ready);
+    assert_eq!(row.seed_persona, None);
+    // Again: nothing to do.
+    super::ready::ensure_worker_ready(&engine.db, tmp.path(), id).await.unwrap();
+
+    // Renamed into place, then an import wrote a newer persona before it
+    // was marked made.
+    let id = converted_worker(&engine, "Scout", Some("Old words.")).await;
+    let row = svc::get_bot(&engine.db.conn, id).await.unwrap().unwrap();
+    let dir = bots.join(row.uid.clone().unwrap());
+    workdir::build_role_workdir(
+        &dir,
+        crate::models::system::AppLocale::En,
+        &super::templates::worker_soul(crate::models::system::AppLocale::En, Some("Old words.")),
+        &super::templates::worker_rules(crate::models::system::AppLocale::En),
+        row.seed_version,
+    )
+    .await
+    .unwrap();
+    use sea_orm::{ActiveModelTrait, Set};
+    let mut newer: crate::db::entities::personal_agent::ActiveModel = row.clone().into();
+    newer.seed_persona = Set(Some("New words.".into()));
+    newer.seed_version = Set(row.seed_version + 1);
+    newer.update(&engine.db.conn).await.unwrap();
+    super::ready::ensure_worker_ready(&engine.db, tmp.path(), id).await.unwrap();
+    let soul = workdir::read_text(&dir, workdir::SOUL_FILE);
+    assert!(soul.contains("New words.") && !soul.contains("Old words."), "{soul}");
+    assert_eq!(workdir::marker_seed_version(&dir), Some(row.seed_version + 1));
+    let row = svc::get_bot(&engine.db.conn, id).await.unwrap().unwrap();
+    assert!(row.workdir_ready && row.seed_persona.is_none());
+}
+
+/// D3: one converted before there was a primary has no brain and is not
+/// talked to, nor written to by another assistant; the primary's first
+/// save gives it a copy of its brain — only the brain: its work stays.
+#[tokio::test]
+async fn the_primarys_first_save_gives_the_brainless_its_brain_and_not_its_work() {
+    let (engine, _tmp) = engine().await;
+    let id = converted_worker(&engine, "Reviewer", None).await;
+    super::ready::fill_brains(&engine.db, &engine.emitter).await;
+    let row = svc::get_bot(&engine.db.conn, id).await.unwrap().unwrap();
+    assert_eq!(row.agent_type, None, "no primary, no brain to copy");
+    engine
+        .save(PersonalAgentDraft {
+            agent_config: Some(brain(AgentType::ClaudeCode)),
+            locale: Some("en".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let row = svc::get_bot(&engine.db.conn, id).await.unwrap().unwrap();
+    assert_eq!(row.agent_type.as_deref(), Some("claude_code"));
+    assert_eq!(row.work_agent_type, "codex", "its work stays its own");
+    assert_eq!(row.work_instructions.as_deref(), Some("Be strict."));
+}
+
+#[tokio::test]
+async fn an_assistant_with_no_brain_takes_no_message() {
+    let (engine, _tmp) = configured().await;
+    let id = converted_worker(&engine, "Reviewer", None).await;
+    let err = engine
+        .resolve_message(super::messages::MessageCall {
+            to: Some(id.to_string()),
+            text: "Have a look".into(),
+            reply_to: None,
+            wants_reply: None,
+            for_input: None,
+        })
+        .await
+        .err()
+        .expect("refused");
+    assert!(err.contains("no brain yet"), "{err}");
+}
+
+/// One converted before there is a primary can be deleted: it has nothing
+/// to hand over.
+#[tokio::test]
+async fn an_assistant_is_deleted_with_no_primary_to_hand_to() {
+    let (engine, _tmp) = engine().await;
+    let id = converted_worker(&engine, "Reviewer", None).await;
+    engine
+        .delete_bot(id, &Default::default(), None)
+        .await
+        .unwrap();
+    assert!(svc::get_bot(&engine.db.conn, id).await.unwrap().is_none());
 }

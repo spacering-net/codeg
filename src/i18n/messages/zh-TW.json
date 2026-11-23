@@ -864,7 +864,7 @@
       "agentDefaultHint": "智慧體預設：{value}",
       "defaultOptionLabel": "預設（{value}）",
       "overrideCount": "已自訂 {count} 項",
-      "tabAssistants": "執行配置",
+      "tabAssistants": "助手",
       "booleanOn": "開啟",
       "booleanOff": "關閉",
       "modelNotSwitched": "智慧體沒有切換到所選模型，下面的選項可能屬於另一個模型。",
@@ -950,8 +950,8 @@
         "disableTitle": "停用「{name}」？",
         "disableConfirm": "停用"
       },
-      "assistantsMoved": "執行配置：已移到助手頁面",
-      "assistantsMovedHint": "在助手頁面的「設定 → 團隊 → 執行配置」裡管理；會話裡 @ 的就是它們。",
+      "assistantsMoved": "助手：在左側欄的「個人助手」分組裡管理",
+      "assistantsMovedHint": "會話裡 @ 的就是你的個人助手：每位都用自己做事用的智能體和常駐指令。",
       "assistantsMovedOpen": "開啟"
     },
     "actions": {
@@ -2455,7 +2455,7 @@
       "none": "—",
       "copyField": "複製{field}",
       "copiedField": "已複製{field}",
-      "assistant": "執行配置"
+      "assistant": "助手"
     },
     "conversationCard": {
       "untitledConversation": "未命名會話",
@@ -3619,8 +3619,8 @@
         "mentionGroupSession": "工作階段",
         "mentionGroupCommit": "提交",
         "mentionGroupSkill": "技能",
-        "mentionGroupAssistant": "執行配置",
-        "mentionManageAssistants": "管理執行配置…"
+        "mentionGroupAssistant": "助手",
+        "mentionManageAssistants": "管理助手…"
       },
       "messageQueue": {
         "addToQueue": "加入佇列",
@@ -3961,12 +3961,12 @@
             "child_rejected": "子代理拒絕該請求",
             "child_unknown": "子代理未知錯誤",
             "unknown": "未知任務",
-            "assistant_not_found": "執行配置不存在",
+            "assistant_not_found": "助手不存在",
             "assistants_unsupported": "需要重新啟動",
             "assistant_support_unknown": "未回應"
           }
         },
-        "unknownAssistant": "執行配置 #{id}",
+        "unknownAssistant": "助手 #{id}",
         "deletedAssistant": "（已刪除）"
       },
       "contentParts": {
@@ -5464,7 +5464,7 @@
       "quickMessages": "快捷訊息",
       "taskTemplates": "任務範本",
       "preferences": "應用偏好（語言、開關）",
-      "assistants": "執行配置",
+      "assistants": "助手",
       "appearance": "外觀（明暗模式、主題色、縮放、字型、背景設定、自訂樣式）"
     },
     "scopeExcluded": {
@@ -5537,7 +5537,7 @@
       "quickMessages": "{count} 則快捷訊息",
       "taskTemplates": "{count} 個任務範本",
       "preferences": "{count} 項應用偏好",
-      "assistants": "{count} 個執行配置",
+      "assistants": "{count} 個助手",
       "appearance": "{count} 項外觀設定"
     },
     "rollbackTitle": "復原匯入",
@@ -5555,7 +5555,7 @@
     "passphraseKeep": "留空則沿用已保存的通行密語",
     "passphrasePlaceholder": "加密通行密語",
     "passphraseHint": "只保存在這台裝置的鑰匙圈中，不會上傳。請在你的其他裝置上輸入同一組。",
-    "assistantsRenamed": "有 {count} 個執行配置與本機已有的執行配置重名，已自動改名。",
+    "assistantsRenamed": "有 {count} 個助手與本機已有的助手重名，已自動改名。",
     "conflictTitle": "自動上傳已暫停",
     "conflictBody": "伺服器上有一份來自 {device}、{time} 的快照，本機尚未還原過。上傳會取代它，而伺服器不保留舊版本。",
     "conflictRestore": "還原它",
@@ -10047,7 +10047,6 @@
       "completed": "已完成",
       "other": "其他",
       "failed": "失敗",
-      "executors": "依執行配置",
       "completedHint": "完成 {count}",
       "tokens": "每日 token",
       "agentTokens": "個人助手",
@@ -10068,7 +10067,8 @@
         "tokens": "Token",
         "tokensSub": "助手 {agent} · 派活 {dispatch}",
         "tokensUnsynced": "用量同步後顯示"
-      }
+      },
+      "agents": "按智能體"
     },
     "settings": {
       "setupStart": "與助手對話",
@@ -10085,7 +10085,7 @@
       "name": "名稱",
       "nameHint": "它在頁面和訊息裡顯示的名字和頭像；助手也知道自己叫這個名字。名字留空則使用預設名稱。",
       "namePlaceholder": "個人助手",
-      "agentHint": "它執行的 agent 和全部選項，設定方式與執行配置相同。",
+      "agentHint": "它想事情、和你說話用的智能體，以及全部選項。",
       "switchNote": "換成另一個 agent 後，下一則訊息會新起一個會話。不會續接舊會話，codeg 會把時間軸交接給新會話。",
       "autoCompact": "自動壓縮閾值",
       "autoCompactHint": "上下文佔用達到這個比例時，codeg 會在下一則訊息前先送出壓縮指令。0 表示關閉。應低於 agent 自己的自動壓縮觸發點。",
@@ -10130,18 +10130,15 @@
       "saveFailed": "儲存失敗",
       "restoreDefaults": "恢復本頁預設",
       "back": "返回對話",
-      "viewTitle": "設定",
-      "readOnly": "助手在另一個 codeg 處理程序中執行，這裡的設定唯讀；執行配置本身仍可編輯。",
+      "viewTitle": "助手偏好設定",
+      "readOnly": "助手在另一個 codeg 處理程序裡執行，這裡的設定唯讀。",
       "setUpFirst": "請先設定主助手。",
       "nav": {
-        "team": "團隊",
         "prefs": "偏好",
-        "identity": "大腦與執行配置",
+        "identity": "身分與大腦",
         "persona": "人設與記憶",
         "notify": "通知",
         "advanced": "進階",
-        "workers": "工作助手",
-        "executors": "執行配置",
         "communication": "溝通",
         "proactive": "主動與通知",
         "automation": "派活與自動",
@@ -10388,7 +10385,7 @@
         },
         "auto_accept": {
           "title": "自動驗收",
-          "hint": "助理派出的改程式碼的工作進入待驗收時，派另一個執行配置唯讀檢查，助理對照驗收標準下結論。關掉就回到你自己驗收。",
+          "hint": "助手派出的改程式的活進入待驗收時，用它做事的智能體唯讀檢查一遍，助手對照驗收標準下結論。關掉就回到你自己驗收。",
           "on": "開",
           "off": "關"
         },
@@ -10481,7 +10478,7 @@
         },
         "level_routine_paused": {
           "title": "例程被暫停",
-          "hint": "連續失敗 3 次，或者它用的執行設定不能用了。"
+          "hint": "連續失敗 3 次，或者它做事用的智能體不能用了。"
         },
         "level_proposal": {
           "title": "提議：卡在你身上的",
@@ -10552,8 +10549,8 @@
           "off": "關"
         },
         "rule_idle_bot": {
-          "title": "閒著的工作助手",
-          "hint": "週回顧裡：兩週都沒被叫醒的工作助手，問你要不要隱藏或刪掉。",
+          "title": "閒著的助手",
+          "hint": "週回顧裡：兩週都沒被叫醒的助手，問你要不要隱藏或刪掉。",
           "on": "開",
           "off": "關"
         },
@@ -10615,7 +10612,7 @@
         },
         "brief_bots": {
           "title": "各助手",
-          "hint": "每個工作助手一行：做完了什麼、在做什麼、卡在哪。隱藏的不列。",
+          "hint": "每個助手一行：做完了什麼、在做什麼、卡在哪。隱藏的不列。",
           "on": "開",
           "off": "關"
         },
@@ -10741,24 +10738,6 @@
         "apply": "遷移",
         "saved": "工作目錄已遷移。"
       },
-      "team": {
-        "noWorkers": "還沒有工作助手",
-        "noWorkersHint": "工作助手負責屬於它的那攤事，並負責到底。需要時跟主助手說，或在這裡新建。",
-        "boundTo": "用 {name} 做事",
-        "unbound": "沒有執行配置：暫時不能自己做事",
-        "sameBatch": "這裡的執行配置就是會話裡 @ 的那些，這裡改了，兩邊同時生效。",
-        "delegationOff": "多智慧體協同已關閉：會話裡暫時不能 @ 它們；助手派活不受影響。",
-        "openCollaboration": "開啟協作設定"
-      },
-      "executor": {
-        "running": "在做 {count} 件",
-        "fortnight": "兩週派 {dispatches} 件 · 完成 {completed} 件",
-        "failing": "最近 {count} 次派給它的工作都失敗了：{error}",
-        "impactRunning": "有 {count} 件派給它的工作在跑，不受影響。",
-        "usedBy": "用它的助手：{names}",
-        "nameJoin": "、",
-        "impactBots": "這些助手會暫時不能自己做事：{names}。"
-      },
       "changed": {
         "on": "開",
         "off": "關",
@@ -10862,8 +10841,7 @@
         "average": "平均 {time}",
         "minutes": "{n} 分鐘",
         "hours": "{h} 小時 {m} 分",
-        "apart": "按執行配置和方式",
-        "byExecutor": "按執行配置和方式",
+        "apart": "按智能體和方式",
         "byBot": "按助手和方式",
         "someone": "早先的派工",
         "unjudged": "派了 {count} 件，還沒有做完的"
@@ -10879,17 +10857,6 @@
       "skillDeleted": "已刪除 {name}",
       "viewSubtitle": "所有助手共用",
       "personaUnwritten": "還沒寫人設。它會在自我介紹、你交代工作、每晚整理時自己補，你也可以直接寫。",
-      "executorPick": {
-        "title": "執行配置",
-        "hint": "大腦負責想，執行配置負責做事：它自己做的事都在這上面跑。幾個助手可以共用一個。",
-        "newHint": "儲存時在大腦同一個 agent 上新建一個，選項自動補全。",
-        "missing": "還沒有執行配置：它現在不能自己做事。選一個，或新建一個。",
-        "disabled": "這個執行配置已停用：它暫時不能自己做事。",
-        "editorNote": "codeg 讀不到這個 agent 的選項（{why}），請在這裡選好；儲存後就用這個執行配置。",
-        "new": "新建（用大腦同一個 agent）",
-        "none": "沒有",
-        "off": "（已停用）"
-      },
       "projects": {
         "about": "助手會在這些專案裡替你留意等你審查的 PR，第一次見面時也從這裡找能幫你做的事。",
         "scope": "盯哪些專案",
@@ -10905,7 +10872,18 @@
         "noForge": "沒有連著程式碼託管",
         "connectAccount": "連接帳號",
         "note": "關閉的專案不會被盯，重新開啟後自動回來。"
-      }
+      },
+      "workTitle": "做事用的智能體",
+      "workHint": "大腦負責想、和你說話；做事用的智能體負責寫程式、跑指令。改大腦不會改這裡。",
+      "workSame": "和大腦一樣",
+      "workOther": "另選",
+      "workSameHint": "照抄大腦的智能體和全部選項；之後兩邊各自獨立。",
+      "workUnavailable": "{agent} 用不了（沒裝或被停用）：另選一個。",
+      "instructionsTitle": "做事時的常駐指令",
+      "instructionsHint": "每次它開工作會話（派活、在一般會話裡被 @）時都會帶上；大腦看不到。",
+      "instructionsPlaceholder": "它做事時要遵守的約定、要檢查的事、要避開的坑……",
+      "instructionsTooLong": "常駐指令最多 {max} 個字。",
+      "noBrainYet": "它還沒有大腦：初始化主助手後，會照抄一份主助手的大腦。"
     },
     "statusWord": {
       "idle": "閒置",
@@ -11224,7 +11202,7 @@
       "resolved": "已處理"
     },
     "bots": {
-      "new": "新增工作助手",
+      "new": "新增助手",
       "copyName": "{name} 副本",
       "copied": "已複製成 {name}",
       "copy": "複製",
@@ -11283,23 +11261,20 @@
         "useIt": "用它"
       },
       "create": {
-        "title": "新增工作助手",
+        "title": "新增助手",
         "description": "名字和幾句人設；大腦和主助手一樣。",
         "name": "名字",
         "namePlaceholder": "例如：程式碼審查",
         "cancel": "取消",
         "create": "建立",
-        "editorNote": "codeg 讀不到這個 agent 的選項（{why}），請在這裡選好；工作助手會用這個執行配置建立。",
         "persona": "人設",
         "personaPlaceholder": "比如：我負責程式碼審查，看改動對不對、測試夠不夠。",
         "personaHint": "一兩句：它是誰、什麼事找它。留空也行，它會先做自我介紹，之後按你交代的和它做過的事自己補。",
-        "executor": "執行配置",
-        "executorNewHint": "在大腦同一個 agent 上新建一個，選項自動補全。",
-        "executorHint": "幾個助手可以共用一個執行配置。"
+        "workSameHint": "大腦用主助手的；做事照抄一份大腦，選項全都一樣，之後各自獨立。兩樣都能在它的頁面裡改。"
       },
       "roster": {
         "title": "助手",
-        "add": "新增工作助手",
+        "add": "新增助手",
         "pinned": "置頂",
         "others": "其他",
         "hiddenCount": "已隱藏 {count} 個",
@@ -11353,7 +11328,7 @@
         "noProjects": "codeg 裡還沒有開啟的專案。",
         "from": {
           "given": "照你說的",
-          "other_config": "沿用別的執行配置",
+          "other_config": "沿用別的助手做事的設定",
           "agent": "agent 自己的預設值"
         },
         "progress": "{at} / {total}",
@@ -11366,14 +11341,11 @@
         "otherWrote": "其他：{text}"
       },
       "changed": {
-        "applied": "建好了一個工作助手",
-        "show": "要建立這個工作助手嗎？（你要求這類改動先給你看）",
-        "suggested": "建議：新增一個工作助手",
+        "applied": "建好了一個助手",
+        "show": "要建這個助手嗎？（你要求這類改動先給你看）",
+        "suggested": "建議：新增一個助手",
         "dismissed": "沒建立",
         "undone": "已復原",
-        "executorFilled": "執行配置用 {agent}，補了 {count} 項選項",
-        "executorMade": "執行配置用 {agent}",
-        "executorBound": "沿用 {name}",
         "open": "開啟",
         "undoOne": "復原",
         "undoneOne": "已復原",
@@ -11384,7 +11356,9 @@
         "undo": "復原",
         "undoAll": "全部復原",
         "uncheckedQuote": "主助手說是你說的：「{quote}」，但這一輪你沒打過",
-        "persona": "人設"
+        "persona": "人設",
+        "workFilled": "做事用 {agent}，補了 {count} 項選項",
+        "workOn": "做事用 {agent}"
       },
       "delete": {
         "title": "刪除 {name}？",
@@ -11394,9 +11368,6 @@
         "stop": "停下",
         "messages": "發給它的 {count} 則訊息還沒回覆：退回給發訊息的助手。",
         "listJoiner": "、",
-        "dropExecutor": "一起刪除它的執行配置 {name}",
-        "executorKept": "預設保留：會話裡照樣能 @，codeg-cli 照樣能用。",
-        "executorShared": "保留：{names} 也綁著它。",
         "dropWorkdir": "一起刪除它的工作目錄",
         "workdirCustom": "這個目錄是你選的，codeg 不會動它。",
         "cancel": "取消",
@@ -11618,8 +11589,8 @@
     },
     "ask": {
       "heading": {
-        "question": "{executor} 在提問",
-        "plan": "{executor} 請你批准計畫"
+        "question": "做事時遇到一個問題",
+        "plan": "做事時要你批准計畫"
       },
       "someone": "執行者",
       "mirror": "來自 {name} 替你接手的工作",
@@ -11971,7 +11942,7 @@
           },
           "auto_accept": {
             "title": "檢查並驗收派出去的改程式碼的工作",
-            "hint": "派另一個執行配置唯讀檢查，我對照你的要求下結論。"
+            "hint": "用做事的智能體唯讀檢查一遍，我對照你的要求下結論。"
           }
         },
         "prefs": "調整偏好",
@@ -11989,8 +11960,6 @@
     "acceptance": {
       "title": "驗收 · 第 {round} 輪",
       "titleMax": "驗收 · 第 {round} 輪（最多 {max} 輪）",
-      "people": "{executor} 執行 · {checker} 檢查",
-      "peopleUnchecked": "{executor} 執行",
       "check": "檢查：",
       "verdict": {
         "pass": "通過",
@@ -12322,7 +12291,7 @@
           "edit": "修改"
         },
         "repeatBody": "30 天裡你第 {count} 次讓它做這類事。",
-        "pausedExecutor": "它的事沒有設好在哪裡跑：沒有執行配置，或者用的那個被刪除、停用了。",
+        "pausedWorkAgent": "它做事用的智能體用不了：沒裝，或者被停用了。",
         "pausedFailures": "連續失敗了 3 次。",
         "trial": "已開始試跑。",
         "reason": "依據：{reason}",
@@ -12336,7 +12305,7 @@
         "open": "打開例程",
         "confirm": "待確認的例程",
         "confirmChange": "待確認的例程改動",
-        "setExecutor": "去設定執行配置"
+        "setWorkAgent": "去選做事用的智能體"
       },
       "more": "更多操作"
     },
@@ -12364,7 +12333,7 @@
         "idle": "事項很久沒動了",
         "behind": "分支落後且有衝突",
         "undo": "你撤銷的改動",
-        "idle_bot": "閒著的工作助手"
+        "idle_bot": "閒著的助手"
       },
       "wait": {
         "permission": "等你核准",
@@ -12479,8 +12448,8 @@
           "hint": "週回顧裡：你撤銷了不少按你的話直接做的改動時，問你要不要改成「先給我看」。"
         },
         "idle_bot": {
-          "title": "閒著的工作助手",
-          "hint": "週回顧裡：兩週都沒被叫醒的工作助手，問你要不要隱藏或刪掉。"
+          "title": "閒著的助手",
+          "hint": "週回顧裡：兩週都沒被叫醒的助手，問你要不要隱藏或刪掉。"
         }
       },
       "undoDetail": "最近兩週按你的話直接做的 {made} 處改動，你撤銷了 {undone} 處。",
@@ -12738,11 +12707,17 @@
     },
     "botPage": {
       "primary": "主助手",
-      "worker": "工作助手",
+      "worker": "助手",
       "chat": "和它聊天"
     },
-    "noExecutor": "它還沒有能用的執行配置，暫時不能自己做事。",
-    "setExecutor": "設定執行配置"
+    "workRanOn": "用 {agent} 做",
+    "workOff": "{agent}（它做事用的智能體）用不了：沒裝或被停用，它暫時不能自己做事。",
+    "setWork": "去另選一個",
+    "noBrain": {
+      "title": "{name} 還沒有大腦",
+      "body": "它是從協作設定遷移來的助手。初始化主助手後，它會照抄一份主助手的大腦，就可以和它對話了。在這之前，一般會話裡照樣可以 @ 它。",
+      "setUp": "初始化主助手"
+    }
   },
   "MessageCheck": {
     "action": "讓助手核查",
@@ -12757,12 +12732,10 @@
     "unfinished": "沒核查完",
     "mark": "助手核查：{verdict}",
     "markQuote": "核查「{quote}」：{verdict}",
-    "by": "由 {executor} 核查",
     "again": "重新核查",
     "inAssistant": "在助手對話裡看",
     "process": "看核查過程",
     "openConversation": "打開原會話",
-    "sent": "已交給 {executor} 核查，結果會顯示在這則訊息下面",
     "sentNoName": "已開始核查，結果會顯示在這則訊息下面",
     "startFailed": "沒能開始核查：{message}",
     "evidence": "證據",

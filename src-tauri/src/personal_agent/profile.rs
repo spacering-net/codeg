@@ -11,11 +11,10 @@
 //!   they acted. With the `reactions` preference on, a proposal rule whose
 //!   cards they keep dismissing is lowered (6.7); off, nothing is lowered
 //!   and what was lowered is back.
-//! - **Grades** ([`grades`]): each assistant's and each executor config's
-//!   handed-out work over [`GRADE_DAYS`] days — how much passed the first
-//!   time (one round, nothing sent back) and how long it took; and apart by
-//!   who handed it out, who ran it and how ([`cells`]), and by the kind of
-//!   work each executor did (7.9).
+//! - **Grades** ([`grades`]): each assistant's handed-out work over
+//!   [`GRADE_DAYS`] days — how much passed the first time (one round,
+//!   nothing sent back) and how long it took; and apart by who handed it
+//!   out, the agent it ran on and how ([`cells`], 7.9).
 //! - **Their corrections**: their hours (they win over what is learned,
 //!   even with the record off), the projects codeg is not to mind. Kept
 //!   until they change them; "clear" forgets what codeg learned, not them.
@@ -542,7 +541,7 @@ pub async fn reactions(db: &AppDatabase, now: DateTime<Utc>) -> Vec<CardReaction
 
 // ── grades ──────────────────────────────────────────────────────────────────
 
-/// How one assistant's or executor config's handed-out work went.
+/// How one assistant's handed-out work went.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct Grade {
     /// Handed out in the window (the checks of finished work left out).
@@ -562,8 +561,10 @@ pub struct Grade {
 #[derive(Debug, Clone)]
 pub struct Graded {
     pub bot_id: Option<i32>,
-    pub executor: i32,
-    pub executor_name: String,
+    /// The agent it ran on.
+    pub agent_type: crate::models::AgentType,
+    /// That agent's name, as its work snapshot has it.
+    pub agent: String,
     pub mode: DispatchMode,
     pub state: DispatchState,
     pub rounds: i32,
@@ -676,11 +677,11 @@ pub async fn graded_between(
                 (DispatchMode::Task, Some(run)) => *run,
                 _ => d.turns,
             };
-            let executor = super::dispatch::executor_of(&d);
+            let work = super::dispatch::work_of(&d);
             Graded {
                 bot_id: d.bot_id,
-                executor: executor.assistant_id,
-                executor_name: executor.name,
+                agent: super::dispatch::agent_words(&work),
+                agent_type: work.agent_type,
                 mode: d.mode,
                 state: d.state,
                 rounds: n,
@@ -702,74 +703,52 @@ pub async fn graded_recent(db: &AppDatabase, now: DateTime<Utc>) -> Vec<Graded> 
     .await
 }
 
-/// The grades over the last [`GRADE_DAYS`] days: by assistant, and by
-/// executor config.
-pub async fn grades(
-    db: &AppDatabase,
-    now: DateTime<Utc>,
-) -> (HashMap<i32, Grade>, HashMap<i32, Grade>) {
+/// The grades over the last [`GRADE_DAYS`] days, by assistant.
+pub async fn grades(db: &AppDatabase, now: DateTime<Utc>) -> HashMap<i32, Grade> {
     grades_of(&graded_recent(db, now).await)
 }
 
-/// `work`'s grades by assistant, and by executor config.
-pub fn grades_of(work: &[Graded]) -> (HashMap<i32, Grade>, HashMap<i32, Grade>) {
-    let mut bots: HashSet<i32> = HashSet::new();
-    let mut executors: HashSet<i32> = HashSet::new();
-    for w in work {
-        if let Some(b) = w.bot_id {
-            bots.insert(b);
-        }
-        executors.insert(w.executor);
-    }
-    let by_bot = bots
-        .into_iter()
+/// `work`'s grades by assistant.
+pub fn grades_of(work: &[Graded]) -> HashMap<i32, Grade> {
+    let bots: HashSet<i32> = work.iter().filter_map(|w| w.bot_id).collect();
+    bots.into_iter()
         .map(|b| (b, grade_of(work.iter().filter(|w| w.bot_id == Some(b)))))
-        .collect();
-    let by_executor = executors
-        .into_iter()
-        .map(|e| (e, grade_of(work.iter().filter(|w| w.executor == e))))
-        .collect();
-    (by_bot, by_executor)
+        .collect()
 }
 
-/// One cell of the grades (7.9): the work one assistant handed to one
-/// executor config one way.
+/// One cell of the grades (7.9): the work one assistant handed out on one
+/// agent one way.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct GradeCell {
     /// Who handed it out (none: from before there were several).
     pub bot_id: Option<i32>,
-    pub executor: i32,
-    /// The executor config's name when the work was handed out.
-    pub executor_name: String,
+    pub agent_type: crate::models::AgentType,
+    /// The agent's name, the latest one it went by.
+    pub agent: String,
     pub mode: DispatchMode,
     pub grade: Grade,
 }
 
-/// `work` apart by assistant × executor config × mode, the most work
-/// first.
+/// `work` apart by assistant × agent × mode, the most work first.
 pub fn cells(work: &[Graded]) -> Vec<GradeCell> {
-    let mut keys: Vec<(Option<i32>, i32, DispatchMode)> = Vec::new();
+    let mut keys: Vec<(Option<i32>, crate::models::AgentType, DispatchMode)> = Vec::new();
     for w in work {
-        let k = (w.bot_id, w.executor, w.mode);
+        let k = (w.bot_id, w.agent_type, w.mode);
         if !keys.contains(&k) {
             keys.push(k);
         }
     }
     let mut out: Vec<GradeCell> = keys
         .into_iter()
-        .map(|(bot_id, executor, mode)| {
+        .map(|(bot_id, agent_type, mode)| {
             let mine: Vec<&Graded> = work
                 .iter()
-                .filter(|w| w.bot_id == bot_id && w.executor == executor && w.mode == mode)
+                .filter(|w| w.bot_id == bot_id && w.agent_type == agent_type && w.mode == mode)
                 .collect();
             GradeCell {
                 bot_id,
-                executor,
-                // The latest name it went by.
-                executor_name: mine
-                    .last()
-                    .map(|w| w.executor_name.clone())
-                    .unwrap_or_default(),
+                agent_type,
+                agent: mine.last().map(|w| w.agent.clone()).unwrap_or_default(),
                 mode,
                 grade: grade_of(mine.into_iter()),
             }
@@ -779,8 +758,8 @@ pub fn cells(work: &[Graded]) -> Vec<GradeCell> {
         b.grade
             .dispatches
             .cmp(&a.grade.dispatches)
-            .then(a.executor.cmp(&b.executor))
             .then(a.bot_id.cmp(&b.bot_id))
+            .then(a.agent.cmp(&b.agent))
     });
     out
 }
@@ -972,8 +951,8 @@ mod tests {
     fn work(state: DispatchState, rounds: i32, revised: bool, minutes: Option<i64>) -> Graded {
         Graded {
             bot_id: Some(1),
-            executor: 7,
-            executor_name: "Dev".into(),
+            agent_type: crate::models::AgentType::Codex,
+            agent: "Codex".into(),
             mode: DispatchMode::Session,
             state,
             rounds,
@@ -1011,8 +990,9 @@ mod tests {
     }
 
     #[test]
-    fn the_grades_come_apart_by_who_handed_out_who_ran_and_how() {
-        let at = |bot: i32, executor: i32, mode: DispatchMode, ok: bool| {
+    fn the_grades_come_apart_by_who_handed_out_what_ran_and_how() {
+        use crate::models::AgentType;
+        let at = |bot: i32, agent_type: AgentType, mode: DispatchMode, ok: bool| {
             let mut w = work(
                 if ok {
                     DispatchState::Completed
@@ -1024,26 +1004,26 @@ mod tests {
                 Some(10),
             );
             w.bot_id = Some(bot);
-            w.executor = executor;
-            w.executor_name = format!("E{executor}");
+            w.agent_type = agent_type;
+            w.agent = format!("{agent_type:?}");
             w.mode = mode;
             w
         };
         let all = vec![
-            at(1, 7, DispatchMode::Task, true),
-            at(1, 7, DispatchMode::Task, false),
-            at(1, 7, DispatchMode::Chat, true),
-            at(2, 7, DispatchMode::Task, true),
-            at(1, 8, DispatchMode::Chat, true),
+            at(1, AgentType::Codex, DispatchMode::Task, true),
+            at(1, AgentType::Codex, DispatchMode::Task, false),
+            at(1, AgentType::Codex, DispatchMode::Chat, true),
+            at(2, AgentType::Codex, DispatchMode::Task, true),
+            at(1, AgentType::ClaudeCode, DispatchMode::Chat, true),
         ];
         let c = cells(&all);
-        assert_eq!(c.len(), 4, "one cell per assistant × executor × mode");
+        assert_eq!(c.len(), 4, "one cell per assistant × agent × mode");
         assert_eq!(
-            (c[0].bot_id, c[0].executor, c[0].mode),
-            (Some(1), 7, DispatchMode::Task),
+            (c[0].bot_id, c[0].agent_type, c[0].mode),
+            (Some(1), AgentType::Codex, DispatchMode::Task),
             "the most work first"
         );
         assert_eq!((c[0].grade.settled, c[0].grade.first_pass), (2, 1));
-        assert_eq!(c[0].executor_name, "E7");
+        assert_eq!(c[0].agent, "Codex");
     }
 }

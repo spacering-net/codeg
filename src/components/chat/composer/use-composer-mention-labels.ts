@@ -58,11 +58,15 @@ export function useComposerMentionLabels(): ComposerMentionLabels {
         label: t("mentionManageAssistants"),
         open: () => {
           if (setRoute) {
-            usePersonalAgentUi.getState().openSettings("executors")
+            // The assistants: the primary's conversation, whichever one
+            // the page showed last.
+            const ui = usePersonalAgentUi.getState()
+            ui.setViewBot(null)
+            ui.showConversation()
             setRoute("personalAgent")
             return
           }
-          void openPersonalAgentPage("executors").catch((e) =>
+          void openPersonalAgentPage("assistants").catch((e) =>
             toast.error(toErrorMessage(e))
           )
         },

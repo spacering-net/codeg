@@ -48,7 +48,8 @@ import { PanelIcon, PanelItem, type PanelItemProps } from "../../panel-section"
 import { RoutineRow, UnfoldButton } from "../../routines-section"
 import {
   canOpenWork,
-  ExecutorAvatar,
+  WorkAgentFact,
+  WorkGlyph,
   useBotName,
   useOpenWork,
   useWorkMeta,
@@ -61,7 +62,7 @@ import { LadderChip, TaskStrip } from "../../task-strip"
 import { useTodayRowProps, type Opener } from "../../today-section"
 import { MOVING } from "../use-work"
 
-/** An executor's avatar leading a row, in px at 100% zoom: as a kind's
+/** A piece of work's glyph leading a row, in px at 100% zoom: as a kind's
  *  icon tile. */
 export const ROW_AVATAR_SIZE = 24
 
@@ -261,11 +262,16 @@ function useDetails({
   const lines: ReactNode[] = []
   if (dispatch) {
     const who = meta({
-      executor: dispatch.executor.name,
       mode: dispatch.mode,
       folder: dispatch.folder_name,
     })
     if (who) lines.push(<p key="who">{who}</p>)
+    // The agent it ran on: a fact of the work, here only.
+    lines.push(
+      <p key="agent">
+        <WorkAgentFact agentType={dispatch.work.agent_type} />
+      </p>
+    )
     if (dispatch.done_when?.trim()) {
       lines.push(
         <div key="done-when" data-pa-done-when>
@@ -601,11 +607,7 @@ function DispatchRowShell({
   const error = d.state === "failed" ? d.error?.trim().split("\n")[0] : null
   const props: PanelItemProps = {
     media: (
-      <ExecutorAvatar
-        id={d.executor.assistant_id}
-        name={d.executor.name}
-        size={ROW_AVATAR_SIZE}
-      />
+      <WorkGlyph mode={d.mode} size={ROW_AVATAR_SIZE} />
     ),
     title: d.title,
     time: formatRelative(d.updated_at, p.scope.now),
