@@ -198,6 +198,37 @@ describe("per-draft-tab composer drafts", () => {
     expect(loadMessageInputDraftV2(b)).toBeNull()
   })
 
+  it("keeps a stored draft-tab draft when another window deletes its keys", () => {
+    // Another window's startup sweep only knows its own draft tabs, so it can
+    // remove this window's stored draft while the tab is still open.
+    const saved = buildNewConversationDraftStorageKey("new-x-saved")
+    saveMessageInputDraftV2(saved, DOC)
+    const loadedKey = buildNewConversationDraftStorageKey("new-x-loaded")
+    localStorage.setItem(V2(loadedKey), JSON.stringify({ doc: DOC }))
+    expect(loadMessageInputDraftV2(loadedKey)).toEqual({
+      kind: "doc",
+      doc: DOC,
+    })
+    const textKey = buildNewConversationDraftStorageKey("new-x-text")
+    saveMessageInputDraft(textKey, "typed")
+
+    for (const key of [saved, loadedKey, textKey]) {
+      localStorage.removeItem(V1(key))
+      localStorage.removeItem(V2(key))
+    }
+
+    expect(loadMessageInputDraftV2(saved)).toEqual({ kind: "doc", doc: DOC })
+    expect(loadMessageInputDraftV2(loadedKey)).toEqual({
+      kind: "doc",
+      doc: DOC,
+    })
+    expect(loadMessageInputDraft(textKey)).toBe("typed")
+
+    // Closing the tab still releases the copy.
+    clearMessageInputDraftV2(saved)
+    expect(loadMessageInputDraftV2(saved)).toBeNull()
+  })
+
   it("moves a draft to another key (closing tab hands off to its replacement)", () => {
     const from = buildNewConversationDraftStorageKey("new-old")
     const to = buildNewConversationDraftStorageKey("new-fresh")
