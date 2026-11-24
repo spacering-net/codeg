@@ -536,7 +536,7 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                           ? t("collapseSubsessions")
                           : t("expandSubsessions")
                       }
-                      className="absolute top-0 bottom-0 z-20 flex cursor-pointer items-center justify-center rounded-sm text-sidebar-foreground outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring"
+                      className="absolute top-0 bottom-0 z-20 flex cursor-pointer items-center justify-center rounded-sm text-muted-foreground/70 outline-none hover:bg-sidebar-accent hover:text-sidebar-foreground focus-visible:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring"
                       style={{
                         left: "calc(var(--conv-rail-axis, 0.875rem) - 0.75rem)",
                         width: "0.75rem",
