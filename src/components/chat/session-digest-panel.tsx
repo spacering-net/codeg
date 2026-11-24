@@ -2,11 +2,10 @@
 
 import { useRef, useState } from "react"
 import { useTranslations } from "next-intl"
-import { ChevronDown, ChevronUp, X } from "lucide-react"
+import { X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useSessionDigest } from "@/hooks/use-session-digest"
-import { sessionDigestAction } from "@/lib/api"
-import type { DigestAnswerClaim, SessionDigest } from "@/lib/session-digest"
+import type { SessionDigest } from "@/lib/session-digest"
 
 export function SessionDigestPanel({
   digest,
@@ -171,76 +170,5 @@ export function SessionDigestSummary({
         : t("inProgress")}
       {digest.now[0] ? ` · ${digest.now[0]}` : ""}
     </span>
-  )
-}
-
-export function SessionDigestOverlay({
-  conversationId,
-  disabled,
-  onSendAnswer,
-}: {
-  conversationId: number | null
-  disabled: boolean
-  onSendAnswer: (text: string, clientMessageId: string) => Promise<boolean>
-}) {
-  const { digest, refresh } = useSessionDigest(conversationId)
-  const t = useTranslations("SessionDigest")
-  const [expanded, setExpanded] = useState(false)
-  if (!digest || conversationId == null) return null
-  const answer = async (questionId: string, option: string) => {
-    let token: string | undefined
-    try {
-      const claim = await sessionDigestAction<DigestAnswerClaim>(
-        conversationId,
-        { operation: "reserve", revision: digest.revision, questionId, option }
-      )
-      token = claim.token
-      if (!(await onSendAnswer(claim.text, claim.token)))
-        throw new Error(t("sendFailed"))
-    } catch (error) {
-      if (token)
-        await sessionDigestAction(conversationId, {
-          operation: "release",
-          token,
-        }).catch(() => {})
-      throw error
-    } finally {
-      await refresh()
-    }
-  }
-  const dismiss = async (title: string) => {
-    await sessionDigestAction(conversationId, {
-      operation: "dismiss",
-      revision: digest.revision,
-      title,
-    })
-    await refresh()
-  }
-  return (
-    <div className="relative z-30 px-3 pt-2">
-      <button
-        type="button"
-        className="flex items-center gap-1.5 rounded-full border border-border/60 bg-background/90 px-2.5 py-1 text-xs text-muted-foreground shadow-sm hover:text-foreground"
-        aria-expanded={expanded}
-        onClick={() => setExpanded(!expanded)}
-      >
-        {t("title")}
-        {expanded ? (
-          <ChevronUp className="size-3" />
-        ) : (
-          <ChevronDown className="size-3" />
-        )}
-      </button>
-      {expanded && (
-        <div className="absolute start-3 top-full mt-1 max-h-[min(32rem,65vh)] w-[min(28rem,calc(100%-1.5rem))] overflow-auto rounded-lg border border-border bg-popover text-popover-foreground shadow-lg">
-          <SessionDigestPanel
-            digest={digest}
-            disabled={disabled}
-            onAnswer={answer}
-            onDismiss={dismiss}
-          />
-        </div>
-      )}
-    </div>
   )
 }

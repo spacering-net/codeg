@@ -70,6 +70,27 @@ pub async fn session_digest_action_core(
     }
     Ok(value)
 }
+pub async fn session_brief_read_core(
+    db: &DatabaseConnection,
+    id: i32,
+) -> Result<Value, AppCommandError> {
+    if !crate::commands::delegation::load_delegation_settings(db)
+        .await
+        .session_messaging_enabled
+    {
+        return Ok(Value::Null);
+    }
+    let brief = crate::db::service::conversation_context_service::read_brief(db, id).await?;
+    serde_json::to_value(brief).map_err(|e| AppCommandError::configuration_invalid(e.to_string()))
+}
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn session_brief_read(
+    db: tauri::State<'_, crate::db::AppDatabase>,
+    conversation_id: i32,
+) -> Result<Value, AppCommandError> {
+    session_brief_read_core(&db.conn, conversation_id).await
+}
 #[cfg(feature = "tauri-runtime")]
 #[tauri::command]
 pub async fn session_digest_action(

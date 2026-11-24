@@ -5,6 +5,12 @@ import { useTranslations } from "next-intl"
 import { Link2Off } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useTabActions } from "@/contexts/tab-context"
+import { SessionDigestPanel } from "@/components/chat/session-digest-panel"
+import {
+  useDigestActions,
+  useSessionBrief,
+  useSessionDigest,
+} from "@/hooks/use-session-digest"
 import {
   listConversationCollaborators,
   setConversationCollaborator,
@@ -23,9 +29,13 @@ export function SessionCollaborators({
   conversationId: number
 }) {
   const t = useTranslations("SessionCollaboration")
+  const td = useTranslations("SessionDigest")
   const statusText = useTranslations("Folder.statusLabels")
   const { openTab } = useTabActions()
   const conversations = useAppWorkspaceStore((s) => s.conversations)
+  const { digest, refresh } = useSessionDigest(conversationId)
+  const { answer, dismiss } = useDigestActions(conversationId, digest, refresh)
+  const brief = useSessionBrief(conversationId)
   const [rows, setRows] = useState<DbConversationSummary[]>([])
   const [pickerOpen, setPickerOpen] = useState(false)
   const [target, setTarget] = useState("")
@@ -101,6 +111,26 @@ export function SessionCollaborators({
   return (
     <section className="min-w-0 rounded-lg border border-border p-3">
       <h3 className="font-medium">{t("progress")}</h3>
+      {digest && (
+        <div className="-mx-3">
+          <h4 className="px-3 text-xs text-muted-foreground">{td("title")}</h4>
+          <SessionDigestPanel
+            digest={digest}
+            onAnswer={answer}
+            onDismiss={dismiss}
+          />
+        </div>
+      )}
+      {brief?.text && (
+        <details className="mt-2">
+          <summary className="cursor-pointer text-xs text-muted-foreground">
+            {t("brief")}
+          </summary>
+          <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs">
+            {brief.text}
+          </pre>
+        </details>
+      )}
       <div className="mt-2 flex items-center justify-between gap-2">
         <h4 className="text-xs text-muted-foreground">{t("title")}</h4>
         <Button

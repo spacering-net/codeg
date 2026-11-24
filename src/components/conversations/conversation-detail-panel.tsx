@@ -63,7 +63,7 @@ import {
 } from "@/components/message/goal-control-context"
 import { useAdvertisedGoalActions } from "@/hooks/use-goal-actions"
 import { ConversationShell } from "@/components/chat/conversation-shell"
-import { SessionDigestOverlay } from "@/components/chat/session-digest-panel"
+import { registerDigestSender } from "@/hooks/use-session-digest"
 import { SessionConfigStaleBanner } from "@/components/chat/session-config-stale-banner"
 import { PiProjectTrustBanner } from "@/components/chat/pi-project-trust-banner"
 import { FeedbackNotesDisplay } from "@/components/chat/feedback-notes-display"
@@ -1520,6 +1520,14 @@ const ConversationTabView = memo(function ConversationTabView({
     handleSendRef.current = handleSend
   }, [handleSend])
 
+  // The right-hand progress panel answers digest questions through this
+  // panel's composer (queue guards, optimistic bubble, lifecycle send).
+  useEffect(() => {
+    if (dbConversationId == null || dbConversationId <= 0) return
+    registerDigestSender(dbConversationId, handleDigestAnswer)
+    return () => registerDigestSender(dbConversationId, null)
+  }, [dbConversationId, handleDigestAnswer])
+
   // "Fork from here": fork at a rendered assistant turn, sending nothing. The
   // ONLY fork entry point — the composer's fork-and-send was removed once this
   // existed, since the tail is just one of the turns this can be aimed at.
@@ -2452,15 +2460,6 @@ const ConversationTabView = memo(function ConversationTabView({
       getSentHistory={getSentHistory}
       topBanner={
         <>
-          <SessionDigestOverlay
-            conversationId={dbConversationId}
-            disabled={
-              !connectionReady ||
-              connStatus !== "connected" ||
-              msgQueue.length > 0
-            }
-            onSendAnswer={handleDigestAnswer}
-          />
           <SessionConfigStaleBanner contextKey={tabId} />
           <PiProjectTrustBanner
             contextKey={tabId}

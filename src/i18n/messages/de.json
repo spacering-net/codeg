@@ -2,6 +2,7 @@
   "SessionCollaboration": {
     "progress": "Sitzungsfortschritt",
     "title": "Zusammenarbeitssitzungen",
+    "brief": "Übergabevermerk",
     "link": "Verknüpfen",
     "choose": "Sitzung auswählen",
     "unlink": "Verknüpfung lösen",

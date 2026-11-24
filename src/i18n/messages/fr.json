@@ -2,6 +2,7 @@
   "SessionCollaboration": {
     "progress": "Progression de la session",
     "title": "Sessions de collaboration",
+    "brief": "Notes de passation",
     "link": "Associer",
     "choose": "Choisir une session",
     "unlink": "Dissocier",

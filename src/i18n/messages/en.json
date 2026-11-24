@@ -2,6 +2,7 @@
   "SessionCollaboration": {
     "progress": "Session progress",
     "title": "Collaboration sessions",
+    "brief": "Takeover notes",
     "link": "Link",
     "choose": "Choose a session",
     "unlink": "Unlink",

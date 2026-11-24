@@ -4,18 +4,33 @@ import { describe, expect, it, vi } from "vitest"
 import en from "@/i18n/messages/en.json"
 import {
   SessionDigestPanel,
-  SessionDigestOverlay,
   SessionDigestSummary,
 } from "./session-digest-panel"
 
 const actions = vi.hoisted(() => ({
   action: vi.fn(),
+  briefRead: vi.fn(),
   refresh: vi.fn(async () => {}),
 }))
-vi.mock("@/lib/api", () => ({ sessionDigestAction: actions.action }))
-vi.mock("@/hooks/use-session-digest", () => ({
+vi.mock("@/lib/api", () => ({
+  sessionDigestAction: actions.action,
+  sessionBriefRead: actions.briefRead,
+}))
+vi.mock("@/lib/transport", () => ({
+  getTransport: () => ({
+    call: actions.action,
+    subscribe: vi.fn(async () => () => {}),
+  }),
+}))
+// useDigestActions runs for real; only the store hook is stubbed.
+vi.mock("@/hooks/use-session-digest", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/use-session-digest")>()),
   useSessionDigest: () => ({ digest, refresh: actions.refresh }),
 }))
+import {
+  registerDigestSender,
+  useDigestActions,
+} from "@/hooks/use-session-digest"
 
 const digest = {
   revision: 1,
@@ -97,22 +112,26 @@ describe("SessionDigestPanel", () => {
   })
 })
 
-describe("SessionDigestOverlay answers", () => {
-  function overlay(
-    onSendAnswer: (text: string, token: string) => Promise<boolean>
-  ) {
+describe("Digest answers through the shared hook", () => {
+  function show(send?: (text: string, token: string) => Promise<boolean>) {
+    registerDigestSender(42, send ? async (t, id) => send(t, id) : null)
     render(
       <NextIntlClientProvider locale="en" messages={en}>
-        <SessionDigestOverlay
-          conversationId={42}
-          disabled={false}
-          onSendAnswer={onSendAnswer}
-        />
+        <Probe />
       </NextIntlClientProvider>
     )
-    fireEvent.click(screen.getByRole("button", { name: "Session summary" }))
   }
-  it("releases a reserved answer when the ordinary user-message send fails", async () => {
+  function Probe() {
+    const { answer, dismiss } = useDigestActions(42, digest, actions.refresh)
+    return (
+      <SessionDigestPanel
+        digest={digest}
+        onAnswer={answer}
+        onDismiss={dismiss}
+      />
+    )
+  }
+  it("releases a reserved answer when the registered send fails", async () => {
     actions.action
       .mockReset()
       .mockImplementation(async (_id, action) =>
@@ -121,7 +140,7 @@ describe("SessionDigestOverlay answers", () => {
           : null
       )
     const send = vi.fn().mockResolvedValue(false)
-    overlay(send)
+    show(send)
     fireEvent.click(screen.getByRole("button", { name: "Fast" }))
     await waitFor(() =>
       expect(actions.action).toHaveBeenCalledWith(42, {
@@ -136,18 +155,40 @@ describe("SessionDigestOverlay answers", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Answer could not be sent"
     )
+    registerDigestSender(42, null)
   })
-  it("does not send when the server rejects a stale question", async () => {
+  it("fails without a sender and never sends", async () => {
+    actions.action
+      .mockReset()
+      .mockImplementation(async (_id, action) =>
+        action.operation === "reserve"
+          ? { token: "tok", text: "Choose a mode\nFast" }
+          : null
+      )
+    show()
+    fireEvent.click(screen.getByRole("button", { name: "Fast" }))
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Answer could not be sent"
+    )
+    await waitFor(() =>
+      expect(actions.action).toHaveBeenCalledWith(42, {
+        operation: "release",
+        token: "tok",
+      })
+    )
+  })
+  it("surfaces a rejected reserve without sending", async () => {
     actions.action
       .mockReset()
       .mockRejectedValue(new Error("Question is no longer current"))
     const send = vi.fn()
-    overlay(send)
+    show(send)
     fireEvent.click(screen.getByRole("button", { name: "Fast" }))
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Question is no longer current"
     )
     expect(send).not.toHaveBeenCalled()
+    registerDigestSender(42, null)
   })
   it("shows pending questions and the current work in the title summary", () => {
     render(

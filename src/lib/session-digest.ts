@@ -4,6 +4,10 @@ export interface SessionDigestQuestion {
   options: string[]
   recommended?: string | null
 }
+export interface SessionBrief {
+  text: string
+  updatedAt: string | null
+}
 export interface SessionDigest {
   revision: number
   updatedAt: string

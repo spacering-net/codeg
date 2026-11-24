@@ -87,6 +87,10 @@ pub fn build_router_with_srn(
             post(handlers::conversations::session_digest_action),
         )
         .route(
+            "/session_brief_read",
+            post(handlers::conversations::session_brief_read),
+        )
+        .route(
             "/list_conversations",
             post(handlers::conversations::list_conversations),
         )

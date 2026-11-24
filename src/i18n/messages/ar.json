@@ -2,6 +2,7 @@
   "SessionCollaboration": {
     "progress": "تقدم الجلسة",
     "title": "جلسات التعاون",
+    "brief": "ملاحظات التسليم",
     "link": "ربط",
     "choose": "اختر جلسة",
     "unlink": "إلغاء الربط",

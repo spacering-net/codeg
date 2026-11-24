@@ -2,6 +2,7 @@
   "SessionCollaboration": {
     "progress": "セッションの進捗",
     "title": "共同作業セッション",
+    "brief": "引き継ぎノート",
     "link": "関連付け",
     "choose": "セッションを選択",
     "unlink": "関連付けを解除",

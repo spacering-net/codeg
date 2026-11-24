@@ -6953,3 +6953,11 @@ export async function sessionDigestAction<T>(
     action,
   })
 }
+
+/** The conversation's current brief, or null while session messaging is off.
+ *  Unwritten briefs read back with an empty `text`. */
+export async function sessionBriefRead(
+  conversationId: number
+): Promise<import("./session-digest").SessionBrief | null> {
+  return getTransport().call("session_brief_read", { conversationId })
+}

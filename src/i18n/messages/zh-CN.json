@@ -2,6 +2,7 @@
   "SessionCollaboration": {
     "progress": "会话进度",
     "title": "协作会话",
+    "brief": "接手笔记",
     "link": "关联",
     "choose": "选择会话",
     "unlink": "解除关联",
