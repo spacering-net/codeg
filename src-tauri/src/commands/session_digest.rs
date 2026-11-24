@@ -5,6 +5,7 @@ use crate::{
 use sea_orm::DatabaseConnection;
 use serde::Deserialize;
 use serde_json::Value;
+use crate::db::service::conversation_context_service::{read_brief, SessionBrief};
 
 #[derive(Debug, Deserialize)]
 #[serde(
@@ -73,22 +74,21 @@ pub async fn session_digest_action_core(
 pub async fn session_brief_read_core(
     db: &DatabaseConnection,
     id: i32,
-) -> Result<Value, AppCommandError> {
+) -> Result<Option<SessionBrief>, AppCommandError> {
     if !crate::commands::delegation::load_delegation_settings(db)
         .await
         .session_messaging_enabled
     {
-        return Ok(Value::Null);
+        return Ok(None);
     }
-    let brief = crate::db::service::conversation_context_service::read_brief(db, id).await?;
-    serde_json::to_value(brief).map_err(|e| AppCommandError::configuration_invalid(e.to_string()))
+    Ok(Some(read_brief(db, id).await?))
 }
 #[cfg(feature = "tauri-runtime")]
 #[tauri::command]
 pub async fn session_brief_read(
     db: tauri::State<'_, crate::db::AppDatabase>,
     conversation_id: i32,
-) -> Result<Value, AppCommandError> {
+) -> Result<Option<SessionBrief>, AppCommandError> {
     session_brief_read_core(&db.conn, conversation_id).await
 }
 #[cfg(feature = "tauri-runtime")]

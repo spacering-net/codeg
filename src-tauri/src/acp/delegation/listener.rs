@@ -1070,8 +1070,29 @@ impl DelegationListener {
         let Some(db) = self.session_message_db.get() else {
             return serde_json::json!({"error": "Session brief is unavailable"});
         };
+        let changed = !matches!(
+            &args,
+            crate::db::service::conversation_context_service::BriefOperation::Read
+        );
         match crate::db::service::conversation_context_service::update_brief(db, id, args).await {
-            Ok(brief) => serde_json::json!({"brief": brief}),
+            Ok(brief) => {
+                if changed {
+                    if let Some(creator) = self.session_creator.get() {
+                        if let Some((_, emitter)) = creator
+                            .manager
+                            .get_state_and_emitter(&entry.parent_connection_id)
+                            .await
+                        {
+                            crate::web::event_bridge::emit_event(
+                                &emitter,
+                                "session-brief://changed",
+                                serde_json::json!({"conversationId": id}),
+                            );
+                        }
+                    }
+                }
+                serde_json::json!({"brief": brief})
+            }
             Err(error) => serde_json::json!({"error": error.to_string()}),
         }
     }

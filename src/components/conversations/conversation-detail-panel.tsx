@@ -2766,11 +2766,7 @@ const GROUP_EDGE_EPSILON = 0.1
 function SplitStripCornerReserve({ side }: { side: "left" | "right" }) {
   const isMobile = useIsMobile()
   const { isOpen: sidebarOpen } = useSidebarContext()
-  const { isOpen: auxOpen, openTab: openAuxTab } = useAuxPanelContext()
-  const openSessionProgress = useCallback(
-    () => openAuxTab("session_details"),
-    [openAuxTab]
-  )
+  const { isOpen: auxOpen } = useAuxPanelContext()
   const { mode, conversationMaximized } = useWorkspaceView()
   const { isMac, isWindows, isLinux } = usePlatform()
   const { zoomLevel } = useZoomLevel()
@@ -2789,6 +2785,11 @@ function SplitStripCornerReserve({ side }: { side: "left" | "right" }) {
 }
 
 export function ConversationDetailPanel() {
+  const { openTab: openAuxTab } = useAuxPanelContext()
+  const openSessionProgress = useCallback(
+    () => openAuxTab("session_details"),
+    [openAuxTab]
+  )
   const t = useTranslations("Folder.conversation")
   const tDetails = useTranslations("Folder.sessionDetails")
   const {
