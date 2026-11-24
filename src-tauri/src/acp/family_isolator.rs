@@ -12,9 +12,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::acp::custom_registry::{CustomAgentDef, CustomAgentSpec};
+use crate::acp::custom_registry::{CustomAgentDef, CustomAgentSource};
 use crate::acp::registry::AgentDistribution;
-use crate::models::agent::AgentType;
 
 /// Families whose official CLI honors a home-override env var.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -73,20 +72,22 @@ impl IsolatorFamily {
     }
 }
 
-/// Merge every channel env map on a custom-agent spec. Extra slots created
-/// through the ACP save path put isolators on `npx.env` (or uvx/binary).
-pub fn spec_env_map(spec: &CustomAgentSpec) -> BTreeMap<String, String> {
-    let mut out = BTreeMap::new();
-    if let Some(npx) = &spec.npx {
-        out.extend(npx.env.clone());
+/// Only the user-configured launch channel can identify an extra account.
+fn manual_launch_env(def: &CustomAgentDef) -> Option<&BTreeMap<String, String>> {
+    use crate::acp::custom_registry::CustomDistributionKind;
+    if def.source != CustomAgentSource::Manual {
+        return None;
     }
-    if let Some(uvx) = &spec.uvx {
-        out.extend(uvx.env.clone());
+    match def.distribution_kind {
+        CustomDistributionKind::Npx => Some(&def.spec.npx.as_ref()?.env),
+        CustomDistributionKind::Uvx => Some(&def.spec.uvx.as_ref()?.env),
+        CustomDistributionKind::Binary => Some(
+            &def.spec
+                .binary
+                .get(crate::acp::registry::current_platform())?
+                .env,
+        ),
     }
-    for bin in spec.binary.values() {
-        out.extend(bin.env.clone());
-    }
-    out
 }
 
 /// Detect the isolated family home from a launch env map.
@@ -145,9 +146,11 @@ fn is_default_home(family: IsolatorFamily, home: &Path) -> bool {
 pub fn extra_homes_for_family(family: IsolatorFamily, defs: &[CustomAgentDef]) -> Vec<PathBuf> {
     let mut homes = Vec::new();
     for def in defs {
-        let env = spec_env_map(&def.spec);
-        if let Some((_, home)) = isolator_from_env_filtered(&env, Some(family)) {
-            if !is_default_home(family, &home) {
+        let Some(env) = manual_launch_env(def) else {
+            continue;
+        };
+        if let Some((_, home)) = isolator_from_env_filtered(env, Some(family)) {
+            if home.is_absolute() && !is_default_home(family, &home) {
                 homes.push(home);
             }
         }
@@ -174,16 +177,10 @@ fn distribution_env(dist: &AgentDistribution) -> BTreeMap<String, String> {
 /// from `custom_agent` at boot and after every save). Sync, no DB.
 pub fn extra_homes_from_live_registry(family: IsolatorFamily) -> Vec<PathBuf> {
     let mut homes = Vec::new();
-    for agent in crate::acp::custom_registry::all() {
-        let AgentType::Custom(id) = agent else {
-            continue;
-        };
-        let Some(meta) = crate::acp::custom_registry::get(id) else {
-            continue;
-        };
+    for meta in crate::acp::custom_registry::manual_account_candidates() {
         let env = distribution_env(&meta.distribution);
         if let Some((_, home)) = isolator_from_env_filtered(&env, Some(family)) {
-            if !is_default_home(family, &home) {
+            if home.is_absolute() && !is_default_home(family, &home) {
                 homes.push(home);
             }
         }
@@ -239,13 +236,7 @@ pub fn login_plan_from_env(env: &BTreeMap<String, String>) -> Option<ExtraSlotLo
 }
 
 pub fn login_plan_from_def(def: &CustomAgentDef) -> Option<ExtraSlotLogin> {
-    use crate::acp::custom_registry::CustomDistributionKind;
-    let env = match def.distribution_kind {
-        CustomDistributionKind::Npx => &def.spec.npx.as_ref()?.env,
-        CustomDistributionKind::Uvx => &def.spec.uvx.as_ref()?.env,
-        CustomDistributionKind::Binary => &def.spec.binary.get(crate::acp::registry::current_platform())?.env,
-    };
-    login_plan_from_env(env)
+    login_plan_from_env(manual_launch_env(def)?)
 }
 
 /// Build the command line `open_external_terminal_impl` will run.
@@ -292,7 +283,7 @@ mod tests {
             assert!(!is_default_home(IsolatorFamily::OpenCode, &fixed));
         });
     }
-    use crate::acp::custom_registry::{CustomDistributionKind, NpxSpec};
+    use crate::acp::custom_registry::{CustomAgentSpec, CustomDistributionKind, NpxSpec};
 
     fn def_with_env(id: &str, env: BTreeMap<String, String>) -> CustomAgentDef {
         CustomAgentDef {
@@ -314,7 +305,7 @@ mod tests {
             icon_url: None,
             skills_shared_store: false,
             skills_dir: None,
-            source: Default::default(),
+            source: CustomAgentSource::Manual,
             version_probe: None,
             supports_mcp: true,
         }
@@ -351,14 +342,20 @@ mod tests {
 
     #[test]
     fn extra_homes_for_family_filters_and_skips_default() {
-        let defs = vec![
+        let temp = tempfile::tempdir().unwrap();
+        let codex_home = temp.path().join("codex-2");
+        let grok_home = temp.path().join("grok-2");
+        let mut defs = vec![
             def_with_env(
                 "codex-2",
-                BTreeMap::from([("CODEX_HOME".into(), "/p/codex-2".into())]),
+                BTreeMap::from([(
+                    "CODEX_HOME".into(),
+                    codex_home.to_string_lossy().into_owned(),
+                )]),
             ),
             def_with_env(
                 "grok-2",
-                BTreeMap::from([("GROK_HOME".into(), "/p/grok-2".into())]),
+                BTreeMap::from([("GROK_HOME".into(), grok_home.to_string_lossy().into_owned())]),
             ),
             def_with_env(
                 "codex-default",
@@ -371,10 +368,19 @@ mod tests {
                 )]),
             ),
         ];
+        let mut from_registry = def_with_env(
+            "registry-agent",
+            BTreeMap::from([(
+                "CODEX_HOME".into(),
+                temp.path().join("unrelated").to_string_lossy().into_owned(),
+            )]),
+        );
+        from_registry.source = CustomAgentSource::Registry;
+        defs.push(from_registry);
         let homes = extra_homes_for_family(IsolatorFamily::Codex, &defs);
-        assert_eq!(homes, vec![PathBuf::from("/p/codex-2")]);
+        assert_eq!(homes, vec![codex_home]);
         let grok = extra_homes_for_family(IsolatorFamily::Grok, &defs);
-        assert_eq!(grok, vec![PathBuf::from("/p/grok-2")]);
+        assert_eq!(grok, vec![grok_home]);
     }
 
     #[test]

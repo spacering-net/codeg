@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest"
+import { setFlagsFromString } from "node:v8"
+import { runInNewContext } from "node:vm"
+import { describe, expect, it, vi } from "vitest"
 
 import {
   adaptMessageTurn,
@@ -12,7 +14,7 @@ import {
   toolResult,
   toolUse,
 } from "./__fixtures__/mockup-turn"
-import { buildActivity } from "./build-activity"
+import { buildActivity, rowIdentity } from "./build-activity"
 import type { ActivityItem } from "./types"
 
 function rows(items: ActivityItem[]): string[] {
@@ -116,6 +118,120 @@ describe("buildActivity on the reference turn", () => {
     ).toEqual(["d2", "d3"])
   })
 
+  it("hands a resume the checks after it, and the call before it only the earlier ones", () => {
+    const TASK = "a1b2c3d4"
+    const status = (id: string) =>
+      toolUse(id, "mcp__codeg-mcp__get_delegation_status", {
+        task_ids: [TASK],
+      })
+    const turn: MessageTurn = {
+      id: "turn-resume-check",
+      role: "assistant",
+      timestamp: "2026-10-22T09:00:00Z",
+      blocks: [
+        toolUse("d1", "mcp__codeg-mcp__delegate_to_agent", {
+          agent_type: "codex",
+          task: "Review the patch.",
+        }),
+        toolResult("d1", JSON.stringify({ task_id: TASK, status: "started" })),
+        status("d2"),
+        toolResult("d2", JSON.stringify({ task_id: TASK, status: "canceled" })),
+        toolUse("r1", "mcp__codeg-mcp__resume_delegation", { task_id: TASK }),
+        toolResult(
+          "r1",
+          JSON.stringify({
+            task_id: TASK,
+            status: "running",
+            agent_type: "codex",
+            child_conversation_id: 9,
+          })
+        ),
+        status("d3"),
+        toolResult(
+          "d3",
+          JSON.stringify({ task_id: TASK, status: "completed", text: "Done." })
+        ),
+      ],
+    }
+    const model = buildActivity(
+      adaptMessageTurn(turn, MOCKUP_ADAPTER_TEXT).content,
+      { isStreaming: false }
+    )
+    const pollsOf = (id: string) => {
+      const step = model.steps.find(
+        (s) => s.type === "tool" && s.part.toolCallId === id
+      )
+      return step?.type === "tool"
+        ? step.laterPolls?.map((p) => p.toolCallId)
+        : null
+    }
+    expect(pollsOf("d1")).toEqual(["d2"])
+    expect(pollsOf("r1")).toEqual(["d3"])
+  })
+
+  it.each([
+    ["completed", 0],
+    ["failed", 1],
+  ])(
+    "leaves a refused resume out of the checks: the call before it still ends (%s)",
+    (ending, failed) => {
+      const TASK = "a1b2c3d4"
+      const turn: MessageTurn = {
+        id: "turn-refused-resume",
+        role: "assistant",
+        timestamp: "2026-10-22T09:00:00Z",
+        blocks: [
+          toolUse("d1", "mcp__codeg-mcp__delegate_to_agent", {
+            agent_type: "codex",
+            task: "Review the patch.",
+          }),
+          toolResult(
+            "d1",
+            JSON.stringify({ task_id: TASK, status: "started" })
+          ),
+          toolUse("r1", "mcp__codeg-mcp__resume_delegation", {
+            task_id: TASK,
+          }),
+          toolResult(
+            "r1",
+            JSON.stringify({
+              task_id: TASK,
+              status: "running",
+              error_code: "not_resumable",
+              agent_type: "codex",
+              child_conversation_id: 9,
+              message: "Not resumed: the task is still running.",
+            })
+          ),
+          toolUse("d2", "mcp__codeg-mcp__get_delegation_status", {
+            task_ids: [TASK],
+          }),
+          toolResult(
+            "d2",
+            JSON.stringify({ task_id: TASK, status: ending, text: "Done." })
+          ),
+        ],
+      }
+      const model = buildActivity(
+        adaptMessageTurn(turn, MOCKUP_ADAPTER_TEXT).content,
+        { isStreaming: false }
+      )
+      const pollsOf = (id: string) => {
+        const step = model.steps.find(
+          (s) => s.type === "tool" && s.part.toolCallId === id
+        )
+        return step?.type === "tool"
+          ? step.laterPolls?.map((p) => p.toolCallId)
+          : null
+      }
+      expect(pollsOf("d1")).toEqual(["d2"])
+      expect(pollsOf("r1")).toBeUndefined()
+      expect(model.summary.running).toBe(false)
+      // A failed task is the delegation's failure, counted once.
+      expect(model.summary.failed).toBe(failed)
+    }
+  )
+
   it("keeps the closing prose as the answer", () => {
     expect(model.answer).toHaveLength(1)
     expect(model.answer[0]).toMatchObject({ type: "text" })
@@ -174,6 +290,61 @@ describe("buildActivity on the reference turn", () => {
 })
 
 describe("buildActivity on a live turn", () => {
+  const completedTool = (toolCallId: string): AdaptedContentPart => ({
+    type: "tool-call",
+    toolCallId,
+    toolName: "fixture_output",
+    input: null,
+    output: "completed output",
+    state: "output-available",
+  })
+
+  it("reuses unchanged rows while the prior activity model is still live", () => {
+    const first = buildActivity([completedTool("live-model")], {
+      isStreaming: true,
+    })
+    const settled = buildActivity([completedTool("live-model")], {
+      isStreaming: false,
+    })
+    expect(settled.steps[0]).toBe(first.steps[0])
+    expect(settled.items[0]).toBe(first.items[0])
+  })
+
+  it("does not keep a released reply's tool output reachable", async () => {
+    // The in-process `gc` behind --expose-gc, for this worker only.
+    setFlagsFromString("--expose-gc")
+    const gc = runInNewContext("gc") as () => void
+    const build = (index: number) => {
+      const part = completedTool(`released-${index}`)
+      buildActivity([part], { isStreaming: false })
+      return new WeakRef(part)
+    }
+    // Fewer replies than the index holds: a strong index keeps every one.
+    const released = Array.from({ length: 4 }, (_, i) => build(i))
+    for (let i = 0; i < 8; i++) {
+      // A WeakRef keeps its target until the job that made it has ended.
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      gc()
+    }
+    expect(released.filter((ref) => ref.deref() !== undefined)).toHaveLength(0)
+  })
+
+  it("rebuilds across different parts arrays when WeakRef is unavailable", () => {
+    vi.stubGlobal("WeakRef", undefined)
+    try {
+      const parts = [completedTool("no-weak-ref")]
+      const first = buildActivity(parts, { isStreaming: false })
+      const rebuilt = buildActivity([completedTool("no-weak-ref")], {
+        isStreaming: false,
+      })
+      expect(rebuilt.steps[0]).toEqual(first.steps[0])
+      expect(rebuilt.steps[0]).not.toBe(first.steps[0])
+      expect(buildActivity(parts, { isStreaming: false })).toBe(first)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it("reports the running command and keeps every call visible", () => {
     const parts = adaptMessageTurn(
       MOCKUP_LIVE_TURN,
@@ -408,5 +579,42 @@ describe("buildActivity edge cases", () => {
     expect(rows(model.items)).toEqual(["command:b"])
     expect(model.summary.interrupted).toBe(2)
     expect(model.summary.failed).toBe(0)
+  })
+})
+
+describe("rowIdentity", () => {
+  it("drops the reply's anchor from the steps keyed by place", () => {
+    expect(rowIdentity("thought:h1abc:0")).toBe("thought@0")
+    expect(rowIdentity("note:toolu_01:12")).toBe("note@12")
+    expect(rowIdentity("plan:h9:3")).toBe("plan@3")
+    expect(rowIdentity("image:h9:4")).toBe("image@4")
+  })
+
+  it("keeps a key the anchor plays no part in", () => {
+    expect(rowIdentity("tool:toolu_01")).toBe("tool:toolu_01")
+    expect(rowIdentity("result:call-1:3")).toBe("result:call-1:3")
+    expect(rowIdentity("dpoll:call-2")).toBe("dpoll:call-2")
+  })
+
+  it("is the same while a short opening thought grows past the anchor's length", () => {
+    // Its anchor is hashed from what it says so far until it says enough.
+    const short = buildActivity(
+      [{ type: "reasoning", content: "Look", isStreaming: true }],
+      { isStreaming: true, keepAnswer: true }
+    )
+    const longer = buildActivity(
+      [
+        {
+          type: "reasoning",
+          content: "Looking at the repository layout before anything else",
+          isStreaming: true,
+        },
+      ],
+      { isStreaming: true, keepAnswer: true }
+    )
+    expect(short.items[0]!.key).not.toBe(longer.items[0]!.key)
+    expect(rowIdentity(short.items[0]!.key)).toBe(
+      rowIdentity(longer.items[0]!.key)
+    )
   })
 })

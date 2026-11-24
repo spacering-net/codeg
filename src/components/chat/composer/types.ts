@@ -36,10 +36,16 @@ export interface ReferenceMeta {
   /** agent: whether the agent is currently available. */
   available?: boolean
   /**
-   * assistant: the assistant's id (also the reference `id`, as a string). Its
-   * avatar is looked up by it in the assistants store rather than carried
-   * here: meta is written into drafts and `data-meta`, and a later avatar
-   * change should reach every badge.
+   * assistant: the personal assistant's uid (also the reference `id`) — what
+   * a `codeg://bot/<uid>` link names. Its face and name are looked up by it
+   * on the roster rather than carried here: meta is written into drafts and
+   * `data-meta`, and a later change should reach every badge.
+   */
+  botUid?: string
+  /**
+   * assistant, an old `codeg://assistant/<id>` link: the collaboration
+   * settings' assistant id (also the reference `id`, as a string), shown as
+   * the personal assistant converted from it (its `legacy_assistant_id`).
    */
   assistantId?: number
   /** session: conversation status snapshot (not rendered — the inline badge has no status dot). */
@@ -70,6 +76,13 @@ export interface ReferenceMeta {
    * `/` when absent.
    */
   invocationPrefix?: "/" | "$"
+  /**
+   * skill (an expert): the expert's own id. `id` is then the name the agent
+   * the badge was last stamped for sees it under — `superpowers:<id>` where a
+   * Harness plugin installed whole gives it — and is re-stamped from this one
+   * when the agent changes ({@link restampExpertNames}).
+   */
+  expertId?: string
 }
 
 /**
@@ -79,7 +92,8 @@ export interface ReferenceMeta {
 export interface ReferenceAttrs {
   refType: ReferenceKind
   /**
-   * Stable identity: file relative path / agent_type / assistant id / session
+   * Stable identity: file relative path / agent_type / assistant uid (or an
+   * old link's assistant id) / session
    * id / commit full hash / skill id.
    */
   id: string

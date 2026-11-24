@@ -4,6 +4,7 @@ import {
   modelListGroups,
   type ModelOptionGroup,
 } from "@/lib/model-config-groups"
+import { modelEffortRanges } from "@/lib/model-effort-range"
 import type { SessionConfigOptionInfo, SessionModeInfo } from "@/lib/types"
 
 // The composer's agent settings — the session's config options, or the legacy
@@ -56,6 +57,10 @@ export interface SessionChoiceSetting extends SessionSettingBase {
   recommendedValue: string | null
   /** `list` only: past {@link SESSION_SETTING_SEARCH_THRESHOLD} options. */
   searchable: boolean
+  /** The model selector only: each model's reasoning-effort range, by value,
+   *  shown beside its row — `null` when there is nothing to tell the models
+   *  apart by (see {@link modelEffortRanges}). */
+  effortRanges: ReadonlyMap<string, string> | null
 }
 
 /** An on/off setting: a boolean config option, or a two-value on/off select. */
@@ -117,7 +122,8 @@ function rankOf(
 }
 
 function configOptionSetting(
-  option: SessionConfigOptionInfo
+  option: SessionConfigOptionInfo,
+  effortOption: SessionConfigOptionInfo | null
 ): SessionSetting | null {
   const base = {
     key: `config:${option.id}`,
@@ -169,6 +175,9 @@ function configOptionSetting(
     groups,
     recommendedValue: option.recommended_value ?? null,
     searchable: isList && optionCount > SESSION_SETTING_SEARCH_THRESHOLD,
+    effortRanges: isModelConfigOption(option)
+      ? modelEffortRanges(option, effortOption)
+      : null,
     summary:
       isModelConfigOption(option) || !isDefaultValue(currentValue)
         ? currentLabel
@@ -202,6 +211,7 @@ function legacyModeSetting(
     groups: [{ key: "__modes__", name: null, options }],
     recommendedValue: null,
     searchable: isList && options.length > SESSION_SETTING_SEARCH_THRESHOLD,
+    effortRanges: null,
     summary: isDefaultValue(currentModeId) ? null : currentLabel,
   }
 }
@@ -223,8 +233,11 @@ export function buildSessionSettings({
   modeTitle,
 }: BuildSessionSettingsInput): SessionSetting[] {
   const ranked: { setting: SessionSetting; rank: number; index: number }[] = []
+  // Names the levels in the model list's effort ranges.
+  const effortOption =
+    configOptions.find((option) => option.category === "thought_level") ?? null
   configOptions.forEach((option, index) => {
-    const setting = configOptionSetting(option)
+    const setting = configOptionSetting(option, effortOption)
     if (setting) ranked.push({ setting, rank: rankOf(setting, option), index })
   })
   if (modes.length > 0 && currentModeId) {

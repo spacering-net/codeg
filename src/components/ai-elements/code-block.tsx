@@ -1,12 +1,7 @@
 "use client"
 
 import type { ComponentProps, CSSProperties, HTMLAttributes } from "react"
-import type {
-  BundledLanguage,
-  BundledTheme,
-  HighlighterGeneric,
-  ThemedToken,
-} from "shiki"
+import type { BundledLanguage, ThemedToken, TokensResult } from "shiki"
 
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -18,6 +13,13 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { cn, copyTextToClipboard } from "@/lib/utils"
+import {
+  DEFAULT_CODE_THEMES,
+  getCachedHighlightedCode,
+  highlightCode as highlightSharedCode,
+  rawCodeTokens,
+  subscribeHighlightedCode,
+} from "@/lib/code-highlighter"
 import { CheckIcon, CopyIcon } from "lucide-react"
 import {
   createContext,
@@ -118,127 +120,22 @@ const CodeBlockContext = createContext<CodeBlockContextType>({
   code: "",
 })
 
-// Highlighter cache (singleton per language)
-const highlighterCache = new Map<
-  string,
-  Promise<HighlighterGeneric<BundledLanguage, BundledTheme>>
->()
-
-// Token cache
-const tokensCache = new Map<string, TokenizedCode>()
-
-// Subscribers for async token updates
-const subscribers = new Map<string, Set<(result: TokenizedCode) => void>>()
-
-const getTokensCacheKey = (code: string, language: BundledLanguage) => {
-  const start = code.slice(0, 100)
-  const end = code.length > 100 ? code.slice(-100) : ""
-  return `${language}:${code.length}:${start}:${end}`
-}
-
-const getHighlighter = (
-  language: BundledLanguage
-): Promise<HighlighterGeneric<BundledLanguage, BundledTheme>> => {
-  const cached = highlighterCache.get(language)
-  if (cached) {
-    return cached
-  }
-
-  // Load Shiki's engine lazily: a static `import` would pull it (and its
-  // textmate machinery) into the first-paint bundle for every message list,
-  // even a text-only conversation. Highlighting is already async with an
-  // immediate raw-token fallback (see `createRawTokens`), so deferring the
-  // engine import only extends that existing pre-highlight window slightly.
-  const highlighterPromise = import("shiki").then(({ createHighlighter }) =>
-    createHighlighter({
-      langs: [language],
-      themes: ["github-light", "github-dark"],
-    })
-  )
-
-  highlighterCache.set(language, highlighterPromise)
-  return highlighterPromise
-}
-
-// Create raw tokens for immediate display while highlighting loads
-const createRawTokens = (code: string): TokenizedCode => ({
-  bg: "transparent",
-  fg: "inherit",
-  tokens: code.split("\n").map((line) =>
-    line === ""
-      ? []
-      : [
-          {
-            color: "inherit",
-            content: line,
-          } as ThemedToken,
-        ]
-  ),
+const normalizeTokens = (result: TokensResult): TokenizedCode => ({
+  tokens: result.tokens,
+  fg: result.fg ?? "inherit",
+  bg: result.bg ?? "transparent",
 })
 
-// Synchronous highlight with callback for async results
 export const highlightCode = (
   code: string,
   language: BundledLanguage,
-  // oxlint-disable-next-line eslint-plugin-promise(prefer-await-to-callbacks)
   callback?: (result: TokenizedCode) => void
 ): TokenizedCode | null => {
-  const tokensCacheKey = getTokensCacheKey(code, language)
-
-  // Return cached result if available
-  const cached = tokensCache.get(tokensCacheKey)
-  if (cached) {
-    return cached
-  }
-
-  // Subscribe callback if provided
-  if (callback) {
-    if (!subscribers.has(tokensCacheKey)) {
-      subscribers.set(tokensCacheKey, new Set())
-    }
-    subscribers.get(tokensCacheKey)?.add(callback)
-  }
-
-  // Start highlighting in background - fire-and-forget async pattern
-  getHighlighter(language)
-    // oxlint-disable-next-line eslint-plugin-promise(prefer-await-to-then)
-    .then((highlighter) => {
-      const availableLangs = highlighter.getLoadedLanguages()
-      const langToUse = availableLangs.includes(language) ? language : "text"
-
-      const result = highlighter.codeToTokens(code, {
-        lang: langToUse,
-        themes: {
-          dark: "github-dark",
-          light: "github-light",
-        },
-      })
-
-      const tokenized: TokenizedCode = {
-        bg: result.bg ?? "transparent",
-        fg: result.fg ?? "inherit",
-        tokens: result.tokens,
-      }
-
-      // Cache the result
-      tokensCache.set(tokensCacheKey, tokenized)
-
-      // Notify all subscribers
-      const subs = subscribers.get(tokensCacheKey)
-      if (subs) {
-        for (const sub of subs) {
-          sub(tokenized)
-        }
-        subscribers.delete(tokensCacheKey)
-      }
-    })
-    // oxlint-disable-next-line eslint-plugin-promise(prefer-await-to-then), eslint-plugin-promise(prefer-await-to-callbacks)
-    .catch((error) => {
-      console.error("Failed to highlight code:", error)
-      subscribers.delete(tokensCacheKey)
-    })
-
-  return null
+  const result = highlightSharedCode(
+    { code, language, themes: DEFAULT_CODE_THEMES },
+    callback ? (tokens) => callback(normalizeTokens(tokens)) : undefined
+  )
+  return result ? normalizeTokens(result) : null
 }
 
 // Line number styles using CSS counters
@@ -391,13 +288,17 @@ export function useHighlightedTokens(
   language: BundledLanguage
 ): TokenizedCode {
   // Memoized raw tokens for immediate display
-  const rawTokens = useMemo(() => createRawTokens(code), [code])
+  const rawTokens = useMemo(() => normalizeTokens(rawCodeTokens(code)), [code])
 
   // Synchronous cached-or-raw value, recomputed when code/language changes
-  const syncTokenized = useMemo(
-    () => highlightCode(code, language) ?? rawTokens,
-    [code, language, rawTokens]
-  )
+  const syncTokenized = useMemo(() => {
+    const cached = getCachedHighlightedCode({
+      code,
+      language,
+      themes: DEFAULT_CODE_THEMES,
+    })
+    return cached ? normalizeTokens(cached) : rawTokens
+  }, [code, language, rawTokens])
 
   // Async highlighted result, tagged with its source code/language
   const [asyncState, setAsyncState] = useState<{
@@ -406,20 +307,16 @@ export function useHighlightedTokens(
     tokenized: TokenizedCode
   } | null>(null)
 
-  useEffect(() => {
-    let cancelled = false
-
-    // Subscribe to async highlighting result
-    highlightCode(code, language, (result) => {
-      if (!cancelled) {
-        setAsyncState({ code, language, tokenized: result })
-      }
-    })
-
-    return () => {
-      cancelled = true
-    }
-  }, [code, language])
+  useEffect(
+    () =>
+      subscribeHighlightedCode(
+        { code, language, themes: DEFAULT_CODE_THEMES },
+        (result) => {
+          setAsyncState({ code, language, tokenized: normalizeTokens(result) })
+        }
+      ),
+    [code, language]
+  )
 
   // Use async result only if it matches current code/language
   return asyncState?.code === code && asyncState?.language === language

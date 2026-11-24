@@ -13,6 +13,8 @@ import {
   resetAssistantsStore,
   useAssistantsStore,
 } from "@/stores/assistants-store"
+import { usePersonalAgentRoster } from "@/stores/personal-agent-roster-store"
+import type { RosterEntry } from "@/lib/types"
 import { mockTruncateLayout } from "@/test-layout"
 
 /**
@@ -82,6 +84,7 @@ function bindingOf(overrides: Partial<DelegationBinding>): DelegationBinding {
     taskId: null,
     assistantId: null,
     assistantName: null,
+    botUid: null,
     ...overrides,
   }
 }
@@ -340,7 +343,7 @@ describe("delegation row: who and how it stands", () => {
         state: "output-available",
       })
     )
-    expect(screen.getByText("assistant not found")).toBeInTheDocument()
+    expect(screen.getByText("Assistant not found")).toBeInTheDocument()
   })
 })
 
@@ -682,6 +685,46 @@ describe("delegation row: an assistant's delegation", () => {
       })
     )
     expect(row()).toHaveTextContent("Assistant #7 · Codex")
+  })
+
+  it("names one of the owner's assistants by its uid, as the roster has it now", () => {
+    usePersonalAgentRoster.setState({
+      entries: [
+        {
+          id: 12,
+          kind: "worker",
+          uid: "u-12",
+          name: "Developer",
+          avatar: { kind: "emoji", emoji: "🦉", color: "teal" },
+          legacy_assistant_id: 3,
+        } as unknown as RosterEntry,
+      ],
+    })
+    try {
+      bind(
+        bindingOf({
+          assistantId: 12,
+          botUid: "u-12",
+          assistantName: "Dev then",
+        })
+      )
+      const { unmount } = renderRow(delegation())
+      expect(row()).toHaveTextContent("Developer · Codex")
+      unmount()
+      // An old one's id is the one it was converted from — never a row id.
+      bind(bindingOf({ assistantId: 3, assistantName: "Reviewer" }))
+      const again = renderRow(delegation())
+      expect(row()).toHaveTextContent("Developer · Codex")
+      again.unmount()
+      // Gone from the roster since: the name it carried, marked so.
+      bind(
+        bindingOf({ assistantId: 13, botUid: "u-13", assistantName: "Tester" })
+      )
+      renderRow(delegation())
+      expect(row()).toHaveTextContent("Tester (deleted) · Codex")
+    } finally {
+      usePersonalAgentRoster.setState({ entries: null })
+    }
   })
 
   it("marks an assistant that has been deleted", () => {

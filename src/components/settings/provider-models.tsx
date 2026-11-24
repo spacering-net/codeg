@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 import { useTranslations } from "next-intl"
 import {
   AlertCircle,
@@ -462,14 +462,17 @@ export function ModelPickerDialog({
   const [keep, setKeep] = useState<Set<string>>(() => new Set())
   const [filter, setFilter] = useState("")
 
-  useEffect(() => {
-    if (!open) return
-    setPicked(new Set(initial))
-    setKeep(new Set())
-    setFilter("")
-    // Reset only when the dialog opens.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open])
+  // Reset only when the dialog opens, adjusted while rendering. The initial
+  // state already matches a fresh open, so mounting needs no reset.
+  const [wasOpen, setWasOpen] = useState(open)
+  if (open !== wasOpen) {
+    setWasOpen(open)
+    if (open) {
+      setPicked(new Set(initial))
+      setKeep(new Set())
+      setFilter("")
+    }
+  }
 
   const shown = useMemo(() => {
     const q = filter.trim().toLowerCase()

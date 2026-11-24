@@ -138,21 +138,32 @@ export function PetMarketplaceDialog({
 
   useEffect(() => {
     if (!open) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- marketplace fetch on open and on every query change
     void reload()
   }, [open, reload])
 
   // Reset transient UI state when dialog closes
   useEffect(() => {
     if (!open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset when the parent closes the dialog
       setReinstallTarget(null)
       setInstallingId(null)
       setPreviewPetId(null)
     }
   }, [open])
 
-  useEffect(() => {
+  // A preview belongs to the page of results it was opened on. Adjusted while
+  // rendering whenever any query input actually changes.
+  const [previewQuery, setPreviewQuery] = useState({ page, q, kind, sort })
+  if (
+    previewQuery.page !== page ||
+    previewQuery.q !== q ||
+    previewQuery.kind !== kind ||
+    previewQuery.sort !== sort
+  ) {
+    setPreviewQuery({ page, q, kind, sort })
     setPreviewPetId(null)
-  }, [page, q, kind, sort])
+  }
 
   const performInstall = useCallback(
     async (pet: MarketplacePet, overwrite: boolean) => {

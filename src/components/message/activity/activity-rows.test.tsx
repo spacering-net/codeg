@@ -1,5 +1,12 @@
 import { useState, type ReactElement } from "react"
-import { act, fireEvent, render, screen, within } from "@testing-library/react"
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -45,6 +52,7 @@ const DELEGATION: DelegationContextValue = {
   findByParentToolUseId: () => undefined,
   findByChildConversationId: () => undefined,
   findByTaskId: () => undefined,
+  bindingsForParent: () => [],
 }
 const WORKSPACE = new Proxy(
   {},
@@ -383,7 +391,7 @@ describe("jumping to a failure", () => {
 })
 
 describe("long replies", () => {
-  function edits(count: number): MessageTurn {
+  function edits(count: number, failAt?: number): MessageTurn {
     const blocks: ContentBlock[] = []
     for (let i = 0; i < count; i++) {
       blocks.push(
@@ -393,40 +401,116 @@ describe("long replies", () => {
           new_string: "b",
         })
       )
-      blocks.push(toolResult(`e${i}`, "ok"))
+      blocks.push(
+        i === failAt
+          ? toolResult(`e${i}`, "String to replace not found", true)
+          : toolResult(`e${i}`, "ok")
+      )
     }
     return turn(blocks)
   }
 
-  it("opens a giant reply with its head and tail and a way to see the rest", () => {
-    renderUi(<Round parts={parts(edits(200))} />)
-    const more = screen.getByRole("button", { name: "Show 130 more steps" })
-    expect(screen.getAllByText("Edited")).toHaveLength(70)
-    fireEvent.click(more)
-    expect(screen.getAllByText("Edited")).toHaveLength(200)
+  const spacers = (container: HTMLElement) =>
+    container.querySelectorAll<HTMLElement>('li[data-marker="spacer"]')
+
+  it("draws a giant reply a stretch at a time, the rest a scroll away", () => {
+    const view = renderUi(<Round parts={parts(edits(200))} />)
+    // Opened at its head: the rows near it, then one spacer as tall as the
+    // rest, for the list to keep its height. No fold to click through.
+    const drawn = screen.getAllByText("Edited")
+    expect(drawn.length).toBeGreaterThan(0)
+    expect(drawn.length).toBeLessThan(200)
+    expect(rowOf("f0.ts")).toBeTruthy()
+    expect(screen.queryByText("f199.ts")).toBeNull()
+    expect(screen.queryByRole("button", { name: /more step/ })).toBeNull()
+    const [after] = spacers(view.container)
+    expect(after).toHaveAttribute("aria-hidden", "true")
+    expect(Number.parseFloat(after!.style.height)).toBeGreaterThan(0)
   })
 
-  it("folds a streaming reply's rows away one at a time as it grows", () => {
+  it("draws a short reply whole", () => {
+    const view = renderUi(<Round parts={parts(edits(40))} />)
+    expect(screen.getAllByText("Edited")).toHaveLength(40)
+    expect(spacers(view.container)).toHaveLength(0)
+  })
+
+  it("keeps drawing the rows that join a live reply resting at its end", () => {
+    // At work on its latest call: no prose after it yet, which would be one
+    // more row on the rail.
+    const running = (count: number): MessageTurn => {
+      const done = edits(count)
+      return { ...done, blocks: done.blocks.slice(0, -1) }
+    }
     const live = (count: number) => (
-      <Round parts={parts(edits(count), true)} completed={false} />
+      <Round parts={parts(running(count), true)} completed={false} />
     )
     const view = renderUi(live(150))
-    expect(screen.getAllByText("Edited")).toHaveLength(150)
-    expect(screen.queryByRole("button", { name: /more step/ })).toBeNull()
+    expect(screen.getAllByText("Edited").length).toBeLessThan(150)
+    expect(screen.queryByText("f0.ts")).toBeNull()
     const late = rowOf("f149.ts")
-    // Past the fold, the oldest row past the head goes, not a whole chunk —
-    // and the rows that stay are the same rows, not drawn again.
     view.rerender(withProviders(live(151)))
-    expect(
-      screen.getByRole("button", { name: "Show 1 more step" })
-    ).toBeTruthy()
-    expect(screen.getAllByText("Edited")).toHaveLength(150)
+    expect(rowOf("f150.ts")).toBeTruthy()
+    // The rows that stay are the same rows, not drawn again.
     expect(rowOf("f149.ts")).toBe(late)
-    view.rerender(withProviders(live(152)))
+  })
+
+  it("draws a failure far down the reply when the header points to it", async () => {
+    renderUi(<Round parts={parts(edits(200, 150))} />)
+    expect(screen.queryByText("f150.ts")).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "1 failed" }))
+    await waitFor(() => expect(rowOf("f150.ts")).toBeTruthy())
+  })
+})
+
+describe("long runs of commands", () => {
+  function commands(count: number, failAt?: number): MessageTurn {
+    const blocks: ContentBlock[] = []
+    for (let i = 0; i < count; i++) {
+      blocks.push(toolUse(`c${i}`, "Bash", { command: `npm run task${i}` }))
+      blocks.push(
+        i === failAt
+          ? toolResult(`c${i}`, "npm ERR! missing script", true)
+          : toolResult(`c${i}`, "ok")
+      )
+    }
+    return turn(blocks)
+  }
+
+  it("draws a long group's members a stretch at a time", () => {
+    // Still at it: the group stays open as it grows.
+    const running = commands(150)
+    const live = { ...running, blocks: running.blocks.slice(0, -1) }
+    const view = renderUi(<Round parts={parts(live, true)} completed={false} />)
+    const drawn = view.container.querySelectorAll(
+      'li.activity-child[data-step-key^="tool:c"]'
+    )
+    expect(drawn.length).toBeGreaterThan(0)
+    expect(drawn.length).toBeLessThan(150)
+    // Live, it rests on its newest members.
+    expect(screen.getByText("npm run task149")).toBeTruthy()
+    expect(screen.queryByText("npm run task0")).toBeNull()
     expect(
-      screen.getByRole("button", { name: "Show 2 more steps" })
-    ).toBeTruthy()
-    expect(screen.getAllByText("Edited")).toHaveLength(150)
+      view.container.querySelectorAll('li.activity-child[data-marker="spacer"]')
+    ).toHaveLength(1)
+  })
+
+  it("draws a group's failed first member when the header points to it", async () => {
+    // Live, its members rest on the newest; the first shares the group's key.
+    const running = commands(150, 0)
+    const live = { ...running, blocks: running.blocks.slice(0, -1) }
+    renderUi(<Round parts={parts(live, true)} completed={false} />)
+    expect(screen.queryByText("npm run task0")).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "1 failed" }))
+    await waitFor(() => expect(screen.getByText("npm run task0")).toBeTruthy())
+  })
+
+  it("draws a failed member far down a folded group when the header points to it", async () => {
+    renderUi(<Round parts={parts(commands(150, 120))} />)
+    expect(screen.queryByText("npm run task120")).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "1 failed" }))
+    await waitFor(() =>
+      expect(screen.getByText("npm run task120")).toBeTruthy()
+    )
   })
 })
 
@@ -831,6 +915,106 @@ describe("a command group in a reply being written", () => {
         spy.mockRestore()
       }
     })
+
+    describe("with a command moved to the background still running in it", () => {
+      // codex-acp moves a long command to the background and never settles
+      // the call that launched it: the command runs on, its own row saying
+      // so, while the reply goes on past the group — and after it is done.
+      const BACKGROUNDED: ContentBlock[] = [
+        toolUse("c1", "Bash", { command: "pnpm lint" }),
+        toolResult("c1", "ok"),
+        {
+          ...toolUse(
+            "c2",
+            "Bash",
+            { command: "pnpm test" },
+            { jetbrains: { air: { asyncTasks: { backgrounded: true } } } }
+          ),
+          status: "in_progress",
+        } as ContentBlock,
+      ]
+      const THOUGHT: ContentBlock = {
+        type: "thinking",
+        text: "**Considering design options**",
+      }
+      /** The last of the group's members: the turning ring or the fold. */
+      const footOf = () =>
+        document.querySelector<HTMLElement>(
+          '.activity-children > li[data-marker="working"], .activity-children > li[data-marker="foot"]'
+        )
+      const fold = () =>
+        screen.getByRole("button", { name: "Collapse 2 commands" })
+
+      it("ends its members on the row that folds it, not the turning ring", () => {
+        renderUi(
+          <Round
+            parts={parts(live([...BACKGROUNDED, THOUGHT]), true)}
+            completed={false}
+          />
+        )
+        // Still running, it stays open, and its header says one runs.
+        expect(header()).toHaveAttribute("aria-expanded", "true")
+        expect(header()).toHaveAccessibleName(/^Running 2 commands/)
+        const member = rowOf("pnpm test")
+        expect(member).toHaveAttribute("data-status", "running")
+        expect(within(member).getByText("background")).toBeTruthy()
+        // A step follows it: no command joins it now.
+        expect(footOf()).toHaveAttribute("data-marker", "foot")
+        expect(within(footOf()!).getByRole("button")).toBe(fold())
+        expect(
+          document.querySelector('.activity-children > [data-marker="working"]')
+        ).toBeNull()
+      })
+
+      it("takes the running command in with the rest when it folds", () => {
+        renderUi(
+          <Round
+            parts={parts(live([...BACKGROUNDED, THOUGHT]), true)}
+            completed={false}
+          />
+        )
+        fireEvent.click(fold())
+        expect(header()).toHaveAttribute("aria-expanded", "false")
+        expect(screen.queryByText("pnpm lint")).toBeNull()
+        expect(screen.queryByText("pnpm test")).toBeNull()
+        expect(document.querySelector(".activity-children")).toBeNull()
+        // Its header still says one of them runs.
+        expect(rowOf("Running 2 commands")).toHaveAttribute(
+          "data-status",
+          "running"
+        )
+      })
+
+      it("turns at its foot, folded shows the command, while it is still the reply's last row", () => {
+        // Nothing after it yet: the next command may join it, and the one
+        // running is the step under way.
+        renderUi(
+          <Round parts={parts(live(BACKGROUNDED), true)} completed={false} />
+        )
+        expect(footOf()).toHaveAttribute("data-marker", "working")
+        fireEvent.click(header())
+        expect(rowOf("pnpm test")).toHaveAttribute("data-status", "running")
+        expect(screen.queryByText("pnpm lint")).toBeNull()
+      })
+
+      it("keeps the command in the group once the reply is done, even as its last row", () => {
+        for (const blocks of [
+          [...BACKGROUNDED, THOUGHT, { type: "text", text: "Done." }],
+          BACKGROUNDED,
+        ] as ContentBlock[][]) {
+          const view = renderUi(<Round parts={parts(live(blocks))} />)
+          // Folded by the reply being done, nothing under its header.
+          expect(header()).toHaveAttribute("aria-expanded", "false")
+          expect(screen.queryByText("pnpm test")).toBeNull()
+          // Opened, its members end on the fold, the command running in it.
+          fireEvent.click(header())
+          expect(rowOf("pnpm test")).toHaveAttribute("data-status", "running")
+          expect(footOf()).toHaveAttribute("data-marker", "foot")
+          view.unmount()
+          resetDisclosureStore()
+        }
+      })
+    })
   })
 
   it("folded, shows the member that needs the user under its header", () => {
@@ -846,6 +1030,59 @@ describe("a command group in a reply being written", () => {
     expect(member.getAttribute("data-status")).toBe("awaiting")
     expect(within(member).getByText("needs you")).toBeTruthy()
     expect(screen.queryByText("pnpm lint")).toBeNull()
+  })
+})
+
+describe("an exploration group in a reply being written", () => {
+  const live = (blocks: ContentBlock[]): MessageTurn => ({
+    id: "t-explore",
+    role: "assistant",
+    timestamp: "2026-10-23T10:00:00Z",
+    blocks,
+  })
+  // Two reads made together, the second still going.
+  const READS: ContentBlock[] = [
+    toolUse("r1", "Read", { file_path: "/r/a.ts" }),
+    toolResult("r1", "a"),
+    toolUse("r2", "Read", { file_path: "/r/b.ts" }),
+  ]
+  const header = () => screen.getByRole("button", { name: /^Exploring/ })
+  // A member's row: the group's own carries its first member's key.
+  const read = (id: string) =>
+    document.querySelector<HTMLElement>(
+      `li.activity-child[data-step-key="tool:${id}"]`
+    )
+  const footOf = () =>
+    document.querySelector<HTMLElement>(
+      '.activity-children > li[data-marker="working"], .activity-children > li[data-marker="foot"]'
+    )
+
+  it("shows the read under way under its folded header while it is the reply's last row", () => {
+    renderUi(<Round parts={parts(live(READS), true)} completed={false} />)
+    expect(header()).toHaveAttribute("aria-expanded", "false")
+    expect(read("r2")).toHaveAttribute("data-status", "running")
+    expect(read("r1")).toBeNull()
+    fireEvent.click(header())
+    expect(footOf()).toHaveAttribute("data-marker", "working")
+  })
+
+  it("keeps a read still going inside once the reply has moved past it", () => {
+    // A command made alongside the reads follows them.
+    renderUi(
+      <Round
+        parts={parts(
+          live([...READS, toolUse("c9", "Bash", { command: "pnpm test" })]),
+          true
+        )}
+        completed={false}
+      />
+    )
+    expect(header()).toHaveAttribute("aria-expanded", "false")
+    expect(read("r2")).toBeNull()
+    // Opened, its members end on the fold: nothing joins it now.
+    fireEvent.click(header())
+    expect(read("r2")).toHaveAttribute("data-status", "running")
+    expect(footOf()).toHaveAttribute("data-marker", "foot")
   })
 })
 
@@ -944,7 +1181,14 @@ describe("the foot of a live reply", () => {
     // The answer has started under the steps: the ring at their foot still
     // turns, and nothing turns under the answer.
     renderUi(<Round parts={parts(LIVE, true, ["r1"])} completed={false} />)
-    expect(screen.getByText("Done.")).toBeTruthy()
+    // Still being written: a character at a time, each its own span.
+    expect(
+      screen.getByText(
+        (_, element) =>
+          element?.textContent === "Done." &&
+          ![...element.children].some((child) => child.textContent === "Done.")
+      )
+    ).toBeTruthy()
     expect(footOf()).toHaveAttribute("data-marker", "working")
     expect(footOf().querySelector(".animate-spin")).toBeTruthy()
     expect(working()).toHaveLength(1)
@@ -1123,6 +1367,36 @@ describe("command row", () => {
       expect(label).toHaveClass("text-activity-secondary", "font-medium")
     }
   })
+
+  it("darkens its words on hover or focus, as the fold row does", () => {
+    renderUi(
+      <Round
+        parts={parts(
+          turn([
+            toolUse("c1", "Bash", {
+              command: "pnpm test",
+              description: "Run the tests",
+            }),
+            toolResult("c1", "ok"),
+          ])
+        )}
+      />
+    )
+
+    // `.activity-row-toggle` (globals.css) takes the secondary ink inside the
+    // header that opens the row to the foreground.
+    const header = screen.getByText("Run the tests").closest("button")!
+    expect(header).toHaveAttribute("aria-expanded")
+    expect(header).toHaveClass("activity-row-toggle")
+    expect(within(header).getByText("Command")).toHaveClass(
+      "text-activity-secondary"
+    )
+    // So does the grey glyph in its ring, the row's marker beside it.
+    const marker = header.parentElement!.querySelector(
+      ":scope > .activity-marker"
+    )!
+    expect(marker.querySelector("svg")).toHaveAttribute("data-quiet")
+  })
 })
 
 describe("skill and to-do rows", () => {
@@ -1220,5 +1494,128 @@ describe("a row's figure", () => {
     // A command with nothing to count leaves its figure empty: no line.
     const command = within(rowOf("pnpm lint")).getAllByRole("button")[0]!
     expect(command.querySelector(".activity-figure")).toBeEmptyDOMElement()
+  })
+})
+
+describe("Kimi MCP OAuth entry", () => {
+  const url =
+    "https://auth.example.test/authorize?state=a%2Bb&code_challenge=x_y&redirect_uri=http%3A%2F%2F127.0.0.1%3A43127%2Fcallback"
+  function oauthParts(phase = "waiting", done = false) {
+    return parts(
+      turn([
+        toolUse(
+          "oauth",
+          "mcp__notion__authenticate",
+          {},
+          {
+            "codeg.kimiMcpOAuth": {
+              toolName: "mcp__notion__authenticate",
+              server: "notion",
+              phase,
+              url: phase === "waiting" ? url : null,
+            },
+          }
+        ),
+        ...(done ? [toolResult("oauth", "cancelled", true)] : []),
+      ]),
+      !done,
+      done ? undefined : ["oauth"]
+    )
+  }
+
+  it("offers the full URL before completion and opens only on an explicit click", () => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null)
+    try {
+      const view = renderUi(<Round parts={oauthParts()} completed={false} />)
+      const link = screen.getByRole("link", {
+        name: "Open authorization in system browser",
+      })
+      expect(link).toHaveAttribute("href", url)
+      expect(open).not.toHaveBeenCalled()
+      fireEvent.click(link)
+      expect(open).toHaveBeenCalledExactlyOnceWith(url, "_blank", "noreferrer")
+      view.rerender(
+        withProviders(
+          <Round parts={oauthParts("reconnecting")} completed={false} />
+        )
+      )
+      expect(
+        screen.queryByRole("link", {
+          name: "Open authorization in system browser",
+        })
+      ).not.toBeInTheDocument()
+      expect(screen.getByText(/Reconnecting notion/)).toBeInTheDocument()
+      expect(
+        screen.getByText(/verify access with a real MCP tool call/)
+      ).toBeInTheDocument()
+      expect(open).toHaveBeenCalledTimes(1)
+      view.rerender(
+        withProviders(<Round parts={oauthParts("waiting", true)} />)
+      )
+      expect(
+        screen.queryByText(/Waiting for notion authorization/)
+      ).not.toBeInTheDocument()
+    } finally {
+      open.mockRestore()
+    }
+  })
+
+  it("reports native opener failure without leaking its error and allows retry", async () => {
+    const platform = await import("@/lib/platform")
+    const opener = vi
+      .spyOn(platform, "openUrl")
+      .mockRejectedValueOnce(new Error("private authorization parameters"))
+      .mockResolvedValueOnce()
+    vi.stubGlobal("__TAURI_INTERNALS__", {})
+    try {
+      renderUi(<Round parts={oauthParts()} completed={false} />)
+      const link = screen.getByRole("link", {
+        name: "Open authorization in system browser",
+      })
+      expect(opener).not.toHaveBeenCalled()
+      await act(async () => {
+        fireEvent.click(link)
+      })
+      expect(opener).toHaveBeenLastCalledWith(url)
+      expect(screen.getByText(/Could not open the browser/)).toBeInTheDocument()
+      expect(
+        screen.queryByText(/private authorization parameters/)
+      ).not.toBeInTheDocument()
+      expect(link).toHaveAttribute("href", url)
+      await act(async () => {
+        fireEvent.click(link)
+      })
+      expect(opener).toHaveBeenCalledTimes(2)
+      expect(
+        screen.queryByText(/Could not open the browser/)
+      ).not.toBeInTheDocument()
+      expect(
+        screen.getByText(/Waiting for notion authorization/)
+      ).toBeInTheDocument()
+    } finally {
+      opener.mockRestore()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it("never exposes a link from ordinary MCP output", () => {
+    renderUi(
+      <Round
+        parts={parts(
+          turn([
+            toolUse("ordinary", "mcp__notion__fetch", {}),
+            toolResult(
+              "ordinary",
+              `Open this URL in your browser to authorize "notion":\n\n${url}`
+            ),
+          ])
+        )}
+      />
+    )
+    expect(
+      screen.queryByRole("link", {
+        name: "Open authorization in system browser",
+      })
+    ).not.toBeInTheDocument()
   })
 })

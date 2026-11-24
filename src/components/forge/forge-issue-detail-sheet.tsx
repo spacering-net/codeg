@@ -25,6 +25,7 @@ import {
   ExternalLink,
   GitMerge,
   GitPullRequestClosed,
+  Layers,
   Link2,
   ListTodo,
   LoaderCircle,
@@ -32,10 +33,11 @@ import {
   RefreshCw,
   RotateCcw,
   Send,
+  ShieldAlert,
   TriangleAlert,
   type LucideIcon,
 } from "lucide-react"
-import { MessageResponse } from "@/components/ai-elements/message"
+import { ForgeMarkdown } from "@/components/forge/forge-markdown"
 import { formatRelative } from "@/components/conversations/sidebar-conversation-grouping"
 import {
   UnifiedDiffPreview,
@@ -43,10 +45,13 @@ import {
 } from "@/components/diff/unified-diff-preview"
 import {
   CHIP_FILL,
+  canStartTask,
   ForgeLabelChip,
+  numberList,
   ROW_ACTION,
   ROW_ACTION_GLYPH,
   stateGlyph,
+  togetherWith,
 } from "@/components/forge/forge-issue-row"
 import { statusLabelKey } from "@/components/tasks/task-card"
 import {
@@ -86,6 +91,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import {
+  forgeApproveWorkflows,
   forgeChangeDetail,
   forgeChangeFiles,
   forgeCreateComment,
@@ -95,6 +101,7 @@ import {
   forgeMergeOptions,
   forgeSetItemState,
 } from "@/lib/api"
+import { useIssueBody } from "@/components/forge/use-issue-body"
 import {
   type AppErrorTranslator,
   toLocalizedErrorMessage,
@@ -117,6 +124,7 @@ import type {
   ForgeMergeStrategy,
   ForgeStateAction,
   ForgeTaskLink,
+  ForgeWorkflowApproval,
 } from "@/lib/types"
 
 /**
@@ -374,6 +382,7 @@ function CommentThread({
   )
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch from the forge; load() flips the loading flag before awaiting
     void load(1)
   }, [load])
 
@@ -971,7 +980,7 @@ function CommentCard({ comment }: { comment: ForgeComment }) {
         </header>
         {body ? (
           <div className="break-words px-3 py-2 text-[0.8125rem] leading-relaxed">
-            <MessageResponse className={BODY_MARKDOWN}>{body}</MessageResponse>
+            <ForgeMarkdown className={BODY_MARKDOWN}>{body}</ForgeMarkdown>
           </div>
         ) : (
           <p className="px-3 py-2 text-xs italic text-muted-foreground">
@@ -1075,6 +1084,7 @@ function useChangeDetail(
   }, [folderId, number])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch from the forge; load() flips the loading flag before awaiting
     void load()
   }, [load])
 
@@ -1091,9 +1101,20 @@ function useChangeDetail(
  * counters that describe the change's SIZE went to the files panel, where the
  * list they count is.
  */
-function ChecksPanel({ change }: { change: ChangeDetailState }) {
+function ChecksPanel({
+  change,
+  approving,
+  onApprove,
+}: {
+  change: ChangeDetailState
+  approving: boolean
+  /** Arms the approval dialog on the change as it is on screen. */
+  onApprove: () => void
+}) {
   const t = useTranslations("Forge")
   const { detail, loading, failure } = change
+  const approval = detail?.workflow_approval ?? null
+  const held = (approval?.runs.length ?? 0) > 0
   return (
     <div className="flex flex-col gap-3 px-5 py-4">
       {/* One line above the list, and the reload at the end of it. The verdict
@@ -1105,7 +1126,9 @@ function ChecksPanel({ change }: { change: ChangeDetailState }) {
       <div className="flex min-w-0 items-center gap-2">
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2.5 gap-y-1 text-[0.6875rem] text-muted-foreground">
           {detail != null ? <MergeReadiness detail={detail} /> : null}
-          {detail != null ? <ChecksSummary checks={detail.checks} /> : null}
+          {detail != null ? (
+            <ChecksSummary checks={detail.checks} held={held} />
+          ) : null}
         </div>
         {/* No `ms-auto`: the run above takes the free space, so the button
             holds the row's end whether or not either group said anything. */}
@@ -1127,7 +1150,118 @@ function ChecksPanel({ change }: { change: ChangeDetailState }) {
         <FailureStrip error={failure.error} onRetry={change.reload} />
       ) : null}
 
+      {detail != null && approval != null ? (
+        <WorkflowApprovalStrip
+          approval={approval}
+          canArm={detail.head_sha != null && detail.state === "open"}
+          approving={approving}
+          onApprove={onApprove}
+        />
+      ) : null}
+
       {detail != null ? <ChecksList checks={detail.checks} /> : null}
+    </div>
+  )
+}
+
+/**
+ * Workflows GitHub is holding until a maintainer approves them — what its own
+ * "Approve workflows to run" box is about. A fork's first contributions run
+ * nothing until then, so this is usually the ONLY thing the Checks tab has to
+ * say about such a change: none of its checks exist yet.
+ *
+ * The button is withheld in the cases where approving from here would be
+ * wrong or impossible, and each says why: the runs cannot be tied to this
+ * change alone, or the account cannot push. The forge's own page is linked in
+ * every case — it is where a person who wants to look harder, or who is
+ * refused here, goes next.
+ */
+function WorkflowApprovalStrip({
+  approval,
+  canArm,
+  approving,
+  onApprove,
+}: {
+  approval: ForgeWorkflowApproval
+  /** There is a head commit to pin the approval to, and the change is open. */
+  canArm: boolean
+  approving: boolean
+  onApprove: () => void
+}) {
+  const t = useTranslations("Forge")
+  const count = approval.runs.length
+  const forgeUrl = approval.runs.find((run) => run.url != null)?.url ?? null
+  const blockedReason = approval.ambiguous
+    ? t("approveBlockedAmbiguous")
+    : approval.can_approve === false
+      ? t("approveBlockedPermission")
+      : null
+  return (
+    <div
+      className="flex flex-col gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2.5 text-xs"
+      data-forge-approval=""
+    >
+      <div className="flex items-start gap-2">
+        <ShieldAlert
+          className="mt-0.5 size-3.5 shrink-0 text-amber-600"
+          aria-hidden
+        />
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <span className="font-medium">
+            {count > 0
+              ? t("checksAwaitingApproval", { count })
+              : t("approveUnknownTitle")}
+          </span>
+          <span className="text-muted-foreground">{t("approveExplain")}</span>
+          {count > 0 ? (
+            <ul className="flex flex-col gap-0.5">
+              {approval.runs.map((run) => (
+                <li key={run.id} className="min-w-0 truncate">
+                  {run.url != null ? (
+                    <BrowserLink
+                      href={run.url}
+                      className="hover:text-foreground hover:underline"
+                    >
+                      {run.name}
+                    </BrowserLink>
+                  ) : (
+                    run.name
+                  )}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {approval.incomplete ? (
+            <span className="text-amber-600">{t("approveIncompleteHint")}</span>
+          ) : null}
+          {blockedReason != null ? (
+            <span className="text-amber-600">{blockedReason}</span>
+          ) : null}
+        </div>
+      </div>
+      {count > 0 ? (
+        <div className="flex items-center justify-end gap-2">
+          {forgeUrl != null ? (
+            <BrowserLink
+              href={forgeUrl}
+              className="text-muted-foreground hover:text-foreground hover:underline"
+            >
+              {t("approveOpenOnForge")}
+            </BrowserLink>
+          ) : null}
+          {blockedReason == null ? (
+            <Button
+              type="button"
+              size="sm"
+              className="h-7 text-xs"
+              disabled={approving || !canArm}
+              onClick={onApprove}
+            >
+              {approving ? t("approving") : t("approveWorkflows")}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -1267,7 +1401,16 @@ function tallyChecks(checks: ForgeCheck[]): CheckTally {
  * verdict beside it (see [`ChecksPanel`]), which is the other half of the same
  * question.
  */
-function ChecksSummary({ checks }: { checks: ForgeChangeDetail["checks"] }) {
+function ChecksSummary({
+  checks,
+  held = false,
+}: {
+  checks: ForgeChangeDetail["checks"]
+  /** Workflows are held for approval: an empty list is "nothing has been
+   *  allowed to run yet", which the approval strip says — "no checks ran"
+   *  would read as a repository without CI. */
+  held?: boolean
+}) {
   const t = useTranslations("Forge")
   const tally = useMemo(() => tallyChecks(checks.checks), [checks])
 
@@ -1275,6 +1418,7 @@ function ChecksSummary({ checks }: { checks: ForgeChangeDetail["checks"] }) {
     return <span>{t("checksUnavailable")}</span>
   }
   if (checks.checks.length === 0) {
+    if (held) return null
     // "Nothing ran" is a claim about the repository; "we saw nothing" is a
     // claim about this token. GitHub gates its two check collections behind
     // two permissions, so an empty list from a half-readable pair means the
@@ -1429,6 +1573,7 @@ function ChangedFiles({
   )
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch from the forge; load() flips the loading flag before awaiting
     void load(1)
   }, [load])
 
@@ -1725,9 +1870,26 @@ function CountBadge({ value }: { value: number | null }) {
  * Silent when the forge would not say (no scope, no CI) and when nothing ran,
  * because a mark for "no answer" is indistinguishable from a mark for "fine".
  */
-function ChecksBadge({ checks }: { checks: ForgeCheckList | null }) {
+function ChecksBadge({
+  checks,
+  held = 0,
+}: {
+  checks: ForgeCheckList | null
+  /** Workflow runs held for approval — ranked right after a failure, as on
+   *  the list row (see `checksMark`): nothing will run until somebody acts. */
+  held?: number
+}) {
   const t = useTranslations("Forge")
   const verdict = useMemo(() => checksVerdict(checks), [checks])
+  if (held > 0 && verdict?.state !== "failure") {
+    return (
+      <ShieldAlert
+        role="img"
+        aria-label={t("checksAwaitingApproval", { count: held })}
+        className="size-3.5 shrink-0 text-amber-600"
+      />
+    )
+  }
   if (verdict == null) return null
   const { Icon, className } = CHECK_GLYPH[verdict.state]
   return (
@@ -2075,6 +2237,18 @@ function MergeBox({
           "overflow-hidden rounded-xl border border-border"
         )}
       >
+        {(detail?.workflow_approval?.runs.length ?? 0) > 0 ? (
+          // First: until these are approved, the checks below are not the
+          // whole story — the held workflows have not produced theirs yet.
+          <MergeSignal
+            Icon={ShieldAlert}
+            className="text-amber-600"
+            title={t("mergeWorkflowsAwaiting")}
+            hint={t("checksAwaitingApproval", {
+              count: detail?.workflow_approval?.runs.length ?? 0,
+            })}
+          />
+        ) : null}
         {checks != null ? (
           <MergeSignal
             Icon={CHECK_GLYPH[checks.state].Icon}
@@ -2208,6 +2382,8 @@ function MergeBox({
  */
 function Conversation({
   row,
+  description,
+  descriptionPending = false,
   folderId,
   identity,
   onCommentPosted,
@@ -2216,6 +2392,12 @@ function Conversation({
   viewportEl,
 }: {
   row: ForgeIssueRow
+  /** The item's description. Passed in rather than read off `row` because a
+   *  CNB issue's list row carries none — it comes from its own read, see
+   *  [`useIssueBody`]. */
+  description: string | null
+  /** That read is still out — see [`useIssueBody`]. */
+  descriptionPending?: boolean
   folderId: number | null
   /** Who a comment from here would be signed as — see [`useForgeIdentity`]. */
   identity: ForgeIdentity | null
@@ -2231,7 +2413,7 @@ function Conversation({
   viewportEl: HTMLElement | null
 }) {
   const t = useTranslations("Forge")
-  const body = row.body?.trim()
+  const body = description?.trim()
   return (
     <>
       {/* The description is the first thing said about the item, so it sits in
@@ -2246,15 +2428,16 @@ function Conversation({
           label={row.author ?? undefined}
         />
         <div className={RAIL_BODY}>
-          {body ? (
+          {/* Nothing at all while the description is still being read: "no
+              description" is a CLAIM, and making it before the answer arrives
+              would flash that sentence over every issue that has one. */}
+          {descriptionPending ? null : body ? (
             // The forge's own Markdown, through the same renderer the chat
             // uses — headings, task lists, tables, fenced code and images all
             // come out as the author wrote them, and link clicks go through
             // the app's link-safety routing rather than the webview.
             <div className="break-words text-[0.8125rem] leading-relaxed">
-              <MessageResponse className={BODY_MARKDOWN}>
-                {body}
-              </MessageResponse>
+              <ForgeMarkdown className={BODY_MARKDOWN}>{body}</ForgeMarkdown>
             </div>
           ) : (
             // Left where the text would be, as a comment's own empty body is —
@@ -2327,10 +2510,13 @@ export function ForgeIssueDetailSheet({
   row,
   link,
   folderId,
+  issueBodyOnDemand = false,
   onOpenChange,
   onStart,
   onRowUpdated,
   onCommentPosted,
+  tabRequest = null,
+  onChecksChanged,
 }: {
   /** The item on show, or `null` when the panel is closed. Held by the page so
    *  a list refresh re-renders the panel with the item's fresh copy. */
@@ -2342,6 +2528,12 @@ export function ForgeIssueDetailSheet({
    *  repository from this folder's own remote). `null` while no folder is
    *  resolved, which costs the thread and nothing else. */
   folderId: number | null
+  /**
+   * This forge's ISSUE list rows carry no description, so the panel reads the
+   * item itself when it opens (see [`useIssueBody`]). Set only for CNB; the
+   * others serve the body with the row.
+   */
+  issueBodyOnDemand?: boolean
   onOpenChange: (open: boolean) => void
   /** Opens the page's trigger dialog on this item. */
   onStart: () => void
@@ -2366,6 +2558,15 @@ export function ForgeIssueDetailSheet({
    * counts the comment onto whatever it holds by the time this arrives.
    */
   onCommentPosted: (item: { isPr: boolean; number: number }) => void
+  /**
+   * "Show this change's Checks tab" — what clicking a row's CI mark asks for.
+   * A NEW object per click (`nonce`), so asking again for the item already on
+   * show still switches back to the tab. Ignored for any other item.
+   */
+  tabRequest?: { number: number; nonce: number } | null
+  /** The change's CI changed from here (workflows approved): the list should
+   *  re-read this row's mark. */
+  onChecksChanged?: (number: number) => void
 }) {
   const t = useTranslations("Forge")
   const tTasks = useTranslations("Tasks")
@@ -2398,6 +2599,19 @@ export function ForgeIssueDetailSheet({
     headSha: string | null
   } | null>(null)
   const [merging, setMerging] = useState(false)
+  /**
+   * The approval awaiting confirmation, pinned to the commit on screen when
+   * the dialog OPENED — exactly as `pendingMerge` is, and for the same reason:
+   * a refresh underneath the open dialog must not swap in a commit nobody
+   * reviewed. The backend refuses if the change has moved on since.
+   */
+  const [pendingApproval, setPendingApproval] = useState<{
+    folderId: number
+    number: number
+    headSha: string
+    runs: number
+  } | null>(null)
+  const [approving, setApproving] = useState(false)
   /** The method the reader chose from the menu, or `null` for "whatever the
    *  repository prefers" — which is not known until the options land, and is
    *  not this component's to guess. */
@@ -2416,6 +2630,9 @@ export function ForgeIssueDetailSheet({
     change?.folderId ?? null,
     change?.number ?? null
   )
+  /** An ISSUE's description when the list did not bring one — CNB only (see
+   *  [`useIssueBody`]); a no-op everywhere else. */
+  const issueBody = useIssueBody(folderId, row, issueBodyOnDemand)
   /**
    * A change there is still something to land. A merged one is done, and
    * neither forge will merge a closed change — the box would be an offer to
@@ -2477,6 +2694,10 @@ export function ForgeIssueDetailSheet({
    *  the previous change on its Files tab must not have this one's files
    *  fetched before they ask. */
   const [shownItem, setShownItem] = useState(change?.number ?? null)
+  /** The last `tabRequest` acted on, so each one switches the tab once. */
+  const [appliedTabRequest, setAppliedTabRequest] = useState<number | null>(
+    null
+  )
 
   if ((change?.number ?? null) !== shownItem) {
     setShownItem(change?.number ?? null)
@@ -2485,6 +2706,18 @@ export function ForgeIssueDetailSheet({
     // A method chosen for the previous change says nothing about this one, and
     // the repository it belongs to may not even permit it.
     setPickedMethod(null)
+    // Nor does an approval armed on it.
+    setPendingApproval(null)
+  } else if (
+    tabRequest != null &&
+    tabRequest.nonce !== appliedTabRequest &&
+    change != null &&
+    tabRequest.number === change.number
+  ) {
+    // After the swap above has settled (a later render), so the reset cannot
+    // undo it. `mounted` catches up through the branch below.
+    setAppliedTabRequest(tabRequest.nonce)
+    setTab("checks")
   } else if (!mounted.has(tab)) {
     // Not folded into the branch above: both queue updates for the SAME state,
     // and this one — computed from the outgoing item's tab — would be applied
@@ -2518,6 +2751,45 @@ export function ForgeIssueDetailSheet({
   )
 
   const reloadDetail = detail.reload
+  const applyApproval = useCallback(
+    async (pending: { folderId: number; number: number; headSha: string }) => {
+      setApproving(true)
+      try {
+        const result = await forgeApproveWorkflows(
+          pending.folderId,
+          pending.number,
+          pending.headSha
+        )
+        if (result.approved > 0) {
+          toast.success(t("approveDone", { count: result.approved }))
+        }
+        if (result.failed.length > 0) {
+          toast.error(
+            t("approvePartial", {
+              names: result.failed.map((f) => f.name).join(", "),
+            })
+          )
+        }
+        if (result.approved === 0 && result.failed.length === 0) {
+          // Approved by somebody else meanwhile, or no longer held.
+          toast.info(t("approveNothingHeld"))
+        }
+        if (result.incomplete) toast.info(t("approveIncompleteHint"))
+      } catch (error) {
+        toast.error(
+          toLocalizedErrorMessage(error, tRoot as unknown as AppErrorTranslator)
+        )
+      } finally {
+        setApproving(false)
+        // Dismissed either way, like the merge dialog: the likeliest refusal
+        // is "the change moved on", and the answer to that is to look again.
+        setPendingApproval(null)
+        reloadDetail()
+        onChecksChanged?.(pending.number)
+      }
+    },
+    [onChecksChanged, reloadDetail, t, tRoot]
+  )
   const applyMerge = useCallback(
     async (pending: { method: ForgeMergeMethod; headSha: string | null }) => {
       if (row == null || folderId == null) return
@@ -2583,6 +2855,12 @@ export function ForgeIssueDetailSheet({
   const chip = chipStateForLink(link)
   const active = chip === "active"
   const terminal = chip === "terminal"
+  // The row's own rules (see `canStartTask` / `togetherWith`), so the footer
+  // and the list never offer different things for the same item — plus the
+  // panel's own read of a change, which can know it merged before the list
+  // row does.
+  const startable = canStartTask(row) && detail.detail?.state !== "merged"
+  const others = togetherWith(link, row)
   const { Icon, className: glyphClass, labelKey } = stateGlyph(row)
   const stateLabel = t(labelKey)
   /** Which way the state button points — and whether there is one at all.
@@ -2689,7 +2967,10 @@ export function ForgeIssueDetailSheet({
                 </TabsTrigger>
                 <TabsTrigger value="checks" className="text-[0.8125rem]">
                   {t("checks")}
-                  <ChecksBadge checks={detail.detail?.checks ?? null} />
+                  <ChecksBadge
+                    checks={detail.detail?.checks ?? null}
+                    held={detail.detail?.workflow_approval?.runs.length ?? 0}
+                  />
                 </TabsTrigger>
                 <TabsTrigger value="files" className="text-[0.8125rem]">
                   {t("filesTitle")}
@@ -2706,6 +2987,7 @@ export function ForgeIssueDetailSheet({
             >
               <Conversation
                 row={row}
+                description={row.body ?? null}
                 folderId={folderId}
                 identity={identity}
                 onCommentPosted={onCommentPosted}
@@ -2742,7 +3024,21 @@ export function ForgeIssueDetailSheet({
               />
             </TabPane>
             <TabPane value="checks" active={tab} mounted={mounted}>
-              <ChecksPanel change={detail} />
+              <ChecksPanel
+                change={detail}
+                approving={approving}
+                onApprove={() => {
+                  // Pinned HERE, as the dialog opens — see `pendingApproval`.
+                  const sha = detail.detail?.head_sha
+                  if (sha == null) return
+                  setPendingApproval({
+                    folderId: change.folderId,
+                    number: change.number,
+                    headSha: sha,
+                    runs: detail.detail?.workflow_approval?.runs.length ?? 0,
+                  })
+                }}
+              />
             </TabPane>
             <TabPane value="files" active={tab} mounted={mounted}>
               {/* Keyed by the item for the same reason the thread is: the row
@@ -2764,6 +3060,8 @@ export function ForgeIssueDetailSheet({
           >
             <Conversation
               row={row}
+              description={issueBody.body}
+              descriptionPending={issueBody.pending}
               folderId={folderId}
               identity={identity}
               onCommentPosted={onCommentPosted}
@@ -2842,21 +3140,23 @@ export function ForgeIssueDetailSheet({
 
           <div className="ms-auto flex items-center gap-1.5">
             {link == null ? (
-              <Button
-                type="button"
-                size="sm"
-                className={ROW_ACTION}
-                onClick={onStart}
-              >
-                <CirclePlay className={ROW_ACTION_GLYPH} aria-hidden />
-                {t("start")}
-              </Button>
+              startable ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  className={ROW_ACTION}
+                  onClick={onStart}
+                >
+                  <CirclePlay className={ROW_ACTION_GLYPH} aria-hidden />
+                  {t("start")}
+                </Button>
+              ) : null
             ) : (
               // Siblings, never nested — same reason as on the row: a button
               // inside a button folds its text into the outer one's accessible
               // name and leaves keyboard activation to the browser.
               <>
-                {terminal ? (
+                {terminal && startable ? (
                   <button
                     type="button"
                     onClick={onStart}
@@ -2871,16 +3171,29 @@ export function ForgeIssueDetailSheet({
                   size="sm"
                   variant="ghost"
                   onClick={() => setRoute("tasks")}
-                  title={t("viewTask")}
+                  title={
+                    others.length > 0
+                      ? `${t("viewTask")} · ${t("combinedWith", { numbers: numberList(others) })}`
+                      : t("viewTask")
+                  }
                   className={cn(
                     ROW_ACTION,
                     active ? CHIP_FILL.active : CHIP_FILL.settled
                   )}
                 >
-                  <ListTodo className={ROW_ACTION_GLYPH} aria-hidden />
+                  {others.length > 0 ? (
+                    <Layers className={ROW_ACTION_GLYPH} aria-hidden />
+                  ) : (
+                    <ListTodo className={ROW_ACTION_GLYPH} aria-hidden />
+                  )}
                   {isDeferredLink(link)
                     ? tTasks("statusDeferred")
                     : tTasks(statusLabelKey(link.status))}
+                  {others.length > 0 ? (
+                    <span className="sr-only">
+                      {t("combinedWith", { numbers: numberList(others) })}
+                    </span>
+                  ) : null}
                 </Button>
               </>
             )}
@@ -2983,6 +3296,42 @@ export function ForgeIssueDetailSheet({
                           mergeOptions?.merge_strategy ?? "merge_commit"
                         ).label
                   )}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Approving runs a contributor's code on the repository's CI, which is
+          the one thing GitHub holds it back to ask about — so this asks too,
+          and says so. */}
+      <AlertDialog
+        open={pendingApproval != null}
+        onOpenChange={(open) => {
+          if (!open && !approving) setPendingApproval(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("approveConfirmTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("approveConfirmBody", {
+                count: pendingApproval?.runs ?? 0,
+                sha: pendingApproval?.headSha.slice(0, 7) ?? "",
+              })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={approving}>
+              {t("cancel")}
+            </AlertDialogCancel>
+            <Button
+              type="button"
+              disabled={approving || pendingApproval == null}
+              onClick={() => {
+                if (pendingApproval != null) void applyApproval(pendingApproval)
+              }}
+            >
+              {approving ? t("approving") : t("approveWorkflows")}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>

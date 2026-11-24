@@ -1,9 +1,19 @@
 "use client"
 
-import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react"
+import {
+  Fragment,
+  useCallback,
+  useContext,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react"
 import { ChevronRightIcon } from "lucide-react"
 
 import type { ToolApproval } from "@/lib/activity/approval"
+import { rowIdentity } from "@/lib/activity/build-activity"
 import type { StepStatus } from "@/lib/activity/types"
 import { cn } from "@/lib/utils"
 import { useActivityRender } from "./activity-context"
@@ -12,6 +22,13 @@ import { ApprovalChip, showsApproval } from "./approval-chip"
 import { useFoldRow } from "./fold-back"
 import { TimelineFoot } from "./timeline-foot"
 import { useRailGrowth } from "./use-rail-growth"
+import {
+  TimelineRevealContext,
+  useTimelineWindow,
+  WINDOWED_ROWS,
+  type ListMetrics,
+  type WindowRow,
+} from "./use-timeline-window"
 
 const MARKER_POSITION = {
   main: {
@@ -57,6 +74,8 @@ export function ActivityRow({
   title,
   className,
   headerClassName,
+  motionKey,
+  motionSelf = false,
 }: {
   stepKey: string
   status?: StepStatus
@@ -87,6 +106,13 @@ export function ActivityRow({
   title?: string
   className?: string
   headerClassName?: string
+  /** What the row stands for as the reply changes shape (`ReplyMotion`):
+   *  its step, unless the row is something else that shares that step's key —
+   *  a group, keyed by its first member. */
+  motionKey?: string
+  /** The row fades in by itself (late): the reply's motion leaves its
+   *  arrival alone. */
+  motionSelf?: boolean
 }) {
   const detailId = useId()
   const open = expandable && expanded
@@ -105,7 +131,6 @@ export function ActivityRow({
     if (!styles.animationName || styles.animationName === "none") {
       // No slide to wait for (reduced motion, chat animations off): the panel
       // goes in the same flush as the close, before it paints again.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setClosing(false)
       return
     }
@@ -155,6 +180,10 @@ export function ActivityRow({
     variant === "main" ? "text-sm leading-6" : "text-[0.8125rem] leading-6",
     headerClassName
   )
+  // The header on its own, for the reply's motion: a new group fades its
+  // header in while the command it took in glides out from under it.
+  const ownMotionKey = motionKey ?? rowIdentity(stepKey)
+  const headerMotionKey = `${ownMotionKey}:head`
 
   return (
     <li
@@ -165,13 +194,15 @@ export function ActivityRow({
       data-marker={markerKind}
       data-status={status}
       data-step-key={stepKey}
+      data-motion-key={ownMotionKey}
+      data-motion-self={motionSelf ? "" : undefined}
       // As the last row it runs the rail beside its open panel, down to the
       // end mark (globals.css).
       data-body={panel ? "" : undefined}
     >
       <span
         className={cn(
-          "absolute flex items-center justify-center",
+          "activity-marker absolute flex items-center justify-center",
           MARKER_POSITION[variant][markerKind]
         )}
       >
@@ -182,17 +213,24 @@ export function ActivityRow({
           type="button"
           className={cn(
             headerClass,
-            "cursor-pointer rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            // Pointed at or focused, its words darken as the foot's do
+            // (`.activity-row-toggle` in globals.css).
+            "activity-row-toggle cursor-pointer rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           )}
           aria-expanded={open}
           aria-controls={open ? detailId : undefined}
           title={title}
           onClick={() => onExpandedChange?.(!open)}
+          data-motion-key={headerMotionKey}
         >
           {header}
         </button>
       ) : (
-        <div className={headerClass} title={title}>
+        <div
+          className={headerClass}
+          title={title}
+          data-motion-key={headerMotionKey}
+        >
           {header}
         </div>
       )}
@@ -246,15 +284,26 @@ export function RowChevron({
 }
 
 /**
- * Whether a group is still going, for its foot: a member runs, or the reply
- * is still being written with the group its last row, where the next step may
- * join it — the foot turns from the group's first command to its last rather
- * than flickering between commands. Not while the agent waits on the user.
+ * Where a group stands in its reply. `current`: the reply is still being
+ * written with the group its last row, where the next step may join it.
+ * `going`: its foot turns — while it is current and the agent is not waiting
+ * on the user — from the group's first command to its last rather than
+ * flickering between commands. Folded while current, its running member shows
+ * under its header, so the step under way is never hidden.
+ *
+ * Once the reply has moved past it — a row follows, or the answer does — or
+ * is done, nothing joins it: a member still running there (a command moved to
+ * the background, a call going on beside the steps after it) says so on its
+ * own row, inside the group, and the foot is the row that folds the group.
  */
-export function useGroupGoing(live: boolean, followed: boolean): boolean {
+export function useGroupPlace(followed: boolean): {
+  current: boolean
+  going: boolean
+} {
   const { isStreaming } = useActivityRender()
   const { awaitingUser } = useActivityLive()
-  return !awaitingUser && (live || (isStreaming && !followed))
+  const current = isStreaming && !followed
+  return { current, going: current && !awaitingUser }
 }
 
 /** The foot an open group's members end on (see `TimelineFoot`). */
@@ -267,6 +316,13 @@ export interface MembersFoot {
   what: string
   /** Folds the group. */
   onFold: () => void
+  /** The group's key: its foot's, as the reply changes shape (`ReplyMotion`). */
+  motionScope: string
+}
+
+/** A member row's height before it has been drawn: one line. */
+function estimateMemberHeight(_member: WindowRow, { rem }: ListMetrics) {
+  return 1.75 * rem
 }
 
 /**
@@ -276,21 +332,87 @@ export interface MembersFoot {
  * from its foot, the group's header comes back into view and takes the focus
  * the foot had. While the reply is written, the rail grows down to each
  * member that joins.
+ *
+ * Handed its members (`members`, drawn by `renderMember`) rather than drawn
+ * rows, a long run of them — an agent running hundreds of commands back to
+ * back — is drawn a stretch at a time as it scrolls into view, as a long
+ * reply's rows are (`useTimelineWindow`).
  */
-export function ActivityMembers({
+export function ActivityMembers<T extends WindowRow>({
   foot,
   children,
+  members,
+  renderMember,
 }: {
   foot?: MembersFoot
-  children: ReactNode
+  /** Rows drawn as they are: a folded group's live member. */
+  children?: ReactNode
+  members?: readonly T[]
+  renderMember?: (member: T) => ReactNode
 }) {
   const { isStreaming } = useActivityRender()
   const listRef = useRef<HTMLUListElement>(null)
   const foldRow = useFoldRow()
   useRailGrowth(listRef, foot !== undefined && isStreaming)
+  const windowed =
+    members !== undefined && renderMember !== undefined
+      ? members.length > WINDOWED_ROWS
+      : false
+  const { span, reveal } = useTimelineWindow({
+    listRef,
+    scope: "member",
+    rows: windowed ? members! : null,
+    estimate: estimateMemberHeight,
+    follow: isStreaming,
+  })
+  // The timeline asked for one of these members to be drawn (its failure
+  // link, see `ActivityTimeline`): now if this list is drawn, or as it mounts.
+  const requests = useContext(TimelineRevealContext)
+  const latest = useRef({ windowed, members, reveal })
+  useLayoutEffect(() => {
+    latest.current = { windowed, members, reveal }
+  })
+  const take = useCallback(() => {
+    const { windowed, members, reveal } = latest.current
+    if (!requests || !windowed || !members) return
+    const wanted = requests.take((key) =>
+      members.some((member) => member.key === key)
+    )
+    if (wanted === null) return
+    reveal(members.findIndex((member) => member.key === wanted))
+  }, [requests])
+  useLayoutEffect(() => {
+    if (!requests) return
+    take()
+    return requests.listen(take)
+  }, [requests, take])
+  const drawn = members && span ? members.slice(span.start, span.end) : members
   return (
-    <ul ref={listRef} role="list" className="activity-children">
-      {children}
+    <ul
+      ref={listRef}
+      role="list"
+      className="activity-children"
+      data-windowed={span ? "" : undefined}
+    >
+      {span && span.start > 0 ? (
+        <MembersSpacer
+          key="window-before"
+          height={span.before}
+          after={foot?.after ?? "ring"}
+        />
+      ) : null}
+      {drawn && renderMember
+        ? drawn.map((member) => (
+            <Fragment key={member.key}>{renderMember(member)}</Fragment>
+          ))
+        : children}
+      {span && members && span.end < members.length ? (
+        <MembersSpacer
+          key="window-after"
+          height={span.after}
+          after={foot?.after ?? "ring"}
+        />
+      ) : null}
       {foot ? (
         <TimelineFoot
           variant="child"
@@ -298,9 +420,33 @@ export function ActivityMembers({
           working={foot.working}
           what={foot.what}
           onFold={(control) => foldRow(control, foot.onFold)}
+          motionScope={foot.motionScope}
         />
       ) : null}
     </ul>
+  )
+}
+
+/** A stretch of a long run of members not drawn: as tall as they are, their
+ *  dashed rail running through it (globals.css), reaching as far into the
+ *  members either side as theirs do (`after`, their marker). */
+function MembersSpacer({
+  height,
+  after,
+}: {
+  height: number
+  after: "ring" | "dot"
+}) {
+  return (
+    <li
+      aria-hidden="true"
+      className="activity-child"
+      data-marker="spacer"
+      // Not `data-after`: that sets a foot lower, and a spacer's place is
+      // its rows'.
+      data-dots={after === "dot" ? "" : undefined}
+      style={{ height }}
+    />
   )
 }
 

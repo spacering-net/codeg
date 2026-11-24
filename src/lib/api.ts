@@ -1,6 +1,7 @@
 import {
   getActiveRemoteConnectionId,
   getShellTransport,
+  getServerBaseUrl,
   getTransport,
   isDesktop,
   isRemoteDesktopMode,
@@ -12,6 +13,7 @@ import {
   unauthorizedSource,
 } from "./transport/web-auth"
 import { notifyWebUnauthorized } from "./transport/web-connection-store"
+import { randomUUID } from "./utils"
 import { getCurrentEffectiveAppLocale } from "./i18n"
 import {
   DEFAULT_FORGE_COMMENT_PAGE_SIZE,
@@ -19,9 +21,12 @@ import {
   DEFAULT_FORGE_PAGE_SIZE,
 } from "./forge-list-prefs"
 import { TurnBusyError, isTurnInProgressRejection } from "./turn-busy"
+import { asConversationMovedError } from "./conversation-moved"
 import type { FolderThemeColor } from "./theme-presets"
 import type { FollowUpIntent } from "./task-follow-up"
 import type {
+  CardClick,
+  MessageCheck,
   LeakedTempReclaim,
   LeakedTempScan,
   AgentType,
@@ -29,17 +34,62 @@ import type {
   CliToolStatus,
   AgentDelegationDefaults,
   AgentOptionsSnapshot,
-  AssistantDraft,
   AssistantInfo,
-  AssistantPatch,
+  AskAnswerOutcome,
+  AskPlanDecision,
+  ConversationTarget,
+  DispatchInfo,
+  DispatchMode,
+  ItemInfo,
+  PersonalAgentDraft,
+  PersonalAgentFile,
+  PersonalAgentInfo,
+  PersonalAgentSnapshot,
+  PersonalAgentApplied,
+  PersonalAgentOutputDoc,
+  RosterAct,
+  RosterEntry,
+  StepLine,
+  BotCreateDraft,
+  BotDeleteOptions,
+  BotImpact,
+  BotMade,
+  PersonalAgentSettingChange,
+  PersonalAgentPresence,
+  ProposalRule,
+  ProposalRuleView,
+  PersonalAgentHistoryResults,
+  PersonalAgentHistoryScope,
+  PersonalAgentGrades,
+  PersonalAgentHistoryStatus,
+  PersonalAgentProfile,
+  PersonalAgentProfileOp,
+  PersonalAgentToday,
+  PersonalAgentActivity,
+  Routine,
+  RoutineAction,
+  RoutineDraft,
+  RoutineRun,
+  PersonalAgentMeetProject,
+  PersonalAgentChoicePick,
+  PersonalAgentStats,
+  TimelineChanges,
+  TimelineCursor,
+  TimelinePage,
+  ThreadView,
+  TimelineRow,
   Automation,
   AutomationRun,
   AutomationDraft,
   DeepSeekCatalogModel,
   DeepSeekModelCatalog,
+  DeepSeekProviderRoute,
+  DeepSeekProviderRoutes,
   ForgeAutoScanReport,
   ForgeAutoStatus,
+  ForgeApproveResult,
   ForgeChangeDetail,
+  ForgeCheckSummaryList,
   ForgeChangedFileList,
   ForgeComment,
   ForgeCreateResult,
@@ -47,11 +97,14 @@ import type {
   ForgeIdentity,
   ForgeIssueList,
   ForgeIssueRow,
+  ForgeIssuesCreateResult,
+  ForgeIssuesTaskDraftInput,
   ForgeLabelList,
   ForgeMergeMethod,
   ForgeMergeOptions,
   ForgePanelSettings,
   ForgeRemote,
+  ForgeImage,
   ForgeSettingsStore,
   ForgeSort,
   ForgeStateAction,
@@ -65,6 +118,7 @@ import type {
   WorkTaskEvent,
   WorkTaskFolderSettings,
   WorkTaskTemplate,
+  WorkTaskUncommittedFile,
   ConversationSummary,
   ConversationDetail,
   ConversationOutline,
@@ -131,6 +185,7 @@ import type {
   WorktreeResolution,
   GitWorktreeRemoval,
   DbConversationSummary,
+  MoveConversationsResult,
   ImportResult,
   ImportSelectedResult,
   ScanResult,
@@ -258,7 +313,11 @@ export async function acpConnect(
   workingDir?: string,
   sessionId?: string,
   preferredModeId?: string | null,
-  preferredConfigValues?: Record<string, string> | null
+  preferredConfigValues?: Record<string, string> | null,
+  /** The existing conversation this connect opens (a real row id). Its own
+   *  stored selection then wins over the preferences above, which are only
+   *  the new-conversation default (codeg#1179). */
+  conversationId?: number | null
 ): Promise<string> {
   return getTransport().call("acp_connect", {
     agentType,
@@ -266,6 +325,25 @@ export async function acpConnect(
     sessionId: sessionId ?? null,
     preferredModeId: preferredModeId ?? null,
     preferredConfigValues: preferredConfigValues ?? null,
+    conversationId: conversationId ?? null,
+  })
+}
+
+/**
+ * Record the composer's pending mode pick on a connection — never sent to the
+ * agent; the tab applies it at its next send. `initial` = a draft's one-time
+ * hand-over at its first send: applied only while no pick was made on the
+ * connection. Resolves to whether it applied.
+ */
+export async function acpSetComposerMode(
+  connectionId: string,
+  modeId: string | null,
+  initial = false
+): Promise<boolean> {
+  return getTransport().call("acp_set_composer_mode", {
+    connectionId,
+    modeId,
+    initial,
   })
 }
 
@@ -281,8 +359,8 @@ export async function acpConnect(
  * would blow axum's 2 MiB `DefaultBodyLimit` and 413 the send.
  *
  * `shouldStrip` is false on a local desktop workspace (Tauri IPC has no body
- * limit and there is no uploads dir to hydrate from), so those blocks pass
- * through byte-identical. Under `shouldStrip`, a `file://` uri on an image
+ * limit, and an image there is never uploaded to be hydrated back), so those
+ * blocks pass through byte-identical. Under `shouldStrip`, a `file://` uri on an image
  * block can only have come from an upload — every web/remote attach path
  * routes through `/upload_attachment` first — so uri presence is the marker.
  * Pure; exported for tests.
@@ -337,7 +415,7 @@ export async function acpPrompt(
     })
   } catch (e) {
     if (isTurnInProgressRejection(e)) throw new TurnBusyError()
-    throw e
+    throw asConversationMovedError(e) ?? e
   }
 }
 
@@ -476,8 +554,19 @@ export async function acpAnswerPlanApproval(
   })
 }
 
-export async function acpDisconnect(connectionId: string): Promise<void> {
-  return getTransport().call("acp_disconnect", { connectionId })
+export function acpDisconnect(connectionId: string): Promise<void>
+export function acpDisconnect(
+  connectionId: string,
+  onlyIfIdle: true
+): Promise<boolean>
+export function acpDisconnect(
+  connectionId: string,
+  onlyIfIdle?: true
+): Promise<void | boolean> {
+  return getTransport().call(
+    "acp_disconnect",
+    onlyIfIdle ? { connectionId, onlyIfIdle } : { connectionId }
+  )
 }
 
 export async function acpTouchConnection(
@@ -680,6 +769,10 @@ export async function acpUpdateAgentConfig(
   agentType: AgentType,
   params: {
     config_json?: string | null
+    system_instructions_content?: string | null
+    /** The instructions file the editor showed: the content is written there
+     *  (the agent's own file only), not to a fresh resolution. */
+    system_instructions_file_path?: string | null
     codex_auth_json?: string | null
     codex_config_toml?: string | null
     /** The config.toml text the draft was loaded from: a key codeg manages
@@ -708,6 +801,8 @@ export async function acpUpdateAgentConfig(
   return getTransport().call("acp_update_agent_config", {
     agentType,
     configJson: params.config_json ?? null,
+    systemInstructionsContent: params.system_instructions_content ?? null,
+    systemInstructionsFilePath: params.system_instructions_file_path ?? null,
     codexAuthJson: params.codex_auth_json ?? null,
     codexConfigToml: params.codex_config_toml ?? null,
     codexConfigTomlBaseline: params.codex_config_toml_baseline ?? null,
@@ -924,8 +1019,12 @@ export async function listPiModelCapabilities(): Promise<PiModelCatalog> {
  * "inheriting the agent's built-in list", not an error; an unreadable one
  * arrives as `error` so the panel can refuse to edit it.
  */
-export async function loadDeepSeekModelCatalog(): Promise<DeepSeekModelCatalog> {
-  return getTransport().call("acp_load_deepseek_model_catalog", {})
+export async function loadDeepSeekModelCatalog(
+  version?: string | null
+): Promise<DeepSeekModelCatalog> {
+  return getTransport().call("acp_load_deepseek_model_catalog", {
+    version: version ?? null,
+  })
 }
 
 /**
@@ -938,9 +1037,35 @@ export async function loadDeepSeekModelCatalog(): Promise<DeepSeekModelCatalog> 
  * after it, not the ones already running.
  */
 export async function updateDeepSeekModelCatalog(
-  models: DeepSeekCatalogModel[] | null
+  models: DeepSeekCatalogModel[] | null,
+  version?: string | null
 ): Promise<void> {
-  return getTransport().call("acp_update_deepseek_model_catalog", { models })
+  return getTransport().call("acp_update_deepseek_model_catalog", {
+    models,
+    version: version ?? null,
+  })
+}
+
+/**
+ * Read the DeepSeek Harness provider routes — `llm-pi-ai.providers` in the
+ * bridge's own `$DSH_HOME/deepseek-acp/settings.yaml`. While that document does
+ * not exist the routes come from the legacy harness documents the bridge
+ * imports, and `source` says which one.
+ */
+export async function loadDeepSeekProviderRoutes(): Promise<DeepSeekProviderRoutes> {
+  return getTransport().call("acp_load_deepseek_provider_routes", {})
+}
+
+/**
+ * Store the DeepSeek Harness provider routes, replacing `llm-pi-ai.providers`
+ * in the bridge's own document and leaving every other key (and every other
+ * section) alone. `null` — and an empty list — REMOVE the routes, so only the
+ * official DeepSeek route remains.
+ */
+export async function updateDeepSeekProviderRoutes(
+  routes: DeepSeekProviderRoute[] | null
+): Promise<void> {
+  return getTransport().call("acp_update_deepseek_provider_routes", { routes })
 }
 
 /**
@@ -1598,8 +1723,29 @@ export async function opencodeRemovePlugin(
 export async function acpListAgentSkills(params: {
   agentType: AgentType
   workspacePath?: string | null
+  /** Also list the dangling links under a skill's name (owner `broken`), so
+   *  they can be repaired or removed. Only the Harness page asks: an older
+   *  backend ignores it. */
+  includeBroken?: boolean
 }): Promise<AgentSkillsListResult> {
   return getTransport().call("acp_list_agent_skills", {
+    agentType: params.agentType,
+    workspacePath: params.workspacePath ?? null,
+    ...(params.includeBroken ? { includeBroken: true } : {}),
+  })
+}
+
+/**
+ * The skills an agent's sessions can load, for the composer menus. For
+ * OpenCode that is every skill it reads (`.claude` folders and the folders
+ * above the workspace included), more than the Skills settings page manages
+ * through {@link acpListAgentSkills}; for every other agent the two agree.
+ */
+export async function acpListAgentRuntimeSkills(params: {
+  agentType: AgentType
+  workspacePath?: string | null
+}): Promise<AgentSkillsListResult> {
+  return getTransport().call("acp_list_agent_runtime_skills", {
     agentType: params.agentType,
     workspacePath: params.workspacePath ?? null,
   })
@@ -1626,6 +1772,12 @@ export async function acpSaveAgentSkill(params: {
   content: string
   workspacePath?: string | null
   layout?: AgentSkillLayout | null
+  /**
+   * A new skill: refused (`id_taken`) when the id is already used in any
+   * directory of the scope or in Codeg's store. Without it an existing skill
+   * of that id is updated.
+   */
+  create?: boolean
 }): Promise<AgentSkillItem> {
   return getTransport().call("acp_save_agent_skill", {
     agentType: params.agentType,
@@ -1634,6 +1786,7 @@ export async function acpSaveAgentSkill(params: {
     content: params.content,
     workspacePath: params.workspacePath ?? null,
     layout: params.layout ?? null,
+    ...(params.create ? { create: true } : {}),
   })
 }
 
@@ -1657,12 +1810,6 @@ export async function expertsList(): Promise<ExpertListItem[]> {
   return getTransport().call("experts_list")
 }
 
-export async function expertsGetInstallStatus(
-  expertId: string
-): Promise<ExpertInstallStatus[]> {
-  return getTransport().call("experts_get_install_status", { expertId })
-}
-
 /** One round-trip snapshot of every (expert, agent) link state for the matrix. */
 export async function expertsListAllInstallStatuses(): Promise<
   ExpertInstallStatus[]
@@ -1675,26 +1822,6 @@ export async function expertsApplyLinks(
   ops: LinkOp[]
 ): Promise<LinkOpResult[]> {
   return getTransport().call("experts_apply_links", { ops })
-}
-
-export async function expertsLinkToAgent(params: {
-  expertId: string
-  agentType: AgentType
-}): Promise<ExpertInstallStatus> {
-  return getTransport().call("experts_link_to_agent", {
-    expertId: params.expertId,
-    agentType: params.agentType,
-  })
-}
-
-export async function expertsUnlinkFromAgent(params: {
-  expertId: string
-  agentType: AgentType
-}): Promise<void> {
-  return getTransport().call("experts_unlink_from_agent", {
-    expertId: params.expertId,
-    agentType: params.agentType,
-  })
 }
 
 export async function expertsReadContent(expertId: string): Promise<string> {
@@ -1713,12 +1840,6 @@ export async function scienceList(): Promise<ScienceListItem[]> {
   return getTransport().call("science_list")
 }
 
-export async function scienceGetInstallStatus(
-  skillId: string
-): Promise<ExpertInstallStatus[]> {
-  return getTransport().call("science_get_install_status", { skillId })
-}
-
 /** One round-trip snapshot of every (science skill, agent) link state. */
 export async function scienceListAllInstallStatuses(): Promise<
   ExpertInstallStatus[]
@@ -1733,32 +1854,8 @@ export async function scienceApplyLinks(
   return getTransport().call("science_apply_links", { ops })
 }
 
-export async function scienceLinkToAgent(params: {
-  skillId: string
-  agentType: AgentType
-}): Promise<ExpertInstallStatus> {
-  return getTransport().call("science_link_to_agent", {
-    skillId: params.skillId,
-    agentType: params.agentType,
-  })
-}
-
-export async function scienceUnlinkFromAgent(params: {
-  skillId: string
-  agentType: AgentType
-}): Promise<void> {
-  return getTransport().call("science_unlink_from_agent", {
-    skillId: params.skillId,
-    agentType: params.agentType,
-  })
-}
-
 export async function scienceReadContent(skillId: string): Promise<string> {
   return getTransport().call("science_read_content", { skillId })
-}
-
-export async function scienceOpenCentralDir(): Promise<string> {
-  return getTransport().call("science_open_central_dir")
 }
 
 // ─── Custom (user-authored) skills ──────────────────────────────────────
@@ -1878,26 +1975,6 @@ export async function officecliListSkills(): Promise<OfficecliSkill[]> {
 
 export async function officecliSyncSkills(): Promise<SkillSyncReport> {
   return getTransport().call("officecli_sync_skills")
-}
-
-export async function officecliSkillLinkToAgent(params: {
-  skillId: string
-  agentType: AgentType
-}): Promise<ExpertInstallStatus> {
-  return getTransport().call("officecli_skill_link_to_agent", params)
-}
-
-export async function officecliSkillUnlinkFromAgent(params: {
-  skillId: string
-  agentType: AgentType
-}): Promise<void> {
-  return getTransport().call("officecli_skill_unlink_from_agent", params)
-}
-
-export async function officecliSkillGetInstallStatus(
-  skillId: string
-): Promise<ExpertInstallStatus[]> {
-  return getTransport().call("officecli_skill_get_install_status", { skillId })
 }
 
 /** One round-trip snapshot of every (skill, agent) link state for the matrix. */
@@ -2214,6 +2291,14 @@ export async function validateGiteaToken(
   return getTransport().call("validate_gitea_token", { serverUrl, token })
 }
 
+/** CNB is its own API dialect: `https://api.cnb.cool` with a `Bearer` token. */
+export async function validateCnbToken(
+  serverUrl: string,
+  token: string
+): Promise<GitHubTokenValidation> {
+  return getTransport().call("validate_cnb_token", { serverUrl, token })
+}
+
 export async function updateGitHubAccounts(
   settings: GitHubAccountsSettings
 ): Promise<GitHubAccountsSettings> {
@@ -2438,31 +2523,765 @@ export async function assistantList(): Promise<AssistantInfo[]> {
   return getTransport().call("assistant_list", {})
 }
 
-export async function assistantCreate(
-  draft: AssistantDraft
-): Promise<AssistantInfo> {
-  return getTransport().call("assistant_create", { draft })
+// ─── Personal agent ────────────────────────────────────────────────────────
+// Reads work in every process; actions go to the process running the agent
+// and fail elsewhere with `errors.engineElsewhere`.
+
+export async function personalAgentGet(
+  bot?: number | null
+): Promise<PersonalAgentSnapshot> {
+  return getTransport().call("personal_agent_get", { botId: bot ?? null })
 }
 
-/** Apply an edit; only the fields present change. */
-export async function assistantUpdate(
-  id: number,
-  patch: AssistantPatch
-): Promise<AssistantInfo> {
-  return getTransport().call("assistant_update", { id, patch })
+export async function personalAgentSave(
+  draft: PersonalAgentDraft,
+  bot?: number | null
+): Promise<PersonalAgentInfo> {
+  return getTransport().call("personal_agent_save", {
+    draft,
+    botId: bot ?? null,
+  })
 }
 
-/** Soft-delete; resolves to the tombstone. */
-export async function assistantDelete(id: number): Promise<AssistantInfo> {
-  return getTransport().call("assistant_delete", { id })
+/** A page older than `beforeId` (the newest without), never cutting a turn
+ *  — or, with `sinceId`, every row from `sinceId` up to `beforeId` (none and
+ *  `too_far` when that is more than one read returns). */
+export async function personalAgentTimeline(
+  beforeId?: number | null,
+  limit?: number,
+  sinceId?: number | null,
+  bot?: number | null
+): Promise<TimelinePage> {
+  return getTransport().call("personal_agent_timeline", {
+    beforeId: beforeId ?? null,
+    limit: limit ?? null,
+    sinceId: sinceId ?? null,
+    botId: bot ?? null,
+  })
 }
 
-/** Persist the order after a drag (the complete list, first to last);
- *  resolves to the rows whose position changed. */
-export async function assistantReorder(
-  ids: number[]
-): Promise<AssistantInfo[]> {
-  return getTransport().call("assistant_reorder", { ids })
+/** Rows by id (at most 100). */
+export async function personalAgentTimelineRows(
+  ids: number[],
+  bot?: number | null
+): Promise<TimelineRow[]> {
+  return getTransport().call("personal_agent_timeline_rows", {
+    ids,
+    botId: bot ?? null,
+  })
+}
+
+/** Rows changed since `since` (inclusive), or past `after`, from `minId` up. */
+export async function personalAgentTimelineUpdatedSince(
+  since: string | null,
+  after: TimelineCursor | null,
+  minId: number | null,
+  bot?: number | null
+): Promise<TimelineChanges> {
+  return getTransport().call("personal_agent_timeline_updated_since", {
+    since,
+    after,
+    minId,
+    botId: bot ?? null,
+  })
+}
+
+export async function personalAgentSend(
+  text: string,
+  blocks?: unknown[] | null,
+  replyTo?: number | null,
+  bot?: number | null,
+  /** The button of the quoted reply's card it came from (9.2). */
+  card?: CardClick | null
+): Promise<TimelineRow> {
+  return getTransport().call("personal_agent_send", {
+    text,
+    blocks: blocks && blocks.length > 0 ? blocks : null,
+    replyTo: replyTo ?? null,
+    botId: bot ?? null,
+    card: card ?? null,
+  })
+}
+
+/** Record what a button of a card in an assistant's reply did (9.2): the
+ *  reply row, as it now is. */
+export async function personalAgentCardAct(
+  bot: number | null | undefined,
+  rowId: number,
+  element: string,
+  act: { action: "pa.item"; label?: string | null; op?: string | null }
+): Promise<TimelineRow> {
+  return getTransport().call("personal_agent_card_act", {
+    botId: bot ?? null,
+    rowId,
+    element,
+    action: act.action,
+    label: act.label ?? null,
+    op: act.op ?? null,
+  })
+}
+
+export async function personalAgentCancel(bot?: number | null): Promise<void> {
+  return getTransport().call("personal_agent_cancel", { botId: bot ?? null })
+}
+
+/** "Stop everything": all the assistant has going — its turn, the work it
+ *  dispatched, the messages nobody started on. */
+export async function personalAgentStopAll(bot?: number | null): Promise<void> {
+  return getTransport().call("personal_agent_stop_all", { botId: bot ?? null })
+}
+
+/** Change settings item by item: the account's preferences and team, or
+ *  assistant `bot`'s own. Returns what changed. */
+export async function personalAgentSettingsPatch(
+  changes: PersonalAgentSettingChange[],
+  bot?: number | null
+): Promise<PersonalAgentApplied[]> {
+  return getTransport().call("personal_agent_settings_patch", {
+    changes,
+    botId: bot ?? null,
+  })
+}
+
+/** The owner's assistants, primary first. */
+/** The roster: every assistant with how the owner arranged it and its
+ *  live state (8.3). */
+export async function personalAgentBots(): Promise<RosterEntry[]> {
+  return getTransport().call("personal_agent_bots", {})
+}
+
+/** The documents an assistant wrote in its working directory, newest
+ *  first. */
+export async function personalAgentOutputs(
+  botId?: number | null
+): Promise<PersonalAgentOutputDoc[]> {
+  return getTransport().call("personal_agent_outputs", { botId })
+}
+
+/** One of those documents, as text. */
+export async function personalAgentOutputRead(
+  botId: number | null | undefined,
+  path: string
+): Promise<string> {
+  return getTransport().call("personal_agent_output_read", { botId, path })
+}
+
+/** Arrange an assistant on the roster (4.14). */
+export async function personalAgentRosterAct(
+  botId: number,
+  act: RosterAct
+): Promise<void> {
+  return getTransport().call("personal_agent_roster_act", { botId, act })
+}
+
+/** The steps the brain's turn in flight went through. */
+export async function personalAgentTurnSteps(
+  botId?: number | null
+): Promise<StepLine[]> {
+  return getTransport().call("personal_agent_turn_steps", { botId })
+}
+
+/** Settle one of an assistant's open matters: done, dropped, later (it
+ *  waits on time, no due), or snoozed until `until` — `15m`, `1h`,
+ *  `tomorrow` (tomorrow morning) or an ISO 8601 time with its offset. A
+ *  snooze without `until` is `later`. */
+export async function personalAgentItemAct(
+  botId: number | null | undefined,
+  itemId: number,
+  act: "done" | "drop" | "later" | "snooze",
+  until?: "15m" | "1h" | "tomorrow" | (string & {})
+): Promise<ItemInfo> {
+  return getTransport().call("personal_agent_item_act", {
+    botId,
+    itemId,
+    act,
+    until: until ?? null,
+  })
+}
+
+/** One codeg window's beat (6.2, 1.12): whether it has the focus, and how
+ *  long since the last key or pointer input in it (`null`: none yet).
+ *  Whether the owner is in codeg after it. */
+export async function personalAgentPresence(
+  window: string,
+  focused: boolean,
+  idleMs: number | null,
+  typedMs: number | null = null,
+  viewing: number | null = null,
+  /** The session (conversation) this window's workspace has in front. */
+  viewingConversation: number | null = null
+): Promise<PersonalAgentPresence> {
+  return getTransport().call("personal_agent_presence", {
+    window,
+    focused,
+    idleMs,
+    typedMs,
+    viewing,
+    viewingConversation,
+  })
+}
+
+/** Hand this device's notification switch and "hide contents" to the
+ *  desktop backend, which posts the assistants' notifications itself
+ *  (1.13). The local shell's: they are this screen's settings. */
+export async function notificationPrefsSync(
+  enabled: boolean,
+  hideBody: boolean
+): Promise<void> {
+  return getShellTransport().call("notification_prefs_sync", {
+    enabled,
+    hideBody,
+  })
+}
+
+/** An assistant's avatar as PNGs (base64, no `data:` prefix): the icon of
+ *  the notifications the desktop backend posts (1.13), and the strip of
+ *  frames its menu bar shows (10.10). `null`: it has none — an old one
+ *  goes. */
+export async function personalAgentAvatarPng(
+  botId: number,
+  png: string | null,
+  tray: string | null
+): Promise<void> {
+  return getTransport().call("personal_agent_avatar_png", {
+    botId,
+    png,
+    tray,
+  })
+}
+
+/** The "about you" page (1.12): the owner's time zone, the record's switch,
+ *  whether they are in codeg, and the hours codeg sees. */
+/** "Today" (6.3): what waits on the owner anywhere in codeg, what the
+ *  assistants keep an eye on, the rest of the day, what was done today. */
+export async function personalAgentToday(): Promise<PersonalAgentToday> {
+  return getTransport().call("personal_agent_today", {})
+}
+
+/** The activity tab's one list (C1): "today", the assistant's open
+ *  matters and its routines, merged into four groups by the server, read
+ *  from one snapshot. A part that could not be read fails it all. */
+export async function personalAgentActivity(
+  bot?: number | null
+): Promise<PersonalAgentActivity> {
+  return getTransport().call("personal_agent_activity", { botId: bot ?? null })
+}
+
+/** An assistant's routines, with their latest runs (6.9). */
+export async function personalAgentRoutines(
+  bot?: number | null
+): Promise<Routine[]> {
+  return getTransport().call("personal_agent_routines", { botId: bot ?? null })
+}
+
+/** A routine's runs, newest first. */
+export async function personalAgentRoutineRuns(
+  routineId: number,
+  limit?: number
+): Promise<RoutineRun[]> {
+  return getTransport().call("personal_agent_routine_runs", {
+    routineId,
+    limit: limit ?? null,
+  })
+}
+
+/** Save a routine from the editor: made (and run once as a trial) when
+ *  `routineId` is null, else changed. `noticeId`: the card it came from. */
+export async function personalAgentRoutineSave(
+  bot: number | null | undefined,
+  routineId: number | null,
+  draft: RoutineDraft,
+  noticeId?: number | null
+): Promise<Routine> {
+  return getTransport().call("personal_agent_routine_save", {
+    botId: bot ?? null,
+    routineId,
+    draft,
+    noticeId: noticeId ?? null,
+  })
+}
+
+/** Run a routine now, pause, resume or delete it. */
+/** codeg's proposal rules (6.7): muted from a card, lowered after the
+ *  owner kept dismissing their cards, and how their cards fared. */
+export async function personalAgentRules(): Promise<ProposalRuleView[]> {
+  return getTransport().call("personal_agent_rules", {})
+}
+
+/** Put a rule codeg lowered back where it was. */
+export async function personalAgentRuleReset(
+  rule: ProposalRule
+): Promise<ProposalRuleView[]> {
+  return getTransport().call("personal_agent_rule_reset", { rule })
+}
+
+export async function personalAgentRoutineAct(
+  bot: number | null | undefined,
+  routineId: number,
+  action: RoutineAction
+): Promise<Routine> {
+  return getTransport().call("personal_agent_routine_act", {
+    botId: bot ?? null,
+    routineId,
+    action,
+  })
+}
+
+export async function personalAgentProfile(): Promise<PersonalAgentProfile> {
+  return getTransport().call("personal_agent_profile", {})
+}
+
+/** The owner changes their profile (5.3): their hours, a project codeg is
+ *  not to mind, or clearing what codeg learned. The page comes back anew. */
+export async function personalAgentProfileUpdate(
+  op: PersonalAgentProfileOp
+): Promise<PersonalAgentProfile> {
+  return getTransport().call("personal_agent_profile_update", { op })
+}
+
+/** Each assistant's grade over the last 30 days. */
+export async function personalAgentGrades(): Promise<PersonalAgentGrades> {
+  return getTransport().call("personal_agent_grades", {})
+}
+
+/** The time machine (8.2): what was said and done before, as the
+ *  assistants' `history_search` finds it. `since` is `YYYY-MM-DD` or `7d`. */
+export async function personalAgentHistorySearch(params: {
+  query: string
+  scope?: PersonalAgentHistoryScope
+  since?: string
+  projectId?: number
+  limit?: number
+}): Promise<PersonalAgentHistoryResults> {
+  return getTransport().call("personal_agent_history_search", {
+    query: params.query,
+    scope: params.scope ?? null,
+    since: params.since ?? null,
+    projectId: params.projectId ?? null,
+    limit: params.limit ?? null,
+  })
+}
+
+/** How far the time machine's index is. */
+export async function personalAgentHistoryStatus(): Promise<PersonalAgentHistoryStatus> {
+  return getTransport().call("personal_agent_history_status", {})
+}
+
+/** Build the time machine's index again, from nothing, at once. */
+export async function personalAgentHistoryRebuild(): Promise<PersonalAgentHistoryStatus> {
+  return getTransport().call("personal_agent_history_rebuild", {})
+}
+
+/** Stop one piece of handed-out work from its card (8.5). False when it
+ *  is past stopping. */
+export async function personalAgentDispatchStop(
+  botId: number | null | undefined,
+  dispatchId: number
+): Promise<boolean> {
+  return getTransport().call("personal_agent_dispatch_stop", {
+    botId,
+    dispatchId,
+  })
+}
+
+/** The owner answers a piece of work's question or plan approval on an ask
+ *  card (7.3.1): the card of the assistant answering it, or its mirror.
+ *  The first answer wins; a late one is told whose did. */
+export async function personalAgentAskAnswer(params: {
+  askId: number
+  answer?: QuestionAnswer
+  decision?: AskPlanDecision
+  feedback?: string | null
+}): Promise<AskAnswerOutcome> {
+  return getTransport().call("personal_agent_ask_answer", {
+    askId: params.askId,
+    answer: params.answer,
+    decision: params.decision,
+    feedback: params.feedback ?? undefined,
+  })
+}
+
+/** Where a conversation opens: its project and agent (a session link in a
+ *  reply). */
+export async function personalAgentConversationTarget(
+  conversationId: number
+): Promise<ConversationTarget> {
+  return getTransport().call("personal_agent_conversation_target", {
+    conversationId,
+  })
+}
+
+/** Make a work assistant from a name (4.12). */
+export async function personalAgentBotCreate(
+  draft: BotCreateDraft
+): Promise<BotMade> {
+  return getTransport().call("personal_agent_bot_create", { draft })
+}
+
+/** Copy a work assistant (4.14). */
+export async function personalAgentBotCopy(
+  botId: number,
+  name: string,
+  locale: string
+): Promise<BotMade> {
+  return getTransport().call("personal_agent_bot_copy", {
+    botId,
+    name,
+    locale,
+  })
+}
+
+/** What deleting a work assistant touches. */
+export async function personalAgentBotImpact(
+  botId: number
+): Promise<BotImpact> {
+  return getTransport().call("personal_agent_bot_impact", { botId })
+}
+
+export async function personalAgentBotDelete(
+  botId: number,
+  options: BotDeleteOptions
+): Promise<void> {
+  return getTransport().call("personal_agent_bot_delete", { botId, options })
+}
+
+/** An answer on a choice card: a choice's key (with `projectId` when it asks
+ *  for one), or the owner's own words. */
+export async function personalAgentChoiceAnswer(
+  noticeId: number,
+  answer: {
+    key?: string
+    text?: string
+    projectId?: number | null
+    /** A card of several questions, answered whole (none: skipped). */
+    answers?: PersonalAgentChoicePick[]
+  },
+  bot?: number | null
+): Promise<TimelineRow> {
+  return getTransport().call("personal_agent_choice_answer", {
+    noticeId,
+    key: answer.key ?? null,
+    text: answer.text ?? null,
+    projectId: answer.projectId ?? null,
+    answers: answer.answers ?? null,
+    botId: bot ?? null,
+  })
+}
+
+/** The projects the assistants may keep an eye on (`prefs.projects`):
+ *  each open project and its forge as this machine knows it — nothing
+ *  asked of a forge. */
+export async function personalAgentMeetProjects(): Promise<
+  PersonalAgentMeetProject[]
+> {
+  return getTransport().call("personal_agent_meet_projects", {})
+}
+
+/** [Find one] on the card asking to find one thing: codeg looks in the
+ *  projects watched for one thing to help with at once (5.4). */
+export async function personalAgentStarter(
+  noticeId: number,
+  bot?: number | null
+): Promise<TimelineRow> {
+  return getTransport().call("personal_agent_starter", {
+    noticeId,
+    botId: bot ?? null,
+  })
+}
+
+/** A thread between assistants, as assistant `bot` sees it. */
+export async function personalAgentThread(
+  threadId: number,
+  bot?: number | null
+): Promise<ThreadView> {
+  return getTransport().call("personal_agent_thread", {
+    threadId,
+    botId: bot ?? null,
+  })
+}
+
+export async function personalAgentCompact(bot?: number | null): Promise<void> {
+  return getTransport().call("personal_agent_compact", { botId: bot ?? null })
+}
+
+export async function personalAgentNewSession(
+  bot?: number | null
+): Promise<void> {
+  return getTransport().call("personal_agent_new_session", {
+    botId: bot ?? null,
+  })
+}
+
+export async function personalAgentResumeAutoCompact(
+  bot?: number | null
+): Promise<void> {
+  return getTransport().call("personal_agent_resume_auto_compact", {
+    botId: bot ?? null,
+  })
+}
+
+export async function personalAgentKeepalive(
+  bot?: number | null
+): Promise<void> {
+  return getTransport().call("personal_agent_keepalive", { botId: bot ?? null })
+}
+
+export async function personalAgentResend(
+  rowId: number,
+  bot?: number | null
+): Promise<TimelineRow> {
+  return getTransport().call("personal_agent_resend", {
+    rowId,
+    botId: bot ?? null,
+  })
+}
+
+/** The owner has seen the timeline up to row `upTo`. */
+export async function personalAgentMarkSeen(
+  upTo: number,
+  bot?: number | null
+): Promise<void> {
+  return getTransport().call("personal_agent_mark_seen", {
+    upTo,
+    botId: bot ?? null,
+  })
+}
+
+/** The owner's answer on a native card: `accept` runs what it holds as the
+ *  card shows it (a proposal; an uncertain step, again), `dismiss` closes it.
+ *  Resolves to the card's row as it now stands — `acting` while what it runs
+ *  is still on its way. */
+export async function personalAgentNoticeAct(
+  noticeId: number,
+  /** `accept` / `dismiss`; a stop card's `stop:<message id>`; a changed
+   *  card's `undo`, or `undo:<assistant id>` for one assistant it made, and
+   *  a suggested team's `accept:<templates>`; a reminder card's `done`,
+   *  `snooze:<15m|1h|tomorrow>` or `hand_over`; getting to know the owner:
+   *  the projects card's `skip`, the first-thing card's `hand` (with its
+   *  words), `next` and `dismiss`, and `done` or `team` on what the
+   *  assistants do on their own; an acceptance card's `revise` (send it
+   *  back with the card's words), `accept` or `recheck` (7.5). */
+  action: NoticeAction,
+  bot?: number | null,
+  /** `hand_over` and `hand`: the owner's words, posted as their message
+   *  quoting the card. */
+  text?: string
+): Promise<TimelineRow> {
+  return getTransport().call("personal_agent_notice_act", {
+    noticeId,
+    action,
+    botId: bot ?? null,
+    text: text ?? null,
+  })
+}
+
+/** What the owner can answer on a native card. */
+export type NoticeAction =
+  | "accept"
+  | "dismiss"
+  | "undo"
+  | `undo:${number}`
+  | `stop:${number}`
+  | "unwatch"
+  | "done"
+  | "snooze:15m"
+  | "snooze:1h"
+  | "snooze:tomorrow"
+  | "hand_over"
+  | `accept:${string}`
+  | "skip"
+  | "hand"
+  | "next"
+  | "revise"
+  | "recheck"
+  | "retry"
+  | "resume"
+  // codeg's proposal rule cards (6.7): their next steps, and "don't suggest
+  // these" on any suggestion.
+  | "mute"
+  | "check"
+  | "remind"
+  | "open"
+  | "summary"
+  | "close"
+  // A watched pull request's card (7.4): have its task fix it, hand it the
+  // feedback.
+  | "fix"
+  | "forward"
+  | "rebase"
+  // The weekly review's questions (6.6): show changes first; hide or (once
+  // the page deleted it) delete an idle work assistant.
+  | "ask_first"
+  | "hide"
+  | "delete"
+  // A plan's card (7.6): start (or go on), stop, end; a step confirmed or
+  // canceled; a change taken back (`undo:<change>`).
+  | "start"
+  | "stop"
+  | "cancel"
+  | `confirm:${number}`
+  | `cancel_step:${number}`
+  // A tidy-up's or a process skill's card (7.7, 7.8): a draft applied (or
+  // let go with "dismiss"), a skill turned off or on (and "delete").
+  | "apply"
+  | "disable"
+  | "enable"
+
+export async function personalAgentAnswerQuestion(
+  questionId: string,
+  answer: QuestionAnswer,
+  bot?: number | null
+): Promise<void> {
+  return getTransport().call("personal_agent_answer_question", {
+    questionId,
+    answer,
+    botId: bot ?? null,
+  })
+}
+
+export async function personalAgentAnswerPlan(
+  approvalId: string,
+  answer: PlanApprovalAnswer,
+  bot?: number | null
+): Promise<void> {
+  return getTransport().call("personal_agent_answer_plan", {
+    approvalId,
+    answer,
+    botId: bot ?? null,
+  })
+}
+
+export async function personalAgentRespondPermission(
+  requestId: string,
+  optionId: string,
+  bot?: number | null
+): Promise<void> {
+  return getTransport().call("personal_agent_respond_permission", {
+    requestId,
+    optionId,
+    botId: bot ?? null,
+  })
+}
+
+export async function personalAgentItems(
+  status?: "active" | "all" | "done",
+  bot?: number | null
+): Promise<ItemInfo[]> {
+  return getTransport().call("personal_agent_items", {
+    status: status ?? null,
+    botId: bot ?? null,
+  })
+}
+
+/** Dispatches newest first: these `ids`, or the latest `limit` of `mode`. */
+export async function personalAgentDispatches(
+  mode?: DispatchMode | null,
+  limit?: number | null,
+  ids?: number[] | null,
+  bot?: number | null
+): Promise<DispatchInfo[]> {
+  return getTransport().call("personal_agent_dispatches", {
+    mode: mode ?? null,
+    limit: limit ?? null,
+    ids: ids ?? null,
+    botId: bot ?? null,
+  })
+}
+
+export async function personalAgentStats(
+  days?: number,
+  bot?: number | null
+): Promise<PersonalAgentStats> {
+  return getTransport().call("personal_agent_stats", {
+    days: days ?? null,
+    botId: bot ?? null,
+  })
+}
+
+export async function personalAgentFiles(
+  bot?: number | null
+): Promise<PersonalAgentFile[]> {
+  return getTransport().call("personal_agent_files", { botId: bot ?? null })
+}
+
+export async function personalAgentFileSave(
+  name: string,
+  content: string,
+  bot?: number | null
+): Promise<void> {
+  return getTransport().call("personal_agent_file_save", {
+    name,
+    content,
+    botId: bot ?? null,
+  })
+}
+
+/** A memory entry (`memory/<name>.md`), with the lines of the index that
+ *  link to it; or a process skill (`process-skills/<name>/SKILL.md`), its folder. */
+export async function personalAgentFileDelete(
+  name: string,
+  bot?: number | null
+): Promise<void> {
+  return getTransport().call("personal_agent_file_delete", {
+    name,
+    botId: bot ?? null,
+  })
+}
+
+/** Turn one of an assistant's process skills (`name`, its folder) on or
+ *  off (7.8): off, it is kept and not loaded. */
+export async function personalAgentSkillSwitch(
+  name: string,
+  on: boolean,
+  bot?: number | null
+): Promise<void> {
+  return getTransport().call("personal_agent_skill_switch", {
+    name,
+    on,
+    botId: bot ?? null,
+  })
+}
+
+/** "Is this right?" (10.3): have a message of an ordinary conversation
+ *  checked — its last check, or (with `again`, once that one is over) a new
+ *  one, handed out by the primary at once. `message` is all of it (its
+ *  fingerprint is of all of it); `asked`, the owner's message it answered;
+ *  `quote`, the sentence of it they selected. */
+export async function personalAgentCheckMessage(args: {
+  conversationId: number
+  message: string
+  asked?: string | null
+  quote?: string | null
+  again?: boolean
+}): Promise<MessageCheck> {
+  return getTransport().call("personal_agent_check_message", {
+    conversationId: args.conversationId,
+    message: args.message,
+    asked: args.asked ?? null,
+    quote: args.quote ?? null,
+    again: args.again ?? false,
+  })
+}
+
+/** The latest check of each message of a conversation (10.3). */
+export async function personalAgentChecks(
+  conversationId: number
+): Promise<MessageCheck[]> {
+  return getTransport().call("personal_agent_checks", { conversationId })
+}
+
+/** `null` returns to the data directory's default. `locale` is the UI's: the
+ *  language of the template files of a directory made anew. */
+export async function personalAgentSetWorkdir(
+  path: string | null,
+  locale?: string,
+  bot?: number | null
+): Promise<PersonalAgentInfo> {
+  return getTransport().call("personal_agent_set_workdir", {
+    path,
+    locale,
+    botId: bot ?? null,
+  })
 }
 
 export async function listConversationTags(): Promise<ConversationTagDetail[]> {
@@ -3615,21 +4434,26 @@ export async function openCommitWindow(folderId: number): Promise<void> {
   )
 }
 
+/**
+ * The Settings window's pages a caller can open by name. MCP, Skills and Skill
+ * packs are not among them: they are sections of the workspace's Harness page
+ * (`useOpenHarness`). Kept in step with `resolve_settings_route`
+ * (`commands/windows.rs`) and the web `open_settings_window`
+ * (`web/handlers/folders.rs`), where a name they do not know lands on
+ * Appearance.
+ */
 export type SettingsSection =
   | "general"
   | "appearance"
   | "agents"
-  | "mcp"
-  | "skills"
-  | "experts"
-  | "science"
-  | "office-tools"
   | "collaboration"
   | "browser"
   | "computer-use"
   | "version-control"
   | "shortcuts"
   | "system"
+  // Desktop only: the web nav has no Web service page.
+  | "web-service"
 
 interface OpenSettingsWindowOptions {
   agentType?: AgentType | null
@@ -3796,6 +4620,53 @@ export async function createConversation(
   })
 }
 
+/** What {@link createAskConversation} created, and where. */
+export interface CreateAskConversationResult {
+  conversationId: number
+  folderId: number
+  /** The conversation the ask was filed under — for an ask asked from another
+   *  ask, that ask's own main conversation, not the one passed in. */
+  parentConversationId: number
+}
+
+/**
+ * Create an ask conversation ("ask about this selection") in `folderId` — the
+ * folder its agent is running in — as a child of `parentConversationId`
+ * (`kind: "ask"`), so the sidebar nests it under that conversation and its
+ * Session Details lists it. Asking from inside an ask conversation links to
+ * that one's main conversation.
+ */
+export async function createAskConversation(
+  parentConversationId: number,
+  folderId: number,
+  agentType: AgentType,
+  title?: string
+): Promise<CreateAskConversationResult> {
+  return getTransport().call("create_ask_conversation", {
+    parentConversationId,
+    folderId,
+    agentType,
+    title: title ?? null,
+  })
+}
+
+/** The ask conversations of `parentConversationId`, newest first. */
+export async function listAskConversations(
+  parentConversationId: number
+): Promise<DbConversationSummary[]> {
+  return getTransport().call("list_ask_conversations", {
+    parentConversationId,
+  })
+}
+
+/** Turn an ask conversation into an ordinary one (it becomes a root of the
+ *  sidebar). */
+export async function detachAskConversation(
+  conversationId: number
+): Promise<void> {
+  return getTransport().call("detach_ask_conversation", { conversationId })
+}
+
 /**
  * Create a folderless "chat mode" conversation. The backend lazily creates a
  * dated per-conversation scratch dir and a dedicated hidden chat folder
@@ -3859,6 +4730,22 @@ export async function deleteConversation(
   conversationId: number
 ): Promise<void> {
   return getTransport().call("delete_conversation", { conversationId })
+}
+
+/**
+ * Move conversations to another open project folder. From the next message on
+ * the agent works in the target folder; the history is untouched. Each
+ * conversation is judged on its own — see {@link MoveConversationsResult} —
+ * and the call rejects only for an invalid target.
+ */
+export async function moveConversations(
+  conversationIds: number[],
+  targetFolderId: number
+): Promise<MoveConversationsResult> {
+  return getTransport().call("move_conversations", {
+    conversationIds,
+    targetFolderId,
+  })
 }
 
 // Folder command management
@@ -4103,11 +4990,24 @@ function stripUploadedTaskConfig(config: WorkTaskConfig): WorkTaskConfig {
 
 export async function workTaskUpdate(
   id: number,
-  draft: WorkTaskDraft
+  draft: WorkTaskDraft,
+  /** How the server treats the selector tuple (codeg#1179): untouched keeps
+   *  the CURRENT row's, reset re-resolves the folder's task settings now.
+   *  Older servers ignore both and apply the draft as sent. */
+  flags?: {
+    selectionUntouched?: boolean
+    selectionReset?: boolean
+    /** Only the selector tuple changes; refused if the task's title, folder
+     *  or brief moved since the dialog opened. */
+    selectorOnly?: boolean
+  }
 ): Promise<WorkTask> {
   return getTransport().call("work_task_update", {
     id,
     draft: { ...draft, config: stripUploadedTaskConfig(draft.config) },
+    selectionUntouched: flags?.selectionUntouched ?? false,
+    selectionReset: flags?.selectionReset ?? false,
+    selectorOnly: flags?.selectorOnly ?? false,
   })
 }
 
@@ -4261,7 +5161,15 @@ export async function workTaskDeliverPr(
   prTitle: string | null,
   draft: boolean,
   deleteWorktree: boolean,
-  markDone: boolean
+  markDone: boolean,
+  /** Which issues the pull request closes — a task made from several related
+   *  issues only, and only before its first delivery fixed the list. Omitted
+   *  (`undefined`) for every other delivery. */
+  closes?: number[],
+  /** Commit what the worktree holds uncommitted, with this message, before
+   *  the push (see `workTaskUncommittedFiles`). Omitted, a dirty worktree is
+   *  refused. */
+  commitMessage?: string
 ): Promise<string> {
   return getTransport().call("work_task_deliver_pr", {
     id,
@@ -4269,7 +5177,15 @@ export async function workTaskDeliverPr(
     draft,
     deleteWorktree,
     markDone,
+    ...(closes === undefined ? {} : { closes }),
+    ...(commitMessage === undefined ? {} : { commitMessage }),
   })
+}
+
+/** Stop waiting for the background work a running task's agent left going
+ *  and settle the task now; whatever is still running is stopped with it. */
+export async function workTaskStopBackgroundWait(id: number): Promise<void> {
+  return getTransport().call("work_task_stop_background_wait", { id })
 }
 
 /** Withdraw a merge waiting in the project's queue; the task stays in review. */
@@ -4303,6 +5219,28 @@ export async function workTaskDefer(
   return getTransport().call("work_task_defer", { id, deferred })
 }
 
+/**
+ * The answer about a forge-sourced task's thread comment, given while
+ * accepting it: whether it is posted when the task finishes, and the reply it
+ * carries per item number (blank or missing = the outcome line alone). Only
+ * while the task is in review in generation `runSeq` — the one the dialog
+ * showed; call it before the acceptance itself, which it then binds to that
+ * generation (refused once the task ran again).
+ */
+export async function workTaskSetWriteback(
+  id: number,
+  runSeq: number,
+  writeback: boolean,
+  drafts: Record<number, string>
+): Promise<void> {
+  return getTransport().call("work_task_set_writeback", {
+    id,
+    runSeq,
+    writeback,
+    drafts,
+  })
+}
+
 /** Remove the task's worktree + branch (also retries a failed cleanup). */
 export async function workTaskCleanup(id: number): Promise<void> {
   return getTransport().call("work_task_cleanup", { id })
@@ -4320,6 +5258,14 @@ export async function workTaskChangedFiles(
   id: number
 ): Promise<WorkTaskChangedFile[]> {
   return getTransport().call("work_task_changed_files", { id })
+}
+
+/** What the task's worktree holds uncommitted — the files a delivery would
+ *  commit before pushing. */
+export async function workTaskUncommittedFiles(
+  id: number
+): Promise<WorkTaskUncommittedFile[]> {
+  return getTransport().call("work_task_uncommitted_files", { id })
 }
 
 /** Effective settings after the folder → global → built-in fallback — what
@@ -4481,8 +5427,10 @@ export function isEmptyAttachmentError(err: unknown): boolean {
 // page was served from. Desktop + remote workspace: routes through the Rust
 // `remote_upload_attachment` command, because the webview's `fetch` can't
 // hit a plain `http://` remote (mixed-content rules block secure-context
-// requests). Returns the server-side absolute path so the caller can attach
-// it as a `file://` ResourceLink — identical shape on both transports.
+// requests). Local desktop: there is no server, so `save_pasted_attachment`
+// keeps the bytes in this machine's own uploads directory. Returns the
+// absolute path so the caller can attach it as a `file://` ResourceLink —
+// identical shape on every transport.
 export async function uploadAttachment(
   file: File,
   sessionId?: string | null
@@ -4506,6 +5454,18 @@ export async function uploadAttachment(
       "remote_upload_attachment",
       {
         connectionId: remoteId,
+        fileName: file.name,
+        mimeType: file.type || null,
+        sessionId: sessionId ?? null,
+        dataBase64: arrayBufferToBase64(buf),
+      }
+    )
+  }
+  if (isDesktop()) {
+    const buf = await file.arrayBuffer()
+    return getShellTransport().call<UploadAttachmentResult>(
+      "save_pasted_attachment",
+      {
         fileName: file.name,
         mimeType: file.type || null,
         sessionId: sessionId ?? null,
@@ -4992,14 +5952,66 @@ export async function getFileTree(
 }
 
 /**
- * Flat, gitignore-aware listing of every file/dir under `path`. Ignored
- * directories are pruned during the backend walk (no depth cap), so deeply
- * nested files are reachable while the payload stays small. Used by file search.
+ * Enumerate every non-ignored file/dir under `path`, without a depth cap.
+ * This can return millions of entries; search surfaces use searchWorkspaceFiles
+ * to keep the renderer's payload and retained state bounded.
  */
 export async function listWorkspaceFiles(
   path: string
 ): Promise<WorkspaceFileEntry[]> {
   return getTransport().call("list_workspace_files", { path })
+}
+
+/** Compatibility no-op. Discovery starts only with a cancellable query. */
+export async function prepareWorkspaceFileSearch(path: string): Promise<void> {
+  return getTransport().call("prepare_workspace_file_search", { path })
+}
+
+/** Rank across the workspace and transfer only a bounded set of matches. */
+export async function searchWorkspaceFiles(
+  path: string,
+  query: string,
+  options: {
+    limit?: number
+    filesOnly?: boolean
+    refresh?: boolean
+    /** Reject a cached snapshot built more than this many ms ago. */
+    maxAgeMs?: number
+    request?: { consumerId: string; generation: number }
+    signal?: AbortSignal
+  } = {}
+): Promise<WorkspaceFileEntry[]> {
+  const {
+    signal,
+    request = { consumerId: randomUUID(), generation: 0 },
+    ...params
+  } = options
+  if (signal?.aborted) return []
+  const transport = getTransport()
+  const cancel = () => {
+    void transport
+      .call("cancel_workspace_file_search", { request })
+      .catch(() => {})
+  }
+  signal?.addEventListener("abort", cancel, { once: true })
+  try {
+    return await transport.call(
+      "search_workspace_files",
+      {
+        path,
+        query,
+        ...params,
+        request,
+      },
+      {
+        // The backend bounds queue wait + traversal to five minutes. Give both
+        // HTTP transports time to receive that result, including a cold build.
+        timeoutMs: 330_000,
+      }
+    )
+  } finally {
+    signal?.removeEventListener("abort", cancel)
+  }
 }
 
 export async function startWorkspaceStateStream(
@@ -5282,7 +6294,20 @@ export interface WebServerInfo {
   port: number
   token: string
   addresses: string[]
+  /** Address the listener is bound to: `0.0.0.0` (every interface, so the
+   *  local network can reach it) or `127.0.0.1` (this machine only). */
+  bindHost: string
 }
+
+/** Bind hosts the desktop web service can be configured with (Rust
+ *  `WEB_SERVICE_HOST_CANDIDATES`); the first is the default. */
+export const WEB_SERVICE_HOSTS = ["0.0.0.0", "127.0.0.1"] as const
+export type WebServiceHost = (typeof WEB_SERVICE_HOSTS)[number]
+export const DEFAULT_WEB_SERVICE_HOST: WebServiceHost = "0.0.0.0"
+
+/** Broadcast whenever the desktop web service starts or stops, from any
+ *  window or from auto-start. Carries only `running`; re-read the status. */
+export const WEB_SERVICE_STATUS_CHANGED_EVENT = "web-service://status-changed"
 
 export async function startWebServer(params?: {
   port?: number
@@ -5308,6 +6333,8 @@ export interface WebServiceConfig {
   token: string | null
   port: number | null
   autoStart: boolean
+  /** Saved bind host; `null`/absent means never chosen (the default). */
+  host?: WebServiceHost | null
 }
 
 export async function getWebServiceConfig(): Promise<WebServiceConfig> {
@@ -5478,6 +6505,16 @@ export async function setChatEventWebhooks(
   webhooks: WebhookConfig[]
 ): Promise<void> {
   return getTransport().call("set_chat_event_webhooks", { webhooks })
+}
+
+export async function getChatEventTopLevelOnly(): Promise<boolean> {
+  return getTransport().call("get_chat_event_top_level_only")
+}
+
+export async function setChatEventTopLevelOnly(
+  enabled: boolean
+): Promise<void> {
+  return getTransport().call("set_chat_event_top_level_only", { enabled })
 }
 
 export async function getChatMessageLanguage(): Promise<string> {
@@ -6260,6 +7297,55 @@ export async function forgeListIssues(
   })
 }
 
+/** One issue, read in full — its description included.
+ *
+ *  CNB's issue LIST omits the body (its pull list carries one), so the detail
+ *  panel asks for the item itself the moment it opens — one request, paid only
+ *  for the item somebody is reading, the same trade the comment thread makes.
+ *  No other forge takes this path: their list rows already carry the body. */
+export async function forgeIssueDetail(
+  folderId: number,
+  number: number,
+  accountId?: string | null
+): Promise<ForgeIssueRow> {
+  return getTransport().call("forge_issue_detail", {
+    folderId,
+    number,
+    accountId: accountId ?? null,
+  })
+}
+
+/** Download to the backend cache; render its binary resource URL. */
+export async function forgeReadImage(
+  folderId: number,
+  uploadPath: string,
+  accountId?: string | null
+): Promise<ForgeImage> {
+  const connectionId = getActiveRemoteConnectionId()
+  const baseUrl = getServerBaseUrl()
+  const image = await getTransport().call<ForgeImage>("forge_read_image", {
+    folderId,
+    uploadPath,
+    accountId: accountId ?? null,
+  })
+  if (connectionId != null) {
+    // Preserve the remote connection's custom auth headers and support HTTP
+    // remote servers: Rust copies the binary into this desktop's cache.
+    try {
+      return await getShellTransport().call<ForgeImage>(
+        "remote_cache_forge_image",
+        { connectionId, url: image.url }
+      )
+    } catch (error) {
+      if (isRemoteAuthenticationFailed(error)) {
+        notifyRemoteDesktopUnauthorized()
+      }
+      throw error
+    }
+  }
+  return isDesktop() ? image : { ...image, url: `${baseUrl}${image.url}` }
+}
+
 /** Everything a COUNT may be narrowed by. No page and no order: neither can
  *  change the number, which is what lets the switcher survive a page turn
  *  without spending a request. */
@@ -6444,6 +7530,35 @@ export async function forgeChangeDetail(
   })
 }
 
+/** CI summaries for one page of proposed changes — the list rows' marks.
+ *  Asked AFTER the list has drawn, and never an error the page shows: a forge
+ *  that cannot answer comes back `available: false`, which draws nothing. */
+export async function forgeCheckSummaries(
+  folderId: number,
+  numbers: number[],
+  accountId?: string | null
+): Promise<ForgeCheckSummaryList> {
+  return getTransport().call("forge_check_summaries", {
+    folderId,
+    query: { numbers, accountId: accountId ?? null },
+  })
+}
+
+/** Approve the workflow runs held on a pull request (GitHub). `headSha` is the
+ *  commit the person reviewed: the backend refuses if the change has moved on
+ *  since, rather than approving a push nobody looked at. */
+export async function forgeApproveWorkflows(
+  folderId: number,
+  number: number,
+  headSha: string,
+  accountId?: string | null
+): Promise<ForgeApproveResult> {
+  return getTransport().call("forge_approve_workflows", {
+    folderId,
+    request: { number, headSha, accountId: accountId ?? null },
+  })
+}
+
 /** One page of the files a proposed change touches. Paths and counters only —
  *  reading the diff itself is what the task worktree and the app's diff view
  *  are for. */
@@ -6544,6 +7659,13 @@ export async function workTaskCreateFromForge(
   draft: ForgeTaskDraftInput
 ): Promise<ForgeCreateResult> {
   return getTransport().call("work_task_create_from_forge", { draft })
+}
+
+/** One task for several related issues — see `ForgeIssuesTaskDraftInput`. */
+export async function workTaskCreateFromForgeIssues(
+  draft: ForgeIssuesTaskDraftInput
+): Promise<ForgeIssuesCreateResult> {
+  return getTransport().call("work_task_create_from_forge_issues", { draft })
 }
 
 /** Latest task per source key (any state) — drives the row chips. */

@@ -8,6 +8,7 @@ import {
   Coins,
   CopyIcon,
   ListTodo,
+  ShieldCheck,
   Split,
 } from "lucide-react"
 import { useLocale, useTranslations } from "next-intl"
@@ -19,6 +20,7 @@ import {
 } from "@/components/ui/tooltip"
 import { useMessageScroll } from "@/components/message/message-scroll-context"
 import { useChatAnimationsEnabled } from "@/hooks/use-appearance"
+import { useArrivedOnCompletion } from "@/hooks/use-chat-motion"
 import { useModelLabel } from "@/components/message/model-label-context"
 import { useCreateTaskFromMessage } from "./use-create-task-from-message"
 import { formatTokenCount } from "@/lib/token-format"
@@ -47,6 +49,9 @@ interface TurnStatsProps {
    * name the backend can resolve yet (`unnamed` — the post-turn reparse fills
    * it in a moment later). Only read while `forkDisabled`. */
   forkDisabledReason?: "busy" | "unnamed"
+  /** "Is this right?" (10.3): have the assistant check this reply. Undefined
+   *  hides it — nobody to ask, or nothing stored to check. */
+  onCheck?: () => void
 }
 
 const iconButtonClass =
@@ -64,10 +69,12 @@ export function TurnStats({
   onForkFromHere,
   forkDisabled = false,
   forkDisabledReason = "busy",
+  onCheck,
 }: TurnStatsProps) {
   const locale = useLocale()
   const t = useTranslations("Folder.chat.messageList")
   const tTasks = useTranslations("Tasks")
+  const tCheck = useTranslations("MessageCheck")
   const scroll = useMessageScroll()
   const chatAnimations = useChatAnimationsEnabled()
   const modelLabel = useModelLabel()
@@ -170,6 +177,8 @@ export function TurnStats({
     []
   )
 
+  const arrived = useArrivedOnCompletion(isResponseComplete)
+
   if (!isResponseComplete) return null
   // Deliberately not gated on `hasDuration`: nothing in this row renders a
   // duration any more, so a turn carrying only one would open an empty row.
@@ -177,7 +186,12 @@ export function TurnStats({
     return null
 
   return (
-    <div className="mt-2 -ms-[0.3125rem] flex items-center justify-start gap-1 text-xs text-muted-foreground">
+    <div
+      className={cn(
+        "mt-2 -ms-[0.3125rem] flex items-center justify-start gap-1 text-xs text-muted-foreground",
+        arrived && "chat-enter"
+      )}
+    >
       <TooltipProvider delayDuration={150}>
         {hasCopy && (
           <Tooltip>
@@ -215,6 +229,22 @@ export function TurnStats({
             <TooltipContent side="top">
               {tTasks("createFromMessage")}
             </TooltipContent>
+          </Tooltip>
+        )}
+        {hasCopy && onCheck && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={onCheck}
+                className={iconButtonClass}
+                aria-label={tCheck("action")}
+                data-check-message
+              >
+                <ShieldCheck aria-hidden="true" className="h-3.5 w-3.5" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top">{tCheck("action")}</TooltipContent>
           </Tooltip>
         )}
         {onForkFromHere && (

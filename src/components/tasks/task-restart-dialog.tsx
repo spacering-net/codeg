@@ -75,9 +75,13 @@ export function TaskRestartDialog({
   // A fresh box per open — a note belongs to one restart, not to the next.
   useEffect(() => {
     if (!open) return
+    // Kept as an effect (like the sibling dialogs): the reset also re-arms the
+    // submit latch ref, which cannot be written during render.
+    /* eslint-disable react-hooks/set-state-in-effect */
     setText("")
     setSubmitting(false)
     setDuplicate(null)
+    /* eslint-enable react-hooks/set-state-in-effect */
     submittingRef.current = false
   }, [open, task])
 

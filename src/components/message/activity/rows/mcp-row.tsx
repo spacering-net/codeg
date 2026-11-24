@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl"
 
 import { tryParseJson } from "@/lib/activity/json"
 import { mcpResultPayload } from "@/lib/activity/mcp"
+import { readKimiMcpOAuth } from "@/lib/kimi-mcp-oauth"
 import { cn } from "@/lib/utils"
 import { useActivityRender } from "../activity-context"
 import { ActivityRow } from "../activity-row"
@@ -14,6 +15,7 @@ import { RailIcon } from "../rail-icon"
 import { ResultBody } from "../result-body"
 import { ToolFigure, toolIcon, useStatusText } from "../step-visuals"
 import type { ToolStep } from "./explore-rows"
+import { McpOAuthNotice } from "./mcp-oauth-notice"
 
 /** `mcp · linear` — where the tool came from, not a status. */
 function McpChip({ server }: { server: string }) {
@@ -43,7 +45,7 @@ function prettyJson(text: string | null): string | null {
 export const McpRow = memo(function McpRow({ step }: { step: ToolStep }) {
   const t = useTranslations("Folder.chat.activity")
   const statusText = useStatusText()
-  const { recoveredKeys } = useActivityRender()
+  const { recoveredKeys, isStreaming } = useActivityRender()
   const { tool, part } = step
   const failed = tool.status === "failed" || tool.status === "rejected"
   const [open, setOpen] = useDisclosure(step.key, {
@@ -60,6 +62,11 @@ export const McpRow = memo(function McpRow({ step }: { step: ToolStep }) {
     return JSON.stringify(payload.json, null, 2)
   }, [part.output, part.errorText])
   const expandable = !!args || !!result
+  const oauth = readKimiMcpOAuth(part.meta)
+  const showOAuth =
+    isStreaming &&
+    (tool.status === "pending" || tool.status === "running") &&
+    oauth?.toolName === part.toolName
 
   return (
     <ActivityRow
@@ -78,6 +85,11 @@ export const McpRow = memo(function McpRow({ step }: { step: ToolStep }) {
       onExpandedChange={setOpen}
       title={tool.detail ?? undefined}
       trailing={<ToolFigure tool={tool} />}
+      addon={
+        showOAuth && oauth ? (
+          <McpOAuthNotice key={oauth.url ?? oauth.phase} progress={oauth} />
+        ) : null
+      }
       detail={() => (
         <div className="@container">
           <div className="grid gap-2 @min-[34rem]:grid-cols-2">

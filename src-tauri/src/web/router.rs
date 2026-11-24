@@ -38,6 +38,27 @@ pub fn build_router_with_proxy_auth(
     static_dir: std::path::PathBuf,
     shutdown_signal: Arc<ShutdownSignal>,
 ) -> Router {
+    build_router_with_srn(
+        state,
+        token,
+        proxy_auth,
+        static_dir,
+        shutdown_signal,
+        crate::srn::web::installed(),
+    )
+}
+
+/// [`build_router_with_proxy_auth`] with Codeg Web's SRN sign-in given
+/// rather than the one this process set up (`srn::web::installed`); `None`
+/// answers "not enabled".
+pub fn build_router_with_srn(
+    state: Arc<AppState>,
+    token: String,
+    proxy_auth: Option<Arc<super::proxy_auth::ProxyJwtAuth>>,
+    static_dir: std::path::PathBuf,
+    shutdown_signal: Arc<ShutdownSignal>,
+    srn_web: Option<Arc<crate::srn::web::SrnWeb>>,
+) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
@@ -48,6 +69,7 @@ pub fn build_router_with_proxy_auth(
         proxy: proxy_auth,
     };
     let web_auth_for_ws = web_auth.clone();
+    let web_auth_for_srn = web_auth.clone();
     let token_for_cli_hello = token.clone();
 
     let api = Router::new()
@@ -270,6 +292,18 @@ pub fn build_router_with_proxy_auth(
             post(handlers::conversations::create_conversation),
         )
         .route(
+            "/create_ask_conversation",
+            post(handlers::conversations::create_ask_conversation),
+        )
+        .route(
+            "/list_ask_conversations",
+            post(handlers::conversations::list_ask_conversations),
+        )
+        .route(
+            "/detach_ask_conversation",
+            post(handlers::conversations::detach_ask_conversation),
+        )
+        .route(
             "/create_chat_conversation",
             post(handlers::conversations::create_chat_conversation),
         )
@@ -292,6 +326,10 @@ pub fn build_router_with_proxy_auth(
         .route(
             "/delete_conversation",
             post(handlers::conversations::delete_conversation),
+        )
+        .route(
+            "/move_conversations",
+            post(handlers::conversations::move_conversations),
         )
         // ─── Folders ───
         .route(
@@ -362,20 +400,260 @@ pub fn build_router_with_proxy_auth(
             post(handlers::assistants::assistant_list),
         )
         .route(
-            "/assistant_create",
-            post(handlers::assistants::assistant_create),
+            "/personal_agent_get",
+            post(handlers::personal_agent::personal_agent_get),
         )
         .route(
-            "/assistant_update",
-            post(handlers::assistants::assistant_update),
+            "/personal_agent_timeline",
+            post(handlers::personal_agent::personal_agent_timeline),
         )
         .route(
-            "/assistant_delete",
-            post(handlers::assistants::assistant_delete),
+            "/personal_agent_timeline_rows",
+            post(handlers::personal_agent::personal_agent_timeline_rows),
         )
         .route(
-            "/assistant_reorder",
-            post(handlers::assistants::assistant_reorder),
+            "/personal_agent_timeline_updated_since",
+            post(handlers::personal_agent::personal_agent_timeline_updated_since),
+        )
+        .route(
+            "/personal_agent_items",
+            post(handlers::personal_agent::personal_agent_items),
+        )
+        .route(
+            "/personal_agent_dispatches",
+            post(handlers::personal_agent::personal_agent_dispatches),
+        )
+        .route(
+            "/personal_agent_files",
+            post(handlers::personal_agent::personal_agent_files),
+        )
+        .route(
+            "/personal_agent_stats",
+            post(handlers::personal_agent::personal_agent_stats),
+        )
+        .route(
+            "/personal_agent_save",
+            post(handlers::personal_agent::personal_agent_save),
+        )
+        .route(
+            "/personal_agent_send",
+            post(handlers::personal_agent::personal_agent_send),
+        )
+        .route(
+            "/personal_agent_cancel",
+            post(handlers::personal_agent::personal_agent_cancel),
+        )
+        .route(
+            "/personal_agent_stop_all",
+            post(handlers::personal_agent::personal_agent_stop_all),
+        )
+        .route(
+            "/personal_agent_bots",
+            post(handlers::personal_agent::personal_agent_bots),
+        )
+        .route(
+            "/personal_agent_outputs",
+            post(handlers::personal_agent::personal_agent_outputs),
+        )
+        .route(
+            "/personal_agent_output_read",
+            post(handlers::personal_agent::personal_agent_output_read),
+        )
+        .route(
+            "/personal_agent_roster_act",
+            post(handlers::personal_agent::personal_agent_roster_act),
+        )
+        .route(
+            "/personal_agent_turn_steps",
+            post(handlers::personal_agent::personal_agent_turn_steps),
+        )
+        .route(
+            "/personal_agent_item_act",
+            post(handlers::personal_agent::personal_agent_item_act),
+        )
+        .route(
+            "/personal_agent_presence",
+            post(handlers::personal_agent::personal_agent_presence),
+        )
+        .route(
+            "/personal_agent_profile",
+            post(handlers::personal_agent::personal_agent_profile),
+        )
+        .route(
+            "/personal_agent_profile_update",
+            post(handlers::personal_agent::personal_agent_profile_update),
+        )
+        .route(
+            "/personal_agent_grades",
+            post(handlers::personal_agent::personal_agent_grades),
+        )
+        .route(
+            "/personal_agent_history_search",
+            post(handlers::personal_agent::personal_agent_history_search),
+        )
+        .route(
+            "/personal_agent_history_status",
+            post(handlers::personal_agent::personal_agent_history_status),
+        )
+        .route(
+            "/personal_agent_history_rebuild",
+            post(handlers::personal_agent::personal_agent_history_rebuild),
+        )
+        .route(
+            "/personal_agent_today",
+            post(handlers::personal_agent::personal_agent_today),
+        )
+        .route(
+            "/personal_agent_activity",
+            post(handlers::personal_agent::personal_agent_activity),
+        )
+        .route(
+            "/notification_prefs_sync",
+            post(handlers::personal_agent::notification_prefs_sync),
+        )
+        .route(
+            "/personal_agent_avatar_png",
+            post(handlers::personal_agent::personal_agent_avatar_png),
+        )
+        .route(
+            "/personal_agent_card_act",
+            post(handlers::personal_agent::personal_agent_card_act),
+        )
+        .route(
+            "/personal_agent_dispatch_stop",
+            post(handlers::personal_agent::personal_agent_dispatch_stop),
+        )
+        .route(
+            "/personal_agent_ask_answer",
+            post(handlers::personal_agent::personal_agent_ask_answer),
+        )
+        .route(
+            "/personal_agent_conversation_target",
+            post(handlers::personal_agent::personal_agent_conversation_target),
+        )
+        .route(
+            "/personal_agent_settings_patch",
+            post(handlers::personal_agent::personal_agent_settings_patch),
+        )
+        .route(
+            "/personal_agent_bot_create",
+            post(handlers::personal_agent::personal_agent_bot_create),
+        )
+        .route(
+            "/personal_agent_bot_copy",
+            post(handlers::personal_agent::personal_agent_bot_copy),
+        )
+        .route(
+            "/personal_agent_bot_impact",
+            post(handlers::personal_agent::personal_agent_bot_impact),
+        )
+        .route(
+            "/personal_agent_bot_delete",
+            post(handlers::personal_agent::personal_agent_bot_delete),
+        )
+        .route(
+            "/personal_agent_choice_answer",
+            post(handlers::personal_agent::personal_agent_choice_answer),
+        )
+        .route(
+            "/personal_agent_meet_projects",
+            post(handlers::personal_agent::personal_agent_meet_projects),
+        )
+        .route(
+            "/personal_agent_starter",
+            post(handlers::personal_agent::personal_agent_starter),
+        )
+        .route(
+            "/personal_agent_thread",
+            post(handlers::personal_agent::personal_agent_thread),
+        )
+        .route(
+            "/personal_agent_compact",
+            post(handlers::personal_agent::personal_agent_compact),
+        )
+        .route(
+            "/personal_agent_new_session",
+            post(handlers::personal_agent::personal_agent_new_session),
+        )
+        .route(
+            "/personal_agent_resume_auto_compact",
+            post(handlers::personal_agent::personal_agent_resume_auto_compact),
+        )
+        .route(
+            "/personal_agent_keepalive",
+            post(handlers::personal_agent::personal_agent_keepalive),
+        )
+        .route(
+            "/personal_agent_resend",
+            post(handlers::personal_agent::personal_agent_resend),
+        )
+        .route(
+            "/personal_agent_mark_seen",
+            post(handlers::personal_agent::personal_agent_mark_seen),
+        )
+        .route(
+            "/personal_agent_notice_act",
+            post(handlers::personal_agent::personal_agent_notice_act),
+        )
+        .route(
+            "/personal_agent_routines",
+            post(handlers::personal_agent::personal_agent_routines),
+        )
+        .route(
+            "/personal_agent_routine_runs",
+            post(handlers::personal_agent::personal_agent_routine_runs),
+        )
+        .route(
+            "/personal_agent_routine_save",
+            post(handlers::personal_agent::personal_agent_routine_save),
+        )
+        .route(
+            "/personal_agent_routine_act",
+            post(handlers::personal_agent::personal_agent_routine_act),
+        )
+        .route(
+            "/personal_agent_rules",
+            post(handlers::personal_agent::personal_agent_rules),
+        )
+        .route(
+            "/personal_agent_rule_reset",
+            post(handlers::personal_agent::personal_agent_rule_reset),
+        )
+        .route(
+            "/personal_agent_answer_question",
+            post(handlers::personal_agent::personal_agent_answer_question),
+        )
+        .route(
+            "/personal_agent_answer_plan",
+            post(handlers::personal_agent::personal_agent_answer_plan),
+        )
+        .route(
+            "/personal_agent_respond_permission",
+            post(handlers::personal_agent::personal_agent_respond_permission),
+        )
+        .route(
+            "/personal_agent_file_save",
+            post(handlers::personal_agent::personal_agent_file_save),
+        )
+        .route(
+            "/personal_agent_file_delete",
+            post(handlers::personal_agent::personal_agent_file_delete),
+        )
+        .route(
+            "/personal_agent_skill_switch",
+            post(handlers::personal_agent::personal_agent_skill_switch),
+        )
+        .route(
+            "/personal_agent_check_message",
+            post(handlers::personal_agent::personal_agent_check_message),
+        )
+        .route(
+            "/personal_agent_checks",
+            post(handlers::personal_agent::personal_agent_checks),
+        )
+        .route(
+            "/personal_agent_set_workdir",
+            post(handlers::personal_agent::personal_agent_set_workdir),
         )
         .route(
             "/list_conversation_tags",
@@ -528,6 +806,18 @@ pub fn build_router_with_proxy_auth(
         .route(
             "/list_workspace_files",
             post(handlers::folders::list_workspace_files),
+        )
+        .route(
+            "/search_workspace_files",
+            post(handlers::folders::search_workspace_files),
+        )
+        .route(
+            "/cancel_workspace_file_search",
+            post(handlers::folders::cancel_workspace_file_search),
+        )
+        .route(
+            "/prepare_workspace_file_search",
+            post(handlers::folders::prepare_workspace_file_search),
         )
         .route(
             "/start_workspace_state_stream",
@@ -854,6 +1144,10 @@ pub fn build_router_with_proxy_auth(
             post(handlers::config_sync::config_sync_apply_rollback),
         )
         .route(
+            "/config_sync_mirror_appearance",
+            post(handlers::config_sync::config_sync_mirror_appearance),
+        )
+        .route(
             "/download_workspace_file",
             post(handlers::workspace_files::download_workspace_file),
         )
@@ -913,6 +1207,127 @@ pub fn build_router_with_proxy_auth(
             post(handlers::mcp::mcp_set_server_apps),
         )
         .route("/mcp_remove_server", post(handlers::mcp::mcp_remove_server))
+        // The MCP engine behind the Harness page. The eight routes above
+        // stay one release longer, for older clients of this server.
+        .route("/mcp_inventory", post(handlers::mcp::mcp_inventory))
+        .route("/mcp_apply", post(handlers::mcp::mcp_apply))
+        .route(
+            "/mcp_parse_snippet",
+            post(handlers::mcp::mcp_parse_snippet),
+        )
+        // ─── Harness catalog (Discover) and the SpaceRing image proxy ───
+        .route("/harness_status", post(handlers::harness::harness_status))
+        .route("/harness_config", post(handlers::harness::harness_config))
+        .route("/harness_list", post(handlers::harness::harness_list))
+        .route("/harness_item", post(handlers::harness::harness_item))
+        .route(
+            "/harness_versions",
+            post(handlers::harness::harness_versions),
+        )
+        .route(
+            "/harness_releases",
+            post(handlers::harness::harness_releases),
+        )
+        .route("/harness_readme", post(handlers::harness::harness_readme))
+        .route("/harness_prompt", post(handlers::harness::harness_prompt))
+        .route("/harness_blob", post(handlers::harness::harness_blob))
+        .route("/srn_asset", post(handlers::harness::srn_asset))
+        // ─── Harness MCP installs and the record of what was installed ───
+        .route(
+            "/harness_mcp_plan",
+            post(handlers::harness_mcp::harness_mcp_plan),
+        )
+        .route(
+            "/harness_mcp_install",
+            post(handlers::harness_mcp::harness_mcp_install),
+        )
+        .route(
+            "/harness_installed",
+            post(handlers::harness_mcp::harness_installed),
+        )
+        .route(
+            "/harness_mcp_uninstall",
+            post(handlers::harness_mcp::harness_mcp_uninstall),
+        )
+        // ─── Harness skill installs ───
+        .route(
+            "/harness_skill_plan",
+            post(handlers::harness_skills::harness_skill_plan),
+        )
+        .route(
+            "/harness_skill_install",
+            post(handlers::harness_skills::harness_skill_install),
+        )
+        .route(
+            "/harness_skill_uninstall",
+            post(handlers::harness_skills::harness_skill_uninstall),
+        )
+        // ─── Harness plugin installs, updates, switches and repairs ───
+        .route(
+            "/harness_plugin_plan",
+            post(handlers::harness_plugins::harness_plugin_plan),
+        )
+        .route(
+            "/harness_plugin_install",
+            post(handlers::harness_plugins::harness_plugin_install),
+        )
+        .route(
+            "/harness_plugin_uninstall",
+            post(handlers::harness_plugins::harness_plugin_uninstall),
+        )
+        .route(
+            "/harness_plugin_plan_update",
+            post(handlers::harness_plugins::harness_plugin_plan_update),
+        )
+        .route(
+            "/harness_plugin_update",
+            post(handlers::harness_plugins::harness_plugin_update),
+        )
+        .route(
+            "/harness_plugin_set_host",
+            post(handlers::harness_plugins::harness_plugin_set_host),
+        )
+        .route(
+            "/harness_plugin_set_enabled",
+            post(handlers::harness_plugins::harness_plugin_set_enabled),
+        )
+        .route(
+            "/harness_plugin_repair",
+            post(handlers::harness_plugins::harness_plugin_repair),
+        )
+        .route(
+            "/harness_plugin_hook_trust",
+            post(handlers::harness_plugins::harness_plugin_hook_trust),
+        )
+        // ─── The update check of what was installed from Harness ───
+        .route(
+            "/harness_updates",
+            post(handlers::harness_updates::harness_updates),
+        )
+        .route(
+            "/harness_check_updates",
+            post(handlers::harness_updates::harness_check_updates),
+        )
+        // ─── Skills engine (Harness page: skills and skill packs) ───
+        .route("/skills_inventory", post(handlers::skills::skills_inventory))
+        .route(
+            "/skills_apply_links",
+            post(handlers::skills::skills_apply_links),
+        )
+        .route("/skills_adopt", post(handlers::skills::skills_adopt))
+        .route(
+            "/skills_repair_link",
+            post(handlers::skills::skills_repair_link),
+        )
+        .route("/skills_backups", post(handlers::skills::skills_backups))
+        .route(
+            "/skills_backup_restore",
+            post(handlers::skills::skills_backup_restore),
+        )
+        .route(
+            "/skills_backup_delete",
+            post(handlers::skills::skills_backup_delete),
+        )
         // ─── Version control settings ───
         .route("/detect_git", post(handlers::version_control::detect_git))
         .route(
@@ -946,6 +1361,10 @@ pub fn build_router_with_proxy_auth(
         .route(
             "/validate_gitea_token",
             post(handlers::version_control::validate_gitea_token),
+        )
+        .route(
+            "/validate_cnb_token",
+            post(handlers::version_control::validate_cnb_token),
         )
         .route(
             "/save_account_token",
@@ -1022,6 +1441,10 @@ pub fn build_router_with_proxy_auth(
         .route(
             "/acp_set_config_option",
             post(handlers::acp::acp_set_config_option),
+        )
+        .route(
+            "/acp_set_composer_mode",
+            post(handlers::acp::acp_set_composer_mode),
         )
         .route(
             "/acp_goal_control",
@@ -1132,6 +1555,14 @@ pub fn build_router_with_proxy_auth(
         .route(
             "/acp_update_deepseek_model_catalog",
             post(handlers::acp::acp_update_deepseek_model_catalog),
+        )
+        .route(
+            "/acp_load_deepseek_provider_routes",
+            post(handlers::acp::acp_load_deepseek_provider_routes),
+        )
+        .route(
+            "/acp_update_deepseek_provider_routes",
+            post(handlers::acp::acp_update_deepseek_provider_routes),
         )
         .route(
             "/acp_validate_pi_command",
@@ -1246,6 +1677,10 @@ pub fn build_router_with_proxy_auth(
             post(handlers::acp::acp_list_agent_skills),
         )
         .route(
+            "/acp_list_agent_runtime_skills",
+            post(handlers::acp::acp_list_agent_runtime_skills),
+        )
+        .route(
             "/acp_read_agent_skill",
             post(handlers::acp::acp_read_agent_skill),
         )
@@ -1324,24 +1759,12 @@ pub fn build_router_with_proxy_auth(
         // ─── Experts ───
         .route("/experts_list", post(handlers::experts::experts_list))
         .route(
-            "/experts_get_install_status",
-            post(handlers::experts::experts_get_install_status),
-        )
-        .route(
             "/experts_list_all_install_statuses",
             post(handlers::experts::experts_list_all_install_statuses),
         )
         .route(
-            "/experts_link_to_agent",
-            post(handlers::experts::experts_link_to_agent),
-        )
-        .route(
             "/experts_apply_links",
             post(handlers::experts::experts_apply_links),
-        )
-        .route(
-            "/experts_unlink_from_agent",
-            post(handlers::experts::experts_unlink_from_agent),
         )
         .route(
             "/experts_read_content",
@@ -1371,32 +1794,16 @@ pub fn build_router_with_proxy_auth(
         // ─── Science ───
         .route("/science_list", post(handlers::science::science_list))
         .route(
-            "/science_get_install_status",
-            post(handlers::science::science_get_install_status),
-        )
-        .route(
             "/science_list_all_install_statuses",
             post(handlers::science::science_list_all_install_statuses),
-        )
-        .route(
-            "/science_link_to_agent",
-            post(handlers::science::science_link_to_agent),
         )
         .route(
             "/science_apply_links",
             post(handlers::science::science_apply_links),
         )
         .route(
-            "/science_unlink_from_agent",
-            post(handlers::science::science_unlink_from_agent),
-        )
-        .route(
             "/science_read_content",
             post(handlers::science::science_read_content),
-        )
-        .route(
-            "/science_open_central_dir",
-            post(handlers::science::science_open_central_dir),
         )
         // ─── Custom skills ───
         .route("/custom_list", post(handlers::custom_skills::custom_list))
@@ -1469,18 +1876,6 @@ pub fn build_router_with_proxy_auth(
         .route(
             "/officecli_sync_skills",
             post(handlers::office_tools::officecli_sync_skills),
-        )
-        .route(
-            "/officecli_skill_link_to_agent",
-            post(handlers::office_tools::officecli_skill_link_to_agent),
-        )
-        .route(
-            "/officecli_skill_unlink_from_agent",
-            post(handlers::office_tools::officecli_skill_unlink_from_agent),
-        )
-        .route(
-            "/officecli_skill_get_install_status",
-            post(handlers::office_tools::officecli_skill_get_install_status),
         )
         .route(
             "/officecli_skill_list_all_install_statuses",
@@ -1646,6 +2041,14 @@ pub fn build_router_with_proxy_auth(
         .route(
             "/set_chat_event_webhooks",
             post(handlers::chat_channel::set_chat_event_webhooks),
+        )
+        .route(
+            "/get_chat_event_top_level_only",
+            post(handlers::chat_channel::get_chat_event_top_level_only),
+        )
+        .route(
+            "/set_chat_event_top_level_only",
+            post(handlers::chat_channel::set_chat_event_top_level_only),
         )
         .route(
             "/get_chat_message_language",
@@ -1824,6 +2227,11 @@ pub fn build_router_with_proxy_auth(
             post(handlers::forge::forge_list_issues),
         )
         .route(
+            "/forge_issue_detail",
+            post(handlers::forge::forge_issue_detail),
+        )
+        .route("/forge_read_image", post(handlers::forge::forge_read_image))
+        .route(
             "/forge_tab_count",
             post(handlers::forge::forge_tab_count),
         )
@@ -1852,6 +2260,14 @@ pub fn build_router_with_proxy_auth(
             post(handlers::forge::forge_change_detail),
         )
         .route(
+            "/forge_check_summaries",
+            post(handlers::forge::forge_check_summaries),
+        )
+        .route(
+            "/forge_approve_workflows",
+            post(handlers::forge::forge_approve_workflows),
+        )
+        .route(
             "/forge_change_files",
             post(handlers::forge::forge_change_files),
         )
@@ -1867,6 +2283,10 @@ pub fn build_router_with_proxy_auth(
         .route(
             "/work_task_create_from_forge",
             post(handlers::forge::work_task_create_from_forge),
+        )
+        .route(
+            "/work_task_create_from_forge_issues",
+            post(handlers::forge::work_task_create_from_forge_issues),
         )
         .route(
             "/work_task_lookup_by_source",
@@ -1905,6 +2325,10 @@ pub fn build_router_with_proxy_auth(
             post(handlers::work_task::work_task_merge_unqueue),
         )
         .route(
+            "/work_task_stop_background_wait",
+            post(handlers::work_task::work_task_stop_background_wait),
+        )
+        .route(
             "/work_task_complete",
             post(handlers::work_task::work_task_complete),
         )
@@ -1917,6 +2341,10 @@ pub fn build_router_with_proxy_auth(
             post(handlers::work_task::work_task_defer),
         )
         .route(
+            "/work_task_set_writeback",
+            post(handlers::work_task::work_task_set_writeback),
+        )
+        .route(
             "/work_task_cleanup",
             post(handlers::work_task::work_task_cleanup),
         )
@@ -1924,6 +2352,10 @@ pub fn build_router_with_proxy_auth(
         .route(
             "/work_task_changed_files",
             post(handlers::work_task::work_task_changed_files),
+        )
+        .route(
+            "/work_task_uncommitted_files",
+            post(handlers::work_task::work_task_uncommitted_files),
         )
         .route(
             "/work_task_settings_get",
@@ -1964,13 +2396,13 @@ pub fn build_router_with_proxy_auth(
         )
         .route(
             "/background_set",
-            // A 16MiB image becomes ~21.4MiB once base64-encoded and wrapped in
+            // A 64MiB image becomes ~85.4MiB once base64-encoded and wrapped in
             // the JSON envelope; axum's default 2MiB `DefaultBodyLimit` would
             // 413 any real photo before the handler runs. Raise it to cover the
             // advertised ceiling; `backgrounds::validate_background` stays the
             // authoritative size boundary on the decoded bytes.
             post(handlers::background::background_set)
-                .layer(DefaultBodyLimit::max(24 * 1024 * 1024)),
+                .layer(DefaultBodyLimit::max(96 * 1024 * 1024)),
         )
         .route(
             "/background_clear",
@@ -2072,6 +2504,12 @@ pub fn build_router_with_proxy_auth(
     // The login page needs to read the user's preferred language before
     // authenticating so it can render in their chosen locale.
     let public_api = Router::new()
+        // Image URLs carry short-lived, per-resource capabilities issued by
+        // forge_read_image. <img> cannot attach a Bearer header.
+        .route(
+            "/forge_image/{key}",
+            get(crate::forge::image_cache::serve_image),
+        )
         .route(
             "/get_system_language_settings",
             post(handlers::system_settings::get_system_language_settings),
@@ -2194,12 +2632,19 @@ pub fn build_router_with_proxy_auth(
         }
     });
 
+    // Codeg Web's SRN sign-in (`srn::web::routes`): its own instance-access
+    // check on three routes, none on the callback. Merged after the layers
+    // above so the wildcard CORS (meant for Bearer clients) does not cover
+    // it, and matched ahead of the static pages and the API's catch-all.
+    let srn_routes = crate::srn::web::routes::router(srn_web, web_auth_for_srn);
+
     Router::new()
         .nest("/api", api)
         .merge(ws_route)
         .fallback_service(static_files)
         .layer(html_rewrite)
         .layer(cors)
+        .merge(srn_routes)
         .layer(Extension(state))
         .layer(Extension(shutdown_signal))
         // Compress API JSON and static text assets. Allowlist predicate —

@@ -5,7 +5,7 @@
  * child ids — from a `delegate_to_agent` tool call, in priority order:
  *   live `DelegationContext` binding → persisted `meta["codeg.delegation"]`
  *   → parsed tool input/output. The same model drives the timeline's
- *   delegation row, the resumed-delegation card and the top-right
+ *   delegation and resumed-delegation rows and the top-right
  *   `SubAgentOverlay`, so they never disagree on what a sub-agent is doing.
  *
  * Pure parsing lives in `@/lib/delegation-card`; this hook adds the two
@@ -48,7 +48,7 @@ export interface DelegationCardSource {
   meta?: Record<string, unknown> | null
   /**
    * A broker task id to resolve the live binding by when `parentToolUseId`
-   * matches none. Set by `ResumedDelegationCard`: a resume re-binds the child
+   * matches none. Set by `DelegationResumeRow`: a resume re-binds the child
    * to the ORIGINAL `delegate_to_agent` call's tool_use_id, so the resume
    * call's own id is never a binding key — the task id in its arguments is.
    */
@@ -76,6 +76,11 @@ export interface DelegationIdentity {
   /** The assistant's name when the delegation started: the fallback for a row
    *  the assistants store does not hold. */
   assistantName: string | null
+  /** The owner's assistant it ran as (its uid), looked up on the roster;
+   *  with it, `assistantId` is that assistant's row. Null for a plain agent
+   *  delegation and for one from before them (then `assistantId` is the
+   *  collaboration settings' assistant). */
+  botUid: string | null
 }
 
 export interface DelegationCardModel {
@@ -231,6 +236,12 @@ export function useDelegationCardModel(
     toolOutput?.assistantName ??
     parsedMeta?.assistantName ??
     null
+  const botUid =
+    binding?.botUid ??
+    parsed.botUid ??
+    toolOutput?.botUid ??
+    parsedMeta?.botUid ??
+    null
 
   // Live binding → the call's own `agent_type` argument → the broker report's
   // `agent_type` → the historical meta injected from the child's DB row. The
@@ -240,13 +251,13 @@ export function useDelegationCardModel(
   // that fills it in anyway must not paint the wrong agent.
   const agentType: AgentType | null =
     binding?.agentType ??
-    (assistantId === null ? parsed.agentType : null) ??
+    (assistantId === null && botUid === null ? parsed.agentType : null) ??
     toolOutput?.agentType ??
     parsedMeta?.agentType ??
     null
   const identity = useMemo<DelegationIdentity>(
-    () => ({ agentType, assistantId, assistantName }),
-    [agentType, assistantId, assistantName]
+    () => ({ agentType, assistantId, assistantName, botUid }),
+    [agentType, assistantId, assistantName, botUid]
   )
   const ended = useMemo(() => taskEnding(laterReport), [laterReport])
   const status = resolveDelegationStatus({
@@ -291,6 +302,7 @@ export function useDelegationCardModel(
       binding ||
       parsed.agentType ||
       parsed.assistantId ||
+      parsed.botUid ||
       parsed.task ||
       parsedMeta ||
       toolOutput?.agentType ||

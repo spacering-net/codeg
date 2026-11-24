@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 
+import { parseMcpToolName } from "./activity/mcp"
 import {
   aliasToolInputKeys,
   claudeCodeMarksSubagent,
@@ -175,6 +176,39 @@ describe("inferLiveToolName meta.claudeCode.toolName override", () => {
         meta: { claudeCode: { toolName: "memory_recall" } },
       })
     ).toBe("memory_recall")
+  })
+
+  it("names EnterPlanMode by its meta name whatever kind the adapter gives it", () => {
+    // claude-agent-acp 0.99.0 (#1467) reports EnterPlanMode with the
+    // `switch_mode` kind ExitPlanMode has, where 0.98.0 said `other`. The
+    // frames are otherwise the same (measured): the opening tool_call has no
+    // input, the update after it an empty one.
+    const meta = { claudeCode: { toolName: "EnterPlanMode" } }
+    for (const kind of ["switch_mode", "other"]) {
+      for (const rawInput of [null, "{}"]) {
+        const name = inferLiveToolName({
+          title: "EnterPlanMode",
+          kind,
+          rawInput,
+          meta,
+        })
+        expect(name, `${kind} ${rawInput}`).toBe("enterplanmode")
+        expect(normalizeToolName(name)).toBe("enterplanmode")
+      }
+    }
+    // The meta name decides, not the kind: with no title to go by, a
+    // `switch_mode` call is still EnterPlanMode rather than a generic switch.
+    expect(
+      inferLiveToolName({
+        title: null,
+        kind: "switch_mode",
+        rawInput: null,
+        meta,
+      })
+    ).toBe("enterplanmode")
+    expect(
+      inferLiveToolName({ title: null, kind: "switch_mode", rawInput: null })
+    ).toBe("switch_mode")
   })
 
   it("falls back to title-based inference when no meta is provided", () => {
@@ -1769,5 +1803,70 @@ describe("inferLiveToolName meta.kiro.canonicalToolName override", () => {
         new_string: "b",
       })
     ).toBe("edit")
+  })
+})
+
+describe("inferLiveToolName on claude-agent-acp's readable MCP titles", () => {
+  // claude-agent-acp 0.109.1 (#1674) titles an MCP tool call `<server>: <tool>`
+  // where it sent the raw `mcp__<server>__<tool>`, and keeps the raw name in
+  // `_meta.claudeCode.toolName` — the frames below are the adapter's own (live,
+  // 0.110.0). Both titles must name the call alike, so a live card matches the
+  // one a reload draws from the transcript's raw name.
+  const frame = (server: string, tool: string, title: string) => ({
+    title,
+    kind: "other",
+    meta: {
+      claudeCode: { toolName: `mcp__${server}__${tool}` },
+      jetbrains: { air: { version: 1, mcp: { server, tool } } },
+      is_mcp_tool_call: true,
+    },
+  })
+  const cases: [string, string, string | null, string][] = [
+    [
+      "codeg-mcp",
+      "task_progress",
+      '{"message":"halfway"}',
+      "mcp__codeg-mcp__task_progress",
+    ],
+    ["codeg-mcp", "ask_user_question", '{"questions":[]}', "question"],
+    [
+      "codeg-mcp",
+      "delegate_to_agent",
+      '{"agent_type":"codex","task":"hi"}',
+      "delegate_to_agent",
+    ],
+    [
+      "codeg-mcp",
+      "get_delegation_status",
+      '{"task_ids":["t1"]}',
+      "get_delegation_status",
+    ],
+    ["codeg-mcp", "cancel_delegation", '{"task_id":"t1"}', "cancel_delegation"],
+    ["github", "create_issue", '{"title":"x"}', "mcp__github__create_issue"],
+    // The readable title reads as the built-in web search to the title rules;
+    // the raw name keeps it this server's MCP call.
+    ["web-search", "search", '{"query":"codeg"}', "mcp__web-search__search"],
+  ]
+
+  it.each(cases)("%s: %s", (server, tool, rawInput, expected) => {
+    const name = (title: string, input: string | null) =>
+      inferLiveToolName({ ...frame(server, tool, title), rawInput: input })
+    for (const input of [null, rawInput]) {
+      expect(name(`${server}: ${tool}`, input)).toBe(
+        name(`mcp__${server}__${tool}`, input)
+      )
+    }
+    expect(name(`${server}: ${tool}`, rawInput)).toBe(expected)
+  })
+
+  it("keeps a third-party tool's server for its MCP row", () => {
+    const name = inferLiveToolName({
+      ...frame("github", "create_issue", "github: create_issue"),
+      rawInput: null,
+    })
+    expect(parseMcpToolName(name)).toEqual({
+      server: "github",
+      tool: "create_issue",
+    })
   })
 })

@@ -8,19 +8,11 @@ use crate::app_state::AppState;
 use crate::commands::experts::{ExpertInstallStatus, LinkOp, LinkOpResult};
 use crate::commands::office_tools as ot;
 use crate::commands::office_tools::{OfficecliInfo, OfficecliSkill, SkillSyncReport};
-use crate::models::agent::AgentType;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillIdParams {
     pub skill_id: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SkillAgentParams {
-    pub skill_id: String,
-    pub agent_type: AgentType,
 }
 
 #[derive(Deserialize)]
@@ -58,10 +50,12 @@ pub async fn officecli_install(
     Ok(Json(result))
 }
 
-pub async fn officecli_uninstall() -> Result<Json<OfficecliInfo>, AppCommandError> {
-    let result = ot::officecli_uninstall()
+pub async fn officecli_uninstall(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<OfficecliInfo>, AppCommandError> {
+    let result = ot::officecli_uninstall_core(&state.emitter)
         .await
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+        .map_err(|e| AppCommandError::from(&e))?;
     Ok(Json(result))
 }
 
@@ -70,37 +64,12 @@ pub async fn officecli_list_skills() -> Result<Json<Vec<OfficecliSkill>>, AppCom
     Ok(Json(result))
 }
 
-pub async fn officecli_sync_skills() -> Result<Json<SkillSyncReport>, AppCommandError> {
-    let result = ot::officecli_sync_skills()
+pub async fn officecli_sync_skills(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<SkillSyncReport>, AppCommandError> {
+    let result = ot::officecli_sync_skills_core(&state.emitter)
         .await
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
-    Ok(Json(result))
-}
-
-pub async fn officecli_skill_link_to_agent(
-    Json(params): Json<SkillAgentParams>,
-) -> Result<Json<ExpertInstallStatus>, AppCommandError> {
-    let result = ot::officecli_skill_link_to_agent(params.skill_id, params.agent_type)
-        .await
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
-    Ok(Json(result))
-}
-
-pub async fn officecli_skill_unlink_from_agent(
-    Json(params): Json<SkillAgentParams>,
-) -> Result<Json<()>, AppCommandError> {
-    ot::officecli_skill_unlink_from_agent(params.skill_id, params.agent_type)
-        .await
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
-    Ok(Json(()))
-}
-
-pub async fn officecli_skill_get_install_status(
-    Json(params): Json<SkillIdParams>,
-) -> Result<Json<Vec<ExpertInstallStatus>>, AppCommandError> {
-    let result = ot::officecli_skill_get_install_status(params.skill_id)
-        .await
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+        .map_err(|e| AppCommandError::from(&e))?;
     Ok(Json(result))
 }
 
@@ -113,11 +82,12 @@ pub async fn officecli_skill_list_all_install_statuses(
 }
 
 pub async fn officecli_skill_apply_links(
+    Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<ApplyLinksParams>,
 ) -> Result<Json<Vec<LinkOpResult>>, AppCommandError> {
-    let result = ot::officecli_skill_apply_links(params.ops)
+    let result = ot::officecli_skill_apply_links_core(&state.emitter, params.ops)
         .await
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+        .map_err(|e| AppCommandError::from(&e))?;
     Ok(Json(result))
 }
 

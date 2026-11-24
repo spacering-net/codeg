@@ -58,6 +58,11 @@ const TasksViewContext = createContext<TasksViewContextValue | null>(null)
  * runs headless, so `task://changed` nudges + refetch are the only way an open
  * board learns a task advanced.
  */
+/** The board's tasks where a provider is above; `null` elsewhere. */
+export function useOptionalTasksView() {
+  return useContext(TasksViewContext)
+}
+
 export function useTasksView() {
   const ctx = useContext(TasksViewContext)
   if (!ctx) {

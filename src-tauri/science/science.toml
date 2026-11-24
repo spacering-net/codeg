@@ -1,7 +1,7 @@
 # Scientific research skill metadata. Bundled alongside skills/ and loaded at
 # runtime by commands/science.rs (mirrors experts.toml).
 #
-# Curated from K-Dense-AI/scientific-agent-skills @ 4d97e293 — v1 vendors only
+# Curated from K-Dense-AI/scientific-agent-skills @ 526ebce1 (v2.72.0) — v1 vendors only
 # skills that are MIT-licensed and self-contained (no required cross-skill edges).
 #
 # Fields beyond the experts.toml set:
@@ -25,6 +25,7 @@ icon = "Sparkles"
 sort_order = 10
 featured = true
 accent = "amber"
+needs_env = true
 
 [skill.display_name]
 en = "Scientific Brainstorming"
@@ -209,16 +210,16 @@ pt = "Análise exploratória de dados"
 ar = "تحليل البيانات الاستكشافي"
 
 [skill.description]
-en = "Automated exploration of scientific data files across 200+ formats with quality metrics and reports."
-"zh-CN" = "对 200+ 种格式的科学数据文件做自动化探索，输出质量指标与报告。"
-"zh-TW" = "對 200+ 種格式的科學資料檔案做自動化探索，輸出品質指標與報告。"
-ja = "200 以上の形式の科学データファイルを自動探索し、品質指標とレポートを生成。"
-ko = "200종 이상 형식의 과학 데이터 파일을 자동 탐색하고 품질 지표와 보고서를 생성합니다."
-es = "Exploración automatizada de archivos de datos científicos en más de 200 formatos con métricas de calidad e informes."
-de = "Automatisierte Exploration wissenschaftlicher Datendateien in über 200 Formaten mit Qualitätsmetriken und Berichten."
-fr = "Exploration automatisée de fichiers de données scientifiques (200+ formats) avec métriques de qualité et rapports."
-pt = "Exploração automatizada de arquivos de dados científicos em mais de 200 formatos com métricas de qualidade e relatórios."
-ar = "استكشاف آلي لملفات البيانات العلمية بأكثر من 200 صيغة مع مقاييس الجودة والتقارير."
+en = "Bounded, local profiling of supported scientific data files — structure, missingness and outlier audits, and an EDA report."
+"zh-CN" = "对受支持的科学数据文件做本地、有边界的探索：结构概览、缺失与离群审计，并输出 EDA 报告。"
+"zh-TW" = "對受支援的科學資料檔案做本機、有邊界的探索：結構概覽、缺失與離群稽核，並輸出 EDA 報告。"
+ja = "対応する科学データファイルをローカルで範囲を限定して探索。構造の把握、欠損・外れ値の監査、EDA レポートを生成。"
+ko = "지원되는 과학 데이터 파일을 로컬에서 범위를 한정해 탐색합니다 — 구조 파악, 결측·이상치 점검, EDA 보고서."
+es = "Exploración local y acotada de archivos de datos científicos compatibles: estructura, auditoría de valores faltantes y atípicos, e informe EDA."
+de = "Begrenzte, lokale Exploration unterstützter wissenschaftlicher Datendateien — Struktur, Prüfung fehlender Werte und Ausreißer sowie ein EDA-Bericht."
+fr = "Exploration locale et bornée des fichiers de données scientifiques pris en charge : structure, audit des valeurs manquantes et aberrantes, et rapport EDA."
+pt = "Exploração local e delimitada de arquivos de dados científicos suportados: estrutura, auditoria de valores ausentes e outliers, e relatório de EDA."
+ar = "استكشاف محلي ومحدود لملفات البيانات العلمية المدعومة: البنية، وتدقيق القيم المفقودة والشاذة، وتقرير تحليل استكشافي."
 
 
 [[skill]]
@@ -243,16 +244,16 @@ pt = "Visualização científica"
 ar = "التصور العلمي"
 
 [skill.description]
-en = "Publication-ready figures — multi-panel layouts, significance annotations, and journal-specific formatting."
-"zh-CN" = "出版级图表：多面板布局、显著性标注与期刊专属格式。"
-"zh-TW" = "出版級圖表：多面板佈局、顯著性標註與期刊專屬格式。"
-ja = "出版品質の図。マルチパネル配置、有意差注釈、ジャーナル固有の書式に対応。"
-ko = "출판 수준 그림 — 다중 패널 배치, 유의성 주석, 저널별 서식."
-es = "Figuras listas para publicar: diseños multipanel, anotaciones de significancia y formato específico de revista."
-de = "Publikationsreife Abbildungen — Mehrfeld-Layouts, Signifikanz-Annotationen und journalspezifische Formate."
-fr = "Figures prêtes à publier : dispositions multipanneaux, annotations de significativité et mise en forme par revue."
-pt = "Figuras prontas para publicação: layouts multipainel, anotações de significância e formatação específica de periódico."
-ar = "أشكال جاهزة للنشر: تخطيطات متعددة اللوحات، وتعليقات الدلالة الإحصائية، وتنسيق خاص بكل مجلة."
+en = "Truthful, accessible publication figures — multi-panel layouts, uncertainty displays, color/contrast audits, and journal export planning."
+"zh-CN" = "真实、无障碍的出版级图表：多面板布局、不确定性呈现、配色与对比度审查及期刊导出规划。"
+"zh-TW" = "真實、無障礙的出版級圖表：多面板佈局、不確定性呈現、配色與對比度審查及期刊匯出規劃。"
+ja = "正確でアクセシブルな出版品質の図。マルチパネル配置、不確実性の表示、配色・コントラスト監査、ジャーナル向け書き出し計画。"
+ko = "정확하고 접근성 높은 출판용 그림 — 다중 패널 배치, 불확실성 표시, 색상·대비 점검, 저널 내보내기 계획."
+es = "Figuras de publicación veraces y accesibles: diseños multipanel, representación de la incertidumbre, auditoría de color y contraste, y planificación de exportación para revistas."
+de = "Wahrheitsgetreue, barrierearme Publikationsabbildungen — Mehrfeld-Layouts, Unsicherheitsdarstellung, Farb- und Kontrastprüfung sowie Exportplanung für Journale."
+fr = "Figures de publication fidèles et accessibles : dispositions multipanneaux, représentation de l'incertitude, audit couleur et contraste, et planification de l'export pour les revues."
+pt = "Figuras de publicação fiéis e acessíveis: layouts multipainel, exibição da incerteza, auditoria de cor e contraste, e planejamento de exportação para periódicos."
+ar = "أشكال نشر صادقة وسهلة الوصول: تخطيطات متعددة اللوحات، وعرض عدم اليقين، وتدقيق الألوان والتباين، وتخطيط التصدير للمجلات."
 
 
 [[skill]]
@@ -295,6 +296,7 @@ icon = "Search"
 sort_order = 90
 featured = true
 accent = "sky"
+needs_env = true
 
 [skill.display_name]
 en = "Paper Lookup"
@@ -309,16 +311,16 @@ pt = "Busca de artigos"
 ar = "البحث عن الأوراق البحثية"
 
 [skill.description]
-en = "Search 10 scholarly APIs (PubMed, arXiv, OpenAlex, Crossref…) for papers, citations, and open-access full text."
-"zh-CN" = "检索 10 个学术 API（PubMed、arXiv、OpenAlex、Crossref…）查找论文、引用与开放获取全文。"
-"zh-TW" = "檢索 10 個學術 API（PubMed、arXiv、OpenAlex、Crossref…）查找論文、引用與開放取用全文。"
-ja = "10 の学術 API（PubMed、arXiv、OpenAlex、Crossref…）で論文・引用・オープンアクセス全文を検索。"
-ko = "10개 학술 API(PubMed, arXiv, OpenAlex, Crossref…)에서 논문·인용·오픈액세스 전문을 검색합니다."
-es = "Busca en 10 API académicas (PubMed, arXiv, OpenAlex, Crossref…) artículos, citas y texto completo de acceso abierto."
-de = "10 wissenschaftliche APIs (PubMed, arXiv, OpenAlex, Crossref…) nach Artikeln, Zitationen und Open-Access-Volltext durchsuchen."
-fr = "Rechercher dans 10 API savantes (PubMed, arXiv, OpenAlex, Crossref…) articles, citations et texte intégral en libre accès."
-pt = "Pesquise em 10 APIs acadêmicas (PubMed, arXiv, OpenAlex, Crossref…) artigos, citações e texto completo de acesso aberto."
-ar = "البحث في 10 واجهات برمجية أكاديمية (PubMed وarXiv وOpenAlex وCrossref…) عن الأوراق والاستشهادات والنص الكامل المفتوح."
+en = "Search 18 scholarly APIs (PubMed, arXiv, OpenAlex, Crossref…) for papers, citations, and open-access full text."
+"zh-CN" = "检索 18 个学术 API（PubMed、arXiv、OpenAlex、Crossref…）查找论文、引用与开放获取全文。"
+"zh-TW" = "檢索 18 個學術 API（PubMed、arXiv、OpenAlex、Crossref…）查找論文、引用與開放取用全文。"
+ja = "18 の学術 API（PubMed、arXiv、OpenAlex、Crossref…）で論文・引用・オープンアクセス全文を検索。"
+ko = "18개 학술 API(PubMed, arXiv, OpenAlex, Crossref…)에서 논문·인용·오픈액세스 전문을 검색합니다."
+es = "Busca en 18 API académicas (PubMed, arXiv, OpenAlex, Crossref…) artículos, citas y texto completo de acceso abierto."
+de = "18 wissenschaftliche APIs (PubMed, arXiv, OpenAlex, Crossref…) nach Artikeln, Zitationen und Open-Access-Volltext durchsuchen."
+fr = "Rechercher dans 18 API savantes (PubMed, arXiv, OpenAlex, Crossref…) articles, citations et texte intégral en libre accès."
+pt = "Pesquise em 18 APIs acadêmicas (PubMed, arXiv, OpenAlex, Crossref…) artigos, citações e texto completo de acesso aberto."
+ar = "البحث في 18 واجهة برمجية أكاديمية (PubMed وarXiv وOpenAlex وCrossref…) عن الأوراق والاستشهادات والنص الكامل المفتوح."
 
 
 [[skill]]
@@ -405,16 +407,16 @@ pt = "Avaliação acadêmica"
 ar = "التقييم الأكاديمي"
 
 [skill.description]
-en = "Score scholarly work with the ScholarEval framework across formulation, methodology, analysis, and writing."
-"zh-CN" = "用 ScholarEval 框架从选题、方法、分析到写作对学术工作量化评分。"
-"zh-TW" = "以 ScholarEval 框架從選題、方法、分析到寫作對學術工作量化評分。"
-ja = "ScholarEval フレームワークで、課題設定・方法・分析・執筆にわたり研究成果を採点。"
-ko = "ScholarEval 프레임워크로 문제 설정·방법론·분석·글쓰기 전반에 걸쳐 학술 성과를 채점."
-es = "Puntúa el trabajo académico con el marco ScholarEval en formulación, metodología, análisis y redacción."
-de = "Wissenschaftliche Arbeiten mit dem ScholarEval-Rahmen in Fragestellung, Methodik, Analyse und Schreiben bewerten."
-fr = "Noter les travaux savants avec le cadre ScholarEval : formulation, méthodologie, analyse et rédaction."
-pt = "Pontue trabalhos acadêmicos com o framework ScholarEval em formulação, metodologia, análise e redação."
-ar = "تقييم الأعمال البحثية بإطار ScholarEval عبر صياغة المشكلة والمنهجية والتحليل والكتابة."
+en = "Qualitative-first, evidence-traceable developmental review of scholarly work — never for ranking people or high-stakes decisions."
+"zh-CN" = "以定性为先、证据可追溯的方式对学术工作做发展性评审；不用于给人排名或重大决策。"
+"zh-TW" = "以質性為先、證據可追溯的方式對學術工作做發展性評審；不用於為人排名或重大決策。"
+ja = "定性重視・根拠を追跡できる形で学術成果を発展的にレビュー。人物の順位付けや重大な判断には使いません。"
+ko = "정성 평가 우선, 근거 추적이 가능한 학술 성과 발전적 검토 — 사람 순위 매기기나 중대한 결정에는 쓰지 않습니다."
+es = "Revisión formativa del trabajo académico, cualitativa y con evidencia trazable; nunca para clasificar personas ni para decisiones de alto impacto."
+de = "Qualitativ ausgerichtete, belegbare Entwicklungsbegutachtung wissenschaftlicher Arbeiten — nie für Personenrankings oder folgenreiche Entscheidungen."
+fr = "Évaluation formative des travaux savants, qualitative d'abord et traçable aux preuves — jamais pour classer des personnes ni pour des décisions à fort enjeu."
+pt = "Revisão formativa de trabalhos acadêmicos, qualitativa e com evidências rastreáveis — nunca para ranquear pessoas nem para decisões de alto impacto."
+ar = "مراجعة تطويرية للأعمال البحثية نوعية أولًا وقابلة لتتبع الأدلة، ولا تُستخدم أبدًا لترتيب الأشخاص أو للقرارات المصيرية."
 
 
 [[skill]]

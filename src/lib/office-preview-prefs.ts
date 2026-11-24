@@ -1,12 +1,24 @@
-// Whether to auto-open a live preview when an agent produces an office file
-// (.docx/.xlsx/.pptx) in the workspace. Persisted in localStorage; defaults to
-// ON now that the file-lock contention that made it disruptive is fixed (the
-// preview uses a long-lived `officecli watch` server instead of re-reading the
-// file on every change).
+// Whether to auto-open a live preview when an agent's tool writes an office
+// file (.docx/.xlsx/.pptx) in the workspace during its turn. Persisted in
+// localStorage; defaults to ON now that the file-lock contention that made it
+// disruptive is fixed (the preview uses a long-lived `officecli watch` server
+// instead of re-reading the file on every change).
 
 import { useEffect, useState } from "react"
 
 const AUTO_PREVIEW_KEY = "workspace:office-auto-preview"
+
+/**
+ * Backend broadcast of the Office documents an agent's running turn wrote
+ * through its tools (`src-tauri/src/agent_turn_files`). The workspace
+ * auto-opens these — and only these — when the preference is on.
+ */
+export const AGENT_TURN_FILES_EVENT = "folder://agent-turn-files"
+
+export interface AgentTurnFilesEvent {
+  /** Absolute paths, as the filesystem spells them. */
+  paths: string[]
+}
 const AUTO_PREVIEW_EVENT = "codeg:office-auto-preview-changed"
 
 export function loadOfficeAutoPreview(): boolean {

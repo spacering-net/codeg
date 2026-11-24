@@ -15,8 +15,8 @@
  */
 
 import { buildBackgroundTaskRows } from "@/lib/background-task"
-import { delegateCallTaskId } from "@/lib/delegation-card"
 import { buildDelegationTaskRows } from "@/lib/delegation-status"
+import { delegationStepTaskId } from "./delegation-task"
 import { isFailureStatus, isLiveStatus } from "./status"
 import type {
   ActivityCounts,
@@ -126,7 +126,7 @@ export function summarizeActivity(steps: ActivityStep[]): ActivitySummary {
       // A delegation stands where its task's newest check says. The checks
       // are rows of their own, but a task that failed is the delegation's
       // failure — counted once, on its row.
-      const taskId = delegateCallTaskId(step.part)
+      const taskId = delegationStepTaskId(step)
       const task = buildDelegationTaskRows(step.laterPolls).find(
         (row) => row.taskId === taskId
       )

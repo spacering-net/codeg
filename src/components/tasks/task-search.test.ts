@@ -92,6 +92,33 @@ describe("taskMatchesSearch", () => {
     expect(matches(forgeTask(), "#12")).toBe(false)
   })
 
+  /** A task made from several issues is found by ANY of them — its number,
+   *  its `owner/repo#n`, its title — not only the one it leads with. */
+  it("finds a task of several issues by any of them", () => {
+    const several = forgeTask({
+      source_meta: {
+        ...forgeTask().source_meta!,
+        items: [
+          {
+            number: 128,
+            url: "https://github.com/acme/app/issues/128",
+            title: "Login times out on slow networks",
+          },
+          {
+            number: 131,
+            url: "https://github.com/acme/app/issues/131",
+            title: "Retry storm after a timeout",
+          },
+        ],
+      },
+    })
+    expect(matches(several, "#131")).toBe(true)
+    expect(matches(several, "#128")).toBe(true)
+    expect(matches(several, "#13")).toBe(false)
+    expect(matches(several, "acme/app#131")).toBe(true)
+    expect(matches(several, "retry storm")).toBe(true)
+  })
+
   it("finds a forge task by its repository and its item", () => {
     expect(matches(forgeTask(), "acme/app")).toBe(true)
     expect(matches(forgeTask(), "acme/app#128")).toBe(true)

@@ -1,8 +1,20 @@
 import { act, render } from "@testing-library/react"
-import { useRef } from "react"
-import { describe, expect, it } from "vitest"
+import { StrictMode, useRef } from "react"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { useRailGrowth } from "./use-rail-growth"
+
+/** Whether a reply is taking the pending reply's place as the list mounts.
+ *  Told once, as in the thread: the reply's own mount, right after, takes
+ *  the pending reply's layout. */
+const handoff = vi.hoisted(() => ({ taking: false }))
+vi.mock("../reply-motion", () => ({
+  takesPendingPlace: () => {
+    const taking = handoff.taking
+    handoff.taking = false
+    return taking
+  },
+}))
 
 function List({
   rows,
@@ -26,9 +38,11 @@ function List({
           key={row}
           data-row={row}
           data-body={row === body ? "" : undefined}
+          // A stretch of a long list not drawn (activity-timeline.tsx).
+          data-marker={row.startsWith("spacer") ? "spacer" : undefined}
         />
       ))}
-      {foot ? <li key="foot" data-row="foot" /> : null}
+      {foot ? <li key="foot" data-row="foot" data-marker="working" /> : null}
     </ul>
   )
 }
@@ -50,6 +64,10 @@ async function marks(container: HTMLElement) {
 }
 
 describe("useRailGrowth", () => {
+  afterEach(() => {
+    handoff.taking = false
+  })
+
   it("marks the rows that join a live list, and the row they follow", async () => {
     const view = render(<List rows={["a", "b"]} live />)
     view.rerender(<List rows={["a", "b", "c", "d"]} live />)
@@ -152,6 +170,30 @@ describe("useRailGrowth", () => {
     })
   })
 
+  it("lets the rows join that a reply mounts with in the pending reply's place", async () => {
+    // The pending reply stood as this list, its ring alone: what the reply
+    // mounts with has only just come, and grows in as rows that join do.
+    handoff.taking = true
+    const view = render(<List rows={["a", "b"]} live foot />)
+
+    expect(await marks(view.container)).toEqual({
+      a: "enter",
+      b: "enter",
+      foot: "",
+    })
+  })
+
+  it("keeps those marks through its effect run over again (Strict Mode)", async () => {
+    handoff.taking = true
+    const view = render(
+      <StrictMode>
+        <List rows={["a"]} live foot />
+      </StrictMode>
+    )
+
+    expect(await marks(view.container)).toEqual({ a: "enter", foot: "" })
+  })
+
   it("marks nothing in a settled list", async () => {
     const view = render(<List rows={["a"]} live={false} />)
     view.rerender(<List rows={["a", "b"]} live={false} />)
@@ -189,6 +231,38 @@ describe("useRailGrowth", () => {
       b: "extend",
       c: "enter",
     })
+  })
+
+  it("leaves the rows a long list draws as it scrolls alone", async () => {
+    // Drawn a stretch at a time: rows come in above the ones drawn, and the
+    // spacer standing for the rest comes and goes. None of it is a step
+    // joining the list.
+    const view = render(<List rows={["c", "d"]} live foot />)
+    view.rerender(<List rows={["spacer-a", "a", "b", "c", "d"]} live foot />)
+    expect(await marks(view.container)).toEqual({
+      "spacer-a": "",
+      a: "",
+      b: "",
+      c: "",
+      d: "",
+      foot: "",
+    })
+    view.rerender(
+      <List rows={["spacer-a", "a", "b", "c", "d", "spacer-b"]} live foot />
+    )
+    expect((await marks(view.container))["spacer-b"]).toBe("")
+    // The window reaching the end: the spacer goes, the rows it stood for
+    // are drawn above the foot. Drawn, not joining.
+    view.rerender(
+      <List rows={["spacer-a", "a", "b", "c", "d", "x", "y"]} live foot />
+    )
+    const reached = await marks(view.container)
+    expect([reached.x, reached.y]).toEqual(["", ""])
+    // A step joining at the end, the window resting there, still does.
+    view.rerender(
+      <List rows={["spacer-a", "a", "b", "c", "d", "x", "y", "e"]} live foot />
+    )
+    expect((await marks(view.container)).e).toBe("enter")
   })
 
   it("clears its marks when the list settles", async () => {

@@ -2,12 +2,18 @@
 
 import { useCallback, useSyncExternalStore } from "react"
 
-import { acpListAgentSkills } from "@/lib/api"
+import { acpListAgentRuntimeSkills } from "@/lib/api"
+import { listenSkillsChanged } from "@/lib/skills/changes"
+import type { SkillsChanged } from "@/lib/skills/types"
 import type { AgentSkillItem, AgentType } from "@/lib/types"
 
 /**
  * The skills an agent sees from one folder, held ONCE per window and shared by
  * every component that reads them.
+ *
+ * They are what the agent's sessions load (`acpListAgentRuntimeSkills`): for
+ * OpenCode that includes the `.claude` folders and the folders above the
+ * workspace, which its Skills settings page does not list.
  *
  * Several readers routinely share a folder: a Codex tab's composer (its `$`
  * menu) and its transcript (its badge check) read the same list, and background
@@ -30,12 +36,19 @@ interface SkillsEntry {
   generation: number
   /** A scan whose answer is still wanted is running. */
   loading: boolean
+  /** Kept while nothing read it, so nothing followed its changes: the next
+   *  reader shows it, and scans it again. */
+  stale: boolean
 }
 
 const entries = new Map<string, SkillsEntry>()
 /** The folders some mounted component is reading right now. */
 const readers = new Map<string, Set<() => void>>()
+/** Keep recent lists for quick reopen, apart from entries with active readers. */
+const MAX_INACTIVE_SKILL_LISTS = 32
 let listeningForFocus = false
+/** Stops following `skills://changed`; set while anything is read. */
+let stopFollowingChanges: (() => void) | null = null
 
 /** Stable empty answer: a fresh `[]` per read would never compare equal to
  *  itself as a `useSyncExternalStore` snapshot, and React would re-render
@@ -68,6 +81,7 @@ function entryFor(
       skills: null,
       generation: 0,
       loading: false,
+      stale: false,
     }
     entries.set(key, entry)
   }
@@ -81,13 +95,14 @@ function scan(key: string, entry: SkillsEntry): void {
   // Forgotten (by invalidation) or superseded (by a newer scan) since it began.
   const stale = () =>
     entries.get(key) !== entry || entry.generation !== generation
-  acpListAgentSkills({
+  acpListAgentRuntimeSkills({
     agentType: entry.agentType,
     workspacePath: entry.workspacePath,
   }).then(
     (result) => {
       if (stale()) return
       entry.loading = false
+      entry.stale = false
       const skills = result.supported ? result.skills : EMPTY
       // An unchanged list keeps its reference, so a refresh that found nothing
       // new re-renders no reader (nor re-parses a transcript's messages).
@@ -116,6 +131,34 @@ function onWindowFocus() {
   }
 }
 
+// Codeg changed a skill or a link — from this window (the Harness page sits in
+// the same window as the composers, so no focus event follows its changes),
+// from another one, or from another client of the same server. The event
+// names the agents that read a directory that changed; an empty list, or a
+// reconnect after events may have been lost, could be anyone. Their folders
+// that something reads are rescanned; the rest are forgotten, so the next
+// reader scans afresh instead of being served a list from before the change.
+function onSkillsChanged(change: SkillsChanged | null) {
+  const named =
+    change && change.agents.length > 0 ? new Set(change.agents) : null
+  for (const [key, entry] of entries) {
+    if (named && !named.has(entry.agentType)) continue
+    if (readers.has(key)) scan(key, entry)
+    else entries.delete(key)
+  }
+}
+
+function keepRecentlyClosedList(key: string, entry: SkillsEntry) {
+  // Insertion order tracks when a list became inactive. Leave active lists
+  // shared by all readers regardless of how many folders are open.
+  entries.delete(key)
+  entries.set(key, entry)
+  for (const oldest of entries.keys()) {
+    if (entries.size - readers.size <= MAX_INACTIVE_SKILL_LISTS) break
+    if (!readers.has(oldest)) entries.delete(oldest)
+  }
+}
+
 function subscribe(
   agentType: AgentType,
   workspacePath: string | null,
@@ -132,17 +175,29 @@ function subscribe(
     window.addEventListener("focus", onWindowFocus)
     listeningForFocus = true
   }
+  stopFollowingChanges ??= listenSkillsChanged(onSkillsChanged)
   // Loaded already (another reader got here first): nothing to fetch. A failed
-  // first scan left `skills` null, so the next reader to mount retries it.
-  if (entry.skills === null && !entry.loading) scan(key, entry)
+  // first scan left `skills` null, so the next reader to mount retries it; a
+  // list kept while nothing read it is shown, and checked again.
+  if ((entry.skills === null || entry.stale) && !entry.loading) {
+    scan(key, entry)
+  }
   return () => {
     keyReaders.delete(onChange)
     if (keyReaders.size === 0 && readers.get(key) === keyReaders) {
       readers.delete(key)
+      keepRecentlyClosedList(key, entry)
     }
     if (readers.size === 0 && listeningForFocus) {
       window.removeEventListener("focus", onWindowFocus)
       listeningForFocus = false
+    }
+    if (readers.size === 0 && stopFollowingChanges) {
+      stopFollowingChanges()
+      stopFollowingChanges = null
+      // From here on nothing hears of a change: whatever is kept may go out
+      // of date before the next reader comes.
+      for (const kept of entries.values()) kept.stale = true
     }
   }
 }

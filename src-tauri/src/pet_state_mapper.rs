@@ -82,6 +82,10 @@ pub struct PetGlobalState {
     /// presence of *any* outstanding permission keeps ambient state at
     /// `Waiting` until the user resolves it.
     pending_permissions: HashMap<String, String>,
+    /// Outstanding questions and plan approvals (`q:`/`p:` + id →
+    /// connection_id): the agent is as blocked on the user as on a permission
+    /// (18 #2).
+    pending_asks: HashMap<String, String>,
     /// Connection ids of in-flight delegation sub-agents. Their status events
     /// ride the parent's emitter onto this bus, but a sub-agent is not a
     /// user-facing session — it's surfaced inline in its parent's transcript
@@ -129,6 +133,8 @@ impl PetGlobalState {
                 self.erroring.remove(child_connection_id);
                 self.pending_permissions
                     .retain(|_, cid| cid != child_connection_id);
+                self.pending_asks
+                    .retain(|_, cid| cid != child_connection_id);
             }
             // A known sub-agent's WORK never drives ambient state: it must not
             // land in `prompting` / `erroring`, because the panel (which the
@@ -154,6 +160,7 @@ impl PetGlobalState {
                 // pin the sprite on `Waiting` forever.
                 AcpEvent::TurnComplete { .. } => {
                     self.pending_permissions.retain(|_, cid| cid != conn);
+                    self.pending_asks.retain(|_, cid| cid != conn);
                 }
                 // Disconnect also forgets the child so dead ids don't pile up —
                 // this is what cleans up a `DelegationCompleted` dropped on a
@@ -164,8 +171,11 @@ impl PetGlobalState {
                 } => {
                     self.delegation_children.remove(conn);
                     self.pending_permissions.retain(|_, cid| cid != conn);
+                    self.pending_asks.retain(|_, cid| cid != conn);
                 }
-                _ => {}
+                payload => {
+                    self.apply_ask(conn, payload);
+                }
             },
             AcpEvent::StatusChanged { status } => match status {
                 ConnectionStatus::Prompting => {
@@ -184,6 +194,7 @@ impl PetGlobalState {
                     self.prompting.remove(conn);
                     self.erroring.remove(conn);
                     self.pending_permissions.retain(|_, cid| cid != conn);
+                    self.pending_asks.retain(|_, cid| cid != conn);
                 }
             },
             AcpEvent::Error { .. } => {
@@ -216,9 +227,35 @@ impl PetGlobalState {
                 // entry. Without this, a single past permission would mask
                 // Running across the entire app until the connection drops.
                 self.pending_permissions.retain(|_, cid| cid != conn);
+                self.pending_asks.retain(|_, cid| cid != conn);
             }
-            _ => {}
+            payload => {
+                self.apply_ask(conn, payload);
+            }
         }
+    }
+
+    /// Book a question or plan approval asked or settled on `conn`; `false`
+    /// for any other event.
+    fn apply_ask(&mut self, conn: &str, payload: &AcpEvent) -> bool {
+        match payload {
+            AcpEvent::QuestionRequest { question_id, .. } => {
+                self.pending_asks
+                    .insert(format!("q:{question_id}"), conn.to_string());
+            }
+            AcpEvent::QuestionResolved { question_id, .. } => {
+                self.pending_asks.remove(&format!("q:{question_id}"));
+            }
+            AcpEvent::PlanApprovalRequest { approval_id, .. } => {
+                self.pending_asks
+                    .insert(format!("p:{approval_id}"), conn.to_string());
+            }
+            AcpEvent::PlanApprovalResolved { approval_id, .. } => {
+                self.pending_asks.remove(&format!("p:{approval_id}"));
+            }
+            _ => return false,
+        }
+        true
     }
 
     /// Reset the volatile signal sets after a bus overrun. We can't reconstruct
@@ -235,6 +272,7 @@ impl PetGlobalState {
         self.prompting.clear();
         self.erroring.clear();
         self.pending_permissions.clear();
+        self.pending_asks.clear();
     }
 }
 
@@ -243,7 +281,8 @@ impl PetGlobalState {
 /// Priority rationale, top-down:
 ///
 /// * `Failed` — most urgent, brief auto-recovery handles the linger.
-/// * `Waiting` from `pending_permissions` — blocking: the agent literally
+/// * `Waiting` from `pending_permissions` (or `pending_asks`: a question or a
+///   plan approval) — blocking: the agent literally
 ///   cannot proceed without the user clicking allow/deny, so it outranks
 ///   any concurrent prompt elsewhere. Renders as `Waiting` (not a separate
 ///   highlight) so the cue blends with the regular idle-but-reachable
@@ -262,7 +301,7 @@ pub fn compute_pet_state(snapshot: &PetGlobalState) -> PetState {
     if !snapshot.erroring.is_empty() {
         return PetState::Failed;
     }
-    if !snapshot.pending_permissions.is_empty() {
+    if !snapshot.pending_permissions.is_empty() || !snapshot.pending_asks.is_empty() {
         return PetState::Waiting;
     }
     if !snapshot.prompting.is_empty() {
@@ -281,6 +320,10 @@ fn is_acp_event_relevant(payload: &AcpEvent) -> bool {
             | AcpEvent::Error { .. }
             | AcpEvent::PermissionRequest { .. }
             | AcpEvent::PermissionResolved { .. }
+            | AcpEvent::QuestionRequest { .. }
+            | AcpEvent::QuestionResolved { .. }
+            | AcpEvent::PlanApprovalRequest { .. }
+            | AcpEvent::PlanApprovalResolved { .. }
             | AcpEvent::TurnComplete { .. }
             | AcpEvent::ConversationStatusChanged { .. }
             // Tracked so a sub-agent's connection can be filtered out of
@@ -587,6 +630,70 @@ mod tests {
             },
         ));
         assert_eq!(compute_pet_state(&s), PetState::Running);
+    }
+
+    /// A question or a plan approval keeps the pet waiting like a
+    /// permission, until it is settled or its turn ends (18 #2).
+    #[test]
+    fn a_question_or_a_plan_pending_yields_waiting() {
+        let mut s = PetGlobalState::default();
+        let prompting = AcpEvent::StatusChanged {
+            status: ConnectionStatus::Prompting,
+        };
+        s.apply(&env("c1", prompting.clone()));
+        s.apply(&env(
+            "c1",
+            AcpEvent::QuestionRequest {
+                question_id: "q1".into(),
+                questions: vec![],
+            },
+        ));
+        assert_eq!(compute_pet_state(&s), PetState::Waiting);
+        s.apply(&env(
+            "c1",
+            AcpEvent::QuestionResolved {
+                question_id: "q1".into(),
+                resolution: None,
+            },
+        ));
+        assert_eq!(compute_pet_state(&s), PetState::Running);
+
+        s.apply(&env(
+            "c1",
+            AcpEvent::PlanApprovalRequest {
+                approval_id: "a1".into(),
+                tool_call_id: "t1".into(),
+                plan_markdown: "# Plan".into(),
+            },
+        ));
+        assert_eq!(compute_pet_state(&s), PetState::Waiting);
+        s.apply(&env(
+            "c1",
+            AcpEvent::TurnComplete {
+                session_id: "s".into(),
+                stop_reason: "cancelled".into(),
+                agent_type: "codex".into(),
+            },
+        ));
+        assert_eq!(compute_pet_state(&s), PetState::Idle);
+
+        // A delegation sub-agent's question reaches the sprite as well.
+        s.apply(&delegation_started("parent", "child"));
+        s.apply(&env(
+            "child",
+            AcpEvent::QuestionRequest {
+                question_id: "q2".into(),
+                questions: vec![],
+            },
+        ));
+        assert_eq!(compute_pet_state(&s), PetState::Waiting);
+        s.apply(&env(
+            "child",
+            AcpEvent::StatusChanged {
+                status: ConnectionStatus::Disconnected,
+            },
+        ));
+        assert_eq!(compute_pet_state(&s), PetState::Idle);
     }
 
     #[test]
@@ -922,6 +1029,7 @@ mod tests {
                 task_id: "task-pet-1".into(),
                 assistant_id: None,
                 assistant_name: None,
+                bot_uid: None,
             },
         )
     }
@@ -941,6 +1049,7 @@ mod tests {
                 },
                 assistant_id: None,
                 assistant_name: None,
+                bot_uid: None,
             },
         )
     }

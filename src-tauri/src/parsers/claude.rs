@@ -919,12 +919,29 @@ fn context_continuation_text(content: &[ContentBlock]) -> Option<&str> {
 }
 
 /// The framing ahead of the summary in a continuation message: its opening
-/// sentence, then the `Summary:` line the CLI puts the summary under.
+/// sentence, any `<system-reminder>` blocks, then the `Summary:` line the CLI
+/// puts the summary under.
+///
+/// Claude Code 2.1.312 started putting a reminder for the model between the
+/// opening sentence and `Summary:` (every summary written by 2.1.312, 2.1.316
+/// and 2.1.318 on the machine this was measured on has one):
+///
+/// ```text
+/// This session is being continued from a previous conversation that ran out of context. …
+///
+/// <system-reminder>
+/// <tools-used-before-summary>Bash, Read, …</tools-used-before-summary>
+/// </system-reminder>
+/// Summary:
+/// ```
+///
+/// Only closed reminder blocks are skipped. An unclosed one, or any other text
+/// there, stays in the summary, as an unknown framing always has.
 fn continuation_preamble_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(&format!(
-            r"\A\s*{}[^\n]*\n(?:[ \t]*\r?\n)*(?:[ \t]*Summary:[ \t]*\r?\n)?",
+            r"\A\s*{}[^\n]*\n(?:[ \t]*\r?\n)*(?:[ \t]*<system-reminder>[\s\S]*?</system-reminder>[ \t]*\r?\n(?:[ \t]*\r?\n)*)*(?:[ \t]*Summary:[ \t]*\r?\n)?",
             regex::escape(CONTEXT_CONTINUATION_PREFIX)
         ))
         .unwrap()
@@ -933,12 +950,17 @@ fn continuation_preamble_regex() -> &'static Regex {
 
 /// Whether `line` is one of the instructions the CLI appends to a continuation
 /// message after the summary: where the full pre-compaction transcript lives,
-/// and to pick the work back up without asking.
+/// to pick the work back up without asking, and (Claude Code 2.1.293 and
+/// later, after every summary) that the messages kept after the summary are
+/// newer than it.
 fn is_continuation_trailer(line: &str) -> bool {
     let line = line.trim_start();
     line.starts_with("If you need specific details from before compaction")
         || line.starts_with("Continue the conversation from where it left off")
         || line.starts_with("Please continue the conversation from where")
+        || line.starts_with(
+            "The messages after this summary are the most recent messages from before compaction",
+        )
 }
 
 /// The summary a continuation message carries, without the framing the CLI
@@ -972,7 +994,7 @@ fn continuation_summary_text(message: &str) -> String {
 
 /// Whether a reconstructed slash-command display line is a `/compact`
 /// invocation — bare, or carrying the focus instructions it accepts.
-fn is_compact_command(display: &str) -> bool {
+pub(crate) fn is_compact_command(display: &str) -> bool {
     display == "/compact" || display.starts_with("/compact ")
 }
 
@@ -1681,6 +1703,12 @@ fn resolve_claude_config_dir_from(
 }
 
 impl AgentParser for ClaudeParser {
+    /// Claude Code's own `<session>.jsonl`, read raw.
+    fn own_record_contains(&self, conversation_id: &str, needle: &str) -> Option<bool> {
+        let path = find_session_file_in(&self.base_dir, conversation_id)?;
+        super::file_lines_contain(&path, needle)
+    }
+
     fn list_conversations(&self) -> Result<Vec<ConversationSummary>, ParseError> {
         let mut conversations = Vec::new();
 
@@ -2151,10 +2179,13 @@ impl ClaudeRecordAccumulator {
                     //
                     // `background_watch` also keys its overlay turn ids by
                     // position, so an insert inside an open episode re-emits
-                    // everything after it. Only a manual compaction inserts,
-                    // and a manual one is a foreground submission — the
-                    // watcher's foreground window is closed around it. Were
-                    // that ever to change the cost is a duplicate overlay
+                    // everything after it. A `/compact` codeg sent is a
+                    // foreground submission, which no episode sees. One it did
+                    // not send (claude-agent-acp 0.101.0 sends its own for an
+                    // idle session) opens an episode AT this echo, handed the
+                    // boundary and the summary the watcher held back for it,
+                    // so the insert lands before the episode's first emission.
+                    // Were that ever to change the cost is a duplicate overlay
                     // turn, which the refetch watermark retires.
                     for owner in usage_owner_by_message_id.values_mut() {
                         if *owner >= at {
@@ -3007,19 +3038,49 @@ fn user_content_blocks(content: &serde_json::Value) -> Vec<ContentBlock> {
     }
 
     if let Some(arr) = content.as_array() {
+        // Whether the item just read was a text block that became the last of
+        // `blocks`: the only text a document block can be the stand-in for.
+        let mut after_text = false;
         for item in arr {
+            let follows_text = std::mem::replace(&mut after_text, false);
             let block_type = item.get("type").and_then(|t| t.as_str()).unwrap_or("");
             match block_type {
                 "text" => {
                     if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
                         if let Some(cleaned) = strip_system_tags(text) {
                             blocks.push(ContentBlock::Text { text: cleaned });
+                            after_text = true;
                         }
                     }
                 }
                 "image" => {
                     if let Some(image_block) = extract_claude_user_image(item) {
                         blocks.push(image_block);
+                    }
+                }
+                "document" => {
+                    // claude-agent-acp 0.99.0 (#1460) sends a PDF that came as
+                    // a blob resource as a document block, right after the link
+                    // it writes for the resource (`formatUriAsLink`). The PDF
+                    // itself has no block of its own here, so that link becomes
+                    // the attachment the prompt is shown with live, by the same
+                    // rule (`project_user_prompt_block`). Left as it was, a
+                    // pasted PDF read back as a bare `clipboard://…` address.
+                    // Only a PDF (the one document type the adapter sends) and
+                    // only the text block right before it.
+                    let is_pdf = item
+                        .get("source")
+                        .and_then(|source| source.get("media_type"))
+                        .and_then(|media_type| media_type.as_str())
+                        == Some("application/pdf");
+                    if follows_text && is_pdf {
+                        if let Some(ContentBlock::Text { text }) = blocks.last_mut() {
+                            if let Some(shown) =
+                                bare_adapter_link(text).and_then(pdf_attachment_text)
+                            {
+                                *text = shown;
+                            }
+                        }
                     }
                 }
                 "tool_result" | "server_tool_result" => {
@@ -3048,6 +3109,61 @@ fn user_content_blocks(content: &serde_json::Value) -> Vec<ContentBlock> {
     }
 
     blocks
+}
+
+/// claude-agent-acp's `formatUriAsLink`, the text it writes into a user record
+/// for a resource or a resource link in the prompt: `[@name](uri)` for a
+/// `file://` or `zed://` uri, named after its last path segment, and the bare
+/// uri for anything else (a web page, a pasted file's `clipboard://` uri).
+pub(crate) fn claude_uri_link(uri: &str) -> String {
+    let named = |rest: &str| {
+        let name = rest
+            .rsplit('/')
+            .next()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(rest);
+        format!("[@{name}]({uri})")
+    };
+    if let Some(path) = uri.strip_prefix("file://") {
+        named(path)
+    } else if uri.starts_with("zed://") {
+        named(uri)
+    } else {
+        uri.to_string()
+    }
+}
+
+/// `text` as a uri when it is exactly the bare link [`claude_uri_link`] writes
+/// for one: a uri that is not a `file://` or `zed://` one, such as a pasted
+/// file's `clipboard://` uri. A `[@name](uri)` link is left alone; the
+/// transcript already reads it back as the named attachment.
+fn bare_adapter_link(text: &str) -> Option<String> {
+    let text = text.trim();
+    // A scheme (RFC 3986: a letter, then letters, digits, `+`, `-`, `.`), then
+    // `://`, and no whitespace anywhere.
+    let scheme = text.split_once("://")?.0;
+    let is_uri = scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+        && !text.chars().any(char::is_whitespace);
+    (is_uri && claude_uri_link(text) == text).then(|| text.to_string())
+}
+
+/// What the live user turn shows for a PDF sent as a blob resource, by the
+/// rule every surface shares ([`crate::acp::types::project_user_prompt_block`]).
+fn pdf_attachment_text(uri: String) -> Option<String> {
+    use crate::acp::types::{project_user_prompt_block, PromptInputBlock, UserTurnBlock};
+    let block = PromptInputBlock::Resource {
+        uri,
+        mime_type: Some("application/pdf".to_string()),
+        text: None,
+        blob: Some(String::new()),
+    };
+    match project_user_prompt_block(&block) {
+        UserTurnBlock::Text { text } => Some(text),
+        UserTurnBlock::Image { .. } => None,
+    }
 }
 
 /// The conversation title a user message gives: from its first text block.
@@ -5752,6 +5868,43 @@ mod tests {
         // Nothing but the opening sentence: better the sentence than nothing.
         let bare = "This session is being continued from a previous conversation…";
         assert_eq!(continuation_summary_text(bare), bare);
+    }
+
+    /// Claude Code 2.1.312 puts a `<system-reminder>` block between the opening
+    /// sentence and `Summary:`, and from 2.1.293 every summary ends with a line
+    /// about the messages kept after it. Both are framing for the model, and
+    /// come off like the rest of it.
+    #[test]
+    fn continuation_summary_text_strips_the_2_1_312_framing() {
+        let current = CONTINUATION
+            .replace(
+                "conversation.\n\nSummary:\n",
+                "conversation.\n\n<system-reminder>\n<tools-used-before-summary>Agent, Bash, Read</tools-used-before-summary>\n</system-reminder>\nSummary:\n",
+            )
+            + "\n\nThe messages after this summary are the most recent messages from before compaction, kept verbatim. The summary was written without seeing them, so something it says has not happened yet may already have happened in them.";
+        assert!(current.contains("<system-reminder>"), "fixture applies");
+        assert_eq!(continuation_summary_text(&current), CONTINUATION_SUMMARY);
+
+        // Two reminder blocks, and blank lines around them.
+        let two = CONTINUATION.replace(
+            "conversation.\n\nSummary:\n",
+            "conversation.\n\n<system-reminder>\na\n</system-reminder>\n\n<system-reminder>b</system-reminder>\n\nSummary:\n",
+        );
+        assert_eq!(continuation_summary_text(&two), CONTINUATION_SUMMARY);
+
+        // An unclosed reminder is not framing this knows: it stays.
+        let unclosed = CONTINUATION.replace(
+            "conversation.\n\nSummary:\n",
+            "conversation.\n\n<system-reminder>\nnever closed\nSummary:\n",
+        );
+        assert!(continuation_summary_text(&unclosed).starts_with("<system-reminder>"));
+
+        // A summary that only quotes the kept-messages line mid-body keeps it.
+        let quoting = CONTINUATION.replace(
+            "   Fix the parser.",
+            "   Fix the parser.\nThe messages after this summary are the most recent messages from before compaction, it says.\n   Then test it.",
+        );
+        assert!(continuation_summary_text(&quoting).contains("it says.\n   Then test it."));
     }
 
     /// A compaction is a boundary between turns, so history has to draw the
@@ -8965,6 +9118,118 @@ mod tests {
         ));
     }
 
+    /// A PDF pasted into the composer reaches Claude through claude-agent-acp
+    /// 0.99.0 as the resource's link and a document block (from a real
+    /// transcript, the typed text first as the composer sends it). Read back,
+    /// it shows the attachment the live turn shows for the same prompt.
+    #[test]
+    fn a_pdf_blob_reads_back_as_the_attachment_the_live_turn_shows() {
+        use crate::acp::types::{user_blocks_from_prompt, PromptInputBlock, UserMessageBlock};
+        let uri = "clipboard://report.pdf-1";
+        let value = json!({
+            "message": {
+                "content": [
+                    {"type": "text", "text": "what is in the attachment?"},
+                    {"type": "text", "text": uri},
+                    {
+                        "type": "document",
+                        "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQK"}
+                    }
+                ]
+            }
+        });
+        let live = user_blocks_from_prompt(&[
+            PromptInputBlock::Text {
+                text: "what is in the attachment?".into(),
+            },
+            PromptInputBlock::Resource {
+                uri: uri.into(),
+                mime_type: Some("application/pdf".into()),
+                text: None,
+                blob: Some("JVBERi0xLjQK".into()),
+            },
+        ]);
+        let live_texts: Vec<&str> = live
+            .iter()
+            .map(|block| match block {
+                UserMessageBlock::Text { text } => text.as_str(),
+                UserMessageBlock::Image { .. } => panic!("no image in this prompt"),
+            })
+            .collect();
+
+        let blocks = extract_user_content(&value);
+        let texts: Vec<&str> = blocks
+            .iter()
+            .map(|block| match block {
+                ContentBlock::Text { text } => text.as_str(),
+                other => panic!("unexpected block {other:?}"),
+            })
+            .collect();
+        assert_eq!(texts, live_texts);
+        assert_ne!(
+            texts[1], uri,
+            "the bare address no longer stands in the prose"
+        );
+    }
+
+    /// Only the adapter's bare link right before a document is rewritten. Its
+    /// `[@name](uri)` link for a file already reads back as the named
+    /// attachment; prose and a link with no document after it stay as written.
+    #[test]
+    fn only_the_adapters_bare_link_before_a_document_is_read_as_its_attachment() {
+        let doc = json!({
+            "type": "document",
+            "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQK"}
+        });
+        let read = |content: serde_json::Value| -> Vec<String> {
+            extract_user_content(&json!({"message": {"content": content}}))
+                .into_iter()
+                .map(|block| match block {
+                    ContentBlock::Text { text } => text,
+                    other => panic!("unexpected block {other:?}"),
+                })
+                .collect()
+        };
+
+        for kept in [
+            "[@a.pdf](file:///docs/a.pdf)",
+            "file:///docs/a.pdf",
+            "summarize this PDF",
+            "see https://example.com/a b.pdf",
+        ] {
+            assert_eq!(
+                read(json!([{"type": "text", "text": kept}, doc])),
+                vec![kept.to_string()]
+            );
+        }
+        assert_eq!(
+            read(json!([{"type": "text", "text": "clipboard://report.pdf-1"}])),
+            vec!["clipboard://report.pdf-1".to_string()]
+        );
+        // A document with no text before it adds nothing.
+        assert!(read(json!([doc])).is_empty());
+        // The adapter sends only PDFs as documents, and writes the link right
+        // before one: a text document, or a link with another block between it
+        // and the document (one that reads back as nothing included), is not
+        // its stand-in.
+        let text_doc = json!({
+            "type": "document",
+            "source": {"type": "text", "media_type": "text/plain", "data": "notes"}
+        });
+        assert_eq!(
+            read(json!([{"type": "text", "text": "clipboard://notes.txt-1"}, text_doc])),
+            vec!["clipboard://notes.txt-1".to_string()]
+        );
+        assert_eq!(
+            read(json!([
+                {"type": "text", "text": "clipboard://report.pdf-1"},
+                {"type": "text", "text": "<system-reminder>noted</system-reminder>"},
+                doc
+            ])),
+            vec!["clipboard://report.pdf-1".to_string()]
+        );
+    }
+
     #[test]
     fn extract_user_content_parses_claude_data_uri_image_block() {
         let value = json!({
@@ -9886,6 +10151,14 @@ mod tests {
                 Some("r1"),
                 &["b9052120", "a79caadf", "39e44cd0"],
             ),
+            // CLI 2.1.328 adds this one to the family: a request that resumed
+            // a paused one. Fields as named in the 2.1.328 binary's code,
+            // trimmed; not seen in a live transcript.
+            json!({
+                "type": "api-request-resumed", "sessionId": "s1",
+                "timestamp": "2026-10-15T13:55:17.035Z",
+                "messageId": "msg_2", "pausedRequestId": "r2", "resumedRequestId": "r3",
+            }),
             assistant(
                 "a2",
                 "2026-10-15T13:55:17.040Z",
@@ -9906,7 +10179,7 @@ mod tests {
                 r
             })
             .collect();
-        assert_eq!(with_requests.len() - without_requests.len(), 6);
+        assert_eq!(with_requests.len() - without_requests.len(), 7);
 
         let with = parse_lines("req", &record_lines(&with_requests));
         let without = parse_lines("req", &record_lines(&without_requests));

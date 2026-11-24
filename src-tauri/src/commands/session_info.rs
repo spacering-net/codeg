@@ -121,7 +121,8 @@ impl SessionInfoAccess for DbSessionInfoLookup {
             created_at: Some(summary.created_at),
             updated_at: Some(summary.updated_at),
             parent_id: summary.parent_id,
-            is_delegation_child: summary.parent_id.is_some(),
+            is_delegation_child: summary.kind
+                == crate::db::entities::conversation::ConversationKind::Delegate,
             stats: None,
             messages: None,
             note: None,
@@ -424,7 +425,7 @@ pub async fn set_session_info_settings(
 ) -> Result<SessionInfoSettings, AppCommandError> {
     #[cfg(feature = "tauri-runtime")]
     {
-        let emitter = EventEmitter::Tauri(app);
+        let emitter = EventEmitter::from_app(&app);
         set_session_info_settings_core(&db.conn, &config, &emitter, settings).await
     }
     #[cfg(not(feature = "tauri-runtime"))]

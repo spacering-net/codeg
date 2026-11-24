@@ -24,6 +24,7 @@ use crate::acp::types::{
 };
 #[cfg(feature = "tauri-runtime")]
 use crate::acp::types::{ConnectionInfo, ForkResultInfo, PromptInputBlock};
+use crate::app_error::AppCommandError;
 use crate::db::service::agent_setting_service;
 use crate::db::service::model_provider_service;
 use crate::db::AppDatabase;
@@ -199,6 +200,11 @@ pub(crate) fn apply_custom_version_to_url(
 /// [`resolve_npx_command_for`]: PATH, then `~/.local/bin`, then the current npm
 /// global prefix, then the agent vendor's own native install. The fallbacks
 /// handle GUI environments that don't inherit the user's shell PATH.
+///
+/// Qoder on Windows resolves further at launch (see [`crate::acp::qoder`]): a
+/// wrapper whose target the user overrode through Agent Settings env, or one
+/// whose CLI went missing, passes this command-existence gate and reports the
+/// specific problem at connect rather than reading as "not installed" here.
 pub(crate) async fn is_cmd_available(agent_type: AgentType, cmd: &str) -> bool {
     resolve_npx_command_for(agent_type, cmd).await.is_some()
 }
@@ -470,21 +476,24 @@ fn npx_native_install(agent_type: AgentType, cmd: &str) -> Option<PathBuf> {
 /// that PATH, and on Windows nothing lands in `~/.local/bin` either, so without
 /// this a working native install reads as not installed.
 ///
-/// `@xai-official/grok`'s npm postinstall writes its binary to the same place,
-/// and `npm uninstall -g` leaves that copy behind. Grok records which installer
-/// owns `~/.grok/bin` as `[cli].installer` in the `config.toml` beside it:
-/// `"internal"` from its own installers, `"npm"` from the npm package. A copy
-/// recorded as npm's does not count here. An npm-installed Grok resolves
+/// `@xai-official/grok`'s npm package writes its binary to the same place, and
+/// `npm uninstall -g` leaves that copy behind. An npm-installed Grok resolves
 /// through the npm prefix like every other npx agent, and counting its copy
-/// would keep Grok installed after codeg uninstalls it.
+/// would keep Grok installed after codeg uninstalls it, so that copy does not
+/// count here. Grok records which installer owns `~/.grok/bin` as
+/// `[cli].installer` in the `config.toml` beside it: `"internal"` from its own
+/// installers, `"npm"` from the npm package's postinstall. Where npm skipped
+/// that postinstall (npm 12 blocks install scripts it was not told to allow,
+/// and `ignore-scripts` skips them), the package's launcher unpacks the binary
+/// on its first run and records nothing; with no record, the copy is told
+/// apart by where its build lives ([`is_grok_npm_copy`]).
 ///
 /// Only the default location is probed. A `GROK_BIN_DIR` or `GROK_HOME`
 /// relocation is not followed.
 fn grok_native_install(home: &Path, cmd: &str) -> Option<PathBuf> {
     let grok_dir = home.join(".grok");
-    let cand = grok_dir
-        .join("bin")
-        .join(binary_cache::executable_file_name(cmd));
+    let bin_dir = grok_dir.join("bin");
+    let cand = bin_dir.join(binary_cache::executable_file_name(cmd));
     if !cand.is_file() {
         return None;
     }
@@ -499,7 +508,48 @@ fn grok_native_install(home: &Path, cmd: &str) -> Option<PathBuf> {
                 .as_str()
                 .map(str::to_string)
         });
-    (installer.as_deref() != Some("npm")).then_some(cand)
+    let npm_copy = match installer.as_deref() {
+        Some(installer) => installer == "npm",
+        None => is_grok_npm_copy(&bin_dir, &cand, cmd),
+    };
+    (!npm_copy).then_some(cand)
+}
+
+/// Whether `cand`, `<cmd>` in `bin_dir` (`~/.grok/bin`), is laid out as
+/// `@xai-official/grok`'s npm scripts leave it: they unpack the build beside it
+/// as `<cmd>-<version>` (with `.exe` on Windows) and make `cand` a symlink to
+/// that bare name, or on Windows a copy of that file. Grok's own installers and
+/// its updater keep their builds in `~/.grok/downloads` and link or copy `cand`
+/// from there.
+fn is_grok_npm_copy(bin_dir: &Path, cand: &Path, cmd: &str) -> bool {
+    let prefix = format!("{cmd}-");
+    // As the npm scripts' own cleanup matches their builds: a digit right after
+    // the prefix, which leaves out `grok-pager-<version>`.
+    let is_build = |name: &std::ffi::OsStr| {
+        name.to_str()
+            .and_then(|name| name.strip_prefix(prefix.as_str()))
+            .is_some_and(|version| version.starts_with(|c: char| c.is_ascii_digit()))
+    };
+    if let Ok(target) = fs::read_link(cand) {
+        let mut parts = target.components();
+        return matches!(
+            (parts.next(), parts.next()),
+            (Some(std::path::Component::Normal(name)), None) if is_build(name)
+        );
+    }
+    let Ok(len) = fs::metadata(cand).map(|meta| meta.len()) else {
+        return false;
+    };
+    fs::read_dir(bin_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|entry| {
+            is_build(&entry.file_name())
+                && entry
+                    .metadata()
+                    .is_ok_and(|meta| meta.is_file() && meta.len() == len)
+        })
 }
 
 #[derive(Default)]
@@ -792,6 +842,11 @@ async fn detect_local_version(agent_type: AgentType) -> Option<String> {
     match meta.distribution {
         registry::AgentDistribution::Npx { cmd, package, .. } => {
             let resolved = resolve_npx_command_for(agent_type, cmd).await?;
+            // A Windows Qoder dispatcher can select a native install even
+            // when a different Qoder version exists in the npm global prefix.
+            if cfg!(windows) && agent_type == AgentType::Qoder {
+                return system_probed_version(agent_type, &resolved, Some(package)).await;
+            }
             // Try `npm list -g <package_name> --json` to get the real installed version.
             let pkg_name = package_name_from_spec(package);
             let mut version = detect_npm_global_version(&pkg_name).await;
@@ -918,6 +973,10 @@ struct AgentDiag {
     /// (NOT `resolve_npx`) is what the verdict uses for non-npx agents, so a
     /// working cached-binary / uvx agent is not misreported as node-missing.
     launchable: Option<String>,
+    /// Windows Qoder only: the program codeg starts behind the launcher
+    /// `launchable` names (see [`crate::acp::qoder`]), or why it could not be
+    /// found. Resolved with the app's env; connect applies the agent's own.
+    direct_launch: Option<Result<String, String>>,
     /// `resolve_npx_command(cmd)` — the resolution the new-session page gates on
     /// (npx agents only; `None` for binary/uvx).
     resolve_npx: Option<String>,
@@ -927,8 +986,9 @@ struct AgentDiag {
     user_prefix_bin: Option<String>,
     /// Homebrew global bin (`/opt/homebrew/bin/<cmd>` etc.) when it exists (macOS).
     homebrew_bin: Option<String>,
-    /// Version seen by `detect_npm_global_version` (covers BOTH prefixes).
+    /// Version of the selected CLI for Windows Qoder; npm globals otherwise.
     detected_version: Option<String>,
+    direct_version_probe: bool,
     /// `agent_setting.installed_version` recorded in the DB.
     db_version: Option<String>,
     /// Set only for ACP *adapter* agents (Claude Code, Codex): the vendor CLI
@@ -1128,11 +1188,23 @@ async fn collect_agent_diag(
             diag.distribution = "npx";
             diag.package = Some(package.to_string());
             diag.node_required = node_required.map(str::to_string);
+            diag.direct_version_probe = cfg!(windows) && agent_type == AgentType::Qoder;
 
             let resolve_npx = resolve_npx_command_for(agent_type, cmd)
                 .await
                 .map(|p| p.to_string_lossy().to_string());
             diag.launchable = resolve_npx.clone();
+            // Qoder on Windows launches the program behind its wrapper (see
+            // `acp::qoder`), so the report adds that program and, for an npm
+            // install, its entry, or why it could not be found, next to the
+            // wrapper the new-session page gates on.
+            if cfg!(windows) && agent_type == AgentType::Qoder {
+                diag.direct_launch = resolve_npx.as_ref().map(|p| {
+                    crate::acp::qoder::resolve_launch(Path::new(p), &BTreeMap::new())
+                        .map(|launch| launch.describe())
+                        .map_err(|error| error.to_string())
+                });
+            }
             diag.resolve_npx = resolve_npx;
 
             diag.system_prefix_bin = npm_prefix_g.and_then(|p| {
@@ -1155,7 +1227,19 @@ async fn collect_agent_diag(
             // is killed on drop via `npm_list_version`'s `kill_on_drop`).
             diag.detected_version = tokio::time::timeout(
                 DIAG_PROBE_TIMEOUT,
-                detect_npm_global_version(&package_name_from_spec(package)),
+                async {
+                    if diag.direct_version_probe {
+                        match diag.resolve_npx.as_deref() {
+                            Some(path) => {
+                                system_probed_version(agent_type, Path::new(path), Some(package))
+                                    .await
+                            }
+                            None => None,
+                        }
+                    } else {
+                        detect_npm_global_version(&package_name_from_spec(package)).await
+                    }
+                },
             )
             .await
             .ok()
@@ -1464,6 +1548,16 @@ fn compute_verdict(inp: &DiagInputs) -> DiagnosticsVerdict {
         );
     }
 
+    // Windows Qoder: the launcher resolves, but connect starts the CLI behind
+    // it, and that could not be found (the reason is in the agent section).
+    if matches!(agent.direct_launch, Some(Err(_))) {
+        return diag_verdict(
+            DiagLevel::Fail,
+            "installed_but_unresolved",
+            "The agent is recorded as installed, but the app cannot locate its executable.",
+        );
+    }
+
     diag_verdict(
         DiagLevel::Ok,
         "ok",
@@ -1560,6 +1654,22 @@ fn build_report(
             if a.launchable.is_some() { DiagLevel::Ok } else { DiagLevel::Fail },
             (a.distribution == "npx").then_some("this is exactly what the new-session page checks"),
         )];
+        if let Some(direct) = &a.direct_launch {
+            checks.push(match direct {
+                Ok(program) => diag_check(
+                    "program behind the launcher",
+                    program,
+                    DiagLevel::Ok,
+                    Some("what connect starts on Windows, instead of the launcher"),
+                ),
+                Err(reason) => diag_check(
+                    "program behind the launcher",
+                    reason,
+                    DiagLevel::Fail,
+                    Some("connect cannot start the CLI behind the launcher"),
+                ),
+            });
+        }
         if let Some(p) = &a.package {
             checks.push(diag_check("package", p, DiagLevel::Info, None));
         }
@@ -1586,10 +1696,18 @@ fn build_report(
                 ));
             }
             checks.push(diag_check(
-                "detect_npm_global_version",
+                if a.direct_version_probe {
+                    "selected CLI --version"
+                } else {
+                    "detect_npm_global_version"
+                },
                 a.detected_version.as_deref().unwrap_or("none"),
                 DiagLevel::Info,
-                Some("covers both prefixes — what the Settings badge uses"),
+                Some(if a.direct_version_probe {
+                    "probes the selected direct launch"
+                } else {
+                    "covers both prefixes — what the Settings badge uses"
+                }),
             ));
         }
         // Adapter agents: show the vendor CLI next to the adapter it is NOT.
@@ -2200,6 +2318,53 @@ fn probe_cache_key(
 static SYSTEM_PROBE_CACHE: std::sync::Mutex<Option<HashMap<ProbeCacheKey, ProbeCacheEntry>>> =
     std::sync::Mutex::new(None);
 
+#[derive(PartialEq, Eq, Hash)]
+struct DirectProbeKey {
+    program: PathBuf,
+    args: Vec<String>,
+}
+
+struct DirectProbeEntry {
+    /// Both the native runtime and its script can change independently.
+    files: Vec<(std::time::SystemTime, u64)>,
+    version: Option<String>,
+}
+
+static DIRECT_PROBE_CACHE: std::sync::Mutex<Option<HashMap<DirectProbeKey, DirectProbeEntry>>> =
+    std::sync::Mutex::new(None);
+
+async fn qoder_probed_version(launch: &crate::acp::qoder::QoderWindowsLaunch) -> Option<String> {
+    let key = DirectProbeKey {
+        program: launch.program.clone(),
+        args: launch.version_probe_args(),
+    };
+    let files = std::iter::once(launch.program.as_path())
+        .chain(launch.prefix_args.iter().map(Path::new))
+        .map(|path| {
+            let metadata = std::fs::metadata(path).ok()?;
+            Some((metadata.modified().ok()?, metadata.len()))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    if let Ok(cache) = DIRECT_PROBE_CACHE.lock() {
+        if let Some(entry) = cache.as_ref().and_then(|map| map.get(&key)) {
+            if entry.files == files {
+                return entry.version.clone();
+            }
+        }
+    }
+    let version = probe_cli_version_token(&launch.program, &key.args).await;
+    if let Ok(mut cache) = DIRECT_PROBE_CACHE.lock() {
+        cache.get_or_insert_with(HashMap::new).insert(
+            key,
+            DirectProbeEntry {
+                files,
+                version: version.clone(),
+            },
+        );
+    }
+    version
+}
+
 /// First version-looking token in probe output: starts with a digit (a leading
 /// `v` is tolerated and stripped), is dotted, and is drawn from the semver /
 /// calendar-version alphabet. Whitespace tokens are additionally split on `/`
@@ -2269,7 +2434,44 @@ pub(crate) async fn system_probed_version(
     let declared_probe = agent_type
         .custom_id()
         .and_then(crate::acp::custom_registry::version_probe_of);
+    // Qoder on Windows runs the program behind its launcher, so the version is
+    // read from that exact program — resolved by the same steps the connect
+    // takes — and from nothing else: probing the wrapper or the global npm
+    // package can report an installation the launch will not start. A
+    // resolution that fails here has no version to report; the connect surfaces
+    // its specific error. The probe sees the process environment, so a
+    // per-agent `QODER_CLI_BIN` override shifts the launch only, and the
+    // recorded version stays the default installation's.
+    if cfg!(windows) && agent_type == AgentType::Qoder {
+        let Ok(launch) = crate::acp::qoder::resolve_launch(resolved_bin, &BTreeMap::new()) else {
+            return None;
+        };
+        return qoder_probed_version(&launch).await;
+    }
     system_probed_version_with(declared_probe, resolved_bin, npm_package).await
+}
+
+/// What [`system_probed_version`] last read for `resolved_bin`, while the
+/// binary is unchanged since; `None` when it has not been asked. Runs
+/// nothing: for a caller that must not start the agent's CLI.
+pub(crate) fn known_system_probed_version(
+    agent_type: AgentType,
+    resolved_bin: &std::path::Path,
+) -> Option<String> {
+    // Read through its own probe, never this cache.
+    if cfg!(windows) && agent_type == AgentType::Qoder {
+        return None;
+    }
+    let declared_probe = agent_type
+        .custom_id()
+        .and_then(crate::acp::custom_registry::version_probe_of);
+    let mtime = std::fs::metadata(resolved_bin).ok()?.modified().ok()?;
+    let key = probe_cache_key(resolved_bin, declared_probe, None);
+    let cache = SYSTEM_PROBE_CACHE.lock().ok()?;
+    match cache.as_ref()?.get(&key) {
+        Some((cached_mtime, version)) if *cached_mtime == mtime => version.clone(),
+        _ => None,
+    }
 }
 
 /// Probe order: the declared `version_probe` command wins when it yields a
@@ -2360,9 +2562,9 @@ const NPM_INCLUDE_OPTIONAL: &str = "--include=optional";
 /// npm ≥7 hides lifecycle-script output by default. hermes-agent's postinstall
 /// runs a multi-minute runtime bootstrap (pinned upstream checkout + isolated
 /// venv sync); without this flag the install log goes silent for the whole
-/// bootstrap, which reads as a hang (codeg imposes no timeout on npm). Other
-/// agents' packages have no meaningful install scripts, so this only adds
-/// their (empty) script output.
+/// bootstrap, which reads as a hang (codeg imposes no timeout on npm). Grok's
+/// postinstall only unpacks its binary and other agents' packages have no
+/// meaningful install scripts, so for them this adds a few lines at most.
 const NPM_FOREGROUND_SCRIPTS: &str = "--foreground-scripts";
 /// CLI override forcing lifecycle scripts ON. A user-level
 /// `ignore-scripts=true` (.npmrc or npm_config_ignore_scripts) makes `npm
@@ -2377,8 +2579,8 @@ const NPM_FOREGROUND_SCRIPTS: &str = "--foreground-scripts";
 const NPM_RUN_SCRIPTS_OVERRIDE: &str = "--ignore-scripts=false";
 
 /// The flags that let `package`'s own install scripts run, for the packages
-/// whose install is those scripts ([`npm_package_requires_scripts`]); none for
-/// any other package.
+/// whose install needs those scripts ([`npm_package_requires_scripts`]); none
+/// for any other package.
 ///
 /// [`NPM_RUN_SCRIPTS_OVERRIDE`] stopped being enough with npm 12, which runs no
 /// install script it was not told to: npm 12.2.1 skipped hermes-agent's
@@ -2388,7 +2590,8 @@ const NPM_RUN_SCRIPTS_OVERRIDE: &str = "--ignore-scripts=false";
 /// so npm takes `--allow-scripts=<name>` for those, matched against the
 /// package's resolved registry identity: it covers the package being
 /// installed and none of its dependencies. npm 9.6.7, 10.2.4, 10.8.2 and
-/// 11.17.0 accept the flag without a warning and run the script as before.
+/// 11.17.0 accept the flag without a warning and run the script as before
+/// (11.17.0 and 12.2.2 likewise for a scoped name, `@xai-official/grok`).
 fn npm_run_scripts_args(package: &str) -> Vec<String> {
     if !npm_package_requires_scripts(package) {
         return Vec::new();
@@ -2412,10 +2615,28 @@ fn npm_run_scripts_args(package: &str) -> Vec<String> {
 const NODE_ENV_PROXY_VAR: &str = "NODE_USE_ENV_PROXY";
 
 /// Whether an npm package's lifecycle scripts are load-bearing for the
-/// install (skipping them yields a broken command). Only the hermes-agent
-/// community bridge today: its postinstall bootstraps the entire Python
-/// runtime the `hermes` bin execs into.
+/// install, so codeg's install lets them run ([`npm_run_scripts_args`]):
+///
+/// - hermes-agent ([`npm_package_bootstraps_runtime`]): its postinstall
+///   bootstraps the entire Python runtime the `hermes` bin execs into, so
+///   skipping it yields a broken command.
+/// - `@xai-official/grok`: only its postinstall points `~/.grok/bin/grok` at
+///   the build just installed and records that copy as npm's (see
+///   [`grok_native_install`]). Skipping it leaves the package's launcher to
+///   unpack a build there on its first run and to run whatever
+///   `~/.grok/bin/grok` is from then on, so an upgrade never reaches it (on
+///   npm 12.2.2, an upgrade from 1.0.70 to 1.0.77 still ran 1.0.70), and the
+///   copy `npm uninstall -g` leaves records no installer.
 fn npm_package_requires_scripts(package: &str) -> bool {
+    npm_package_bootstraps_runtime(package)
+        || package_name_from_spec(package) == "@xai-official/grok"
+}
+
+/// Whether an npm package is a bootstrap wrapper: its postinstall downloads
+/// the runtime its bin execs into, so the install can die inside those
+/// downloads ([`annotate_npm_bootstrap_failure`]) or leave a bin with no
+/// runtime behind it. Only the hermes-agent community bridge today.
+fn npm_package_bootstraps_runtime(package: &str) -> bool {
     package_name_from_spec(package) == "hermes-agent"
 }
 
@@ -2425,7 +2646,7 @@ fn npm_package_requires_scripts(package: &str) -> bool {
 /// `fetch` go through — worth spelling out, because npm reports it as a bare
 /// `fetch failed` that says nothing about a proxy.
 fn annotate_npm_bootstrap_failure(package: &str, err: AcpError) -> AcpError {
-    if !npm_package_requires_scripts(package) {
+    if !npm_package_bootstraps_runtime(package) {
         return err;
     }
     let AcpError::Protocol(message) = &err else {
@@ -2940,6 +3161,21 @@ fn load_opencode_config_text() -> Option<String> {
     (!raw.trim().is_empty()).then(|| raw.to_string())
 }
 
+/// The MCP write lock, for the settings writers below that replace a file
+/// the MCP page also edits — `mcpServers` lives in Qoder's and Gemini's
+/// `settings.json`, `[mcp_servers]` in Grok's `config.toml`, `mcp_servers`
+/// in Hermes' `config.yaml`, `mcp.servers` in OpenCode's config, and Claude
+/// Code's `settings.json` holds the `enabledPlugins` the MCP engine keeps in
+/// step. One writer at a time keeps a save here from landing in the middle
+/// of an `mcp_apply` (see `commands::mcp_engine::lock`).
+///
+/// Taken by each writer for its own read-modify-write, never around a call
+/// to another one that takes it: the lock is not re-entrant.
+fn mcp_write_lock() -> Result<crate::commands::mcp_engine::lock::McpWriteGuard, AcpError> {
+    crate::commands::mcp_engine::lock::acquire_blocking()
+        .map_err(|e| AcpError::protocol(e.to_string()))
+}
+
 /// Write the panel's OpenCode config text as is, once it parses as OpenCode
 /// would parse it (JSON with comments and trailing commas, an object at the
 /// root). Written atomically, so OpenCode never reads a half-written file.
@@ -2951,6 +3187,8 @@ fn persist_opencode_config_text(text: &str) -> Result<(), AcpError> {
     } else {
         format!("{text}\n")
     };
+    // `mcp.servers` lives in this file.
+    let _mcp_lock = mcp_write_lock()?;
     crate::acp::opencode_config::write_atomic(&resolve_opencode_config_path(), &text)
         .map_err(|e| AcpError::protocol(format!("write OpenCode config failed: {e}")))
 }
@@ -4323,9 +4561,9 @@ fn parse_grok_settings(raw_toml: &str) -> GrokSettings {
 /// (Grok's config reference: "Allowed reasoning-effort values for this model.
 /// When omitted, the menu comes from the endpoint's `/v1/models` row"). That
 /// endpoint is Grok's model catalog (xAI's, or `[endpoints].models_base_url`),
-/// matched by model id: grok 1.0.62 and 1.0.70 never fetch the list of a
-/// model's own `base_url`, so a custom model the catalog lacks has levels only
-/// from here.
+/// matched by model id: grok 1.0.62, 1.0.70 and 1.0.77 never fetch the list of
+/// a model's own `base_url`, so a custom model the catalog lacks has levels
+/// only from here.
 const GROK_REASONING_EFFORTS_KEY: &str = "reasoning_efforts";
 
 /// One `reasoning_efforts` level as the panel compares it: trimmed and
@@ -8543,7 +8781,7 @@ async fn hermes_setup_argvs() -> (Vec<String>, Vec<String>) {
         // Unreachable: Hermes is always an Npx distribution. Fall through to
         // the npx guidance with the same pinned spec so a future match-arm
         // change can't resurrect a stale recipe.
-        _ => "hermes-agent@0.22.2",
+        _ => "hermes-agent@0.23.3",
     };
     (
         hermes_npx_argv(package, &["acp", "--setup"]),
@@ -8866,6 +9104,8 @@ pub(crate) fn acp_update_hermes_config_core(
     let home = hermes_home_dir();
     ensure_hermes_home_secure(&home)?;
 
+    // From the read of config.yaml to its write: `mcp_servers` lives in it.
+    let _mcp_lock = mcp_write_lock()?;
     // Build + validate everything BEFORE any write, so an invalid document or a
     // crafted key never half-applies (the secret in particular).
     let config_path = hermes_config_yaml_path();
@@ -9223,6 +9463,220 @@ fn qoder_settings_json_path() -> PathBuf {
     crate::parsers::qoder::resolve_qoder_config_dir().join("settings.json")
 }
 
+
+/// The user-global instructions file the agent itself loads at session start,
+/// or `None` when it has no such file codeg can edit safely.
+///
+/// Each entry is the file the agent's shipped code reads (checked against the
+/// pinned releases), resolved with the same environment overrides as the rest
+/// of this panel. `None` on purpose:
+/// - Hermes: its only global file is `SOUL.md`, which REPLACES the persona;
+/// - Cursor: user rules are `.mdc` files with front matter, or server-side;
+/// - MiniMax Code: the data dir moves with profiles and a legacy migration;
+/// - OpenClaw: the file lives in a workspace configured in openclaw.json, and
+///   may be on a remote Gateway;
+/// - custom agents: codeg does not know their file layout.
+pub(crate) fn agent_system_instructions_path(agent_type: AgentType) -> Option<PathBuf> {
+    match agent_type {
+        AgentType::ClaudeCode => {
+            Some(crate::parsers::claude::resolve_claude_config_dir().join("CLAUDE.md"))
+        }
+        // `AGENTS.override.md` wins while it is non-blank.
+        AgentType::Codex => Some(codex_style_instructions_file(
+            &crate::parsers::codex::resolve_codex_home_dir(),
+        )),
+        AgentType::Gemini => {
+            Some(crate::parsers::gemini::resolve_gemini_base_dir().join("GEMINI.md"))
+        }
+        // Antigravity reads every one of `~/.gemini/{AGENTS,GEMINI}.md` from a
+        // hardcoded `~/.gemini` (it ignores `GEMINI_HOME`); `AGENTS.md` keeps
+        // it apart from Gemini CLI's `GEMINI.md`.
+        AgentType::Antigravity => Some(home_dir_or_default().join(".gemini").join("AGENTS.md")),
+        AgentType::OpenCode => Some(
+            crate::acp::opencode_config::config_dir()
+                .unwrap_or_else(|| home_dir_or_default().join(".config").join("opencode"))
+                .join("AGENTS.md"),
+        ),
+        // Cline's "Global AGENTS.md" is the cross-agent `~/.agents` one.
+        AgentType::Cline => Some(home_dir_or_default().join(".agents").join("AGENTS.md")),
+        // User memory is `<config dir>/CODEBUDDY.md` (or `.mdc`, first found);
+        // an `AGENTS.md` there is only read when the workspace IS the home.
+        AgentType::CodeBuddy => Some(first_existing_file(
+            &crate::parsers::codebuddy::resolve_codebuddy_config_dir(),
+            CODEBUDDY_INSTRUCTIONS_FILES,
+        )),
+        AgentType::KimiCode => {
+            Some(crate::parsers::kimi_code::resolve_kimi_code_home_dir().join("AGENTS.md"))
+        }
+        // Pi loads the first of these that exists.
+        AgentType::Pi => Some(first_existing_file(
+            &crate::parsers::pi::resolve_pi_agent_dir(),
+            PI_INSTRUCTIONS_FILES,
+        )),
+        AgentType::Grok => Some(crate::parsers::grok::resolve_grok_home_dir().join("AGENTS.md")),
+        AgentType::DeepSeek => {
+            Some(crate::parsers::deepseek::resolve_dsh_home_dir().join("AGENTS.md"))
+        }
+        AgentType::Qoder => {
+            Some(crate::parsers::qoder::resolve_qoder_config_dir().join("AGENTS.md"))
+        }
+        // Kiro's global instructions are steering files.
+        AgentType::Kiro => Some(
+            crate::parsers::kiro::resolve_kiro_home_dir()
+                .join("steering")
+                .join("AGENTS.md"),
+        ),
+        // A Codex fork: same override precedence.
+        AgentType::Trae => Some(codex_style_instructions_file(
+            &crate::acp::trae::resolve_trae_home_dir(),
+        )),
+        AgentType::CommandCode => {
+            Some(crate::acp::command_code::command_code_home_dir().join("AGENTS.md"))
+        }
+        // ZCode follows HOME / USERPROFILE only.
+        AgentType::ZCode => Some(inherited_node_home_dir().join(".zcode").join("AGENTS.md")),
+        AgentType::Hermes
+        | AgentType::Cursor
+        | AgentType::MiniMaxCode
+        | AgentType::OpenClaw
+        | AgentType::Custom(_) => None,
+    }
+}
+
+const CODEX_INSTRUCTIONS_FILES: &[&str] = &["AGENTS.override.md", "AGENTS.md"];
+const PI_INSTRUCTIONS_FILES: &[&str] =
+    &["AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
+const CODEBUDDY_INSTRUCTIONS_FILES: &[&str] = &["CODEBUDDY.md", "CODEBUDDY.mdc"];
+
+/// Every file [`agent_system_instructions_path`] may resolve to for the agent,
+/// whichever is in effect right now. A save goes to the file the panel showed
+/// (when it is one of these), not to a fresh resolution: blanking Codex's
+/// override, say, flips the resolution to `AGENTS.md`, whose content the
+/// editor never displayed.
+fn agent_system_instructions_candidates(agent_type: AgentType) -> Vec<PathBuf> {
+    let Some(resolved) = agent_system_instructions_path(agent_type) else {
+        return Vec::new();
+    };
+    let siblings: &[&str] = match agent_type {
+        AgentType::Codex | AgentType::Trae => CODEX_INSTRUCTIONS_FILES,
+        AgentType::Pi => PI_INSTRUCTIONS_FILES,
+        AgentType::CodeBuddy => CODEBUDDY_INSTRUCTIONS_FILES,
+        _ => &[],
+    };
+    let mut candidates = vec![resolved.clone()];
+    if let Some(dir) = resolved.parent() {
+        candidates.extend(siblings.iter().map(|name| dir.join(name)));
+    }
+    candidates
+}
+
+/// `<dir>/AGENTS.override.md` while it holds anything but whitespace, else
+/// `<dir>/AGENTS.md` — the file Codex (and its forks) actually loads.
+fn codex_style_instructions_file(dir: &Path) -> PathBuf {
+    let override_file = dir.join(CODEX_INSTRUCTIONS_FILES[0]);
+    match fs::read_to_string(&override_file) {
+        Ok(text) if !text.trim().is_empty() => override_file,
+        _ => dir.join(CODEX_INSTRUCTIONS_FILES[1]),
+    }
+}
+
+/// The first of `names` in `dir` that is a file, else the first name.
+fn first_existing_file(dir: &Path, names: &[&str]) -> PathBuf {
+    names
+        .iter()
+        .map(|name| dir.join(name))
+        .find(|path| path.is_file())
+        .unwrap_or_else(|| dir.join(names[0]))
+}
+
+/// The agent's global instructions file as `(path, content)` for the settings
+/// panel; the content is `None` when the file does not exist or cannot be read
+/// as UTF-8 text.
+pub(crate) fn load_agent_system_instructions(
+    agent_type: AgentType,
+) -> (Option<String>, Option<String>) {
+    let path = agent_system_instructions_path(agent_type);
+    let path_str = path.as_ref().map(|p| p.display().to_string());
+    let content = path.and_then(|p| fs::read_to_string(p).ok());
+    (path_str, content)
+}
+
+/// Write `content` as the agent's global instructions file.
+///
+/// The file belongs to the agent (and to the user, who may edit it by hand or
+/// keep it in a dotfiles checkout), so the write is careful with it:
+/// - content equal to what is on disk is not written at all, and empty content
+///   for a missing file does not create it (nor its directory);
+/// - a file that exists but cannot be read as text is refused rather than
+///   replaced, since the panel showed it empty;
+/// - the write is atomic and goes through a symlink, keeping the link and the
+///   file's permissions.
+///
+/// `shown_path` is the file the panel displayed (the `system_instructions_file_path`
+/// it was given); the write goes there, and only when it is one of the
+/// agent's own instruction files. Without it the file is resolved afresh.
+fn persist_agent_system_instructions(
+    agent_type: AgentType,
+    content: &str,
+    shown_path: Option<&str>,
+) -> Result<(), AcpError> {
+    let Some(resolved) = agent_system_instructions_path(agent_type) else {
+        return Err(AcpError::protocol(
+            "this agent has no global instructions file",
+        ));
+    };
+    let path = instructions_write_target(
+        resolved,
+        agent_system_instructions_candidates(agent_type),
+        shown_path,
+    )?;
+    write_instructions_file(&path, content)
+}
+
+/// The file a save writes: the one the panel showed when it is among the
+/// agent's `candidates`, else (nothing shown) the `resolved` one.
+fn instructions_write_target(
+    resolved: PathBuf,
+    candidates: Vec<PathBuf>,
+    shown_path: Option<&str>,
+) -> Result<PathBuf, AcpError> {
+    let Some(shown) = shown_path else {
+        return Ok(resolved);
+    };
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.display().to_string() == shown)
+        .ok_or_else(|| {
+            AcpError::protocol(format!(
+                "{shown} is not this agent's instructions file (it is now {}); reopen the settings to edit it",
+                resolved.display()
+            ))
+        })
+}
+
+fn write_instructions_file(path: &Path, content: &str) -> Result<(), AcpError> {
+    let current = match fs::read_to_string(path) {
+        Ok(text) => Some(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
+            return Err(AcpError::protocol(format!(
+                "failed to read instructions file {}: {e}",
+                path.display()
+            )))
+        }
+    };
+    if current.as_deref().unwrap_or_default() == content {
+        return Ok(());
+    }
+    crate::acp::opencode_config::write_atomic(path, content).map_err(|e| {
+        AcpError::protocol(format!(
+            "failed to write instructions file {}: {e}",
+            path.display()
+        ))
+    })
+}
+
+
 pub(crate) fn load_agent_local_config_json(agent_type: AgentType) -> Option<String> {
     if agent_type == AgentType::Codex {
         return load_codex_local_config_json();
@@ -9360,6 +9814,9 @@ fn persist_agent_local_config_json(
         ));
     }
 
+    // From the read to the write: Gemini's and Qoder's `settings.json` hold
+    // `mcpServers`, Claude Code's the `enabledPlugins` the MCP engine edits.
+    let _mcp_lock = mcp_write_lock()?;
     let mut base = if path.exists() {
         match fs::read_to_string(&path)
             .ok()
@@ -9417,7 +9874,9 @@ pub(crate) fn skill_storage_spec(agent_type: AgentType) -> Option<SkillStorageSp
         // or, at the top of one of those directories, a flat `<id>.md`
         // (`skill-scan.ts`, `skill-file.ts`). New skills go to the first of
         // each list, the layout OpenCode documents. It also reads
-        // `.claude/skills`, which codeg lists under Claude Code.
+        // `.claude/skills`, which codeg lists under Claude Code, and the same
+        // folders in every directory above the project; the composer's `/`
+        // menu reads all of them (`acp::opencode_skills`).
         //
         // `~/.agents/skills` matters beyond OpenCode: OpenCode is a
         // "universal" agent for the `skills` CLI, whose global `skills add`
@@ -9651,13 +10110,13 @@ pub(crate) fn skill_storage_spec(agent_type: AgentType) -> Option<SkillStorageSp
         // Command Code loads `<id>/SKILL.md` bundles — found recursively, never
         // a flat `<id>.md` — from `~/.commandcode/skills` and the shared
         // `~/.agents/skills` store, plus `.commandcode/skills` and
-        // `.agents/skills` in the project. Verified against 1.84.0, 1.86.3 and
-        // 1.88.0 by planting one skill in each candidate directory: exactly
-        // those four reached the session's commands, while `.claude/skills`
-        // (project and user) and the flat file were ignored. The Command Code
-        // directory leads so linking targets it without touching the shared
-        // store (the TRAE CLI ordering); on a name clash Command Code prefers
-        // it too.
+        // `.agents/skills` in the project. Verified against 1.84.0, 1.86.3,
+        // 1.88.0, 1.88.1, 1.88.2 and 1.88.4 by planting one skill in each candidate
+        // directory: exactly those four reached the session's commands, while
+        // `.claude/skills` (project and user) and the flat file were ignored.
+        // The Command Code directory leads so linking targets it without
+        // touching the shared store (the TRAE CLI ordering); on a name clash
+        // Command Code prefers it too.
         AgentType::CommandCode => Some(SkillStorageSpec {
             kind: SkillStorageKind::SkillDirectoryOnly,
             global_dirs: vec![
@@ -9887,17 +10346,6 @@ fn project_skill_bases(agent_type: AgentType, workspace: &str) -> Vec<PathBuf> {
     }
 }
 
-pub(crate) fn preferred_scope_skill_dir(
-    agent_type: AgentType,
-    scope: AgentSkillScope,
-    workspace_path: Option<&str>,
-) -> Result<PathBuf, AcpError> {
-    let dirs = scoped_skill_dirs(agent_type, scope, workspace_path)?;
-    dirs.into_iter()
-        .next()
-        .ok_or_else(|| AcpError::protocol("no skill directory resolved for this agent"))
-}
-
 fn is_markdown_file(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
@@ -9978,7 +10426,7 @@ fn parse_frontmatter_scalar(rest: &str) -> Option<String> {
     }
 }
 
-fn build_skill_item(
+pub(crate) fn build_skill_item(
     id: String,
     scope: AgentSkillScope,
     layout: AgentSkillLayout,
@@ -9993,6 +10441,13 @@ fn build_skill_item(
         path: path.to_string_lossy().to_string(),
         description,
         read_only: false,
+        // Filled in by `crate::skills::world::annotate_items` where a listing
+        // is served.
+        link_target: None,
+        owner: crate::acp::types::AgentSkillOwner::Agent,
+        pack: None,
+        codeg_copy: false,
+        plugin: None,
     }
 }
 
@@ -10000,7 +10455,7 @@ fn build_skill_item(
 /// (imagegen, skill-creator, etc.). We scan that directory so users see
 /// these in the `$` autocomplete and the Skills settings list — but any
 /// write to those files would clobber the CLI's own assets.
-fn is_read_only_skill_path(agent_type: AgentType, skill_path: &Path) -> bool {
+pub(crate) fn is_read_only_skill_path(agent_type: AgentType, skill_path: &Path) -> bool {
     let ro_root = match agent_type {
         AgentType::Codex => codex_home_dir().join("skills").join(".system"),
         // Cursor's bundled builtin skills; the CLI restores them on update,
@@ -10380,6 +10835,8 @@ fn persist_qoder_settings(text: &str) -> Result<(), AcpError> {
         fs::create_dir_all(parent)
             .map_err(|e| AcpError::protocol(format!("create qoder config dir failed: {e}")))?;
     }
+    // `mcpServers` lives in this file.
+    let _mcp_lock = mcp_write_lock()?;
     fs::write(&path, format!("{text}\n"))
         .map_err(|e| AcpError::protocol(format!("write qoder settings failed: {e}")))
 }
@@ -10886,8 +11343,12 @@ fn agent_env_keys(agent_type: AgentType) -> (&'static str, &'static str, &'stati
         // `llm-deepseek` adapter through the launch-environment snapshot —
         // which, when the host installs none (deepseek-acp does not), falls
         // back to `process.env`, so codeg's launch env reaches it. It resolves
-        // per request (`config.baseURL ?? env ?? https://api.deepseek.com`),
-        // NOT at load. `DEEPSEEK_ACP_PROVIDER` is a different thing entirely —
+        // per request (`config.baseURL ?? env ?? <default>`), NOT at load. The
+        // default and the protocol moved in deepseek-acp 0.10.0: through 0.9.0
+        // OpenAI Chat Completions at `https://api.deepseek.com`, since then
+        // DeepSeek's Anthropic-compatible Messages API (`<base>/v1/messages`)
+        // at `https://api.deepseek.com/anthropic`, so a bound endpoint must
+        // serve the latter. `DEEPSEEK_ACP_PROVIDER` is a different thing entirely —
         // the provider ROUTE id (`deepseek-official`), a registry key rather
         // than a URL — so it must not ride the base-url slot, or binding a
         // model provider would write an endpoint into the route selector and
@@ -10919,8 +11380,9 @@ fn agent_env_keys(agent_type: AgentType) -> (&'static str, &'static str, &'stati
         // `auth.type = "gemini-api-key"` reads (the server says so in its own
         // `auth_required` message). `AGY_ACP_DEFAULT_MODEL` is real — it is
         // the env the server's `get_default_model_id` consults before falling
-        // back to `gemini-3.8-flash-high` (`gemini-4-argon-high` for an Agent
-        // Platform session since 1.4.1). There is NO endpoint override, so
+        // back to `gemini-3.8-flash-high` (for an Agent Platform session
+        // `gemini-4-argon-high` from 1.4.1, `gemini-4-carbon-medium` from
+        // 1.5.0). There is NO endpoint override, so
         // the base-url slot stays an inert `AGY_BASE_URL` placeholder for the
         // same reason `CURSOR_MODEL`/`QODER_BASE_URL` above are: it keeps the
         // generic cascade off the `OPENAI_*` keys.
@@ -11855,6 +12317,398 @@ pub(crate) async fn acp_update_agent_preferences_and_refresh(
     Ok(refresh_config_staleness(manager, db, data_dir, &[agent_type], ConfigStaleKind::AgentConfig).await)
 }
 
+/// What a connect replays on the session, and which conversation row the
+/// connection is bound to for persisting its selection.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConnectSelection {
+    pub mode_id: Option<String>,
+    pub config_values: BTreeMap<String, String>,
+    /// The conversation row resolved for this connect; `None` for a draft.
+    pub row_id: Option<i32>,
+    /// The row's pending composer mode, restored onto the connection.
+    pub composer_mode_id: Option<String>,
+}
+
+/// Resolve the selection a connect replays (codeg#1179).
+///
+/// The row is `conversation_id` when it is live and runs `agent_type`, else —
+/// given `session_id` — the live row holding `(session_id, agent_type)`.
+///
+/// - Row with a stored selection → ONLY that is replayed; the client's
+///   new-conversation default never reaches an existing conversation, and an
+///   option the snapshot lacks is left to the resumed agent.
+/// - Row without one (legacy NULL / unparsable) → once, then frozen by the
+///   persister: a to-do task's CURRENT conversation whose task names the
+///   row's agent replays the task's tuple; any other task row (agent differs)
+///   or an automation run's row replays nothing (the resumed agent's own
+///   selection gets frozen); only an ordinary conversation takes the client's
+///   default.
+/// - No row (draft) → the client's default.
+///
+/// The row, the task binding and the automation-run link are read in ONE read
+/// transaction under the persister lock, so it never mixes a pre-relink NULL
+/// selection with a post-relink "no owner" and never reads mid-write.
+pub async fn resolve_connect_selection(
+    db: &sea_orm::DatabaseConnection,
+    manager: &ConnectionManager,
+    agent_type: AgentType,
+    conversation_id: Option<i32>,
+    session_id: Option<&str>,
+    client_mode_id: Option<String>,
+    client_config_values: BTreeMap<String, String>,
+) -> ConnectSelection {
+    let client = ConnectSelection {
+        mode_id: client_mode_id,
+        config_values: client_config_values,
+        row_id: None,
+        composer_mode_id: None,
+    };
+    let _guard = manager.selection.lock().await;
+    match resolve_connect_selection_tx(db, agent_type, conversation_id, session_id, &client).await
+    {
+        Ok(sel) => sel,
+        Err(e) => {
+            tracing::warn!("[ACP] resolve_connect_selection failed, using the client's: {e}");
+            client
+        }
+    }
+}
+
+async fn resolve_connect_selection_tx(
+    db: &sea_orm::DatabaseConnection,
+    agent_type: AgentType,
+    conversation_id: Option<i32>,
+    session_id: Option<&str>,
+    client: &ConnectSelection,
+) -> Result<ConnectSelection, crate::db::error::DbError> {
+    use crate::db::entities::{automation_run, conversation, work_task};
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, TransactionTrait};
+
+    let agent_str = serde_json::to_value(agent_type)
+        .ok()
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_default();
+    let txn = db.begin().await?;
+    let mut row = match conversation_id.filter(|id| *id > 0) {
+        Some(id) => conversation::Entity::find_by_id(id)
+            .filter(conversation::Column::DeletedAt.is_null())
+            .one(&txn)
+            .await?
+            .filter(|r| r.agent_type == agent_str),
+        None => None,
+    };
+    if row.is_none() {
+        if let Some(sid) = session_id.filter(|s| !s.is_empty()) {
+            row = conversation::Entity::find()
+                .filter(conversation::Column::ExternalId.eq(sid))
+                .filter(conversation::Column::AgentType.eq(agent_str.clone()))
+                .filter(conversation::Column::DeletedAt.is_null())
+                .one(&txn)
+                .await?;
+        }
+    }
+    let Some(row) = row else {
+        txn.commit().await?;
+        return Ok(client.clone());
+    };
+    if let Some(stored) =
+        crate::models::ConversationSelection::parse(row.selector_state.as_deref())
+    {
+        txn.commit().await?;
+        return Ok(ConnectSelection {
+            mode_id: stored.mode_id,
+            config_values: stored.config_values,
+            row_id: Some(row.id),
+            composer_mode_id: stored.composer_mode_id,
+        });
+    }
+    // Legacy row: no selection recorded yet.
+    let task = work_task::Entity::find()
+        .filter(work_task::Column::ConversationId.eq(row.id))
+        .one(&txn)
+        .await?;
+    let selection = if let Some(task) = task {
+        let cfg: crate::models::WorkTaskConfig =
+            serde_json::from_str(&task.config).unwrap_or_default();
+        let (agent, mode, values) =
+            crate::db::service::work_task_service::resolve_agent_config(&txn, task.folder_id, &cfg)
+                .await?;
+        if agent.as_deref() == Some(agent_str.as_str()) {
+            ConnectSelection {
+                mode_id: mode,
+                config_values: values,
+                row_id: Some(row.id),
+                composer_mode_id: None,
+            }
+        } else {
+            ConnectSelection {
+                row_id: Some(row.id),
+                ..Default::default()
+            }
+        }
+    } else {
+        let automation = automation_run::Entity::find()
+            .filter(automation_run::Column::ConversationId.eq(row.id))
+            .one(&txn)
+            .await?;
+        if automation.is_some() {
+            ConnectSelection {
+                row_id: Some(row.id),
+                ..Default::default()
+            }
+        } else {
+            ConnectSelection {
+                row_id: Some(row.id),
+                ..client.clone()
+            }
+        }
+    };
+    txn.commit().await?;
+    Ok(selection)
+}
+
+/// [`resolve_connect_selection`] + spawn + bind: the connect path every
+/// user-facing entry point (Tauri, web, chat channel) shares.
+///
+/// A connection that ended before it could be bound — a resume the agent
+/// refused during its handshake, or a session it lost — is reported like a
+/// closed one (`ConnectionNotFound`): the web client's attach and the chat
+/// channel's routing need a live connection, and have no other way to learn
+/// it is gone. The desktop app reads such an ending from the connection's own
+/// events instead (see [`spawn_and_bind_conversation_selection`]).
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn spawn_with_conversation_selection(
+    manager: &ConnectionManager,
+    db: &sea_orm::DatabaseConnection,
+    agent_type: AgentType,
+    working_dir: Option<String>,
+    session_id: Option<String>,
+    runtime_env: BTreeMap<String, String>,
+    owner_window_label: String,
+    emitter: EventEmitter,
+    conversation_id: Option<i32>,
+    client_mode_id: Option<String>,
+    client_config_values: BTreeMap<String, String>,
+) -> Result<String, AcpError> {
+    let spawned = spawn_and_bind_conversation_selection(
+        manager,
+        db,
+        agent_type,
+        working_dir,
+        session_id,
+        runtime_env,
+        owner_window_label,
+        emitter,
+        conversation_id,
+        client_mode_id,
+        client_config_values,
+    )
+    .await?;
+    spawned.bound?;
+    Ok(spawned.connection_id)
+}
+
+/// A spawned connection, and whether binding it to its conversation's row
+/// worked (`Err` only when the connection had already ended).
+pub(crate) struct SpawnedConversationConnection {
+    pub connection_id: String,
+    pub bound: Result<(), AcpError>,
+}
+
+/// [`spawn_with_conversation_selection`] that hands the connection back even
+/// when it ended before the bind, saying so in `bound`.
+///
+/// For the desktop app's `acp_connect`: its client buffers every event of a
+/// connection it has not routed yet and replays them once it has the id, so a
+/// resume that ended during its handshake still shows why — the error with its
+/// code, or `SessionLoadFailed` and its banner (a codex session another
+/// process holds is `session_busy`, with Reload). Refusing the id instead
+/// showed every such ending as a bare "connection not found".
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn spawn_and_bind_conversation_selection(
+    manager: &ConnectionManager,
+    db: &sea_orm::DatabaseConnection,
+    agent_type: AgentType,
+    working_dir: Option<String>,
+    session_id: Option<String>,
+    runtime_env: BTreeMap<String, String>,
+    owner_window_label: String,
+    emitter: EventEmitter,
+    conversation_id: Option<i32>,
+    client_mode_id: Option<String>,
+    client_config_values: BTreeMap<String, String>,
+) -> Result<SpawnedConversationConnection, AcpError> {
+    let selection = resolve_connect_selection(
+        db,
+        manager,
+        agent_type,
+        conversation_id,
+        session_id.as_deref(),
+        client_mode_id,
+        client_config_values,
+    )
+    .await;
+    let connection_id = manager
+        .spawn_agent(
+            agent_type,
+            working_dir,
+            session_id,
+            runtime_env,
+            owner_window_label,
+            emitter,
+            selection.mode_id.clone(),
+            selection.config_values.clone(),
+        )
+        .await?;
+    // Before returning, so a setter right after connect finds the binding.
+    let bound = match selection.row_id {
+        Some(row_id) => {
+            manager
+                .bind_selection_conversation(&connection_id, row_id, selection.composer_mode_id)
+                .await
+        }
+        None => Ok(()),
+    };
+    Ok(SpawnedConversationConnection {
+        connection_id,
+        bound,
+    })
+}
+
+#[cfg(test)]
+mod connect_selection_tests {
+    use super::*;
+    use crate::db::service::conversation_service;
+    use crate::db::test_helpers::{fresh_in_memory_db, seed_folder};
+    use crate::models::ConversationSelection;
+
+    fn client() -> (Option<String>, BTreeMap<String, String>) {
+        let mut v = BTreeMap::new();
+        v.insert("model".to_string(), "default-model".to_string());
+        v.insert("effort".to_string(), "high".to_string());
+        (Some("default-mode".to_string()), v)
+    }
+
+    #[tokio::test]
+    async fn a_stored_selection_is_replayed_alone() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-1179-connect").await;
+        let conv = conversation_service::create(&db.conn, folder, AgentType::Codex, None, None)
+            .await
+            .unwrap();
+        let mut values = BTreeMap::new();
+        values.insert("model".to_string(), "picked".to_string());
+        conversation_service::set_selector_state(
+            &db.conn,
+            conv.id,
+            &ConversationSelection {
+                mode_id: None,
+                composer_mode_id: Some("plan".into()),
+                config_values: values.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        let manager = ConnectionManager::new();
+        let (mode, vals) = client();
+        let sel = resolve_connect_selection(
+            &db.conn,
+            &manager,
+            AgentType::Codex,
+            Some(conv.id),
+            None,
+            mode,
+            vals,
+        )
+        .await;
+        // Neither the default's mode nor its extra option leaks in.
+        assert_eq!(sel.mode_id, None);
+        assert_eq!(sel.config_values, values);
+        assert_eq!(sel.row_id, Some(conv.id));
+        assert_eq!(sel.composer_mode_id.as_deref(), Some("plan"));
+    }
+
+    #[tokio::test]
+    async fn drafts_legacy_rows_and_other_agents_fall_back_as_specified() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-1179-connect-legacy").await;
+        let conv = conversation_service::create(&db.conn, folder, AgentType::Codex, None, None)
+            .await
+            .unwrap();
+        let manager = ConnectionManager::new();
+        let (mode, vals) = client();
+
+        // Legacy ordinary row → the client's default, bound to the row.
+        let sel = resolve_connect_selection(
+            &db.conn,
+            &manager,
+            AgentType::Codex,
+            Some(conv.id),
+            None,
+            mode.clone(),
+            vals.clone(),
+        )
+        .await;
+        assert_eq!(sel.mode_id, mode);
+        assert_eq!(sel.config_values, vals);
+        assert_eq!(sel.row_id, Some(conv.id));
+
+        // Another agent / unknown row → treated as a draft.
+        let sel = resolve_connect_selection(
+            &db.conn,
+            &manager,
+            AgentType::ClaudeCode,
+            Some(conv.id),
+            None,
+            mode.clone(),
+            vals.clone(),
+        )
+        .await;
+        assert_eq!(sel.row_id, None);
+        assert_eq!(sel.config_values, vals);
+
+        // A legacy task conversation whose task names another agent → nothing.
+        let task = crate::db::service::work_task_service::create(
+            &db.conn,
+            crate::models::WorkTaskDraft {
+                folder_id: folder,
+                title: "t".into(),
+                config: serde_json::json!({
+                    "display_text": "x",
+                    "prompt_blocks": [{ "type": "text", "text": "x" }],
+                    "agent_type": "claude_code",
+                }),
+            },
+        )
+        .await
+        .unwrap();
+        {
+            use crate::db::entities::work_task;
+            use sea_orm::sea_query::Expr;
+            use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+            work_task::Entity::update_many()
+                .col_expr(work_task::Column::ConversationId, Expr::value(Some(conv.id)))
+                .filter(work_task::Column::Id.eq(task.id))
+                .exec(&db.conn)
+                .await
+                .unwrap();
+        }
+        let sel = resolve_connect_selection(
+            &db.conn,
+            &manager,
+            AgentType::Codex,
+            Some(conv.id),
+            None,
+            mode,
+            vals,
+        )
+        .await;
+        assert_eq!(sel.row_id, Some(conv.id));
+        assert_eq!(sel.mode_id, None);
+        assert!(sel.config_values.is_empty());
+    }
+}
+
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 #[allow(clippy::too_many_arguments)]
@@ -11864,6 +12718,7 @@ pub async fn acp_connect(
     session_id: Option<String>,
     preferred_mode_id: Option<String>,
     preferred_config_values: Option<BTreeMap<String, String>>,
+    conversation_id: Option<i32>,
     manager: State<'_, ConnectionManager>,
     db: State<'_, AppDatabase>,
     app_handle: tauri::AppHandle,
@@ -11887,18 +12742,45 @@ pub async fn acp_connect(
     // can prompt the user to install it from Agent Settings.
     verify_agent_installed(agent_type).await?;
 
-    let emitter = EventEmitter::Tauri(app_handle);
+    let emitter = EventEmitter::from_app(&app_handle);
+    let spawned = spawn_and_bind_conversation_selection(
+        &manager,
+        &db.conn,
+        agent_type,
+        working_dir,
+        session_id,
+        runtime_env,
+        window.label().to_string(),
+        emitter,
+        conversation_id,
+        preferred_mode_id,
+        preferred_config_values.unwrap_or_default(),
+    )
+    .await?;
+    if let Err(e) = spawned.bound {
+        // Ended during its handshake: the webview replays the connection's
+        // buffered events once it routes this id, which say why.
+        tracing::info!(
+            "[ACP] connection {} ended before its conversation could be bound: {e}",
+            spawned.connection_id
+        );
+    }
+    Ok(spawned.connection_id)
+}
+
+/// Record the composer's pending mode pick on a connection (never sent to the
+/// agent; the tab applies it at its next send). `initial` = a draft's
+/// one-time hand-over at its first send. Returns whether it applied.
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn acp_set_composer_mode(
+    connection_id: String,
+    mode_id: Option<String>,
+    initial: Option<bool>,
+    manager: State<'_, ConnectionManager>,
+) -> Result<bool, AcpError> {
     manager
-        .spawn_agent(
-            agent_type,
-            working_dir,
-            session_id,
-            runtime_env,
-            window.label().to_string(),
-            emitter,
-            preferred_mode_id,
-            preferred_config_values.unwrap_or_default(),
-        )
+        .set_composer_mode(&connection_id, mode_id, initial.unwrap_or(false))
         .await
 }
 
@@ -11923,8 +12805,11 @@ pub async fn acp_prompt(
             None,
             client_message_id,
         )
-        .await
-        .map(|_| ())
+        .await?;
+    // A person typed this in a codeg window: a dispatch they write in is
+    // theirs from now on.
+    crate::personal_agent::note_owner_prompt(&connection_id, conversation_id);
+    Ok(())
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -12114,9 +12999,16 @@ pub async fn acp_answer_plan_approval(
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn acp_disconnect(
     connection_id: String,
+    only_if_idle: Option<bool>,
     manager: State<'_, ConnectionManager>,
-) -> Result<(), AcpError> {
-    manager.disconnect(&connection_id).await
+) -> Result<Option<bool>, AcpError> {
+    if only_if_idle == Some(true) {
+        return manager
+            .release_idle(&connection_id, chrono::Utc::now())
+            .await
+            .map(Some);
+    }
+    manager.disconnect(&connection_id).await.map(|()| None)
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -12193,14 +13085,22 @@ pub async fn acp_get_session_snapshot_by_conversation(
 /// connection by `external_id` and the frontend would mis-tag it as a locally
 /// owned connection, tearing it down (killing the real owner's agent) on tab
 /// close. Discovering it here lets the second client attach as a viewer.
+///
+/// A conversation the user moved to another folder only discovers connections
+/// launched in the folder it is in NOW: one still running in the folder it left
+/// (a client that missed the move, or a turn that was in flight) is not
+/// something to attach to — the next prompt there is refused anyway.
 pub(crate) async fn acp_find_connection_for_conversation_core(
     manager: &ConnectionManager,
+    db: &sea_orm::DatabaseConnection,
     conversation_id: i32,
     session_id: Option<&str>,
     agent_type: AgentType,
 ) -> Result<Option<crate::acp::ConversationConnectionInfo>, AcpError> {
+    let fence = manager.relocation_fence(db, conversation_id).await;
+    let dir = fence.as_ref().map(|(_, path)| path.as_str());
     let connection_id = match manager
-        .find_connection_by_conversation_id(conversation_id)
+        .find_connection_by_conversation_id_in(conversation_id, dir)
         .await
     {
         Some(id) => id,
@@ -12210,7 +13110,7 @@ pub(crate) async fn acp_find_connection_for_conversation_core(
         None => match session_id {
             Some(sid) if !sid.is_empty() => {
                 match manager
-                    .find_connection_by_external_id(sid, agent_type)
+                    .find_connection_by_external_id_in(sid, agent_type, dir)
                     .await
                 {
                     Some(id) => id,
@@ -12253,9 +13153,11 @@ pub async fn acp_find_connection_for_conversation(
     session_id: Option<String>,
     agent_type: AgentType,
     manager: State<'_, ConnectionManager>,
+    db: State<'_, AppDatabase>,
 ) -> Result<Option<crate::acp::ConversationConnectionInfo>, AcpError> {
     acp_find_connection_for_conversation_core(
         &manager,
+        &db.conn,
         conversation_id,
         session_id.as_deref(),
         agent_type,
@@ -12534,6 +13436,8 @@ pub(crate) async fn acp_list_agents_core(db: &AppDatabase) -> Result<Vec<AcpAgen
         } else {
             (local_config_json, None)
         };
+        let (system_instructions_file_path, system_instructions_content) =
+            load_agent_system_instructions(agent_type);
         let grok_config_toml = if agent_type == AgentType::Grok {
             load_grok_config_toml_raw()
         } else {
@@ -12608,6 +13512,8 @@ pub(crate) async fn acp_list_agents_core(db: &AppDatabase) -> Result<Vec<AcpAgen
             config_json,
             config_file_path: agent_local_config_path(agent_type)
                 .map(|path| path.display().to_string()),
+            system_instructions_file_path,
+            system_instructions_content,
             codex_auth_json,
             codex_config_toml,
             codex_sandbox_settings,
@@ -12807,7 +13713,7 @@ pub async fn acp_update_agent_preferences(
         .app_data_dir()
         .map(|p| crate::paths::resolve_effective_data_dir(&p))
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_update_agent_preferences_and_refresh(
         agent_type,
         enabled,
@@ -12958,7 +13864,7 @@ pub async fn acp_update_agent_env(
         .app_data_dir()
         .map(|p| crate::paths::resolve_effective_data_dir(&p))
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_update_agent_env_and_refresh(
         agent_type,
         enabled,
@@ -12976,6 +13882,8 @@ pub async fn acp_update_agent_env(
 pub(crate) async fn acp_update_agent_config_core(
     agent_type: AgentType,
     config_json: Option<String>,
+    system_instructions_content: Option<String>,
+    system_instructions_file_path: Option<String>,
     codex_auth_json: Option<String>,
     codex_config_toml: Option<String>,
     codex_config_toml_baseline: Option<String>,
@@ -13008,6 +13916,31 @@ pub(crate) async fn acp_update_agent_config_core(
             return Err(AcpError::protocol(
                 "invalid config_json: root must be a JSON object",
             ));
+        }
+    }
+
+    if let Some(instructions) = system_instructions_content.as_deref() {
+        persist_agent_system_instructions(
+            agent_type,
+            instructions,
+            system_instructions_file_path.as_deref(),
+        )?;
+        // The instructions panel saves on its own: nothing else was sent, so
+        // no native config file may be touched — the generic tail below would
+        // re-serialize the agent's settings file (and reset it to `{}` when it
+        // does not parse).
+        if config_json.is_none()
+            && codex_auth_json.is_none()
+            && codex_config_toml.is_none()
+            && codex_model_catalog.is_none()
+            && codex_sandbox.is_none()
+            && grok_config_toml.is_none()
+            && grok_structured.is_none()
+            && cursor_cli_config_json.is_none()
+            && cursor_structured.is_none()
+        {
+            emit_acp_agents_updated(emitter, "config_updated", Some(agent_type));
+            return Ok(());
         }
     }
 
@@ -13050,6 +13983,8 @@ pub(crate) async fn acp_update_agent_config_core(
         //    snapshot can't silently drop config written by another window / the
         //    MCP settings path since the panel opened.
         if grok_config_toml.is_some() || grok_structured.is_some() {
+            // From the read to the write: `[mcp_servers]` lives in this file.
+            let _mcp_lock = mcp_write_lock()?;
             let base = match grok_config_toml {
                 Some(text) => text,
                 None => read_grok_config_or_empty()?,
@@ -13137,6 +14072,8 @@ pub(crate) async fn acp_update_agent_config_core(
 pub(crate) async fn acp_update_agent_config_and_refresh(
     agent_type: AgentType,
     config_json: Option<String>,
+    system_instructions_content: Option<String>,
+    system_instructions_file_path: Option<String>,
     codex_auth_json: Option<String>,
     codex_config_toml: Option<String>,
     codex_config_toml_baseline: Option<String>,
@@ -13154,6 +14091,8 @@ pub(crate) async fn acp_update_agent_config_and_refresh(
     acp_update_agent_config_core(
         agent_type,
         config_json,
+        system_instructions_content,
+        system_instructions_file_path,
         codex_auth_json,
         codex_config_toml,
         codex_config_toml_baseline,
@@ -13176,6 +14115,8 @@ pub(crate) async fn acp_update_agent_config_and_refresh(
 pub async fn acp_update_agent_config(
     agent_type: AgentType,
     config_json: Option<String>,
+    system_instructions_content: Option<String>,
+    system_instructions_file_path: Option<String>,
     codex_auth_json: Option<String>,
     codex_config_toml: Option<String>,
     codex_config_toml_baseline: Option<String>,
@@ -13194,10 +14135,12 @@ pub async fn acp_update_agent_config(
         .app_data_dir()
         .map(|p| crate::paths::resolve_effective_data_dir(&p))
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_update_agent_config_and_refresh(
         agent_type,
         config_json,
+        system_instructions_content,
+        system_instructions_file_path,
         codex_auth_json,
         codex_config_toml,
         codex_config_toml_baseline,
@@ -13225,7 +14168,7 @@ pub async fn acp_update_hermes_config(
     raw_config_yaml: Option<String>,
     app: tauri::AppHandle,
 ) -> Result<(), AcpError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_update_hermes_config_core(
         HermesConfigUpdate {
             provider,
@@ -13283,7 +14226,7 @@ pub async fn acp_update_kimi_code_config(
         .app_data_dir()
         .map(|p| crate::paths::resolve_effective_data_dir(&p))
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_update_kimi_code_config_and_refresh(
         KimiCodeConfigUpdate {
             mode,
@@ -13327,7 +14270,7 @@ pub async fn acp_update_pi_config(
     db: State<'_, AppDatabase>,
     app: tauri::AppHandle,
 ) -> Result<(), AcpError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_update_pi_config_core(
         PiConfigUpdate {
             provider,
@@ -13734,7 +14677,7 @@ pub async fn acp_download_agent_binary(
     task_id: String,
     app: tauri::AppHandle,
 ) -> Result<(), AcpError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_download_agent_binary_core(agent_type, version, task_id, &emitter).await
 }
 
@@ -13901,7 +14844,7 @@ pub async fn acp_update_system_agent(
     db: State<'_, AppDatabase>,
     app: tauri::AppHandle,
 ) -> Result<Option<String>, AcpError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_update_system_agent_core(agent_type, task_id, &db, &emitter).await
 }
 
@@ -13960,7 +14903,7 @@ pub async fn acp_install_uv_tool(
     task_id: String,
     app: tauri::AppHandle,
 ) -> Result<(), AcpError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_install_uv_tool_core(task_id, &emitter).await
 }
 
@@ -14051,7 +14994,7 @@ pub async fn acp_detect_agent_local_version(
     db: State<'_, AppDatabase>,
     app: tauri::AppHandle,
 ) -> Result<Option<String>, AcpError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_detect_agent_local_version_core(agent_type, &db.conn, &emitter).await
 }
 
@@ -14180,7 +15123,7 @@ pub(crate) async fn acp_prepare_npx_agent_core(
             // `~/.local/bin`) legitimately satisfies the check. Without this,
             // a broken install is recorded as installed and only fails at
             // connect time with an opaque error.
-            if npm_package_requires_scripts(&install_spec) {
+            if npm_package_bootstraps_runtime(&install_spec) {
                 emit_agent_install_event(
                     emitter,
                     &task_id,
@@ -14334,7 +15277,7 @@ pub async fn acp_prepare_npx_agent(
     db: State<'_, AppDatabase>,
     app: tauri::AppHandle,
 ) -> Result<String, AcpError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_prepare_npx_agent_core(
         agent_type,
         registry_version,
@@ -14420,7 +15363,7 @@ pub async fn acp_uninstall_agent(
     db: State<'_, AppDatabase>,
     app: tauri::AppHandle,
 ) -> Result<(), AcpError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_uninstall_agent_core(agent_type, task_id, &db, &emitter).await
 }
 
@@ -14467,7 +15410,7 @@ pub async fn acp_install_pi_binary(
     task_id: String,
     app: tauri::AppHandle,
 ) -> Result<(), AcpError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_install_pi_binary_core(task_id, &emitter).await
 }
 
@@ -14512,7 +15455,7 @@ pub async fn acp_uninstall_pi_binary(
     task_id: String,
     app: tauri::AppHandle,
 ) -> Result<(), AcpError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_uninstall_pi_binary_core(task_id, &emitter).await
 }
 
@@ -14545,14 +15488,26 @@ pub async fn acp_reorder_agents(
     db: State<'_, AppDatabase>,
     app: tauri::AppHandle,
 ) -> Result<(), AcpError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_reorder_agents_core(&agent_types, &db, &emitter).await
 }
 
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+/// Every skill an agent sees in a scope, for the Skills page — each with where
+/// its link points and whose it is (`AgentSkillItem.owner`). Takes no lock.
 pub async fn acp_list_agent_skills(
     agent_type: AgentType,
     workspace_path: Option<String>,
+) -> Result<AgentSkillsListResult, AcpError> {
+    acp_list_agent_skills_with(agent_type, workspace_path, false).await
+}
+
+/// [`acp_list_agent_skills`]; with `include_broken`, dangling links under a
+/// skill's name are listed too (owner `broken`), so the page can offer to
+/// repair or remove them.
+pub(crate) async fn acp_list_agent_skills_with(
+    agent_type: AgentType,
+    workspace_path: Option<String>,
+    include_broken: bool,
 ) -> Result<AgentSkillsListResult, AcpError> {
     let Some(spec) = skill_storage_spec(agent_type) else {
         return Ok(AgentSkillsListResult {
@@ -14565,6 +15520,7 @@ pub async fn acp_list_agent_skills(
 
     let mut locations = Vec::new();
     let mut skills_by_key: BTreeMap<String, AgentSkillItem> = BTreeMap::new();
+    let mut scanned: Vec<(AgentSkillScope, PathBuf)> = Vec::new();
 
     for dir in &spec.global_dirs {
         locations.push(AgentSkillLocation {
@@ -14577,6 +15533,7 @@ pub async fn acp_list_agent_skills(
             let key = format!("global:{}", skill.id);
             skills_by_key.entry(key).or_insert(skill);
         }
+        scanned.push((AgentSkillScope::Global, dir.clone()));
     }
 
     if let Some(workspace) = workspace_path.as_deref().map(str::trim) {
@@ -14599,6 +15556,35 @@ pub async fn acp_list_agent_skills(
                     let key = format!("project:{}", skill.id);
                     skills_by_key.entry(key).or_insert(skill);
                 }
+                scanned.push((AgentSkillScope::Project, project_dir));
+            }
+        }
+    }
+
+    if include_broken {
+        for (scope, dir) in &scanned {
+            let prefix = match scope {
+                AgentSkillScope::Global => "global",
+                AgentSkillScope::Project => "project",
+            };
+            let Ok(entries) = fs::read_dir(dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let id = entry.file_name().to_string_lossy().into_owned();
+                let path = entry.path();
+                let dangling = fs::symlink_metadata(&path)
+                    .map(|meta| meta.file_type().is_symlink())
+                    .unwrap_or(false)
+                    && fs::metadata(&path).is_err();
+                if !dangling || validate_skill_id(&id).is_err() {
+                    continue;
+                }
+                skills_by_key
+                    .entry(format!("{prefix}:{id}"))
+                    .or_insert_with(|| {
+                        build_skill_item(id, *scope, AgentSkillLayout::SkillDirectory, path)
+                    });
             }
         }
     }
@@ -14614,6 +15600,7 @@ pub async fn acp_list_agent_skills(
             .cmp(&scope_rank(b.scope))
             .then_with(|| a.name.cmp(&b.name))
     });
+    crate::skills::world::annotate_items(&crate::skills::store_dir(), &mut skills);
 
     Ok(AgentSkillsListResult {
         supported: true,
@@ -14621,6 +15608,40 @@ pub async fn acp_list_agent_skills(
         locations,
         skills,
     })
+}
+
+/// The skills an agent's sessions can load, for the composer menus. OpenCode
+/// loads skills from more folders than the Skills settings page manages for it
+/// (`acp::opencode_skills`), so its menu reads them all, with the environment
+/// OpenCode is launched with; every other agent's menu lists what
+/// [`acp_list_agent_skills`] does.
+pub(crate) async fn acp_list_agent_runtime_skills_core(
+    agent_type: AgentType,
+    workspace_path: Option<String>,
+    db: &AppDatabase,
+) -> Result<AgentSkillsListResult, AcpError> {
+    if agent_type != AgentType::OpenCode {
+        return acp_list_agent_skills(agent_type, workspace_path).await;
+    }
+    let env = agent_setting_service::load_agent_env(&db.conn, agent_type).await;
+    let workspace = workspace_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(Path::new);
+    let mut listing = crate::acp::opencode_skills::SkillSources::for_env(&env).listing(workspace);
+    crate::skills::world::annotate_items(&crate::skills::store_dir(), &mut listing.skills);
+    Ok(listing)
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn acp_list_agent_runtime_skills(
+    agent_type: AgentType,
+    workspace_path: Option<String>,
+    db: State<'_, AppDatabase>,
+) -> Result<AgentSkillsListResult, AcpError> {
+    acp_list_agent_runtime_skills_core(agent_type, workspace_path, &db).await
 }
 
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
@@ -14643,45 +15664,331 @@ pub async fn acp_read_agent_skill(
     if is_read_only_skill_path(agent_type, Path::new(&skill.path)) {
         skill.read_only = true;
     }
+    crate::skills::world::annotate_items(
+        &crate::skills::store_dir(),
+        std::slice::from_mut(&mut skill),
+    );
     let content_path = skill_content_path(skill.layout, Path::new(&skill.path));
     let content = fs::read_to_string(&content_path)
         .map_err(|e| AcpError::protocol(format!("failed to read skill content: {e}")))?;
     Ok(AgentSkillContent { skill, content })
 }
 
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn acp_save_agent_skill(
+/// A Skills page error with its stable code.
+fn skill_page_error(
+    base: AppCommandError,
+    code: &str,
+    detail: Option<String>,
+) -> AppCommandError {
+    crate::skills::coded_error(base, code, detail)
+}
+
+fn skill_page_input_error(error: AcpError) -> AppCommandError {
+    use crate::skills::model::codes;
+    skill_page_error(
+        AppCommandError::invalid_input(error.to_string()),
+        codes::SKILL_INVALID,
+        None,
+    )
+}
+
+/// Which agents read the directory a Skills page write went into.
+fn skill_page_readers(
+    ctx: &crate::skills::SkillsCtx,
+    path: &Path,
+    agent_type: AgentType,
+) -> Vec<AgentType> {
+    let readers = ctx.readers_of_entry(path);
+    if readers.is_empty() {
+        vec![agent_type]
+    } else {
+        readers
+    }
+}
+
+/// Where a Skills page write goes: the agent's directories of the scope, in
+/// its reading order, how it lays skills out, and — for each directory —
+/// the other agents that read it too (global directories several agents
+/// read, as the skills engine works them out; none for a project's).
+pub(crate) struct SkillPageDirs {
+    pub kind: SkillStorageKind,
+    pub dirs: Vec<PathBuf>,
+    /// Parallel to `dirs`: the OTHER agents reading each.
+    pub shared_with: Vec<Vec<AgentType>>,
+    /// Parallel to `dirs`: the agent CLI's own bundled skills (Codex's
+    /// `skills/.system`, …) — never where a new skill goes.
+    pub read_only: Vec<bool>,
+}
+
+/// Works out an agent's [`SkillPageDirs`] — called by the Skills page's save
+/// and delete once they hold the skills lock (and by a preflight, which takes
+/// none), so who reads each folder is what it is when the write happens, not
+/// what it was when the request came in.
+pub(crate) type SkillPageDirsFn<'a> =
+    dyn Fn() -> Result<SkillPageDirs, AppCommandError> + Send + Sync + 'a;
+
+impl SkillPageDirs {
+    /// `dirs` of `agent_type`, each with the other agents of `ctx` that
+    /// read it.
+    pub(crate) fn with_readers(
+        ctx: &crate::skills::SkillsCtx,
+        agent_type: AgentType,
+        kind: SkillStorageKind,
+        dirs: Vec<PathBuf>,
+    ) -> Self {
+        let shared_with = dirs
+            .iter()
+            .map(|dir| {
+                ctx.dir_info(dir)
+                    .map(|info| {
+                        info.readers
+                            .iter()
+                            .copied()
+                            .filter(|a| *a != agent_type)
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            })
+            .collect();
+        let read_only = dirs
+            .iter()
+            .map(|dir| {
+                is_read_only_skill_path(agent_type, dir)
+                    || ctx
+                        .dir_info(dir)
+                        .is_some_and(|info| !info.read_only_for.is_empty())
+            })
+            .collect();
+        Self {
+            kind,
+            dirs,
+            shared_with,
+            read_only,
+        }
+    }
+
+    /// Where a new skill goes: the first folder only this agent reads that
+    /// is not the agent CLI's own.
+    fn own_dir(&self) -> Option<&PathBuf> {
+        self.dirs
+            .iter()
+            .zip(&self.shared_with)
+            .zip(&self.read_only)
+            .find(|((_, others), read_only)| others.is_empty() && !**read_only)
+            .map(|((dir, _), _)| dir)
+    }
+
+    /// The other agents reading the directory `entry` is in.
+    fn others_reading(&self, entry: &Path) -> Vec<AgentType> {
+        let Some(parent) = entry.parent() else {
+            return Vec::new();
+        };
+        let key = crate::skills::fsio::normalize(parent);
+        self.dirs
+            .iter()
+            .zip(&self.shared_with)
+            .find(|(dir, _)| {
+                crate::skills::fsio::same_path(&crate::skills::fsio::normalize(dir), &key)
+            })
+            .map(|(_, others)| others.clone())
+            .unwrap_or_default()
+    }
+}
+
+/// The agent's [`SkillPageDirs`] for a scope, from the environment Codeg
+/// runs in.
+fn skill_page_dirs(
+    ctx: &crate::skills::SkillsCtx,
+    agent_type: AgentType,
+    scope: AgentSkillScope,
+    skill_id: &str,
+    workspace_path: Option<&str>,
+) -> Result<SkillPageDirs, AppCommandError> {
+    use crate::skills::model::codes;
+    let Some(spec) = skill_storage_spec(agent_type) else {
+        return Err(skill_page_error(
+            AppCommandError::invalid_input(format!(
+                "{agent_type} skills are not supported in Settings yet"
+            )),
+            codes::AGENT_UNSUPPORTED,
+            None,
+        ));
+    };
+    validate_skill_id(skill_id).map_err(skill_page_input_error)?;
+    let dirs =
+        scoped_skill_dirs(agent_type, scope, workspace_path).map_err(skill_page_input_error)?;
+    Ok(match scope {
+        AgentSkillScope::Global => SkillPageDirs::with_readers(ctx, agent_type, spec.kind, dirs),
+        AgentSkillScope::Project => SkillPageDirs {
+            kind: spec.kind,
+            shared_with: vec![Vec::new(); dirs.len()],
+            read_only: dirs
+                .iter()
+                .map(|dir| is_read_only_skill_path(agent_type, dir))
+                .collect(),
+            dirs,
+        },
+    })
+}
+
+fn agent_list(agents: &[AgentType]) -> String {
+    agents
+        .iter()
+        .map(|a| a.as_wire().into_owned())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Create or save one of an agent's own skills (the Skills page).
+///
+/// Under the skills lock. Refused: a skill of the agent CLI itself
+/// (`read_only_skill`); a write that would land, through a link, in Codeg's
+/// store (`store_link_read_only` — a pack's, Harness's or Custom skill is
+/// changed in Codeg, or copied into a Custom skill, never through an agent's
+/// link); and, with `create`, an id that anything in the scope's directories
+/// or in Codeg's store already uses (`id_taken`). Without `create` (an older
+/// client that cannot say which it means) an existing skill is updated, as
+/// before. `SKILL.md` is replaced in one step.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn acp_save_agent_skill_core(
+    emitter: &EventEmitter,
     agent_type: AgentType,
     scope: AgentSkillScope,
     skill_id: String,
     content: String,
     workspace_path: Option<String>,
     layout: Option<AgentSkillLayout>,
-) -> Result<AgentSkillItem, AcpError> {
-    let Some(spec) = skill_storage_spec(agent_type) else {
-        return Err(AcpError::protocol(format!(
-            "{agent_type} skills are not supported in Settings yet"
-        )));
+    create: bool,
+) -> Result<AgentSkillItem, AppCommandError> {
+    let ctx = crate::skills::SkillsCtx::user();
+    // Checked now (an unsupported agent, a bad id), and worked out again
+    // under the lock.
+    skill_page_dirs(&ctx, agent_type, scope, &skill_id, workspace_path.as_deref())?;
+    let id = skill_id.clone();
+    let target = move || {
+        skill_page_dirs(
+            &crate::skills::SkillsCtx::user(),
+            agent_type,
+            scope,
+            &id,
+            workspace_path.as_deref(),
+        )
     };
-    let id = validate_skill_id(&skill_id)?;
-    let dirs = scoped_skill_dirs(agent_type, scope, workspace_path.as_deref())?;
-    let preferred_dir = preferred_scope_skill_dir(agent_type, scope, workspace_path.as_deref())?;
+    acp_save_agent_skill_in(
+        &ctx,
+        emitter,
+        agent_type,
+        scope,
+        skill_id,
+        content,
+        &target,
+        layout,
+        create,
+    )
+    .await
+}
 
-    fs::create_dir_all(&preferred_dir)
-        .map_err(|e| AcpError::protocol(format!("failed to create skills directory: {e}")))?;
+/// [`acp_save_agent_skill_core`] into the directories `target` names, with
+/// the store, lock and agents of `ctx`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn acp_save_agent_skill_in(
+    ctx: &crate::skills::SkillsCtx,
+    emitter: &EventEmitter,
+    agent_type: AgentType,
+    scope: AgentSkillScope,
+    skill_id: String,
+    content: String,
+    target: &SkillPageDirsFn<'_>,
+    layout: Option<AgentSkillLayout>,
+    create: bool,
+) -> Result<AgentSkillItem, AppCommandError> {
+    use crate::skills::model::codes;
+    let id = validate_skill_id(&skill_id).map_err(skill_page_input_error)?;
+    let store = ctx.store.clone();
 
-    let existing = locate_existing_skill_across_dirs(&dirs, spec.kind, &id, scope);
+    let _guard = ctx.lock().await.map_err(AppCommandError::from)?;
+
+    // Who reads which folder, as it is now that no other writer can change
+    // anything.
+    let target = target()?;
+    if target.dirs.is_empty() {
+        return Err(skill_page_input_error(AcpError::protocol(
+            "no skill directory resolved for this agent",
+        )));
+    }
+    // A new skill goes into the first directory only this agent reads (Cline:
+    // `~/.cline/skills`, not the `~/.agents/skills` it reads first), never a
+    // folder of the agent CLI's own: never where it would show up for other
+    // agents unasked, nor where the agent's CLI keeps its bundled skills.
+    let own_dir = target.own_dir().cloned();
+    let SkillPageDirs {
+        kind,
+        dirs,
+        shared_with,
+        read_only,
+    } = target;
+
+    if create {
+        let flat = matches!(kind, SkillStorageKind::SkillDirectoryOrMarkdownFile);
+        let taken = dirs
+            .iter()
+            .flat_map(|dir| {
+                let mut candidates = vec![dir.join(&id)];
+                if flat {
+                    candidates.push(dir.join(format!("{id}.md")));
+                }
+                candidates
+            })
+            .chain(std::iter::once(store.join(&id)))
+            .find(|path| fs::symlink_metadata(path).is_ok());
+        if let Some(path) = taken {
+            return Err(skill_page_error(
+                AppCommandError::already_exists(format!(
+                    "a skill named '{id}' already exists at {}",
+                    path.display()
+                )),
+                codes::ID_TAKEN,
+                Some(path.to_string_lossy().into_owned()),
+            ));
+        }
+    }
+
+    let existing = locate_existing_skill_across_dirs(&dirs, kind, &id, scope);
     if let Some(ref item) = existing {
-        if is_read_only_skill_path(agent_type, Path::new(&item.path)) {
-            return Err(AcpError::protocol(format!(
-                "skill '{id}' is a built-in system skill and cannot be modified"
-            )));
+        let in_read_only_dir = Path::new(&item.path).parent().is_some_and(|parent| {
+            dirs.iter()
+                .zip(&read_only)
+                .any(|(dir, read_only)| *read_only && dir.as_path() == parent)
+        });
+        if in_read_only_dir || is_read_only_skill_path(agent_type, Path::new(&item.path)) {
+            return Err(skill_page_error(
+                AppCommandError::permission_denied(format!(
+                    "skill '{id}' is a built-in system skill and cannot be modified"
+                )),
+                codes::READ_ONLY_SKILL,
+                None,
+            ));
         }
     }
     let mut skill = if let Some(item) = existing {
         item
     } else {
-        let new_layout = match spec.kind {
+        let Some(preferred_dir) = own_dir else {
+            // Every folder is read by other agents too, or is the CLI's own.
+            let mut others: Vec<AgentType> = shared_with.into_iter().flatten().collect();
+            others.sort();
+            others.dedup();
+            return Err(skill_page_error(
+                AppCommandError::invalid_input(format!(
+                    "{agent_type} has no skill folder of its own to put a new skill in (other agents read {}: {})",
+                    dirs[0].display(),
+                    agent_list(&others)
+                )),
+                codes::NO_OWN_DIRECTORY,
+                Some(agent_list(&others)),
+            ));
+        };
+        let new_layout = match kind {
             SkillStorageKind::SkillDirectoryOnly => AgentSkillLayout::SkillDirectory,
             SkillStorageKind::SkillDirectoryOrMarkdownFile => {
                 layout.unwrap_or(AgentSkillLayout::MarkdownFile)
@@ -14696,54 +16003,359 @@ pub async fn acp_save_agent_skill(
 
     let skill_path = PathBuf::from(&skill.path);
     let content_path = skill_content_path(skill.layout, &skill_path);
-
-    if skill.layout == AgentSkillLayout::SkillDirectory {
-        fs::create_dir_all(&skill_path).map_err(|e| {
-            AcpError::protocol(format!(
-                "failed to create skill directory '{}': {e}",
-                skill.path
-            ))
-        })?;
-    } else if let Some(parent) = content_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| {
-            AcpError::protocol(format!("failed to create skill parent directory: {e}"))
-        })?;
+    // Through a link into Codeg's store, the write would change Codeg's copy
+    // for every agent linked to it.
+    if crate::skills::fsio::resolves_into(&content_path, &store) {
+        return Err(skill_page_error(
+            AppCommandError::permission_denied(format!(
+                "'{id}' is Codeg's skill, linked here from its skill store; change it in Codeg, or copy it into a Custom skill"
+            )),
+            codes::STORE_LINK_READ_ONLY,
+            Some(content_path.to_string_lossy().into_owned()),
+        ));
     }
 
-    fs::write(&content_path, content)
-        .map_err(|e| AcpError::protocol(format!("failed to write skill content: {e}")))?;
+    let io_failure = |what: &str, err: std::io::Error| {
+        skill_page_error(
+            AppCommandError::io_error(format!("{what}: {err}")),
+            codes::IO_ERROR,
+            Some(err.to_string()),
+        )
+    };
+    if skill.layout == AgentSkillLayout::SkillDirectory {
+        fs::create_dir_all(&skill_path)
+            .map_err(|e| io_failure("failed to create skill directory", e))?;
+    } else if let Some(parent) = content_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| io_failure("failed to create skill parent directory", e))?;
+    }
+
+    crate::skills::fsio::write_content_atomic(&content_path, content.as_bytes())
+        .map_err(|e| io_failure("failed to write skill content", e))?;
 
     skill.description = read_skill_description(&content_path);
-
+    crate::skills::world::annotate_items(&store, std::slice::from_mut(&mut skill));
+    crate::skills::announce(
+        emitter,
+        [crate::skills::model::ChangedKind::AgentSkills],
+        skill_page_readers(ctx, &skill_path, agent_type),
+    );
     Ok(skill)
 }
 
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+/// [`acp_save_agent_skill_core`] with the older arguments (an update when the
+/// skill exists), announcing nothing — what this module's tests call.
+#[cfg(test)]
+pub async fn acp_save_agent_skill(
+    agent_type: AgentType,
+    scope: AgentSkillScope,
+    skill_id: String,
+    content: String,
+    workspace_path: Option<String>,
+    layout: Option<AgentSkillLayout>,
+) -> Result<AgentSkillItem, AcpError> {
+    acp_save_agent_skill_core(
+        &EventEmitter::Noop,
+        agent_type,
+        scope,
+        skill_id,
+        content,
+        workspace_path,
+        layout,
+        false,
+    )
+    .await
+    .map_err(|e| AcpError::protocol(e.message))
+}
+
+/// What deleting one of an agent's skills does — or, with `preflight`,
+/// would do (snake_case on the wire).
+#[derive(Debug, Clone, Serialize)]
+pub struct SkillPageDeleteResult {
+    /// The entry was deleted (`false` for a preflight).
+    pub deleted: bool,
+    /// The entry: a folder, a flat `.md`, a link or a broken link.
+    pub path: String,
+    /// `folder` | `file` | `link` | `broken_link`.
+    pub kind: &'static str,
+    /// The OTHER agents that read the directory it is in, and lose it too.
+    pub shared_with: Vec<AgentType>,
+    /// Present iff `shared_with` is not empty: the acknowledgement of exactly
+    /// these effects, to send back with the real delete.
+    pub ack: Option<String>,
+}
+
+/// How a Skills page delete is confirmed: the same discipline as
+/// `skills_apply_links` — a delete in a directory other agents read needs the
+/// `ack` its preflight returned.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SkillPageDeleteConfirm {
+    pub preflight: bool,
+    pub ack: Option<String>,
+}
+
+/// Delete one of an agent's skills (the Skills page), under the skills lock.
+/// An entry that is a link — Codeg's or not — loses only the link; a broken
+/// link under the name can be deleted too. A skill of the agent CLI itself is
+/// refused (`read_only_skill`). In a directory other agents read, every one
+/// of them loses it: the real delete then needs the `ack` of a preflight
+/// (`acknowledgement_required`, or `effects_changed` when the effects are no
+/// longer those acknowledged; `i18n_params.detail` = those agents).
+pub(crate) async fn acp_delete_agent_skill_core(
+    emitter: &EventEmitter,
+    agent_type: AgentType,
+    scope: AgentSkillScope,
+    skill_id: String,
+    workspace_path: Option<String>,
+    confirm: SkillPageDeleteConfirm,
+) -> Result<SkillPageDeleteResult, AppCommandError> {
+    let ctx = crate::skills::SkillsCtx::user();
+    // Checked now, and worked out again under the lock.
+    skill_page_dirs(&ctx, agent_type, scope, &skill_id, workspace_path.as_deref())?;
+    let id = skill_id.clone();
+    let target = move || {
+        skill_page_dirs(
+            &crate::skills::SkillsCtx::user(),
+            agent_type,
+            scope,
+            &id,
+            workspace_path.as_deref(),
+        )
+    };
+    acp_delete_agent_skill_in(&ctx, emitter, agent_type, scope, skill_id, &target, confirm).await
+}
+
+/// [`acp_delete_agent_skill_core`] in the directories `target` names, with
+/// the store, lock and agents of `ctx`.
+pub(crate) async fn acp_delete_agent_skill_in(
+    ctx: &crate::skills::SkillsCtx,
+    emitter: &EventEmitter,
+    agent_type: AgentType,
+    scope: AgentSkillScope,
+    skill_id: String,
+    target: &SkillPageDirsFn<'_>,
+    confirm: SkillPageDeleteConfirm,
+) -> Result<SkillPageDeleteResult, AppCommandError> {
+    use crate::skills::model::codes;
+    let id = validate_skill_id(&skill_id).map_err(skill_page_input_error)?;
+
+    // A preflight reads; the real delete holds the lock from here on.
+    let _guard = if confirm.preflight {
+        None
+    } else {
+        Some(ctx.lock().await.map_err(AppCommandError::from)?)
+    };
+    // Who reads the folder, as it is now: the `ack` is checked against the
+    // agents that lose the skill at the moment it goes, not those of when
+    // the request came in (another agent may have started reading the
+    // folder while this one waited for the lock).
+    let target = target()?;
+
+    let skill_path = match locate_existing_skill_across_dirs(&target.dirs, target.kind, &id, scope)
+    {
+        Some(skill) => PathBuf::from(skill.path),
+        None => target
+            .dirs
+            .iter()
+            .map(|dir| dir.join(&id))
+            .find(|path| {
+                fs::symlink_metadata(path)
+                    .map(|meta| meta.file_type().is_symlink())
+                    .unwrap_or(false)
+            })
+            .ok_or_else(|| {
+                skill_page_error(
+                    AppCommandError::not_found(format!("skill not found: {id}")),
+                    codes::NOT_FOUND,
+                    None,
+                )
+            })?,
+    };
+    if is_read_only_skill_path(agent_type, &skill_path) {
+        return Err(skill_page_error(
+            AppCommandError::permission_denied(format!(
+                "skill '{id}' is a built-in system skill and cannot be deleted"
+            )),
+            codes::READ_ONLY_SKILL,
+            None,
+        ));
+    }
+    // A Harness plugin's member skill changes only with the plugin.
+    if let Some(plugin) = crate::skills::owned::plugin_of_entry(ctx, &skill_path) {
+        return Err(skill_page_error(
+            AppCommandError::permission_denied(format!(
+                "'{id}' is the Harness plugin {plugin}'s skill; it changes only with the plugin"
+            )),
+            codes::PLUGIN_OWNED,
+            Some(plugin),
+        ));
+    }
+    let kind = match crate::skills::link::inspect(&skill_path) {
+        crate::skills::link::RawEntry::Link { resolved: None, .. } => "broken_link",
+        crate::skills::link::RawEntry::Link { .. } => "link",
+        crate::skills::link::RawEntry::Dir => "folder",
+        _ => "file",
+    };
+    let mut others = target.others_reading(&skill_path);
+    others.sort();
+    others.dedup();
+    let token = (!others.is_empty()).then(|| {
+        crate::commands::mcp_engine::fsio::sha256_hex(
+            format!(
+                "skills-page-delete/1\n{}\n{}\n{kind}\n{}",
+                agent_type.as_wire(),
+                skill_path.to_string_lossy(),
+                agent_list(&others)
+            )
+            .as_bytes(),
+        )
+    });
+    let mut result = SkillPageDeleteResult {
+        deleted: false,
+        path: skill_path.to_string_lossy().into_owned(),
+        kind,
+        shared_with: others.clone(),
+        ack: token.clone(),
+    };
+    if confirm.preflight {
+        return Ok(result);
+    }
+    if let Some(token) = &token {
+        if confirm.ack.as_deref() != Some(token.as_str()) {
+            let code = if confirm.ack.is_some() {
+                codes::EFFECTS_CHANGED
+            } else {
+                codes::ACKNOWLEDGEMENT_REQUIRED
+            };
+            return Err(skill_page_error(
+                AppCommandError::invalid_input(format!(
+                    "{} is in a folder {} also read: deleting it deletes it for them too. Preflight the delete and send back its ack",
+                    skill_path.display(),
+                    agent_list(&others)
+                )),
+                code,
+                Some(agent_list(&others)),
+            ));
+        }
+    }
+    let readers = skill_page_readers(ctx, &skill_path, agent_type);
+    remove_skill_entry(&skill_path).map_err(|e| {
+        skill_page_error(
+            AppCommandError::io_error(format!("failed to delete skill entry: {e}")),
+            codes::REMOVE_FAILED,
+            Some(e.to_string()),
+        )
+    })?;
+    // Codeg's link or copy: off the record too.
+    let mut record = crate::skills::record::LinkRecord::load(&ctx.store);
+    let codeg = record.remove(&skill_path).is_some();
+    if codeg {
+        if let Err(err) = record.save(&ctx.store) {
+            tracing::warn!("[Skills] could not update the link record: {err}");
+        }
+    }
+    let mut kinds = vec![crate::skills::model::ChangedKind::AgentSkills];
+    if codeg {
+        kinds.push(crate::skills::model::ChangedKind::Links);
+    }
+    crate::skills::announce(emitter, kinds, readers);
+    result.deleted = true;
+    Ok(result)
+}
+
+/// [`acp_delete_agent_skill_core`] announcing nothing — what this module's
+/// tests call.
+#[cfg(test)]
 pub async fn acp_delete_agent_skill(
     agent_type: AgentType,
     scope: AgentSkillScope,
     skill_id: String,
     workspace_path: Option<String>,
 ) -> Result<(), AcpError> {
-    let Some(spec) = skill_storage_spec(agent_type) else {
-        return Err(AcpError::protocol(format!(
-            "{agent_type} skills are not supported in Settings yet"
-        )));
-    };
-    let id = validate_skill_id(&skill_id)?;
-    let dirs = scoped_skill_dirs(agent_type, scope, workspace_path.as_deref())?;
+    acp_delete_agent_skill_core(
+        &EventEmitter::Noop,
+        agent_type,
+        scope,
+        skill_id,
+        workspace_path,
+        SkillPageDeleteConfirm::default(),
+    )
+    .await
+    .map(|_| ())
+    .map_err(|e| AcpError::protocol(e.message))
+}
 
-    let skill = locate_existing_skill_across_dirs(&dirs, spec.kind, &id, scope)
-        .ok_or_else(|| AcpError::protocol(format!("skill not found: {id}")))?;
-    if is_read_only_skill_path(agent_type, Path::new(&skill.path)) {
-        return Err(AcpError::protocol(format!(
-            "skill '{id}' is a built-in system skill and cannot be deleted"
-        )));
+/// The Skills page's three commands as the desktop registers them. The
+/// shared functions above take no app handle; these add what the page can
+/// pass beside the older arguments (`include_broken`, `create`) and announce
+/// `skills://changed`.
+#[cfg(feature = "tauri-runtime")]
+pub mod skill_page {
+    use super::*;
+
+    #[tauri::command]
+    pub async fn acp_list_agent_skills(
+        agent_type: AgentType,
+        workspace_path: Option<String>,
+        include_broken: Option<bool>,
+    ) -> Result<AgentSkillsListResult, AcpError> {
+        super::acp_list_agent_skills_with(
+            agent_type,
+            workspace_path,
+            include_broken.unwrap_or(false),
+        )
+        .await
     }
-    let skill_path = PathBuf::from(&skill.path);
-    remove_skill_entry(&skill_path)
-        .map_err(|e| AcpError::protocol(format!("failed to delete skill entry: {e}")))?;
-    Ok(())
+
+    #[allow(clippy::too_many_arguments)]
+    #[tauri::command]
+    pub async fn acp_save_agent_skill(
+        agent_type: AgentType,
+        scope: AgentSkillScope,
+        skill_id: String,
+        content: String,
+        workspace_path: Option<String>,
+        layout: Option<AgentSkillLayout>,
+        create: Option<bool>,
+        app: tauri::AppHandle,
+    ) -> Result<AgentSkillItem, AppCommandError> {
+        super::acp_save_agent_skill_core(
+            &EventEmitter::from_app(&app),
+            agent_type,
+            scope,
+            skill_id,
+            content,
+            workspace_path,
+            layout,
+            create.unwrap_or(false),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[tauri::command]
+    pub async fn acp_delete_agent_skill(
+        agent_type: AgentType,
+        scope: AgentSkillScope,
+        skill_id: String,
+        workspace_path: Option<String>,
+        preflight: Option<bool>,
+        ack: Option<String>,
+        app: tauri::AppHandle,
+    ) -> Result<SkillPageDeleteResult, AppCommandError> {
+        super::acp_delete_agent_skill_core(
+            &EventEmitter::from_app(&app),
+            agent_type,
+            scope,
+            skill_id,
+            workspace_path,
+            SkillPageDeleteConfirm {
+                preflight: preflight.unwrap_or(false),
+                ack,
+            },
+        )
+        .await
+    }
 }
 
 /// The plugins OpenCode's global config declares (`plugins`, plus 1.x
@@ -15050,13 +16662,16 @@ mod opencode_skills_tests {
     fn opencode_skill_roots_follow_its_config_dir() {
         let tmp = tempfile::tempdir().unwrap();
         let (xdg, own) = (tmp.path().join("xdg"), tmp.path().join("own"));
-        let shared = home_dir_or_default().join(".agents").join("skills");
+        // `~/.agents/skills` is read under `temp_env`'s lock, like the spec:
+        // another test may be pointing HOME at a home of its own meanwhile.
+        let shared = || home_dir_or_default().join(".agents").join("skills");
         temp_env::with_vars(
             [
                 ("OPENCODE_CONFIG_DIR", None::<&Path>),
                 ("XDG_CONFIG_HOME", Some(xdg.as_path())),
             ],
             || {
+                let shared = shared();
                 let spec = skill_storage_spec(AgentType::OpenCode).expect("OpenCode has a store");
                 assert_eq!(spec.kind, SkillStorageKind::SkillDirectoryOrMarkdownFile);
                 assert_eq!(
@@ -15079,6 +16694,7 @@ mod opencode_skills_tests {
                 ("XDG_CONFIG_HOME", Some(xdg.as_path())),
             ],
             || {
+                let shared = shared();
                 let spec = skill_storage_spec(AgentType::OpenCode).expect("OpenCode has a store");
                 assert_eq!(
                     spec.global_dirs,
@@ -15095,7 +16711,15 @@ mod opencode_skills_tests {
         let tmp = tempfile::tempdir().unwrap();
         let workspace = tmp.path().join("repo");
         let config = tmp.path().join("config");
-        temp_env::async_with_vars([("OPENCODE_CONFIG_DIR", Some(config.as_path()))], async {
+        // A home of the test's own too: a save consults Codeg's skill store.
+        let home = tmp.path().join("home");
+        temp_env::async_with_vars(
+            [
+                ("OPENCODE_CONFIG_DIR", Some(config.as_path())),
+                ("HOME", Some(home.as_path())),
+                ("USERPROFILE", Some(home.as_path())),
+            ],
+            async {
             write_skill(&workspace.join(".opencode/skills"), "bundle", "a bundle");
             fs::create_dir_all(workspace.join(".opencode/skill")).unwrap();
             fs::write(workspace.join(".opencode/skill/flat.md"), "a flat file").unwrap();
@@ -15797,6 +17421,114 @@ mod tests {
         let version =
             system_probed_version(AgentType::Custom("probe-e2e-test"), &bin, None).await;
         assert_eq!(version.as_deref(), Some("1.2.3"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn qoder_version_cache_distinguishes_entries_and_refreshes_after_a_change() {
+        use crate::acp::qoder::{QoderInstallKind, QoderWindowsLaunch};
+        let dir = tempfile::tempdir().unwrap();
+        let entry = dir.path().join("version.sh");
+        std::fs::write(
+            &entry,
+            "printf x >> \"${0%/*}/probes\"\nprintf '1.2.3\\n'\n",
+        )
+        .unwrap();
+        let mut launch = QoderWindowsLaunch {
+            program: PathBuf::from("/bin/sh"),
+            prefix_args: vec![entry.clone().into_os_string()],
+            kind: QoderInstallKind::NpmPackage,
+        };
+        for _ in 0..2 {
+            assert_eq!(qoder_probed_version(&launch).await.as_deref(), Some("1.2.3"));
+        }
+        assert_eq!(std::fs::read(dir.path().join("probes")).unwrap(), b"x");
+        // A different file length makes invalidation deterministic even on a
+        // filesystem with coarse timestamps.
+        std::fs::write(
+            &entry,
+            "printf x >> \"${0%/*}/probes\"\nprintf '10.20.30\\n'\n",
+        )
+        .unwrap();
+        assert_eq!(qoder_probed_version(&launch).await.as_deref(), Some("10.20.30"));
+        assert_eq!(std::fs::read(dir.path().join("probes")).unwrap(), b"xx");
+        let other = dir.path().join("other.sh");
+        std::fs::write(&other, "printf '4.5.6\\n'\n").unwrap();
+        launch.prefix_args = vec![other.into_os_string()];
+        assert_eq!(qoder_probed_version(&launch).await.as_deref(), Some("4.5.6"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn qoder_version_cache_also_caches_failed_probes() {
+        use crate::acp::qoder::{QoderInstallKind, QoderWindowsLaunch};
+        let dir = tempfile::tempdir().unwrap();
+        let entry = dir.path().join("failing.sh");
+        std::fs::write(&entry, "printf x >> \"${0%/*}/probes\"\nexit 1\n").unwrap();
+        let launch = QoderWindowsLaunch {
+            program: PathBuf::from("/bin/sh"),
+            prefix_args: vec![entry.into_os_string()],
+            kind: QoderInstallKind::NpmPackage,
+        };
+        for _ in 0..2 {
+            assert_eq!(qoder_probed_version(&launch).await, None);
+        }
+        assert_eq!(std::fs::read(dir.path().join("probes")).unwrap(), b"x");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn qoder_detection_and_diagnostics_probe_the_selected_cli_before_npm() {
+        let node = resolve_command_on_path("node").expect("the fixture needs a real node");
+        let output = crate::process::tokio_command(&node)
+            .arg("--version")
+            .output()
+            .await
+            .unwrap();
+        let expected = extract_version_token(&String::from_utf8_lossy(&output.stdout)).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("qoder.cmd"),
+            "@echo off\r\nset \"DISPATCHER=%~dp0qoder-dispatcher.ps1\"\r\npowershell.exe -File \"%DISPATCHER%\" -- %*\r\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.path().join("npm.cmd"),
+            "@echo off\r\necho {\"dependencies\":{\"@qoder-ai/qodercli\":{\"version\":\"0.0.1\"}}}\r\n",
+        )
+        .unwrap();
+        let inherited_path = std::env::var_os("PATH").unwrap_or_default();
+        let test_path = std::env::join_paths(
+            std::iter::once(root.path().to_path_buf())
+                .chain(std::env::split_paths(&inherited_path)),
+        )
+        .unwrap();
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        // A real native executable answers --version, while the competing npm
+        // metadata deliberately describes a different version. The dispatcher
+        // selects the executable through its supported override.
+        temp_env::async_with_vars(
+            [
+                ("PATH", Some(test_path.as_os_str())),
+                ("QODER_CLI_BIN", Some(node.as_os_str())),
+            ],
+            async {
+                assert_eq!(
+                    detect_npm_global_version("@qoder-ai/qodercli")
+                        .await
+                        .as_deref(),
+                    Some("0.0.1")
+                );
+                assert_eq!(
+                    detect_local_version(AgentType::Qoder).await.as_deref(),
+                    Some(expected.as_str())
+                );
+                let diag = collect_agent_diag(&db, AgentType::Qoder, None).await;
+                assert_eq!(diag.detected_version.as_deref(), Some(expected.as_str()));
+                assert!(diag.direct_version_probe);
+            },
+        )
+        .await;
     }
 
     #[cfg(unix)]
@@ -17027,8 +18759,8 @@ mod tests {
             },
         )
         .unwrap();
-        // The shape verified against grok 1.0.62 and 1.0.70: bare levels make
-        // it advertise `supportsReasoningEffort` with exactly these
+        // The shape verified against grok 1.0.62, 1.0.70 and 1.0.77: bare levels
+        // make it advertise `supportsReasoningEffort` with exactly these
         // `reasoningEfforts`.
         assert_eq!(
             grok_efforts_text(&merged, "grok-4.7").as_deref(),
@@ -18835,6 +20567,56 @@ echo {"id":"codeg-models","type":"response","command":"get_available_models","su
         );
     }
 
+    /// The settings writers that replace a file the MCP page also edits take
+    /// the MCP write lock (`commands::mcp_engine::lock`): while another
+    /// writer holds it they write nothing, and they go ahead once it is let
+    /// go. Qoder's `settings.json`, OpenCode's config and its plugin list
+    /// stand for the rest here — theirs are the files an environment
+    /// variable can move into a temp directory.
+    #[test]
+    fn settings_writers_wait_for_the_mcp_write_lock() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let qoder = tmp.path().join("qoder");
+        let opencode = tmp.path().join("opencode");
+        temp_env::with_vars(
+            [
+                ("QODER_CONFIG_DIR", Some(qoder.as_path())),
+                ("OPENCODE_CONFIG_DIR", Some(opencode.as_path())),
+            ],
+            || {
+                let held = crate::commands::mcp_engine::lock::acquire_blocking().expect("lock");
+                let (done_tx, done_rx) = std::sync::mpsc::channel();
+                let writers = std::thread::spawn(move || {
+                    let outcome = persist_qoder_settings("{\"a\": 1}")
+                        .and_then(|()| persist_opencode_config_text("{\"model\": \"a/b\"}"))
+                        .and_then(|()| {
+                            opencode_plugins::add_plugin("some-plugin")
+                                .map(|_| ())
+                                .map_err(AcpError::Protocol)
+                        });
+                    let _ = done_tx.send(());
+                    outcome
+                });
+                assert!(
+                    done_rx.recv_timeout(Duration::from_millis(250)).is_err(),
+                    "a writer went ahead while the lock was someone else's"
+                );
+                assert!(!qoder.join("settings.json").exists());
+                assert!(!opencode.join("opencode.json").exists());
+
+                drop(held);
+                writers.join().expect("join").expect("the writers finish");
+                assert_eq!(
+                    fs::read_to_string(qoder.join("settings.json")).expect("qoder"),
+                    "{\"a\": 1}\n"
+                );
+                let config = fs::read_to_string(opencode.join("opencode.json")).expect("opencode");
+                assert!(config.contains("\"a/b\""), "{config}");
+                assert!(config.contains("some-plugin"), "{config}");
+            },
+        );
+    }
+
     #[test]
     fn codex_config_projection_tracks_model_provider_for_fingerprint() {
         // Two configs sharing one base_url but naming different providers must
@@ -19096,13 +20878,26 @@ wire_api = "chat"
         std::fs::create_dir_all(&saved).expect("create skill dir");
         std::fs::write(saved.join("SKILL.md"), "---\nname: demo\n---\nbody\n")
             .expect("write SKILL.md");
-        let listed = tokio::runtime::Runtime::new()
-            .expect("runtime")
-            .block_on(acp_list_agent_skills(
-                AgentType::DeepSeek,
-                Some(nested.to_string_lossy().to_string()),
-            ))
-            .expect("list skills");
+        // Under a home of the test's own: the listing also reads Codeg's skill
+        // store (who owns each skill), which must not be the real one.
+        let home = tmp.path().join("home");
+        let listed = temp_env::with_vars(
+            [
+                ("HOME", Some(home.as_os_str())),
+                ("USERPROFILE", Some(home.as_os_str())),
+                ("DSH_HOME", None),
+                ("DSH_AGENTS_HOME", None),
+            ],
+            || {
+                tokio::runtime::Runtime::new()
+                    .expect("runtime")
+                    .block_on(acp_list_agent_skills(
+                        AgentType::DeepSeek,
+                        Some(nested.to_string_lossy().to_string()),
+                    ))
+            },
+        )
+        .expect("list skills");
         assert!(
             listed.skills.iter().any(|s| s.id == "demo"),
             "skill saved at the git root must be listed from a nested workspace: {:?}",
@@ -19162,13 +20957,25 @@ wire_api = "chat"
         std::fs::create_dir_all(&saved).expect("create skill dir");
         std::fs::write(saved.join("SKILL.md"), "---\nname: demo\n---\nbody\n")
             .expect("write SKILL.md");
-        let listed = tokio::runtime::Runtime::new()
-            .expect("runtime")
-            .block_on(acp_list_agent_skills(
-                AgentType::KimiCode,
-                Some(nested.to_string_lossy().to_string()),
-            ))
-            .expect("list skills");
+        // Under a home of the test's own: the listing also reads Codeg's skill
+        // store (who owns each skill), which must not be the real one.
+        let home = tmp.path().join("home");
+        let listed = temp_env::with_vars(
+            [
+                ("HOME", Some(home.as_os_str())),
+                ("USERPROFILE", Some(home.as_os_str())),
+                ("KIMI_CODE_HOME", None),
+            ],
+            || {
+                tokio::runtime::Runtime::new()
+                    .expect("runtime")
+                    .block_on(acp_list_agent_skills(
+                        AgentType::KimiCode,
+                        Some(nested.to_string_lossy().to_string()),
+                    ))
+            },
+        )
+        .expect("list skills");
         assert!(
             listed.skills.iter().any(|s| s.id == "demo"),
             "skill saved at the git root must be listed from a nested workspace: {:?}",
@@ -19793,6 +21600,7 @@ wire_api = "chat"
         use crate::web::event_bridge::EventEmitter;
 
         let mgr = ConnectionManager::new();
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
         mgr.insert_test_connection("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
             .await;
         {
@@ -19802,10 +21610,16 @@ wire_api = "chat"
             s.event_seq = 7;
         }
 
-        let info = acp_find_connection_for_conversation_core(&mgr, 42, None, AgentType::ClaudeCode)
-            .await
-            .expect("ok")
-            .expect("a live connection is bound to conversation 42");
+        let info = acp_find_connection_for_conversation_core(
+            &mgr,
+            &db.conn,
+            42,
+            None,
+            AgentType::ClaudeCode,
+        )
+        .await
+        .expect("ok")
+        .expect("a live connection is bound to conversation 42");
         assert_eq!(info.connection_id, "c1");
         assert_eq!(info.event_seq, 7);
     }
@@ -19819,14 +21633,19 @@ wire_api = "chat"
         use crate::web::event_bridge::EventEmitter;
 
         let mgr = ConnectionManager::new();
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
         mgr.insert_test_connection("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
             .await;
-        assert!(
-            acp_find_connection_for_conversation_core(&mgr, 999, None, AgentType::ClaudeCode)
-                .await
-                .expect("ok")
-                .is_none()
-        );
+        assert!(acp_find_connection_for_conversation_core(
+            &mgr,
+            &db.conn,
+            999,
+            None,
+            AgentType::ClaudeCode
+        )
+        .await
+        .expect("ok")
+        .is_none());
     }
 
     #[tokio::test]
@@ -19841,6 +21660,7 @@ wire_api = "chat"
         use crate::web::event_bridge::EventEmitter;
 
         let mgr = ConnectionManager::new();
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
         mgr.insert_test_connection("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
             .await;
         {
@@ -19853,16 +21673,23 @@ wire_api = "chat"
 
         // by-conversation misses, no session fallback → None.
         assert!(
-            acp_find_connection_for_conversation_core(&mgr, 42, None, AgentType::ClaudeCode)
-                .await
-                .expect("ok")
-                .is_none(),
+            acp_find_connection_for_conversation_core(
+                &mgr,
+                &db.conn,
+                42,
+                None,
+                AgentType::ClaudeCode
+            )
+            .await
+            .expect("ok")
+            .is_none(),
             "without a session_id fallback an unbound connection is undiscoverable"
         );
 
         // session fallback finds the live owner (matching agent_type).
         let info = acp_find_connection_for_conversation_core(
             &mgr,
+            &db.conn,
             42,
             Some("sess-abc"),
             AgentType::ClaudeCode,
@@ -19876,6 +21703,7 @@ wire_api = "chat"
         // a non-matching session id still misses.
         assert!(acp_find_connection_for_conversation_core(
             &mgr,
+            &db.conn,
             42,
             Some("other"),
             AgentType::ClaudeCode
@@ -19888,10 +21716,16 @@ wire_api = "chat"
         // (external_id is unique only per agent) — otherwise a viewer could
         // attach to the wrong agent's connection.
         assert!(
-            acp_find_connection_for_conversation_core(&mgr, 42, Some("sess-abc"), AgentType::Codex)
-                .await
-                .expect("ok")
-                .is_none(),
+            acp_find_connection_for_conversation_core(
+                &mgr,
+                &db.conn,
+                42,
+                Some("sess-abc"),
+                AgentType::Codex
+            )
+            .await
+            .expect("ok")
+            .is_none(),
             "external_id fallback must be scoped by agent_type"
         );
     }
@@ -19906,6 +21740,7 @@ wire_api = "chat"
         use crate::models::AgentType;
         use crate::web::event_bridge::EventEmitter;
 
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
         for terminal in [ConnectionStatus::Disconnected, ConnectionStatus::Error] {
             let mgr = ConnectionManager::new();
             mgr.insert_test_connection("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
@@ -19917,10 +21752,16 @@ wire_api = "chat"
                 s.status = terminal.clone();
             }
             assert!(
-                acp_find_connection_for_conversation_core(&mgr, 42, None, AgentType::ClaudeCode)
-                    .await
-                    .expect("ok")
-                    .is_none(),
+                acp_find_connection_for_conversation_core(
+                    &mgr,
+                    &db.conn,
+                    42,
+                    None,
+                    AgentType::ClaudeCode
+                )
+                .await
+                .expect("ok")
+                .is_none(),
                 "terminal status {terminal:?} must not be returned as a live connection"
             );
         }
@@ -19999,18 +21840,19 @@ wire_api = "chat"
         assert!(build_npm_install_spec("cline@3.0.9", Some("latest")).is_err());
     }
 
-    // hermes-agent's postinstall bootstraps its runtime, and it is the only
-    // package codeg force-enables lifecycle scripts for. The spec, not the
-    // agent type, is what `npm_package_requires_scripts` keys off, so a custom
-    // version spec must still name the package, or the install leaves a shim
-    // that only fails later, at connect, with "runtime is not ready". The spec's
-    // own version is also the recorded fallback when detection comes up empty.
+    // hermes-agent's postinstall bootstraps its runtime, so codeg
+    // force-enables its lifecycle scripts. The spec, not the agent type, is
+    // what `npm_package_requires_scripts` keys off, so a custom version spec
+    // must still name the package, or the install leaves a shim that only
+    // fails later, at connect, with "runtime is not ready". The spec's own
+    // version is also the recorded fallback when detection comes up empty.
     #[test]
     fn hermes_custom_version_spec_keeps_lifecycle_scripts_and_records_its_version() {
-        let spec = build_npm_install_spec("hermes-agent@0.22.2", Some("0.23.0")).unwrap();
-        assert_eq!(spec, "hermes-agent@0.23.0");
+        let spec = build_npm_install_spec("hermes-agent@0.23.3", Some("0.24.0")).unwrap();
+        assert_eq!(spec, "hermes-agent@0.24.0");
         assert!(npm_package_requires_scripts(&spec));
-        assert_eq!(version_from_package_spec(&spec).as_deref(), Some("0.23.0"));
+        assert!(npm_package_bootstraps_runtime(&spec));
+        assert_eq!(version_from_package_spec(&spec).as_deref(), Some("0.24.0"));
     }
 
     #[test]
@@ -20146,8 +21988,9 @@ wire_api = "chat"
     }
 
     /// A `grok` in `~/.grok/bin` (`grok.exe` on Windows) counts as Grok's
-    /// native install unless Grok recorded it as the npm package's copy, the
-    /// one `npm uninstall -g` leaves behind.
+    /// native install unless it is the npm package's copy, the one `npm
+    /// uninstall -g` leaves behind: recorded as npm's, or, with no record,
+    /// laid out as the npm package lays it out (see the layout tests below).
     #[test]
     fn grok_native_install_counts_any_copy_but_the_npm_packages() {
         let home = tempfile::tempdir().expect("tempdir");
@@ -20167,7 +22010,8 @@ wire_api = "chat"
         // The record as `install.ps1` writes it, with CRLF line endings.
         assert_eq!(found().as_deref(), Some(bin.as_path()));
 
-        // Only an explicit npm record excludes the copy.
+        // Without an npm record, a copy with no build of the npm package's
+        // beside it still counts.
         for other in ["", "[cli]\nauto_update = false\n", "not = [toml"] {
             std::fs::write(&config, other).expect("write config");
             assert_eq!(found().as_deref(), Some(bin.as_path()), "config: {other:?}");
@@ -20180,6 +22024,89 @@ wire_api = "chat"
         std::fs::write(&config, "[cli]\ninstaller = \"npm\"\nauto_update = true\n")
             .expect("write config");
         assert_eq!(found(), None);
+    }
+
+    /// Where npm skipped the postinstall, the package's launcher unpacks the
+    /// build on its first run and records no installer, and the copy is told
+    /// apart by its layout. This is the Windows one, which the test can build
+    /// on any host: `grok.exe` copied from the `grok-<version>.exe` beside it.
+    #[test]
+    fn grok_native_install_skips_an_unrecorded_copy_of_an_npm_build() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let grok_dir = home.path().join(".grok");
+        let bin_dir = grok_dir.join("bin");
+        let bin = bin_dir.join(binary_cache::executable_file_name("grok"));
+        let build_name = |stem: &str| format!("{stem}{}", std::env::consts::EXE_SUFFIX);
+        let build = bin_dir.join(build_name("grok-1.0.70"));
+        let config = grok_dir.join("config.toml");
+        let found = || grok_native_install(home.path(), "grok");
+
+        std::fs::create_dir_all(&bin_dir).expect("create bin dir");
+        std::fs::write(&build, "build 1.0.70").expect("write build");
+        std::fs::write(&bin, "build 1.0.70").expect("write copy");
+        // The launcher's first run leaves no config; a turn then writes one
+        // with a `[cli]` table and still no installer.
+        assert_eq!(found(), None, "no config");
+        std::fs::write(&config, "[cli]\nauto_update = true\n").expect("write config");
+        assert_eq!(found(), None, "no installer");
+
+        // A record decides over the layout.
+        std::fs::write(&config, "[cli]\ninstaller = \"internal\"\n").expect("write config");
+        assert_eq!(found().as_deref(), Some(bin.as_path()));
+        std::fs::remove_file(&config).expect("remove config");
+
+        // A `grok` that is no copy of that build counts, and so does one beside
+        // files that only look like builds (the pager's, another `grok-…`).
+        std::fs::write(&bin, "another build").expect("write other");
+        assert_eq!(found().as_deref(), Some(bin.as_path()));
+        std::fs::remove_file(&build).expect("remove build");
+        for name in ["grok-pager-1.0.70", "grok-latest"] {
+            let lookalike = bin_dir.join(build_name(name));
+            std::fs::write(&lookalike, "another build").expect("write lookalike");
+            assert_eq!(found().as_deref(), Some(bin.as_path()), "{name}");
+            std::fs::remove_file(&lookalike).expect("remove lookalike");
+        }
+    }
+
+    /// The Unix layout: npm links `grok` to the bare name of the build beside
+    /// it, where Grok's own installers link it into `~/.grok/downloads`.
+    #[cfg(unix)]
+    #[test]
+    fn grok_native_install_skips_an_unrecorded_link_to_an_npm_build() {
+        use std::os::unix::fs::symlink;
+
+        let home = tempfile::tempdir().expect("tempdir");
+        let grok_dir = home.path().join(".grok");
+        let bin_dir = grok_dir.join("bin");
+        let downloads = grok_dir.join("downloads");
+        let bin = bin_dir.join("grok");
+        let found = || grok_native_install(home.path(), "grok");
+        std::fs::create_dir_all(&bin_dir).expect("create bin dir");
+        std::fs::create_dir_all(&downloads).expect("create downloads");
+        std::fs::write(bin_dir.join("grok-1.0.70"), "build 1.0.70").expect("write build");
+        std::fs::write(downloads.join("grok-macos-aarch64"), "build").expect("write download");
+        let relink = |target: &Path| {
+            let _ = std::fs::remove_file(&bin);
+            symlink(target, &bin).expect("link grok");
+        };
+
+        // What the npm launcher and postinstall leave, with no record.
+        relink(Path::new("grok-1.0.70"));
+        assert_eq!(found(), None);
+        std::fs::write(grok_dir.join("config.toml"), "[cli]\nauto_update = true\n")
+            .expect("write config");
+        assert_eq!(found(), None, "a config without an installer");
+
+        // install.sh's relative link, and the absolute one it makes when the
+        // bin and download directories have different parents.
+        let absolute = downloads.join("grok-macos-aarch64");
+        for target in [
+            Path::new("../downloads/grok-macos-aarch64"),
+            absolute.as_path(),
+        ] {
+            relink(target);
+            assert_eq!(found().as_deref(), Some(bin.as_path()), "{target:?}");
+        }
     }
 
     #[cfg(not(windows))]
@@ -21745,35 +23672,52 @@ wire_api = "chat"
         }
     }
 
-    /// The script flags reach exactly the packages whose install is their
+    /// The script flags reach exactly the packages whose install needs their
     /// scripts, and name the package, which npm 12 needs before it runs a
     /// script of a global install or an `npx` run.
     #[test]
-    fn hermes_installs_name_the_package_whose_scripts_npm_must_run() {
-        for spec in ["hermes-agent@0.22.2", "hermes-agent@0.23.0", "hermes-agent"] {
-            assert_eq!(
-                npm_run_scripts_args(spec),
-                ["--ignore-scripts=false", "--allow-scripts=hermes-agent"],
-                "{spec}"
-            );
+    fn installs_name_the_packages_whose_scripts_npm_must_run() {
+        for (specs, name) in [
+            (
+                &["hermes-agent@0.23.3", "hermes-agent@0.24.0", "hermes-agent"][..],
+                "hermes-agent",
+            ),
+            (
+                &["@xai-official/grok@1.0.92", "@xai-official/grok"][..],
+                "@xai-official/grok",
+            ),
+        ] {
+            for spec in specs {
+                assert_eq!(
+                    npm_run_scripts_args(spec),
+                    [
+                        "--ignore-scripts=false".to_string(),
+                        format!("--allow-scripts={name}"),
+                    ],
+                    "{spec}"
+                );
+            }
         }
-        // Every other agent keeps the user's own script policy.
+        // Every other agent keeps the user's own script policy, and so does a
+        // package whose name only starts like one of those.
         for spec in [
-            "cline@3.0.74",
-            "@xai-official/grok@1.0.70",
+            "cline@3.0.75",
+            "@xai-official/grok-darwin-arm64@1.0.77",
             "hermes-agent-npm@1.0.0",
         ] {
             assert!(npm_run_scripts_args(spec).is_empty(), "{spec}");
         }
+        // Grok's postinstall downloads nothing and leaves no runtime to check.
+        assert!(!npm_package_bootstraps_runtime("@xai-official/grok@1.0.92"));
         assert_eq!(
-            hermes_npx_argv("hermes-agent@0.22.2", &["acp", "--setup"]),
+            hermes_npx_argv("hermes-agent@0.23.3", &["acp", "--setup"]),
             [
                 "npx",
                 "-y",
                 "--ignore-scripts=false",
                 "--allow-scripts=hermes-agent",
                 "--package",
-                "hermes-agent@0.22.2",
+                "hermes-agent@0.23.3",
                 "hermes",
                 "acp",
                 "--setup",
@@ -21800,7 +23744,7 @@ wire_api = "chat"
                     .expect("npx recipe must pin via --package");
                 assert_eq!(
                     argv.get(pkg_idx + 1).map(String::as_str),
-                    Some("hermes-agent@0.22.2")
+                    Some("hermes-agent@0.23.3")
                 );
                 assert_eq!(argv.get(pkg_idx + 2).map(String::as_str), Some("hermes"));
             } else {
@@ -22412,19 +24356,25 @@ model = "gpt"
             )
         };
 
-        let annotated = annotate_npm_bootstrap_failure("hermes-agent@0.22.2", download());
+        let annotated = annotate_npm_bootstrap_failure("hermes-agent@0.23.3", download());
         let text = annotated.to_string();
         assert!(text.contains("fetch failed"), "keeps the original error");
         assert!(text.contains("HTTP(S)_PROXY"), "adds the proxy hint");
 
         // A package whose install runs no bootstrap can't fail this way, so the
-        // hint would be noise even on a matching message.
-        let other = annotate_npm_bootstrap_failure("@zed-industries/claude-code-acp", download());
-        assert!(!other.to_string().contains("HTTP(S)_PROXY"));
+        // hint would be noise even on a matching message. That includes Grok,
+        // whose postinstall codeg also runs but which downloads nothing.
+        for other in [
+            "@zed-industries/claude-code-acp",
+            "@xai-official/grok@1.0.92",
+        ] {
+            let other = annotate_npm_bootstrap_failure(other, download());
+            assert!(!other.to_string().contains("HTTP(S)_PROXY"));
+        }
 
         // A hermes failure that isn't a download stays untouched.
         let permissions = annotate_npm_bootstrap_failure(
-            "hermes-agent@0.22.2",
+            "hermes-agent@0.23.3",
             AcpError::Protocol("failed to install npm package globally: EACCES".to_string()),
         );
         assert!(!permissions.to_string().contains("HTTP(S)_PROXY"));
@@ -23204,5 +25154,154 @@ model = "gpt"
             Some(&serde_json::json!({ "apiProvider": "deepseek", "apiKey": "sk" }).to_string()),
         );
         assert_eq!(env.get("CLINE_PROVIDER").map(String::as_str), Some("cline-pass"));
+    }
+
+    #[test]
+    fn instructions_write_creates_the_file_and_its_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent").join("AGENTS.md");
+        write_instructions_file(&path, "# Rules\n").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "# Rules\n");
+        write_instructions_file(&path, "").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "");
+    }
+
+    #[test]
+    fn instructions_write_of_empty_text_never_creates_a_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent_dir = dir.path().join("agent");
+        write_instructions_file(&agent_dir.join("AGENTS.md"), "").unwrap();
+        assert!(!agent_dir.exists());
+    }
+
+    #[test]
+    fn instructions_write_refuses_a_file_it_cannot_read_as_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("AGENTS.md");
+        fs::write(&path, [0xff, 0xfe, 0x00]).unwrap();
+        assert!(write_instructions_file(&path, "# Rules").is_err());
+        assert_eq!(fs::read(&path).unwrap(), vec![0xff, 0xfe, 0x00]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn instructions_write_goes_through_a_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("dotfiles-CLAUDE.md");
+        fs::write(&target, "old").unwrap();
+        let link = dir.path().join("CLAUDE.md");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        write_instructions_file(&link, "new").unwrap();
+        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "new");
+    }
+
+    #[test]
+    fn test_agent_system_instructions_paths() {
+        let file_name = |agent: AgentType| {
+            agent_system_instructions_path(agent)
+                .and_then(|path| path.file_name().map(|n| n.to_string_lossy().into_owned()))
+        };
+        assert_eq!(file_name(AgentType::ClaudeCode).as_deref(), Some("CLAUDE.md"));
+        assert_eq!(file_name(AgentType::Gemini).as_deref(), Some("GEMINI.md"));
+        for agent in [
+            AgentType::Antigravity,
+            AgentType::OpenCode,
+            AgentType::Cline,
+            AgentType::KimiCode,
+            AgentType::Grok,
+            AgentType::DeepSeek,
+            AgentType::Qoder,
+            AgentType::Kiro,
+            AgentType::CommandCode,
+            AgentType::ZCode,
+        ] {
+            assert_eq!(file_name(agent).as_deref(), Some("AGENTS.md"), "{agent:?}");
+        }
+        let antigravity = agent_system_instructions_path(AgentType::Antigravity).unwrap();
+        assert!(antigravity.ends_with(".gemini/AGENTS.md"));
+        let kiro = agent_system_instructions_path(AgentType::Kiro).unwrap();
+        assert!(kiro.ends_with("steering/AGENTS.md"));
+        let cline = agent_system_instructions_path(AgentType::Cline).unwrap();
+        assert!(cline.ends_with(".agents/AGENTS.md"));
+        // Codex, Trae, Pi and CodeBuddy pick among candidates that exist on
+        // this machine; their rules are covered by the helpers' tests.
+        for agent in [AgentType::Codex, AgentType::Trae, AgentType::Pi, AgentType::CodeBuddy] {
+            assert!(agent_system_instructions_path(agent).is_some(), "{agent:?}");
+        }
+        for agent in [
+            AgentType::Hermes,
+            AgentType::Cursor,
+            AgentType::MiniMaxCode,
+            AgentType::OpenClaw,
+            AgentType::Custom("my-bot"),
+        ] {
+            assert_eq!(agent_system_instructions_path(agent), None, "{agent:?}");
+        }
+    }
+
+    #[test]
+    fn codex_style_instructions_use_a_non_blank_override() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(codex_style_instructions_file(dir.path()), dir.path().join("AGENTS.md"));
+        fs::write(dir.path().join("AGENTS.override.md"), " \n").unwrap();
+        assert_eq!(codex_style_instructions_file(dir.path()), dir.path().join("AGENTS.md"));
+        fs::write(dir.path().join("AGENTS.override.md"), "# Override").unwrap();
+        assert_eq!(
+            codex_style_instructions_file(dir.path()),
+            dir.path().join("AGENTS.override.md")
+        );
+    }
+
+    #[test]
+    fn instructions_save_stays_on_the_shown_file_when_the_resolution_flips() {
+        let dir = tempfile::tempdir().unwrap();
+        let override_file = dir.path().join("AGENTS.override.md");
+        let agents_file = dir.path().join("AGENTS.md");
+        fs::write(&override_file, "# Override").unwrap();
+        fs::write(&agents_file, "# Fallback").unwrap();
+        let candidates = || vec![override_file.clone(), agents_file.clone()];
+        let shown = override_file.display().to_string();
+
+        // Blanking the shown override flips Codex's resolution to AGENTS.md…
+        write_instructions_file(&override_file, "").unwrap();
+        let resolved = codex_style_instructions_file(dir.path());
+        assert_eq!(resolved, agents_file);
+        // …but the next save still lands on the file the editor showed.
+        let target = instructions_write_target(resolved, candidates(), Some(&shown)).unwrap();
+        assert_eq!(target, override_file);
+        write_instructions_file(&target, "# New").unwrap();
+        assert_eq!(fs::read_to_string(&agents_file).unwrap(), "# Fallback");
+        assert_eq!(fs::read_to_string(&override_file).unwrap(), "# New");
+    }
+
+    #[test]
+    fn instructions_save_refuses_a_path_that_is_not_the_agents_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let agents_file = dir.path().join("AGENTS.md");
+        let elsewhere = dir.path().join("elsewhere.md").display().to_string();
+        assert!(instructions_write_target(
+            agents_file.clone(),
+            vec![agents_file.clone()],
+            Some(&elsewhere)
+        )
+        .is_err());
+        assert_eq!(
+            instructions_write_target(agents_file.clone(), vec![agents_file.clone()], None)
+                .unwrap(),
+            agents_file
+        );
+    }
+
+    #[test]
+    fn first_existing_instructions_file_falls_back_to_the_first_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let names = ["AGENTS.override.md", "AGENTS.md", "CLAUDE.md"];
+        assert_eq!(
+            first_existing_file(dir.path(), &names),
+            dir.path().join("AGENTS.override.md")
+        );
+        fs::write(dir.path().join("CLAUDE.md"), "x").unwrap();
+        assert_eq!(first_existing_file(dir.path(), &names), dir.path().join("CLAUDE.md"));
     }
 }

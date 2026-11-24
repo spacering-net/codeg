@@ -83,9 +83,14 @@ interface BranchSelectorListProps {
 // would stop flipping at the screen edge and stop clamping inside the list.
 const ROW_ESTIMATE_REM = 2.125
 const MAX_LIST_HEIGHT_REM = 30
-// Width of the right-side action bubble (`w-56`) — used only to decide whether
-// to flip it to the left when the popover hugs the screen edge.
-const BUBBLE_WIDTH_REM = 14
+// The action bubble sizes to its content between these bounds, so a merge /
+// rebase label naming two long branches widens it instead of truncating the
+// target away. The max is further capped by the room on the side it opens on;
+// whichever side can host the full max width wins, else the roomier one.
+const BUBBLE_MIN_WIDTH_REM = 14
+const BUBBLE_MAX_WIDTH_REM = 26
+// Gap kept between the bubble and the window edge.
+const BUBBLE_EDGE_GAP_PX = 8
 // Coarse per-action height + container padding (`p-1`), used to clamp the
 // bubble's top so a leaf near the bottom doesn't push its last actions past the
 // list root. Slightly over-estimated on purpose so the whole bubble always fits.
@@ -169,6 +174,38 @@ interface ActionBubble {
   top: number
   /** Flip to the left of the popover when there's no room on the right. */
   flipLeft: boolean
+  /** Max width (px): BUBBLE_MAX_WIDTH_REM capped by the room on that side. */
+  maxWidth: number
+}
+
+// Placeholder sentinels substituted for branch names when formatting a label,
+// so the translated text can be split back into literal + branch-name parts.
+const BRANCH_TOKEN_MARK = "\u0000"
+const BRANCH_TOKEN_SPLIT = /\u0000(\d+)\u0000/
+
+/**
+ * Split a translated label whose values were `branchToken(i)` sentinels into
+ * literal text and branch-name parts (in the translation's own word order).
+ */
+export function splitBranchLabel(
+  formatted: string,
+  names: readonly string[]
+): Array<{ text: string; isBranch: boolean }> {
+  const pieces = formatted.split(BRANCH_TOKEN_SPLIT)
+  const parts: Array<{ text: string; isBranch: boolean }> = []
+  pieces.forEach((piece, index) => {
+    // `split` with a capture group alternates literal, index, literal, …
+    if (index % 2 === 1) {
+      parts.push({ text: names[Number(piece)] ?? "", isBranch: true })
+    } else if (piece) {
+      parts.push({ text: piece, isBranch: false })
+    }
+  })
+  return parts
+}
+
+function branchToken(index: number): string {
+  return `${BRANCH_TOKEN_MARK}${index}${BRANCH_TOKEN_MARK}`
 }
 
 // Searchable + virtualized branch panel: operations and the local/remote branch
@@ -408,6 +445,39 @@ export function BranchSelectorList({
     [navigableCount, navigableRowIndices]
   )
 
+  // Merge / rebase labels name two branches. Each name truncates on its own
+  // (literal words never shrink), so a long source branch can't push the verb
+  // and the target branch out of view; the full text stays in the tooltip.
+  const leafActionLabelParts = useCallback(
+    (
+      action: BranchLeafAction,
+      fullName: string
+    ): Array<{ text: string; isBranch: boolean }> | null => {
+      const names = [fullName, branch ?? "-"]
+      switch (action) {
+        case "merge":
+          return splitBranchLabel(
+            t("mergeBranchIntoCurrent", {
+              branchName: branchToken(0),
+              currentBranch: branchToken(1),
+            }),
+            names
+          )
+        case "rebase":
+          return splitBranchLabel(
+            t("rebaseCurrentToBranch", {
+              currentBranch: branchToken(1),
+              branchName: branchToken(0),
+            }),
+            names
+          )
+        default:
+          return null
+      }
+    },
+    [t, branch]
+  )
+
   const leafActionLabel = useCallback(
     (action: BranchLeafAction, fullName: string): string => {
       switch (action) {
@@ -476,6 +546,11 @@ export function BranchSelectorList({
       rowRect.top - rootRect.top,
       Math.max(0, rootRect.height - bubbleHeight)
     )
+    const maxWidthPx = BUBBLE_MAX_WIDTH_REM * remPx
+    const roomRight = window.innerWidth - rootRect.right - BUBBLE_EDGE_GAP_PX
+    const roomLeft = rootRect.left - BUBBLE_EDGE_GAP_PX
+    const flipLeft = roomRight < maxWidthPx && roomLeft > roomRight
+    const room = flipLeft ? roomLeft : roomRight
     setBubble({
       leafKey: row.key,
       fullName: row.fullName,
@@ -483,8 +558,13 @@ export function BranchSelectorList({
       actions,
       ownerNavIndex: navIndex,
       top,
-      flipLeft:
-        rootRect.right + 8 + BUBBLE_WIDTH_REM * remPx > window.innerWidth,
+      flipLeft,
+      // Never below the old fixed width: a cramped side keeps the old overflow
+      // behaviour rather than collapsing the bubble.
+      maxWidth: Math.max(
+        BUBBLE_MIN_WIDTH_REM * remPx,
+        Math.min(maxWidthPx, room)
+      ),
     })
     setBubbleActiveIndex(0)
     // Highlight the owner leaf (covers the keyboard path, where no hover fires).
@@ -817,9 +897,10 @@ export function BranchSelectorList({
           // leaf, so the source branch re-lights while you're over its actions.
           onMouseEnter={() => setActiveIndex(bubble.ownerNavIndex)}
           // Flush against the popup's edge (no margin) so it reads as attached.
-          className="absolute z-50 w-56 rounded-xl border bg-popover p-1 shadow-lg"
+          className="absolute z-50 w-max min-w-56 rounded-xl border bg-popover p-1 shadow-lg"
           style={{
             top: bubble.top,
+            maxWidth: bubble.maxWidth,
             ...(bubble.flipLeft ? { right: "100%" } : { left: "100%" }),
           }}
         >
@@ -828,6 +909,8 @@ export function BranchSelectorList({
             const destructive = DESTRUCTIVE_ACTIONS.has(action)
             const bubbleActive = index === bubbleActiveIndex
             const startsGroup = index > 0 && BUBBLE_GROUP_STARTS.has(action)
+            const label = leafActionLabel(action, bubble.fullName)
+            const labelParts = leafActionLabelParts(action, bubble.fullName)
             return (
               <Fragment key={action}>
                 {startsGroup && (
@@ -842,6 +925,7 @@ export function BranchSelectorList({
                   disabled={loading}
                   onMouseMove={() => setBubbleActiveIndex(index)}
                   onClick={() => selectBubbleAction(index)}
+                  title={labelParts ? label : undefined}
                   className={cn(
                     "flex w-full select-none items-center gap-2 rounded-md px-1.5 py-1.5 text-left text-sm outline-none transition-colors",
                     "disabled:pointer-events-none disabled:opacity-50",
@@ -850,9 +934,24 @@ export function BranchSelectorList({
                   )}
                 >
                   <ActionIcon className="size-3.5 shrink-0 opacity-70" />
-                  <span className="min-w-0 flex-1 truncate">
-                    {leafActionLabel(action, bubble.fullName)}
-                  </span>
+                  {labelParts ? (
+                    <span className="flex min-w-0 flex-1 overflow-hidden">
+                      {labelParts.map((part, partIndex) => (
+                        <span
+                          key={partIndex}
+                          className={
+                            part.isBranch
+                              ? "min-w-0 truncate"
+                              : "shrink-0 whitespace-pre"
+                          }
+                        >
+                          {part.text}
+                        </span>
+                      ))}
+                    </span>
+                  ) : (
+                    <span className="min-w-0 flex-1 truncate">{label}</span>
+                  )}
                 </button>
               </Fragment>
             )

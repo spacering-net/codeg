@@ -77,6 +77,8 @@ vi.mock("@/hooks/use-built-in-science", () => ({ useBuiltInScience: () => [] }))
 vi.mock("@/hooks/use-enabled-skill-ids", () => ({
   useEnabledSkillIds: () => ({
     enabledIds: new Set(),
+    providers: new Map(),
+    providersKnown: true,
     ready: false,
     supported: true,
   }),
@@ -1793,6 +1795,104 @@ describe("MessageInput slash menu rows", () => {
   })
 })
 
+// claude-agent-acp 0.99.1 marks Claude's skills among its commands: at first
+// only the ones whose SKILL.md it found on disk, and once Claude Code's own
+// skill list is read, all of them (a bundled one without a path). The menu
+// shows the marks only in that second list, so it never shows some skills
+// marked and others not.
+describe("MessageInput slash menu skill rows", () => {
+  afterEach(() => {
+    cleanup()
+    composerHandle.current = null
+  })
+
+  const USER_SKILL_PATH = "/home/u/.claude/skills/user-skill/SKILL.md"
+
+  async function openMenu(
+    availableCommands: React.ComponentProps<
+      typeof MessageInput
+    >["availableCommands"]
+  ) {
+    renderInput({ agentType: "claude_code", availableCommands })
+    await waitFor(
+      () => expect(composerHandle.current?.getEditor()).toBeTruthy(),
+      { timeout: 5000 }
+    )
+    const editor = composerHandle.current?.getEditor()
+    if (!editor) throw new Error("composer editor not mounted")
+    act(() => {
+      editor.commands.insertContent("/")
+    })
+    return screen.findByTestId("slash-menu")
+  }
+
+  function kindOf(menu: HTMLElement, token: string) {
+    const row = within(menu).getByText(token).closest("button") as HTMLElement
+    const column = row.querySelector<HTMLElement>("[data-command-kind]")
+    return {
+      kind: column?.dataset.commandKind ?? null,
+      icon: column?.querySelector("svg") != null,
+      text: row.textContent,
+    }
+  }
+
+  it("shows every skill with the skill icon once the agent has marked them all", async () => {
+    const menu = await openMenu([
+      {
+        name: "user-skill",
+        description: "User skill probe",
+        skill: true,
+        skill_path: USER_SKILL_PATH,
+      },
+      {
+        name: "simplify",
+        description: "Review the changed code",
+        input_hint: "[<target>]",
+        skill: true,
+      },
+      { name: "compact", description: "Compact the thread" },
+    ])
+    expect(kindOf(menu, "/user-skill")).toEqual({
+      kind: "skill",
+      icon: true,
+      text: "/user-skillUser skill probe",
+    })
+    expect(kindOf(menu, "/simplify")).toEqual({
+      kind: "skill",
+      icon: true,
+      text: "/simplify[<target>]Review the changed code",
+    })
+    // A command keeps an empty column, so the tokens line up.
+    expect(kindOf(menu, "/compact")).toEqual({
+      kind: "command",
+      icon: false,
+      text: "/compactCompact the thread",
+    })
+    // Hovering a skill's token shows its SKILL.md, when there is one.
+    expect(within(menu).getByText("/user-skill")).toHaveAttribute(
+      "title",
+      USER_SKILL_PATH
+    )
+    expect(within(menu).getByText("/simplify")).not.toHaveAttribute("title")
+  })
+
+  it("keeps every row plain while only some skills are marked", async () => {
+    const menu = await openMenu([
+      {
+        name: "user-skill",
+        description: "User skill probe",
+        skill: true,
+        skill_path: USER_SKILL_PATH,
+      },
+      { name: "simplify", description: "Review the changed code" },
+      { name: "compact", description: "Compact the thread" },
+    ])
+    expect(menu.querySelector("[data-command-kind]")).toBeNull()
+    expect(within(menu).getByText("/user-skill")).not.toHaveAttribute("title")
+    expect(kindOf(menu, "/user-skill").text).toBe("/user-skillUser skill probe")
+  })
+})
+
 // Antigravity's ACP server advertises only its built-ins and never a skill, so
 // the skills it loads reach the `/` menu from disk, after those commands.
 describe("MessageInput slash menu for skills an agent does not advertise", () => {
@@ -1872,6 +1972,27 @@ describe("MessageInput slash menu for skills an agent does not advertise", () =>
     expect(agentSkills).toHaveBeenCalledWith("antigravity", null)
   })
 
+  it("lists custom ACP agents' skills from disk after their commands", async () => {
+    agentSkills.mockReturnValue([DEPLOY, SHADOWED])
+    await mountAndType({
+      agentType: "custom:antigravity-b",
+      availableCommands: COMMANDS,
+    })
+
+    const menu = await screen.findByTestId("slash-menu")
+    const rows = within(menu)
+      .getAllByRole("button")
+      .map((row) => row.textContent)
+    expect(rows).toEqual([
+      expect.stringMatching(/^\/plan/),
+      expect.stringMatching(/^\/logout/),
+      expect.stringMatching(/^\/usage/),
+      "DeployShip the build",
+    ])
+    expect(within(menu).queryByText("Plan skill")).toBeNull()
+    expect(agentSkills).toHaveBeenCalledWith("custom:antigravity-b", null)
+  })
+
   it("inserts a picked Antigravity skill as its `/` token", async () => {
     agentSkills.mockReturnValue([DEPLOY])
     const { editor } = await mountAndType(
@@ -1916,6 +2037,70 @@ describe("MessageInput slash menu for skills an agent does not advertise", () =>
     })
     const menu = await screen.findByTestId("slash-menu")
     expect(within(menu).getByText("Deploy")).toBeInTheDocument()
+  })
+
+  // OpenCode 1.x advertised every skill as a command; 2.x advertises only its
+  // commands, so after the move to 2.x its `/` menu showed just these four
+  // (#1089). Its skills now come from disk, as Antigravity's do.
+  it("lists OpenCode's skills from disk after its commands", async () => {
+    // What opencode 2.2.5 advertises with no MCP prompts or custom commands.
+    const OPENCODE_COMMANDS = [
+      { name: "init", description: "guided AGENTS.md setup" },
+      {
+        name: "review",
+        description:
+          "review changes [commit|branch|pr], defaults to uncommitted",
+      },
+      {
+        name: "goal",
+        description:
+          "keep working until an objective is met [pause|resume|clear]",
+      },
+      { name: "compact", description: "Compact the session" },
+    ]
+    // Sending `/review` runs OpenCode's command, never a skill of that name.
+    const REVIEW_SKILL = { ...SHADOWED, id: "review", name: "Review skill" }
+    agentSkills.mockReturnValue([DEPLOY, REVIEW_SKILL])
+    const { editor } = await mountAndType({
+      agentType: "open_code",
+      availableCommands: OPENCODE_COMMANDS,
+    })
+
+    const menu = await screen.findByTestId("slash-menu")
+    const rows = within(menu)
+      .getAllByRole("button")
+      .map((row) => row.textContent)
+    expect(rows).toEqual([
+      expect.stringMatching(/^\/init/),
+      expect.stringMatching(/^\/review/),
+      expect.stringMatching(/^\/goal/),
+      expect.stringMatching(/^\/compact/),
+      "DeployShip the build",
+    ])
+    expect(within(menu).queryByText("Review skill")).toBeNull()
+    expect(agentSkills).toHaveBeenCalledWith("open_code", null)
+
+    // Picking it inserts the `/` token OpenCode passes to its model as written.
+    act(() => {
+      editor.commands.insertContent("dep")
+    })
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId("slash-menu")).getAllByRole("button")
+      ).toHaveLength(1)
+    )
+    act(() => {
+      ;(editor.view.dom as HTMLElement).dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        })
+      )
+    })
+    await waitFor(() =>
+      expect(composerHandle.current?.getText()).toBe("/deploy ")
+    )
   })
 
   it("keeps a `$` typed for Antigravity as plain text", async () => {
@@ -3191,6 +3376,54 @@ describe("MessageInput predicted follow-up prompt", () => {
     expect(sendButton).not.toBeDisabled()
   })
 
+  it("offers a button beside Send that fills it in, gone once the composer holds text", async () => {
+    const onSend = vi.fn()
+    const { container } = await mounted({
+      promptSuggestion: "Run the tests",
+      onSend,
+    })
+    const useLabel = enMessages.Folder.chat.messageInput.usePromptSuggestion
+    const useButton = () =>
+      container.querySelector<HTMLButtonElement>(
+        `button[aria-label="${useLabel}"]`
+      )
+    expect(useButton()).not.toBeNull()
+
+    fireEvent.click(useButton()!)
+    expect(composerHandle.current!.getText()).toBe("Run the tests")
+    // Filled, not sent.
+    expect(onSend).not.toHaveBeenCalled()
+    await waitFor(() => expect(useButton()).toBeNull())
+
+    // Clearing the composer brings it back.
+    act(() => composerHandle.current!.clear())
+    await waitFor(() => expect(useButton()).not.toBeNull())
+
+    // Text the user typed hides it too.
+    act(() => composerHandle.current!.setText("my own words"))
+    await waitFor(() => expect(useButton()).toBeNull())
+  })
+
+  it("shows no fill button without a suggestion or while one is not offered", async () => {
+    const useLabel = enMessages.Folder.chat.messageInput.usePromptSuggestion
+    for (const props of [
+      { promptSuggestion: null },
+      {
+        promptSuggestion: "Run the tests",
+        isPrompting: true,
+        onCancel: vi.fn(),
+      },
+      { promptSuggestion: "Run the tests", disabled: true },
+      { promptSuggestion: "Run the tests", isEditingQueueItem: true },
+    ]) {
+      const { container, unmount } = await mounted(props)
+      expect(
+        container.querySelector(`button[aria-label="${useLabel}"]`)
+      ).toBeNull()
+      unmount()
+    }
+  })
+
   it("does not offer it while a turn runs, while disabled, or while editing a queued message", async () => {
     for (const props of [
       { isPrompting: true },
@@ -3343,6 +3576,48 @@ describe("MessageInput live content for draft tidying", () => {
         finishRead?.("")
       })
       await waitFor(() => expect(hasLiveComposerContent(draftKey)).toBe(false))
+    })
+
+    describe("with files copied in Finder / Explorer", () => {
+      afterEach(() => {
+        attachmentsOverride.current = null
+      })
+
+      // jsdom has no `ClipboardEvent`, which ProseMirror's `pasteText` builds,
+      // so the text paste itself is only observed being asked for.
+      function spyOnTextPaste() {
+        const view = composerHandle.current!.getEditor()!.view
+        return vi.spyOn(view, "pasteText").mockImplementation(() => true)
+      }
+
+      it("attaches the files instead of pasting the names the text API sees", async () => {
+        let attachedFiles = false
+        const appendClipboardFiles = vi.fn(async () => {
+          attachedFiles = true
+          return true
+        })
+        attachmentsOverride.current = { appendClipboardFiles }
+        setClipboard(async () => "bundle.zip")
+        const paste = await openPasteItem()
+        const pasteText = spyOnTextPaste()
+        fireEvent.click(paste)
+        await waitFor(() => expect(attachedFiles).toBe(true))
+        await act(async () => {})
+        expect(pasteText).not.toHaveBeenCalled()
+      })
+
+      it("still pastes the text when the clipboard holds no files", async () => {
+        attachmentsOverride.current = {
+          appendClipboardFiles: vi.fn(async () => false),
+        }
+        setClipboard(async () => "plain words")
+        const paste = await openPasteItem()
+        const pasteText = spyOnTextPaste()
+        fireEvent.click(paste)
+        await waitFor(() =>
+          expect(pasteText).toHaveBeenCalledWith("plain words")
+        )
+      })
     })
   })
 

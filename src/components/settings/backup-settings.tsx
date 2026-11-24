@@ -330,10 +330,13 @@ export function BackupSettings({ pane }: { pane: DataSyncPane }) {
   // `SideLocation` is the safe default once an archive turns out to carry
   // transcripts: it hands the files over without touching any agent's
   // directory. (The API's own default stays `Skip` — changing that would alter
-  // what an omitted `externalMode` means for existing callers.)
-  useEffect(() => {
+  // what an omitted `externalMode` means for existing callers.) Applied while
+  // rendering, on the render where `hasExternal` flips to true.
+  const [prevHasExternal, setPrevHasExternal] = useState(hasExternal)
+  if (hasExternal !== prevHasExternal) {
+    setPrevHasExternal(hasExternal)
     if (hasExternal) setExternalChoice("side")
-  }, [hasExternal])
+  }
 
   const buildExternalMode = useCallback((): ExternalRestoreMode | null => {
     if (!hasExternal) return null

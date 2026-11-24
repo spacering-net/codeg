@@ -119,6 +119,27 @@ describe("native surface occlusion leases", () => {
     })
     expect(result.current).toBe(false)
   })
+
+  it.each(["table-fullscreen", "mermaid-fullscreen"])(
+    "the fallback detector sees Streamdown's %s view, which has no data-state",
+    async (marker) => {
+      const { result } = renderHook(() => useFallbackOverlayOpen())
+      const view = document.createElement("div")
+      view.setAttribute("role", "dialog")
+      view.setAttribute("aria-modal", "true")
+      view.setAttribute("data-streamdown", marker)
+      await act(async () => {
+        document.body.appendChild(view)
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+      expect(result.current).toBe(true)
+      await act(async () => {
+        view.remove()
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+      expect(result.current).toBe(false)
+    }
+  )
 })
 
 describe("DOM-bound leases", () => {

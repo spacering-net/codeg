@@ -88,6 +88,13 @@ pub struct ForgePanelSettings {
     /// says when the user presses Create is what gets stored on the task.
     #[serde(default = "default_writeback")]
     pub writeback_default: bool,
+    /// End every comment codeg posts with the "🤖 Generated with Codeg" line.
+    /// On by default (an absent field included, so rows written before it
+    /// existed get it too). Read when the comment is POSTED, not frozen on the
+    /// task: it is how comments look, not a decision about one work item, so
+    /// switching it off applies to every comment not yet sent.
+    #[serde(default = "default_true")]
+    pub comment_footer: bool,
     /// User-authored text appended after a scenario's built-in instruction,
     /// keyed by scenario wire name plus the reserved [`SCENARIO_PROMPT_ALL`].
     /// Unknown keys are kept and ignored, so a future scenario needs no schema
@@ -110,6 +117,7 @@ impl Default for ForgePanelSettings {
             default_issue_scenario: None,
             default_pr_scenario: None,
             writeback_default: default_writeback(),
+            comment_footer: true,
             scenario_prompts: BTreeMap::new(),
             auto: ForgeAutoSettings::default(),
         }
@@ -579,6 +587,7 @@ mod tests {
             default_issue_scenario: Some("  plan_first ".into()),
             default_pr_scenario: Some("   ".into()),
             writeback_default: false,
+            comment_footer: false,
             scenario_prompts: [
                 ("all".to_string(), "  keep me  ".to_string()),
                 ("fix".to_string(), "\n \t".to_string()),
@@ -680,6 +689,9 @@ mod tests {
         // as `false`: this is the switch's starting position, and the build
         // that shipped before this setting existed started it on.
         assert!(empty.global.writeback_default);
+        // A blob from before the footer existed signs its comments: the
+        // default, absent field included.
+        assert!(empty.global.comment_footer);
 
         let future = decode(
             r#"{"global":{"writeback_default":false,"scenario_prompts":{"fix":"a"}},
@@ -687,6 +699,7 @@ mod tests {
         )
         .expect("unknown fields are ignored");
         assert!(!future.global.writeback_default);
+        assert!(future.global.comment_footer, "an absent footer field reads as on");
         assert_eq!(future.effective(1).standing_prompt("fix").as_deref(), Some("a"));
         assert_eq!(future.effective(12).standing_prompt("fix").as_deref(), Some("b"));
 

@@ -9,13 +9,16 @@
     "them and the ESLint setup is not type-aware. Editors keep using",
     "tsconfig.json, tests and all.",
     "`exclude` replaces tsconfig.json's list instead of adding to it, so the",
-    "first three entries must stay in step with that file."
+    "first four entries must stay in step with that file. The dev-generated",
+    "validator has unused imports in this app; production route types remain",
+    "included."
   ],
   "extends": "./tsconfig.json",
   "exclude": [
     "node_modules",
     "src-tauri",
     "browser-agent",
+    ".next/dev/types/validator.ts",
     "**/*.test.ts",
     "**/*.test.tsx"
   ]
