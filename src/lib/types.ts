@@ -3783,6 +3783,10 @@ export interface LiveMessage {
   role: MessageRole
   content: LiveContentBlock[]
   started_at: string
+  /** The turn failed, in the agent's words (a terminal `SessionFailure`
+   *  applied while it ran): the reducer's closing `turn_error` block, for a
+   *  client hydrating before `TurnComplete`. */
+  turn_error?: string | null
 }
 
 export interface PendingPermissionState {
@@ -3937,6 +3941,11 @@ export interface SessionFailureRecord {
    *  silenced, not fixed — saying otherwise would be a lie whenever the
    *  connection is still down. */
   dismissed?: boolean
+  /** codeg's own, never an adapter's: this terminal record's `title` also
+   *  streamed as one whole reply chunk of the turn it ended (Antigravity tells
+   *  a dead executor that way), so the failure line takes those words' place
+   *  (`dropEchoedFailureText`). */
+  echoed_in_reply?: boolean
 }
 
 /**

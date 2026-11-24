@@ -14921,6 +14921,13 @@ struct TurnOutputProbe {
     /// stopped it, as the text an empty turn is then explained by (see
     /// [`EmptyTurnCause::HookStopped`] and [`hook_stop_notice_text`]).
     hook_stop: Option<String>,
+    /// Antigravity only: the turn's last few reply chunks, whole and trimmed.
+    /// agy tells a dead executor as ONE chunk holding its account, so a
+    /// failure read off the trajectory whose words match one of these was
+    /// streamed as reply text (`SessionFailureRecord::echoed_in_reply`).
+    /// Only the tail matters: the account is the turn's last words but for a
+    /// citation notice.
+    antigravity_chunks: std::collections::VecDeque<String>,
 }
 
 impl TurnOutputProbe {
@@ -14937,6 +14944,25 @@ impl TurnOutputProbe {
         } else {
             self.saw_metadata_update = true;
         }
+        if agent_type == AgentType::Antigravity {
+            if let SessionUpdate::AgentMessageChunk(ContentChunk {
+                content: ContentBlock::Text(text),
+                ..
+            }) = update
+            {
+                if self.antigravity_chunks.len() == ANTIGRAVITY_CHUNKS_KEPT {
+                    self.antigravity_chunks.pop_front();
+                }
+                self.antigravity_chunks
+                    .push_back(text.text.trim().to_string());
+            }
+        }
+    }
+
+    /// Whether one of the turn's last reply chunks said exactly `account`.
+    fn streamed_whole(&self, account: &str) -> bool {
+        let account = account.trim();
+        !account.is_empty() && self.antigravity_chunks.iter().any(|chunk| chunk == account)
     }
 
     fn note_dropped(&mut self, error: &impl std::fmt::Display) {
@@ -14982,6 +15008,9 @@ fn hook_stop_notice_text(agent_type: AgentType, notice: &SessionNotice) -> Optio
         _ => title.to_string(),
     })
 }
+
+/// How many trailing reply chunks [`TurnOutputProbe`] keeps for Antigravity.
+const ANTIGRAVITY_CHUNKS_KEPT: usize = 4;
 
 /// Why a turn ended with `EndTurn` but no agent output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16083,8 +16112,27 @@ async fn run_conversation_loop(
                             // must land before `apply_event`'s turn-boundary
                             // settle, or the retry warnings it escalates would
                             // be marked recovered while the failure is live.
+                            //
+                            // Antigravity disguises a failed turn the same way
+                            // but says so only as a reply chunk; its trajectory
+                            // holds the typed account (see
+                            // `antigravity_turn_failure`).
                             let terminal_failure =
-                                response_session_failure(response.meta.as_ref());
+                                match response_session_failure(response.meta.as_ref()) {
+                                    Some(record) => Some(record),
+                                    None if agent_type == AgentType::Antigravity
+                                        && matches!(response.stop_reason, StopReason::EndTurn) =>
+                                    {
+                                        antigravity_turn_failure(
+                                            state,
+                                            &sid.0,
+                                            turn_started_at_ms,
+                                            &probe,
+                                        )
+                                        .await
+                                    }
+                                    None => None,
+                                };
                             if let Some(record) = &terminal_failure {
                                 emit_with_state(
                                     state,
@@ -20447,6 +20495,8 @@ fn parse_session_failure_record(value: &serde_json::Value) -> Option<SessionFail
             })
             .unwrap_or_default(),
         resolved: false,
+        // codeg's own mark: an adapter's record never carries it.
+        echoed_in_reply: false,
     })
 }
 
@@ -20466,6 +20516,50 @@ fn parse_session_failure_record(value: &serde_json::Value) -> Option<SessionFail
 /// `transport_lost` error escalation ONLY here — ignoring this carrier lost
 /// the terminal record entirely, so the turn-boundary settle painted the
 /// still-dead connection as a recovered warning.
+/// The failure an Antigravity turn ended on, as the terminal record an AIR
+/// adapter would have put on the prompt response.
+///
+/// agy 1.5.2 reports a dead executor (the model API refused the account's
+/// location, the quota ran out, …) as one ordinary `agent_message_chunk` and
+/// ends the turn `end_turn`, so live it read as the model's reply — a reply
+/// with no model and no usage, which a reload then drew as a failure. The
+/// trajectory holds the typed account (`parsers::antigravity::
+/// newest_round_failure`, on disk before the response is sent), worded as the
+/// chunk was. As a terminal record it closes the turn with the failure line
+/// (taking the place of the chunk that told it — `echoed_in_reply`), and is
+/// told once as the turn's failure.
+async fn antigravity_turn_failure(
+    state: &Arc<RwLock<SessionState>>,
+    session_id: &str,
+    turn_started_at_ms: u64,
+    probe: &TurnOutputProbe,
+) -> Option<SessionFailureRecord> {
+    let dir = state.read().await.antigravity_sessions_dir.clone()?;
+    let since = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
+        i64::try_from(turn_started_at_ms).ok()?,
+    )?;
+    let session = session_id.to_string();
+    let (position, failure) = tokio::task::spawn_blocking(move || {
+        crate::parsers::antigravity::newest_round_failure(&dir, &session, since)
+    })
+    .await
+    .ok()??;
+    Some(SessionFailureRecord {
+        // Unique per step of the session: records are kept per connection as
+        // revision watermarks, and a fork moves the connection to another
+        // session whose positions start over.
+        id: format!("antigravity:{session_id}:{position}"),
+        revision: 1,
+        category: failure.category.to_string(),
+        severity: "error".to_string(),
+        echoed_in_reply: probe.streamed_whole(&failure.text),
+        title: failure.text,
+        details: None,
+        actions: Vec::new(),
+        resolved: false,
+    })
+}
+
 fn response_session_failure(
     meta: Option<&serde_json::Map<String, serde_json::Value>>,
 ) -> Option<SessionFailureRecord> {
@@ -36922,6 +37016,31 @@ mod tests {
             &SessionUpdate::AgentMessageChunk(ContentChunk::new("hi".into())),
         );
         assert!(probe.saw_agent_output);
+    }
+
+    /// agy tells a dead executor as ONE reply chunk: only a whole chunk among
+    /// the turn's last few is the echo the failure line replaces — words
+    /// merely inside a longer chunk, or another agent's chunks, are not.
+    #[test]
+    fn only_a_whole_antigravity_chunk_counts_as_the_echoed_account() {
+        use agent_client_protocol::schema::v1::ContentChunk;
+        let chunk = |text: &str| SessionUpdate::AgentMessageChunk(ContentChunk::new(text.into()));
+
+        let mut probe = TurnOutputProbe::new(0);
+        probe.note_update(AgentType::ClaudeCode, &chunk("Not eligible."));
+        assert!(!probe.streamed_whole("Not eligible."));
+
+        probe.note_update(AgentType::Antigravity, &chunk("Let me look. Not eligible."));
+        assert!(!probe.streamed_whole("Not eligible."));
+        probe.note_update(AgentType::Antigravity, &chunk("Not eligible."));
+        probe.note_update(AgentType::Antigravity, &chunk("\n\nSources: x"));
+        assert!(probe.streamed_whole(" Not eligible. "));
+        assert!(!probe.streamed_whole(""));
+
+        for _ in 0..ANTIGRAVITY_CHUNKS_KEPT {
+            probe.note_update(AgentType::Antigravity, &chunk("more"));
+        }
+        assert!(!probe.streamed_whole("Not eligible."), "only the tail is kept");
     }
 
     /// The classifier's whole purpose is to separate "we went blind" from
