@@ -842,6 +842,8 @@
       "enable": "啟用委派",
       "enableHint": "關閉後，delegate_to_agent 工具會從智慧體的 MCP 工具清單中隱藏。",
       "withheldByHostTools": "{agents} 不會拿到委派工具：它們單獨開啟了「由 Agent 自行處理檔案與命令」。",
+      "selfInitiate": "Allow spawn without @",
+      "selfInitiateHint": "When on, an agent may start a listed sub-agent on its own. An @ mention is still always honored. When off, only an @ mention starts a sub-agent.",
       "depthLimit": "最大委派深度",
       "depthHint": "允許範圍：{min}–{max}。限制委派鏈（根 → 子 → 孫 …）的最大遞迴深度。",
       "completedCacheLabel": "已完成結果快取（MB）",

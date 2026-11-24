@@ -219,6 +219,9 @@ pub struct CompanionFeatures {
     /// `computer_clipboard_read` / `computer_clipboard_write`, on the
     /// person's own switch on top of `computer`, as `computer_launch` is.
     pub computer_clipboard: bool,
+    /// When true (with delegation), rewrite `delegate_to_agent` so only an
+    /// `@` mention starts a child. Unknown token on older parents: ignored.
+    pub mention_only: bool,
 }
 
 impl CompanionFeatures {
@@ -245,6 +248,7 @@ impl CompanionFeatures {
                 computer: false,
                 computer_launch: false,
                 computer_clipboard: false,
+                mention_only: false,
             };
         };
         let mut f = Self {
@@ -262,6 +266,7 @@ impl CompanionFeatures {
             computer: false,
             computer_launch: false,
             computer_clipboard: false,
+            mention_only: false,
         };
         for tok in s.split(',').map(str::trim).filter(|t| !t.is_empty()) {
             match tok {
@@ -279,6 +284,7 @@ impl CompanionFeatures {
                 "computer" => f.computer = true,
                 "computer_launch" => f.computer_launch = true,
                 "computer_clipboard" => f.computer_clipboard = true,
+                "mention_only" => f.mention_only = true,
                 _ => {}
             }
         }
@@ -740,6 +746,9 @@ pub async fn dispatch_line(
             }
             remove_disabled_agents_from_delegate_enum(&mut tools, &ctx.disabled_agents);
             append_custom_agents_to_delegate_enum(&mut tools, &ctx.custom_agents);
+            if ctx.features.mention_only {
+                apply_mention_only_delegate_copy(&mut tools);
+            }
             if ctx.features.allows_tool("delegate_to_agent") {
                 offer_assistants_in_delegate_schema(ctx, &mut tools).await;
             }
@@ -817,6 +826,28 @@ fn append_custom_agents_to_delegate_enum(tools: &mut Value, custom_agents: &[Str
         if !variants.iter().any(|v| v.as_str() == Some(slug)) {
             variants.push(Value::String(slug.clone()));
         }
+    }
+}
+
+const MENTION_ONLY_DELEGATE_DESCRIPTION: &str = "Only use this tool when the user explicitly mentions an agent or assistant to delegate to. Hand off a self-contained sub-task to a separate local AI agent that runs in its own session. ASYNCHRONOUS: returns a task_id right away and the sub-agent keeps working in the background — this call never blocks. So you can fan out several delegations at once and keep working, then collect the results with get_delegation_status by passing the task_ids array (one id to poll a single task, or many at once to poll the whole fan-out in one call) — or stop one early with cancel_delegation(task_id). The sub-agent CANNOT see this conversation, your open files, or earlier turns — it starts cold, so `task` must carry everything it needs. Best for independent, parallelizable work you can describe up front; not for steps that need your ongoing back-and-forth. RECOGNIZING AN EXPLICIT DELEGATION REQUEST: the user can name a sub-agent directly in their message — it appears as `@AgentName` or as a Markdown link `[@AgentName](codeg://agent/<agent_type>)`. Such a mention IS an explicit instruction to delegate the associated work to that agent, even when the user never names this tool. If the message names several agents, make one call per agent, each carrying that agent's slice of the work.";
+
+const MENTION_ONLY_AGENT_TYPE_DESCRIPTION: &str = "Which local agent runs the sub-task. Pick the one best suited to the work — or, when the user's message names an agent via `@AgentName` / `codeg://agent/<agent_type>`, use that exact `<agent_type>` slug (e.g. `codeg://agent/claude_code` means `claude_code`).";
+
+/// Settings toggle off: restore the pre-self-initiate copy so models wait
+/// for an `@` mention. The enum of launchable agents is unchanged.
+fn apply_mention_only_delegate_copy(tools: &mut Value) {
+    let Some(arr) = tools.as_array_mut() else {
+        return;
+    };
+    let Some(tool) = arr
+        .iter_mut()
+        .find(|t| t.get("name").and_then(|v| v.as_str()) == Some("delegate_to_agent"))
+    else {
+        return;
+    };
+    tool["description"] = Value::String(MENTION_ONLY_DELEGATE_DESCRIPTION.to_string());
+    if let Some(desc) = tool.pointer_mut("/inputSchema/properties/agent_type/description") {
+        *desc = Value::String(MENTION_ONLY_AGENT_TYPE_DESCRIPTION.to_string());
     }
 }
 
@@ -4804,6 +4835,7 @@ mod tests {
             computer: false,
             computer_launch: false,
             computer_clipboard: false,
+            mention_only: false,
         })
     }
 
@@ -4911,6 +4943,46 @@ mod tests {
         assert!(status["inputSchema"]["properties"]["wait_ms"].is_object());
         let required = status["inputSchema"]["required"].as_array().unwrap();
         assert!(required.iter().any(|v| v == "task_ids"));
+        // Self-initiate is allowed: a mention is sufficient, not required.
+        // The old copy said a mention IS the trigger, so agents waited for `@`.
+        let desc = delegate["description"].as_str().unwrap();
+        assert!(
+            desc.contains("YOU MAY CALL THIS TOOL WITHOUT A USER @ MENTION"),
+            "delegate_to_agent must invite self-initiated spawn"
+        );
+        assert!(
+            desc.contains("Such a mention MUST be honored"),
+            "an @ mention must still force a delegation"
+        );
+        assert!(
+            !desc.contains("Such a mention IS an explicit instruction"),
+            "do not tell the model that only a mention starts a sub-agent"
+        );
+        let agent_desc = delegate["inputSchema"]["properties"]["agent_type"]["description"]
+            .as_str()
+            .unwrap();
+        assert!(agent_desc.contains("even when the user did not @-mention"));
+    }
+
+    #[tokio::test]
+    async fn mention_only_feature_restores_at_mention_copy() {
+        let features = CompanionFeatures::parse(Some("delegation,mention_only"));
+        assert!(features.delegation);
+        assert!(features.mention_only);
+        let ctx = ctx_with(features);
+        let line = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
+        let resp = unwrap_respond(dispatch_line(&ctx, Arc::new(InflightCalls::new()), line).await);
+        let delegate = resp.result.unwrap()["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "delegate_to_agent")
+            .unwrap()
+            .clone();
+        let desc = delegate["description"].as_str().unwrap();
+        assert!(desc.contains("Such a mention IS an explicit instruction"));
+        assert!(desc.contains("Only use this tool when the user explicitly mentions"));
+        assert!(!desc.contains("YOU MAY CALL THIS TOOL WITHOUT A USER @ MENTION"));
     }
 
     #[tokio::test]
@@ -5436,6 +5508,7 @@ mod tests {
         computer: false,
         computer_launch: false,
         computer_clipboard: false,
+        mention_only: false,
     };
     const BOTH: CompanionFeatures = CompanionFeatures {
         delegation: true,
@@ -5452,6 +5525,7 @@ mod tests {
         computer: false,
         computer_launch: false,
         computer_clipboard: false,
+        mention_only: false,
     };
     const ASK_ONLY: CompanionFeatures = CompanionFeatures {
         delegation: false,
@@ -5468,6 +5542,7 @@ mod tests {
         computer: false,
         computer_launch: false,
         computer_clipboard: false,
+        mention_only: false,
     };
     const SESSIONS_ONLY: CompanionFeatures = CompanionFeatures {
         delegation: false,
@@ -5484,6 +5559,7 @@ mod tests {
         computer: false,
         computer_launch: false,
         computer_clipboard: false,
+        mention_only: false,
     };
 
     fn list_tool_names(action: LineAction) -> Vec<String> {
@@ -5976,6 +6052,7 @@ mod tests {
         computer: false,
         computer_launch: false,
         computer_clipboard: false,
+        mention_only: false,
     };
     const TASKBOARD_ONLY: CompanionFeatures = CompanionFeatures {
         delegation: false,
@@ -5992,6 +6069,7 @@ mod tests {
         computer: false,
         computer_launch: false,
         computer_clipboard: false,
+        mention_only: false,
     };
 
     /// The two authoring groups gate independently: enabling one must not
@@ -6015,6 +6093,7 @@ mod tests {
 
     const PERSONAL_AGENT_ONLY: CompanionFeatures = CompanionFeatures {
         delegation: false,
+        mention_only: false,
         feedback: false,
         ask: false,
         sessions: false,
@@ -7008,6 +7087,7 @@ mod tests {
 
     const BROWSER_ONLY: CompanionFeatures = CompanionFeatures {
         delegation: false,
+        mention_only: false,
         feedback: false,
         ask: false,
         sessions: false,

@@ -842,6 +842,8 @@
       "enable": "위임 사용",
       "enableHint": "끄면 delegate_to_agent 도구가 에이전트의 MCP 도구 목록에서 숨겨집니다.",
       "withheldByHostTools": "{agents}에는 위임 도구가 제공되지 않습니다. 해당 에이전트의 “파일과 명령을 에이전트가 직접 처리” 스위치가 켜져 있습니다.",
+      "selfInitiate": "Allow spawn without @",
+      "selfInitiateHint": "When on, an agent may start a listed sub-agent on its own. An @ mention is still always honored. When off, only an @ mention starts a sub-agent.",
       "depthLimit": "최대 위임 깊이",
       "depthHint": "허용 범위: {min}–{max}. 위임 체인(루트 → 하위 → 손자 …)의 재귀 깊이를 제한합니다.",
       "completedCacheLabel": "완료 결과 캐시(MB)",

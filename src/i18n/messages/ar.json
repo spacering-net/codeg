@@ -842,6 +842,8 @@
       "enable": "تفعيل التفويض",
       "enableHint": "عند الإيقاف، يتم إخفاء أداة delegate_to_agent من قائمة أدوات MCP الخاصة بالوكيل.",
       "withheldByHostTools": "لن تحصل {agents} على أدوات التفويض: مفتاح «دع الوكيل يتولى الملفات والأوامر» الخاص بها مُفعّل.",
+      "selfInitiate": "Allow spawn without @",
+      "selfInitiateHint": "When on, an agent may start a listed sub-agent on its own. An @ mention is still always honored. When off, only an @ mention starts a sub-agent.",
       "depthLimit": "أقصى عمق للتفويض",
       "depthHint": "النطاق المسموح: {min}–{max}. يحدّ من عمق سلسلة التفويض (جذر ← فرعي ← حفيد …).",
       "completedCacheLabel": "ذاكرة التخزين المؤقت للنتائج المكتملة (MB)",

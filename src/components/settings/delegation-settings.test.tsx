@@ -161,6 +161,7 @@ describe("DelegationSettingsSection", () => {
       await screen.findByLabelText("Maximum delegation depth")
     ).toBeInTheDocument()
     expect(screen.getByLabelText("Enable delegation")).toBeInTheDocument()
+    expect(screen.getByLabelText("Allow spawn without @")).toBeInTheDocument()
     expect(
       screen.getByLabelText("Completed-result cache (MB)")
     ).toBeInTheDocument()
@@ -228,6 +229,7 @@ describe("DelegationSettingsSection", () => {
     await waitFor(() => {
       expect(mockSetDelegationSettings).toHaveBeenCalledWith({
         enabled: true,
+        allow_self_initiate: true,
         depth_limit: 1,
         completed_cache_max_mb: 0,
         agent_defaults: {},
@@ -251,6 +253,7 @@ describe("DelegationSettingsSection", () => {
     await waitFor(() => {
       expect(mockSetDelegationSettings).toHaveBeenCalledWith({
         enabled: true,
+        allow_self_initiate: true,
         depth_limit: 1,
         completed_cache_max_mb: 512,
         agent_defaults: {},
@@ -274,6 +277,7 @@ describe("DelegationSettingsSection", () => {
     await waitFor(() => {
       expect(mockSetDelegationSettings).toHaveBeenCalledWith({
         enabled: true,
+        allow_self_initiate: true,
         depth_limit: 5,
         completed_cache_max_mb: 512,
         agent_defaults: {},
@@ -341,6 +345,30 @@ describe("DelegationSettingsSection — tabs and the saved record", () => {
     await user.click(screen.getByLabelText("Enable delegation"))
     await user.click(tab(/^Agent defaults/))
     expect(screen.queryByText(notice)).toBeNull()
+  })
+
+  it("saves a mention-only preference and tracks remote changes", async () => {
+    mockGetDelegationSettings.mockResolvedValue(settings({ enabled: true }))
+    mockSetDelegationSettings.mockImplementation(async (value) => value)
+    const user = userEvent.setup()
+    renderWithIntl()
+    await loaded()
+    const toggle = screen.getByLabelText("Allow spawn without @")
+    expect(toggle).toHaveAttribute("data-state", "checked")
+
+    await user.click(toggle)
+    expect(dotOn(/^General/)).not.toBeNull()
+    await user.click(screen.getByRole("button", { name: "Save" }))
+    expect(mockSetDelegationSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ allow_self_initiate: false })
+    )
+    await waitFor(() => expect(dotOn(/^General/)).toBeNull())
+    act(() =>
+      delegationHandler?.(
+        settings({ enabled: true, allow_self_initiate: true })
+      )
+    )
+    expect(toggle).toHaveAttribute("data-state", "checked")
   })
 
   it("marks a tab with unsaved changes", async () => {

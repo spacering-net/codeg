@@ -842,6 +842,8 @@
       "enable": "委任を有効化",
       "enableHint": "オフにすると、delegate_to_agent ツールはエージェントの MCP ツール一覧から非表示になります。",
       "withheldByHostTools": "{agents} には委任ツールが渡りません。エージェントごとの「ファイルとコマンドをエージェント自身に任せる」スイッチがオンになっています。",
+      "selfInitiate": "Allow spawn without @",
+      "selfInitiateHint": "When on, an agent may start a listed sub-agent on its own. An @ mention is still always honored. When off, only an @ mention starts a sub-agent.",
       "depthLimit": "最大委任深度",
       "depthHint": "許可範囲: {min}–{max}。委任チェーン（ルート → 子 → 孫 …）の再帰深度を制限します。",
       "completedCacheLabel": "完了結果のキャッシュ（MB）",

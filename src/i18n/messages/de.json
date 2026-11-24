@@ -842,6 +842,8 @@
       "enable": "Delegation aktivieren",
       "enableHint": "Wenn deaktiviert, wird das Tool delegate_to_agent im MCP-Toolkatalog des Agenten ausgeblendet.",
       "withheldByHostTools": "{agents} erhalten die Delegationswerkzeuge nicht: Ihr agentenspezifischer Schalter „Dateien und Befehle vom Agenten selbst ausführen lassen“ ist aktiv.",
+      "selfInitiate": "Allow spawn without @",
+      "selfInitiateHint": "When on, an agent may start a listed sub-agent on its own. An @ mention is still always honored. When off, only an @ mention starts a sub-agent.",
       "depthLimit": "Maximale Delegationstiefe",
       "depthHint": "Zulässiger Bereich: {min}–{max}. Begrenzt, wie tief eine Delegationskette (Root → Kind → Enkel …) rekursieren kann.",
       "completedCacheLabel": "Cache abgeschlossener Ergebnisse (MB)",

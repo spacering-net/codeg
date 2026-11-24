@@ -53,6 +53,7 @@
 //! children — they keep running in the background (the whole point of async).
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -1546,6 +1547,10 @@ pub struct DelegationBroker {
     tool_calls: Arc<ToolCallTracker>,
     pre_canceled_handles: Arc<PreCanceledHandles>,
     config: Arc<Mutex<DelegationConfig>>,
+    /// Separate from `DelegationConfig` so existing test literals do not
+    /// have to name it. Default on: agents may spawn without `@`. The
+    /// settings toggle can turn it off (mention-only description).
+    allow_self_initiate: Arc<AtomicBool>,
     /// Woken after every terminal `record_completed` so a `get_delegation_status`
     /// long-poll wakes the instant its task finishes instead of busy-polling.
     result_notify: Arc<Notify>,
@@ -1608,6 +1613,7 @@ impl DelegationBroker {
             tool_calls: Arc::new(ToolCallTracker::default()),
             pre_canceled_handles: Arc::new(PreCanceledHandles::default()),
             config: Arc::new(Mutex::new(DelegationConfig::default())),
+            allow_self_initiate: Arc::new(AtomicBool::new(true)),
             result_notify: Arc::new(Notify::new()),
             block_resurface: BLOCK_RESURFACE_INTERVAL,
         }
@@ -2443,6 +2449,14 @@ impl DelegationBroker {
 
     pub async fn config_snapshot(&self) -> DelegationConfig {
         self.config.lock().await.clone()
+    }
+
+    pub fn set_allow_self_initiate(&self, allow: bool) {
+        self.allow_self_initiate.store(allow, Ordering::Relaxed);
+    }
+
+    pub fn allow_self_initiate(&self) -> bool {
+        self.allow_self_initiate.load(Ordering::Relaxed)
     }
 
     /// If this in-flight setup has been flagged canceled by a parent cancel,

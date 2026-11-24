@@ -4,6 +4,7 @@
 //!   * `delegation.enabled` — feature kill switch (default false)
 //!   * `delegation.depth_limit` — max chain depth a child is allowed to sit at
 //!   * `delegation.agent_defaults` — per-agent spawn overrides (JSON blob)
+//!   * `delegation.allow_self_initiate` — agents may spawn without `@`
 //!   * `delegation.completed_cache_max_mb` — per-parent byte budget (in MB) for
 //!     the broker's in-memory cache of completed result text (`0` = unlimited)
 //!
@@ -39,6 +40,13 @@ pub const KEY_DELEGATION_DEPTH: &str = "delegation.depth_limit";
 pub const KEY_DELEGATION_AGENT_DEFAULTS: &str = "delegation.agent_defaults";
 /// Per-parent completed-result cache budget, in MB. `0` = unlimited.
 pub const KEY_DELEGATION_COMPLETED_CACHE_MB: &str = "delegation.completed_cache_max_mb";
+/// When true (default), `delegate_to_agent` invites self-initiated spawn.
+/// When false, the tool description says only an `@` mention starts a child.
+pub const KEY_DELEGATION_ALLOW_SELF_INITIATE: &str = "delegation.allow_self_initiate";
+
+fn default_allow_self_initiate() -> bool {
+    true
+}
 
 pub const DEPTH_MIN: u32 = 1;
 pub const DEPTH_MAX: u32 = 8;
@@ -72,6 +80,11 @@ pub struct DelegationSettings {
     /// unlimited), so an older client can't silently disable the valve.
     #[serde(default = "default_completed_cache_max_mb")]
     pub completed_cache_max_mb: u32,
+    /// When true, agents may call `delegate_to_agent` without an `@`
+    /// mention. An `@` mention is still always honored. Missing in a
+    /// payload → on, matching the post-#478 default.
+    #[serde(default = "default_allow_self_initiate")]
+    pub allow_self_initiate: bool,
 }
 
 impl Default for DelegationSettings {
@@ -81,6 +94,7 @@ impl Default for DelegationSettings {
             depth_limit: 1,
             agent_defaults: BTreeMap::new(),
             completed_cache_max_mb: DEFAULT_COMPLETED_CACHE_MB,
+            allow_self_initiate: true,
         }
     }
 }
@@ -98,6 +112,7 @@ impl DelegationSettings {
             // No upper clamp: the cache budget is a user memory choice, not a
             // safety rail. `0` stays `0` (unlimited).
             completed_cache_max_mb: self.completed_cache_max_mb,
+            allow_self_initiate: self.allow_self_initiate,
         }
     }
 
@@ -137,6 +152,13 @@ pub async fn load_delegation_settings(conn: &DatabaseConnection) -> DelegationSe
         }
     }
     if let Ok(Some(raw)) =
+        app_metadata_service::get_value(conn, KEY_DELEGATION_ALLOW_SELF_INITIATE).await
+    {
+        if let Ok(v) = raw.parse::<bool>() {
+            settings.allow_self_initiate = v;
+        }
+    }
+    if let Ok(Some(raw)) =
         app_metadata_service::get_value(conn, KEY_DELEGATION_AGENT_DEFAULTS).await
     {
         // Corrupt JSON → keep defaults (empty map). Matches the "never errors
@@ -155,6 +177,7 @@ pub async fn load_delegation_settings(conn: &DatabaseConnection) -> DelegationSe
 /// after any external write to `app_metadata`.
 pub async fn apply_persisted_config(conn: &DatabaseConnection, broker: &DelegationBroker) {
     let settings = load_delegation_settings(conn).await;
+    broker.set_allow_self_initiate(settings.allow_self_initiate);
     broker.set_config(settings.into_broker_config()).await;
 }
 
@@ -222,12 +245,20 @@ pub async fn set_delegation_settings_core(
     let agent_defaults_json = serde_json::to_string(&clamped.agent_defaults).map_err(|e| {
         AppCommandError::configuration_invalid(format!("serialize agent_defaults: {e}"))
     })?;
+    app_metadata_service::upsert_value(
+        conn,
+        KEY_DELEGATION_ALLOW_SELF_INITIATE,
+        &clamped.allow_self_initiate.to_string(),
+    )
+    .await
+    .map_err(AppCommandError::from)?;
     app_metadata_service::upsert_value(conn, KEY_DELEGATION_AGENT_DEFAULTS, &agent_defaults_json)
         .await
         .map_err(AppCommandError::from)?;
     broker
         .set_config(clamped.clone().into_broker_config())
         .await;
+    broker.set_allow_self_initiate(clamped.allow_self_initiate);
     emit_event(emitter, DELEGATION_SETTINGS_CHANGED_EVENT, &clamped);
     Ok(clamped)
 }
@@ -318,6 +349,7 @@ mod tests {
         let broker = make_broker();
         let desired = DelegationSettings {
             enabled: false,
+            allow_self_initiate: false,
             depth_limit: 3,
             ..DelegationSettings::default()
         };
@@ -329,6 +361,8 @@ mod tests {
 
         let loaded = load_delegation_settings(&db.conn).await;
         assert_eq!(loaded.enabled, saved.enabled);
+        assert!(!loaded.allow_self_initiate);
+        assert!(!broker.allow_self_initiate());
         assert_eq!(loaded.depth_limit, saved.depth_limit);
 
         let cfg = broker.config_snapshot().await;

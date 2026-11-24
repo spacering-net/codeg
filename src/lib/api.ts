@@ -6598,6 +6598,9 @@ export interface DelegationSettings {
   /** Per-parent byte budget (in MB) for the broker's in-memory cache of
    * completed sub-agent result text. `0` = unlimited. */
   completed_cache_max_mb: number
+  /** When true, agents may spawn a listed sub-agent without an `@` mention.
+   * An `@` mention is still always honored. */
+  allow_self_initiate?: boolean
   /** Optional per-agent overrides applied when codeg-mcp spawns a subagent.
    * Keyed by `agent_type`. Missing entries mean "use agent defaults." */
   agent_defaults?: Partial<Record<AgentType, AgentDelegationDefaults>>

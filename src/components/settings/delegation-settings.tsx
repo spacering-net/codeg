@@ -102,6 +102,7 @@ export function DelegationSettingsSection() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [enabled, setEnabled] = useState(false)
+  const [allowSelfInitiate, setAllowSelfInitiate] = useState(true)
   const [depth, setDepth] = useState<number>(1)
   const [cacheMb, setCacheMb] = useState<number>(DEFAULT_CACHE_MB)
   const [agentDefaults, setAgentDefaults] = useState<
@@ -116,6 +117,7 @@ export function DelegationSettingsSection() {
    * the broadcast below. `enabled !== baselineEnabledRef.current` is therefore
    * "the user moved this and hasn't saved yet". */
   const baselineEnabledRef = useRef(false)
+  const baselineAllowSelfRef = useRef(true)
   /** Bumped by every broadcast, so a load or save reply can tell that a
    * broadcast landed while it was out — and leave the switch and the saved
    * record to it (see `persisted`). */
@@ -140,6 +142,8 @@ export function DelegationSettingsSection() {
         if (remoteGenRef.current === gen) {
           setEnabled(s.enabled)
           baselineEnabledRef.current = s.enabled
+          baselineAllowSelfRef.current = s.allow_self_initiate !== false
+          setAllowSelfInitiate(baselineAllowSelfRef.current)
           setPersisted(s)
         }
         setDepth(s.depth_limit)
@@ -222,6 +226,12 @@ export function DelegationSettingsSection() {
         setEnabled((current) =>
           current === previousBaseline ? remote.enabled : current
         )
+        const previousAllowSelf = baselineAllowSelfRef.current
+        const nextAllowSelf = remote.allow_self_initiate !== false
+        baselineAllowSelfRef.current = nextAllowSelf
+        setAllowSelfInitiate((current) =>
+          current === previousAllowSelf ? nextAllowSelf : current
+        )
         setPersisted(remote)
       }
     )
@@ -241,6 +251,7 @@ export function DelegationSettingsSection() {
   const save = useCallback(async () => {
     const payload: DelegationSettings = {
       enabled,
+      allow_self_initiate: allowSelfInitiate,
       depth_limit: clamp(depth, DEPTH_MIN, DEPTH_MAX),
       completed_cache_max_mb: clampCacheMb(cacheMb),
       agent_defaults: agentDefaults,
@@ -259,6 +270,8 @@ export function DelegationSettingsSection() {
         setPersisted(applied)
         setEnabled(applied.enabled)
         baselineEnabledRef.current = applied.enabled
+        baselineAllowSelfRef.current = applied.allow_self_initiate !== false
+        setAllowSelfInitiate(baselineAllowSelfRef.current)
       }
       // Mirror any server-side clamps / filter passes back into the UI so the
       // inputs reflect what was actually persisted.
@@ -273,11 +286,12 @@ export function DelegationSettingsSection() {
     } finally {
       setSaving(false)
     }
-  }, [enabled, depth, cacheMb, agentDefaults, t])
+  }, [enabled, allowSelfInitiate, depth, cacheMb, agentDefaults, t])
 
   const generalDirty =
     persisted !== null &&
     (enabled !== persisted.enabled ||
+      allowSelfInitiate !== (persisted.allow_self_initiate !== false) ||
       clamp(depth, DEPTH_MIN, DEPTH_MAX) !== persisted.depth_limit ||
       clampCacheMb(cacheMb) !== persisted.completed_cache_max_mb)
   const defaultsDirty =
@@ -346,6 +360,20 @@ export function DelegationSettingsSection() {
                 </span>
               </p>
             )}
+            <SettingRow
+              icon={Bubbles}
+              title={t("selfInitiate")}
+              description={t("selfInitiateHint")}
+              htmlFor="delegation-self-initiate"
+              control={
+                <Switch
+                  id="delegation-self-initiate"
+                  checked={allowSelfInitiate}
+                  onCheckedChange={setAllowSelfInitiate}
+                  disabled={loading || !enabled}
+                />
+              }
+            />
             <SettingRow
               icon={Gauge}
               title={t("depthLimit")}

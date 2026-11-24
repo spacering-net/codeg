@@ -842,6 +842,8 @@
       "enable": "Enable delegation",
       "enableHint": "When off, the delegate_to_agent tool is hidden from the agent's MCP catalog.",
       "withheldByHostTools": "{agents} will not get the delegation tools: their per-agent “Let the agent handle files and commands” switch is on.",
+      "selfInitiate": "Allow spawn without @",
+      "selfInitiateHint": "When on, an agent may start a listed sub-agent on its own. An @ mention is still always honored. When off, only an @ mention starts a sub-agent.",
       "depthLimit": "Maximum delegation depth",
       "depthHint": "Allowed range: {min}–{max}. Caps how deep a chain (root → child → grandchild …) can recurse.",
       "completedCacheLabel": "Completed-result cache (MB)",

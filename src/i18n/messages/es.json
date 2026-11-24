@@ -842,6 +842,8 @@
       "enable": "Activar delegación",
       "enableHint": "Cuando está desactivado, la herramienta delegate_to_agent se oculta del catálogo de herramientas MCP del agente.",
       "withheldByHostTools": "{agents} no recibirán las herramientas de delegación: su interruptor por agente «Deja que el agente gestione archivos y comandos» está activado.",
+      "selfInitiate": "Allow spawn without @",
+      "selfInitiateHint": "When on, an agent may start a listed sub-agent on its own. An @ mention is still always honored. When off, only an @ mention starts a sub-agent.",
       "depthLimit": "Profundidad máxima de delegación",
       "depthHint": "Rango permitido: {min}–{max}. Limita la profundidad de recursión de una cadena de delegación (raíz → hijo → nieto …).",
       "completedCacheLabel": "Caché de resultados completados (MB)",
