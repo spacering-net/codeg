@@ -2288,6 +2288,12 @@
       "sectionFolders": "Ordner",
       "sectionChats": "Chat",
       "sectionRecent": "Zuletzt",
+      "timeGroupPriorities": "Prioritäten (In Bearbeitung)",
+      "timeGroupToday": "Heute",
+      "timeGroupYesterday": "Gestern",
+      "timeGroupPrevious7Days": "Letzte 7 Tage",
+      "timeGroupPrevious30Days": "Letzte 30 Tage",
+      "timeGroupOlder": "Älter",
       "noChats": "Keine Chats",
       "noRecent": "Keine kürzlichen Konversationen",
       "showMoreRecent": "Mehr anzeigen ({count})",
@@ -2323,7 +2329,10 @@
       "noRecentChats": "Keine letzten Chats",
       "noRecentFolders": "Keine letzten Ordner-Unterhaltungen",
       "noRecentCli": "Keine letzten Unterhaltungen von der Kommandozeile",
-      "recentFilterMenuLabel": "In „Zuletzt“ anzeigen"
+      "recentFilterMenuLabel": "In „Zuletzt“ anzeigen",
+      "timeGroupPrioritiesTooltip": "Enthält aktuell laufende Sitzungen",
+      "recentGroupingModeTime": "Zu Zeitgruppierung wechseln",
+      "recentGroupingModeFlat": "Zu flacher Liste wechseln"
     },
     "conversation": {
       "reloadFailed": "Konversation konnte nicht neu geladen werden: {message}",

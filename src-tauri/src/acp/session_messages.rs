@@ -6,12 +6,12 @@ use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter};
 use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 
-use super::connection::{current_config_option_values, SetterOutcome, SteerOutcome};
+use super::connection::{current_config_option_values, SteerOutcome};
 use super::delegation::broker::DelegationBroker;
 use super::error::AcpError;
 use super::manager::ConnectionManager;
 use super::types::{
-    AgentOptionsSnapshot, ConnectionStatus, PromptInputBlock, SessionConfigKindInfo,
+    ConnectionStatus, PromptInputBlock, SessionConfigKindInfo, SessionConfigOptionInfo,
 };
 use crate::db::entities::folder::FolderKind;
 use crate::db::entities::{conversation, session_message};
@@ -37,71 +37,16 @@ pub struct SessionCreator {
     pub data_dir: std::path::PathBuf,
 }
 
-impl SessionCreator {
-    async fn apply_mode(
-        &self,
-        connection: &str,
-        snapshot: &AgentOptionsSnapshot,
-        mode: &str,
-    ) -> Result<bool, String> {
-        let legacy = snapshot
-            .modes
-            .as_ref()
-            .filter(|m| !m.available_modes.is_empty());
-        // Codex exposes both channels. Its config option drives the composer
-        // and its setter returns the mode actually applied by the agent.
-        let option = snapshot.config_options.iter().find_map(|option| {
-            if option.category.as_deref() != Some("mode") {
-                return None;
-            }
-            let SessionConfigKindInfo::Select(select) = &option.kind else {
-                return None;
-            };
-            select
-                .options
-                .iter()
-                .chain(select.groups.iter().flat_map(|group| &group.options))
-                .any(|entry| entry.value == mode)
-                .then_some((&option.id, select))
-        });
-        let outcome = if let Some((id, select)) = option {
-            if select.current_value == mode {
-                return Ok(false);
-            }
-            tokio::time::timeout(
-                Duration::from_secs(15),
-                self.manager
-                    .set_config_option_and_wait(connection, id.clone(), mode.into()),
-            )
-            .await
-        } else if let Some(modes) = legacy {
-            if modes.current_mode_id == mode {
-                return Ok(false);
-            }
-            if !modes.available_modes.iter().any(|entry| entry.id == mode) {
-                return Err(format!(
-                    "permission mode {mode:?} is unavailable for the target agent"
-                ));
-            }
-            tokio::time::timeout(
-                Duration::from_secs(15),
-                self.manager.set_mode_and_wait(connection, mode.into()),
-            )
-            .await
-        } else {
-            return Err(format!(
-                "permission mode {mode:?} is unavailable for the target agent"
-            ));
-        };
-        match outcome.map_err(|_| format!("timed out applying permission mode {mode:?}"))? {
-            Ok(SetterOutcome::Confirmed { current }) if current == mode => Ok(true),
-            Err(error) => Err(format!("could not apply permission mode {mode:?}: {error}")),
-            _ => Err(format!(
-                "the target agent did not confirm permission mode {mode:?}"
-            )),
+fn current_permission_mode(options: &[SessionConfigOptionInfo]) -> Option<&str> {
+    options.iter().find_map(|option| match &option.kind {
+        SessionConfigKindInfo::Select(select) if option.category.as_deref() == Some("mode") => {
+            Some(select.current_value.as_str())
         }
-    }
+        _ => None,
+    })
+}
 
+impl SessionCreator {
     pub async fn create(
         &self,
         caller: &str,
@@ -130,31 +75,17 @@ impl SessionCreator {
                 .ok_or("creator has no active conversation")?;
             let agent_type = request.agent_type.unwrap_or(caller.agent_type);
             let mode = if agent_type == caller.agent_type {
-                let current = caller
-                    .config_options
-                    .as_deref()
-                    .unwrap_or_default()
-                    .iter()
-                    .find_map(|option| {
-                        if option.category.as_deref() != Some("mode") {
-                            return None;
-                        }
-                        match &option.kind {
-                            SessionConfigKindInfo::Select(select) => {
-                                Some(select.current_value.clone())
-                            }
-                            _ => None,
-                        }
-                    })
-                    .or_else(|| caller.current_mode.clone());
+                let current =
+                    current_permission_mode(caller.config_options.as_deref().unwrap_or_default())
+                        .or(caller.current_mode.as_deref());
                 if request
                     .mode_id
-                    .as_ref()
-                    .is_some_and(|requested| Some(requested) != current.as_ref())
+                    .as_deref()
+                    .is_some_and(|requested| Some(requested) != current)
                 {
                     return Err("same-agent sessions inherit the current permission mode".into());
                 }
-                current
+                current.map(str::to_owned)
             } else {
                 request.mode_id.clone()
             };
@@ -162,7 +93,7 @@ impl SessionCreator {
         };
         let mut defaults = agent_defaults.get(&agent_type).cloned().unwrap_or_default();
         if mode.is_some() {
-            defaults.mode_id = None;
+            defaults.mode_id.clone_from(&mode);
             defaults.config_values.remove("mode");
         }
         defaults.config_values.extend(request.config_values.clone());
@@ -219,63 +150,64 @@ impl SessionCreator {
             conversation_id,
         )
         .await;
-        let connection = match self
-            .manager
-            .spawn_agent(
+        let started = async {
+            let connection = crate::commands::acp::spawn_with_conversation_selection(
+                &self.manager,
+                &self.db,
                 agent_type,
                 Some(folder.path),
                 None,
                 runtime_env,
                 "session-tools".into(),
                 emitter.clone(),
+                Some(conversation_id),
                 defaults.mode_id,
                 defaults.config_values,
             )
             .await
-        {
-            Ok(connection) => connection,
-            Err(error) => {
-                let _ = conversation_service::update_status(
-                    &self.db,
-                    conversation_id,
-                    crate::db::entities::conversation::ConversationStatus::Cancelled,
-                )
-                .await;
-                return Err(format!(
-                    "conversation {} was created but could not start: {error}",
-                    conversation_id
-                ));
-            }
-        };
-        if mode.is_some() || !request.config_values.is_empty() {
-            let verified = async {
-                let mut snapshot = self
+            .map_err(|error| error.to_string())?;
+            // Creation accepts explicit settings for the first prompt. The shared
+            // connect path can fall back on stale saved preferences, so use its
+            // result here to reject an unavailable explicit pick before sending.
+            let confirmed = async {
+                let snapshot = self
                     .manager
                     .wait_for_session_options(&connection, Duration::from_secs(60))
                     .await
                     .map_err(|error| error.to_string())?;
-                if let Some(mode) = mode.as_deref() {
-                    if self.apply_mode(&connection, &snapshot, mode).await?
-                        && !request.config_values.is_empty()
-                    {
-                        snapshot = self
-                            .manager
-                            .wait_for_session_options(&connection, Duration::from_secs(60))
-                            .await
-                            .map_err(|error| error.to_string())?;
-                    }
+                let current_mode =
+                    current_permission_mode(&snapshot.config_options).or_else(|| {
+                        snapshot
+                            .modes
+                            .as_ref()
+                            .map(|modes| modes.current_mode_id.as_str())
+                    });
+                if let Some(mode) = mode.as_deref().filter(|mode| Some(*mode) != current_mode) {
+                    return Err(format!(
+                        "could not apply permission mode {mode:?} for {agent_type}"
+                    ));
                 }
                 let current = current_config_option_values(&snapshot.config_options);
-                for (key, value) in &request.config_values {
-                    if current.get(key) != Some(value) {
-                        return Err(format!("could not apply {key}={value} for {agent_type}"));
-                    }
+                if let Some((key, value)) = request
+                    .config_values
+                    .iter()
+                    .find(|(key, value)| current.get(*key) != Some(*value))
+                {
+                    return Err(format!("could not apply {key}={value} for {agent_type}"));
                 }
                 Ok(())
             }
             .await;
-            if let Err(error) = verified {
+            if let Err(error) = confirmed {
                 let _ = self.manager.disconnect(&connection).await;
+                return Err(error);
+            }
+            Ok(connection)
+        }
+        .await;
+        let connection = match started {
+            Ok(connection) => connection,
+            Err(error) => {
                 let _ = conversation_service::update_status(
                     &self.db,
                     conversation_id,
@@ -288,9 +220,11 @@ impl SessionCreator {
                     conversation_id,
                 )
                 .await;
-                return Err(error);
+                return Err(format!(
+                    "conversation {conversation_id} was created but could not start: {error}"
+                ));
             }
-        }
+        };
         let message_id = queue::enqueue(
             &self.db,
             sender,
@@ -423,24 +357,19 @@ async fn dispatch(
     let connection = if is_initial {
         initial_connection
     } else {
-        match manager
-            .find_connection_by_conversation_id(recipient.id)
+        match crate::models::AgentType::from_wire(&recipient.agent_type) {
+            Some(agent) => crate::commands::acp::acp_find_connection_for_conversation_core(
+                manager,
+                db,
+                recipient.id,
+                recipient.external_id.as_deref(),
+                agent,
+            )
             .await
-        {
-            Some(id) => Some(id),
-            None => match recipient.external_id.as_deref() {
-                Some(external_id) => {
-                    match crate::models::agent::AgentType::from_wire(&recipient.agent_type) {
-                        Some(agent) => {
-                            manager
-                                .find_connection_by_external_id(external_id, agent)
-                                .await
-                        }
-                        None => None,
-                    }
-                }
-                None => None,
-            },
+            .ok()
+            .flatten()
+            .map(|info| info.connection_id),
+            None => None,
         }
     };
     let connection = match (connection, activation) {
@@ -482,9 +411,7 @@ async fn dispatch(
     let Some(row) = valid.into_iter().find(|row| !busy || row.mode == "steer") else {
         return Ok(());
     };
-    if !broker.config_snapshot().await.session_messaging_enabled
-        || !queue::claim(db, &row).await?
-    {
+    if !broker.config_snapshot().await.session_messaging_enabled || !queue::claim(db, &row).await? {
         return Ok(());
     }
 
@@ -603,7 +530,7 @@ async fn activate_recipient(
         .map(|model| ("model".into(), model))
         .into_iter()
         .collect();
-    let outcome = crate::commands::acp::spawn_with_conversation_selection(
+    let outcome = crate::commands::acp::spawn_and_bind_conversation_selection(
         manager,
         db,
         agent,
@@ -620,6 +547,7 @@ async fn activate_recipient(
     .map_err(|error| error.to_string())?;
     let connection = outcome.connection_id;
     let ready: Result<(), String> = async {
+        outcome.bound.map_err(|error| error.to_string())?;
         manager
             .wait_for_session_options(&connection, Duration::from_secs(60))
             .await

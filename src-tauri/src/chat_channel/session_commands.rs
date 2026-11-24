@@ -904,7 +904,7 @@ pub async fn handle_resume(
     )
     .await
     {
-        Ok(outcome) => outcome.connection_id,
+        Ok(id) => id,
         Err(e) => {
             return RichMessage::error(format!("{}{e}", i18n::failed_to_start_agent_label(lang)));
         }
@@ -1537,7 +1537,7 @@ async fn spawn_chat_connection_for_conversation(
             .map_err(|e| e.to_string())?;
     let owner_label = owner_label_for(channel_id, sender_id, target);
     // The conversation's own stored selection is replayed (codeg#1179).
-    let outcome = crate::commands::acp::spawn_with_conversation_selection(
+    let connection_id = crate::commands::acp::spawn_with_conversation_selection(
         conn_mgr,
         db,
         conv.agent_type,
@@ -1553,7 +1553,7 @@ async fn spawn_chat_connection_for_conversation(
     .await
     .map_err(|e| e.to_string())?;
 
-    Ok((outcome.connection_id, folder))
+    Ok((connection_id, folder))
 }
 
 async fn send_chat_prompt(

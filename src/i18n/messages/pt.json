@@ -2288,6 +2288,12 @@
       "sectionFolders": "Pastas",
       "sectionChats": "Chat",
       "sectionRecent": "Recentes",
+      "timeGroupPriorities": "Prioridades (Em andamento)",
+      "timeGroupToday": "Hoje",
+      "timeGroupYesterday": "Ontem",
+      "timeGroupPrevious7Days": "Últimos 7 dias",
+      "timeGroupPrevious30Days": "Últimos 30 dias",
+      "timeGroupOlder": "Mais antigos",
       "noChats": "Sem chats",
       "noRecent": "Sem conversas recentes",
       "showMoreRecent": "Mostrar mais ({count})",
@@ -2323,7 +2329,10 @@
       "noRecentChats": "Nenhum chat recente",
       "noRecentFolders": "Nenhuma conversa de pasta recente",
       "noRecentCli": "Nenhuma conversa recente da linha de comando",
-      "recentFilterMenuLabel": "Mostrar em Recentes"
+      "recentFilterMenuLabel": "Mostrar em Recentes",
+      "timeGroupPrioritiesTooltip": "Inclui sessões atualmente em execução",
+      "recentGroupingModeTime": "Mudar para agrupamento por data",
+      "recentGroupingModeFlat": "Mudar para lista simples"
     },
     "conversation": {
       "reloadFailed": "Falha ao recarregar conversa: {message}",

@@ -222,9 +222,22 @@ function denormalizeLiveMessage(
   return {
     id: wire.id,
     role: wire.role === "tool" ? "tool" : "assistant",
-    content: wire.content
-      .map((block) => denormalizeBlock(block, toolMap))
-      .filter((b): b is LocalLiveContentBlock => b !== null),
+    content: [
+      ...wire.content
+        .map((block) => denormalizeBlock(block, toolMap))
+        .filter((b): b is LocalLiveContentBlock => b !== null),
+      // Only the agent's own account is kept (a blank title is worded by the
+      // client from the category), so the line is the agent's.
+      ...(wire.turn_error
+        ? [
+            {
+              type: "turn_error" as const,
+              message: wire.turn_error,
+              fromAgent: true,
+            },
+          ]
+        : []),
+    ],
     startedAt: Number.isNaN(startedAtMs) ? Date.now() : startedAtMs,
   }
 }

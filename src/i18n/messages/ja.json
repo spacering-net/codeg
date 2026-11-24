@@ -2288,6 +2288,12 @@
       "sectionFolders": "フォルダ",
       "sectionChats": "チャット",
       "sectionRecent": "最近",
+      "timeGroupPriorities": "優先事項（進行中）",
+      "timeGroupToday": "今日",
+      "timeGroupYesterday": "昨日",
+      "timeGroupPrevious7Days": "過去 7 日間",
+      "timeGroupPrevious30Days": "過去 30 日間",
+      "timeGroupOlder": "それ以前",
       "noChats": "チャットがありません",
       "noRecent": "最近の会話はありません",
       "showMoreRecent": "さらに表示（{count}）",
@@ -2323,7 +2329,10 @@
       "noRecentChats": "最近のチャットはありません",
       "noRecentFolders": "最近のフォルダー会話はありません",
       "noRecentCli": "コマンドラインからの最近の会話はありません",
-      "recentFilterMenuLabel": "最近の表示"
+      "recentFilterMenuLabel": "最近の表示",
+      "timeGroupPrioritiesTooltip": "現在実行中のセッションが含まれます",
+      "recentGroupingModeTime": "時間グループ表示に切り替え",
+      "recentGroupingModeFlat": "フラットリストに切り替え"
     },
     "conversation": {
       "reloadFailed": "会話の再読み込みに失敗しました: {message}",

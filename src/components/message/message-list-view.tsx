@@ -2027,41 +2027,6 @@ export function MessageListView({
     [sourceJump, threadItems]
   )
   const sourceOffset = isWindowedDetail(detail) ? detail.turns_offset : 0
-  useEffect(() => {
-    if (!sourceJump || !isActive || detailLoading) return
-    const clear = () => {
-      if (useSessionMessageJump.getState().pending === sourceJump) {
-        useSessionMessageJump.setState({ pending: null })
-      }
-    }
-    if (sourceIndex >= 0) {
-      const frame = requestAnimationFrame(() => {
-        scrollApiRef.current?.scrollToIndex(sourceIndex, { align: "start" })
-        clear()
-      })
-      return () => cancelAnimationFrame(frame)
-    }
-    if (sourceOffset > 0) {
-      void loadOlderTurnsThrough(conversationId, sourceOffset - 1).then(
-        (reached) => {
-          if (!reached) clear()
-        }
-      )
-    } else if (detail || detailError || acpLoadError) {
-      clear()
-    }
-  }, [
-    acpLoadError,
-    conversationId,
-    detail,
-    detailError,
-    detailLoading,
-    isActive,
-    loadOlderTurnsThrough,
-    sourceIndex,
-    sourceJump,
-    sourceOffset,
-  ])
   // The per-message rows are computed only while the side panel shows them:
   // grouping them parses every turn's diffs.
   const navDemanded = useTranscriptNavDemanded(
@@ -2178,6 +2143,44 @@ export function MessageListView({
     loadOlderTurnsThrough,
   })
 
+  const selectNavEntry = navJump.select
+  useEffect(() => {
+    if (!sourceJump || !isActive || detailLoading) return
+    const clear = () => {
+      if (useSessionMessageJump.getState().pending === sourceJump) {
+        useSessionMessageJump.setState({ pending: null })
+      }
+    }
+    if (sourceIndex >= 0) {
+      const frame = requestAnimationFrame(() => {
+        selectNavEntry({ threadIndex: sourceIndex })
+        clear()
+      })
+      return () => cancelAnimationFrame(frame)
+    }
+    if (sourceOffset > 0) {
+      void loadOlderTurnsThrough(conversationId, sourceOffset - 1).then(
+        (reached) => {
+          if (!reached) clear()
+        }
+      )
+    } else if (detail || detailError || acpLoadError) {
+      clear()
+    }
+  }, [
+    acpLoadError,
+    conversationId,
+    detail,
+    detailError,
+    detailLoading,
+    isActive,
+    loadOlderTurnsThrough,
+    selectNavEntry,
+    sourceIndex,
+    sourceJump,
+    sourceOffset,
+  ])
+
   // --- Session Details side panel ---------------------------------------------
   // The plan it shows: the live reply's latest plan block while it has one,
   // else the latest plan in the history (the inline overlay resolves the same
@@ -2193,10 +2196,10 @@ export function MessageListView({
     livePlanEntries.length > 0 ? livePlanEntries : historicalPlanEntries
   const insightsActions = useMemo<TranscriptInsightsActions>(
     () => ({
-      selectNavEntry: navJump.select,
+      selectNavEntry,
       retryEarlierNav: earlierOutline.retry,
     }),
-    [navJump.select, earlierOutline.retry]
+    [selectNavEntry, earlierOutline.retry]
   )
   const navEarlier =
     earlierOutlineState.status === "loading" ||

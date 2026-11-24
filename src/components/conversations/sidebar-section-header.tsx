@@ -2,12 +2,14 @@
 
 import { memo } from "react"
 import {
+  CalendarDays,
   ChevronRight,
   Download,
   Ellipsis,
   FolderGit2,
   FolderOpenDot,
   LayersPlus,
+  List,
   SquarePen,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
@@ -22,6 +24,7 @@ import {
 import {
   SIDEBAR_RECENT_FILTERS,
   type SidebarRecentFilter,
+  type SidebarRecentGroupingMode,
   type SidebarSectionKey,
 } from "@/lib/sidebar-view-mode-storage"
 import { cn } from "@/lib/utils"
@@ -51,6 +54,8 @@ export const SidebarSectionHeader = memo(function SidebarSectionHeader({
   onNewFolderGroup,
   recentFilter,
   onRecentFilterChange,
+  recentGroupingMode,
+  onRecentGroupingModeChange,
   topGap = false,
 }: {
   section: SidebarSectionKey
@@ -100,6 +105,8 @@ export const SidebarSectionHeader = memo(function SidebarSectionHeader({
    */
   recentFilter?: SidebarRecentFilter
   onRecentFilterChange?: (filter: SidebarRecentFilter) => void
+  recentGroupingMode?: SidebarRecentGroupingMode
+  onRecentGroupingModeChange?: (mode: SidebarRecentGroupingMode) => void
   /**
    * Adds breathing room above the header so the "Folders" section reads as
    * visually separated from the "Pinned" section above it. Implemented as
@@ -131,6 +138,10 @@ export const SidebarSectionHeader = memo(function SidebarSectionHeader({
     (section === "chats" || section === "recent") && onNewChat != null
   const newChatLabel =
     section === "recent" ? t("newConversation") : t("newChatAction")
+  const showRecentGrouping =
+    section === "recent" &&
+    recentGroupingMode != null &&
+    onRecentGroupingModeChange != null
   const showRecentFilter =
     section === "recent" && recentFilter != null && onRecentFilterChange != null
   const recentFilterOptionLabel = (filter: SidebarRecentFilter) =>
@@ -215,8 +226,36 @@ export const SidebarSectionHeader = memo(function SidebarSectionHeader({
             )}
           />
         </button>
-        {(showNewChat || showRecentFilter) && (
+        {(showNewChat || showRecentFilter || showRecentGrouping) && (
           <div className="absolute top-1/2 right-[0.375rem] flex -translate-y-1/2 items-center gap-px">
+            {showRecentGrouping && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onRecentGroupingModeChange(
+                    recentGroupingMode === "time" ? "flat" : "time"
+                  )
+                }}
+                title={
+                  recentGroupingMode === "time"
+                    ? t("recentGroupingModeFlat")
+                    : t("recentGroupingModeTime")
+                }
+                aria-label={
+                  recentGroupingMode === "time"
+                    ? t("recentGroupingModeFlat")
+                    : t("recentGroupingModeTime")
+                }
+                className={actionButtonClassName}
+              >
+                {recentGroupingMode === "time" ? (
+                  <CalendarDays className="h-[0.875rem] w-[0.875rem]" />
+                ) : (
+                  <List className="h-[0.875rem] w-[0.875rem]" />
+                )}
+              </button>
+            )}
             {showRecentFilter && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>

@@ -1553,12 +1553,44 @@ const HANDSHAKE_STARTUP_RETRY_BUDGET: std::time::Duration = if cfg!(test) {
 /// `network::proxy`) — besides 1.x being refused before launch. The name is
 /// looked up in the rendered error and in `data`: ACP renders `data` into
 /// `Display`, but not every adapter puts the name there.
-fn session_establishment_is_retryable(e: &agent_client_protocol::Error) -> bool {
+fn agent_still_starting(e: &agent_client_protocol::Error) -> bool {
     const STARTING: &str = "ServiceUnavailableError";
     e.to_string().contains(STARTING)
         || e.data
             .as_ref()
             .is_some_and(|data| data.to_string().contains(STARTING))
+}
+
+/// Whether a session-establishing request the agent refused may succeed if
+/// asked again shortly: the agent is still starting ([`agent_still_starting`]),
+/// or the session is still held by the codex process that had it a moment ago
+/// ([`codex_session_has_active_writer`]).
+fn session_establishment_is_retryable(e: &agent_client_protocol::Error) -> bool {
+    agent_still_starting(e) || codex_session_has_active_writer(e)
+}
+
+/// Whether codex-acp refused to open the session because another codex process
+/// still holds it as its writer (`data.reason == "thread_active_writer"`, shown
+/// as "This Codex session is in use by another Codex client").
+///
+/// Most of the time that other process is codeg's own: the connection that ran
+/// the session a moment ago, which was disconnected but has not exited yet.
+/// Disconnecting only signals the agent's process tree, and the codex
+/// app-server that holds the session can take seconds to exit. A work task hits
+/// this every time: its run disconnects at the turn's end, and "open the
+/// conversation" resumes the same session right after. Once that process exits
+/// the session opens normally, so the request is retried within the startup
+/// budget. A session that is still held when the budget runs out — open in
+/// another Codex client, say — ends as `session_busy`
+/// ([`classify_session_load_error`]), whose banner offers to reload it.
+///
+/// Only the structured reason counts, not the English sentence.
+fn codex_session_has_active_writer(e: &agent_client_protocol::Error) -> bool {
+    e.data
+        .as_ref()
+        .and_then(|data| data.get("reason"))
+        .and_then(|reason| reason.as_str())
+        == Some("thread_active_writer")
 }
 
 /// Run a session-establishing RPC, retrying while the agent says it is still
@@ -1591,8 +1623,8 @@ where
                     && tokio::time::Instant::now() + delay <= deadline =>
             {
                 tracing::info!(
-                    "[ACP] agent still starting; retrying session request in {delay:?} \
-                     (attempt {attempt}): {e}"
+                    "[ACP] agent cannot serve the session yet; retrying session request \
+                     in {delay:?} (attempt {attempt}): {e}"
                 );
                 attempt += 1;
                 if handshake
@@ -10178,8 +10210,10 @@ async fn run_connection(
                         // back to session/new would bind the conversation to an
                         // empty session the moment the agent finishes starting,
                         // so the handshake fails instead and a reconnect opens
-                        // the original session.
-                        if session_establishment_is_retryable(&e) {
+                        // the original session. (A codex session still held by
+                        // another process once the budget is spent is not this
+                        // case: it is classified `session_busy` below.)
+                        if agent_still_starting(&e) {
                             tracing::warn!(
                                 "[ACP][{agent_type}] session/load: agent still starting after \
                                  the startup budget ({}); not falling back to session/new",
@@ -12777,7 +12811,22 @@ async fn apply_preferred_session_options(
     session_models: Option<&serde_json::Value>,
     initial_config_options: Vec<SessionConfigOption>,
 ) -> Vec<SessionConfigOption> {
-    if let Some(pref_mode) = preferred_mode_id {
+    let mode_option = preferred_mode_id.and_then(|mode| {
+        initial_config_options.iter().find(|option| {
+            matches!(option.category, Some(SessionConfigOptionCategory::Mode))
+                && matches!(option.kind, SessionConfigKind::Select(_))
+                && !config_option_rejects_value(option, mode)
+        })
+    });
+    let mut config_with_mode;
+    let preferred_config_values = if let (Some(option), Some(mode)) = (mode_option, preferred_mode_id) {
+        config_with_mode = preferred_config_values.clone();
+        config_with_mode.entry(option.id.to_string()).or_insert_with(|| mode.to_owned());
+        &config_with_mode
+    } else {
+        preferred_config_values
+    };
+    if let Some(pref_mode) = preferred_mode_id.filter(|_| mode_option.is_none()) {
         let needs_apply = session
             .modes()
             .as_ref()
@@ -14928,6 +14977,13 @@ struct TurnOutputProbe {
     /// stopped it, as the text an empty turn is then explained by (see
     /// [`EmptyTurnCause::HookStopped`] and [`hook_stop_notice_text`]).
     hook_stop: Option<String>,
+    /// Antigravity only: the turn's last few reply chunks, whole and trimmed.
+    /// agy tells a dead executor as ONE chunk holding its account, so a
+    /// failure read off the trajectory whose words match one of these was
+    /// streamed as reply text (`SessionFailureRecord::echoed_in_reply`).
+    /// Only the tail matters: the account is the turn's last words but for a
+    /// citation notice.
+    antigravity_chunks: std::collections::VecDeque<String>,
 }
 
 impl TurnOutputProbe {
@@ -14944,6 +15000,25 @@ impl TurnOutputProbe {
         } else {
             self.saw_metadata_update = true;
         }
+        if agent_type == AgentType::Antigravity {
+            if let SessionUpdate::AgentMessageChunk(ContentChunk {
+                content: ContentBlock::Text(text),
+                ..
+            }) = update
+            {
+                if self.antigravity_chunks.len() == ANTIGRAVITY_CHUNKS_KEPT {
+                    self.antigravity_chunks.pop_front();
+                }
+                self.antigravity_chunks
+                    .push_back(text.text.trim().to_string());
+            }
+        }
+    }
+
+    /// Whether one of the turn's last reply chunks said exactly `account`.
+    fn streamed_whole(&self, account: &str) -> bool {
+        let account = account.trim();
+        !account.is_empty() && self.antigravity_chunks.iter().any(|chunk| chunk == account)
     }
 
     fn note_dropped(&mut self, error: &impl std::fmt::Display) {
@@ -14989,6 +15064,9 @@ fn hook_stop_notice_text(agent_type: AgentType, notice: &SessionNotice) -> Optio
         _ => title.to_string(),
     })
 }
+
+/// How many trailing reply chunks [`TurnOutputProbe`] keeps for Antigravity.
+const ANTIGRAVITY_CHUNKS_KEPT: usize = 4;
 
 /// Why a turn ended with `EndTurn` but no agent output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16090,8 +16168,27 @@ async fn run_conversation_loop(
                             // must land before `apply_event`'s turn-boundary
                             // settle, or the retry warnings it escalates would
                             // be marked recovered while the failure is live.
+                            //
+                            // Antigravity disguises a failed turn the same way
+                            // but says so only as a reply chunk; its trajectory
+                            // holds the typed account (see
+                            // `antigravity_turn_failure`).
                             let terminal_failure =
-                                response_session_failure(response.meta.as_ref());
+                                match response_session_failure(response.meta.as_ref()) {
+                                    Some(record) => Some(record),
+                                    None if agent_type == AgentType::Antigravity
+                                        && matches!(response.stop_reason, StopReason::EndTurn) =>
+                                    {
+                                        antigravity_turn_failure(
+                                            state,
+                                            &sid.0,
+                                            turn_started_at_ms,
+                                            &probe,
+                                        )
+                                        .await
+                                    }
+                                    None => None,
+                                };
                             if let Some(record) = &terminal_failure {
                                 emit_with_state(
                                     state,
@@ -20463,6 +20560,8 @@ fn parse_session_failure_record(value: &serde_json::Value) -> Option<SessionFail
             })
             .unwrap_or_default(),
         resolved: false,
+        // codeg's own mark: an adapter's record never carries it.
+        echoed_in_reply: false,
     })
 }
 
@@ -20482,6 +20581,50 @@ fn parse_session_failure_record(value: &serde_json::Value) -> Option<SessionFail
 /// `transport_lost` error escalation ONLY here — ignoring this carrier lost
 /// the terminal record entirely, so the turn-boundary settle painted the
 /// still-dead connection as a recovered warning.
+/// The failure an Antigravity turn ended on, as the terminal record an AIR
+/// adapter would have put on the prompt response.
+///
+/// agy 1.5.2 reports a dead executor (the model API refused the account's
+/// location, the quota ran out, …) as one ordinary `agent_message_chunk` and
+/// ends the turn `end_turn`, so live it read as the model's reply — a reply
+/// with no model and no usage, which a reload then drew as a failure. The
+/// trajectory holds the typed account (`parsers::antigravity::
+/// newest_round_failure`, on disk before the response is sent), worded as the
+/// chunk was. As a terminal record it closes the turn with the failure line
+/// (taking the place of the chunk that told it — `echoed_in_reply`), and is
+/// told once as the turn's failure.
+async fn antigravity_turn_failure(
+    state: &Arc<RwLock<SessionState>>,
+    session_id: &str,
+    turn_started_at_ms: u64,
+    probe: &TurnOutputProbe,
+) -> Option<SessionFailureRecord> {
+    let dir = state.read().await.antigravity_sessions_dir.clone()?;
+    let since = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
+        i64::try_from(turn_started_at_ms).ok()?,
+    )?;
+    let session = session_id.to_string();
+    let (position, failure) = tokio::task::spawn_blocking(move || {
+        crate::parsers::antigravity::newest_round_failure(&dir, &session, since)
+    })
+    .await
+    .ok()??;
+    Some(SessionFailureRecord {
+        // Unique per step of the session: records are kept per connection as
+        // revision watermarks, and a fork moves the connection to another
+        // session whose positions start over.
+        id: format!("antigravity:{session_id}:{position}"),
+        revision: 1,
+        category: failure.category.to_string(),
+        severity: "error".to_string(),
+        echoed_in_reply: probe.streamed_whole(&failure.text),
+        title: failure.text,
+        details: None,
+        actions: Vec::new(),
+        resolved: false,
+    })
+}
+
 fn response_session_failure(
     meta: Option<&serde_json::Map<String, serde_json::Value>>,
 ) -> Option<SessionFailureRecord> {
@@ -27548,6 +27691,77 @@ mod tests {
         assert!(!session_establishment_is_retryable(
             &agent_client_protocol::util::internal_error("session_busy")
         ));
+    }
+
+    /// codex-acp 2.10 as codeg sees it on the wire when the session's previous
+    /// codex process still holds it (`threadActiveWriterRequestError`).
+    fn codex_active_writer_error() -> agent_client_protocol::Error {
+        let mut e = agent_client_protocol::Error::invalid_request().data(serde_json::json!({
+            "reason": "thread_active_writer",
+            "threadId": "01a1d022-bcf4-78f0-ab1e-69397f00ab97",
+            "details": "thread 01a1d022-bcf4-78f0-ab1e-69397f00ab97 already has an active writer",
+        }));
+        e.message = "This Codex session is in use by another Codex client (the Codex app, \
+                     the CLI or an IDE extension). Close the session there or quit that \
+                     client, then try again."
+            .to_string();
+        e
+    }
+
+    #[test]
+    fn recognizes_a_codex_session_still_held_by_another_process() {
+        assert!(session_establishment_is_retryable(
+            &codex_active_writer_error()
+        ));
+        // Still held once the budget is spent, it is not an agent still
+        // starting (which fails the handshake) but a busy session, whose
+        // banner offers Reload.
+        assert!(!agent_still_starting(&codex_active_writer_error()));
+        assert_eq!(
+            classify_session_load_error(&codex_active_writer_error()),
+            Some("session_busy")
+        );
+        // Only the structured reason counts: the sentence alone, or another
+        // reason in the same shape, is not a session being let go of.
+        let mut sentence_only = agent_client_protocol::Error::invalid_request();
+        sentence_only.message = codex_active_writer_error().message;
+        assert!(!session_establishment_is_retryable(&sentence_only));
+        assert!(!session_establishment_is_retryable(
+            &agent_client_protocol::Error::invalid_request()
+                .data(serde_json::json!({ "reason": "archived" }))
+        ));
+        assert!(!session_establishment_is_retryable(
+            &agent_client_protocol::Error::invalid_request()
+                .data(serde_json::json!("thread_active_writer"))
+        ));
+    }
+
+    /// The work-task case: the run's connection was disconnected at its turn's
+    /// end and "open the conversation" resumes the same session while the old
+    /// codex process is still exiting. The resume is retried until the session
+    /// is free instead of ending the connection.
+    #[tokio::test(start_paused = true)]
+    async fn retries_a_codex_resume_until_the_previous_process_lets_go() {
+        let handshake = CancellationToken::new();
+        let deadline = tokio::time::Instant::now() + AGENT_STARTUP_RETRY_BUDGET;
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let result = retry_session_establishment(&handshake, deadline, || {
+            let calls = Arc::clone(&calls);
+            async move {
+                let attempt = calls.fetch_add(1, Ordering::SeqCst) + 1;
+                if attempt < 4 {
+                    Err(codex_active_writer_error())
+                } else {
+                    Ok(attempt)
+                }
+            }
+        })
+        .await
+        .expect("no cancellation");
+
+        assert_eq!(result.expect("fourth attempt succeeds"), 4);
+        assert_eq!(calls.load(Ordering::SeqCst), 4);
     }
 
     #[tokio::test(start_paused = true)]
@@ -36938,6 +37152,31 @@ mod tests {
             &SessionUpdate::AgentMessageChunk(ContentChunk::new("hi".into())),
         );
         assert!(probe.saw_agent_output);
+    }
+
+    /// agy tells a dead executor as ONE reply chunk: only a whole chunk among
+    /// the turn's last few is the echo the failure line replaces — words
+    /// merely inside a longer chunk, or another agent's chunks, are not.
+    #[test]
+    fn only_a_whole_antigravity_chunk_counts_as_the_echoed_account() {
+        use agent_client_protocol::schema::v1::ContentChunk;
+        let chunk = |text: &str| SessionUpdate::AgentMessageChunk(ContentChunk::new(text.into()));
+
+        let mut probe = TurnOutputProbe::new(0);
+        probe.note_update(AgentType::ClaudeCode, &chunk("Not eligible."));
+        assert!(!probe.streamed_whole("Not eligible."));
+
+        probe.note_update(AgentType::Antigravity, &chunk("Let me look. Not eligible."));
+        assert!(!probe.streamed_whole("Not eligible."));
+        probe.note_update(AgentType::Antigravity, &chunk("Not eligible."));
+        probe.note_update(AgentType::Antigravity, &chunk("\n\nSources: x"));
+        assert!(probe.streamed_whole(" Not eligible. "));
+        assert!(!probe.streamed_whole(""));
+
+        for _ in 0..ANTIGRAVITY_CHUNKS_KEPT {
+            probe.note_update(AgentType::Antigravity, &chunk("more"));
+        }
+        assert!(!probe.streamed_whole("Not eligible."), "only the tail is kept");
     }
 
     /// The classifier's whole purpose is to separate "we went blind" from

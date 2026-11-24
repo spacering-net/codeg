@@ -12469,6 +12469,13 @@ async fn resolve_connect_selection_tx(
 
 /// [`resolve_connect_selection`] + spawn + bind: the connect path every
 /// user-facing entry point (Tauri, web, chat channel) shares.
+///
+/// A connection that ended before it could be bound — a resume the agent
+/// refused during its handshake, or a session it lost — is reported like a
+/// closed one (`ConnectionNotFound`): the web client's attach and the chat
+/// channel's routing need a live connection, and have no other way to learn
+/// it is gone. The desktop app reads such an ending from the connection's own
+/// events instead (see [`spawn_and_bind_conversation_selection`]).
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn spawn_with_conversation_selection(
     manager: &ConnectionManager,
@@ -12482,7 +12489,56 @@ pub(crate) async fn spawn_with_conversation_selection(
     conversation_id: Option<i32>,
     client_mode_id: Option<String>,
     client_config_values: BTreeMap<String, String>,
-) -> Result<crate::acp::manager::SpawnOutcome, AcpError> {
+) -> Result<String, AcpError> {
+    let spawned = spawn_and_bind_conversation_selection(
+        manager,
+        db,
+        agent_type,
+        working_dir,
+        session_id,
+        runtime_env,
+        owner_window_label,
+        emitter,
+        conversation_id,
+        client_mode_id,
+        client_config_values,
+    )
+    .await?;
+    spawned.bound?;
+    Ok(spawned.connection_id)
+}
+
+/// A spawned connection, and whether binding it to its conversation's row
+/// worked (`Err` only when the connection had already ended).
+pub(crate) struct SpawnedConversationConnection {
+    pub connection_id: String,
+    pub bound: Result<(), AcpError>,
+    pub reused: bool,
+}
+
+/// [`spawn_with_conversation_selection`] that hands the connection back even
+/// when it ended before the bind, saying so in `bound`.
+///
+/// For the desktop app's `acp_connect`: its client buffers every event of a
+/// connection it has not routed yet and replays them once it has the id, so a
+/// resume that ended during its handshake still shows why — the error with its
+/// code, or `SessionLoadFailed` and its banner (a codex session another
+/// process holds is `session_busy`, with Reload). Refusing the id instead
+/// showed every such ending as a bare "connection not found".
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn spawn_and_bind_conversation_selection(
+    manager: &ConnectionManager,
+    db: &sea_orm::DatabaseConnection,
+    agent_type: AgentType,
+    working_dir: Option<String>,
+    session_id: Option<String>,
+    runtime_env: BTreeMap<String, String>,
+    owner_window_label: String,
+    emitter: EventEmitter,
+    conversation_id: Option<i32>,
+    client_mode_id: Option<String>,
+    client_config_values: BTreeMap<String, String>,
+) -> Result<SpawnedConversationConnection, AcpError> {
     let selection = resolve_connect_selection(
         db,
         manager,
@@ -12493,7 +12549,7 @@ pub(crate) async fn spawn_with_conversation_selection(
         client_config_values,
     )
     .await;
-    let outcome = manager
+    let spawned = manager
         .spawn_agent_with_outcome(
             agent_type,
             working_dir,
@@ -12505,14 +12561,20 @@ pub(crate) async fn spawn_with_conversation_selection(
             selection.config_values,
         )
         .await?;
-    if let Some(row_id) = selection.row_id {
-        // Before returning, so a setter right after connect finds the binding.
-        // A connection that already ended is reported like a closed one.
-        manager
-            .bind_selection_conversation(&outcome.connection_id, row_id, selection.composer_mode_id)
-            .await?;
-    }
-    Ok(outcome)
+    // Before returning, so a setter right after connect finds the binding.
+    let bound = match selection.row_id {
+        Some(row_id) => {
+            manager
+                .bind_selection_conversation(&spawned.connection_id, row_id, selection.composer_mode_id)
+                .await
+        }
+        None => Ok(()),
+    };
+    Ok(SpawnedConversationConnection {
+        connection_id: spawned.connection_id,
+        bound,
+        reused: spawned.reused,
+    })
 }
 
 #[cfg(test)]
@@ -12683,7 +12745,7 @@ pub async fn acp_connect(
     verify_agent_installed(agent_type).await?;
 
     let emitter = EventEmitter::from_app(&app_handle);
-    spawn_with_conversation_selection(
+    let spawned = spawn_and_bind_conversation_selection(
         &manager,
         &db.conn,
         agent_type,
@@ -12696,8 +12758,16 @@ pub async fn acp_connect(
         preferred_mode_id,
         preferred_config_values.unwrap_or_default(),
     )
-    .await
-    .map(|outcome| outcome.connection_id)
+    .await?;
+    if let Err(e) = spawned.bound {
+        // Ended during its handshake: the webview replays the connection's
+        // buffered events once it routes this id, which say why.
+        tracing::info!(
+            "[ACP] connection {} ended before its conversation could be bound: {e}",
+            spawned.connection_id
+        );
+    }
+    Ok(spawned.connection_id)
 }
 
 /// Record the composer's pending mode pick on a connection (never sent to the

@@ -342,6 +342,16 @@ struct RunInner {
     /// resolution says which answer took effect — and since when it waits.
     failing: Option<(String, Instant)>,
     last_error: Option<String>,
+    /// The account of the run's turn FAILING that codeg took out of its reply
+    /// (`SessionFailureRecord::echoed_in_reply` — Antigravity tells a dead
+    /// executor as reply text): such a turn still ends `end_turn`, and is no
+    /// success with an empty result. Other terminal records stay as they
+    /// were: an AIR adapter can publish a session-scoped error after a reply
+    /// that did succeed.
+    turn_failure: Option<String>,
+    /// The root connection's `event_seq` when the prompt went out: only a
+    /// record after it is about the run's turn.
+    prompt_seq: Option<u64>,
     /// Events, oldest first; `seq` runs from 1.
     log: VecDeque<RunEvent>,
     next_seq: u64,
@@ -969,7 +979,11 @@ impl CliRunService {
             }
             inner.phase = Phase::Running;
             inner.reporting = true;
-            inner.turns_before_prompt = Some(state.read().await.turns_completed);
+            {
+                let root = state.read().await;
+                inner.turns_before_prompt = Some(root.turns_completed);
+                inner.prompt_seq = Some(root.event_seq);
+            }
             run.push(
                 &mut inner,
                 EventBody::Init {
@@ -1662,7 +1676,17 @@ impl CliRunService {
             _ => {}
         }
         if let Some(text) = events::error_text(&env.payload) {
-            run.inner.lock().await.last_error = Some(text);
+            let mut inner = run.inner.lock().await;
+            // Only once the prompt is out: `session/load` replays a resumed
+            // conversation's still-active records of earlier turns.
+            if matches!(
+                &env.payload,
+                AcpEvent::SessionFailure { record } if record.echoed_in_reply
+            ) && inner.prompt_seq.is_some_and(|seq| env.seq > seq)
+            {
+                inner.turn_failure = Some(text.clone());
+            }
+            inner.last_error = Some(text);
         }
         if !self.on_ask_event(run, conn, &env.payload).await {
             if let Some(body) = events::translate(&env.payload) {
@@ -2299,7 +2323,17 @@ impl CliRunService {
         let (subtype, error) = if let Some(tool) = failure {
             stop_outcome(&StopCause::PermissionRequired { tool })
         } else if stop_reason == "end_turn" {
-            (Subtype::Success, None)
+            match inner.turn_failure.clone() {
+                Some(message) => (
+                    Subtype::ErrorDuringExecution,
+                    Some(ErrorInfo {
+                        code: "turn_failed".into(),
+                        message,
+                        next_steps: Vec::new(),
+                    }),
+                ),
+                None => (Subtype::Success, None),
+            }
         } else if stop_reason == "cancelled" {
             match inner.stop.clone() {
                 Some(cause) => stop_outcome(&cause),
@@ -2788,6 +2822,8 @@ impl RunInner {
             permission_failure: None,
             failing: None,
             last_error: None,
+            turn_failure: None,
+            prompt_seq: None,
             log: VecDeque::new(),
             next_seq: 0,
             reporting: false,
@@ -4727,6 +4763,69 @@ mod tests {
         let result = result_of(&h.drain(&started.run_id).await);
         assert_eq!(result.subtype, Subtype::ErrorDuringExecution);
         assert_eq!(result.error.unwrap().message, "agent crashed");
+    }
+
+    /// A turn Antigravity told failed as reply text (the record codeg reads
+    /// off its trajectory, `echoed_in_reply`) still ends `end_turn`; the run
+    /// reports the failure, not a success with no result. An AIR adapter's own
+    /// terminal record leaves a reply that ended well a success.
+    #[tokio::test]
+    async fn a_turn_antigravity_told_failed_fails_the_run() {
+        let h = Harness::new().await;
+        let started = h.start(PermissionPolicy::Deny).await;
+        h.until_command(&started.connection_id, "prompt:review it")
+            .await;
+        h.emit(
+            &started.connection_id,
+            AcpEvent::SessionFailure {
+                record: crate::acp::types::SessionFailureRecord {
+                    id: "antigravity:s1:1".into(),
+                    revision: 1,
+                    category: "access".into(),
+                    severity: "error".into(),
+                    title: "Not eligible in your location.".into(),
+                    details: None,
+                    actions: Vec::new(),
+                    resolved: false,
+                    echoed_in_reply: true,
+                },
+            },
+        )
+        .await;
+        h.emit(&started.connection_id, turn_complete("end_turn"))
+            .await;
+        let result = result_of(&h.drain(&started.run_id).await);
+        assert_eq!(result.subtype, Subtype::ErrorDuringExecution);
+        let error = result.error.unwrap();
+        assert_eq!(error.code, "turn_failed");
+        assert_eq!(error.message, "Not eligible in your location.");
+
+        let h = Harness::new().await;
+        let started = h.start(PermissionPolicy::Deny).await;
+        h.until_command(&started.connection_id, "prompt:review it")
+            .await;
+        h.emit(&started.connection_id, reply("done")).await;
+        h.emit(
+            &started.connection_id,
+            AcpEvent::SessionFailure {
+                record: crate::acp::types::SessionFailureRecord {
+                    id: "worker:error".into(),
+                    revision: 1,
+                    category: "connection".into(),
+                    severity: "error".into(),
+                    title: "The background worker stopped.".into(),
+                    details: None,
+                    actions: Vec::new(),
+                    resolved: false,
+                    echoed_in_reply: false,
+                },
+            },
+        )
+        .await;
+        h.emit(&started.connection_id, turn_complete("end_turn"))
+            .await;
+        let result = result_of(&h.drain(&started.run_id).await);
+        assert_eq!(result.subtype, Subtype::Success);
     }
 
     #[tokio::test]

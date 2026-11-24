@@ -105,7 +105,7 @@ pub async fn acp_connect(
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
 
     let emitter = state.emitter.clone();
-    let outcome = acp_commands::spawn_with_conversation_selection(
+    let connection_id = acp_commands::spawn_with_conversation_selection(
         manager,
         &db.conn,
         params.agent_type,
@@ -121,7 +121,7 @@ pub async fn acp_connect(
     .await
     .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
 
-    Ok(Json(outcome.connection_id))
+    Ok(Json(connection_id))
 }
 
 #[derive(Deserialize)]
@@ -1062,10 +1062,20 @@ pub async fn acp_list_pi_model_capabilities(
     ))
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpLoadDeepSeekModelCatalogParams {
+    /// The deepseek-acp version the settings page judges by (installed, else
+    /// pinned): it decides which document holds the catalog.
+    #[serde(default)]
+    pub version: Option<String>,
+}
+
 pub async fn acp_load_deepseek_model_catalog(
+    Json(params): Json<AcpLoadDeepSeekModelCatalogParams>,
 ) -> Result<Json<deepseek_settings_commands::DeepSeekModelCatalog>, AppCommandError> {
     Ok(Json(
-        deepseek_settings_commands::load_deepseek_model_catalog_core(),
+        deepseek_settings_commands::load_deepseek_model_catalog_core(params.version.as_deref()),
     ))
 }
 
@@ -1076,6 +1086,9 @@ pub struct AcpUpdateDeepSeekModelCatalogParams {
     /// is inherited again.
     #[serde(default)]
     pub models: Option<Vec<deepseek_settings_commands::DeepSeekCatalogModel>>,
+    /// As in [`AcpLoadDeepSeekModelCatalogParams::version`].
+    #[serde(default)]
+    pub version: Option<String>,
 }
 
 pub async fn acp_update_deepseek_model_catalog(
@@ -1083,8 +1096,12 @@ pub async fn acp_update_deepseek_model_catalog(
     Json(params): Json<AcpUpdateDeepSeekModelCatalogParams>,
 ) -> Result<Json<()>, AppCommandError> {
     let emitter = state.emitter.clone();
-    deepseek_settings_commands::update_deepseek_model_catalog_core(params.models, &emitter)
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    deepseek_settings_commands::update_deepseek_model_catalog_core(
+        params.models,
+        params.version.as_deref(),
+        &emitter,
+    )
+    .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(()))
 }
 

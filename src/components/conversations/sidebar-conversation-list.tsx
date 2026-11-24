@@ -80,10 +80,13 @@ import {
   loadFolderGroupExpanded,
   saveFolderGroupExpanded,
   loadRecentFilter,
+  loadRecentGroupingMode,
   loadSectionCollapsed,
   saveRecentFilter,
+  saveRecentGroupingMode,
   saveSectionCollapsed,
   type SidebarRecentFilter,
+  type SidebarRecentGroupingMode,
   loadConversationExpanded,
   saveConversationExpanded,
   DEFAULT_SECTION_ORDER,
@@ -126,6 +129,7 @@ import {
   folderHeaderFlatIndices,
   groupByFolderWithReuse,
   headerIndexForFolder,
+  localDayStart,
   mergeChildrenById,
   nextHeaderAfter,
   pointerYToTargetIndex,
@@ -138,6 +142,7 @@ import {
   worktreeChildrenByParent,
   worktreeHeaderAlias,
   type DragSlot,
+  type RecentTimeGroupId,
   type SidebarEntry,
   type SidebarLayout,
   type SidebarRow,
@@ -1113,6 +1118,17 @@ export function SidebarConversationList({
     saveRecentFilter(next)
     setRecentFilter(next)
   }, [])
+  // Time groups or one flat list for the Recent section. Persisted and
+  // hydrated after mount, like the filter above.
+  const [recentGroupingMode, setRecentGroupingMode] =
+    useState<SidebarRecentGroupingMode>("time")
+  const changeRecentGroupingMode = useCallback(
+    (next: SidebarRecentGroupingMode) => {
+      saveRecentGroupingMode(next)
+      setRecentGroupingMode(next)
+    },
+    []
+  )
   // How many Recent rows are currently revealed. Session-only (not persisted):
   // "show me more of this list right now" is a reading gesture, not a setting —
   // and a fresh sidebar should open short again.
@@ -1253,6 +1269,7 @@ export function SidebarConversationList({
     setFolderGroupExpanded(loadFolderGroupExpanded())
     setSectionCollapsed(loadSectionCollapsed())
     setRecentFilter(loadRecentFilter())
+    setRecentGroupingMode(loadRecentGroupingMode())
     setConversationExpanded(new Set(loadConversationExpanded()))
   }, [])
 
@@ -1409,6 +1426,20 @@ export function SidebarConversationList({
     const interval = setInterval(relativeClock.tick, 60_000)
     return () => clearInterval(interval)
   }, [relativeClock])
+
+  // The local day Recent's time groups are measured from. Held as the day's
+  // start so the minute check below only re-renders when the date actually
+  // changes — past midnight "Today" has to become "Yesterday" even when no
+  // conversation changed to rebuild the rows. A same-day check is a no-op
+  // state write, so no render.
+  const [recentDayStart, setRecentDayStart] = useState(localDayStart)
+  useEffect(() => {
+    const interval = setInterval(
+      () => setRecentDayStart(localDayStart()),
+      60_000
+    )
+    return () => clearInterval(interval)
+  }, [])
 
   // The tag filter narrows what every section DRAWS — pinned, folders, chats
   // and recent all bucket from this. It never touches the per-folder counts
@@ -1670,6 +1701,8 @@ export function SidebarConversationList({
         layout,
         groupExpanded: folderGroupExpanded,
         hideEmptyFolders: tagFilterActive,
+        recentGroupingMode,
+        currentTime: recentDayStart,
       }),
     [
       pinned,
@@ -1685,6 +1718,8 @@ export function SidebarConversationList({
       recentExpanded,
       showRecent,
       recentLimit,
+      recentGroupingMode,
+      recentDayStart,
       sectionOrder,
       conversationExpanded,
       childrenByParent,
@@ -3059,6 +3094,12 @@ export function SidebarConversationList({
           onRecentFilterChange={
             row.section === "recent" ? changeRecentFilter : undefined
           }
+          recentGroupingMode={
+            row.section === "recent" ? recentGroupingMode : undefined
+          }
+          onRecentGroupingModeChange={
+            row.section === "recent" ? changeRecentGroupingMode : undefined
+          }
           // Every section header carries a top gap: it separates "Folders" from
           // the "Pinned" section above it, and — now that a fixed New chat /
           // Search region sits above the scrolled list — gives the first section
@@ -3196,6 +3237,33 @@ export function SidebarConversationList({
                 : recentFilter === "cli"
                   ? t("noRecentCli")
                   : t("noRecent")}
+        </div>
+      )
+    }
+    if (row.kind === "recent-time-group") {
+      const timeGroupLabels: Record<RecentTimeGroupId, string> = {
+        priorities: t("timeGroupPriorities"),
+        today: t("timeGroupToday"),
+        yesterday: t("timeGroupYesterday"),
+        previous7Days: t("timeGroupPrevious7Days"),
+        previous30Days: t("timeGroupPrevious30Days"),
+        older: t("timeGroupOlder"),
+      }
+      const label = timeGroupLabels[row.groupId]
+      const tooltip =
+        row.groupId === "priorities"
+          ? t("timeGroupPrioritiesTooltip")
+          : undefined
+      return (
+        <div
+          data-recent-time-group={row.groupId}
+          className="flex items-center justify-between px-3 pt-2.5 pb-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground/60 select-none"
+          title={tooltip}
+        >
+          <span className="truncate">{label}</span>
+          <span className="font-mono text-[0.625rem] font-normal opacity-70 ml-2 shrink-0">
+            {row.count}
+          </span>
         </div>
       )
     }
@@ -3352,6 +3420,7 @@ export function SidebarConversationList({
     if (row.kind === "folders-empty") return "folders-empty"
     if (row.kind === "recent-empty") return "recent-empty"
     if (row.kind === "recent-more") return "recent-more"
+    if (row.kind === "recent-time-group") return `recent-group-${row.groupId}`
     const prefix = row.recent ? "recent-" : ""
     if (row.kind === "subsession-loading") {
       return `${prefix}subloading-${row.parentId}`
