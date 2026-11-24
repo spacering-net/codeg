@@ -8750,7 +8750,9 @@ mod tests {
             BrokerMessage::Ping => Some(json!({"ok": true})),
             _ => None,
         });
-        let delegate = delegate_schema(&ctx_on(&sock)).await;
+        let mut ctx = ctx_on(&sock);
+        ctx.features.session_messaging = true;
+        let delegate = delegate_schema(&ctx).await;
         assert_eq!(delegate, embedded_delegate_schema());
         assert_eq!(
             delegate["inputSchema"]["required"],
