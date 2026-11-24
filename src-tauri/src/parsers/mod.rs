@@ -404,9 +404,17 @@ pub trait AgentParser {
 /// so a parser handed [`AgentEnv::inherited`] instead reads the default
 /// directory while the agent writes elsewhere (#948).
 pub fn build_agent_parser(agent_type: AgentType, env: &AgentEnv) -> Box<dyn AgentParser> {
+    build_agent_parser_with_text(agent_type, env, codex::CodexText::Display)
+}
+
+pub(crate) fn build_agent_parser_with_text(
+    agent_type: AgentType,
+    env: &AgentEnv,
+    text: codex::CodexText,
+) -> Box<dyn AgentParser> {
     let inner: Box<dyn AgentParser> = match agent_type {
         AgentType::ClaudeCode => Box::new(claude::ClaudeParser::for_env(env)),
-        AgentType::Codex => Box::new(codex::CodexParser::for_env(env)),
+        AgentType::Codex => Box::new(codex::CodexParser::for_env(env).with_text(text)),
         AgentType::OpenCode => Box::new(opencode::OpenCodeParser::for_env(env)),
         AgentType::Gemini => Box::new(gemini::GeminiParser::for_env(env)),
         // This parser reads a fixed `~/.openclaw/agents` and follows no

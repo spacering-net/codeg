@@ -582,6 +582,59 @@ mod tests {
         assert!(!live_uploads.join("stale.png").exists());
     }
 
+    /// A skill pack's ownership marker (`skills/ui-render/.codeg-managed`)
+    /// survives a round trip, while `.codeg-*` scaffolding in the same section
+    /// still stays out — without the marker a restored pack copy reads as the
+    /// user's own skill.
+    #[tokio::test]
+    async fn round_trip_keeps_a_skill_packs_ownership_marker() {
+        use super::super::restore::{apply_pending_restore_with_paths, stage_restore_core};
+        let src_dir = tempfile::tempdir().unwrap();
+        let db = fresh_disk_db(src_dir.path()).await;
+        let live = src_dir.path().join("live");
+        let pack = live.join("skills").join("ui-render");
+        std::fs::create_dir_all(&pack).unwrap();
+        std::fs::write(pack.join("SKILL.md"), b"---\nname: ui-render\n---\n").unwrap();
+        std::fs::write(pack.join(".codeg-managed"), b"Codeg installs this skill\n").unwrap();
+        let scaffolding = live.join("skills").join(".codeg-staging");
+        std::fs::create_dir_all(&scaffolding).unwrap();
+        std::fs::write(scaffolding.join("half"), b"x").unwrap();
+        let dest = src_dir.path().join("backup.codeg.zip");
+        let cancel = CancellationToken::new();
+        create_backup_core(
+            inputs(&db.conn, src_dir.path(), &live),
+            BackupOptions::default(),
+            &dest,
+            &EventEmitter::Noop,
+            "m1",
+            &cancel,
+        )
+        .await
+        .unwrap();
+
+        let restore_dir = tempfile::tempdir().unwrap();
+        stage_restore_core(
+            &dest,
+            restore_dir.path(),
+            &EventEmitter::Noop,
+            "m2",
+            &cancel,
+        )
+        .await
+        .unwrap();
+        let restore_live_base = restore_dir.path().join("live");
+        apply_pending_restore_with_paths(
+            restore_dir.path(),
+            &LiveRoots::rooted_at(&restore_live_base),
+        )
+        .unwrap();
+
+        let restored = restore_live_base.join("skills");
+        assert!(restored.join("ui-render").join("SKILL.md").is_file());
+        assert!(restored.join("ui-render").join(".codeg-managed").is_file());
+        assert!(!restored.join(".codeg-staging").exists());
+    }
+
     /// The structural guarantee against D1 recurring: drive the whole
     /// `MANAGED_SECTIONS` table end to end. A section added to the table but
     /// not wired into packing OR swapping fails here instead of silently

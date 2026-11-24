@@ -10,7 +10,7 @@ use crate::db::entities::conversation::ConversationKind;
 use crate::db::entities::{conversation, folder};
 use crate::db::error::DbError;
 use crate::db::service::conversation_tag_service;
-use crate::models::{AgentType, AssistantRunSnapshot, DbConversationSummary};
+use crate::models::{AgentType, AssistantRunSnapshot, ConversationSelection, DbConversationSummary};
 
 pub async fn create(
     conn: &DatabaseConnection,
@@ -135,6 +135,7 @@ async fn create_inner(
         assistant_id: Set(assistant_id),
         assistant_snapshot: Set(assistant_snapshot),
         source: Set(None),
+        selector_state: Set(None),
     };
     Ok(model.insert(conn).await?)
 }
@@ -940,6 +941,7 @@ struct CarriedOverRow {
     assistant_id: Option<i32>,
     assistant_snapshot: Option<String>,
     source: Option<String>,
+    selector_state: Option<String>,
 }
 
 impl CarriedOverRow {
@@ -984,6 +986,10 @@ impl CarriedOverRow {
             assistant_snapshot: row.assistant_snapshot.clone(),
             // Carried: the history was started where the conversation was.
             source: row.source.clone(),
+            // Carried: the preserved history ran with this selection. A fork
+            // overwrites it afterwards with the selection the fork actually
+            // inherited (`persist_fork_outcome`).
+            selector_state: row.selector_state.clone(),
         }
     }
 
@@ -1016,6 +1022,7 @@ impl CarriedOverRow {
             assistant_id: Set(self.assistant_id),
             assistant_snapshot: Set(self.assistant_snapshot),
             source: Set(self.source),
+            selector_state: Set(self.selector_state),
         }
     }
 }
@@ -1542,6 +1549,66 @@ async fn fill_summary_extras(
         s.tag_ids = tags.remove(&s.id).unwrap_or_default();
     }
     Ok(())
+}
+
+/// The stored selection of a LIVE conversation row. `None` when the row is
+/// missing, deleted, has no stored selection (legacy NULL) or holds
+/// unparsable JSON.
+pub async fn get_selector_state<C: sea_orm::ConnectionTrait>(
+    conn: &C,
+    conversation_id: i32,
+) -> Result<Option<ConversationSelection>, DbError> {
+    let row = conversation::Entity::find_by_id(conversation_id)
+        .filter(conversation::Column::DeletedAt.is_null())
+        .one(conn)
+        .await?;
+    Ok(row.and_then(|r| ConversationSelection::parse(r.selector_state.as_deref())))
+}
+
+/// Write a live row's selection. Unchanged values are a no-op, and the write
+/// never bumps `updated_at` — the selection is not activity and must not
+/// reorder the sidebar. Returns whether a row changed.
+pub async fn set_selector_state<C: sea_orm::ConnectionTrait>(
+    conn: &C,
+    conversation_id: i32,
+    selection: &ConversationSelection,
+) -> Result<bool, DbError> {
+    use sea_orm::sea_query::{Condition, Expr};
+    let json = selection.to_json();
+    let res = conversation::Entity::update_many()
+        .col_expr(conversation::Column::SelectorState, Expr::value(json.clone()))
+        .filter(conversation::Column::Id.eq(conversation_id))
+        .filter(conversation::Column::DeletedAt.is_null())
+        .filter(
+            Condition::any()
+                .add(conversation::Column::SelectorState.is_null())
+                .add(conversation::Column::SelectorState.ne(json)),
+        )
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected > 0)
+}
+
+/// Write a selection only where none is stored yet (`selector_state IS
+/// NULL`) — freezes a legacy row so its next reopen never takes the
+/// new-conversation default. Returns whether a row changed.
+pub async fn set_selector_state_if_absent<C: sea_orm::ConnectionTrait>(
+    conn: &C,
+    conversation_id: i32,
+    selection: &ConversationSelection,
+) -> Result<bool, DbError> {
+    use sea_orm::sea_query::Expr;
+    let res = conversation::Entity::update_many()
+        .col_expr(
+            conversation::Column::SelectorState,
+            Expr::value(selection.to_json()),
+        )
+        .filter(conversation::Column::Id.eq(conversation_id))
+        .filter(conversation::Column::DeletedAt.is_null())
+        .filter(conversation::Column::SelectorState.is_null())
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected > 0)
 }
 
 pub async fn get_by_id(

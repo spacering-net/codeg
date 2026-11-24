@@ -26,6 +26,11 @@ pub enum Kind {
     Prompt,
     Assistant,
     Connector,
+    /// A plugin: one package of skills (and assistants, hooks, code) to
+    /// install whole with each host's own plugin system, or as its skills
+    /// only. Nothing installs one yet: every install path refuses it as of
+    /// another kind.
+    Plugin,
     #[serde(other)]
     Unknown,
 }
@@ -142,6 +147,18 @@ pub struct Advisory {
     pub published_at: String,
 }
 
+impl Advisory {
+    /// It asks installed copies of `revision` to be switched off (or taken
+    /// out): action `disable` or `remove`, for every revision or this one.
+    /// An action this Codeg does not know asks nothing of it.
+    pub fn disables(&self, revision: u64) -> bool {
+        matches!(
+            self.action,
+            AdvisoryAction::Disable | AdvisoryAction::Remove
+        ) && (self.revisions.is_empty() || self.revisions.contains(&revision))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LatestVersion {
@@ -174,6 +191,10 @@ pub struct InstallInfo {
     /// The registry's `server.json`, as published.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server: Option<Value>,
+    /// Plugins only. The package is the plugin's folder as its author wrote
+    /// it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<PluginInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub packages: Option<Vec<PinnedPackage>>,
     #[serde(default)]
@@ -244,6 +265,161 @@ pub struct SkillInfo {
     pub license: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compatibility: Option<String>,
+}
+
+/// A plugin, as one of its versions is: what each host gets, its members,
+/// what runs on its own once it is installed whole, and whether it may be.
+///
+/// Decide on [`Self::full`] and [`Self::approved`]; [`Self::not_full`] is the
+/// reason to show. Every list here is required: a missing one would read as
+/// "nothing runs" or "everything pinned", the permissive case.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginInfo {
+    /// As its manifests name it: what hosts call it once installed.
+    pub name: String,
+    /// The hosts it has a manifest for, and what each gets. Others take its
+    /// skills only.
+    pub hosts: Vec<PluginHost>,
+    pub unknown_manifests: Vec<String>,
+    /// Its skills and assistants: installed with it, never one by one.
+    pub components: Vec<PluginComponent>,
+    /// What runs on its own once it is installed whole. A part of a type
+    /// this Codeg does not know still runs on its own.
+    pub autorun: Vec<AutorunPart>,
+    /// What runs on its own, with the manifests and the files its commands
+    /// name.
+    pub autorun_files: Vec<String>,
+    /// MCP servers it brings that are not pinned to an exact version: while
+    /// there are any, it is not installed whole.
+    pub mcp_unpinned: Vec<String>,
+    /// Changes when anything but its Markdown, plain text and pictures
+    /// does: the user is asked again before an update.
+    pub exec_sha256: String,
+    /// This revision may be installed whole on the strength of a person
+    /// having looked at it (or it runs nothing on its own).
+    pub approved: bool,
+    /// The revision to install whole: the latest that may be. `None`: none
+    /// may; its skills only.
+    #[serde(default)]
+    pub full: Option<FullRevision>,
+    /// Why the latest revision is not [`Self::full`]; `None` when it is.
+    #[serde(default)]
+    pub not_full: Option<NotFull>,
+}
+
+impl PluginInfo {
+    /// Something in it runs on its own once installed whole, whatever its
+    /// type.
+    pub fn runs_on_its_own(&self) -> bool {
+        !self.autorun.is_empty()
+    }
+}
+
+/// One host a plugin has a manifest for, and what it gets there.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginHost {
+    /// The host's id (`claude`, `codex`, `opencode`, …; more may come): the
+    /// key of `/config`'s `plugins.adapters`.
+    pub host: String,
+    /// Its manifest, from the plugin's root; empty when the marketplace's
+    /// entry is all there is of it.
+    #[serde(default)]
+    pub manifest: String,
+    /// The name in that host's manifest, when the API tells it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub skills: u64,
+    #[serde(default)]
+    pub agents: u64,
+    #[serde(default)]
+    pub commands: u64,
+    #[serde(default)]
+    pub hooks: u64,
+    #[serde(default)]
+    pub mcp: u64,
+    #[serde(default)]
+    pub code: u64,
+}
+
+/// A plugin's member: a skill or an assistant.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginComponent {
+    pub kind: ComponentKind,
+    pub name: String,
+    /// Its folder (a skill) or file (an assistant), from the plugin's root.
+    pub path: String,
+    #[serde(default)]
+    pub summary: Option<String>,
+    /// Its files' tree hash: compared between two revisions, it tells which
+    /// members changed.
+    /// `None` from a site that does not send it yet: then every member
+    /// reads as changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tree_sha256: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ComponentKind {
+    Skill,
+    Assistant,
+    /// Not installable.
+    #[serde(other)]
+    Unknown,
+}
+
+/// Something that runs once the plugin is installed, without the user or
+/// the agent calling it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutorunPart {
+    pub host: String,
+    pub r#type: AutorunType,
+    /// The file that declares it, or is it.
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AutorunType {
+    Hook,
+    Code,
+    Mcp,
+    Lsp,
+    Monitor,
+    Bin,
+    /// Still runs on its own: never read as nothing to consent to.
+    #[serde(other)]
+    Unknown,
+}
+
+/// A revision to install a plugin whole.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FullRevision {
+    pub revision: u64,
+    #[serde(default)]
+    pub version: Option<String>,
+}
+
+/// Why the latest revision is not the one to install whole.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotFull {
+    /// It waits for a person's review.
+    PendingReview,
+    /// An MCP server it brings is not pinned to an exact version.
+    McpUnpinned,
+    /// A reason this Codeg does not know: still not full.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -327,11 +503,28 @@ pub struct VersionState {
     pub checks: Option<CheckSummary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub packages: Option<Vec<PackageState>>,
+    /// Plugins only: whether this revision may be installed whole, and
+    /// which one may now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<PluginState>,
     /// SHA-256 of the fields above as the API wrote them. Equal on two
     /// answers means nothing a person agreed to has changed in between.
     /// Compare it; do not recompute it from this struct.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state_sha256: Option<String>,
+}
+
+/// A plugin revision's standing, read fresh. A field missing reads as the
+/// strictest: not approved, no revision to install whole, no hash to match.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginState {
+    #[serde(default)]
+    pub approved: bool,
+    #[serde(default)]
+    pub full: Option<FullRevision>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exec_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -400,6 +593,22 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<AdvisoryAction>(json!("quarantine")).unwrap(),
             AdvisoryAction::Unknown
+        );
+        assert_eq!(
+            serde_json::from_value::<Kind>(json!("plugin")).unwrap(),
+            Kind::Plugin
+        );
+        assert_eq!(
+            serde_json::from_value::<AutorunType>(json!("daemon")).unwrap(),
+            AutorunType::Unknown
+        );
+        assert_eq!(
+            serde_json::from_value::<NotFull>(json!("license")).unwrap(),
+            NotFull::Unknown
+        );
+        assert_eq!(
+            serde_json::from_value::<ComponentKind>(json!("command")).unwrap(),
+            ComponentKind::Unknown
         );
         // and never as the permissive value
         assert_ne!(
@@ -562,5 +771,183 @@ mod tests {
         assert_eq!(items[4].status, ItemStatus::Unavailable);
         assert_eq!(items[4].installed, None);
         assert_eq!(items[5].status, ItemStatus::Unknown);
+    }
+
+    // The real answers for obra/superpowers 7.0.2 (revision 1), as
+    // spacering.net gave them on 2026-11-19, with `files` cut to the first
+    // eight, and by hand: each member's `treeSha256` (production sends it
+    // from the next deploy) and fields no Codeg knows (`somethingNew`).
+    const SUPERPOWERS_INSTALL_INFO: &str =
+        include_str!("../../tests/fixtures/harness/superpowers-install-info.json");
+    const SUPERPOWERS_RESOLVE: &str =
+        include_str!("../../tests/fixtures/harness/superpowers-resolve.json");
+
+    #[test]
+    fn install_info_reads_a_real_plugin() {
+        let info: InstallInfo = serde_json::from_str(SUPERPOWERS_INSTALL_INFO).unwrap();
+        assert_eq!(info.item.kind, Kind::Plugin);
+        assert_eq!(info.item.r#ref, "obra/superpowers");
+        assert_eq!(info.version.revision, 1);
+        assert_eq!(info.version.version.as_deref(), Some("7.0.2"));
+        assert!(info.skill.is_none() && info.server.is_none());
+        assert_eq!(info.files.len(), 8);
+        let plugin = info.plugin.as_ref().unwrap();
+        assert_eq!(plugin.name, "superpowers");
+        let hosts: Vec<&str> = plugin.hosts.iter().map(|h| h.host.as_str()).collect();
+        assert!(
+            hosts.contains(&"claude") && hosts.contains(&"codex") && hosts.contains(&"opencode")
+        );
+        let claude = &plugin.hosts[0];
+        assert_eq!(
+            (
+                claude.host.as_str(),
+                claude.manifest.as_str(),
+                claude.skills,
+                claude.hooks
+            ),
+            ("claude", ".claude-plugin/plugin.json", 15, 1)
+        );
+        assert_eq!(claude.name, None);
+        assert_eq!(plugin.components.len(), 15);
+        assert!(plugin
+            .components
+            .iter()
+            .all(|c| c.kind == ComponentKind::Skill
+                && c.path == format!("skills/{}", c.name)
+                && c.tree_sha256.as_ref().is_some_and(|h| h.len() == 64)));
+        assert!(plugin.runs_on_its_own());
+        let hook = &plugin.autorun[0];
+        assert_eq!(
+            (hook.host.as_str(), hook.r#type, hook.event.as_deref()),
+            ("claude", AutorunType::Hook, Some("SessionStart"))
+        );
+        assert_eq!(
+            hook.command.as_deref(),
+            Some("\"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd\" session-start")
+        );
+        assert!(plugin
+            .autorun
+            .iter()
+            .any(|p| p.host == "opencode" && p.r#type == AutorunType::Code && p.command.is_none()));
+        assert!(plugin
+            .autorun_files
+            .contains(&".claude-plugin/plugin.json".to_string()));
+        assert!(plugin.mcp_unpinned.is_empty() && plugin.unknown_manifests.is_empty());
+        assert_eq!(plugin.exec_sha256.len(), 64);
+        assert!(!plugin.approved);
+        assert_eq!(plugin.full, None);
+        assert_eq!(plugin.not_full, Some(NotFull::PendingReview));
+    }
+
+    #[test]
+    fn a_plugin_member_without_its_tree_hash_still_reads() {
+        let mut value: Value = serde_json::from_str(SUPERPOWERS_INSTALL_INFO).unwrap();
+        for component in value["plugin"]["components"].as_array_mut().unwrap() {
+            component.as_object_mut().unwrap().remove("treeSha256");
+        }
+        let info: InstallInfo = serde_json::from_value(value).unwrap();
+        assert!(info
+            .plugin
+            .unwrap()
+            .components
+            .iter()
+            .all(|c| c.tree_sha256.is_none()));
+    }
+
+    #[test]
+    fn a_plugin_reads_its_full_revision_and_values_it_does_not_know_strictly() {
+        let mut value: Value = serde_json::from_str(SUPERPOWERS_INSTALL_INFO).unwrap();
+        let plugin = &mut value["plugin"];
+        plugin["approved"] = json!(true);
+        plugin["full"] = json!({ "revision": 1, "version": "7.0.2" });
+        plugin["notFull"] = json!("license_review");
+        plugin["autorun"] = json!([{ "host": "claude", "type": "daemon", "path": "x.json" }]);
+        plugin["components"][0]["kind"] = json!("command");
+        let info: InstallInfo = serde_json::from_value(value).unwrap();
+        let plugin = info.plugin.unwrap();
+        assert!(plugin.approved);
+        assert_eq!(
+            plugin.full,
+            Some(FullRevision {
+                revision: 1,
+                version: Some("7.0.2".into())
+            })
+        );
+        // an unknown reason is still a reason: not full
+        assert_eq!(plugin.not_full, Some(NotFull::Unknown));
+        // an unknown kind of part still runs on its own
+        assert_eq!(plugin.autorun[0].r#type, AutorunType::Unknown);
+        assert!(plugin.runs_on_its_own());
+        assert_eq!(plugin.components[0].kind, ComponentKind::Unknown);
+    }
+
+    #[test]
+    fn a_plugin_without_what_says_what_runs_is_refused() {
+        // a missing list would read as nothing running or everything pinned
+        for field in [
+            "autorun",
+            "mcpUnpinned",
+            "execSha256",
+            "approved",
+            "hosts",
+            "components",
+        ] {
+            let mut value: Value = serde_json::from_str(SUPERPOWERS_INSTALL_INFO).unwrap();
+            value["plugin"].as_object_mut().unwrap().remove(field);
+            assert!(
+                serde_json::from_value::<InstallInfo>(value).is_err(),
+                "{field} missing was read"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_reads_a_real_plugin_snapshot() {
+        #[derive(Deserialize)]
+        struct Answer {
+            items: Vec<Resolved>,
+        }
+        let answer: Answer = serde_json::from_str(SUPERPOWERS_RESOLVE).unwrap();
+        let item = &answer.items[0];
+        assert_eq!(item.id, "01a1f230-a5b2-7bca-9cee-bd63eb5aee5c");
+        assert_eq!(item.status, ItemStatus::Listed);
+        assert_eq!(item.kind, Some(Kind::Plugin));
+        let state = item.installed.as_ref().unwrap();
+        assert_eq!(state.status, VersionStatus::Ok);
+        assert!(state.state_sha256.is_some());
+        let plugin = state.plugin.as_ref().unwrap();
+        assert!(!plugin.approved);
+        assert_eq!(plugin.full, None);
+        assert_eq!(plugin.exec_sha256.as_ref().map(String::len), Some(64));
+
+        // with a revision to install whole
+        let state: VersionState = serde_json::from_value(json!({
+            "revision": 2, "status": "ok",
+            "plugin": { "approved": true, "full": { "revision": 2, "version": null }, "execSha256": "ab" }
+        }))
+        .unwrap();
+        assert_eq!(
+            state.plugin,
+            Some(PluginState {
+                approved: true,
+                full: Some(FullRevision {
+                    revision: 2,
+                    version: None
+                }),
+                exec_sha256: Some("ab".into()),
+            })
+        );
+        // an incomplete one reads as the strictest
+        let state: VersionState =
+            serde_json::from_value(json!({ "revision": 2, "status": "ok", "plugin": {} })).unwrap();
+        assert_eq!(state.plugin, Some(PluginState::default()));
+        // and a skill has none
+        let state: VersionState =
+            serde_json::from_value(json!({ "revision": 2, "status": "ok" })).unwrap();
+        assert_eq!(state.plugin, None);
+        assert!(serde_json::to_value(&state)
+            .unwrap()
+            .get("plugin")
+            .is_none());
     }
 }

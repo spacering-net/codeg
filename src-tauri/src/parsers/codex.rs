@@ -23,8 +23,15 @@ use crate::parsers::{
     AgentParser, ParseError,
 };
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CodexText {
+    Display,
+    Fork,
+}
+
 pub struct CodexParser {
     base_dir: PathBuf,
+    text: CodexText,
 }
 
 /// How far into a rollout to look for the `session_meta` carrying its history
@@ -213,14 +220,23 @@ impl CodexParser {
     pub fn for_env(env: &AgentEnv) -> Self {
         Self {
             base_dir: resolve_codex_home_dir_for_env(env).join("sessions"),
+            text: CodexText::Display,
         }
+    }
+
+    pub(crate) fn with_text(mut self, text: CodexText) -> Self {
+        self.text = text;
+        self
     }
 
     /// Test-only constructor that lets callers point the parser at a fixture
     /// directory instead of `~/.codex/sessions`.
     #[cfg(any(test, feature = "test-utils"))]
     pub fn with_base_dir(base_dir: PathBuf) -> Self {
-        Self { base_dir }
+        Self {
+            base_dir,
+            text: CodexText::Display,
+        }
     }
 
     /// Every line of a rollout, with the history it inherits BY REFERENCE
@@ -3467,12 +3483,17 @@ impl CodexParser {
         // Index in `messages` of the compaction divider the next
         // `item_completed.ContextCompaction` names (see the `compacted` arm).
         let mut unnamed_compaction_divider: Option<usize> = None;
+        let mut completed_agent = None;
+        // By-reference forks replay ancestor headers before the child's own records.
+        let mut source_threads = HashSet::from([conversation_id.to_owned()]);
 
         for line in lines {
             if line.trim().is_empty() {
                 continue;
             }
 
+            // Only adjacent records from the same rollout can be twins.
+            let preceding_agent = completed_agent.take();
             let value: serde_json::Value = match serde_json::from_str(&line) {
                 Ok(v) => v,
                 Err(_) => continue,
@@ -3497,6 +3518,24 @@ impl CodexParser {
 
             match msg_type {
                 "session_meta" => {
+                    if let Some(header) = value.get("payload") {
+                        if let Some(id) = header.get("id").and_then(|id| id.as_str()) {
+                            if !session_header_seen || source_threads.contains(id) {
+                                source_threads.insert(id.to_owned());
+                                for parent in [
+                                    header.pointer("/history_base/thread_id"),
+                                    header.get("forked_from_id"),
+                                ]
+                                .into_iter()
+                                .flatten()
+                                {
+                                    if let Some(parent) = parent.as_str() {
+                                        source_threads.insert(parent.to_owned());
+                                    }
+                                }
+                            }
+                        }
+                    }
                     // First header wins for every identity field — see the same
                     // latch in `parse_jsonl_summary`: the parent header that
                     // follows a forked child's own (replayed inline, or spliced
@@ -3773,6 +3812,7 @@ impl CodexParser {
                                     .and_then(|m| m.as_str())
                                     .unwrap_or("")
                                     .to_string();
+                                let source_id = completed_twin_id(preceding_agent, &text);
                                 messages.push(UnifiedMessage {
                                     id: format!("assistant-{}", messages.len()),
                                     role: MessageRole::Assistant,
@@ -3782,7 +3822,7 @@ impl CodexParser {
                                     duration_ms: None,
                                     model: None,
                                     completed_at: Some(timestamp),
-                                agent_message_id: None,
+                                    agent_message_id: source_id,
                                 });
                             }
                             "thread_goal_updated" => {
@@ -3907,6 +3947,13 @@ impl CodexParser {
                                 }
                             }
                             "item_completed" => {
+                                if payload
+                                    .get("thread_id")
+                                    .and_then(|id| id.as_str())
+                                    .is_none_or(|id| source_threads.contains(id))
+                                {
+                                    completed_agent = completed_agent_anchor(payload);
+                                }
                                 // The compaction the last `compacted` record
                                 // drew a divider for, now under the id codex-acp
                                 // gave the live divider (`compactionId` IS this
@@ -5069,6 +5116,16 @@ impl CodexParser {
                                 // An image-only record has nothing for the
                                 // deny-lists (which are text rules) to judge.
                                 let mut text = first_text_block(&blocks).unwrap_or_default();
+                                let source_id = if is_user {
+                                    None
+                                } else {
+                                    agent_message_id(payload).or_else(|| {
+                                        completed_twin_id(
+                                            preceding_agent,
+                                            &codex_item_text(payload),
+                                        )
+                                    })
+                                };
                                 let mut blocks = blocks;
                                 // A reply to codex's async questions folds into
                                 // their card (see `codex_async_questions`).
@@ -5123,7 +5180,10 @@ impl CodexParser {
                                             .filter(|(_, seen)| seen == body)
                                             .map(|(index, _)| index);
                                         match twin.and_then(|index| messages.get_mut(index)) {
-                                            Some(existing) => existing.content = blocks,
+                                            Some(existing) => {
+                                                existing.content = blocks;
+                                                existing.agent_message_id = source_id;
+                                            }
                                             None => {
                                                 messages.push(UnifiedMessage {
                                                     id: format!("assistant-plan-{}", messages.len()),
@@ -5134,7 +5194,7 @@ impl CodexParser {
                                                     duration_ms: None,
                                                     model: None,
                                                     completed_at: Some(timestamp),
-                                                    agent_message_id: None,
+                                                    agent_message_id: source_id,
                                                 });
                                             }
                                         }
@@ -5162,6 +5222,7 @@ impl CodexParser {
                                 promotion.push_candidate(record_ordinal, is_user, &text);
                                 pending_promotions.push(PendingPromotedMessage {
                                     insert_at: messages.len(),
+                                    agent_message_id: source_id,
                                     is_user,
                                     blocks,
                                     timestamp,
@@ -5458,7 +5519,7 @@ impl CodexParser {
                     duration_ms: None,
                     model: None,
                     completed_at: Some(pending.timestamp),
-                agent_message_id: None,
+                    agent_message_id: pending.agent_message_id,
                 })
                 .collect();
             messages.splice(insert_at..insert_at, group);
@@ -5534,7 +5595,12 @@ impl CodexParser {
         merge_touching_thinking_cards(&mut messages, turn_starts);
         // After the promotion and dedupe passes, which compare the raw text of
         // a record's twins.
-        render_agent_message_citations(&mut messages, cwd.as_deref().unwrap_or(""));
+        match self.text {
+            CodexText::Display => {
+                render_agent_message_citations(&mut messages, cwd.as_deref().unwrap_or(""))
+            }
+            CodexText::Fork => prepare_fork_text(&mut messages),
+        }
         let mut turns = group_into_turns(messages);
         reconcile_turn_usage(&mut turns, &recorded_round_usage);
         super::relocate_orphaned_tool_results(&mut turns);
@@ -5891,6 +5957,104 @@ fn render_agent_message_citations(messages: &mut [UnifiedMessage], cwd: &str) {
             }
         }
     }
+}
+
+/// Only the source assistant message can name a fork point. Tool output
+/// grouped into its display turn is not part of Codex's agentMessage.text.
+fn prepare_fork_text(messages: &mut [UnifiedMessage]) {
+    for message in messages {
+        if matches!(message.role, MessageRole::Tool) {
+            message
+                .content
+                .retain(|block| !matches!(block, ContentBlock::Text { .. }));
+        } else if matches!(message.role, MessageRole::Assistant) {
+            for block in &mut message.content {
+                if let ContentBlock::Text { text } = block {
+                    if let std::borrow::Cow::Owned(visible) = without_memory_citations(text) {
+                        *text = visible;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Codex extracts these literal, non-nesting tags into separate metadata.
+/// An unclosed tag consumes the rest of the message. Preserve all other bytes.
+fn without_memory_citations(text: &str) -> std::borrow::Cow<'_, str> {
+    const OPEN: &str = "<oai-mem-citation>";
+    const CLOSE: &str = "</oai-mem-citation>";
+    let Some((before, mut body)) = text.split_once(OPEN) else {
+        return text.into();
+    };
+    let mut visible = before.to_owned();
+    while let Some((_, rest)) = body.split_once(CLOSE) {
+        match rest.split_once(OPEN) {
+            Some((between, next)) => {
+                visible.push_str(between);
+                body = next;
+            }
+            None => {
+                visible.push_str(rest);
+                break;
+            }
+        }
+    }
+    visible.into()
+}
+
+/// Some rollouts persist the item id only on the preceding completion event.
+fn completed_agent_anchor(payload: &serde_json::Value) -> Option<(String, String)> {
+    let item = payload.get("item")?;
+    if item.get("type")?.as_str()? != "AgentMessage" {
+        return None;
+    }
+    let [block] = item.get("content")?.as_array()?.as_slice() else {
+        return None;
+    };
+    if block.get("type")?.as_str()? != "Text" {
+        return None;
+    }
+    Some((
+        agent_message_id(item)?,
+        crate::acp::fork::fingerprint_agent_message(block.get("text")?.as_str()?),
+    ))
+}
+
+fn completed_twin_id(anchor: Option<(String, String)>, text: &str) -> Option<String> {
+    let (id, fingerprint) = anchor?;
+    (crate::acp::fork::fingerprint_agent_message(&without_memory_citations(text)) == fingerprint)
+        .then_some(id)
+}
+
+/// An assistant record's text the way Codex builds its item from it: every
+/// text part concatenated as-is (`parse_agent_message`, `finalize_turn_item`).
+/// Not the `"\n"`-joined text [`extract_response_item_message_blocks`]
+/// renders, which would miss the twin of a multi-part reply.
+fn codex_item_text(payload: &serde_json::Value) -> String {
+    match payload.get("content") {
+        Some(serde_json::Value::String(text)) => text.clone(),
+        Some(serde_json::Value::Array(parts)) => parts
+            .iter()
+            .filter(|part| {
+                matches!(
+                    part.get("type").and_then(|t| t.as_str()),
+                    Some("output_text" | "input_text")
+                )
+            })
+            .filter_map(|part| part.get("text")?.as_str())
+            .collect(),
+        _ => String::new(),
+    }
+}
+
+fn agent_message_id(payload: &serde_json::Value) -> Option<String> {
+    payload
+        .get("id")?
+        .as_str()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
 }
 
 /// `assistant-<n>` (the agent-message arm) or a promoted record
@@ -6609,6 +6773,7 @@ struct PendingPromotedMessage {
     /// something else mutates `messages`, which is why the splice runs first in
     /// the post-loop sequence.
     insert_at: usize,
+    agent_message_id: Option<String>,
     is_user: bool,
     blocks: Vec<ContentBlock>,
     timestamp: DateTime<Utc>,
@@ -7230,7 +7395,7 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
                 duration_ms,
                 model: turn_model,
                 completed_at,
-            agent_message_id: None,
+                agent_message_id: msg.agent_message_id.clone(),
             });
         }
     }

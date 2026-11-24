@@ -341,9 +341,8 @@ export interface MessageTurn {
    * nothing an agent could look up.
    *
    * Present only where the turn can be a fork point ("fork from here"), which
-   * today means Claude and DeepSeek assistant turns. Its absence does NOT mean
-   * the turn cannot be forked at: codex forks by content fingerprint instead,
-   * and DeepSeek falls back to one — all resolved entirely in the backend, so
+   * includes Codex, Claude and DeepSeek assistant turns. A transcript without
+   * an id can still fork by a content fingerprint, resolved in the backend, so
    * never gate the fork affordance on this. */
   agent_message_id?: string | null
   /** CLIENT-ONLY, never on the wire. The id the PARSER gave this turn.
@@ -1714,6 +1713,21 @@ export interface SessionConfigSelectOptionInfo {
   value: string
   name: string
   description?: string | null
+  /** What the agent says about this entry's model's reasoning efforts — only
+   *  on an entry of the model option, and only where the agent names them
+   *  (claude-agent-acp 0.110.0+, codex-acp 2.10.0+). Absent otherwise. */
+  reasoning_efforts?: ModelReasoningEffortsInfo | null
+}
+
+/** One model's reasoning efforts, from its entry of the `model` option
+ *  (JetBrains AIR `reasoningEfforts`): known before that model is current,
+ *  where the effort option lists only the current model's. */
+export interface ModelReasoningEffortsInfo {
+  /** Effort ids, in the order the effort option lists them once the model is
+   *  current. Never empty. */
+  values: string[]
+  /** The one the agent recommends — one of `values` — when it names one. */
+  recommended?: string | null
 }
 
 export interface SessionConfigSelectGroupInfo {
@@ -2009,6 +2023,27 @@ export interface WorkTaskConfig {
    *  the choice existed does). The branch actually used is recorded on
    *  `WorkTask.base_branch` once the worktree exists. */
   base_branch?: string | null
+  /** Server-owned: the selector tuple above is the task's own, fixed at
+   *  creation or explicit edit, never re-resolved from the folder's task
+   *  settings (codeg#1179). Absent on tasks from before; a client never sets
+   *  it. */
+  agent_config_frozen?: boolean
+}
+
+/** A bound task's conversation selection, as its next rerun runs it
+ *  (`WorkTask.conversation_selection`). */
+export interface WorkTaskConversationSelection {
+  conversation_id: number
+  folder_id: number
+  agent_type: AgentType
+  /** Config option values (model, effort, …) by option id. */
+  config_values: Record<string, string>
+  /** The conversation predates stored selections: these are what its next
+   *  connect replays once and keeps. */
+  legacy: boolean
+  /** A legacy task whose agent was changed while bound: its next run starts a
+   *  new conversation with the task's own tuple. */
+  replaces_conversation: boolean
 }
 
 export interface WorkTask {
@@ -2100,6 +2135,9 @@ export interface WorkTask {
    *  open instead of settling it — settling would end that work (mirrors Rust
    *  WorkTaskBackgroundWait). Absent when not waiting. */
   background_wait?: WorkTaskBackgroundWait | null
+  /** The bound conversation's own model / options — only on a single-task
+   *  fetch (`workTaskGet`) from a server that knows them; absent otherwise. */
+  conversation_selection?: WorkTaskConversationSelection | null
   created_at: string
   updated_at: string
   started_at: string | null
@@ -2814,6 +2852,8 @@ export interface WorkTaskPreflight {
   exit_code?: number | null
   /** Trailing combined output — present when the light is red. */
   output_tail?: string | null
+  /** Which run of the command wrote this light (engine bookkeeping). */
+  run_id?: string | null
 }
 
 /** One append-only timeline entry ("how the task advanced"). */
@@ -3323,6 +3363,14 @@ export type AcpEvent =
   | {
       type: "mode_changed"
       mode_id: string
+    }
+  | {
+      /** The composer's pending mode pick for this connection (applied by a
+       *  tab at its next send, never sent to the agent from here). `null`
+       *  clears it — once the agent's current mode reached it. */
+      type: "composer_mode_changed"
+      mode_id: string | null
+      explicit?: boolean
     }
   | {
       type: "plan_update"
@@ -4053,6 +4101,9 @@ export interface LiveSessionSnapshot {
   fork_supported: boolean
   available_commands: AvailableCommandInfo[]
   selectors_ready: boolean
+  /** The composer's pending mode pick (see the `composer_mode_changed`
+   *  event). Absent when there is none. */
+  composer_mode_id?: string | null
   /** Whether the running session is on stale (launch-time) config after a later
    *  settings save. Absent on older server payloads (then treated as `false`). */
   config_stale?: boolean
@@ -4491,6 +4542,9 @@ export interface AgentSkillItem {
   pack?: string | null
   /** A copy Codeg made where no link could be made. */
   codeg_copy?: boolean
+  /** A Harness plugin's member skill (`owner: "harness"`): the plugin's
+   *  install name. It is managed with the plugin, as a whole. */
+  plugin?: string | null
 }
 
 export interface AgentSkillsListResult {

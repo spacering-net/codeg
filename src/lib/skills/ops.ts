@@ -27,7 +27,8 @@ export interface CellTarget {
  * The fewest ops that move `targets` on (or off). A cell already where it is
  * asked to be is skipped, and so is one that cannot be switched — something
  * else holds the name, the agent has nowhere to link to, the skill is not
- * ready (`ready`) — or, turning off, a copy changed on the agent's side,
+ * ready for that agent (`ready`: a Harness plugin may give the agent the
+ * name) — or, turning off, a copy changed on the agent's side,
  * which the engine never takes away. An empty answer means nothing to do: the
  * caller sends nothing.
  */
@@ -35,7 +36,7 @@ export function deltaOps(
   model: SkillsModel,
   targets: readonly CellTarget[],
   enable: boolean,
-  ready: (skillId: string) => boolean = () => true
+  ready: (skillId: string, agent: AgentType) => boolean = () => true
 ): SkillOp[] {
   const ops: SkillOp[] = []
   const seen = new Set<string>()
@@ -46,7 +47,7 @@ export function deltaOps(
     const view = cellView(
       model.cell(skill, agent),
       model.agent(agent),
-      ready(skill)
+      ready(skill, agent)
     )
     if (enable ? view.toggle !== "enable" : view.toggle !== "disable") continue
     ops.push({ skill, agent, action: enable ? "enable" : "disable" })

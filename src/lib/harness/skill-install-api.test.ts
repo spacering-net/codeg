@@ -290,6 +290,8 @@ describe("harness_installed, part by part", () => {
       skills: [],
       mcp_problem: null,
       skills_problem: null,
+      plugins: [],
+      plugins_problem: null,
     })
   })
 

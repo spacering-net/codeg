@@ -4718,10 +4718,10 @@ fn remove_command_code_server_at(path: &Path, id: &str) -> Result<bool, AppComma
 // Cursor's CLI (and IDE — the file is shared) reads its user-global MCP config
 // from `~/.cursor/mcp.json` — a JSON file with a top-level `mcpServers`
 // object. The CLI (checked against 2026.10.22-27dcf5f; 2026.11.05-86047df,
-// 2026.11.11-b912975 and 2026.11.13-eacade1 start, list and reject the same
-// entries) parses each entry with a Zod union: stdio when it has a `command`
-// and its optional `type` is `"stdio"`, otherwise remote when it has a `url`
-// and its optional `type` is `"http"` or `"sse"`. A remote entry tries
+// 2026.11.11-b912975, 2026.11.13-eacade1 and 2026.11.22-e9042b2 start, list
+// and reject the same entries) parses each entry with a Zod union: stdio when
+// it has a `command` and its optional `type` is `"stdio"`, otherwise remote
+// when it has a `url` and its optional `type` is `"http"` or `"sse"`. A remote entry tries
 // streamable HTTP first and falls back to SSE unless it says `type: "sse"`,
 // which goes straight to SSE.
 // Unknown keys are stripped, but an entry that fits neither branch, or a

@@ -24,6 +24,14 @@
 //!   ([`startup`]).
 //! - The commands ([`commands`]) and the older packs' commands' view of it
 //!   ([`legacy`]).
+//! - **Plugin-owned skills** ([`owned`]): a Harness plugin installed as its
+//!   skills only keeps them in a store of its own,
+//!   `~/.codeg/skills/.plugins/<install name>/<skill>/` — the same engine
+//!   over another store ([`SkillsCtx::owned_by`]), so the link in an agent's
+//!   directory keeps the skill's own name while nothing in Codeg's store (a
+//!   pack's skill of that name, say) is touched. Everywhere else such a link
+//!   or copy reads as the plugin's, and nothing but the plugin's owner token
+//!   changes it.
 //!
 //! Everything that changes something announces [`model::SKILLS_CHANGED_EVENT`].
 
@@ -37,6 +45,9 @@ pub(crate) mod legacy;
 pub mod link;
 pub(crate) mod lock;
 pub mod model;
+// The plugin side (step 8 on) is what calls most of it.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod owned;
 pub(crate) mod packs;
 pub(crate) mod provenance;
 pub(crate) mod record;
@@ -99,6 +110,12 @@ pub struct SkillsCtx {
     pub lock_wait: Duration,
     pub agents: Vec<AgentDirs>,
     pub linker: Arc<dyn LinkStrategy>,
+    /// The plugin whose own store `store` is ([`Self::owned_by`]); `None`
+    /// for Codeg's store.
+    pub(crate) owner: Option<String>,
+    /// `<Codeg's store>/.plugins`: every plugin's own store, one folder per
+    /// install name.
+    pub(crate) plugins_root: PathBuf,
     dirs: Vec<DirInfo>,
     agent_dirs: BTreeMap<AgentType, Vec<usize>>,
     #[cfg_attr(not(test), allow(dead_code))]
@@ -159,6 +176,8 @@ impl SkillsCtx {
             agent_dirs.insert(agent.agent, mine);
         }
         Self {
+            plugins_root: store.join(owned::PLUGINS_DIR),
+            owner: None,
             store,
             lock_path,
             lock_wait: lock::LOCK_WAIT,
@@ -273,6 +292,28 @@ impl SkillsCtx {
 
     pub(crate) fn skill_path(&self, id: &str) -> PathBuf {
         self.store.join(id)
+    }
+
+    /// Codeg's own store: `store` itself, or — for a plugin's own store —
+    /// the one its `.plugins` is in. Backups of skills always go there.
+    pub(crate) fn main_store(&self) -> PathBuf {
+        match &self.owner {
+            Some(_) => self
+                .plugins_root
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| self.store.clone()),
+            None => self.store.clone(),
+        }
+    }
+
+    /// The same agents, lock and links over the plugin `plugin`'s own store
+    /// (no check of the name: [`Self::owned_by`] is the way in).
+    pub(crate) fn over_plugin_store(&self, plugin: &str) -> SkillsCtx {
+        let mut ctx = self.clone();
+        ctx.store = self.plugins_root.join(plugin);
+        ctx.owner = Some(plugin.to_string());
+        ctx
     }
 
     /// Fail at `point` when a test armed it.

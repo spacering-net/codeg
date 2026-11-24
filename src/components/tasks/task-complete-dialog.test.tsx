@@ -9,6 +9,7 @@ const completeMock = vi.fn().mockResolvedValue(undefined)
 const settingsMock = vi.fn()
 
 vi.mock("@/lib/api", () => ({
+  workTaskGet: vi.fn().mockRejectedValue(new Error("not in this test")),
   workTaskComplete: (...args: unknown[]) => completeMock(...args),
   workTaskSettingsEffective: (...args: unknown[]) => settingsMock(...args),
 }))

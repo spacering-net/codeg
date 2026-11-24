@@ -15,6 +15,7 @@ use super::model::{
     AgentSkillDir, BrokenLink, CellEntry, CellState, DirRole, EntryKind, NameTaken, SkillCell,
     SkillOrigin, SkillsAgent, SkillsInventory, StoreSkill,
 };
+use super::owned::OwnedIndex;
 use super::provenance::{store_skills, Provenance, UI_IDS};
 use super::record::LinkRecord;
 use super::{SkillsCtx, StorePaths};
@@ -42,6 +43,16 @@ pub(crate) enum Entry {
         target: Option<PathBuf>,
         broken: bool,
     },
+    /// A link into another plugin's own store, or a copy its record says it
+    /// made: the plugin `plugin`'s member `skill` (`super::owned`). Only the
+    /// plugin's owner token changes it.
+    Owned {
+        plugin: String,
+        skill: String,
+        target: Option<PathBuf>,
+        copy: bool,
+        broken: bool,
+    },
     Folder,
     File,
     Unreadable(String),
@@ -67,9 +78,17 @@ impl Entry {
 
     pub fn target(&self) -> Option<&Path> {
         match self {
-            Entry::CodegLink { target, .. } | Entry::ForeignLink { target, .. } => {
-                target.as_deref()
-            }
+            Entry::CodegLink { target, .. }
+            | Entry::ForeignLink { target, .. }
+            | Entry::Owned { target, .. } => target.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// The plugin whose member the entry is, when it is one.
+    pub fn plugin(&self) -> Option<&str> {
+        match self {
+            Entry::Owned { plugin, .. } => Some(plugin),
             _ => None,
         }
     }
@@ -90,6 +109,9 @@ impl Entry {
             Entry::CodegCopy { .. } => EntryKind::Folder,
             Entry::ForeignLink { broken: false, .. } => EntryKind::Link,
             Entry::ForeignLink { broken: true, .. } => EntryKind::BrokenLink,
+            Entry::Owned { copy: true, .. } => EntryKind::Folder,
+            Entry::Owned { broken: false, .. } => EntryKind::Link,
+            Entry::Owned { broken: true, .. } => EntryKind::BrokenLink,
             Entry::Folder => EntryKind::Folder,
             Entry::File => EntryKind::File,
             Entry::Unreadable(_) => EntryKind::Unreadable,
@@ -108,6 +130,9 @@ pub(crate) struct World<'c> {
     pub store: StorePaths,
     pub record: LinkRecord,
     pub provenance: Provenance,
+    /// The plugins' own stores (but this view's own) and the copies their
+    /// records say they made: what reads as [`Entry::Owned`].
+    owned: OwnedIndex,
     overlay: BTreeMap<PathBuf, Entry>,
     cache: RefCell<BTreeMap<PathBuf, Entry>>,
     store_hashes: RefCell<BTreeMap<String, Option<String>>>,
@@ -129,7 +154,11 @@ impl<'c> World<'c> {
             ctx,
             store: StorePaths::of(&ctx.store),
             record: LinkRecord::load(&ctx.store),
-            provenance: Provenance::load(&ctx.store),
+            provenance: match &ctx.owner {
+                Some(_) => Provenance::load_owned(&ctx.store),
+                None => Provenance::load(&ctx.store),
+            },
+            owned: OwnedIndex::load(&ctx.plugins_root, ctx.owner.as_deref()),
             overlay: BTreeMap::new(),
             cache: RefCell::new(BTreeMap::new()),
             store_hashes: RefCell::new(BTreeMap::new()),
@@ -171,6 +200,34 @@ impl<'c> World<'c> {
             RawEntry::Unreadable(err) => Entry::Unreadable(err),
             RawEntry::File => Entry::File,
             RawEntry::Dir => match self.record.get(path) {
+                // A plugin's record claims the folder too, and more
+                // recently: this record's entry is stale (its copy went,
+                // the plugin's was made there since).
+                Some(rec)
+                    if rec.mode == LinkMode::Copy
+                        && self.owned.copy(path).is_some_and(|claim| {
+                            super::owned::newer_time(&claim.created_at, &rec.created_at)
+                        }) =>
+                {
+                    let claim = self.owned.copy(path).expect("checked just above");
+                    Entry::Owned {
+                        plugin: claim.plugin.clone(),
+                        skill: claim.skill.clone(),
+                        target: None,
+                        copy: true,
+                        broken: false,
+                    }
+                }
+                // In a plugin's own view, Codeg's store made a copy there
+                // since (a pack's skill): not the plugin's.
+                Some(rec)
+                    if rec.mode == LinkMode::Copy
+                        && self.owned.main_copy(path).is_some_and(|made| {
+                            super::owned::newer_time(made, &rec.created_at)
+                        }) =>
+                {
+                    Entry::Folder
+                }
                 Some(rec) if rec.mode == LinkMode::Copy => {
                     let hash = hash_skill_dir(path, &rec.skill).ok();
                     let matches = hash.is_some() && hash == rec.copy_hash;
@@ -181,7 +238,16 @@ impl<'c> World<'c> {
                         current,
                     }
                 }
-                _ => Entry::Folder,
+                _ => match self.owned.copy(path) {
+                    Some(claim) => Entry::Owned {
+                        plugin: claim.plugin.clone(),
+                        skill: claim.skill.clone(),
+                        target: None,
+                        copy: true,
+                        broken: false,
+                    },
+                    None => Entry::Folder,
+                },
             },
             RawEntry::Link { target, resolved } => {
                 if let Some(skill) = target.as_deref().and_then(|t| self.store.child_of(t)) {
@@ -189,6 +255,17 @@ impl<'c> World<'c> {
                         broken: resolved.is_none() && !self.pending.contains(&skill),
                         skill,
                         target,
+                    };
+                }
+                if let Some((plugin, skill)) =
+                    self.owned.link(target.as_deref(), resolved.as_deref())
+                {
+                    return Entry::Owned {
+                        plugin,
+                        skill,
+                        broken: resolved.is_none(),
+                        target,
+                        copy: false,
                     };
                 }
                 match resolved {
@@ -331,6 +408,7 @@ impl<'c> World<'c> {
                 copy_matches: None,
                 copy_current: None,
                 shared_with: Vec::new(),
+                plugin: None,
                 entries,
             };
         };
@@ -347,13 +425,21 @@ impl<'c> World<'c> {
                 }
             }
             Entry::CodegCopy { skill: s, .. } if s == skill => CellState::Copy,
-            Entry::CodegLink { broken: true, .. } | Entry::ForeignLink { broken: true, .. } => {
-                CellState::Broken
-            }
-            Entry::CodegLink { .. } | Entry::ForeignLink { .. } => CellState::LinkedElsewhere,
-            Entry::CodegCopy { .. } | Entry::Folder | Entry::File | Entry::Unreadable(_) => {
-                CellState::Blocked
-            }
+            Entry::CodegLink { broken: true, .. }
+            | Entry::ForeignLink { broken: true, .. }
+            | Entry::Owned {
+                broken: true,
+                copy: false,
+                ..
+            } => CellState::Broken,
+            Entry::CodegLink { .. }
+            | Entry::ForeignLink { .. }
+            | Entry::Owned { copy: false, .. } => CellState::LinkedElsewhere,
+            Entry::CodegCopy { .. }
+            | Entry::Owned { copy: true, .. }
+            | Entry::Folder
+            | Entry::File
+            | Entry::Unreadable(_) => CellState::Blocked,
             Entry::Absent => CellState::NotLinked,
         };
         let codeg = match entry {
@@ -384,6 +470,7 @@ impl<'c> World<'c> {
         SkillCell {
             agent,
             state,
+            plugin: entry.plugin().map(str::to_string),
             path: Some(path.to_string_lossy().into_owned()),
             dir: Some(dir.to_string_lossy().into_owned()),
             dir_role: Some(*role),
@@ -490,12 +577,22 @@ pub(crate) fn agents_view(ctx: &SkillsCtx) -> Vec<SkillsAgent> {
         .collect()
 }
 
-pub(crate) fn inventory(ctx: &SkillsCtx) -> SkillsInventory {
-    let world = World::load(ctx);
-    let backups = super::backups::counts(ctx);
-    let skills = store_skills(&ctx.store, &world.provenance)
+/// The store's skills as the inventory lists them; `plugin` for a plugin's
+/// own store (every skill in it is that plugin's, from Harness).
+fn listed_skills(
+    ctx: &SkillsCtx,
+    world: &World<'_>,
+    backups: &BTreeMap<String, usize>,
+) -> Vec<StoreSkill> {
+    let plugin = ctx.owner.clone();
+    store_skills(&ctx.store, &world.provenance)
         .into_iter()
         .map(|(id, origin)| {
+            let origin = if plugin.is_some() {
+                SkillOrigin::Harness
+            } else {
+                origin
+            };
             let dir = ctx.skill_path(&id);
             let skill_md = dir.join("SKILL.md");
             let name = crate::commands::custom_skills::read_frontmatter_name(&skill_md)
@@ -511,8 +608,15 @@ pub(crate) fn inventory(ctx: &SkillsCtx) -> SkillsInventory {
                 harness: (origin == SkillOrigin::Harness)
                     .then(|| world.provenance.harness_info(&id))
                     .flatten(),
-                backups: backups.get(&id).copied().unwrap_or(0),
+                // A plugin's skills' backups are counted under Codeg's
+                // store's skill of that name.
+                backups: if plugin.is_some() {
+                    0
+                } else {
+                    backups.get(&id).copied().unwrap_or(0)
+                },
                 path: dir.to_string_lossy().into_owned(),
+                plugin: plugin.clone(),
                 id,
                 origin,
                 name,
@@ -520,15 +624,32 @@ pub(crate) fn inventory(ctx: &SkillsCtx) -> SkillsInventory {
                 cells,
             }
         })
-        .collect();
+        .collect()
+}
+
+pub(crate) fn inventory(ctx: &SkillsCtx) -> SkillsInventory {
+    let world = World::load(ctx);
+    let backups = super::backups::counts(ctx);
+    let skills = listed_skills(ctx, &world, &backups);
     let mut problems = world.provenance.problems.clone();
     if let Some(problem) = &world.record.problem {
         problems.push(problem.clone());
+    }
+    let mut plugin_skills = Vec::new();
+    for plugin in super::owned::plugin_stores(ctx) {
+        let owned = ctx.over_plugin_store(&plugin);
+        let owned_world = World::load(&owned);
+        plugin_skills.extend(listed_skills(&owned, &owned_world, &backups));
+        problems.extend(owned_world.provenance.problems.iter().cloned());
+        if let Some(problem) = &owned_world.record.problem {
+            problems.push(problem.clone());
+        }
     }
     SkillsInventory {
         store: ctx.store.to_string_lossy().into_owned(),
         agents: agents_view(ctx),
         skills,
+        plugin_skills,
         name_taken: name_taken(ctx, &world.provenance),
         broken_links: world.broken_links(),
         problems,
@@ -544,6 +665,7 @@ pub(crate) fn annotate_items(store: &Path, items: &mut [AgentSkillItem]) {
     let paths = StorePaths::of(store);
     let record = LinkRecord::load(store);
     let provenance = Provenance::load(store);
+    let owned = OwnedIndex::load(&store.join(super::owned::PLUGINS_DIR), None);
     let owner_of = |id: &str| -> (AgentSkillOwner, Option<String>) {
         match provenance.origin_of(store, id) {
             Some(SkillOrigin::Harness) => (AgentSkillOwner::Harness, None),
@@ -562,20 +684,35 @@ pub(crate) fn annotate_items(store: &Path, items: &mut [AgentSkillItem]) {
                     .as_deref()
                     .and_then(|t| paths.child_of(t))
                     .or_else(|| resolved.as_deref().and_then(|r| paths.child_of(r)));
+                let plugin = owned.link(target.as_deref(), resolved.as_deref());
                 let (owner, pack) = match (into_store, resolved.is_some()) {
                     (_, false) => (AgentSkillOwner::Broken, None),
                     (Some(id), true) => owner_of(&id),
+                    // A plugin's member: from Harness, read only here.
+                    (None, true) if plugin.is_some() => (AgentSkillOwner::Harness, None),
                     (None, true) => (AgentSkillOwner::LinkedElsewhere, None),
                 };
                 item.owner = owner;
                 item.pack = pack;
+                item.plugin = plugin.map(|(plugin, _)| plugin);
             }
             RawEntry::Dir => {
-                if let Some(rec) = record.get(&path).filter(|r| r.mode == LinkMode::Copy) {
+                let claim = owned.copy(&path);
+                let rec = record.get(&path).filter(|r| {
+                    r.mode == LinkMode::Copy
+                        && !claim.is_some_and(|claim| {
+                            super::owned::newer_time(&claim.created_at, &r.created_at)
+                        })
+                });
+                if let Some(rec) = rec {
                     let (owner, pack) = owner_of(&rec.skill);
                     item.owner = owner;
                     item.pack = pack;
                     item.codeg_copy = true;
+                } else if let Some(claim) = claim {
+                    item.owner = AgentSkillOwner::Harness;
+                    item.codeg_copy = true;
+                    item.plugin = Some(claim.plugin.clone());
                 }
             }
             _ => {}

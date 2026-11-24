@@ -88,8 +88,14 @@ export interface UseConnectionLifecycleReturn {
        */
       onSendFailed?: (error: unknown) => void
     }
+  ) => Promise<void>
+  /** `saveAsDefault`: the pick also becomes the new-conversation default —
+   *  only for an explicit pick in a draft (codeg#1179). */
+  handleSetConfigOption: (
+    configId: string,
+    valueId: string,
+    opts?: { saveAsDefault?: boolean }
   ) => void
-  handleSetConfigOption: (configId: string, valueId: string) => void
   handleCancel: () => void
   handleRespondPermission: (requestId: string, optionId: string) => void
 }
@@ -443,7 +449,7 @@ export function useConnectionLifecycle({
           transientUnmount,
         })
       ) {
-        connDisconnectRef.current().catch(() => {})
+        connDisconnectRef.current(true).catch(() => {})
       }
       // The active key names the view on screen, and this one is gone. Left
       // claimed, it would hold the busy owner kept running above out of both
@@ -524,7 +530,9 @@ export function useConnectionLifecycle({
       touchActivity(contextKey)
       const onTurnInProgress = opts?.onTurnInProgress
       const onSendFailed = opts?.onSendFailed
-      void (async () => {
+      // Returned (handled: it never rejects) so a draft's first send can hold
+      // its selector lock until the prompt was acknowledged or failed.
+      return (async () => {
         const currentModeId = modeIdRef.current
         if (modeId && modeId !== currentModeId) {
           await connSetMode(modeId)
@@ -595,7 +603,7 @@ export function useConnectionLifecycle({
   }, [connCancel])
 
   const handleSetConfigOption = useCallback(
-    (configId: string, valueId: string) => {
+    (configId: string, valueId: string, opts?: { saveAsDefault?: boolean }) => {
       // The connection here still belongs to another agent (a draft mid-switch,
       // or one whose new pick could not connect), so the options on screen are
       // the selected agent's cached ones. Applying the edit would hand the
@@ -604,7 +612,7 @@ export function useConnectionLifecycle({
       // no connection here at all.
       if (connAgentType != null && connAgentType !== agentType) return
       touchActivity(contextKey)
-      connSetConfigOption(configId, valueId).catch((e: unknown) =>
+      connSetConfigOption(configId, valueId, opts).catch((e: unknown) =>
         console.error("[ConnLifecycle] setConfigOption:", e)
       )
     },

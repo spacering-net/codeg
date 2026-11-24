@@ -375,8 +375,14 @@ const ConversationTabView = memo(function ConversationTabView({
   // A null seed here means that diff is "agent default vs null", which
   // resolves the displayed mode through `conn.modes.current_mode_id`
   // and never triggers the catch-up `setMode`.
+  //
+  // Drafts only (codeg#1179): a persisted conversation keeps no local mode
+  // pick — its composer reads the connection's recorded pick
+  // (`conn.composerModeId`), else the mode the backend restored from the
+  // conversation's own stored selection. Seeding it from the per-agent
+  // default would import another conversation's mode at the next send.
   const [modeId, setModeId] = useState<string | null>(() =>
-    getSavedModeId(agentType)
+    conversationId != null ? null : getSavedModeId(agentType)
   )
   const [sendSignal, setSendSignal] = useState(0)
   const [agentsLoaded, setAgentsLoaded] = useState(false)
@@ -793,13 +799,54 @@ const ConversationTabView = memo(function ConversationTabView({
   // the transcript tells them apart, badging from what this agent last
   // advertised in this folder while the list is unknown.
   const connectionCommands = connIsForOtherAgent ? null : conn.availableCommands
+  // A persisted conversation follows the backend's record of the composer's
+  // pending pick; a draft its local pick (codeg#1179).
+  const isPersistedConversation = dbConversationId != null
+  // `modeId` stays null for a persisted conversation, except as the fallback
+  // when the server predates the composer record (the send applies it then).
+  const composerPick = isPersistedConversation
+    ? connIsForOtherAgent
+      ? null
+      : (conn.composerModeId ?? modeId)
+    : modeId
   const selectedModeId = useMemo(() => {
     if (connectionModes.length === 0) return null
-    if (modeId && connectionModes.some((mode) => mode.id === modeId)) {
-      return modeId
+    if (
+      composerPick &&
+      connectionModes.some((mode) => mode.id === composerPick)
+    ) {
+      return composerPick
     }
     return effectiveModes?.current_mode_id ?? connectionModes[0]?.id ?? null
-  }, [effectiveModes, connectionModes, modeId])
+  }, [effectiveModes, connectionModes, composerPick])
+  // For the first send's draft → persisted hand-over (read inside an async
+  // continuation, after the row exists).
+  const draftModeIdRef = useRef(modeId)
+  const appliedModeIdRef = useRef(effectiveModes?.current_mode_id ?? null)
+  const connRef = useRef(conn)
+  useEffect(() => {
+    draftModeIdRef.current = modeId
+    appliedModeIdRef.current = effectiveModes?.current_mode_id ?? null
+    connRef.current = conn
+  })
+  // Whether a pick here is still a DRAFT's — the only picks that write the
+  // new-conversation default. Decided synchronously at pick time: no row id
+  // yet AND no row creation in flight (a failed create re-opens it).
+  const isDraftForDefaults = useCallback(
+    () => dbConvIdRef.current == null && !createConversationPendingRef.current,
+    []
+  )
+  const handleConfigOptionChange = useCallback(
+    (configId: string, valueId: string) => {
+      // The first send is being admitted: the prompt runs with what was
+      // showing at submit.
+      if (connRef.current.selectorsLocked) return
+      handleSetConfigOption(configId, valueId, {
+        saveAsDefault: isDraftForDefaults(),
+      })
+    },
+    [handleSetConfigOption, isDraftForDefaults]
+  )
   // Read by the queue auto-flush for items that were queued before this tab knew
   // its modes (it runs from a timer, so it must not close over a stale value).
   const selectedModeIdRef = useRef(selectedModeId)
@@ -1237,6 +1284,36 @@ const ConversationTabView = memo(function ConversationTabView({
       const title = promptDraftTitleSeed(draft, sharedT("attachedResources"))
       const chatSend = sendOwnTab?.isChat === true
       const chatExistingDir = sendOwnTab?.workingDir
+      // Lock the selectors for the whole first-send attempt (codeg#1179):
+      // the prompt runs with — and the new row records — exactly the
+      // selection showing at submit. One `finally` releases it on every exit.
+      const firstSendLock = connRef.current.beginFirstSend()
+      let handOver: Promise<unknown> | null = null
+      // Draft → persisted: hand the draft's mode pick to the connection's
+      // composer record in the same step that publishes the row id, so the
+      // composer (and a message queued meanwhile) keeps showing it until the
+      // agent's mode reached it.
+      const handOverDraftMode = () => {
+        const pick = draftModeIdRef.current
+        if (!pick || pick === appliedModeIdRef.current) {
+          // Nothing pending: the persisted conversation follows its
+          // connection from here; a leftover local pick would resurface as
+          // a stale fallback once a later pick is cleared.
+          setModeId(null)
+          return
+        }
+        handOver = connRef.current
+          .setComposerMode(pick, { initial: true })
+          // Recorded (or vetoed in favour of another surface's pick): the
+          // connection's record is the source from now on.
+          .then(() => {
+            if (mountedRef.current) setModeId(null)
+          })
+          .catch((e: unknown) =>
+            // An older server: keep the local pick, the send applies it.
+            console.error("[ConversationTabView] composer hand-over:", e)
+          )
+      }
 
       void (async () => {
         try {
@@ -1253,6 +1330,7 @@ const ConversationTabView = memo(function ConversationTabView({
             newConversationId = res.conversationId
             sendFolderId = res.folderId
             dbConvIdRef.current = newConversationId
+            handOverDraftMode()
             setExternalId(effectiveConversationId, sessionIdRef.current ?? null)
             // Bind the DB id BEFORE the prompt goes out. The mirror effect
             // below also binds, but only after a re-render — this closes that
@@ -1285,6 +1363,7 @@ const ConversationTabView = memo(function ConversationTabView({
               title
             )
             dbConvIdRef.current = newConversationId
+            handOverDraftMode()
             // Set external ID on the stable virtual session (no migration needed —
             // effectiveConversationId never changes, so the session stays in place).
             // DB persistence of external_id is now backend-driven from
@@ -1314,7 +1393,7 @@ const ConversationTabView = memo(function ConversationTabView({
           // Now that the row exists, kick off the actual prompt with the
           // conversation_id pinned so the backend adopts our row instead of
           // creating a duplicate one.
-          lifecycleSend(draft, selectedModeIdArg, {
+          await lifecycleSend(draft, selectedModeIdArg, {
             folderId: sendFolderId,
             conversationId: newConversationId,
             clientMessageId: optimisticTurn.id,
@@ -1347,6 +1426,8 @@ const ConversationTabView = memo(function ConversationTabView({
           }
         } finally {
           createConversationPendingRef.current = false
+          if (handOver) await handOver
+          connRef.current.releaseFirstSend(firstSendLock)
         }
       })()
     },
@@ -1579,8 +1660,21 @@ const ConversationTabView = memo(function ConversationTabView({
 
   const handleModeChange = useCallback(
     (newModeId: string) => {
+      if (connRef.current.selectorsLocked) return
+      if (!isDraftForDefaults()) {
+        // An existing conversation: record the pick on its connection (the
+        // backend persists it on the row and every attached client follows);
+        // the send applies it. Never the new-conversation default.
+        connRef.current.setComposerMode(newModeId).catch((e: unknown) => {
+          // An older server without the composer record: keep the pick
+          // locally, as before — the send applies it.
+          console.error("[ConversationTabView] setComposerMode:", e)
+          setModeId(newModeId)
+        })
+        return
+      }
       setModeId(newModeId)
-      // Persist mode selection to localStorage immediately. Use effectiveModes
+      // A draft's pick IS the new-conversation default. Use effectiveModes
       // (reconciled to selectedAgent) rather than the raw connection modes, so a
       // mode change made during a cross-agent switch window can't save the
       // previous agent's mode shape under the selected agent.
@@ -1591,7 +1685,7 @@ const ConversationTabView = memo(function ConversationTabView({
         })
       }
     },
-    [effectiveModes, selectedAgent]
+    [effectiveModes, isDraftForDefaults, selectedAgent]
   )
 
   const handleAnswerQuestion = useCallback(
@@ -2175,6 +2269,7 @@ const ConversationTabView = memo(function ConversationTabView({
           availableCommands={connectionCommands}
           connStatus={connStatus}
           isActive={isActive}
+          isVisible={isVisible}
           sendSignal={sendSignal}
           detailLoading={detailLoading}
           detailError={detailError}
@@ -2357,7 +2452,7 @@ const ConversationTabView = memo(function ConversationTabView({
       selectorsLoading={selectorsLoading}
       selectedModeId={selectedModeId}
       onModeChange={handleModeChange}
-      onConfigOptionChange={handleSetConfigOption}
+      onConfigOptionChange={handleConfigOptionChange}
       agentType={selectedAgent}
       availableCommands={connectionCommands}
       // The previous agent's prediction is no use to the one just picked.
@@ -2498,7 +2593,7 @@ const ConversationTabView = memo(function ConversationTabView({
                 selectorsLoading={selectorsLoading}
                 selectedModeId={selectedModeId}
                 onModeChange={handleModeChange}
-                onConfigOptionChange={handleSetConfigOption}
+                onConfigOptionChange={handleConfigOptionChange}
                 agentType={selectedAgent}
                 availableCommands={connectionCommands}
                 attachmentTabId={tabId}

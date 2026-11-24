@@ -2298,6 +2298,7 @@
       "forge": "仓库面板",
       "canvas": "无限画布",
       "harness": "驾驭工程",
+      "harnessHint": "技能 · MCP",
       "folderGroup": {
         "newGroup": "新建分组",
         "newGroupTitle": "新建文件夹分组",
@@ -3527,6 +3528,7 @@
         "modelListLabel": "模型",
         "recommendedBadge": "推荐",
         "recommendedValue": "推荐：{value}",
+        "effortRange": "推理级别：{range}",
         "searchOptions": "搜索选项...",
         "searchOptionsAria": "搜索选项",
         "noOptions": "未找到选项",
@@ -3688,7 +3690,8 @@
             "title": "「{skill}」技能尚未对 {agent} 启用",
             "description": "前往驾驭工程 › 技能包 启用后即可在此使用。",
             "action": "去启用",
-            "hint": "技能未启用"
+            "hint": "技能未启用",
+            "showPlugin": "查看插件"
           },
           "scrollPrev": "显示上一组技能",
           "scrollNext": "显示下一组技能"
@@ -6374,7 +6377,7 @@
     "baseBranch": "基准分支",
     "baseBranchDefault": "任务开始时的当前分支",
     "baseBranchHint": "任务从该分支拉出工作树，合并时也落回该分支。",
-    "agentInheritedHint": "继承自任务设置，修改后仅对本任务生效",
+    "agentInheritedHint": "来自任务设置——随任务保存",
     "agentNoDefaultHint": "任务设置中没有默认 agent，当前选中的 agent 将随任务保存",
     "agentInheritedUnavailableHint": "任务设置中的 {agent} 不可用，当前选中的 agent 将随任务保存",
     "agentOverrideReset": "恢复继承",
@@ -6581,7 +6584,20 @@
     "deliverPrCommitMessageLabel": "提交信息",
     "deliverPrUncommittedHint": "想让智能体自己提交的话，取消后把任务退回再跑一轮。",
     "deliverPrCommitSubmit": "提交、推送并创建",
-    "deliverPrCommitPushSubmit": "提交并推送"
+    "deliverPrCommitPushSubmit": "提交并推送",
+    "agentLockedHint": "此任务已产生会话，不能更换智能体",
+    "conversationSelectionTitle": "此会话的模型与选项",
+    "conversationSelectionHint": "请在会话中修改；下次重试、退回或合并会沿用此会话及这些设置。",
+    "conversationSelectionOpen": "在会话中修改",
+    "conversationSelectionLoading": "加载中…",
+    "conversationSelectionUnavailable": "当前服务器不提供此信息",
+    "conversationSelectionEmpty": "智能体默认",
+    "conversationSelectionLegacy": "尚未记录——会话下次连接时会固定为这些设置",
+    "conversationSelectionStarting": "任务正在启动，请在运行后再试",
+    "conversationSelectionReplaced": "此任务的智能体与其会话不同：下次运行会用下面的设置开启新会话。",
+    "settingsAgentFrozenHint": "任务会保留创建时的智能体和选项——此处的修改只影响之后创建的任务。",
+    "actionEditTaskConfig": "编辑任务配置",
+    "selectorOnlyHint": "审阅中只能修改智能体选项，任务描述和标题保持不变。"
   },
   "CustomSkillsSettings": {
     "loading": "正在加载自定义技能…",
@@ -7564,6 +7580,7 @@
       "discover": "发现",
       "mcp": "MCP",
       "skills": "技能",
+      "plugins": "插件",
       "packs": "技能包"
     },
     "updatesAvailable": "{count, number} 项可更新",
@@ -7599,7 +7616,8 @@
         "skill": "技能",
         "mcp": "MCP",
         "prompt": "提示词",
-        "assistant": "助手"
+        "assistant": "助手",
+        "plugin": "插件"
       },
       "kind": {
         "skill": "技能",
@@ -7607,6 +7625,7 @@
         "prompt": "提示词",
         "assistant": "助手",
         "connector": "连接器",
+        "plugin": "插件",
         "unknown": "未知类别"
       },
       "filters": {
@@ -7874,10 +7893,21 @@
           "unsupportedWeb": "Codeg 服务器还不能复制定义，更新服务器后即可复制。"
         }
       },
+      "plugin": {
+        "hosts": "宿主",
+        "members": "成员",
+        "autorun": "自动运行",
+        "releases": "发布记录",
+        "added": "新增",
+        "updated": "更新",
+        "removed": "移除",
+        "unpinned": "没有钉死版本的 MCP 服务",
+        "noAutorun": "无"
+      },
       "hero": {
         "title": "为你的智能体找到<accent>新能力</accent>",
-        "subtitle": "{count, number} 个社区技能、MCP 服务、提示词与助手，安装一次，多个智能体都能用",
-        "subtitleNoCount": "社区技能、MCP 服务、提示词与助手，安装一次，多个智能体都能用"
+        "subtitle": "{count, number} 个社区技能、插件、MCP 服务、提示词与助手，安装一次，多个智能体都能用",
+        "subtitleNoCount": "社区技能、插件、MCP 服务、提示词与助手，安装一次，多个智能体都能用"
       },
       "layout": {
         "label": "布局",
@@ -8067,8 +8097,10 @@
           "latest": "已是最新",
           "updateAvailable": "可更新",
           "yanked": "版本已撤回",
+          "unapproved": "批准已撤销",
           "disabledByAuthor": "已被作者停用",
-          "removedByHarness": "已被 SRN Harness 下架"
+          "removedByHarness": "已被 SRN Harness 下架",
+          "gone": "SRN 上已没有这一项"
         },
         "editDefinition": "编辑定义",
         "editDefinitionLetter": "编辑定义 {letter}",
@@ -8422,7 +8454,11 @@
         "permissionsNotStated": "SRN Harness 没有说明它要求什么权限。",
         "noPermissions": "没有特别的要求。",
         "undeclared": "检测到，但未声明",
-        "declaredOnly": "已声明，但未检测到"
+        "declaredOnly": "已声明，但未检测到",
+        "undeclaredCount": "{count, plural, other {# 项未声明}}",
+        "moreValues": "还有 {count, plural, other {# 项}}",
+        "fewerValues": "收起",
+        "noneDeclared": "发布者没有声明任何权限，下面都是检测到的。"
       },
       "blocked": {
         "title": "无法安装",
@@ -8728,18 +8764,22 @@
         "clearFilters": "清除搜索和筛选",
         "deleteTicked": "删除…",
         "orphans": "指向已删除技能的失效链接",
-        "problems": "Codeg 在技能存储中发现了需要留意的地方"
+        "problems": "Codeg 在技能存储中发现了需要留意的地方",
+        "pluginSkills": "插件的技能"
       },
       "marks": {
         "harnessVersion": "SRN Harness {version}",
-        "problem": "需要处理"
+        "problem": "需要处理",
+        "belongsTo": "属于 {plugin}"
       },
       "harnessStates": {
         "latest": "已是最新",
         "updateAvailable": "有可用更新",
         "yanked": "版本已撤回",
+        "unapproved": "批准已撤销",
         "disabledByAuthor": "已被作者停用",
         "removedByHarness": "已从 SRN Harness 下架",
+        "gone": "SRN 上已没有这一项",
         "changedLocally": "本地改过",
         "filesMissing": "文件缺失"
       },
@@ -8886,7 +8926,8 @@
         "forSome": "{count, number} 个智能体",
         "batchOn": "启用",
         "batchOff": "停用",
-        "clear": "清除"
+        "clear": "清除",
+        "providedBy": "由 {plugin} 提供"
       },
       "write": {
         "notOn": "没有为 {agent} 启用 <code>{skill}</code>。",
@@ -9074,7 +9115,8 @@
           "brokenCodeg": "Codeg 建的链接，哪儿也不指向。可以修复或删除。",
           "brokenOther": "不是 Codeg 建的链接，哪儿也不指向。可以删除。",
           "unknown": "这个 Codeg 没有说明这项技能是谁的。"
-        }
+        },
+        "showPlugin": "查看插件"
       },
       "editor": {
         "newCustom": "新建自定义技能",
@@ -9277,8 +9319,9 @@
         "archive": "从 SRN Harness 保存的副本下载，先按 SHA-256 <code>{hash}</code>… 核对整个压缩包，再逐个核对文件。",
         "source": "从 GitHub 获取：仓库 <code>{repository}</code>，提交 <code>{commit}</code>，文件夹 <code>{path}</code>。每个文件都按它的 SHA-256 核对。",
         "noSource": "SRN Harness 既没有提供文件的副本，也没有提供获取文件的来源。",
-        "files": "显示 {count, plural, other {# 个文件}}",
-        "executable": "可执行"
+        "executable": "可执行",
+        "fileList": "文件清单",
+        "executableCount": "{count, plural, other {# 个可执行}}"
       },
       "name": {
         "title": "安装名称",
@@ -9504,9 +9547,245 @@
       },
       "ownershipUnresolved": "Codeg 无法读取它从 SRN Harness 安装技能的记录，因此无法判断这项技能是否来自 SRN Harness。在能读取这份记录之前，会原样保留它。"
     },
+    "pluginInstall": {
+      "actions": {
+        "install": "安装"
+      },
+      "versions": {
+        "behindPending": "完整安装：<code>{full}</code>（<code>{latest}</code> 待审核）",
+        "behindUnpinned": "完整安装：<code>{full}</code>（<code>{latest}</code>：没有钉死版本的 MCP 服务）",
+        "pending": "完整安装待审核",
+        "unpinned": "完整安装：没有钉死版本的 MCP 服务"
+      },
+      "members": {
+        "title": "成员",
+        "none": "无",
+        "kinds": {
+          "assistant": "助手",
+          "unknown": "未知"
+        }
+      },
+      "hostParts": {
+        "skills": "技能 {count, number}",
+        "agents": "助手 {count, number}",
+        "commands": "命令 {count, number}",
+        "hooks": "钩子 {count, number}",
+        "mcp": "MCP 服务 {count, number}",
+        "code": "代码插件 {count, number}",
+        "nothing": "无"
+      },
+      "autorun": {
+        "title": "自动运行",
+        "consent": "同意自动运行",
+        "show": "展开",
+        "hide": "收起",
+        "reading": "正在读取…",
+        "types": {
+          "hook": "钩子",
+          "code": "代码插件",
+          "mcp": "MCP 服务",
+          "lsp": "语言服务",
+          "monitor": "监视器",
+          "bin": "命令",
+          "unknown": "其他"
+        },
+        "consentNote": "勾选即表示你同意上面 {count, plural, other {# 项}}在以插件装的智能体里自动运行。",
+        "consentNoteNoList": "勾选即表示你同意这个插件带的内容在以插件装的智能体里自动运行。"
+      },
+      "modes": {
+        "native": "以插件装",
+        "skills": "只装技能",
+        "none": "不装",
+        "unknown": "未知"
+      },
+      "hosts": {
+        "title": "智能体",
+        "none": "没有检测到智能体",
+        "codexTrust": "需在 Codex 中信任钩子",
+        "experts": "接管专家技能 {count, number}",
+        "held": "名称已被占用 {count, number}",
+        "copiesToTake": "移入备份的副本：",
+        "noPreview": "无法读取链接的影响",
+        "setAll": "全部设为"
+      },
+      "missing": {
+        "noHosts": "为至少一个智能体选择安装方式。",
+        "name": "SRN Harness 没有给出安装名称。",
+        "consent": "同意自动运行。",
+        "agentBlocked": "{agent}：技能无法放入。",
+        "agentNoPreview": "{agent}：无法读取链接的影响。"
+      },
+      "notices": {
+        "effectsChanged": "预览已过时，未写入任何内容。",
+        "stateMoved": "SRN Harness 上的信息已更新。"
+      },
+      "outcome": {
+        "installed": "已安装。",
+        "busy": "另一项改动正在进行，未写入任何内容。",
+        "failed": "安装失败。",
+        "unknown": "这个 Codeg 无法判断安装结果。",
+        "needsRepair": "需修复：{agents}",
+        "problems": "未完成的清理：",
+        "status": {
+          "done": "完成",
+          "failed": "失败",
+          "undone": "已还原",
+          "needs_repair": "需修复",
+          "unknown": "未知"
+        }
+      },
+      "reasons": {
+        "not_a_plugin": "这不是插件（它是：{kind}）。",
+        "plugin_info_missing": "SRN Harness 没有给出插件本身的内容。",
+        "plugin_install_name_invalid": "<code>{name}</code> 不能用作插件的安装名称。",
+        "plugin_install_name_mismatch": "安装名称 <code>{name}</code> 不是这个版本的 <code>{expected}</code>。",
+        "plugin_install_name_taken": "<code>{name}</code> 已被另一个插件占用（<code>{ref}</code>）。",
+        "plugin_already_installed": "已以 <code>{name}</code> 安装。",
+        "plugin_no_hosts": "没有为任何智能体安装。",
+        "plugin_no_adapter": "{agent} 不能以插件装。",
+        "plugin_native_unavailable": "{agent} 不能以插件装：",
+        "plugin_revision_not_target": "修订 #{revision} 不能这样安装。",
+        "plugin_revision_not_target_native": "修订 #{revision} 不是可以完整安装的修订（#{expected}）。",
+        "plugin_revision_not_target_skills": "修订 #{revision} 不是最新修订（#{expected}）。",
+        "plugin_no_full": "还没有可以完整安装的修订（待审核）。",
+        "plugin_no_full_unpinned": "没有可以完整安装的修订（没有钉死版本的 MCP 服务）。",
+        "plugin_not_approved": "修订 #{revision} 未获准完整安装。",
+        "plugin_mcp_unpinned": "没有钉死版本的 MCP 服务：<code>{servers}</code>。",
+        "plugin_consent_required": "自动运行的部分需要你同意。",
+        "plugin_consent_stale": "自动运行的部分已有变化，需要重新同意。",
+        "plugin_host_step_failed": "{agent}：「{step}」失败。",
+        "plugin_needs_repair": "需修复：{agents}。",
+        "plugin_up_to_date": "已是修订 #{revision}。",
+        "plugin_record_changed": "Codeg 的插件记录已有变化。",
+        "plugin_not_on_agent": "{agent} 没有这个插件。",
+        "plugin_last_host": "{agent} 是唯一装了它的智能体。",
+        "plugin_unchanged": "{agent} 已经是这样。",
+        "plugin_suspended": "Codeg 已为 {agent} 停用它。",
+        "plugin_no_repair_needed": "{agent} 不需要修复。",
+        "plugin_reinstall_required": "{agent}：需要卸载后重新安装。",
+        "plugin_revision_modified": "修订 #{revision} 的文件已被改动。",
+        "plugin_unverified": "无法向 SRN 核实这个修订。",
+        "plugin_advisory_disable": "有公告要求停用这个修订。",
+        "plugin_launch_env_unreadable": "无法读取 {agent} 的启动设置。",
+        "plugin_host_not_found": "没有找到宿主。",
+        "plugin_host_version_unknown": "无法读取宿主的版本。",
+        "plugin_host_home_relative": "{variable} 是相对路径：<code>{path}</code>。",
+        "plugin_adapter_off": "这个宿主暂不能以插件装。",
+        "plugin_host_version_unsupported": "不支持宿主版本 <code>{version}</code>。",
+        "plugin_host_command_failed": "<code>{command}</code> 失败（{status}）。",
+        "plugin_host_command_timed_out": "<code>{command}</code> 超过 {seconds, number} 秒没有完成。",
+        "plugin_host_command_not_started": "无法启动 <code>{command}</code>。",
+        "plugin_marketplace_unreadable": "无法读取 Codeg 的插件市场文件。",
+        "plugin_host_name_taken": "宿主里已有名为 <code>{name}</code> 的插件（<code>{plugin}</code>）。",
+        "plugin_host_name_changed": "它在宿主里的名称从 <code>{from}</code> 改成了 <code>{to}</code>。",
+        "plugin_revision_missing": "插件仓库里没有修订 #{revision}。",
+        "plugin_host_files": "无法写入宿主的文件。",
+        "plugin_host_not_listed": "插件没有这个宿主的清单。",
+        "plugin_entry_missing": "插件里没有这个宿主能加载的代码。",
+        "plugin_host_settings_unreadable": "无法读取宿主的设置。",
+        "plugin_host_not_installed": "宿主里没有安装 <code>{name}</code>。",
+        "plugin_marketplace_not_added": "宿主里没有 Codeg 的插件市场。",
+        "plugin_marketplace_elsewhere": "宿主里同名的插件市场在别处：<code>{path}</code>。",
+        "plugin_marketplace_elsewhere_unknown": "宿主里同名的插件市场在别处。",
+        "plugin_marketplace_entry_missing": "Codeg 的插件市场里没有它。",
+        "plugin_marketplace_source_mismatch": "插件市场指向 <code>{found}</code>，而不是 <code>{expected}</code>。",
+        "plugin_host_entry_mismatch": "宿主配置列出的是 <code>{found}</code>，而不是 <code>{expected}</code>。",
+        "plugin_host_cache_missing": "宿主里没有这个插件的副本。",
+        "plugin_hooks_unreadable": "无法读取钩子的信任状态。",
+        "experts_linked": "专家技能仍在链接中：<code>{names}</code>。",
+        "owned_set_differs": "其他智能体装的是它的另一组技能，请先更新。",
+        "owned_by_other": "<code>{name}</code> 属于另一个插件（<code>{plugin}</code>）。",
+        "copies_not_refreshed": "无法更新 <code>{name}</code> 的副本。",
+        "member_duplicate": "有两个成员都叫 <code>{name}</code>。",
+        "member_file_mismatch": "<code>{name}</code> 的 <code>{path}</code> 与列表不符。",
+        "plugin_owned": "<code>{name}</code> 属于插件，只能随插件一起管理。"
+      }
+    },
+    "plugins": {
+      "refresh": "重新读取插件",
+      "listLabel": "已装插件",
+      "none": "还没有安装插件",
+      "browse": "去发现中浏览",
+      "retry": "重试",
+      "version": "版本 {version}",
+      "revision": "修订 #{revision}",
+      "installed": "已安装 {version}",
+      "states": {
+        "disabled": "已停用",
+        "suspended": "SRN 已停用",
+        "needsRepair": "需修复",
+        "unknown": "未知状态"
+      },
+      "actions": {
+        "update": "更新",
+        "repair": "修复",
+        "uninstall": "卸载",
+        "disable": "停用",
+        "enable": "启用",
+        "changeMode": "改装法",
+        "hookTrust": "钩子信任",
+        "manage": "管理"
+      },
+      "hooks": {
+        "again": "重新读取",
+        "none": "没有钩子",
+        "trusted": "钩子已信任",
+        "untrusted": "需在 Codex 中信任钩子",
+        "modified": "钩子已改动，需在 Codex 中重新信任",
+        "unknown": "无法读取钩子的信任状态"
+      },
+      "dialog": {
+        "checking": "正在检查…",
+        "writing": "正在写入…",
+        "refused": "未执行：",
+        "failed": "操作失败。",
+        "giveBack": "交还专家技能 {count, number}",
+        "fromTo": "<code>{from}</code> → <code>{to}</code>",
+        "upToDate": "已是最新。",
+        "changedMembers": "改动的成员",
+        "memberChanges": {
+          "added": "新增",
+          "removed": "移除",
+          "changed": "更新"
+        },
+        "actions": {
+          "update": "更新",
+          "resume": "更新并重新启用",
+          "to_skills": "改为只装技能",
+          "record_only": "保持停用",
+          "none": "不变",
+          "needs_repair": "需修复，不更新",
+          "unknown": "未知"
+        },
+        "title": {
+          "mode": "<code>{name}</code> · {agent}：{mode}",
+          "enable": "启用 <code>{name}</code> · {agent}",
+          "disable": "停用 <code>{name}</code> · {agent}",
+          "repair": "修复 <code>{name}</code>"
+        },
+        "confirm": {
+          "mode": "更改",
+          "enable": "启用",
+          "disable": "停用",
+          "repair": "修复"
+        },
+        "outcome": {
+          "updated": "已更新。",
+          "changed": "已更改。",
+          "repaired": "已修复。"
+        },
+        "missing": {
+          "title": "更新之前，还需要：",
+          "titleChange": "还需要：",
+          "target": "没有可更新到的修订。",
+          "yanked": "确认更新到已撤回的版本。"
+        }
+      }
+    },
     "record": {
       "mcp": "Codeg 无法读取它从 SRN Harness 安装 MCP 服务的记录，所以这里没有任何服务标记为来自 SRN Harness。在能读取这份记录之前，不会从 SRN Harness 安装或卸载任何内容。",
-      "skills": "Codeg 无法读取它从 SRN Harness 安装技能的记录，所以这里没有任何技能标记为来自 SRN Harness。在能读取这份记录之前，不会从 SRN Harness 安装或卸载任何内容，可能来自 SRN Harness 的技能也会原样保留。"
+      "skills": "Codeg 无法读取它从 SRN Harness 安装技能的记录，所以这里没有任何技能标记为来自 SRN Harness。在能读取这份记录之前，不会从 SRN Harness 安装或卸载任何内容，可能来自 SRN Harness 的技能也会原样保留。",
+      "plugins": "无法读取插件的记录。"
     },
     "errors": {
       "disabled": "这个 Codeg 上已关闭「发现」。",

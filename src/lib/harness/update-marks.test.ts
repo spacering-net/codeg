@@ -1,12 +1,19 @@
 import { describe, expect, it } from "vitest"
 
+import enMessages from "@/i18n/messages/en.json"
+import zhCnMessages from "@/i18n/messages/zh-CN.json"
 import { showOptions as mcpShowOptions } from "@/components/harness/mcp/mcp-toolbar"
 import { showOptions as skillsShowOptions } from "@/components/harness/skills/skills-toolbar"
-import { marksOf, type McpHarnessSeam } from "./mcp-marks"
+import {
+  MCP_HARNESS_REMOTE_STATES,
+  marksOf,
+  type McpHarnessSeam,
+} from "./mcp-marks"
 import { normalizeInstalled } from "./mcp-install-normalize"
 import { rawInstalledItem } from "./mcp-install-fixtures"
 import { rawInstalledSkill } from "./skill-install-fixtures"
 import {
+  SKILLS_HARNESS_STATES,
   skillMarksOf,
   skillStateOf,
   type SkillsHarnessSeam,
@@ -94,6 +101,21 @@ describe("the MCP section's marks", () => {
     })
   })
 
+  it("say an item no longer on SRN is gone, with nothing to update to", () => {
+    const marks = marksOf(installed, updates([entry("a", 3, "gone")]))
+    expect(marks.get("alpha")).toMatchObject({
+      remote: "gone",
+      updateAvailable: false,
+    })
+    // asked about another revision than the listing shows (a record kept
+    // for an agent this Codeg does not list)
+    const other = marksOf(installed, updates([entry("d", 3, "gone")]))
+    expect(other.get("delta")).toMatchObject({
+      remote: "gone",
+      updateAvailable: false,
+    })
+  })
+
   it("offer the filter only when something has an update", () => {
     const seam = (marks: McpHarnessSeam["marks"]): McpHarnessSeam => ({
       marks,
@@ -153,6 +175,15 @@ describe("the Skills section's marks", () => {
     expect(skillStateOf(marks.get("three")!)).toBe("removedByHarness")
     expect(marks.get("three")!.updateAvailable).toBe(false)
 
+    // no longer on SRN; a folder changed here still says more
+    const gone = skillMarksOf(
+      skills,
+      updates([entry("s2", 2, "gone"), entry("s3", 2, "gone")])
+    )
+    expect(skillStateOf(gone.get("three")!)).toBe("gone")
+    expect(gone.get("three")!.updateAvailable).toBe(false)
+    expect(skillStateOf(gone.get("two")!)).toBe("changedLocally")
+
     const seam: SkillsHarnessSeam = {
       states: new Map(),
       marks,
@@ -163,5 +194,25 @@ describe("the Skills section's marks", () => {
     expect(
       skillsShowOptions(true, { ...seam, marks: skillMarksOf(skills) })
     ).not.toContain("updates")
+  })
+})
+
+describe("the marks' labels", () => {
+  it("have one for every state a mark can show", () => {
+    for (const messages of [enMessages, zhCnMessages]) {
+      const mcp: Record<string, string> = messages.Harness.mcp.harness.states
+      const skills: Record<string, string> =
+        messages.Harness.skills.harnessStates
+      for (const state of MCP_HARNESS_REMOTE_STATES) {
+        expect(mcp[state], state).toBeTruthy()
+      }
+      for (const state of SKILLS_HARNESS_STATES) {
+        expect(skills[state], state).toBeTruthy()
+      }
+    }
+    expect(enMessages.Harness.mcp.harness.states.gone).toBe("No longer on SRN")
+    expect(zhCnMessages.Harness.skills.harnessStates.gone).toBe(
+      "SRN 上已没有这一项"
+    )
   })
 })

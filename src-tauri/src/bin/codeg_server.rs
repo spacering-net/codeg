@@ -708,9 +708,10 @@ async fn async_main(
     }
 
     // The Harness update check (mirrors lib.rs setup): daily, in the
-    // background, only tells; not started under CODEG_HARNESS=off.
+    // background, only tells (but switches off a plugin's autorun parts SRN
+    // no longer vouches for); not started under CODEG_HARNESS=off.
     if let Some(checker) =
-        codeg_lib::harness::updates::build(&state.data_dir, state.emitter.clone())
+        codeg_lib::harness::updates::build(&state.data_dir, state.emitter.clone(), &state.db)
     {
         tokio::spawn(codeg_lib::harness::updates::run(checker));
     }

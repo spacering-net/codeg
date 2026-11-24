@@ -95,6 +95,7 @@ describe("known values", () => {
   it("names the kinds and risks this build knows, and nothing else", () => {
     expect(knownKind("skill")).toBe("skill")
     expect(knownKind("connector")).toBe("connector")
+    expect(knownKind("plugin")).toBe("plugin")
     expect(knownKind("widget")).toBeNull()
     expect(knownKind(undefined)).toBeNull()
     expect(knownKind("constructor")).toBeNull()

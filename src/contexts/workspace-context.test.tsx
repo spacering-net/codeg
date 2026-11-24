@@ -5220,7 +5220,7 @@ it("retains mobile conversation identity, connection and runtime through A(files
   vi.mocked(api.acpFindConnectionForConversation).mockResolvedValue(null)
   vi.mocked(api.acpConnect).mockResolvedValue("mobile-connection")
   vi.mocked(api.acpGetSessionSnapshot).mockResolvedValue(null)
-  vi.mocked(api.acpDisconnect).mockReset().mockResolvedValue(undefined)
+  vi.mocked(api.acpDisconnect).mockReset().mockResolvedValue(true)
   const mounted = vi.fn()
   const unmounted = vi.fn()
   const filesUnmounted = vi.fn()
@@ -5335,7 +5335,7 @@ it("retains mobile conversation identity, connection and runtime through A(files
     view.unmount()
   })
   expect(unmounted).toHaveBeenCalledOnce()
-  expect(api.acpDisconnect).toHaveBeenCalledWith("mobile-connection")
+  expect(api.acpDisconnect).toHaveBeenCalledWith("mobile-connection", true)
   expect(useConversationRuntimeStore.getState().byConversationId.has(42)).toBe(
     false
   )

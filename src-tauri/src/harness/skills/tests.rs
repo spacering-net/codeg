@@ -38,13 +38,13 @@ const NAME: &str = "pdf";
 // ─── The package ────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
-struct File {
-    path: String,
-    bytes: Vec<u8>,
-    executable: bool,
+pub(crate) struct File {
+    pub(crate) path: String,
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) executable: bool,
 }
 
-fn file(path: &str, text: &str, executable: bool) -> File {
+pub(crate) fn file(path: &str, text: &str, executable: bool) -> File {
     File {
         path: path.to_string(),
         bytes: text.as_bytes().to_vec(),
@@ -66,11 +66,11 @@ fn package(revision: u64) -> Vec<File> {
     ]
 }
 
-fn sha(bytes: &[u8]) -> String {
+pub(crate) fn sha(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-fn zip_of(files: &[File]) -> Vec<u8> {
+pub(crate) fn zip_of(files: &[File]) -> Vec<u8> {
     let mut out = io::Cursor::new(Vec::new());
     {
         let mut zip = zip::ZipWriter::new(&mut out);
@@ -86,7 +86,7 @@ fn zip_of(files: &[File]) -> Vec<u8> {
     out.into_inner()
 }
 
-fn listing(files: &[File]) -> Value {
+pub(crate) fn listing(files: &[File]) -> Value {
     Value::Array(
         files
             .iter()
@@ -100,21 +100,25 @@ fn listing(files: &[File]) -> Value {
 
 // ─── The stand-ins ──────────────────────────────────────────────────────
 
+/// What the stand-in serves. The plugin install's tests use it too, for an
+/// item of their own (`item`).
 #[derive(Default)]
-struct Catalog {
-    latest: u64,
-    versions: BTreeMap<u64, Value>,
-    resolved: BTreeMap<u64, Value>,
+pub(crate) struct Catalog {
+    /// The item served, `(ref, id)`; the skill's own when `None`.
+    pub(crate) item: Option<(String, String)>,
+    pub(crate) latest: u64,
+    pub(crate) versions: BTreeMap<u64, Value>,
+    pub(crate) resolved: BTreeMap<u64, Value>,
     /// Files served as they are, by path (archives here, the source's files
     /// on the raw host).
-    blobs: BTreeMap<String, Vec<u8>>,
-    config: Value,
-    seen: Vec<(Method, String)>,
+    pub(crate) blobs: BTreeMap<String, Vec<u8>>,
+    pub(crate) config: Value,
+    pub(crate) seen: Vec<(Method, String)>,
     /// Run once, when `/resolve` is next asked.
     on_resolve: Option<Box<dyn FnOnce() + Send>>,
     /// Answer `/resolve` as a site that does not serve it: 404, with a
     /// missing item's body.
-    resolve_missing: bool,
+    pub(crate) resolve_missing: bool,
 }
 
 fn json_reply(value: &Value) -> Response {
@@ -143,10 +147,14 @@ fn answer(catalog: &Mutex<Catalog>, method: Method, path: &str, body: &[u8]) -> 
         )
             .into_response();
     }
-    let item = format!("/api/harness/v1/items/{REF}");
+    let (item_ref, item_id) = catalog
+        .item
+        .clone()
+        .unwrap_or_else(|| (REF.to_string(), ID.to_string()));
+    let item = format!("/api/harness/v1/items/{item_ref}");
     if path == item {
         return json_reply(
-            &json!({ "id": ID, "ref": REF, "latest": { "revision": catalog.latest } }),
+            &json!({ "id": item_id, "ref": item_ref, "latest": { "revision": catalog.latest } }),
         );
     }
     if path == "/api/harness/v1/config" {
@@ -189,9 +197,9 @@ fn answer(catalog: &Mutex<Catalog>, method: Method, path: &str, body: &[u8]) -> 
     not_found()
 }
 
-struct Site {
-    origin: String,
-    catalog: Arc<Mutex<Catalog>>,
+pub(crate) struct Site {
+    pub(crate) origin: String,
+    pub(crate) catalog: Arc<Mutex<Catalog>>,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -202,7 +210,7 @@ impl Drop for Site {
 }
 
 impl Site {
-    async fn start() -> Self {
+    pub(crate) async fn start() -> Self {
         let catalog: Arc<Mutex<Catalog>> = Arc::new(Mutex::new(Catalog {
             config: json!({}),
             ..Catalog::default()
@@ -232,7 +240,7 @@ impl Site {
         }
     }
 
-    fn seen(&self) -> Vec<(Method, String)> {
+    pub(crate) fn seen(&self) -> Vec<(Method, String)> {
         self.catalog.lock().unwrap().seen.clone()
     }
 }
@@ -557,7 +565,9 @@ fn codes_of(reasons: &[Reason]) -> Vec<&str> {
     reasons.iter().map(|reason| reason.code.as_str()).collect()
 }
 
-fn drain(events: &mut tokio::sync::broadcast::Receiver<WebEvent>) -> Vec<(String, Value)> {
+pub(crate) fn drain(
+    events: &mut tokio::sync::broadcast::Receiver<WebEvent>,
+) -> Vec<(String, Value)> {
     let mut out = Vec::new();
     while let Ok(event) = events.try_recv() {
         out.push((event.channel, (*event.payload).clone()));
@@ -1098,6 +1108,7 @@ async fn the_install_name_steps_around_whatever_holds_it() {
                 state_sha256: String::new(),
                 installed_at: String::new(),
                 op: String::new(),
+                plugin: None,
                 extra: serde_json::Map::new(),
             },
         );
@@ -1628,6 +1639,7 @@ fn crash_after(sandbox: &Sandbox, revision: u64, steps: usize) -> PathBuf {
         state_sha256: String::new(),
         installed_at: String::new(),
         op: tx.journal.op.clone(),
+        plugin: None,
         extra: serde_json::Map::new(),
     });
     if steps == 1 {
@@ -1719,7 +1731,10 @@ async fn the_engines_startup_finishes_journals_before_it_clears_staging() {
     let stray = sandbox.ctx().store.join(".codeg-staging/stray/new");
     fs::create_dir_all(&stray).unwrap();
     fs::write(stray.join("x"), "x").unwrap();
-    let report = crate::skills::startup::run_blocking(sandbox.ctx());
+    let report = crate::skills::startup::run_blocking(
+        sandbox.ctx(),
+        &crate::harness::plugins::PluginsCtx::at(&sandbox.path("codeg")),
+    );
     assert!(
         !report.problems.iter().any(|p| p.contains("journal")),
         "{:?}",
@@ -1731,7 +1746,10 @@ async fn the_engines_startup_finishes_journals_before_it_clears_staging() {
     // and one rolled back: swapped in, not committed
     let sandbox = Sandbox::new().await;
     crash_after(&sandbox, 3, 3);
-    crate::skills::startup::run_blocking(sandbox.ctx());
+    crate::skills::startup::run_blocking(
+        sandbox.ctx(),
+        &crate::harness::plugins::PluginsCtx::at(&sandbox.path("codeg")),
+    );
     assert!(!sandbox.store(NAME).exists());
     assert!(sandbox.manifest().is_none());
     assert!(!sandbox.ctx().store.join(".codeg-staging").exists());
@@ -2333,10 +2351,20 @@ async fn the_listing_answers_each_part_on_its_own() {
         installed: BTreeMap::new(),
         record_path: sandbox.path("codeg/harness/mcp.json"),
     };
+    let plugins = crate::harness::plugins::install::PluginsLocal {
+        plugins: crate::harness::plugins::PluginsCtx::at(&sandbox.path("codeg")),
+        skills: sandbox.local.clone(),
+        adapters: Vec::new(),
+        envs: BTreeMap::new(),
+        default_env: crate::harness::plugins::hosts::HostEnv::sandboxed(&sandbox.path("home"), &[]),
+        missing_envs: Default::default(),
+    };
     let list = || {
         crate::commands::harness_mcp::harness_installed_in(
             &mcp_local,
             sandbox.ctx().clone(),
+            &plugins,
+            &[],
             &sandbox.emitter,
         )
     };
@@ -2369,6 +2397,19 @@ async fn the_listing_answers_each_part_on_its_own() {
     let wire = serde_json::to_value(list().await.unwrap()).unwrap();
     assert!(wire["mcp_problem"].is_null());
     assert_eq!(wire["skills_problem"]["code"], "record_unreadable");
+    assert!(wire["plugins_problem"].is_null());
+    assert_eq!(wire["plugins"], serde_json::json!([]));
+
+    // the plugins record cannot be read: the MCP side is still listed
+    let plugins_record = &plugins.plugins.record;
+    fs::create_dir_all(plugins_record.parent().unwrap()).unwrap();
+    fs::write(plugins_record, "{ not json").unwrap();
+    let listed = list().await.unwrap();
+    assert!(listed.mcp_problem.is_none());
+    assert!(listed.plugins.is_empty());
+    let problem = listed.plugins_problem.unwrap();
+    assert_eq!(problem.code, "record_unreadable");
+    assert!(problem.detail.unwrap().contains("plugins.json"));
 }
 
 /// QA finding: a site without `/resolve` answers it 404 — not "no item at

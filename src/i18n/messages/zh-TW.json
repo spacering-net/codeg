@@ -2298,6 +2298,7 @@
       "forge": "儲存庫面板",
       "canvas": "無限畫布",
       "harness": "駕馭工程",
+      "harnessHint": "技能 · MCP",
       "folderGroup": {
         "newGroup": "新增分組",
         "newGroupTitle": "新增資料夾分組",
@@ -3525,6 +3526,7 @@
         "modelListLabel": "模型",
         "recommendedBadge": "推薦",
         "recommendedValue": "推薦：{value}",
+        "effortRange": "推理級別：{range}",
         "searchOptions": "搜尋選項...",
         "searchOptionsAria": "搜尋選項",
         "noOptions": "找不到選項",
@@ -3688,7 +3690,8 @@
             "title": "「{skill}」技能尚未對 {agent} 啟用",
             "description": "前往駕馭工程 › 技能包 啟用後即可在此使用。",
             "action": "前往啟用",
-            "hint": "技能未啟用"
+            "hint": "技能未啟用",
+            "showPlugin": "檢視外掛"
           },
           "scrollPrev": "顯示上一組技能",
           "scrollNext": "顯示下一組技能"
@@ -6374,7 +6377,7 @@
     "baseBranch": "基準分支",
     "baseBranchDefault": "任務開始時的目前分支",
     "baseBranchHint": "任務從該分支拉出工作樹，合併時也會落回該分支。",
-    "agentInheritedHint": "繼承自任務設定，修改後僅對本任務生效",
+    "agentInheritedHint": "來自任務設定——隨任務儲存",
     "agentNoDefaultHint": "任務設定中沒有預設 agent，目前選取的 agent 將隨任務儲存",
     "agentInheritedUnavailableHint": "任務設定中的 {agent} 無法使用，目前選取的 agent 將隨任務儲存",
     "agentOverrideReset": "恢復繼承",
@@ -6581,7 +6584,20 @@
     "deliverPrCommitMessageLabel": "提交訊息",
     "deliverPrUncommittedHint": "想讓智能體自己提交的話，取消後把任務退回再跑一輪。",
     "deliverPrCommitSubmit": "提交、推送並建立",
-    "deliverPrCommitPushSubmit": "提交並推送"
+    "deliverPrCommitPushSubmit": "提交並推送",
+    "agentLockedHint": "此任務已產生對話，不能更換智慧體",
+    "conversationSelectionTitle": "此對話的模型與選項",
+    "conversationSelectionHint": "請在對話中修改；下次重試、退回或合併會沿用此對話及這些設定。",
+    "conversationSelectionOpen": "在對話中修改",
+    "conversationSelectionLoading": "載入中…",
+    "conversationSelectionUnavailable": "目前伺服器不提供此資訊",
+    "conversationSelectionEmpty": "智慧體預設",
+    "conversationSelectionLegacy": "尚未記錄——對話下次連線時會固定為這些設定",
+    "conversationSelectionStarting": "任務正在啟動，請在執行後再試",
+    "conversationSelectionReplaced": "此任務的智慧體與其對話不同：下次執行會用下面的設定開啟新對話。",
+    "settingsAgentFrozenHint": "任務會保留建立時的智慧體和選項——此處的修改只影響之後建立的任務。",
+    "actionEditTaskConfig": "編輯任務設定",
+    "selectorOnlyHint": "審閱中只能修改智慧體選項，任務描述和標題保持不變。"
   },
   "CustomSkillsSettings": {
     "loading": "正在載入自訂技能…",
@@ -7564,6 +7580,7 @@
       "discover": "探索",
       "mcp": "MCP",
       "skills": "技能",
+      "plugins": "外掛",
       "packs": "技能包"
     },
     "updatesAvailable": "{count, number} 項可更新",
@@ -7599,7 +7616,8 @@
         "skill": "技能",
         "mcp": "MCP",
         "prompt": "提示詞",
-        "assistant": "助手"
+        "assistant": "助手",
+        "plugin": "外掛"
       },
       "kind": {
         "skill": "技能",
@@ -7607,6 +7625,7 @@
         "prompt": "提示詞",
         "assistant": "助手",
         "connector": "連接器",
+        "plugin": "外掛",
         "unknown": "未知類別"
       },
       "filters": {
@@ -7874,10 +7893,21 @@
           "unsupportedWeb": "Codeg 伺服器還不能複製定義，更新伺服器後即可複製。"
         }
       },
+      "plugin": {
+        "hosts": "宿主",
+        "members": "成員",
+        "autorun": "自動執行",
+        "releases": "發布紀錄",
+        "added": "新增",
+        "updated": "更新",
+        "removed": "移除",
+        "unpinned": "沒有釘死版本的 MCP 服務",
+        "noAutorun": "無"
+      },
       "hero": {
         "title": "為你的智慧體找到<accent>新能力</accent>",
-        "subtitle": "{count, number} 個社群技能、MCP 服務、提示詞與助手，安裝一次，多個智慧體都能用",
-        "subtitleNoCount": "社群技能、MCP 服務、提示詞與助手，安裝一次，多個智慧體都能用"
+        "subtitle": "{count, number} 個社群技能、外掛、MCP 服務、提示詞與助手，安裝一次，多個智慧體都能用",
+        "subtitleNoCount": "社群技能、外掛、MCP 服務、提示詞與助手，安裝一次，多個智慧體都能用"
       },
       "layout": {
         "label": "版面",
@@ -8067,8 +8097,10 @@
           "latest": "已是最新",
           "updateAvailable": "可更新",
           "yanked": "版本已撤回",
+          "unapproved": "核准已撤銷",
           "disabledByAuthor": "已被作者停用",
-          "removedByHarness": "已被 SRN Harness 下架"
+          "removedByHarness": "已被 SRN Harness 下架",
+          "gone": "SRN 上已沒有這一項"
         },
         "editDefinition": "編輯定義",
         "editDefinitionLetter": "編輯定義 {letter}",
@@ -8422,7 +8454,11 @@
         "permissionsNotStated": "SRN Harness 沒有說明它要求哪些權限。",
         "noPermissions": "沒有特別的要求。",
         "undeclared": "偵測到，但未聲明",
-        "declaredOnly": "已聲明，但未偵測到"
+        "declaredOnly": "已聲明，但未偵測到",
+        "undeclaredCount": "{count, plural, other {# 項未聲明}}",
+        "moreValues": "還有 {count, plural, other {# 項}}",
+        "fewerValues": "收起",
+        "noneDeclared": "發布者沒有聲明任何權限，下面都是偵測到的。"
       },
       "blocked": {
         "title": "無法安裝",
@@ -8728,18 +8764,22 @@
         "clearFilters": "清除搜尋和篩選",
         "deleteTicked": "刪除…",
         "orphans": "指向已刪除技能的失效連結",
-        "problems": "Codeg 在技能存放區中發現了需要留意的地方"
+        "problems": "Codeg 在技能存放區中發現了需要留意的地方",
+        "pluginSkills": "外掛的技能"
       },
       "marks": {
         "harnessVersion": "SRN Harness {version}",
-        "problem": "需要處理"
+        "problem": "需要處理",
+        "belongsTo": "屬於 {plugin}"
       },
       "harnessStates": {
         "latest": "已是最新",
         "updateAvailable": "有可用更新",
         "yanked": "版本已撤回",
+        "unapproved": "核准已撤銷",
         "disabledByAuthor": "已被作者停用",
         "removedByHarness": "已從 SRN Harness 下架",
+        "gone": "SRN 上已沒有這一項",
         "changedLocally": "本機改過",
         "filesMissing": "檔案遺失"
       },
@@ -8886,7 +8926,8 @@
         "forSome": "{count, number} 個智能體",
         "batchOn": "啟用",
         "batchOff": "停用",
-        "clear": "清除"
+        "clear": "清除",
+        "providedBy": "由 {plugin} 提供"
       },
       "write": {
         "notOn": "沒有為 {agent} 啟用 <code>{skill}</code>。",
@@ -9074,7 +9115,8 @@
           "brokenCodeg": "Codeg 建立的連結，哪裡也不指向。可以修復或刪除。",
           "brokenOther": "不是 Codeg 建立的連結，哪裡也不指向。可以刪除。",
           "unknown": "這個 Codeg 沒有說明這項技能是誰的。"
-        }
+        },
+        "showPlugin": "檢視外掛"
       },
       "editor": {
         "newCustom": "新增自訂技能",
@@ -9277,8 +9319,9 @@
         "archive": "從 SRN Harness 保存的副本下載，先按 SHA-256 <code>{hash}</code>… 核對整個壓縮檔，再逐一核對檔案。",
         "source": "從 GitHub 取得：儲存庫 <code>{repository}</code>，提交 <code>{commit}</code>，資料夾 <code>{path}</code>。每個檔案都按它的 SHA-256 核對。",
         "noSource": "SRN Harness 既沒有提供檔案的副本，也沒有提供取得檔案的來源。",
-        "files": "顯示 {count, plural, other {# 個檔案}}",
-        "executable": "可執行"
+        "executable": "可執行",
+        "fileList": "檔案清單",
+        "executableCount": "{count, plural, other {# 個可執行}}"
       },
       "name": {
         "title": "安裝名稱",
@@ -9504,9 +9547,245 @@
       },
       "ownershipUnresolved": "Codeg 無法讀取它從 SRN Harness 安裝技能的紀錄，因此無法判斷這項技能是否來自 SRN Harness。在能讀取這份紀錄之前，會原樣保留它。"
     },
+    "pluginInstall": {
+      "actions": {
+        "install": "安裝"
+      },
+      "versions": {
+        "behindPending": "完整安裝：<code>{full}</code>（<code>{latest}</code> 待審核）",
+        "behindUnpinned": "完整安裝：<code>{full}</code>（<code>{latest}</code>：沒有釘死版本的 MCP 服務）",
+        "pending": "完整安裝待審核",
+        "unpinned": "完整安裝：沒有釘死版本的 MCP 服務"
+      },
+      "members": {
+        "title": "成員",
+        "none": "無",
+        "kinds": {
+          "assistant": "助手",
+          "unknown": "未知"
+        }
+      },
+      "hostParts": {
+        "skills": "技能 {count, number}",
+        "agents": "助手 {count, number}",
+        "commands": "指令 {count, number}",
+        "hooks": "鉤子 {count, number}",
+        "mcp": "MCP 服務 {count, number}",
+        "code": "程式外掛 {count, number}",
+        "nothing": "無"
+      },
+      "autorun": {
+        "title": "自動執行",
+        "consent": "同意自動執行",
+        "show": "展開",
+        "hide": "收起",
+        "reading": "正在讀取…",
+        "types": {
+          "hook": "鉤子",
+          "code": "程式外掛",
+          "mcp": "MCP 服務",
+          "lsp": "語言服務",
+          "monitor": "監視器",
+          "bin": "指令",
+          "unknown": "其他"
+        },
+        "consentNote": "勾選即表示你同意上面 {count, plural, other {# 項}}在以外掛安裝的智能體裡自動執行。",
+        "consentNoteNoList": "勾選即表示你同意這個外掛帶的內容在以外掛安裝的智能體裡自動執行。"
+      },
+      "modes": {
+        "native": "以外掛安裝",
+        "skills": "只裝技能",
+        "none": "不裝",
+        "unknown": "未知"
+      },
+      "hosts": {
+        "title": "智能體",
+        "none": "沒有偵測到智能體",
+        "codexTrust": "需在 Codex 中信任鉤子",
+        "experts": "接管專家技能 {count, number}",
+        "held": "名稱已被占用 {count, number}",
+        "copiesToTake": "移入備份的副本：",
+        "noPreview": "無法讀取連結的影響",
+        "setAll": "全部設為"
+      },
+      "missing": {
+        "noHosts": "為至少一個智能體選擇安裝方式。",
+        "name": "SRN Harness 沒有提供安裝名稱。",
+        "consent": "同意自動執行。",
+        "agentBlocked": "{agent}：技能無法放入。",
+        "agentNoPreview": "{agent}：無法讀取連結的影響。"
+      },
+      "notices": {
+        "effectsChanged": "預覽已過時，未寫入任何內容。",
+        "stateMoved": "SRN Harness 上的資訊已更新。"
+      },
+      "outcome": {
+        "installed": "已安裝。",
+        "busy": "另一項變更正在進行，未寫入任何內容。",
+        "failed": "安裝失敗。",
+        "unknown": "這個 Codeg 無法判斷安裝結果。",
+        "needsRepair": "需修復：{agents}",
+        "problems": "未完成的清理：",
+        "status": {
+          "done": "完成",
+          "failed": "失敗",
+          "undone": "已還原",
+          "needs_repair": "需修復",
+          "unknown": "未知"
+        }
+      },
+      "reasons": {
+        "not_a_plugin": "這不是外掛（它是：{kind}）。",
+        "plugin_info_missing": "SRN Harness 沒有提供外掛本身的內容。",
+        "plugin_install_name_invalid": "<code>{name}</code> 不能用作外掛的安裝名稱。",
+        "plugin_install_name_mismatch": "安裝名稱 <code>{name}</code> 不是這個版本的 <code>{expected}</code>。",
+        "plugin_install_name_taken": "<code>{name}</code> 已被另一個外掛占用（<code>{ref}</code>）。",
+        "plugin_already_installed": "已以 <code>{name}</code> 安裝。",
+        "plugin_no_hosts": "沒有為任何智能體安裝。",
+        "plugin_no_adapter": "{agent} 不能以外掛安裝。",
+        "plugin_native_unavailable": "{agent} 不能以外掛安裝：",
+        "plugin_revision_not_target": "修訂 #{revision} 不能這樣安裝。",
+        "plugin_revision_not_target_native": "修訂 #{revision} 不是可以完整安裝的修訂（#{expected}）。",
+        "plugin_revision_not_target_skills": "修訂 #{revision} 不是最新修訂（#{expected}）。",
+        "plugin_no_full": "還沒有可以完整安裝的修訂（待審核）。",
+        "plugin_no_full_unpinned": "沒有可以完整安裝的修訂（沒有釘死版本的 MCP 服務）。",
+        "plugin_not_approved": "修訂 #{revision} 未獲准完整安裝。",
+        "plugin_mcp_unpinned": "沒有釘死版本的 MCP 服務：<code>{servers}</code>。",
+        "plugin_consent_required": "自動執行的部分需要你同意。",
+        "plugin_consent_stale": "自動執行的部分已有變化，需要重新同意。",
+        "plugin_host_step_failed": "{agent}：「{step}」失敗。",
+        "plugin_needs_repair": "需修復：{agents}。",
+        "plugin_up_to_date": "已是修訂 #{revision}。",
+        "plugin_record_changed": "Codeg 的外掛紀錄已有變化。",
+        "plugin_not_on_agent": "{agent} 沒有這個外掛。",
+        "plugin_last_host": "{agent} 是唯一裝了它的智能體。",
+        "plugin_unchanged": "{agent} 已經是這樣。",
+        "plugin_suspended": "Codeg 已為 {agent} 停用它。",
+        "plugin_no_repair_needed": "{agent} 不需要修復。",
+        "plugin_reinstall_required": "{agent}：需要解除安裝後重新安裝。",
+        "plugin_revision_modified": "修訂 #{revision} 的檔案已被改動。",
+        "plugin_unverified": "無法向 SRN 核實這個修訂。",
+        "plugin_advisory_disable": "有公告要求停用這個修訂。",
+        "plugin_launch_env_unreadable": "無法讀取 {agent} 的啟動設定。",
+        "plugin_host_not_found": "找不到宿主。",
+        "plugin_host_version_unknown": "無法讀取宿主的版本。",
+        "plugin_host_home_relative": "{variable} 是相對路徑：<code>{path}</code>。",
+        "plugin_adapter_off": "這個宿主暫時不能以外掛安裝。",
+        "plugin_host_version_unsupported": "不支援宿主版本 <code>{version}</code>。",
+        "plugin_host_command_failed": "<code>{command}</code> 失敗（{status}）。",
+        "plugin_host_command_timed_out": "<code>{command}</code> 超過 {seconds, number} 秒沒有完成。",
+        "plugin_host_command_not_started": "無法啟動 <code>{command}</code>。",
+        "plugin_marketplace_unreadable": "無法讀取 Codeg 的外掛市集檔案。",
+        "plugin_host_name_taken": "宿主裡已有名為 <code>{name}</code> 的外掛（<code>{plugin}</code>）。",
+        "plugin_host_name_changed": "它在宿主裡的名稱從 <code>{from}</code> 改成了 <code>{to}</code>。",
+        "plugin_revision_missing": "外掛儲存庫裡沒有修訂 #{revision}。",
+        "plugin_host_files": "無法寫入宿主的檔案。",
+        "plugin_host_not_listed": "外掛沒有這個宿主的清單。",
+        "plugin_entry_missing": "外掛裡沒有這個宿主能載入的程式碼。",
+        "plugin_host_settings_unreadable": "無法讀取宿主的設定。",
+        "plugin_host_not_installed": "宿主裡沒有安裝 <code>{name}</code>。",
+        "plugin_marketplace_not_added": "宿主裡沒有 Codeg 的外掛市集。",
+        "plugin_marketplace_elsewhere": "宿主裡同名的外掛市集在別處：<code>{path}</code>。",
+        "plugin_marketplace_elsewhere_unknown": "宿主裡同名的外掛市集在別處。",
+        "plugin_marketplace_entry_missing": "Codeg 的外掛市集裡沒有它。",
+        "plugin_marketplace_source_mismatch": "外掛市集指向 <code>{found}</code>，而不是 <code>{expected}</code>。",
+        "plugin_host_entry_mismatch": "宿主設定列出的是 <code>{found}</code>，而不是 <code>{expected}</code>。",
+        "plugin_host_cache_missing": "宿主裡沒有這個外掛的副本。",
+        "plugin_hooks_unreadable": "無法讀取鉤子的信任狀態。",
+        "experts_linked": "專家技能仍在連結中：<code>{names}</code>。",
+        "owned_set_differs": "其他智能體裝的是它的另一組技能，請先更新。",
+        "owned_by_other": "<code>{name}</code> 屬於另一個外掛（<code>{plugin}</code>）。",
+        "copies_not_refreshed": "無法更新 <code>{name}</code> 的副本。",
+        "member_duplicate": "有兩個成員都叫 <code>{name}</code>。",
+        "member_file_mismatch": "<code>{name}</code> 的 <code>{path}</code> 與清單不符。",
+        "plugin_owned": "<code>{name}</code> 屬於外掛，只能隨外掛一起管理。"
+      }
+    },
+    "plugins": {
+      "refresh": "重新讀取外掛",
+      "listLabel": "已裝外掛",
+      "none": "還沒有安裝外掛",
+      "browse": "去探索中瀏覽",
+      "retry": "重試",
+      "version": "版本 {version}",
+      "revision": "修訂 #{revision}",
+      "installed": "已安裝 {version}",
+      "states": {
+        "disabled": "已停用",
+        "suspended": "SRN 已停用",
+        "needsRepair": "需修復",
+        "unknown": "未知狀態"
+      },
+      "actions": {
+        "update": "更新",
+        "repair": "修復",
+        "uninstall": "解除安裝",
+        "disable": "停用",
+        "enable": "啟用",
+        "changeMode": "改裝法",
+        "hookTrust": "鉤子信任",
+        "manage": "管理"
+      },
+      "hooks": {
+        "again": "重新讀取",
+        "none": "沒有鉤子",
+        "trusted": "鉤子已信任",
+        "untrusted": "需在 Codex 中信任鉤子",
+        "modified": "鉤子已改動，需在 Codex 中重新信任",
+        "unknown": "無法讀取鉤子的信任狀態"
+      },
+      "dialog": {
+        "checking": "正在檢查…",
+        "writing": "正在寫入…",
+        "refused": "未執行：",
+        "failed": "操作失敗。",
+        "giveBack": "交還專家技能 {count, number}",
+        "fromTo": "<code>{from}</code> → <code>{to}</code>",
+        "upToDate": "已是最新。",
+        "changedMembers": "改動的成員",
+        "memberChanges": {
+          "added": "新增",
+          "removed": "移除",
+          "changed": "更新"
+        },
+        "actions": {
+          "update": "更新",
+          "resume": "更新並重新啟用",
+          "to_skills": "改為只裝技能",
+          "record_only": "保持停用",
+          "none": "不變",
+          "needs_repair": "需修復，不更新",
+          "unknown": "未知"
+        },
+        "title": {
+          "mode": "<code>{name}</code> · {agent}：{mode}",
+          "enable": "啟用 <code>{name}</code> · {agent}",
+          "disable": "停用 <code>{name}</code> · {agent}",
+          "repair": "修復 <code>{name}</code>"
+        },
+        "confirm": {
+          "mode": "變更",
+          "enable": "啟用",
+          "disable": "停用",
+          "repair": "修復"
+        },
+        "outcome": {
+          "updated": "已更新。",
+          "changed": "已變更。",
+          "repaired": "已修復。"
+        },
+        "missing": {
+          "title": "更新之前，還需要：",
+          "titleChange": "還需要：",
+          "target": "沒有可更新到的修訂。",
+          "yanked": "確認更新到已撤回的版本。"
+        }
+      }
+    },
     "record": {
       "mcp": "Codeg 無法讀取它從 SRN Harness 安裝 MCP 服務的紀錄，所以這裡沒有任何服務標示為來自 SRN Harness。在能讀取這份紀錄之前，不會從 SRN Harness 安裝或解除安裝任何內容。",
-      "skills": "Codeg 無法讀取它從 SRN Harness 安裝技能的紀錄，所以這裡沒有任何技能標示為來自 SRN Harness。在能讀取這份紀錄之前，不會從 SRN Harness 安裝或解除安裝任何內容，可能來自 SRN Harness 的技能也會原樣保留。"
+      "skills": "Codeg 無法讀取它從 SRN Harness 安裝技能的紀錄，所以這裡沒有任何技能標示為來自 SRN Harness。在能讀取這份紀錄之前，不會從 SRN Harness 安裝或解除安裝任何內容，可能來自 SRN Harness 的技能也會原樣保留。",
+      "plugins": "無法讀取外掛的紀錄。"
     },
     "errors": {
       "disabled": "這個 Codeg 已關閉「探索」。",

@@ -19,6 +19,7 @@ vi.mock("sonner", () => ({
 const setWritebackMock = vi.fn().mockResolvedValue(undefined)
 
 vi.mock("@/lib/api", () => ({
+  workTaskGet: vi.fn().mockRejectedValue(new Error("not in this test")),
   workTaskMerge: (...args: unknown[]) => mergeMock(...args),
   workTaskSettingsEffective: (...args: unknown[]) => settingsMock(...args),
   workTaskSetWriteback: (...args: unknown[]) => setWritebackMock(...args),

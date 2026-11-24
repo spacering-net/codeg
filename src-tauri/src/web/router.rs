@@ -972,6 +972,10 @@ pub fn build_router_with_srn(
             "/harness_versions",
             post(handlers::harness::harness_versions),
         )
+        .route(
+            "/harness_releases",
+            post(handlers::harness::harness_releases),
+        )
         .route("/harness_readme", post(handlers::harness::harness_readme))
         .route("/harness_prompt", post(handlers::harness::harness_prompt))
         .route("/harness_blob", post(handlers::harness::harness_blob))
@@ -1005,6 +1009,43 @@ pub fn build_router_with_srn(
         .route(
             "/harness_skill_uninstall",
             post(handlers::harness_skills::harness_skill_uninstall),
+        )
+        // ─── Harness plugin installs, updates, switches and repairs ───
+        .route(
+            "/harness_plugin_plan",
+            post(handlers::harness_plugins::harness_plugin_plan),
+        )
+        .route(
+            "/harness_plugin_install",
+            post(handlers::harness_plugins::harness_plugin_install),
+        )
+        .route(
+            "/harness_plugin_uninstall",
+            post(handlers::harness_plugins::harness_plugin_uninstall),
+        )
+        .route(
+            "/harness_plugin_plan_update",
+            post(handlers::harness_plugins::harness_plugin_plan_update),
+        )
+        .route(
+            "/harness_plugin_update",
+            post(handlers::harness_plugins::harness_plugin_update),
+        )
+        .route(
+            "/harness_plugin_set_host",
+            post(handlers::harness_plugins::harness_plugin_set_host),
+        )
+        .route(
+            "/harness_plugin_set_enabled",
+            post(handlers::harness_plugins::harness_plugin_set_enabled),
+        )
+        .route(
+            "/harness_plugin_repair",
+            post(handlers::harness_plugins::harness_plugin_repair),
+        )
+        .route(
+            "/harness_plugin_hook_trust",
+            post(handlers::harness_plugins::harness_plugin_hook_trust),
         )
         // ─── The update check of what was installed from Harness ───
         .route(
@@ -1148,6 +1189,10 @@ pub fn build_router_with_srn(
         .route(
             "/acp_set_config_option",
             post(handlers::acp::acp_set_config_option),
+        )
+        .route(
+            "/acp_set_composer_mode",
+            post(handlers::acp::acp_set_composer_mode),
         )
         .route(
             "/acp_goal_control",

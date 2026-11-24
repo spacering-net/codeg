@@ -2298,6 +2298,7 @@
       "forge": "لوحة المستودع",
       "canvas": "لوحة لا نهائية",
       "harness": "هندسة Harness",
+      "harnessHint": "مهارات · MCP",
       "folderGroup": {
         "newGroup": "مجموعة جديدة",
         "newGroupTitle": "مجموعة مجلدات جديدة",
@@ -3525,6 +3526,7 @@
         "modelListLabel": "النماذج",
         "recommendedBadge": "موصى به",
         "recommendedValue": "موصى به: {value}",
+        "effortRange": "جهد الاستدلال: {range}",
         "searchOptions": "البحث في الخيارات...",
         "searchOptionsAria": "البحث في الخيارات",
         "noOptions": "لم يتم العثور على خيارات",
@@ -3688,7 +3690,8 @@
             "title": "المهارة ”{skill}“ غير مُفعّلة بعد لـ {agent}",
             "description": "فعّلها من هندسة Harness › حزم المهارات لاستخدامها هنا.",
             "action": "تفعيل",
-            "hint": "المهارة غير مُفعّلة"
+            "hint": "المهارة غير مُفعّلة",
+            "showPlugin": "عرض الإضافة"
           },
           "scrollPrev": "عرض المهارات السابقة",
           "scrollNext": "عرض المزيد من المهارات"
@@ -6374,7 +6377,7 @@
     "baseBranch": "الفرع الأساسي",
     "baseBranchDefault": "الفرع الحالي عند بدء المهمة",
     "baseBranchHint": "تتفرّع المهمة من هذا الفرع، ويعيدها الدمج إليه.",
-    "agentInheritedHint": "موروث من إعدادات المهام — عدِّله ليصبح خاصًا بهذه المهمة",
+    "agentInheritedHint": "من إعدادات المهام — يُحفظ مع هذه المهمة",
     "agentNoDefaultHint": "لا يوجد وكيل افتراضي في إعدادات المهام — سيُحفَظ الوكيل المحدد مع هذه المهمة",
     "agentInheritedUnavailableHint": "الوكيل {agent} من إعدادات المهام غير متاح — سيُحفَظ الوكيل المحدد مع هذه المهمة",
     "agentOverrideReset": "العودة إلى الوراثة",
@@ -6581,7 +6584,20 @@
     "deliverPrCommitMessageLabel": "رسالة الإيداع",
     "deliverPrUncommittedHint": "إن أردت أن يثبّتها الوكيل بنفسه، فألغِ وأعد المهمة لجولة أخرى.",
     "deliverPrCommitSubmit": "إيداع ودفع وفتح",
-    "deliverPrCommitPushSubmit": "إيداع ودفع"
+    "deliverPrCommitPushSubmit": "إيداع ودفع",
+    "agentLockedHint": "لهذه المهمة محادثة بالفعل — لا يمكن تغيير وكيلها",
+    "conversationSelectionTitle": "نموذج هذه المحادثة وخياراتها",
+    "conversationSelectionHint": "غيّرها داخل المحادثة؛ وستتابع إعادة المحاولة أو الإرجاع أو الدمج التالي هذه المحادثة بها.",
+    "conversationSelectionOpen": "افتح المحادثة للتغيير",
+    "conversationSelectionLoading": "جارٍ التحميل…",
+    "conversationSelectionUnavailable": "غير متاح من هذا الخادم",
+    "conversationSelectionEmpty": "الإعدادات الافتراضية للوكيل",
+    "conversationSelectionLegacy": "لم يُسجَّل بعد — ستحتفظ المحادثة بهذه الإعدادات بدءًا من اتصالها التالي",
+    "conversationSelectionStarting": "المهمة قيد البدء — حاول مجددًا بعد أن تبدأ التشغيل",
+    "conversationSelectionReplaced": "وكيل هذه المهمة يختلف عن وكيل محادثتها: سيبدأ التشغيل التالي محادثة جديدة بالإعدادات أدناه.",
+    "settingsAgentFrozenHint": "تحتفظ المهام بالوكيل والخيارات التي أُنشئت بها — يسري التغيير هنا على المهام المنشأة لاحقًا.",
+    "actionEditTaskConfig": "تعديل إعدادات المهمة",
+    "selectorOnlyHint": "أثناء المراجعة يمكن تغيير خيارات الوكيل فقط؛ ويبقى الوصف والعنوان كما هما."
   },
   "CustomSkillsSettings": {
     "loading": "جارٍ تحميل المهارات المخصّصة…",
@@ -7564,6 +7580,7 @@
       "discover": "اكتشاف",
       "mcp": "MCP",
       "skills": "المهارات",
+      "plugins": "الإضافات",
       "packs": "حزم المهارات"
     },
     "updatesAvailable": "{count, plural, zero {لا تحديثات متاحة} one {تحديث واحد متاح} two {تحديثان متاحان} few {# تحديثات متاحة} many {# تحديثًا متاحًا} other {# تحديث متاح}}",
@@ -7599,7 +7616,8 @@
         "skill": "المهارات",
         "mcp": "MCP",
         "prompt": "الموجِّهات",
-        "assistant": "المساعدون"
+        "assistant": "المساعدون",
+        "plugin": "الإضافات"
       },
       "kind": {
         "skill": "مهارة",
@@ -7607,6 +7625,7 @@
         "prompt": "موجِّه",
         "assistant": "مساعد",
         "connector": "موصِّل",
+        "plugin": "إضافة",
         "unknown": "نوع غير معروف"
       },
       "filters": {
@@ -7874,10 +7893,21 @@
           "unsupportedWeb": "خادم Codeg لا ينسخ التعريفات بعد. حدِّث الخادم لنسخها."
         }
       },
+      "plugin": {
+        "hosts": "المضيفات",
+        "members": "المكوّنات",
+        "autorun": "ما يعمل تلقائيًا",
+        "releases": "الإصدارات المنشورة",
+        "added": "أُضيف",
+        "updated": "حُدِّث",
+        "removed": "أُزيل",
+        "unpinned": "خوادم MCP بلا إصدار مثبّت",
+        "noAutorun": "لا شيء"
+      },
       "hero": {
         "title": "اعثر على <accent>قدرات جديدة</accent> لوكلائك",
-        "subtitle": "{count, number} من المهارات وخوادم MCP والموجّهات والمساعدين من المجتمع — ثبّت مرة واحدة واستخدمها عبر وكلائك",
-        "subtitleNoCount": "مهارات وخوادم MCP وموجّهات ومساعدون من المجتمع — ثبّت مرة واحدة واستخدمها عبر وكلائك"
+        "subtitle": "{count, number} من المهارات والإضافات وخوادم MCP والموجّهات والمساعدين من المجتمع — ثبّت مرة واحدة واستخدمها عبر وكلائك",
+        "subtitleNoCount": "مهارات وإضافات وخوادم MCP وموجّهات ومساعدون من المجتمع — ثبّت مرة واحدة واستخدمها عبر وكلائك"
       },
       "layout": {
         "label": "التخطيط",
@@ -8067,8 +8097,10 @@
           "latest": "محدَّث",
           "updateAvailable": "يتوفر تحديث",
           "yanked": "سُحب الإصدار",
+          "unapproved": "سُحبت الموافقة",
           "disabledByAuthor": "عطّله مؤلفه",
-          "removedByHarness": "أُزيل من SRN Harness"
+          "removedByHarness": "أُزيل من SRN Harness",
+          "gone": "لم يعد موجودًا في SRN"
         },
         "editDefinition": "تعديل التعريف",
         "editDefinitionLetter": "تعديل التعريف {letter}",
@@ -8422,7 +8454,11 @@
         "permissionsNotStated": "لم يذكر SRN Harness ما يطلبه.",
         "noPermissions": "لا شيء بعينه.",
         "undeclared": "مُكتشَف، غير مُصرَّح به",
-        "declaredOnly": "مُصرَّح به، غير مُكتشَف"
+        "declaredOnly": "مُصرَّح به، غير مُكتشَف",
+        "undeclaredCount": "{count, plural, zero {لا شيء غير مُصرَّح به} one {عنصر واحد غير مُصرَّح به} two {عنصران غير مُصرَّح بهما} few {# عناصر غير مُصرَّح بها} many {# عنصرًا غير مُصرَّح به} other {# عنصر غير مُصرَّح به}}",
+        "moreValues": "{count, plural, zero {لا مزيد} one {واحد آخر} two {اثنان آخران} few {# أخرى} many {# أخرى} other {# أخرى}}",
+        "fewerValues": "عرض أقل",
+        "noneDeclared": "لم يُصرِّح الناشر بأيٍّ منها؛ كلها اكتشفتها الفحوص."
       },
       "blocked": {
         "title": "لا يمكن تثبيت هذا",
@@ -8728,18 +8764,22 @@
         "clearFilters": "مسح البحث والتصفية",
         "deleteTicked": "حذف…",
         "orphans": "روابط معطّلة إلى مهارات لم تعد موجودة",
-        "problems": "وجد Codeg في مخزن مهاراته ما يستحق النظر"
+        "problems": "وجد Codeg في مخزن مهاراته ما يستحق النظر",
+        "pluginSkills": "مهارات الإضافات"
       },
       "marks": {
         "harnessVersion": "SRN Harness {version}",
-        "problem": "يحتاج إلى انتباه"
+        "problem": "يحتاج إلى انتباه",
+        "belongsTo": "جزء من {plugin}"
       },
       "harnessStates": {
         "latest": "محدّثة",
         "updateAvailable": "يتوفّر تحديث",
         "yanked": "سُحب الإصدار",
+        "unapproved": "سُحبت الموافقة",
         "disabledByAuthor": "عطّلها مؤلّفها",
         "removedByHarness": "أُزيلت من SRN Harness",
+        "gone": "لم تعد موجودة في SRN",
         "changedLocally": "عُدّلت هنا",
         "filesMissing": "ملفات مفقودة"
       },
@@ -8886,7 +8926,8 @@
         "forSome": "عدد الوكلاء: {count, number}",
         "batchOn": "تفعيل",
         "batchOff": "تعطيل",
-        "clear": "مسح"
+        "clear": "مسح",
+        "providedBy": "يوفّرها {plugin}"
       },
       "write": {
         "notOn": "لم تُفعَّل <code>{skill}</code> لـ {agent}.",
@@ -9074,7 +9115,8 @@
           "brokenCodeg": "رابط أنشأه Codeg لا يؤدي إلى أي مكان. يمكن إصلاحه أو حذفه.",
           "brokenOther": "رابط لا يؤدي إلى أي مكان، أُنشئ خارج Codeg. يمكن حذفه.",
           "unknown": "لم يذكر هذا الإصدار من Codeg لمن هذه المهارة."
-        }
+        },
+        "showPlugin": "عرض الإضافة"
       },
       "editor": {
         "newCustom": "مهارة مخصّصة جديدة",
@@ -9277,8 +9319,9 @@
         "archive": "يُنزَّل من نسخة SRN Harness، ويُتحقَّق منه مقابل بصمة SHA-256 الخاصة به <code>{hash}</code>…، ثم ملفًا ملفًا.",
         "source": "يُجلب من GitHub: <code>{repository}</code> عند الالتزام <code>{commit}</code>، المجلد <code>{path}</code>. ويُتحقَّق من كل ملف مقابل بصمة SHA-256 الخاصة به.",
         "noSource": "لا يقدّم SRN Harness نسخة من ملفاتها ولا مصدرًا لجلبها منه.",
-        "files": "عرض {count, plural, zero {الملفات} one {الملف} two {الملفين} few {# ملفات} many {# ملفًا} other {# ملف}}",
-        "executable": "تنفيذي"
+        "executable": "تنفيذي",
+        "fileList": "قائمة الملفات",
+        "executableCount": "{count, plural, zero {لا ملفات تنفيذية} one {ملف تنفيذي واحد} two {ملفان تنفيذيان} few {# ملفات تنفيذية} many {# ملفًا تنفيذيًا} other {# ملف تنفيذي}}"
       },
       "name": {
         "title": "اسم التثبيت",
@@ -9504,9 +9547,245 @@
       },
       "ownershipUnresolved": "تعذّر على Codeg قراءة سجلّه للمهارات التي ثبّتها من SRN Harness، لذا لا يستطيع معرفة ما إذا كانت هذه المهارة من SRN Harness. تُترك كما هي تمامًا حتى تمكن قراءة السجلّ."
     },
+    "pluginInstall": {
+      "actions": {
+        "install": "تثبيت"
+      },
+      "versions": {
+        "behindPending": "التثبيت الكامل: <code>{full}</code> (<code>{latest}</code> بانتظار المراجعة)",
+        "behindUnpinned": "التثبيت الكامل: <code>{full}</code> (<code>{latest}</code>: خوادم MCP بلا إصدار مثبّت)",
+        "pending": "التثبيت الكامل بانتظار المراجعة",
+        "unpinned": "التثبيت الكامل: خوادم MCP بلا إصدار مثبّت"
+      },
+      "members": {
+        "title": "المكوّنات",
+        "none": "لا شيء",
+        "kinds": {
+          "assistant": "مساعد",
+          "unknown": "غير معروف"
+        }
+      },
+      "hostParts": {
+        "skills": "المهارات: {count, number}",
+        "agents": "المساعدون: {count, number}",
+        "commands": "الأوامر: {count, number}",
+        "hooks": "الخطافات: {count, number}",
+        "mcp": "خوادم MCP: {count, number}",
+        "code": "إضافات برمجية: {count, number}",
+        "nothing": "لا شيء"
+      },
+      "autorun": {
+        "title": "ما يعمل تلقائيًا",
+        "consent": "أوافق على ما يعمل تلقائيًا",
+        "show": "عرض كامل",
+        "hide": "إخفاء",
+        "reading": "جارٍ القراءة…",
+        "types": {
+          "hook": "خطاف",
+          "code": "إضافة برمجية",
+          "mcp": "خادم MCP",
+          "lsp": "خادم لغة",
+          "monitor": "مراقب",
+          "bin": "أمر",
+          "unknown": "أخرى"
+        },
+        "consentNote": "بتحديد هذا، توافق على أن {count, plural, zero {العناصر أعلاه تعمل} one {العنصر أعلاه يعمل} two {العنصرين أعلاه يعملان} few {العناصر الـ# أعلاه تعمل} many {العناصر الـ# أعلاه تعمل} other {العناصر الـ# أعلاه تعمل}} تلقائيًا في الوكلاء المثبَّت فيها كإضافة.",
+        "consentNoteNoList": "بتحديد هذا، توافق على أن ما تجلبه هذه الإضافة يعمل تلقائيًا في الوكلاء المثبَّت فيها كإضافة."
+      },
+      "modes": {
+        "native": "كإضافة",
+        "skills": "المهارات فقط",
+        "none": "عدم التثبيت",
+        "unknown": "غير معروف"
+      },
+      "hosts": {
+        "title": "الوكلاء",
+        "none": "لم يُعثر على وكلاء",
+        "codexTrust": "يلزم الوثوق بالخطافات في Codex",
+        "experts": "يتولّى مهارات الخبراء {count, number}",
+        "held": "أسماء مستخدَمة {count, number}",
+        "copiesToTake": "نسخ تُنقل إلى النسخ الاحتياطية:",
+        "noPreview": "تعذّرت قراءة ما يغيّره الربط",
+        "setAll": "الكل"
+      },
+      "missing": {
+        "noHosts": "اختر طريقة التثبيت لوكيل واحد على الأقل.",
+        "name": "لم يقدّم SRN Harness اسم تثبيت.",
+        "consent": "وافق على ما يعمل تلقائيًا.",
+        "agentBlocked": "{agent}: لا يمكن إضافة مهاراته.",
+        "agentNoPreview": "{agent}: تعذّرت قراءة ما يغيّره الربط."
+      },
+      "notices": {
+        "effectsChanged": "المعاينة لم تعد محدّثة. لم يُكتب شيء.",
+        "stateMoved": "تغيّرت المعلومات على SRN Harness."
+      },
+      "outcome": {
+        "installed": "تم التثبيت.",
+        "busy": "يجري تغيير آخر. لم يُكتب شيء.",
+        "failed": "فشل التثبيت.",
+        "unknown": "لا يستطيع Codeg هذا معرفة نتيجة التثبيت.",
+        "needsRepair": "يحتاج إلى إصلاح: {agents}",
+        "problems": "تنظيف لم يكتمل:",
+        "status": {
+          "done": "تم",
+          "failed": "فشل",
+          "undone": "تم التراجع",
+          "needs_repair": "يحتاج إلى إصلاح",
+          "unknown": "غير معروف"
+        }
+      },
+      "reasons": {
+        "not_a_plugin": "هذه ليست إضافة (بل: {kind}).",
+        "plugin_info_missing": "لم يقدّم SRN Harness شيئًا عن الإضافة نفسها.",
+        "plugin_install_name_invalid": "لا يصلح <code>{name}</code> اسمَ تثبيت لإضافة.",
+        "plugin_install_name_mismatch": "اسم التثبيت <code>{name}</code> ليس اسم هذا الإصدار (<code>{expected}</code>).",
+        "plugin_install_name_taken": "<code>{name}</code> مستخدَم لإضافة أخرى (<code>{ref}</code>).",
+        "plugin_already_installed": "مثبّتة مسبقًا باسم <code>{name}</code>.",
+        "plugin_no_hosts": "لن يحصل عليها أي وكيل.",
+        "plugin_no_adapter": "لا يستطيع {agent} تثبيتها كإضافة.",
+        "plugin_native_unavailable": "لا يستطيع {agent} تثبيتها كإضافة:",
+        "plugin_revision_not_target": "لا يمكن تثبيت المراجعة #{revision} بهذه الطريقة.",
+        "plugin_revision_not_target_native": "المراجعة #{revision} ليست التي تُثبَّت كاملة (#{expected}).",
+        "plugin_revision_not_target_skills": "المراجعة #{revision} ليست الأحدث (#{expected}).",
+        "plugin_no_full": "لا توجد بعد مراجعة يمكن تثبيتها كاملة (بانتظار المراجعة).",
+        "plugin_no_full_unpinned": "لا توجد مراجعة يمكن تثبيتها كاملة (خوادم MCP بلا إصدار مثبّت).",
+        "plugin_not_approved": "المراجعة #{revision} غير معتمدة للتثبيت الكامل.",
+        "plugin_mcp_unpinned": "خوادم MCP بلا إصدار مثبّت: <code>{servers}</code>.",
+        "plugin_consent_required": "ما يعمل تلقائيًا يحتاج إلى موافقتك.",
+        "plugin_consent_stale": "تغيّر ما يعمل تلقائيًا: وافق عليه من جديد.",
+        "plugin_host_step_failed": "{agent}: فشلت خطوة «{step}».",
+        "plugin_needs_repair": "يحتاج إلى إصلاح: {agents}.",
+        "plugin_up_to_date": "على المراجعة #{revision} بالفعل.",
+        "plugin_record_changed": "تغيّر سجل إضافات Codeg.",
+        "plugin_not_on_agent": "ليست لدى {agent} هذه الإضافة.",
+        "plugin_last_host": "{agent} هو الوكيل الوحيد الذي لديه هذه الإضافة.",
+        "plugin_unchanged": "هي لدى {agent} على هذا النحو بالفعل.",
+        "plugin_suspended": "أوقفها Codeg لدى {agent}.",
+        "plugin_no_repair_needed": "لا يحتاج {agent} إلى إصلاح.",
+        "plugin_reinstall_required": "{agent}: أزل تثبيتها ثم ثبّتها من جديد.",
+        "plugin_revision_modified": "تغيّرت ملفات المراجعة #{revision}.",
+        "plugin_unverified": "تعذّر سؤال SRN عن هذه المراجعة.",
+        "plugin_advisory_disable": "يطلب تنبيه إيقاف هذه المراجعة.",
+        "plugin_launch_env_unreadable": "تعذّرت قراءة إعدادات تشغيل {agent}.",
+        "plugin_host_not_found": "لم يُعثر على المضيف.",
+        "plugin_host_version_unknown": "تعذّرت قراءة إصدار المضيف.",
+        "plugin_host_home_relative": "{variable} مسار نسبي: <code>{path}</code>.",
+        "plugin_adapter_off": "غير متاحة بعد كإضافة لهذا المضيف.",
+        "plugin_host_version_unsupported": "إصدار المضيف <code>{version}</code> غير مدعوم.",
+        "plugin_host_command_failed": "فشل <code>{command}</code> ({status}).",
+        "plugin_host_command_timed_out": "لم ينتهِ <code>{command}</code> خلال {seconds, number} ث.",
+        "plugin_host_command_not_started": "تعذّر تشغيل <code>{command}</code>.",
+        "plugin_marketplace_unreadable": "تعذّرت قراءة ملف سوق Codeg.",
+        "plugin_host_name_taken": "لدى المضيف إضافة أخرى باسم <code>{name}</code> (<code>{plugin}</code>).",
+        "plugin_host_name_changed": "تغيّر اسمها لدى المضيف من <code>{from}</code> إلى <code>{to}</code>.",
+        "plugin_revision_missing": "المراجعة #{revision} ليست في مخزن الإضافات.",
+        "plugin_host_files": "تعذّرت كتابة ملفات المضيف.",
+        "plugin_host_not_listed": "ليس للإضافة بيان لهذا المضيف.",
+        "plugin_entry_missing": "ليس في الإضافة شيفرة يستطيع هذا المضيف تحميلها.",
+        "plugin_host_settings_unreadable": "تعذّرت قراءة إعدادات المضيف.",
+        "plugin_host_not_installed": "<code>{name}</code> غير مثبّتة لدى المضيف.",
+        "plugin_marketplace_not_added": "لا يعرف المضيف سوق Codeg.",
+        "plugin_marketplace_elsewhere": "سوق المضيف بهذا الاسم في مكان آخر: <code>{path}</code>.",
+        "plugin_marketplace_elsewhere_unknown": "سوق المضيف بهذا الاسم في مكان آخر.",
+        "plugin_marketplace_entry_missing": "لا يوجد لها مُدخل في سوق Codeg.",
+        "plugin_marketplace_source_mismatch": "يشير السوق إلى <code>{found}</code> لا إلى <code>{expected}</code>.",
+        "plugin_host_entry_mismatch": "تذكر إعدادات المضيف <code>{found}</code> لا <code>{expected}</code>.",
+        "plugin_host_cache_missing": "نسخة الإضافة لدى المضيف مفقودة.",
+        "plugin_hooks_unreadable": "تعذّرت قراءة حالة الثقة بالخطافات.",
+        "experts_linked": "مهارات الخبراء ما زالت مربوطة: <code>{names}</code>.",
+        "owned_set_differs": "لدى وكيل آخر مجموعة أخرى من مهاراتها: حدّثها أولًا.",
+        "owned_by_other": "<code>{name}</code> تخص إضافة أخرى (<code>{plugin}</code>).",
+        "copies_not_refreshed": "تعذّر تحديث نسخ <code>{name}</code>.",
+        "member_duplicate": "مكوّنان باسم <code>{name}</code>.",
+        "member_file_mismatch": "<code>{path}</code> في <code>{name}</code> لا يطابق القائمة.",
+        "plugin_owned": "<code>{name}</code> جزء من إضافة: لا تُدار إلا معها."
+      }
+    },
+    "plugins": {
+      "refresh": "إعادة قراءة الإضافات",
+      "listLabel": "الإضافات المثبّتة",
+      "none": "لا توجد إضافات مثبّتة",
+      "browse": "التصفّح في الاستكشاف",
+      "retry": "إعادة المحاولة",
+      "version": "الإصدار {version}",
+      "revision": "المراجعة #{revision}",
+      "installed": "مثبّتة {version}",
+      "states": {
+        "disabled": "متوقفة",
+        "suspended": "أوقفها SRN",
+        "needsRepair": "تحتاج إلى إصلاح",
+        "unknown": "حالة غير معروفة"
+      },
+      "actions": {
+        "update": "تحديث",
+        "repair": "إصلاح",
+        "uninstall": "إلغاء التثبيت",
+        "disable": "إيقاف",
+        "enable": "تشغيل",
+        "changeMode": "تغيير طريقة التثبيت",
+        "hookTrust": "الثقة بالخطافات",
+        "manage": "إدارة"
+      },
+      "hooks": {
+        "again": "القراءة مجددًا",
+        "none": "لا توجد خطافات",
+        "trusted": "الخطافات موثوقة",
+        "untrusted": "يلزم الوثوق بالخطافات في Codex",
+        "modified": "تغيّرت الخطافات: يلزم الوثوق بها مجددًا في Codex",
+        "unknown": "تعذّرت قراءة حالة الثقة بالخطافات"
+      },
+      "dialog": {
+        "checking": "جارٍ التحقق…",
+        "writing": "جارٍ الكتابة…",
+        "refused": "لم يُنفَّذ:",
+        "failed": "فشلت العملية.",
+        "giveBack": "يعيد مهارات الخبراء {count, number}",
+        "fromTo": "<code>{from}</code> ← <code>{to}</code>",
+        "upToDate": "محدّثة.",
+        "changedMembers": "الأعضاء المتغيّرون",
+        "memberChanges": {
+          "added": "أُضيف",
+          "removed": "أُزيل",
+          "changed": "حُدّث"
+        },
+        "actions": {
+          "update": "تحديث",
+          "resume": "تحديث وتشغيل",
+          "to_skills": "إلى المهارات فقط",
+          "record_only": "تبقى متوقفة",
+          "none": "بلا تغيير",
+          "needs_repair": "تحتاج إلى إصلاح: لا تحديث",
+          "unknown": "غير معروف"
+        },
+        "title": {
+          "mode": "<code>{name}</code> · {agent}: {mode}",
+          "enable": "تشغيل <code>{name}</code> · {agent}",
+          "disable": "إيقاف <code>{name}</code> · {agent}",
+          "repair": "إصلاح <code>{name}</code>"
+        },
+        "confirm": {
+          "mode": "تغيير",
+          "enable": "تشغيل",
+          "disable": "إيقاف",
+          "repair": "إصلاح"
+        },
+        "outcome": {
+          "updated": "تم التحديث.",
+          "changed": "تم التغيير.",
+          "repaired": "تم الإصلاح."
+        },
+        "missing": {
+          "title": "قبل أن يمكن تحديثها:",
+          "titleChange": "ما زال مطلوبًا:",
+          "target": "لا توجد مراجعة للتحديث إليها.",
+          "yanked": "أكّد التحديث إلى إصدار مسحوب."
+        }
+      }
+    },
     "record": {
       "mcp": "تعذّر على Codeg قراءة سجلّه لخوادم MCP التي ثبّتها من SRN Harness، لذا لا يظهر هنا أي خادم بعلامة SRN Harness. وإلى أن تمكن قراءة السجلّ، لن يُثبَّت أي شيء من SRN Harness ولن يُلغى تثبيته.",
-      "skills": "تعذّر على Codeg قراءة سجلّه للمهارات التي ثبّتها من SRN Harness، لذا لا تظهر هنا أي مهارة بعلامة SRN Harness. وإلى أن تمكن قراءة السجلّ، لن يُثبَّت أي شيء من SRN Harness ولن يُلغى تثبيته، وتُترك المهارات التي قد تكون من SRN Harness كما هي تمامًا."
+      "skills": "تعذّر على Codeg قراءة سجلّه للمهارات التي ثبّتها من SRN Harness، لذا لا تظهر هنا أي مهارة بعلامة SRN Harness. وإلى أن تمكن قراءة السجلّ، لن يُثبَّت أي شيء من SRN Harness ولن يُلغى تثبيته، وتُترك المهارات التي قد تكون من SRN Harness كما هي تمامًا.",
+      "plugins": "لا يستطيع Codeg قراءة سجل الإضافات."
     },
     "errors": {
       "disabled": "«اكتشاف» متوقف في هذا الـ Codeg.",

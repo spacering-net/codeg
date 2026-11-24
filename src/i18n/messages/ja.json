@@ -2298,6 +2298,7 @@
       "forge": "リポジトリパネル",
       "canvas": "無限キャンバス",
       "harness": "ハーネスエンジニアリング",
+      "harnessHint": "スキル · MCP",
       "folderGroup": {
         "newGroup": "新しいグループ",
         "newGroupTitle": "新しいフォルダグループ",
@@ -3525,6 +3526,7 @@
         "modelListLabel": "モデル",
         "recommendedBadge": "推奨",
         "recommendedValue": "推奨: {value}",
+        "effortRange": "推論レベル: {range}",
         "searchOptions": "オプションを検索...",
         "searchOptionsAria": "オプションを検索",
         "noOptions": "オプションが見つかりません",
@@ -3688,7 +3690,8 @@
             "title": "「{skill}」スキルは {agent} でまだ有効になっていません",
             "description": "ハーネスエンジニアリング › スキルパック で有効にすると、ここで使用できます。",
             "action": "有効にする",
-            "hint": "スキルが無効です"
+            "hint": "スキルが無効です",
+            "showPlugin": "プラグインを表示"
           },
           "scrollPrev": "前のスキルを表示",
           "scrollNext": "次のスキルを表示"
@@ -6374,7 +6377,7 @@
     "baseBranch": "ベースブランチ",
     "baseBranchDefault": "タスク開始時の現在のブランチ",
     "baseBranchHint": "タスクはこのブランチから分岐し、マージもこのブランチに戻ります。",
-    "agentInheritedHint": "タスク設定から継承 — 変更するとこのタスク専用になります",
+    "agentInheritedHint": "タスク設定から — このタスクに保存されます",
     "agentNoDefaultHint": "タスク設定に既定のエージェントがありません — 選択中のエージェントをこのタスクに保存します",
     "agentInheritedUnavailableHint": "タスク設定の {agent} は利用できません — 選択中のエージェントをこのタスクに保存します",
     "agentOverrideReset": "継承に戻す",
@@ -6581,7 +6584,20 @@
     "deliverPrCommitMessageLabel": "コミットメッセージ",
     "deliverPrUncommittedHint": "エージェントにコミットさせたい場合は、キャンセルしてタスクを差し戻し、もう一巡させてください。",
     "deliverPrCommitSubmit": "コミットして push・作成",
-    "deliverPrCommitPushSubmit": "コミットして push"
+    "deliverPrCommitPushSubmit": "コミットして push",
+    "agentLockedHint": "このタスクにはすでに会話があるため、エージェントは変更できません",
+    "conversationSelectionTitle": "この会話のモデルとオプション",
+    "conversationSelectionHint": "会話の中で変更してください。次の再試行・差し戻し・マージはこの会話をその設定で続けます。",
+    "conversationSelectionOpen": "会話を開いて変更",
+    "conversationSelectionLoading": "読み込み中…",
+    "conversationSelectionUnavailable": "このサーバーからは取得できません",
+    "conversationSelectionEmpty": "エージェントの既定値",
+    "conversationSelectionLegacy": "未記録 — 次の接続時に会話がこの設定で固定されます",
+    "conversationSelectionStarting": "タスクを開始しています — 実行中になってからもう一度お試しください",
+    "conversationSelectionReplaced": "このタスクのエージェントは会話のものと異なります。次の実行では以下の設定で新しい会話を開始します。",
+    "settingsAgentFrozenHint": "タスクは作成時のエージェントとオプションを保持します — ここでの変更はこの後に作成するタスクに適用されます。",
+    "actionEditTaskConfig": "タスク設定を編集",
+    "selectorOnlyHint": "レビュー中はエージェントのオプションのみ変更でき、説明とタイトルはそのままです。"
   },
   "CustomSkillsSettings": {
     "loading": "カスタムスキルを読み込み中…",
@@ -7564,6 +7580,7 @@
       "discover": "見つける",
       "mcp": "MCP",
       "skills": "スキル",
+      "plugins": "プラグイン",
       "packs": "スキルパック"
     },
     "updatesAvailable": "{count, number} 件のアップデートがあります",
@@ -7599,7 +7616,8 @@
         "skill": "スキル",
         "mcp": "MCP",
         "prompt": "プロンプト",
-        "assistant": "アシスタント"
+        "assistant": "アシスタント",
+        "plugin": "プラグイン"
       },
       "kind": {
         "skill": "スキル",
@@ -7607,6 +7625,7 @@
         "prompt": "プロンプト",
         "assistant": "アシスタント",
         "connector": "コネクター",
+        "plugin": "プラグイン",
         "unknown": "不明な種類"
       },
       "filters": {
@@ -7874,10 +7893,21 @@
           "unsupportedWeb": "Codeg サーバーはまだ定義をコピーできません。サーバーを更新するとコピーできます。"
         }
       },
+      "plugin": {
+        "hosts": "ホスト",
+        "members": "メンバー",
+        "autorun": "自動で実行されるもの",
+        "releases": "リリース",
+        "added": "追加",
+        "updated": "更新",
+        "removed": "削除",
+        "unpinned": "バージョンが固定されていない MCP サーバー",
+        "noAutorun": "なし"
+      },
       "hero": {
         "title": "エージェントに<accent>新しい力</accent>を",
-        "subtitle": "{count, number} 件のコミュニティのスキル、MCP サーバー、プロンプト、アシスタント。一度インストールすれば複数のエージェントで使えます",
-        "subtitleNoCount": "コミュニティのスキル、MCP サーバー、プロンプト、アシスタント。一度インストールすれば複数のエージェントで使えます"
+        "subtitle": "{count, number} 件のコミュニティのスキル、プラグイン、MCP サーバー、プロンプト、アシスタント。一度インストールすれば複数のエージェントで使えます",
+        "subtitleNoCount": "コミュニティのスキル、プラグイン、MCP サーバー、プロンプト、アシスタント。一度インストールすれば複数のエージェントで使えます"
       },
       "layout": {
         "label": "レイアウト",
@@ -8067,8 +8097,10 @@
           "latest": "最新",
           "updateAvailable": "更新あり",
           "yanked": "バージョン取り下げ",
+          "unapproved": "承認取り消し",
           "disabledByAuthor": "作者が無効化",
-          "removedByHarness": "SRN Harness から削除"
+          "removedByHarness": "SRN Harness から削除",
+          "gone": "SRN にはもうありません"
         },
         "editDefinition": "定義を編集",
         "editDefinitionLetter": "定義 {letter} を編集",
@@ -8422,7 +8454,11 @@
         "permissionsNotStated": "何を求めるかを SRN Harness は示していません。",
         "noPermissions": "特にありません。",
         "undeclared": "検出、未申告",
-        "declaredOnly": "申告、未検出"
+        "declaredOnly": "申告、未検出",
+        "undeclaredCount": "{count, plural, other {# 件が未申告}}",
+        "moreValues": "ほか {count, plural, other {# 件}}",
+        "fewerValues": "折りたたむ",
+        "noneDeclared": "公開者は何も申告していません。以下はすべて検出されたものです。"
       },
       "blocked": {
         "title": "これはインストールできません",
@@ -8728,18 +8764,22 @@
         "clearFilters": "検索と絞り込みをクリア",
         "deleteTicked": "削除…",
         "orphans": "なくなったスキルへの壊れたリンク",
-        "problems": "Codeg がスキルストアで確認が必要なものを見つけました"
+        "problems": "Codeg がスキルストアで確認が必要なものを見つけました",
+        "pluginSkills": "プラグインのスキル"
       },
       "marks": {
         "harnessVersion": "SRN Harness {version}",
-        "problem": "要対応"
+        "problem": "要対応",
+        "belongsTo": "{plugin} の一部"
       },
       "harnessStates": {
         "latest": "最新",
         "updateAvailable": "更新あり",
         "yanked": "バージョン取り下げ",
+        "unapproved": "承認取り消し",
         "disabledByAuthor": "作者が無効化",
         "removedByHarness": "SRN Harness から削除",
+        "gone": "SRN にはもうありません",
         "changedLocally": "ここで変更済み",
         "filesMissing": "ファイル不足"
       },
@@ -8886,7 +8926,8 @@
         "forSome": "{count, number} 件のエージェント",
         "batchOn": "オンにする",
         "batchOff": "オフにする",
-        "clear": "クリア"
+        "clear": "クリア",
+        "providedBy": "{plugin} が提供"
       },
       "write": {
         "notOn": "{agent} で <code>{skill}</code> をオンにできませんでした。",
@@ -9074,7 +9115,8 @@
           "brokenCodeg": "Codeg が作ったリンクで、どこも指していません。修復または削除できます。",
           "brokenOther": "Codeg 以外が作ったリンクで、どこも指していません。削除できます。",
           "unknown": "この Codeg はこのスキルが誰のものかを示しませんでした。"
-        }
+        },
+        "showPlugin": "プラグインを表示"
       },
       "editor": {
         "newCustom": "新しいカスタムスキル",
@@ -9277,8 +9319,9 @@
         "archive": "SRN Harness が保管するコピーからダウンロードし、SHA-256 <code>{hash}</code>… で照合してから、ファイルごとにチェックします。",
         "source": "GitHub から取得します（<code>{repository}</code>、コミット <code>{commit}</code>、フォルダー <code>{path}</code>）。各ファイルを SHA-256 で照合します。",
         "noSource": "SRN Harness は、ファイルのコピーも、ファイルの取得元も示していません。",
-        "files": "{count, plural, other {# 個のファイルを表示}}",
-        "executable": "実行可能"
+        "executable": "実行可能",
+        "fileList": "ファイル一覧",
+        "executableCount": "{count, plural, other {# 件が実行可能}}"
       },
       "name": {
         "title": "インストール名",
@@ -9504,9 +9547,245 @@
       },
       "ownershipUnresolved": "Codeg が SRN Harness からインストールしたスキルの記録を読み取れないため、このスキルが SRN Harness のものかどうか判断できません。記録を読み取れるようになるまで、そのまま残します。"
     },
+    "pluginInstall": {
+      "actions": {
+        "install": "インストール"
+      },
+      "versions": {
+        "behindPending": "完全インストール：<code>{full}</code>（<code>{latest}</code> は審査待ち）",
+        "behindUnpinned": "完全インストール：<code>{full}</code>（<code>{latest}</code>：バージョンが固定されていない MCP サーバー）",
+        "pending": "完全インストールは審査待ち",
+        "unpinned": "完全インストール：バージョンが固定されていない MCP サーバー"
+      },
+      "members": {
+        "title": "メンバー",
+        "none": "なし",
+        "kinds": {
+          "assistant": "アシスタント",
+          "unknown": "不明"
+        }
+      },
+      "hostParts": {
+        "skills": "スキル {count, number}",
+        "agents": "アシスタント {count, number}",
+        "commands": "コマンド {count, number}",
+        "hooks": "フック {count, number}",
+        "mcp": "MCP サーバー {count, number}",
+        "code": "コードプラグイン {count, number}",
+        "nothing": "なし"
+      },
+      "autorun": {
+        "title": "自動で実行されるもの",
+        "consent": "自動実行に同意する",
+        "show": "すべて表示",
+        "hide": "閉じる",
+        "reading": "読み込み中…",
+        "types": {
+          "hook": "フック",
+          "code": "コードプラグイン",
+          "mcp": "MCP サーバー",
+          "lsp": "言語サーバー",
+          "monitor": "モニター",
+          "bin": "コマンド",
+          "unknown": "その他"
+        },
+        "consentNote": "チェックすると、上の {count, plural, other {# 件}}がプラグインとして入れたエージェントで自動実行されることに同意したことになります。",
+        "consentNoteNoList": "チェックすると、このプラグインの内容がプラグインとして入れたエージェントで自動実行されることに同意したことになります。"
+      },
+      "modes": {
+        "native": "プラグインとして",
+        "skills": "スキルのみ",
+        "none": "入れない",
+        "unknown": "不明"
+      },
+      "hosts": {
+        "title": "エージェント",
+        "none": "エージェントが見つかりません",
+        "codexTrust": "Codex でフックを信頼する必要があります",
+        "experts": "エキスパートスキルを引き継ぐ {count, number}",
+        "held": "使用中の名前 {count, number}",
+        "copiesToTake": "バックアップに移すコピー：",
+        "noPreview": "リンクの影響を読み取れません",
+        "setAll": "すべて"
+      },
+      "missing": {
+        "noHosts": "少なくとも 1 つのエージェントのインストール方法を選んでください。",
+        "name": "SRN Harness がインストール名を示していません。",
+        "consent": "自動実行に同意してください。",
+        "agentBlocked": "{agent}：スキルを入れられません。",
+        "agentNoPreview": "{agent}：リンクの影響を読み取れません。"
+      },
+      "notices": {
+        "effectsChanged": "プレビューが古くなりました。何も書き込んでいません。",
+        "stateMoved": "SRN Harness の情報が更新されました。"
+      },
+      "outcome": {
+        "installed": "インストールしました。",
+        "busy": "別の変更が進行中です。何も書き込んでいません。",
+        "failed": "インストールに失敗しました。",
+        "unknown": "この Codeg ではインストールの結果を判断できません。",
+        "needsRepair": "修復が必要：{agents}",
+        "problems": "完了していない後片付け：",
+        "status": {
+          "done": "完了",
+          "failed": "失敗",
+          "undone": "元に戻しました",
+          "needs_repair": "修復が必要",
+          "unknown": "不明"
+        }
+      },
+      "reasons": {
+        "not_a_plugin": "これはプラグインではありません（種類：{kind}）。",
+        "plugin_info_missing": "SRN Harness がプラグイン自体の内容を示していません。",
+        "plugin_install_name_invalid": "<code>{name}</code> はプラグインのインストール名に使えません。",
+        "plugin_install_name_mismatch": "インストール名 <code>{name}</code> がこのバージョンの <code>{expected}</code> と一致しません。",
+        "plugin_install_name_taken": "<code>{name}</code> は別のプラグインが使っています（<code>{ref}</code>）。",
+        "plugin_already_installed": "<code>{name}</code> としてインストール済みです。",
+        "plugin_no_hosts": "どのエージェントにもインストールしません。",
+        "plugin_no_adapter": "{agent} にはプラグインとしてインストールできません。",
+        "plugin_native_unavailable": "{agent} にはプラグインとしてインストールできません：",
+        "plugin_revision_not_target": "リビジョン #{revision} はこの方法ではインストールできません。",
+        "plugin_revision_not_target_native": "リビジョン #{revision} は完全インストールできるリビジョン（#{expected}）ではありません。",
+        "plugin_revision_not_target_skills": "リビジョン #{revision} は最新（#{expected}）ではありません。",
+        "plugin_no_full": "完全インストールできるリビジョンはまだありません（審査待ち）。",
+        "plugin_no_full_unpinned": "完全インストールできるリビジョンはありません（バージョンが固定されていない MCP サーバー）。",
+        "plugin_not_approved": "リビジョン #{revision} は完全インストールが承認されていません。",
+        "plugin_mcp_unpinned": "バージョンが固定されていない MCP サーバー：<code>{servers}</code>。",
+        "plugin_consent_required": "自動で実行されるものには同意が必要です。",
+        "plugin_consent_stale": "自動で実行されるものが変わりました。もう一度同意してください。",
+        "plugin_host_step_failed": "{agent}：「{step}」に失敗しました。",
+        "plugin_needs_repair": "修復が必要：{agents}。",
+        "plugin_up_to_date": "すでにリビジョン #{revision} です。",
+        "plugin_record_changed": "Codeg のプラグイン記録が変わりました。",
+        "plugin_not_on_agent": "{agent} にはこのプラグインがありません。",
+        "plugin_last_host": "{agent} はこれを持つ唯一のエージェントです。",
+        "plugin_unchanged": "{agent} はすでにその状態です。",
+        "plugin_suspended": "Codeg が {agent} で無効にしました。",
+        "plugin_no_repair_needed": "{agent} は修復の必要がありません。",
+        "plugin_reinstall_required": "{agent}：アンインストールしてから再インストールしてください。",
+        "plugin_revision_modified": "リビジョン #{revision} のファイルが変更されています。",
+        "plugin_unverified": "このリビジョンを SRN に確認できませんでした。",
+        "plugin_advisory_disable": "このリビジョンを無効にするよう告知が出ています。",
+        "plugin_launch_env_unreadable": "{agent} の起動設定を読み取れません。",
+        "plugin_host_not_found": "ホストが見つかりません。",
+        "plugin_host_version_unknown": "ホストのバージョンを読み取れません。",
+        "plugin_host_home_relative": "{variable} が相対パスです：<code>{path}</code>。",
+        "plugin_adapter_off": "このホストではまだプラグインとしてインストールできません。",
+        "plugin_host_version_unsupported": "ホストのバージョン <code>{version}</code> には対応していません。",
+        "plugin_host_command_failed": "<code>{command}</code> が失敗しました（{status}）。",
+        "plugin_host_command_timed_out": "<code>{command}</code> が {seconds, number} 秒以内に終わりませんでした。",
+        "plugin_host_command_not_started": "<code>{command}</code> を起動できません。",
+        "plugin_marketplace_unreadable": "Codeg のマーケットプレイスファイルを読み取れません。",
+        "plugin_host_name_taken": "ホストに <code>{name}</code> という別のプラグインがあります（<code>{plugin}</code>）。",
+        "plugin_host_name_changed": "ホストでの名前が <code>{from}</code> から <code>{to}</code> に変わりました。",
+        "plugin_revision_missing": "プラグインストアにリビジョン #{revision} がありません。",
+        "plugin_host_files": "ホストのファイルに書き込めません。",
+        "plugin_host_not_listed": "このプラグインにはこのホスト用のマニフェストがありません。",
+        "plugin_entry_missing": "このプラグインにはこのホストが読み込めるコードがありません。",
+        "plugin_host_settings_unreadable": "ホストの設定を読み取れません。",
+        "plugin_host_not_installed": "ホストに <code>{name}</code> がインストールされていません。",
+        "plugin_marketplace_not_added": "ホストに Codeg のマーケットプレイスがありません。",
+        "plugin_marketplace_elsewhere": "ホストの同名マーケットプレイスは別の場所にあります：<code>{path}</code>。",
+        "plugin_marketplace_elsewhere_unknown": "ホストの同名マーケットプレイスは別の場所にあります。",
+        "plugin_marketplace_entry_missing": "Codeg のマーケットプレイスにこのプラグインがありません。",
+        "plugin_marketplace_source_mismatch": "マーケットプレイスの参照先が <code>{expected}</code> ではなく <code>{found}</code> です。",
+        "plugin_host_entry_mismatch": "ホストの設定にあるのは <code>{expected}</code> ではなく <code>{found}</code> です。",
+        "plugin_host_cache_missing": "ホストにこのプラグインのコピーがありません。",
+        "plugin_hooks_unreadable": "フックの信頼状態を読み取れません。",
+        "experts_linked": "エキスパートスキルがまだリンクされています：<code>{names}</code>。",
+        "owned_set_differs": "別のエージェントには別の組み合わせのスキルがあります。先に更新してください。",
+        "owned_by_other": "<code>{name}</code> は別のプラグインのものです（<code>{plugin}</code>）。",
+        "copies_not_refreshed": "<code>{name}</code> のコピーを更新できませんでした。",
+        "member_duplicate": "<code>{name}</code> という名前のメンバーが 2 つあります。",
+        "member_file_mismatch": "<code>{name}</code> の <code>{path}</code> が一覧と一致しません。",
+        "plugin_owned": "<code>{name}</code> はプラグインの一部で、プラグインごとにしか管理できません。"
+      }
+    },
+    "plugins": {
+      "refresh": "プラグインを読み直す",
+      "listLabel": "インストール済みのプラグイン",
+      "none": "プラグインはインストールされていません",
+      "browse": "見つけるで探す",
+      "retry": "再試行",
+      "version": "バージョン {version}",
+      "revision": "リビジョン #{revision}",
+      "installed": "インストール済み {version}",
+      "states": {
+        "disabled": "オフ",
+        "suspended": "SRN によりオフ",
+        "needsRepair": "修復が必要",
+        "unknown": "不明な状態"
+      },
+      "actions": {
+        "update": "更新",
+        "repair": "修復",
+        "uninstall": "アンインストール",
+        "disable": "オフにする",
+        "enable": "オンにする",
+        "changeMode": "入れ方を変更",
+        "hookTrust": "フックの信頼",
+        "manage": "管理"
+      },
+      "hooks": {
+        "again": "読み直す",
+        "none": "フックなし",
+        "trusted": "フックは信頼済み",
+        "untrusted": "Codex でフックを信頼する必要があります",
+        "modified": "フックが変更されました：Codex で信頼し直す必要があります",
+        "unknown": "フックの信頼状態を読み取れません"
+      },
+      "dialog": {
+        "checking": "確認中…",
+        "writing": "書き込み中…",
+        "refused": "実行されませんでした：",
+        "failed": "操作に失敗しました。",
+        "giveBack": "エキスパートスキルを返す {count, number}",
+        "fromTo": "<code>{from}</code> → <code>{to}</code>",
+        "upToDate": "最新です。",
+        "changedMembers": "変更されたメンバー",
+        "memberChanges": {
+          "added": "追加",
+          "removed": "削除",
+          "changed": "更新"
+        },
+        "actions": {
+          "update": "更新",
+          "resume": "更新してオンにする",
+          "to_skills": "スキルのみに変更",
+          "record_only": "オフのまま",
+          "none": "変更なし",
+          "needs_repair": "修復が必要：更新しません",
+          "unknown": "不明"
+        },
+        "title": {
+          "mode": "<code>{name}</code> · {agent}：{mode}",
+          "enable": "<code>{name}</code> をオンにする · {agent}",
+          "disable": "<code>{name}</code> をオフにする · {agent}",
+          "repair": "<code>{name}</code> を修復"
+        },
+        "confirm": {
+          "mode": "変更",
+          "enable": "オンにする",
+          "disable": "オフにする",
+          "repair": "修復"
+        },
+        "outcome": {
+          "updated": "更新しました。",
+          "changed": "変更しました。",
+          "repaired": "修復しました。"
+        },
+        "missing": {
+          "title": "更新する前に：",
+          "titleChange": "あと必要なこと：",
+          "target": "更新先のリビジョンがありません。",
+          "yanked": "取り下げられたバージョンへの更新を確認してください。"
+        }
+      }
+    },
     "record": {
       "mcp": "Codeg が SRN Harness からインストールした MCP サーバーの記録を読み取れないため、ここではどれも SRN Harness からのものとして示していません。記録を読み取れるようになるまで、SRN Harness からのインストールやアンインストールは行いません。",
-      "skills": "Codeg が SRN Harness からインストールしたスキルの記録を読み取れないため、ここではどれも SRN Harness からのものとして示していません。記録を読み取れるようになるまで、SRN Harness からのインストールやアンインストールは行わず、SRN Harness のものかもしれないスキルもそのまま残します。"
+      "skills": "Codeg が SRN Harness からインストールしたスキルの記録を読み取れないため、ここではどれも SRN Harness からのものとして示していません。記録を読み取れるようになるまで、SRN Harness からのインストールやアンインストールは行わず、SRN Harness のものかもしれないスキルもそのまま残します。",
+      "plugins": "プラグインの記録を読み取れません。"
     },
     "errors": {
       "disabled": "この Codeg では「見つける」がオフになっています。",

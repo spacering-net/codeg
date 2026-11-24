@@ -35,6 +35,8 @@ import {
   updateHarnessDialog,
 } from "./mcp-install-state"
 import type { HarnessReason, HarnessVersionState } from "./mcp-install-types"
+import { openPluginInstall } from "./plugin-install-state"
+import { openPluginUpdate } from "./plugin-manage-state"
 import {
   initialSkillInput,
   orderedAgents,
@@ -567,7 +569,7 @@ export function setSkillAcceptYanked(
 /**
  * `openHarness({ section: "discover", itemRef, intent: "install" })`: show
  * the item, and once it is in, offer its install dialog — an MCP server's or
- * a skill's. Any other kind has nothing to install. Nothing is installed:
+ * a skill's or a plugin's. Any other kind has nothing to install. Nothing is installed:
  * the dialog asks.
  */
 export async function openDiscoverItemToInstallAny(
@@ -599,6 +601,35 @@ export async function openDiscoverItemToInstallAny(
       itemRef: detail.item.ref,
       title: detail.item.title,
       purpose: "install",
+      from: "discover",
+    })
+  } else if (kind === "plugin") {
+    // Installed here already: the link's install is its update — planned
+    // and shown like any update, written only by its dialog's button. What
+    // is installed is read first when the page has not read it yet.
+    const itemId = detail.item.id
+    if (slots.get(HARNESS_INSTALLED).value === null) {
+      await reloadHarnessInstalled(slots)
+      if (slots.get(DISCOVER_DETAIL)?.request !== request) return
+    }
+    const installed = slots.get(HARNESS_INSTALLED).value
+    // Still not known (the read failed, or a newer one is on its way): the
+    // detail is on show, and its own actions say installed or not.
+    if (installed === null) return
+    const listed = installed.plugins?.find(
+      (plugin) => plugin.item_id === itemId
+    )
+    if (listed) {
+      openPluginUpdate(slots, {
+        itemId: listed.item_id,
+        itemRef: listed.ref,
+        name: listed.name,
+      })
+      return
+    }
+    openPluginInstall(slots, {
+      itemRef: detail.item.ref,
+      title: detail.item.title,
       from: "discover",
     })
   }

@@ -52,19 +52,37 @@ pub async fn harness_mcp_install_core(
 
 pub async fn harness_installed_core(
     db: &AppDatabase,
+    data_dir: &std::path::Path,
     emitter: &EventEmitter,
 ) -> Result<HarnessInstalled, AppCommandError> {
     let local = Local::from_db(db).await;
-    harness_installed_in(&local, crate::skills::SkillsCtx::user(), emitter).await
+    let plugins = crate::commands::harness_plugins::plugins_local(db, data_dir, false).await;
+    // The update check's last answers (read, never asked): the plugins'
+    // update marks.
+    let updates = crate::harness::updates::checker_for(data_dir, emitter)
+        .updates()
+        .await
+        .map(|updates| updates.items)
+        .unwrap_or_default();
+    harness_installed_in(
+        &local,
+        crate::skills::SkillsCtx::user(),
+        &plugins,
+        &updates,
+        emitter,
+    )
+    .await
 }
 
-/// [`harness_installed_core`] over the given MCP side and skill store. A
-/// record that cannot be read (the MCP record, the skills manifest) empties
-/// only its own part and says so in that part's problem; anything else
-/// rejects as before.
+/// [`harness_installed_core`] over the given MCP side, skill store and
+/// plugin side. A record that cannot be read (the MCP record, the skills
+/// manifest, the plugins record) empties only its own part and says so in
+/// that part's problem; anything else rejects as before.
 pub(crate) async fn harness_installed_in(
     local: &Local,
     skills: crate::skills::SkillsCtx,
+    plugins: &crate::harness::plugins::install::PluginsLocal,
+    updates: &[crate::harness::updates::UpdateItem],
     emitter: &EventEmitter,
 ) -> Result<HarnessInstalled, AppCommandError> {
     let unreadable = |error: &AppCommandError| {
@@ -80,11 +98,17 @@ pub(crate) async fn harness_installed_in(
             skills: Vec::new(),
             mcp_problem: Some(unreadable(&error).ok_or(error)?),
             skills_problem: None,
+            plugins: Vec::new(),
+            plugins_problem: None,
         },
     };
     match crate::harness::skills::installed_skills(skills).await {
         Ok(skills) => listed.skills = skills,
         Err(error) => listed.skills_problem = Some(unreadable(&error).ok_or(error)?),
+    }
+    match crate::harness::plugins::listing::installed(plugins, updates).await? {
+        Ok(rows) => listed.plugins = rows,
+        Err(problem) => listed.plugins_problem = Some(problem),
     }
     Ok(listed)
 }
@@ -162,7 +186,11 @@ mod tauri_commands {
         app: tauri::AppHandle,
         db: tauri::State<'_, AppDatabase>,
     ) -> Result<HarnessInstalled, AppCommandError> {
-        harness_installed_core(&db, &EventEmitter::from_app(&app)).await
+        use tauri::Manager;
+        let data_dir = crate::paths::resolve_effective_data_dir(
+            &app.path().app_data_dir().unwrap_or_default(),
+        );
+        harness_installed_core(&db, &data_dir, &EventEmitter::from_app(&app)).await
     }
 
     #[tauri::command]
