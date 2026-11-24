@@ -89,7 +89,11 @@ function publish(value: TranscriptInsights) {
 function panel(active = true, conversationId = CONVERSATION) {
   return (
     <NextIntlClientProvider locale="en" messages={enMessages}>
-      <SessionDetailsInsights conversationId={conversationId} active={active} />
+      <SessionDetailsInsights
+        conversationId={conversationId}
+        dbConversationId={null}
+        active={active}
+      />
     </NextIntlClientProvider>
   )
 }

@@ -330,7 +330,9 @@ async fn write_dropped_turn_status(
     let row = conversation::Entity::find_by_id(conversation_id)
         .one(db_conn)
         .await?;
-    if row.is_none_or(|row| row.parent_id.is_some()) {
+    // A delegation child's status is the delegation flow's; an ask
+    // conversation (which also has a parent) is the user's, like a root.
+    if row.is_none_or(|row| row.kind == conversation::ConversationKind::Delegate) {
         return Ok(());
     }
     let changed = conversation_service::update_status_if(

@@ -2412,6 +2412,19 @@
       "copiedField": "{field}をコピーしました",
       "assistant": "アシスタント"
     },
+    "askConversations": {
+      "title": "質問の会話",
+      "total": "{count} 件",
+      "untitled": "新しい質問",
+      "actions": "その他の操作",
+      "open": "開く",
+      "convertToRegular": "通常の会話に変換",
+      "converted": "通常の会話に変換しました",
+      "convertFailed": "通常の会話に変換できませんでした",
+      "drawerTitle": "質問の会話",
+      "drawerDescription": "この会話の選択内容から始めた質問の会話",
+      "pendingFirstMessage": "質問はエージェントの準備ができ次第送信されます。もう一度操作すると破棄されます。"
+    },
     "conversationCard": {
       "untitledConversation": "無題の会話",
       "newConversation": "新しい会話",
@@ -3837,7 +3850,7 @@
         "selectionSaveAsNote": "メモに保存",
         "selectionAsk": "質問",
         "selectionAskPlaceholder": "選択範囲について質問…",
-        "selectionAskSubmit": "新規会話で質問する",
+        "selectionAskClose": "閉じる",
         "downloadImage": "画像をダウンロード",
         "copyImage": "画像をコピー",
         "copiedImage": "画像をコピーしました",

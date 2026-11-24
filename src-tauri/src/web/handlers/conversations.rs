@@ -43,6 +43,39 @@ pub async fn list_all_conversations(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ConversationCollaboratorsParams {
+    conversation_id: i32,
+}
+
+pub async fn list_conversation_collaborators(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ConversationCollaboratorsParams>,
+) -> Result<Json<Vec<crate::models::DbConversationSummary>>, AppCommandError> {
+    Ok(Json(conv_commands::list_conversation_collaborators_core(
+        &state.db.conn, params.conversation_id,
+    ).await?))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetConversationCollaboratorParams {
+    conversation_id: i32,
+    target_id: i32,
+    linked: bool,
+}
+
+pub async fn set_conversation_collaborator(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<SetConversationCollaboratorParams>,
+) -> Result<Json<()>, AppCommandError> {
+    conv_commands::set_conversation_collaborator_core(
+        &state.db.conn, &state.emitter, params.conversation_id, params.target_id, params.linked,
+    ).await?;
+    Ok(Json(()))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ListChildConversationsParams {
     pub parent_conversation_id: i32,
 }
@@ -302,6 +335,66 @@ pub async fn create_conversation(
     .await?;
     conv_commands::emit_conversation_upsert(&state.emitter, &db.conn, result).await;
     Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateAskConversationParams {
+    pub parent_conversation_id: i32,
+    pub folder_id: i32,
+    pub agent_type: AgentType,
+    pub title: Option<String>,
+}
+
+pub async fn create_ask_conversation(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<CreateAskConversationParams>,
+) -> Result<Json<conv_commands::AskConversationCreated>, AppCommandError> {
+    let created = conv_commands::create_ask_conversation_core(
+        &state.emitter,
+        &state.db.conn,
+        params.parent_conversation_id,
+        params.folder_id,
+        params.agent_type,
+        params.title,
+    )
+    .await?;
+    Ok(Json(created))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListAskConversationsParams {
+    pub parent_conversation_id: i32,
+}
+
+pub async fn list_ask_conversations(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ListAskConversationsParams>,
+) -> Result<Json<Vec<DbConversationSummary>>, AppCommandError> {
+    let rows =
+        conv_commands::list_ask_conversations_core(&state.db.conn, params.parent_conversation_id)
+            .await?;
+    Ok(Json(rows))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetachAskConversationParams {
+    pub conversation_id: i32,
+}
+
+pub async fn detach_ask_conversation(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<DetachAskConversationParams>,
+) -> Result<Json<()>, AppCommandError> {
+    conv_commands::detach_ask_conversation_core(
+        &state.emitter,
+        &state.db.conn,
+        params.conversation_id,
+    )
+    .await?;
+    Ok(Json(()))
 }
 
 #[derive(Deserialize)]

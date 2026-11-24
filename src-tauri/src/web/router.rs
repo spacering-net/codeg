@@ -94,6 +94,8 @@ pub fn build_router_with_srn(
             "/list_all_conversations",
             post(handlers::conversations::list_all_conversations),
         )
+        .route("/list_conversation_collaborators", post(handlers::conversations::list_conversation_collaborators))
+        .route("/set_conversation_collaborator", post(handlers::conversations::set_conversation_collaborator))
         .route(
             "/list_child_conversations",
             post(handlers::conversations::list_child_conversations),
@@ -290,6 +292,18 @@ pub fn build_router_with_srn(
         .route(
             "/create_conversation",
             post(handlers::conversations::create_conversation),
+        )
+        .route(
+            "/create_ask_conversation",
+            post(handlers::conversations::create_ask_conversation),
+        )
+        .route(
+            "/list_ask_conversations",
+            post(handlers::conversations::list_ask_conversations),
+        )
+        .route(
+            "/detach_ask_conversation",
+            post(handlers::conversations::detach_ask_conversation),
         )
         .route(
             "/create_chat_conversation",

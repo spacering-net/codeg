@@ -108,7 +108,10 @@ pub(crate) async fn authorize_session_control(
     let target = conversation_service::get_by_id(conn, session_id)
         .await
         .map_err(|e| e.to_string())?;
-    if target.id != caller_id && target.parent_id != Some(caller_id) {
+    if target.id != caller_id
+        && (target.parent_id != Some(caller_id)
+            || target.kind != crate::db::entities::conversation::ConversationKind::Delegate)
+    {
         return Err("You can only control your own session or a direct delegation child".into());
     }
     Ok(())
@@ -169,7 +172,8 @@ impl SessionInfoAccess for DbSessionInfoLookup {
             created_at: Some(summary.created_at),
             updated_at: Some(summary.updated_at),
             parent_id: summary.parent_id,
-            is_delegation_child: summary.parent_id.is_some(),
+            is_delegation_child: summary.kind
+                == crate::db::entities::conversation::ConversationKind::Delegate,
             stats: None,
             messages: None,
             children: Vec::new(),
@@ -180,7 +184,10 @@ impl SessionInfoAccess for DbSessionInfoLookup {
         };
 
         match conversation_service::list_children(conn, session_id).await {
-            Ok(children) => {
+            Ok(mut children) => {
+                children.retain(|child| {
+                    child.kind == crate::db::entities::conversation::ConversationKind::Delegate
+                });
                 info.children_truncated = children.len() > MAX_SESSION_MESSAGES as usize;
                 info.children = children
                     .into_iter()

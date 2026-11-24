@@ -2412,6 +2412,19 @@
       "copiedField": "已复制{field}",
       "assistant": "助手"
     },
+    "askConversations": {
+      "title": "提问会话",
+      "total": "共 {count} 个",
+      "untitled": "新提问",
+      "actions": "更多操作",
+      "open": "打开",
+      "convertToRegular": "转为普通会话",
+      "converted": "已转为普通会话",
+      "convertFailed": "转为普通会话失败",
+      "drawerTitle": "提问会话",
+      "drawerDescription": "从此会话选中内容发起的提问会话",
+      "pendingFirstMessage": "问题正等待智能体就绪后发送，再操作一次将放弃它。"
+    },
     "conversationCard": {
       "untitledConversation": "未命名会话",
       "newConversation": "新建会话",
@@ -3837,7 +3850,7 @@
         "selectionSaveAsNote": "存为便签",
         "selectionAsk": "提问",
         "selectionAskPlaceholder": "针对选中内容提问…",
-        "selectionAskSubmit": "在新建会话中提问",
+        "selectionAskClose": "关闭",
         "downloadImage": "下载图片",
         "copyImage": "复制图片",
         "copiedImage": "已复制图片",
