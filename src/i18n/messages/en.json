@@ -3872,6 +3872,7 @@
         "unknownAgent": "Sub-agent",
         "delegationPinnedMode": "Started in {mode} mode, pinned by the parent for this delegation",
         "openDetail": "Open conversation",
+        "delegationPinnedModel": "Started on {model}, pinned by the parent for this delegation",
         "resumed": "Resumed",
         "resumeReasonLabel": "Resume reason",
         "detailTitle": "Sub-agent conversation",

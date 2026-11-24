@@ -4874,6 +4874,8 @@ mod tests {
             working_dir: None,
             requested_working_dir: None,
             permission_mode: None,
+            model: None,
+            config_values: std::collections::BTreeMap::new(),
             external_handle: None,
             assistant: None,
         }

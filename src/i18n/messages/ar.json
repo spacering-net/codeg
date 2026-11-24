@@ -3872,6 +3872,7 @@
         "unknownAgent": "وكيل فرعي",
         "delegationPinnedMode": "Started in {mode} mode, pinned by the parent for this delegation",
         "openDetail": "عرض المحادثة",
+        "delegationPinnedModel": "بدأ على {model}، حدده الأصل لهذه الإحالة",
         "resumed": "تم الاستئناف",
         "resumeReasonLabel": "سبب الاستئناف",
         "detailTitle": "محادثة الوكيل الفرعي",

@@ -3872,6 +3872,7 @@
         "unknownAgent": "子智慧體",
         "delegationPinnedMode": "Started in {mode} mode, pinned by the parent for this delegation",
         "openDetail": "檢視會話",
+        "delegationPinnedModel": "此次委派由上層指定使用 {model}",
         "resumed": "已恢復",
         "resumeReasonLabel": "恢復原因",
         "detailTitle": "子智慧體會話",
