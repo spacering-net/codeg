@@ -89,6 +89,20 @@ impl SelectionPersister {
         self.owners.lock().await
     }
 
+    /// Commit a transfer while selector updates for the old binding are excluded.
+    /// A failed commit leaves its writer alone. A successful one already saved
+    /// the target selection; only the target may take authority at the new link.
+    pub(crate) async fn commit_binding_change<T, E>(
+        &self,
+        row_id: i32,
+        commit: impl std::future::Future<Output = Result<T, E>>,
+    ) -> Result<T, E> {
+        let mut owners = self.owners.lock().await;
+        let value = commit.await?;
+        owners.remove(&row_id);
+        Ok(value)
+    }
+
     /// Whether `conn_id` currently holds the write authority for `row_id`.
     pub async fn owns(&self, row_id: i32, conn_id: &str) -> bool {
         self.owners
@@ -358,6 +372,20 @@ mod tests {
 
     fn emitter() -> EventEmitter {
         EventEmitter::Noop
+    }
+
+    #[tokio::test]
+    async fn a_binding_transfer_revokes_the_old_writer_only_after_commit() {
+        let persister = SelectionPersister::default();
+        persister.lock().await.insert(7, "source".into());
+        let refused: Result<(), ()> = persister.commit_binding_change(7, async { Err(()) }).await;
+        assert!(refused.is_err());
+        assert!(persister.owns(7, "source").await);
+        persister
+            .commit_binding_change(7, async { Ok::<_, ()>(()) })
+            .await
+            .unwrap();
+        assert!(!persister.owns(7, "source").await);
     }
 
     #[tokio::test]

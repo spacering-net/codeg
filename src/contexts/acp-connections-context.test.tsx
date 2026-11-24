@@ -196,6 +196,31 @@ async function mountProvider() {
   await act(async () => {})
 }
 
+it("owns the connection returned by an account switch without spawning it again", async () => {
+  await mountProvider()
+  await act(async () => {
+    await h.actions!.adoptOwnedConnection({
+      contextKey: "account-switch-tab",
+      connectionId: "verified-target",
+      agentType: "claude_code",
+      agentAccountId: "work",
+      workingDir: "/tmp/project",
+      sessionId: "same-session",
+      conversationId: 42,
+    })
+  })
+  const connection = h.store!.getConnection("account-switch-tab")!
+  expect(connection.connectionId).toBe("verified-target")
+  expect(connection.agentAccountId).toBe("work")
+  expect(connection.isViewer).toBe(false)
+  expect(h.acpConnect).not.toHaveBeenCalled()
+  expect(h.acpFindConnectionForConversation).not.toHaveBeenCalled()
+  await act(async () => {
+    await h.actions!.disconnect("account-switch-tab")
+  })
+  expect(h.acpDisconnect).toHaveBeenCalledWith("verified-target")
+})
+
 const TAB = "conv-1-claude_code-42"
 
 beforeEach(() => {
@@ -1887,6 +1912,57 @@ describe("AcpConnectionsProvider AIR async tasks", () => {
 // only), this has to work from EVERY state the icon can show — including the
 // states where the store holds no entry at all.
 describe("AcpConnectionsProvider reconnect (status-icon button)", () => {
+  it("keeps the selected native account on reconnect and separates another account", async () => {
+    h.acpFindConnectionForConversation.mockResolvedValue(null)
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(
+        TAB,
+        "codex",
+        "/tmp/x",
+        "same-native-id",
+        42,
+        "account-a"
+      )
+    })
+    expect(h.store!.getConnection(TAB)?.agentAccountId).toBe("account-a")
+    await act(async () => {
+      await h.actions!.reconnect(TAB)
+    })
+    expect(h.acpConnect).toHaveBeenLastCalledWith(
+      "codex",
+      "/tmp/x",
+      "same-native-id",
+      undefined,
+      {},
+      "account-a",
+      42
+    )
+    h.acpConnect.mockResolvedValue("other-account-conn")
+    await act(async () => {
+      await h.actions!.connect(
+        "another-tab",
+        "codex",
+        "/tmp/x",
+        "same-native-id",
+        43,
+        "account-b"
+      )
+    })
+    expect(h.acpConnect).toHaveBeenLastCalledWith(
+      "codex",
+      "/tmp/x",
+      "same-native-id",
+      undefined,
+      {},
+      "account-b",
+      43
+    )
+    expect(h.store!.getConnection("another-tab")?.agentAccountId).toBe(
+      "account-b"
+    )
+  })
+
   async function connectOwner() {
     h.acpFindConnectionForConversation.mockResolvedValue(null)
     await mountProvider()
@@ -1914,6 +1990,7 @@ describe("AcpConnectionsProvider reconnect (status-icon button)", () => {
       "sess-1",
       undefined,
       {},
+      undefined,
       42
     )
     expect(h.store!.getConnection(TAB)?.connectionId).toBe("respawned-conn")
@@ -1939,6 +2016,7 @@ describe("AcpConnectionsProvider reconnect (status-icon button)", () => {
       "sess-1",
       undefined,
       {},
+      undefined,
       42
     )
     expect(h.store!.getConnection(TAB)?.connectionId).toBe("respawned-conn")
@@ -1967,6 +2045,7 @@ describe("AcpConnectionsProvider reconnect (status-icon button)", () => {
       "sess-1",
       undefined,
       {},
+      undefined,
       42
     )
   })
@@ -2014,6 +2093,7 @@ describe("AcpConnectionsProvider reconnect (status-icon button)", () => {
       "sess-1",
       undefined,
       {},
+      undefined,
       42
     )
   })
@@ -2134,6 +2214,7 @@ describe("AcpConnectionsProvider reconnect (status-icon button)", () => {
       "sess-1",
       undefined,
       {},
+      undefined,
       42
     )
     expect(h.store!.getConnection(TAB)?.connectionId).toBe("respawned-conn")
@@ -2225,6 +2306,7 @@ describe("AcpConnectionsProvider reconnect (status-icon button)", () => {
       "snapshot-session",
       undefined,
       {},
+      undefined,
       42
     )
   })
@@ -2266,6 +2348,7 @@ describe("AcpConnectionsProvider reconnect (status-icon button)", () => {
       "minted-1",
       undefined,
       {},
+      undefined,
       42
     )
   })
@@ -2317,14 +2400,15 @@ describe("AcpConnectionsProvider disconnect teardown confirmation", () => {
       applied = await h.actions!.reapplyConfig(TAB)
     })
 
-    // Still reconnected — the user is not left stranded...
+    // The saved row still selects the account on reconnect, even when the old process may remain.
     expect(h.acpConnect).toHaveBeenLastCalledWith(
       "claude_code",
       "/tmp/x",
       "sess-1",
       undefined,
       {},
-      null
+      undefined,
+      42
     )
     // ...but the caller must not show an "applied" confirmation for a restart
     // that may have landed right back on the process it meant to replace.

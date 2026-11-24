@@ -35,7 +35,7 @@ pub async fn harness_mcp_plan_core(
     revision: Option<u64>,
 ) -> Result<HarnessMcpPlan, AppCommandError> {
     ensure_enabled(harness)?;
-    let local = Local::from_db(db).await;
+    let local = Local::from_db(db).await?;
     mcp::plan(&local, harness, item_ref, revision).await
 }
 
@@ -46,7 +46,7 @@ pub async fn harness_mcp_install_core(
     request: HarnessMcpInstallRequest,
 ) -> Result<HarnessMcpInstallResult, AppCommandError> {
     ensure_enabled(harness)?;
-    let local = Local::from_db(db).await;
+    let local = Local::from_db(db).await?;
     mcp::install(&local, harness, emitter, request).await
 }
 
@@ -55,7 +55,7 @@ pub async fn harness_installed_core(
     data_dir: &std::path::Path,
     emitter: &EventEmitter,
 ) -> Result<HarnessInstalled, AppCommandError> {
-    let local = Local::from_db(db).await;
+    let local = Local::from_db(db).await?;
     let plugins = crate::commands::harness_plugins::plugins_local(db, data_dir, false).await;
     // The update check's last answers (read, never asked): the plugins'
     // update marks.
@@ -118,7 +118,7 @@ pub async fn harness_mcp_uninstall_core(
     emitter: &EventEmitter,
     request: HarnessMcpUninstallRequest,
 ) -> Result<HarnessMcpUninstallResult, AppCommandError> {
-    let local = Local::from_db(db).await;
+    let local = Local::from_db(db).await?;
     mcp::uninstall(&local, emitter, request).await
 }
 

@@ -26,6 +26,7 @@
 //! server. They take the same write lock, and reach Codex's file through
 //! [`legacy_codex_replace_entry`].
 
+pub(crate) mod accounts;
 pub(crate) mod agents;
 pub(crate) mod apply;
 pub(crate) mod dialect;
@@ -113,12 +114,21 @@ pub(crate) async fn installed_agents(db: &AppDatabase) -> BTreeMap<McpAppType, b
     }
 }
 
-pub(crate) async fn engine_ctx(db: &AppDatabase) -> EngineCtx {
-    EngineCtx::from_envs(&agent_setting_service::load_agent_envs(&db.conn).await)
+pub(crate) async fn engine_ctx(db: &AppDatabase) -> Result<EngineCtx, AppCommandError> {
+    let mut ctx = EngineCtx::from_envs(&agent_setting_service::load_agent_envs(&db.conn).await);
+    ctx.add_custom_account_paths();
+    for (agent, home) in crate::commands::mcp::native_account_homes(db).await? {
+        if let Some((app, paths)) = accounts::paths_for(agent, &home)? {
+            ctx.manifests
+                .insert(paths.servers.clone(), home.join(accounts::MANIFEST));
+            ctx.add_family_path(app, paths);
+        }
+    }
+    Ok(ctx)
 }
 
 pub async fn mcp_inventory_core(db: &AppDatabase) -> Result<McpInventory, AppCommandError> {
-    let ctx = engine_ctx(db).await;
+    let ctx = engine_ctx(db).await?;
     let installed = installed_agents(db).await;
     // Twenty-odd files, some of them megabytes (`~/.claude.json`): off the
     // async workers.
@@ -193,26 +203,39 @@ pub(crate) async fn apply_in_guarded<G, R>(
         }
     };
     guard()?;
-    let codex_home = request
-        .ops
-        .iter()
-        .any(|op| op.agent == McpAppType::Codex)
-        .then(|| ctx.paths_of(McpAppType::Codex))
-        .flatten()
-        .and_then(|paths| paths.servers.parent().map(std::path::Path::to_path_buf));
-    let locked = match &codex_home {
-        Some(home) => Some(codex_catalog_commit::lock_home(home).await),
-        None => None,
-    };
+    let mut locked = Vec::new();
+    let mut problem = None;
+    if request.ops.iter().any(|op| op.agent == McpAppType::Codex) {
+        let paths = ctx.paths_of(McpAppType::Codex).into_iter().chain(
+            ctx.family_paths
+                .get(&McpAppType::Codex)
+                .into_iter()
+                .flatten(),
+        );
+        for paths in paths {
+            if let Some(home) = paths.servers.parent() {
+                match codex_catalog_commit::lock_home(home).await {
+                    Ok(gate) => locked.push((paths.servers.clone(), gate)),
+                    Err(error) => {
+                        problem = Some(codex_lock_issue(&error));
+                        break;
+                    }
+                }
+            }
+        }
+    }
     let result = {
-        let access = match &locked {
-            None => CodexAccess::Unlocked,
-            Some(Ok(home)) => CodexAccess::Locked(home),
-            Some(Err(error)) => CodexAccess::Failed(codex_lock_issue(error)),
+        let access = match problem {
+            Some(issue) => CodexAccess::Failed(issue),
+            None => CodexAccess::Homes(
+                locked
+                    .iter()
+                    .map(|(path, gate)| (path.clone(), gate as &dyn apply::CodexGate))
+                    .collect(),
+            ),
         };
         apply::apply_locked(ctx, request, &access)
     };
-    // Codex's lock is let go first; the MCP lock is still held.
     drop(locked);
     let after = then(&result);
     Ok((result, Some(after)))
@@ -238,7 +261,7 @@ pub async fn mcp_apply_core(
     emitter: &EventEmitter,
     request: McpApplyRequest,
 ) -> Result<McpApplyResult, AppCommandError> {
-    let ctx = engine_ctx(db).await;
+    let ctx = engine_ctx(db).await?;
     let result = apply_in(&ctx, &request).await;
     announce(emitter, apply::changed_agents(&result));
     Ok(result)
@@ -253,7 +276,7 @@ pub async fn mcp_apply_core_then<R>(
     request: McpApplyRequest,
     then: impl FnOnce(&McpApplyResult) -> R,
 ) -> Result<(McpApplyResult, Option<R>), AppCommandError> {
-    let ctx = engine_ctx(db).await;
+    let ctx = engine_ctx(db).await?;
     let (result, after) = apply_in_then(&ctx, &request, then).await;
     announce(emitter, apply::changed_agents(&result));
     Ok((result, after))

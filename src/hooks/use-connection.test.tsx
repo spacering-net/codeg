@@ -10,11 +10,20 @@ const fake = vi.hoisted(() => {
   // rides the same per-key listeners.
   let pending: { agentType: string; workingDir: string | null } | undefined
   const listeners = new Set<() => void>()
+  const cachedSelectors = new Map<
+    string,
+    {
+      modes: ConnectionState["modes"]
+      configOptions: ConnectionState["configOptions"]
+    }
+  >()
   return {
+    cachedSelectors,
     reset() {
       conn = undefined
       pending = undefined
       listeners.clear()
+      cachedSelectors.clear()
     },
     setConn(next: ConnectionState | undefined) {
       conn = next
@@ -58,7 +67,7 @@ vi.mock("@/contexts/acp-connections-context", () => {
   return {
     useConnectionStore: () => fake.store,
     useAcpActions: () => actions,
-    getCachedSelectors: () => null,
+    getCachedSelectors: (key: string) => fake.cachedSelectors.get(key) ?? null,
   }
 })
 
@@ -185,6 +194,34 @@ describe("useConnection snapshot stability", () => {
 })
 
 describe("useConnection in-flight connect", () => {
+  it("shows the connecting account's cached selectors and updates when its account changes", () => {
+    fake.reset()
+    const personal = {
+      modes: { current_mode_id: "default", available_modes: [] },
+      configOptions: [],
+    }
+    const work = {
+      modes: { current_mode_id: "plan", available_modes: [] },
+      configOptions: [],
+    }
+    fake.cachedSelectors.set("claude_code", personal)
+    fake.cachedSelectors.set("claude_code:account:work", work)
+    fake.setConn(makeConn({ status: "connecting", agentAccountId: "work" }))
+    const { result } = renderHook(() => useConnection("k"))
+    expect(result.current.modes).toBe(work.modes)
+    expect(result.current.configOptions).toBe(work.configOptions)
+    act(() =>
+      fake.setConn(makeConn({ status: "connecting", agentAccountId: null }))
+    )
+    expect(result.current.modes).toBe(personal.modes)
+    expect(result.current.configOptions).toBe(personal.configOptions)
+    act(() =>
+      fake.setConn(makeConn({ status: "connecting", agentAccountId: "new" }))
+    )
+    expect(result.current.modes).toBeNull()
+    expect(result.current.hasCachedSelectors).toBe(false)
+  })
+
   it("reports `connecting` while a connect() is in flight with no entry yet", () => {
     fake.reset()
     const { result } = renderHook(() => useConnection("k"))

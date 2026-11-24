@@ -795,6 +795,17 @@ pub fn hydrate(defs: &[CustomAgentDef]) -> Vec<(String, CustomAgentError)> {
     errors
 }
 
+/// Account configuration may be shared only with slots the user configured.
+pub(crate) fn manual_account_candidates() -> Vec<&'static AcpAgentMeta> {
+    registry()
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .values()
+        .filter(|entry| entry.source == CustomAgentSource::Manual)
+        .map(|entry| entry.meta)
+        .collect()
+}
+
 /// Launch metadata for a registered custom agent, or `None` when the id is not
 /// registered (never registered, or deleted while conversations still point at
 /// it).

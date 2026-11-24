@@ -81,12 +81,12 @@ pub(crate) struct Local {
 }
 
 impl Local {
-    pub(crate) async fn from_db(db: &AppDatabase) -> Self {
-        Self {
-            engine: mcp_engine::engine_ctx(db).await,
+    pub(crate) async fn from_db(db: &AppDatabase) -> Result<Self, AppCommandError> {
+        Ok(Self {
+            engine: mcp_engine::engine_ctx(db).await?,
             installed: mcp_engine::installed_agents(db).await,
             record_path: record::default_record_path(),
-        }
+        })
     }
 }
 
@@ -657,8 +657,8 @@ fn written_fingerprint(
     key: &str,
     basis: Option<&str>,
 ) -> Option<String> {
-    let paths = engine.paths_of(agent)?;
-    let (config, entries) = inventory::read_agent(agent, paths);
+    engine.paths_of(agent)?;
+    let (config, entries) = inventory::read_family(engine, agent);
     if config.basis.is_none() || config.basis.as_deref() != basis {
         return None;
     }
