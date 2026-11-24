@@ -25,6 +25,8 @@ import {
   normalizeStatus,
   normalizeVersions,
 } from "./normalize"
+import { normalizeReleases } from "./plugin-install-normalize"
+import type { HarnessPluginRelease } from "./plugin-install-types"
 import type {
   HarnessConfig,
   HarnessItemDetail,
@@ -105,6 +107,15 @@ export async function harnessVersions(
 ): Promise<HarnessVersionSummary[]> {
   return normalizeVersions(
     await getTransport().call("harness_versions", itemRefArgs(itemRef))
+  )
+}
+
+/** A plugin's releases, newest first (`/items/{ref}/releases`). */
+export async function harnessReleases(
+  itemRef: string
+): Promise<HarnessPluginRelease[]> {
+  return normalizeReleases(
+    await getTransport().call("harness_releases", itemRefArgs(itemRef))
   )
 }
 

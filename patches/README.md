@@ -108,3 +108,31 @@ checks that actual component replacement and unmount abort every plugin request.
 Service tests exercise saturation, cancelled streaming prefixes, unmounts,
 coalescing, and the cache budgets. Remove or revisit this patch when upgrading
 Streamdown or after upstream provides an equivalent cancellation lifecycle.
+
+## Motion DOM 13.3.0 WAAPI finish handlers
+
+WebKit does not collect a Web Animations API animation once it has run, nor
+anything its event handlers reference (WebKit #329512, Motion #4034).
+`NativeAnimation`'s finish handler captures the element, the motion value and the
+caller's `onComplete`, so every accelerated Motion animation kept its element and
+the component's props alive after removal.
+
+The patch backports upstream `motiondivision/motion` commits `7ba5aaf` (release
+the handler when it runs, on `cancel()` and on a timeline handoff; reattach it in
+`play()`) and `bcfb146` (reattach it in `complete()` unless stopped, so a cancelled
+animation still completes and resolves `finished`). Upstream's `stop()` and
+`TransformAnimation` changes have no counterpart in 13.3.0: its `stop()` already
+detaches through `cancel()`, and the transform compositor class does not exist.
+Both the ESM `NativeAnimation.mjs`/`NativeAnimationWrapper.mjs` and the CommonJS
+`index.js` carry the change; the UMD bundles are not reachable through the
+package exports.
+
+`src/lib/motion-finish-handler-memory.test.ts` drives the installed ESM and
+CommonJS builds through `motion` with a stubbed WAAPI animation: finish, cancel,
+play, cancelled-then-completed, stopped-then-completed, timeline handoff and the
+wrapper. `src/app/pet-panel/_components/PetPanel.animation.test.tsx` checks the
+handler is released when a real `AnimatePresence` row exits. Neither measures
+retained bytes in WKWebView.
+
+Remove this patch when upgrading to Motion 14.10.0 or later, which contains both
+commits.

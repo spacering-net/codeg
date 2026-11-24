@@ -215,6 +215,13 @@ pub struct PetWindowConfig {
     pub x: Option<f64>,
     #[serde(default)]
     pub y: Option<f64>,
+    /// Monitor scale factor captured when `(x, y)` was recorded. On macOS,
+    /// `tao`'s physical monitor rects can overlap across mixed-DPI layouts
+    /// (e.g. a 1× display to the right of a 2× primary); storing the recorded
+    /// scale factor lets restore convert `(x, y)` back into unambiguous Cocoa
+    /// logical points before matching monitors.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position_scale_factor: Option<f64>,
     #[serde(default = "default_scale")]
     pub scale: f64,
     #[serde(default = "default_always_on_top")]
@@ -236,17 +243,20 @@ impl Default for PetWindowConfig {
             active_pet_id: None,
             x: None,
             y: None,
+            position_scale_factor: None,
             scale: 0.75,
             always_on_top: true,
         }
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PetWindowStatePatch {
     pub x: Option<f64>,
     pub y: Option<f64>,
+    #[serde(default)]
+    pub position_scale_factor: Option<f64>,
     pub scale: Option<f64>,
     pub always_on_top: Option<bool>,
     pub enabled: Option<bool>,

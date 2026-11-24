@@ -35,9 +35,14 @@
 //! engine's to edit, and it does so through here as well: [`mcp_servers`] is
 //! a commit of its own kind, taken under the same lock, that may change those
 //! tables and nothing else.
+//!
+//! **Plugins.** The Harness plugin adapter switches Codeg's plugins on and
+//! off and takes away their hooks' trust when they go: [`plugin_tables`],
+//! the same kind of commit for those entries alone.
 
 pub mod lock;
 pub mod mcp_servers;
+pub mod plugin_tables;
 pub mod txn;
 
 use std::collections::HashMap;
@@ -56,6 +61,7 @@ use crate::acp::codex_runtime::{self, CodexRuntime, JudgeError, ValidatedRuntime
 
 pub use lock::{CodexHomeGuard, LockError, LOCK_WAIT};
 pub use mcp_servers::{lock_home_blocking, McpCommitError, McpConfigChange};
+pub use plugin_tables::PluginCommitError;
 pub use txn::{Repair, Target, TxnError};
 
 pub const META_REL: &str = "codeg-model-catalog.meta.json";

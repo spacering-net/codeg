@@ -68,18 +68,18 @@ describe("HarnessViewHost — whether Discover is offered", () => {
     await waitFor(() =>
       expect(mocks.call).toHaveBeenCalledWith("harness_status")
     )
-    expect(sections()).toBe("discover,mcp,skills,packs")
+    expect(sections()).toBe("discover,mcp,skills,plugins,packs")
   })
 
   it("is on by default, and stays on without a flash when the backend agrees", async () => {
     const { answer } = answerLater()
     renderHost()
-    expect(sections()).toBe("discover,mcp,skills,packs")
+    expect(sections()).toBe("discover,mcp,skills,plugins,packs")
 
     await act(async () => {
       answer({ enabled: true, origin: "https://spacering.net" })
     })
-    expect(sections()).toBe("discover,mcp,skills,packs")
+    expect(sections()).toBe("discover,mcp,skills,plugins,packs")
     expect(new Set(renders)).toEqual(new Set(["on"]))
   })
 
@@ -90,7 +90,7 @@ describe("HarnessViewHost — whether Discover is offered", () => {
     await act(async () => {
       answer({ enabled: false, origin: "https://spacering.net" })
     })
-    expect(sections()).toBe("mcp,skills,packs")
+    expect(sections()).toBe("mcp,skills,plugins,packs")
     expect(localStorage.getItem(KEY)).toBe("0")
   })
 
@@ -98,7 +98,7 @@ describe("HarnessViewHost — whether Discover is offered", () => {
     localStorage.setItem(KEY, "0")
     const { answer } = answerLater()
     renderHost()
-    expect(sections()).toBe("mcp,skills,packs")
+    expect(sections()).toBe("mcp,skills,plugins,packs")
 
     await act(async () => {
       answer({ enabled: false, origin: "https://spacering.net" })
@@ -114,7 +114,7 @@ describe("HarnessViewHost — whether Discover is offered", () => {
     await act(async () => {
       answer({ enabled: true, origin: "https://spacering.net" })
     })
-    expect(sections()).toBe("discover,mcp,skills,packs")
+    expect(sections()).toBe("discover,mcp,skills,plugins,packs")
     expect(localStorage.getItem(KEY)).toBe("1")
   })
 
@@ -141,7 +141,7 @@ describe("HarnessViewHost — whether Discover is offered", () => {
         fail(error)
       })
       // Not "off": the section stays, and tells the user to update.
-      expect(sections()).toBe("discover,mcp,skills,packs")
+      expect(sections()).toBe("discover,mcp,skills,plugins,packs")
       expect(localStorage.getItem(KEY)).toBeNull()
     }
   )
@@ -154,7 +154,7 @@ describe("HarnessViewHost — whether Discover is offered", () => {
     await act(async () => {
       fail(new Error("Request timed out"))
     })
-    expect(sections()).toBe("mcp,skills,packs")
+    expect(sections()).toBe("mcp,skills,plugins,packs")
     expect(localStorage.getItem(KEY)).toBe("0")
   })
 
@@ -164,7 +164,7 @@ describe("HarnessViewHost — whether Discover is offered", () => {
     const { answer } = answerLater()
     renderHost()
     // The local window's "off" says nothing about this host.
-    expect(sections()).toBe("discover,mcp,skills,packs")
+    expect(sections()).toBe("discover,mcp,skills,plugins,packs")
 
     await act(async () => {
       answer({ enabled: true, origin: "https://spacering.net" })

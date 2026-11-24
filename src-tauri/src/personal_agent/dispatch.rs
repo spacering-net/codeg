@@ -1162,6 +1162,8 @@ impl PersonalAgentEngine {
                 .then(|| crate::models::DELIVERABLE_REPORT.to_string()),
             base_branch: None,
             executor_name: Some(work.name.clone()),
+            // The assistant's work tuple, as it is now, is the task's own.
+            agent_config_frozen: true,
         };
         let draft = WorkTaskDraft {
             folder_id,

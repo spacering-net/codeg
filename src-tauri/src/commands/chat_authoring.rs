@@ -528,6 +528,8 @@ impl ChatAuthoringAccess for DbChatAuthoring {
             // project folder's checkout, as it did before the choice existed.
             base_branch: None,
             executor_name: None,
+            // Frozen by `work_task_service::create`.
+            agent_config_frozen: false,
         };
         let config = match serde_json::to_value(&config) {
             Ok(v) => v,

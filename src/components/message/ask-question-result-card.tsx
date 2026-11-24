@@ -88,8 +88,9 @@ export function AskQuestionResultCard({
   const initialSelections = useMemo(() => {
     const sel: Record<string, { chosen: string[]; otherText: string }> = {}
     if (!pending || outcome?.declined) return sel
-    // codex `request_user_input` answers carry the question `id`; codeg-mcp / grok
-    // asks carry none and match on the header+question signature instead.
+    // codex `request_user_input` and DSH answers carry the question `id`;
+    // codeg-mcp / grok asks carry none and match on the header+question
+    // signature instead.
     const byId = new Map(
       (outcome?.answers ?? [])
         .filter((a) => a.id)

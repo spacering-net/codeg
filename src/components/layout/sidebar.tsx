@@ -38,6 +38,7 @@ import {
   type SidebarConversationListHandle,
 } from "@/components/conversations/sidebar-conversation-list"
 import { HarnessUpdatesBadge } from "@/components/harness/harness-updates-badge"
+import { LabelWithHint } from "@/components/layout/label-with-hint"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -145,6 +146,7 @@ function SidebarNavButton({
   label,
   onClick,
   active,
+  hint,
   trailing,
 }: {
   icon: LucideIcon
@@ -155,6 +157,8 @@ function SidebarNavButton({
   label: string
   onClick: () => void
   active?: boolean
+  /** Small text after the label: what the page holds. */
+  hint?: string
   trailing?: ReactNode
 }) {
   return (
@@ -178,7 +182,11 @@ function SidebarNavButton({
       ) : (
         <Icon className="h-[0.875rem] w-[0.875rem] shrink-0 text-muted-foreground" />
       )}
-      <span className="truncate">{label}</span>
+      {hint ? (
+        <LabelWithHint label={label} hint={hint} />
+      ) : (
+        <span className="truncate">{label}</span>
+      )}
       {trailing}
     </button>
   )
@@ -685,6 +693,7 @@ export function Sidebar() {
           <SidebarNavButton
             icon={DraftingCompass}
             label={t("harness")}
+            hint={t("harnessHint")}
             active={routeId === "harness"}
             onClick={() => {
               if (isMobile) toggle()

@@ -41,10 +41,15 @@ pub(crate) mod journal;
 pub(crate) mod manifest;
 pub mod model;
 pub(crate) mod names;
+// Called by the plugins module's install (the next step).
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod owned;
 pub(crate) mod package;
 
 #[cfg(test)]
-mod tests;
+mod owned_tests;
+#[cfg(test)]
+pub(crate) mod tests;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -156,7 +161,10 @@ fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-async fn latest_revision(harness: &Harness, item_ref: &ItemRef) -> Result<u64, HarnessError> {
+pub(crate) async fn latest_revision(
+    harness: &Harness,
+    item_ref: &ItemRef,
+) -> Result<u64, HarnessError> {
     let item = harness.item(&item_ref.to_string()).await?;
     item.get("latest")
         .and_then(|latest| latest.get("revision"))
@@ -165,7 +173,11 @@ async fn latest_revision(harness: &Harness, item_ref: &ItemRef) -> Result<u64, H
         .ok_or_else(|| HarnessError::invalid_response("the item names no latest revision"))
 }
 
-async fn resolve_one(harness: &Harness, id: &str, revision: u64) -> Result<Resolved, HarnessError> {
+pub(crate) async fn resolve_one(
+    harness: &Harness,
+    id: &str,
+    revision: u64,
+) -> Result<Resolved, HarnessError> {
     harness
         .resolve(&[Installed {
             id: id.to_string(),
@@ -180,7 +192,7 @@ async fn resolve_one(harness: &Harness, id: &str, revision: u64) -> Result<Resol
 /// What the snapshot's packages make of the item: blocking reasons (no
 /// exact version, `missing`, a verification this Codeg does not know) and
 /// warnings (not verified yet, install scripts).
-fn package_reasons(state: Option<&VersionState>) -> (Vec<Reason>, Vec<Reason>) {
+pub(crate) fn package_reasons(state: Option<&VersionState>) -> (Vec<Reason>, Vec<Reason>) {
     let mut blocking = Vec::new();
     let mut warnings = Vec::new();
     let Some(state) = state else {
@@ -324,6 +336,7 @@ pub(crate) fn installed_skills_in(ctx: &SkillsCtx) -> Result<Vec<InstalledSkill>
     Ok(manifest
         .skills
         .iter()
+        .filter(|(_, entry)| entry.plugin.is_none())
         .map(|(name, entry)| listed(&world, name, entry))
         .collect())
 }
@@ -1155,6 +1168,7 @@ fn stage_install(
         state_sha256: prepared.state_sha256.clone(),
         installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         op: tx.journal.op.clone(),
+        plugin: None,
         extra: serde_json::Map::new(),
     });
     if let Err(error) = tx.write_journal() {

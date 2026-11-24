@@ -272,9 +272,22 @@ export function CanvasConversationSurface({
     )
   }, [contextKey, conversationId, effectiveConversationId, migrateConversation])
 
+  // Drafts only (codeg#1179): a persisted conversation keeps no local mode
+  // pick — its composer reads the connection's recorded pick, else the mode
+  // the backend restored from the conversation's own stored selection.
   const [modeId, setModeId] = useState<string | null>(() =>
-    getSavedModeId(agentType)
+    conversationId != null ? null : getSavedModeId(agentType)
   )
+  // A draft card switching agents re-seeds from the new agent's default, as
+  // the tab view does: a mode id both agents share must not carry over.
+  const seededAgentRef = useRef(agentType)
+  useEffect(() => {
+    if (seededAgentRef.current === agentType) return
+    seededAgentRef.current = agentType
+    if (conversationId != null) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- re-seeds the draft's mode when its agent changes
+    setModeId(getSavedModeId(agentType))
+  }, [agentType, conversationId])
   // Sends handed back to the composer, which cleared itself as each went out
   // (see the bounce handler in `handleSend`). Oldest first, offered one at a
   // time: a second can bounce before the composer has taken the first.
@@ -559,8 +572,47 @@ export function CanvasConversationSurface({
   }, [completeTurn, connStatus, effectiveConversationId, syncTurnMetadata])
   useEffect(() => () => syncCancelRef.current?.(), [])
 
+  // For the first send's draft → persisted hand-over and the pick handlers
+  // (read inside async continuations).
+  const draftModeIdRef = useRef(modeId)
+  const appliedModeIdRef = useRef(effectiveModes?.current_mode_id ?? null)
+  const connRef = useRef(conn)
+  useEffect(() => {
+    draftModeIdRef.current = modeId
+    appliedModeIdRef.current = effectiveModes?.current_mode_id ?? null
+    connRef.current = conn
+  })
+  // Whether a pick here is still a DRAFT's — the only picks that write the
+  // new-conversation default (codeg#1179): no row yet and none being created.
+  const isDraftForDefaults = useCallback(
+    () => dbConversationIdRef.current == null && !creatingRef.current,
+    []
+  )
+  const handleConfigOptionChange = useCallback(
+    (configId: string, valueId: string) => {
+      if (connRef.current.selectorsLocked) return
+      handleSetConfigOption(configId, valueId, {
+        saveAsDefault: isDraftForDefaults(),
+      })
+    },
+    [handleSetConfigOption, isDraftForDefaults]
+  )
+
   const handleModeChange = useCallback(
     (nextModeId: string) => {
+      if (connRef.current.selectorsLocked) return
+      if (!isDraftForDefaults()) {
+        // An existing conversation: record the pick on its connection (the
+        // backend persists it on the row); the send applies it. Never the
+        // new-conversation default.
+        connRef.current.setComposerMode(nextModeId).catch((e: unknown) => {
+          // An older server without the composer record: keep the pick
+          // locally, as before — the send applies it.
+          console.error("[canvas] setComposerMode:", e)
+          setModeId(nextModeId)
+        })
+        return
+      }
       setModeId(nextModeId)
       // The preference stores the whole mode SHAPE, not just the id, so it can
       // be shipped to the backend at connect time. Reconciled to the selected
@@ -573,7 +625,7 @@ export function CanvasConversationSurface({
         })
       }
     },
-    [agentType, effectiveModes]
+    [agentType, effectiveModes, isDraftForDefaults]
   )
 
   const handleSend = useCallback(
@@ -654,6 +706,11 @@ export function CanvasConversationSurface({
       if (!draftTarget) return
       creatingRef.current = true
       setCreating(true)
+      // Lock the selectors for the whole first-send attempt (codeg#1179); one
+      // `finally` releases it on every exit. Keyed by contextKey, so it
+      // survives the card being replaced once the row exists.
+      const firstSendLock = connRef.current.beginFirstSend()
+      let handOver: Promise<unknown> | null = null
       void (async () => {
         try {
           const title = promptDraftTitleSeed(
@@ -682,12 +739,30 @@ export function CanvasConversationSurface({
             sendFolderId = draftTarget.folderId
           }
           dbConversationIdRef.current = newId
+          // Draft → persisted: hand the draft's mode pick to the connection's
+          // composer record in the same step that publishes the row id.
+          {
+            const pick = draftModeIdRef.current
+            if (!pick || pick === appliedModeIdRef.current) {
+              // Nothing pending: follow the connection from here.
+              setModeId(null)
+            } else {
+              handOver = connRef.current
+                .setComposerMode(pick, { initial: true })
+                // Recorded or vetoed: the connection's record rules now; an
+                // older server keeps the local pick (the send applies it).
+                .then(() => setModeId(null))
+                .catch((e: unknown) =>
+                  console.error("[canvas] composer hand-over:", e)
+                )
+            }
+          }
           setExternalId(effectiveConversationId, connSessionId ?? null)
           setDbConversationId(effectiveConversationId, newId)
           setCreatedConversationId(newId)
           refreshConversations()
           onConversationCreated?.(newId, sendFolderId)
-          lifecycleSend(draft, selectedModeIdArg, {
+          await lifecycleSend(draft, selectedModeIdArg, {
             folderId: sendFolderId,
             conversationId: newId,
             clientMessageId: optimisticTurn.id,
@@ -710,6 +785,8 @@ export function CanvasConversationSurface({
         } finally {
           creatingRef.current = false
           setCreating(false)
+          if (handOver) await handOver
+          connRef.current.releaseFirstSend(firstSendLock)
         }
       })()
     },
@@ -835,13 +912,24 @@ export function CanvasConversationSurface({
     () => effectiveConfigOptions ?? [],
     [effectiveConfigOptions]
   )
+  // A persisted conversation follows the backend's record of the composer's
+  // pending pick; a draft its local pick (codeg#1179).
+  const composerPick =
+    createdConversationId != null || conversationId != null
+      ? connIsForOtherAgent
+        ? null
+        : (conn.composerModeId ?? modeId)
+      : modeId
   const selectedModeId = useMemo(() => {
     if (connectionModes.length === 0) return null
-    if (modeId && connectionModes.some((mode) => mode.id === modeId)) {
-      return modeId
+    if (
+      composerPick &&
+      connectionModes.some((mode) => mode.id === composerPick)
+    ) {
+      return composerPick
     }
     return effectiveModes?.current_mode_id ?? connectionModes[0]?.id ?? null
-  }, [effectiveModes, connectionModes, modeId])
+  }, [effectiveModes, connectionModes, composerPick])
 
   // Arrow-key history source, read lazily on the first Up/Down (see
   // `MessageInput.getSentHistory`) so streaming tokens cost nothing here.
@@ -895,7 +983,7 @@ export function CanvasConversationSurface({
           selectorsLoading={selectorsLoading}
           selectedModeId={selectedModeId}
           onModeChange={handleModeChange}
-          onConfigOptionChange={handleSetConfigOption}
+          onConfigOptionChange={handleConfigOptionChange}
           agentType={agentType}
           availableCommands={connectionCommands ?? []}
           promptSuggestion={connIsForOtherAgent ? null : conn.promptSuggestion}

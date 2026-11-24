@@ -331,7 +331,7 @@ export function PetWindow({ petId }: PetWindowProps) {
 
   return (
     <div
-      className="relative flex h-screen w-screen select-none items-center justify-center"
+      className="relative flex h-screen w-screen select-none items-center justify-center overflow-hidden"
       style={{ background: "transparent" }}
       onPointerDown={drag.onPointerDown}
     >

@@ -31,6 +31,7 @@ pub mod generative_ui;
 pub mod git;
 pub mod harness;
 pub mod harness_mcp;
+pub mod harness_plugins;
 pub mod harness_skills;
 pub mod harness_updates;
 pub mod skills;

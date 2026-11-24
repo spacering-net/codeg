@@ -371,6 +371,7 @@ pub(crate) mod test_support {
                         value: v.to_string(),
                         name: v.to_uppercase(),
                         description: None,
+                        reasoning_efforts: None,
                     })
                     .collect(),
                 groups: Vec::new(),

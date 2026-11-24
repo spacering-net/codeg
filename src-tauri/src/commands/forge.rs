@@ -1711,6 +1711,9 @@ pub async fn create_forge_task(
         // project folder's checkout.
         base_branch: None,
         executor_name: None,
+        // Frozen by the service create path (an explicit agent verbatim, else
+        // the folder's task settings as they are now).
+        agent_config_frozen: false,
     };
     let task_draft = WorkTaskDraft {
         folder_id: draft.folder_id,
@@ -2013,6 +2016,9 @@ pub async fn create_forge_issues_task(
             .then(|| crate::models::DELIVERABLE_REPORT.to_string()),
         base_branch: None,
         executor_name: None,
+        // Frozen by the service create path (an explicit agent verbatim, else
+        // the folder's task settings as they are now).
+        agent_config_frozen: false,
     };
     let numbers: Vec<i64> = listed.iter().map(|item| item.number).collect();
     let task_draft = WorkTaskDraft {

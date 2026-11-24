@@ -422,6 +422,8 @@ impl AutomationEngine {
             // the project folder's checkout like any unspecified one.
             base_branch: None,
             executor_name: None,
+            // The automation's captured tuple is the task's own.
+            agent_config_frozen: true,
         };
         let draft = crate::models::WorkTaskDraft {
             folder_id,

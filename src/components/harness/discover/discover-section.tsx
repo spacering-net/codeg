@@ -29,7 +29,7 @@ import { DiscoverFailure } from "./discover-failure"
 
 /**
  * What the workspace's host has installed from the catalog, by item id — the
- * MCP servers and the skills, from `harness_installed`. `undefined` until the
+ * MCP servers, the skills and the plugins, from `harness_installed`. `undefined` until the
  * host has said, and from a Codeg too old to say: no card or detail then
  * claims anything is installed. A part whose record cannot be read lists
  * nothing; the detail's actions say so.
@@ -62,6 +62,10 @@ function useInstalledItems():
       if (marks.has(skill.id)) continue
       marks.set(skill.id, mark(skill.id, skill.revision))
     }
+    for (const plugin of value.plugins ?? []) {
+      if (marks.has(plugin.item_id)) continue
+      marks.set(plugin.item_id, mark(plugin.item_id, plugin.revision))
+    }
     return marks
   }, [value, updates])
 }
@@ -78,6 +82,7 @@ function pendingDetail(itemRef: string): DiscoverDetailState {
     versions: { phase: "idle", value: null, error: null, request: 0 },
     readme: { phase: "idle", value: null, error: null, request: 0 },
     prompt: { phase: "idle", value: null, error: null, request: 0 },
+    releases: { phase: "idle", value: null, error: null, request: 0 },
     request: 0,
   }
 }

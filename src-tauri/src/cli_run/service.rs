@@ -4522,6 +4522,7 @@ mod tests {
                         value: v.to_string(),
                         name: v.to_string(),
                         description: None,
+                        reasoning_efforts: None,
                     })
                     .collect(),
                 groups: vec![],
