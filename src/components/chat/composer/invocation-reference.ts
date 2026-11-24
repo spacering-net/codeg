@@ -1,8 +1,9 @@
 import type { KnownInvocations } from "@/lib/invocation-token"
-import type {
-  AgentSkillItem,
-  AgentType,
-  AvailableCommandInfo,
+import {
+  isCustomAgentType,
+  type AgentSkillItem,
+  type AgentType,
+  type AvailableCommandInfo,
 } from "@/lib/types"
 
 import type { ReferenceAttrs } from "./types"
@@ -30,12 +31,33 @@ export type InvocationPrefix = "/" | "$"
  *   loads every skill in its skill directories and names each one to the
  *   model. A `/<skill>` the user sends reaches the model as written, next to
  *   that list.
+ * - OpenCode: `/`, the same way. OpenCode 1.x turned every skill into a
+ *   command, but 2.x keeps skills apart from commands: its ACP server
+ *   advertises only its commands (`/init`, `/review`, `/goal`, `/compact`, plus
+ *   configured and MCP-prompt ones), while it still loads every skill, names
+ *   each to the model and gives the model a `skill` tool to load one by id. A
+ *   `/<skill>` the user sends reaches the model as written.
+ * - Custom ACP agents (`custom:<id>`): `/`. codeg cannot tell whether an
+ *   arbitrary ACP server advertises its skills (Antigravity's
+ *   `agy_acp_server` run as a custom agent never does), so the scan follows the
+ *   user's own declaration instead: a custom agent that declares a dedicated
+ *   skills directory or the shared `.agents/skills` store lists those skills,
+ *   and one that declares neither gets `supported: false` and an empty list. A
+ *   declared skill the agent also advertises as a command is dropped by
+ *   {@link skillsForMenu}, so it is not listed twice.
  */
 export function diskSkillTrigger(
   agentType: AgentType | null | undefined
 ): InvocationPrefix | null {
+  if (!agentType) return null
   if (agentType === "codex") return "$"
-  if (agentType === "antigravity") return "/"
+  if (
+    agentType === "antigravity" ||
+    agentType === "open_code" ||
+    isCustomAgentType(agentType)
+  ) {
+    return "/"
+  }
   return null
 }
 
@@ -44,7 +66,8 @@ export function diskSkillTrigger(
  * with the agent's own commands, and a skill whose `/<id>` is also a command is
  * left out: sending that token runs the command, so the skill row could not do
  * what it says. Antigravity, for one, intercepts `/plan`, `/logout` and
- * `/usage` before its model sees them.
+ * `/usage` before its model sees them, and OpenCode runs any advertised
+ * command, `/review` included.
  */
 export function skillsForMenu(
   skills: readonly AgentSkillItem[],
@@ -67,6 +90,36 @@ export function skillsForMenu(
  */
 export function commandInvocationToken(name: string): string {
   return name.startsWith("$") ? name : `/${name}`
+}
+
+const NO_SKILL_COMMANDS: ReadonlySet<string> = new Set()
+
+/**
+ * The names of the advertised commands a `/` menu shows as skills, or an empty
+ * set when it should show none.
+ *
+ * claude-agent-acp (0.99.1+) marks a command as a skill in two passes. The
+ * list `session/new` sends marks only the skills whose `SKILL.md` the adapter
+ * found itself, under the cwd or the home directory. Once Claude Code's own
+ * skill list has been read (shortly after the session's first prompt starts),
+ * it sends the list again with every skill marked, the plugin and nested ones
+ * with their path and the ones bundled with the CLI (`simplify`, `loop`, …)
+ * with the kind alone. A list made before that read would show some skills
+ * marked and others not, so the marks count only in a list that has a skill
+ * without a path: only that read produces one. Until then (and in a list from
+ * a session that never prompts, such as the agent-options probe) every row
+ * keeps the one look it has always had.
+ */
+export function skillMarkedCommands(
+  commands: readonly Pick<
+    AvailableCommandInfo,
+    "name" | "skill" | "skill_path"
+  >[]
+): ReadonlySet<string> {
+  if (!commands.some((cmd) => cmd.skill && !cmd.skill_path)) {
+    return NO_SKILL_COMMANDS
+  }
+  return new Set(commands.filter((cmd) => cmd.skill).map((cmd) => cmd.name))
 }
 
 /**

@@ -254,6 +254,10 @@ pub struct AssistantRunSnapshot {
     pub agent_options: AgentDelegationDefaults,
     #[serde(default)]
     pub instructions: String,
+    /// The owner's assistant's face then (absent on a child from before
+    /// them).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<super::personal_agent_bots::BotAvatar>,
 }
 
 impl AssistantRunSnapshot {
@@ -544,6 +548,7 @@ mod tests {
             name: "Reviewer".to_string(),
             agent_options: selection(None, &[("model", "m")]),
             instructions: "x".repeat(10_000),
+            avatar: None,
         })
         .unwrap();
         assert_eq!(

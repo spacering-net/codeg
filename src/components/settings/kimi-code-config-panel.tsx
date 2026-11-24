@@ -515,14 +515,19 @@ export function KimiCodeConfigPanel({
   // Re-seed the whole form whenever the projection changes — i.e. config.toml
   // actually changed on disk (our own save, or the raw editor rewriting the
   // file out from under the structured fields). Without this the structured
-  // form keeps showing pre-save values after a raw overwrite.
-  useEffect(() => {
+  // form keeps showing pre-save values after a raw overwrite. Adjusted while
+  // rendering; the initial state already matches, so mount needs no reset.
+  const [seededDraft, setSeededDraft] = useState(savedDraft)
+  if (savedDraft !== seededDraft) {
+    setSeededDraft(savedDraft)
     setDraft(savedDraft)
     setMaxContextTouched(false)
-  }, [savedDraft])
-  useEffect(() => {
+  }
+  const [seededRawConfig, setSeededRawConfig] = useState(config.rawConfigToml)
+  if (config.rawConfigToml !== seededRawConfig) {
+    setSeededRawConfig(config.rawConfigToml)
     setRawConfig(config.rawConfigToml ?? "")
-  }, [config.rawConfigToml])
+  }
 
   const patch = useCallback((next: Partial<KimiDraft>) => {
     setDraft((current) => ({ ...current, ...next }))

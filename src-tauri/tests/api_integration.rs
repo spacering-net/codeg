@@ -596,6 +596,42 @@ async fn deepseek_model_catalog_requires_a_token() {
     assert_eq!(resp.status_code(), 401);
 }
 
+#[tokio::test]
+async fn deepseek_provider_routes_are_readable_and_shaped_for_the_panel() {
+    let (server, _data, _static) = build_test_server().await;
+    let resp = server
+        .post("/api/acp_load_deepseek_provider_routes")
+        .add_header("authorization", format!("Bearer {TEST_TOKEN}"))
+        .json(&json!({}))
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    let body: Value = resp.json();
+    // Same contract as the catalog above: camelCase on the wire, and the
+    // missing-document case is reported in-band rather than as an error.
+    assert!(body["path"].is_string(), "got {body}");
+    assert!(body["exists"].is_boolean(), "got {body}");
+    assert!(body["configured"].is_boolean(), "got {body}");
+    assert!(
+        body["source"].is_string() || body["source"].is_null(),
+        "got {body}"
+    );
+    assert!(body["routes"].is_array(), "got {body}");
+    assert!(
+        body["error"].is_string() || body["error"].is_null(),
+        "got {body}"
+    );
+}
+
+#[tokio::test]
+async fn deepseek_provider_routes_require_a_token() {
+    let (server, _data, _static) = build_test_server().await;
+    let resp = server
+        .post("/api/acp_load_deepseek_provider_routes")
+        .json(&json!({}))
+        .await;
+    assert_eq!(resp.status_code(), 401);
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Computer use
 //
@@ -722,29 +758,11 @@ async fn a_server_that_shares_its_screen_answers_its_web_clients() {
 // Assistants
 // ────────────────────────────────────────────────────────────────────────────
 
-fn assistant_draft(name: &str) -> Value {
-    json!({
-        "name": name,
-        "description": "Reviews diffs",
-        "avatar": { "kind": "monogram", "color": "violet" },
-        "agent_config": {
-            "agent_type": "codex",
-            "agent_options": { "config_values": { "model": "gpt-5.5" } },
-            "label_snapshot": {
-                "agent": "Codex CLI",
-                "mode": null,
-                "options": [
-                    { "id": "model", "kind": "select", "name": "Model", "value_label": "GPT-5.5" }
-                ]
-            }
-        },
-        "instructions": "Be terse.",
-        "enabled": true
-    })
-}
-
+/// The collaboration settings' assistants are read only now: their list is
+/// served (old links and delegation children read it), and the commands
+/// that changed them are gone — the owner's assistants took their place.
 #[tokio::test]
-async fn assistants_round_trip_over_http() {
+async fn assistants_are_listed_and_no_longer_changed_over_http() {
     let (server, _data, _static) = build_test_server().await;
     let auth = format!("Bearer {TEST_TOKEN}");
     let call = |path: &'static str, body: Value| {
@@ -758,63 +776,148 @@ async fn assistants_round_trip_over_http() {
     assert_eq!(resp.status_code(), 200);
     assert_eq!(resp.json::<Value>(), json!([]));
 
-    let resp = call("/api/assistant_create", json!({ "draft": assistant_draft("Reviewer") })).await;
-    assert_eq!(resp.status_code(), 200);
-    let a: Value = resp.json();
-    assert_eq!(a["name"], "Reviewer");
-    assert_eq!(a["revision"], 1);
-    assert_eq!(a["agent_type"], "codex");
-    assert!(a["deleted_at"].is_null());
-    let a_id = a["id"].as_i64().unwrap();
+    for (path, body) in [
+        ("/api/assistant_create", json!({ "draft": {} })),
+        ("/api/assistant_update", json!({ "id": 1, "patch": {} })),
+        ("/api/assistant_delete", json!({ "id": 1 })),
+        ("/api/assistant_reorder", json!({ "ids": [1] })),
+    ] {
+        let resp = call(path, body).await;
+        assert_ne!(resp.status_code(), 200, "{path} is gone");
+    }
+}
 
-    let resp = call("/api/assistant_create", json!({ "draft": assistant_draft("Writer") })).await;
-    let b_id = resp.json::<Value>()["id"].as_i64().unwrap();
+// ────────────────────────────────────────────────────────────────────────────
+// Harness catalog (Discover) and the SpaceRing image proxy
+// ────────────────────────────────────────────────────────────────────────────
+//
+// Nothing here may reach spacering.net. The first test runs with the catalog
+// switched off, where no command makes a request; the second only sends what
+// is refused before a request is made. Both set `CODEG_HARNESS` for their
+// duration (`temp_env` runs them one at a time), so neither depends on the
+// environment the tests were started in.
 
-    // A duplicate name is a conflict carrying its i18n key.
-    let resp = call("/api/assistant_create", json!({ "draft": assistant_draft("writer") })).await;
-    assert_eq!(resp.status_code(), 409);
-    assert_eq!(resp.json::<Value>()["i18n_key"], "errors.duplicateName");
+/// The eight commands that ask the catalog, with arguments it would accept.
+fn harness_commands() -> [(&'static str, Value); 8] {
+    [
+        ("/api/harness_config", json!({})),
+        (
+            "/api/harness_list",
+            json!({ "q": "pdf", "kind": "skill", "sort": "popular" }),
+        ),
+        ("/api/harness_item", json!({ "itemRef": "anthropics/pdf" })),
+        (
+            "/api/harness_versions",
+            json!({ "itemRef": "anthropics/pdf" }),
+        ),
+        (
+            "/api/harness_readme",
+            json!({ "itemRef": "anthropics/pdf" }),
+        ),
+        (
+            "/api/harness_prompt",
+            json!({ "itemRef": "anthropics/pdf" }),
+        ),
+        (
+            "/api/harness_blob",
+            json!({ "sha256": "9f2c0d1e".repeat(8) }),
+        ),
+        (
+            "/api/srn_asset",
+            json!({ "path": "/api/avatars/0199b5e2-6c4f-7d1a-9f2e-3c8a1b5d7e90/4f1c2a9e8b7d6c5a.png" }),
+        ),
+    ]
+}
 
-    // An incomplete selection never lands.
-    let mut incomplete = assistant_draft("Other");
-    incomplete["agent_config"]["agent_options"]["config_values"] = json!({});
-    let resp = call("/api/assistant_create", json!({ "draft": incomplete })).await;
-    assert_eq!(resp.status_code(), 400);
-    assert_eq!(resp.json::<Value>()["i18n_key"], "errors.invalidAgentOptions");
+#[tokio::test]
+async fn harness_commands_are_routed_and_refuse_when_the_catalog_is_switched_off() {
+    temp_env::async_with_vars([("CODEG_HARNESS", Some("off"))], async {
+        let (server, _data, _static) = build_test_server().await;
 
-    let resp = call(
-        "/api/assistant_update",
-        json!({ "id": a_id, "patch": { "enabled": false } }),
-    )
+        // Not without the token, like every other command.
+        let resp = server.post("/api/harness_status").json(&json!({})).await;
+        assert_eq!(resp.status_code(), 401);
+
+        // The status is how a client learns the catalog is off: it answers.
+        let resp = server
+            .post("/api/harness_status")
+            .add_header("authorization", format!("Bearer {TEST_TOKEN}"))
+            .json(&json!({}))
+            .await;
+        assert_eq!(resp.status_code(), 200);
+        let status: Value = resp.json();
+        assert_eq!(status["enabled"], false);
+        let origin = status["origin"].as_str().expect("an origin");
+        assert!(
+            origin.starts_with("http") && !origin.ends_with('/'),
+            "{origin}"
+        );
+        assert_eq!(status.as_object().unwrap().len(), 2, "{status}");
+
+        // Everything else is routed (not the 501 of an unknown command) and
+        // refuses with the key the frontend sorts failures by.
+        for (path, args) in harness_commands() {
+            let resp = server
+                .post(path)
+                .add_header("authorization", format!("Bearer {TEST_TOKEN}"))
+                .json(&args)
+                .await;
+            assert_eq!(resp.status_code(), 403, "{path}");
+            let error: Value = resp.json();
+            assert_eq!(error["i18n_key"], "Harness.errors.disabled", "{path}");
+            assert_eq!(error["code"], "permission_denied", "{path}");
+        }
+    })
     .await;
-    assert_eq!(resp.status_code(), 200);
-    let updated: Value = resp.json();
-    assert_eq!(updated["enabled"], false);
-    assert_eq!(updated["revision"], 2);
-    assert_eq!(updated["instructions"], "Be terse.");
+}
 
-    let resp = call("/api/assistant_reorder", json!({ "ids": [b_id, a_id] })).await;
-    assert_eq!(resp.status_code(), 200);
-    let moved: Value = resp.json();
-    assert_eq!(moved.as_array().unwrap().len(), 2);
-    assert_eq!(moved[0]["id"], b_id);
+#[tokio::test]
+async fn harness_commands_refuse_a_malformed_address_before_asking_the_catalog() {
+    temp_env::async_with_vars([("CODEG_HARNESS", None::<&str>)], async {
+        let (server, _data, _static) = build_test_server().await;
+        let call = |path: &'static str, args: Value| {
+            server
+                .post(path)
+                .add_header("authorization", format!("Bearer {TEST_TOKEN}"))
+                .json(&args)
+        };
 
-    let resp = call("/api/assistant_delete", json!({ "id": a_id })).await;
-    assert_eq!(resp.status_code(), 200);
-    assert!(resp.json::<Value>()["deleted_at"].is_string());
+        let resp = call("/api/harness_status", json!({})).await;
+        assert_eq!(resp.status_code(), 200);
+        assert_eq!(resp.json::<Value>()["enabled"], true);
 
-    let resp = call("/api/assistant_delete", json!({ "id": a_id })).await;
-    assert_eq!(resp.status_code(), 404);
+        for (path, args) in [
+            ("/api/harness_item", json!({ "itemRef": "Anthropics/PDF" })),
+            ("/api/harness_versions", json!({ "itemRef": "../etc" })),
+            ("/api/harness_readme", json!({ "itemRef": "anthropics" })),
+            (
+                "/api/harness_prompt",
+                json!({ "itemRef": "anthropics/pdf/prompt" }),
+            ),
+            ("/api/srn_asset", json!({ "path": "/api/me" })),
+            (
+                "/api/srn_asset",
+                json!({ "path": "https://elsewhere.example/api/avatars/u/a.png" }),
+            ),
+            ("/api/srn_asset", json!({ "path": "/api/avatars/../me" })),
+            (
+                "/api/harness_blob",
+                json!({ "sha256": "9F2C0D1E".repeat(8) }),
+            ),
+            ("/api/harness_blob", json!({ "sha256": "../config" })),
+        ] {
+            let resp = call(path, args.clone()).await;
+            assert_eq!(resp.status_code(), 400, "{path} {args}");
+            let error: Value = resp.json();
+            assert_eq!(
+                error["i18n_key"], "Harness.errors.invalidRef",
+                "{path} {args}"
+            );
+        }
 
-    // The list keeps the tombstone, in display order.
-    let resp = call("/api/assistant_list", json!({})).await;
-    let list: Value = resp.json();
-    let ids: Vec<i64> = list
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|r| r["id"].as_i64().unwrap())
-        .collect();
-    assert_eq!(ids, vec![b_id, a_id]);
-    assert!(list[1]["deleted_at"].is_string());
+        // The argument is `itemRef`: another spelling is not an argument.
+        let resp = call("/api/harness_item", json!({ "item_ref": "anthropics/pdf" })).await;
+        assert_eq!(resp.status_code(), 422);
+    })
+    .await;
 }

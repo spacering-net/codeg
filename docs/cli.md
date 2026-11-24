@@ -400,6 +400,14 @@ The agent's own mode is another matter: `--mode bypassPermissions` (Claude
 Code) decides whether the agent asks at all, `--permissions` what Codeg answers
 when it does.
 
+Claude Code starts a session in Auto unless `--mode` or its own
+`permissions.defaultMode` setting names another mode. In Auto, Claude Code's
+own check decides most actions itself: it runs file edits in the working
+directory and the commands it judges safe, and refuses the ones it judges
+risky. Those never reach `--permissions`. Behind an API gateway that cannot
+answer that check, every command it would review is refused. `--mode default`
+(Manual) has Claude Code ask before it makes changes again.
+
 Under `wait`, the conversation's link goes to stderr. Answer there — in the
 window, or from a chat channel. `--open` brings it to the front. When
 `--timeout` runs out while requests are still waiting, the result lists them
@@ -584,6 +592,7 @@ change. `next_steps` are commands or actions to try, when there are any.
 | `cancelled` | `error_during_execution` | The run was cancelled in Codeg |
 | `run_stopped`, `run_lost` | `error_during_execution` | The run stopped before its prompt was sent |
 | `stop_<reason>` | `error_during_execution` | The turn ended for another reason than finishing: `stop_max_tokens`, `stop_refusal`, `stop_max_turn_requests`, … |
+| `turn_failed` | `error_during_execution` | The agent said the turn failed instead of replying (Antigravity: its API refused the request, its quota ran out, …): `message` is the agent's account |
 | `too_many_reservations` | `error_during_execution` | Too many runs are being set up on that Codeg at once. Try again shortly |
 | `agents_unavailable`, `assistants_unavailable` | `error_during_execution` | Codeg could not list them |
 | `http_error` | `error_during_execution` | An unexpected HTTP answer |
@@ -755,9 +764,11 @@ git show HEAD | codeg-cli -a claude_code -w "$PWD" --timeout 30m \
 ```
 
 `CODEG_URL` and `CODEG_TOKEN` point `codeg-cli` at that server, as `--url`
-and `--token-file` would. The prompt carries the commit on stdin, because
-under the default `--permissions deny` the agent cannot run `git` itself.
-`--permissions reads` lets it read the rest of the checkout.
+and `--token-file` would. The prompt carries the commit on stdin, so the
+review needs no command the policy would have to allow. `--permissions reads`
+lets it read the rest of the checkout. Claude Code starts in Auto, where it
+can edit files in the checkout without asking: add `--mode default` to keep a
+review from changing them (see [Permissions](#permissions)).
 
 In GitHub Actions:
 

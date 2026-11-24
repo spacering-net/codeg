@@ -35,6 +35,31 @@ export function getShellTransport(): Transport {
   return _shellTransport
 }
 
+const _changeListeners = new Set<() => void>()
+
+/**
+ * Hear when the transport `getTransport()` returns is swapped: a remote-
+ * desktop window configured or cleared its remote server. A long-lived
+ * `subscribe()` made before that is bound to the old one and has to be
+ * made again. Returns the unsubscribe.
+ */
+export function onActiveTransportChange(listener: () => void): () => void {
+  _changeListeners.add(listener)
+  return () => {
+    _changeListeners.delete(listener)
+  }
+}
+
+function transportChanged(): void {
+  for (const listener of [..._changeListeners]) {
+    try {
+      listener()
+    } catch {
+      // one listener's failure is its own
+    }
+  }
+}
+
 export function configureRemoteDesktopTransport(
   config: RemoteTransportConfig
 ): void {
@@ -45,12 +70,15 @@ export function configureRemoteDesktopTransport(
     RemoteDesktopTransport: new (config: RemoteTransportConfig) => Transport
   }
   _remoteTransport = new RemoteDesktopTransport(config)
+  transportChanged()
 }
 
 export function clearRemoteDesktopTransport(): void {
+  const had = _remoteTransport !== null
   _remoteTransport?.destroy?.()
   _remoteTransport = null
   _remoteConfig = null
+  if (had) transportChanged()
 }
 
 export function getActiveRemoteConnectionId(): number | null {

@@ -478,6 +478,10 @@ export interface RequiredOptionRowProps {
   mark?: RequiredRowMark | null
   /** Focus target for "jump to the first missing row". */
   triggerRef?: (el: HTMLButtonElement | null) => void
+  /** Its name alone, without the line under it saying what it is (a
+   *  mode's, the option's): where the rows are to be picked at a glance —
+   *  the personal assistant's first setup. Its values keep theirs. */
+  hideHint?: boolean
 }
 
 /**
@@ -494,6 +498,7 @@ export function RequiredOptionRow({
   invalid,
   mark,
   triggerRef,
+  hideHint = false,
 }: RequiredOptionRowProps) {
   const t = useTranslations("AcpAgentSettings.multiAgent")
   const ta = useTranslations("AcpAgentSettings.multiAgent.assistants")
@@ -533,7 +538,11 @@ export function RequiredOptionRow({
   )
 
   return (
-    <RowShell label={label} hint={description} badges={badges}>
+    <RowShell
+      label={label}
+      hint={hideHint ? undefined : description}
+      badges={badges}
+    >
       <Select
         value={value ?? ""}
         onValueChange={onChange}

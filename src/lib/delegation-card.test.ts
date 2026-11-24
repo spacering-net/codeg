@@ -98,6 +98,7 @@ describe("codex live-wire result envelope", () => {
       errorCode: null,
       // A plain agent delegation names no assistant.
       assistantId: null,
+      botUid: null,
       assistantName: null,
     })
   })
@@ -277,6 +278,31 @@ describe("assistant identity", () => {
         })
       ).assistantId
     ).toBe(4)
+  })
+
+  it("reads the owner's assistant by its uid, over an assistant_id or agent", () => {
+    expect(
+      parseInput(
+        JSON.stringify({
+          bot: "u-7",
+          assistant_id: 3,
+          agent_type: "codex",
+          task: "x",
+        })
+      )
+    ).toMatchObject({ botUid: "u-7", assistantId: null, agentType: null })
+    // One the backend refuses names nobody — never whoever else is named.
+    expect(
+      parseInput(
+        JSON.stringify({ bot: "Not A Uid", assistant_id: 3, task: "x" })
+      )
+    ).toMatchObject({ botUid: null, assistantId: null })
+    // Off the meta and the report too.
+    expect(
+      parseDelegationMeta({
+        "codeg.delegation": { status: "running", bot_uid: "u-7" },
+      })?.botUid
+    ).toBe("u-7")
   })
 
   it("ignores an id the backend would refuse", () => {
@@ -594,6 +620,7 @@ describe("opencode code-mode execute payloads", () => {
     expect(parseInput(interp)).toEqual({
       agentType: "zcode",
       assistantId: null,
+      botUid: null,
       task: null,
       workingDir: null,
     })
@@ -784,6 +811,7 @@ describe("opencode code-mode execute payloads", () => {
       expect(parseInput(raw)).toEqual({
         agentType: null,
         assistantId: null,
+        botUid: null,
         task: null,
         workingDir: null,
       })
@@ -833,6 +861,7 @@ describe("opencode code-mode execute payloads", () => {
       expect(parseInput(raw)).toEqual({
         agentType: null,
         assistantId: null,
+        botUid: null,
         task: null,
         workingDir: null,
       })
@@ -843,6 +872,7 @@ describe("opencode code-mode execute payloads", () => {
     const empty = {
       agentType: null,
       assistantId: null,
+      botUid: null,
       task: null,
       workingDir: null,
     }

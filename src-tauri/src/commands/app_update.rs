@@ -42,7 +42,7 @@ pub async fn perform_app_update(
     state: tauri::State<'_, AppUpdateStateHandle>,
 ) -> Result<AppUpdateState, AppCommandError> {
     let handle = state.inner().clone();
-    let emitter = EventEmitter::Tauri(app.clone());
+    let emitter = EventEmitter::from_app(&app);
 
     let (started, snap) = update_state::try_begin(&handle, &emitter);
     if !started {
@@ -195,7 +195,7 @@ pub async fn restart_app(
     state: tauri::State<'_, AppUpdateStateHandle>,
 ) -> Result<(), AppCommandError> {
     let handle = state.inner().clone();
-    let emitter = EventEmitter::Tauri(app.clone());
+    let emitter = EventEmitter::from_app(&app);
     // Atomically claim the relaunch (flips to `Restarting`) only if an update is
     // genuinely staged — same authority check as the server `restart_impl`.
     // Guards a stale window / direct IPC call from relaunching during

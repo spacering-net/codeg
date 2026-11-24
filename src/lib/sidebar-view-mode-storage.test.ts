@@ -1,15 +1,23 @@
 import { beforeEach, describe, expect, it } from "vitest"
 
+import enMessages from "@/i18n/messages/en.json"
 import {
   DEFAULT_SECTION_ORDER,
+  SIDEBAR_NAV_ITEM_IDS,
   SIDEBAR_RECENT_FILTERS,
+  isNavItemVisible,
+  loadNavItemVisibility,
   loadRecentFilter,
   loadSectionCollapsed,
   loadSectionOrder,
   loadShowRecent,
   loadTagFilter,
+  loadRecentGroupingMode,
+  saveRecentGroupingMode,
+  RECENT_GROUPING_MODE_KEY,
   moveSectionInOrder,
   normalizeSectionOrder,
+  saveNavItemVisibility,
   saveRecentFilter,
   saveSectionOrder,
   saveShowRecent,
@@ -21,21 +29,38 @@ const SECTION_ORDER_KEY = "workspace:sidebar-section-order"
 const SHOW_RECENT_KEY = "workspace:sidebar-show-recent"
 const RECENT_FILTER_KEY = "workspace:sidebar-recent-filter"
 const TAG_FILTER_KEY = "workspace:sidebar-tag-filter"
+const NAV_ITEMS_KEY = "workspace:sidebar-nav-items"
 
 describe("normalizeSectionOrder", () => {
   it("passes a complete order through unchanged", () => {
+    expect(
+      normalizeSectionOrder(["recent", "chats", "assistants", "folders"])
+    ).toEqual(["recent", "chats", "assistants", "folders"])
+  })
+
+  it("puts the assistants right above the folders in a store from before them", () => {
+    // A store written before the assistants' section existed gets it where a
+    // new user has it — above the folders — not at the bottom.
     expect(normalizeSectionOrder(["recent", "chats", "folders"])).toEqual([
       "recent",
       "chats",
+      "assistants",
       "folders",
+    ])
+    expect(normalizeSectionOrder(["folders", "chats", "recent"])).toEqual([
+      "assistants",
+      "folders",
+      "chats",
+      "recent",
     ])
   })
 
-  it("appends missing sections in default order", () => {
+  it("appends the other missing sections in default order", () => {
     // Forward compatibility in reverse: a store written before "Recent" existed
     // gets it at the bottom rather than losing the section entirely.
     expect(normalizeSectionOrder(["chats", "folders"])).toEqual([
       "chats",
+      "assistants",
       "folders",
       "recent",
     ])
@@ -44,12 +69,13 @@ describe("normalizeSectionOrder", () => {
   it("drops unknown entries and repeats", () => {
     expect(
       normalizeSectionOrder(["recent", "bogus", "recent", 7, null, "chats"])
-    ).toEqual(["recent", "chats", "folders"])
+    ).toEqual(["recent", "chats", "assistants", "folders"])
   })
 
   it("migrates the legacy two-way strings, preserving the user's choice", () => {
     expect(normalizeSectionOrder("chats-first")).toEqual([
       "chats",
+      "assistants",
       "folders",
       "recent",
     ])
@@ -58,7 +84,8 @@ describe("normalizeSectionOrder", () => {
     )
   })
 
-  it("falls back to the default for anything unusable", () => {
+  it("falls back to the default — the assistants first — for anything unusable", () => {
+    expect(DEFAULT_SECTION_ORDER[0]).toBe("assistants")
     expect(normalizeSectionOrder(undefined)).toEqual(DEFAULT_SECTION_ORDER)
     expect(normalizeSectionOrder("nonsense")).toEqual(DEFAULT_SECTION_ORDER)
     expect(normalizeSectionOrder({ folders: 1 })).toEqual(DEFAULT_SECTION_ORDER)
@@ -103,19 +130,34 @@ describe("section-order persistence", () => {
   beforeEach(() => localStorage.clear())
 
   it("round-trips through localStorage", () => {
-    saveSectionOrder(["recent", "folders", "chats"])
-    expect(loadSectionOrder()).toEqual(["recent", "folders", "chats"])
+    saveSectionOrder(["recent", "folders", "assistants", "chats"])
+    expect(loadSectionOrder()).toEqual([
+      "recent",
+      "folders",
+      "assistants",
+      "chats",
+    ])
   })
 
-  it("defaults to Folders → Chat → Recent with nothing stored", () => {
-    expect(loadSectionOrder()).toEqual(["folders", "chats", "recent"])
+  it("defaults to Assistants → Folders → Chat → Recent with nothing stored", () => {
+    expect(loadSectionOrder()).toEqual([
+      "assistants",
+      "folders",
+      "chats",
+      "recent",
+    ])
   })
 
   it("migrates a legacy bare string left by an older build", () => {
     // The old format was not JSON, so the loader must survive the parse failure
     // rather than resetting the user's preference.
     localStorage.setItem(SECTION_ORDER_KEY, "chats-first")
-    expect(loadSectionOrder()).toEqual(["chats", "folders", "recent"])
+    expect(loadSectionOrder()).toEqual([
+      "chats",
+      "assistants",
+      "folders",
+      "recent",
+    ])
   })
 
   it("falls back to the default for corrupt JSON", () => {
@@ -181,6 +223,84 @@ describe("loadSectionCollapsed", () => {
   })
 })
 
+describe("sidebar nav items", () => {
+  beforeEach(() => localStorage.clear())
+
+  it("lists the route rows top to bottom, Harness after the canvas", () => {
+    // The assistants have a section of their own, no row here.
+    expect(SIDEBAR_NAV_ITEM_IDS).toEqual([
+      "automations",
+      "tasks",
+      "forge",
+      "canvas",
+      "harness",
+    ])
+  })
+
+  it("names every row from the sidebar's own messages", () => {
+    // Each id doubles as its `Folder.sidebar` key: the row, its visibility
+    // toggle and the quick-actions entry all read the label through it.
+    const labels: Record<string, unknown> = enMessages.Folder.sidebar
+    for (const id of SIDEBAR_NAV_ITEM_IDS) {
+      expect(typeof labels[id]).toBe("string")
+    }
+    expect(enMessages.Folder.sidebar.harness).toBe("Harness Engineering")
+  })
+
+  it("shows a row unless it was explicitly hidden", () => {
+    for (const id of SIDEBAR_NAV_ITEM_IDS) {
+      expect(isNavItemVisible({}, id)).toBe(true)
+      expect(isNavItemVisible({ [id]: true }, id)).toBe(true)
+      expect(isNavItemVisible({ [id]: false }, id)).toBe(false)
+    }
+  })
+
+  it("shows everything with nothing stored", () => {
+    expect(loadNavItemVisibility()).toEqual({})
+  })
+
+  it("round-trips a hidden Harness row", () => {
+    saveNavItemVisibility({ harness: false })
+    expect(JSON.parse(localStorage.getItem(NAV_ITEMS_KEY) ?? "")).toEqual({
+      harness: false,
+    })
+    expect(loadNavItemVisibility()).toEqual({ harness: false })
+    expect(isNavItemVisible(loadNavItemVisibility(), "harness")).toBe(false)
+
+    saveNavItemVisibility({ harness: true })
+    expect(isNavItemVisible(loadNavItemVisibility(), "harness")).toBe(true)
+  })
+
+  it("shows Harness to a store written before the row existed", () => {
+    // Only explicit choices are stored, so an older store has no entry for a
+    // newer route — and no entry means shown.
+    localStorage.setItem(
+      NAV_ITEMS_KEY,
+      JSON.stringify({ automations: false, canvas: true })
+    )
+    const stored = loadNavItemVisibility()
+
+    expect(stored).toEqual({ automations: false, canvas: true })
+    expect(isNavItemVisible(stored, "harness")).toBe(true)
+    expect(isNavItemVisible(stored, "automations")).toBe(false)
+  })
+
+  it("drops entries it does not recognise", () => {
+    localStorage.setItem(
+      NAV_ITEMS_KEY,
+      JSON.stringify({ retired: false, harness: false, tasks: "no" })
+    )
+    expect(loadNavItemVisibility()).toEqual({ harness: false })
+  })
+
+  it("reads corrupt storage as nothing hidden", () => {
+    for (const raw of ["{not json", "null", '"harness"', "[]"]) {
+      localStorage.setItem(NAV_ITEMS_KEY, raw)
+      expect(loadNavItemVisibility()).toEqual({})
+    }
+  })
+})
+
 describe("tag filter persistence", () => {
   beforeEach(() => localStorage.clear())
 
@@ -219,5 +339,27 @@ describe("tag filter persistence", () => {
       JSON.stringify({ tagIds: [4, "x", 4, 9], mode: "weird" })
     )
     expect(loadTagFilter()).toEqual({ tagIds: [4, 9], mode: "any" })
+  })
+})
+
+describe("recentGroupingMode storage", () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  it("defaults to time when empty", () => {
+    expect(loadRecentGroupingMode()).toBe("time")
+  })
+
+  it("round-trips flat and time", () => {
+    saveRecentGroupingMode("flat")
+    expect(loadRecentGroupingMode()).toBe("flat")
+    saveRecentGroupingMode("time")
+    expect(loadRecentGroupingMode()).toBe("time")
+  })
+
+  it("ignores garbage values", () => {
+    localStorage.setItem(RECENT_GROUPING_MODE_KEY, "not-a-valid-mode")
+    expect(loadRecentGroupingMode()).toBe("time")
   })
 })

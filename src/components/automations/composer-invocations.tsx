@@ -21,6 +21,7 @@ import {
   buildKnownInvocations,
   commandToReference,
   diskSkillTrigger,
+  skillMarkedCommands,
   skillsForMenu,
   skillToReference,
   type InvocationPrefix,
@@ -57,9 +58,13 @@ export interface ComposerInvocations {
   /** True only when the menu is open AND has at least one item to show. */
   isOpen: boolean
   commands: AvailableCommandInfo[]
+  /** The commands the rows show as skills (`skillMarkedCommands`), read off
+   *  the full list so the filter never moves the icon column. */
+  skillCommands: ReadonlySet<string>
   skills: AgentSkillItem[]
   /** The trigger `skills` are listed and inserted under (`$` for Codex, `/`
-   *  for Antigravity), or null for an agent whose skills come as commands. */
+   *  for Antigravity and OpenCode), or null for an agent whose skills come as
+   *  commands. */
   skillTrigger: InvocationPrefix | null
   /** Every invocation this menu could offer, for the composer's `knownInvocations`
    *  — so seeded / pasted text badges exactly what the menu would insert. */
@@ -81,8 +86,8 @@ export interface ComposerInvocations {
  * untouched. It reuses the shared, pure reference builders + the composer's
  * `isExternalMenuOpen`/`onExternalMenuKeyDown` escape hatch; a selected item
  * becomes a badge that serializes to its literal `/cmd` / `$skill` token on save.
- * Antigravity's skills, which its server never advertises, join its commands
- * under `/`.
+ * Antigravity's and OpenCode's skills, which their servers never advertise,
+ * and a custom agent's declared skills join their commands under `/`.
  */
 export function useComposerInvocations({
   editorRef,
@@ -159,6 +164,11 @@ export function useComposerInvocations({
         skillTrigger ?? "/"
       ),
     [availableCommands, skillTrigger, skills]
+  )
+
+  const skillCommands = useMemo(
+    () => skillMarkedCommands(availableCommands),
+    [availableCommands]
   )
 
   const count = commands.length + matchedSkills.length
@@ -255,6 +265,7 @@ export function useComposerInvocations({
   return {
     isOpen: open && count > 0,
     commands,
+    skillCommands,
     skills: matchedSkills,
     skillTrigger,
     knownInvocations,
@@ -408,7 +419,11 @@ export function ComposerInvocationsPopup({
               inv.selectCommand(cmd)
             }}
           >
-            <CommandOptionLabel command={cmd} />
+            <CommandOptionLabel
+              command={cmd}
+              skill={inv.skillCommands.has(cmd.name)}
+              kindColumn={inv.skillCommands.size > 0}
+            />
           </button>
         ))}
         {inv.skills.map((skill, i) => {

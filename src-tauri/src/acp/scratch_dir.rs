@@ -181,17 +181,65 @@ fn isolates_on(windows: bool, agent: AgentType) -> bool {
     !windows || unpacks_into_temp_on_windows(agent)
 }
 
+/// Returns true if the command binary matches the Antigravity ACP server executable.
+///
+/// Strips any leading directory path (`/` or `\`), ignores case, and strips an optional
+/// `.exe` extension before checking if the file stem equals `agy_acp_server`.
+fn is_antigravity_server_cmd(cmd: &str) -> bool {
+    let file_name = cmd.rsplit(['/', '\\']).next().unwrap_or("");
+    let stem = if file_name
+        .get(file_name.len().saturating_sub(4)..)
+        .is_some_and(|ext| ext.eq_ignore_ascii_case(".exe"))
+    {
+        &file_name[..file_name.len() - 4]
+    } else {
+        file_name
+    };
+    stem.eq_ignore_ascii_case("agy_acp_server")
+}
+
 /// Agents whose Windows build unpacks itself into the temp directory on every
 /// launch and cleans up only on a graceful exit: the leak this module exists
 /// for. Antigravity's server is a PyInstaller onefile (its registry entry
 /// records each version checked).
+///
+/// A custom agent that runs the same server binary (a user-registered
+/// Antigravity) leaks the same way, so it is matched by its Windows launch
+/// entry: a binary distribution whose entry (the nested `dir_entry` path, else
+/// `cmd` — on Windows hydration takes `cmd` from the `windows-*` spec) is
+/// named `agy_acp_server`. Any other custom agent keeps the ambient temp dir.
 ///
 /// An allowlist rather than a list of agents that run Git Bash, because what a
 /// redirect breaks depends on which programs a session happens to start, not on
 /// the agent: any agent's commands can start Git's `bash.exe`, or `git` itself
 /// can start its `ssh.exe`.
 fn unpacks_into_temp_on_windows(agent: AgentType) -> bool {
-    matches!(agent, AgentType::Antigravity)
+    match agent {
+        AgentType::Antigravity => true,
+        AgentType::Custom(id) => {
+            let Some(meta) = crate::acp::custom_registry::get(id) else {
+                return false;
+            };
+            match &meta.distribution {
+                crate::acp::registry::AgentDistribution::Binary {
+                    platforms,
+                    dir_entry,
+                    cmd,
+                    ..
+                } => {
+                    let has_windows_platform =
+                        platforms.iter().any(|p| p.platform.starts_with("windows-"));
+                    if !has_windows_platform {
+                        return false;
+                    }
+                    let win_cmd = dir_entry.map(|e| e.windows).unwrap_or(*cmd);
+                    is_antigravity_server_cmd(win_cmd)
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
 }
 
 /// A scratch root is only usable if a child can still bind a unix socket
@@ -1510,5 +1558,110 @@ mod tests {
 
         assert!(remove_dir_robust(&target).is_ok());
         assert!(!target.exists());
+    }
+
+    #[test]
+    fn matches_antigravity_server_cmd_names() {
+        assert!(is_antigravity_server_cmd("agy_acp_server.exe"));
+        assert!(is_antigravity_server_cmd("./agy_acp_server.exe"));
+        assert!(is_antigravity_server_cmd("bin\\AGY_ACP_SERVER.EXE"));
+        assert!(is_antigravity_server_cmd("dist/agy_acp_server"));
+
+        assert!(!is_antigravity_server_cmd("agy_acp_server_real.exe"));
+        assert!(!is_antigravity_server_cmd("goose.exe"));
+        assert!(!is_antigravity_server_cmd(""));
+        assert!(!is_antigravity_server_cmd("agy_acp_server.exe.bak"));
+    }
+
+    #[test]
+    fn custom_antigravity_agent_is_isolated_on_windows() {
+        use crate::acp::custom_registry::{
+            hydrate, hydrate_test_guard, BinaryPlatformSpec, CustomAgentDef, CustomAgentSpec,
+            CustomDistributionKind, NpxSpec,
+        };
+        use std::collections::BTreeMap;
+
+        fn custom_binary_def(id: &str, win_cmd: &str) -> CustomAgentDef {
+            let mut binary = BTreeMap::new();
+            for platform in [
+                "darwin-aarch64",
+                "darwin-x86_64",
+                "linux-aarch64",
+                "linux-x86_64",
+                "windows-aarch64",
+                "windows-x86_64",
+            ] {
+                binary.insert(
+                    platform.to_string(),
+                    BinaryPlatformSpec {
+                        archive: format!("https://example.com/{id}-{platform}.zip"),
+                        cmd: win_cmd.to_string(),
+                        args: vec![],
+                        env: BTreeMap::new(),
+                        sha256: None,
+                    },
+                );
+            }
+            CustomAgentDef {
+                registry_id: id.to_string(),
+                name: id.to_string(),
+                description: "test custom agent".to_string(),
+                version: "1.0.0".to_string(),
+                distribution_kind: CustomDistributionKind::Binary,
+                spec: CustomAgentSpec {
+                    binary,
+                    ..Default::default()
+                },
+                icon_url: None,
+                skills_shared_store: false,
+                skills_dir: None,
+                source: Default::default(),
+                version_probe: None,
+                supports_mcp: true,
+            }
+        }
+
+        let _guard = hydrate_test_guard();
+        let agy = custom_binary_def("custom-antigravity", "agy_acp_server.exe");
+        // A nested entry is published as `dir_entry` and matched by its
+        // Windows path rather than the bare `cmd`.
+        let nested = custom_binary_def("custom-antigravity-nested", "./bin/agy_acp_server.exe");
+        let other = custom_binary_def("custom-other", "goose.exe");
+        // Only a binary distribution can be the onefile server: an npx package
+        // whose console script happens to share the name is not matched.
+        let npx = CustomAgentDef {
+            registry_id: "custom-antigravity-npx".to_string(),
+            distribution_kind: CustomDistributionKind::Npx,
+            spec: CustomAgentSpec {
+                npx: Some(NpxSpec {
+                    package: "agy-acp-server@1.0.0".to_string(),
+                    args: vec![],
+                    env: BTreeMap::new(),
+                    cmd: Some("agy_acp_server".to_string()),
+                    node_required: None,
+                }),
+                ..Default::default()
+            },
+            ..custom_binary_def("custom-antigravity-npx", "unused")
+        };
+
+        let errors = hydrate(&[agy, nested, other, npx]);
+        assert!(errors.is_empty(), "hydration should succeed: {errors:?}");
+
+        assert!(isolates_on(true, AgentType::Custom("custom-antigravity")));
+        assert!(isolates_on(
+            true,
+            AgentType::Custom("custom-antigravity-nested")
+        ));
+        assert!(!isolates_on(true, AgentType::Custom("custom-other")));
+        assert!(!isolates_on(
+            true,
+            AgentType::Custom("custom-antigravity-npx")
+        ));
+        // Not registered at all: the lookup misses and nothing changes.
+        assert!(!isolates_on(true, AgentType::Custom("custom-unregistered")));
+
+        let cleanup_errors = hydrate(&[]);
+        assert!(cleanup_errors.is_empty());
     }
 }

@@ -11,14 +11,11 @@
 //!
 //! ## Isolation contract
 //!
-//! - Different `connection_id`s use distinct Tauri event channels
-//!   (`remote-ws-event-{id}`) AND distinct background WS tasks. Two remote
-//!   workspaces opened side-by-side never mix events.
+//! - Different `connection_id`s use distinct Tauri event channels and
+//!   distinct background WS tasks.
 //! - Within one `connection_id`, multiple webviews (main + remote-settings
-//!   child window, etc.) share **one** underlying WS connection but each
-//!   event is dispatched only to the webview labels that have explicitly
-//!   subscribed. We never `app.emit(...)` globally — every emit is
-//!   `app.emit_to(EventTarget::webview(label), ...)`.
+//!   child window, etc.) share one underlying WS connection. Each subscriber
+//!   label has its own event name (`remote-ws-event-{id}-{label}`) and target.
 //! - When the last subscriber for a connection unsubscribes (or its window
 //!   is destroyed), the WS task shuts down and the entry is removed from
 //!   the proxy state.
@@ -446,6 +443,52 @@ pub async fn remote_http_call(
     response.json::<Value>().await.map_err(|e| {
         AppCommandError::network("Failed to parse remote response").with_detail(e.to_string())
     })
+}
+
+/// Cache a previously issued forge image locally. The image URL is a narrow,
+/// capability-bearing resource path, never a caller-supplied host or file.
+#[tauri::command]
+pub async fn remote_cache_forge_image(
+    db: State<'_, AppDatabase>,
+    connection_id: i32,
+    url: String,
+) -> Result<crate::forge::ForgeImage, AppCommandError> {
+    use crate::forge::{image_cache, ForgeError};
+
+    if !image_cache::valid_image_url(&url) {
+        return Err(AppCommandError::invalid_input("Invalid cached forge image URL"));
+    }
+    let conn = remote_workspace_connection_service::get(&db.conn, connection_id)
+        .await
+        .map_err(AppCommandError::db)?
+        .ok_or_else(|| AppCommandError::not_found("Remote connection not found"))?;
+    let endpoint = format!("{}{}", conn.base_url.trim_end_matches('/'), url);
+    let key = image_cache::cache_key(&[
+        "codeg-server", &connection_id.to_string(), &conn.base_url, &conn.token, &url,
+    ]);
+    let client = crate::forge::http_client()?;
+    let image = image_cache::get_or_download(
+        &crate::paths::codeg_forge_images_root(),
+        key,
+        image_cache::IMAGE_MAX_BYTES,
+        || async {
+            let response = client.get(endpoint)
+                .bearer_auth(conn.token.trim())
+                .headers(conn.headers.to_header_map())
+                .header("X-Requested-With", "XMLHttpRequest")
+                .send().await
+                .map_err(|error| ForgeError::Network(error.without_url().to_string()))?;
+            match response.status().as_u16() {
+                200 => Ok(response),
+                401 => Err(ForgeError::Auth("Remote workspace token was rejected".into())),
+                status => Err(ForgeError::Api { status, message: "Remote image download failed".into() }),
+            }
+        },
+    ).await.map_err(|error| match error {
+        ForgeError::Auth(message) => AppCommandError::authentication_failed(message),
+        error => error.into(),
+    })?;
+    Ok(image_cache::local_image_url(image).await?)
 }
 
 // ─── Multipart upload proxy ───────────────────────────────────────────
@@ -1554,7 +1597,6 @@ pub async fn remote_ws_subscribe(
     window_instance_id: String,
 ) -> Result<(), AppCommandError> {
     let label = window.label().to_string();
-    let event_name = format!("remote-ws-event-{connection_id}");
     let proxy_arc: Arc<RemoteProxyState> = (*proxy).clone();
     let subscriber = WsSubscriber {
         label: label.clone(),
@@ -1584,7 +1626,7 @@ pub async fn remote_ws_subscribe(
     };
 
     if let Some(entry) = existing_entry {
-        acknowledge_ready_subscriber(&app, &entry, &label, &event_name).await;
+        acknowledge_ready_subscriber(&app, &entry, connection_id, &label).await;
         return Ok(());
     }
 
@@ -1630,7 +1672,7 @@ pub async fn remote_ws_subscribe(
         }
     };
     if let Some(existing) = raced_entry {
-        acknowledge_ready_subscriber(&app, &existing, &label, &event_name).await;
+        acknowledge_ready_subscriber(&app, &existing, connection_id, &label).await;
         return Ok(());
     }
 
@@ -1764,14 +1806,13 @@ async fn run_ws_task(
     mut shutdown_rx: watch::Receiver<bool>,
     mut outbound_rx: mpsc::Receiver<String>,
 ) {
-    let event_name = format!("remote-ws-event-{connection_id}");
     run_ws_connection(
         target,
         |last_known| stored_ws_target(db.clone(), connection_id, last_known),
         &entry,
         &mut shutdown_rx,
         &mut outbound_rx,
-        |frame| forward_frame(&app, &entry, &event_name, frame),
+        |frame| forward_frame(&app, &entry, connection_id, frame),
     )
     .await;
 
@@ -2013,47 +2054,56 @@ async fn backoff_sleep(shutdown_rx: &mut watch::Receiver<bool>, fail_count: u32)
 /// Forward a text frame from the remote WS to all current subscribers of
 /// this connection. The remote codeg-server's `ws.rs` emits frames shaped
 /// `{ "channel": "...", "payload": ... }` (see `WebEventBroadcaster`).
-/// We re-emit the payload as-is into the Tauri event named
-/// `remote-ws-event-{connection_id}`, but only to webview labels listed in
-/// the subscriber set — never broadcast.
+/// Re-emit the payload as-is to the subscribed webviews.
 async fn forward_frame(
     app: &AppHandle,
     entry: &Arc<WsTaskEntry>,
-    event_name: &str,
+    connection_id: i32,
     envelope: Value,
 ) {
-    let labels = snapshot_subscribers(entry).await;
-    for label in labels {
-        if let Err(e) = app.emit_to(EventTarget::webview(&label), event_name, &envelope) {
-            tracing::error!("[RemoteProxy] emit_to {label} for {event_name} failed: {e}");
-        }
+    for label in snapshot_subscribers(entry).await {
+        emit_frame_to_label(app, connection_id, &label, &envelope);
     }
 }
 
-/// Emit one of the internal lifecycle channels (`__ready__`,
-/// `__disconnected__`, `__unauthorized__`) to all current subscribers.
+/// Build one of the internal lifecycle envelopes (`__ready__`,
+/// `__disconnected__`, `__unauthorized__`).
 fn lifecycle_frame(channel: &'static str) -> Value {
     serde_json::json!({ "channel": channel, "payload": Value::Null })
 }
 
-fn emit_internal_to_label(app: &AppHandle, label: &str, event_name: &str, channel: &'static str) {
-    let envelope = lifecycle_frame(channel);
-    if let Err(e) = app.emit_to(EventTarget::webview(label), event_name, &envelope) {
-        tracing::error!("[RemoteProxy] emit_to {label} for {event_name} ({channel}) failed: {e}");
+/// Tauri event name for one subscriber webview of one connection. Must match
+/// the name `RemoteDesktopTransport.startWs` listens on. Webview labels only
+/// use characters Tauri also allows in event names, so this is always valid.
+fn remote_ws_event_name(connection_id: i32, label: &str) -> String {
+    format!("remote-ws-event-{connection_id}-{label}")
+}
+
+fn emit_frame_to_label(app: &AppHandle, connection_id: i32, label: &str, envelope: &Value) {
+    // Tauri evaluates an event script in other webviews with the same event
+    // name, even when the target filter leaves them no recipients.
+    let event_name = remote_ws_event_name(connection_id, label);
+    if let Err(e) = app.emit_to(EventTarget::webview(label), &event_name, envelope) {
+        tracing::error!("[RemoteProxy] emit_to {label} for {event_name} failed: {e}");
     }
 }
 
 async fn acknowledge_ready_subscriber(
     app: &AppHandle,
     entry: &WsTaskEntry,
+    connection_id: i32,
     label: &str,
-    event_name: &str,
 ) {
     // Hold readiness through the acknowledgement so it cannot overtake a
     // disconnect notification. Also used after the slow-path insert race.
     let ready = entry.ready.read().await;
     if *ready {
-        emit_internal_to_label(app, label, event_name, WS_READY_CHANNEL);
+        emit_frame_to_label(
+            app,
+            connection_id,
+            label,
+            &lifecycle_frame(WS_READY_CHANNEL),
+        );
     }
 }
 
@@ -2242,6 +2292,19 @@ mod tests {
             shutdown_tx,
             outbound_tx,
         })
+    }
+
+    #[test]
+    fn ws_event_name_is_scoped_to_connection_and_webview() {
+        // Same literal the transport tests pin on the listening side.
+        assert_eq!(
+            remote_ws_event_name(17, "main-webview"),
+            "remote-ws-event-17-main-webview"
+        );
+        assert_ne!(
+            remote_ws_event_name(7, "remote-webview-a"),
+            remote_ws_event_name(7, "remote-webview-b")
+        );
     }
 
     // ─── Host pinning for credential-carrying requests ──────────────────
@@ -3138,6 +3201,18 @@ mod tests {
         // once lets a dial without the race through as well; this test tells
         // the two apart wherever the SYN is dropped instead.
         let silent = std::net::SocketAddr::from(([192, 0, 2, 1], port));
+        // A proxy that takes over all traffic (a TUN adapter) answers every
+        // SYN, TEST-NET-1's too: there is no silent address to get past then,
+        // only one that accepts and is not the server.
+        if let Ok(Ok(_)) = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            tokio::net::TcpStream::connect(silent),
+        )
+        .await
+        {
+            eprintln!("skipped: something on this network answers TEST-NET-1");
+            return;
+        }
         let answering = std::net::SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port));
         let connector = HttpConnector::new_with_resolver(FixedResolver(vec![silent, answering]));
         let request = ws_request_with_subprotocol_auth(

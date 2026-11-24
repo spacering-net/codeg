@@ -11,6 +11,7 @@ import {
   buildAcpAdapterCheck,
   buildVersionCheck,
   canCheckLatestRelease,
+  claudeThinkingSummariesEnabled,
   compareReleaseVersion,
   configTextForClaudeSave,
   extractCodexImportantValues,
@@ -31,6 +32,7 @@ import {
   codexSandboxSeedsAcpPreset,
   rebaseDeepSeekDraft,
   setClaudeEnvFlagInConfigText,
+  setClaudeThinkingSummaries,
   setHostToolsAgentMode,
   showsCodexReadOnlyAcpWarning,
   toggleGrokReasoningEffort,
@@ -2473,6 +2475,39 @@ describe("codex WebSocket switch follows supports_websockets alone", () => {
     expect(movedParsed.features).toEqual({
       default_mode_request_user_input: true,
     })
+  })
+})
+
+describe("Claude thinking summaries — CLAUDE_CODE_THINKING_DISPLAY in the adapter's env", () => {
+  const KEY = "CLAUDE_CODE_THINKING_DISPLAY"
+
+  it("is on only for the exact value claude-agent-acp reads", () => {
+    expect(claudeThinkingSummariesEnabled("")).toBe(false)
+    expect(claudeThinkingSummariesEnabled("ANTHROPIC_MODEL=opus")).toBe(false)
+    // The adapter takes `summarized` or `omitted` verbatim and ignores
+    // anything else, which leaves Claude Code's own default in place.
+    expect(claudeThinkingSummariesEnabled(`${KEY}=omitted`)).toBe(false)
+    expect(claudeThinkingSummariesEnabled(`${KEY}=Summarized`)).toBe(false)
+    // Trimmed, as the saved env is.
+    expect(claudeThinkingSummariesEnabled(`${KEY} = summarized `)).toBe(true)
+  })
+
+  it("round-trips on and off, keeping the other variables", () => {
+    const on = setClaudeThinkingSummaries("ANTHROPIC_MODEL=opus", true)
+    expect(on).toBe(`ANTHROPIC_MODEL=opus\n${KEY}=summarized`)
+    expect(claudeThinkingSummariesEnabled(on)).toBe(true)
+
+    // Off removes the key, so Claude Code's default display applies again:
+    // `omitted` would hide the notes it writes between tool calls as well.
+    const off = setClaudeThinkingSummaries(on, false)
+    expect(off).toBe("ANTHROPIC_MODEL=opus")
+    expect(claudeThinkingSummariesEnabled(off)).toBe(false)
+  })
+
+  it("replaces a value typed by hand when turned on", () => {
+    expect(setClaudeThinkingSummaries(`${KEY}=omitted\nX=1`, true)).toBe(
+      `${KEY}=summarized\nX=1`
+    )
   })
 })
 

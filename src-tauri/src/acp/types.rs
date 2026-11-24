@@ -155,6 +155,14 @@ pub struct SessionFailureRecord {
     /// Emitted `false` from the parser; flipped by the two stores.
     #[serde(default)]
     pub resolved: bool,
+    /// codeg's own (never on an adapter's wire): this terminal record's
+    /// `title` also streamed as one whole reply chunk of the turn it ended —
+    /// Antigravity tells a dead executor that way (see
+    /// `connection::antigravity_turn_failure`). Those words are no reply, so
+    /// the failure line takes their place in the live message, here
+    /// (`SessionState::apply_event`) and in the frontend reducer alike.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub echoed_in_reply: bool,
 }
 
 /// Cumulative cost of one async task, as the adapter last reported it
@@ -579,6 +587,16 @@ pub enum AcpEvent {
     ForkSupported { supported: bool },
     /// Current session mode changed
     ModeChanged { mode_id: String },
+    /// The composer's pending mode pick for this connection changed (see
+    /// `SessionState::composer_mode_id`). Never sent to the agent: a tab
+    /// applies it at its next send. `mode_id: None` clears it — emitted once
+    /// the agent's current mode reached the pick. `explicit` marks a user's
+    /// own pick (vs a draft's one-time hand-over or a reconnect's restore).
+    ComposerModeChanged {
+        mode_id: Option<String>,
+        #[serde(default)]
+        explicit: bool,
+    },
     /// Agent reported plan update for current turn
     PlanUpdate { entries: Vec<PlanEntryInfo> },
     /// Connection status changed
@@ -713,7 +731,9 @@ pub enum AcpEvent {
         /// Stable machine-readable identifier: `"resource_not_found"` for
         /// JSON-RPC -32002, `"session_busy"` for codex-acp's typed
         /// `data.reason: "thread_active_writer"` (2.1.0+; matched on the wire
-        /// message before that), or `"session_unavailable"` /
+        /// message before that), `"provider_mismatch"` for codex 0.166's
+        /// refusal of a thread bound to another model provider (`message` is
+        /// then codex's own sentence), or `"session_unavailable"` /
         /// `"session_archived"` matched on the wire message. See
         /// `classify_session_load_error`.
         code: String,
@@ -766,6 +786,15 @@ pub enum AcpEvent {
         /// into `SessionState` to exempt the connection from both idle sweeps
         /// while work is pending.
         outstanding: u32,
+        /// The same tasks one by one, for the composer's "N running" list: a
+        /// count alone cannot say WHICH background sub-agents still run once
+        /// their launching turn has ended, and the launch cards cannot either
+        /// (a transcript can't tell a live task from one whose CLI died).
+        /// Every emission carries the producer's WHOLE current set, like
+        /// `outstanding` — state, not a delta — so an absent field means none.
+        /// `outstanding` stays its length, for older readers.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        outstanding_tasks: Vec<BackgroundOutstandingTask>,
         /// Tasks settled by `<task-notification>` records in this batch — the
         /// frontend raises one OS notification per entry.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -775,6 +804,27 @@ pub enum AcpEvent {
         /// `transcript_watermark` catches up (`>=`), closing the emit/refetch
         /// race without cross-namespace id dedup.
         watermark: u64,
+    },
+    /// A live progress tick for a background sub-agent whose launch card has
+    /// already left the live message: its launching turn ended (the usual case
+    /// — a background launch returns at once and the turn answers), or a later
+    /// turn is running. A `ToolCallUpdate` cannot reach that card, since the
+    /// frontend diverts out-of-turn wire updates and `SessionState` would
+    /// recreate a ghost live message for one. The frontend merges `meta` into
+    /// the launch card's own `meta` in memory, the way a settle rewrites its
+    /// lifecycle marker. Nothing is persisted: the tick is the only record.
+    ///
+    /// Grok only (`subagent_progress`): its background children report while
+    /// they run, and almost always after the parent's turn has ended.
+    BackgroundTaskProgress {
+        session_id: String,
+        /// The launching tool call — the card to update.
+        tool_use_id: String,
+        /// The sub-agent's own id.
+        task_id: String,
+        /// Keys to merge into the card's `meta` (for Grok,
+        /// `grokSubagentSession` + `grokSubagentProgress`).
+        meta: serde_json::Value,
     },
     /// A `delegate_to_agent` MCP tool call from the parent agent has spawned a
     /// child sub-session and the child's prompt is in flight. Emitted as soon
@@ -802,6 +852,10 @@ pub enum AcpEvent {
         assistant_id: Option<i32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         assistant_name: Option<String>,
+        /// The owner's assistant it runs as (its uid); with it, `assistant_id`
+        /// is that assistant's row. Absent for one from before them.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bot_uid: Option<String>,
     },
     /// The child sub-session has finished (or errored / timed out / been
     /// canceled). The MCP tool_result has been delivered to the parent agent.
@@ -823,6 +877,21 @@ pub enum AcpEvent {
         assistant_id: Option<i32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         assistant_name: Option<String>,
+        /// The owner's assistant it runs as (its uid); with it, `assistant_id`
+        /// is that assistant's row. Absent for one from before them.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bot_uid: Option<String>,
+    },
+    /// A codeg delegation of this (parent) connection started (`running`) or
+    /// reached a terminal state. Lifecycle accounting only, so unlike
+    /// `DelegationStarted` / `DelegationCompleted` it is emitted for EVERY
+    /// broker delegation — including one whose parent tool call could not be
+    /// identified (a synthetic `delegation-*` id), which has no card to bind
+    /// but still dies with its parent (`cancel_by_parent`). The teardown gates
+    /// spare a parent while it has a delegated child running.
+    DelegationChildRunning {
+        child_connection_id: String,
+        running: bool,
     },
     /// A human submitted a prompt from the Codeg conversation UI (desktop or
     /// web). Synthetic, notification-only event: it mutates no `SessionState`
@@ -872,9 +941,16 @@ pub enum AcpEvent {
         questions: Vec<crate::acp::question::QuestionSpec>,
     },
     /// A previously-pending question was answered (from any client) or canceled
-    /// (the tool call was aborted / the connection drained). Carries only the
-    /// `question_id`; clients clear the matching card. Idempotent on apply.
-    QuestionResolved { question_id: String },
+    /// (the tool call was aborted / the connection drained). Clients clear the
+    /// matching card by `question_id`. Idempotent on apply.
+    QuestionResolved {
+        question_id: String,
+        /// Whose answer took effect and what it was — or, with no answer,
+        /// that it was withdrawn (7.3.1). Additive: older clients read the id
+        /// alone.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resolution: Option<AnswerResolution>,
+    },
     /// A Grok `exit_plan_mode` call: the agent finished planning and is BLOCKED
     /// on the user's approval of the plan before it leaves plan mode and starts
     /// implementing (Grok's native `_x.ai/exit_plan_mode` ext request). Broadcast
@@ -889,9 +965,30 @@ pub enum AcpEvent {
         plan_markdown: String,
     },
     /// A previously-pending plan approval was answered (from any client) or
-    /// canceled (the connection drained). Carries only the `approval_id`; clients
-    /// clear the matching card. Idempotent on apply.
-    PlanApprovalResolved { approval_id: String },
+    /// canceled (the connection drained). Clients clear the matching card by
+    /// `approval_id`. Idempotent on apply.
+    PlanApprovalResolved {
+        approval_id: String,
+        /// As on [`AcpEvent::QuestionResolved`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resolution: Option<AnswerResolution>,
+    },
+    /// The assistant that dispatched this session answers its questions and
+    /// plan approvals for the owner (7.3.1): a window does not notify the
+    /// owner of those at once, only when one is forwarded to them
+    /// ([`AcpEvent::AskForwarded`]). Kept in `SessionState.ask_delegate`.
+    AskDelegate {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        delegate: Option<AskDelegate>,
+    },
+    /// A question or plan approval of this session the dispatching assistant
+    /// was answering is now the owner's to answer: notify them.
+    AskForwarded {
+        request_id: String,
+        /// `question`, `plan` or `permission` (a plan approval that arrived
+        /// as a permission request).
+        kind: String,
+    },
     /// The agent's effective settings (env vars / model provider / native config
     /// files) changed AFTER this connection was spawned, so the running process
     /// is still using its launch-time config. Emitted by
@@ -906,6 +1003,54 @@ pub enum AcpEvent {
         stale: bool,
         kind: ConfigStaleKind,
     },
+}
+
+/// What kind of work a [`BackgroundOutstandingTask`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundTaskKind {
+    /// A sub-agent running in the background (Claude Code's async `Agent`,
+    /// an OpenCode background `subagent`, a Grok background `spawn_subagent`).
+    Agent,
+    /// A background shell (Claude Code's `Bash(run_in_background)`). The AIR
+    /// async-task channel reports these too, with a stop; the frontend lists
+    /// them from there.
+    Shell,
+}
+
+impl BackgroundTaskKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Agent => "agent",
+            Self::Shell => "shell",
+        }
+    }
+}
+
+/// Cap on [`BackgroundOutstandingTask::description`]: a row title, not the
+/// prompt. Keeps every emission of the set — each one carries it whole —
+/// small whatever the agent wrote.
+pub const BACKGROUND_TASK_DESCRIPTION_MAX_CHARS: usize = 200;
+
+/// One launched-but-unresolved background task, as the producer of
+/// [`AcpEvent::BackgroundActivity`] accounts it: the Claude transcript
+/// watcher, or the OpenCode / Grok live state. Leaves the set when it settles
+/// (or, for the watcher, when its keep-alive expires).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackgroundOutstandingTask {
+    /// The id its settle will carry (`BackgroundSettledInfo::task_id`).
+    pub task_id: String,
+    pub kind: BackgroundTaskKind,
+    /// The tool call that launched it, when known — the card the frontend
+    /// takes the row's title from. `None` for a task whose launch this
+    /// producer never saw (a Claude interim notification is the one case).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_use_id: Option<String>,
+    /// The launch's own description of the task, the row's fallback title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// When the producer first saw it launched (or resumed), Unix ms.
+    pub started_at_ms: i64,
 }
 
 /// One background task settled by a `<task-notification>` transcript record,
@@ -1142,7 +1287,7 @@ pub fn attachment_names_from_prompt(blocks: &[PromptInputBlock]) -> Option<Strin
 /// or backslashes is wrapped in `<…>`. Without that a perfectly ordinary
 /// attachment — `file:///a/b (1).ts`, or a Windows `file:///C:\dir\x` — closed
 /// the link early and rendered as raw `[…](…)` source text.
-fn attachment_marker(label: &str, uri: &str) -> String {
+pub(crate) fn attachment_marker(label: &str, uri: &str) -> String {
     format!(
         "[{}]({})",
         escape_markdown_text(label),
@@ -1427,6 +1572,14 @@ pub enum PermissionAnswerOrigin {
     ChatChannel,
     /// The permission policy of a headless `codeg-cli` run.
     CliPolicy { run_id: String },
+    /// An assistant answering a plan approval that arrived as a permission
+    /// request, for the owner (7.3.1). Only plan approvals: an executor's
+    /// other permission requests are the owner's.
+    Assistant { bot_id: i32 },
+    /// The owner, answering such a plan approval on an assistant's page —
+    /// told apart from the session's card so the page's own submission is
+    /// recognised when it is the one that took effect.
+    AssistantPage,
 }
 
 impl PermissionAnswerOrigin {
@@ -1437,7 +1590,105 @@ impl PermissionAnswerOrigin {
             Self::User => "user",
             Self::ChatChannel => "chat_channel",
             Self::CliPolicy { .. } => "cli_policy",
+            Self::Assistant { .. } => "assistant",
+            Self::AssistantPage => "assistant_page",
         }
+    }
+}
+
+/// Who answered a question or a plan approval (7.3.1). The first answer
+/// wins; this names whose that was.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AnswerOrigin {
+    /// A person, on the card in the session (any Codeg window).
+    User,
+    /// The owner, on an assistant's page.
+    AssistantPage,
+    /// An assistant, answering for the owner.
+    Assistant { bot_id: i32 },
+    /// A chat channel.
+    ChatChannel,
+    /// The policy of a headless `codeg-cli` run.
+    CliPolicy,
+}
+
+/// How a question or plan approval was settled: the answer that took effect
+/// and whose it was, or — with neither — that it was withdrawn before any
+/// answer (the tool call aborted, the connection drained).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnswerResolution {
+    /// What the agent got: a `QuestionOutcome` or a `PlanApprovalAnswer`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<AnswerOrigin>,
+    pub at: chrono::DateTime<chrono::Utc>,
+}
+
+impl AnswerResolution {
+    pub fn withdrawn() -> Self {
+        Self {
+            answer: None,
+            origin: None,
+            at: chrono::Utc::now(),
+        }
+    }
+
+    pub fn is_answer(&self) -> bool {
+        self.answer.is_some()
+    }
+}
+
+/// What an answer to a question or plan approval came to (7.3.1): taken, too
+/// late (another answer took effect first: that one), or the request is gone.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AnswerOutcome {
+    Answered(AnswerResolution),
+    AlreadyAnswered(AnswerResolution),
+    Withdrawn,
+}
+
+/// What the dispatching assistant answers for the owner on a session (7.3.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AskDelegate {
+    pub bot_id: i32,
+    /// Questions (except those asking for a secret).
+    pub questions: bool,
+    /// Plan approvals: extension requests and the plan-approval permission
+    /// requests of Claude Code and Codex.
+    pub plans: bool,
+}
+
+/// Which plan approval a permission request is, when it is one (7.3.1):
+/// Claude Code's `ExitPlanMode` or a Codex plan review. Any other
+/// permission request is not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanPermission {
+    ClaudeExitPlan,
+    CodexPlanReview,
+}
+
+impl PlanPermission {
+    /// Read off the request: Claude Code offers `exit-plan-*` options, a
+    /// Codex review is the `plan-review:<item>` call offering
+    /// `implement_plan`.
+    pub fn of(tool_call: &serde_json::Value, options: &[PermissionOptionInfo]) -> Option<Self> {
+        if options.iter().any(|o| o.option_id.starts_with("exit-plan-")) {
+            return Some(Self::ClaudeExitPlan);
+        }
+        let call_id = tool_call
+            .get("toolCallId")
+            .or_else(|| tool_call.get("tool_call_id"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        if call_id.starts_with("plan-review:")
+            || options.iter().any(|o| o.option_id == "implement_plan")
+        {
+            return Some(Self::CodexPlanReview);
+        }
+        None
     }
 }
 
@@ -1476,6 +1727,30 @@ pub struct SessionConfigSelectOptionInfo {
     pub value: String,
     pub name: String,
     pub description: Option<String>,
+    /// What the agent says about this entry's model's reasoning efforts —
+    /// only on an entry of the model option, and only where the agent names
+    /// them (see [`ModelReasoningEffortsInfo`]). Left off the wire when
+    /// absent, and `#[serde(default)]` so snapshots written before the field
+    /// existed still deserialize.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_efforts: Option<ModelReasoningEffortsInfo>,
+}
+
+/// One model's reasoning efforts, as its entry of the `model` option names
+/// them: JetBrains AIR's `reasoningEfforts` (claude-agent-acp 0.110.0,
+/// codex-acp 2.10.0). It lets a model's effort levels be known before that
+/// model is current — the effort option itself lists only the current
+/// model's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelReasoningEffortsInfo {
+    /// The model's effort ids, in the order the agent's effort option lists
+    /// them once the model is current. Never empty.
+    pub values: Vec<String>,
+    /// The one the agent recommends for the model — one of `values`, or
+    /// `None` when the agent names none (codex-acp, when the model's default
+    /// effort is not in its list).
+    #[serde(default)]
+    pub recommended: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1727,6 +2002,8 @@ pub struct AcpAgentInfo {
     pub host_tools_agent_mode: bool,
     pub config_json: Option<String>,
     pub config_file_path: Option<String>,
+    pub system_instructions_file_path: Option<String>,
+    pub system_instructions_content: Option<String>,
     pub codex_auth_json: Option<String>,
     pub codex_config_toml: Option<String>,
     /// Compact structured codex model-catalog source (the `codeg` custom-model
@@ -2233,6 +2510,37 @@ pub struct AgentSkillItem {
     /// `~/.codex/skills/.system/*`). Surfaced so the UI can show them but
     /// refuse to edit or delete; the backend also refuses such writes.
     pub read_only: bool,
+    /// Where the entry's link points, when it is a link (symlink or
+    /// junction); `None` for a real folder or file.
+    pub link_target: Option<String>,
+    /// Whose skill this is (see [`AgentSkillOwner`]).
+    pub owner: AgentSkillOwner,
+    /// The pack (`experts`, `science`, `office`, `ui`) when `owner` is `pack`.
+    pub pack: Option<String>,
+    /// A copy Codeg made where no link could be made (Windows); `owner` names
+    /// what it is a copy of.
+    pub codeg_copy: bool,
+    /// A Harness plugin's member skill (`owner` is `harness`): the plugin's
+    /// install name.
+    pub plugin: Option<String>,
+}
+
+/// Whose skill an agent's listed skill is.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSkillOwner {
+    /// Codeg linked it from one of its skill packs (read only here).
+    Pack,
+    /// Codeg linked it from a Harness install (read only here).
+    Harness,
+    /// Codeg linked it from a Custom skill (edited in Codeg's store).
+    Custom,
+    /// The agent's own skill, in place.
+    Agent,
+    /// A link to somewhere outside Codeg's store.
+    LinkedElsewhere,
+    /// A link that leads nowhere.
+    Broken,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2254,6 +2562,16 @@ pub struct AvailableCommandInfo {
     pub name: String,
     pub description: String,
     pub input_hint: Option<String>,
+    /// The agent marks the command as a skill (JetBrains AIR's command
+    /// `_meta.jetbrains.air.kind = "skill"`, read by `air_command_skill` in
+    /// `connection.rs`). Left off the wire when false, so a command of an agent
+    /// that marks nothing serializes exactly as before.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub skill: bool,
+    /// The skill's `SKILL.md`, when the agent sent its path. Only ever set
+    /// together with `skill`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_path: Option<String>,
 }
 
 /// Claude Code's Remote Control for a session that has it on: the session can
@@ -2274,6 +2592,10 @@ pub struct RemoteControlInfo {
 pub struct ForkProtocolResult {
     pub forked_session_id: String,
     pub original_session_id: String,
+    /// The selection the fork actually inherited, read in the connection loop
+    /// after every setter queued before the fork was applied. Written to both
+    /// the re-pointed row and the sibling (`persist_fork_outcome`).
+    pub inherited_selection: crate::models::ConversationSelection,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -22,6 +22,7 @@ import {
   Download,
   Eye,
   EyeOff,
+  FileText,
   GripVertical,
   Loader2,
   Minus,
@@ -34,6 +35,7 @@ import {
   Save,
   Stethoscope,
   Trash2,
+  Undo2,
   Wrench,
 } from "lucide-react"
 import { parse as parseTomlDocument } from "smol-toml"
@@ -212,11 +214,16 @@ import {
 import { CodeBuddyConfigPanel } from "./codebuddy-config-panel"
 import { CursorConfigPanel } from "./cursor-config-panel"
 import {
-  DEEPSEEK_DEFAULT_BASE_URL,
+  DEEPSEEK_LEGACY_BASE_URL,
   DEEPSEEK_PANEL_ENV_KEYS,
   DeepSeekConfigPanel,
 } from "./deepseek-config-panel"
-import { DeepSeekModelListEditor } from "./deepseek-model-list-editor"
+import {
+  DeepSeekModelListEditor,
+  deepseekReadsHarnessCatalog,
+  deepseekReadsProviderRoutes,
+} from "./deepseek-model-list-editor"
+import { DeepSeekProviderRoutesEditor } from "./deepseek-provider-routes-editor"
 import { MiniMaxCodeConfigPanel } from "./minimax-code-config-panel"
 import { KimiCodeConfigPanel } from "./kimi-code-config-panel"
 import { PiConfigPanel } from "./pi-config-panel"
@@ -237,6 +244,11 @@ type ClaudeAuthMode = (typeof CLAUDE_AUTH_MODES)[number]
 interface AgentDraft {
   enabled: boolean
   envText: string
+  systemInstructionsText: string
+  /** The instructions file's content when the draft was built (or last
+   *  saved): the shared save sends the text only when it differs, so an
+   *  untouched draft never writes the agent's file. */
+  systemInstructionsBaseline: string
   configText: string
   apiBaseUrl: string
   apiKey: string
@@ -516,6 +528,41 @@ function parseEnvText(envText: string): Record<string, string> {
 }
 
 /**
+ * Split an instructions file path into its directory (with the trailing
+ * separator) and file name, so the panel can elide the directory and keep the
+ * name in view. Handles both `/` and `\` separators.
+ */
+export function splitInstructionsPath(path: string): {
+  dir: string
+  name: string
+} {
+  const cut = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"))
+  return { dir: path.slice(0, cut + 1), name: path.slice(cut + 1) }
+}
+
+/**
+ * Re-read on refresh: the instructions file is often edited outside codeg (by
+ * hand, or by the agent's own CLI), so an untouched editor shows what is on
+ * disk now instead of the text it was first loaded with.
+ */
+export function rebaseSystemInstructionsDraft(
+  draft: AgentDraft,
+  agent: AcpAgentInfo
+): AgentDraft {
+  // An unsaved edit is kept as typed; an untouched editor follows the file.
+  if (draft.systemInstructionsText !== draft.systemInstructionsBaseline) {
+    return draft
+  }
+  const next = agent.system_instructions_content ?? ""
+  if (next === draft.systemInstructionsBaseline) return draft
+  return {
+    ...draft,
+    systemInstructionsText: next,
+    systemInstructionsBaseline: next,
+  }
+}
+
+/**
  * Fold the DeepSeek panel's own env keys, as they are actually persisted, into
  * an existing draft. Everything else in the draft — other keys, and any
  * unsaved edit to them — is left exactly as it was.
@@ -647,6 +694,41 @@ export function setHostToolsAgentMode(
 ): string {
   return patchEnvText(envText, {
     [HOST_TOOLS_ENV]: enabled ? HOST_TOOLS_AGENT : HOST_TOOLS_DEFAULT,
+  })
+}
+
+/**
+ * How Claude Code shows its thinking. Claude Code asks the API for
+ * `display: "updates"` by default, so a thinking block carries only the notes
+ * Claude writes between tool calls; `summarized` adds summaries of the
+ * reasoning itself. Display decides what comes back, not what is billed.
+ *
+ * claude-agent-acp (0.99.0 and later) reads this variable from ITS OWN
+ * environment, so it belongs in `env_json`, which is the adapter's launch env.
+ * The native settings.json `env` reaches only the Claude Code process the
+ * adapter starts, where the variable does nothing. An older adapter ignores it.
+ */
+const CLAUDE_THINKING_DISPLAY_ENV = "CLAUDE_CODE_THINKING_DISPLAY"
+const CLAUDE_THINKING_DISPLAY_SUMMARIZED = "summarized"
+
+/** Whether this agent's env draft asks Claude Code for thinking summaries. */
+export function claudeThinkingSummariesEnabled(envText: string): boolean {
+  return (
+    parseEnvText(envText)[CLAUDE_THINKING_DISPLAY_ENV] ===
+    CLAUDE_THINKING_DISPLAY_SUMMARIZED
+  )
+}
+
+/** Turn thinking summaries on, or remove the key so Claude Code's own default
+ *  applies again. */
+export function setClaudeThinkingSummaries(
+  envText: string,
+  enabled: boolean
+): string {
+  return patchEnvText(envText, {
+    [CLAUDE_THINKING_DISPLAY_ENV]: enabled
+      ? CLAUDE_THINKING_DISPLAY_SUMMARIZED
+      : undefined,
   })
 }
 
@@ -821,8 +903,9 @@ const GROK_DEFAULT_BASE_URL = "https://api.x.ai/v1"
  * `reasoning_efforts`. Each is one of Grok's canonical levels and reaches the
  * provider exactly as written. Unlike Kimi there is no free-text level: Grok
  * rejects an unknown one, and drops the model's WHOLE list with it (verified
- * against 1.0.62 and 1.0.70). `none` is left out because next to real levels
- * it reads as "declare none"; a hand-written one still shows as an extra chip.
+ * against 1.0.62, 1.0.70 and 1.0.77). `none` is left out because next to real
+ * levels it reads as "declare none"; a hand-written one still shows as an extra
+ * chip.
  */
 export const GROK_REASONING_EFFORT_LEVELS = [
   "minimal",
@@ -1735,26 +1818,6 @@ const OPENCODE_PROVIDER_NPM_OPTIONS = [
   },
 ] as const
 
-function buildOpenCodeModelOptions(
-  config: OpenCodeConfigView | null
-): OpenCodeModelOptionGroup[] {
-  if (!config) return []
-  const groups: OpenCodeModelOptionGroup[] = []
-  for (const providerId of config.providerIds) {
-    const provider = config.providers[providerId]
-    if (!provider || provider.modelIds.length === 0) continue
-    groups.push({
-      providerId,
-      label: provider.name || providerId,
-      models: provider.modelIds.map((modelId) => ({
-        value: `${providerId}/${modelId}`,
-        label: modelId,
-      })),
-    })
-  }
-  return groups
-}
-
 function OpenCodeModelCombobox({
   value,
   onValueChange,
@@ -1945,18 +2008,19 @@ function codexListIsManaged(list: CodexModelConfig): boolean {
 }
 
 /**
- * Provider ids codex builds in (codex 0.160.1, `built_in_model_providers` in
+ * Provider ids codex builds in (codex 0.165.0, `built_in_model_providers` in
  * the `model-provider-info` crate); `openai` is the one an Official
  * Subscription (ChatGPT login) session runs on. A `[model_providers.<id>]`
  * table for one of them does not change it: `merge_configured_model_providers`
- * keeps the built-in entry, except that the two Bedrock ids accept a few
- * fields — and reject the whole config if any other field,
- * `supports_websockets` included, is set.
+ * keeps the built-in entry, except that the two Bedrock ids and `gcp` (Google
+ * Cloud Vertex AI, new in 0.165) accept a few fields — and reject the whole
+ * config if any other field, `supports_websockets` included, is set.
  */
 const CODEX_BUILT_IN_PROVIDER_IDS: ReadonlySet<string> = new Set([
   "openai",
   "amazon-bedrock",
   "amazon-bedrock-runtime",
+  "gcp",
   "ollama",
   "lmstudio",
 ])
@@ -3651,6 +3715,50 @@ export function setClaudeEnvFlagInConfigText(
   }
 }
 
+/** Top-level settings.json keys for Claude Code's prompt cache lifetime
+ *  (`"5m"` | `"1h"`, Claude Code 2.1.242+): `promptCacheTtl` covers the main
+ *  conversation, `subagentPromptCacheTtl` subagents, workflows and background
+ *  helpers. Unset means Claude's default lifetime. */
+export const CLAUDE_PROMPT_CACHE_TTL_KEY = "promptCacheTtl"
+export const CLAUDE_SUBAGENT_PROMPT_CACHE_TTL_KEY = "subagentPromptCacheTtl"
+export const CLAUDE_PROMPT_CACHE_TTL_ONE_HOUR = "1h"
+export type ClaudePromptCacheTtlKey =
+  | typeof CLAUDE_PROMPT_CACHE_TTL_KEY
+  | typeof CLAUDE_SUBAGENT_PROMPT_CACHE_TTL_KEY
+
+/** Whether the native config asks for the one-hour cache under `key`. Read
+ *  straight off the config text so the switch follows the JSON editor; absent
+ *  (or any other value) is off. */
+export function claudePromptCacheOneHourEnabled(
+  configText: string,
+  key: ClaudePromptCacheTtlKey
+): boolean {
+  const parseResult = parseConfigJsonText(configText)
+  if (parseResult.error) return false
+  // Exact match: Claude rejects anything but "5m" / "1h", so a padded value
+  // must not read as on.
+  return parseResult.config[key] === CLAUDE_PROMPT_CACHE_TTL_ONE_HOUR
+}
+
+/** On writes `"1h"` under `key`, off removes the key; every other key is kept.
+ *  Returns `null` for invalid JSON — rebuilding from `{}` would make the save's
+ *  merge diff delete every other key on disk. */
+export function setClaudePromptCacheTtlInConfigText(
+  configText: string,
+  key: ClaudePromptCacheTtlKey,
+  enabled: boolean
+): string | null {
+  const parseResult = parseConfigJsonText(configText)
+  if (parseResult.error) return null
+  const config: Record<string, unknown> = { ...parseResult.config }
+  if (enabled) {
+    config[key] = CLAUDE_PROMPT_CACHE_TTL_ONE_HOUR
+  } else {
+    delete config[key]
+  }
+  return JSON.stringify(config, null, 2)
+}
+
 /**
  * Materialize both Claude hardening toggles into the native config `env` AND the
  * DB env overlay (envText), writing the explicit "1"/"0" per toggle so the shown
@@ -3885,6 +3993,8 @@ function buildAgentDraft(agent: AcpAgentInfo): AgentDraft {
   return {
     enabled: agent.enabled,
     envText,
+    systemInstructionsText: agent.system_instructions_content ?? "",
+    systemInstructionsBaseline: agent.system_instructions_content ?? "",
     configText,
     apiBaseUrl:
       agent.agent_type === "hermes"
@@ -4812,6 +4922,55 @@ function AgentReorderItem({
   )
 }
 
+const CLAUDE_PROMPT_CACHE_SWITCHES = [
+  { key: CLAUDE_PROMPT_CACHE_TTL_KEY, label: "claude.promptCacheMain" },
+  {
+    key: CLAUDE_SUBAGENT_PROMPT_CACHE_TTL_KEY,
+    label: "claude.promptCacheSubagent",
+  },
+] as const
+
+/** Claude Code's one-hour prompt cache switches. Each one reads its key off the
+ *  native config text, so a hand edit of the JSON moves the switch with it;
+ *  while the JSON doesn't parse they are locked rather than guessing. */
+function ClaudePromptCacheFields({
+  configText,
+  onChange,
+}: {
+  configText: string
+  onChange: (key: ClaudePromptCacheTtlKey, enabled: boolean) => void
+}) {
+  const t = useTranslations("AcpAgentSettings")
+  const invalid = parseConfigJsonText(configText).error !== null
+  return (
+    <div className="space-y-1.5 border-t border-border/60 pt-3">
+      <label className="text-xs font-medium">
+        {t("claude.promptCacheMode")}
+      </label>
+      {CLAUDE_PROMPT_CACHE_SWITCHES.map(({ key, label }) => (
+        <div
+          key={key}
+          className="flex items-center justify-between rounded-md border px-3 py-2"
+        >
+          <label className="text-2xs text-muted-foreground">
+            {t(label)}
+            <code className="ml-1.5 font-mono">{key}</code>
+          </label>
+          <Switch
+            checked={claudePromptCacheOneHourEnabled(configText, key)}
+            disabled={invalid}
+            onCheckedChange={(checked) => onChange(key, checked)}
+            aria-label={t(label)}
+          />
+        </div>
+      ))}
+      <p className="text-2xs text-muted-foreground">
+        {t("claude.promptCacheHint")}
+      </p>
+    </div>
+  )
+}
+
 export function AcpAgentSettings() {
   const ime = useImeGuard()
   const locale = useLocale()
@@ -4820,6 +4979,10 @@ export function AcpAgentSettings() {
   const tCatalog = tCatalogScoped as unknown as CodexCatalogTranslator
   const tModels = useTranslations("ProviderModels")
   const rawTranslator = t as unknown as AcpTranslator
+  // The module-level helpers behind `acpText` are called while this component
+  // and its children render, so the translator must be published before they
+  // run; an effect would leave the first render on the English fallbacks.
+  // eslint-disable-next-line react-hooks/globals -- must be set before the render-time acpText readers
   acpTranslator = (key, values) => rawTranslator(key, values)
   const searchParams = useSearchParams()
   const [agents, setAgents] = useState<AcpAgentInfo[]>([])
@@ -4849,6 +5012,9 @@ export function AcpAgentSettings() {
     Partial<Record<AgentType, boolean>>
   >({})
   const [savingConfig, setSavingConfig] = useState<
+    Partial<Record<AgentType, boolean>>
+  >({})
+  const [savingInstructions, setSavingInstructions] = useState<
     Partial<Record<AgentType, boolean>>
   >({})
   const [modelProviders, setModelProviders] = useState<ModelProviderInfo[]>([])
@@ -4983,6 +5149,9 @@ export function AcpAgentSettings() {
       null,
     [selectedAgentType, sortedAgents]
   )
+  // The release the DeepSeek editors are judged on: installed, else pinned.
+  const deepseekVersion =
+    selectedAgent?.installed_version ?? selectedAgent?.registry_version ?? null
   const agentTypesKey = useMemo(
     () =>
       [...new Set(agents.map((agent) => agent.agent_type))].sort().join(","),
@@ -5021,6 +5190,13 @@ export function AcpAgentSettings() {
           const existing = updated[agent.agent_type]
           if (agent.agent_type === "deepseek" && existing) {
             updated[agent.agent_type] = rebaseDeepSeekDraft(existing, agent)
+          }
+          const current = updated[agent.agent_type]
+          if (current) {
+            updated[agent.agent_type] = rebaseSystemInstructionsDraft(
+              current,
+              agent
+            )
           }
         }
         return updated
@@ -5145,6 +5321,7 @@ export function AcpAgentSettings() {
       installStream.status === "failed"
     ) {
       if (streamAgentType) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- re-checks the agent on disk after the install stream ends
         runPreflight(streamAgentType).catch(() => {})
       }
     }
@@ -5152,6 +5329,7 @@ export function AcpAgentSettings() {
   }, [installStream.status])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial agent list fetch
     refreshAgents().catch((err) => {
       console.error("[Settings] refresh agents failed:", err)
     })
@@ -5160,6 +5338,7 @@ export function AcpAgentSettings() {
   useEffect(() => {
     if (loadingAgents || !agentTypesKey) return
     const agentTypes = agentTypesKey.split(",") as AgentType[]
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- preflight checks query the backend for each agent
     runAllPreflight(agentTypes).catch((err) => {
       console.error("[Settings] run all preflight failed:", err)
     })
@@ -5180,6 +5359,7 @@ export function AcpAgentSettings() {
       (agent) => agent.agent_type === requestedAgentType
     )
     if (matched) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- applies the `?agent=` URL request once per value (ref-guarded)
       setSelectedAgentType(matched.agent_type)
     }
     handledSearchAgentRef.current = requestedAgentType
@@ -5201,8 +5381,11 @@ export function AcpAgentSettings() {
     selected.scrollIntoView({ block: "nearest", behavior: "smooth" })
   }, [loadingAgents, selectedAgentType])
 
+  // Ordered after the `?agent=` effect above: its queued selection is the
+  // `prev` this validates against the refreshed list.
   useEffect(() => {
     if (sortedAgents.length === 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- keeps the selection valid after the `?agent=` effect of the same commit
       setSelectedAgentType(null)
       return
     }
@@ -5225,6 +5408,7 @@ export function AcpAgentSettings() {
       ? selectedAgent.agent_type
       : null
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset paired with the latest-release fetch below
     setVisitLatestRelease(null)
     if (!latestLookupTarget) return
     let current = true
@@ -5342,11 +5526,69 @@ export function AcpAgentSettings() {
     [reportAffectedSessions]
   )
 
+  // The file now holds `content`: an editor still showing it is clean again,
+  // and one the user kept typing in stays dirty against the new baseline.
+  const markSystemInstructionsSaved = useCallback(
+    (agentType: AgentType, content: string) => {
+      setDrafts((prev) => {
+        const draft = prev[agentType]
+        if (!draft || draft.systemInstructionsBaseline === content) return prev
+        return {
+          ...prev,
+          [agentType]: { ...draft, systemInstructionsBaseline: content },
+        }
+      })
+    },
+    []
+  )
+
+  const persistSystemInstructions = useCallback(
+    async (
+      agentType: AgentType,
+      content: string,
+      filePath: string | null | undefined
+    ) => {
+      setSavingInstructions((prev) => ({ ...prev, [agentType]: true }))
+      try {
+        const affected = await acpUpdateAgentConfig(agentType, {
+          system_instructions_content: content,
+          system_instructions_file_path: filePath ?? null,
+        })
+        reportAffectedSessions(affected)
+        setAgents((prev) =>
+          prev.map((agent) =>
+            agent.agent_type === agentType
+              ? {
+                  ...agent,
+                  system_instructions_content: content,
+                }
+              : agent
+          )
+        )
+        markSystemInstructionsSaved(agentType, content)
+        toast.success(t("toasts.systemInstructionsSaved"), {
+          description: t("toasts.configSavedHint"),
+        })
+      } catch (err) {
+        console.error("[Settings] save system instructions failed:", err)
+        const message = toErrorMessage(err)
+        toast.error(t("toasts.saveSystemInstructionsFailed"), {
+          description: message,
+        })
+      } finally {
+        setSavingInstructions((prev) => ({ ...prev, [agentType]: false }))
+      }
+    },
+    [markSystemInstructionsSaved, reportAffectedSessions, t]
+  )
+
   const persistConfig = useCallback(
     async (
       agentType: AgentType,
       configText: string,
       options?: {
+        systemInstructionsText?: string
+        systemInstructionsFilePath?: string
         codexAuthJsonText?: string
         codexConfigTomlText?: string
         codexConfigTomlBaseline?: string
@@ -5398,6 +5640,12 @@ export function AcpAgentSettings() {
       try {
         const affected = await acpUpdateAgentConfig(agentType, {
           config_json: configForPersist || null,
+          system_instructions_content:
+            typeof options?.systemInstructionsText === "string"
+              ? options.systemInstructionsText
+              : null,
+          system_instructions_file_path:
+            options?.systemInstructionsFilePath ?? null,
           codex_auth_json:
             typeof codexAuthJsonText === "string" ? codexAuthJsonText : null,
           codex_config_toml:
@@ -5426,6 +5674,10 @@ export function AcpAgentSettings() {
               ? {
                   ...agent,
                   config_json: normalizedConfig || null,
+                  system_instructions_content:
+                    typeof options?.systemInstructionsText === "string"
+                      ? options.systemInstructionsText
+                      : agent.system_instructions_content,
                   codex_auth_json:
                     typeof codexAuthJsonText === "string"
                       ? codexAuthJsonText
@@ -5468,11 +5720,14 @@ export function AcpAgentSettings() {
               : agent
           )
         )
+        if (typeof options?.systemInstructionsText === "string") {
+          markSystemInstructionsSaved(agentType, options.systemInstructionsText)
+        }
       } finally {
         setSavingConfig((prev) => ({ ...prev, [agentType]: false }))
       }
     },
-    [agents, reportAffectedSessions]
+    [agents, markSystemInstructionsSaved, reportAffectedSessions]
   )
 
   // After a Grok save, re-read the merged on-disk config and rebuild the Grok
@@ -6249,6 +6504,9 @@ export function AcpAgentSettings() {
   const selectedIsSavingConfig = selectedAgent
     ? Boolean(savingConfig[selectedAgent.agent_type])
     : false
+  const selectedIsSavingInstructions = selectedAgent
+    ? Boolean(savingInstructions[selectedAgent.agent_type])
+    : false
   const selectedAgentKind = selectedAgent?.agent_type ?? null
 
   const selectedModelProviders = useMemo(() => {
@@ -6393,16 +6651,14 @@ export function AcpAgentSettings() {
     openCodeIntegrations,
     openCodeCatalog,
   ])
-  const openCodeModelOptions = useMemo(() => {
-    const catalogGroups = buildConnectedModelOptions({
-      connected: openCodeConnected,
-      catalog: openCodeCatalog,
-    })
-    // Fall back to the config-derived groups before the catalog has loaded.
-    return catalogGroups.length > 0
-      ? catalogGroups
-      : buildOpenCodeModelOptions(selectedOpenCodeConfig)
-  }, [openCodeConnected, openCodeCatalog, selectedOpenCodeConfig])
+  const openCodeModelOptions = useMemo(
+    () =>
+      buildConnectedModelOptions({
+        connected: openCodeConnected,
+        catalog: openCodeCatalog,
+      }),
+    [openCodeConnected, openCodeCatalog]
+  )
   const openCodeCatalogIds = useMemo(
     () => new Set(openCodeCatalog.map((p) => p.id)),
     [openCodeCatalog]
@@ -6492,8 +6748,11 @@ export function AcpAgentSettings() {
     return getAgentChecks(selectedAgent, selectedCurrent, selectedLatestRelease)
   }, [locale, selectedAgent, selectedCurrent, selectedLatestRelease])
 
+  // Seeds the fold state once per check: a check keeps the state it was first
+  // seen with even if its status changes later, so this cannot be derived.
   useEffect(() => {
     if (!selectedAgent || selectedChecks.length === 0) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time seeding of per-check defaults, see above
     setExpandedChecks((prev) => {
       let next = prev
       for (const check of selectedChecks) {
@@ -6522,30 +6781,21 @@ export function AcpAgentSettings() {
     setExpandedChecks((prev) => (prev[key] ? prev : { ...prev, [key]: true }))
   }, [selectedAgent, selectedChecks])
 
-  useEffect(() => {
-    if (!selectedOpenCodeConfig) {
-      if (openCodeProviderId) setOpenCodeProviderId("")
-      return
-    }
-    if (!openCodeProviderId) return
-    if (selectedOpenCodeConfig.providerIds.includes(openCodeProviderId)) {
-      return
-    }
+  // Drop an expanded / pending-delete provider once it is no longer in the
+  // selected OpenCode config. Adjusted during render (each check clears its
+  // own condition, so it settles in one extra pass) rather than in an effect.
+  if (
+    openCodeProviderId &&
+    !selectedOpenCodeConfig?.providerIds.includes(openCodeProviderId)
+  ) {
     setOpenCodeProviderId("")
-  }, [openCodeProviderId, selectedOpenCodeConfig])
-
-  useEffect(() => {
-    if (!openCodeDeleteProviderId) return
-    if (!selectedOpenCodeConfig) {
-      setOpenCodeDeleteProviderId(null)
-      return
-    }
-    if (
-      !selectedOpenCodeConfig.providerIds.includes(openCodeDeleteProviderId)
-    ) {
-      setOpenCodeDeleteProviderId(null)
-    }
-  }, [openCodeDeleteProviderId, selectedOpenCodeConfig])
+  }
+  if (
+    openCodeDeleteProviderId &&
+    !selectedOpenCodeConfig?.providerIds.includes(openCodeDeleteProviderId)
+  ) {
+    setOpenCodeDeleteProviderId(null)
+  }
 
   const updateSelectedDraft = useCallback(
     (updater: (current: AgentDraft) => AgentDraft) => {
@@ -6772,6 +7022,28 @@ export function AcpAgentSettings() {
       }))
     },
     [selectedAgent, selectedDraft, t, updateSelectedDraft]
+  )
+
+  // The cache switches live in the native config text itself (top-level keys,
+  // no env mirror), so they need nothing in the draft beyond `configText`.
+  const handleClaudePromptCacheTtlChange = useCallback(
+    (key: ClaudePromptCacheTtlKey, enabled: boolean) => {
+      if (
+        !selectedAgent ||
+        !selectedDraft ||
+        selectedAgent.agent_type !== "claude_code"
+      )
+        return
+      updateSelectedDraft((current) => {
+        const configText = setClaudePromptCacheTtlInConfigText(
+          current.configText,
+          key,
+          enabled
+        )
+        return configText === null ? current : { ...current, configText }
+      })
+    },
+    [selectedAgent, selectedDraft, updateSelectedDraft]
   )
 
   const handleGrokAuthModeChange = useCallback(
@@ -8364,6 +8636,7 @@ export function AcpAgentSettings() {
 
   useEffect(() => {
     if (selectedAgent?.agent_type !== "codex" && codexLoginStatus !== "idle") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- stops the external device-login polling when leaving Codex
       cancelCodexDeviceLogin()
     }
   }, [selectedAgent, codexLoginStatus, cancelCodexDeviceLogin])
@@ -8782,6 +9055,33 @@ export function AcpAgentSettings() {
                       aria-label={t("hostTools.label")}
                     />
                   </div>
+                  {selectedAgent.agent_type === "claude_code" && (
+                    <div className="flex items-start justify-between gap-3 rounded-md border bg-muted/10 p-3">
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium">
+                          {t("claude.thinkingSummaries")}
+                        </label>
+                        <p className="text-2xs text-muted-foreground">
+                          {t("claude.thinkingSummariesHint")}
+                        </p>
+                      </div>
+                      <Switch
+                        checked={claudeThinkingSummariesEnabled(
+                          selectedDraft.envText
+                        )}
+                        onCheckedChange={(checked) => {
+                          updateSelectedDraft((current) => ({
+                            ...current,
+                            envText: setClaudeThinkingSummaries(
+                              current.envText,
+                              checked
+                            ),
+                          }))
+                        }}
+                        aria-label={t("claude.thinkingSummaries")}
+                      />
+                    </div>
+                  )}
                   <div className="flex justify-end">
                     <Button
                       size="sm"
@@ -8821,6 +9121,137 @@ export function AcpAgentSettings() {
                     </Button>
                   </div>
                 </div>
+
+                {selectedAgent.system_instructions_file_path &&
+                  (() => {
+                    const instructionsPath =
+                      selectedAgent.system_instructions_file_path
+                    const { dir: instructionsDir, name: instructionsFile } =
+                      splitInstructionsPath(instructionsPath)
+                    const instructionsDirty =
+                      selectedDraft.systemInstructionsText !==
+                      selectedDraft.systemInstructionsBaseline
+                    return (
+                      <div className="space-y-3 rounded-md border bg-muted/10 p-3">
+                        <div className="space-y-1">
+                          <label
+                            htmlFor="agent-system-instructions"
+                            className="text-xs font-medium"
+                          >
+                            {t("systemInstructions.label")}
+                          </label>
+                          <p className="text-2xs text-muted-foreground">
+                            {t("systemInstructions.hint")}
+                          </p>
+                        </div>
+                        {/* The file name is what tells the user which file
+                            this is (CLAUDE.md, GEMINI.md, AGENTS.md …), so a
+                            long path gives up its directory, never the name. */}
+                        <div className="flex items-center gap-1.5 rounded-md border bg-background/60 py-0.5 ps-2 pe-0.5">
+                          <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                          <span
+                            dir="ltr"
+                            className="flex min-w-0 flex-1 font-mono text-2xs"
+                            title={instructionsPath}
+                          >
+                            {instructionsDir && (
+                              <span className="truncate text-muted-foreground">
+                                {instructionsDir}
+                              </span>
+                            )}
+                            <span className="shrink-0 text-foreground">
+                              {instructionsFile}
+                            </span>
+                          </span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 w-6 shrink-0 p-0"
+                            title={t("systemInstructions.copyPath")}
+                            aria-label={t("systemInstructions.copyPath")}
+                            onClick={async () => {
+                              const ok =
+                                await copyTextToClipboard(instructionsPath)
+                              if (ok) {
+                                toast.success(
+                                  t("systemInstructions.pathCopied")
+                                )
+                              }
+                            }}
+                          >
+                            <Copy className="h-3 w-3" />
+                          </Button>
+                        </div>
+                        <Textarea
+                          id="agent-system-instructions"
+                          value={selectedDraft.systemInstructionsText}
+                          onChange={(event) => {
+                            updateSelectedDraft((current) => ({
+                              ...current,
+                              systemInstructionsText: event.target.value,
+                            }))
+                          }}
+                          placeholder={t("systemInstructions.placeholder")}
+                          className="min-h-40 max-h-[28rem] overflow-y-auto rounded-md bg-background/60 font-mono text-xs leading-relaxed md:text-xs"
+                          spellCheck={false}
+                          disabled={selectedIsSavingInstructions}
+                        />
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                          {instructionsDirty && (
+                            <span className="me-auto flex items-center gap-1.5 text-2xs text-muted-foreground">
+                              <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                              {t("systemInstructions.unsaved")}
+                            </span>
+                          )}
+                          {instructionsDirty && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              disabled={selectedIsSavingInstructions}
+                              onClick={() => {
+                                updateSelectedDraft((current) => ({
+                                  ...current,
+                                  systemInstructionsText:
+                                    current.systemInstructionsBaseline,
+                                }))
+                              }}
+                            >
+                              <Undo2 className="h-3.5 w-3.5" />
+                              {t("systemInstructions.discard")}
+                            </Button>
+                          )}
+                          <Button
+                            size="sm"
+                            disabled={
+                              selectedIsSavingInstructions || !instructionsDirty
+                            }
+                            onClick={() =>
+                              // eslint-disable-next-line react-hooks/refs -- runs on click, not during render; the enclosing IIFE hides that from the compiler
+                              persistSystemInstructions(
+                                selectedAgent.agent_type,
+                                selectedDraft.systemInstructionsText,
+                                instructionsPath
+                              )
+                            }
+                          >
+                            {selectedIsSavingInstructions ? (
+                              <>
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                {t("actions.saving")}
+                              </>
+                            ) : (
+                              <>
+                                <Save className="h-3.5 w-3.5" />
+                                {t("actions.saveSystemInstructions")}
+                              </>
+                            )}
+                          </Button>
+                        </div>
+                      </div>
+                    )
+                  })()}
 
                 {selectedAgent.agent_type === "codex" ? (
                   <div className="space-y-3 rounded-md border bg-muted/10 p-3">
@@ -9434,7 +9865,7 @@ export function AcpAgentSettings() {
                         onChange={(event) => {
                           handleCodexConfigTomlTextChange(event.target.value)
                         }}
-                        placeholder={`model = "gpt-6-astra"
+                        placeholder={`model = "gpt-6.2-sol"
 model_reasoning_effort = "high"
 model_provider = "codeg"
 
@@ -11618,20 +12049,46 @@ base_url = "https://api.openai.com/v1"`}
                         )
                       }
                     />
-                    {/* The deployment's model catalog. It lives in the harness'
-                      own `settings.yaml`, not in the agent env, so it has its
-                      own section and its own save — and it is what the
-                      composer's per-session model selector gets to choose
-                      from. */}
-                    <DeepSeekModelListEditor
-                      launchModel={selectedAgent.env.DEEPSEEK_ACP_MODEL}
-                      endpoint={{
-                        baseUrl:
-                          selectedAgent.env.DEEPSEEK_BASE_URL?.trim() ||
-                          DEEPSEEK_DEFAULT_BASE_URL,
-                        apiKey: selectedAgent.env.DEEPSEEK_API_KEY ?? "",
-                      }}
-                    />
+                    {/* What the composer's per-session model picker gets to
+                      choose from. Through deepseek-acp 0.9.0 that is an
+                      editable catalog in the harness' own `settings.yaml`
+                      (`llm-deepseek.models`), not the agent env, so it has its
+                      own section and its own save. 0.10.0 and 0.11.0 build
+                      that catalog into the bridge and read the file no more;
+                      0.12.0 lays the section over it again. From 0.10.0 the
+                      bridge also reads `llm-pi-ai.providers` in its own
+                      document, where each route adds a provider's catalog to
+                      the same picker, so 0.12.0 on shows both editors. Judged
+                      on the installed release, else the pinned one. */}
+                    {deepseekReadsHarnessCatalog(deepseekVersion) && (
+                      <DeepSeekModelListEditor
+                        key={deepseekVersion ?? ""}
+                        version={deepseekVersion}
+                        launchModel={selectedAgent.env.DEEPSEEK_ACP_MODEL}
+                        endpoint={
+                          // Only the releases before 0.10.0 get the import:
+                          // they speak OpenAI Chat Completions to
+                          // DEEPSEEK_BASE_URL (else their default endpoint),
+                          // which lists models the OpenAI way. From 0.10.0 the
+                          // official route speaks Anthropic Messages, and from
+                          // 0.12.0 the section may set its own `baseURL`, so
+                          // the endpoint the agent really uses (and whose key
+                          // this is) cannot be told from the env alone.
+                          deepseekReadsProviderRoutes(deepseekVersion)
+                            ? undefined
+                            : {
+                                baseUrl:
+                                  selectedAgent.env.DEEPSEEK_BASE_URL?.trim() ||
+                                  DEEPSEEK_LEGACY_BASE_URL,
+                                apiKey:
+                                  selectedAgent.env.DEEPSEEK_API_KEY ?? "",
+                              }
+                        }
+                      />
+                    )}
+                    {deepseekReadsProviderRoutes(deepseekVersion) && (
+                      <DeepSeekProviderRoutesEditor />
+                    )}
                   </>
                 ) : selectedAgent.agent_type === "qoder" ? (
                   <QoderConfigPanel
@@ -12717,7 +13174,7 @@ base_url = "https://api.openai.com/v1"`}
                                 )
                               }}
                               state={claudeProviderModels}
-                              placeholder="claude-fable-5-1"
+                              placeholder="claude-fable-5-2"
                             />
                           </div>
                         </div>
@@ -12875,6 +13332,10 @@ base_url = "https://api.openai.com/v1"`}
                             />
                           </div>
                         </div>
+                        <ClaudePromptCacheFields
+                          configText={selectedDraft.configText}
+                          onChange={handleClaudePromptCacheTtlChange}
+                        />
                       </div>
                     ) : (
                       importantFieldsFor(selectedAgent.agent_type).model && (
@@ -12891,7 +13352,7 @@ base_url = "https://api.openai.com/v1"`}
                                 event.target.value
                               )
                             }}
-                            placeholder="gpt-6-astra / claude-sonnet-5-5 / gemini-3.1-pro-preview"
+                            placeholder="gpt-6.2-sol / claude-sonnet-5-5 / gemini-3.1-pro-preview"
                           />
                         </div>
                       )
@@ -12909,7 +13370,7 @@ base_url = "https://api.openai.com/v1"`}
                         placeholder={`{
   "apiBaseUrl": "https://api.example.com",
   "apiKey": "sk-...",
-  "model": "gpt-6-astra",
+  "model": "gpt-6.2-sol",
   "env": {
     "CUSTOM_KEY": "VALUE"
   }
@@ -12992,7 +13453,21 @@ base_url = "https://api.openai.com/v1"`}
                             .then(() =>
                               persistConfig(
                                 selectedAgent.agent_type,
-                                configToSave
+                                configToSave,
+                                {
+                                  // Only an edited text: an untouched one would
+                                  // write a stale copy over the file (or create
+                                  // an empty one).
+                                  systemInstructionsText:
+                                    selectedAgent.system_instructions_file_path &&
+                                    selectedDraft.systemInstructionsText !==
+                                      selectedDraft.systemInstructionsBaseline
+                                      ? selectedDraft.systemInstructionsText
+                                      : undefined,
+                                  systemInstructionsFilePath:
+                                    selectedAgent.system_instructions_file_path ??
+                                    undefined,
+                                }
                               )
                             )
                             .then(async () => {

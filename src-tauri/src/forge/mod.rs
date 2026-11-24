@@ -6,16 +6,27 @@
 
 pub mod auth;
 pub mod auto;
+pub mod cnb;
 pub mod deliver;
 pub mod envelope;
+pub mod feedback;
 pub mod gitea;
 pub mod github;
 pub mod gitlab;
+pub(crate) mod image_cache;
 pub mod settings;
+pub mod thread_reply;
 
 use std::sync::RwLock;
 
 pub use auth::{host_profile, resolve_forge_auth, strip_base_path, HostProfile, ResolvedAuth};
+
+/// Cached image resource. Neither credentials nor image bytes cross JSON/IPC.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ForgeImage {
+    pub mime_type: String,
+    pub url: String,
+}
 
 /// The forge a host speaks. Everything provider-specific downstream — REST
 /// base, auth header, the shape of a "pull request", which ref a proposed
@@ -33,6 +44,12 @@ pub enum ForgeProvider {
     /// this variant makes. Nothing downstream distinguishes them, and inventing
     /// a fourth variant would only split one credential store in two.
     Gitea,
+    /// CNB (cnb.cool) — Tencent's code hosting platform. Its API is its own:
+    /// the REST base is a SEPARATE host (`api.cnb.cool`), authentication is a
+    /// `Bearer` token, and the wire shapes are neither GitHub's nor Gitea's.
+    /// It does borrow GitHub's `refs/pull/<n>/head` namespace, which is what
+    /// lets a proposed change's head be fetched without adding a remote.
+    Cnb,
 }
 
 impl ForgeProvider {
@@ -41,6 +58,7 @@ impl ForgeProvider {
             ForgeProvider::GitHub => "github",
             ForgeProvider::GitLab => "gitlab",
             ForgeProvider::Gitea => "gitea",
+            ForgeProvider::Cnb => "cnb",
         }
     }
 
@@ -52,6 +70,7 @@ impl ForgeProvider {
             "github" => Ok(ForgeProvider::GitHub),
             "gitlab" => Ok(ForgeProvider::GitLab),
             "gitea" => Ok(ForgeProvider::Gitea),
+            "cnb" => Ok(ForgeProvider::Cnb),
             other => Err(ForgeError::Invalid(format!("unknown provider: {other}"))),
         }
     }
@@ -64,6 +83,7 @@ impl ForgeProvider {
             ForgeProvider::GitHub => "GitHub",
             ForgeProvider::GitLab => "GitLab",
             ForgeProvider::Gitea => "Gitea",
+            ForgeProvider::Cnb => "CNB",
         }
     }
 
@@ -76,6 +96,9 @@ impl ForgeProvider {
         match self {
             ForgeProvider::GitHub | ForgeProvider::Gitea => "pull request",
             ForgeProvider::GitLab => "merge request",
+            // CNB's own UI and API documentation call it a 合并请求 / merge
+            // request, even though the REST path is `/pulls`.
+            ForgeProvider::Cnb => "merge request",
         }
     }
 
@@ -93,7 +116,9 @@ impl ForgeProvider {
     /// check out a Gitea fork's head without adding a remote.
     pub fn change_head_ref(self, number: i64) -> String {
         match self {
-            ForgeProvider::GitHub | ForgeProvider::Gitea => format!("refs/pull/{number}/head"),
+            ForgeProvider::GitHub | ForgeProvider::Gitea | ForgeProvider::Cnb => {
+                format!("refs/pull/{number}/head")
+            }
             ForgeProvider::GitLab => format!("refs/merge-requests/{number}/head"),
         }
     }
@@ -139,6 +164,15 @@ impl ForgeProvider {
                     ForgeItemKind::Change => "pulls",
                 };
                 format!("{origin}/{owner_repo}/{segment}/{number}")
+            }
+            ForgeProvider::Cnb => {
+                // The `/-/` separator, as on GitLab — CNB nests both
+                // collections under it and uses `pulls` for the change.
+                let segment = match kind {
+                    ForgeItemKind::Issue => "issues",
+                    ForgeItemKind::Change => "pulls",
+                };
+                format!("{origin}/{owner_repo}/-/{segment}/{number}")
             }
         }
     }
@@ -209,10 +243,10 @@ pub enum ForgeError {
     /// The host is not one codeg can read: nothing is configured for it and its
     /// name claims none of the forges. Distinct from [`ForgeError::NoAccount`]
     /// because the advice differs — "add a GitHub account for bitbucket.org"
-    /// is advice that cannot work, while "only GitHub, GitLab and Gitea are
-    /// supported" is the actual answer (with adding an account still the way
+    /// is advice that cannot work, while "only GitHub, GitLab, Gitea and CNB
+    /// are supported" is the actual answer (with adding an account still the way
     /// in for a self-hosted instance under an unrelated name).
-    #[error("unsupported forge host {host}: only GitHub, GitLab and Gitea are supported")]
+    #[error("unsupported forge host {host}: only GitHub, GitLab, Gitea and CNB are supported")]
     UnsupportedHost { host: String },
     /// The host answered in a way only the OTHER forge answers — codeg had it
     /// classified wrong and now knows better. Recoverable by construction: the
@@ -232,6 +266,17 @@ pub enum ForgeError {
     Api { status: u16, message: String },
     #[error("forge network error: {0}")]
     Network(String),
+    /// A guard refused a WRITE before (or instead of) sending it — the change
+    /// moved on since it was reviewed, the target is ambiguous, or the forge
+    /// said the account may not. Carries the i18n key the panel shows, because
+    /// each of these has a specific thing for the person to do next.
+    #[error("{message}")]
+    Refused {
+        i18n_key: &'static str,
+        message: String,
+        /// The account lacks the right, as opposed to the request being wrong.
+        forbidden: bool,
+    },
 }
 
 impl From<ForgeError> for crate::app_error::AppCommandError {
@@ -272,6 +317,18 @@ impl From<ForgeError> for crate::app_error::AppCommandError {
             ForgeError::Invalid(msg) => E::invalid_input(msg.clone()),
             ForgeError::Api { .. } | ForgeError::Network(_) => {
                 E::network("forge API request failed").with_detail(err.to_string())
+            }
+            ForgeError::Refused {
+                i18n_key,
+                message,
+                forbidden,
+            } => {
+                let base = if *forbidden {
+                    E::permission_denied(message.clone())
+                } else {
+                    E::invalid_input(message.clone())
+                };
+                base.with_i18n(*i18n_key, std::collections::BTreeMap::new())
             }
         }
     }
@@ -316,6 +373,13 @@ pub fn source_key(
         return Err(ForgeError::Invalid(format!("bad work item number: {number}")));
     }
     Ok(format!("{provider}:{host}:{repo}:{kind}:{number}"))
+}
+
+/// The work item number a key built by [`source_key`] ends with. No segment
+/// before it can hold a `:` (the host and the repository are both refused
+/// with one), so the last segment is always the number.
+pub fn source_key_number(key: &str) -> Option<i64> {
+    key.rsplit(':').next()?.parse().ok()
 }
 
 /// Repository-identity comparison. GitHub preserves canonical casing in API
@@ -446,6 +510,49 @@ pub struct ForgeSourceMeta {
     /// which is the posture the old folder setting shipped with.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub writeback: Option<bool>,
+    /// Every issue of a task made from several related issues, in the task's
+    /// own order — the lead (the one `number`, `url` and `title` above name)
+    /// first. Empty, and absent from the JSON, on a task triggered from one
+    /// item: that one is the fields above. A display snapshot like the rest of
+    /// this struct; which items a task handles is QUERIED from
+    /// `work_task_source_key`, never from here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<ForgeSourceItem>,
+    /// Which of `items` the pull request this task opens closes — chosen by
+    /// the user at the task's first delivery and fixed from then on, so every
+    /// pull request the task ever opens (the first one, a replacement for one
+    /// closed since, the one a crash recovery adopted) closes the same issues.
+    /// The others are referenced, not closed. Absent until that first delivery,
+    /// and always on a single-item task, whose pull request closes its issue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_closes: Option<Vec<i64>>,
+}
+
+/// One issue of a task made from several related issues (see
+/// [`ForgeSourceMeta::items`]).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ForgeSourceItem {
+    pub number: i64,
+    /// Canonical html URL — server-derived, like [`ForgeSourceMeta::url`].
+    pub url: String,
+    /// Title at trigger time (display only; the prompt carries its own copy).
+    pub title: String,
+}
+
+impl ForgeSourceMeta {
+    /// Whether the task handles several items rather than one.
+    pub fn is_combined(&self) -> bool {
+        self.items.len() > 1
+    }
+
+    /// The numbers of every item the task handles, lead first.
+    pub fn item_numbers(&self) -> Vec<i64> {
+        if self.items.is_empty() {
+            vec![self.number]
+        } else {
+            self.items.iter().map(|item| item.number).collect()
+        }
+    }
 }
 
 /// Where a task WITHOUT forge provenance delivers its work: the repository its
@@ -689,6 +796,12 @@ pub struct ListIssuesRequest {
     pub state: String,
     #[serde(default)]
     pub assigned_me: bool,
+    /// Only the changes whose review is requested of the signed-in account —
+    /// set by codeg itself (the personal agent looking for a first thing to
+    /// help with), never by a client. GitHub and GitLab filter by it; the
+    /// others refuse it rather than list everything.
+    #[serde(default)]
+    pub review_requested_me: bool,
     /// Label names, ANDed. Already normalized (see [`normalize_labels`]).
     #[serde(default)]
     pub labels: Vec<String>,
@@ -718,6 +831,7 @@ impl ListIssuesRequest {
             tab: filters.tab,
             state: filters.state,
             assigned_me: filters.assigned_me,
+            review_requested_me: false,
             labels: normalize_labels(filters.labels),
             search: normalize_search(filters.search.as_deref()),
             sort: filters.sort,
@@ -1525,7 +1639,7 @@ fn default_files_per_page() -> u32 {
 /// only sometimes a `changes_count` (and that one as a STRING, "12+" once the
 /// diff is truncated). Showing a zero where the forge said nothing would claim
 /// a change touches nothing, so absent stays absent.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ForgeChangeDetail {
     pub number: i64,
     /// Where it would land — `main`, `release/1.2`.
@@ -1561,6 +1675,20 @@ pub struct ForgeChangeDetail {
     /// CI as the forge reports it for the head commit. Empty means the forge
     /// answered and there is nothing running; see [`ForgeCheckList`].
     pub checks: ForgeCheckList,
+    /// When the forge last saw anything happen on it — a push, a review, a
+    /// comment — as it spells it. What tells a watcher there may be new
+    /// review feedback to read (7.4) without reading it every time. `None`
+    /// where the forge does not say (CNB).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    /// Workflow runs that will not start until a maintainer approves them —
+    /// GitHub holds a fork's first contributions this way. `None` whenever
+    /// there is nothing to say: not GitHub, not a fork (a same-repository
+    /// change is never held), or the token cannot read Actions. Kept apart from
+    /// [`Self::checks`] because a held run has produced NO check yet: the
+    /// commit's check collections are empty, and without this the panel says
+    /// "no checks" over exactly the change that needs somebody to act.
+    pub workflow_approval: Option<ForgeWorkflowApproval>,
 }
 
 /// How a check ended up, in ONE vocabulary.
@@ -1572,7 +1700,7 @@ pub struct ForgeChangeDetail {
 /// skipped/manual/waiting_for_resource). Three vocabularies, one strip of
 /// indicators — so they are folded here, at the boundary, and the UI switches
 /// on five values instead of eighteen.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ForgeCheckState {
     /// Not started yet.
@@ -1595,7 +1723,7 @@ impl ForgeCheckState {
 }
 
 /// One CI check on a change's head commit.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ForgeCheck {
     /// Stable within one response — the forge's own id where there is one, so
     /// React keys survive a refresh that reorders the strip.
@@ -1626,7 +1754,7 @@ pub struct ForgeCheck {
 /// gets a 403 from one and an empty `200 []` from the other. Reporting that as
 /// a complete empty list is the original bug wearing a disguise — the pipeline
 /// is red, and the panel says nothing ran.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ForgeCheckList {
     pub checks: Vec<ForgeCheck>,
     pub available: bool,
@@ -1662,6 +1790,287 @@ impl ForgeCheckList {
         }
     }
 }
+
+/// One item as an action taken on it is checked against afterwards: its
+/// state, and the commit a merged change landed as when the forge says. Read
+/// from the item's own JSON, which every forge serves at its own address.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ItemFacts {
+    /// `open` / `closed` / `merged`, as [`ForgeIssueRow::state`].
+    pub state: String,
+    pub merge_commit: Option<String>,
+}
+
+impl ItemFacts {
+    /// GitHub marks a merged pull request with `merged_at` (or `merged`),
+    /// Gitea with `merged`, CNB with `is_merged` beside `state: closed`,
+    /// GitLab with `state: merged`; a GitLab merge request being merged is
+    /// `locked`, still open. The commit is `merge_commit_sha`, or GitLab's
+    /// `squash_commit_sha` for a squash.
+    pub fn from_json(v: &serde_json::Value) -> Self {
+        let text = |k: &str| {
+            v.get(k)
+                .and_then(|x| x.as_str())
+                .map(str::trim)
+                .filter(|x| !x.is_empty())
+        };
+        let raw = text("state").unwrap_or("open").to_ascii_lowercase();
+        let flag = |k: &str| v.get(k).and_then(|m| m.as_bool()) == Some(true);
+        let merged =
+            raw == "merged" || flag("merged") || flag("is_merged") || text("merged_at").is_some();
+        let state = if merged {
+            "merged"
+        } else if raw == "closed" {
+            "closed"
+        } else {
+            "open"
+        };
+        let merge_commit = if merged {
+            text("merge_commit_sha")
+                .or_else(|| text("squash_commit_sha"))
+                .map(str::to_string)
+        } else {
+            None
+        };
+        Self {
+            state: state.to_string(),
+            merge_commit,
+        }
+    }
+}
+
+/// One CI verdict for a whole change, as a list row draws it.
+///
+/// Folded from counts with the SAME rules [`ForgeCheckState`] uses for the
+/// detail panel (a skipped or cancelled check is neither a pass nor a failure),
+/// so the row's mark and the panel's tab badge cannot tell two stories. GitHub's
+/// own rollup word is NOT that fold — it calls a cancelled run a failure — and is
+/// read only when the counts are unavailable (an older Enterprise Server).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ForgeCheckVerdict {
+    Failure,
+    Running,
+    Success,
+    /// Every check ran without a verdict (skipped, cancelled, manual).
+    Neutral,
+}
+
+/// How many checks are in each folded state. `total` is the forge's own count
+/// and can exceed the sum: a state this fold does not recognize is counted
+/// nowhere rather than guessed into one of the four.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+pub struct ForgeCheckCounts {
+    pub passing: u32,
+    pub failing: u32,
+    pub pending: u32,
+    pub neutral: u32,
+    pub total: u32,
+}
+
+impl ForgeCheckCounts {
+    /// The verdict these counts reach, in the order a reviewer reads them: a
+    /// failure outranks a run still going, which outranks a clean sweep.
+    /// `None` when nothing was counted at all.
+    pub fn verdict(&self) -> Option<ForgeCheckVerdict> {
+        if self.failing > 0 {
+            Some(ForgeCheckVerdict::Failure)
+        } else if self.pending > 0 {
+            Some(ForgeCheckVerdict::Running)
+        } else if self.passing > 0 {
+            Some(ForgeCheckVerdict::Success)
+        } else if self.neutral > 0 {
+            Some(ForgeCheckVerdict::Neutral)
+        } else {
+            None
+        }
+    }
+}
+
+/// One change's CI, as much as a list row needs: a verdict, its counts where
+/// the forge gives them, and whether workflows are waiting on a maintainer.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ForgeCheckSummary {
+    pub number: i64,
+    /// `None` means the forge answered and this change has no checks — which a
+    /// row draws as nothing at all, exactly as before this existed.
+    pub verdict: Option<ForgeCheckVerdict>,
+    /// `None` where the forge gives a verdict but no breakdown (GitLab's
+    /// pipeline status, an older GitHub Enterprise Server).
+    pub counts: Option<ForgeCheckCounts>,
+    /// Workflow runs on the head commit held for a maintainer's approval
+    /// (GitHub only; always 0 elsewhere). Independent of `verdict`: a held fork
+    /// change typically has NO checks yet, so this is often the only thing to
+    /// draw. Best-effort on the list — the detail panel's answer is the
+    /// authoritative one (see [`ForgeWorkflowApproval`]).
+    pub awaiting_approval: u32,
+}
+
+impl ForgeCheckSummary {
+    /// A full check list, summarized — for a forge with no cheaper way to ask
+    /// (Gitea). `None` when the list itself is unknown; a PARTIAL list is
+    /// unknown too, since its counts would undercount exactly what is missing.
+    pub fn from_checks(number: i64, list: &ForgeCheckList) -> Option<Self> {
+        if !list.available || list.partial {
+            return None;
+        }
+        let mut counts = ForgeCheckCounts {
+            total: u32::try_from(list.checks.len()).unwrap_or(u32::MAX),
+            ..ForgeCheckCounts::default()
+        };
+        for check in &list.checks {
+            match check.state {
+                ForgeCheckState::Success => counts.passing += 1,
+                ForgeCheckState::Failure => counts.failing += 1,
+                ForgeCheckState::Queued | ForgeCheckState::Running => counts.pending += 1,
+                ForgeCheckState::Neutral => counts.neutral += 1,
+            }
+        }
+        Some(Self {
+            number,
+            verdict: counts.verdict(),
+            counts: Some(counts),
+            awaiting_approval: 0,
+        })
+    }
+}
+
+/// The CI summaries for one page of changes.
+///
+/// A change missing from `items` is UNKNOWN — the forge would not say, or
+/// said so with an error for that one change — and is not the same as a change
+/// with `verdict: None`, which the forge positively reported as having no
+/// checks. Both draw nothing; only the second may ever be described as "no
+/// checks". `available: false` is the whole batch being unknown.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ForgeCheckSummaryList {
+    pub available: bool,
+    pub items: Vec<ForgeCheckSummary>,
+}
+
+impl ForgeCheckSummaryList {
+    pub fn unavailable() -> Self {
+        Self {
+            available: false,
+            items: Vec::new(),
+        }
+    }
+}
+
+/// Which changes a summary request is about. Capped at a page's worth
+/// ([`MAX_PER_PAGE`]) — the list never shows more, and a GraphQL query with an
+/// alias per change has to stay bounded.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckSummariesQuery {
+    pub numbers: Vec<i64>,
+    #[serde(default)]
+    pub account_id: Option<String>,
+}
+
+impl CheckSummariesQuery {
+    /// Positive, de-duplicated, in the order asked, and no more than a page.
+    pub fn resolve(&self) -> Vec<i64> {
+        let mut seen = std::collections::HashSet::new();
+        self.numbers
+            .iter()
+            .copied()
+            .filter(|n| *n > 0 && seen.insert(*n))
+            .take(MAX_PER_PAGE as usize)
+            .collect()
+    }
+}
+
+/// A workflow run held for approval.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ForgePendingRun {
+    /// The run id, as a string (64-bit on GitHub).
+    pub id: String,
+    pub name: String,
+    /// `http(s)` only (see [`sanitize_web_url`]).
+    pub url: Option<String>,
+}
+
+/// The runs a change is waiting on a maintainer for, and whether this panel
+/// can let one approve them.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ForgeWorkflowApproval {
+    pub runs: Vec<ForgePendingRun>,
+    /// The search was cut short (page budget, or a page that failed), so there
+    /// may be held runs that are not listed. Never read as "none are held".
+    pub incomplete: bool,
+    /// The held runs cannot be tied to THIS change alone: the same fork branch
+    /// has more than one open pull request, and GitHub does not say which one a
+    /// fork's run belongs to. Approving would then approve another change's
+    /// runs too, so the panel offers the forge's own page instead.
+    pub ambiguous: bool,
+    /// Whether the account can push to the repository (what approving needs).
+    /// `None` when that could not be read — the button stays, and the forge's
+    /// own answer decides.
+    pub can_approve: Option<bool>,
+}
+
+/// "Approve the runs held on this change" — with the head commit the person
+/// looked at, so a push that lands after they looked is not approved on their
+/// behalf.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApproveWorkflowsRequest {
+    pub number: i64,
+    pub head_sha: String,
+    #[serde(default)]
+    pub account_id: Option<String>,
+}
+
+impl ApproveWorkflowsRequest {
+    pub fn resolve(&self) -> Result<(i64, String), ForgeError> {
+        if self.number <= 0 {
+            return Err(ForgeError::Invalid(format!(
+                "bad work item number: {}",
+                self.number
+            )));
+        }
+        let sha = self.head_sha.trim().to_ascii_lowercase();
+        // A full commit id, and nothing else: it is compared against the
+        // forge's, and an abbreviation would let "approve" match a commit the
+        // person never saw.
+        if !is_full_sha(&sha) {
+            return Err(ForgeError::Invalid(format!(
+                "bad head commit: {}",
+                self.head_sha
+            )));
+        }
+        Ok((self.number, sha))
+    }
+}
+
+/// A full hex commit id — SHA-1 (40) or SHA-256 (64).
+pub fn is_full_sha(value: &str) -> bool {
+    (value.len() == 40 || value.len() == 64) && value.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// What an approval did, run by run.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ForgeApproveResult {
+    pub approved: u32,
+    /// Runs the forge refused, by name, with its reason.
+    pub failed: Vec<ForgeApproveFailure>,
+    /// Some held runs may not have been found (see
+    /// [`ForgeWorkflowApproval::incomplete`]); the ones found were approved.
+    pub incomplete: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ForgeApproveFailure {
+    pub name: String,
+    pub message: String,
+}
+
+/// i18n keys for the approval guards (see [`ForgeError::Refused`]).
+pub const APPROVE_HEAD_CHANGED_I18N_KEY: &str = "Forge.errors.approveHeadChanged";
+pub const APPROVE_AMBIGUOUS_I18N_KEY: &str = "Forge.errors.approveAmbiguous";
+pub const APPROVE_FORBIDDEN_I18N_KEY: &str = "Forge.errors.approveForbidden";
+pub const APPROVE_NOT_OPEN_I18N_KEY: &str = "Forge.errors.approveNotOpen";
 
 /// How a file was touched, in the one vocabulary both forges can be read into.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -1801,6 +2210,10 @@ pub fn web_origin(auth: &ResolvedAuth) -> String {
     let base = auth.api_base.trim_end_matches('/');
     if base == "https://api.github.com" {
         return "https://github.com".to_string();
+    }
+    // CNB's API lives on its own host, with the web UI a bare label away.
+    if base == "https://api.cnb.cool" {
+        return "https://cnb.cool".to_string();
     }
     match ["/api/v3", "/api/v4", "/api/v1"]
         .iter()
@@ -2140,6 +2553,7 @@ mod tests {
             tab: ForgeTab::Issues,
             state: "open".into(),
             assigned_me: false,
+            review_requested_me: false,
             labels: vec![],
             search: None,
             sort: ForgeSort::default(),

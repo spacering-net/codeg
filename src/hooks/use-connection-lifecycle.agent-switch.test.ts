@@ -16,7 +16,11 @@ vi.mock("next-intl", () => ({
 }))
 
 vi.mock("@/contexts/acp-connections-context", () => {
-  const actions = { setActiveKey: vi.fn(), touchActivity: vi.fn() }
+  const actions = {
+    setActiveKey: vi.fn(),
+    releaseActiveKey: vi.fn(),
+    touchActivity: vi.fn(),
+  }
   return { useAcpActions: () => actions }
 })
 
@@ -50,6 +54,9 @@ vi.mock("@/hooks/use-connection", () => {
       configOptions: null,
       isViewer: false,
       backgroundOutstanding: 0,
+      asyncTasks: [],
+      remoteControl: null,
+      delegatedChildren: [],
     }),
   }
 })
@@ -87,6 +94,10 @@ describe("useConnectionLifecycle config edits across an agent switch", () => {
 
     result.current.handleSetConfigOption("model", "gpt-5.4")
 
-    expect(conn.setConfigOption).toHaveBeenCalledWith("model", "gpt-5.4")
+    expect(conn.setConfigOption).toHaveBeenCalledWith(
+      "model",
+      "gpt-5.4",
+      undefined
+    )
   })
 })

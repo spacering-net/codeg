@@ -2,10 +2,13 @@
 //! web-mode mirror of the commands in `commands::generative_ui`, which they
 //! call as is.
 
-use axum::Json;
+use std::sync::Arc;
+
+use axum::{Extension, Json};
 use serde::Deserialize;
 
 use crate::app_error::AppCommandError;
+use crate::app_state::AppState;
 use crate::commands::experts::{ExpertInstallStatus, LinkOp, LinkOpResult};
 use crate::commands::generative_ui::{self as commands, GenerativeUiSkillInfo};
 
@@ -26,9 +29,12 @@ pub async fn generative_ui_list_all_install_statuses(
 }
 
 pub async fn generative_ui_apply_links(
+    Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<ApplyLinksParams>,
 ) -> Result<Json<Vec<LinkOpResult>>, AppCommandError> {
-    Ok(Json(commands::generative_ui_apply_links(params.ops).await?))
+    Ok(Json(
+        commands::generative_ui_apply_links_core(&state.emitter, params.ops).await?,
+    ))
 }
 
 pub async fn generative_ui_read_content() -> Result<Json<String>, AppCommandError> {

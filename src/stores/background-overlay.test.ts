@@ -639,3 +639,85 @@ describe("RESOLVE_BACKGROUND_TASK (in-memory launch-card flip)", () => {
     expect(session(7)!.pendingBackgroundSettlements).toEqual([])
   })
 })
+
+// A Grok background sub-agent ticks every few seconds while it runs, after its
+// launch turn ended: each tick is merged into its launch card's `meta`, wherever
+// that card sits (promoted this session, or cold-loaded history).
+describe("APPLY_BACKGROUND_TASK_PROGRESS", () => {
+  function spawnCardTurn(id: string, toolUseId: string): MessageTurn {
+    return {
+      id,
+      role: "assistant",
+      blocks: [
+        {
+          type: "tool_use",
+          tool_use_id: toolUseId,
+          tool_name: "spawn_subagent",
+          input_preview: null,
+          meta: { "x.ai/tool": { name: "spawn_subagent" } },
+        },
+        {
+          type: "tool_result",
+          tool_use_id: toolUseId,
+          output_preview: "Subagent started in background.\nsubagent_id: sub-1",
+          is_error: false,
+        },
+      ],
+      timestamp: "2026-07-07T03:47:00.000Z",
+    }
+  }
+
+  function cardMeta(turns: MessageTurn[], toolUseId: string) {
+    for (const t of turns) {
+      for (const b of t.blocks) {
+        if (b.type === "tool_use" && b.tool_use_id === toolUseId) {
+          return b.meta ?? null
+        }
+      }
+    }
+    return undefined
+  }
+
+  const tick = (toolCallCount: number) => ({
+    grokSubagentSession: { subagentId: "sub-1", childSessionId: "sub-1" },
+    grokSubagentProgress: { toolCallCount, durationMs: toolCallCount * 1000 },
+  })
+
+  it("merges each tick into a promoted launch card, keeping its other keys", () => {
+    actions().appendOptimisticTurn(7, spawnCardTurn("t-0", "call_9"), "tok-1")
+    actions().completeTurn(7, null)
+
+    actions().applyBackgroundTaskProgress(7, "call_9", tick(1))
+    actions().applyBackgroundTaskProgress(7, "call_9", tick(3))
+
+    expect(cardMeta(session(7)!.localTurns, "call_9")).toEqual({
+      "x.ai/tool": { name: "spawn_subagent" },
+      ...tick(3),
+    })
+  })
+
+  it("reaches a cold-loaded card in detail turns", async () => {
+    mockGetFolderConversation.mockResolvedValueOnce(
+      detail({ turns: [spawnCardTurn("turn-0", "call_9")] })
+    )
+    actions().fetchDetail(7)
+    await flushMicrotasks()
+
+    actions().applyBackgroundTaskProgress(7, "call_9", tick(2))
+
+    expect(cardMeta(session(7)!.detail!.turns, "call_9")).toMatchObject(tick(2))
+  })
+
+  it("leaves the state untouched when no card matches", () => {
+    actions().appendOptimisticTurn(7, spawnCardTurn("t-0", "call_9"), "tok-1")
+    actions().completeTurn(7, null)
+    const before = useConversationRuntimeStore.getState()
+
+    actions().applyBackgroundTaskProgress(7, "call_other", tick(1))
+    // An unopened conversation is not materialized for a tick either.
+    actions().applyBackgroundTaskProgress(8, "call_9", tick(1))
+
+    expect(useConversationRuntimeStore.getState()).toBe(before)
+    expect(session(8)).toBeUndefined()
+  })
+})

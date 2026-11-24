@@ -76,6 +76,8 @@ fn spawn_local_command(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    // Not Codeg Web's SRN settings (the secret file's path among them).
+    crate::appimage_env::drop_codeg_only(child.as_std_mut());
     if let Some(dir) = resolve_working_dir(working_dir.as_deref()) {
         child.current_dir(dir);
     }
@@ -230,7 +232,8 @@ enum ShellInvocation {
 /// command travels in `$CODEG_CMD` rather than argv to sidestep quoting — the
 /// same indirection the built-in terminal uses. POSIX shells get `-l` so the
 /// user's login profile (PATH for `zed`, `code`, …) applies; no `-i`, as there
-/// is no TTY here.
+/// is no TTY here. PowerShell runs the user's `$PROFILE` for the same reason:
+/// it has no login mode, so that only means leaving out `-NoProfile`.
 ///
 /// cmd.exe is the exception: it expands `%VAR%` once, over its own command
 /// line, and never inside a value it expanded, so behind `%CODEG_CMD%` the
@@ -241,12 +244,7 @@ enum ShellInvocation {
 /// line is what `reject_unsafe_cmd_variable` and `reject_cmd_syntax` guard.
 fn shell_invocation(shell: &str, command: &str) -> ShellInvocation {
     let args: Vec<&str> = match classify_shell_family(shell) {
-        ShellFamily::PowerShell => vec![
-            "-NoLogo",
-            "-NoProfile",
-            "-Command",
-            "Invoke-Expression $env:CODEG_CMD",
-        ],
+        ShellFamily::PowerShell => vec!["-NoLogo", "-Command", "Invoke-Expression $env:CODEG_CMD"],
         ShellFamily::Cmd => {
             return ShellInvocation::CmdLine(format!("/D /V:OFF /S /C \"{command}\""))
         }
@@ -288,6 +286,16 @@ mod tests {
         assert_eq!(
             shell_invocation("/bin/zsh", "zed ."),
             args(&["-l", "-c", "eval \"$CODEG_CMD\""])
+        );
+    }
+
+    #[test]
+    fn powershell_runs_the_users_profile_like_a_login_shell() {
+        // No `-NoProfile`: the PATH that fnm, conda, … set up in `$PROFILE`
+        // applies to the command, as the login profile does for POSIX shells.
+        assert_eq!(
+            shell_invocation("pwsh.exe", "code ."),
+            args(&["-NoLogo", "-Command", "Invoke-Expression $env:CODEG_CMD"])
         );
     }
 
@@ -469,6 +477,51 @@ mod tests {
 
         // Generous: the wait ends as soon as the marker appears, and a login
         // shell's profile (nvm, conda, …) on a busy machine can take seconds.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if let Ok(contents) = std::fs::read_to_string(&marker) {
+                if !contents.is_empty() {
+                    assert_eq!(contents, expected);
+                    return;
+                }
+            }
+            assert!(Instant::now() < deadline, "command never wrote the marker");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    /// Codeg Web's SRN settings, the client secret file's path among them,
+    /// are codeg's own: a local command does not inherit them.
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn runs_command_without_codeg_s_srn_settings() {
+        use crate::srn::web::config::CHILD_HIDDEN_ENV;
+        use std::time::{Duration, Instant};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let marker = dir.path().join("marker.txt");
+        let report = CHILD_HIDDEN_ENV
+            .iter()
+            .map(|name| format!("${{{name}-unset}}"))
+            .collect::<Vec<_>>()
+            .join("|");
+        let vars: Vec<(&str, Option<&str>)> = CHILD_HIDDEN_ENV
+            .iter()
+            .map(|name| (*name, Some("/run/secrets/codeg-srn-client-secret")))
+            .collect();
+        temp_env::async_with_vars(vars, async {
+            run_local_command(
+                format!("printf '%s' \"{report}\" > '{}'", marker.display()),
+                None,
+                None,
+                Some(dir.path().to_str().expect("utf-8 temp path").into()),
+            )
+            .await
+            .expect("spawn");
+        })
+        .await;
+        let expected = vec!["unset"; CHILD_HIDDEN_ENV.len()].join("|");
+
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             if let Ok(contents) = std::fs::read_to_string(&marker) {

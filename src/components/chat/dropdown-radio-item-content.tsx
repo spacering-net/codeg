@@ -18,6 +18,11 @@ interface DropdownRadioItemContentProps {
    *  (`[reconnect]`), shown in the label's line. It gives way first when the
    *  line is short, so a long hint never squeezes the label away. */
   hint?: string | null
+  /** A short fact about the option, set at the end of the label's line (a
+   *  model's reasoning-effort range). It never squeezes the label: the label
+   *  truncates first. `asideTitle` is its tooltip, saying what it is. */
+  aside?: string | null
+  asideTitle?: string | null
 }
 
 export function DropdownRadioItemContent({
@@ -25,10 +30,13 @@ export function DropdownRadioItemContent({
   description,
   recommendedLabel,
   hint,
+  aside,
+  asideTitle,
 }: DropdownRadioItemContentProps) {
   const normalizedDescription = description?.trim()
   const badge = recommendedLabel?.trim()
   const normalizedHint = hint?.trim()
+  const normalizedAside = aside?.trim()
 
   return (
     <div
@@ -48,6 +56,14 @@ export function DropdownRadioItemContent({
           <Badge variant="outline" className="px-1 text-3xs font-normal">
             {badge}
           </Badge>
+        ) : null}
+        {normalizedAside ? (
+          <span
+            className="ml-auto shrink-0 pl-2 text-xs text-muted-foreground"
+            title={asideTitle?.trim() || undefined}
+          >
+            {normalizedAside}
+          </span>
         ) : null}
       </div>
       {normalizedDescription ? (

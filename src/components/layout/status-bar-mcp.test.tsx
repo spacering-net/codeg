@@ -320,7 +320,7 @@ describe("StatusBarMcp", () => {
     await openPopover2()
 
     expect(
-      screen.getByText(/Could not read the status: transport offline/)
+      await screen.findByText(/Could not read the status: transport offline/)
     ).toBeInTheDocument()
     // No strip and no switches: there is no status to render either from.
     expect(screen.queryByText("Sessions")).not.toBeInTheDocument()

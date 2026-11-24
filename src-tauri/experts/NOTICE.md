@@ -1,8 +1,8 @@
 # Third-Party Notice — Expert Skills
 
 The 15 skills under `src-tauri/experts/skills/` are vendored from
-[obra/superpowers v7.0.1](https://github.com/obra/superpowers/releases/tag/v7.0.1),
-commit `2ce8aa15d05bd57213e6f746f953aafb7ded7a8b`.
+[obra/superpowers v7.0.2](https://github.com/obra/superpowers/releases/tag/v7.0.2),
+commit `22f0b463e7a5e579904dd6211a520321035526f7`.
 
 The skill files follow the upstream `skills/` tree. Codeg carries three
 standalone-runtime adaptations:
@@ -11,9 +11,10 @@ standalone-runtime adaptations:
   each skill as a standalone directory, outside the upstream repository's root
   ESM package scope, so this marker lets `render-graphs.js` run on Node
   versions without automatic ESM detection.
-- `executing-plans/scripts/task-brief`, `sdd-workspace`, and `review-package`
-  are local copies of
-  the matching upstream helpers from `subagent-driven-development`.
+- `executing-plans/scripts/task-brief`, `sdd-workspace`, `review-package`,
+  and `sdd-repo` are local copies of the matching upstream helpers from
+  `subagent-driven-development` (the first three call `sdd-repo` from their
+  own directory, so it must travel with them).
 - `executing-plans/scripts/task-start` and `task-done` prefer those local
   helpers and retain a sibling fallback for older installations. The skill
   text also points its workspace and review commands at the local copies.
@@ -29,7 +30,8 @@ each agent itself.
 
 To update, check out the desired upstream release in a separate directory,
 replace this bundle's `skills/` with upstream `skills/` (including deletions),
-and restore `writing-skills/package.json`. Update the source revision here and
+restore `writing-skills/package.json`, and re-copy the four helpers above from
+the new `subagent-driven-development/scripts/`. Update the source revision here and
 the catalog when the skill set or workflows change. Compare both trees;
 the documented standalone adaptations should be the only differences. Run the
 `commands::experts::tests` Rust tests and

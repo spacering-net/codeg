@@ -24,7 +24,11 @@ vi.mock("next-intl", () => ({
 }))
 
 vi.mock("@/contexts/acp-connections-context", () => ({
-  useAcpActions: () => ({ setActiveKey: vi.fn(), touchActivity: vi.fn() }),
+  useAcpActions: () => ({
+    setActiveKey: vi.fn(),
+    releaseActiveKey: vi.fn(),
+    touchActivity: vi.fn(),
+  }),
 }))
 
 const tasks = vi.hoisted(() => ({
@@ -87,6 +91,9 @@ vi.mock("@/hooks/use-connection", () => ({
     configOptions: null,
     isViewer: false,
     backgroundOutstanding: 0,
+    asyncTasks: [],
+    remoteControl: null,
+    delegatedChildren: [],
   }),
 }))
 

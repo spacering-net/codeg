@@ -34,6 +34,7 @@ import { useChatHtmlEnabled } from "@/lib/chat-html-prefs"
 import { createChatHtmlProcessor } from "@/lib/chat-html-markdown"
 import { scrollportComponents } from "./markdown-scrollport"
 import { maskLiteralSpans } from "./markdown-mask"
+import { normalizeInlineDollarMath } from "./inline-dollar-math"
 import { rehypePluginsAllowingCodeg } from "./rehype-allow-codeg"
 import { remarkTrimCjkAutolinkTail } from "./remark-cjk-autolink-tail"
 import { withRelativeFileLinks } from "./rehype-relative-file-links"
@@ -355,11 +356,15 @@ export const MessageBranchPage = ({
 // use it — they render as plain text + reference badges via PlainTextWithBadges
 // (see message/plain-text-with-badges.tsx) — so the former user-only `softBreaks`
 // / `/slash`-badging hooks were removed.
-export type MessageResponseProps = ComponentProps<typeof Streamdown>
+export type MessageResponseProps = ComponentProps<typeof Streamdown> & {
+  /** Extend parsing while retaining the shared Markdown pipeline. */
+  additionalRemarkPlugins?: ComponentProps<typeof Streamdown>["remarkPlugins"]
+}
 
 // remark-math uses dollar delimiters. `\[...\]` / `\(...\)` are rewritten
 // to `$$...$$`. Single-dollar `$...$` is disabled (`singleDollarTextMath:
 // false`) so currency (`$9.99`) and shell vars (`$HOME`, `$1`) stay prose.
+// Only tightly delimited single-dollar formulas are normalized explicitly.
 //
 // A single-line `$$x$$` inside a paragraph stays *inline* math (mdast tags
 // every math-text node `math-inline` regardless of dollar count). The one
@@ -403,7 +408,7 @@ export function normalizeMathDelimiters(text: string): string {
       const open = atContentStart ? MATH_FENCE_PAD : ""
       return `${open}$$${inner}${MATH_FENCE_PAD}$$`
     })
-  return restore(normalized)
+  return normalizeInlineDollarMath(restore(normalized))
 }
 
 function isSpaceOrTab(code: number): boolean {
@@ -549,6 +554,7 @@ function MessageResponseImpl({
   mode = FINISHED_MODE,
   parseIncompleteMarkdown = FINISHED_PARSE_INCOMPLETE_MARKDOWN,
   remend,
+  additionalRemarkPlugins,
   ...props
 }: MessageResponseProps) {
   const inReply = useAssistantReply()
@@ -566,11 +572,20 @@ function MessageResponseImpl({
   const plugins = useStreamdownPlugins(
     typeof normalized === "string" ? normalized : undefined
   )
+  const combinedRemarkPlugins = useMemo(
+    () =>
+      additionalRemarkPlugins?.length
+        ? [...remarkPlugins, ...additionalRemarkPlugins]
+        : remarkPlugins,
+    [additionalRemarkPlugins]
+  )
 
   return (
     <Streamdown
       className={cn(
-        "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:ps-2 [&_ol]:ps-2",
+        // `chat-markdown`: while it streams, its blocks keep the spacing they
+        // settle with (globals.css).
+        "chat-markdown size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:ps-2 [&_ol]:ps-2",
         // Each block takes the direction of its own text (`dir="auto"`
         // below), so indents and rules go on the logical start side. An item
         // re-states `text-align: start`: the UA gives <li>
@@ -594,7 +609,7 @@ function MessageResponseImpl({
         className
       )}
       plugins={plugins}
-      remarkPlugins={remarkPlugins}
+      remarkPlugins={combinedRemarkPlugins}
       rehypePlugins={rehypePlugins}
       mode={mode}
       parseIncompleteMarkdown={parseIncompleteMarkdown}
@@ -609,9 +624,9 @@ function MessageResponseImpl({
       // elements, but the link icon + safety routing on `a`, the diagram and
       // json-render blocks on `pre` and the table's scrollbars always win.
       components={{
+        ...markdownLocalImageComponents,
         ...props.components,
         ...markdownLinkComponents,
-        ...markdownLocalImageComponents,
         ...messageBlockComponents,
         ...scrollportComponents,
       }}
@@ -628,7 +643,16 @@ export const MessageResponse = memo(
     (prevProps.mode ?? FINISHED_MODE) === (nextProps.mode ?? FINISHED_MODE) &&
     (prevProps.parseIncompleteMarkdown ??
       FINISHED_PARSE_INCOMPLETE_MARKDOWN) ===
-      (nextProps.parseIncompleteMarkdown ?? FINISHED_PARSE_INCOMPLETE_MARKDOWN)
+      (nextProps.parseIncompleteMarkdown ??
+        FINISHED_PARSE_INCOMPLETE_MARKDOWN) &&
+    // The prose being written wraps its new characters to fade them in
+    // (`animated` + `isAnimating`); done, it drops the wrapping.
+    (prevProps.isAnimating ?? false) === (nextProps.isAnimating ?? false) &&
+    prevProps.animated === nextProps.animated &&
+    prevProps.additionalRemarkPlugins === nextProps.additionalRemarkPlugins &&
+    prevProps.remarkPlugins === nextProps.remarkPlugins &&
+    prevProps.rehypePlugins === nextProps.rehypePlugins &&
+    prevProps.components === nextProps.components
 )
 
 MessageResponse.displayName = "MessageResponse"

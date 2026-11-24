@@ -3,3 +3,10 @@
 # and must equal what src/lib/json-render/skill.ts generates, which is LF.
 # Windows checkouts convert text to CRLF by default (core.autocrlf), so pin it.
 src-tauri/genui/** text eol=lf
+
+# The bundled expert and science skills are embedded with `include_dir!` and
+# installed for agents byte for byte. A CRLF checkout adds one byte per line,
+# pushing SKILL.md past the 20,000-byte compaction limit the experts test
+# enforces (and handing agents CRLF scripts), so pin these to LF too.
+src-tauri/experts/** text eol=lf
+src-tauri/science/** text eol=lf

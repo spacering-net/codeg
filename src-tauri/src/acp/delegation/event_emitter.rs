@@ -81,6 +81,19 @@ pub trait DelegationEventEmitter: Send + Sync {
         assistant: Option<&AssistantRef>,
         result: DelegationResultSummary,
     );
+
+    /// Publish `AcpEvent::DelegationChildRunning` on the parent's stream when a
+    /// delegation starts (`running`) or reaches a terminal state. Unlike the two
+    /// above it is NOT skipped for a synthetic parent tool-use id: it is the
+    /// parent's lifecycle accounting, not a card binding. A no-op by default so
+    /// emitters that only care about cards need not implement it.
+    async fn emit_child_running(
+        &self,
+        _parent_connection_id: &str,
+        _child_connection_id: &str,
+        _running: bool,
+    ) {
+    }
 }
 
 /// Default emitter used when the broker is constructed via the short-form
@@ -167,6 +180,7 @@ impl DelegationEventEmitter for ConnectionManagerEventEmitter {
                 task_id: task_id.to_string(),
                 assistant_id: assistant.map(|a| a.id),
                 assistant_name: assistant.map(|a| a.name.clone()),
+                bot_uid: assistant.and_then(|a| a.bot_uid.clone()),
             },
         )
         .await;
@@ -201,6 +215,31 @@ impl DelegationEventEmitter for ConnectionManagerEventEmitter {
                 result,
                 assistant_id: assistant.map(|a| a.id),
                 assistant_name: assistant.map(|a| a.name.clone()),
+                bot_uid: assistant.and_then(|a| a.bot_uid.clone()),
+            },
+        )
+        .await;
+    }
+
+    async fn emit_child_running(
+        &self,
+        parent_connection_id: &str,
+        child_connection_id: &str,
+        running: bool,
+    ) {
+        let Some((state_arc, emitter)) = self
+            .manager
+            .get_state_and_emitter(parent_connection_id)
+            .await
+        else {
+            return;
+        };
+        emit_with_state(
+            &state_arc,
+            &emitter,
+            AcpEvent::DelegationChildRunning {
+                child_connection_id: child_connection_id.to_string(),
+                running,
             },
         )
         .await;
@@ -220,6 +259,9 @@ pub mod mock {
     pub struct MockEventEmitter {
         pub calls: Mutex<Vec<EmitCall>>,
         pub started_calls: Mutex<Vec<EmitStartedCall>>,
+        /// `(parent_connection_id, child_connection_id, running)` per
+        /// `emit_child_running`.
+        pub child_running_calls: Mutex<Vec<(String, String, bool)>>,
     }
 
     #[derive(Debug, Clone)]
@@ -264,6 +306,10 @@ pub mod mock {
 
         pub async fn started_count(&self) -> usize {
             self.started_calls.lock().await.len()
+        }
+
+        pub async fn child_running_snapshot(&self) -> Vec<(String, String, bool)> {
+            self.child_running_calls.lock().await.clone()
         }
     }
 
@@ -312,6 +358,19 @@ pub mod mock {
                 assistant: assistant.cloned(),
                 result,
             });
+        }
+
+        async fn emit_child_running(
+            &self,
+            parent_connection_id: &str,
+            child_connection_id: &str,
+            running: bool,
+        ) {
+            self.child_running_calls.lock().await.push((
+                parent_connection_id.to_string(),
+                child_connection_id.to_string(),
+                running,
+            ));
         }
     }
 }

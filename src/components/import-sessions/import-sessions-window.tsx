@@ -187,6 +187,7 @@ export function ImportSessionsWindow({
   }, [performScan])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- starts the initial scan; the loader updates progress state as it runs
     void performScan()
     // Mount-only: re-running on a focusPath identity change would discard an
     // in-flight scan for nothing (the query param never changes in-window).

@@ -47,22 +47,29 @@ vi.mock("@/stores/app-workspace-store", () => ({
     selector({ conversations: workspace.conversations }),
 }))
 
+const fileTree = vi.hoisted(() => ({ reset: vi.fn() }))
+
 vi.mock("@/hooks/use-file-tree", () => ({
-  useFileTree: () => ({ allFiles: [], loading: false, reset: vi.fn() }),
+  useFileTree: () => ({ allFiles: [], loading: false, reset: fileTree.reset }),
 }))
 
-function renderDialog() {
-  return render(
+function dialog(open: boolean) {
+  return (
     <NextIntlClientProvider locale="en" messages={enMessages}>
-      <SearchCommandDialog open onOpenChange={() => {}} />
+      <SearchCommandDialog open={open} onOpenChange={() => {}} />
     </NextIntlClientProvider>
   )
+}
+
+function renderDialog() {
+  return render(dialog(true))
 }
 
 describe("SearchCommandDialog focus", () => {
   beforeEach(() => {
     workspace.activeFolderId = null
     workspace.conversations = []
+    fileTree.reset.mockReset()
   })
 
   it("opens with the cursor in the search box, so typing searches", async () => {
@@ -136,5 +143,14 @@ describe("SearchCommandDialog focus", () => {
     } finally {
       composer.remove()
     }
+  })
+
+  it("asks for a native snapshot newer than each opening once it closes", () => {
+    const { rerender } = render(dialog(false))
+    expect(fileTree.reset).toHaveBeenLastCalledWith(true)
+    rerender(dialog(true))
+    fileTree.reset.mockClear()
+    rerender(dialog(false))
+    expect(fileTree.reset).toHaveBeenCalledExactlyOnceWith(true)
   })
 })

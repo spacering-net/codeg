@@ -1,60 +1,43 @@
 //! Built-in scientific-research skills management.
 //!
-//! This is a third bundled skill source that mirrors `commands/experts.rs`
-//! almost verbatim. Science skills (curated from
-//! K-Dense-AI/scientific-agent-skills) are bundled into the binary via
-//! `include_dir!` and, on startup, extracted into the same central store as
-//! experts — `~/.codeg/skills/<id>/`. Users enable a science skill for any ACP
-//! agent by symlinking (or Windows-junctioning) the agent's skill dir into the
-//! central copy.
+//! Science skills (curated from K-Dense-AI/scientific-agent-skills) are
+//! bundled into the binary via `include_dir!` and, on startup, extracted into
+//! the same central store as experts — `~/.codeg/skills/<id>/`. Users enable a
+//! science skill for any ACP agent by symlinking (or Windows-junctioning) the
+//! agent's skill dir into the central copy.
 //!
-//! Why a near-copy instead of a shared abstraction: experts/office already run
-//! two writers into the central store safely by relying on **disjoint id
-//! namespaces** plus a simple hash+manifest+backup scheme — not a bespoke
-//! multi-writer protocol. Science is a third writer with ids that are disjoint
-//! from experts (`brainstorming`, …) and office (`officecli-*`) by curation, so
-//! it inherits the same safety posture. The only structural differences from
-//! `experts.rs` are: its own `SCIENCE_BUNDLE`, its own `.manifest.science.json`
-//! (so it never clobbers experts' `.manifest.json`), its own `supported_agents`,
-//! and four extra `science.toml` fields (featured/accent/needs_key/needs_env).
-//! The generic link primitives and link-state DTOs are reused from experts —
-//! exactly as `office_tools.rs` does — so science link statuses serialize
-//! identically and the frontend enablement merge stays uniform.
-//!
-//! Factoring the shared hash/extract/install glue into one helper is a
-//! deliberate future refactor (see docs/science-mode-spec.md §9), not a v1 goal.
+//! Extraction, linking and status go through the skills engine
+//! (`crate::skills`), exactly as for Experts; what is Science's own is its
+//! `SCIENCE_BUNDLE`, its manifest `.manifest.science.json` (so it never
+//! clobbers experts' `.manifest.json`), its `supported_agents`, and four extra
+//! `science.toml` fields (featured/accent/needs_key/needs_env). Link statuses
+//! reuse the Experts DTOs, so they serialize identically and the frontend
+//! enablement merge stays uniform.
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use chrono::Utc;
-use include_dir::{include_dir, Dir, DirEntry};
+use include_dir::{include_dir, Dir};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use tokio::sync::Mutex;
 
-use crate::acp::types::AgentSkillScope;
-use crate::commands::acp::{
-    preferred_scope_skill_dir, remove_skill_entry, scoped_skill_dirs, skill_storage_spec,
-    validate_skill_id,
-};
-// Reuse the generic filesystem link primitives and link-state DTOs from experts
-// (same boundary office_tools.rs uses). The central store is shared, so science
-// installs into `central_experts_dir()` too.
-use crate::commands::experts::{
-    central_experts_dir, classify_link, create_link_raw, path_is_symlink, read_link_target,
-    ExpertInstallStatus, ExpertLinkState, LinkOp, LinkOpResult,
-};
+use crate::app_error::AppCommandError;
+use crate::commands::acp::{skill_storage_spec, validate_skill_id};
+use crate::commands::experts::{central_experts_dir, ExpertInstallStatus, LinkOp, LinkOpResult};
 use crate::models::agent::AgentType;
+use crate::skills::model::SkillOrigin;
+use crate::skills::packs::{self, Bundle};
+use crate::skills::{legacy, SkillsCtx};
+use crate::web::event_bridge::EventEmitter;
+
+pub use crate::skills::packs::InstallReport;
 
 // ─── Embedded bundle ────────────────────────────────────────────────────
 
 static SCIENCE_BUNDLE: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/science");
 
-const MANIFEST_FILE: &str = ".manifest.science.json";
 const SCIENCE_TOML: &str = "science.toml";
 
 // ─── Error type ─────────────────────────────────────────────────────────
@@ -77,12 +60,39 @@ pub enum ScienceError {
     CentralUnavailable(String),
 }
 
+impl ScienceError {
+    pub fn code(&self) -> &'static str {
+        use crate::skills::model::codes;
+        match self {
+            ScienceError::NotFound(_) | ScienceError::CentralUnavailable(_) => {
+                codes::SKILL_NOT_FOUND
+            }
+            ScienceError::UnsupportedAgent(_) => codes::AGENT_UNSUPPORTED,
+            ScienceError::NameCollision { .. } => codes::TARGET_OCCUPIED,
+            ScienceError::ForeignLink { .. } => codes::TARGET_LINKED_ELSEWHERE,
+            ScienceError::Io(_) => codes::IO_ERROR,
+            ScienceError::Metadata(_) => codes::SKILL_INVALID,
+        }
+    }
+}
+
+impl From<&ScienceError> for AppCommandError {
+    fn from(error: &ScienceError) -> Self {
+        crate::skills::coded_error(
+            AppCommandError::task_execution_failed(error.to_string()),
+            error.code(),
+            None,
+        )
+    }
+}
+
+/// On both transports an error is an `AppCommandError` with its stable code.
 impl Serialize for ScienceError {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        serializer.serialize_str(&self.to_string())
+        AppCommandError::from(self).serialize(serializer)
     }
 }
 
@@ -120,61 +130,15 @@ pub struct ScienceListItem {
     pub installed_centrally: bool,
     pub user_modified: bool,
     pub central_path: String,
-}
-
-#[derive(Debug, Clone, Default, Serialize)]
-pub struct InstallReport {
-    pub installed_count: usize,
-    pub updated_count: usize,
-    pub pending_user_review: Vec<String>,
-    pub errors: Vec<String>,
-}
-
-// ─── Manifest ───────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct Manifest {
-    #[serde(default)]
-    codeg_version: String,
-    #[serde(default)]
-    installed_at: String,
-    #[serde(default)]
-    science: BTreeMap<String, ManifestEntry>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct ManifestEntry {
-    #[serde(default)]
-    hash: String,
-    #[serde(default)]
-    installed_at: String,
-    #[serde(default)]
-    pending_user_review: bool,
-}
-
-// ─── Concurrency ────────────────────────────────────────────────────────
-
-fn mutation_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
+    /// The store holds a skill of another origin under this id: the science
+    /// skill is not installed, and not linked.
+    pub name_taken: bool,
 }
 
 // ─── Paths ──────────────────────────────────────────────────────────────
-// The central store is shared with experts (`~/.codeg/skills/`); only the
-// manifest file differs, so the two sources never clobber each other's state.
-
-fn manifest_path() -> PathBuf {
-    central_experts_dir().join(MANIFEST_FILE)
-}
 
 fn science_central_path(skill_id: &str) -> PathBuf {
     central_experts_dir().join(skill_id)
-}
-
-fn agent_link_path(agent: AgentType, skill_id: &str) -> Result<PathBuf, ScienceError> {
-    let dir = preferred_scope_skill_dir(agent, AgentSkillScope::Global, None)
-        .map_err(|_| ScienceError::UnsupportedAgent(agent))?;
-    Ok(dir.join(skill_id))
 }
 
 // ─── Metadata loading ───────────────────────────────────────────────────
@@ -230,7 +194,8 @@ fn load_bundled_metadata_inner() -> Result<Vec<ScienceMetadata>, ScienceError> {
 
     let mut out = Vec::with_capacity(root.skill.len());
     for entry in root.skill {
-        let bundled_hash = hash_bundled_science(&entry.id)?;
+        let bundled_hash = packs::bundled_hash(&SCIENCE_BUNDLE, &entry.id)
+            .ok_or_else(|| ScienceError::NotFound(entry.id.clone()))?;
         out.push(ScienceMetadata {
             id: entry.id,
             category: entry.category,
@@ -249,8 +214,8 @@ fn load_bundled_metadata_inner() -> Result<Vec<ScienceMetadata>, ScienceError> {
     Ok(out)
 }
 
-/// Ids of all bundled science skills. Used by the custom-skills pack to exclude
-/// built-in ids from the "custom" set (all packs share the central store).
+/// Ids of all bundled science skills. Used by the custom-skills pack to keep
+/// built-in ids out of new custom skills, and by the engine's "name taken".
 pub(crate) fn bundled_ids() -> Vec<String> {
     bundled_metadata().iter().map(|m| m.id.clone()).collect()
 }
@@ -262,345 +227,57 @@ fn find_metadata(skill_id: &str) -> Result<&'static ScienceMetadata, ScienceErro
         .ok_or_else(|| ScienceError::NotFound(skill_id.to_string()))
 }
 
-// ─── Hashing ────────────────────────────────────────────────────────────
-// Copied from experts.rs (generic bundle/disk hashing). The logical path
-// format — `skills/<id>/<rel>` — is identical, so hashes are comparable within
-// this module's own manifest.
-
-fn hash_bundled_science(skill_id: &str) -> Result<String, ScienceError> {
-    let skill_dir = format!("skills/{skill_id}");
-    let dir = SCIENCE_BUNDLE
-        .get_dir(&skill_dir)
-        .ok_or_else(|| ScienceError::NotFound(skill_id.to_string()))?;
-    let mut files: Vec<(&str, &[u8])> = Vec::new();
-    collect_bundle_files(dir, &mut files);
-    files.sort_by_key(|(path, _)| *path);
-    let mut hasher = Sha256::new();
-    for (path, contents) in files {
-        hasher.update(path.as_bytes());
-        hasher.update(b"\0");
-        hasher.update(contents);
-        hasher.update(b"\0");
-    }
-    Ok(format!("{:x}", hasher.finalize()))
-}
-
-fn collect_bundle_files<'a>(dir: &'a Dir<'a>, out: &mut Vec<(&'a str, &'a [u8])>) {
-    for entry in dir.entries() {
-        match entry {
-            DirEntry::File(f) => {
-                let rel = f.path().to_str().unwrap_or("");
-                out.push((rel, f.contents()));
-            }
-            DirEntry::Dir(d) => collect_bundle_files(d, out),
-        }
-    }
-}
-
-fn hash_disk_directory(path: &Path) -> Result<String, ScienceError> {
-    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
-    collect_disk_files(path, path, &mut files)?;
-    files.sort_by(|a, b| a.0.cmp(&b.0));
-    let mut hasher = Sha256::new();
-    for (rel_path, contents) in files {
-        let logical = format!(
-            "skills/{}/{}",
-            path.file_name().and_then(|s| s.to_str()).unwrap_or_default(),
-            rel_path
-        );
-        hasher.update(logical.as_bytes());
-        hasher.update(b"\0");
-        hasher.update(&contents);
-        hasher.update(b"\0");
-    }
-    Ok(format!("{:x}", hasher.finalize()))
-}
-
-fn collect_disk_files(
-    base: &Path,
-    current: &Path,
-    out: &mut Vec<(String, Vec<u8>)>,
-) -> Result<(), ScienceError> {
-    if !current.exists() {
-        return Ok(());
-    }
-    for entry in fs::read_dir(current)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
-        let child = entry.path();
-        if file_type.is_dir() {
-            collect_disk_files(base, &child, out)?;
-        } else if file_type.is_file() {
-            let rel = child
-                .strip_prefix(base)
-                .map_err(|e| ScienceError::Io(e.to_string()))?
-                .to_string_lossy()
-                .replace('\\', "/");
-            let contents = fs::read(&child)?;
-            out.push((rel, contents));
-        }
-    }
-    Ok(())
-}
-
-// ─── Manifest I/O ───────────────────────────────────────────────────────
-
-fn load_manifest() -> Manifest {
-    let path = manifest_path();
-    match fs::read_to_string(&path) {
-        Ok(content) => serde_json::from_str::<Manifest>(&content).unwrap_or_default(),
-        Err(_) => Manifest::default(),
-    }
-}
-
-fn save_manifest(manifest: &Manifest) -> Result<(), ScienceError> {
-    let path = manifest_path();
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let serialized = serde_json::to_string_pretty(manifest)
-        .map_err(|e| ScienceError::Metadata(format!("failed to serialize manifest: {e}")))?;
-    fs::write(&path, serialized)?;
-    Ok(())
-}
-
 // ─── Central store installation ────────────────────────────────────────
 
+fn bundle() -> Bundle<'static> {
+    Bundle {
+        origin: SkillOrigin::Science,
+        dir: &SCIENCE_BUNDLE,
+        skills: bundled_metadata()
+            .iter()
+            .map(|m| (m.id.clone(), m.bundled_hash.clone()))
+            .collect(),
+    }
+}
+
+/// Extract or update the bundled science skills in `ctx`'s store, under the
+/// skills lock. Blocking.
+pub(crate) fn install_in(ctx: &SkillsCtx) -> InstallReport {
+    match ctx.lock_blocking() {
+        Ok(_guard) => packs::install_bundle(ctx, &bundle()),
+        Err(err) => InstallReport {
+            errors: vec![format!("skills lock: {err}")],
+            ..InstallReport::default()
+        },
+    }
+}
+
 pub async fn ensure_central_science_installed() -> InstallReport {
-    let _guard = mutation_lock().lock().await;
-    tokio::task::spawn_blocking(ensure_central_science_installed_blocking)
+    tokio::task::spawn_blocking(|| install_in(&SkillsCtx::user()))
         .await
-        .unwrap_or_else(|e| {
-            let mut r = InstallReport::default();
-            r.errors.push(format!("join error: {e}"));
-            r
+        .unwrap_or_else(|e| InstallReport {
+            errors: vec![format!("join error: {e}")],
+            ..InstallReport::default()
         })
-}
-
-fn ensure_central_science_installed_blocking() -> InstallReport {
-    let mut report = InstallReport::default();
-
-    let central = central_experts_dir();
-    if let Err(e) = fs::create_dir_all(&central) {
-        report
-            .errors
-            .push(format!("failed to create central dir: {e}"));
-        return report;
-    }
-
-    let mut manifest = load_manifest();
-    let meta_list = bundled_metadata();
-
-    for meta in meta_list {
-        match install_or_refresh_science(meta, &mut manifest) {
-            Ok(InstallAction::Skipped) => {}
-            Ok(InstallAction::Installed) => report.installed_count += 1,
-            Ok(InstallAction::Updated) => report.updated_count += 1,
-            Ok(InstallAction::BackedUp) => {
-                report.updated_count += 1;
-                report.pending_user_review.push(meta.id.clone());
-            }
-            Err(e) => report.errors.push(format!("{}: {}", meta.id, e)),
-        }
-    }
-
-    manifest.codeg_version = env!("CARGO_PKG_VERSION").to_string();
-    manifest.installed_at = Utc::now().to_rfc3339();
-    if let Err(e) = save_manifest(&manifest) {
-        report.errors.push(format!("save manifest: {e}"));
-    }
-
-    report
-}
-
-enum InstallAction {
-    Skipped,
-    Installed,
-    Updated,
-    BackedUp,
-}
-
-fn install_or_refresh_science(
-    meta: &ScienceMetadata,
-    manifest: &mut Manifest,
-) -> Result<InstallAction, ScienceError> {
-    let central_path = science_central_path(&meta.id);
-    let bundled_hash = &meta.bundled_hash;
-    let manifest_entry = manifest.science.get(&meta.id).cloned().unwrap_or_default();
-
-    if central_path.exists() {
-        let on_disk_hash = hash_disk_directory(&central_path).unwrap_or_default();
-        if &on_disk_hash == bundled_hash {
-            // Up-to-date and pristine. Ensure manifest matches.
-            if manifest_entry.hash != *bundled_hash {
-                manifest.science.insert(
-                    meta.id.clone(),
-                    ManifestEntry {
-                        hash: bundled_hash.clone(),
-                        installed_at: Utc::now().to_rfc3339(),
-                        pending_user_review: false,
-                    },
-                );
-            }
-            return Ok(InstallAction::Skipped);
-        }
-
-        // Content differs. Was the user the one who changed it, or is the
-        // bundle itself newer?
-        let user_modified = manifest_entry.hash.is_empty() || on_disk_hash != manifest_entry.hash;
-        if user_modified {
-            // Preserve user work (or a foreign same-named dir): move aside,
-            // install fresh. Non-destructive, matching experts' behavior.
-            let backup_name = format!(
-                "{}.user-backup-{}",
-                meta.id,
-                Utc::now().format("%Y%m%d-%H%M%S")
-            );
-            let backup_path = central_experts_dir().join(backup_name);
-            fs::rename(&central_path, &backup_path)?;
-            extract_science_to_disk(meta, &central_path)?;
-            manifest.science.insert(
-                meta.id.clone(),
-                ManifestEntry {
-                    hash: bundled_hash.clone(),
-                    installed_at: Utc::now().to_rfc3339(),
-                    pending_user_review: true,
-                },
-            );
-            return Ok(InstallAction::BackedUp);
-        }
-
-        // Pristine but outdated → overwrite.
-        remove_skill_entry(&central_path)
-            .map_err(|e| ScienceError::Io(format!("remove stale science skill: {e}")))?;
-        extract_science_to_disk(meta, &central_path)?;
-        manifest.science.insert(
-            meta.id.clone(),
-            ManifestEntry {
-                hash: bundled_hash.clone(),
-                installed_at: Utc::now().to_rfc3339(),
-                pending_user_review: false,
-            },
-        );
-        Ok(InstallAction::Updated)
-    } else {
-        extract_science_to_disk(meta, &central_path)?;
-        manifest.science.insert(
-            meta.id.clone(),
-            ManifestEntry {
-                hash: bundled_hash.clone(),
-                installed_at: Utc::now().to_rfc3339(),
-                pending_user_review: false,
-            },
-        );
-        Ok(InstallAction::Installed)
-    }
-}
-
-fn extract_science_to_disk(meta: &ScienceMetadata, target: &Path) -> Result<(), ScienceError> {
-    let skill_rel = format!("skills/{}", meta.id);
-    let dir = SCIENCE_BUNDLE
-        .get_dir(&skill_rel)
-        .ok_or_else(|| ScienceError::NotFound(meta.id.clone()))?;
-    fs::create_dir_all(target)?;
-    extract_bundle_dir(dir, &skill_rel, target)?;
-    Ok(())
-}
-
-fn extract_bundle_dir(
-    dir: &Dir<'_>,
-    bundle_prefix: &str,
-    target: &Path,
-) -> Result<(), ScienceError> {
-    for entry in dir.entries() {
-        match entry {
-            DirEntry::File(f) => {
-                let rel = f
-                    .path()
-                    .to_str()
-                    .ok_or_else(|| ScienceError::Io("non-utf8 path in bundle".into()))?;
-                let rel_within = rel
-                    .strip_prefix(bundle_prefix)
-                    .and_then(|s| s.strip_prefix('/'))
-                    .unwrap_or(rel);
-                let out_path = target.join(rel_within);
-                if let Some(parent) = out_path.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                fs::write(&out_path, f.contents())?;
-                // `include_dir!` does not carry Unix permission bits, so bundled
-                // scripts would extract as non-executable and fail when a skill
-                // invokes them by path. Restore the execute bit for any file
-                // that declares a shebang.
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    if f.contents().starts_with(b"#!") {
-                        let mut perms = fs::metadata(&out_path)?.permissions();
-                        perms.set_mode(perms.mode() | 0o111);
-                        fs::set_permissions(&out_path, perms)?;
-                    }
-                }
-            }
-            DirEntry::Dir(d) => {
-                extract_bundle_dir(d, bundle_prefix, target)?;
-            }
-        }
-    }
-    Ok(())
 }
 
 // ─── Commands: list / status ────────────────────────────────────────────
 
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn science_list() -> Result<Vec<ScienceListItem>, ScienceError> {
-    let meta_list = bundled_metadata().to_vec();
-    let manifest = load_manifest();
-    let mut out = Vec::with_capacity(meta_list.len());
-    for meta in meta_list {
+    let store = central_experts_dir();
+    let provenance = crate::skills::provenance::Provenance::load(&store);
+    let mut out = Vec::new();
+    for meta in bundled_metadata().iter().cloned() {
         let central_path = science_central_path(&meta.id);
-        let installed_centrally = central_path.exists();
-        let user_modified = manifest
-            .science
-            .get(&meta.id)
-            .map(|e| e.pending_user_review)
-            .unwrap_or(false);
+        let present = central_path.exists();
+        let ours = provenance.origin_of(&store, &meta.id) == Some(SkillOrigin::Science);
         out.push(ScienceListItem {
-            metadata: meta,
-            installed_centrally,
-            user_modified,
+            installed_centrally: present && ours,
+            user_modified: ours && provenance.pending_user_review(&meta.id),
+            name_taken: present && !ours,
             central_path: central_path.to_string_lossy().to_string(),
-        });
-    }
-    Ok(out)
-}
-
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn science_get_install_status(
-    skill_id: String,
-) -> Result<Vec<ExpertInstallStatus>, ScienceError> {
-    let skill_id =
-        validate_skill_id(&skill_id).map_err(|e| ScienceError::Metadata(e.to_string()))?;
-    let _ = find_metadata(&skill_id)?; // ensure it exists in the bundle
-    let expected = science_central_path(&skill_id);
-    let agents = supported_agents();
-
-    let mut out = Vec::with_capacity(agents.len());
-    for agent in agents {
-        let link_path = match agent_link_path(agent, &skill_id) {
-            Ok(p) => p,
-            Err(_) => continue,
-        };
-        let state = classify_link(&link_path, &expected);
-        let target_path = read_link_target(&link_path).map(|p| p.to_string_lossy().to_string());
-        out.push(ExpertInstallStatus {
-            expert_id: skill_id.clone(),
-            agent_type: agent,
-            state,
-            link_path: link_path.to_string_lossy().to_string(),
-            target_path,
-            expected_target_path: expected.to_string_lossy().to_string(),
-            copy_mode: false,
+            metadata: meta,
         });
     }
     Ok(out)
@@ -647,206 +324,61 @@ fn supported_agents() -> Vec<AgentType> {
 
 // ─── Commands: link / unlink ────────────────────────────────────────────
 
-/// Link one science skill into one agent's skill dir. **Assumes the mutation
-/// lock is already held** by the caller — `tokio::sync::Mutex` is not reentrant,
-/// so the batch path (`science_apply_links`) locks once and calls this directly
-/// rather than the public command (which would self-deadlock).
-fn link_one_locked(
-    skill_id: &str,
-    agent_type: AgentType,
-) -> Result<ExpertInstallStatus, ScienceError> {
-    let skill_id = validate_skill_id(skill_id).map_err(|e| ScienceError::Metadata(e.to_string()))?;
-    let _ = find_metadata(&skill_id)?;
-    let central = science_central_path(&skill_id);
-    if !central.exists() {
-        return Err(ScienceError::CentralUnavailable(format!(
-            "science skill '{skill_id}' is not installed in central store"
-        )));
-    }
-
-    let link_path = agent_link_path(agent_type, &skill_id)?;
-    if let Some(parent) = link_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    let mut copy_mode = false;
-    match create_link_raw(&central, &link_path) {
-        Ok(is_copy) => {
-            copy_mode = is_copy;
-        }
-        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
-            match classify_link(&link_path, &central) {
-                ExpertLinkState::LinkedToCodeg => {
-                    // Idempotent success.
-                }
-                ExpertLinkState::BlockedByRealDirectory => {
-                    return Err(ScienceError::NameCollision {
-                        path: link_path.to_string_lossy().to_string(),
-                    });
-                }
-                ExpertLinkState::LinkedElsewhere | ExpertLinkState::Broken => {
-                    let found = read_link_target(&link_path)
-                        .map(|p| p.to_string_lossy().to_string())
-                        .unwrap_or_else(|| "<unknown>".into());
-                    return Err(ScienceError::ForeignLink {
-                        path: link_path.to_string_lossy().to_string(),
-                        found,
-                    });
-                }
-                ExpertLinkState::NotLinked => {
-                    // Shouldn't happen after AlreadyExists, but retry once.
-                    create_link_raw(&central, &link_path)
-                        .map_err(|e| ScienceError::Io(format!("retry link failed: {e}")))?;
-                }
-            }
-        }
-        Err(err) => return Err(ScienceError::Io(err.to_string())),
-    }
-
-    let state = classify_link(&link_path, &central);
-    let target_path = read_link_target(&link_path).map(|p| p.to_string_lossy().to_string());
-    Ok(ExpertInstallStatus {
-        expert_id: skill_id.clone(),
-        agent_type,
-        state,
-        link_path: link_path.to_string_lossy().to_string(),
-        target_path,
-        expected_target_path: central.to_string_lossy().to_string(),
-        copy_mode,
+/// Apply a batch of enable/disable operations under the skills lock. Each op
+/// is applied independently: a failing op records `ok: false` (with a code)
+/// and the batch continues. See `experts_apply_links_core` for what is
+/// refused here and done on the Harness page instead.
+pub async fn science_apply_links_core(
+    emitter: &EventEmitter,
+    ops: Vec<LinkOp>,
+) -> Result<Vec<LinkOpResult>, ScienceError> {
+    let ctx = SkillsCtx::user();
+    let guard = match ctx.lock().await {
+        Ok(guard) => guard,
+        Err(err) => return Ok(legacy::busy(&ops, &err)),
+    };
+    let task_ctx = ctx.clone();
+    let (results, changed) = tokio::task::spawn_blocking(move || {
+        let _guard = guard;
+        // As before: enabling needs a skill of the bundle; disabling an id
+        // that is not one is an idempotent success.
+        legacy::apply_ops(&task_ctx, SkillOrigin::Science, &ops, |id, enable| {
+            (enable && find_metadata(id).is_err())
+                .then(|| ScienceError::NotFound(id.to_string()).to_string())
+        })
     })
-}
-
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn science_link_to_agent(
-    skill_id: String,
-    agent_type: AgentType,
-) -> Result<ExpertInstallStatus, ScienceError> {
-    let _guard = mutation_lock().lock().await;
-    link_one_locked(&skill_id, agent_type)
-}
-
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn science_unlink_from_agent(
-    skill_id: String,
-    agent_type: AgentType,
-) -> Result<(), ScienceError> {
-    let _guard = mutation_lock().lock().await;
-    unlink_one_locked(&skill_id, agent_type)
-}
-
-/// Remove one science skill's link from one agent's skill dirs. **Assumes the
-/// mutation lock is already held** (see `link_one_locked`).
-fn unlink_one_locked(skill_id: &str, agent_type: AgentType) -> Result<(), ScienceError> {
-    let skill_id = validate_skill_id(skill_id).map_err(|e| ScienceError::Metadata(e.to_string()))?;
-
-    // Scan ALL global dirs for this agent to handle shared-dir agents — most
-    // built-ins also point at the cross-agent `~/.agents/skills/` store, so the
-    // link may sit in either. `skill_storage_spec` is the live list; do not
-    // enumerate them here, it drifts.
-    let dirs = scoped_skill_dirs(agent_type, AgentSkillScope::Global, None)
-        .map_err(|_| ScienceError::UnsupportedAgent(agent_type))?;
-
-    let central = science_central_path(&skill_id);
-    let mut removed = false;
-    for dir in dirs {
-        let candidate = dir.join(&skill_id);
-        if !candidate.exists() && !path_is_symlink(&candidate) {
-            continue;
-        }
-        let state = classify_link(&candidate, &central);
-        if matches!(
-            state,
-            ExpertLinkState::LinkedToCodeg | ExpertLinkState::Broken
-        ) {
-            remove_skill_entry(&candidate).map_err(|e| {
-                ScienceError::Io(format!("remove link {}: {e}", candidate.display()))
-            })?;
-            removed = true;
-        } else if state == ExpertLinkState::LinkedElsewhere {
-            return Err(ScienceError::ForeignLink {
-                path: candidate.to_string_lossy().to_string(),
-                found: read_link_target(&candidate)
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "<unknown>".into()),
-            });
-        } else if state == ExpertLinkState::BlockedByRealDirectory {
-            // Not ours; leave alone.
-            continue;
-        }
+    .await
+    .map_err(|e| ScienceError::Io(format!("join error: {e}")))?;
+    if !changed.dirs.is_empty() {
+        crate::skills::announce(
+            emitter,
+            [crate::skills::model::ChangedKind::Links],
+            changed.agents(&ctx),
+        );
     }
-
-    let _ = removed; // already-unlinked is an idempotent success
-    Ok(())
+    Ok(results)
 }
 
-/// Apply a batch of enable/disable operations under a single lock acquisition.
-/// Each op is applied independently: a failing op records `ok: false` and the
-/// batch continues. The frontend re-fetches the authoritative snapshot via
-/// `science_list_all_install_statuses` afterward (shared agent dirs make per-op
-/// state non-local — see the office/experts shared-dir note).
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn science_apply_links(ops: Vec<LinkOp>) -> Result<Vec<LinkOpResult>, ScienceError> {
-    let _guard = mutation_lock().lock().await;
-    let mut out = Vec::with_capacity(ops.len());
-    for op in ops {
-        let LinkOp {
-            expert_id,
-            agent_type,
-            enable,
-        } = op;
-        let res = if enable {
-            link_one_locked(&expert_id, agent_type).map(Some)
-        } else {
-            unlink_one_locked(&expert_id, agent_type).map(|()| None)
-        };
-        out.push(match res {
-            Ok(status) => LinkOpResult {
-                expert_id,
-                agent_type,
-                ok: true,
-                status,
-                error: None,
-            },
-            Err(err) => LinkOpResult {
-                expert_id,
-                agent_type,
-                ok: false,
-                status: None,
-                error: Some(err.to_string()),
-            },
-        });
-    }
-    Ok(out)
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn science_apply_links(
+    ops: Vec<LinkOp>,
+    app: tauri::AppHandle,
+) -> Result<Vec<LinkOpResult>, ScienceError> {
+    science_apply_links_core(&EventEmitter::from_app(&app), ops).await
 }
 
 /// One-shot snapshot of every (science skill, agent) link state — lets the
 /// matrix UI render the whole grid from a single round-trip.
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn science_list_all_install_statuses() -> Result<Vec<ExpertInstallStatus>, ScienceError> {
+    let ids = bundled_ids();
     let agents = supported_agents();
-    let mut out = Vec::with_capacity(bundled_metadata().len() * agents.len());
-    for meta in bundled_metadata() {
-        let expected = science_central_path(&meta.id);
-        for &agent in &agents {
-            let link_path = match agent_link_path(agent, &meta.id) {
-                Ok(p) => p,
-                Err(_) => continue,
-            };
-            let state = classify_link(&link_path, &expected);
-            let target_path =
-                read_link_target(&link_path).map(|p| p.to_string_lossy().to_string());
-            out.push(ExpertInstallStatus {
-                expert_id: meta.id.clone(),
-                agent_type: agent,
-                state,
-                link_path: link_path.to_string_lossy().to_string(),
-                target_path,
-                expected_target_path: expected.to_string_lossy().to_string(),
-                copy_mode: false,
-            });
-        }
-    }
-    Ok(out)
+    tokio::task::spawn_blocking(move || {
+        legacy::statuses(&SkillsCtx::user(), SkillOrigin::Science, &ids, &agents)
+    })
+    .await
+    .map_err(|e| ScienceError::Io(format!("join error: {e}")))
 }
 
 // ─── Commands: read / open ──────────────────────────────────────────────
@@ -871,13 +403,6 @@ pub async fn science_read_content(skill_id: String) -> Result<String, ScienceErr
     }
     let content = fs::read_to_string(&path)?;
     Ok(content)
-}
-
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn science_open_central_dir() -> Result<String, ScienceError> {
-    let dir = central_experts_dir();
-    fs::create_dir_all(&dir)?;
-    Ok(dir.to_string_lossy().to_string())
 }
 
 #[cfg(test)]
@@ -930,14 +455,16 @@ mod tests {
         assert!(!supported_agents().contains(&agent));
     }
 
+    #[cfg(not(windows))] // only the hermetic-home tests below
     use tokio::time::{timeout, Duration};
 
-    // These tests use ids that are well-formed but absent from the bundle and
-    // unlikely to exist as real links, so they never mutate the developer's
-    // real skill directories.
+    // These tests run against a home of their own (`with_hermetic_home`), and
+    // use ids that are well-formed but absent from the bundle.
 
+    #[cfg(not(windows))] // a home of its own: `skills::tests::with_hermetic_home`
     #[tokio::test]
     async fn apply_links_does_not_deadlock() {
+        let tmp = tempfile::tempdir().unwrap();
         let ops = vec![
             LinkOp {
                 expert_id: "zzz-codeg-science-batch-absent-aaa".into(),
@@ -950,16 +477,24 @@ mod tests {
                 enable: false,
             },
         ];
-        let results = timeout(Duration::from_secs(5), science_apply_links(ops))
-            .await
-            .expect("science_apply_links must not deadlock")
-            .expect("batch returns Ok");
+        let results = crate::skills::tests::with_hermetic_home(
+            tmp.path(),
+            timeout(
+                Duration::from_secs(5),
+                science_apply_links_core(&EventEmitter::Noop, ops),
+            ),
+        )
+        .await
+        .expect("science_apply_links must not deadlock")
+        .expect("batch returns Ok");
         assert_eq!(results.len(), 2);
         assert!(results.iter().all(|r| r.ok), "{results:?}");
     }
 
+    #[cfg(not(windows))] // a home of its own: `skills::tests::with_hermetic_home`
     #[tokio::test]
     async fn apply_links_collects_per_op_results_without_aborting() {
+        let tmp = tempfile::tempdir().unwrap();
         let ops = vec![
             LinkOp {
                 expert_id: "zzz-codeg-science-batch-absent".into(),
@@ -967,13 +502,18 @@ mod tests {
                 enable: false,
             },
             LinkOp {
-                // Unknown skill → enable fails at find_metadata, before any fs write.
+                // Unknown skill → enable fails before any fs write.
                 expert_id: "zzz-unknown-science-skill".into(),
                 agent_type: AgentType::ClaudeCode,
                 enable: true,
             },
         ];
-        let results = science_apply_links(ops).await.expect("batch returns Ok");
+        let results = crate::skills::tests::with_hermetic_home(
+            tmp.path(),
+            science_apply_links_core(&EventEmitter::Noop, ops),
+        )
+        .await
+        .expect("batch returns Ok");
         assert_eq!(results.len(), 2);
         assert!(results[0].ok, "idempotent disable should succeed");
         assert!(!results[1].ok, "unknown skill enable should fail its op");
@@ -981,6 +521,7 @@ mod tests {
         assert!(results[1].status.is_none());
     }
 
+    #[cfg(not(windows))] // a home of its own: `skills::tests::with_hermetic_home`
     #[tokio::test]
     // The hydrate guard is held across the await on purpose — see the
     // identical note in `custom_agent_service`.
@@ -989,10 +530,14 @@ mod tests {
         // A test hydrating a custom agent that declares a store would add a
         // column between the snapshot and the count below.
         let _guard = crate::acp::custom_registry::hydrate_test_guard();
-        let rows = science_list_all_install_statuses()
-            .await
-            .expect("snapshot returns Ok");
-        let expected = bundled_metadata().len() * supported_agents().len();
+        let tmp = tempfile::tempdir().unwrap();
+        let (rows, expected) = crate::skills::tests::with_hermetic_home(tmp.path(), async {
+            let rows = science_list_all_install_statuses()
+                .await
+                .expect("snapshot returns Ok");
+            (rows, bundled_metadata().len() * supported_agents().len())
+        })
+        .await;
         assert_eq!(rows.len(), expected);
     }
 
@@ -1001,12 +546,14 @@ mod tests {
     /// column and no row, so the authoritative refresh that follows a toggle
     /// read the freshly linked cell back as unlinked and flipped it off — and
     /// the re-enable then collided with the link the first one had created.
-    /// Both status endpoints must therefore cover every built-in that declares
-    /// a skill store.
+    /// The status snapshot must therefore cover every built-in that declares
+    /// a skill store. (The single-skill `science_get_install_status` it also
+    /// checked had no caller and was removed with the engine.)
     ///
     /// Built-ins only: `all_acp_agents()` also reads the process-global custom
     /// registry, which `a_declared_custom_agent_gains_a_column_here_too`
     /// rewrites from another test thread.
+    #[cfg(not(windows))] // a home of its own: `skills::tests::with_hermetic_home`
     #[tokio::test]
     async fn supported_agents_cover_every_skills_capable_builtin() {
         let expected: Vec<AgentType> = crate::acp::registry::builtin_acp_agents()
@@ -1030,29 +577,19 @@ mod tests {
             "Command Code declares a skill store, so it is one of the columns"
         );
 
-        let skill_id = bundled_metadata()
-            .first()
-            .expect("science bundle should be non-empty")
-            .id
-            .clone();
-        let one_skill: Vec<AgentType> = science_get_install_status(skill_id)
+        let tmp = tempfile::tempdir().unwrap();
+        let whole_grid: Vec<AgentType> =
+            crate::skills::tests::with_hermetic_home(tmp.path(), async {
+                science_list_all_install_statuses()
+                    .await
+                    .expect("snapshot returns Ok")
+            })
             .await
-            .expect("status lookup returns Ok")
-            .into_iter()
-            .map(|row| row.agent_type)
-            .collect();
-        let whole_grid: Vec<AgentType> = science_list_all_install_statuses()
-            .await
-            .expect("snapshot returns Ok")
             .into_iter()
             .map(|row| row.agent_type)
             .collect();
 
         for agent in expected {
-            assert!(
-                one_skill.contains(&agent),
-                "science_get_install_status drops {agent:?}"
-            );
             assert!(
                 whole_grid.contains(&agent),
                 "science_list_all_install_statuses drops {agent:?}"

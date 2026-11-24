@@ -13,9 +13,16 @@
 import { useEffect, useMemo, useState } from "react"
 
 import { Message, MessageContent } from "@/components/ai-elements/message"
+import { SessionDetailsCard } from "@/components/conversations/session-details-content"
 import { SessionDetailsInsights } from "@/components/layout/session-details-insights"
 import { CompletedTurnContent } from "@/components/message/completed-turn-content"
 import { ContentPartsRenderer } from "@/components/message/content-parts-renderer"
+import {
+  LiveRunsChip,
+  LiveRunsGroups,
+  type LiveRunsList,
+} from "@/components/message/live-runs-chip"
+import { LiveTurnStats } from "@/components/message/live-turn-stats"
 import { extractDelegationSources } from "@/components/message/message-list-view"
 import { buildMessageNavEntries } from "@/components/message/message-nav-entries"
 import { MessageNavScrollContext } from "@/components/message/message-nav-scroll-context"
@@ -51,7 +58,11 @@ import {
   toolResult,
   toolUse,
 } from "@/lib/activity/__fixtures__/mockup-turn"
-import type { MessageTurn } from "@/lib/types"
+import type {
+  AsyncTaskRecord,
+  DbConversationSummary,
+  MessageTurn,
+} from "@/lib/types"
 import { publishTranscriptInsights } from "@/stores/transcript-insights-store"
 
 const params =
@@ -86,6 +97,7 @@ const DELEGATION: DelegationContextValue = {
   findByParentToolUseId: () => undefined,
   findByChildConversationId: () => undefined,
   findByTaskId: () => undefined,
+  bindingsForParent: () => [],
 }
 
 const WORKSPACE = new Proxy(
@@ -661,6 +673,10 @@ const RUNNING_TASK_ID = "5b4a74be-2c1d-4e8f-9a0b-6c5d4e3f2a1b"
 const RUNNING_TASK =
   "Run the web unit tests in /Users/me/work/my-app and report every failure with its file path and line number."
 
+const RESUMED_TASK_ID = "4df5d544-8b1e-4c2a-9f3d-1a2b3c4d5e6f"
+const RESUMED_TASK =
+  "Perform an independent security-focused review of the completed implementation and report every finding with its file and line."
+
 const DELEGATION_TURN: MessageTurn = {
   id: "turn-delegation",
   role: "assistant",
@@ -758,6 +774,50 @@ const DELEGATION_TURN: MessageTurn = {
       "d4",
       JSON.stringify({ task_id: RUNNING_TASK_ID, status: "running" })
     ),
+    // An interrupted sub-agent brought back: drawn as its delegation row.
+    toolUse(
+      "d5",
+      "mcp__codeg-mcp__resume_delegation",
+      {
+        task_id: RESUMED_TASK_ID,
+        reason: "The app was restarted while the review was running.",
+      },
+      {
+        "codeg.delegation": {
+          status: "running",
+          child_conversation_id: 80,
+          agent_type: "codex",
+          task_id: RESUMED_TASK_ID,
+          task_preview: RESUMED_TASK,
+        },
+      }
+    ),
+    toolResult(
+      "d5",
+      JSON.stringify({
+        task_id: RESUMED_TASK_ID,
+        status: "running",
+        agent_type: "codex",
+        child_conversation_id: 80,
+        message: `Delegation resumed. task_id=${RESUMED_TASK_ID} (unchanged).`,
+      })
+    ),
+    // A refused resume revived nothing: only its reason is shown.
+    toolUse("d6", "mcp__codeg-mcp__resume_delegation", {
+      task_id: POLLED_TASK_ID,
+    }),
+    toolResult(
+      "d6",
+      JSON.stringify({
+        task_id: POLLED_TASK_ID,
+        status: "completed",
+        error_code: "not_resumable",
+        agent_type: "codex",
+        child_conversation_id: 78,
+        message:
+          "Not resumed: the task already completed — resume only applies to a canceled task.",
+      })
+    ),
     {
       type: "text",
       text: "The build passes; three of the six steps are done.",
@@ -811,6 +871,40 @@ const COMMANDS_LIVE_TURN: MessageTurn = {
         " ✓ lib/report.test.ts (12 tests)",
       ].join("\n")
     ),
+  ],
+}
+
+/** A command group the reply has gone on past, with one of its commands moved
+ *  to the background and still running (codex's `asyncTasks.backgrounded`:
+ *  the call that launched it never settles). */
+const BACKGROUND_GROUP_TURN: MessageTurn = {
+  id: "turn-background-group",
+  role: "assistant",
+  timestamp: "2026-10-29T08:00:00Z",
+  blocks: [
+    toolUse("bg1", "Bash", {
+      command:
+        "cat package.json && cat app/page.tsx && cat app/globals.css && cat components/neon-demo.tsx",
+    }),
+    toolResult("bg1", '{\n  "name": "web",\n  "private": true\n}'),
+    toolUse(
+      "bg2",
+      "Bash",
+      { command: "git status --short && find .. -name AGENTS.md -print" },
+      { jetbrains: { air: { asyncTasks: { backgrounded: true } } } }
+    ),
+    toolResult(
+      "bg2",
+      [
+        "../codeg-task-423/AGENTS.md",
+        "../codeg-dev-0630/AGENTS.md",
+        "find: ../.Trashes: Operation not permitted",
+      ].join("\n")
+    ),
+    {
+      type: "thinking",
+      text: "**Considering design options**\n\nThe page needs a calmer palette.",
+    },
   ],
 }
 
@@ -893,7 +987,10 @@ const MARKDOWN_TURN: MessageTurn = {
  * starts over: prose that ends the reply and then turns into a note, a read,
  * commands that gather into a group one by one, an edit. `&interval=` sets the
  * beat in ms, `&beat=` holds it on one beat (`window.__setStreamBeat` moves
- * it).
+ * it). `&lead=prose` opens it on words rather than a thought, `&beats=` ends
+ * it after that many (`&lead=prose&beats=1`: a reply of words alone), and
+ * `&pending=1` draws its beat 0 as the pending reply, which gives way to the
+ * reply as a send's does.
  */
 const STREAM_BEATS: MessageTurn["blocks"][] = [
   [
@@ -933,6 +1030,23 @@ const STREAM_BEATS: MessageTurn["blocks"][] = [
 /** Beats the settled reply stays up for before it starts over. */
 const STREAM_SETTLED_BEATS = 3
 
+/** The beats as the page asks for them (see `STREAM_BEATS`). */
+const STREAM = ((): MessageTurn["blocks"][] => {
+  const beats: MessageTurn["blocks"][] =
+    params.get("lead") === "prose"
+      ? [
+          [
+            {
+              type: "text",
+              text: "Looking at the page first, then its styles.",
+            },
+          ],
+          ...STREAM_BEATS.slice(1),
+        ]
+      : STREAM_BEATS
+  return beats.slice(0, Number(params.get("beats") ?? beats.length))
+})()
+
 function StreamScenario() {
   const interval = Number(params.get("interval") ?? 1400)
   const held = params.get("beat")
@@ -943,15 +1057,14 @@ function StreamScenario() {
     if (held) return
     const id = window.setInterval(
       () =>
-        setBeat((b) =>
-          b >= STREAM_BEATS.length + STREAM_SETTLED_BEATS ? 1 : b + 1
-        ),
+        setBeat((b) => (b >= STREAM.length + STREAM_SETTLED_BEATS ? 1 : b + 1)),
       interval
     )
     return () => window.clearInterval(id)
   }, [held, interval])
+  const pending = params.get("pending") === "1" && beat === 0
   const scenario = useMemo<Scenario>(() => {
-    const blocks = STREAM_BEATS.slice(0, beat).flat()
+    const blocks = STREAM.slice(0, beat).flat()
     const answered = new Set(
       blocks.flatMap((b) =>
         b.type === "tool_result" && b.tool_use_id ? [b.tool_use_id] : []
@@ -967,7 +1080,7 @@ function StreamScenario() {
         duration_ms: 21000,
         blocks,
       },
-      live: beat <= STREAM_BEATS.length,
+      live: beat <= STREAM.length,
       inProgress: blocks.flatMap((b) =>
         b.type === "tool_use" && b.tool_use_id && !answered.has(b.tool_use_id)
           ? [b.tool_use_id]
@@ -975,7 +1088,168 @@ function StreamScenario() {
       ),
     }
   }, [beat])
-  return <ScenarioView scenario={scenario} />
+  // Two replies, as in the thread: the pending one goes, the reply comes.
+  return (
+    <ScenarioView
+      key={pending ? "pending" : "reply"}
+      scenario={scenario}
+      pending={pending}
+    />
+  )
+}
+
+/**
+ * The live activity row under the transcript with the work a turn left
+ * running (`?view=async-tasks`): `&tasks=` background tasks (default 6) —
+ * shells with an output and a stop, a monitor that offers neither, a workflow
+ * on a phase, a turn the agent started on its own — plus a background
+ * sub-agent and a delegation, under the reference reply, in a pane as tall as
+ * a chat column (`&height=`, default 640). The chip opens the list; `&list=1`
+ * also lays it out flat beside the row, for a screenshot.
+ */
+const ASYNC_TASK_KINDS: AsyncTaskRecord[] = [
+  {
+    task_id: "bg-loops",
+    name: "Run fixed-file loops then original-failure checks",
+    task_type: "shell",
+    description: "for f in $(cat fixed.txt); do pnpm vitest run $f; done",
+    show_in_transcript: false,
+    can_stop: true,
+    state: "running",
+    output_file_path: "/tmp/codeg-gallery/bg-loops.output",
+  },
+  {
+    task_id: "bg-monitor",
+    name: "t3 verification: fixed-run failures, original-failure tallies, completion",
+    task_type: "monitor",
+    description: "t3 verification",
+    show_in_transcript: true,
+    can_stop: false,
+    state: "running",
+  },
+  {
+    task_id: "bg-wait",
+    name: "Wait until fixed-file verification loops finish",
+    task_type: "shell",
+    description: "until [ -f done.flag ]; do sleep 5; done",
+    show_in_transcript: false,
+    can_stop: true,
+    state: "running",
+    output_file_path: "/tmp/codeg-gallery/bg-wait.output",
+  },
+  {
+    task_id: "bg-workflow",
+    name: "deep-research",
+    task_type: "workflow",
+    description: "Survey the runners",
+    show_in_transcript: true,
+    can_stop: true,
+    state: "running",
+    phase: "Research",
+    current_agent: "researcher-2",
+  },
+  {
+    task_id: "bg-turn",
+    name: "Claude is working",
+    task_type: "turn",
+    description: 'Background command "pnpm build" completed (exit code 0)',
+    show_in_transcript: false,
+    can_stop: true,
+    state: "running",
+  },
+  {
+    task_id: "bg-paused",
+    name: "Wait until the whole verification job finishes",
+    task_type: "shell",
+    description: "wait $(cat job.pid)",
+    show_in_transcript: false,
+    can_stop: true,
+    state: "paused",
+    output_file_path: "/tmp/codeg-gallery/bg-paused.output",
+  },
+]
+
+function AsyncTasksScenario() {
+  const count = Number(params.get("tasks") ?? 6)
+  const height = Number(params.get("height") ?? 640)
+  const tasks = useMemo(
+    () =>
+      Array.from({ length: count }, (_, i) => {
+        const kind = ASYNC_TASK_KINDS[i % ASYNC_TASK_KINDS.length]!
+        return { ...kind, task_id: `${kind.task_id}-${i}` }
+      }),
+    [count]
+  )
+  const reply = useMemo(
+    () => adaptMessageTurn(MOCKUP_ASSISTANT_TURN, MOCKUP_ADAPTER_TEXT),
+    []
+  )
+  const [roundOpen, setRoundOpen] = useState(false)
+  const [startedAt] = useState(() => Date.now() - 95_000)
+  const runs = useMemo<LiveRunsList>(() => {
+    const subagents = [
+      {
+        key: "bg:gallery-sub",
+        part: null,
+        background: true,
+        description: "Explore the test runner configs",
+        startedAt,
+      },
+    ]
+    const delegations = [{ childConnectionId: "gallery-child", binding: null }]
+    return {
+      tasks,
+      subagents,
+      delegations,
+      count: tasks.length + subagents.length + delegations.length,
+    }
+  }, [tasks, startedAt])
+  const showList = params.get("list") === "1"
+  return (
+    <div
+      id="gallery-root"
+      data-scenario="async-tasks"
+      className="mx-auto flex w-full max-w-[48rem] flex-col overflow-hidden border-x border-border"
+      style={{ height }}
+    >
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
+        <Message from="assistant">
+          <MessageContent>
+            <CompletedTurnContent
+              parts={reply.content}
+              durationMs={MOCKUP_ASSISTANT_TURN.duration_ms}
+              completed
+              currentRound
+              roundOpen={roundOpen}
+              onRoundOpenChange={setRoundOpen}
+            />
+          </MessageContent>
+        </Message>
+      </div>
+      {showList && (
+        <div className="mx-auto mb-1 w-[min(26rem,calc(100%-2rem))] rounded-2xl py-1 shadow-2xl ring-1 ring-foreground/5">
+          <LiveRunsGroups
+            runs={runs}
+            onStop={() => {}}
+            stopping={new Set()}
+            agentName="Claude Code"
+            onNavigate={() => {}}
+          />
+        </div>
+      )}
+      <LiveTurnStats
+        message={null}
+        trailing={
+          <LiveRunsChip
+            runs={runs}
+            interactive
+            onStopAsyncTask={async () => true}
+            agentName="Claude Code"
+          />
+        }
+      />
+    </div>
+  )
 }
 
 /**
@@ -988,27 +1262,54 @@ function StreamScenario() {
  */
 const NAV_CONVERSATION_ID = -1
 
-function navUserTurn(id: string, text: string): MessageTurn {
+/** The conversation the nav scenario's summary card describes;
+ *  `&status=` picks its status. */
+const NAV_SUMMARY: DbConversationSummary = {
+  id: 128,
+  folder_id: 1,
+  title: "Keep the CSV export working after the schema change",
+  title_locked: false,
+  agent_type: "codex",
+  status: params.get("status") ?? "in_progress",
+  kind: "regular",
+  model: null,
+  git_branch: "fix/csv-export",
+  external_id: "019a4c1e-7b2f-7d8e-9a10-3c4b5d6e7f80",
+  message_count: 9,
+  child_count: 1,
+  created_at: "2026-11-11T09:00:00.000Z",
+  updated_at: new Date(Date.now() - 6 * 60_000).toISOString(),
+  pinned_at: null,
+}
+
+/** A message sent `minutesAgo` before the page loaded. */
+function navUserTurn(
+  id: string,
+  text: string,
+  minutesAgo: number
+): MessageTurn {
   return {
     id,
     role: "user",
-    timestamp: "2026-10-22T08:00:00Z",
+    timestamp: new Date(Date.now() - minutesAgo * 60_000).toISOString(),
     blocks: [{ type: "text", text }],
   }
 }
 
 const NAV_TURNS: MessageTurn[] = [
-  navUserTurn("nav-1", "Survey the project and list its components"),
+  navUserTurn("nav-1", "Survey the project and list its components", 52),
   FILES_TURN,
-  navUserTurn("nav-2", "/compact"),
+  navUserTurn("nav-2", "/compact", 40),
   navUserTurn(
     "nav-3",
-    "Page through the tasks instead of loading them all at once"
+    "Page through the tasks instead of loading them all at once",
+    31
   ),
   LONG_EDIT_TURN,
   navUserTurn(
     "nav-4",
-    "继续打磨优化会话详情tab内容：\n1、Git分支名的左边那个图标不要；\n2、检查消息导航是否有性能问题，有的话一并修掉，然后跑一遍测试"
+    "继续打磨优化会话详情tab内容：\n1、Git分支名的左边那个图标不要；\n2、检查消息导航是否有性能问题，有的话一并修掉，然后跑一遍测试",
+    3
   ),
   DELEGATION_TURN,
   { ...FILES_TURN, id: "nav-files" },
@@ -1040,6 +1341,7 @@ function navInsights() {
     },
   })
   const plan = DELEGATION_TURN.blocks.find((block) => block.type === "plan")
+  const lastEntry = entries[entries.length - 1]
   return {
     nav: {
       count: entries.length,
@@ -1047,6 +1349,11 @@ function navInsights() {
       earlier: null,
       revealingTurnId: null,
       currentTurnId: params.get("current") ?? "nav-4",
+      // `&turn=running`: the agent is still on the last message.
+      running:
+        params.get("turn") === "running" && lastEntry
+          ? { turnId: lastEntry.turnId, startedAt: Date.now() - 83_000 }
+          : null,
     },
     plan: {
       entries: plan?.type === "plan" ? plan.entries : [],
@@ -1076,9 +1383,11 @@ function NavScenario() {
     >
       <ScrollArea className="min-h-0 flex-1" onViewportRef={setViewport}>
         <MessageNavScrollContext.Provider value={viewport}>
-          <div className="min-w-0 space-y-4 p-3 text-sm">
+          <div className="min-w-0 space-y-3 p-3 text-sm">
+            <SessionDetailsCard summary={NAV_SUMMARY} model="gpt-5.5-codex" />
             <SessionDetailsInsights
               conversationId={NAV_CONVERSATION_ID}
+              dbConversationId={null}
               active
             />
           </div>
@@ -1154,10 +1463,24 @@ const SCENARIOS: Scenario[] = [
     live: true,
     inProgress: ["k3"],
   },
+  {
+    id: "background-group",
+    title: "A command moved to the background, the reply gone on past it",
+    turn: BACKGROUND_GROUP_TURN,
+    live: true,
+    inProgress: ["bg2"],
+  },
   { id: "markdown", title: "Markdown", turn: MARKDOWN_TURN },
 ]
 
-function ScenarioView({ scenario }: { scenario: Scenario }) {
+function ScenarioView({
+  scenario,
+  pending = false,
+}: {
+  scenario: Scenario
+  /** Drawn as the pending reply (see `CompletedTurnContent`). */
+  pending?: boolean
+}) {
   const [roundOpen, setRoundOpen] = useState(true)
   const adapted = useMemo(
     () =>
@@ -1192,6 +1515,7 @@ function ScenarioView({ scenario }: { scenario: Scenario }) {
               currentRound
               roundOpen={roundOpen}
               onRoundOpenChange={setRoundOpen}
+              pending={pending}
             />
           </MessageContent>
         </Message>
@@ -1215,6 +1539,8 @@ export default function ActivityGalleryPage() {
           <div className="chat-motion-scope min-h-screen bg-background text-foreground">
             {view === "nav" ? (
               <NavScenario />
+            ) : view === "async-tasks" ? (
+              <AsyncTasksScenario />
             ) : (
               <div
                 id="gallery-root"

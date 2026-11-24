@@ -25,9 +25,11 @@ import type {
 import { ForgeStartDialog } from "./forge-start-dialog"
 
 const workTaskCreateFromForge = vi.fn()
+const forgeIssueDetail = vi.fn()
 vi.mock("@/lib/api", () => ({
   workTaskCreateFromForge: (...args: unknown[]) =>
     workTaskCreateFromForge(...args),
+  forgeIssueDetail: (...args: unknown[]) => forgeIssueDetail(...args),
 }))
 
 const setRoute = vi.fn()
@@ -45,6 +47,13 @@ const GITHUB: ForgeRemote = {
   owner_repo: "o/r",
   remote_url: "https://github.com/o/r.git",
   provider: "github",
+  supported: true,
+}
+const CNB: ForgeRemote = {
+  server_host: "cnb.cool",
+  owner_repo: "acme/app",
+  remote_url: "https://cnb.cool/acme/app.git",
+  provider: "cnb",
   supported: true,
 }
 const GITLAB: ForgeRemote = {
@@ -158,6 +167,39 @@ describe("ForgeStartDialog", () => {
       writeback: true,
       force: false,
     })
+  })
+
+  /**
+   * CNB's issue list carries no description. The preview reads it, because
+   * what the preview shows is what the envelope wraps — and the read body is
+   * what goes out (the server fills one still missing at Create).
+   */
+  it("previews and sends the description a CNB issue's read brings back", async () => {
+    const user = userEvent.setup()
+    forgeIssueDetail.mockResolvedValue(row({ body: "read from the item" }))
+    workTaskCreateFromForge.mockResolvedValueOnce({
+      outcome: "created",
+      task: task(),
+    })
+    mount(row({ body: null }), CNB)
+
+    expect(forgeIssueDetail).toHaveBeenCalledWith(7, 42)
+    await user.click(screen.getByText(enMessages.Forge.previewToggle))
+    expect(await screen.findByText("read from the item")).toBeInTheDocument()
+    expect(
+      screen.queryByText(enMessages.Forge.previewEmpty)
+    ).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: "Create task" }))
+    await waitFor(() => expect(workTaskCreateFromForge).toHaveBeenCalled())
+    expect(workTaskCreateFromForge.mock.calls[0][0].snapshot.body).toBe(
+      "read from the item"
+    )
+  })
+
+  it("reads nothing for a forge whose rows carry the body", () => {
+    mount(row({ body: null }), GITLAB)
+    expect(forgeIssueDetail).not.toHaveBeenCalled()
   })
 
   it("carries the write-back choice, off when the switch is cleared", async () => {

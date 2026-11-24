@@ -671,7 +671,14 @@ fn parse_transcript(bytes: &[u8]) -> Transcript {
         }
         match record_type {
             "runtime-config" => {
-                if let Some(model) = value.get("model").and_then(Value::as_str) {
+                // Blank like a reply's (see `entry_model`): 1.1.81 writes one of
+                // these per turn, with an empty `model` when its catalog had no
+                // model to name, which must not replace the one named before.
+                if let Some(model) = value
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .filter(|m| !m.trim().is_empty())
+                {
                     launch_model = Some(model.to_string());
                 }
                 // The CLI's own window for the launch model. Authoritative where
@@ -1243,7 +1250,7 @@ pub(crate) fn qoder_ask_envelope_from_recorded(recorded: &Value) -> Option<Strin
 /// The start and end of the sentence Qoder's `AskUserQuestion` returns once
 /// questions are answered (deobfuscated from the 1.1.67 bundle; the same
 /// strings ship in every release from 1.1.23 through 1.1.69, and again in
-/// 1.1.72 through 1.1.75).
+/// 1.1.72 through 1.1.75; 1.1.81 returns the same sentence live).
 const QODER_ANSWERED_PREFIX: &str = "Your questions have been answered: ";
 const QODER_ANSWERED_SUFFIX: &str = ". You can now continue with these answers in mind.";
 
@@ -1884,6 +1891,26 @@ mod tests {
             .find(|t| matches!(t.role, crate::models::TurnRole::Assistant))
             .expect("assistant turn");
         assert_eq!(blank_turn.model, None);
+    }
+
+    // A blank `runtime-config` model is dropped the same way. 1.1.81 writes one
+    // such record per turn, and a later blank one must not replace the launch
+    // model that a session whose answers name none falls back to.
+    #[test]
+    fn a_blank_runtime_config_model_keeps_the_launch_model() {
+        let tmp = tempfile::tempdir().unwrap();
+        let blank_config = RUNTIME_CONFIG.replace(r#""model":"qmodel_38max""#, r#""model":"""#);
+        let unnamed_answer = ANSWER_LINE.replace(r#""model":"qmodel_38max""#, r#""model":"""#);
+        write_session(
+            tmp.path(),
+            "s1",
+            &[RUNTIME_CONFIG, USER_LINE, &blank_config, &unnamed_answer],
+        );
+
+        let summaries = parser_in(tmp.path()).list_conversations().unwrap();
+        assert_eq!(summaries[0].model.as_deref(), Some("qmodel_38max"));
+        let detail = parser_in(tmp.path()).get_conversation("s1").unwrap();
+        assert_eq!(detail.summary.model.as_deref(), Some("qmodel_38max"));
     }
 
     // The same on a later FRAGMENT of one response: the bubble it merges into

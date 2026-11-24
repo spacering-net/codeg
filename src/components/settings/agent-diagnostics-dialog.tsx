@@ -130,6 +130,7 @@ export function AgentDiagnosticsDialog({
   // Run once each time the dialog opens; clear when it closes.
   useEffect(() => {
     if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- diagnostics fetch on open; clears with it on close
       void run()
     } else {
       setReport(null)

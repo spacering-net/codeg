@@ -3,8 +3,10 @@
 //!
 //! Skills are loaded dynamically from the OfficeCLI binary (`officecli
 //! load_skill <id>`) and placed in the same central store
-//! (`~/.codeg/skills/<id>/`) used by built-in experts. Enabling a skill for
-//! an agent reuses the expert system's symlink mechanism.
+//! (`~/.codeg/skills/<id>/`) used by built-in experts, recorded in Office's
+//! manifest (`.manifest.office.json`). Their sync, links and removal go
+//! through the skills engine (`crate::skills`); the installer of the binary
+//! itself stays here.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -17,19 +19,15 @@ use std::time::Duration;
 use serde::Serialize;
 use tokio::sync::Mutex;
 
-use crate::acp::types::AgentSkillScope;
-use crate::commands::acp::{
-    preferred_scope_skill_dir, remove_skill_entry, resolve_command_on_path, scoped_skill_dirs,
-    skill_storage_spec, validate_skill_id,
-};
-use crate::commands::experts::{
-    central_experts_dir, classify_link, create_link_raw, path_is_symlink, read_link_target,
-    ExpertInstallStatus, ExpertLinkState, LinkOp, LinkOpResult,
-};
+use crate::commands::acp::{resolve_command_on_path, skill_storage_spec, validate_skill_id};
+use crate::commands::experts::{central_experts_dir, ExpertInstallStatus, LinkOp, LinkOpResult};
 use crate::app_error::AppCommandError;
 use crate::commands::folders::resolve_tree_path;
 use crate::models::agent::AgentType;
 use crate::process::{collect_lines_lossy, tokio_command};
+use crate::skills::model::{ChangedKind, SkillOrigin, SkillsIssue};
+use crate::skills::packs::OfficeWrite;
+use crate::skills::{legacy, SkillsCtx};
 use crate::web::event_bridge::EventEmitter;
 
 // ─── Error type ─────────────────────────────────────────────────────────
@@ -52,12 +50,38 @@ pub enum OfficeToolsError {
     CommandFailed(String),
 }
 
+impl OfficeToolsError {
+    pub fn code(&self) -> &'static str {
+        use crate::skills::model::codes;
+        match self {
+            OfficeToolsError::NotInstalled => "officecli_not_installed",
+            OfficeToolsError::SkillNotFound(_) => codes::SKILL_NOT_FOUND,
+            OfficeToolsError::UnsupportedAgent(_) => codes::AGENT_UNSUPPORTED,
+            OfficeToolsError::NameCollision { .. } => codes::TARGET_OCCUPIED,
+            OfficeToolsError::ForeignLink { .. } => codes::TARGET_LINKED_ELSEWHERE,
+            OfficeToolsError::Io(_) => codes::IO_ERROR,
+            OfficeToolsError::CommandFailed(_) => "command_failed",
+        }
+    }
+}
+
+impl From<&OfficeToolsError> for AppCommandError {
+    fn from(error: &OfficeToolsError) -> Self {
+        crate::skills::coded_error(
+            AppCommandError::task_execution_failed(error.to_string()),
+            error.code(),
+            None,
+        )
+    }
+}
+
+/// On both transports an error is an `AppCommandError` with its stable code.
 impl Serialize for OfficeToolsError {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        serializer.serialize_str(&self.to_string())
+        AppCommandError::from(self).serialize(serializer)
     }
 }
 
@@ -69,6 +93,9 @@ impl From<io::Error> for OfficeToolsError {
 
 // ─── Concurrency ───────────────────────────────────────────────────────
 
+/// Serializes installing and uninstalling the OfficeCLI binary (one
+/// installer at a time). The skills themselves — the sync, links, their
+/// removal — are under the skills lock instead (`crate::skills::lock`).
 fn mutation_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
@@ -100,6 +127,9 @@ pub struct OfficecliSkill {
     pub display_name: BTreeMap<String, String>,
     pub description: BTreeMap<String, String>,
     pub installed_centrally: bool,
+    /// The store holds a skill of another origin under this id (one of the
+    /// user's): Office leaves it alone and does not link it.
+    pub name_taken: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -107,6 +137,9 @@ pub struct OfficecliSkill {
 pub struct SkillSyncReport {
     pub synced: usize,
     pub errors: Vec<String>,
+    /// The same problems with their stable codes (`name_taken`, `io_error`,
+    /// `command_failed`, …), `path` naming the skill's folder.
+    pub issues: Vec<SkillsIssue>,
 }
 
 // ─── Skill metadata (hardcoded — OfficeCLI has no list command) ────────
@@ -248,7 +281,10 @@ fn find_skill_def(id: &str) -> Option<&'static SkillDef> {
     skill_defs().iter().find(|s| s.id == id)
 }
 
-fn skill_def_to_metadata(def: &SkillDef) -> OfficecliSkill {
+fn skill_def_to_metadata(
+    def: &SkillDef,
+    provenance: &crate::skills::provenance::Provenance,
+) -> OfficecliSkill {
     let mut display_name = BTreeMap::new();
     display_name.insert("en".to_string(), def.en_name.to_string());
     display_name.insert("zh-CN".to_string(), def.zh_name.to_string());
@@ -258,6 +294,8 @@ fn skill_def_to_metadata(def: &SkillDef) -> OfficecliSkill {
     description.insert("zh-CN".to_string(), def.zh_desc.to_string());
 
     let central_path = skill_central_path(def.id);
+    let present = central_path.exists();
+    let ours = provenance.origin_of(&central_experts_dir(), def.id) == Some(SkillOrigin::Office);
     OfficecliSkill {
         id: def.id.to_string(),
         category: def.category.to_string(),
@@ -265,7 +303,8 @@ fn skill_def_to_metadata(def: &SkillDef) -> OfficecliSkill {
         sort_order: def.sort_order,
         display_name,
         description,
-        installed_centrally: central_path.exists(),
+        installed_centrally: present && ours,
+        name_taken: present && !ours,
     }
 }
 
@@ -273,12 +312,6 @@ fn skill_def_to_metadata(def: &SkillDef) -> OfficecliSkill {
 
 fn skill_central_path(skill_id: &str) -> PathBuf {
     central_experts_dir().join(skill_id)
-}
-
-fn agent_link_path(agent: AgentType, skill_id: &str) -> Result<PathBuf, OfficeToolsError> {
-    let dir = preferred_scope_skill_dir(agent, AgentSkillScope::Global, None)
-        .map_err(|_| OfficeToolsError::UnsupportedAgent(agent))?;
-    Ok(dir.join(skill_id))
 }
 
 // ─── Binary detection ──────────────────────────────────────────────────
@@ -510,7 +543,7 @@ pub async fn officecli_install(
     task_id: String,
     app: tauri::AppHandle,
 ) -> Result<OfficecliInfo, OfficeToolsError> {
-    officecli_install_core(task_id, &EventEmitter::Tauri(app)).await
+    officecli_install_core(task_id, &EventEmitter::from_app(&app)).await
 }
 
 /// Run the vendor's official installer script (mirror-first, GitHub fallback),
@@ -887,8 +920,13 @@ fn officecli_install_command(os: InstallOs) -> OfficecliInstallCommand {
     }
 }
 
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn officecli_uninstall() -> Result<OfficecliInfo, OfficeToolsError> {
+/// Uninstall the OfficeCLI binary, then take Office's skills away: every link
+/// and matching copy of them in every agent's directory, their folders in the
+/// store, and their manifest entries — under the skills lock. A skill of the
+/// user's that holds an Office id is not Office's, and stays.
+pub async fn officecli_uninstall_core(
+    emitter: &EventEmitter,
+) -> Result<OfficecliInfo, OfficeToolsError> {
     let _guard = mutation_lock().lock().await;
 
     // Operate on the official installer's primary install location directly,
@@ -905,55 +943,18 @@ pub async fn officecli_uninstall() -> Result<OfficecliInfo, OfficeToolsError> {
         })?;
     }
 
-    let mut cleanup_errors: Vec<String> = Vec::new();
-
-    // Remove per-agent symlinks across all scoped skill dirs (not just the
-    // preferred dir) so secondary dirs like ~/.agents/skills are also cleaned.
-    for agent in supported_agents() {
-        let dirs = match scoped_skill_dirs(agent, AgentSkillScope::Global, None) {
-            Ok(d) => d,
-            Err(_) => continue,
-        };
-        for def in skill_defs() {
-            let central = skill_central_path(def.id);
-            for dir in &dirs {
-                let candidate = dir.join(def.id);
-                if !candidate.exists() && !path_is_symlink(&candidate) {
-                    continue;
-                }
-                let state = classify_link(&candidate, &central);
-                let should_remove = match state {
-                    ExpertLinkState::LinkedToCodeg => true,
-                    ExpertLinkState::Broken => {
-                        // Only remove broken links whose target was our
-                        // central skill dir (not user-owned danglers).
-                        read_link_target(&candidate)
-                            .map(|t| t.starts_with(&central))
-                            .unwrap_or(false)
-                    }
-                    _ => false,
-                };
-                if should_remove {
-                    if let Err(e) = remove_skill_entry(&candidate) {
-                        cleanup_errors.push(format!(
-                            "failed to remove link {}: {e}",
-                            candidate.display()
-                        ));
-                    }
-                }
-            }
-        }
-    }
-
-    // Clean up OfficeCLI skills from central store
-    for def in skill_defs() {
-        let central = skill_central_path(def.id);
-        if central.exists() {
-            if let Err(e) = fs::remove_dir_all(&central) {
-                cleanup_errors.push(format!("failed to remove {}: {e}", central.display()));
-            }
-        }
-    }
+    let ctx = SkillsCtx::user();
+    let skills_guard = ctx.lock().await.map_err(|e| {
+        OfficeToolsError::Io(format!("binary removed but its skills were left in place: {e}"))
+    })?;
+    let task_ctx = ctx.clone();
+    let (agents, cleanup_errors) = tokio::task::spawn_blocking(move || {
+        let _guard = skills_guard;
+        crate::skills::packs::uninstall_office_skills(&task_ctx)
+    })
+    .await
+    .map_err(|e| OfficeToolsError::Io(format!("join error: {e}")))?;
+    crate::skills::announce(emitter, [ChangedKind::Links, ChangedKind::Store], agents);
 
     if !cleanup_errors.is_empty() {
         return Err(OfficeToolsError::Io(format!(
@@ -967,32 +968,46 @@ pub async fn officecli_uninstall() -> Result<OfficecliInfo, OfficeToolsError> {
     Ok(officecli_detect().await)
 }
 
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn officecli_uninstall(app: tauri::AppHandle) -> Result<OfficecliInfo, OfficeToolsError> {
+    officecli_uninstall_core(&EventEmitter::from_app(&app)).await
+}
+
 // ─── Commands: skill listing ───────────────────────────────────────────
 
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn officecli_list_skills() -> Vec<OfficecliSkill> {
-    skill_defs().iter().map(skill_def_to_metadata).collect()
+    let provenance = crate::skills::provenance::Provenance::load(&central_experts_dir());
+    skill_defs()
+        .iter()
+        .map(|def| skill_def_to_metadata(def, &provenance))
+        .collect()
 }
 
 // ─── Commands: skill sync ──────────────────────────────────────────────
 
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn officecli_sync_skills() -> Result<SkillSyncReport, OfficeToolsError> {
-    let _guard = mutation_lock().lock().await;
+/// Load every Office skill from OfficeCLI, then write them into the store.
+///
+/// The nine runs of the binary happen without the skills lock — they must not
+/// keep every other writer waiting. The writes then happen under it, each
+/// `SKILL.md` replaced in one step and recorded in Office's manifest. An id
+/// that a skill of the user's holds is left alone (`name_taken`), and Codeg's
+/// copies of what changed are refreshed.
+pub async fn officecli_sync_skills_core(
+    emitter: &EventEmitter,
+) -> Result<SkillSyncReport, OfficeToolsError> {
+    use crate::skills::model::codes;
     let binary = resolve_officecli().ok_or(OfficeToolsError::NotInstalled)?;
-
-    let central_dir = central_experts_dir();
-    fs::create_dir_all(&central_dir)?;
 
     let mut report = SkillSyncReport {
         synced: 0,
         errors: vec![],
+        issues: vec![],
     };
+    let mut loaded: Vec<(&'static SkillDef, String)> = Vec::new();
 
     for def in skill_defs() {
-        let target_dir = skill_central_path(def.id);
-        let skill_md = target_dir.join("SKILL.md");
-
         // Load skill content from OfficeCLI binary. The CLI keys skills by
         // its own short id (`load_id`), which differs from our invocation
         // name (`def.id`) for the officecli-* skills.
@@ -1001,19 +1016,23 @@ pub async fn officecli_sync_skills() -> Result<SkillSyncReport, OfficeToolsError
             .arg(def.load_id)
             .output()
             .await;
+        let failure = |detail: String| {
+            SkillsIssue::new("command_failed")
+                .path(skill_central_path(def.id))
+                .detail(detail)
+        };
 
         match output {
             Ok(out) if out.status.success() => {
-                let content = String::from_utf8_lossy(&out.stdout);
+                let content = String::from_utf8_lossy(&out.stdout).into_owned();
                 if content.trim().is_empty() {
                     report
                         .errors
                         .push(format!("{}: empty skill content", def.id));
+                    report.issues.push(failure("empty skill content".into()));
                     continue;
                 }
-                fs::create_dir_all(&target_dir)?;
-                fs::write(&skill_md, content.as_ref())?;
-                report.synced += 1;
+                loaded.push((def, content));
             }
             Ok(out) => {
                 let stderr = String::from_utf8_lossy(&out.stderr);
@@ -1030,6 +1049,7 @@ pub async fn officecli_sync_skills() -> Result<SkillSyncReport, OfficeToolsError
                     Some(hint) => format!("{}: {hint}", def.id),
                     None => format!("{}: load_skill failed: {stderr}", def.id),
                 };
+                report.issues.push(failure(msg.clone()));
                 report.errors.push(msg);
             }
             Err(e) => {
@@ -1037,11 +1057,94 @@ pub async fn officecli_sync_skills() -> Result<SkillSyncReport, OfficeToolsError
                 report
                     .errors
                     .push(format!("{}: command error: {e}", def.id));
+                report.issues.push(failure(e.to_string()));
             }
         }
     }
 
+    let ctx = SkillsCtx::user();
+    let guard = ctx
+        .lock()
+        .await
+        .map_err(|e| OfficeToolsError::Io(e.to_string()))?;
+    let task_ctx = ctx.clone();
+    let (report, written) = tokio::task::spawn_blocking(move || {
+        let _guard = guard;
+        let mut report = report;
+        let mut written: Vec<String> = Vec::new();
+        if let Err(e) = fs::create_dir_all(&task_ctx.store) {
+            report.errors.push(format!("failed to create central dir: {e}"));
+            return (report, written);
+        }
+        let mut manifest = crate::skills::packs::load_office_manifest(&task_ctx);
+        for (def, content) in loaded {
+            let folder = task_ctx.skill_path(def.id);
+            match crate::skills::packs::write_office_skill(
+                &task_ctx,
+                &mut manifest,
+                def.id,
+                &content,
+            ) {
+                Ok(OfficeWrite::Written) => {
+                    report.synced += 1;
+                    written.push(def.id.to_string());
+                }
+                Ok(OfficeWrite::Unchanged) => report.synced += 1,
+                Ok(OfficeWrite::LeftAlone) => {
+                    report.errors.push(format!(
+                        "{}: Office's manifest could not be read earlier and this folder is not Office's skill as written; it is left as it is",
+                        def.id
+                    ));
+                    report.issues.push(
+                        SkillsIssue::new(codes::OWNERSHIP_UNRESOLVED)
+                            .path(&folder)
+                            .detail("office"),
+                    );
+                }
+                Ok(OfficeWrite::NameTaken) => {
+                    report.errors.push(format!(
+                        "{}: a skill of your own uses this name in Codeg's skill store; Office leaves it alone",
+                        def.id
+                    ));
+                    report
+                        .issues
+                        .push(SkillsIssue::new(codes::NAME_TAKEN).path(&folder));
+                }
+                Err(e) => {
+                    report.errors.push(format!("{}: {e}", def.id));
+                    report.issues.push(
+                        SkillsIssue::new(codes::IO_ERROR)
+                            .path(&folder)
+                            .detail(e.to_string()),
+                    );
+                }
+            }
+        }
+        manifest.stamp();
+        if let Err(e) = manifest.save(&task_ctx.store) {
+            report.errors.push(format!("save manifest: {e}"));
+        }
+        for id in &written {
+            report
+                .errors
+                .extend(crate::skills::packs::refresh_copies(&task_ctx, id));
+        }
+        (report, written)
+    })
+    .await
+    .map_err(|e| OfficeToolsError::Io(format!("join error: {e}")))?;
+
+    if !written.is_empty() {
+        let agents: Vec<AgentType> = ctx.agents.iter().map(|a| a.agent).collect();
+        crate::skills::announce(emitter, [ChangedKind::Store], agents);
+    }
     Ok(report)
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn officecli_sync_skills(app: tauri::AppHandle) -> Result<SkillSyncReport, OfficeToolsError> {
+    officecli_sync_skills_core(&EventEmitter::from_app(&app)).await
 }
 
 // ─── Commands: skill link / unlink ─────────────────────────────────────
@@ -1078,235 +1181,61 @@ fn supported_agents() -> Vec<AgentType> {
         .collect()
 }
 
-/// Link one office skill into one agent's skill dir. **Assumes the mutation
-/// lock is already held** — `tokio::sync::Mutex` is not reentrant, so
-/// `officecli_skill_apply_links` locks once and calls this directly rather than
-/// the public command. The "not synced" guard stays here so a batch enable of
-/// an un-synced skill fails only that op.
-fn link_one_locked(
-    skill_id: &str,
-    agent_type: AgentType,
-) -> Result<ExpertInstallStatus, OfficeToolsError> {
-    let skill_id = validate_skill_id(skill_id).map_err(|e| OfficeToolsError::Io(e.to_string()))?;
-    let _ = find_skill_def(&skill_id)
-        .ok_or_else(|| OfficeToolsError::SkillNotFound(skill_id.clone()))?;
-
-    let central = skill_central_path(&skill_id);
-    if !central.exists() {
-        return Err(OfficeToolsError::Io(format!(
-            "skill '{skill_id}' is not synced — run sync first"
-        )));
-    }
-
-    let link_path = agent_link_path(agent_type, &skill_id)?;
-    if let Some(parent) = link_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    let mut copy_mode = false;
-    match create_link_raw(&central, &link_path) {
-        Ok(is_copy) => {
-            copy_mode = is_copy;
-        }
-        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
-            match classify_link(&link_path, &central) {
-                ExpertLinkState::LinkedToCodeg => {}
-                ExpertLinkState::BlockedByRealDirectory => {
-                    return Err(OfficeToolsError::NameCollision {
-                        path: link_path.to_string_lossy().to_string(),
-                    });
-                }
-                ExpertLinkState::LinkedElsewhere | ExpertLinkState::Broken => {
-                    let found = read_link_target(&link_path)
-                        .map(|p| p.to_string_lossy().to_string())
-                        .unwrap_or_else(|| "<unknown>".into());
-                    return Err(OfficeToolsError::ForeignLink {
-                        path: link_path.to_string_lossy().to_string(),
-                        found,
-                    });
-                }
-                ExpertLinkState::NotLinked => {
-                    create_link_raw(&central, &link_path)
-                        .map_err(|e| OfficeToolsError::Io(format!("retry link failed: {e}")))?;
-                }
-            }
-        }
-        Err(err) => return Err(OfficeToolsError::Io(err.to_string())),
-    }
-
-    let state = classify_link(&link_path, &central);
-    let target_path = read_link_target(&link_path).map(|p| p.to_string_lossy().to_string());
-    Ok(ExpertInstallStatus {
-        expert_id: skill_id.clone(),
-        agent_type,
-        state,
-        link_path: link_path.to_string_lossy().to_string(),
-        target_path,
-        expected_target_path: central.to_string_lossy().to_string(),
-        copy_mode,
-    })
-}
-
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn officecli_skill_link_to_agent(
-    skill_id: String,
-    agent_type: AgentType,
-) -> Result<ExpertInstallStatus, OfficeToolsError> {
-    let _guard = mutation_lock().lock().await;
-    link_one_locked(&skill_id, agent_type)
-}
-
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn officecli_skill_unlink_from_agent(
-    skill_id: String,
-    agent_type: AgentType,
-) -> Result<(), OfficeToolsError> {
-    let _guard = mutation_lock().lock().await;
-    unlink_one_locked(&skill_id, agent_type)
-}
-
-/// Remove one office skill's link from one agent's skill dirs. **Assumes the
-/// mutation lock is already held** (see `link_one_locked`).
-fn unlink_one_locked(skill_id: &str, agent_type: AgentType) -> Result<(), OfficeToolsError> {
-    let skill_id = validate_skill_id(skill_id).map_err(|e| OfficeToolsError::Io(e.to_string()))?;
-    let _ = find_skill_def(&skill_id)
-        .ok_or_else(|| OfficeToolsError::SkillNotFound(skill_id.clone()))?;
-
-    let dirs = scoped_skill_dirs(agent_type, AgentSkillScope::Global, None)
-        .map_err(|_| OfficeToolsError::UnsupportedAgent(agent_type))?;
-
-    let central = skill_central_path(&skill_id);
-    for dir in dirs {
-        let candidate = dir.join(&skill_id);
-        if !candidate.exists() && !path_is_symlink(&candidate) {
-            continue;
-        }
-        let state = classify_link(&candidate, &central);
-        let should_remove = match state {
-            ExpertLinkState::LinkedToCodeg => true,
-            ExpertLinkState::Broken => read_link_target(&candidate)
-                .map(|t| t.starts_with(&central))
-                .unwrap_or(false),
-            _ => false,
-        };
-        if should_remove {
-            remove_skill_entry(&candidate).map_err(|e| {
-                OfficeToolsError::Io(format!("remove link {}: {e}", candidate.display()))
-            })?;
-        } else if state == ExpertLinkState::LinkedElsewhere {
-            return Err(OfficeToolsError::ForeignLink {
-                path: candidate.to_string_lossy().to_string(),
-                found: read_link_target(&candidate)
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "<unknown>".into()),
-            });
-        }
-    }
-    Ok(())
-}
-
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn officecli_skill_get_install_status(
-    skill_id: String,
-) -> Result<Vec<ExpertInstallStatus>, OfficeToolsError> {
-    let skill_id = validate_skill_id(&skill_id).map_err(|e| OfficeToolsError::Io(e.to_string()))?;
-    let _ = find_skill_def(&skill_id)
-        .ok_or_else(|| OfficeToolsError::SkillNotFound(skill_id.clone()))?;
-
-    let expected = skill_central_path(&skill_id);
-    let agents = supported_agents();
-
-    let mut out = Vec::with_capacity(agents.len());
-    for agent in agents {
-        let link_path = match agent_link_path(agent, &skill_id) {
-            Ok(p) => p,
-            Err(_) => continue,
-        };
-        let state = classify_link(&link_path, &expected);
-        let target_path = read_link_target(&link_path).map(|p| p.to_string_lossy().to_string());
-        out.push(ExpertInstallStatus {
-            expert_id: skill_id.clone(),
-            agent_type: agent,
-            state,
-            link_path: link_path.to_string_lossy().to_string(),
-            target_path,
-            expected_target_path: expected.to_string_lossy().to_string(),
-            copy_mode: false,
-        });
-    }
-    Ok(out)
-}
-
-/// Apply a batch of enable/disable operations under a single lock acquisition.
-/// Mirrors `experts_apply_links`; an un-synced skill simply fails its own op.
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn officecli_skill_apply_links(
+/// Apply a batch of enable/disable operations under the skills lock. Mirrors
+/// `experts_apply_links_core`; an un-synced or unknown skill simply fails its
+/// own op.
+pub async fn officecli_skill_apply_links_core(
+    emitter: &EventEmitter,
     ops: Vec<LinkOp>,
 ) -> Result<Vec<LinkOpResult>, OfficeToolsError> {
-    let _guard = mutation_lock().lock().await;
-    let mut out = Vec::with_capacity(ops.len());
-    for op in ops {
-        // `LinkOp.expert_id` carries the office skill id here — the field name is
-        // shared with the experts batch type, and office's ExpertInstallStatus
-        // already overloads `expert_id` as the skill id.
-        let LinkOp {
-            expert_id,
-            agent_type,
-            enable,
-        } = op;
-        let res = if enable {
-            link_one_locked(&expert_id, agent_type).map(Some)
-        } else {
-            unlink_one_locked(&expert_id, agent_type).map(|()| None)
-        };
-        out.push(match res {
-            Ok(status) => LinkOpResult {
-                expert_id,
-                agent_type,
-                ok: true,
-                status,
-                error: None,
-            },
-            Err(err) => LinkOpResult {
-                expert_id,
-                agent_type,
-                ok: false,
-                status: None,
-                error: Some(err.to_string()),
-            },
-        });
+    let ctx = SkillsCtx::user();
+    let guard = match ctx.lock().await {
+        Ok(guard) => guard,
+        Err(err) => return Ok(legacy::busy(&ops, &err)),
+    };
+    let task_ctx = ctx.clone();
+    let (results, changed) = tokio::task::spawn_blocking(move || {
+        let _guard = guard;
+        // `LinkOp.expert_id` carries the office skill id here — the field name
+        // is shared with the experts batch type. Both directions need one of
+        // the Office skills, as before.
+        legacy::apply_ops(&task_ctx, SkillOrigin::Office, &ops, |id, _enable| {
+            if let Err(e) = validate_skill_id(id) {
+                return Some(OfficeToolsError::Io(e.to_string()).to_string());
+            }
+            find_skill_def(id)
+                .is_none()
+                .then(|| OfficeToolsError::SkillNotFound(id.to_string()).to_string())
+        })
+    })
+    .await
+    .map_err(|e| OfficeToolsError::Io(format!("join error: {e}")))?;
+    if !changed.dirs.is_empty() {
+        crate::skills::announce(emitter, [ChangedKind::Links], changed.agents(&ctx));
     }
-    Ok(out)
+    Ok(results)
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn officecli_skill_apply_links(
+    ops: Vec<LinkOp>,
+    app: tauri::AppHandle,
+) -> Result<Vec<LinkOpResult>, OfficeToolsError> {
+    officecli_skill_apply_links_core(&EventEmitter::from_app(&app), ops).await
 }
 
 /// One-shot snapshot of every (skill, agent) link state for the matrix UI.
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn officecli_skill_list_all_install_statuses(
 ) -> Result<Vec<ExpertInstallStatus>, OfficeToolsError> {
+    let ids = bundled_skill_ids();
     let agents = supported_agents();
-    let mut out = Vec::with_capacity(skill_defs().len() * agents.len());
-    for def in skill_defs() {
-        let expected = skill_central_path(def.id);
-        for &agent in &agents {
-            let link_path = match agent_link_path(agent, def.id) {
-                Ok(p) => p,
-                Err(_) => continue,
-            };
-            let state = classify_link(&link_path, &expected);
-            let target_path =
-                read_link_target(&link_path).map(|p| p.to_string_lossy().to_string());
-            out.push(ExpertInstallStatus {
-                expert_id: def.id.to_string(),
-                agent_type: agent,
-                state,
-                link_path: link_path.to_string_lossy().to_string(),
-                target_path,
-                expected_target_path: expected.to_string_lossy().to_string(),
-                copy_mode: false,
-            });
-        }
-    }
-    Ok(out)
+    tokio::task::spawn_blocking(move || {
+        legacy::statuses(&SkillsCtx::user(), SkillOrigin::Office, &ids, &agents)
+    })
+    .await
+    .map_err(|e| OfficeToolsError::Io(format!("join error: {e}")))
 }
 
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
@@ -1512,12 +1441,14 @@ mod tests {
         assert!(!supported_agents().contains(&agent));
     }
 
+    #[cfg(not(windows))] // only the hermetic-home tests below
     use tokio::time::{timeout, Duration};
 
     // Tests use unknown skill ids so they never touch the developer's real skill
     // directories: office link/unlink both fail at `find_skill_def` for an
     // unknown id, before any filesystem access.
 
+    #[cfg(not(windows))] // a home of its own: `skills::tests::with_hermetic_home`
     #[tokio::test]
     async fn apply_links_does_not_deadlock() {
         // Regression guard: `officecli_skill_apply_links` must hold the
@@ -1535,15 +1466,24 @@ mod tests {
                 enable: false,
             },
         ];
-        let results = timeout(Duration::from_secs(5), officecli_skill_apply_links(ops))
-            .await
-            .expect("officecli_skill_apply_links must not deadlock")
-            .expect("batch returns Ok");
+        // A home of its own: the real one's skills are never read.
+        let tmp = tempfile::tempdir().unwrap();
+        let results = crate::skills::tests::with_hermetic_home(
+            tmp.path(),
+            timeout(
+                Duration::from_secs(5),
+                officecli_skill_apply_links_core(&EventEmitter::Noop, ops),
+            ),
+        )
+        .await
+        .expect("officecli_skill_apply_links must not deadlock")
+        .expect("batch returns Ok");
         assert_eq!(results.len(), 2);
         // Unknown skills fail their own op without aborting the batch.
         assert!(results.iter().all(|r| !r.ok && r.error.is_some()), "{results:?}");
     }
 
+    #[cfg(not(windows))] // a home of its own: `skills::tests::with_hermetic_home`
     #[tokio::test]
     async fn apply_links_collects_per_op_results_without_aborting() {
         let ops = vec![
@@ -1558,15 +1498,20 @@ mod tests {
                 enable: false,
             },
         ];
-        let results = officecli_skill_apply_links(ops)
-            .await
-            .expect("batch returns Ok");
+        let tmp = tempfile::tempdir().unwrap();
+        let results = crate::skills::tests::with_hermetic_home(
+            tmp.path(),
+            officecli_skill_apply_links_core(&EventEmitter::Noop, ops),
+        )
+        .await
+        .expect("batch returns Ok");
         assert_eq!(results.len(), 2);
         assert!(results.iter().all(|r| !r.ok));
         assert!(results.iter().all(|r| r.error.is_some()));
         assert!(results.iter().all(|r| r.status.is_none()));
     }
 
+    #[cfg(not(windows))] // a home of its own: `skills::tests::with_hermetic_home`
     #[tokio::test]
     // The hydrate guard is held across the await on purpose — see the
     // identical note in `custom_agent_service`.
@@ -1575,10 +1520,14 @@ mod tests {
         // A test hydrating a custom agent that declares a store would add a
         // column between the snapshot and the count below.
         let _guard = crate::acp::custom_registry::hydrate_test_guard();
-        let rows = officecli_skill_list_all_install_statuses()
-            .await
-            .expect("snapshot returns Ok");
-        let expected = skill_defs().len() * supported_agents().len();
+        let tmp = tempfile::tempdir().unwrap();
+        let (rows, expected) = crate::skills::tests::with_hermetic_home(tmp.path(), async {
+            let rows = officecli_skill_list_all_install_statuses()
+                .await
+                .expect("snapshot returns Ok");
+            (rows, skill_defs().len() * supported_agents().len())
+        })
+        .await;
         assert_eq!(rows.len(), expected);
     }
 
