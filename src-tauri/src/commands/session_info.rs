@@ -21,7 +21,7 @@ use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 
 use crate::acp::session_info::{
-    SessionHistory, SessionHistoryItem, SessionHistoryOptions, SessionHistoryTool,
+    SessionCollaborator, SessionHistory, SessionHistoryItem, SessionHistoryOptions, SessionHistoryTool,
     SessionInfo, SessionInfoAccess, SessionInfoConfig, SessionInfoRuntimeConfig,
     SessionMessageItem, SessionMessages, MAX_HISTORY_CHARS, MAX_SESSION_MESSAGES,
 };
@@ -163,8 +163,22 @@ impl SessionInfoAccess for DbSessionInfoLookup {
             is_delegation_child: summary.parent_id.is_some(),
             stats: None,
             messages: None,
+            collaborators: Vec::new(),
+            collaborators_truncated: false,
             note: None,
         };
+
+        match conversation_service::list_collaborators(conn, session_id).await {
+            Ok(rows) => {
+                info.collaborators_truncated = rows.len() > MAX_SESSION_MESSAGES as usize;
+                info.collaborators = rows.into_iter().take(MAX_SESSION_MESSAGES as usize)
+                    .map(|row| SessionCollaborator { session_id: row.id, status: row.status })
+                    .collect();
+            }
+            Err(_) => {
+                info.note.get_or_insert_with(|| "Independent collaborators could not be read.".into());
+            }
+        }
 
         if max_messages == 0 {
             return info;

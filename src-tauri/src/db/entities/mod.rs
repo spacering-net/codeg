@@ -10,6 +10,7 @@ pub mod chat_channel_message_log;
 pub mod chat_channel_sender_context;
 pub mod chat_channel_thread_binding;
 pub mod conversation;
+pub mod conversation_collaborator;
 pub mod conversation_tag;
 pub mod conversation_tag_link;
 pub mod custom_agent;

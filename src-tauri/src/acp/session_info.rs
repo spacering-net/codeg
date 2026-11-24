@@ -101,6 +101,10 @@ pub struct SessionInfo {
     pub stats: Option<SessionStats>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub messages: Option<SessionMessages>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub collaborators: Vec<SessionCollaborator>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub collaborators_truncated: bool,
     /// Human-readable note for a not-found result, or a partial one (e.g. the
     /// transcript parse timed out so `messages` is absent). `None` on a clean
     /// full result.
@@ -122,6 +126,12 @@ impl SessionInfo {
             ..Default::default()
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionCollaborator {
+    pub session_id: i32,
+    pub status: String,
 }
 
 /// History is bounded independently from the compact session preview.

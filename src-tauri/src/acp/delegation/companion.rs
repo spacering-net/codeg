@@ -4617,6 +4617,17 @@ fn render_session_summary_text(o: &Value) -> String {
     {
         out.push_str(&format!("Total tokens: {tokens}\n"));
     }
+    if let Some(collaborators) = o.get("collaborators").and_then(Value::as_array).filter(|rows| !rows.is_empty()) {
+        out.push_str("Independent collaboration sessions:\n");
+        for row in collaborators {
+            let id = row.get("session_id").and_then(Value::as_i64).unwrap_or(0);
+            let status = row.get("status").and_then(Value::as_str).unwrap_or("unknown");
+            out.push_str(&format!("- session #{id}: status={status}\n"));
+        }
+        if o.get("collaborators_truncated").and_then(Value::as_bool) == Some(true) {
+            out.push_str("Additional collaboration sessions omitted (limit 200).\n");
+        }
+    }
     if let Some(note) = s("note") {
         out.push_str(&format!("Note: {note}\n"));
     }

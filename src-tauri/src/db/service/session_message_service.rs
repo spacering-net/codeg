@@ -19,6 +19,9 @@ pub async fn enqueue(
         return Err(DbErr::Custom("invalid session message".into()));
     }
     let txn = db.begin().await?;
+    // Claim SQLite's writer lock before the liveness reads so parallel creation
+    // cannot leave another caller trying to write through a stale read snapshot.
+    txn.execute_unprepared("UPDATE session_message SET id = id WHERE 0").await?;
     ensure_live(&txn, sender).await?;
     ensure_live(&txn, recipient).await?;
     let id = insert(&txn, sender, recipient, message, mode, reply).await?;

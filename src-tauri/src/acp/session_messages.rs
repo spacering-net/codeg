@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, TransactionTrait};
 use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 
@@ -245,22 +245,25 @@ impl SessionCreator {
             validate_create_option_ids(&selected.config_options, &request.config_values)?;
         }
         defaults.config_values.extend(request.config_values.clone());
-        let title = Some(request.title.clone());
-        let conversation_id = if folder.kind == FolderKind::Chat {
-            conversation_service::create_chat(&self.db, folder.id, agent_type, title, None)
-                .await
-                .map(|conversation| conversation.id)
-                .map_err(|error| error.to_string())?
+        let git_branch = if folder.kind == FolderKind::Chat {
+            None
         } else {
-            crate::commands::conversations::create_conversation_core(
-                &self.db, folder.id, agent_type, title,
-            )
-            .await
-            .map_err(|error| error.to_string())?
+            crate::commands::conversations::detect_git_branch(&folder.path).await
         };
-        conversation_service::update_title(&self.db, conversation_id, request.title)
+        let txn = self.db.begin().await.map_err(|error| error.to_string())?;
+        let title = Some(request.title.clone());
+        let created = if folder.kind == FolderKind::Chat {
+            conversation_service::create_chat(&txn, folder.id, agent_type, title, git_branch).await
+        } else {
+            conversation_service::create(&txn, folder.id, agent_type, title, git_branch).await
+        };
+        let conversation_id = created.map_err(|error| error.to_string())?.id;
+        conversation_service::link_collaborator(&txn, sender, conversation_id)
+            .await.map_err(|error| error.to_string())?;
+        conversation_service::update_title(&txn, conversation_id, request.title)
             .await
             .map_err(|error| error.to_string())?;
+        txn.commit().await.map_err(|error| error.to_string())?;
         crate::commands::conversations::emit_conversation_upsert(
             &emitter,
             &self.db,
