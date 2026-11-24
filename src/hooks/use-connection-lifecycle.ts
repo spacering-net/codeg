@@ -12,6 +12,8 @@ import {
   type ConnectionWork,
 } from "@/lib/connection-teardown"
 import { TurnBusyError } from "@/lib/turn-busy"
+import { ConversationMovedError } from "@/lib/conversation-moved"
+import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { type AgentType, type PromptDraft } from "@/lib/types"
 import { getAgentLabel } from "@/lib/custom-agents"
 
@@ -86,8 +88,14 @@ export interface UseConnectionLifecycleReturn {
        */
       onSendFailed?: (error: unknown) => void
     }
+  ) => Promise<void>
+  /** `saveAsDefault`: the pick also becomes the new-conversation default —
+   *  only for an explicit pick in a draft (codeg#1179). */
+  handleSetConfigOption: (
+    configId: string,
+    valueId: string,
+    opts?: { saveAsDefault?: boolean }
   ) => void
-  handleSetConfigOption: (configId: string, valueId: string) => void
   handleCancel: () => void
   handleRespondPermission: (requestId: string, optionId: string) => void
 }
@@ -441,7 +449,7 @@ export function useConnectionLifecycle({
           transientUnmount,
         })
       ) {
-        connDisconnectRef.current().catch(() => {})
+        connDisconnectRef.current(true).catch(() => {})
       }
       // The active key names the view on screen, and this one is gone. Left
       // claimed, it would hold the busy owner kept running above out of both
@@ -522,7 +530,9 @@ export function useConnectionLifecycle({
       touchActivity(contextKey)
       const onTurnInProgress = opts?.onTurnInProgress
       const onSendFailed = opts?.onSendFailed
-      void (async () => {
+      // Returned (handled: it never rejects) so a draft's first send can hold
+      // its selector lock until the prompt was acknowledged or failed.
+      return (async () => {
         const currentModeId = modeIdRef.current
         if (modeId && modeId !== currentModeId) {
           await connSetMode(modeId)
@@ -538,6 +548,27 @@ export function useConnectionLifecycle({
           // observed yet). Not an error — the draft is re-queued by the caller
           // so it auto-sends when the current turn finishes.
           onTurnInProgress?.()
+          return
+        }
+        if (e instanceof ConversationMovedError) {
+          // The conversation was moved to another project and this connection
+          // still runs in the folder it left. Say where it went and pull the
+          // rows: the tab follows its row to the new folder, which reconnects
+          // the agent there. The message is not resent on its own — the user
+          // sends it again from the new folder.
+          const folder =
+            e.folderId != null
+              ? useAppWorkspaceStore.getState().getFolder(e.folderId)
+              : undefined
+          notify({
+            level: "warning",
+            key: `conversation-moved:${contextKey}`,
+            title: t("errors.conversationMoved", {
+              folder: folder?.alias || folder?.name || "",
+            }),
+          })
+          void useAppWorkspaceStore.getState().refreshConversations()
+          onSendFailed?.(e)
           return
         }
         console.error("[ConnLifecycle] sendPrompt:", e)
@@ -572,7 +603,7 @@ export function useConnectionLifecycle({
   }, [connCancel])
 
   const handleSetConfigOption = useCallback(
-    (configId: string, valueId: string) => {
+    (configId: string, valueId: string, opts?: { saveAsDefault?: boolean }) => {
       // The connection here still belongs to another agent (a draft mid-switch,
       // or one whose new pick could not connect), so the options on screen are
       // the selected agent's cached ones. Applying the edit would hand the
@@ -581,7 +612,7 @@ export function useConnectionLifecycle({
       // no connection here at all.
       if (connAgentType != null && connAgentType !== agentType) return
       touchActivity(contextKey)
-      connSetConfigOption(configId, valueId).catch((e: unknown) =>
+      connSetConfigOption(configId, valueId, opts).catch((e: unknown) =>
         console.error("[ConnLifecycle] setConfigOption:", e)
       )
     },

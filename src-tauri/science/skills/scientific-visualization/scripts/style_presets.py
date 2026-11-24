@@ -1,416 +1,503 @@
 #!/usr/bin/env python3
+"""Scoped Matplotlib style presets for scientific figures.
+
+Presets are visual starting points, not journal-compliance profiles. Matplotlib
+is imported lazily so listing and help work in a standard-library environment.
 """
-Matplotlib Style Presets for Publication-Ready Scientific Figures
 
-This module provides pre-configured matplotlib styles optimized for
-different journals and use cases.
-"""
+from __future__ import annotations
 
-import matplotlib.pyplot as plt
-import matplotlib as mpl
-from typing import Optional, Dict, Any
+import argparse
+import importlib.util
+import json
+import sys
+from contextlib import contextmanager
+from pathlib import Path
+from types import ModuleType
+from typing import Any, Iterator
 
+from _common import CliError, atomic_write_bytes, checked_output_file
 
-# Okabe-Ito colorblind-friendly palette
-OKABE_ITO_COLORS = [
-    '#E69F00',  # Orange
-    '#56B4E9',  # Sky Blue
-    '#009E73',  # Bluish Green
-    '#F0E442',  # Yellow
-    '#0072B2',  # Blue
-    '#D55E00',  # Vermillion
-    '#CC79A7',  # Reddish Purple
-    '#000000'   # Black
-]
+ASSET_ROOT = Path(__file__).resolve().parents[1] / "assets"
+PROFILE_PATH = ASSET_ROOT / "publisher_profiles.json"
+SCHEMA_VERSION = "1.0"
 
-# Paul Tol palettes
-TOL_BRIGHT = ['#4477AA', '#EE6677', '#228833', '#CCBB44', '#66CCEE', '#AA3377', '#BBBBBB']
-TOL_MUTED = ['#332288', '#88CCEE', '#44AA99', '#117733', '#999933', '#DDCC77', '#CC6677', '#882255', '#AA4499']
-TOL_HIGH_CONTRAST = ['#004488', '#DDAA33', '#BB5566']
+BASE_STYLE: dict[str, Any] = {
+    "figure.dpi": 100,
+    "figure.facecolor": "white",
+    "figure.autolayout": False,
+    "figure.constrained_layout.use": False,
+    "font.size": 8,
+    "font.family": "sans-serif",
+    "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
+    "axes.linewidth": 0.6,
+    "axes.labelsize": 8,
+    "axes.titlesize": 8,
+    "axes.labelweight": "normal",
+    "axes.spines.top": False,
+    "axes.spines.right": False,
+    "axes.edgecolor": "black",
+    "axes.labelcolor": "black",
+    "axes.axisbelow": True,
+    "axes.grid": False,
+    "xtick.major.size": 3,
+    "xtick.minor.size": 2,
+    "xtick.major.width": 0.6,
+    "xtick.minor.width": 0.5,
+    "xtick.labelsize": 7,
+    "xtick.direction": "out",
+    "ytick.major.size": 3,
+    "ytick.minor.size": 2,
+    "ytick.major.width": 0.6,
+    "ytick.minor.width": 0.5,
+    "ytick.labelsize": 7,
+    "ytick.direction": "out",
+    "lines.linewidth": 1.4,
+    "lines.markersize": 4,
+    "lines.markeredgewidth": 0.6,
+    "patch.linewidth": 0.6,
+    "legend.fontsize": 7,
+    "legend.frameon": False,
+    "savefig.dpi": 300,
+    "savefig.format": "pdf",
+    # "tight" changes the exported physical page dimensions. Opt in explicitly.
+    "savefig.bbox": "standard",
+    "savefig.pad_inches": 0.05,
+    "savefig.transparent": False,
+    "savefig.facecolor": "white",
+    "savefig.edgecolor": "white",
+    "image.cmap": "viridis",
+    # Type 42 keeps TrueType fonts editable/embedded in PDF/PS.
+    "pdf.fonttype": 42,
+    "ps.fonttype": 42,
+    # SVG text remains text but depends on font availability at render time.
+    "svg.fonttype": "none",
+}
 
-# Wong palette
-WONG_COLORS = ['#000000', '#E69F00', '#56B4E9', '#009E73', '#F0E442', '#0072B2', '#D55E00', '#CC79A7']
+STYLE_OVERRIDES: dict[str, dict[str, Any]] = {
+    "default": {},
+    "nature": {
+        "font.size": 7,
+        "axes.labelsize": 7,
+        "axes.titlesize": 7,
+        "xtick.labelsize": 6,
+        "ytick.labelsize": 6,
+        "legend.fontsize": 6,
+        "lines.linewidth": 1.0,
+        "savefig.dpi": 450,
+    },
+    "science": {
+        "font.size": 7,
+        "axes.labelsize": 7,
+        "axes.titlesize": 7,
+        "xtick.labelsize": 6,
+        "ytick.labelsize": 6,
+        "legend.fontsize": 6,
+        "savefig.dpi": 300,
+    },
+    "cell": {
+        "font.size": 7,
+        "axes.labelsize": 8,
+        "axes.titlesize": 8,
+        "xtick.labelsize": 7,
+        "ytick.labelsize": 7,
+        "legend.fontsize": 7,
+        "savefig.dpi": 300,
+    },
+    "minimal": {
+        "axes.linewidth": 0.8,
+        "xtick.major.width": 0.8,
+        "ytick.major.width": 0.8,
+        "lines.linewidth": 1.8,
+    },
+    "presentation": {
+        "font.size": 14,
+        "axes.labelsize": 16,
+        "axes.titlesize": 18,
+        "xtick.labelsize": 12,
+        "ytick.labelsize": 12,
+        "legend.fontsize": 12,
+        "axes.linewidth": 1.4,
+        "lines.linewidth": 2.4,
+        "lines.markersize": 8,
+        "savefig.format": "png",
+    },
+}
 
-
-def get_base_style() -> Dict[str, Any]:
-    """
-    Get base publication-quality style settings.
-
-    Returns
-    -------
-    dict
-        Dictionary of matplotlib rcParams
-    """
-    return {
-        # Figure
-        'figure.dpi': 100,  # Display DPI (changed on save)
-        'figure.facecolor': 'white',
-        'figure.autolayout': False,
-        'figure.constrained_layout.use': True,
-
-        # Font
-        'font.size': 8,
-        'font.family': 'sans-serif',
-        'font.sans-serif': ['Arial', 'Helvetica', 'DejaVu Sans'],
-
-        # Axes
-        'axes.linewidth': 0.5,
-        'axes.labelsize': 9,
-        'axes.titlesize': 9,
-        'axes.labelweight': 'normal',
-        'axes.spines.top': False,
-        'axes.spines.right': False,
-        'axes.spines.left': True,
-        'axes.spines.bottom': True,
-        'axes.edgecolor': 'black',
-        'axes.labelcolor': 'black',
-        'axes.axisbelow': True,
-        'axes.prop_cycle': mpl.cycler(color=OKABE_ITO_COLORS),
-
-        # Grid
-        'axes.grid': False,
-
-        # Ticks
-        'xtick.major.size': 3,
-        'xtick.minor.size': 2,
-        'xtick.major.width': 0.5,
-        'xtick.minor.width': 0.5,
-        'xtick.labelsize': 7,
-        'xtick.direction': 'out',
-        'ytick.major.size': 3,
-        'ytick.minor.size': 2,
-        'ytick.major.width': 0.5,
-        'ytick.minor.width': 0.5,
-        'ytick.labelsize': 7,
-        'ytick.direction': 'out',
-
-        # Lines
-        'lines.linewidth': 1.5,
-        'lines.markersize': 4,
-        'lines.markeredgewidth': 0.5,
-
-        # Legend
-        'legend.fontsize': 7,
-        'legend.frameon': False,
-        'legend.loc': 'best',
-
-        # Savefig
-        'savefig.dpi': 300,
-        'savefig.format': 'pdf',
-        'savefig.bbox': 'tight',
-        'savefig.pad_inches': 0.05,
-        'savefig.transparent': False,
-        'savefig.facecolor': 'white',
-
-        # Image
-        'image.cmap': 'viridis',
-        'image.aspect': 'auto',
-    }
-
-
-def apply_publication_style(style_name: str = 'default') -> None:
-    """
-    Apply a pre-configured publication style.
-
-    Parameters
-    ----------
-    style_name : str, default 'default'
-        Name of the style to apply. Options:
-        - 'default': General publication style
-        - 'nature': Nature journal style
-        - 'science': Science journal style
-        - 'cell': Cell Press style
-        - 'minimal': Minimal clean style
-        - 'presentation': Larger fonts for presentations
-
-    Examples
-    --------
-    >>> apply_publication_style('nature')
-    >>> fig, ax = plt.subplots()
-    >>> ax.plot([1, 2, 3], [1, 4, 9])
-    """
-    base_style = get_base_style()
-
-    # Style-specific modifications
-    if style_name == 'nature':
-        base_style.update({
-            'font.size': 7,
-            'axes.labelsize': 8,
-            'axes.titlesize': 8,
-            'xtick.labelsize': 6,
-            'ytick.labelsize': 6,
-            'legend.fontsize': 6,
-            'savefig.dpi': 600,
-        })
-
-    elif style_name == 'science':
-        base_style.update({
-            'font.size': 7,
-            'axes.labelsize': 8,
-            'xtick.labelsize': 6,
-            'ytick.labelsize': 6,
-            'legend.fontsize': 6,
-            'savefig.dpi': 600,
-        })
-
-    elif style_name == 'cell':
-        base_style.update({
-            'font.size': 8,
-            'axes.labelsize': 9,
-            'xtick.labelsize': 7,
-            'ytick.labelsize': 7,
-            'legend.fontsize': 7,
-            'savefig.dpi': 600,
-        })
-
-    elif style_name == 'minimal':
-        base_style.update({
-            'axes.linewidth': 0.8,
-            'xtick.major.width': 0.8,
-            'ytick.major.width': 0.8,
-            'lines.linewidth': 2,
-        })
-
-    elif style_name == 'presentation':
-        base_style.update({
-            'font.size': 14,
-            'axes.labelsize': 16,
-            'axes.titlesize': 18,
-            'xtick.labelsize': 12,
-            'ytick.labelsize': 12,
-            'legend.fontsize': 12,
-            'axes.linewidth': 1.5,
-            'lines.linewidth': 2.5,
-            'lines.markersize': 8,
-        })
-
-    elif style_name != 'default':
-        print(f"Warning: Style '{style_name}' not recognized. Using 'default'.")
-
-    # Apply the style
-    plt.rcParams.update(base_style)
-    print(f"✓ Applied '{style_name}' publication style")
+STYLE_NOTICES = {
+    "nature": (
+        "Starting point based on flagship Nature final-artwork guidance "
+        "accessed 2026-10-01; verify article stage and current instructions."
+    ),
+    "science": (
+        "Historical Science revised-manuscript guidance accessed 2026-07-23; "
+        "live access failed on 2026-10-01. Verify current journal instructions."
+    ),
+    "cell": (
+        "Starting point based on general Cell Press production guidance accessed "
+        "2026-10-01; journal and article-type exceptions exist."
+    ),
+}
 
 
-def set_color_palette(palette_name: str = 'okabe_ito') -> None:
-    """
-    Set a colorblind-friendly color palette.
+def _load_palette_asset() -> ModuleType:
+    asset = ASSET_ROOT / "color_palettes.py"
+    spec = importlib.util.spec_from_file_location(
+        "_scientific_visualization_color_palettes", asset
+    )
+    if spec is None or spec.loader is None:
+        raise CliError(f"cannot load bundled palette asset: {asset}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
-    Parameters
-    ----------
-    palette_name : str, default 'okabe_ito'
-        Name of the palette. Options:
-        - 'okabe_ito': Okabe-Ito palette (8 colors)
-        - 'wong': Wong palette (8 colors)
-        - 'tol_bright': Paul Tol bright palette (7 colors)
-        - 'tol_muted': Paul Tol muted palette (9 colors)
-        - 'tol_high_contrast': Paul Tol high contrast (3 colors)
 
-    Examples
-    --------
-    >>> set_color_palette('tol_muted')
-    >>> fig, ax = plt.subplots()
-    >>> for i in range(5):
-    ...     ax.plot([1, 2, 3], [i, i+1, i+2])
-    """
-    palettes = {
-        'okabe_ito': OKABE_ITO_COLORS,
-        'wong': WONG_COLORS,
-        'tol_bright': TOL_BRIGHT,
-        'tol_muted': TOL_MUTED,
-        'tol_high_contrast': TOL_HIGH_CONTRAST,
-    }
+def available_palettes() -> dict[str, list[str]]:
+    palettes = getattr(_load_palette_asset(), "PALETTES", None)
+    if not isinstance(palettes, dict):
+        raise CliError("bundled palette asset does not define PALETTES")
+    return {name: list(colors) for name, colors in palettes.items()}
 
+
+def get_style(
+    style_name: str = "default",
+    *,
+    palette_name: str = "okabe_ito_on_white",
+) -> dict[str, Any]:
+    """Return a validated plain rcParams dictionary without global mutation."""
+    if style_name not in STYLE_OVERRIDES:
+        raise CliError(
+            f"unknown style {style_name!r}; "
+            f"available: {', '.join(sorted(STYLE_OVERRIDES))}"
+        )
+    palettes = available_palettes()
     if palette_name not in palettes:
-        available = ', '.join(palettes.keys())
-        print(f"Warning: Palette '{palette_name}' not found. Available: {available}")
-        palette_name = 'okabe_ito'
+        raise CliError(
+            f"unknown palette {palette_name!r}; "
+            f"available: {', '.join(sorted(palettes))}"
+        )
+    style = dict(BASE_STYLE)
+    style.update(STYLE_OVERRIDES[style_name])
+    # Stored separately because a Matplotlib Cycler is not JSON serializable.
+    style["_palette_colors"] = palettes[palette_name]
+    return style
 
+
+def _matplotlib_style(style: dict[str, Any]) -> dict[str, Any]:
+    try:
+        import matplotlib as mpl
+    except ImportError as exc:
+        raise CliError(
+            "Matplotlib is required to apply styles; "
+            "run with --with 'matplotlib==3.11.2'"
+        ) from exc
+    prepared = dict(style)
+    colors = prepared.pop("_palette_colors")
+    prepared["axes.prop_cycle"] = mpl.cycler(color=colors)
+    # rcParams validation catches stale or misspelled keys.
+    validated = mpl.RcParams()
+    validated.update(prepared)
+    return dict(validated)
+
+
+def apply_publication_style(
+    style_name: str = "default",
+    *,
+    palette_name: str = "okabe_ito_on_white",
+    reset: bool = False,
+) -> dict[str, Any]:
+    """Apply a validated style globally and return the settings used."""
+    try:
+        import matplotlib as mpl
+    except ImportError as exc:
+        raise CliError(
+            "Matplotlib is required to apply styles; "
+            "run with --with 'matplotlib==3.11.2'"
+        ) from exc
+    if reset:
+        mpl.rcdefaults()
+    style = _matplotlib_style(get_style(style_name, palette_name=palette_name))
+    mpl.rcParams.update(style)
+    return {
+        "style": style_name,
+        "palette": palette_name,
+        "notice": STYLE_NOTICES.get(
+            style_name,
+            "General-purpose visual preset; review the rendered figure in context.",
+        ),
+    }
+
+
+@contextmanager
+def style_context(
+    style_name: str = "default",
+    *,
+    palette_name: str = "okabe_ito_on_white",
+) -> Iterator[dict[str, Any]]:
+    """Temporarily apply a preset without leaking global rcParams changes."""
+    try:
+        import matplotlib as mpl
+    except ImportError as exc:
+        raise CliError(
+            "Matplotlib is required to use a style context; "
+            "run with --with 'matplotlib==3.11.2'"
+        ) from exc
+    style = _matplotlib_style(get_style(style_name, palette_name=palette_name))
+    with mpl.rc_context(style):
+        yield {
+            "style": style_name,
+            "palette": palette_name,
+            "notice": STYLE_NOTICES.get(style_name),
+        }
+
+
+def set_color_palette(palette_name: str = "okabe_ito_on_white") -> list[str]:
+    """Set only the Matplotlib color cycle, preserving other rcParams."""
+    try:
+        import matplotlib as mpl
+    except ImportError as exc:
+        raise CliError(
+            "Matplotlib is required to set a palette; "
+            "run with --with 'matplotlib==3.11.2'"
+        ) from exc
+    palettes = available_palettes()
+    if palette_name not in palettes:
+        raise CliError(
+            f"unknown palette {palette_name!r}; "
+            f"available: {', '.join(sorted(palettes))}"
+        )
     colors = palettes[palette_name]
-    plt.rcParams['axes.prop_cycle'] = plt.cycler(color=colors)
-    print(f"✓ Applied '{palette_name}' color palette ({len(colors)} colors)")
+    mpl.rcParams["axes.prop_cycle"] = mpl.cycler(color=colors)
+    return colors
 
 
-def configure_for_journal(journal: str, figure_width: str = 'single') -> None:
-    """
-    Configure matplotlib for a specific journal.
+def load_publisher_profiles() -> dict[str, Any]:
+    """Load the bundled dated publisher snapshots."""
+    try:
+        document = json.loads(PROFILE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CliError(f"cannot load publisher profiles: {exc}") from exc
+    profiles = document.get("profiles")
+    if not isinstance(profiles, dict):
+        raise CliError("publisher profile asset is malformed")
+    return document
 
-    Parameters
-    ----------
-    journal : str
-        Journal name: 'nature', 'science', 'cell', 'plos', 'acs', 'ieee'
-    figure_width : str, default 'single'
-        Figure width: 'single' or 'double' column
 
-    Examples
-    --------
-    >>> configure_for_journal('nature', figure_width='single')
-    >>> fig, ax = plt.subplots()  # Will have correct size for Nature
-    """
-    journal = journal.lower()
+def figure_size_for_profile(
+    publisher: str,
+    width: str,
+    *,
+    aspect: float = 0.75,
+) -> tuple[float, float]:
+    """Return width/height in inches from a dated profile snapshot."""
+    if not (math_is_finite_positive(aspect)):
+        raise CliError("aspect must be finite and greater than zero")
+    document = load_publisher_profiles()
+    try:
+        profile = document["profiles"][publisher]
+    except KeyError as exc:
+        raise CliError(
+            f"unknown publisher {publisher!r}; "
+            f"available: {', '.join(sorted(document['profiles']))}"
+        ) from exc
+    widths = profile.get("widths_mm") or {}
+    if width not in widths:
+        raise CliError(
+            f"width {width!r} unavailable for {publisher}; "
+            f"available: {', '.join(sorted(widths))}"
+        )
+    width_inches = float(widths[width]) / 25.4
+    return width_inches, width_inches * aspect
 
-    # Journal specifications
-    journal_configs = {
-        'nature': {
-            'single_width': 89,  # mm
-            'double_width': 183,
-            'style': 'nature',
-        },
-        'science': {
-            'single_width': 55,
-            'double_width': 175,
-            'style': 'science',
-        },
-        'cell': {
-            'single_width': 85,
-            'double_width': 178,
-            'style': 'cell',
-        },
-        'plos': {
-            'single_width': 83,
-            'double_width': 173,
-            'style': 'default',
-        },
-        'acs': {
-            'single_width': 82.5,
-            'double_width': 178,
-            'style': 'default',
-        },
-        'ieee': {
-            'single_width': 89,
-            'double_width': 182,
-            'style': 'default',
-        },
+
+def math_is_finite_positive(value: float) -> bool:
+    return value > 0 and value < float("inf")
+
+
+def configure_for_journal(
+    journal: str,
+    figure_width: str = "single",
+    *,
+    aspect: float = 0.75,
+    palette_name: str = "okabe_ito_on_white",
+) -> dict[str, Any]:
+    """Compatibility helper using a dated profile, without claiming compliance."""
+    aliases = {
+        "plos": "default",
+        "acs": "default",
+        "ieee": "default",
+        "bmc": "default",
+        "elsevier": "default",
+    }
+    style_name = journal if journal in {"nature", "science", "cell"} else aliases.get(journal)
+    if style_name is None:
+        raise CliError(f"unknown journal/publisher profile: {journal!r}")
+    notice = apply_publication_style(style_name, palette_name=palette_name)
+    width_aliases = {
+        "nature": {"double": "full"},
+        "cell": {"double": "full"},
+        "plos": {"single": "text-column", "double": "full"},
+        "acs": {"double": "full"},
+        "ieee": {"double": "full"},
+        "bmc": {"single": "half", "double": "full"},
+        "elsevier": {"double": "full"},
+    }
+    profile_width = width_aliases.get(journal, {}).get(
+        figure_width, figure_width
+    )
+    width_inches, height_inches = figure_size_for_profile(
+        journal, profile_width, aspect=aspect
+    )
+    try:
+        import matplotlib as mpl
+    except ImportError as exc:
+        raise CliError("Matplotlib is required to configure figure size") from exc
+    mpl.rcParams["figure.figsize"] = (width_inches, height_inches)
+    return {
+        **notice,
+        "publisher_profile": journal,
+        "profile_width": profile_width,
+        "figsize_inches": [width_inches, height_inches],
+        "profile_accessed": load_publisher_profiles()["profiles"][journal].get(
+            "accessed", load_publisher_profiles()["accessed"]
+        ),
+        "notice": (
+            "Configured from a dated planning snapshot. This does not establish "
+            "journal compliance; verify current target-journal instructions."
+        ),
     }
 
-    if journal not in journal_configs:
-        available = ', '.join(journal_configs.keys())
-        raise ValueError(f"Journal '{journal}' not recognized. Available: {available}")
 
-    config = journal_configs[journal]
-
-    # Apply style
-    apply_publication_style(config['style'])
-
-    # Set default figure size
-    width_mm = config['single_width'] if figure_width == 'single' else config['double_width']
-    width_inches = width_mm / 25.4
-    plt.rcParams['figure.figsize'] = (width_inches, width_inches * 0.75)  # 4:3 aspect ratio
-
-    print(f"✓ Configured for {journal.upper()} ({figure_width} column: {width_mm} mm)")
+def _mplstyle_value(key: str, value: Any) -> str:
+    if isinstance(value, bool):
+        return "True" if value else "False"
+    if isinstance(value, (list, tuple)):
+        return ", ".join(str(item) for item in value)
+    return str(value)
 
 
-def create_style_template(output_file: str = 'publication.mplstyle') -> None:
-    """
-    Create a matplotlib style file that can be used with plt.style.use().
-
-    Parameters
-    ----------
-    output_file : str, default 'publication.mplstyle'
-        Output filename for the style file
-
-    Examples
-    --------
-    >>> create_style_template('my_style.mplstyle')
-    >>> plt.style.use('my_style.mplstyle')
-    """
-    style = get_base_style()
-
-    with open(output_file, 'w') as f:
-        f.write("# Publication-quality matplotlib style\n")
-        f.write("# Usage: plt.style.use('publication.mplstyle')\n\n")
-
-        for key, value in style.items():
-            if isinstance(value, mpl.cycler):
-                # Handle cycler specially
-                colors = [c['color'] for c in value]
-                f.write(f"axes.prop_cycle : cycler('color', {colors})\n")
-            else:
-                f.write(f"{key} : {value}\n")
-
-    print(f"✓ Created style template: {output_file}")
-    print(f"  Use with: plt.style.use('{output_file}')")
-
-
-def show_color_palettes() -> None:
-    """
-    Display available color palettes for visual inspection.
-    """
-    palettes = {
-        'Okabe-Ito': OKABE_ITO_COLORS,
-        'Wong': WONG_COLORS,
-        'Tol Bright': TOL_BRIGHT,
-        'Tol Muted': TOL_MUTED,
-        'Tol High Contrast': TOL_HIGH_CONTRAST,
-    }
-
-    fig, axes = plt.subplots(len(palettes), 1, figsize=(8, len(palettes) * 0.5))
-
-    for ax, (name, colors) in zip(axes, palettes.items()):
-        ax.set_xlim(0, len(colors))
-        ax.set_ylim(0, 1)
-        ax.set_yticks([])
-        ax.set_xticks([])
-        ax.set_ylabel(name, fontsize=10)
-
-        for i, color in enumerate(colors):
-            ax.add_patch(plt.Rectangle((i, 0), 1, 1, facecolor=color, edgecolor='black', linewidth=0.5))
-            # Add hex code
-            ax.text(i + 0.5, 0.5, color, ha='center', va='center',
-                   fontsize=7, color='white' if i >= len(colors) - 1 else 'black')
-
-    fig.suptitle('Colorblind-Friendly Palettes', fontsize=12, fontweight='bold')
-    plt.tight_layout()
-    plt.show()
+def create_style_template(
+    output_file: str | Path,
+    *,
+    style_name: str = "default",
+    palette_name: str = "okabe_ito_on_white",
+    force: bool = False,
+) -> Path:
+    """Write a parseable mplstyle file, refusing implicit overwrite."""
+    output = checked_output_file(output_file, force=force)
+    style = get_style(style_name, palette_name=palette_name)
+    colors = style.pop("_palette_colors")
+    lines = [
+        "# Scientific visualization style preset",
+        f"# style: {style_name}; palette: {palette_name}",
+        "# Verify current target-journal rules before submission.",
+        "",
+    ]
+    for key, value in style.items():
+        lines.append(f"{key}: {_mplstyle_value(key, value)}")
+    lines.append(
+        "axes.prop_cycle: cycler('color', "
+        + json.dumps(colors)
+        + ")"
+    )
+    payload = ("\n".join(lines) + "\n").encode("utf-8")
+    atomic_write_bytes(output, payload, force=force)
+    return output
 
 
 def reset_to_default() -> None:
-    """
-    Reset matplotlib to default settings.
-    """
+    """Reset Matplotlib's global rcParams."""
+    try:
+        import matplotlib as mpl
+    except ImportError as exc:
+        raise CliError("Matplotlib is required to reset rcParams") from exc
     mpl.rcdefaults()
-    print("✓ Reset to matplotlib defaults")
+
+
+def _serializable_style(style_name: str, palette_name: str) -> dict[str, Any]:
+    style = get_style(style_name, palette_name=palette_name)
+    colors = style.pop("_palette_colors")
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "style": style_name,
+        "palette": palette_name,
+        "palette_colors": colors,
+        "rcparams": style,
+        "notice": STYLE_NOTICES.get(
+            style_name,
+            "General-purpose visual preset; verify the rendered output.",
+        ),
+    }
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Inspect or write deterministic Matplotlib style presets. "
+            "Presets are not journal-compliance certifications."
+        )
+    )
+    parser.add_argument(
+        "--list", action="store_true", help="list available styles and palettes"
+    )
+    parser.add_argument(
+        "--show", metavar="STYLE", help="print one style as JSON"
+    )
+    parser.add_argument(
+        "--write", nargs=2, metavar=("STYLE", "PATH"), help="write an mplstyle file"
+    )
+    parser.add_argument(
+        "--palette", default="okabe_ito_on_white", help="palette name"
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="overwrite an existing style file"
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    try:
+        args = parser.parse_args(argv)
+        if args.list:
+            print(
+                json.dumps(
+                    {
+                        "schema_version": SCHEMA_VERSION,
+                        "styles": sorted(STYLE_OVERRIDES),
+                        "palettes": {
+                            name: colors
+                            for name, colors in sorted(available_palettes().items())
+                        },
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return 0
+        if args.show:
+            print(
+                json.dumps(
+                    _serializable_style(args.show, args.palette),
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return 0
+        if args.write:
+            style_name, output = args.write
+            written = create_style_template(
+                output,
+                style_name=style_name,
+                palette_name=args.palette,
+                force=args.force,
+            )
+            print(written)
+            return 0
+        parser.error("choose --list, --show STYLE, or --write STYLE PATH")
+    except CliError as exc:
+        parser.exit(2, f"error: {exc}\n")
 
 
 if __name__ == "__main__":
-    print("Matplotlib Style Presets for Scientific Figures")
-    print("=" * 50)
-
-    # Show available styles
-    print("\nAvailable publication styles:")
-    print("  - default")
-    print("  - nature")
-    print("  - science")
-    print("  - cell")
-    print("  - minimal")
-    print("  - presentation")
-
-    print("\nAvailable color palettes:")
-    print("  - okabe_ito (recommended)")
-    print("  - wong")
-    print("  - tol_bright")
-    print("  - tol_muted")
-    print("  - tol_high_contrast")
-
-    print("\nExample usage:")
-    print("  from style_presets import apply_publication_style, set_color_palette")
-    print("  apply_publication_style('nature')")
-    print("  set_color_palette('okabe_ito')")
-
-    # Create example figure
-    print("\nGenerating example figure with 'default' style...")
-    apply_publication_style('default')
-
-    fig, ax = plt.subplots(figsize=(3.5, 2.5))
-    for i in range(5):
-        ax.plot([1, 2, 3, 4], [i, i+1, i+0.5, i+2], marker='o', label=f'Series {i+1}')
-    ax.set_xlabel('Time (hours)')
-    ax.set_ylabel('Response (AU)')
-    ax.legend()
-    fig.suptitle('Example with Publication Style')
-    plt.tight_layout()
-    plt.show()
-
-    # Show color palettes
-    print("\nDisplaying color palettes...")
-    show_color_palettes()
+    sys.exit(main())

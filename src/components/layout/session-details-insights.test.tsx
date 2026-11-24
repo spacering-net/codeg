@@ -74,6 +74,7 @@ function insights(
       earlier: null,
       revealingTurnId: null,
       currentTurnId: null,
+      running: null,
       ...over.nav,
     },
     plan: { entries: [], streaming: false, ...over.plan },
@@ -318,8 +319,25 @@ describe("SessionDetailsInsights", () => {
     ])
   })
 
-  // On the rows' left column, so each title lines up with the rows' text.
-  it("puts the chevron that folds a section before its title", () => {
+  it("hands the navigator the message the agent is answering", () => {
+    publish(
+      insights({
+        nav: {
+          count: 2,
+          entries: [navEntry("u1", 1), navEntry("u2", 2)],
+          running: { turnId: "u2", startedAt: null },
+        },
+      })
+    )
+    renderPanel()
+    const running = screen.getByTestId("nav-running")
+    expect(running).toHaveTextContent("message 2")
+    expect(running).toHaveTextContent("Running")
+  })
+
+  // The icon on the rows' left column, so each title lines up with the
+  // rows' text; the chevron that folds the section at the header's end.
+  it("heads a section with its icon and ends it with a chevron", () => {
     publish(
       insights({
         plan: {
@@ -331,12 +349,37 @@ describe("SessionDetailsInsights", () => {
     renderPanel()
     for (const title of ["Agent Plan", "Message navigation"]) {
       const header = screen.getByRole("button", { name: new RegExp(title) })
-      const chevron = header.querySelector("svg")
-      expect(chevron).not.toBeNull()
+      const icons = header.querySelectorAll("svg")
+      const label = within(header).getByText(title)
+      // In the title's colour, not the theme's.
+      expect(icons[0].parentElement).toHaveClass("text-foreground")
+      expect(label).toHaveClass("text-foreground")
       expect(
-        chevron!.compareDocumentPosition(within(header).getByText(title)) &
+        icons[0].compareDocumentPosition(label) &
+          Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy()
+      const chevron = icons[icons.length - 1]
+      expect(chevron).toHaveClass("lucide-chevron-down")
+      expect(
+        label.compareDocumentPosition(chevron) &
           Node.DOCUMENT_POSITION_FOLLOWING
       ).toBeTruthy()
     }
+  })
+
+  // Folded it points along the header; open, down at what the section shows.
+  it("turns the chevron down once the section opens", () => {
+    publish(insights({ nav: { count: 1, entries: [navEntry("u1", 1)] } }))
+    renderPanel()
+    const header = screen.getByRole("button", { name: /Message navigation/ })
+    const chevron = () => {
+      const icons = header.querySelectorAll("svg")
+      return icons[icons.length - 1]
+    }
+    const wasOpen = header.getAttribute("aria-expanded") === "true"
+    expect(chevron().classList.contains("-rotate-90")).toBe(!wasOpen)
+    fireEvent.click(header)
+    expect(header).toHaveAttribute("aria-expanded", String(!wasOpen))
+    expect(chevron().classList.contains("-rotate-90")).toBe(wasOpen)
   })
 })

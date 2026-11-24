@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { applyLogBatch } from "./log-buffer"
+import { applyLogBatch, PendingLogBatch } from "./log-buffer"
 import type { LogRecord } from "@/lib/types"
 
 function rec(seq: number, message = "m"): LogRecord {
@@ -14,6 +14,18 @@ function rec(seq: number, message = "m"): LogRecord {
     spans: [],
   }
 }
+
+describe("PendingLogBatch", () => {
+  it("keeps the newest unique records in sequence after wrapping", () => {
+    const pending = new PendingLogBatch(3)
+    for (const seq of [1, 2, 3, 4, 4, 2, 5]) pending.append(rec(seq))
+
+    expect(pending.drain().map((r) => r.seq)).toEqual([3, 4, 5])
+    expect(pending.drain()).toEqual([])
+    pending.append(rec(6))
+    expect(pending.drain().map((r) => r.seq)).toEqual([6])
+  })
+})
 
 describe("applyLogBatch", () => {
   it("appends fresh records in order", () => {

@@ -8,7 +8,7 @@ use crate::app_state::AppState;
 use crate::commands::work_task as core;
 use crate::models::{
     WorkTaskChangedFile, WorkTaskDraft, WorkTaskEventInfo, WorkTaskFolderSettings, WorkTaskInfo,
-    WorkTaskTemplateDraft, WorkTaskTemplateInfo,
+    WorkTaskTemplateDraft, WorkTaskTemplateInfo, WorkTaskUncommittedFile,
 };
 
 fn default_event_limit() -> u64 {
@@ -47,6 +47,13 @@ pub struct CreateParams {
 pub struct UpdateParams {
     pub id: i32,
     pub draft: WorkTaskDraft,
+    /// See `work_task_service::WorkTaskUpdateFlags`; older clients omit both.
+    #[serde(default)]
+    pub selection_untouched: bool,
+    #[serde(default)]
+    pub selection_reset: bool,
+    #[serde(default)]
+    pub selector_only: bool,
 }
 
 #[derive(Deserialize)]
@@ -169,6 +176,10 @@ pub struct DeliverPrParams {
     /// or closes every issue on its first delivery.
     #[serde(default)]
     pub closes: Option<Vec<i64>>,
+    /// Commit what the worktree holds uncommitted, with this message, before
+    /// the push. Absent refuses a dirty worktree, as it always did.
+    #[serde(default)]
+    pub commit_message: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -184,6 +195,16 @@ pub struct StartAllParams {
 pub struct ArchiveParams {
     pub id: i32,
     pub archived: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetWritebackParams {
+    pub id: i32,
+    pub run_seq: i32,
+    pub writeback: bool,
+    #[serde(default)]
+    pub drafts: std::collections::BTreeMap<i64, String>,
 }
 
 #[derive(Deserialize)]
@@ -273,6 +294,11 @@ pub async fn work_task_update(
         &state.chat_channel_manager,
         params.id,
         params.draft,
+        crate::db::service::work_task_service::WorkTaskUpdateFlags {
+            selection_untouched: params.selection_untouched,
+            selection_reset: params.selection_reset,
+            selector_only: params.selector_only,
+        },
     )
     .await
     .map_err(AppCommandError::from)?;
@@ -376,6 +402,15 @@ pub async fn work_task_cancel(
     Ok(Json(()))
 }
 
+pub async fn work_task_stop_background_wait(
+    Json(params): Json<IdParams>,
+) -> Result<Json<()>, AppCommandError> {
+    core::work_task_stop_background_wait_core(params.id)
+        .await
+        .map_err(AppCommandError::from)?;
+    Ok(Json(()))
+}
+
 /// `true` = the merge was queued behind another landing of the same project
 /// rather than started now.
 pub async fn work_task_merge(
@@ -414,6 +449,7 @@ pub async fn work_task_deliver_pr(
         params.delete_worktree,
         params.mark_done,
         params.closes,
+        params.commit_message,
     )
     .await
     .map_err(AppCommandError::from)?;
@@ -436,6 +472,23 @@ pub async fn work_task_archive(
     core::work_task_archive_core(&state.emitter, &state.db, params.id, params.archived)
         .await
         .map_err(AppCommandError::from)?;
+    Ok(Json(()))
+}
+
+pub async fn work_task_set_writeback(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<SetWritebackParams>,
+) -> Result<Json<()>, AppCommandError> {
+    core::work_task_set_writeback_core(
+        &state.emitter,
+        &state.db,
+        params.id,
+        params.run_seq,
+        params.writeback,
+        params.drafts,
+    )
+    .await
+    .map_err(AppCommandError::from)?;
     Ok(Json(()))
 }
 
@@ -471,6 +524,14 @@ pub async fn work_task_changed_files(
     Json(params): Json<IdParams>,
 ) -> Result<Json<Vec<WorkTaskChangedFile>>, AppCommandError> {
     let result = core::work_task_changed_files_core(&state.db, params.id).await?;
+    Ok(Json(result))
+}
+
+pub async fn work_task_uncommitted_files(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<IdParams>,
+) -> Result<Json<Vec<WorkTaskUncommittedFile>>, AppCommandError> {
+    let result = core::work_task_uncommitted_files_core(&state.db, params.id).await?;
     Ok(Json(result))
 }
 

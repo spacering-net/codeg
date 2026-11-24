@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest"
+import { setFlagsFromString } from "node:v8"
+import { runInNewContext } from "node:vm"
+import { describe, expect, it, vi } from "vitest"
 
 import {
   adaptMessageTurn,
@@ -288,6 +290,61 @@ describe("buildActivity on the reference turn", () => {
 })
 
 describe("buildActivity on a live turn", () => {
+  const completedTool = (toolCallId: string): AdaptedContentPart => ({
+    type: "tool-call",
+    toolCallId,
+    toolName: "fixture_output",
+    input: null,
+    output: "completed output",
+    state: "output-available",
+  })
+
+  it("reuses unchanged rows while the prior activity model is still live", () => {
+    const first = buildActivity([completedTool("live-model")], {
+      isStreaming: true,
+    })
+    const settled = buildActivity([completedTool("live-model")], {
+      isStreaming: false,
+    })
+    expect(settled.steps[0]).toBe(first.steps[0])
+    expect(settled.items[0]).toBe(first.items[0])
+  })
+
+  it("does not keep a released reply's tool output reachable", async () => {
+    // The in-process `gc` behind --expose-gc, for this worker only.
+    setFlagsFromString("--expose-gc")
+    const gc = runInNewContext("gc") as () => void
+    const build = (index: number) => {
+      const part = completedTool(`released-${index}`)
+      buildActivity([part], { isStreaming: false })
+      return new WeakRef(part)
+    }
+    // Fewer replies than the index holds: a strong index keeps every one.
+    const released = Array.from({ length: 4 }, (_, i) => build(i))
+    for (let i = 0; i < 8; i++) {
+      // A WeakRef keeps its target until the job that made it has ended.
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      gc()
+    }
+    expect(released.filter((ref) => ref.deref() !== undefined)).toHaveLength(0)
+  })
+
+  it("rebuilds across different parts arrays when WeakRef is unavailable", () => {
+    vi.stubGlobal("WeakRef", undefined)
+    try {
+      const parts = [completedTool("no-weak-ref")]
+      const first = buildActivity(parts, { isStreaming: false })
+      const rebuilt = buildActivity([completedTool("no-weak-ref")], {
+        isStreaming: false,
+      })
+      expect(rebuilt.steps[0]).toEqual(first.steps[0])
+      expect(rebuilt.steps[0]).not.toBe(first.steps[0])
+      expect(buildActivity(parts, { isStreaming: false })).toBe(first)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it("reports the running command and keeps every call visible", () => {
     const parts = adaptMessageTurn(
       MOCKUP_LIVE_TURN,

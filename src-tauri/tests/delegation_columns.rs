@@ -41,6 +41,7 @@ async fn delegation_columns_round_trip() {
         assistant_id: Set(None),
         assistant_snapshot: Set(None),
         source: Set(None),
+        selector_state: Set(None),
     };
     let inserted = active.insert(&db.conn).await.expect("insert");
     let id = inserted.id;

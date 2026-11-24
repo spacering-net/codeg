@@ -50,14 +50,11 @@ pub struct RuntimeLock {
 /// without a lock manager, say). A runtime goes on without the lock there,
 /// as it always did; any other error stops it rather than run unlocked.
 pub fn locking_unsupported(error: &io::Error) -> bool {
-    if error.kind() == io::ErrorKind::Unsupported {
-        return true;
-    }
     #[cfg(unix)]
-    if error.raw_os_error() == Some(libc::ENOLCK) {
-        return true;
-    }
-    false
+    let no_lock_manager = error.raw_os_error() == Some(libc::ENOLCK);
+    #[cfg(not(unix))]
+    let no_lock_manager = false;
+    error.kind() == io::ErrorKind::Unsupported || no_lock_manager
 }
 
 /// The lock file of the database `data_dir` holds.

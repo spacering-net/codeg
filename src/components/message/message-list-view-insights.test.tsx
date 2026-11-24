@@ -302,6 +302,31 @@ describe("MessageListView insights", () => {
     })
   })
 
+  it("tells the navigator nothing runs while the agent is idle", () => {
+    seed()
+    renderTranscript(true)
+    expect(published()?.nav.running).toBeNull()
+  })
+
+  it("tells the navigator which message the agent is answering", () => {
+    seed()
+    render(
+      <MessageListView
+        conversationId={CID}
+        imageRoot={null}
+        agentType="claude_code"
+        availableCommands={[]}
+        connStatus="prompting"
+        insightsInSidebar
+      />
+    )
+    // No live reply yet: counted from when the message was sent.
+    expect(published()?.nav.running).toEqual({
+      turnId: "u2",
+      startedAt: Date.parse(TURNS[2].timestamp),
+    })
+  })
+
   it("counts the messages above a loaded window", () => {
     seed({
       turns_offset: 6,

@@ -22,6 +22,7 @@ import {
   ChevronRight,
   MessagesSquare,
   SquareTerminal,
+  ListChecks,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useImeGuard } from "@/hooks/use-ime-guard"
@@ -66,6 +67,10 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ConversationStatusDot } from "./conversation-status-dot"
+import {
+  SidebarRelativeTime,
+  type SidebarRelativeClock,
+} from "./sidebar-relative-time"
 import { SessionDetailsDialog } from "./session-details-dialog"
 import { SidebarConversationHoverDetails } from "./sidebar-conversation-hover-details"
 import { ConversationTagChips } from "./conversation-tag-chip"
@@ -73,6 +78,7 @@ import {
   ConversationTagContextSubmenu,
   NewConversationTagDialog,
 } from "./conversation-tag-picker"
+import { MoveToFolderContextSubmenu } from "./move-to-folder-menu"
 import { AgentIcon } from "@/components/agent-icon"
 import { AssistantAvatar } from "@/components/assistants/assistant-avatar"
 import { useBranchChip, useResolvedTags } from "@/hooks/use-conversation-tags"
@@ -189,6 +195,8 @@ interface SidebarConversationCardProps {
   isSelected: boolean
   isOpenInTab?: boolean
   timeLabel?: string
+  relativeTimeAt?: string
+  relativeTimeClock?: SidebarRelativeClock
   onSelect: (id: number, agentType: string, folderId: number) => void
   onDoubleClick?: (id: number, agentType: string, folderId: number) => void
   onRename: (id: number, newTitle: string) => Promise<void>
@@ -196,6 +204,17 @@ interface SidebarConversationCardProps {
   onStatusChange: (id: number, status: ConversationStatus) => Promise<void>
   onNewConversation?: (folderId: number) => void
   onTogglePin?: (id: number, nextPinned: boolean) => void
+  /** A folder was picked in the "Move to folder" submenu — the caller asks for
+   *  confirmation. Offered on root regular and chat conversations only (a
+   *  sub-session moves with its root). */
+  onMoveToFolder?: (
+    conversation: DbConversationSummary,
+    folderId: number
+  ) => void
+  /** Opens Manage conversations on the folder this row is listed under.
+   *  Offered on root folder conversations only: a chat — and a sub-session,
+   *  which may hang under one — lives in no folder a scope there can name. */
+  onManageConversations?: (conversation: DbConversationSummary) => void
   /** Delegation-tree nesting depth (0 = root). Drives the per-level indent. */
   depth?: number
   /** True when `child_count > 0`: the conversation has delegation children, so
@@ -212,6 +231,8 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   isSelected,
   isOpenInTab = false,
   timeLabel,
+  relativeTimeAt,
+  relativeTimeClock,
   onSelect,
   onDoubleClick,
   onRename,
@@ -219,6 +240,8 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   onStatusChange,
   onNewConversation,
   onTogglePin,
+  onMoveToFolder,
+  onManageConversations,
   depth = 0,
   hasChildren = false,
   expanded = false,
@@ -229,6 +252,12 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   const tSidebar = useTranslations("Folder.sidebar")
   const tStatus = useTranslations("Folder.statusLabels")
   const tDetails = useTranslations("Folder.sessionDetails")
+  const timeLabelClassName = cn(
+    "relative shrink-0 tabular-nums text-[0.71875rem]",
+    isSelected
+      ? "font-medium text-muted-foreground"
+      : "font-normal text-muted-foreground/70"
+  )
   const [renameOpen, setRenameOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
@@ -617,18 +646,14 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                             {tSidebar("statusCancelledBadge")}
                           </span>
                         </span>
+                      ) : relativeTimeClock && relativeTimeAt !== undefined ? (
+                        <SidebarRelativeTime
+                          timestamp={relativeTimeAt}
+                          clock={relativeTimeClock}
+                          className={timeLabelClassName}
+                        />
                       ) : timeLabel ? (
-                        <span
-                          className={cn(
-                            "relative shrink-0 tabular-nums",
-                            "text-[0.71875rem]",
-                            isSelected
-                              ? "font-medium text-muted-foreground"
-                              : "font-normal text-muted-foreground/70"
-                          )}
-                        >
-                          {timeLabel}
-                        </span>
+                        <span className={timeLabelClassName}>{timeLabel}</span>
                       ) : null}
                     </span>
                     {/* Hover quick actions — roots only (sub-sessions opt out above).
@@ -768,6 +793,28 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                 )}
               </ContextMenuSubContent>
             </ContextMenuSub>
+            {onMoveToFolder &&
+              !isSubsession &&
+              (conversation.kind === "regular" ||
+                conversation.kind === "chat") && (
+                <MoveToFolderContextSubmenu
+                  currentFolderId={conversation.folder_id}
+                  onPick={(folderId) => onMoveToFolder(conversation, folderId)}
+                />
+              )}
+            {onManageConversations &&
+              !isSubsession &&
+              conversation.kind !== "chat" && (
+                <>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem
+                    onSelect={() => onManageConversations(conversation)}
+                  >
+                    <ListChecks className="h-4 w-4" />
+                    {tSidebar("folderHeaderMenu.manageConversations")}
+                  </ContextMenuItem>
+                </>
+              )}
             <ContextMenuSeparator />
             <ContextMenuItem
               variant="destructive"

@@ -40,7 +40,12 @@ import {
 // FolderOpen lucide icon renders once per FolderHeader body → counts folder
 // re-renders. Both increment only when the owning memoized component does NOT
 // bail out, so they measure exactly the production memo path.
-const probes = vi.hoisted(() => ({ card: 0, folder: 0, root: 0 }))
+const probes = vi.hoisted(() => ({
+  card: 0,
+  folder: 0,
+  root: 0,
+  virtualizer: 0,
+}))
 
 // Mutable backing store the mocked tab-context hook reads from (workspace data
 // now lives in the real zustand store, seeded per test below). `tabs` is
@@ -124,6 +129,7 @@ vi.mock("virtua", () => ({
     onScroll?: (offset: number) => void
     ref?: Ref<unknown>
   }) => {
+    probes.virtualizer++
     virtuaCtl.onScroll = onScroll ?? null
     useImperativeHandle(ref, () => ({
       get scrollOffset() {
@@ -1574,6 +1580,46 @@ describe("SidebarConversationList — time labels", () => {
     store.activeTabId = null
     store.tabSpec = []
     useAppWorkspaceStore.setState({ folders, allFolders: folders })
+  })
+
+  it("updates changed time labels without re-rendering the list or cards", () => {
+    vi.useFakeTimers({ now: FIXED })
+    try {
+      const hour = 60 * MINUTE
+      const crossing = new Date(FIXED - 2 * hour + 90_000).toISOString()
+      const steady = new Date(FIXED - 48 * hour - 3 * hour).toISOString()
+      useAppWorkspaceStore.setState({
+        conversations: [
+          conv(41, 1, { created_at: crossing, updated_at: crossing }),
+          conv(42, 1, { created_at: steady, updated_at: steady }),
+        ],
+      })
+      const view = render(tree())
+      const rows = () =>
+        Array.from(
+          view.container.querySelectorAll("[data-conv-key]"),
+          (row) => row.textContent
+        )
+      const initial = rows()
+      expect(initial.join(" ")).toContain("conv-411h")
+      expect(initial.join(" ")).toContain("conv-422d")
+      const firstRenderCount = probes.virtualizer
+      const firstCardCount = probes.card
+
+      act(() => vi.advanceTimersByTime(MINUTE))
+      expect(rows()).toEqual(initial)
+      expect(probes.card).toBe(firstCardCount)
+      expect(probes.virtualizer).toBe(firstRenderCount)
+
+      act(() => vi.advanceTimersByTime(MINUTE))
+      expect(rows().join(" ")).toContain("conv-412h")
+      expect(rows().join(" ")).toContain("conv-422d")
+      expect(probes.card).toBe(firstCardCount)
+      expect(probes.virtualizer).toBe(firstRenderCount)
+      view.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("labels Chat rows with the last activity they are ordered by", () => {

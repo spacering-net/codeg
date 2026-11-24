@@ -33,6 +33,7 @@ use super::auth::ResolvedAuth;
 use super::deliver::{ForgePr, NewPullRequest};
 use super::{
     count_diff_lines, sanitize_web_url, scan_timestamp, truncate_chars, urlencode_path,
+    ForgeCheckSummary, ForgeCheckSummaryList, ForgeCheckVerdict,
     urlencode_query, validate_state_filter, web_origin, ForgeChangeDetail, ForgeChangedFile,
     ForgeChangedFileList, ForgeCheck, ForgeCheckList, ForgeCheckState, ForgeComment,
     ForgeCommentList, ForgeError, ForgeFileStatus, ForgeIssueList, ForgeIssueRow, ForgeItemKind,
@@ -42,6 +43,120 @@ use super::{
 };
 
 // ── reads ───────────────────────────────────────────────────────────────────
+
+/// Project upload paths in GitLab Markdown are project-relative, even though
+/// they start with `/`. Download through the API: the web route needs a browser
+/// session and does not accept the account's PRIVATE-TOKEN.
+pub async fn read_image(
+    auth: &ResolvedAuth,
+    owner_repo: &str,
+    upload_path: &str,
+) -> Result<super::ForgeImage, ForgeError> {
+    read_image_in(
+        auth,
+        owner_repo,
+        upload_path,
+        &crate::paths::codeg_forge_images_root(),
+        super::image_cache::IMAGE_MAX_BYTES,
+    )
+    .await
+}
+
+async fn read_image_in(
+    auth: &ResolvedAuth,
+    owner_repo: &str,
+    upload_path: &str,
+    cache_root: &std::path::Path,
+    max_bytes: u64,
+) -> Result<super::ForgeImage, ForgeError> {
+    let (secret, filename) = image_upload_parts(upload_path)?;
+    let project = project_ref(owner_repo)?;
+    let url = format!(
+        "{}/projects/{project}/uploads/{secret}/{}",
+        auth.api_base,
+        urlencode_path(&filename)
+    );
+    let key = super::image_cache::cache_key(&[
+        "gitlab", &auth.api_base, &auth.account_id, &auth.token, &project, &url,
+    ]);
+    super::image_cache::get_or_download(cache_root, key, max_bytes, || image_get(auth, &url)).await
+}
+
+/// A file in object storage is answered, in GitLab's default "direct" download
+/// mode, with a redirect to a signed storage URL on another origin. The shared
+/// client stops there so `PRIVATE-TOKEN` never leaves GitLab's origin; follow
+/// that one hop here without any credential. The URL's signature is the
+/// authorization, exactly as when a browser follows the same redirect.
+async fn image_get(auth: &ResolvedAuth, url: &str) -> Result<reqwest::Response, ForgeError> {
+    let client = super::http_client()?;
+    let response = client
+        .get(url)
+        .header("PRIVATE-TOKEN", &auth.token)
+        .header("User-Agent", "codeg")
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| ForgeError::Network(e.to_string()))?;
+    if !response.status().is_redirection() {
+        return finish(response).await;
+    }
+    let status = response.status().as_u16();
+    let location = response
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| response.url().join(value).ok())
+        .filter(|location| matches!(location.scheme(), "http" | "https"))
+        .ok_or_else(|| ForgeError::Api {
+            status,
+            message: "GitLab redirected the image download to an invalid location".into(),
+        })?;
+    // No credential header on this request. A further cross-origin redirect
+    // stops in the shared client and is reported as a failed download.
+    let storage = client
+        .get(location)
+        .header("User-Agent", "codeg")
+        .send()
+        .await
+        .map_err(|e| ForgeError::Network(e.without_url().to_string()))?;
+    if storage.status().is_success() {
+        Ok(storage)
+    } else {
+        Err(ForgeError::Api {
+            status: storage.status().as_u16(),
+            message: "Object storage image download failed".into(),
+        })
+    }
+}
+
+/// Accept upload coordinates only, never a client-supplied host, repository or
+/// API URL. Decode the filename once and re-encode it as one API path segment.
+fn image_upload_parts(path: &str) -> Result<(&str, String), ForgeError> {
+    let invalid = || ForgeError::Invalid("invalid GitLab image upload path".into());
+    if path.len() > 4096 || path.contains(['?', '#']) {
+        return Err(invalid());
+    }
+    let (secret, filename) = path
+        .strip_prefix("/uploads/")
+        .and_then(|p| p.split_once('/'))
+        .ok_or_else(invalid)?;
+    if secret.len() != 32 || !secret.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return Err(invalid());
+    }
+    let filename = urlencoding::decode(filename)
+        .map_err(|_| invalid())?
+        .into_owned();
+    if filename.is_empty()
+        || filename == "."
+        || filename == ".."
+        || filename
+            .chars()
+            .any(|c| c == '/' || c == '\\' || c.is_control())
+    {
+        return Err(invalid());
+    }
+    Ok((secret, filename))
+}
 
 pub async fn list_issues(
     auth: &ResolvedAuth,
@@ -570,6 +685,9 @@ pub async fn change_detail(
         changed_files: raw.changes_count.as_deref().and_then(exact_changes_count),
         commits: None,
         checks,
+        // Only GitHub holds runs for a maintainer's approval through an API
+        // this panel can act on.
+        workflow_approval: None,
     })
 }
 
@@ -642,6 +760,112 @@ fn job_state(status: &str) -> ForgeCheckState {
         // canceled, skipped, manual — ran (or deliberately did not) and
         // produced no verdict.
         _ => ForgeCheckState::Neutral,
+    }
+}
+
+/// The GraphQL endpoint beside a REST base: `…/api/v4` → `…/api/graphql`,
+/// keeping whatever relative URL root the instance is mounted under.
+pub(crate) fn graphql_url(api_base: &str) -> String {
+    let base = api_base.trim_end_matches('/');
+    match base.strip_suffix("/v4") {
+        Some(api) => format!("{api}/graphql"),
+        None => format!("{base}/graphql"),
+    }
+}
+
+/// A head pipeline's status, folded the way [`job_state`] folds a job's — so
+/// the row and the panel's tab badge read the same words the same way.
+/// `MANUAL` (blocked on a manual job) is no verdict, as a manual job is.
+fn pipeline_verdict(status: &str, group: Option<&str>) -> ForgeCheckVerdict {
+    // "Passed with warnings" is a pass whose allowed failures are the detail.
+    if group == Some("success-with-warnings") {
+        return ForgeCheckVerdict::Success;
+    }
+    match status {
+        "SUCCESS" => ForgeCheckVerdict::Success,
+        "FAILED" => ForgeCheckVerdict::Failure,
+        "CREATED" | "WAITING_FOR_RESOURCE" | "PREPARING" | "PENDING" | "RUNNING"
+        | "SCHEDULED" | "CANCELING" | "WAITING_FOR_CALLBACK" => ForgeCheckVerdict::Running,
+        _ => ForgeCheckVerdict::Neutral,
+    }
+}
+
+/// CI summaries for one page of merge requests: each one's HEAD PIPELINE
+/// status, in one GraphQL request (the REST list carries no pipeline). No
+/// counts — a pipeline status is what GitLab's own MR list shows too.
+///
+/// Decoration, so it never fails (see [`ForgeCheckSummaryList`]): a merge
+/// request missing from the answer is unknown, and `headPipeline: null` is a
+/// change with no pipeline.
+pub async fn check_summaries(
+    auth: &ResolvedAuth,
+    owner_repo: &str,
+    numbers: &[i64],
+) -> ForgeCheckSummaryList {
+    let Some(path) = super::normalize_repo(owner_repo) else {
+        return ForgeCheckSummaryList::unavailable();
+    };
+    if numbers.is_empty() {
+        return ForgeCheckSummaryList {
+            available: true,
+            items: Vec::new(),
+        };
+    }
+    let iids: Vec<String> = numbers.iter().map(i64::to_string).collect();
+    let body = serde_json::json!({
+        "query": "query($path: ID!, $iids: [String!]) { project(fullPath: $path) { \
+                  mergeRequests(iids: $iids, first: 100) { nodes { iid \
+                  headPipeline { status detailedStatus { group } } } } } }",
+        "variables": { "path": path, "iids": iids },
+    });
+    let Ok(response) = api_post(auth, &graphql_url(&auth.api_base), &body).await else {
+        return ForgeCheckSummaryList::unavailable();
+    };
+    let Ok(value) = response.json::<serde_json::Value>().await else {
+        return ForgeCheckSummaryList::unavailable();
+    };
+    // Any error leaves the answer suspect as a whole: GitLab does not tie its
+    // errors to one merge request the way GitHub's aliases do.
+    if value
+        .get("errors")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|e| !e.is_empty())
+    {
+        return ForgeCheckSummaryList::unavailable();
+    }
+    let Some(nodes) = value
+        .pointer("/data/project/mergeRequests/nodes")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return ForgeCheckSummaryList::unavailable();
+    };
+    let items = nodes
+        .iter()
+        .filter_map(|node| {
+            let number = node
+                .get("iid")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|iid| iid.parse::<i64>().ok())
+                .filter(|n| numbers.contains(n))?;
+            let pipeline = node.get("headPipeline").filter(|p| p.is_object());
+            let verdict = pipeline.and_then(|p| {
+                let status = p.get("status").and_then(serde_json::Value::as_str)?;
+                let group = p
+                    .pointer("/detailedStatus/group")
+                    .and_then(serde_json::Value::as_str);
+                Some(pipeline_verdict(status, group))
+            });
+            Some(ForgeCheckSummary {
+                number,
+                verdict,
+                counts: None,
+                awaiting_approval: 0,
+            })
+        })
+        .collect();
+    ForgeCheckSummaryList {
+        available: true,
+        items,
     }
 }
 
@@ -1405,8 +1629,231 @@ mod tests {
     use axum::extract::Query;
     use axum::routing::{get, post};
     use axum::Json;
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+
+    const IMAGE_UPLOAD: &str = "/uploads/b1f62467989935311a5735eff346a6c7/image.png";
+
+    #[test]
+    fn image_paths_are_upload_coordinates_not_arbitrary_urls_or_api_paths() {
+        for path in [
+            "https://other.test/uploads/b1f62467989935311a5735eff346a6c7/image.png",
+            "/api/v4/projects/other/uploads/1/image.png",
+            "/uploads/short/image.png",
+            "/uploads/b1f62467989935311a5735eff346a6c7/../image.png",
+            "/uploads/b1f62467989935311a5735eff346a6c7/%2e%2e",
+            "/uploads/b1f62467989935311a5735eff346a6c7/a%2fb.png",
+            "/uploads/b1f62467989935311a5735eff346a6c7/a%5cb.png",
+            "/uploads/b1f62467989935311a5735eff346a6c7/%00.png",
+            "/uploads/b1f62467989935311a5735eff346a6c7/image.png?token=secret",
+            "/uploads/b1f62467989935311a5735eff346a6c7/image.png#fragment",
+        ] {
+            assert!(
+                matches!(image_upload_parts(path), Err(ForgeError::Invalid(_))),
+                "{path}"
+            );
+        }
+        let (_, filename) =
+            image_upload_parts("/uploads/b1f62467989935311a5735eff346a6c7/%E5%9B%BE%20%231.png")
+                .unwrap();
+        assert_eq!(filename, "图 #1.png");
+    }
+
+    #[allow(clippy::type_complexity)]
+    async fn image_api(
+        bytes: Vec<u8>,
+        chunked: bool,
+    ) -> (ResolvedAuth, Arc<std::sync::Mutex<Vec<(String, String)>>>) {
+        let seen: Arc<std::sync::Mutex<Vec<(String, String)>>> = Default::default();
+        let captured = seen.clone();
+        let app =
+            axum::Router::new().route(
+                "/{*path}",
+                get(
+                    move |axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
+                          headers: axum::http::HeaderMap| {
+                        let captured = captured.clone();
+                        let bytes = bytes.clone();
+                        async move {
+                            captured.lock().unwrap().push((
+                                uri.to_string(),
+                                headers
+                                    .get("private-token")
+                                    .unwrap()
+                                    .to_str()
+                                    .unwrap()
+                                    .to_string(),
+                            ));
+                            let body =
+                                if chunked {
+                                    axum::body::Body::from_stream(futures_util::stream::iter([
+                                        Ok::<_, std::io::Error>(bytes),
+                                    ]))
+                                } else {
+                                    axum::body::Body::from(bytes)
+                                };
+                            axum::http::Response::builder()
+                                .header("content-type", "application/octet-stream")
+                                .body(body)
+                                .unwrap()
+                        }
+                    },
+                ),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (auth_for(format!("http://{addr}/gitlab/api/v4")), seen)
+    }
+
+    #[tokio::test]
+    async fn image_download_authenticates_and_detects_octet_stream_png() {
+        let cache = tempfile::tempdir().unwrap();
+        let png = STANDARD.decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6TAAAAABJRU5ErkJggg==",
+        ).unwrap();
+        let (auth, seen) = image_api(png.clone(), false).await;
+        let image = read_image_in(
+            &auth,
+            "group/sub/proj",
+            "/uploads/b1f62467989935311a5735eff346a6c7/%E5%9B%BE%20%231.png",
+            cache.path(),
+            1024,
+        )
+        .await
+        .unwrap();
+        assert_eq!(image.mime_type, "image/png");
+        assert_eq!(std::fs::read(super::super::image_cache::cached_path(&image)).unwrap(), png);
+        let again = read_image_in(
+            &auth,
+            "group/sub/proj",
+            "/uploads/b1f62467989935311a5735eff346a6c7/%E5%9B%BE%20%231.png",
+            cache.path(),
+            1024,
+        ).await.unwrap();
+        assert_eq!(again.url, image.url);
+        let server = axum_test::TestServer::new(
+            axum::Router::new().route(
+                "/api/forge_image/{key}", get(super::super::image_cache::serve_image),
+            ),
+        ).unwrap();
+        let response = server.get(&image.url).await;
+        response.assert_status_ok();
+        response.assert_header("content-type", "image/png");
+        response.assert_header("x-content-type-options", "nosniff");
+        assert_eq!(response.as_bytes().as_ref(), png.as_slice());
+        assert!(response.header("content-security-policy").to_str().unwrap().starts_with("sandbox;"));
+        let denied = format!("{}?cap={}", image.url.split('?').next().unwrap(), uuid::Uuid::new_v4());
+        server.get(&denied).await.assert_status_not_found();
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![(
+                "/gitlab/api/v4/projects/group%2Fsub%2Fproj/uploads/b1f62467989935311a5735eff346a6c7/%E5%9B%BE%20%231.png".into(),
+                "tok-test".into(),
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn image_download_follows_object_storage_redirect_without_the_token() {
+        let cache = tempfile::tempdir().unwrap();
+        let png = STANDARD.decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6TAAAAABJRU5ErkJggg==",
+        )
+        .unwrap();
+        type Seen = Arc<std::sync::Mutex<Vec<(String, Option<String>)>>>;
+        let storage_seen: Seen = Default::default();
+        let captured = storage_seen.clone();
+        let body = png.clone();
+        let storage = axum::Router::new().route(
+            "/bucket/{*path}",
+            get(
+                move |axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
+                      headers: axum::http::HeaderMap| {
+                    let captured = captured.clone();
+                    let body = body.clone();
+                    async move {
+                        captured.lock().unwrap().push((
+                            uri.to_string(),
+                            headers
+                                .get("private-token")
+                                .map(|v| v.to_str().unwrap().to_string()),
+                        ));
+                        axum::http::Response::builder()
+                            .header("content-type", "image/png")
+                            .body(axum::body::Body::from(body))
+                            .unwrap()
+                    }
+                },
+            ),
+        );
+        let storage_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let storage_addr = storage_listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(storage_listener, storage).await.unwrap() });
+
+        // A different port is a different origin: the shared client stops at
+        // this redirect, as it would at an S3/GCS host.
+        let signed = format!("http://{storage_addr}/bucket/image.png?X-Amz-Signature=abc");
+        let gitlab_seen = Arc::new(AtomicUsize::new(0));
+        let hits = gitlab_seen.clone();
+        let gitlab = axum::Router::new().route(
+            "/{*path}",
+            get(move |headers: axum::http::HeaderMap| {
+                let hits = hits.clone();
+                let signed = signed.clone();
+                async move {
+                    assert_eq!(headers.get("private-token").unwrap(), "tok-test");
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    axum::http::Response::builder()
+                        .status(302)
+                        .header("location", signed)
+                        .body(axum::body::Body::empty())
+                        .unwrap()
+                }
+            }),
+        );
+        let gitlab_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let gitlab_addr = gitlab_listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(gitlab_listener, gitlab).await.unwrap() });
+
+        let auth = auth_for(format!("http://{gitlab_addr}/api/v4"));
+        let image = read_image_in(&auth, "group/proj", IMAGE_UPLOAD, cache.path(), 1024)
+            .await
+            .unwrap();
+        assert_eq!(image.mime_type, "image/png");
+        assert_eq!(
+            std::fs::read(super::super::image_cache::cached_path(&image)).unwrap(),
+            png
+        );
+        assert_eq!(gitlab_seen.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            *storage_seen.lock().unwrap(),
+            vec![("/bucket/image.png?X-Amz-Signature=abc".to_string(), None)]
+        );
+    }
+
+    #[tokio::test]
+    async fn image_download_rejects_a_successful_html_response() {
+        let cache = tempfile::tempdir().unwrap();
+        let (auth, _) = image_api(b"<html>Sign in</html>".to_vec(), false).await;
+        assert!(matches!(
+            read_image_in(&auth, "group/sub/proj", IMAGE_UPLOAD, cache.path(), 1024).await,
+            Err(ForgeError::Invalid(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn image_download_caps_both_content_length_and_chunked_responses() {
+        for chunked in [false, true] {
+            let cache = tempfile::tempdir().unwrap();
+            let (auth, _) = image_api(vec![0; 1025], chunked).await;
+            let error = read_image_in(&auth, "group/sub/proj", IMAGE_UPLOAD, cache.path(), 1024)
+                .await
+                .unwrap_err();
+            assert!(matches!(error, ForgeError::Invalid(ref message) if message.contains("1024 byte")));
+        }
+    }
 
     fn auth_for(api_base: String) -> ResolvedAuth {
         ResolvedAuth {
@@ -2963,4 +3410,91 @@ mod open_items_tests {
         assert_eq!(asked[0].1.get("page").cloned(), Some(restart.to_string()));
     }
 
+}
+
+#[cfg(test)]
+mod check_summary_tests {
+    use super::*;
+    use axum::routing::post;
+    use axum::Json;
+    use std::sync::{Arc, Mutex};
+
+    fn auth_for(api_base: String) -> ResolvedAuth {
+        ResolvedAuth {
+            provider: super::super::ForgeProvider::GitLab,
+            server_host: "gitlab.test".into(),
+            api_base,
+            account_id: "acc-test".into(),
+            username: "alice".into(),
+            avatar_url: None,
+            token: "tok-test".into(),
+            scopes: vec![],
+        }
+    }
+
+    async fn serve(answer: serde_json::Value) -> (ResolvedAuth, Arc<Mutex<Vec<serde_json::Value>>>) {
+        let seen: Arc<Mutex<Vec<serde_json::Value>>> = Arc::default();
+        let log = seen.clone();
+        let app = axum::Router::new().route(
+            "/gitlab/api/graphql",
+            post(move |Json(body): Json<serde_json::Value>| {
+                let log = log.clone();
+                let answer = answer.clone();
+                async move {
+                    log.lock().unwrap().push(body);
+                    Json(answer)
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        // Mounted under a relative URL root, which the GraphQL path keeps.
+        (auth_for(format!("http://{addr}/gitlab/api/v4")), seen)
+    }
+
+    #[test]
+    fn the_graphql_endpoint_keeps_the_relative_url_root() {
+        assert_eq!(graphql_url("https://gitlab.com/api/v4"), "https://gitlab.com/api/graphql");
+        assert_eq!(graphql_url("https://h/gitlab/api/v4/"), "https://h/gitlab/api/graphql");
+    }
+
+    #[tokio::test]
+    async fn head_pipelines_fold_into_the_row_verdicts() {
+        let (auth, seen) = serve(serde_json::json!({ "data": { "project": { "mergeRequests": { "nodes": [
+            { "iid": "1", "headPipeline": { "status": "SUCCESS", "detailedStatus": { "group": "success" } } },
+            { "iid": "2", "headPipeline": { "status": "FAILED", "detailedStatus": { "group": "success-with-warnings" } } },
+            { "iid": "3", "headPipeline": { "status": "RUNNING", "detailedStatus": { "group": "running" } } },
+            { "iid": "4", "headPipeline": { "status": "MANUAL", "detailedStatus": { "group": "manual" } } },
+            { "iid": "5", "headPipeline": null },
+            // Not asked for: dropped rather than trusted.
+            { "iid": "99", "headPipeline": { "status": "FAILED" } },
+        ] } } } }))
+        .await;
+        let list = check_summaries(&auth, "group/app", &[1, 2, 3, 4, 5, 6]).await;
+        assert!(list.available);
+        let verdict = |n: i64| list.items.iter().find(|s| s.number == n).map(|s| s.verdict);
+        assert_eq!(verdict(1), Some(Some(ForgeCheckVerdict::Success)));
+        assert_eq!(verdict(2), Some(Some(ForgeCheckVerdict::Success)), "passed with warnings");
+        assert_eq!(verdict(3), Some(Some(ForgeCheckVerdict::Running)));
+        assert_eq!(verdict(4), Some(Some(ForgeCheckVerdict::Neutral)), "blocked on a manual job");
+        assert_eq!(verdict(5), Some(None), "no pipeline: present and empty");
+        assert_eq!(verdict(6), None, "not in the answer: unknown");
+        assert_eq!(verdict(99), None);
+        assert!(list.items.iter().all(|s| s.counts.is_none() && s.awaiting_approval == 0));
+
+        let body = &seen.lock().unwrap()[0];
+        assert_eq!(body["variables"]["path"], "group/app");
+        assert_eq!(body["variables"]["iids"], serde_json::json!(["1", "2", "3", "4", "5", "6"]));
+    }
+
+    #[tokio::test]
+    async fn any_error_leaves_the_batch_unknown() {
+        let (auth, _) = serve(serde_json::json!({
+            "data": { "project": null },
+            "errors": [{ "message": "The resource that you are attempting to access does not exist" }],
+        }))
+        .await;
+        assert!(!check_summaries(&auth, "group/app", &[1]).await.available);
+    }
 }

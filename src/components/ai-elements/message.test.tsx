@@ -35,11 +35,16 @@ vi.mock("@streamdown/math", () => ({
   createMathPlugin: () => ({}),
 }))
 vi.mock("@streamdown/mermaid", () => ({ mermaid: {} }))
-vi.mock("@streamdown/code", () => ({
-  code: {
+vi.mock("@/lib/code-highlighter", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/code-highlighter")>()),
+  createCodePlugin: async () => ({
+    name: "shiki",
+    type: "code-highlighter",
     highlight: vi.fn(),
     supportsLanguage: vi.fn(() => true),
-  },
+    getSupportedLanguages: () => [],
+    getThemes: () => ["github-light", "github-dark"],
+  }),
 }))
 
 vi.mock("@/components/ai-elements/link-safety", () => ({

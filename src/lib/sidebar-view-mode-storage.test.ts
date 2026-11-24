@@ -1,8 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest"
 
+import enMessages from "@/i18n/messages/en.json"
 import {
   DEFAULT_SECTION_ORDER,
+  SIDEBAR_NAV_ITEM_IDS,
   SIDEBAR_RECENT_FILTERS,
+  isNavItemVisible,
+  loadNavItemVisibility,
   loadRecentFilter,
   loadSectionCollapsed,
   loadSectionOrder,
@@ -10,6 +14,7 @@ import {
   loadTagFilter,
   moveSectionInOrder,
   normalizeSectionOrder,
+  saveNavItemVisibility,
   saveRecentFilter,
   saveSectionOrder,
   saveShowRecent,
@@ -21,6 +26,7 @@ const SECTION_ORDER_KEY = "workspace:sidebar-section-order"
 const SHOW_RECENT_KEY = "workspace:sidebar-show-recent"
 const RECENT_FILTER_KEY = "workspace:sidebar-recent-filter"
 const TAG_FILTER_KEY = "workspace:sidebar-tag-filter"
+const NAV_ITEMS_KEY = "workspace:sidebar-nav-items"
 
 describe("normalizeSectionOrder", () => {
   it("passes a complete order through unchanged", () => {
@@ -178,6 +184,83 @@ describe("loadSectionCollapsed", () => {
       JSON.stringify({ recent: true, chats: false, bogus: 1 })
     )
     expect(loadSectionCollapsed()).toEqual({ recent: true, chats: false })
+  })
+})
+
+describe("sidebar nav items", () => {
+  beforeEach(() => localStorage.clear())
+
+  it("lists the route rows top to bottom, Harness after the canvas", () => {
+    expect(SIDEBAR_NAV_ITEM_IDS).toEqual([
+      "automations",
+      "tasks",
+      "forge",
+      "canvas",
+      "harness",
+    ])
+  })
+
+  it("names every row from the sidebar's own messages", () => {
+    // Each id doubles as its `Folder.sidebar` key: the row, its visibility
+    // toggle and the quick-actions entry all read the label through it.
+    const labels: Record<string, unknown> = enMessages.Folder.sidebar
+    for (const id of SIDEBAR_NAV_ITEM_IDS) {
+      expect(typeof labels[id]).toBe("string")
+    }
+    expect(enMessages.Folder.sidebar.harness).toBe("Harness Engineering")
+  })
+
+  it("shows a row unless it was explicitly hidden", () => {
+    for (const id of SIDEBAR_NAV_ITEM_IDS) {
+      expect(isNavItemVisible({}, id)).toBe(true)
+      expect(isNavItemVisible({ [id]: true }, id)).toBe(true)
+      expect(isNavItemVisible({ [id]: false }, id)).toBe(false)
+    }
+  })
+
+  it("shows everything with nothing stored", () => {
+    expect(loadNavItemVisibility()).toEqual({})
+  })
+
+  it("round-trips a hidden Harness row", () => {
+    saveNavItemVisibility({ harness: false })
+    expect(JSON.parse(localStorage.getItem(NAV_ITEMS_KEY) ?? "")).toEqual({
+      harness: false,
+    })
+    expect(loadNavItemVisibility()).toEqual({ harness: false })
+    expect(isNavItemVisible(loadNavItemVisibility(), "harness")).toBe(false)
+
+    saveNavItemVisibility({ harness: true })
+    expect(isNavItemVisible(loadNavItemVisibility(), "harness")).toBe(true)
+  })
+
+  it("shows Harness to a store written before the row existed", () => {
+    // Only explicit choices are stored, so an older store has no entry for a
+    // newer route — and no entry means shown.
+    localStorage.setItem(
+      NAV_ITEMS_KEY,
+      JSON.stringify({ automations: false, canvas: true })
+    )
+    const stored = loadNavItemVisibility()
+
+    expect(stored).toEqual({ automations: false, canvas: true })
+    expect(isNavItemVisible(stored, "harness")).toBe(true)
+    expect(isNavItemVisible(stored, "automations")).toBe(false)
+  })
+
+  it("drops entries it does not recognise", () => {
+    localStorage.setItem(
+      NAV_ITEMS_KEY,
+      JSON.stringify({ retired: false, harness: false, tasks: "no" })
+    )
+    expect(loadNavItemVisibility()).toEqual({ harness: false })
+  })
+
+  it("reads corrupt storage as nothing hidden", () => {
+    for (const raw of ["{not json", "null", '"harness"', "[]"]) {
+      localStorage.setItem(NAV_ITEMS_KEY, raw)
+      expect(loadNavItemVisibility()).toEqual({})
+    }
   })
 })
 

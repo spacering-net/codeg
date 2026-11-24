@@ -87,7 +87,7 @@ export interface ComposerInvocations {
  * `isExternalMenuOpen`/`onExternalMenuKeyDown` escape hatch; a selected item
  * becomes a badge that serializes to its literal `/cmd` / `$skill` token on save.
  * Antigravity's and OpenCode's skills, which their servers never advertise,
- * join their commands under `/`.
+ * and a custom agent's declared skills join their commands under `/`.
  */
 export function useComposerInvocations({
   editorRef,

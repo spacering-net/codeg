@@ -291,6 +291,73 @@ describe("SessionSettingsPicker — the popover", () => {
     expect(sonnet).toHaveTextContent(MSGS.recommendedBadge)
   })
 
+  it("sets each model's effort range on its row when the models differ", async () => {
+    const user = userEvent.setup()
+    const model = (
+      value: string,
+      name: string,
+      values: string[]
+    ): SessionConfigSelectOptionInfo => ({
+      value,
+      name,
+      description: null,
+      reasoning_efforts: { values, recommended: null },
+    })
+    const effortOption = CLAUDE[2]!
+    const shortList = [
+      select("model", "Model", "model", "opus", [
+        model("opus", "Opus 5.5", ["low", "medium", "high"]),
+        model("sonnet", "Sonnet 5.5", ["low", "medium"]),
+      ]),
+      effortOption,
+    ]
+    renderPicker({ configOptions: shortList })
+    let popover = await openPopover(user)
+    const opus = within(popover).getByRole("button", { name: /Opus 5\.5/ })
+    expect(within(opus).getByText("Low–High")).toHaveAttribute(
+      "title",
+      MSGS.effortRange.replace("{range}", "Low–High")
+    )
+    expect(
+      within(popover).getByRole("button", { name: /Sonnet 5\.5/ })
+    ).toHaveTextContent("Low–Medium")
+    cleanup()
+
+    // The searchable list (past eight models) sets it the same way.
+    const many = Array.from({ length: 9 }, (_, i) =>
+      model(`m${i}`, `Model ${i}`, i === 0 ? ["low", "ultra"] : ["low", "high"])
+    )
+    renderPicker({
+      configOptions: [
+        select("model", "Model", "model", "m1", many),
+        effortOption,
+      ],
+    })
+    popover = await openPopover(user)
+    expect(
+      within(popover).getByRole("option", { name: /Model 0/ })
+    ).toHaveTextContent("Low–Ultra")
+    expect(
+      within(popover).getByRole("option", { name: /Model 1/ })
+    ).toHaveTextContent("Low–High")
+  })
+
+  it("sets no effort range when every model would show the same one", async () => {
+    const user = userEvent.setup()
+    const same = { values: ["low", "high"], recommended: "low" }
+    renderPicker({
+      configOptions: [
+        select("model", "Model", "model", "opus", [
+          { value: "opus", name: "Opus 5.5", reasoning_efforts: same },
+          { value: "sonnet", name: "Sonnet 5.5", reasoning_efforts: same },
+        ]),
+        CLAUDE[2]!,
+      ],
+    })
+    const popover = await openPopover(user)
+    expect(within(popover).queryByText("Low–High")).toBeNull()
+  })
+
   it("scrolls the panel and a short list in the app's scrollbar, not the native one", async () => {
     const user = userEvent.setup()
     renderPicker()

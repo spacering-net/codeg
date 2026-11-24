@@ -95,11 +95,10 @@ export function compareByPinnedAtDesc(
 
 /**
  * Relative time label (e.g. "5m", "3h", "2d"). `now` is passed in rather than
- * read from `Date.now()` so a whole render tick shares one value: every
- * unchanged row then produces an identical label string and the card `memo`
- * stays hit. The list refreshes `now` once a minute (see
- * `SidebarConversationList`), bounding label staleness without making a single
- * status event re-render every card.
+ * read from `Date.now()` so every label reads the same instant: the list's
+ * shared once-a-minute clock (see `createSidebarRelativeClock`). Each label
+ * subscribes to that clock on its own and re-renders only when its formatted
+ * text changes, so neither a tick nor a status event re-renders every card.
  */
 export function formatRelative(iso: string, now: number): string {
   const ts = parseTimestamp(iso)
@@ -1207,10 +1206,10 @@ function pushConversationRow(
  * linear row list for windowing by the one Virtualizer — pinned conversations
  * are ordinary conversation rows in the SAME array, never a separate list.
  *
- * Pure and deliberately **does not take `now`**: the per-minute `now` tick that
+ * Pure and deliberately **does not take `now`**: the per-minute clock tick that
  * refreshes relative time labels must not rebuild this array (that would defeat
- * the Phase 1 memo chain). `timeLabel` stays computed at the row renderer from
- * the shared `now` against the row's `conversation`.
+ * the Phase 1 memo chain). The row renderer passes only the row's timestamp;
+ * each card's `SidebarRelativeTime` formats it against the shared clock.
  *
  * Structure (top to bottom): the "Pinned" section (when present) is always
  * first; the "Folders", "Chat" and "Recent" sections follow in the order set by

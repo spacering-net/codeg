@@ -19,10 +19,10 @@ use crate::acp::feedback::{FeedbackItem, FeedbackStatus};
 use crate::acp::plan_approval::PendingPlanApprovalState;
 use crate::acp::question::PendingQuestionState;
 use crate::acp::types::{
-    AcpEvent, AsyncTaskRecord, AvailableCommandInfo, ConfigStaleKind, ConnectionStatus,
-    EventEnvelope, GrokModelCatalog, GrokModelSpec, PromptCapabilitiesInfo, RemoteControlInfo,
-    SessionConfigOptionInfo, SessionFailureRecord, SessionModeStateInfo, ToolApprovalInfo,
-    ToolCallImageInfo,
+    AcpEvent, AsyncTaskRecord, AvailableCommandInfo, BackgroundOutstandingTask, ConfigStaleKind,
+    ConnectionStatus, EventEnvelope, GrokModelCatalog, GrokModelSpec, PromptCapabilitiesInfo,
+    RemoteControlInfo, SessionConfigOptionInfo, SessionFailureRecord, SessionModeStateInfo,
+    ToolApprovalInfo, ToolCallImageInfo,
 };
 use crate::models::agent::AgentType;
 use crate::models::message::MessageRole;
@@ -362,11 +362,24 @@ pub struct SessionState {
     /// dies with it). Carried on `to_snapshot()` so a client attaching
     /// mid-episode recovers the pending count without replaying events.
     pub background_outstanding: u32,
+    /// The same tasks one by one (`BackgroundActivity::outstanding_tasks`), so
+    /// a client attaching mid-episode can list WHICH background sub-agents
+    /// still run, not just how many. `apply_event` is the only writer.
+    pub background_outstanding_tasks: Vec<BackgroundOutstandingTask>,
     /// Instant of the most recent `BackgroundActivity` event. Bounds the sweep
     /// exemption: if the watcher stops reporting (task died, bug) the
     /// exemption lapses after `background_keepalive_max_age()` instead of
     /// pinning the connection alive forever. Backend-internal; not serialized.
     pub background_activity_at: Option<DateTime<Utc>>,
+    /// The last answer Claude Code wrote in a turn it started on its own (the
+    /// follow-up to a `<task-notification>`), with when it was read. Those
+    /// turns never reach the wire as a prompt's turn — no `TurnComplete`, no
+    /// [`Self::last_assistant_text`] — and arrive only as the watcher's
+    /// `BackgroundActivity` turns, so this is the one place an engine that
+    /// waited them out can read what the agent finally said (see
+    /// `acp::turn_end_hold`). `apply_event` is the only writer.
+    /// Backend-internal; not serialized.
+    pub last_background_reply: Option<(DateTime<Utc>, String)>,
 
     // ACP 协商出的能力
     pub modes: Option<SessionModeStateInfo>,
@@ -516,6 +529,39 @@ pub struct SessionState {
     /// on the snapshot so a frontend that reconnects after refresh can see
     /// "init complete" without waiting for an event that already fired.
     pub selectors_ready: bool,
+    /// True while a session establishment is in progress and its selectors
+    /// are not settled yet: from creation / every `SessionStarted` (new,
+    /// resumed, loaded, forked session) until the following `SelectorsReady`.
+    /// The conversation's stored selection is never written while this is set
+    /// — that is exactly when the agent's pre-application defaults are
+    /// visible (a resume emits `session.modes()` before replaying the stored
+    /// selection; a fork emits the forked session's defaults before restoring
+    /// the inherited ones). Backend-internal; not serialized.
+    pub selectors_settling: bool,
+    /// The conversation row this connection writes its selection to before
+    /// the first prompt links it (`conversation_id` is only set by
+    /// `ConversationLinked`): set by `acp_connect` for an existing
+    /// conversation (`ConnectionManager::bind_selection_conversation`).
+    /// Backend-internal; not serialized.
+    pub selection_conversation_id: Option<i32>,
+    /// A mode the user picked in a tab's composer that the tab applies at its
+    /// next send (legacy-modes picks are deferred to send time), recorded so a
+    /// close-and-reopen without sending keeps the pick. Never sent to the
+    /// agent from here. Written only by `AcpEvent::ComposerModeChanged`;
+    /// carried on `to_snapshot()`.
+    pub composer_mode_id: Option<String>,
+    /// Latched by the first EXPLICIT composer pick on this connection, never
+    /// reset. A draft's one-time hand-over of its pick (and a reconnect's
+    /// restore of the stored intent) applies only while this is false, so it
+    /// can never overwrite a pick another surface already made.
+    /// Backend-internal; not serialized.
+    pub composer_mode_touched: bool,
+    /// Set by the connection's driver once its loop has ended, right before
+    /// the final selection flush. From then on direct selection mutations
+    /// (`acp_set_composer_mode`, `bind_selection_conversation`) are refused,
+    /// so a pick is either in the flushed row or rejected, never accepted and
+    /// lost. Backend-internal; not serialized.
+    pub selection_finalized: bool,
 
     /// Most recent unresolved `AcpEvent::Error` payload. Cleared when a new
     /// prompt starts, matching the frontend reducer's live-event behavior. The
@@ -596,6 +642,25 @@ pub struct SessionState {
     /// answer, is never recorded, so its placeholder row still settles.
     /// Backend-only.
     pub antigravity_answered_interactions: BTreeSet<String>,
+
+    /// Whether the adapter on this connection is antigravity-acp, so that its
+    /// `interaction_<hex>` questions are bridged into the question card
+    /// (`connection.rs::try_bridge_antigravity_ask`). Always true for the
+    /// built-in Antigravity. A custom agent gets it at initialize only when
+    /// the RUNNING adapter reports `agentInfo.name == "antigravity-acp"` (a
+    /// second Antigravity account registered as a custom agent, say), because
+    /// the id prefix alone says nothing about who minted it
+    /// (`connection.rs::speaks_antigravity_interactions`). Backend-only.
+    pub antigravity_interactions: bool,
+    /// Whether a declined bridged Antigravity question stops the turn: the
+    /// running adapter reported 1.5.1 or later at initialize
+    /// (`connection.rs::antigravity_skip_cancels_turn`). Backend-only.
+    pub antigravity_skip_cancels_turn: bool,
+    /// Configured Gemini home for this launch's trajectory (backend only).
+    pub(crate) antigravity_sessions_dir: Option<std::path::PathBuf>,
+    /// A transiently unreadable task DB at the foreground boundary. Passive
+    /// releases wait for the next successful read (bounded if the DB is lost).
+    pub(crate) antigravity_reconcile_at: Option<DateTime<Utc>>,
 
     /// Whether live-feedback notes for THIS session go over the native ACP
     /// `_session/steering` push channel instead of the `check_user_feedback`
@@ -706,6 +771,14 @@ pub struct SessionState {
     /// cleared) so the lifecycle subscriber can surface it as the
     /// `delegation_call_id`-bound child outcome. Cleared on the next prompt.
     pub last_assistant_text: Option<String>,
+
+    /// When the last turn's `TurnComplete` was applied here — the moment
+    /// [`Self::last_assistant_text`] was captured, so the two read together
+    /// say which answer came when. Stamped here rather than where a consumer
+    /// reads the event, which can lag the bus: an engine comparing this answer
+    /// with [`Self::last_background_reply`] (see `acp::turn_end_hold`) needs
+    /// both on the same clock. Backend-internal; not serialized.
+    pub last_turn_completed_at: Option<DateTime<Utc>>,
 
     /// The just-completed turn's tool-call progress ([`Self::turn_progress`]),
     /// captured at TurnComplete beside `last_assistant_text` — by the time the
@@ -913,7 +986,9 @@ impl SessionState {
             feedback: Vec::new(),
             tool_approvals: Vec::new(),
             background_outstanding: 0,
+            background_outstanding_tasks: Vec::new(),
             background_activity_at: None,
+            last_background_reply: None,
             modes: None,
             current_mode: None,
             config_options: None,
@@ -935,6 +1010,11 @@ impl SessionState {
             claude_settings: None,
             remote_control: None,
             selectors_ready: false,
+            selectors_settling: true,
+            selection_conversation_id: None,
+            composer_mode_id: None,
+            composer_mode_touched: false,
+            selection_finalized: false,
             last_error: None,
             session_started_tx: None,
             event_seq: 0,
@@ -946,6 +1026,10 @@ impl SessionState {
             feedback_tool_available: false,
             result_tool_available: false,
             antigravity_answered_interactions: BTreeSet::new(),
+            antigravity_interactions: agent_type == AgentType::Antigravity,
+            antigravity_skip_cancels_turn: false,
+            antigravity_sessions_dir: None,
+            antigravity_reconcile_at: None,
             native_steering_available: false,
             codex_user_input_shape: None,
             neutral_goal_channel: false,
@@ -956,6 +1040,7 @@ impl SessionState {
             async_tasks: BTreeMap::new(),
             async_task_activity_at: None,
             last_assistant_text: None,
+            last_turn_completed_at: None,
             last_turn_progress: None,
             pending_user_message: None,
             pending_user_message_started_at: None,
@@ -1195,6 +1280,9 @@ impl SessionState {
                 }
                 self.external_id = Some(session_id.clone());
                 self.status = ConnectionStatus::Connected;
+                // A new establishment begins: its selectors are transitional
+                // until the `SelectorsReady` that follows it.
+                self.selectors_settling = true;
                 // Fire the dedup waiter (if any). Take()-and-send is
                 // single-shot: a duplicate SessionStarted (replay, agent
                 // re-init) finds None here and is a no-op, which is
@@ -1264,6 +1352,12 @@ impl SessionState {
                 // stream has long since corrected it.
                 if let Some(modes) = self.modes.as_mut() {
                     modes.current_mode_id = mode_id.clone();
+                }
+            }
+            AcpEvent::ComposerModeChanged { mode_id, explicit } => {
+                self.composer_mode_id = mode_id.clone();
+                if *explicit {
+                    self.composer_mode_touched = true;
                 }
             }
             AcpEvent::SessionConfigOptions { config_options } => {
@@ -1547,6 +1641,7 @@ impl SessionState {
                 if self.turn_in_flight || self.live_message.is_some() {
                     self.last_assistant_text = None;
                     self.last_turn_progress = self.turn_progress();
+                    self.last_turn_completed_at = Some(Utc::now());
                 }
                 if let Some(live) = self.live_message.as_ref() {
                     let after_last_tool_call = live
@@ -1703,6 +1798,7 @@ impl SessionState {
                 // after browser refresh) can tell the initial handshake is
                 // already done — the event fires only once per connection.
                 self.selectors_ready = true;
+                self.selectors_settling = false;
             }
             AcpEvent::Error {
                 message,
@@ -1830,13 +1926,28 @@ impl SessionState {
                     }
                 }
             }
-            AcpEvent::BackgroundActivity { outstanding, .. } => {
+            AcpEvent::BackgroundActivity {
+                turns,
+                outstanding,
+                outstanding_tasks,
+                ..
+            } => {
+                if let Some(reply) = last_assistant_reply(turns) {
+                    self.last_background_reply = Some((Utc::now(), reply));
+                }
                 // Mirror the watcher's authoritative accounting so the idle
                 // sweeps can exempt this connection while background work is
                 // pending. The turns/settled payloads are frontend-only; the
                 // trailing `last_activity_at = now` below additionally resets
                 // the backend idle timer on every batch of transcript activity.
                 self.background_outstanding = *outstanding;
+                self.background_outstanding_tasks = outstanding_tasks.clone();
+                self.background_activity_at = Some(Utc::now());
+            }
+            AcpEvent::BackgroundTaskProgress { .. } => {
+                // The card patch is frontend-only. The tick itself is the agent
+                // saying a background child is alive right now, so it refreshes
+                // the keep-alive clock the outstanding count is bounded by.
                 self.background_activity_at = Some(Utc::now());
             }
             AcpEvent::SessionFailure { record } => {
@@ -1942,6 +2053,16 @@ impl SessionState {
         if self.has_live_async_task(now) {
             return true;
         }
+        self.watcher_counts_work(now)
+            || self
+                .antigravity_reconcile_at
+                .is_some_and(|at| now.signed_duration_since(at) < background_keepalive_max_age())
+    }
+
+    /// Whether the transcript watcher (or another `BackgroundActivity`
+    /// producer) still counts work, and reported recently enough to believe
+    /// it — the watcher's half of [`Self::has_active_background_work`].
+    fn watcher_counts_work(&self, now: DateTime<Utc>) -> bool {
         if self.background_outstanding == 0 {
             return false;
         }
@@ -1949,6 +2070,19 @@ impl SessionState {
             Some(at) => now.signed_duration_since(at) < background_keepalive_max_age(),
             None => false,
         }
+    }
+
+    /// Whether the watcher still counts a background SUB-AGENT
+    /// ([`BackgroundTaskKind::Agent`](crate::acp::types::BackgroundTaskKind)),
+    /// under the same age bound as its count. claude-agent-acp keeps every
+    /// sub-agent out of the AIR async-task table (its `isSubagentTask` filter),
+    /// so for Claude Code this is the only place a running sub-agent shows.
+    pub fn has_outstanding_background_agent(&self, now: DateTime<Utc>) -> bool {
+        self.watcher_counts_work(now)
+            && self
+                .background_outstanding_tasks
+                .iter()
+                .any(|t| t.kind == crate::acp::types::BackgroundTaskKind::Agent)
     }
 
     /// Whether any AIR async task is still non-terminal AND the adapter has
@@ -2608,6 +2742,7 @@ impl SessionState {
             feedback: self.feedback.clone(),
             tool_approvals: self.tool_approvals.clone(),
             background_outstanding: self.background_outstanding,
+            background_outstanding_tasks: self.background_outstanding_tasks.clone(),
             feedback_tool_available: self.feedback_tool_available,
             native_steering_available: self.native_steering_available,
             modes: self.modes.clone(),
@@ -2620,6 +2755,7 @@ impl SessionState {
             fork_supported: self.fork_supported,
             available_commands: self.available_commands.clone(),
             selectors_ready: self.selectors_ready,
+            composer_mode_id: self.composer_mode_id.clone(),
             config_stale: self.config_stale,
             config_stale_kind: self.config_stale_kind,
             last_error: self.last_error.clone(),
@@ -2653,6 +2789,25 @@ pub(crate) fn owner_composes_prompts(owner_window_label: &str) -> bool {
         && owner_window_label != crate::cli_run::service::CLI_OWNER_LABEL
         && !crate::acp::one_shot::is_one_shot_owner(owner_window_label)
         && !owner_window_label.starts_with("chat_channel:")
+}
+
+/// The answer of the last assistant turn in `turns`: its last non-empty `Text`
+/// block, trimmed. `None` when no assistant turn in the batch has one (a turn
+/// still on its tool calls, or a batch of user turns only).
+fn last_assistant_reply(turns: &[crate::models::message::MessageTurn]) -> Option<String> {
+    use crate::models::message::{ContentBlock, TurnRole};
+    turns
+        .iter()
+        .rev()
+        .filter(|turn| matches!(turn.role, TurnRole::Assistant))
+        .find_map(|turn| {
+            turn.blocks.iter().rev().find_map(|block| match block {
+                ContentBlock::Text { text } if !text.trim().is_empty() => {
+                    Some(text.trim().to_string())
+                }
+                _ => None,
+            })
+        })
 }
 
 /// Max age of the background keep-alive: how long a connection with
@@ -2742,6 +2897,10 @@ pub struct LiveSessionSnapshot {
     /// common no-background case keeps the wire shape byte-identical.
     #[serde(default, skip_serializing_if = "u32_is_zero")]
     pub background_outstanding: u32,
+    /// Those tasks one by one (see `SessionState.background_outstanding_tasks`).
+    /// Same `default` / skip-when-empty treatment as the count.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub background_outstanding_tasks: Vec<BackgroundOutstandingTask>,
     /// Whether this agent has the `check_user_feedback` tool (see
     /// `SessionState.feedback_tool_available`). `#[serde(default)]` so older
     /// payloads deserialize to `false`; the frontend gates the feedback bar on
@@ -2771,6 +2930,11 @@ pub struct LiveSessionSnapshot {
     pub fork_supported: bool,
     pub available_commands: Vec<AvailableCommandInfo>,
     pub selectors_ready: bool,
+    /// The composer's pending mode pick (see `SessionState.composer_mode_id`).
+    /// Omitted when there is none, so the common snapshot keeps its
+    /// pre-feature wire shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composer_mode_id: Option<String>,
     /// Whether the running session is on stale (launch-time) config after a
     /// later settings save (see `SessionState.config_stale`). `#[serde(default)]`
     /// so older server payloads without the field deserialize to `false`; always
@@ -3559,14 +3723,30 @@ mod tests {
         let mut s = fresh_state();
         assert!(!s.has_active_background_work(Utc::now()));
 
+        let agent = crate::acp::types::BackgroundOutstandingTask {
+            task_id: "a1".into(),
+            kind: crate::acp::types::BackgroundTaskKind::Agent,
+            tool_use_id: Some("toolu_1".into()),
+            description: Some("Run the build".into()),
+            started_at_ms: 1_000,
+        };
+        let shell = crate::acp::types::BackgroundOutstandingTask {
+            task_id: "b1".into(),
+            kind: crate::acp::types::BackgroundTaskKind::Shell,
+            tool_use_id: None,
+            description: None,
+            started_at_ms: 2_000,
+        };
         s.apply_event(&AcpEvent::BackgroundActivity {
             session_id: "sid".into(),
             turns: vec![],
             outstanding: 2,
+            outstanding_tasks: vec![agent.clone(), shell],
             settled: vec![],
             watermark: 42,
         });
         assert_eq!(s.background_outstanding, 2);
+        assert_eq!(s.background_outstanding_tasks.len(), 2);
         let now = Utc::now();
         assert!(s.has_active_background_work(now));
 
@@ -3575,15 +3755,90 @@ mod tests {
         let long_after = now + background_keepalive_max_age() + chrono::Duration::seconds(1);
         assert!(!s.has_active_background_work(long_after));
 
-        // Settled back to zero: no exemption regardless of recency.
+        // Each event is the whole set: one that lists less REPLACES it.
+        s.apply_event(&AcpEvent::BackgroundActivity {
+            session_id: "sid".into(),
+            turns: vec![],
+            outstanding: 1,
+            outstanding_tasks: vec![agent.clone()],
+            settled: vec![],
+            watermark: 43,
+        });
+        assert_eq!(s.background_outstanding_tasks, vec![agent]);
+
+        // Settled back to zero: no exemption regardless of recency, no rows.
         s.apply_event(&AcpEvent::BackgroundActivity {
             session_id: "sid".into(),
             turns: vec![],
             outstanding: 0,
+            outstanding_tasks: vec![],
             settled: vec![],
-            watermark: 43,
+            watermark: 44,
         });
         assert!(!s.has_active_background_work(Utc::now()));
+        assert!(s.background_outstanding_tasks.is_empty());
+    }
+
+    /// A turn Claude Code ran on its own only reaches codeg as the watcher's
+    /// overlay turns, so its answer is read off them: the LAST assistant turn's
+    /// last non-empty text. A batch with no such text (a turn still on its
+    /// tools, a user turn) keeps the reply already read.
+    #[test]
+    fn background_activity_records_the_last_assistant_reply() {
+        use crate::models::message::{ContentBlock, MessageTurn, TurnRole};
+        fn turn(role: TurnRole, blocks: Vec<ContentBlock>) -> MessageTurn {
+            MessageTurn {
+                id: "bg-0-0".into(),
+                role,
+                blocks,
+                timestamp: Utc::now(),
+                usage: None,
+                duration_ms: None,
+                model: None,
+                completed_at: None,
+                agent_message_id: None,
+            }
+        }
+        fn text(t: &str) -> ContentBlock {
+            ContentBlock::Text { text: t.into() }
+        }
+        fn activity(turns: Vec<MessageTurn>) -> AcpEvent {
+            AcpEvent::BackgroundActivity {
+                session_id: "sid".into(),
+                turns,
+                outstanding: 0,
+                outstanding_tasks: vec![],
+                settled: vec![],
+                watermark: 0,
+            }
+        }
+        let mut s = fresh_state();
+        assert!(s.last_background_reply.is_none());
+
+        s.apply_event(&activity(vec![
+            turn(TurnRole::Assistant, vec![text("first answer")]),
+            turn(
+                TurnRole::Assistant,
+                vec![
+                    text("checking the log"),
+                    text("  all 12 tests passed  "),
+                    text(" "),
+                ],
+            ),
+            turn(TurnRole::User, vec![text("not an answer")]),
+        ]));
+        assert_eq!(
+            s.last_background_reply.as_ref().map(|(_, t)| t.as_str()),
+            Some("all 12 tests passed")
+        );
+
+        s.apply_event(&activity(vec![turn(TurnRole::Assistant, vec![])]));
+        s.apply_event(&activity(vec![]));
+        assert_eq!(
+            s.last_background_reply.as_ref().map(|(_, t)| t.as_str()),
+            Some("all 12 tests passed"),
+            "a batch without an answer keeps the one already read"
+        );
     }
 
     #[test]
@@ -3592,22 +3847,42 @@ mod tests {
         s.apply_event(&AcpEvent::BackgroundActivity {
             session_id: "sid".into(),
             turns: vec![],
-            outstanding: 3,
+            outstanding: 1,
+            outstanding_tasks: vec![crate::acp::types::BackgroundOutstandingTask {
+                task_id: "a1".into(),
+                kind: crate::acp::types::BackgroundTaskKind::Agent,
+                tool_use_id: Some("toolu_1".into()),
+                description: None,
+                started_at_ms: 1_000,
+            }],
             settled: vec![],
             watermark: 0,
         });
-        assert_eq!(s.to_snapshot().background_outstanding, 3);
+        assert_eq!(s.to_snapshot().background_outstanding, 1);
         let json = serde_json::to_value(s.to_snapshot()).unwrap();
         assert_eq!(
             json.get("background_outstanding").and_then(|v| v.as_u64()),
-            Some(3)
+            Some(1)
         );
+        assert_eq!(
+            json.get("background_outstanding_tasks"),
+            Some(&serde_json::json!([{
+                "task_id": "a1",
+                "kind": "agent",
+                "tool_use_id": "toolu_1",
+                "started_at_ms": 1000,
+            }]))
+        );
+        // And back: a client hydrating from it gets the rows whole.
+        let back: LiveSessionSnapshot = serde_json::from_value(json).unwrap();
+        assert_eq!(back.background_outstanding_tasks, s.background_outstanding_tasks);
 
         // Zero is skipped so the common no-background snapshot stays
         // byte-identical with the pre-feature wire shape.
         let zero = fresh_state();
         let json = serde_json::to_value(zero.to_snapshot()).unwrap();
         assert!(json.get("background_outstanding").is_none());
+        assert!(json.get("background_outstanding_tasks").is_none());
     }
 
     #[test]
@@ -5329,6 +5604,34 @@ mod tests {
             agent_type: "codex".into(),
         });
         assert_eq!(s.last_assistant_text, None);
+    }
+
+    /// The turn's end is stamped beside its answer, once: a repeated
+    /// `TurnComplete` (the cancel path can bring a second) keeps both.
+    #[test]
+    fn turn_complete_stamps_when_the_answer_was_captured() {
+        let mut s = fresh_state();
+        assert!(s.last_turn_completed_at.is_none());
+        s.live_message = Some(LiveMessage {
+            id: "m1".into(),
+            role: MessageRole::Assistant,
+            content: vec![LiveContentBlock::Text {
+                text: "done".into(),
+                parent_tool_use_id: None,
+            }],
+            started_at: Utc::now(),
+        });
+        let complete = AcpEvent::TurnComplete {
+            session_id: "ext".into(),
+            stop_reason: "end_turn".into(),
+            agent_type: "claude_code".into(),
+        };
+        s.apply_event(&complete);
+        let stamped = s.last_turn_completed_at.expect("stamped");
+        assert_eq!(s.last_assistant_text.as_deref(), Some("done"));
+        s.apply_event(&complete);
+        assert_eq!(s.last_turn_completed_at, Some(stamped), "a repeat keeps it");
+        assert_eq!(s.last_assistant_text.as_deref(), Some("done"));
     }
 
     /// A turn that never opened a live message has no text of its own either.

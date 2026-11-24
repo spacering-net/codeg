@@ -48,7 +48,7 @@ describe("OpenCodeCustomProviderDialog — the provider's models", () => {
       "https://relay.test/v1"
     )
     await user.type(screen.getByPlaceholderText("sk-..."), "sk-relay")
-    const models = screen.getByPlaceholderText(/gpt-6-astra/)
+    const models = screen.getByPlaceholderText(/gpt-6\.2-sol/)
     await user.type(models, "mine")
 
     await user.click(pick)

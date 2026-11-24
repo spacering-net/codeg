@@ -191,7 +191,7 @@ pub async fn assistant_create(
     db: State<'_, AppDatabase>,
     draft: AssistantDraft,
 ) -> Result<AssistantInfo, AppCommandError> {
-    assistant_create_core(&EventEmitter::Tauri(app), &db, draft).await
+    assistant_create_core(&EventEmitter::from_app(&app), &db, draft).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -202,7 +202,7 @@ pub async fn assistant_update(
     id: i32,
     patch: AssistantPatch,
 ) -> Result<AssistantInfo, AppCommandError> {
-    assistant_update_core(&EventEmitter::Tauri(app), &db, id, patch).await
+    assistant_update_core(&EventEmitter::from_app(&app), &db, id, patch).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -212,7 +212,7 @@ pub async fn assistant_delete(
     db: State<'_, AppDatabase>,
     id: i32,
 ) -> Result<AssistantInfo, AppCommandError> {
-    assistant_delete_core(&EventEmitter::Tauri(app), &db, id).await
+    assistant_delete_core(&EventEmitter::from_app(&app), &db, id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -222,7 +222,7 @@ pub async fn assistant_reorder(
     db: State<'_, AppDatabase>,
     ids: Vec<i32>,
 ) -> Result<Vec<AssistantInfo>, AppCommandError> {
-    assistant_reorder_core(&EventEmitter::Tauri(app), &db, ids).await
+    assistant_reorder_core(&EventEmitter::from_app(&app), &db, ids).await
 }
 
 #[cfg(test)]

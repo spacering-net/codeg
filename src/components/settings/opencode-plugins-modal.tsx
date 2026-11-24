@@ -72,6 +72,7 @@ export function OpencodePluginsModal({
 
   useEffect(() => {
     if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset paired with the plugin list fetch on open
       setDraft("")
       void refresh()
     }

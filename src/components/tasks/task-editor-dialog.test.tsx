@@ -9,6 +9,7 @@ const branchesMock = vi.fn()
 const headMock = vi.fn()
 
 vi.mock("@/lib/api", () => ({
+  workTaskGet: vi.fn().mockRejectedValue(new Error("not in this test")),
   gitListAllBranches: (...args: unknown[]) => branchesMock(...args),
   getGitBranch: (...args: unknown[]) => headMock(...args),
   workTaskSettingsEffective: () =>

@@ -100,7 +100,7 @@ pub async fn terminal_spawn(
             extra_env,
             temp_files: vec![],
         },
-        EventEmitter::Tauri(app_handle),
+        EventEmitter::from_app(&app_handle),
     )
 }
 
@@ -161,6 +161,6 @@ pub fn terminal_list(
     manager: State<'_, TerminalManager>,
     app_handle: tauri::AppHandle,
 ) -> Result<Vec<TerminalInfo>, TerminalError> {
-    let emitter = EventEmitter::Tauri(app_handle);
+    let emitter = EventEmitter::from_app(&app_handle);
     Ok(manager.list_with_exit_check(Some(&emitter)))
 }

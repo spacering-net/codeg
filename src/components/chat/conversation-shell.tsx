@@ -11,14 +11,12 @@ import type {
   PromptInputBlock,
   QuestionAnswer,
   SessionConfigOptionInfo,
-  AsyncTaskRecord,
   SessionFailureRecord,
   SessionModeInfo,
   AvailableCommandInfo,
   RemoteControlInfo,
 } from "@/lib/types"
 import { ComposerStatusStrips } from "@/components/chat/composer-status-strips"
-import { AsyncTaskStrip } from "@/components/chat/async-task-strip"
 import { RemoteControlStrip } from "@/components/chat/remote-control-strip"
 import type {
   PendingPermission,
@@ -54,12 +52,6 @@ interface ConversationShellProps {
    *  every surface with a live store — dismissing is client-local, so viewers
    *  get it too. */
   onSessionFailureDismiss?: (ids: string[]) => void
-  /** AIR async tasks for this connection. The strip filters to the live ones
-   *  itself; omit/empty renders nothing. */
-  asyncTasks?: AsyncTaskRecord[]
-  /** Stops one async task. Omitted for read-only surfaces — the stop buttons
-   *  are then hidden, which is right: a viewer has no connection to ask. */
-  onStopAsyncTask?: (taskId: string) => Promise<boolean>
   /** Claude Code's Remote Control while it is on; its strip shows the
    *  session's link and QR code. Omit/`null` renders nothing. */
   remoteControl?: RemoteControlInfo | null
@@ -176,8 +168,6 @@ export function ConversationShell({
   claudeApiRetry,
   sessionFailures,
   onSessionFailureDismiss,
-  asyncTasks,
-  onStopAsyncTask,
   remoteControl,
   onRemoteControlOff,
   pendingPermission,
@@ -242,23 +232,18 @@ export function ConversationShell({
     >
       {topBanner}
 
-      {/* Above the transcript, not down in the composer dock: this is the state
-          of work running RIGHT NOW, and pinning it here keeps it still while the
-          messages scroll under it — the stop button doesn't move out from under
-          the pointer. The dock below is for things that come and go with the
-          turn or the connection (`ComposerStatusStrips`). */}
+      {/* Above the transcript, not down in the composer dock: Remote Control
+          is the session's standing state, and pinning it here keeps it still
+          while the messages scroll under it. The dock below is for things that
+          come and go with the turn or the connection
+          (`ComposerStatusStrips`). Work running past a turn — background
+          tasks, sub-agents, delegations — is the transcript's live activity
+          row's "N running" (`MessageListView`'s `liveRuns`). */}
       {remoteControl && (
         <RemoteControlStrip
           remoteControl={remoteControl}
           onTurnOff={onRemoteControlOff}
           canTurnOff={status === "connected"}
-        />
-      )}
-      {asyncTasks && asyncTasks.length > 0 && (
-        <AsyncTaskStrip
-          tasks={asyncTasks}
-          onStop={onStopAsyncTask}
-          agentName={agentName}
         />
       )}
 

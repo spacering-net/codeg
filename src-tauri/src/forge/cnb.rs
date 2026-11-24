@@ -430,6 +430,9 @@ pub async fn change_detail(
         // commit-status list the other clients fold into `ForgeCheck`; saying
         // "unavailable" is honest, and the panel draws no strip.
         checks: ForgeCheckList::unavailable(),
+        // Only GitHub holds runs for a maintainer's approval through an API
+        // this panel can act on.
+        workflow_approval: None,
     })
 }
 

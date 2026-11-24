@@ -34,6 +34,7 @@ const delegation = {
   findByParentToolUseId: () => undefined,
   findByChildConversationId: () => undefined,
   findByTaskId: (taskId: string) => bindings.get(taskId),
+  bindingsForParent: () => [],
 }
 vi.mock("@/contexts/delegation-context", async () => {
   const actual = await vi.importActual<

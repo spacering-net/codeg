@@ -24,6 +24,10 @@ interface ModelOptionListProps {
   /** Localized chip text for that row (like the search/empty labels below, the
    *  translation is the caller's). */
   recommendedLabel?: string
+  /** A short fact per option, by value, set at the end of its row (a model's
+   *  reasoning-effort range); `asideTitle` turns one into its tooltip. */
+  asides?: ReadonlyMap<string, string> | null
+  asideTitle?: (aside: string) => string
   onSelect: (value: string) => void
   searchPlaceholder: string
   searchAriaLabel: string
@@ -74,6 +78,8 @@ export function ModelOptionList({
   currentValue,
   recommendedValue = null,
   recommendedLabel,
+  asides = null,
+  asideTitle,
   onSelect,
   searchPlaceholder,
   searchAriaLabel,
@@ -305,6 +311,7 @@ export function ModelOptionList({
                     const optionIndex = optionIndexByRow.get(flatIndex) ?? 0
                     const selected = row.option.value === currentValue
                     const active = optionIndex === activeIndexClamped
+                    const aside = asides?.get(row.option.value) ?? null
                     return (
                       <button
                         key={row.key}
@@ -331,6 +338,10 @@ export function ModelOptionList({
                             row.option.value === recommendedValue
                               ? recommendedLabel
                               : null
+                          }
+                          aside={aside}
+                          asideTitle={
+                            aside && asideTitle ? asideTitle(aside) : null
                           }
                         />
                       </button>

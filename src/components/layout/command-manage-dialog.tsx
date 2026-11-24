@@ -266,6 +266,7 @@ export function CommandManageDialog({
   // commands.
   useEffect(() => {
     if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset paired with an external fetch on open
       setFormError(null)
       setSearchQuery("")
       void refresh()
@@ -311,9 +312,13 @@ export function CommandManageDialog({
 
   useEffect(() => {
     const id = selected?.id ?? null
+    // The editable form is re-seeded from the selected command, and whether
+    // the error survives depends on the ref of the last-seeded id, which
+    // cannot be read during render.
     if (id !== formCommandIdRef.current) setFormError(null)
     formCommandIdRef.current = id
     if (!selected) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- form re-seeded from selection, gated on a ref
       setDraft(EMPTY_DRAFT)
       return
     }
@@ -337,7 +342,7 @@ export function CommandManageDialog({
   }, [commands, searchQuery])
 
   const searchActive = searchQuery.trim().length > 0
-  const localHintValues = useMemo(localCommandHintValues, [])
+  const localHintValues = useMemo(() => localCommandHintValues(), [])
   const safeContainerWidth = panelContainerWidth > 0 ? panelContainerWidth : 900
   const leftMinSize = clamp(
     toPercent(LEFT_MIN_WIDTH, safeContainerWidth),

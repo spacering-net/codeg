@@ -33,11 +33,13 @@ import {
   ListX,
   Loader2,
   MessageSquareReply,
+  MessageSquareShare,
   MessageSquareText,
   Pencil,
   Play,
   RotateCw,
   ListTodo,
+  TimerOff,
   Trash2,
   Undo2,
 } from "lucide-react"
@@ -47,6 +49,7 @@ import {
   workTaskChangedFiles,
   workTaskCleanup,
   workTaskDefer,
+  workTaskGet,
   workTaskDelete,
   workTaskDiff,
   workTaskEvents,
@@ -55,6 +58,7 @@ import {
   workTaskRetry,
   workTaskReturn,
   workTaskStart,
+  workTaskStopBackgroundWait,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import {
@@ -93,6 +97,10 @@ import {
   type TaskMessageComposerHandle,
 } from "./task-message-composer"
 import { TaskTranscriptDialog } from "./task-transcript-dialog"
+import {
+  taskConversationSettling,
+  useOpenTaskConversation,
+} from "./use-open-task-conversation"
 import {
   duplicateActiveSource,
   duplicateActiveSourceLabel,
@@ -143,6 +151,7 @@ import {
 } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import type {
+  WorkTaskConversationSelection,
   AgentType,
   PromptInputBlock,
   WorkTask,
@@ -271,6 +280,39 @@ export function TaskDetailSheet({
   const [sessionOpen, setSessionOpen] = useState(false)
   const [diffFile, setDiffFile] = useState<string | null | false>(false)
   const [busy, setBusy] = useState(false)
+  // "Open conversation to change" (codeg#1179): the task's model / options
+  // are its conversation's own, changed with that conversation's selectors —
+  // also from review, before Return / Merge continue it. Resolves the CURRENT
+  // binding at click time; disabled while the binding may still change.
+  const openTaskConversation = useOpenTaskConversation()
+  const [openingConversation, setOpeningConversation] = useState(false)
+  // The bound conversation's own selection, read fresh (the board row does
+  // not carry it), and re-read when the binding or the status moves — an
+  // inline retry can re-link the task while the sheet stays open.
+  const [conversationSelection, setConversationSelection] =
+    useState<WorkTaskConversationSelection | null>(null)
+  const selTaskId = task?.id ?? null
+  const selConversationId = task?.conversation_id ?? null
+  const selStatus = task?.status ?? null
+  useEffect(() => {
+    if (!open || selTaskId == null || selConversationId == null) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clears the selection owned by the fetch below
+      setConversationSelection(null)
+      return
+    }
+    let cancelled = false
+    workTaskGet(selTaskId)
+      .then((row) => {
+        if (!cancelled)
+          setConversationSelection(row.conversation_selection ?? null)
+      })
+      .catch(() => {
+        if (!cancelled) setConversationSelection(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, selTaskId, selConversationId, selStatus])
   /** Synchronous in-flight latch for the follow-up send (see submitFollowUp). */
   const submittingRef = useRef(false)
   const reqRef = useRef(0)
@@ -293,6 +335,7 @@ export function TaskDetailSheet({
   const [convAgentType, setConvAgentType] = useState<AgentType | null>(null)
   useEffect(() => {
     if (!open || conversationId == null) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clears the chip owned by the transcript fetch below
       setTokenTotal(null)
       setConvAgentType(null)
       return
@@ -342,6 +385,7 @@ export function TaskDetailSheet({
   useEffect(() => {
     if (!open || taskId == null) return
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- per-open reset paired with the fetch + subscription below
     setEvents([])
     setFiles([])
     setComposerOpen(false)
@@ -385,9 +429,19 @@ export function TaskDetailSheet({
   // anyway" and waive a guard the user never saw refuse anything. (The label
   // and the waiver read the same state, so the two can never disagree; this is
   // about not carrying a decision across the moment it was made.)
-  useEffect(() => {
+  // Adjusted during render rather than in an effect, so no commit ever pairs a
+  // stale refusal with the new box/status; the initial null covers mount.
+  const [dupScope, setDupScope] = useState({
+    composerOpen,
+    status: taskStatus,
+  })
+  if (
+    dupScope.composerOpen !== composerOpen ||
+    dupScope.status !== taskStatus
+  ) {
+    setDupScope({ composerOpen, status: taskStatus })
     setRestartDuplicate(null)
-  }, [composerOpen, task?.status])
+  }
 
   /// A restart that consumed the note closes the box with it, so the text
   /// cannot be silently attached to a second restart the user did not mean.
@@ -414,15 +468,32 @@ export function TaskDetailSheet({
   // Snapshot first (it carries the model the run actually used); otherwise the
   // resolved agent's display name, so a task that simply follows the folder's
   // defaults still names its agent beside the icon.
+  //
+  // A task with a conversation runs that conversation's own selection
+  // (codeg#1179), so its model is the conversation's once known — the
+  // snapshot's label only while it names that same value.
   const agentLabel = useMemo(() => {
     const snap = task?.config?.label_snapshot
     const name =
       snap?.agent_label ??
       (agentType ? (getAgentLabel(agentType) ?? agentType) : null)
     if (!name) return null
-    const model = snap?.config_labels?.model
+    const sel =
+      conversationSelection && !conversationSelection.replaces_conversation
+        ? conversationSelection
+        : null
+    const snapModel = snap?.config_labels?.model
+    const convModel = sel?.config_values?.model
+    const model =
+      convModel == null
+        ? sel
+          ? null
+          : snapModel
+        : convModel === task?.config?.config_values?.model && snapModel
+          ? snapModel
+          : convModel
     return model ? `${name} · ${model}` : name
-  }, [task, agentType])
+  }, [task, agentType, conversationSelection])
 
   // The project's forge remote, for an ordinary reviewed task that could be
   // delivered to a pull request. Read again whenever the sheet opens on one:
@@ -461,6 +532,10 @@ export function TaskDetailSheet({
   const mergeRequests = usesMergeRequests(task, folderRemote?.provider)
 
   const canEdit = task.status === "todo" || task.status === "failed"
+  /** The reply drafted for each thread, item order by number. */
+  const threadReplies = Object.entries(task.writeback_drafts ?? {})
+    .filter(([, text]) => text.trim().length > 0)
+    .sort(([a], [b]) => Number(a) - Number(b))
 
   // The next-step panel's buttons — ONE list for every status, review
   // included, so the panel never changes shape from one status to the next.
@@ -695,6 +770,15 @@ export function TaskDetailSheet({
           zoneActions.push(archive(t("actionArchive")))
           break
       }
+      // A turn held open for its background work — the card's same escape
+      // (see `buildTaskActions`): settle now, ending what still runs.
+      if (task.background_wait) {
+        zoneActions.push({
+          icon: TimerOff,
+          label: t("actionStopBackgroundWait"),
+          onClick: () => run(() => workTaskStopBackgroundWait(task.id)),
+        })
+      }
     }
   }
 
@@ -928,6 +1012,46 @@ export function TaskDetailSheet({
                       </MarkdownImageProvider>
                     </div>
                   </CollapsibleBlock>
+                </section>
+              ) : null}
+
+              {/* The reply drafted for the thread(s) the task came from,
+                  rendered the way the forge will render it. Read-only here:
+                  the acceptance dialogs are where it is edited, because
+                  accepting is what posts it. */}
+              {threadReplies.length > 0 ? (
+                <section className="flex flex-col gap-1.5">
+                  <h3 className="text-[0.6875rem] font-medium uppercase tracking-wide text-muted-foreground">
+                    {t("detailThreadReply")}
+                  </h3>
+                  {isReview ? (
+                    <p className="text-xs text-muted-foreground">
+                      {task.source_meta?.writeback === true
+                        ? t("detailThreadReplyHint")
+                        : t("detailThreadReplyOffHint")}
+                    </p>
+                  ) : null}
+                  {threadReplies.map(([number, text]) => (
+                    <CollapsibleBlock
+                      key={number}
+                      maxPx={192}
+                      fadeClass="from-muted"
+                    >
+                      <div
+                        className={cn(
+                          "break-words rounded-xl bg-muted p-3 text-xs leading-relaxed",
+                          RESULT_MARKDOWN
+                        )}
+                      >
+                        {threadReplies.length > 1 ? (
+                          <p className="mb-1.5 font-mono text-muted-foreground">
+                            #{number}
+                          </p>
+                        ) : null}
+                        <MessageResponse>{text}</MessageResponse>
+                      </div>
+                    </CollapsibleBlock>
+                  ))}
                 </section>
               ) : null}
 
@@ -1423,6 +1547,41 @@ export function TaskDetailSheet({
                   onClick={() => setSessionOpen(true)}
                 />
               ) : null}
+              {task.conversation_id != null &&
+              !archived &&
+              conversationSelection?.replaces_conversation === true &&
+              task.status === "review" ? (
+                // A legacy task whose agent changed while bound: Return /
+                // Merge start a NEW conversation with the task's own tuple,
+                // so that tuple is what to change (agent locked).
+                <FooterAction
+                  icon={Pencil}
+                  label={t("actionEditTaskConfig")}
+                  busy={busy}
+                  onClick={() => onEdit(task)}
+                />
+              ) : null}
+              {task.conversation_id != null &&
+              !archived &&
+              conversationSelection?.replaces_conversation !== true ? (
+                <FooterAction
+                  icon={MessageSquareShare}
+                  label={t("conversationSelectionOpen")}
+                  busy={openingConversation || taskConversationSettling(task)}
+                  onClick={() => {
+                    setOpeningConversation(true)
+                    openTaskConversation(task.id)
+                      .then((result) => {
+                        if (result === "opened") onOpenChange(false)
+                        else if (result === "starting")
+                          toast.info(t("conversationSelectionStarting"))
+                        else toast.info(t("conversationSelectionUnavailable"))
+                      })
+                      .catch((e: unknown) => toast.error(toErrorMessage(e)))
+                      .finally(() => setOpeningConversation(false))
+                  }}
+                />
+              ) : null}
               {canEdit ? (
                 <FooterAction
                   icon={Pencil}
@@ -1822,6 +1981,8 @@ const EVENT_KIND_KEYS = {
   cleanup_failed: "eventCleanupFailed",
   resume_fallback: "eventResumeFallback",
   context_compact: "eventContextCompact",
+  background_wait: "eventBackgroundWait",
+  background_wait_end: "eventBackgroundWaitEnd",
   user_action: "eventUserAction",
   diff_stat: "eventDiffStat",
   forge_writeback: "eventForgeWriteback",
@@ -2022,6 +2183,29 @@ function timelineDetail(event: WorkTaskEvent): string | null {
         before && after ? `${before} → ${after}` : (before ?? str("reason"))
       return (
         [status, span, str("detail"), str("error")]
+          .filter(Boolean)
+          .join(" · ") || null
+      )
+    }
+    case "background_wait": {
+      const tasks = Array.isArray(p.tasks)
+        ? (p.tasks as unknown[]).filter((x) => typeof x === "string")
+        : []
+      return tasks.join(", ") || str("reason")
+    }
+    case "background_wait_end": {
+      const secs = typeof p.waited_secs === "number" ? p.waited_secs : null
+      const waited =
+        secs == null
+          ? null
+          : secs >= 60
+            ? `${Math.floor(secs / 60)}m ${secs % 60}s`
+            : `${secs}s`
+      const leftover = Array.isArray(p.leftover)
+        ? (p.leftover as unknown[]).filter((x) => typeof x === "string")
+        : []
+      return (
+        [str("outcome"), waited, leftover.join(", ") || null]
           .filter(Boolean)
           .join(" · ") || null
       )

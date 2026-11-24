@@ -768,7 +768,7 @@ pub async fn update_system_language_settings(
         .await
         .map_err(AppCommandError::from)?;
 
-    let emitter = crate::web::event_bridge::EventEmitter::Tauri(app);
+    let emitter = crate::web::event_bridge::EventEmitter::from_app(&app);
     crate::web::event_bridge::emit_event(
         &emitter,
         LANGUAGE_SETTINGS_UPDATED_EVENT,
@@ -787,7 +787,7 @@ pub async fn update_system_terminal_settings(
     manager: State<'_, ConnectionManager>,
 ) -> Result<SystemTerminalSettings, AppCommandError> {
     let config = manager.terminal_shell_config();
-    let emitter = crate::web::event_bridge::EventEmitter::Tauri(app);
+    let emitter = crate::web::event_bridge::EventEmitter::from_app(&app);
     set_system_terminal_settings_core(&db.conn, &config, &emitter, settings).await
 }
 

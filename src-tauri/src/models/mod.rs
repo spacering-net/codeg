@@ -29,6 +29,7 @@ pub use canvas::{CanvasBoard, CanvasBoardSummary, CanvasMutation, CanvasNode, Ca
 pub use chat_channel::{ChannelStatusInfo, ChatChannelInfo, ChatChannelMessageLogInfo};
 pub use conversation::{
     AgentConversationCount, AgentStats, ConversationBranchTag, ConversationDetail,
+    ConversationSelection,
     ConversationOutline, ConversationSummary, ConversationTagDetail, ConversationTurnsPage,
     DbConversationDetail, DbConversationSummary, FolderInfo, ImportFolderOutcome, ImportResult,
     ImportSelectedResult, ScanFolder, ScanResult, ScanSession, ScanSessionStatus,
@@ -53,10 +54,10 @@ pub use token_usage::{
     TokenUsageSyncStatus, TokenUsageTotals,
 };
 pub use work_task::{
-    FollowUpIntent, WorkTaskChangedFile, WorkTaskConfig, WorkTaskDraft, WorkTaskEventInfo,
-    WorkTaskFolderSettings, WorkTaskInfo, WorkTaskMergeOp, WorkTaskMergeState, WorkTaskPreflight,
-    WorkTaskQueuedMerge, WorkTaskSource, WorkTaskStatus, WorkTaskTemplateDraft,
-    WorkTaskTemplateInfo, DELIVERABLE_REPORT, STAGE_PROMPT_ALL,
+    FollowUpIntent, WorkTaskBackgroundWait, WorkTaskChangedFile, WorkTaskConfig, WorkTaskDraft,
+    WorkTaskEventInfo, WorkTaskFolderSettings, WorkTaskInfo, WorkTaskMergeOp, WorkTaskMergeState,
+    WorkTaskPreflight, WorkTaskQueuedMerge, WorkTaskSource, WorkTaskStatus, WorkTaskTemplateDraft,
+    WorkTaskTemplateInfo, WorkTaskUncommittedFile, DELIVERABLE_REPORT, STAGE_PROMPT_ALL,
 };
 #[cfg(feature = "tauri-runtime")]
 pub use system::{
