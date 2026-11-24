@@ -1902,6 +1902,8 @@ mod tauri_app {
                 conversations::get_conversation,
                 conversations::list_all_conversations,
                 conversations::list_child_conversations,
+                conversations::list_conversation_collaborators,
+                conversations::set_conversation_collaborator,
                 conversations::list_opened_tabs,
                 conversations::save_opened_tabs,
                 conversations::import_local_conversations,

@@ -1906,6 +1906,17 @@ pub async fn link_collaborator(
     Ok(())
 }
 
+pub async fn unlink_collaborator(
+    conn: &DatabaseConnection,
+    source_id: i32,
+    target_id: i32,
+) -> Result<(), DbError> {
+    crate::db::entities::conversation_collaborator::Entity::delete_by_id((source_id, target_id))
+        .exec(conn)
+        .await?;
+    Ok(())
+}
+
 pub async fn list_collaborators(
     conn: &DatabaseConnection,
     source_id: i32,
