@@ -880,6 +880,7 @@ describe("opencode code-mode execute payloads", () => {
       assistantId: null,
       task: null,
       workingDir: null,
+      model: null,
     }
     // What runs is whatever these expressions evaluate to, which the first
     // literal in them does not determine. A second argument object makes
