@@ -1,11 +1,19 @@
-//! ACP `session/fork` support via raw JSON-RPC messages.
+//! ACP `session/fork` support.
 //!
-//! The `sacp` crate does not yet provide typed request/response types for
-//! `session/fork`, so we use `UntypedMessage` (the same pattern used for
-//! `session/set_config_option` in connection.rs).
+//! The request is the schema's typed `ForkSessionRequest` (behind
+//! `unstable_session_fork`). It goes out untyped for the one reason
+//! `session/new` and `session/resume` do: grok's top-level `models` has no field
+//! on the typed response, so [`send_capturing_models`] reads it off the raw
+//! reply first.
 
-use sacp::schema::{ForkSessionRequest, ForkSessionResponse, SessionId};
-use sacp::{Agent, ConnectionTo, UntypedMessage};
+use agent_client_protocol::schema::v1::{
+    ForkSessionRequest, ForkSessionResponse, McpServer, Meta, SessionId, AGENT_METHOD_NAMES,
+};
+use agent_client_protocol::{Agent, ConnectionTo};
+
+use crate::acp::connection::{
+    agent_error_text, claude_raw_sdk_session_meta, send_capturing_models, ClaudeSessionOptions,
+};
 
 use crate::acp::error::AcpError;
 use crate::models::agent::AgentType;
@@ -33,12 +41,10 @@ use crate::models::message::{ContentBlock, MessageTurn, TurnRole};
 ///   fingerprint match even wins regardless of occurrence).
 /// * **codex-acp 1.8.0** first matches `message_id` against `items[].id`, then
 ///   falls back to hashing each agent message and taking the
-///   `message_occurrence`-th match. Codex rollout files record NO item ids, so
-///   codeg cannot produce one it would recognise — the fingerprint is the only
-///   path that resolves there, and `message_id` is sent as codeg's own turn id
-///   purely because the field is required.
-/// * **deepseek-acp 0.8.0** is the only one that can use BOTH halves, so codeg
-///   sends both. Its id side accepts either the wire id it stamps on message
+///   `message_occurrence`-th match. Newer Codex rollouts carry the native
+///   assistant item id; older records use the fingerprint of the source text.
+/// * **deepseek-acp 0.8.0** can also use both halves. Its id side accepts
+///   either the wire id it stamps on message
 ///   chunks (`<turn>:<step>`) or the session log's own `message.id`, and
 ///   `crate::parsers::deepseek` records the latter. Its fingerprint side hashes
 ///   the history TWICE — once per assistant message, once per whole turn — and
@@ -94,7 +100,7 @@ fn fingerprint_occurrence(turns: &[MessageTurn], idx: usize, fingerprint: &str) 
 }
 
 /// Build the fork point naming `turn_id`, or `None` when this agent/turn cannot
-/// be named — in which case the caller forks at the tail, as before.
+/// be named. The caller decides whether a tail fork is appropriate.
 ///
 /// Only ASSISTANT turns are fork points: every adapter resolves the point
 /// against an agent message, and "continue from my own prompt" is already what
@@ -110,41 +116,9 @@ pub fn resolve_fork_point(
     let turn = &turns[idx];
 
     match agent_type {
-        // Codex rollouts carry no item ids, so the id can never match and the
-        // fingerprint is the only thing that resolves. `message_id` is still
-        // required by the wire contract, so it carries codeg's own turn id —
-        // deliberately something codex will not find, which is exactly what
-        // makes it fall through to the fingerprint branch.
-        AgentType::Codex => {
-            let text = turn_text(turn);
-            if text.trim().is_empty() {
-                return None;
-            }
-            let fingerprint = fingerprint_agent_message(&text);
-            let occurrence = fingerprint_occurrence(turns, idx, &fingerprint);
-            Some(ForkPoint {
-                message_id: turn_id.to_string(),
-                message_fingerprint: Some(fingerprint),
-                message_occurrence: u32::try_from(occurrence).ok(),
-            })
-        }
-        // DeepSeek and Claude 0.75.1 both read the two halves in the same
-        // order, so both are sent. The id resolves on its own whenever the
-        // transcript named the message, and the fingerprint is what still
-        // resolves when it did not — a DeepSeek log written without an `id` or
-        // a parse that began mid-log; on Claude, a fork point that has drifted
-        // off the active parentUuid chain onto an abandoned branch. Sending the
-        // fingerprint alongside an id costs nothing: both adapters stop at the
-        // first id that matches and never look at it.
-        //
-        // The `text.trim().is_empty()` guard below is load-bearing on Claude,
-        // not just tidiness. Every turn `parsers::claude` leaves unnamed is one
-        // codeg SYNTHESIZED with no text of its own (a `/goal` marker, a bare
-        // top-level `tool_use`, a bare `tool_result`); `fingerprint("")` would
-        // match every text-free grouping on the agent's side at once and then
-        // pick between them by occurrence, forking somewhere arbitrary. A tail
-        // fork is the honest answer for those.
-        AgentType::ClaudeCode | AgentType::DeepSeek => {
+        // Prefer the agent's own item id. Older transcripts may only have
+        // assistant text; pass its fingerprint and its one-based occurrence.
+        AgentType::Codex | AgentType::ClaudeCode | AgentType::DeepSeek => {
             let text = turn_text(turn);
             let fingerprint = (!text.trim().is_empty()).then(|| fingerprint_agent_message(&text));
             // Neither half can name this turn — an assistant bubble opened by a
@@ -156,11 +130,9 @@ pub fn resolve_fork_point(
                 .as_ref()
                 .map(|fp| fingerprint_occurrence(turns, idx, fp));
             Some(ForkPoint {
-                // Same reasoning as codex when the transcript named nothing:
-                // the field is required, and codeg's own turn id (`turn-<n>`,
+                // The field is required, and codeg's own turn id (`turn-<n>`,
                 // a position, never a record uuid) is deliberately something
-                // neither adapter will find, which is what makes it fall
-                // through to the fingerprint.
+                // the adapter will not find, so it falls through to the fingerprint.
                 message_id: turn
                     .agent_message_id
                     .clone()
@@ -175,8 +147,48 @@ pub fn resolve_fork_point(
     }
 }
 
+/// A missing anchor can describe the tail of a live transcript. For a named
+/// historical Codex turn, only fall back to the tail if it really is the tail
+/// (see [`is_thread_tail`]).
+pub(super) fn requested_fork_point(
+    turns: &[MessageTurn],
+    turn_id: &str,
+    agent_type: AgentType,
+) -> Result<Option<ForkPoint>, AcpError> {
+    let point = resolve_fork_point(turns, turn_id, agent_type);
+    if point.is_none()
+        && agent_type == AgentType::Codex
+        && turn_id
+            .strip_prefix("turn-")
+            .is_some_and(|n| n.parse::<usize>().is_ok())
+        && !is_thread_tail(turns, turn_id)
+    {
+        return Err(AcpError::protocol(format!(
+            "Cannot locate the selected Codex fork point {turn_id}"
+        )));
+    }
+    Ok(point)
+}
+
+/// Whether a tail fork lands on `turn_id`: nothing the agent carries on from
+/// follows it. Mirrors the UI's `markThreadTail`, which steps over a failed
+/// round's closing line and over turns that render nothing, so the reply
+/// before them is still offered "fork from here" as the tail.
+fn is_thread_tail(turns: &[MessageTurn], turn_id: &str) -> bool {
+    let Some(idx) = turns.iter().position(|t| t.id == turn_id) else {
+        return false;
+    };
+    turns[idx + 1..].iter().all(|t| {
+        t.blocks.is_empty()
+            || (matches!(t.role, TurnRole::System)
+                && t.blocks
+                    .iter()
+                    .all(|b| matches!(b, ContentBlock::TurnError { .. })))
+    })
+}
+
 impl ForkPoint {
-    fn to_meta(&self) -> serde_json::Value {
+    fn to_meta(&self) -> Meta {
         let mut fork = serde_json::Map::new();
         fork.insert("version".into(), serde_json::json!(1));
         fork.insert("messageId".into(), serde_json::json!(self.message_id));
@@ -186,52 +198,112 @@ impl ForkPoint {
         if let Some(n) = self.message_occurrence {
             fork.insert("messageOccurrence".into(), serde_json::json!(n));
         }
-        serde_json::json!({ "jetbrains": { "air": { "fork": fork } } })
+        let mut meta = Meta::new();
+        meta.insert(
+            "jetbrains".into(),
+            serde_json::json!({ "air": { "fork": fork } }),
+        );
+        meta
     }
 }
 
 /// Send a `session/fork` request over an existing ACP connection.
 ///
-/// Returns the full `ForkSessionResponse` so the caller can attach directly
-/// without a separate `session/load` round-trip, plus the raw top-level `models`
-/// value (captured before the typed deserialize drops it) so the Grok path can
-/// parse per-model reasoning-effort data. `None` when the response has no
-/// `models` field.
+/// Returns the full `ForkSessionResponse` — what the caller attaches when the
+/// agent cannot resume the fork — plus the raw top-level `models` value so the
+/// Grok path can parse per-model reasoning-effort data (`None` when the
+/// response has none).
 ///
 /// `fork_point` forks at a chosen message instead of the tail; see [`ForkPoint`].
 /// An agent that does not implement it ignores the unknown `_meta` key, so this
 /// is inert rather than an error wherever it isn't understood. An agent that
 /// DOES implement it but cannot resolve the point answers `invalid_params`,
 /// which surfaces as a fork failure the user can retry from a different turn.
+///
+/// What else the request names depends on the agent; see [`build_fork_request`].
+#[allow(clippy::too_many_arguments)]
 pub async fn fork_session(
     cx: &ConnectionTo<Agent>,
     session_id: &SessionId,
+    agent_type: AgentType,
     cwd: &str,
+    mcp_servers: &[McpServer],
+    claude: &ClaudeSessionOptions,
     fork_point: Option<&ForkPoint>,
 ) -> Result<(ForkSessionResponse, Option<serde_json::Value>), AcpError> {
-    let req = ForkSessionRequest::new(session_id.clone(), cwd);
-    // Built through a Value so the AIR block can be attached: `_meta` is not a
-    // settable field on the typed request, and the bytes are otherwise
-    // identical to the typed send.
-    let mut req = serde_json::to_value(&req)
-        .map_err(|e| AcpError::protocol(format!("Failed to build fork request: {e}")))?;
-    if let (Some(point), Some(obj)) = (fork_point, req.as_object_mut()) {
-        obj.insert("_meta".into(), point.to_meta());
+    send_capturing_models(
+        cx,
+        AGENT_METHOD_NAMES.session_fork,
+        build_fork_request(session_id, agent_type, cwd, mcp_servers, claude, fork_point),
+    )
+    .await
+    .map_err(|e| AcpError::protocol(format!("session/fork failed: {}", agent_error_text(&e))))
+}
+
+/// The `session/fork` request: the fork point, if any, plus — for Claude and
+/// Codex — the MCP servers the session runs with (and, for Claude, its
+/// `_meta.claudeCode`).
+///
+/// `handle_fork_or_exit` resumes the forked session straight away with the
+/// connection's MCP servers. glm-acp-agent and deepseek-acp mount them there:
+/// glm connects them on the fork and reconnects on the resume, deepseek mounts
+/// them on a session handle the resume replaces with a new one. So for those
+/// agents the fork names no MCP servers, on purpose, since naming them on the
+/// fork too only starts them twice. When there is no resume (the agent does not
+/// advertise it, or it fails) the fork is attached as-is, without servers.
+///
+/// Codex cannot get its servers from the resume (#1105). codex-acp builds the
+/// forked thread's config, `mcp_servers` included, from the fork request's own
+/// list (`request.mcpServers ?? []`), and from 2.2.0 it keeps the forked thread
+/// subscribed. The codex app-server answers a `thread/resume` of a loaded thread
+/// that still has a subscriber by rejoining it and ignoring every config
+/// override ("thread/resume overrides ignored for loaded thread"). A fork that
+/// named no servers therefore stayed without them, codeg-mcp included, for the
+/// whole life of the session: measured live on codex-acp 2.4.0 to 2.6.0, the
+/// fork's model requests carried no codeg-mcp tool while the parent's did. So
+/// Codex's fork names the servers itself, which mounts them once. codex-acp
+/// 1.13 through 2.1.x unsubscribed the fork, and there the resume cold-restarts
+/// the thread with the resume's identical list: the servers start twice, which
+/// costs a process restart but loses nothing.
+///
+/// claude-agent-acp is the other way round from 0.90.0 (#1317). The fork STARTS
+/// the forked session — a Claude Code process of its own — from the request's
+/// `cwd`, MCP servers and `_meta`, and the resume that follows reuses it only
+/// when those match what the session was started with (the adapter's session
+/// fingerprint: `cwd`, the servers, `_meta.claudeCode` and a few `_meta` keys
+/// codeg never sends; the AIR fork point is not part of it). A fork that names
+/// nothing makes the resume tear that process down and start a second one,
+/// measured live: two CLI processes per fork where one does. So Claude's fork
+/// names exactly what `build_resume_session_request` names — the same servers
+/// and the same `claude_raw_sdk_session_meta` — and the resume then returns the
+/// running session at once (measured 1 ms, where the restart took ~240 ms).
+/// From 0.73.0 through 0.89.x the fork only copied the transcript and read
+/// neither field, so one request serves every version codeg may launch.
+fn build_fork_request(
+    session_id: &SessionId,
+    agent_type: AgentType,
+    cwd: &str,
+    mcp_servers: &[McpServer],
+    claude: &ClaudeSessionOptions,
+    fork_point: Option<&ForkPoint>,
+) -> ForkSessionRequest {
+    let mut req = ForkSessionRequest::new(session_id.clone(), cwd);
+    let mut meta = fork_point.map(ForkPoint::to_meta).unwrap_or_default();
+    let claude_meta = claude_raw_sdk_session_meta(agent_type, claude);
+    let names_servers = claude_meta.is_some() || agent_type == AgentType::Codex;
+    if let Some(session_meta) = claude_meta {
+        // Disjoint keys: the fork point lives under `jetbrains`, the session's
+        // own settings under `claudeCode`.
+        meta.extend(session_meta);
     }
-    let untyped_req = UntypedMessage::new("session/fork", &req)
-        .map_err(|e| AcpError::protocol(format!("Failed to build fork request: {e}")))?;
-
-    let raw_response: serde_json::Value = cx
-        .send_request_to(Agent, untyped_req)
-        .block_task()
-        .await
-        .map_err(|e| AcpError::protocol(format!("session/fork failed: {e}")))?;
-
-    let models = raw_response.get("models").cloned();
-    let response: ForkSessionResponse = serde_json::from_value(raw_response)
-        .map_err(|e| AcpError::protocol(format!("Failed to parse fork response: {e}")))?;
-
-    Ok((response, models))
+    if names_servers && !mcp_servers.is_empty() {
+        req = req.mcp_servers(mcp_servers.to_vec());
+    }
+    if meta.is_empty() {
+        req
+    } else {
+        req.meta(meta)
+    }
 }
 
 #[cfg(test)]
@@ -253,24 +325,223 @@ mod tests {
         }
     }
 
-    /// The shape both adapters parse: version 1, and the id under
-    /// `jetbrains.air.fork`.
+    /// The shape both adapters parse — version 1, and the id under
+    /// `jetbrains.air.fork` — as the request's own top-level `_meta`, which is
+    /// where the typed request puts it.
     #[test]
-    fn meta_matches_the_air_fork_block() {
-        let meta = ForkPoint {
+    fn fork_request_carries_the_air_fork_block_as_its_meta() {
+        let point = ForkPoint {
             message_id: "msg_01".into(),
             message_fingerprint: Some("sha256:ab".into()),
             message_occurrence: Some(2),
-        }
-        .to_meta();
+        };
+        let wire = serde_json::to_value(build_fork_request(
+            &SessionId::new("sess-1"),
+            AgentType::Codex,
+            "/work",
+            &[server("other")],
+            &ClaudeSessionOptions::new(true),
+            Some(&point),
+        ))
+        .unwrap();
+        assert_eq!(wire["sessionId"], "sess-1");
+        assert_eq!(wire["cwd"], "/work");
         assert_eq!(
-            meta,
+            wire["_meta"],
             serde_json::json!({"jetbrains": {"air": {"fork": {
                 "version": 1,
                 "messageId": "msg_01",
                 "messageFingerprint": "sha256:ab",
                 "messageOccurrence": 2,
             }}}})
+        );
+        // Codex's fork also names the connection's servers (#1105).
+        assert_eq!(wire["mcpServers"][0]["name"], "other");
+    }
+
+    fn server(name: &str) -> McpServer {
+        McpServer::Stdio(agent_client_protocol::schema::v1::McpServerStdio::new(
+            name, "/bin/mcp",
+        ))
+    }
+
+    /// For DeepSeek and Grok a tail fork is the bare request: no fork point,
+    /// and no MCP servers — the resume that follows every fork is what mounts
+    /// them (see [`build_fork_request`]), so naming them here would start them
+    /// twice.
+    #[test]
+    fn a_tail_fork_names_neither_a_fork_point_nor_mcp_servers() {
+        for agent_type in [AgentType::DeepSeek, AgentType::Grok] {
+            let wire = serde_json::to_value(build_fork_request(
+                &SessionId::new("sess-1"),
+                agent_type,
+                "/work",
+                &[server("codeg-mcp")],
+                &ClaudeSessionOptions::new(true),
+                None,
+            ))
+            .unwrap();
+            assert_eq!(
+                wire,
+                serde_json::json!({"sessionId": "sess-1", "cwd": "/work"}),
+                "{agent_type:?}"
+            );
+        }
+    }
+
+    /// Codex's fork names the servers its resume names (#1105): codex-acp
+    /// builds the forked thread's MCP config from the fork request alone, and
+    /// the resume of that still-subscribed thread cannot add any. It carries no
+    /// `_meta` of Claude's.
+    #[test]
+    fn a_codex_fork_names_the_servers_its_resume_sends() {
+        let servers = vec![server("codeg-mcp"), server("docs")];
+        let fork = serde_json::to_value(build_fork_request(
+            &SessionId::new("sess-1"),
+            AgentType::Codex,
+            "/work",
+            &servers,
+            &ClaudeSessionOptions::new(true),
+            None,
+        ))
+        .unwrap();
+        let resume = serde_json::to_value(crate::acp::connection::build_resume_session_request(
+            AgentType::Codex,
+            SessionId::new("sess-2"),
+            std::path::Path::new("/work"),
+            servers.clone(),
+            &ClaudeSessionOptions::new(true),
+        ))
+        .unwrap();
+        assert_eq!(fork["mcpServers"], resume["mcpServers"]);
+        assert_eq!(fork["mcpServers"].as_array().map(Vec::len), Some(2));
+        assert_eq!(fork["mcpServers"][0]["name"], "codeg-mcp");
+        assert!(fork.get("_meta").is_none());
+
+        // No servers: the bare request.
+        let bare = serde_json::to_value(build_fork_request(
+            &SessionId::new("sess-1"),
+            AgentType::Codex,
+            "/work",
+            &[],
+            &ClaudeSessionOptions::new(true),
+            None,
+        ))
+        .unwrap();
+        assert_eq!(
+            bare,
+            serde_json::json!({"sessionId": "sess-1", "cwd": "/work"})
+        );
+    }
+
+    /// Claude's fork names exactly the settings its resume names — the same
+    /// servers and the same `_meta.claudeCode` — because claude-agent-acp
+    /// 0.90.0 starts the forked session from the fork, and the resume reuses
+    /// that session only when the two agree (anything else restarts it).
+    #[test]
+    fn a_claude_fork_names_the_settings_its_resume_sends() {
+        let servers = vec![server("codeg-mcp"), server("docs")];
+        let fork = serde_json::to_value(build_fork_request(
+            &SessionId::new("sess-1"),
+            AgentType::ClaudeCode,
+            "/work",
+            &servers,
+            &ClaudeSessionOptions::new(true),
+            None,
+        ))
+        .unwrap();
+        let resume = serde_json::to_value(crate::acp::connection::build_resume_session_request(
+            AgentType::ClaudeCode,
+            SessionId::new("sess-2"),
+            std::path::Path::new("/work"),
+            servers.clone(),
+            &ClaudeSessionOptions::new(true),
+        ))
+        .unwrap();
+        assert_eq!(fork["cwd"], resume["cwd"]);
+        assert_eq!(fork["mcpServers"], resume["mcpServers"]);
+        assert_eq!(fork["_meta"], resume["_meta"]);
+        assert_eq!(
+            fork["_meta"],
+            serde_json::json!({"claudeCode": {"emitRawSDKMessages": true}})
+        );
+        assert_eq!(fork["mcpServers"].as_array().map(Vec::len), Some(2));
+
+        // No servers: none named on either request.
+        let bare = serde_json::to_value(build_fork_request(
+            &SessionId::new("sess-1"),
+            AgentType::ClaudeCode,
+            "/work",
+            &[],
+            &ClaudeSessionOptions::new(true),
+            None,
+        ))
+        .unwrap();
+        assert!(bare.get("mcpServers").is_none());
+        assert_eq!(
+            bare["_meta"],
+            serde_json::json!({"claudeCode": {"emitRawSDKMessages": true}})
+        );
+    }
+
+    /// A connection that asks for no predicted prompts (an automation run, a
+    /// chat-channel bot) says so on the fork as on the resume: the option is
+    /// part of the adapter's session fingerprint, so a fork that left it out
+    /// would make the resume restart the forked session.
+    #[test]
+    fn a_claude_fork_without_prompt_suggestions_matches_its_resume() {
+        let fork = serde_json::to_value(build_fork_request(
+            &SessionId::new("sess-1"),
+            AgentType::ClaudeCode,
+            "/work",
+            &[server("codeg-mcp")],
+            &ClaudeSessionOptions::new(false),
+            None,
+        ))
+        .unwrap();
+        let resume = serde_json::to_value(crate::acp::connection::build_resume_session_request(
+            AgentType::ClaudeCode,
+            SessionId::new("sess-2"),
+            std::path::Path::new("/work"),
+            vec![server("codeg-mcp")],
+            &ClaudeSessionOptions::new(false),
+        ))
+        .unwrap();
+        assert_eq!(fork["_meta"], resume["_meta"]);
+        assert_eq!(
+            fork["_meta"],
+            serde_json::json!({"claudeCode": {
+                "emitRawSDKMessages": true,
+                "options": {"promptSuggestions": false},
+            }})
+        );
+    }
+
+    /// The fork point and the session's settings ride the same `_meta`, side by
+    /// side: neither replaces the other, and the adapter's session fingerprint
+    /// reads only the `claudeCode` half.
+    #[test]
+    fn a_claude_fork_point_rides_beside_the_session_settings() {
+        let point = ForkPoint {
+            message_id: "msg_01".into(),
+            message_fingerprint: None,
+            message_occurrence: None,
+        };
+        let wire = serde_json::to_value(build_fork_request(
+            &SessionId::new("sess-1"),
+            AgentType::ClaudeCode,
+            "/work",
+            &[],
+            &ClaudeSessionOptions::new(true),
+            Some(&point),
+        ))
+        .unwrap();
+        assert_eq!(
+            wire["_meta"],
+            serde_json::json!({
+                "claudeCode": {"emitRawSDKMessages": true},
+                "jetbrains": {"air": {"fork": {"version": 1, "messageId": "msg_01"}}},
+            })
         );
     }
 
@@ -350,6 +621,186 @@ mod tests {
         assert_eq!(point.message_id, "msg_01");
         assert!(point.message_fingerprint.is_none());
         assert!(point.message_occurrence.is_none());
+    }
+
+    #[test]
+    fn codex_fork_preserves_native_ids_and_fingerprints_before_rendering_citations() {
+        use crate::parsers::{
+            codex::{CodexParser, CodexText},
+            AgentParser,
+        };
+        use serde_json::json;
+
+        let original = r#"See :codex-file-citation{path="src/main.rs"}."#;
+        let response = |citation: &str| {
+            json!({"type":"message", "role":"assistant",
+            "content":[{"type":"output_text", "text":format!("{original}<oai-mem-citation>{citation}</oai-mem-citation>")}]})
+        };
+        let completion = |kind: &str, id: &str, source: &str| {
+            json!({"type":"item_completed", "thread_id":source,
+            "item":{"type":kind, "id":id, "content":[{"type":"Text","text":original}]}})
+        };
+        let mut selected = response("selected");
+        selected["id"] = "msg-selected".into();
+        let mut unnamed = response("third");
+        unnamed["id"] = "  ".into();
+        let records = [
+            (
+                "session_meta",
+                json!({"id":"fork-test","cwd":"/repo","forked_from_id":"parent"}),
+            ),
+            ("session_meta", json!({"id":"parent","cwd":"/repo"})),
+            ("response_item", selected),
+            (
+                "event_msg",
+                completion("AgentMessage", "msg-completed", "fork-test"),
+            ),
+            ("response_item", response("second")),
+            (
+                "event_msg",
+                completion("McpToolCall", "tool-id", "fork-test"),
+            ),
+            ("response_item", unnamed),
+            (
+                "event_msg",
+                completion("AgentMessage", "foreign-id", "other-thread"),
+            ),
+            ("response_item", response("fourth")),
+        ];
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = records
+            .into_iter()
+            .map(|(kind, payload)| {
+                json!({"timestamp":"2026-10-29T10:00:00Z","type":kind,"payload":payload})
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(dir.path().join("fork-test.jsonl"), transcript).unwrap();
+        let parser = CodexParser::with_base_dir(dir.path().to_owned());
+        let display = parser.get_conversation("fork-test").unwrap();
+        assert!(turn_text(&display.turns[0]).contains("[src/main.rs]"));
+        assert!(turn_text(&display.turns[0]).contains("<oai-mem-citation>selected"));
+        let native = parser
+            .with_text(CodexText::Fork)
+            .get_conversation("fork-test")
+            .unwrap();
+        let fingerprint = fingerprint_agent_message(original);
+        for (index, expected_id) in ["msg-selected", "msg-completed", "turn-2", "turn-3"]
+            .into_iter()
+            .enumerate()
+        {
+            let clicked = &display.turns[index].id;
+            let point = requested_fork_point(&native.turns, clicked, AgentType::Codex)
+                .unwrap()
+                .unwrap();
+            let wire = serde_json::to_value(build_fork_request(
+                &SessionId::new("fork-test"),
+                AgentType::Codex,
+                "/repo",
+                &[],
+                &ClaudeSessionOptions::new(true),
+                Some(&point),
+            ))
+            .unwrap();
+            let anchor = &wire["_meta"]["jetbrains"]["air"]["fork"];
+            assert_eq!(anchor["messageId"], expected_id);
+            assert_eq!(anchor["messageFingerprint"], fingerprint);
+            assert_eq!(anchor["messageOccurrence"], index + 1);
+        }
+    }
+
+    #[test]
+    fn codex_does_not_tail_fork_an_unnamed_historical_turn() {
+        let turns = [
+            turn("turn-0", TurnRole::Assistant, "", None),
+            turn("turn-1", TurnRole::User, "later", None),
+        ];
+        assert!(requested_fork_point(&turns, "turn-0", AgentType::Codex).is_err());
+        assert!(requested_fork_point(&[], "turn-0", AgentType::Codex).is_err());
+        assert!(
+            requested_fork_point(&turns[..1], "turn-0", AgentType::Codex)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// Codex builds a multi-part reply's item from its parts concatenated as-is,
+    /// while codeg renders them joined by newlines. The completion twin must be
+    /// matched on Codex's text, or an id-less record loses the only id it has
+    /// and falls back to a fingerprint no Codex item carries.
+    #[test]
+    fn codex_multi_part_reply_takes_its_completion_id() {
+        use crate::parsers::{
+            codex::{CodexParser, CodexText},
+            AgentParser,
+        };
+        use serde_json::json;
+
+        let records = [
+            ("session_meta", json!({"id":"multi-part","cwd":"/repo"})),
+            (
+                "event_msg",
+                json!({"type":"item_completed", "thread_id":"multi-part",
+                "item":{"type":"AgentMessage", "id":"msg-completed",
+                "content":[{"type":"Text","text":"Read this."}]}}),
+            ),
+            (
+                "response_item",
+                json!({"type":"message", "role":"assistant", "content":[
+                    {"type":"output_text", "text":"Read "},
+                    {"type":"output_text",
+                     "text":"<oai-mem-citation>memory</oai-mem-citation>this."}
+                ]}),
+            ),
+        ];
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = records
+            .into_iter()
+            .map(|(kind, payload)| {
+                json!({"timestamp":"2026-10-29T10:00:00Z","type":kind,"payload":payload})
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(dir.path().join("multi-part.jsonl"), transcript).unwrap();
+        let native = CodexParser::with_base_dir(dir.path().to_owned())
+            .with_text(CodexText::Fork)
+            .get_conversation("multi-part")
+            .unwrap();
+        let point = requested_fork_point(&native.turns, &native.turns[0].id, AgentType::Codex)
+            .unwrap()
+            .unwrap();
+        assert_eq!(point.message_id, "msg-completed");
+    }
+
+    /// A failed round's closing line (and a turn with nothing to render) is
+    /// stepped over by the UI's tail marker, so the text-less reply before it
+    /// is still the tail and must still tail-fork, as it did before.
+    #[test]
+    fn codex_tail_forks_an_unnamed_reply_before_a_failed_rounds_closing_line() {
+        let failure = MessageTurn {
+            role: TurnRole::System,
+            blocks: vec![ContentBlock::TurnError {
+                message: "API Error: 503".into(),
+            }],
+            ..turn("turn-1", TurnRole::System, "", None)
+        };
+        let empty = MessageTurn {
+            blocks: vec![],
+            ..turn("turn-2", TurnRole::Assistant, "", None)
+        };
+        let unnamed = turn("turn-0", TurnRole::Assistant, "", None);
+        let tail = [unnamed.clone(), failure.clone(), empty];
+        assert!(requested_fork_point(&tail, "turn-0", AgentType::Codex)
+            .unwrap()
+            .is_none());
+        let later = [
+            unnamed,
+            failure,
+            turn("turn-2", TurnRole::User, "later", None),
+        ];
+        assert!(requested_fork_point(&later, "turn-0", AgentType::Codex).is_err());
     }
 
     #[test]

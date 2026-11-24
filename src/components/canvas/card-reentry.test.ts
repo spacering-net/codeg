@@ -112,13 +112,13 @@ describe("a board returning to cards whose agents are still running", () => {
     // under the draft's key, now claimed by nothing and swept a minute later.
     const view = read(VIEW)
     expect(view).toMatch(
-      /useState<\s*ReadonlyMap<number, CanvasSurfaceKey>\s*>\(loadCanvasSurfaceKeys\)/
+      /useState<\s*ReadonlyMap<number, CanvasSurfaceKey>\s*>\(\(\) =>\s*loadCanvasSurfaceKeys\(boardId\)\s*\)/
     )
     const materialize = view.slice(
       view.indexOf("const materializeDraft"),
       view.indexOf("const endNodeResize")
     )
-    expect(materialize).toContain("saveCanvasSurfaceKeys(next)")
+    expect(materialize).toContain("saveCanvasSurfaceKeys(boardId, next)")
   })
 
   it("only honours a key that still names the same card", () => {
@@ -130,7 +130,7 @@ describe("a board returning to cards whose agents are still running", () => {
     const view = read(VIEW)
     const prune = view.slice(
       view.indexOf("setDetailCardsPersisted((prev) => {"),
-      view.indexOf("}, [hydrated, dbNodes, setDetailCardsPersisted])")
+      view.indexOf("}, [boardId, hydrated, dbNodes, setDetailCardsPersisted])")
     )
     expect(prune).toContain("setSurfaceKeys((prev) => {")
     expect(prune).toContain("node?.conversation_id === entry.conversationId")

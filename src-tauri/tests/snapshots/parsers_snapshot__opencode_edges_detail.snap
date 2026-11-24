@@ -1,0 +1,140 @@
+---
+source: tests/parsers_snapshot.rs
+expression: detail
+---
+{
+  "summary": {
+    "id": "oc-edges-001",
+    "agent_type": "open_code",
+    "folder_path": "/tmp/demo",
+    "folder_name": "demo",
+    "title": "OpenCode session edges",
+    "started_at": "[ts]",
+    "ended_at": "[ts]",
+    "message_count": 6,
+    "model": "claude-sonnet-4-6",
+    "git_branch": null
+  },
+  "turns": [
+    {
+      "id": "turn-0",
+      "role": "user",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "ship the release notes"
+        }
+      ],
+      "timestamp": "[ts]",
+      "completed_at": "[ts]"
+    },
+    {
+      "id": "turn-1",
+      "role": "assistant",
+      "blocks": [
+        {
+          "type": "tool_use",
+          "tool_use_id": "p-compaction",
+          "tool_name": "context_compaction",
+          "input_preview": null,
+          "meta": {
+            "contextCompaction": {
+              "version": 1,
+              "trigger": "automatic"
+            }
+          }
+        },
+        {
+          "type": "tool_result",
+          "tool_use_id": "p-compaction",
+          "output_preview": null,
+          "is_error": false
+        }
+      ],
+      "timestamp": "[ts]",
+      "duration_ms": 1000,
+      "completed_at": "[ts]"
+    },
+    {
+      "id": "turn-2",
+      "role": "assistant",
+      "blocks": [
+        {
+          "type": "tool_use",
+          "tool_use_id": "question:2",
+          "tool_name": "question",
+          "input_preview": "{\"questions\":[{\"question\":\"Ship it now?\",\"header\":\"Release\",\"multiple\":false,\"options\":[{\"label\":\"Yes\",\"description\":\"Publish\"},{\"label\":\"Not yet\",\"description\":\"Hold\"}],\"multiSelect\":false}]}"
+        },
+        {
+          "type": "tool_result",
+          "tool_use_id": "question:2",
+          "output_preview": "{\"declined\":false,\"answers\":[{\"header\":\"Release\",\"question\":\"Ship it now?\",\"selected\":[\"Not yet\"]}]}",
+          "is_error": false
+        }
+      ],
+      "timestamp": "[ts]",
+      "usage": {
+        "input_tokens": 10,
+        "output_tokens": 4,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0
+      },
+      "duration_ms": 400,
+      "model": "claude-sonnet-4-6",
+      "completed_at": "[ts]"
+    },
+    {
+      "id": "turn-3",
+      "role": "assistant",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "[opencode APIError] Invalid Authentication"
+        }
+      ],
+      "timestamp": "[ts]",
+      "usage": {
+        "input_tokens": 3,
+        "output_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0
+      },
+      "duration_ms": 100,
+      "model": "claude-sonnet-4-6",
+      "completed_at": "[ts]"
+    },
+    {
+      "id": "turn-4",
+      "role": "assistant",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "[opencode aborted]"
+        }
+      ],
+      "timestamp": "[ts]",
+      "usage": {
+        "input_tokens": 2,
+        "output_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0
+      },
+      "duration_ms": 100,
+      "model": "claude-sonnet-4-6",
+      "completed_at": "[ts]"
+    }
+  ],
+  "session_stats": {
+    "total_usage": {
+      "input_tokens": 15,
+      "output_tokens": 4,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+    },
+    "total_tokens": 19,
+    "total_duration_ms": 1600,
+    "context_window_used_tokens": 2,
+    "context_window_max_tokens": 200000,
+    "context_window_usage_percent": 0.001
+  }
+}

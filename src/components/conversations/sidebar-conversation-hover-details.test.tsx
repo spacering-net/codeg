@@ -264,7 +264,7 @@ describe("SidebarConversationHoverDetails", () => {
     seed()
     renderBubble(conv({ origin_cwd: "/Users/dev/projects/codeg-feature-x" }))
 
-    expect(fieldValue("Source worktree removed")).toBe(
+    expect(fieldValue("Original working directory")).toBe(
       "/Users/dev/projects/codeg-feature-x"
     )
   })
@@ -273,6 +273,6 @@ describe("SidebarConversationHoverDetails", () => {
     seed()
     renderBubble(conv())
 
-    expect(screen.queryByText("Source worktree removed")).toBeNull()
+    expect(screen.queryByText("Original working directory")).toBeNull()
   })
 })

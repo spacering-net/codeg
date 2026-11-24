@@ -40,8 +40,19 @@ type CollabAgg = {
 
 type CollabToolCallBlock = Extract<LiveContentBlock, { type: "tool_call" }>
 
+/** Whether each call's input is a collab op, by the call's info: asked of
+ *  every call on every streaming batch, and an info is replaced rather than
+ *  changed when its call updates. */
+const collabByInfo = new WeakMap<CollabToolCallBlock["info"], boolean>()
+
 function isCollabBlock(block: LiveContentBlock): block is CollabToolCallBlock {
-  return block.type === "tool_call" && isCodexCollabInput(block.info.raw_input)
+  if (block.type !== "tool_call") return false
+  let collab = collabByInfo.get(block.info)
+  if (collab === undefined) {
+    collab = isCodexCollabInput(block.info.raw_input)
+    collabByInfo.set(block.info, collab)
+  }
+  return collab
 }
 
 /** Rewrite a spawn block into the execution capsule: aggregated per-agent status,

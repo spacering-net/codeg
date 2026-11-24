@@ -100,7 +100,7 @@ pub async fn terminal_spawn(
             extra_env,
             temp_files: vec![],
         },
-        EventEmitter::Tauri(app_handle),
+        EventEmitter::from_app(&app_handle),
     )
 }
 
@@ -138,13 +138,21 @@ pub fn terminal_snapshot(
     Ok(manager.snapshot(&terminal_id))
 }
 
+/// Ends a terminal's process. `keep_output` stops it without closing it: the
+/// final output stays for the tab that still shows it (see
+/// [`TerminalManager::stop`]); otherwise the terminal is closed and forgotten.
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub fn terminal_kill(
     terminal_id: String,
+    keep_output: Option<bool>,
     manager: State<'_, TerminalManager>,
 ) -> Result<(), TerminalError> {
-    manager.kill(&terminal_id)
+    if keep_output == Some(true) {
+        manager.stop(&terminal_id)
+    } else {
+        manager.kill(&terminal_id)
+    }
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -153,6 +161,6 @@ pub fn terminal_list(
     manager: State<'_, TerminalManager>,
     app_handle: tauri::AppHandle,
 ) -> Result<Vec<TerminalInfo>, TerminalError> {
-    let emitter = EventEmitter::Tauri(app_handle);
+    let emitter = EventEmitter::from_app(&app_handle);
     Ok(manager.list_with_exit_check(Some(&emitter)))
 }

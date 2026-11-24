@@ -65,6 +65,14 @@ export function SearchCommandDialog({
   const { revealInFileTree } = useAuxPanelContext()
 
   const [activeTab, setActiveTab] = useState<SearchTab>("conversations")
+  // The search box owns the keyboard: the dialog opens with the cursor in it,
+  // and switching tabs or agent filters leaves it there, so typing always
+  // searches.
+  const inputRef = useRef<HTMLInputElement>(null)
+  const switchTab = useCallback((tab: SearchTab) => {
+    setActiveTab(tab)
+    inputRef.current?.focus()
+  }, [])
   const [query, setQuery] = useState("")
   const [agentFilter, setAgentFilter] = useState<AgentType | null>(null)
   const [results, setResults] = useState<DbConversationSummary[]>([])
@@ -80,7 +88,8 @@ export function SearchCommandDialog({
     reset: resetFileTree,
   } = useFileTree({
     folderPath: folderPath || undefined,
-    enabled: activeTab === "files",
+    enabled: open && activeTab === "files",
+    query,
   })
 
   // Compute which agent types exist in current folder
@@ -88,8 +97,8 @@ export function SearchCommandDialog({
     new Set(conversations.map((c) => c.agent_type))
   ).sort(compareAgentType)
 
-  // Rank files by relevance (name/path tiers + fuzzy subsequence), scanning the
-  // full list so a deeply nested match isn't crowded out by shallower ones.
+  // The backend ranks the whole workspace before capping the response, so a
+  // deeply nested match remains reachable without retaining the full index.
   const filteredFiles = useMemo(
     () => rankFileMatches(query, allFiles, 100),
     [allFiles, query]
@@ -131,14 +140,19 @@ export function SearchCommandDialog({
     }
   }, [query, agentFilter, doSearch, activeTab])
 
-  // Reset state when dialog closes
+  // Reset state when dialog closes. Kept in an effect because it also resets
+  // the shared file-tree hook (`resetFileTree`), which is not this component's
+  // own state and so cannot be adjusted during render.
   useEffect(() => {
     if (!open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on close alongside the file-tree hook reset
       setQuery("")
       setAgentFilter(null)
       setResults([])
       setActiveTab("conversations")
-      resetFileTree()
+      // Like the full re-list this replaced, each opening searches files as
+      // they are now, not a native snapshot left over from before it opened.
+      resetFileTree(true)
     }
   }, [open, resetFileTree])
 
@@ -184,6 +198,15 @@ export function SearchCommandDialog({
       open={open}
       onOpenChange={onOpenChange}
       shouldFilter={activeTab === "conversations"}
+      // Not `autoFocus`: an input focused while mounting takes focus before
+      // the focus trap starts listening, so the trap never records it and has
+      // nothing to pull focus back to when the chat composer behind the dialog
+      // refocuses itself at the end of a turn — the rest of the query would be
+      // typed into the composer.
+      onOpenAutoFocus={(event) => {
+        event.preventDefault()
+        inputRef.current?.focus()
+      }}
     >
       {/* Folder context header */}
       {folder && (
@@ -198,7 +221,8 @@ export function SearchCommandDialog({
       {/* Tabs */}
       <div className="flex items-center gap-0 border-b px-3">
         <button
-          onClick={() => setActiveTab("conversations")}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => switchTab("conversations")}
           className={cn(
             "relative h-9 px-3 text-sm font-medium transition-colors",
             activeTab === "conversations"
@@ -212,7 +236,8 @@ export function SearchCommandDialog({
           )}
         </button>
         <button
-          onClick={() => setActiveTab("files")}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => switchTab("files")}
           className={cn(
             "relative h-9 px-3 text-sm font-medium transition-colors",
             activeTab === "files"
@@ -228,6 +253,7 @@ export function SearchCommandDialog({
       </div>
 
       <CommandInput
+        ref={inputRef}
         placeholder={placeholder}
         value={query}
         onValueChange={setQuery}
@@ -242,6 +268,7 @@ export function SearchCommandDialog({
       {activeTab === "conversations" && availableAgents.length > 1 && (
         <div className="flex flex-wrap items-center gap-1 px-3 py-2 border-b">
           <button
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => setAgentFilter(null)}
             className={cn(
               "h-6 shrink-0 text-xs px-2 rounded-md transition-colors",
@@ -255,6 +282,7 @@ export function SearchCommandDialog({
           {availableAgents.map((at) => (
             <button
               key={at}
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => setAgentFilter(at)}
               className={cn(
                 "flex shrink-0 items-center gap-1.5 h-6 text-xs px-2 rounded-md transition-colors",

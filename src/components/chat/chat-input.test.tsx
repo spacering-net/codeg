@@ -155,4 +155,17 @@ describe("ChatInput slash-command loading window", () => {
     )
     expect(renderStatus({ status: "error" })?.commandsLoading).toBe(false)
   })
+
+  // The user-visible half of issue #797: a torn-down connection is what greys
+  // the composer out, so a turn-scoped failure must never take the connection
+  // with it. `prompting` stays enabled on purpose (the draft enqueues), and
+  // `error` / `disconnected` are exactly the states the backend used to enter
+  // for a rejected `session/prompt` — the user could not send again until a
+  // full agent respawn had finished.
+  it("greys the composer out only when the connection itself is gone", () => {
+    expect(renderStatus({ status: "connected" })?.disabled).toBe(false)
+    expect(renderStatus({ status: "prompting" })?.disabled).toBe(false)
+    expect(renderStatus({ status: "error" })?.disabled).toBe(true)
+    expect(renderStatus({ status: "disconnected" })?.disabled).toBe(true)
+  })
 })

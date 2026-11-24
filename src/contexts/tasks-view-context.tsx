@@ -13,6 +13,7 @@ import {
 import { useTranslations } from "next-intl"
 import { workTaskList } from "@/lib/api"
 import { notifyDesktop } from "@/lib/desktop-notification"
+import { requestWindowAttention } from "@/lib/window-attention"
 import { onTransportReconnect, subscribe } from "@/lib/platform"
 import {
   loadTasksViewMode,
@@ -20,11 +21,14 @@ import {
   type TasksViewMode,
 } from "@/lib/tasks-board-filter-storage"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
+import { isDeferred } from "@/components/tasks/task-acceptance"
 import type { WorkTask } from "@/lib/types"
 
 const WORK_TASK_CHANGED_EVENT = "task://changed"
 
-/** Statuses that need the user ("等你处理") — drives the sidebar badge. */
+/** Statuses that need the user ("等你处理") — drives the sidebar badge. A task
+ *  the user archived or put aside to handle later is not counted, whatever its
+ *  status: the badge mirrors the column, not the state machine. */
 const ATTENTION_STATUSES = new Set(["awaiting_input", "review", "failed"])
 
 interface TasksViewContextValue {
@@ -136,7 +140,10 @@ export function TasksViewProvider({ children }: { children: ReactNode }) {
   const attentionCount = useMemo(
     () =>
       tasks.filter(
-        (t) => ATTENTION_STATUSES.has(t.status) && t.archived_at == null
+        (t) =>
+          ATTENTION_STATUSES.has(t.status) &&
+          t.archived_at == null &&
+          !isDeferred(t)
       ).length,
     [tasks]
   )
@@ -154,10 +161,11 @@ export function TasksViewProvider({ children }: { children: ReactNode }) {
 }
 
 /**
- * System notification when a task flips into review (ready for acceptance) or
- * failed. The engine runs headless, so this fetch-to-fetch diff is the only
- * place that sees the transition; the window-state gate and the user's
- * per-event switch live inside `notifyDesktop`.
+ * System notification — and a taskbar / Dock nudge — when a task flips into
+ * review (ready for acceptance) or failed. The engine runs headless, so this
+ * fetch-to-fetch diff is the only place that sees the transition; the
+ * window-state gates and the user's per-event switches live inside
+ * `notifyDesktop` and `requestWindowAttention`.
  */
 function notifyFlips(
   prev: Map<number, WorkTask["status"]> | null,
@@ -194,5 +202,6 @@ function notifyFlips(
         ? t("notifyReviewRedacted")
         : t("notifyFailedRedacted"),
     })
+    void requestWindowAttention("work_task")
   }
 }

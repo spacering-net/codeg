@@ -4,6 +4,12 @@ use serde::{Deserialize, Serialize};
 pub struct SystemProxySettings {
     pub enabled: bool,
     pub proxy_url: Option<String>,
+    /// Hosts that connect directly instead of through the proxy, as a
+    /// comma-separated list. Exported as `NO_PROXY` behind the loopback hosts
+    /// codeg always adds (see [`crate::network::proxy::no_proxy_env_value`]).
+    /// `#[serde(default)]` so rows stored before this field existed still parse.
+    #[serde(default)]
+    pub no_proxy: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -86,9 +92,51 @@ pub struct TerminalShellOption {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AvailableTerminalShells {
     pub options: Vec<TerminalShellOption>,
-    /// What `resolve_shell()` would currently fall back to. Surfaced read-only
-    /// in the UI so users can see what "system default" actually maps to.
+    /// What a terminal tab opened right now would launch, given the stored
+    /// selection: the platform fallback when the selection is "system default",
+    /// and otherwise the chosen shell resolved to a concrete path. Surfaced
+    /// read-only in the UI, which is the only place a user can see that
+    /// "Windows PowerShell" means `…\v1.0\powershell.exe` — or that a custom
+    /// path resolved to nothing. Best-effort by nature; see
+    /// [`crate::commands::system_settings::resolve_effective_shell`] for which
+    /// promises it does and does not make.
     pub resolved_shell: String,
+}
+
+/// What the main window's close button does.
+///
+/// Three values rather than the two a settings page needs, because the third
+/// is what makes the other two discoverable: codeg has always hidden to tray,
+/// and a user who believes the app exited never goes looking for a preference
+/// to change. `Ask` shows the choice once, on the first close, and pins itself
+/// to `Minimize` or `Exit` from there.
+#[cfg(feature = "tauri-runtime")]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CloseWindowBehavior {
+    #[default]
+    Ask,
+    Minimize,
+    Exit,
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct SystemCloseBehaviorSettings {
+    pub behavior: CloseWindowBehavior,
+}
+
+/// The settings-page view. `tray_available` is a live platform capability, not
+/// a stored value: where the tray is unusable the close button force-exits and
+/// the preference cannot apply, so the UI disables the control and says why.
+/// Sending it from the backend keeps the frontend from re-deriving it by
+/// guessing at the OS.
+#[cfg(feature = "tauri-runtime")]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct SystemCloseBehaviorSettingsView {
+    pub behavior: CloseWindowBehavior,
+    pub tray_available: bool,
 }
 
 #[cfg(feature = "tauri-runtime")]

@@ -1,26 +1,48 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 import { useTranslations } from "next-intl"
 import {
   Check,
   Copy,
   Eye,
   EyeOff,
+  HardDrive,
   Loader2,
   Save,
   ExternalLink,
 } from "lucide-react"
 import { toast } from "sonner"
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
 import { BrowserLink } from "@/components/ui/browser-link"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import {
   acpAntigravityLoginCancel,
   acpAntigravityLoginFinish,
   acpAntigravityLoginStart,
   acpAntigravitySignOut,
+  acpReclaimLeakedTemp,
+  acpScanLeakedTemp,
   acpSyncAntigravitySettings,
   type AntigravityLoginOutcome,
   type AntigravityLoginStart,
@@ -35,7 +57,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import type { AcpAgentInfo } from "@/lib/types"
+import type { AcpAgentInfo, LeakedTempScan } from "@/lib/types"
 
 /** codeg-side knob recording the chosen auth method. The agent reads NOTHING
  * from it — its auth intent comes from `auth.type` in
@@ -253,8 +275,8 @@ function HeadlessSignIn({
 
   // Read by the abandon effect below, which must NOT re-run whenever the
   // pending attempt changes — only when the attempt stops being ours.
+  // Synced from `pending` by the layout effect below `currentMethod`.
   const pendingRef = useRef<PendingLogin | null>(null)
-  pendingRef.current = pending
 
   // The single owner of "this attempt is over". A pending sign-in belongs to
   // the method it was started for, and behind the handle is an agent process
@@ -290,7 +312,13 @@ function HeadlessSignIn({
   // — so an answer that arrives late has to be checked against this rather
   // than against the `method` its closure captured.
   const currentMethod = useRef(method)
-  currentMethod.current = method
+  // Synced at commit rather than during render. Every reader runs later: the
+  // abandon cleanup is a passive effect (layout effects run first), and
+  // `stillOurs` is only called after an await.
+  useLayoutEffect(() => {
+    pendingRef.current = pending
+    currentMethod.current = method
+  })
 
   /** Whether a reply that just arrived still belongs on screen. */
   const stillOurs = useCallback(
@@ -664,6 +692,251 @@ function SignOut({
  * session. A second copy here would only create two places to disagree about
  * what a session runs on.
  */
+/** Human-readable byte count. Binary units — these are disk sizes. */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  const units = ["KB", "MB", "GB", "TB"]
+  let value = bytes / 1024
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit += 1
+  }
+  return `${value.toFixed(value >= 10 || unit === 0 ? 0 : 1)} ${units[unit]}`
+}
+
+/**
+ * One-time reclamation of temp directories leaked by launches from BEFORE
+ * per-launch isolation shipped.
+ *
+ * Scan-then-confirm rather than a silent sweep, and the copy says why: the
+ * directories live in the system temp dir, which every PyInstaller application
+ * shares. codeg cannot tell its own leftovers from another app's, so deleting
+ * them is the user's call, not codeg's.
+ */
+function LeakedTempSection() {
+  const t = useTranslations("AcpAgentSettings")
+  const [scan, setScan] = useState<LeakedTempScan | null>(null)
+  /** Paths the user has explicitly opted in. Starts empty — see the render. */
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [failed, setFailed] = useState<string[]>([])
+  const [busy, setBusy] = useState(false)
+  const [confirming, setConfirming] = useState(false)
+
+  const runScan = useCallback(async () => {
+    setBusy(true)
+    try {
+      setScan(await acpScanLeakedTemp())
+      // A new scan is a new set of paths; carrying ticks across would let a
+      // path the user never looked at arrive pre-approved.
+      setSelected(new Set())
+      setFailed([])
+    } catch (err) {
+      toast.error(toErrorMessage(err))
+    } finally {
+      setBusy(false)
+    }
+  }, [])
+
+  const chosen = useMemo(
+    () => scan?.entries.filter((entry) => selected.has(entry.path)) ?? [],
+    [scan, selected]
+  )
+  const chosenBytes = chosen.reduce((total, entry) => total + entry.bytes, 0)
+
+  const runReclaim = useCallback(async () => {
+    setConfirming(false)
+    if (chosen.length === 0) return
+    setBusy(true)
+    try {
+      const result = await acpReclaimLeakedTemp(chosen.map((e) => e.path))
+      toast.success(
+        t("antigravity.tempReclaimed", {
+          count: result.removed,
+          size: formatBytes(result.freed_bytes),
+        })
+      )
+      // Every failure, not just the first: "removed 3 of 5" with three
+      // unexplained survivors is the report that wastes the next hour.
+      setFailed(result.failed)
+      setScan(await acpScanLeakedTemp())
+      setSelected(new Set())
+    } catch (err) {
+      toast.error(toErrorMessage(err))
+    } finally {
+      setBusy(false)
+    }
+  }, [chosen, t])
+
+  const toggle = useCallback((path: string, on: boolean) => {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (on) next.add(path)
+      else next.delete(path)
+      return next
+    })
+  }, [])
+
+  const allChecked: boolean | "indeterminate" =
+    scan && scan.entries.length > 0 && selected.size === scan.entries.length
+      ? true
+      : selected.size > 0
+        ? "indeterminate"
+        : false
+
+  return (
+    <div className="space-y-1.5 rounded-md border bg-background/60 p-2.5">
+      <div className="flex items-center gap-1.5">
+        <HardDrive className="h-3.5 w-3.5 text-muted-foreground" />
+        <span className="text-xs font-medium">
+          {t("antigravity.tempReclaimTitle")}
+        </span>
+      </div>
+      <p className="text-3xs text-muted-foreground">
+        {t("antigravity.tempReclaimHint")}
+      </p>
+
+      {scan ? (
+        <div className="space-y-1">
+          <p className="text-2xs">
+            {scan.entries.length === 0
+              ? t("antigravity.tempReclaimNone")
+              : t("antigravity.tempReclaimFound", {
+                  count: scan.entries.length,
+                  size: formatBytes(scan.total_bytes),
+                })}
+          </p>
+          {scan.skipped > 0 ? (
+            <p className="text-3xs text-muted-foreground">
+              {t("antigravity.tempReclaimSkipped", { count: scan.skipped })}
+            </p>
+          ) : null}
+          <code className="block overflow-x-auto rounded bg-muted px-2 py-1 font-mono text-3xs whitespace-nowrap text-muted-foreground">
+            {scan.root}
+          </code>
+
+          {/* Nothing is pre-ticked, and every path is shown. The hint above
+              says codeg cannot tell its own leftovers from another
+              application's; a single button that deleted all of them would be
+              asking the user to take responsibility for a list they were never
+              shown. */}
+          {scan.entries.length > 0 ? (
+            <div className="rounded border">
+              <label className="flex items-center gap-2 border-b px-2 py-1">
+                <Checkbox
+                  checked={allChecked}
+                  disabled={busy}
+                  onCheckedChange={(value) =>
+                    setSelected(
+                      value === true
+                        ? new Set(scan.entries.map((e) => e.path))
+                        : new Set()
+                    )
+                  }
+                />
+                <span className="text-3xs text-muted-foreground">
+                  {t("antigravity.tempReclaimSelectAll")}
+                </span>
+              </label>
+              <div className="max-h-40 overflow-y-auto">
+                {scan.entries.map((entry) => (
+                  <label
+                    className="flex items-center gap-2 px-2 py-1 hover:bg-muted/50"
+                    key={entry.path}
+                  >
+                    <Checkbox
+                      checked={selected.has(entry.path)}
+                      disabled={busy}
+                      onCheckedChange={(value) =>
+                        toggle(entry.path, value === true)
+                      }
+                    />
+                    <span className="min-w-0 flex-1 truncate font-mono text-3xs">
+                      {entry.path}
+                    </span>
+                    <span className="shrink-0 text-3xs tabular-nums text-muted-foreground">
+                      {formatBytes(entry.bytes)}
+                    </span>
+                    <span className="shrink-0 text-3xs tabular-nums text-muted-foreground">
+                      {t("antigravity.tempReclaimAgeHours", {
+                        hours: entry.age_hours,
+                      })}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {failed.length > 0 ? (
+            <ul className="space-y-0.5">
+              {failed.map((message) => (
+                <li className="text-3xs text-destructive" key={message}>
+                  {message}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className="flex justify-end gap-1.5">
+        <Button
+          className="h-7 gap-1.5 px-2.5 text-xs"
+          disabled={busy}
+          onClick={() => void runScan()}
+          size="sm"
+          type="button"
+          variant="outline"
+        >
+          {busy && !scan ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : null}
+          {t("antigravity.tempReclaimScan")}
+        </Button>
+        {scan && scan.entries.length > 0 ? (
+          <AlertDialog onOpenChange={setConfirming} open={confirming}>
+            <AlertDialogTrigger asChild>
+              <Button
+                className="h-7 gap-1.5 px-2.5 text-xs"
+                disabled={busy || chosen.length === 0}
+                size="sm"
+                type="button"
+                variant="destructive"
+              >
+                {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                {t("antigravity.tempReclaimDelete")}
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>
+                  {t("antigravity.tempReclaimConfirmTitle", {
+                    count: chosen.length,
+                  })}
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  {t("antigravity.tempReclaimConfirmBody", {
+                    size: formatBytes(chosenBytes),
+                  })}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>
+                  {t("antigravity.tempReclaimCancel")}
+                </AlertDialogCancel>
+                <AlertDialogAction onClick={() => void runReclaim()}>
+                  {t("antigravity.tempReclaimConfirmAction")}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
 export function AntigravityConfigPanel({
   agent,
   saving,
@@ -1059,6 +1332,8 @@ export function AntigravityConfigPanel({
             </code>
           </div>
         ) : null}
+
+        <LeakedTempSection />
 
         <div className="flex justify-end">
           <Button

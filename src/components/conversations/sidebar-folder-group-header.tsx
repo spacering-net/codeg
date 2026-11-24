@@ -3,6 +3,8 @@
 import { memo, useCallback, useState } from "react"
 import {
   ChevronRight,
+  FolderGit2,
+  FolderOpenDot,
   Layers,
   MoreHorizontal,
   Palette,
@@ -51,7 +53,8 @@ import { SubsessionAncestorRails } from "./sidebar-conversation-card"
  * rail-axis glyph, same hover-revealed trailing `⋯` — and, past geometry, the
  * same title type (size, weight and colour) and the same running-sessions
  * badge. The one thing that sets a group apart is its glyph: Layers, not a
- * folder.
+ * folder. Past the `⋯` it carries the Folders heading's own "add a folder" pair
+ * — Clone Repository, then Open Folder — scoped to this group.
  *
  * Owns its own `useTranslations` rather than receiving `t`: next-intl returns a
  * fresh `t` on every parent render, so a `t` prop would defeat this component's
@@ -66,6 +69,8 @@ export const SidebarFolderGroupHeader = memo(function SidebarFolderGroupHeader({
   onRename,
   onChangeColor,
   onDelete,
+  onOpenFolder,
+  onCloneRepository,
   themeColor,
   appThemeColor,
   isDragging,
@@ -87,6 +92,14 @@ export const SidebarFolderGroupHeader = memo(function SidebarFolderGroupHeader({
   onRename?: (groupId: number, name: string) => void
   onChangeColor?: (groupId: number, color: FolderThemeColor) => void
   onDelete?: (groupId: number) => void
+  /**
+   * The Folders heading's Open Folder / Clone Repository actions, scoped to
+   * this group: the caller lands whatever folder they open INSIDE it. Each
+   * renders as a hover-revealed button only when provided, and never on the
+   * presentation copy. Must be referentially stable to preserve the memo.
+   */
+  onOpenFolder?: (groupId: number) => void
+  onCloneRepository?: (groupId: number) => void
   themeColor: FolderThemeColor
   appThemeColor: ThemeColor
   isDragging?: boolean
@@ -105,6 +118,9 @@ export const SidebarFolderGroupHeader = memo(function SidebarFolderGroupHeader({
 }) {
   const t = useTranslations("Folder.sidebar")
   const tCommon = useTranslations("Folder.common")
+  // The "add a folder" pair reuses the Folders heading's strings (which are the
+  // top-of-page dropdown's), so the same action reads the same everywhere.
+  const tDropdown = useTranslations("Folder.folderNameDropdown")
   const ime = useImeGuard()
 
   // Controlled dialog rendered as a SIBLING of the ContextMenu, never a child:
@@ -127,6 +143,18 @@ export const SidebarFolderGroupHeader = memo(function SidebarFolderGroupHeader({
   // The group's chosen colour paints its TITLE and nothing else — same contract
   // as a folder's (see `folderTitleTintVars`); undefined for `inherit`.
   const titleTint = folderTitleTintVars(themeColor)
+
+  // One look for every trailing action, the folder row's: hover-revealed (and
+  // kept on keyboard focus and on touch, which has no hover), /90 at rest to
+  // clear 3:1 non-text contrast, full foreground on hover. justify-end flushes
+  // each 14px glyph to its box's right edge, so the glyphs — not the transparent
+  // boxes — keep the list's shared right-edge rhythm.
+  const trailingActionClassName = cn(
+    "flex h-6 w-6 shrink-0 items-center justify-end",
+    "rounded-[0.375rem] cursor-pointer outline-none text-muted-foreground/90",
+    "opacity-0 group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100",
+    "transition-[opacity,color] duration-150 hover:text-sidebar-foreground"
+  )
 
   const row = (
     <div className={cn("relative h-[2rem]", isDragging && "opacity-60")}>
@@ -229,40 +257,71 @@ export const SidebarFolderGroupHeader = memo(function SidebarFolderGroupHeader({
           </div>
         </button>
         {!presentation && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation()
-              // Re-open the SAME context menu as right-click rather than
-              // duplicating its items (single source of truth). The
-              // synthetic event bubbles to the enclosing trigger, which
-              // Radix opens at these coords.
-              const rect = e.currentTarget.getBoundingClientRect()
-              e.currentTarget.dispatchEvent(
-                new MouseEvent("contextmenu", {
-                  bubbles: true,
-                  cancelable: true,
-                  button: 2,
-                  clientX: rect.left,
-                  clientY: rect.bottom,
-                })
-              )
-            }}
-            title={t("moreOptions")}
-            aria-label={t("moreOptions")}
-            aria-haspopup="menu"
-            className={cn(
-              // Rightmost control, so it carries the right-edge margin that
-              // lines this up with the folder rows' trailing cluster:
-              // 0.375rem + the list's px-1.5 = a uniform 0.75rem inset.
-              "mr-[0.375rem] flex h-6 w-6 shrink-0 items-center justify-end",
-              "rounded-[0.375rem] cursor-pointer outline-none text-muted-foreground/90",
-              "opacity-0 group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100",
-              "transition-[opacity,color] duration-150 hover:text-sidebar-foreground"
+          // The trailing cluster. `⋯` leads it, as it leads a folder row's, and
+          // the "add a folder" pair follows in the Folders heading's own order —
+          // Clone Repository, then Open Folder flush right — so the same two
+          // glyphs stack in one column under the heading's. The CLUSTER carries
+          // the right-edge margin (0.375rem + the list's px-1.5 = the uniform
+          // 0.75rem inset), so the inset holds whichever actions are present,
+          // and the heading's `gap-px`, so both glyphs land on the heading's
+          // to the pixel. Every button is a sibling of the toggle, so none of
+          // them ever collapses or expands the group.
+          <div className="mr-[0.375rem] flex shrink-0 items-center gap-px">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                // Re-open the SAME context menu as right-click rather than
+                // duplicating its items (single source of truth). The
+                // synthetic event bubbles to the enclosing trigger, which
+                // Radix opens at these coords.
+                const rect = e.currentTarget.getBoundingClientRect()
+                e.currentTarget.dispatchEvent(
+                  new MouseEvent("contextmenu", {
+                    bubbles: true,
+                    cancelable: true,
+                    button: 2,
+                    clientX: rect.left,
+                    clientY: rect.bottom,
+                  })
+                )
+              }}
+              title={t("moreOptions")}
+              aria-label={t("moreOptions")}
+              aria-haspopup="menu"
+              className={trailingActionClassName}
+            >
+              <MoreHorizontal className="h-[0.875rem] w-[0.875rem]" />
+            </button>
+            {onCloneRepository != null && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onCloneRepository(groupId)
+                }}
+                title={tDropdown("cloneRepository")}
+                aria-label={tDropdown("cloneRepository")}
+                className={trailingActionClassName}
+              >
+                <FolderGit2 className="h-[0.875rem] w-[0.875rem]" />
+              </button>
             )}
-          >
-            <MoreHorizontal className="h-[0.875rem] w-[0.875rem]" />
-          </button>
+            {onOpenFolder != null && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onOpenFolder(groupId)
+                }}
+                title={tDropdown("openFolder")}
+                aria-label={tDropdown("openFolder")}
+                className={trailingActionClassName}
+              >
+                <FolderOpenDot className="h-[0.875rem] w-[0.875rem]" />
+              </button>
+            )}
+          </div>
         )}
       </div>
     </div>

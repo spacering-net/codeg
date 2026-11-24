@@ -46,6 +46,12 @@ const GLOBAL_MIN_GAP_MS = 400
 
 export interface NotifyPayload {
   title: string
+  /**
+   * Title used instead when "hide notification contents" is on. Supply it
+   * whenever `title` carries user-authored text (a session's title is the
+   * user's own words); omit it for fixed titles.
+   */
+  redactedTitle?: string
   /** Body shown when the user has not asked for contents to be hidden. */
   body: string
   /**
@@ -138,6 +144,10 @@ export async function notifyDesktop(
     prefs.hideBody && payload.redactedBody !== undefined
       ? payload.redactedBody
       : payload.body
+  const title =
+    prefs.hideBody && payload.redactedTitle !== undefined
+      ? payload.redactedTitle
+      : payload.title
 
   // Claim the cooldown before awaiting. Delivery crosses an IPC boundary, and
   // two events arriving in the same tick would both pass the check above if the
@@ -146,7 +156,7 @@ export async function notifyDesktop(
   lastAnyNotifiedAt = now
 
   try {
-    await deliverSystemNotification(payload.title, body)
+    await deliverSystemNotification(title, body)
     return true
   } catch {
     return false

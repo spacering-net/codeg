@@ -58,6 +58,7 @@ export function ModelProviderSettings() {
   }, [t])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial provider list fetch
     loadProviders().catch(console.error)
   }, [loadProviders])
 

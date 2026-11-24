@@ -3,6 +3,7 @@ import type {
   UserImageDisplay,
   UserResourceDisplay,
 } from "@/lib/adapters/ai-elements-adapter"
+import { foldReferenceLinks } from "@/lib/reference-link"
 import type { PromptDraft, PromptInputBlock } from "@/lib/types"
 
 function isResourceLinkBlock(
@@ -69,6 +70,71 @@ export function getPromptDraftDisplayText(
 ): string {
   const trimmed = draft.displayText.trim()
   return trimmed || attachedResourcesFallback
+}
+
+/**
+ * The title a new conversation starts with, until its agent names it: the
+ * draft's display text the way a title displays (`formatConversationTitle`
+ * folds each reference link to its label), cut to `max` characters.
+ *
+ * Folded BEFORE it is cut. A badge's link can be long — the one for a page the
+ * built-in browser handed over carries the page's address — and a cut inside
+ * one leaves a link that no longer folds, so the tab and the sidebar showed
+ * raw `[Page screenshot](codeg://embedded/…` until the real title arrived.
+ */
+export function promptDraftTitleSeed(
+  draft: PromptDraft,
+  attachedResourcesFallback: string,
+  max = 80
+): string {
+  const folded = foldReferenceLinks(
+    getPromptDraftDisplayText(draft, attachedResourcesFallback)
+  ).trim()
+  // Links whose labels are blank fold to nothing; a title still says something.
+  return (folded || attachedResourcesFallback).slice(0, max)
+}
+
+/**
+ * Whether a draft carries more than plain text (image attachments, file
+ * badges) and therefore has to ride the wire as a full block list.
+ *
+ * Exported because it is also an ELIGIBILITY fact, not just an encoding one:
+ * only the native `_session/steering` wire takes blocks, so a surface that
+ * offers a mid-turn send on a pull-tool session must not offer it for a draft
+ * this returns true for (the backend rejects it with `NoActiveTurn`). Shared
+ * with {@link buildSteerPayload} so the affordance and the encoding can never
+ * disagree about what "more than text" means.
+ */
+export function draftRidesBlocks(draft: PromptDraft): boolean {
+  return draft.blocks.some((b) => b.type !== "text")
+}
+
+/**
+ * Encode a draft for the live-feedback (steering) wire — the SINGLE place
+ * this encoding lives, shared by the composer's mid-turn send and the queue
+ * row's click-to-insert so the two can never drift.
+ *
+ * Returns `null` when there is nothing to steer (no text at all). Otherwise:
+ * - `blocks` carries the FULL block list only when the draft holds more than
+ *   plain text (image attachments, file badges). Only the native
+ *   `_session/steering` wire takes blocks — the pull path rejects them as
+ *   `NoActiveTurn`, which callers handle as their turn-end fallback.
+ * - `text` is the recorded/display form: the draft's display text when
+ *   blocks ride along, else the joined text blocks, trimmed.
+ */
+export function buildSteerPayload(draft: PromptDraft): {
+  text: string
+  blocks?: PromptInputBlock[]
+} | null {
+  const blocks = draftRidesBlocks(draft) ? draft.blocks : undefined
+  const text = blocks
+    ? draft.displayText
+    : draft.blocks
+        .map((b) => (b.type === "text" ? b.text : ""))
+        .join("\n")
+        .trim()
+  if (!text) return null
+  return { text, ...(blocks ? { blocks } : {}) }
 }
 
 export function buildUserMessageTextPartsFromDraft(

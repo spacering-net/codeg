@@ -1,8 +1,11 @@
 import { describe, it, expect, vi } from "vitest"
+import { shallow } from "zustand/shallow"
 
 import {
   pickModelFromTurns,
+  projectRuntimeSessionDetails,
   resolveActiveSessionDetails,
+  resolveActiveSessionDetailsFromSnapshot,
 } from "./active-session-details"
 import type {
   DbConversationDetail,
@@ -63,8 +66,7 @@ function turn(over: Partial<MessageTurn> = {}): MessageTurn {
   }
 }
 
-// The resolver only reads `.detail` and `.sessionStats`, so a cast partial is
-// enough and keeps the fixture focused.
+// Only the projection inputs are needed, so the fixture omits unrelated state.
 function session(
   over: Partial<ConversationRuntimeSession>
 ): ConversationRuntimeSession {
@@ -119,15 +121,64 @@ describe("resolveActiveSessionDetails", () => {
   it("prefers the loaded detail summary over the workspace summary", () => {
     const getSession = vi.fn(() =>
       session({
-        detail: detail({ summary: summary({ id: 5, title: "from-detail" }) }),
+        detail: detail({
+          summary: summary({ id: 5, external_id: "from-detail" }),
+        }),
       })
     )
     const result = resolveActiveSessionDetails(
       { conversationId: 5 },
       getSession,
-      [summary({ id: 5, title: "from-workspace" })]
+      [summary({ id: 5, external_id: null })]
     )
-    expect(result.summary?.title).toBe("from-detail")
+    expect(result.summary?.external_id).toBe("from-detail")
+  })
+
+  // The loaded detail is a snapshot of when the transcript was fetched; the
+  // workspace list follows the backend's status/upsert events.
+  it("takes the status and title from the live workspace row", () => {
+    const loaded = summary({ id: 5, title: "old", status: "in_progress" })
+    const getSession = vi.fn(() =>
+      session({ detail: detail({ summary: loaded }) })
+    )
+    const result = resolveActiveSessionDetails(
+      { conversationId: 5 },
+      getSession,
+      [summary({ id: 5, title: "renamed", status: "pending_review" })]
+    )
+    expect(result.summary?.status).toBe("pending_review")
+    expect(result.summary?.title).toBe("renamed")
+    // The rest is still the loaded detail's.
+    expect(result.summary?.created_at).toBe(loaded.created_at)
+  })
+
+  // A sub-agent's conversation isn't in the workspace list; the tab's status
+  // comes from the child-summary cache, which follows the same events.
+  it("takes the status from the tab when the list doesn't hold the row", () => {
+    const getSession = vi.fn(() =>
+      session({
+        detail: detail({ summary: summary({ id: 5, status: "in_progress" }) }),
+      })
+    )
+    const result = resolveActiveSessionDetails(
+      { conversationId: 5, status: "completed" },
+      getSession,
+      []
+    )
+    expect(result.summary?.status).toBe("completed")
+  })
+
+  it("hands back the loaded summary itself while it is current", () => {
+    const loaded = summary({ id: 5 })
+    const getSession = vi.fn(() =>
+      session({ detail: detail({ summary: loaded }) })
+    )
+    const result = resolveActiveSessionDetails(
+      { conversationId: 5, status: loaded.status },
+      getSession,
+      [summary({ id: 5 })]
+    )
+    expect(result.summary).toBe(loaded)
   })
 
   it("falls back to detail.session_stats when sessionStats is absent", () => {
@@ -226,5 +277,78 @@ describe("pickModelFromTurns", () => {
 
   it("returns null for an empty list", () => {
     expect(pickModelFromTurns([])).toBeNull()
+  })
+})
+
+describe("projectRuntimeSessionDetails", () => {
+  it("keeps the selected metadata shallow-equal across transcript-only changes", () => {
+    const loaded = detail({ turns: [turn({ model: "history-model" })] })
+    const current = session({
+      detail: loaded,
+      sessionStats: stats(),
+      localTurns: [turn({ model: "live-model" })],
+    })
+    const next = session({
+      ...current,
+      detail: {
+        ...loaded,
+        turns: [
+          ...loaded.turns,
+          turn({ blocks: [{ type: "text", text: "More history" }] }),
+        ],
+      },
+      localTurns: [
+        turn({
+          model: "live-model",
+          blocks: [{ type: "text", text: "A changed reply" }],
+        }),
+      ],
+    })
+    expect(
+      shallow(
+        projectRuntimeSessionDetails(current),
+        projectRuntimeSessionDetails(next)
+      )
+    ).toBe(true)
+  })
+
+  it("still changes when the displayed model or live usage changes", () => {
+    const current = session({
+      detail: detail(),
+      sessionStats: stats({ total_tokens: 10 }),
+      localTurns: [turn({ model: "model-a" })],
+    })
+    const projected = projectRuntimeSessionDetails(current)
+    const next = projectRuntimeSessionDetails(
+      session({
+        ...current,
+        sessionStats: stats({ total_tokens: 20 }),
+        localTurns: [turn({ model: "model-b" })],
+      })
+    )
+    expect(shallow(projected, next)).toBe(false)
+    expect(next.model).toBe("model-b")
+    expect(next.stats?.total_tokens).toBe(20)
+  })
+
+  it("applies live title/status and preserves projected model/usage", () => {
+    const projected = projectRuntimeSessionDetails(
+      session({
+        detail: detail({
+          summary: summary({ title: "old", status: "in_progress" }),
+          session_stats: stats({ total_tokens: 9 }),
+          turns: [turn({ model: "history-model" })],
+        }),
+      })
+    )
+    const resolved = resolveActiveSessionDetailsFromSnapshot(
+      { conversationId: 5, status: "completed" },
+      projected,
+      [summary({ title: "renamed", status: "pending_review" })]
+    )
+    expect(resolved.summary?.title).toBe("renamed")
+    expect(resolved.summary?.status).toBe("completed")
+    expect(resolved.stats?.total_tokens).toBe(9)
+    expect(resolved.model).toBe("history-model")
   })
 })

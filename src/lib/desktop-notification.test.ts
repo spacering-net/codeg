@@ -70,6 +70,14 @@ afterEach(() => {
 
 const PAYLOAD = { title: "proj - Codeg", body: "Claude has finished" }
 
+/** Titled with a session's own title, as `sessionNotificationPayload` builds. */
+const SESSION_PAYLOAD = {
+  title: "Fix the login bug",
+  redactedTitle: "proj - Codeg",
+  body: "proj · Agent: needs permission",
+  redactedBody: "Agent: needs permission",
+}
+
 describe("preference gates", () => {
   it("delivers when everything is on", async () => {
     await expect(notifyDesktop("turn_complete", PAYLOAD)).resolves.toBe(true)
@@ -134,6 +142,27 @@ describe("hidden contents", () => {
     })
 
     expect(deliver).toHaveBeenCalledWith("t", "Claude ran into an error")
+  })
+
+  it("substitutes the redacted title", async () => {
+    // A session's title is the user's own words — hidden with the contents.
+    withPrefs({ hideBody: true })
+
+    await notifyDesktop("permission_request", SESSION_PAYLOAD)
+
+    expect(deliver).toHaveBeenCalledWith(
+      "proj - Codeg",
+      "Agent: needs permission"
+    )
+  })
+
+  it("shows the real title when contents are not hidden", async () => {
+    await notifyDesktop("permission_request", SESSION_PAYLOAD)
+
+    expect(deliver).toHaveBeenCalledWith(
+      "Fix the login bug",
+      "proj · Agent: needs permission"
+    )
   })
 
   it("keeps a body that has no redacted variant", async () => {

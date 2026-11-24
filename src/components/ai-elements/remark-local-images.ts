@@ -56,8 +56,9 @@ function separatorMayBeLost(node: Node, document: string): boolean {
 }
 
 /** Preserve local Markdown images as inert spans until React can load them
- * through the workspace-confined reader. Remote images retain the default
- * sanitize/harden pipeline; no file: or data: protocol is allowed through it. */
+ * through the backend's file readers (`resolveLocalImage`). Remote images
+ * retain the default sanitize/harden pipeline; no file: or data: protocol is
+ * allowed through it. */
 export function remarkLocalImages() {
   return (tree: Root, file: unknown) => {
     const document = String(file)

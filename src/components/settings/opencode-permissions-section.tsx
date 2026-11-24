@@ -48,7 +48,7 @@ import {
 /** Radix Select rejects "" as a value, so "not configured" needs a sentinel. */
 const UNSET = "__opencode_permission_unset__"
 
-const DOCS_URL = "https://opencode.ai/docs/permissions/"
+const DOCS_URL = "https://opencode.ai/v2/docs/permissions"
 
 /** Rule-capable keys get a fine-grained editor; the rest are action-only. */
 const FINE_GRAINED = new Map(
@@ -83,20 +83,22 @@ interface RuleEditor {
 }
 
 /**
- * Visual editor for OpenCode's `permission` block in `opencode.json`.
+ * Visual editor for OpenCode 2's `permissions` rules in its config file.
  *
- * Mirrors https://opencode.ai/docs/permissions/ one-to-one: a global default
- * (`"*"`), a per-tool action for every key the published schema names, and
- * ordered pattern rules for the keys typed as `PermissionRuleConfig`. The
- * headline control is the auto-accept switch, which is the whole point of the
- * block for most users — it writes `"permission": { "*": "allow" }` so no tool
- * call ever stops for approval.
+ * The rules are an ordered list where the last match wins; the editor shows
+ * them grouped: a global default (the `*` action's `*` rule), a base effect
+ * per action, and each action's resource rules. The headline control is the
+ * auto-accept switch, which writes one `{action: "*", resource: "*", effect:
+ * "allow"}` rule so no tool call stops for approval. 1.x's `permission` and
+ * `tools` keys are read the way OpenCode reads them and rewritten as
+ * `permissions` by the next edit.
  *
  * The component is stateless with respect to the config: it renders whatever
  * `configText` says and hands a rewritten document back through `onChange`.
  * Only the in-progress "add a rule" inputs are local — an existing rule is
  * edited straight through, which round-trips because the writer emits rules in
- * array order.
+ * the grouped order. A list written in another order is read-only until Fix
+ * order (or the native JSON) puts it in that order.
  */
 export function OpenCodePermissionsSection({
   configText,
@@ -110,7 +112,10 @@ export function OpenCodePermissionsSection({
   const t = useTranslations("AcpAgentSettings")
   const view = useMemo(() => readOpenCodePermissions(configText), [configText])
   const editable = isOpenCodeConfigEditable(configText)
-  const locked = disabled || !editable || view.invalid
+  // Rules written in another order than the rows show would be rewritten in
+  // the shown order by any edit, changing what untouched rules decide. The
+  // rows wait for Fix order (or a fix in the native JSON).
+  const locked = disabled || !editable || view.invalid || view.orderingUnsafe
 
   const [expandedKey, setExpandedKey] = useState<string | null>(null)
   const [draftPattern, setDraftPattern] = useState("")
@@ -143,21 +148,19 @@ export function OpenCodePermissionsSection({
    */
   const keyHints = useMemo<Record<string, string>>(
     () => ({
-      bash: t("openCode.permissions.keys.bash"),
+      shell: t("openCode.permissions.keys.shell"),
       edit: t("openCode.permissions.keys.edit"),
       read: t("openCode.permissions.keys.read"),
       external_directory: t("openCode.permissions.keys.external_directory"),
-      task: t("openCode.permissions.keys.task"),
+      subagent: t("openCode.permissions.keys.subagent"),
       skill: t("openCode.permissions.keys.skill"),
-      glob: t("openCode.permissions.keys.glob"),
-      grep: t("openCode.permissions.keys.grep"),
-      list: t("openCode.permissions.keys.list"),
       webfetch: t("openCode.permissions.keys.webfetch"),
       websearch: t("openCode.permissions.keys.websearch"),
-      lsp: t("openCode.permissions.keys.lsp"),
-      todowrite: t("openCode.permissions.keys.todowrite"),
+      glob: t("openCode.permissions.keys.glob"),
+      grep: t("openCode.permissions.keys.grep"),
+      execute: t("openCode.permissions.keys.execute"),
       question: t("openCode.permissions.keys.question"),
-      doom_loop: t("openCode.permissions.keys.doom_loop"),
+      todowrite: t("openCode.permissions.keys.todowrite"),
     }),
     [t]
   )
@@ -296,7 +299,8 @@ export function OpenCodePermissionsSection({
           <p className="min-w-0 flex-1 text-2xs text-amber-500">
             {view.orderingFixable
               ? t("openCode.permissions.orderingUnsafe")
-              : t("openCode.permissions.orderingUnsafeManual")}
+              : t("openCode.permissions.orderingUnsafeManual")}{" "}
+            {t("openCode.permissions.orderingLocked")}
           </p>
           {view.orderingFixable && (
             <Button
@@ -320,9 +324,9 @@ export function OpenCodePermissionsSection({
           })}
         </p>
       )}
-      {editable && view.legacyToolsDeny && (
-        <p className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-2xs text-amber-500">
-          {t("openCode.permissions.legacyTools")}
+      {editable && !view.invalid && view.legacy && (
+        <p className="rounded-md border bg-muted/20 px-2.5 py-1.5 text-2xs text-muted-foreground">
+          {t("openCode.permissions.legacyRules")}
         </p>
       )}
 
@@ -341,7 +345,9 @@ export function OpenCodePermissionsSection({
         </div>
         <Switch
           checked={view.autoAcceptAll}
-          disabled={locked}
+          // Auto-accept replaces every rule, so it stays available while the
+          // order is off (it is never on then: see `autoAcceptAll`).
+          disabled={disabled || !editable || view.invalid}
           onCheckedChange={(checked) => {
             // Off only drops the global "*" — anything the user set per tool
             // survives, and a block that held nothing else disappears anyway.
@@ -442,9 +448,14 @@ export function OpenCodePermissionsSection({
                 key={entry.key}
                 entry={entry}
                 label={entry.key}
-                hint={t("openCode.permissions.customKeyHint")}
+                hint={
+                  entry.key === "*"
+                    ? t("openCode.permissions.allToolsResourcesHint")
+                    : t("openCode.permissions.customKeyHint")
+                }
                 fineGrained
                 patternExample="*"
+                baseEditable={entry.key !== "*"}
                 inheritLabel={t("openCode.permissions.actionInherit", {
                   action: actionLabel(
                     effectiveOpenCodeDefault(entry.key, view.globalAction)
@@ -479,6 +490,7 @@ function PermissionRow({
   ruleEditor,
   onToggleExpanded,
   onActionChange,
+  baseEditable = true,
 }: {
   entry: OpenCodePermissionEntry
   label: string
@@ -492,6 +504,8 @@ function PermissionRow({
   ruleEditor: RuleEditor
   onToggleExpanded: (key: string) => void
   onActionChange: (key: string, value: string) => void
+  /** False for the `*` row, whose base effect is the global default above. */
+  baseEditable?: boolean
 }) {
   const t = useTranslations("AcpAgentSettings")
   const { draftPattern, draftAction, editingRule } = ruleEditor
@@ -528,25 +542,27 @@ function PermissionRow({
               })}
             </Badge>
           )}
-          <Select
-            value={entry.action ?? UNSET}
-            disabled={locked}
-            onValueChange={(value) => onActionChange(entry.key, value)}
-          >
-            <SelectTrigger
-              className={cn("h-7 w-40 text-xs", actionTone(entry.action))}
+          {baseEditable && (
+            <Select
+              value={entry.action ?? UNSET}
+              disabled={locked}
+              onValueChange={(value) => onActionChange(entry.key, value)}
             >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent align="end">
-              <SelectItem value={UNSET}>{inheritLabel}</SelectItem>
-              {OPENCODE_PERMISSION_ACTIONS.map((action) => (
-                <SelectItem key={action} value={action}>
-                  {actionLabel(action)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+              <SelectTrigger
+                className={cn("h-7 w-40 text-xs", actionTone(entry.action))}
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent align="end">
+                <SelectItem value={UNSET}>{inheritLabel}</SelectItem>
+                {OPENCODE_PERMISSION_ACTIONS.map((action) => (
+                  <SelectItem key={action} value={action}>
+                    {actionLabel(action)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
           {fineGrained && (
             <CollapsibleTrigger asChild>
               <Button

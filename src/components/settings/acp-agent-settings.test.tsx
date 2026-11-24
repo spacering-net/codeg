@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest"
 
 import {
-  adapterChannelFromEnv,
-  adapterChannelFromEnvText,
   applyClaudeProviderToConfigText,
   buildCodexSandboxConfig,
   codexSandboxBaselineOf,
@@ -12,29 +10,39 @@ import {
   buildMergeConfigPayload,
   buildAcpAdapterCheck,
   buildVersionCheck,
+  canCheckLatestRelease,
+  claudeThinkingSummariesEnabled,
+  compareReleaseVersion,
   configTextForClaudeSave,
   extractCodexImportantValues,
   getAgentChecks,
+  GROK_REASONING_EFFORT_LEVELS,
+  grokReasoningEffortChoices,
   hostToolsAgentModeEnabled,
   importantEnvKeysByAgent,
   importantFieldsFor,
   inferGrokMode,
+  isOpenCodeV1Release,
+  latestReleaseOffer,
   materializeClaudeHardeningFlags,
   patchCodexConfigTomlText,
   patchEnvByImportantKey,
   patchImportantConfigText,
+  providerToRebindTo,
   codexSandboxSeedsAcpPreset,
   rebaseDeepSeekDraft,
-  setAdapterChannel,
   setClaudeEnvFlagInConfigText,
+  setClaudeThinkingSummaries,
   setHostToolsAgentMode,
   showsCodexReadOnlyAcpWarning,
+  toggleGrokReasoningEffort,
 } from "./acp-agent-settings"
 import { parse as parseTomlDocument } from "smol-toml"
 import type {
   AcpAgentInfo,
   AdapterInfo,
   AgentType,
+  ModelProviderInfo,
   PreflightResult,
 } from "@/lib/types"
 
@@ -58,7 +66,6 @@ function makeAgent(overrides: Partial<AcpAgentInfo>): AcpAgentInfo {
     env: {},
     config_json: null,
     config_file_path: null,
-    opencode_auth_json: null,
     codex_auth_json: null,
     cline_secrets_json: null,
     codex_config_toml: null,
@@ -102,6 +109,8 @@ const grokDraft = (
   grokCustomApiKey: "",
   grokCustomApiBackend: "responses",
   grokCustomContextWindow: "",
+  grokCustomReasoningEfforts: [],
+  grokCustomReasoningEffortsBaseline: [],
   grokAutoCompactThreshold: "",
   ...overrides,
 })
@@ -112,6 +121,7 @@ const emptyCustoms = {
   customApiKey: null,
   customApiBackend: null,
   customContextWindow: null,
+  customReasoningEfforts: null,
   autoCompactThresholdPercent: null,
 }
 
@@ -147,6 +157,56 @@ function codexSandboxDraft(
     codexSandboxBaseline: codexSandboxBaselineOf(seeded),
   }
 }
+
+// Providers arrive ordered by row id, so falling straight to the head of the
+// list rebound the agent to its OLDEST provider whenever the auth-mode dropdown
+// round-tripped through another mode, and the rebind copies that provider's
+// model names over the one the user was on. The rendered round trip is pinned
+// in acp-agent-settings.provider-rebind.test.tsx.
+describe("providerToRebindTo", () => {
+  function provider(id: number): ModelProviderInfo {
+    return {
+      id,
+      name: `provider-${id}`,
+      api_url: "",
+      api_key: "",
+      api_key_masked: "",
+      agent_type: "claude_code",
+      model: null,
+      created_at: "",
+      updated_at: "",
+    }
+  }
+  const available = [provider(1), provider(2), provider(3)]
+
+  it("returns to the user's last pick, not the head", () => {
+    expect(providerToRebindTo(available, 2, null)?.id).toBe(2)
+  })
+
+  it("prefers the last pick over the binding saved on the agent", () => {
+    expect(providerToRebindTo(available, 3, 2)?.id).toBe(3)
+  })
+
+  it("returns to the saved binding when nothing was picked in the panel", () => {
+    expect(providerToRebindTo(available, undefined, 2)?.id).toBe(2)
+  })
+
+  it("skips a last pick that is gone and returns to the saved binding", () => {
+    expect(providerToRebindTo(available, 9, 2)?.id).toBe(2)
+  })
+
+  it("falls back to the head for a first-time pick", () => {
+    expect(providerToRebindTo(available, undefined, null)?.id).toBe(1)
+  })
+
+  it("falls back to the head when every candidate is gone", () => {
+    expect(providerToRebindTo([provider(3), provider(4)], 2, 1)?.id).toBe(3)
+  })
+
+  it("has nothing to bind to when no provider exists", () => {
+    expect(providerToRebindTo([], 2, 2)).toBeNull()
+  })
+})
 
 describe("buildCodexSandboxConfig — Codex sandbox/approval save patch", () => {
   // The core contract. The panel also sends the raw config.toml text and the
@@ -385,6 +445,7 @@ describe("buildGrokStructuredConfig — Grok panel save payload", () => {
       customApiKey: "xai-123",
       customApiBackend: "chat_completions",
       customContextWindow: 131072,
+      customReasoningEfforts: null,
       autoCompactThresholdPercent: 80,
     })
   })
@@ -428,6 +489,7 @@ describe("buildGrokStructuredConfig — Grok panel save payload", () => {
       customApiKey: null,
       customApiBackend: "responses",
       customContextWindow: null,
+      customReasoningEfforts: null,
       autoCompactThresholdPercent: 100,
     })
   })
@@ -459,6 +521,123 @@ describe("buildGrokStructuredConfig — Grok panel save payload", () => {
         ...emptyCustoms,
       })
     }
+  })
+})
+
+describe("Grok custom model reasoning-effort levels", () => {
+  // Levels ride with an active model only once the chips moved off the list
+  // they were read as — an emptied list too, which removes the key. Untouched
+  // chips, or no active model, send null ("leave it as it is").
+  it("sends the levels only once the chips moved", () => {
+    const levels = ["low", "medium", "high", "xhigh"]
+    const custom = { grokCustomModelId: "grok-4.7" }
+    expect(
+      buildGrokStructuredConfig(
+        grokDraft({ ...custom, grokCustomReasoningEfforts: levels })
+      ).customReasoningEfforts
+    ).toEqual(levels)
+    expect(
+      buildGrokStructuredConfig(
+        grokDraft({
+          ...custom,
+          grokCustomReasoningEfforts: [],
+          grokCustomReasoningEffortsBaseline: ["high"],
+        })
+      ).customReasoningEfforts
+    ).toEqual([])
+    // Untouched, or toggled back to what was read: nothing to send.
+    for (const read of [[], ["xhigh", "high"]]) {
+      expect(
+        buildGrokStructuredConfig(
+          grokDraft({
+            ...custom,
+            grokCustomReasoningEfforts: [...read],
+            grokCustomReasoningEffortsBaseline: read,
+          })
+        ).customReasoningEfforts
+      ).toBeNull()
+    }
+    // Reordering is a move: the first level is where Grok starts a session.
+    expect(
+      buildGrokStructuredConfig(
+        grokDraft({
+          ...custom,
+          grokCustomReasoningEfforts: ["high", "xhigh"],
+          grokCustomReasoningEffortsBaseline: ["xhigh", "high"],
+        })
+      ).customReasoningEfforts
+    ).toEqual(["high", "xhigh"])
+    // No active custom model: null like the rest of the group.
+    expect(
+      buildGrokStructuredConfig(
+        grokDraft({ grokCustomReasoningEfforts: levels })
+      ).customReasoningEfforts
+    ).toBeNull()
+    expect(
+      buildGrokStructuredConfig(
+        grokDraft({
+          ...custom,
+          grokAuthMode: "api_key",
+          grokCustomReasoningEfforts: levels,
+        })
+      ).customReasoningEfforts
+    ).toBeNull()
+  })
+
+  // The raw editor's text is the merge base and the structured values land on
+  // top: re-sending the levels that were read would revert ones typed there.
+  it("keeps levels typed into the raw config.toml editor", () => {
+    const onDisk = '[models]\ndefault = "grok-4.7"\n\n[model."grok-4.7"]\n'
+    const edited = `${onDisk}reasoning_efforts = ["low", "high"]\n`
+    const opts = buildGrokSaveOptions(
+      {
+        ...grokDraft({ grokCustomModelId: "grok-4.7" }),
+        grokConfigTomlText: edited,
+      },
+      onDisk
+    )
+    expect(opts.grokConfigTomlText).toBe(edited)
+    expect(opts.grokStructured.customModelId).toBe("grok-4.7")
+    expect(opts.grokStructured.customReasoningEfforts).toBeNull()
+  })
+
+  // Only Grok's canonical levels are offered (an unknown one would make Grok
+  // drop the whole list); `none` is left out of the chips.
+  it("offers Grok's canonical levels, plus any other level already saved", () => {
+    expect(GROK_REASONING_EFFORT_LEVELS).toEqual([
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ])
+    expect(grokReasoningEffortChoices([])).toEqual(GROK_REASONING_EFFORT_LEVELS)
+    // A hand-written level stays visible (once) so it can be turned off.
+    expect(grokReasoningEffortChoices(["none", "high", "none"])).toEqual([
+      ...GROK_REASONING_EFFORT_LEVELS,
+      "none",
+    ])
+  })
+
+  it("adds a level in chip order and drops every copy when turned off", () => {
+    expect(toggleGrokReasoningEffort([], "high")).toEqual(["high"])
+    expect(toggleGrokReasoningEffort(["high"], "low")).toEqual(["low", "high"])
+    expect(toggleGrokReasoningEffort(["low", "high"], "xhigh")).toEqual([
+      "low",
+      "high",
+      "xhigh",
+    ])
+    // Extras stay, after the canonical levels.
+    expect(toggleGrokReasoningEffort(["none", "high"], "low")).toEqual([
+      "low",
+      "high",
+      "none",
+    ])
+    expect(toggleGrokReasoningEffort(["low", "high", "low"], "low")).toEqual([
+      "high",
+    ])
+    expect(toggleGrokReasoningEffort(["none"], "none")).toEqual([])
   })
 })
 
@@ -725,9 +904,9 @@ describe("buildVersionCheck", () => {
     expect(check?.fixes.some((fix) => fix.kind === "install_npx")).toBe(true)
   })
 
-  // A registry-added custom agent keeps the full remote/local comparison — its
-  // stored version is a real registry snapshot.
-  it("keeps the remote comparison for a registry-added custom agent", () => {
+  // A registry-added custom agent keeps the full recommended/local comparison —
+  // its stored version is a real registry snapshot.
+  it("keeps the recommended comparison for a registry-added custom agent", () => {
     const check = buildVersionCheck(
       makeAgent({
         agent_type: "custom:goose" as AgentType,
@@ -740,6 +919,64 @@ describe("buildVersionCheck", () => {
     expect(check?.status).toBe("warn")
     expect(check?.message).toContain("Upgrade available")
     expect(check?.fixes.some((fix) => fix.kind === "upgrade_npx")).toBe(true)
+  })
+
+  // codeg refuses OpenCode 1.x at launch, so an installed 1.x is a failure
+  // that names the upgrade, not an optional "upgrade available".
+  it("fails an installed OpenCode 1.x and offers the upgrade", () => {
+    const check = buildVersionCheck(
+      makeAgent({
+        agent_type: "open_code" as AgentType,
+        registry_id: "opencode",
+        distribution_type: "binary",
+        registry_version: "2.2.0",
+        installed_version: "1.19.3",
+      })
+    )
+    expect(check?.status).toBe("fail")
+    expect(check?.message).toContain("OpenCode 1.x is no longer supported")
+    expect(check?.fixes.map((fix) => fix.kind)).toEqual([
+      "upgrade_binary",
+      "uninstall_binary",
+    ])
+  })
+
+  it("keeps the usual comparison for OpenCode 2 and preview builds", () => {
+    const behind = buildVersionCheck(
+      makeAgent({
+        agent_type: "open_code" as AgentType,
+        registry_id: "opencode",
+        distribution_type: "binary",
+        registry_version: "2.2.0",
+        installed_version: "2.1.4",
+      })
+    )
+    expect(behind?.status).toBe("warn")
+    expect(behind?.message).toContain("Upgrade available")
+
+    const current = buildVersionCheck(
+      makeAgent({
+        agent_type: "open_code" as AgentType,
+        registry_id: "opencode",
+        distribution_type: "binary",
+        registry_version: "2.2.0",
+        installed_version: "2.2.0",
+      })
+    )
+    expect(current?.status).toBe("pass")
+  })
+
+  it("judges only OpenCode releases as 1.x", () => {
+    expect(isOpenCodeV1Release("1.19.3")).toBe(true)
+    expect(isOpenCodeV1Release(" 1.18.33 ")).toBe(true)
+    expect(isOpenCodeV1Release("0.15.31")).toBe(true)
+    expect(isOpenCodeV1Release("1.19.5-beta.1")).toBe(true)
+    expect(isOpenCodeV1Release("2.0.0")).toBe(false)
+    expect(isOpenCodeV1Release("2.2.0")).toBe(false)
+    // Preview channels publish as 0.0.0-<tag> whatever the build's age.
+    expect(isOpenCodeV1Release("0.0.0-dev-202609282300")).toBe(false)
+    expect(isOpenCodeV1Release("1.19")).toBe(false)
+    expect(isOpenCodeV1Release("local")).toBe(false)
   })
 
   // uv runtime not ready: a uvx agent (Hermes) must surface a blocked
@@ -830,30 +1067,8 @@ describe("buildVersionCheck", () => {
     expect(check?.fixes).toHaveLength(0)
   })
 
-  // The opt-in latest channel keeps the Upgrade action available in the pass
-  // state: an installed latest-channel agent normally sits AT or AHEAD of the
-  // pin, so the compare-to-pin flow would never offer an upgrade again — and
-  // codeg cannot know whether npm has something newer, because nothing polls
-  // in the background.
-  it("keeps Upgrade available for an installed latest-channel npx agent", () => {
-    const check = buildVersionCheck(
-      makeAgent({
-        agent_type: "gemini" as AgentType,
-        distribution_type: "npx",
-        registry_version: "0.57.0",
-        installed_version: "0.60.0",
-        env: { CODEG_ADAPTER_CHANNEL: "latest" },
-      })
-    )
-    expect(check?.status).toBe("pass")
-    expect(check?.message).toContain("Latest channel")
-    expect(check?.fixes.some((fix) => fix.kind === "upgrade_npx")).toBe(true)
-    expect(check?.fixes.some((fix) => fix.kind === "uninstall_npx")).toBe(true)
-  })
-
-  // The pinned default's pass state is byte-for-byte what it was before the
-  // channel existed.
-  it("leaves the pinned default's pass state unchanged", () => {
+  // An installed agent at the pin is the pass state: nothing to upgrade to.
+  it("reads Already latest with no Upgrade for an agent at the pin", () => {
     const check = buildVersionCheck(
       makeAgent({
         agent_type: "gemini" as AgentType,
@@ -867,37 +1082,433 @@ describe("buildVersionCheck", () => {
     expect(check?.fixes.some((fix) => fix.kind === "upgrade_npx")).toBe(false)
   })
 
-  // A latest-channel agent below the pin still warns: the upgrade it offers
-  // resolves the `latest` dist-tag, which is at least the pin.
-  it("still warns when a latest-channel agent sits below the pin", () => {
+  // Cursor publishes several builds a day under one date. A pin that moves to
+  // a later build of the same day must still reach installs of the earlier
+  // one: connect launches whatever build is cached and never downloads, so
+  // Upgrade here is the only way the pinned build arrives.
+  const cursor = (installed: string) =>
+    makeAgent({
+      agent_type: "cursor" as AgentType,
+      distribution_type: "binary",
+      registry_version: "2026.10.14-941492e",
+      installed_version: installed,
+    })
+
+  it("offers the pinned build to an install of another build of that day", () => {
+    const check = buildVersionCheck(cursor("2026.10.14-0f9edde"))
+    expect(check?.status).toBe("warn")
+    expect(check?.message).toContain("Upgrade available")
+    expect(check?.fixes.some((fix) => fix.kind === "upgrade_binary")).toBe(true)
+  })
+
+  it("reads Already latest for the pinned build itself", () => {
+    for (const installed of [
+      "2026.10.14-941492e",
+      // The raw first line of a system install's `--version`.
+      "cursor-agent 2026.10.14-941492e",
+    ]) {
+      const check = buildVersionCheck(cursor(installed))
+      expect(check?.status).toBe("pass")
+      expect(check?.message).toContain("Already latest")
+    }
+  })
+
+  it("keeps ordering builds of different days by date", () => {
+    const behind = buildVersionCheck(cursor("2026.10.01-14929f9"))
+    expect(behind?.message).toContain("Upgrade available")
+    const ahead = buildVersionCheck(cursor("2026.10.15-1234567"))
+    expect(ahead?.status).toBe("pass")
+    expect(ahead?.message).toContain("Already latest")
+  })
+
+  // Only a suffix on both sides names two builds: a probe that reports build
+  // metadata the pin does not carry is not evidence of a different build.
+  it("does not read a suffix on one side alone as another build", () => {
     const check = buildVersionCheck(
       makeAgent({
         agent_type: "gemini" as AgentType,
         distribution_type: "npx",
         registry_version: "0.57.0",
-        installed_version: "0.50.0",
-        env: { CODEG_ADAPTER_CHANNEL: "latest" },
+        installed_version: "0.57.0+e5f1a2c",
       })
     )
-    expect(check?.status).toBe("warn")
-    expect(check?.message).toContain("Upgrade available")
+    expect(check?.status).toBe("pass")
+    expect(check?.message).toContain("Already latest")
+  })
+})
+
+describe("compareReleaseVersion", () => {
+  // The same cases as `is_strictly_newer` in acp/latest_release.rs: the
+  // backend decides which version to offer, and this decides whether the
+  // installed version already reaches it, so the two must agree.
+  const newer = (a: string, b: string) => compareReleaseVersion(a, b) > 0
+
+  it("orders semver by precedence", () => {
+    expect(newer("1.0.44", "1.0.41")).toBe(true)
+    expect(newer("0.61.0", "0.60.0")).toBe(true)
+    expect(newer("2.0.0", "1.99.99")).toBe(true)
+    expect(compareReleaseVersion("1.0.41", "1.0.41")).toBe(0)
+    expect(newer("1.0.40", "1.0.41")).toBe(false)
+    // Prereleases sort below their release, above the one before.
+    expect(newer("0.85.0-rc.1", "0.85.0")).toBe(false)
+    expect(newer("0.85.0", "0.85.0-rc.1")).toBe(true)
+    expect(newer("0.85.0-rc.1", "0.84.0")).toBe(true)
+    expect(newer("0.85.0-rc.2", "0.85.0-rc.1")).toBe(true)
+    expect(newer("1.0.0-rc.10", "1.0.0-rc.9")).toBe(true)
+    expect(newer("1.0.0-beta", "1.0.0-alpha.1")).toBe(true)
+    expect(newer("1.0.0-alpha.1", "1.0.0-alpha")).toBe(true)
+    // Build metadata carries no precedence.
+    expect(compareReleaseVersion("1.0.0+build.2", "1.0.0+build.1")).toBe(0)
+    // A leading `v` on either side.
+    expect(newer("v1.19.0", "1.18.33")).toBe(true)
+    expect(compareReleaseVersion("1.18.33", "v1.18.33")).toBe(0)
   })
 
-  // The channel is an npx concept (an npm dist-tag), so the same env key on a
-  // binary agent must not rewrite its version card.
-  it("ignores the channel key on a non-npx agent", () => {
-    const check = buildVersionCheck(
-      makeAgent({
+  it("orders calendar versions by their numbers, ignoring suffixes", () => {
+    // Leading zeros are not semver, so these take the numeric path.
+    expect(newer("2026.10.03-abcdef1", "2026.09.26-dd393fe")).toBe(true)
+    expect(newer("2026.09.26-dd393fe", "2026.10.03-abcdef1")).toBe(false)
+    // Same numbers, different hash: a tie, not newer.
+    expect(
+      compareReleaseVersion("2026.09.26-aaaaaaa", "2026.09.26-dd393fe")
+    ).toBe(0)
+    expect(newer("2026.9.7", "2026.9.6")).toBe(true)
+    expect(newer("1.2.1.1", "1.2.1")).toBe(true)
+    expect(compareReleaseVersion("1.2.1", "1.2.1.0")).toBe(0)
+  })
+})
+
+describe("unreviewed latest release in Version Status", () => {
+  const release = { version: "0.61.0" }
+  const gemini = (overrides: Partial<AcpAgentInfo> = {}) =>
+    makeAgent({
+      agent_type: "gemini" as AgentType,
+      distribution_type: "npx",
+      registry_version: "0.60.0",
+      supports_custom_version: true,
+      installed_version: "0.60.0",
+      ...overrides,
+    })
+  const footerKinds = (agent: AcpAgentInfo) =>
+    buildVersionCheck(agent, true, release)?.footerFixes?.map((fix) => fix.kind)
+
+  it("is only looked up where Custom install could follow", () => {
+    expect(canCheckLatestRelease(gemini())).toBe(true)
+    expect(
+      canCheckLatestRelease(
+        gemini({
+          agent_type: "open_code" as AgentType,
+          distribution_type: "binary",
+        })
+      )
+    ).toBe(true)
+    // Custom install cannot fetch another version of these.
+    expect(canCheckLatestRelease(gemini({ distribution_type: "uvx" }))).toBe(
+      false
+    )
+    expect(
+      canCheckLatestRelease(gemini({ supports_custom_version: false }))
+    ).toBe(false)
+    expect(canCheckLatestRelease(gemini({ available: false }))).toBe(false)
+    // Nothing to be newer than.
+    expect(
+      canCheckLatestRelease(
+        gemini({
+          agent_type: "custom:goose" as AgentType,
+          custom_source: "manual",
+        })
+      )
+    ).toBe(false)
+    expect(canCheckLatestRelease(gemini({ registry_version: null }))).toBe(
+      false
+    )
+    // A registry-added custom agent has a real recommended version.
+    expect(
+      canCheckLatestRelease(
+        gemini({
+          agent_type: "custom:goose" as AgentType,
+          custom_source: "registry",
+        })
+      )
+    ).toBe(true)
+  })
+
+  it("offers the release until the installed version reaches it", () => {
+    expect(latestReleaseOffer(gemini(), release)).toBe("0.61.0")
+    expect(
+      latestReleaseOffer(gemini({ installed_version: "0.60.5" }), release)
+    ).toBe("0.61.0")
+    // A prerelease of the offered version is still below it.
+    expect(
+      latestReleaseOffer(gemini({ installed_version: "0.61.0-rc.1" }), release)
+    ).toBe("0.61.0")
+    expect(
+      latestReleaseOffer(gemini({ installed_version: "0.61.0" }), release)
+    ).toBeNull()
+    expect(
+      latestReleaseOffer(gemini({ installed_version: "0.62.0" }), release)
+    ).toBeNull()
+    // Not installed, or installed but unreadable: installing it is exactly
+    // what either needs.
+    expect(
+      latestReleaseOffer(gemini({ installed_version: null }), release)
+    ).toBe("0.61.0")
+    expect(
+      latestReleaseOffer(gemini({ installed_version: "unknown" }), release)
+    ).toBe("0.61.0")
+    expect(latestReleaseOffer(gemini(), null)).toBeNull()
+  })
+
+  it("shares the bottom row with Custom install and never changes the status", () => {
+    // At the recommended version: still a pass, but no longer "Already
+    // latest" beside an offer of something newer.
+    const atPin = buildVersionCheck(gemini(), true, release)
+    expect(atPin?.status).toBe("pass")
+    expect(atPin?.message).toContain("A newer, unreviewed release is available")
+    expect(atPin?.message).not.toContain("Already latest")
+    expect(atPin?.fixes.map((fix) => fix.kind)).toEqual(["uninstall_npx"])
+    expect(atPin?.footerFixes?.map((fix) => fix.kind)).toEqual([
+      "upgrade_latest",
+      "custom_install",
+    ])
+    expect(atPin?.footerFixes?.[0].payload).toBe("0.61.0")
+
+    // Past the pin but short of the release: the same pass state.
+    const ahead = buildVersionCheck(
+      gemini({ installed_version: "0.60.5" }),
+      true,
+      release
+    )
+    expect(ahead?.status).toBe("pass")
+    expect(ahead?.message).toContain("A newer, unreviewed release is available")
+    expect(footerKinds(gemini({ installed_version: "0.60.5" }))).toEqual([
+      "upgrade_latest",
+      "custom_install",
+    ])
+
+    // Below the pin: the upgrade to the recommended version stays the
+    // primary action, and the card stays a warning.
+    const behind = buildVersionCheck(
+      gemini({ installed_version: "0.59.0" }),
+      true,
+      release
+    )
+    expect(behind?.status).toBe("warn")
+    expect(behind?.message).toContain("Upgrade available")
+    expect(behind?.fixes.map((fix) => fix.kind)).toEqual([
+      "upgrade_npx",
+      "uninstall_npx",
+    ])
+    expect(behind?.footerFixes?.map((fix) => fix.kind)).toEqual([
+      "upgrade_latest",
+      "custom_install",
+    ])
+
+    // Unreadable local version: still the warning it was.
+    const unreadable = buildVersionCheck(
+      gemini({ installed_version: "unknown" }),
+      true,
+      release
+    )
+    expect(unreadable?.status).toBe("warn")
+    expect(unreadable?.message).toContain("Local version is not comparable")
+    expect(unreadable?.footerFixes?.[0].kind).toBe("upgrade_latest")
+
+    // Not installed: offered beside Custom install, Install stays primary.
+    const missing = buildVersionCheck(
+      gemini({ installed_version: null }),
+      true,
+      release
+    )
+    expect(missing?.status).toBe("fail")
+    expect(missing?.fixes.map((fix) => fix.kind)).toEqual(["install_npx"])
+    expect(missing?.footerFixes?.map((fix) => fix.kind)).toEqual([
+      "upgrade_latest",
+      "custom_install",
+    ])
+  })
+
+  it("is not offered once installed, nor where it does not apply", () => {
+    // Already at the release.
+    const reached = buildVersionCheck(
+      gemini({ installed_version: "0.61.0" }),
+      true,
+      release
+    )
+    expect(reached?.status).toBe("pass")
+    expect(reached?.message).toContain("Already latest")
+    expect(reached?.footerFixes?.map((fix) => fix.kind)).toEqual([
+      "custom_install",
+    ])
+    // No release found this visit.
+    const none = buildVersionCheck(gemini(), true, null)
+    expect(none?.message).toContain("Already latest")
+    expect(none?.footerFixes?.map((fix) => fix.kind)).toEqual([
+      "custom_install",
+    ])
+    // A manual definition has no recommended version to be newer than.
+    expect(
+      footerKinds(
+        gemini({
+          agent_type: "custom:goose" as AgentType,
+          custom_source: "manual",
+        })
+      )
+    ).toEqual(["custom_install"])
+    // No Custom install, no offer either.
+    expect(footerKinds(gemini({ supports_custom_version: false }))).toEqual([])
+    expect(footerKinds(gemini({ distribution_type: "uvx" }))).not.toContain(
+      "upgrade_latest"
+    )
+    // Platform unsupported keeps its action-free dead end.
+    const unsupported = buildVersionCheck(
+      gemini({
         agent_type: "open_code" as AgentType,
         distribution_type: "binary",
-        registry_version: "1.0.0",
-        installed_version: "1.0.0",
-        env: { CODEG_ADAPTER_CHANNEL: "latest" },
+        available: false,
+      }),
+      true,
+      release
+    )
+    expect(unsupported?.fixes).toEqual([])
+    expect(unsupported?.footerFixes).toBeUndefined()
+  })
+
+  // `hasComparableVersion` lets anything with a digit and a dot through, so a
+  // CLI that printed a diagnostic instead of its version lands in the
+  // compare-to-pin branches. Pinned so a change there is a deliberate one:
+  // the numbers read out of it put it past the pin but below the release,
+  // which offers an install over a version codeg cannot read anyway.
+  it("treats a diagnostic-looking local version as below the release", () => {
+    const check = buildVersionCheck(
+      gemini({ installed_version: "error: 1.2 failed" }),
+      true,
+      release
+    )
+    expect(check?.status).toBe("pass")
+    expect(check?.footerFixes?.[0].kind).toBe("upgrade_latest")
+  })
+
+  it("reaches the Version Status card through getAgentChecks", () => {
+    const versionCard = (latest?: { version: string } | null) =>
+      getAgentChecks(gemini(), undefined, latest).find(
+        (check) => check.check_id === "version_status"
+      )
+    expect(versionCard(release)?.footerFixes?.[0].kind).toBe("upgrade_latest")
+    expect(versionCard()?.footerFixes?.map((fix) => fix.kind)).toEqual([
+      "custom_install",
+    ])
+  })
+
+  // A system agent (Kiro CLI) is installed and updated by its own installer:
+  // the card reports what was found and never offers install/upgrade/
+  // uninstall, which the backend would refuse.
+  it("reports a found system agent without any install action", () => {
+    const check = buildVersionCheck(
+      makeAgent({
+        agent_type: "kiro" as AgentType,
+        distribution_type: "system",
+        registry_version: null,
+        installed_version: "2.24.1",
+        install_url: "https://kiro.dev/docs/getting-started/installation/",
       })
     )
-    expect(check?.message).toContain("Already latest")
-    expect(check?.fixes.some((fix) => fix.kind === "upgrade_binary")).toBe(
-      false
+    expect(check?.status).toBe("pass")
+    expect(check?.message).toContain("own installer")
+    expect(check?.fixes).toEqual([])
+  })
+
+  // With a vendor updater, the found install gets an Upgrade that runs it —
+  // still no install, uninstall or custom version.
+  it("offers the vendor updater as Upgrade when the agent has one", () => {
+    const check = buildVersionCheck(
+      makeAgent({
+        agent_type: "kiro" as AgentType,
+        distribution_type: "system",
+        registry_version: null,
+        installed_version: "2.24.1",
+        supports_self_update: true,
+      })
+    )
+    expect(check?.status).toBe("pass")
+    expect(check?.message).toContain("its own updater")
+    expect(check?.fixes.map((fix) => fix.kind)).toEqual(["upgrade_system"])
+  })
+
+  it("points a missing system agent at its install guide", () => {
+    const url = "https://kiro.dev/docs/getting-started/installation/"
+    const check = buildVersionCheck(
+      makeAgent({
+        agent_type: "kiro" as AgentType,
+        distribution_type: "system",
+        registry_version: null,
+        installed_version: null,
+        install_url: url,
+      })
+    )
+    expect(check?.status).toBe("fail")
+    expect(check?.fixes).toHaveLength(1)
+    expect(check?.fixes[0]).toMatchObject({ kind: "open_url", payload: url })
+  })
+})
+
+describe("getAgentChecks for a system agent", () => {
+  const url = "https://kiro.dev/docs/getting-started/installation/"
+  const kiro = (installed_version: string | null) =>
+    makeAgent({
+      agent_type: "kiro" as AgentType,
+      distribution_type: "system",
+      registry_version: null,
+      installed_version,
+      install_url: url,
+      supports_self_update: true,
+    })
+  const preflight = (status: "pass" | "fail"): { result: PreflightResult } => ({
+    result: {
+      agent_type: "kiro" as AgentType,
+      agent_name: "Kiro CLI",
+      passed: status === "pass",
+      checks: [
+        {
+          check_id: "system_cli",
+          label: "kiro-cli",
+          status,
+          message: "",
+          fixes: [],
+        },
+      ],
+      adapter: null,
+    },
+  })
+  const versionCard = (checks: ReturnType<typeof getAgentChecks>) =>
+    checks.find((c) => c.check_id === "version_status")
+
+  // The preflight resolves the binary a launch runs; `--version` coming back
+  // empty (a probe that timed out right after an update) does not make the
+  // CLI missing, and Upgrade stays on offer.
+  it("keeps a found CLI installed when its version could not be read", () => {
+    const card = versionCard(getAgentChecks(kiro(null), preflight("pass")))
+    expect(card?.status).toBe("pass")
+    expect(card?.message).toContain("its own updater")
+    expect(card?.fixes.map((fix) => fix.kind)).toEqual(["upgrade_system"])
+  })
+
+  // A version left over from before the CLI was removed must not offer an
+  // Upgrade the backend can only refuse.
+  it("reports a CLI the preflight could not find as missing", () => {
+    const card = versionCard(getAgentChecks(kiro("2.24.1"), preflight("fail")))
+    expect(card?.status).toBe("fail")
+    expect(card?.fixes).toEqual([
+      expect.objectContaining({ kind: "open_url", payload: url }),
+    ])
+  })
+
+  it("goes by the version until the preflight has answered", () => {
+    expect(versionCard(getAgentChecks(kiro("2.24.1"), undefined))?.status).toBe(
+      "pass"
+    )
+    expect(versionCard(getAgentChecks(kiro(null), undefined))?.status).toBe(
+      "fail"
     )
   })
 })
@@ -1086,6 +1697,26 @@ describe("applyClaudeProviderToConfigText — provider-bound stale config", () =
     expect(env.ANTHROPIC_CUSTOM_MODEL_OPTION).toBe("gw/opus-preview")
     expect(env.ANTHROPIC_CUSTOM_MODEL_OPTION_NAME).toBe("GW Opus")
     expect(env.ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION).toBe("via gateway")
+  })
+
+  // The Fable pin is provider-owned like the other model pins: a reload can
+  // carry the previous provider's ANTHROPIC_DEFAULT_FABLE_MODEL in the on-disk
+  // config, and a save for a provider that pins no Fable model must drop it.
+  it("writes the provider's Fable pin and clears a stale one", () => {
+    const pinned = applyClaudeProviderToConfigText("", {
+      api_url: "https://gw.example/v1",
+      api_key: "sk-x",
+      model: JSON.stringify({ main: "prov-main", fable: "gw/fable" }),
+    })
+    expect(envOf(pinned).ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("gw/fable")
+
+    const unpinned = applyClaudeProviderToConfigText(pinned, {
+      api_url: "https://gw.example/v1",
+      api_key: "sk-x",
+      model: JSON.stringify({ main: "prov-main" }),
+    })
+    expect(envOf(unpinned).ANTHROPIC_DEFAULT_FABLE_MODEL).toBeUndefined()
+    expect(envOf(unpinned).ANTHROPIC_MODEL).toBe("prov-main")
   })
 
   // The hardening toggles are not provider-controlled, so a provider-authoritative
@@ -1495,9 +2126,7 @@ describe("codex model_reasoning_effort is not managed by the panel", () => {
       { model: "gpt-5" },
       { apiBaseUrl: "https://api.example/v1" },
       { supportsWebsockets: true },
-      { skills: true },
       { defaultModeRequestUserInput: true },
-      { serviceTierFast: true },
     ]) {
       expect(patchCodexConfigTomlText("", patch)).not.toContain(KEY)
     }
@@ -1610,18 +2239,15 @@ describe("codex [features].default_mode_request_user_input toggle", () => {
   describe("headers carrying a trailing comment are still headers", () => {
     it("reuses a commented [features] instead of duplicating it", () => {
       const src = `model = "gpt-5"\n\n[features] # flags\nskills = true\n`
-      for (const patch of [
-        { defaultModeRequestUserInput: true },
-        { skills: true },
-      ]) {
-        const out = patchCodexConfigTomlText(src, patch)
-        expect(() => parseTomlDocument(out)).not.toThrow()
-        // Exactly one header line, and it is still the user's commented one.
-        const headers = out
-          .split("\n")
-          .filter((line) => /^\s*\[features\]/.test(line))
-        expect(headers).toEqual(["[features] # flags"])
-      }
+      const out = patchCodexConfigTomlText(src, {
+        defaultModeRequestUserInput: true,
+      })
+      expect(() => parseTomlDocument(out)).not.toThrow()
+      // Exactly one header line, and it is still the user's commented one.
+      const headers = out
+        .split("\n")
+        .filter((line) => /^\s*\[features\]/.test(line))
+      expect(headers).toEqual(["[features] # flags"])
     })
 
     it("does not reach past one into another table's keys", () => {
@@ -1651,8 +2277,8 @@ describe("codex [features].default_mode_request_user_input toggle", () => {
     expect(readsBackAs(off)).toBe(false)
   })
 
-  it("shares [features] with skills without disturbing it", () => {
-    const withSkills = patchCodexConfigTomlText("", { skills: true })
+  it("shares [features] with another key without disturbing it", () => {
+    const withSkills = "[features]\nskills = true\n"
     const both = patchCodexConfigTomlText(withSkills, {
       defaultModeRequestUserInput: true,
     })
@@ -1671,11 +2297,11 @@ describe("codex [features].default_mode_request_user_input toggle", () => {
     ).toEqual({ skills: true })
   })
 
-  // The flag lives in the same `[features]` table the WebSocket toggle writes
-  // `responses_websockets_v2` into, and that key is rewritten on EVERY patch
-  // from the active provider's `supports_websockets`. A user who turns on
-  // questions must not lose their WebSocket setting as a side effect.
-  it("survives — and preserves — the websocket feature key", () => {
+  // `[features].responses_websockets_v2` shares this table, but codex retired
+  // it in 0.116.0 and the panel no longer manages it: turning on questions
+  // must neither conjure it from the provider's `supports_websockets` (as the
+  // writer once did on every patch) nor drop one the user still has.
+  it("neither adds nor drops the retired websocket feature key", () => {
     const toml = [
       'model_provider = "codeg"',
       "",
@@ -1686,90 +2312,202 @@ describe("codex [features].default_mode_request_user_input toggle", () => {
     const result = patchCodexConfigTomlText(toml, {
       defaultModeRequestUserInput: true,
     })
-    const features = (
-      parseTomlDocument(result) as { features?: Record<string, unknown> }
-    ).features
-    expect(features).toMatchObject({
-      responses_websockets_v2: true,
-      [KEY]: true,
-    })
+    expect(
+      (parseTomlDocument(result) as { features?: Record<string, unknown> })
+        .features
+    ).toEqual({ [KEY]: true })
     expect(readsBackAs(result)).toBe(true)
+
+    const handWritten = `${toml}\n\n[features]\nresponses_websockets_v2 = true\n`
+    const kept = patchCodexConfigTomlText(handWritten, {
+      defaultModeRequestUserInput: true,
+    })
+    expect(
+      (parseTomlDocument(kept) as { features?: Record<string, unknown> })
+        .features
+    ).toEqual({ responses_websockets_v2: true, [KEY]: true })
   })
 })
 
-// `responses_websockets_v2` is rewritten on EVERY patch from the resolved
-// WebSocket state, so any control — this one, skills, service tier, the model
-// field — can destroy it if the writer resolves it differently from the reader.
-describe("codex WebSocket feature key survives unrelated toggles", () => {
-  const KEY = "default_mode_request_user_input"
-
+// Since codex 0.116.0 the WebSocket transport follows the active provider's
+// `supports_websockets` alone; `[features].responses_websockets_v2` is a
+// `Stage::Removed` no-op. The switch must read and write exactly that key.
+describe("codex WebSocket switch follows supports_websockets alone", () => {
   function websocketsOf(configTomlText: string): boolean {
     return extractCodexImportantValues("", configTomlText).supportsWebsockets
   }
 
-  // A config that declares WebSockets ONLY through the feature key: the reader
-  // falls back to it for the codeg provider, so the panel shows the switch on.
-  const FEATURE_ONLY = [
-    'model = "gpt-5"',
+  const BOUND = [
+    'model_provider = "codeg"',
     "",
-    "[features]",
-    "responses_websockets_v2 = true",
+    "[model_providers.codeg]",
+    'base_url = "https://example.test/v1"',
   ].join("\n")
 
-  it("is shown as enabled when only the feature key declares it", () => {
-    expect(websocketsOf(FEATURE_ONLY)).toBe(true)
+  // The panel used to fall back to the feature key and show the switch on,
+  // while codex — which ignores that key — kept talking HTTPS.
+  it("reads off when only the retired feature key is set", () => {
+    expect(
+      websocketsOf(`${BOUND}\n\n[features]\nresponses_websockets_v2 = true\n`)
+    ).toBe(false)
+    expect(
+      websocketsOf(
+        'model = "gpt-5"\n\n[features]\nresponses_websockets_v2 = true\n'
+      )
+    ).toBe(false)
+  })
+
+  it("reads the active provider's key", () => {
+    expect(websocketsOf(`${BOUND}\nsupports_websockets = true\n`)).toBe(true)
+    expect(websocketsOf(`${BOUND}\nsupports_websockets = false\n`)).toBe(false)
+    // Another provider's key is not the active one's.
+    expect(
+      websocketsOf(
+        `${BOUND}\n\n[model_providers.other]\nsupports_websockets = true\n`
+      )
+    ).toBe(false)
+  })
+
+  it("writes only the provider key when switched on", () => {
+    const on = patchCodexConfigTomlText(BOUND, {
+      modelProvider: "codeg",
+      supportsWebsockets: true,
+    })
+    expect(websocketsOf(on)).toBe(true)
+    const parsed = parseTomlDocument(on) as {
+      features?: unknown
+      model_providers?: Record<string, Record<string, unknown>>
+    }
+    expect(parsed.model_providers?.codeg?.supports_websockets).toBe(true)
+    expect(parsed.features).toBeUndefined()
+  })
+
+  // Absent is codex's default (`serde(default)` false), so "off" removes the
+  // key like the other switches instead of pinning `= false`.
+  it("removes the provider key when switched off", () => {
+    const on = `${BOUND}\nsupports_websockets = true\n`
+    const off = patchCodexConfigTomlText(on, {
+      modelProvider: "codeg",
+      supportsWebsockets: false,
+    })
+    expect(websocketsOf(off)).toBe(false)
+    expect(off).not.toContain("supports_websockets")
+  })
+
+  // Cleaning the retired key is the obsolete-keys notice's job, not a side
+  // effect of the switch.
+  it("leaves a hand-written feature key alone in either direction", () => {
+    const src = `${BOUND}\n\n[features]\nresponses_websockets_v2 = true\n`
+    for (const supportsWebsockets of [true, false]) {
+      const out = patchCodexConfigTomlText(src, {
+        modelProvider: "codeg",
+        supportsWebsockets,
+      })
+      expect(out).toContain("responses_websockets_v2 = true")
+    }
   })
 
   for (const [label, patch] of [
     ["the questions toggle", { defaultModeRequestUserInput: true }],
-    ["the skills toggle", { skills: true }],
-    ["the fast service tier", { serviceTierFast: true }],
+    ["the model field", { model: "gpt-5.5" }],
+    ["the base URL field", { apiBaseUrl: "https://other.test/v1" }],
   ] as const) {
-    it(`is not silently cleared by ${label}`, () => {
-      const after = patchCodexConfigTomlText(FEATURE_ONLY, patch)
+    it(`is not touched by ${label}`, () => {
+      const src = `${BOUND}\nsupports_websockets = true\n`
+      const after = patchCodexConfigTomlText(src, patch)
       expect(websocketsOf(after)).toBe(true)
-      expect(after).toContain("responses_websockets_v2 = true")
+      expect(after).not.toContain("responses_websockets_v2")
     })
   }
 
-  // The fallback reads the feature key, so a nested `features.…` line — which
-  // is really `model_providers.codeg.features.…` and means nothing to codex —
-  // must not reach it. Otherwise any unrelated toggle would quietly promote a
-  // provider-local key into a global WebSocket flag.
-  it("is not conjured out of a nested dotted key", () => {
-    const nested = [
+  // A header may carry a trailing comment. The provider writers matched
+  // headers exactly, so they missed a commented provider header (and appended
+  // a second `[model_providers.codeg]`, which TOML rejects) and a commented
+  // NEXT header (and wrote the key into that other table).
+  it("finds a provider header that carries a comment", () => {
+    const src = [
       'model_provider = "codeg"',
       "",
-      "[model_providers.codeg]",
+      "[model_providers.codeg] # my gateway",
       'base_url = "https://example.test/v1"',
-      "features.responses_websockets_v2 = true",
     ].join("\n")
-    expect(websocketsOf(nested)).toBe(false)
-    const after = patchCodexConfigTomlText(nested, {
-      defaultModeRequestUserInput: true,
+    const on = patchCodexConfigTomlText(src, {
+      modelProvider: "codeg",
+      supportsWebsockets: true,
     })
-    const features = (
-      parseTomlDocument(after) as { features?: Record<string, unknown> }
-    ).features
-    expect(features).toEqual({ [KEY]: true })
+    expect(() => parseTomlDocument(on)).not.toThrow()
+    expect(on.match(/\[model_providers\.codeg\]/g)).toHaveLength(1)
+    expect(websocketsOf(on)).toBe(true)
   })
 
-  // The fallback must not outrank an explicit provider `false`, or the
-  // WebSocket switch itself could never be turned off.
-  it("still lets the WebSocket switch turn itself off", () => {
-    const bound = [
+  it("stops at a following header that carries a comment", () => {
+    const src = [
       'model_provider = "codeg"',
       "",
       "[model_providers.codeg]",
       'base_url = "https://example.test/v1"',
-      "supports_websockets = true",
       "",
-      "[features]",
-      "responses_websockets_v2 = true",
+      "[features] # flags",
+      "default_mode_request_user_input = true",
     ].join("\n")
-    const off = patchCodexConfigTomlText(bound, { supportsWebsockets: false })
-    expect(websocketsOf(off)).toBe(false)
-    expect(off).not.toContain("responses_websockets_v2")
+    const on = patchCodexConfigTomlText(src, {
+      modelProvider: "codeg",
+      supportsWebsockets: true,
+    })
+    const parsed = parseTomlDocument(on) as {
+      features?: Record<string, unknown>
+      model_providers?: Record<string, Record<string, unknown>>
+    }
+    expect(parsed.model_providers?.codeg?.supports_websockets).toBe(true)
+    expect(parsed.features).toEqual({ default_mode_request_user_input: true })
+
+    const moved = patchCodexConfigTomlText(src, {
+      modelProvider: "codeg",
+      apiBaseUrl: "https://moved.test/v1",
+    })
+    const movedParsed = parseTomlDocument(moved) as {
+      features?: Record<string, unknown>
+      model_providers?: Record<string, Record<string, unknown>>
+    }
+    expect(movedParsed.model_providers?.codeg?.base_url).toBe(
+      "https://moved.test/v1"
+    )
+    expect(movedParsed.features).toEqual({
+      default_mode_request_user_input: true,
+    })
+  })
+})
+
+describe("Claude thinking summaries — CLAUDE_CODE_THINKING_DISPLAY in the adapter's env", () => {
+  const KEY = "CLAUDE_CODE_THINKING_DISPLAY"
+
+  it("is on only for the exact value claude-agent-acp reads", () => {
+    expect(claudeThinkingSummariesEnabled("")).toBe(false)
+    expect(claudeThinkingSummariesEnabled("ANTHROPIC_MODEL=opus")).toBe(false)
+    // The adapter takes `summarized` or `omitted` verbatim and ignores
+    // anything else, which leaves Claude Code's own default in place.
+    expect(claudeThinkingSummariesEnabled(`${KEY}=omitted`)).toBe(false)
+    expect(claudeThinkingSummariesEnabled(`${KEY}=Summarized`)).toBe(false)
+    // Trimmed, as the saved env is.
+    expect(claudeThinkingSummariesEnabled(`${KEY} = summarized `)).toBe(true)
+  })
+
+  it("round-trips on and off, keeping the other variables", () => {
+    const on = setClaudeThinkingSummaries("ANTHROPIC_MODEL=opus", true)
+    expect(on).toBe(`ANTHROPIC_MODEL=opus\n${KEY}=summarized`)
+    expect(claudeThinkingSummariesEnabled(on)).toBe(true)
+
+    // Off removes the key, so Claude Code's default display applies again:
+    // `omitted` would hide the notes it writes between tool calls as well.
+    const off = setClaudeThinkingSummaries(on, false)
+    expect(off).toBe("ANTHROPIC_MODEL=opus")
+    expect(claudeThinkingSummariesEnabled(off)).toBe(false)
+  })
+
+  it("replaces a value typed by hand when turned on", () => {
+    expect(setClaudeThinkingSummaries(`${KEY}=omitted\nX=1`, true)).toBe(
+      `${KEY}=summarized\nX=1`
+    )
   })
 })
 
@@ -1832,50 +2570,6 @@ describe("host-tools toggle — hand the fs/terminal channels back to the agent"
     expect(hostToolsAgentModeEnabled(setHostToolsAgentMode(off, true))).toBe(
       true
     )
-  })
-})
-
-describe("adapter-channel control — opt into the latest adapter release", () => {
-  const KEY = "CODEG_ADAPTER_CHANNEL"
-
-  it("defaults to pinned for an agent that has never touched the control", () => {
-    expect(adapterChannelFromEnvText("")).toBe("pinned")
-    expect(adapterChannelFromEnvText("XAI_API_KEY=abc")).toBe("pinned")
-    expect(adapterChannelFromEnv({})).toBe("pinned")
-  })
-
-  it("round-trips latest and back to pinned", () => {
-    const latest = setAdapterChannel("XAI_API_KEY=abc", "latest")
-    expect(latest).toContain(`${KEY}=latest`)
-    expect(adapterChannelFromEnvText(latest)).toBe("latest")
-
-    // Pinned DELETES the key: unlike the host-tools knob there is no
-    // process-env second layer that could make "absent" mean something else,
-    // so absent is unambiguously the default on both sides, and the raw
-    // editor stays free of a key that only restates it.
-    const pinned = setAdapterChannel(latest, "pinned")
-    expect(pinned).not.toContain(KEY)
-    expect(adapterChannelFromEnvText(pinned)).toBe("pinned")
-    expect(pinned).toContain("XAI_API_KEY=abc")
-  })
-
-  it("reads only the exact sentinel, matching the Rust reader", () => {
-    // `adapter_channel_is_latest` (commands/acp.rs) treats exactly the trimmed
-    // `latest` as the opt-in; everything else stays on the reviewed pin.
-    expect(adapterChannelFromEnvText(`${KEY}=latest`)).toBe("latest")
-    expect(adapterChannelFromEnvText(`${KEY} = latest `)).toBe("latest")
-    expect(adapterChannelFromEnvText(`${KEY}=Latest`)).toBe("pinned")
-    expect(adapterChannelFromEnvText(`${KEY}=pinned`)).toBe("pinned")
-    expect(adapterChannelFromEnvText(`${KEY}=`)).toBe("pinned")
-    expect(adapterChannelFromEnv({ [KEY]: "latest" })).toBe("latest")
-    expect(adapterChannelFromEnv({ [KEY]: "nightly" })).toBe("pinned")
-  })
-
-  it("does not double up when selected twice", () => {
-    const once = setAdapterChannel("", "latest")
-    const twice = setAdapterChannel(once, "latest")
-    expect(twice).toBe(once)
-    expect(twice.match(new RegExp(KEY, "g"))).toHaveLength(1)
   })
 })
 
@@ -2087,6 +2781,69 @@ describe("important env keys", () => {
   })
 })
 
+describe("Kiro env keys", () => {
+  // KIRO_API_KEY is the only env Kiro CLI reads for sign-in; there is no
+  // endpoint or model variable, so only the key field is offered.
+  it("offers only the API key, under the name Kiro reads", () => {
+    expect(importantEnvKeysByAgent("kiro" as AgentType)).toEqual({
+      apiBaseUrl: [],
+      apiKey: ["KIRO_API_KEY"],
+      model: [],
+    })
+    expect(importantFieldsFor("kiro" as AgentType)).toEqual({
+      apiBaseUrl: false,
+      apiKey: true,
+      model: false,
+    })
+    expect(
+      patchEnvByImportantKey("kiro" as AgentType, "", "apiKey", "ksk_1")
+    ).toBe("KIRO_API_KEY=ksk_1")
+  })
+})
+
+describe("TRAE CLI env keys", () => {
+  // TRAE CLI's sign-in for a browser-less machine is its personal access
+  // token, and `TRAECLI_HOST` points it at an enterprise's own deployment;
+  // the model is chosen over ACP, so there is no model variable.
+  it("offers the token and the API URL under the names TRAE CLI reads", () => {
+    expect(importantEnvKeysByAgent("trae" as AgentType)).toEqual({
+      apiBaseUrl: ["TRAECLI_HOST"],
+      apiKey: ["TRAECLI_PERSONAL_ACCESS_TOKEN"],
+      model: [],
+    })
+    expect(importantFieldsFor("trae" as AgentType)).toEqual({
+      apiBaseUrl: true,
+      apiKey: true,
+      model: false,
+    })
+    expect(
+      patchEnvByImportantKey("trae" as AgentType, "", "apiKey", "pat_1")
+    ).toBe("TRAECLI_PERSONAL_ACCESS_TOKEN=pat_1")
+  })
+})
+
+describe("Command Code env keys", () => {
+  // Command Code's sign-in for a browser-less machine is the API key it reads
+  // ahead of its stored login; providers of the user's own (BYOK) are
+  // connected inside Command Code (`/connect`) and the model is chosen over
+  // ACP, so there is no endpoint or model variable.
+  it("offers only the API key, under the name Command Code reads", () => {
+    expect(importantEnvKeysByAgent("command_code" as AgentType)).toEqual({
+      apiBaseUrl: [],
+      apiKey: ["COMMAND_CODE_API_KEY"],
+      model: [],
+    })
+    expect(importantFieldsFor("command_code" as AgentType)).toEqual({
+      apiBaseUrl: false,
+      apiKey: true,
+      model: false,
+    })
+    expect(
+      patchEnvByImportantKey("command_code" as AgentType, "", "apiKey", "k_1")
+    ).toBe("COMMAND_CODE_API_KEY=k_1")
+  })
+})
+
 describe("codex ACP preset disclosures", () => {
   // Every claim the panel makes about the seeded approval preset is only true
   // when a preset is actually seeded. `default_permissions` shadowing means
@@ -2098,10 +2855,10 @@ describe("codex ACP preset disclosures", () => {
     expect(codexSandboxSeedsAcpPreset(true)).toBe(false)
   })
 
-  it("only warns about the lost read-only sandbox when codeg really seeds read-only", () => {
+  it("only notes the 1.7–1.13 read-only gap when codeg really seeds read-only", () => {
     // Unshadowed read-only: codeg injects the `read-only` preset, which on
-    // codex-acp >=1.7.0 is workspace-write with `approvalsReviewer: "user"`.
-    // Both halves of the warning hold.
+    // codex-acp 1.7.0–1.13.x is workspace-write with `approvalsReviewer:
+    // "user"` (2.0.0 made it read-only again). Both halves of the note hold.
     expect(showsCodexReadOnlyAcpWarning("read-only", false)).toBe(true)
     // Shadowed: no preset is injected, so the warning's promise that every
     // escalation reaches the user would be false — and it would sit directly
@@ -2112,5 +2869,58 @@ describe("codex ACP preset disclosures", () => {
       expect(showsCodexReadOnlyAcpWarning(mode, false)).toBe(false)
       expect(showsCodexReadOnlyAcpWarning(mode, true)).toBe(false)
     }
+  })
+})
+
+describe("ZCode runtime configuration", () => {
+  it("keeps provider credentials in the official runtime", () => {
+    expect(importantFieldsFor("zcode")).toEqual({
+      apiBaseUrl: false,
+      apiKey: false,
+      model: false,
+    })
+    const env =
+      "ZCODE_BIN=C:/My ZCode/zcode.cjs\nZCODE_NODE=C:/My Node/node.exe"
+    expect(patchEnvByImportantKey("zcode", env, "apiKey", "unused")).toBe(env)
+  })
+
+  it("explains that the official CLI is required even when the adapter is installed", () => {
+    const adapter: AdapterInfo = {
+      adapter_package: "zcode-acp-server@0.69.2",
+      adapter_cmd: "zcode-acp-server",
+      adapter_installed: true,
+      native_cmd: "zcode",
+      native_label: "ZCode CLI",
+      native_path: null,
+      native_required: true,
+      shared_config_dir: "~/.zcode",
+      docs_url: "https://github.com/william0wang/zcode-acp",
+    }
+    const check = buildAcpAdapterCheck(adapter)
+    expect(check?.status).toBe("warn")
+    expect(check?.message).toContain("Install and sign in")
+    expect(check?.message).not.toContain("not required")
+    expect(
+      buildAcpAdapterCheck({ ...adapter, native_path: "C:/ZCode/zcode.cjs" })
+        ?.status
+    ).toBe("pass")
+  })
+})
+
+describe("MiniMax Code native configuration", () => {
+  it("does not offer generic API fields or write keys to codeg settings", () => {
+    expect(importantEnvKeysByAgent("minimax_code")).toEqual({
+      apiBaseUrl: [],
+      apiKey: [],
+      model: [],
+    })
+    expect(importantFieldsFor("minimax_code")).toEqual({
+      apiBaseUrl: false,
+      apiKey: false,
+      model: false,
+    })
+    expect(
+      patchEnvByImportantKey("minimax_code", "KEEP=value", "apiKey", "secret")
+    ).toBe("KEEP=value")
   })
 })

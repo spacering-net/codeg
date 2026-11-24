@@ -242,15 +242,15 @@ describe("SuggestionPopup", () => {
     await waitFor(() => expect(popupLayer().style.left).toBe("300px"))
   })
 
-  it("renders the active (agent-first) tab's options plus a four-tab strip", async () => {
+  it("renders the active (agent-first) tab's options plus a five-tab strip", async () => {
     mountPopup()
     // Agent is the first non-empty tab, so its options show by default.
     expect(await screen.findByText("Codex Helper")).toBeInTheDocument()
     expect(screen.getByText("Claude Helper")).toBeInTheDocument()
     // The file tab's option is hidden until that tab is active.
     expect(screen.queryByText("alpha.md")).toBeNull()
-    // Four fixed tabs (no skill tab), agent selected.
-    expect(screen.getAllByRole("tab")).toHaveLength(4)
+    // Five fixed tabs (no skill tab), agent selected.
+    expect(screen.getAllByRole("tab")).toHaveLength(5)
     expect(screen.getByRole("tab", { selected: true })).toHaveAccessibleName(
       /Agents/
     )
@@ -287,7 +287,7 @@ describe("SuggestionPopup", () => {
     mountPopup({ search: emptySearch, emptyLabel: "Nothing" })
     const panel = screen.getByTestId("mention-popup")
     expect(await within(panel).findByText("Nothing")).toBeInTheDocument()
-    expect(screen.getAllByRole("tab")).toHaveLength(4)
+    expect(screen.getAllByRole("tab")).toHaveLength(5)
   })
 
   it("selects the active tab's highlighted row on Enter (default = first agent)", async () => {
@@ -321,7 +321,14 @@ describe("SuggestionPopup", () => {
     act(() => {
       expect(ref.current?.onKeyDown(key("Tab"))).toBe(true)
     })
-    // agent → file; the file option appears and the agent options are gone.
+    // agent → assistant: shown even with nothing in it…
+    expect(screen.getByRole("tab", { selected: true })).toHaveAccessibleName(
+      /Assistants/
+    )
+    act(() => {
+      expect(ref.current?.onKeyDown(key("Tab"))).toBe(true)
+    })
+    // …→ file; the file option appears and the agent options are gone.
     expect(await screen.findByText("alpha.md")).toBeInTheDocument()
     expect(screen.queryByText("Codex Helper")).toBeNull()
     expect(screen.getByRole("tab", { selected: true })).toHaveAccessibleName(
@@ -647,5 +654,378 @@ describe("SuggestionPopup", () => {
     expect(panel.querySelectorAll('[role="option"]')).toHaveLength(1)
     // The polite live region also conveys truncation to screen readers.
     expect(screen.getByRole("status")).toHaveTextContent("More — keep typing")
+  })
+})
+
+/**
+ * The tab strip follows the user's `@` panel preference (Settings → General):
+ * which tabs are shown and in what order. The popup takes it as `tabs`; the
+ * composer feeds it from the stored preference.
+ */
+describe("SuggestionPopup with a chosen tab order", () => {
+  const tabNames = () =>
+    screen
+      .getAllByRole("tab")
+      .map((tab) => tab.textContent?.replace(/\d+$/, ""))
+
+  it("shows only the chosen tabs, in the chosen order", async () => {
+    mountPopup({ tabs: ["file", "agent"] })
+    await screen.findByText("alpha.md")
+    expect(tabNames()).toEqual(["Files", "Agents"])
+    // Hidden tabs are gone from the strip, not merely empty.
+    expect(screen.queryByRole("tab", { name: /Sessions/ })).toBeNull()
+    expect(screen.queryByRole("tab", { name: /Commits/ })).toBeNull()
+  })
+
+  it("opens on the first tab with matches, in the chosen order", async () => {
+    // Sessions come first but have nothing for this query, so the panel skips
+    // to the next tab in the user's order that does — Files, not Agents.
+    mountPopup({ tabs: ["session", "file", "agent"] })
+    expect(await screen.findByText("alpha.md")).toBeInTheDocument()
+    expect(screen.getByRole("tab", { selected: true })).toHaveAccessibleName(
+      /Files/
+    )
+  })
+
+  it("moves through the shown tabs only with Tab / Shift+Tab, wrapping", async () => {
+    const { ref } = mountPopup({ tabs: ["file", "agent", "commit"] })
+    await screen.findByText("alpha.md")
+    const selected = () =>
+      screen.getByRole("tab", { selected: true }).textContent ?? ""
+
+    act(() => ref.current?.onKeyDown(key("Tab")))
+    expect(selected()).toMatch(/^Agents/)
+    act(() => ref.current?.onKeyDown(key("Tab")))
+    expect(selected()).toMatch(/^Commits/)
+    // Wraps past the end straight back to the first shown tab — never onto
+    // the hidden Sessions tab.
+    act(() => ref.current?.onKeyDown(key("Tab")))
+    expect(selected()).toMatch(/^Files/)
+    act(() => ref.current?.onKeyDown(key("Tab", true)))
+    expect(selected()).toMatch(/^Commits/)
+  })
+
+  it("asks the search only for the shown tabs", async () => {
+    const spy = vi.fn<ReferenceSearch>(() => groups)
+    mountPopup({ search: spy, tabs: ["file", "agent"] })
+    await screen.findByText("alpha.md")
+    expect(spy).toHaveBeenCalledWith(
+      state.query,
+      expect.any(AbortSignal),
+      ["file", "agent"],
+      expect.any(Function)
+    )
+  })
+
+  it("shows ready agents while files load and preserves selection when file results arrive", async () => {
+    let finish!: (groups: SuggestionGroup[]) => void
+    const progressive: ReferenceSearch = (_query, _signal, _kinds, update) => {
+      update?.(
+        groups.map((group) =>
+          group.kind === "file" ? { ...group, items: [], loading: true } : group
+        )
+      )
+      return new Promise((resolve) => {
+        finish = resolve
+      })
+    }
+    const { ref, onSelect } = mountPopup({
+      search: progressive,
+      tabs: ["agent", "file"],
+    })
+    await screen.findByText("Codex Helper")
+    fireEvent.click(screen.getByRole("tab", { name: /^Files/ }))
+    expect(screen.getByRole("status")).toHaveTextContent("Searching…")
+    fireEvent.click(screen.getByRole("tab", { name: /^Agents/ }))
+    act(() => ref.current?.onKeyDown(key("ArrowDown")))
+    await act(async () => finish(groups))
+    act(() => ref.current?.onKeyDown(key("Enter")))
+    expect(onSelect).toHaveBeenCalledWith(agentRef2, state.range)
+  })
+
+  it.each([1, 2])(
+    "keeps the keyboard-selected session when %i delayed files arrive",
+    async (fileCount) => {
+      const sessions = [1, 2].map((id) => ({
+        reference: {
+          refType: "session" as const,
+          id: String(id),
+          label: `Ready session ${id}`,
+          uri: `codeg://session/${id}`,
+          meta: null,
+        },
+      }))
+      const ready: SuggestionGroup[] = [
+        { kind: "file", label: "Files", items: [], loading: true },
+        { kind: "session", label: "Sessions", items: sessions },
+      ]
+      let finish!: (value: SuggestionGroup[]) => void
+      const progressive: ReferenceSearch = (
+        _query,
+        _signal,
+        _kinds,
+        update
+      ) => {
+        update?.(ready)
+        return new Promise((resolve) => {
+          finish = resolve
+        })
+      }
+      const { ref, onSelect } = mountPopup({
+        search: progressive,
+        tabs: ["file", "session"],
+      })
+      await screen.findByText("Ready session 1")
+      act(() => ref.current?.onKeyDown(key("ArrowDown")))
+      await act(async () =>
+        finish([
+          {
+            kind: "file",
+            label: "Files",
+            items: Array.from({ length: fileCount }, (_, i) => ({
+              reference: {
+                ...fileRef,
+                id: `late${i}.ts`,
+                label: `late${i}.ts`,
+              },
+            })),
+          },
+          ready[1],
+        ])
+      )
+      expect(screen.getByRole("tab", { name: /^Sessions/ })).toHaveAttribute(
+        "aria-selected",
+        "true"
+      )
+      act(() => ref.current?.onKeyDown(key("Enter")))
+      expect(onSelect).toHaveBeenCalledWith(sessions[1].reference, state.range)
+    }
+  )
+
+  it("preserves the selected reference across a progressive reorder and clamps a removed row", async () => {
+    let update!: NonNullable<Parameters<ReferenceSearch>[3]>
+    const progressive: ReferenceSearch = (_query, _signal, _kinds, publish) => {
+      update = publish!
+      return groups
+    }
+    const { ref, onSelect } = mountPopup({ search: progressive })
+    await screen.findByText("Codex Helper")
+    act(() => ref.current?.onKeyDown(key("ArrowDown")))
+    act(() =>
+      update(
+        groups.map((group) =>
+          group.kind === "agent"
+            ? { ...group, items: [...group.items].reverse() }
+            : group
+        )
+      )
+    )
+    act(() => ref.current?.onKeyDown(key("Enter")))
+    expect(onSelect).toHaveBeenLastCalledWith(agentRef2, state.range)
+    act(() =>
+      update(
+        groups.map((group) =>
+          group.kind === "agent"
+            ? { ...group, items: [{ reference: agentRef }] }
+            : group
+        )
+      )
+    )
+    const active = screen
+      .getAllByRole("option")
+      .filter((row) => row.getAttribute("aria-selected") === "true")
+    expect(active).toHaveLength(1)
+    act(() => ref.current?.onKeyDown(key("Enter")))
+    expect(onSelect).toHaveBeenLastCalledWith(agentRef, state.range)
+  })
+
+  it("re-queries when the shown tabs change while it is open", async () => {
+    const spy = vi.fn<ReferenceSearch>(() => groups)
+    const ref = createRef<SuggestionPopupHandle>()
+    const view = (
+      tabs: readonly ("file" | "agent" | "session" | "commit")[]
+    ) => (
+      <SuggestionPopup
+        ref={ref}
+        state={state}
+        search={spy}
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+        tabs={tabs}
+      />
+    )
+    const { rerender } = render(view(["file", "agent"]))
+    await screen.findByText("alpha.md")
+    expect(spy).toHaveBeenCalledTimes(1)
+
+    // Switched on in the Settings window while this panel was open: its source
+    // has to be loaded now, or the tab would read "No matches" until the next
+    // keystroke.
+    rerender(view(["file", "agent", "session"]))
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(2))
+    expect(spy).toHaveBeenLastCalledWith(
+      state.query,
+      expect.any(AbortSignal),
+      ["file", "agent", "session"],
+      expect.any(Function)
+    )
+    expect(screen.getAllByRole("tab")).toHaveLength(3)
+  })
+
+  it("shows a tab switched on while open as loading until its source arrives", async () => {
+    const sessionRef = {
+      refType: "session" as const,
+      id: "7",
+      label: "Login refactor",
+      uri: "codeg://session/7",
+      meta: null,
+    }
+    // Like the real search: a kind that wasn't asked for comes back empty.
+    const kindsSearch: ReferenceSearch = (_query, _signal, kinds) =>
+      [
+        ...groups,
+        {
+          kind: "session" as const,
+          label: "Sessions",
+          items: [{ reference: sessionRef }],
+        },
+      ].map((group) =>
+        !kinds || kinds.includes(group.kind) ? group : { ...group, items: [] }
+      )
+    const view = (
+      tabs: readonly ("file" | "agent" | "session" | "commit")[]
+    ) => (
+      <SuggestionPopup
+        ref={createRef<SuggestionPopupHandle>()}
+        state={state}
+        search={kindsSearch}
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+        tabs={tabs}
+        loadingLabel="Loading"
+        emptyLabel="Nothing"
+      />
+    )
+    const { rerender } = render(view(["file", "agent"]))
+    await screen.findByText("alpha.md")
+
+    rerender(view(["file", "agent", "session"]))
+    // The tabs that were already loaded keep their rows meanwhile…
+    expect(screen.getByText("alpha.md")).toBeInTheDocument()
+    // …but the new one has nothing to say yet: loading, not "Nothing", and no
+    // count.
+    act(() => {
+      fireEvent.click(screen.getByRole("tab", { name: /Sessions/ }))
+    })
+    const panel = screen.getByTestId("mention-popup")
+    expect(within(panel).getByText("Loading")).toBeInTheDocument()
+    expect(within(panel).queryByText("Nothing")).toBeNull()
+    expect(screen.getByRole("tab", { name: /Sessions/ }).textContent).toBe(
+      "Sessions"
+    )
+
+    expect(await screen.findByText("Login refactor")).toBeInTheDocument()
+    expect(screen.getByRole("tab", { name: /Sessions/ }).textContent).toBe(
+      "Sessions1"
+    )
+  })
+
+  it("doesn't count or offer a tab's rows before a fetch that asked for it", async () => {
+    // A search that answers every kind whatever it was asked: rows for a tab
+    // that wasn't shown when they were fetched still wait for its own fetch,
+    // so the count and the rows can't disagree with the loading state.
+    const everything: ReferenceSearch = () => [
+      ...groups,
+      {
+        kind: "commit",
+        label: "Commits",
+        items: [
+          {
+            reference: {
+              refType: "commit",
+              id: "abc1234",
+              label: "abc1234",
+              uri: "codeg://commit/repo@abc1234",
+              meta: null,
+            },
+          },
+        ],
+      },
+    ]
+    const view = (
+      tabs: readonly ("file" | "agent" | "session" | "commit")[]
+    ) => (
+      <SuggestionPopup
+        ref={createRef<SuggestionPopupHandle>()}
+        state={state}
+        search={everything}
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+        tabs={tabs}
+        loadingLabel="Loading"
+      />
+    )
+    const { rerender } = render(view(["file", "agent"]))
+    await screen.findByText("alpha.md")
+
+    rerender(view(["file", "agent", "commit"]))
+    expect(screen.getByRole("tab", { name: /Commits/ }).textContent).toBe(
+      "Commits"
+    )
+    act(() => {
+      fireEvent.click(screen.getByRole("tab", { name: /Commits/ }))
+    })
+    expect(screen.queryByText("abc1234")).toBeNull()
+    expect(
+      within(screen.getByTestId("mention-popup")).getByText("Loading")
+    ).toBeInTheDocument()
+
+    expect(await screen.findByText("abc1234")).toBeInTheDocument()
+    expect(screen.getByRole("tab", { name: /Commits/ }).textContent).toBe(
+      "Commits1"
+    )
+  })
+
+  it("falls back to the first tab with matches when the pinned tab is hidden", async () => {
+    const ref = createRef<SuggestionPopupHandle>()
+    const view = (
+      tabs: readonly ("file" | "agent" | "session" | "commit")[]
+    ) => (
+      <SuggestionPopup
+        ref={ref}
+        state={state}
+        search={search}
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+        tabs={tabs}
+      />
+    )
+    const { rerender } = render(view(["agent", "file", "commit"]))
+    await screen.findByText("Codex Helper")
+    // Pin the (empty) Commits tab: agent → file → commit.
+    act(() => ref.current?.onKeyDown(key("Tab")))
+    act(() => ref.current?.onKeyDown(key("Tab")))
+    expect(screen.getByRole("tab", { selected: true })).toHaveAccessibleName(
+      /Commits/
+    )
+
+    rerender(view(["agent", "file"]))
+    // Not stranded on a tab that is no longer on the strip.
+    expect(await screen.findByText("Codex Helper")).toBeInTheDocument()
+    expect(screen.getByRole("tab", { selected: true })).toHaveAccessibleName(
+      /Agents/
+    )
+  })
+
+  it("treats an empty tab list as the built-in one rather than an empty strip", async () => {
+    mountPopup({ tabs: [] })
+    await screen.findByText("Codex Helper")
+    expect(tabNames()).toEqual([
+      "Agents",
+      "Assistants",
+      "Files",
+      "Sessions",
+      "Commits",
+    ])
   })
 })

@@ -9,7 +9,7 @@ use sea_orm::{
 };
 
 use crate::models::*;
-use crate::parsers::{folder_name_from_path, AgentParser, ParseError};
+use crate::parsers::{folder_name_from_path, AgentEnv, AgentParser, ParseError};
 
 /// Parser for Hermes Agent (Nous Research) transcripts.
 ///
@@ -21,10 +21,12 @@ use crate::parsers::{folder_name_from_path, AgentParser, ParseError};
 ///   tool_name, reasoning, reasoning_content, timestamp, active, …)`
 ///
 /// Several shapes differ from the OpenCode SQLite parser and are load-bearing:
-/// timestamps are Unix epoch **seconds** as REAL floats (not millis); the
-/// working directory for ACP sessions lives in `model_config` JSON (the `cwd`
-/// column is NULL); messages are ordered by `id` (insertion order, not
-/// timestamp); rewound rows have `active = 0`; and multimodal `content` is
+/// timestamps are Unix epoch **seconds** as REAL floats (not millis); an ACP
+/// session's working directory is in `model_config` JSON (the `cwd` column was
+/// NULL for ACP sessions when this parser was written; the v2026.9.24 and
+/// v0.21.6 adapters fill both); messages are ordered by `id` (insertion order,
+/// not timestamp); rewound rows have `active = 0`; `sessions.ended_at` is not
+/// the last activity (see [`LAST_ACTIVE_AT_SQL`]); and multimodal `content` is
 /// stored with a leading NUL-byte `\x00json:` sentinel followed by a JSON parts
 /// array. See the inline notes on each function.
 pub struct HermesParser {
@@ -39,8 +41,13 @@ impl Default for HermesParser {
 
 impl HermesParser {
     pub fn new() -> Self {
+        Self::for_env(&AgentEnv::inherited())
+    }
+
+    /// The history of the Hermes launched with `env`.
+    pub fn for_env(env: &AgentEnv) -> Self {
         Self {
-            base_dir: resolve_hermes_home_dir(),
+            base_dir: resolve_hermes_home_dir_for_env(env),
         }
     }
 
@@ -99,11 +106,13 @@ impl HermesParser {
         let rows = conn
             .query_all(Statement::from_string(
                 DbBackend::Sqlite,
-                // `cwd` lives in `model_config` JSON for ACP sessions (the column
-                // is NULL); `json_valid` guards against non-JSON blobs aborting
-                // the whole SELECT. Archived sessions are hidden. `message_count`
-                // counts only active, non-system rows.
-                r#"
+                // `cwd` falls back to `model_config` JSON, where ACP sessions
+                // keep it (the column was NULL for them in older builds);
+                // `json_valid` guards against non-JSON blobs aborting the whole
+                // SELECT. Archived sessions are hidden. `message_count` counts
+                // only active, non-system rows.
+                format!(
+                    r#"
                 SELECT
                     s.id AS id,
                     COALESCE(
@@ -114,7 +123,7 @@ impl HermesParser {
                     s.title AS title,
                     s.model AS model,
                     s.started_at AS started_at,
-                    s.ended_at AS ended_at,
+                    {LAST_ACTIVE_AT_SQL} AS last_active_at,
                     s.parent_session_id AS parent_id,
                     (
                         SELECT COUNT(*) FROM messages m
@@ -126,7 +135,7 @@ impl HermesParser {
                 WHERE COALESCE(s.archived, 0) = 0
                 ORDER BY s.started_at DESC
                 "#
-                .to_string(),
+                ),
             ))
             .await?;
 
@@ -153,7 +162,8 @@ impl HermesParser {
         let row = conn
             .query_one(Statement::from_sql_and_values(
                 DbBackend::Sqlite,
-                r#"
+                format!(
+                    r#"
                 SELECT
                     s.id AS id,
                     COALESCE(
@@ -164,7 +174,7 @@ impl HermesParser {
                     s.title AS title,
                     s.model AS model,
                     s.started_at AS started_at,
-                    s.ended_at AS ended_at,
+                    {LAST_ACTIVE_AT_SQL} AS last_active_at,
                     s.parent_session_id AS parent_id,
                     (
                         SELECT COUNT(*) FROM messages m
@@ -175,7 +185,8 @@ impl HermesParser {
                 FROM sessions s
                 WHERE s.id = ?
                 LIMIT 1
-                "#,
+                "#
+                ),
                 [conversation_id.into()],
             ))
             .await?;
@@ -317,6 +328,7 @@ impl HermesParser {
                         is_error: false,
                         agent_stats: None,
                         images: Vec::new(),
+                        exit_code: None,
                     });
                 }
                 MessageRole::System => continue,
@@ -427,7 +439,12 @@ impl AgentParser for HermesParser {
 /// own `get_hermes_home` does NOT expand `~`), defaults to `~/.hermes`, falls
 /// back to `.` when the home dir is unknown.
 pub(crate) fn resolve_hermes_home_dir() -> PathBuf {
-    resolve_hermes_home(std::env::var("HERMES_HOME").ok(), dirs::home_dir())
+    resolve_hermes_home_dir_for_env(&AgentEnv::inherited())
+}
+
+/// [`resolve_hermes_home_dir`] for the Hermes launched with `env`.
+pub(crate) fn resolve_hermes_home_dir_for_env(env: &AgentEnv) -> PathBuf {
+    resolve_hermes_home(env.var("HERMES_HOME"), dirs::home_dir())
 }
 
 fn resolve_hermes_home(env: Option<String>, home: Option<PathBuf>) -> PathBuf {
@@ -461,6 +478,33 @@ fn resolve_hermes_home(env: Option<String>, home: Option<PathBuf>) -> PathBuf {
     }
 }
 
+/// A session's last activity, as the summary's `ended_at`: its newest active,
+/// non-system message, else `sessions.ended_at` for a session without one.
+///
+/// `sessions.ended_at` by itself is not activity. Since v0.21.6 the ACP adapter
+/// stamps it (`end_reason = 'acp_disconnect'`) on every session it holds when
+/// its stdio closes (`end_all_sessions`, called from `acp_adapter/entry.py`),
+/// and `session/load` / `session/resume` clear it again, so a conversation that
+/// is only opened and closed gets a fresh `ended_at` and no new message. codeg
+/// reads a summary's `ended_at` as where the transcript ends: import stamps
+/// `updated_at` with it, and the import scan moves a conversation forward
+/// whenever it grows, which floated every merely-opened conversation to the
+/// top of the sidebar. Upstream ranks sessions by the newest message timestamp
+/// too (`_sql_freshest_of`, which also folds in a heartbeat column codeg does
+/// not need), and skips the same out-of-window values: a timestamp outside
+/// `EPOCH_MIN..=EPOCH_MAX` (0 to 4.2e9 seconds; the garbage doubles a damaged
+/// page leaves behind, or TEXT) must not pin the session's recency.
+const LAST_ACTIVE_AT_SQL: &str = "COALESCE(
+                        (
+                            SELECT MAX(m.timestamp) FROM messages m
+                            WHERE m.session_id = s.id
+                              AND m.active = 1
+                              AND m.role <> 'system'
+                              AND m.timestamp BETWEEN 0.0 AND 4200000000.0
+                        ),
+                        s.ended_at
+                    )";
+
 fn parse_sqlite_summary_row(row: &QueryResult) -> Result<ConversationSummary, ParseError> {
     let id: String = row.try_get("", "id")?;
     let folder_path: Option<String> = row.try_get("", "folder_path")?;
@@ -472,7 +516,9 @@ fn parse_sqlite_summary_row(row: &QueryResult) -> Result<ConversationSummary, Pa
     let started_at = get_real(row, "started_at")
         .map(secs_f64_to_datetime)
         .unwrap_or_else(Utc::now);
-    let ended_at = get_real(row, "ended_at").map(secs_f64_to_datetime);
+    // Unlike `started_at`, an unusable value is no activity at all rather than
+    // "now": every refresh would otherwise move the conversation to the top.
+    let ended_at = get_real(row, "last_active_at").and_then(secs_f64_to_datetime_opt);
 
     let folder_path = normalize_optional_string(folder_path);
     let folder_name = folder_path.as_ref().map(|p| folder_name_from_path(p));
@@ -522,11 +568,18 @@ fn get_u64(row: &QueryResult, col: &str) -> u64 {
     }
 }
 
-/// Convert a Unix epoch timestamp expressed as REAL **seconds** to a UTC time.
-/// (Contrast OpenCode, whose timestamps are milliseconds.)
+/// Convert a Unix epoch timestamp expressed as REAL **seconds** to a UTC time,
+/// "now" when it is unusable. (Contrast OpenCode, whose timestamps are
+/// milliseconds.)
 fn secs_f64_to_datetime(secs: f64) -> DateTime<Utc> {
+    secs_f64_to_datetime_opt(secs).unwrap_or_else(Utc::now)
+}
+
+/// [`secs_f64_to_datetime`] without the fallback: `None` for a non-finite,
+/// non-positive or unrepresentable value.
+fn secs_f64_to_datetime_opt(secs: f64) -> Option<DateTime<Utc>> {
     if !secs.is_finite() || secs <= 0.0 {
-        return Utc::now();
+        return None;
     }
     let mut whole = secs.trunc() as i64;
     let mut nanos = (secs.fract() * 1_000_000_000.0).round() as i64;
@@ -537,9 +590,7 @@ fn secs_f64_to_datetime(secs: f64) -> DateTime<Utc> {
         whole += 1;
         nanos -= 1_000_000_000;
     }
-    Utc.timestamp_opt(whole, nanos as u32)
-        .single()
-        .unwrap_or_else(Utc::now)
+    Utc.timestamp_opt(whole, nanos as u32).single()
 }
 
 fn normalize_optional_string(value: Option<String>) -> Option<String> {
@@ -569,10 +620,24 @@ fn decode_hermes_content(raw: Option<&str>) -> Vec<ContentBlock> {
     };
 
     if let Some(rest) = s.strip_prefix(CONTENT_JSON_PREFIX) {
-        if let Ok(serde_json::Value::Array(parts)) =
-            serde_json::from_str::<serde_json::Value>(rest)
-        {
-            return parts.iter().filter_map(content_part_to_block).collect();
+        match serde_json::from_str::<serde_json::Value>(rest) {
+            Ok(serde_json::Value::Array(parts)) => {
+                return parts.iter().filter_map(content_part_to_block).collect();
+            }
+            // Since v0.21.6 a LITERAL text that itself begins with the sentinel
+            // is stored as the sentinel plus that text as a JSON string
+            // (`_encode_content`), and read back verbatim. It is text, never
+            // parts: decoding it a second time would let a crafted message
+            // choose its own structure, which is what the escape prevents.
+            // Upstream keeps that promise only until the session is reopened:
+            // `session/load` and `session/resume` rewrite the session's rows
+            // from the decoded history (seen on v0.22.0 and v0.22.2), and a
+            // literal that decodes as a parts array is then stored as one,
+            // which the arm above cannot tell from a real one.
+            Ok(serde_json::Value::String(literal)) => {
+                return text_block(literal.trim_start_matches('\u{0000}').trim());
+            }
+            _ => {}
         }
         // Malformed after the sentinel: show the payload as text, minus the
         // unrenderable NUL sentinel.
@@ -905,6 +970,36 @@ mod tests {
         assert!(matches!(&blocks[0], ContentBlock::Text { text } if text == "not json at all"));
     }
 
+    /// v0.21.6 stores a literal message that starts with the sentinel as the
+    /// sentinel plus a JSON string (what `json.dumps` writes for it). The
+    /// literal below spells out a parts array; it must come back as that text,
+    /// not as the parts it imitates.
+    #[test]
+    fn decode_an_escaped_sentinel_literal_as_its_text() {
+        let literal = format!(r#"{CONTENT_JSON_PREFIX}[{{"type":"text","text":"smuggled"}}]"#);
+        let stored = format!(
+            "{CONTENT_JSON_PREFIX}{}",
+            serde_json::to_string(&literal).unwrap()
+        );
+        let blocks = decode_hermes_content(Some(&stored));
+        assert_eq!(blocks.len(), 1);
+        assert!(
+            matches!(&blocks[0], ContentBlock::Text { text } if text == r#"json:[{"type":"text","text":"smuggled"}]"#),
+            "{blocks:?}"
+        );
+    }
+
+    #[test]
+    fn secs_f64_to_datetime_opt_rejects_what_the_fallback_would_call_now() {
+        assert_eq!(
+            secs_f64_to_datetime_opt(1_780_980_974.5).map(|dt| dt.timestamp()),
+            Some(1_780_980_974)
+        );
+        for unusable in [0.0, -1.0, f64::NAN, f64::INFINITY, 8.4e252] {
+            assert_eq!(secs_f64_to_datetime_opt(unusable), None, "{unusable}");
+        }
+    }
+
     #[test]
     fn normalize_tool_arguments_string_vs_object() {
         assert_eq!(
@@ -947,5 +1042,17 @@ mod tests {
         assert_eq!(content_to_text(Some("plain")).as_deref(), Some("plain"));
         assert_eq!(content_to_text(Some("  ")), None);
         assert_eq!(content_to_text(None), None);
+    }
+
+    /// #948: built with an agent's launch env, the parser reads where THAT
+    /// env puts the agent's files, not where codeg's own environment does.
+    #[test]
+    fn for_env_reads_the_home_of_the_launch_env() {
+        // Trimmed like Hermes' own `get_hermes_home`, then taken verbatim.
+        let env = AgentEnv::with_overrides(&[("HERMES_HOME", " /relocated/hermes ")]);
+        assert_eq!(
+            HermesParser::for_env(&env).base_dir,
+            PathBuf::from("/relocated/hermes")
+        );
     }
 }

@@ -7,15 +7,16 @@ import {
 } from "@/lib/types"
 
 describe("Claude provider model with custom option trio", () => {
-  // The custom model option trio rides along with the five model fields in the
-  // provider's `model` JSON, so a round-trip must preserve all eight keys.
-  it("round-trips the five model fields plus the custom option trio", () => {
+  // The custom model option trio rides along with the six model fields in the
+  // provider's `model` JSON, so a round-trip must preserve all nine keys.
+  it("round-trips the six model fields plus the custom option trio", () => {
     const model: ClaudeProviderModel = {
       main: "gw/main",
       reasoning: "gw/reasoning",
       haiku: "gw/haiku",
       sonnet: "gw/sonnet",
       opus: "gw/opus",
+      fable: "gw/fable",
       customOption: "gw/opus-preview",
       customOptionName: "Gateway Opus",
       customOptionDescription: "via gateway",
@@ -39,7 +40,7 @@ describe("Claude provider model with custom option trio", () => {
   })
 
   // Empty/whitespace custom values are dropped on both serialize and parse,
-  // matching the trim-or-omit semantics of the five model fields.
+  // matching the trim-or-omit semantics of the six model fields.
   it("drops empty custom option values", () => {
     expect(
       serializeClaudeProviderModel({

@@ -1,0 +1,433 @@
+{
+  "item": {
+    "id": "01a1f230-a5b2-7bca-9cee-bd63eb5aee5c",
+    "ref": "obra/superpowers",
+    "kind": "plugin",
+    "title": {
+      "en": "Superpowers"
+    }
+  },
+  "version": {
+    "revision": 1,
+    "version": "7.0.2",
+    "publishedAt": "2026-11-03T22:17:07Z",
+    "status": "ok"
+  },
+  "archive": {
+    "url": "/api/harness/v1/archives/6511454a4e369b1c52393d5ced6948e6cf4231f2ae90e163e3df9ef58d4e9db4.zip",
+    "sha256": "6511454a4e369b1c52393d5ced6948e6cf4231f2ae90e163e3df9ef58d4e9db4",
+    "size": 684155
+  },
+  "files": [
+    {
+      "path": ".agents/plugins/marketplace.json",
+      "sha256": "2b94116c190896480e5054222a744e375976f8ae5bdb66ff0ab6b348dfad4182",
+      "size": 363,
+      "executable": false
+    },
+    {
+      "path": ".antigravity-plugin/plugin.json",
+      "sha256": "47fe1ae9311cdf7a1136e2d39d74194ee2bc06d4b9fe2fe8d8652a265ca4a57a",
+      "size": 668,
+      "executable": false
+    },
+    {
+      "path": ".claude-plugin/marketplace.json",
+      "sha256": "04015bf36c0c8e475e61509f4c0c2e72838abb1b6ab70a2c44f04be4317f79fa",
+      "size": 514,
+      "executable": false
+    },
+    {
+      "path": ".claude-plugin/plugin.json",
+      "sha256": "6728b554d1aaf9235f7981c7838a32f50c191297284af97f4c2a808155f7c399",
+      "size": 497,
+      "executable": false
+    },
+    {
+      "path": ".codex-plugin/plugin.json",
+      "sha256": "925b862a7ee38f170f4595a33a1d3c1cecd5e944f271b30d98efa55919febab0",
+      "size": 1730,
+      "executable": false
+    },
+    {
+      "path": ".cursor-plugin/plugin.json",
+      "sha256": "e74bbc3086286fec5595e3adc35f3c340ec255508afdf5030dd617a6a850afea",
+      "size": 578,
+      "executable": false
+    },
+    {
+      "path": ".devin-plugin/plugin.json",
+      "sha256": "5d1227aa357f7c44c07c6555190c3f8e106af24666b8cb48bf0475026113f3d7",
+      "size": 575,
+      "executable": false
+    },
+    {
+      "path": ".gitattributes",
+      "sha256": "4702b23e09afad9638c184c8900b31af635673ba439c265ecc3d341efb54eaf8",
+      "size": 373,
+      "executable": false
+    }
+  ],
+  "source": null,
+  "permissions": {
+    "runsCode": [
+      "cmd",
+      "executable",
+      "node",
+      "python",
+      "shell"
+    ],
+    "installs": [
+      "brew",
+      "bun",
+      "npm",
+      "npx",
+      "pip",
+      "system packages"
+    ],
+    "installScripts": [],
+    "network": [
+      "agentskills.io",
+      "api.github.com",
+      "blog.fsck.com",
+      "claude.com",
+      "code.claude.com",
+      "discord.gg",
+      "docs.github.com",
+      "github.com",
+      "mintcdn.com",
+      "opencode.ai",
+      "platform.claude.com",
+      "primeradiant.com",
+      "raw.githubusercontent.com",
+      "registry.npmjs.org",
+      "www.contributor-covenant.org"
+    ],
+    "secrets": [
+      "BRAINSTORM_TOKEN",
+      "SERVER_KEY"
+    ],
+    "paths": [
+      "~/...",
+      "~/.agents",
+      "~/.bashrc",
+      "~/.claude",
+      "~/.codex",
+      "~/.config",
+      "~/.gemini",
+      "~/.hermes",
+      "~/.local",
+      "~/.superpowers",
+      "~/2026-06-09-code-quality-reviewer-scope-budget-issue.md",
+      "~/home",
+      "~/project",
+      "~/superpowers-skills-backup",
+      "~/threads"
+    ],
+    "tools": [],
+    "hooks": [
+      "claude · SessionStart · \"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd\" session-start",
+      "cursor · sessionStart · ./hooks/run-hook.cmd session-start"
+    ],
+    "code": [
+      ".opencode/plugins/superpowers.js",
+      "index.js",
+      ".pi/extensions/superpowers.ts",
+      ".hermes-plugin/__init__.py"
+    ]
+  },
+  "risk": "low",
+  "reviewed": false,
+  "advisories": [],
+  "plugin": {
+    "name": "superpowers",
+    "hosts": [
+      {
+        "host": "claude",
+        "manifest": ".claude-plugin/plugin.json",
+        "skills": 15,
+        "agents": 0,
+        "commands": 0,
+        "hooks": 1,
+        "mcp": 0,
+        "code": 0,
+        "somethingNew": 1
+      },
+      {
+        "host": "codex",
+        "manifest": ".codex-plugin/plugin.json",
+        "skills": 15,
+        "agents": 0,
+        "commands": 0,
+        "hooks": 0,
+        "mcp": 0,
+        "code": 0
+      },
+      {
+        "host": "cursor",
+        "manifest": ".cursor-plugin/plugin.json",
+        "skills": 15,
+        "agents": 0,
+        "commands": 0,
+        "hooks": 1,
+        "mcp": 0,
+        "code": 0
+      },
+      {
+        "host": "gemini",
+        "manifest": "gemini-extension.json",
+        "skills": 15,
+        "agents": 0,
+        "commands": 0,
+        "hooks": 0,
+        "mcp": 0,
+        "code": 0
+      },
+      {
+        "host": "kimi",
+        "manifest": ".kimi-plugin/plugin.json",
+        "skills": 15,
+        "agents": 0,
+        "commands": 0,
+        "hooks": 0,
+        "mcp": 0,
+        "code": 0
+      },
+      {
+        "host": "antigravity",
+        "manifest": ".antigravity-plugin/plugin.json",
+        "skills": 15,
+        "agents": 0,
+        "commands": 0,
+        "hooks": 0,
+        "mcp": 0,
+        "code": 0
+      },
+      {
+        "host": "devin",
+        "manifest": ".devin-plugin/plugin.json",
+        "skills": 15,
+        "agents": 0,
+        "commands": 0,
+        "hooks": 0,
+        "mcp": 0,
+        "code": 0
+      },
+      {
+        "host": "muse",
+        "manifest": ".muse-plugin/plugin.json",
+        "skills": 15,
+        "agents": 0,
+        "commands": 0,
+        "hooks": 0,
+        "mcp": 0,
+        "code": 0
+      },
+      {
+        "host": "opencode",
+        "manifest": "",
+        "skills": 15,
+        "agents": 0,
+        "commands": 0,
+        "hooks": 0,
+        "mcp": 0,
+        "code": 2
+      },
+      {
+        "host": "pi",
+        "manifest": "package.json",
+        "skills": 15,
+        "agents": 0,
+        "commands": 0,
+        "hooks": 0,
+        "mcp": 0,
+        "code": 1
+      },
+      {
+        "host": "hermes",
+        "manifest": ".hermes-plugin/plugin.yaml",
+        "skills": 15,
+        "agents": 0,
+        "commands": 0,
+        "hooks": 0,
+        "mcp": 0,
+        "code": 1
+      }
+    ],
+    "unknownManifests": [],
+    "components": [
+      {
+        "kind": "skill",
+        "name": "brainstorming",
+        "path": "skills/brainstorming",
+        "summary": "You MUST use this before any creative work - creating features, building components, adding functionality, modifying behavior, or planning anything new, in software or out of it (a talk, a business, a renovation).",
+        "treeSha256": "d37f86e8532add4f09e1d6908fc9f874bc75d7d350c8176866612c803e5271ae",
+        "somethingNew": 1
+      },
+      {
+        "kind": "skill",
+        "name": "diagnosing-superpowers",
+        "path": "skills/diagnosing-superpowers",
+        "summary": "Use when a superpowers session went wrong and your human partner wants to know why — repeated work, ignored plans, stumbles, poor results, a skill that didn't fire, \"it took too long\", \"why is it so expensive\", \"what is it doing\" — or wants to build a bug report for the superpowers maintainers, for the current session or a past one identified by id or path, on any harness.",
+        "treeSha256": "c8c0d3fd4b9a85703bd55fdf1a7e31be157430ed231202dbec7e2c0b4f56a41d"
+      },
+      {
+        "kind": "skill",
+        "name": "dispatching-parallel-agents",
+        "path": "skills/dispatching-parallel-agents",
+        "summary": "Use when facing 2+ independent tasks that can be worked on without shared state or sequential dependencies",
+        "treeSha256": "485c472d05edb8903c608a3462c7e97a2a542b0b3faec86da23a558dc3f21b1c"
+      },
+      {
+        "kind": "skill",
+        "name": "executing-plans",
+        "path": "skills/executing-plans",
+        "summary": "Use when executing an implementation plan in the current session as the implementer yourself — your human partner chose inline execution, or no subagent tool is available",
+        "treeSha256": "85784a7207354f51243f05b576e03a9eea50840552fd947e276419fb77c1aea0"
+      },
+      {
+        "kind": "skill",
+        "name": "finishing-a-development-branch",
+        "path": "skills/finishing-a-development-branch",
+        "summary": "Use when implementation is complete, all tests pass, and you need to decide how to integrate the work",
+        "treeSha256": "58533eac598dedda408c8e4472c34c0a4a06a46645a02ee7b30d3b0b01cb38b6"
+      },
+      {
+        "kind": "skill",
+        "name": "receiving-code-review",
+        "path": "skills/receiving-code-review",
+        "summary": "Use when receiving code review feedback, before implementing suggestions, especially if feedback seems unclear or technically questionable - requires technical rigor and verification, not performative agreement or blind implementation",
+        "treeSha256": "1277e9fa353dde6725ad3ca8c193d8cd10e9883d72fb9cccb182ef93742b4e25"
+      },
+      {
+        "kind": "skill",
+        "name": "requesting-code-review",
+        "path": "skills/requesting-code-review",
+        "summary": "Use when completing tasks, implementing major features, or before merging to verify work meets requirements",
+        "treeSha256": "460b1591be79e8767888fbe6ac069621017f02c59c6f447ba908cf5598b9048e"
+      },
+      {
+        "kind": "skill",
+        "name": "subagent-driven-development",
+        "path": "skills/subagent-driven-development",
+        "summary": "Use when executing implementation plans with independent tasks in the current session",
+        "treeSha256": "ce38f5ebb91c98cae94b1838ff7fb61367228c37c3b74c1d8f34cc44e3722d88"
+      },
+      {
+        "kind": "skill",
+        "name": "systematic-debugging",
+        "path": "skills/systematic-debugging",
+        "summary": "Use when encountering any bug, test failure, or unexpected behavior, before proposing fixes",
+        "treeSha256": "9d76acaa5f74d439274ec342e002674947d6d776dcb2f46cee2c35cc68b3173b"
+      },
+      {
+        "kind": "skill",
+        "name": "test-driven-development",
+        "path": "skills/test-driven-development",
+        "summary": "Use when implementing any feature or bugfix, before writing implementation code",
+        "treeSha256": "9695df1a84936fcfa80fba4bc47ad525c9873fea8608916ac0fb892e3658b5e9"
+      },
+      {
+        "kind": "skill",
+        "name": "using-git-worktrees",
+        "path": "skills/using-git-worktrees",
+        "summary": "Use when starting feature work that needs isolation from current workspace or before executing implementation plans - ensures an isolated workspace exists via native tools or git worktree fallback",
+        "treeSha256": "97f62557a605a4fd85de5fd7f4b3e7d758798de40198164c0a036e468219450c"
+      },
+      {
+        "kind": "skill",
+        "name": "using-superpowers",
+        "path": "skills/using-superpowers",
+        "summary": "Use when starting any conversation - establishes how to find and use skills, requiring skill invocation before ANY response including clarifying questions",
+        "treeSha256": "f2b48517b4d500c5b906cc22346c85b17b3957f6b2aca2c6c97f30d58070428e"
+      },
+      {
+        "kind": "skill",
+        "name": "verification-before-completion",
+        "path": "skills/verification-before-completion",
+        "summary": "Use when about to claim work is complete, fixed, or passing, before committing or creating PRs - requires running verification commands and confirming output before making any success claims; evidence before assertions always",
+        "treeSha256": "a03cc06ded1714382904b57d1c76a34e1431f4381ed14a69a1909ebde5d78153"
+      },
+      {
+        "kind": "skill",
+        "name": "writing-plans",
+        "path": "skills/writing-plans",
+        "summary": "Use when you have a spec or requirements for a multi-step task, before touching code",
+        "treeSha256": "7cfa14dcbc28fd23317d24e8e5938350eecd22eaee06bc54b82f1de5b02ebafb"
+      },
+      {
+        "kind": "skill",
+        "name": "writing-skills",
+        "path": "skills/writing-skills",
+        "summary": "Use when creating new skills, editing existing skills, or verifying skills work before deployment",
+        "treeSha256": "d6a96ae9684d6f1737bcff4c38ff73670e29bf2d70d4770b932e588ed040d05a"
+      }
+    ],
+    "autorun": [
+      {
+        "host": "claude",
+        "type": "hook",
+        "path": "hooks/hooks.json",
+        "event": "SessionStart",
+        "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd\" session-start",
+        "somethingNew": 1
+      },
+      {
+        "host": "cursor",
+        "type": "hook",
+        "path": "hooks/hooks-cursor.json",
+        "event": "sessionStart",
+        "command": "./hooks/run-hook.cmd session-start"
+      },
+      {
+        "host": "opencode",
+        "type": "code",
+        "path": ".opencode/plugins/superpowers.js"
+      },
+      {
+        "host": "opencode",
+        "type": "code",
+        "path": "index.js"
+      },
+      {
+        "host": "pi",
+        "type": "code",
+        "path": ".pi/extensions/superpowers.ts"
+      },
+      {
+        "host": "hermes",
+        "type": "code",
+        "path": ".hermes-plugin/__init__.py"
+      }
+    ],
+    "autorunFiles": [
+      ".antigravity-plugin/plugin.json",
+      ".claude-plugin/plugin.json",
+      ".codex-plugin/plugin.json",
+      ".cursor-plugin/plugin.json",
+      ".devin-plugin/plugin.json",
+      ".hermes-plugin/__init__.py",
+      ".hermes-plugin/plugin.yaml",
+      ".kimi-plugin/plugin.json",
+      ".muse-plugin/plugin.json",
+      ".opencode/plugins/superpowers.js",
+      ".pi/extensions/superpowers.ts",
+      "gemini-extension.json",
+      "hooks/hooks-cursor.json",
+      "hooks/hooks.json",
+      "hooks/run-hook.cmd",
+      "hooks/session-start",
+      "index.js",
+      "package.json"
+    ],
+    "mcpUnpinned": [],
+    "execSha256": "ccbd9abbf16e194fa11be1281cc7551473a2e944b27e4a634c8591ebd86bb2a0",
+    "approved": false,
+    "full": null,
+    "notFull": "pending_review",
+    "somethingNew": {
+      "x": 1
+    }
+  },
+  "somethingNew": true
+}

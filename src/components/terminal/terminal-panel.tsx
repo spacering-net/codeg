@@ -18,7 +18,14 @@ const KEYBAR_COLLAPSED_STORAGE_KEY = "codeg:term-keybar"
  *     后展开/折叠不一致。
  */
 export function TerminalPanel() {
-  const { isOpen, tabs, activeTabId, markTerminalExited } = useTerminalContext()
+  const {
+    isOpen,
+    tabs,
+    activeTabId,
+    markTerminalExited,
+    markTerminalRunning,
+    markTerminalStarted,
+  } = useTerminalContext()
   const isMobile = useIsMobile()
 
   const [keybarCollapsed, setKeybarCollapsed] = useState(() => {
@@ -69,6 +76,11 @@ export function TerminalPanel() {
             workingDir={tab.workingDir}
             shell={tab.shell}
             initialCommand={tab.initialCommand}
+            attach
+            spawnOnMissing={!tab.restored}
+            reuseCompleted
+            onSpawned={markTerminalStarted}
+            onProcessRestored={markTerminalRunning}
             isActive={tab.id === activeTabId}
             isVisible={isOpen}
             keybarVisible={keybarVisible}

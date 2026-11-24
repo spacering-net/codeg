@@ -503,3 +503,124 @@ pub async fn validate_gitea_token(
         message: None,
     })
 }
+
+// ---------------------------------------------------------------------------
+// CNB token validation
+// ---------------------------------------------------------------------------
+
+/// Validate a CNB access token against `GET /user`.
+///
+/// CNB is the one forge whose API is NOT under the instance origin: the web UI
+/// is `https://cnb.cool`, the OpenAPI is `https://api.cnb.cool`, and the auth
+/// header is `Bearer <token>`. The response shape is CNB's own —
+/// `{username, nickname, avatar}`.
+///
+/// Scopes are not reported by this endpoint, so the list is empty. Nothing
+/// gates on scopes (see `ResolvedAuth::scopes`); a token missing a permission
+/// says so at the first API call, with CNB's own `errmsg`.
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn validate_cnb_token(
+    server_url: String,
+    token: String,
+) -> Result<GitHubTokenValidation, AppCommandError> {
+    let trimmed_token = token.trim();
+    if trimmed_token.is_empty() {
+        return Err(AppCommandError::invalid_input("Token cannot be empty"));
+    }
+    let origin = {
+        let base = server_url.trim().trim_end_matches('/');
+        if base.is_empty() {
+            "https://cnb.cool".to_string()
+        } else if base.contains("://") {
+            base.to_string()
+        } else {
+            format!("https://{base}")
+        }
+    };
+    // The SaaS separates UI and API hosts; anything else is assumed to mount
+    // the API under `/api`, which is what `forge::auth::api_base_for` does.
+    let host = origin
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(&origin)
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .split(':')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let api_base = if host == "cnb.cool" {
+        "https://api.cnb.cool".to_string()
+    } else {
+        format!("{origin}/api")
+    };
+
+    let response = reqwest::Client::new()
+        .get(format!("{api_base}/user"))
+        .header("Authorization", format!("Bearer {trimmed_token}"))
+        .header("User-Agent", "codeg")
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| {
+            AppCommandError::network("Failed to connect to CNB API").with_detail(e.to_string())
+        })?;
+
+    if !response.status().is_success() {
+        let status = response.status().as_u16();
+        let body = response.text().await.unwrap_or_default();
+        let detail = serde_json::from_str::<CnbError>(&body)
+            .ok()
+            .and_then(|e| e.errmsg)
+            .filter(|m| !m.trim().is_empty())
+            .unwrap_or(body);
+        // 403 is NOT a bad token here: CNB answers it when the token is valid
+        // but was minted without the `account-profile:r` scope this check
+        // needs, and its `errmsg` names the missing scope. Reporting that as
+        // "invalid token" sends the user to re-mint the same token again.
+        let message = match status {
+            401 => "Invalid or expired token".to_string(),
+            403 => format!("The token is valid but lacks a required scope: {detail}"),
+            _ => format!("CNB API returned status {status}: {detail}"),
+        };
+        return Ok(GitHubTokenValidation {
+            success: false,
+            username: None,
+            scopes: vec![],
+            avatar_url: None,
+            message: Some(message),
+        });
+    }
+
+    let user = response.json::<CnbUserResponse>().await.map_err(|e| {
+        AppCommandError::network("Failed to parse CNB API response").with_detail(e.to_string())
+    })?;
+
+    Ok(GitHubTokenValidation {
+        success: true,
+        username: user
+            .username
+            .filter(|u| !u.trim().is_empty())
+            .or(user.nickname.filter(|n| !n.trim().is_empty())),
+        scopes: vec![],
+        avatar_url: user.avatar,
+        message: None,
+    })
+}
+
+#[derive(Debug, Deserialize)]
+struct CnbUserResponse {
+    #[serde(default)]
+    username: Option<String>,
+    #[serde(default)]
+    nickname: Option<String>,
+    #[serde(default)]
+    avatar: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CnbError {
+    #[serde(default)]
+    errmsg: Option<String>,
+}

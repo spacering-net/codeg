@@ -32,7 +32,7 @@ pub async fn start_workspace_state_stream(
     root_path: String,
     wants_tree_git: Option<bool>,
 ) -> Result<WorkspaceSnapshotResponse, AppCommandError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     // Default true: absent param means a legacy full subscriber.
     start_workspace_state_stream_core(emitter, root_path, wants_tree_git.unwrap_or(true)).await
 }

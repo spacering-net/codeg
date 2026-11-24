@@ -19,7 +19,11 @@ import {
   WORKSPACE_DOWNLOAD_CANCELLED,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
-import { expandHomePath, isHomeRelativePath } from "@/lib/file-open-target"
+import {
+  expandHomePath,
+  isHomeRelativePath,
+  normalizeAbsPath,
+} from "@/lib/file-open-target"
 import {
   toAbsoluteFilePath,
   toFolderRelativePath,
@@ -41,8 +45,9 @@ export interface FileReferencePaths {
 
 /**
  * Resolve a rendered file reference — a `file://` uri (user-message badge) or a
- * local path (assistant markdown link, already rewritten by
- * remark-file-uri-links) — into its absolute and folder-relative forms.
+ * local path (assistant markdown link, as remark-file-uri-links and
+ * rehype-relative-file-links leave it) — into its absolute and folder-relative
+ * forms.
  *
  * Returns null when the target isn't a local file at all (a web link, an
  * embedded `codeg://` attachment badge) or when a relative target can't be made
@@ -64,13 +69,18 @@ export function resolveFileReferenceTarget(
     return { absolute: target.path, relative: null }
   }
 
-  const absolute = toAbsoluteFilePath(target.path, folderPath ?? undefined)
-  if (!absolute) return null
+  const joined = toAbsoluteFilePath(target.path, folderPath ?? undefined)
+  if (!joined) return null
+  // Resolve `.` / `..` the way the opener does, or `../site/a.md` from `/repo`
+  // would read as `/repo/../site/a.md` — inside the folder by its prefix, when
+  // the file it opens, `/site/a.md`, is not.
+  const absolute = normalizeAbsPath(joined)
 
   // `toFolderRelativePath` returns the absolute path unchanged when the file
   // lives outside the folder — that's "no relative form", not a relative path.
+  // The folder is compared in the same resolved form as the file.
   const relative = folderPath
-    ? toFolderRelativePath(absolute, folderPath)
+    ? toFolderRelativePath(absolute, normalizeAbsPath(folderPath))
     : null
   return {
     absolute,
@@ -98,7 +108,11 @@ export function systemFileManagerLabelKey():
 function FileReferenceActionsMenu({ target }: { target: string }) {
   const t = useTranslations("Folder.chat.fileActions")
   const { activeFolder } = useActiveFolder()
+  // Resolved the way the opener resolves it, so the relative path below and
+  // the download that uses it name the file a click opens.
   const folderPath = activeFolder?.path
+    ? normalizeAbsPath(activeFolder.path)
+    : undefined
   const paths = useMemo(
     () => resolveFileReferenceTarget(target, folderPath),
     [target, folderPath]

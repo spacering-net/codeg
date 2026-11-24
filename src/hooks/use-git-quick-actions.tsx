@@ -1,6 +1,13 @@
 "use client"
 
-import { useCallback, useMemo, useRef, useState, type ReactNode } from "react"
+import {
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { ConflictDialog } from "@/components/layout/conflict-dialog"
@@ -117,8 +124,12 @@ export function useGitQuickActions({
 
   // Keep the completion callback in a ref so an inline arrow from the caller
   // doesn't re-identify every handler below on each render.
+  // Synced in a layout effect rather than during render; it is only read once
+  // a git task or dialog settles, always after the commit.
   const onCompletedRef = useRef(onCompleted)
-  onCompletedRef.current = onCompleted
+  useLayoutEffect(() => {
+    onCompletedRef.current = onCompleted
+  })
 
   // The folder this render's handlers act on. Every callback below closes over
   // it, so a handler invoked while folder A is active keeps acting on A even

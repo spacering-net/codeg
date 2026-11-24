@@ -1,7 +1,15 @@
 import { useRef } from "react"
 import { act, fireEvent, render, screen } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest"
 
 const toastSuccess = vi.fn()
 const toastError = vi.fn()
@@ -59,9 +67,10 @@ function mockSelection(
   rect: DOMRect = SELECTION_RECT
 ) {
   let cleared = false
+  const getBoundingClientRect = vi.fn(() => rect)
   const range = {
     commonAncestorContainer: container,
-    getBoundingClientRect: () => rect,
+    getBoundingClientRect,
     cloneRange: () => range,
   }
   const selection = {
@@ -84,6 +93,7 @@ function mockSelection(
   } as unknown as Selection
   vi.spyOn(window, "getSelection").mockReturnValue(selection)
   vi.spyOn(document, "getSelection").mockReturnValue(selection)
+  return getBoundingClientRect
 }
 
 /** Fire the browser event the component listens on, inside `act`. */
@@ -116,17 +126,24 @@ function firePointer(
 function Harness({
   onQuote,
   onAsk,
+  isVisible = true,
 }: {
   onQuote?: (text: string) => void
   onAsk?: (selection: string, question: string) => void
+  isVisible?: boolean
 }) {
   const ref = useRef<HTMLDivElement>(null)
   return (
     <NextIntlClientProvider locale="en" messages={enMessages}>
-      <div ref={ref} data-testid="box">
+      <div
+        ref={ref}
+        data-testid="box"
+        style={isVisible ? undefined : { visibility: "hidden" }}
+      >
         <p data-testid="para">hello world</p>
         <SelectionActionBubble
           containerRef={ref}
+          isVisible={isVisible}
           onQuote={onQuote}
           onAsk={onAsk}
         />
@@ -145,7 +162,7 @@ function openAskComposer(container: HTMLElement, text = "hello") {
   return screen.getByRole("textbox", { name: "Ask about this selection…" })
 }
 
-let rectSpy: ReturnType<typeof vi.spyOn>
+let rectSpy: MockInstance
 
 /**
  * jsdom lays nothing out, so the toolbar's own width — which the edge clamp
@@ -213,6 +230,49 @@ afterEach(() => {
 })
 
 describe("SelectionActionBubble", () => {
+  it("pauses per-frame layout reads while its mounted tab is hidden", () => {
+    vi.useFakeTimers()
+    try {
+      const { container, rerender } = render(<Harness />)
+      const readRect = mockSelection(
+        container.querySelector("[data-testid=para]"),
+        "hello"
+      )
+      selectionChanged()
+      const initialTop = screen.getByRole("toolbar").style.top
+      rerender(<Harness isVisible={false} />)
+      readRect.mockClear()
+      readRect.mockReturnValue({ ...SELECTION_RECT, top: 240, bottom: 260 })
+
+      act(() => vi.advanceTimersByTime(80))
+      expect(readRect).not.toHaveBeenCalled()
+
+      rerender(<Harness />)
+      act(() => vi.advanceTimersByTime(80))
+      expect(readRect).toHaveBeenCalled()
+      expect(screen.getByRole("toolbar").style.top).not.toBe(initialTop)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("stops scheduling frames while the question input owns the selection", () => {
+    vi.useFakeTimers()
+    try {
+      const requestFrame = vi.spyOn(window, "requestAnimationFrame")
+      const { container } = render(<Harness onAsk={vi.fn()} />)
+      const input = openAskComposer(container)
+      fireEvent.change(input, { target: { value: "What does this mean?" } })
+      requestFrame.mockClear()
+
+      act(() => vi.advanceTimersByTime(80))
+      expect(requestFrame).not.toHaveBeenCalled()
+      expect(input).toHaveValue("What does this mean?")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("renders nothing without a selection", () => {
     mockSelection(null, "")
     render(<Harness onQuote={vi.fn()} />)

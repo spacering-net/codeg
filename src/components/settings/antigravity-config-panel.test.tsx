@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest"
 
 vi.mock("@/lib/api", () => ({
   acpSyncAntigravitySettings: vi.fn(),
@@ -8,6 +8,8 @@ vi.mock("@/lib/api", () => ({
   acpAntigravityLoginFinish: vi.fn(),
   acpAntigravityLoginCancel: vi.fn(),
   acpAntigravitySignOut: vi.fn(),
+  acpScanLeakedTemp: vi.fn(),
+  acpReclaimLeakedTemp: vi.fn(),
 }))
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
@@ -20,6 +22,8 @@ import {
   acpAntigravityLoginFinish,
   acpAntigravityLoginStart,
   acpAntigravitySignOut,
+  acpReclaimLeakedTemp,
+  acpScanLeakedTemp,
   acpSyncAntigravitySettings,
 } from "@/lib/api"
 import {
@@ -205,8 +209,8 @@ describe("AntigravityConfigPanel", () => {
 
   type PanelOverrides = {
     env?: Record<string, string>
-    onSaveEnv?: ReturnType<typeof vi.fn>
-    onSaved?: ReturnType<typeof vi.fn>
+    onSaveEnv?: Mock
+    onSaved?: Mock
   }
 
   function agentOf(overrides?: PanelOverrides): AcpAgentInfo {
@@ -808,8 +812,11 @@ describe("AntigravityConfigPanel", () => {
       expect(String(vi.mocked(toast.error).mock.calls[0]?.[0])).toContain(
         "Google Antigravity is not installed."
       )
-      // Still offering to try again, not stuck in a spinner.
-      expect(screen.getByRole("button", { name: h.start })).toBeEnabled()
+      // Still offering to try again, not stuck in a spinner. The toast goes up
+      // before the render that releases the button.
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: h.start })).toBeEnabled()
+      )
     })
   })
 
@@ -907,7 +914,105 @@ describe("AntigravityConfigPanel", () => {
       expect(String(vi.mocked(toast.error).mock.calls[0]?.[0])).toContain(
         "Google Antigravity is not installed."
       )
-      expect(screen.getByRole("button", { name: s.action })).toBeEnabled()
+      // The toast goes up before the render that releases the button.
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: s.action })).toBeEnabled()
+      )
+    })
+  })
+  /**
+   * The temp reclaim is a delete against the SYSTEM temp directory, which every
+   * PyInstaller application on the machine shares. The panel's own copy admits
+   * codeg cannot tell its own leftovers from someone else's — so consent has to
+   * be per path, and it cannot be the default.
+   */
+  describe("leaked temp reclaim", () => {
+    const r = enMessages.AcpAgentSettings.antigravity
+
+    const scan = {
+      root: "/tmp",
+      total_bytes: 3_000_000,
+      skipped: 1,
+      entries: [
+        {
+          path: "/tmp/_MEI111111",
+          bytes: 2_000_000,
+          age_hours: 30,
+          is_dir: true,
+        },
+        {
+          path: "/tmp/_MEI222222",
+          bytes: 1_000_000,
+          age_hours: 5,
+          is_dir: true,
+        },
+      ],
+    }
+
+    it("lists every path and pre-selects none of them", async () => {
+      vi.mocked(acpScanLeakedTemp).mockResolvedValue(scan)
+      renderPanel({ env: { AGY_AUTH_METHOD: "oauth-personal" } })
+
+      fireEvent.click(screen.getByRole("button", { name: r.tempReclaimScan }))
+
+      await screen.findByText("/tmp/_MEI111111")
+      expect(screen.getByText("/tmp/_MEI222222")).toBeInTheDocument()
+      for (const box of screen.getAllByRole("checkbox")) {
+        expect(box).toHaveAttribute("data-state", "unchecked")
+      }
+      // Nothing selected means nothing to delete, so the destructive action is
+      // not reachable at all.
+      expect(
+        screen.getByRole("button", { name: r.tempReclaimDelete })
+      ).toBeDisabled()
+    })
+
+    it("deletes only what was ticked, and only after a confirmation", async () => {
+      vi.mocked(acpScanLeakedTemp).mockResolvedValue(scan)
+      vi.mocked(acpReclaimLeakedTemp).mockResolvedValue({
+        removed: 1,
+        freed_bytes: 2_000_000,
+        failed: [],
+      })
+      renderPanel({ env: { AGY_AUTH_METHOD: "oauth-personal" } })
+      fireEvent.click(screen.getByRole("button", { name: r.tempReclaimScan }))
+      await screen.findByText("/tmp/_MEI111111")
+
+      // Tick the first entry only. Index 0 is the select-all header box.
+      fireEvent.click(screen.getAllByRole("checkbox")[1])
+      fireEvent.click(screen.getByRole("button", { name: r.tempReclaimDelete }))
+
+      // The click opens the dialog; it must not have deleted anything yet.
+      expect(acpReclaimLeakedTemp).not.toHaveBeenCalled()
+      fireEvent.click(
+        await screen.findByRole("button", { name: r.tempReclaimConfirmAction })
+      )
+
+      await waitFor(() => expect(acpReclaimLeakedTemp).toHaveBeenCalled())
+      expect(acpReclaimLeakedTemp).toHaveBeenCalledWith(["/tmp/_MEI111111"])
+    })
+
+    it("shows every path the backend refused, not just the first", async () => {
+      vi.mocked(acpScanLeakedTemp).mockResolvedValue(scan)
+      vi.mocked(acpReclaimLeakedTemp).mockResolvedValue({
+        removed: 0,
+        freed_bytes: 0,
+        failed: ["/tmp/_MEI111111: in use", "/tmp/_MEI222222: access denied"],
+      })
+      renderPanel({ env: { AGY_AUTH_METHOD: "oauth-personal" } })
+      fireEvent.click(screen.getByRole("button", { name: r.tempReclaimScan }))
+      await screen.findByText("/tmp/_MEI111111")
+
+      fireEvent.click(screen.getAllByRole("checkbox")[0])
+      fireEvent.click(screen.getByRole("button", { name: r.tempReclaimDelete }))
+      fireEvent.click(
+        await screen.findByRole("button", { name: r.tempReclaimConfirmAction })
+      )
+
+      await screen.findByText("/tmp/_MEI111111: in use")
+      expect(
+        screen.getByText("/tmp/_MEI222222: access denied")
+      ).toBeInTheDocument()
     })
   })
 })

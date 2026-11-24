@@ -63,11 +63,6 @@ export function MergeWorkspace({
   const [hasUnresolvedConflicts, setHasUnresolvedConflicts] = useState(true)
   const [preparing, setPreparing] = useState(false)
 
-  // Load conflict files on mount
-  useEffect(() => {
-    loadConflicts()
-  }, [folderPath]) // eslint-disable-line react-hooks/exhaustive-deps
-
   async function loadConflicts() {
     try {
       // For pull operations, the merge was aborted during detection to keep
@@ -105,6 +100,12 @@ export function MergeWorkspace({
       setLoadingVersions(false)
     }
   }
+
+  // Load conflict files on mount (declared after the loaders it calls)
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- kicks off the conflict fetch, whose loader flips `preparing` before awaiting
+    loadConflicts()
+  }, [folderPath]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleContentChange = useCallback((content: string) => {
     currentContentRef.current = content

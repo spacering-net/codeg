@@ -103,6 +103,11 @@ export const THEME_COLOR_PREVIEW: Record<ThemeColor, string> = {
  * 最低一档是 green light 的 5.4:1 / 悬停 4.7:1，全部过 14px 正文的 AA 4.5:1。
  * 改任何一个值都要重算一遍，别只挑好看的色号
  * （见 memory: sidebar 对比度下限）。
+ *
+ * 会话时间线的主题色（globals.css 的 --activity-accent：运行中圆环的弧、运行中
+ * 标题的流光、MCP 徽标）逐预设抄的就是这张表，改值两边一起改
+ * （globals-activity-accent.test.ts 对账）；自定义主色按同一规则现算
+ * （readable-accent.ts）。
  */
 export const THEME_COLOR_TITLE: Record<
   ThemeColor,

@@ -1,0 +1,279 @@
+import { act, renderHook } from "@testing-library/react"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+
+import type { AgentOptionsSnapshot, AgentType } from "@/lib/types"
+import {
+  __resetAgentOptionsCacheForTests,
+  useAgentOptions,
+} from "./use-agent-options"
+
+const describeAgentOptions = vi.hoisted(() => vi.fn())
+
+vi.mock("@/lib/api", () => ({ describeAgentOptions }))
+
+function snapshotFor(agent: AgentType): AgentOptionsSnapshot {
+  return {
+    modes: {
+      current_mode_id: "default",
+      available_modes: [
+        { id: "default", name: `${agent} mode`, description: null },
+      ],
+    },
+    config_options: [],
+    available_commands: [],
+  }
+}
+
+/**
+ * The probe is debounced, so an agent switch leaves the PREVIOUS agent's
+ * snapshot on screen for the whole window. Anything that interprets the
+ * snapshot's content — localising the agent's own hardcoded vocabulary, in
+ * particular — must key on the agent that produced it, or a switch would
+ * briefly paint one agent's options in another agent's wording.
+ */
+describe("useAgentOptions snapshot ownership", () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    describeAgentOptions.mockReset()
+    describeAgentOptions.mockImplementation((agent: AgentType) =>
+      Promise.resolve(snapshotFor(agent))
+    )
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it("keeps naming the producing agent while a switch is still debouncing", async () => {
+    // A folder path nobody else seeds, so the module-scope probe cache cannot
+    // hand this test another test's snapshot.
+    const folder = `/tmp/use-agent-options-${Math.random()}`
+    const modeName = (state: { snapshot: AgentOptionsSnapshot | null }) =>
+      state.snapshot?.modes?.available_modes[0]?.name
+    const { result, rerender } = renderHook(
+      ({ agent }: { agent: AgentType }) => useAgentOptions(agent, folder),
+      { initialProps: { agent: "deepseek" as AgentType } }
+    )
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300)
+    })
+    expect(modeName(result.current)).toBe("deepseek mode")
+    expect(result.current.snapshotAgentType).toBe("deepseek")
+
+    // Switch agents but stay inside the debounce window: the snapshot is still
+    // DeepSeek's, so what names it must still be DeepSeek.
+    rerender({ agent: "codex" as AgentType })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100)
+    })
+    expect(modeName(result.current)).toBe("deepseek mode")
+    expect(result.current.snapshotAgentType).toBe("deepseek")
+
+    // Once the re-probe lands the two move together again.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300)
+    })
+    expect(modeName(result.current)).toBe("codex mode")
+    expect(result.current.snapshotAgentType).toBe("codex")
+  })
+})
+
+describe("useAgentOptions model-scoped probes", () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    describeAgentOptions.mockReset()
+    describeAgentOptions.mockImplementation((agent: AgentType) =>
+      Promise.resolve(snapshotFor(agent))
+    )
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it("applies the selected model and re-probes when it changes", async () => {
+    const folder = `/tmp/use-agent-options-model-${Math.random()}`
+    const { rerender } = renderHook(
+      ({ model }: { model: string }) =>
+        useAgentOptions("deepseek" as AgentType, folder, true, { model }),
+      { initialProps: { model: "opencode-go/deepseek-v4.1-flash" } }
+    )
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300)
+    })
+    expect(describeAgentOptions).toHaveBeenCalledTimes(1)
+    expect(describeAgentOptions).toHaveBeenLastCalledWith("deepseek", folder, {
+      model: "opencode-go/deepseek-v4.1-flash",
+    })
+
+    // A different model derives different option lists — the (agent, folder)
+    // cache must not serve the previous model's snapshot.
+    rerender({ model: "vercel/callstack/apex" })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300)
+    })
+    expect(describeAgentOptions).toHaveBeenCalledTimes(2)
+    expect(describeAgentOptions).toHaveBeenLastCalledWith("deepseek", folder, {
+      model: "vercel/callstack/apex",
+    })
+  })
+
+  /** The task editor's config bar and its brief composer each run this hook
+   *  for the same agent and folder. Only the model keys the probe, so both
+   *  read one probe as long as they pass the same model — a host that left it
+   *  out would spawn the agent a second time. */
+  it("shares one probe between hosts passing the same model", async () => {
+    const folder = `/tmp/use-agent-options-shared-${Math.random()}`
+    const selections = { model: "opencode/step-5-preview-free", effort: "high" }
+    // Held open, so the second host arrives while the first probe is still
+    // running rather than after it filled the cache.
+    let answer: (snapshot: AgentOptionsSnapshot) => void = () => {}
+    describeAgentOptions.mockImplementation(
+      () =>
+        new Promise<AgentOptionsSnapshot>((resolve) => {
+          answer = resolve
+        })
+    )
+    const { result } = renderHook(() => [
+      useAgentOptions("deepseek" as AgentType, folder, true, selections),
+      useAgentOptions("deepseek" as AgentType, folder, true, selections),
+    ])
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300)
+    })
+    expect(describeAgentOptions).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      answer(snapshotFor("deepseek"))
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(result.current[0].snapshot).not.toBeNull()
+    expect(result.current[1].snapshot).toBe(result.current[0].snapshot)
+  })
+})
+
+/**
+ * `current` is what an editor gates its rows on: the snapshot on screen must
+ * have been probed for the selection being edited — the same agent, folder
+ * and model — or a value picked off it would land in another selection.
+ */
+describe("useAgentOptions provenance", () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    describeAgentOptions.mockReset()
+    describeAgentOptions.mockImplementation((agent: AgentType) =>
+      Promise.resolve(snapshotFor(agent))
+    )
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it("reports the model a snapshot was probed for, and when it is stale", async () => {
+    const folder = `/tmp/use-agent-options-model-${Math.random()}`
+    const { result, rerender } = renderHook(
+      ({ model }: { model: string | null }) =>
+        useAgentOptions("open_code", folder, true, model ? { model } : null),
+      { initialProps: { model: null as string | null } }
+    )
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300)
+    })
+    expect(result.current.snapshotModel).toBeNull()
+    expect(result.current.current).toBe(true)
+
+    // A model picked: still debouncing, the shown snapshot is the no-model one.
+    rerender({ model: "model-b" })
+    expect(result.current.snapshotModel).toBeNull()
+    expect(result.current.current).toBe(false)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300)
+    })
+    expect(result.current.snapshotModel).toBe("model-b")
+    expect(result.current.current).toBe(true)
+
+    // Back to a model probed moments ago: a cache hit is current at once
+    // after the debounce, and uses the same null for "no model".
+    rerender({ model: null })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300)
+    })
+    expect(result.current.snapshotModel).toBeNull()
+    expect(result.current.current).toBe(true)
+  })
+})
+
+describe("useAgentOptions cache retention", () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    __resetAgentOptionsCacheForTests()
+    describeAgentOptions.mockReset()
+    describeAgentOptions.mockImplementation((agent: AgentType) =>
+      Promise.resolve(snapshotFor(agent))
+    )
+  })
+
+  afterEach(() => {
+    __resetAgentOptionsCacheForTests()
+    vi.useRealTimers()
+  })
+
+  it("refetches the least recently used snapshot after visiting 33 folders", async () => {
+    const folder = (index: number) => `/workspaces/options-cache-${index}`
+    const { result, rerender } = renderHook(
+      ({ index }) => useAgentOptions("open_code", folder(index), false),
+      { initialProps: { index: 0 } }
+    )
+
+    for (let index = 0; index < 32; index++) {
+      rerender({ index })
+      await result.current.ensure()
+    }
+    expect(describeAgentOptions).toHaveBeenCalledTimes(32)
+
+    rerender({ index: 0 })
+    await result.current.ensure()
+    rerender({ index: 32 })
+    await result.current.ensure()
+    expect(describeAgentOptions).toHaveBeenCalledTimes(33)
+
+    rerender({ index: 0 })
+    await result.current.ensure()
+    expect(describeAgentOptions).toHaveBeenCalledTimes(33)
+
+    rerender({ index: 1 })
+    await result.current.ensure()
+    expect(describeAgentOptions).toHaveBeenCalledTimes(34)
+    expect(describeAgentOptions).toHaveBeenLastCalledWith(
+      "open_code",
+      folder(1),
+      null
+    )
+  })
+
+  it("keeps the original freshness timestamp when a hit refreshes recency", async () => {
+    const { result } = renderHook(() =>
+      useAgentOptions("open_code", "/workspaces/options-cache-ttl", false)
+    )
+
+    await result.current.ensure()
+    expect(describeAgentOptions).toHaveBeenCalledTimes(1)
+
+    // A hit inside the TTL is served from cache and moves the entry to the
+    // most-recent end...
+    vi.advanceTimersByTime(20_000)
+    await result.current.ensure()
+    expect(describeAgentOptions).toHaveBeenCalledTimes(1)
+
+    // ...but must not restart its 30s clock: 31s after the PROBE it is stale,
+    // even though it was read only 11s ago.
+    vi.advanceTimersByTime(11_000)
+    await result.current.ensure()
+    expect(describeAgentOptions).toHaveBeenCalledTimes(2)
+  })
+})
