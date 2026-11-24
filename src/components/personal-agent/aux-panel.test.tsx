@@ -124,7 +124,7 @@ vi.mock("@/components/token-usage/charts", () => ({
 }))
 
 import { __resetRosterForTests } from "@/stores/personal-agent-roster-store"
-import { __resetThumbsForTests } from "./aux/output/use-thumb"
+import { __resetThumbsForTests } from "./aux-tabs/output/use-thumb"
 
 import { PersonalAgentAuxPanel } from "./aux-panel"
 import { PageScopeContext, type PageScope } from "./shared"

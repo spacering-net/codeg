@@ -57,7 +57,7 @@ import {
   useWhen,
 } from "./routine-bits"
 import { SheetField, SheetFields } from "./shared"
-import { StatusPill } from "./aux/kit/status-pill"
+import { StatusPill } from "./aux-tabs/kit/status-pill"
 
 /** A last run that says something is wrong, on the row's second line. */
 const WRONG_OUTCOMES = new Set(["failed", "missed", "asked", "declined"])

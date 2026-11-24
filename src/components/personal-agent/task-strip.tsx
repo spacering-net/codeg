@@ -29,8 +29,8 @@ import { openInSystemBrowser } from "@/lib/link-open"
 import type { DispatchInfo, Ladder, PrFacts } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
-import { BranchChip } from "./aux/kit/branch-chip"
-import { StatusPill, type PillTone } from "./aux/kit/status-pill"
+import { BranchChip } from "./aux-tabs/kit/branch-chip"
+import { StatusPill, type PillTone } from "./aux-tabs/kit/status-pill"
 import { canOpenWork, useOpenWork, usePageScope, workTargetOf } from "./shared"
 
 const LADDERS: readonly Ladder[] = [
