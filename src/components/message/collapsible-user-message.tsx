@@ -12,6 +12,10 @@ import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useTabActions } from "@/stores/tab-store"
 import { formatConversationTitle } from "@/lib/conversation-title"
 import {
+  parseSessionMessageText,
+  type SessionMessageAnchor,
+} from "@/lib/session-message-text"
+import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
@@ -19,12 +23,7 @@ import {
 } from "@/components/ui/tooltip"
 
 import { ContentPartsRenderer } from "./content-parts-renderer"
-import {
-  automaticReplyHeader,
-  sessionMessageHeader,
-  useSessionMessageJump,
-  type SessionMessageAnchor,
-} from "./session-message-anchor"
+import { useSessionMessageJump } from "./session-message-anchor"
 
 function SessionMessageSource({
   id,
@@ -88,26 +87,13 @@ export function splitSessionMessageSource(parts: AdaptedContentPart[]): {
   const part = parts[index]
   if (!part || part.type !== "text") return { source: null, parts }
 
-  const source = part.text.match(sessionMessageHeader)
-  const reply = part.text
-    .slice(source?.[0].length ?? 0)
-    .match(automaticReplyHeader)
-  const match = source ?? reply
-  if (!match) return { source: null, parts }
+  const message = parseSessionMessageText(part.text)
+  if (!message) return { source: null, parts }
 
-  const text = part.text.slice(
-    (source?.[0].length ?? 0) + (reply?.[0].length ?? 0)
-  )
+  const { source, text, anchor } = message
   const cleaned = parts.slice()
-  cleaned[index] = { ...part, text: text.replace(/^(?:[^\S\r\n]*\r?\n)+/, "") }
-  const anchor: SessionMessageAnchor | undefined = reply
-    ? reply[2]
-      ? { kind: "reply", messageId: reply[2] }
-      : undefined
-    : source?.[2]
-      ? { kind: "send", messageId: source[2] }
-      : undefined
-  return { source: match[1]!, parts: cleaned, ...(anchor && { anchor }) }
+  cleaned[index] = { ...part, text }
+  return { source, parts: cleaned, ...(anchor && { anchor }) }
 }
 
 /**

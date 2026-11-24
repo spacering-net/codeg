@@ -1,16 +1,10 @@
 import { create } from "zustand"
 import type { AdaptedContentPart } from "@/lib/adapters/ai-elements-adapter"
 import { mcpResultPayload } from "@/lib/activity/mcp"
-
-export const sessionMessageHeader =
-  /^\[Codeg message from conversation (\d+)(?:; message ([\da-f-]{36})| \([^\r\n]*\) to you, conversation \d+ \([^\r\n]*\))?\]\r?\n\r?\n/
-export const automaticReplyHeader =
-  /^\[Automatic reply from session (\d+)(?:; replying to ([\da-f-]{36}))?\]\r?\n\r?\n/
-
-export type SessionMessageAnchor = {
-  kind: "send" | "reply"
-  messageId: string
-}
+import {
+  sessionMessageHeader,
+  type SessionMessageAnchor,
+} from "@/lib/session-message-text"
 
 type Jump = { conversationId: number; anchor: SessionMessageAnchor }
 

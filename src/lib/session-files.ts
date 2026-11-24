@@ -2,6 +2,7 @@ import type { ContentBlock, MessageTurn } from "./types"
 import { normalizeToolName } from "./tool-call-normalization"
 import { estimateChangedLineStats } from "./line-change-stats"
 import { generateUnifiedDiff } from "./unified-diff-generator"
+import { parseSessionMessageText } from "./session-message-text"
 
 export type FileOperation = "read" | "edit" | "write" | "apply_patch"
 
@@ -740,7 +741,9 @@ function computeLineDiff(
 function extractUserMessage(turn: MessageTurn): string {
   for (const block of turn.blocks) {
     if (block.type === "text" && block.text) {
-      const text = block.text.trim()
+      const text = (
+        parseSessionMessageText(block.text)?.text ?? block.text
+      ).trim()
       if (text.length > 80) return `${text.slice(0, 77)}...`
       return text
     }
