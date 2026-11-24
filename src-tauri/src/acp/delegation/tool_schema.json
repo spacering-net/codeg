@@ -42,6 +42,15 @@
         "working_dir": {
           "type": "string",
           "description": "Absolute path the sub-agent runs in. Defaults to this session's working directory."
+        },
+        "notify_mode": {
+          "type": "string",
+          "enum": [
+            "poll",
+            "deliver"
+          ],
+          "default": "poll",
+          "description": "poll (default): collect the result with get_delegation_status. deliver: Codeg queues the first completed turn back into this conversation, waking it when offline. After starting your independent tasks, finish your current turn and wait for their messages instead of polling; status/wait still work. Requires session messaging."
         }
       }
     }

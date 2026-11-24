@@ -5013,6 +5013,20 @@ pub struct ConnectionManagerSpawner {
 
 #[async_trait::async_trait]
 impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpawner {
+    async fn configure_delivery(
+        &self,
+        connection_id: &str,
+        policy: crate::db::service::turn_delivery_service::DeliveryPolicy,
+    ) -> Result<(), crate::acp::delegation::spawner::SpawnerError> {
+        let state = self.manager.get_state(connection_id).await.ok_or_else(|| {
+            crate::acp::delegation::spawner::SpawnerError::Spawn(
+                "child connection is unavailable".into(),
+            )
+        })?;
+        state.write().await.pending_delivery = Some(policy);
+        Ok(())
+    }
+
     async fn spawn(
         &self,
         parent_connection_id: &str,

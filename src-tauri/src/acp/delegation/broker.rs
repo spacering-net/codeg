@@ -2475,15 +2475,30 @@ impl DelegationBroker {
         )
     )]
     pub async fn start_delegation(&self, req: DelegationRequest) -> DelegationTaskReport {
+        self.start_delegation_with_delivery(req, "poll".into(), false)
+            .await
+    }
+
+    pub async fn start_delegation_with_delivery(
+        &self,
+        req: DelegationRequest,
+        notify_mode: String,
+        follow: bool,
+    ) -> DelegationTaskReport {
         // Every report this call returns — the ack, a setup failure, a
         // setup-window terminal — names the assistant the task runs as.
         let identity = req.assistant.as_ref().map(DelegationAssistant::identity);
-        self.start_delegation_inner(req)
+        self.start_delegation_inner(req, notify_mode, follow)
             .await
             .with_assistant(identity.as_ref())
     }
 
-    async fn start_delegation_inner(&self, mut req: DelegationRequest) -> DelegationTaskReport {
+    async fn start_delegation_inner(
+        &self,
+        mut req: DelegationRequest,
+        notify_mode: String,
+        follow: bool,
+    ) -> DelegationTaskReport {
         let identity = req.assistant.as_ref().map(DelegationAssistant::identity);
         // Register this setup as the VERY FIRST thing — before the pre-cancel
         // check's `.await` and the (possibly multi-second) claim poll — so a
@@ -2636,6 +2651,14 @@ impl DelegationBroker {
             );
         }
 
+        if !matches!(notify_mode.as_str(), "poll" | "deliver")
+            || ((notify_mode == "deliver" || follow) && !cfg.session_messaging_enabled)
+        {
+            self.drop_inflight(inflight_id).await;
+            return report_err(req.agent_type, DelegationError::SpawnFailed(
+                "notify_mode must be poll or deliver; automatic delivery requires session messaging".into()), None);
+        }
+
         // --- Depth pre-check ----------------------------------------------------
         // We walk up to `limit + 1` so we know whether the *new* child would
         // sit at >= limit. Cycles/dead chains saturate at the cap.
@@ -2728,6 +2751,25 @@ impl DelegationBroker {
                 DelegationError::Canceled {
                     reason: "parent canceled".into(),
                 },
+                None,
+            );
+        }
+
+        let policy = crate::db::service::turn_delivery_service::DeliveryPolicy {
+            parent_conversation_id: req.parent_conversation_id,
+            notify_mode,
+            follow,
+        };
+        if let Err(error) = self
+            .spawner
+            .configure_delivery(&child_connection_id, policy)
+            .await
+        {
+            let _ = self.spawner.disconnect(&child_connection_id).await;
+            self.drop_inflight(inflight_id).await;
+            return report_err(
+                req.agent_type,
+                DelegationError::SpawnFailed(error.to_string()),
                 None,
             );
         }

@@ -218,6 +218,14 @@ pub async fn complete(
             .await?;
         }
     }
+    if let Some(policy) = delegation_delivery::Entity::find_by_id(turn.conversation_id)
+        .one(&txn)
+        .await?
+    {
+        if policy.notify_mode == "deliver" && policy.first_turn_id == turn.turn_id {
+            deliver_in_tx(&txn, &turn, policy.parent_conversation_id, None).await?;
+        }
+    }
     txn.commit().await?;
     Ok(())
 }
@@ -307,6 +315,80 @@ mod tests {
         db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder},
         models::AgentType,
     };
+
+    #[tokio::test]
+    async fn three_deliver_tasks_queue_results_after_parent_turn_ends() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/fanout-delivery").await;
+        let parent = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        let parent_turn = begin(&db.conn, parent, None, None).await.unwrap();
+        complete(&db.conn, &parent_turn, "end_turn", "waiting")
+            .await
+            .unwrap();
+        for index in 0..3 {
+            let child = seed_conversation(&db, folder, AgentType::Codex).await;
+            let policy = DeliveryPolicy {
+                parent_conversation_id: parent,
+                notify_mode: "deliver".into(),
+                follow: false,
+            };
+            let turn = begin(&db.conn, child, None, Some(&policy)).await.unwrap();
+            complete(&db.conn, &turn, "end_turn", &format!("result {index}"))
+                .await
+                .unwrap();
+        }
+        let messages = queue::queued(&db.conn).await.unwrap();
+        assert_eq!(messages.len(), 3);
+        assert!(messages
+            .iter()
+            .all(|message| message.conversation_id == parent));
+        recover(&db.conn).await.unwrap();
+        assert_eq!(queue::queued(&db.conn).await.unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn reconcile_committed_first_result_repairs_missing_message_once() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/reconcile-delivery").await;
+        let parent = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        let child = seed_conversation(&db, folder, AgentType::Codex).await;
+        let policy = DeliveryPolicy {
+            parent_conversation_id: parent,
+            notify_mode: "deliver".into(),
+            follow: false,
+        };
+        let turn = begin(&db.conn, child, None, Some(&policy)).await.unwrap();
+        complete(&db.conn, &turn, "end_turn", "saved result")
+            .await
+            .unwrap();
+        session_message::Entity::delete_many()
+            .exec(&db.conn)
+            .await
+            .unwrap();
+        recover(&db.conn).await.unwrap();
+        recover(&db.conn).await.unwrap();
+        let messages = queue::queued(&db.conn).await.unwrap();
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].message.contains("saved result"));
+    }
+
+    #[tokio::test]
+    async fn polling_delegations_do_not_queue_automatic_first_results() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/poll-delivery").await;
+        let parent = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        let child = seed_conversation(&db, folder, AgentType::Codex).await;
+        let policy = DeliveryPolicy {
+            parent_conversation_id: parent,
+            notify_mode: "poll".into(),
+            follow: false,
+        };
+        let turn = begin(&db.conn, child, None, Some(&policy)).await.unwrap();
+        complete(&db.conn, &turn, "end_turn", "result")
+            .await
+            .unwrap();
+        assert!(queue::queued(&db.conn).await.unwrap().is_empty());
+    }
 
     #[tokio::test]
     async fn committed_result_reply_is_atomic_and_restart_is_idempotent() {

@@ -1588,6 +1588,21 @@ impl DelegationListener {
             .clone()
             .or_else(|| Some(entry.working_dir.to_string_lossy().to_string()));
 
+        let notify_mode = match req.input.get("notify_mode") {
+            None | Some(Value::Null) => "poll".to_owned(),
+            Some(Value::String(value)) if matches!(value.as_str(), "poll" | "deliver") => {
+                value.clone()
+            }
+            _ => {
+                return report_failed("invalid_notify_mode", "notify_mode must be poll or deliver")
+            }
+        };
+        if notify_mode == "deliver" && entry.agent_hosts_tools {
+            return report_failed(
+                "delivery_unavailable",
+                "automatic delivery is unavailable for this agent",
+            );
+        }
         let delegation_req = DelegationRequest {
             parent_connection_id: req.parent_connection_id,
             parent_conversation_id,
@@ -1599,7 +1614,9 @@ impl DelegationListener {
             external_handle: req.external_handle,
             assistant,
         };
-        self.broker.start_delegation(delegation_req).await
+        self.broker
+            .start_delegation_with_delivery(delegation_req, notify_mode, false)
+            .await
     }
 
     async fn assistant_not_found(&self, asked: &str) -> DelegationTaskReport {
