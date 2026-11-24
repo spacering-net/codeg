@@ -22,6 +22,18 @@ export type ShortcutActionId =
   | "switch_tab_7"
   | "switch_tab_8"
   | "switch_tab_9"
+  | "switch_assistant_1"
+  | "switch_assistant_2"
+  | "switch_assistant_3"
+  | "switch_assistant_4"
+  | "switch_assistant_5"
+  | "switch_assistant_6"
+  | "switch_assistant_7"
+  | "switch_assistant_8"
+  | "switch_assistant_9"
+  | "prev_assistant"
+  | "next_assistant"
+  | "cycle_assistant"
   | "send_message"
   | "newline_in_message"
   | "toggle_custom_style"
@@ -85,6 +97,18 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
   { id: "switch_tab_7" },
   { id: "switch_tab_8" },
   { id: "switch_tab_9" },
+  { id: "switch_assistant_1" },
+  { id: "switch_assistant_2" },
+  { id: "switch_assistant_3" },
+  { id: "switch_assistant_4" },
+  { id: "switch_assistant_5" },
+  { id: "switch_assistant_6" },
+  { id: "switch_assistant_7" },
+  { id: "switch_assistant_8" },
+  { id: "switch_assistant_9" },
+  { id: "prev_assistant" },
+  { id: "next_assistant" },
+  { id: "cycle_assistant" },
   {
     id: "send_message",
   },
@@ -120,10 +144,55 @@ const SHARED_SHORTCUT_PAIRS: Array<[ShortcutActionId, ShortcutActionId]> = [
   ["close_current_terminal_tab", "close_current_tab"],
 ]
 
+/** The assistants page's own keys (10.9): they act only while that page is
+ *  the current page. */
+export const ASSISTANT_SHORTCUT_IDS = [
+  "switch_assistant_1",
+  "switch_assistant_2",
+  "switch_assistant_3",
+  "switch_assistant_4",
+  "switch_assistant_5",
+  "switch_assistant_6",
+  "switch_assistant_7",
+  "switch_assistant_8",
+  "switch_assistant_9",
+  "prev_assistant",
+  "next_assistant",
+  "cycle_assistant",
+] as const satisfies readonly ShortcutActionId[]
+
+/** The workspace's tab keys. Under the assistants page the tabs are not
+ *  shown, and there the assistant keys win (the workspace's listener
+ *  stands down), so any of these can share a chord with any assistant key:
+ *  ⌘1–⌘9 switch tabs everywhere else and assistants there, and Ctrl+Tab —
+ *  `mod+tab`, the next tab — cycles the assistants there. */
+const TAB_NAVIGATION_IDS: ReadonlySet<ShortcutActionId> = new Set([
+  "switch_tab_1",
+  "switch_tab_2",
+  "switch_tab_3",
+  "switch_tab_4",
+  "switch_tab_5",
+  "switch_tab_6",
+  "switch_tab_7",
+  "switch_tab_8",
+  "switch_tab_9",
+  "next_tab",
+  "prev_tab",
+])
+const ASSISTANT_SHORTCUTS: ReadonlySet<ShortcutActionId> = new Set(
+  ASSISTANT_SHORTCUT_IDS
+)
+
 export function canShareShortcut(
   a: ShortcutActionId,
   b: ShortcutActionId
 ): boolean {
+  if (
+    (TAB_NAVIGATION_IDS.has(a) && ASSISTANT_SHORTCUTS.has(b)) ||
+    (ASSISTANT_SHORTCUTS.has(a) && TAB_NAVIGATION_IDS.has(b))
+  ) {
+    return true
+  }
   return SHARED_SHORTCUT_PAIRS.some(
     ([left, right]) =>
       (left === a && right === b) || (left === b && right === a)
@@ -156,6 +225,22 @@ export const DEFAULT_SHORTCUTS: ShortcutSettings = {
   switch_tab_7: "mod+7",
   switch_tab_8: "mod+8",
   switch_tab_9: "mod+9",
+  // The assistants page's (10.9). The same chords as the tab keys, which
+  // stand down there.
+  switch_assistant_1: "mod+1",
+  switch_assistant_2: "mod+2",
+  switch_assistant_3: "mod+3",
+  switch_assistant_4: "mod+4",
+  switch_assistant_5: "mod+5",
+  switch_assistant_6: "mod+6",
+  switch_assistant_7: "mod+7",
+  switch_assistant_8: "mod+8",
+  switch_assistant_9: "mod+9",
+  prev_assistant: "alt+arrowup",
+  next_assistant: "alt+arrowdown",
+  // Ctrl+Tab. `mod` is Ctrl or ⌘ alike (⌘Tab never reaches the page on
+  // macOS), so this is the chord the next tab has.
+  cycle_assistant: "mod+tab",
   send_message: "enter",
   newline_in_message: "shift+enter",
   // 自定义样式的逃生舱：用户把界面改到不可用时，这一路必须仍然按得动，所以选一个
@@ -540,6 +625,37 @@ export function numberedTabIndexFromEvent(
     if (matchShortcutEvent(event, shortcuts[actionId])) {
       return index
     }
+  }
+  return null
+}
+
+/** An assistants page key (10.9) an event is. */
+export type AssistantShortcut =
+  /** The `index`th assistant in the roster's order (0: the primary). */
+  | { kind: "switch"; index: number }
+  | { kind: "prev" }
+  | { kind: "next" }
+  /** The assistants in the order they were last opened. */
+  | { kind: "cycle" }
+
+export function assistantShortcutFromEvent(
+  event: ShortcutEventLike,
+  shortcuts: ShortcutSettings
+): AssistantShortcut | null {
+  for (let index = 0; index < 9; index += 1) {
+    const id = ASSISTANT_SHORTCUT_IDS[index]
+    if (matchShortcutEvent(event, shortcuts[id])) {
+      return { kind: "switch", index }
+    }
+  }
+  if (matchShortcutEvent(event, shortcuts.prev_assistant)) {
+    return { kind: "prev" }
+  }
+  if (matchShortcutEvent(event, shortcuts.next_assistant)) {
+    return { kind: "next" }
+  }
+  if (matchShortcutEvent(event, shortcuts.cycle_assistant)) {
+    return { kind: "cycle" }
   }
   return null
 }

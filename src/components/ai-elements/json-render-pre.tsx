@@ -44,13 +44,33 @@ export function useAssistantReply(): boolean {
   return useContext(AssistantReplyContext)
 }
 
+/** Draws a spec fence's card in place of the session's block. */
+export type RenderJsonRenderCard = (
+  source: string,
+  /** The fence as code, for what cannot render. */
+  fallback: ReactNode
+) => ReactNode
+
+const CardRendererContext = createContext<RenderJsonRenderCard | null>(null)
+
 /** Marks the Markdown below it as an assistant reply's text — the one place
- *  a spec fence becomes a card, as in json-render's own chat examples. */
-export function JsonRenderScope({ children }: { children: ReactNode }) {
+ *  a spec fence becomes a card, as in json-render's own chat examples.
+ *  `renderCard` draws its cards instead of the session's block (an
+ *  assistant's own replies, whose buttons act for the owner); a scope inside
+ *  it without one draws the session's again. */
+export function JsonRenderScope({
+  children,
+  renderCard,
+}: {
+  children: ReactNode
+  renderCard?: RenderJsonRenderCard
+}) {
   return (
-    <AssistantReplyContext.Provider value>
-      {children}
-    </AssistantReplyContext.Provider>
+    <CardRendererContext.Provider value={renderCard ?? null}>
+      <AssistantReplyContext.Provider value>
+        {children}
+      </AssistantReplyContext.Provider>
+    </CardRendererContext.Provider>
   )
 }
 
@@ -114,12 +134,17 @@ function SpecFence({
   children?: ReactNode
 }) {
   const inReply = useContext(AssistantReplyContext)
+  const renderCard = useContext(CardRendererContext)
   const code = <MermaidAwarePre>{children}</MermaidAwarePre>
   if (!inReply) return code
   return (
     <CardBoundary source={source} fallback={code}>
       <Suspense fallback={code}>
-        <JsonRenderBlock source={source} fallback={code} />
+        {renderCard ? (
+          renderCard(source, code)
+        ) : (
+          <JsonRenderBlock source={source} fallback={code} />
+        )}
       </Suspense>
     </CardBoundary>
   )

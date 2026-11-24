@@ -3201,6 +3201,18 @@ mod tests {
         // once lets a dial without the race through as well; this test tells
         // the two apart wherever the SYN is dropped instead.
         let silent = std::net::SocketAddr::from(([192, 0, 2, 1], port));
+        // A proxy that takes over all traffic (a TUN adapter) answers every
+        // SYN, TEST-NET-1's too: there is no silent address to get past then,
+        // only one that accepts and is not the server.
+        if let Ok(Ok(_)) = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            tokio::net::TcpStream::connect(silent),
+        )
+        .await
+        {
+            eprintln!("skipped: something on this network answers TEST-NET-1");
+            return;
+        }
         let answering = std::net::SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port));
         let connector = HttpConnector::new_with_resolver(FixedResolver(vec![silent, answering]));
         let request = ws_request_with_subprotocol_auth(

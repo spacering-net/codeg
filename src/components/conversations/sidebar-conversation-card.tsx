@@ -20,6 +20,7 @@ import {
   CheckCircle2,
   Info,
   ChevronRight,
+  Sparkles,
   SquareTerminal,
   ListChecks,
   MessageCircleQuestionMark,
@@ -81,9 +82,9 @@ import {
 } from "./conversation-tag-picker"
 import { MoveToFolderContextSubmenu } from "./move-to-folder-menu"
 import { AgentIcon } from "@/components/agent-icon"
-import { AssistantAvatar } from "@/components/assistants/assistant-avatar"
+import { useIdentityAssistant } from "@/components/message/delegation-identity"
+import { BotAvatar } from "@/components/personal-agent/bot-avatar"
 import { useBranchChip, useResolvedTags } from "@/hooks/use-conversation-tags"
-import { useAssistant } from "@/stores/assistants-store"
 import { useDetachAskConversation } from "./use-detach-ask-conversation"
 
 /**
@@ -468,9 +469,11 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                       }}
                       aria-hidden
                     >
-                      {conversation.assistant_id != null ? (
+                      {conversation.assistant_id != null ||
+                      conversation.bot_uid != null ? (
                         <SubsessionAssistantAvatar
-                          id={conversation.assistant_id}
+                          id={conversation.assistant_id ?? null}
+                          botUid={conversation.bot_uid ?? null}
                           name={conversation.assistant_name ?? ""}
                         />
                       ) : (
@@ -514,6 +517,22 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                       size="xs"
                       className="relative -ml-[0.25rem] max-w-[calc(100%-3.875rem)] shrink overflow-hidden"
                     />
+                    {/* Dispatched by the personal agent: its executor's
+                    avatar already marks the row; this says who sent it. */}
+                    {conversation.source === "personal_agent" ? (
+                      <span
+                        className="ml-auto inline-flex shrink-0 items-center"
+                        title={tSidebar("personalAgentBadge")}
+                      >
+                        <Sparkles
+                          className="h-3 w-3 text-muted-foreground/60"
+                          aria-hidden
+                        />
+                        <span className="sr-only">
+                          {tSidebar("personalAgentBadge")}
+                        </span>
+                      </span>
+                    ) : null}
                     {/* Started by `codeg-cli`: told apart from the window's
                     own, and found again with the Recent filter. An ask
                     conversation is told apart from the sub-agent runs it
@@ -928,10 +947,18 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
 /** A sub-session run as an assistant shows the assistant's avatar where the
  *  agent icon goes: its current look from the store, or the generic assistant
  *  glyph for a row the store does not hold. */
-function SubsessionAssistantAvatar({ id, name }: { id: number; name: string }) {
-  const assistant = useAssistant(id)
+function SubsessionAssistantAvatar({
+  id,
+  botUid,
+  name,
+}: {
+  id: number | null
+  botUid: string | null
+  name: string
+}) {
+  const assistant = useIdentityAssistant({ assistantId: id, botUid })
   return (
-    <AssistantAvatar
+    <BotAvatar
       avatar={assistant?.avatar ?? null}
       name={assistant?.name ?? name}
       size={14}

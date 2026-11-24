@@ -14,6 +14,7 @@ import { toast } from "sonner"
 import {
   CopyIcon,
   MessageCircleQuestionMark,
+  ShieldCheck,
   StickyNote,
   TextQuote,
 } from "lucide-react"
@@ -71,6 +72,8 @@ type SelectionState =
       y: number
       /** Bubble hangs below the selection (no room above). */
       below: boolean
+      /** The selection lies in one message that can be checked (10.3). */
+      checkable: boolean
     }
 
 const NO_SELECTION: SelectionState = { kind: "none" }
@@ -80,7 +83,20 @@ function sameState(a: SelectionState, b: SelectionState): boolean {
   if (a.kind === "none" || b.kind === "none") return true
   if (a.text !== b.text) return false
   if (a.kind !== "visible" || b.kind !== "visible") return true
-  return a.x === b.x && a.y === b.y && a.below === b.below
+  return (
+    a.x === b.x &&
+    a.y === b.y &&
+    a.below === b.below &&
+    a.checkable === b.checkable
+  )
+}
+
+/** Where a checkable message is marked (`data-check-key`, 10.3). */
+const CHECK_SELECTOR = "[data-check-key]"
+
+function elementOf(node: Node | null | undefined): Element | null {
+  if (!node) return null
+  return node instanceof Element ? node : node.parentElement
 }
 
 interface SelectionActionBubbleProps {
@@ -114,6 +130,13 @@ interface SelectionActionBubbleProps {
    * offered — same rule as `onQuote`.
    */
   onSaveAsNote?: (text: string) => void
+  /**
+   * "Is this right?" (10.3): have the assistant check the selected sentence.
+   * `from` is the message it lies in (its `data-check-key` element). Offered
+   * only for a selection within one such message, and only where omitted it
+   * is not — same rule as `onQuote`.
+   */
+  onCheck?: (text: string, from: Element) => void
 }
 
 /**
@@ -135,11 +158,17 @@ export function SelectionActionBubble({
   onQuote,
   renderAskComposer,
   onSaveAsNote,
+  onCheck,
 }: SelectionActionBubbleProps) {
   const t = useTranslations("Folder.chat.messageList")
+  const tCheck = useTranslations("MessageCheck")
   const [state, setState] = useState<SelectionState>(NO_SELECTION)
   const stateRef = useRef<SelectionState>(NO_SELECTION)
   const bubbleRef = useRef<HTMLDivElement | null>(null)
+  // The message the selection lies in, when it can be checked: kept at the
+  // last measure, since on touch the tap on "Check" drops the selection
+  // before its click.
+  const checkFromRef = useRef<Element | null>(null)
   // The "ask" composer is open. While it is, the toolbar FREEZES: the selection
   // text is already captured in `state`, and every tracker below stands down.
   // It has to — focusing the composer collapses the page selection, so a live
@@ -185,6 +214,11 @@ export function SelectionActionBubble({
     if (!container.contains(range.commonAncestorContainer)) return NO_SELECTION
     const text = selection.toString()
     if (!text.trim()) return NO_SELECTION
+    const from = elementOf(range.startContainer)?.closest(CHECK_SELECTOR)
+    const to = elementOf(range.endContainer)?.closest(CHECK_SELECTOR)
+    checkFromRef.current =
+      from && from === to && container.contains(from) ? from : null
+    const checkable = checkFromRef.current !== null
 
     const rect = range.getBoundingClientRect()
     const box = container.getBoundingClientRect()
@@ -227,7 +261,7 @@ export function SelectionActionBubble({
     const y = Math.round(
       below ? Math.min(rect.bottom - box.top + GAP, floor) : top - GAP
     )
-    return { kind: "visible", text, x, y, below }
+    return { kind: "visible", text, x, y, below, checkable }
   }, [containerRef])
 
   useEffect(() => {
@@ -384,6 +418,15 @@ export function SelectionActionBubble({
     dismiss()
   }, [onSaveAsNote, dismiss])
 
+  const handleCheck = useCallback(() => {
+    const current = stateRef.current
+    const from = checkFromRef.current
+    if (current.kind === "none" || !from || !onCheck) return
+    const { text } = current
+    dismiss()
+    onCheck(text, from)
+  }, [dismiss, onCheck])
+
   const handleQuote = useCallback(() => {
     const current = stateRef.current
     if (current.kind === "none" || !onQuote) return
@@ -522,6 +565,19 @@ export function SelectionActionBubble({
             >
               <MessageCircleQuestionMark />
               {t("selectionAsk")}
+            </Button>
+          )}
+          {onCheck && state.checkable && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              onClick={handleCheck}
+              aria-label={tCheck("selection")}
+              data-check-selection
+            >
+              <ShieldCheck />
+              {tCheck("selection")}
             </Button>
           )}
         </>

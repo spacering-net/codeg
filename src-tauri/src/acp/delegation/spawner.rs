@@ -36,7 +36,11 @@ pub struct DelegationLink {
 /// The assistant a delegated child runs as, and what the child row keeps of it.
 #[derive(Debug, Clone)]
 pub struct AssistantLink {
-    pub id: i32,
+    /// The collaboration settings' assistant it ran as — only a child from
+    /// before the owner's assistants; one of theirs is named by `bot_uid`.
+    pub id: Option<i32>,
+    /// The owner's assistant it runs as.
+    pub bot_uid: Option<String>,
     pub snapshot: crate::models::AssistantRunSnapshot,
 }
 

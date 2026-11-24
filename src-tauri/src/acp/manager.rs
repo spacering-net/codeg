@@ -400,6 +400,33 @@ fn prune_reaped(draining: &mut DrainingChildren) {
     });
 }
 
+/// What waits on the owner in a live session.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionWait {
+    /// `permission` | `question` | `plan`.
+    pub kind: &'static str,
+    /// The tool call's title, the question, the plan's first line.
+    pub text: String,
+    pub since: chrono::DateTime<chrono::Utc>,
+}
+
+/// One live session at a glance ([`ConnectionManager::session_glances`]).
+#[derive(Debug, Clone)]
+pub struct SessionGlance {
+    pub connection_id: String,
+    pub conversation_id: Option<i32>,
+    pub folder_id: Option<i32>,
+    pub agent_type: AgentType,
+    pub status: ConnectionStatus,
+    /// An assistant's own brain session.
+    pub personal_agent: bool,
+    pub wait: Option<SessionWait>,
+    /// A turn runs.
+    pub running: bool,
+    pub turn_started_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub last_activity_at: chrono::DateTime<chrono::Utc>,
+}
+
 pub struct ConnectionManager {
     pub(crate) connections: Arc<Mutex<HashMap<String, AgentConnection>>>,
     /// Connections whose teardown was requested but whose child process has
@@ -484,6 +511,12 @@ pub struct ConnectionManager {
     /// touch the same map. At most one per connection (the agent is blocked in
     /// its `exit_plan_mode` call) — no cap, no cumulative growth.
     pending_plan_approvals: Arc<Mutex<HashMap<String, PendingPlanApprovalEntry>>>,
+    /// How the latest questions and plan approvals settled, by request id
+    /// (7.3.1): the one record of whose answer took effect, read by a later
+    /// answer that came too late. Written under the pending map's lock, in the
+    /// same step that takes the entry out, so a second answer racing the first
+    /// always finds it. Bounded ([`ANSWER_LOG_CAP`]).
+    answers: Arc<std::sync::Mutex<AnswerLog>>,
     /// Conversations a user moved to another folder during this process's
     /// life (root and the delegation children that moved with it).
     ///
@@ -500,6 +533,29 @@ pub struct ConnectionManager {
     /// Per-conversation selection persistence: the serialized persister and
     /// the one-writer-per-row authority map (see `acp::selection`).
     pub(crate) selection: Arc<crate::acp::selection::SelectionPersister>,
+}
+
+/// How many settled questions and plan approvals the manager remembers.
+const ANSWER_LOG_CAP: usize = 512;
+
+/// The settled requests, oldest first, and their resolutions by id.
+#[derive(Default)]
+struct AnswerLog {
+    order: std::collections::VecDeque<String>,
+    by_id: HashMap<String, crate::acp::types::AnswerResolution>,
+}
+
+impl AnswerLog {
+    fn record(&mut self, id: &str, resolution: crate::acp::types::AnswerResolution) {
+        if self.by_id.insert(id.to_string(), resolution).is_none() {
+            self.order.push_back(id.to_string());
+        }
+        while self.order.len() > ANSWER_LOG_CAP {
+            if let Some(old) = self.order.pop_front() {
+                self.by_id.remove(&old);
+            }
+        }
+    }
 }
 
 /// A parked `ask_user_question` awaiting its answer. The `sender` resolves the
@@ -698,6 +754,7 @@ impl ConnectionManager {
             pending_questions: Arc::new(Mutex::new(HashMap::new())),
             question_registration: Arc::new(Mutex::new(())),
             pending_plan_approvals: Arc::new(Mutex::new(HashMap::new())),
+            answers: Arc::new(std::sync::Mutex::new(AnswerLog::default())),
             relocated: Arc::new(std::sync::Mutex::new(Default::default())),
             selection: Arc::new(crate::acp::selection::SelectionPersister::default()),
         }
@@ -718,6 +775,7 @@ impl ConnectionManager {
             pending_questions: self.pending_questions.clone(),
             question_registration: self.question_registration.clone(),
             pending_plan_approvals: self.pending_plan_approvals.clone(),
+            answers: self.answers.clone(),
             relocated: self.relocated.clone(),
             selection: self.selection.clone(),
         }
@@ -774,6 +832,7 @@ impl ConnectionManager {
             pending_questions: Arc::new(Mutex::new(HashMap::new())),
             question_registration: Arc::new(Mutex::new(())),
             pending_plan_approvals: Arc::new(Mutex::new(HashMap::new())),
+            answers: Arc::new(std::sync::Mutex::new(AnswerLog::default())),
             relocated: Arc::new(std::sync::Mutex::new(Default::default())),
             selection: Arc::new(crate::acp::selection::SelectionPersister::default()),
         }
@@ -920,7 +979,7 @@ impl ConnectionManager {
             emitter,
             preferred_mode_id,
             preferred_config_values,
-            None,
+            crate::acp::connection::SpawnSeed::default(),
         )
         .await
     }
@@ -949,10 +1008,46 @@ impl ConnectionManager {
             emitter,
             preferred_mode_id,
             preferred_config_values,
-            Some(seed),
+            crate::acp::connection::SpawnSeed {
+                cli_root: Some(seed),
+                ..Default::default()
+            },
         )
         .await
         .map(|outcome| outcome.connection_id)
+    }
+
+    /// A connection for the personal agent: marked as its own before its agent
+    /// starts, so the codeg-mcp it is given carries the personal-agent tools and
+    /// none of the delegation or board-authoring ones. `session_id` resumes the
+    /// segment's session; `reused` is reported like [`Self::spawn_agent_with_outcome`].
+    #[allow(clippy::too_many_arguments)]
+    pub async fn spawn_personal_agent(
+        &self,
+        agent_type: AgentType,
+        working_dir: Option<String>,
+        session_id: Option<String>,
+        runtime_env: BTreeMap<String, String>,
+        owner_window_label: String,
+        emitter: EventEmitter,
+        preferred_mode_id: Option<String>,
+        preferred_config_values: BTreeMap<String, String>,
+    ) -> Result<SpawnOutcome, AcpError> {
+        self.spawn_agent_seeded(
+            agent_type,
+            working_dir,
+            session_id,
+            runtime_env,
+            owner_window_label,
+            emitter,
+            preferred_mode_id,
+            preferred_config_values,
+            crate::acp::connection::SpawnSeed {
+                personal_agent: true,
+                ..Default::default()
+            },
+        )
+        .await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -966,7 +1061,7 @@ impl ConnectionManager {
         emitter: EventEmitter,
         preferred_mode_id: Option<String>,
         preferred_config_values: BTreeMap<String, String>,
-        cli_root: Option<crate::cli_run::RootSeed>,
+        seed: crate::acp::connection::SpawnSeed,
     ) -> Result<SpawnOutcome, AcpError> {
         // Held for the whole establishment. A restore writing back to the
         // agents' own directories takes the write side, so it can never see an
@@ -1056,7 +1151,7 @@ impl ConnectionManager {
             preferred_config_values,
             self.delegation_snapshot(),
             self.terminal_shell_config.clone(),
-            cli_root,
+            seed,
             Some(self.selection.clone()),
         )
         .await?;
@@ -1324,6 +1419,8 @@ impl ConnectionManager {
         mut blocks: Vec<PromptInputBlock>,
         user_message: Option<(String, Vec<crate::acp::UserMessageBlock>)>,
         internal_suffix: Vec<PromptInputBlock>,
+        reply_token: Option<String>,
+        receipt: Option<crate::acp::prompt_receipt::PromptReceipt>,
     ) -> Result<(), AcpError> {
         // Reject an empty prompt BEFORE touching the concurrency gate. An empty
         // prompt produces no turn — and thus no `TurnComplete` to clear the gate
@@ -1385,6 +1482,8 @@ impl ConnectionManager {
             blocks,
             user_message,
             internal_suffix,
+            reply_token,
+            receipt,
         });
         Ok(())
     }
@@ -1410,7 +1509,7 @@ impl ConnectionManager {
     ) -> Result<(), AcpError> {
         let prompt_lock = self.clone_prompt_lock(conn_id).await?;
         let _guard = prompt_lock.lock_owned().await;
-        self.send_prompt_inner(conn_id, blocks, None, Vec::new())
+        self.send_prompt_inner(conn_id, blocks, None, Vec::new(), None, None)
             .await
     }
 
@@ -1481,6 +1580,66 @@ impl ConnectionManager {
             delegation,
             client_message_id,
             Vec::new(),
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// The personal agent engine's send: as [`Self::send_prompt_linked`],
+    /// tagged with `reply_token` so the connection builds the reply of this
+    /// prompt's turn under it (see [`crate::acp::reply_turn`]).
+    pub async fn send_personal_agent_prompt(
+        &self,
+        db: &AppDatabase,
+        conn_id: &str,
+        blocks: Vec<PromptInputBlock>,
+        folder_id: Option<i32>,
+        conversation_id: Option<i32>,
+        reply_token: Option<String>,
+    ) -> Result<Option<i32>, AcpError> {
+        self.send_prompt_linked_full(
+            db,
+            conn_id,
+            blocks,
+            folder_id,
+            conversation_id,
+            None,
+            None,
+            Vec::new(),
+            reply_token,
+            None,
+        )
+        .await
+    }
+
+    /// The personal agent's follow-up into a dispatched conversation: as
+    /// [`Self::send_prompt_linked_with_message_id`], with `internal_suffix`
+    /// (the prompt's operation frame) and the `receipt` that proves — or
+    /// refuses — the send (see [`crate::acp::prompt_receipt`]).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send_prompt_with_receipt(
+        &self,
+        db: &AppDatabase,
+        conn_id: &str,
+        blocks: Vec<PromptInputBlock>,
+        folder_id: Option<i32>,
+        conversation_id: Option<i32>,
+        client_message_id: Option<String>,
+        internal_suffix: Vec<PromptInputBlock>,
+        receipt: crate::acp::prompt_receipt::PromptReceipt,
+    ) -> Result<Option<i32>, AcpError> {
+        self.send_prompt_linked_full(
+            db,
+            conn_id,
+            blocks,
+            folder_id,
+            conversation_id,
+            None,
+            client_message_id,
+            internal_suffix,
+            None,
+            Some(receipt),
         )
         .await
     }
@@ -1510,6 +1669,8 @@ impl ConnectionManager {
             delegation,
             None,
             internal_suffix,
+            None,
+            None,
         )
         .await
     }
@@ -1525,6 +1686,8 @@ impl ConnectionManager {
         delegation: Option<crate::acp::delegation::spawner::DelegationLink>,
         client_message_id: Option<String>,
         internal_suffix: Vec<PromptInputBlock>,
+        reply_token: Option<String>,
+        receipt: Option<crate::acp::prompt_receipt::PromptReceipt>,
     ) -> Result<Option<i32>, AcpError> {
         // Reject an empty prompt up front, BEFORE any side effects: linking /
         // creating the conversation row, flipping it to InProgress, or emitting
@@ -2037,7 +2200,14 @@ impl ConnectionManager {
             state.pending_delivery = None;
         }
         match self
-            .send_prompt_inner(conn_id, blocks, user_message, internal_suffix)
+            .send_prompt_inner(
+                conn_id,
+                blocks,
+                user_message,
+                internal_suffix,
+                reply_token,
+                receipt,
+            )
             .await
         {
             Ok(()) => {
@@ -2991,6 +3161,7 @@ impl ConnectionManager {
                         origin_cwd: Set(origin_cwd),
                         assistant_id: Set(None),
                         assistant_snapshot: Set(None),
+                        bot_uid: Set(None),
                         source: Set(source),
                         selector_state: Set(inherited_selection.clone()),
                     };
@@ -3734,7 +3905,9 @@ impl ConnectionManager {
                 .pending_permission
                 .as_ref()
                 .map(crate::models::pet::PetPermissionSummary::from);
+            let ask = pet_ask(&state);
             let is_active = pending.is_some()
+                || ask.is_some()
                 || matches!(
                     state.status,
                     ConnectionStatus::Prompting | ConnectionStatus::Error
@@ -3750,10 +3923,64 @@ impl ConnectionManager {
                 title: String::new(),
                 status: state.status.clone(),
                 pending,
+                ask,
                 // Same reason as `title`: resolving a delegation child's parent
                 // needs the DB. Filled by `pet_list_active_sessions_core`.
                 parent: None,
                 assistant_name: None,
+            });
+        }
+        out
+    }
+
+    /// A glance at every live session (the assistants' `session_list` and
+    /// `overview`, plan 8.1): what waits on the owner — an approval, an
+    /// answer, a plan — and what runs. The handles are taken under the map
+    /// lock and each state is read after it is let go, so one busy session
+    /// holds up nobody.
+    pub async fn session_glances(&self) -> Vec<SessionGlance> {
+        let handles: Vec<(String, std::sync::Arc<tokio::sync::RwLock<crate::acp::SessionState>>)> = {
+            let connections = self.connections.lock().await;
+            connections
+                .iter()
+                .map(|(id, c)| (id.clone(), c.state.clone()))
+                .collect()
+        };
+        let mut out = Vec::with_capacity(handles.len());
+        for (id, state) in handles {
+            let s = state.read().await;
+            let wait = if let Some(p) = &s.pending_permission {
+                let title = p
+                    .tool_call
+                    .get("title")
+                    .and_then(|t| t.as_str())
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty())
+                    .unwrap_or("a tool call");
+                Some(SessionWait {
+                    kind: "permission",
+                    text: title.chars().take(200).collect(),
+                    since: p.created_at,
+                })
+            } else {
+                ask_wait(&s).map(|(kind, text, since)| SessionWait { kind, text, since })
+            };
+            let running = s.turn_in_flight || matches!(s.status, ConnectionStatus::Prompting);
+            out.push(SessionGlance {
+                connection_id: id,
+                conversation_id: s.conversation_id,
+                folder_id: s.folder_id,
+                agent_type: s.agent_type,
+                status: s.status.clone(),
+                personal_agent: s.personal_agent,
+                wait,
+                running,
+                turn_started_at: if running {
+                    s.pending_user_message_started_at
+                } else {
+                    None
+                },
+                last_activity_at: s.last_activity_at,
             });
         }
         out
@@ -4356,7 +4583,7 @@ impl ConnectionManager {
         // A pending question that yields is withdrawn for this one; any other
         // pending question refuses it. Dropping a withdrawn entry's sender
         // resolves its waiter with an error, as a cancel does.
-        let withdrawn: Vec<String> = {
+        let withdrawn: Vec<(String, crate::acp::types::AnswerResolution)> = {
             let mut reg = self.pending_questions.lock().await;
             let held: Vec<(String, bool)> = reg
                 .iter()
@@ -4378,16 +4605,26 @@ impl ConnectionManager {
                     yields_to_newer,
                 },
             );
-            held.into_iter().map(|(id, _)| id).collect()
+            // Recorded as withdrawn under the map's lock, in the step that
+            // takes them out (see `answers`).
+            held.into_iter()
+                .map(|(id, _)| {
+                    let resolution = self.settled(&id);
+                    (id, resolution)
+                })
+                .collect()
         };
         #[cfg(test)]
         question_registration_test_gate::pause(conn_id).await;
         // Clear the withdrawn card before the new one goes up.
-        for id in withdrawn {
+        for (id, resolution) in withdrawn {
             emit_with_state(
                 &state,
                 &emitter,
-                AcpEvent::QuestionResolved { question_id: id },
+                AcpEvent::QuestionResolved {
+                    question_id: id,
+                    resolution: Some(resolution),
+                },
             )
             .await;
         }
@@ -4433,18 +4670,86 @@ impl ConnectionManager {
         state: &std::sync::Arc<tokio::sync::RwLock<crate::acp::SessionState>>,
         emitter: &EventEmitter,
     ) -> bool {
-        if self.pending_questions.lock().await.contains_key(question_id) {
-            return false;
-        }
+        let resolution = {
+            let reg = self.pending_questions.lock().await;
+            if reg.contains_key(question_id) {
+                return false;
+            }
+            self.settled(question_id)
+        };
         emit_with_state(
             state,
             emitter,
             AcpEvent::QuestionResolved {
                 question_id: question_id.to_string(),
+                resolution: Some(resolution),
             },
         )
         .await;
         true
+    }
+
+    /// How request `id` settled; a withdrawal is recorded when nothing was.
+    /// Call with the request's pending map locked.
+    fn settled(&self, id: &str) -> crate::acp::types::AnswerResolution {
+        let mut log = self.answers.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(r) = log.by_id.get(id) {
+            return r.clone();
+        }
+        let r = crate::acp::types::AnswerResolution::withdrawn();
+        log.record(id, r.clone());
+        r
+    }
+
+    /// Record how request `id` settled. Call with its pending map locked.
+    fn record_settled(&self, id: &str, resolution: crate::acp::types::AnswerResolution) {
+        self.answers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .record(id, resolution);
+    }
+
+    /// How a question or plan approval settled, when the manager still
+    /// remembers it (7.3.1). `None`: still pending, or never seen here.
+    pub fn resolution_of(&self, request_id: &str) -> Option<crate::acp::types::AnswerResolution> {
+        self.answers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .by_id
+            .get(request_id)
+            .cloned()
+    }
+
+    /// Mark connection `conn_id` as answered for the owner by an assistant
+    /// (7.3.1), or not (`None`), and tell its windows.
+    pub async fn set_ask_delegate(
+        &self,
+        conn_id: &str,
+        delegate: Option<crate::acp::types::AskDelegate>,
+    ) {
+        if let Some((state, emitter)) = self.get_state_and_emitter(conn_id).await {
+            if state.read().await.ask_delegate == delegate {
+                return;
+            }
+            state.write().await.ask_delegate = delegate;
+            emit_with_state(&state, &emitter, AcpEvent::AskDelegate { delegate }).await;
+        }
+    }
+
+    /// A question or plan approval of `conn_id` the assistant was answering
+    /// is now the owner's: its windows notify them (7.3.1).
+    pub async fn ask_forwarded(&self, conn_id: &str, request_id: &str, kind: &str) {
+        if let Some((state, emitter)) = self.get_state_and_emitter(conn_id).await {
+            emit_with_state(
+                &state,
+                &emitter,
+                AcpEvent::AskForwarded {
+                    request_id: request_id.to_string(),
+                    kind: kind.to_string(),
+                },
+            )
+            .await;
+        }
     }
 
     /// Resolve a pending `ask_user_question` with the user's submission (from any
@@ -4460,13 +4765,53 @@ impl ConnectionManager {
         question_id: &str,
         answer: QuestionAnswer,
     ) -> Result<(), AcpError> {
+        // Already answered / canceled / gone elsewhere — idempotent success.
+        self.answer_question_from(
+            conn_id,
+            question_id,
+            answer,
+            crate::acp::types::AnswerOrigin::User,
+        )
+        .await;
+        Ok(())
+    }
+
+    /// Answer a pending question as `origin` — the one point every answer
+    /// goes through (7.3.1). The first answer wins: the entry is taken out
+    /// and its resolution recorded in one step, so a later answer learns
+    /// whose took effect (`AlreadyAnswered`) instead of a bare success; one
+    /// to a request no longer there is `Withdrawn`. Routing uses the entry's
+    /// stored parent connection, so a stale `conn_id` can't misroute.
+    pub async fn answer_question_from(
+        &self,
+        conn_id: &str,
+        question_id: &str,
+        answer: QuestionAnswer,
+        origin: crate::acp::types::AnswerOrigin,
+    ) -> crate::acp::types::AnswerOutcome {
+        use crate::acp::types::{AnswerOutcome, AnswerResolution};
         let _ = conn_id;
-        let entry = self.pending_questions.lock().await.remove(question_id);
-        let Some(entry) = entry else {
-            // Already answered / canceled / gone elsewhere — idempotent success.
-            return Ok(());
+        let (entry, outcome, resolution) = {
+            let mut reg = self.pending_questions.lock().await;
+            let Some(entry) = reg.remove(question_id) else {
+                let earlier = self.resolution_of(question_id);
+                return match earlier {
+                    Some(r) if r.is_answer() => AnswerOutcome::AlreadyAnswered(r),
+                    _ => AnswerOutcome::Withdrawn,
+                };
+            };
+            let outcome = build_outcome(&entry.questions, &answer);
+            // The record is read back to people and assistants: a secret
+            // the owner typed is the executor's alone.
+            let recorded = crate::acp::question::redacted_outcome(&entry.questions, &answer);
+            let resolution = AnswerResolution {
+                answer: serde_json::to_value(&recorded).ok(),
+                origin: Some(origin),
+                at: chrono::Utc::now(),
+            };
+            self.record_settled(question_id, resolution.clone());
+            (entry, outcome, resolution)
         };
-        let outcome = build_outcome(&entry.questions, &answer);
         // Ignore a dropped receiver: the listener may have abandoned the wait
         // (peer-close) at the same instant; the resolved-event below still clears
         // the card.
@@ -4478,11 +4823,12 @@ impl ConnectionManager {
                 &emitter,
                 AcpEvent::QuestionResolved {
                     question_id: question_id.to_string(),
+                    resolution: Some(resolution.clone()),
                 },
             )
             .await;
         }
-        Ok(())
+        AnswerOutcome::Answered(resolution)
     }
 
     /// Cancel a pending `ask_user_question` — the companion's tool call was
@@ -4492,9 +4838,12 @@ impl ConnectionManager {
     /// the question was already answered / gone.
     pub async fn cancel_question(&self, conn_id: &str, question_id: &str) {
         let _ = conn_id;
-        let removed = self.pending_questions.lock().await.remove(question_id);
-        let Some(entry) = removed else {
-            return;
+        let (entry, resolution) = {
+            let mut reg = self.pending_questions.lock().await;
+            let Some(entry) = reg.remove(question_id) else {
+                return;
+            };
+            (entry, self.settled(question_id))
         };
         if let Some((state, emitter)) = self.get_state_and_emitter(&entry.parent_connection_id).await
         {
@@ -4503,6 +4852,7 @@ impl ConnectionManager {
                 &emitter,
                 AcpEvent::QuestionResolved {
                     question_id: question_id.to_string(),
+                    resolution: Some(resolution),
                 },
             )
             .await;
@@ -4521,17 +4871,20 @@ impl ConnectionManager {
         // Remove every entry for this parent under the lock (dropping their
         // senders unblocks the parked listeners), then emit outside the lock —
         // the registry mutex is never held across an await.
-        let drained: Vec<String> = {
+        let drained: Vec<(String, crate::acp::types::AnswerResolution)> = {
             let mut reg = self.pending_questions.lock().await;
             let ids: Vec<String> = reg
                 .iter()
                 .filter(|(_, e)| e.parent_connection_id == conn_id)
                 .map(|(id, _)| id.clone())
                 .collect();
-            for id in &ids {
-                reg.remove(id);
-            }
-            ids
+            ids.into_iter()
+                .map(|id| {
+                    reg.remove(&id);
+                    let r = self.settled(&id);
+                    (id, r)
+                })
+                .collect()
         };
         if drained.is_empty() {
             return;
@@ -4541,8 +4894,16 @@ impl ConnectionManager {
         // run_connection cleanup guard fires this sweep), so tolerate `None` — the
         // core removal above already ran and the frontend clears on disconnect.
         if let Some((state, emitter)) = self.get_state_and_emitter(conn_id).await {
-            for question_id in drained {
-                emit_with_state(&state, &emitter, AcpEvent::QuestionResolved { question_id }).await;
+            for (question_id, resolution) in drained {
+                emit_with_state(
+                    &state,
+                    &emitter,
+                    AcpEvent::QuestionResolved {
+                        question_id,
+                        resolution: Some(resolution),
+                    },
+                )
+                .await;
             }
         }
     }
@@ -4617,14 +4978,19 @@ impl ConnectionManager {
         state: &std::sync::Arc<tokio::sync::RwLock<crate::acp::SessionState>>,
         emitter: &EventEmitter,
     ) -> bool {
-        if self.pending_plan_approvals.lock().await.contains_key(approval_id) {
-            return false;
-        }
+        let resolution = {
+            let reg = self.pending_plan_approvals.lock().await;
+            if reg.contains_key(approval_id) {
+                return false;
+            }
+            self.settled(approval_id)
+        };
         emit_with_state(
             state,
             emitter,
             AcpEvent::PlanApprovalResolved {
                 approval_id: approval_id.to_string(),
+                resolution: Some(resolution),
             },
         )
         .await;
@@ -4644,11 +5010,44 @@ impl ConnectionManager {
         approval_id: &str,
         answer: PlanApprovalAnswer,
     ) -> Result<(), AcpError> {
+        // Already answered / canceled / gone elsewhere — idempotent success.
+        self.answer_plan_approval_from(
+            conn_id,
+            approval_id,
+            answer,
+            crate::acp::types::AnswerOrigin::User,
+        )
+        .await;
+        Ok(())
+    }
+
+    /// Answer a pending plan approval as `origin`: the one point every answer
+    /// goes through. As [`Self::answer_question_from`].
+    pub async fn answer_plan_approval_from(
+        &self,
+        conn_id: &str,
+        approval_id: &str,
+        answer: PlanApprovalAnswer,
+        origin: crate::acp::types::AnswerOrigin,
+    ) -> crate::acp::types::AnswerOutcome {
+        use crate::acp::types::{AnswerOutcome, AnswerResolution};
         let _ = conn_id;
-        let entry = self.pending_plan_approvals.lock().await.remove(approval_id);
-        let Some(entry) = entry else {
-            // Already answered / canceled / gone elsewhere — idempotent success.
-            return Ok(());
+        let (entry, resolution) = {
+            let mut reg = self.pending_plan_approvals.lock().await;
+            let Some(entry) = reg.remove(approval_id) else {
+                let earlier = self.resolution_of(approval_id);
+                return match earlier {
+                    Some(r) if r.is_answer() => AnswerOutcome::AlreadyAnswered(r),
+                    _ => AnswerOutcome::Withdrawn,
+                };
+            };
+            let resolution = AnswerResolution {
+                answer: serde_json::to_value(&answer).ok(),
+                origin: Some(origin),
+                at: chrono::Utc::now(),
+            };
+            self.record_settled(approval_id, resolution.clone());
+            (entry, resolution)
         };
         // Ignore a dropped receiver: the handler may have abandoned the wait
         // (teardown) at the same instant; the resolved event below still clears
@@ -4662,11 +5061,12 @@ impl ConnectionManager {
                 &emitter,
                 AcpEvent::PlanApprovalResolved {
                     approval_id: approval_id.to_string(),
+                    resolution: Some(resolution.clone()),
                 },
             )
             .await;
         }
-        Ok(())
+        AnswerOutcome::Answered(resolution)
     }
 
     /// Cancel every pending plan approval parked on a connection that is tearing
@@ -4675,17 +5075,20 @@ impl ConnectionManager {
     /// plan mode active, re-surfaces on reconnect); the `PlanApprovalResolved`
     /// broadcast clears the card. Mirrors [`Self::cancel_questions_by_parent`].
     pub async fn cancel_plan_approvals_by_parent(&self, conn_id: &str) {
-        let drained: Vec<String> = {
+        let drained: Vec<(String, crate::acp::types::AnswerResolution)> = {
             let mut reg = self.pending_plan_approvals.lock().await;
             let ids: Vec<String> = reg
                 .iter()
                 .filter(|(_, e)| e.parent_connection_id == conn_id)
                 .map(|(id, _)| id.clone())
                 .collect();
-            for id in &ids {
-                reg.remove(id);
-            }
-            ids
+            ids.into_iter()
+                .map(|id| {
+                    reg.remove(&id);
+                    let r = self.settled(&id);
+                    (id, r)
+                })
+                .collect()
         };
         if drained.is_empty() {
             return;
@@ -4693,9 +5096,16 @@ impl ConnectionManager {
         // Best-effort card clear: the connection may already be out of the map
         // (disconnect removes it before this sweep), so tolerate `None`.
         if let Some((state, emitter)) = self.get_state_and_emitter(conn_id).await {
-            for approval_id in drained {
-                emit_with_state(&state, &emitter, AcpEvent::PlanApprovalResolved { approval_id })
-                    .await;
+            for (approval_id, resolution) in drained {
+                emit_with_state(
+                    &state,
+                    &emitter,
+                    AcpEvent::PlanApprovalResolved {
+                        approval_id,
+                        resolution: Some(resolution),
+                    },
+                )
+                .await;
             }
         }
     }
@@ -5023,6 +5433,38 @@ impl ConnectionManager {
 /// includes the git credential helper — without it, delegated subagents
 /// fail any git command that depends on the codeg-injected helper.
 /// The internal suffix carrying an assistant brief, if there is one.
+/// The question or plan approval a session waits on: its kind (`question`
+/// or `plan`), the first question or the plan's first line, and since when.
+fn ask_wait(
+    s: &crate::acp::SessionState,
+) -> Option<(&'static str, String, chrono::DateTime<chrono::Utc>)> {
+    if let Some(q) = &s.pending_question {
+        let text = q
+            .questions
+            .first()
+            .map(|x| x.question.chars().take(200).collect())
+            .unwrap_or_default();
+        return Some(("question", text, q.created_at));
+    }
+    s.pending_plan_approval.as_ref().map(|p| {
+        let text = p
+            .plan_markdown
+            .lines()
+            .map(|l| l.trim().trim_start_matches('#').trim())
+            .find(|l| !l.is_empty())
+            .unwrap_or("")
+            .chars()
+            .take(200)
+            .collect();
+        ("plan", text, p.created_at)
+    })
+}
+
+/// [`ask_wait`] as the pet panel shows it (18 #2).
+fn pet_ask(s: &crate::acp::SessionState) -> Option<crate::models::pet::PetAsk> {
+    ask_wait(s).map(|(kind, text, _)| crate::models::pet::PetAsk { kind, text })
+}
+
 fn brief_suffix(brief: Option<String>) -> Vec<PromptInputBlock> {
     brief
         .map(|text| vec![PromptInputBlock::Text { text }])
@@ -7211,11 +7653,13 @@ mod tests {
                     parent_tool_use_id: "pt-brief".into(),
                     delegation_call_id: "call-brief".into(),
                     assistant: Some(AssistantLink {
-                        id: 3,
+                        id: Some(3),
+                        bot_uid: None,
                         snapshot: crate::models::AssistantRunSnapshot {
                             name: "Reviewer".into(),
                             agent_options: Default::default(),
                             instructions: "Cite lines.".into(),
+                            avatar: None,
                         },
                     }),
                 }),
@@ -7231,6 +7675,7 @@ mod tests {
             blocks,
             user_message,
             internal_suffix,
+            ..
         } = cmd_rx.try_recv().expect("one prompt command")
         else {
             panic!("expected prompt command");
@@ -7252,12 +7697,11 @@ mod tests {
         assert_eq!(row.title.as_deref(), Some("Review the diff"));
         assert_eq!(row.assistant_id, Some(3));
         assert_eq!(row.assistant_name.as_deref(), Some("Reviewer"));
-        let (assistant_id, snapshot) =
+        let snapshot =
             crate::db::service::conversation_service::get_assistant_run(&db.conn, child_id)
                 .await
                 .unwrap()
                 .expect("assistant run recorded");
-        assert_eq!(assistant_id, 3);
         assert_eq!(
             snapshot.expect("snapshot readable").instructions,
             "Cite lines."
@@ -8002,6 +8446,8 @@ mod tests {
                 }],
                 user_message: None,
                 internal_suffix: Vec::new(),
+                reply_token: None,
+                receipt: None,
             })
             .await
             .unwrap();
@@ -8015,6 +8461,8 @@ mod tests {
             }],
             None,
             Vec::new(),
+            None,
+            None,
         );
         let res = tokio::time::timeout(std::time::Duration::from_millis(50), fut).await;
         assert!(

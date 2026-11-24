@@ -67,6 +67,9 @@ export interface DelegationBinding {
    *  name when the delegation started; null for a plain agent delegation. */
   assistantId: number | null
   assistantName: string | null
+  /** The owner's assistant it runs as (its uid); with it, `assistantId` is
+   *  that assistant's row. */
+  botUid: string | null
 }
 
 export interface DelegationContextValue {
@@ -179,6 +182,7 @@ export function DelegationProvider({ children }: { children: ReactNode }) {
           taskId: envelope.task_id ?? null,
           assistantId: envelope.assistant_id ?? null,
           assistantName: envelope.assistant_name ?? null,
+          botUid: envelope.bot_uid ?? null,
         }
         setByToolUseId((prev) => {
           const m = new Map(prev)
@@ -226,6 +230,7 @@ export function DelegationProvider({ children }: { children: ReactNode }) {
             taskId: null,
             assistantId: envelope.assistant_id ?? null,
             assistantName: envelope.assistant_name ?? null,
+            botUid: envelope.bot_uid ?? null,
           }
           const updated: DelegationBinding =
             envelope.result.kind === "ok"

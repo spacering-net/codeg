@@ -1,0 +1,130 @@
+use sea_orm::entity::prelude::*;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
+#[serde(rename_all = "snake_case")]
+pub enum DispatchMode {
+    /// A kanban task in the target project's worktree.
+    #[sea_orm(string_value = "task")]
+    Task,
+    /// A chat-mode conversation in a scratch directory.
+    #[sea_orm(string_value = "chat")]
+    Chat,
+    /// A conversation in the target project's current checkout.
+    #[sea_orm(string_value = "session")]
+    Session,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
+#[serde(rename_all = "snake_case")]
+pub enum DispatchState {
+    /// Waiting for a slot (conversation modes) or for the task to start.
+    #[sea_orm(string_value = "queued")]
+    Queued,
+    #[sea_orm(string_value = "running")]
+    Running,
+    /// Blocked on a question or permission request in its own session.
+    #[sea_orm(string_value = "waiting_input")]
+    WaitingInput,
+    /// A kanban task waiting for the owner's review.
+    #[sea_orm(string_value = "review")]
+    Review,
+    #[sea_orm(string_value = "completed")]
+    Completed,
+    #[sea_orm(string_value = "failed")]
+    Failed,
+    #[sea_orm(string_value = "canceled")]
+    Canceled,
+    /// A restart took the conversation's process down mid-turn.
+    #[sea_orm(string_value = "interrupted")]
+    Interrupted,
+    /// The owner wrote in the conversation; the assistant leaves it alone.
+    #[sea_orm(string_value = "handed_over")]
+    HandedOver,
+}
+
+/// One piece of work the personal agent handed to a role assistant.
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+#[sea_orm(table_name = "personal_agent_dispatch")]
+pub struct Model {
+    #[sea_orm(primary_key)]
+    pub id: i32,
+    pub mode: DispatchMode,
+    /// JSON `DispatchWorkSnapshot`: what its work runs on, frozen when it
+    /// was handed out.
+    #[sea_orm(column_type = "Text")]
+    pub work_snapshot: String,
+    pub folder_id: Option<i32>,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub deliverable: Option<String>,
+    #[sea_orm(column_type = "Text")]
+    pub title: String,
+    #[sea_orm(column_type = "Text")]
+    pub prompt: String,
+    pub work_task_id: Option<i32>,
+    pub conversation_id: Option<i32>,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub connection_id: Option<String>,
+    pub state: DispatchState,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub result_excerpt: Option<String>,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub error: Option<String>,
+    pub origin_batch_id: Option<i32>,
+    /// The delivery that last dispatched or continued it: its result cards
+    /// quote that turn's reply.
+    pub source_batch_id: Option<i32>,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub on_done: Option<String>,
+    pub turns: i32,
+    /// A follow-up waiting for a free session slot (the dispatch is `queued`
+    /// again); sent and cleared when it starts.
+    #[sea_orm(column_type = "Text", nullable)]
+    pub followup: Option<String>,
+    pub created_at: DateTimeUtc,
+    pub updated_at: DateTimeUtc,
+    pub finished_at: Option<DateTimeUtc>,
+    /// The ledger operation (`personal_agent_action.op_id`) that claimed the
+    /// current round: a follow-up writes it in the same update that claims
+    /// the round, so the row itself says which send the round belongs to.
+    #[sea_orm(column_type = "Text", nullable)]
+    pub round_op_id: Option<String>,
+    /// The assistant that dispatched it (`personal_agent.id`).
+    pub bot_id: Option<i32>,
+    /// Where the chain it was made for started: the assistant and its
+    /// timeline row, and the thread it is on.
+    pub origin_bot_id: Option<i32>,
+    pub origin_row_id: Option<i32>,
+    pub thread_id: Option<i32>,
+    /// The input it was made for: `<kind>:<id>`.
+    #[sea_orm(column_type = "Text", nullable)]
+    pub for_input: Option<String>,
+    /// What done looks like, as the assistant wrote it when it dispatched
+    /// the work (7.5): its acceptance is judged against it.
+    #[sea_orm(column_type = "Text", nullable)]
+    pub done_when: Option<String>,
+    /// A round codeg started to fix a watched pull request (7.4, phase 3),
+    /// as JSON (`personal_agent::pr_auto::PrFix`): which watch, why (failed
+    /// checks, a conflict, review feedback), and whether it was a new task
+    /// or a follow-up — codeg delivers it to the pull request once accepted.
+    #[sea_orm(column_type = "Text", nullable)]
+    pub pr_fix: Option<String>,
+    /// codeg's own check of other work (7.5): kept out of what the
+    /// assistants' work is compared by.
+    pub is_check: bool,
+    /// The failed work this one took over (B1): its matter handed to this
+    /// one in the transaction that recorded it.
+    pub replaces_id: Option<i32>,
+    /// The run of that work's board task it took over: a later run the
+    /// owner starts on the board is not taken over.
+    pub replaces_run_seq: Option<i32>,
+    /// The work that took this one over (B1).
+    pub replaced_by: Option<i32>,
+}
+
+#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+pub enum Relation {}
+
+impl ActiveModelBehavior for ActiveModel {}

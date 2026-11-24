@@ -40,6 +40,8 @@ import {
 import type { ComposerAttachments } from "@/components/chat/composer/use-composer-attachments"
 import type { ComposerShortcuts } from "@/components/chat/composer/use-composer-shortcuts"
 
+const NO_COMMANDS: AvailableCommandInfo[] = []
+
 /** The submenu geometry every list in this menu shares. */
 const SUBMENU_STYLE = {
   maxWidth: "min(20rem, calc(100vw - 1rem))",
@@ -57,9 +59,13 @@ export interface ComposerAddMenuProps {
     | "handleUploadLocalFiles"
     | "setServerFilePickerOpen"
   > | null
-  shortcuts: ComposerShortcuts
+  /** Quick messages and the skill families. Omitted with `attachOnly`. */
+  shortcuts?: ComposerShortcuts | null
   /** The agent's own `/` commands (from a live session or a transient probe). */
-  slashCommands: AvailableCommandInfo[]
+  slashCommands?: AvailableCommandInfo[]
+  /** Attachments only: no quick messages, slash commands or skills (a
+   *  surface whose messages must not carry the agent's own commands). */
+  attachOnly?: boolean
   /** Open the live-feedback dialog. Conversation-only; omitted elsewhere. */
   onAddFeedback?: () => void
   feedbackAddDisabled?: boolean
@@ -78,12 +84,14 @@ export interface ComposerAddMenuProps {
 export function ComposerAddMenu({
   disabled = false,
   attachments = null,
-  shortcuts,
-  slashCommands,
+  shortcuts: shortcutsProp = null,
+  slashCommands = NO_COMMANDS,
+  attachOnly = false,
   onAddFeedback,
   feedbackAddDisabled,
   triggerClassName,
 }: ComposerAddMenuProps) {
+  const shortcuts = attachOnly ? null : shortcutsProp
   const t = useTranslations("Folder.chat.messageInput")
   const [slashOpen, setSlashOpen] = useState(false)
   const [slashSearch, setSlashSearch] = useState("")
@@ -118,7 +126,7 @@ export function ComposerAddMenu({
       if (!open) return
       // The editor keeps its selection while the menu is open, so a quick
       // message inserts back at the same caret without tracking an offset.
-      shortcuts.refreshQuickMessages()
+      shortcuts?.refreshQuickMessages()
     },
     [shortcuts]
   )
@@ -178,43 +186,45 @@ export function ComposerAddMenu({
             </>
           )
         ) : null}
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger>
-            <MessageSquareText className="size-4" />
-            {t("quickMessages")}
-          </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent
-            className="min-w-40 overflow-y-auto"
-            style={SUBMENU_STYLE}
-          >
-            {shortcuts.quickMessagesLoading &&
-            shortcuts.quickMessages.length === 0 ? (
-              <div className="px-3 py-4 text-center text-xs text-muted-foreground">
-                {t("quickMessagesLoading")}
-              </div>
-            ) : shortcuts.quickMessages.length === 0 ? (
-              <div className="px-3 py-4 text-center text-xs text-muted-foreground">
-                {t("quickMessagesEmpty")}
-              </div>
-            ) : (
-              shortcuts.quickMessages.map((message) => (
-                <DropdownMenuItem
-                  key={message.id}
-                  onClick={() => shortcuts.insertQuickMessage(message)}
-                >
-                  <span className="truncate">
-                    {message.title || (
-                      <span className="italic text-muted-foreground">
-                        {t("quickMessageUntitled")}
-                      </span>
-                    )}
-                  </span>
-                </DropdownMenuItem>
-              ))
-            )}
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
-        {onAddFeedback && (
+        {shortcuts ? (
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>
+              <MessageSquareText className="size-4" />
+              {t("quickMessages")}
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent
+              className="min-w-40 overflow-y-auto"
+              style={SUBMENU_STYLE}
+            >
+              {shortcuts.quickMessagesLoading &&
+              shortcuts.quickMessages.length === 0 ? (
+                <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+                  {t("quickMessagesLoading")}
+                </div>
+              ) : shortcuts.quickMessages.length === 0 ? (
+                <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+                  {t("quickMessagesEmpty")}
+                </div>
+              ) : (
+                shortcuts.quickMessages.map((message) => (
+                  <DropdownMenuItem
+                    key={message.id}
+                    onClick={() => shortcuts.insertQuickMessage(message)}
+                  >
+                    <span className="truncate">
+                      {message.title || (
+                        <span className="italic text-muted-foreground">
+                          {t("quickMessageUntitled")}
+                        </span>
+                      )}
+                    </span>
+                  </DropdownMenuItem>
+                ))
+              )}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        ) : null}
+        {onAddFeedback && !attachOnly && (
           <DropdownMenuItem
             disabled={feedbackAddDisabled}
             onClick={onAddFeedback}
@@ -226,93 +236,100 @@ export function ComposerAddMenu({
             {t("liveFeedback")}
           </DropdownMenuItem>
         )}
-        <DropdownMenuSub open={slashOpen} onOpenChange={handleSlashOpenChange}>
-          <DropdownMenuSubTrigger disabled={slashCommands.length === 0}>
-            <Command className="size-4" />
-            {t("slashCommands")}
-          </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent
-            className="flex min-w-72 flex-col overflow-hidden p-0"
-            style={SUBMENU_STYLE}
+        {shortcuts ? (
+          <DropdownMenuSub
+            open={slashOpen}
+            onOpenChange={handleSlashOpenChange}
           >
-            <div className="flex shrink-0 items-center gap-2 border-b border-border/60 px-3 py-2">
-              <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-              <input
-                ref={slashInputRef}
-                type="text"
-                role="searchbox"
-                aria-label={t("slashSearchPlaceholder")}
-                value={slashSearch}
-                onChange={(e) => setSlashSearch(e.target.value)}
-                onKeyDown={(e) => {
-                  // Arrow/Enter belong to the IME while a CJK candidate is up,
-                  // not to this command list.
-                  if (isImeCompositionKey(e)) return
-                  if (e.key === "ArrowDown") {
-                    e.preventDefault()
-                    const container = e.currentTarget.closest(
-                      '[data-slot="dropdown-menu-sub-content"]'
-                    )
-                    const firstItem =
-                      container?.querySelector<HTMLElement>('[role="menuitem"]')
-                    firstItem?.focus()
-                    return
-                  }
-                  if (e.key === "Enter") {
-                    e.preventDefault()
-                    const first = filteredSlashCommands[0]
-                    if (first) {
-                      shortcuts.insertSlashCommand(first)
-                      setSlashOpen(false)
+            <DropdownMenuSubTrigger disabled={slashCommands.length === 0}>
+              <Command className="size-4" />
+              {t("slashCommands")}
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent
+              className="flex min-w-72 flex-col overflow-hidden p-0"
+              style={SUBMENU_STYLE}
+            >
+              <div className="flex shrink-0 items-center gap-2 border-b border-border/60 px-3 py-2">
+                <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <input
+                  ref={slashInputRef}
+                  type="text"
+                  role="searchbox"
+                  aria-label={t("slashSearchPlaceholder")}
+                  value={slashSearch}
+                  onChange={(e) => setSlashSearch(e.target.value)}
+                  onKeyDown={(e) => {
+                    // Arrow/Enter belong to the IME while a CJK candidate is up,
+                    // not to this command list.
+                    if (isImeCompositionKey(e)) return
+                    if (e.key === "ArrowDown") {
+                      e.preventDefault()
+                      const container = e.currentTarget.closest(
+                        '[data-slot="dropdown-menu-sub-content"]'
+                      )
+                      const firstItem =
+                        container?.querySelector<HTMLElement>(
+                          '[role="menuitem"]'
+                        )
+                      firstItem?.focus()
+                      return
                     }
-                    return
-                  }
-                  if (e.key === "Escape" || e.key === "Tab") return
-                  // Prevent radix DropdownMenu's built-in typeahead from
-                  // hijacking letter keys while the user is typing.
-                  e.stopPropagation()
-                }}
-                placeholder={t("slashSearchPlaceholder")}
-                className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-                autoComplete="off"
-                spellCheck={false}
-              />
-            </div>
-            <div className="flex-1 overflow-y-auto p-1">
-              {filteredSlashCommands.length === 0 ? (
-                <div className="px-3 py-6 text-center text-xs text-muted-foreground">
-                  {t("slashSearchEmpty")}
-                </div>
-              ) : (
-                filteredSlashCommands.map((cmd) => (
-                  <DropdownMenuItem
-                    key={cmd.name}
-                    onClick={() => shortcuts.insertSlashCommand(cmd)}
-                    // Radix focuses the item on pointermove, which fires while
-                    // scrolling (items slide under the cursor) and steals focus
-                    // from the search input. Short-circuit that default with
-                    // preventDefault so the search keeps focus until the user
-                    // explicitly clicks.
-                    onPointerMove={(e) => e.preventDefault()}
-                    onPointerLeave={(e) => e.preventDefault()}
-                    className="hover:bg-accent hover:text-accent-foreground"
-                  >
-                    <DropdownRadioItemContent
-                      label={commandInvocationToken(cmd.name)}
-                      hint={commandInputHint(cmd)}
-                      description={cmd.description}
-                    />
-                  </DropdownMenuItem>
-                ))
-              )}
-            </div>
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
+                    if (e.key === "Enter") {
+                      e.preventDefault()
+                      const first = filteredSlashCommands[0]
+                      if (first) {
+                        shortcuts.insertSlashCommand(first)
+                        setSlashOpen(false)
+                      }
+                      return
+                    }
+                    if (e.key === "Escape" || e.key === "Tab") return
+                    // Prevent radix DropdownMenu's built-in typeahead from
+                    // hijacking letter keys while the user is typing.
+                    e.stopPropagation()
+                  }}
+                  placeholder={t("slashSearchPlaceholder")}
+                  className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </div>
+              <div className="flex-1 overflow-y-auto p-1">
+                {filteredSlashCommands.length === 0 ? (
+                  <div className="px-3 py-6 text-center text-xs text-muted-foreground">
+                    {t("slashSearchEmpty")}
+                  </div>
+                ) : (
+                  filteredSlashCommands.map((cmd) => (
+                    <DropdownMenuItem
+                      key={cmd.name}
+                      onClick={() => shortcuts.insertSlashCommand(cmd)}
+                      // Radix focuses the item on pointermove, which fires while
+                      // scrolling (items slide under the cursor) and steals focus
+                      // from the search input. Short-circuit that default with
+                      // preventDefault so the search keeps focus until the user
+                      // explicitly clicks.
+                      onPointerMove={(e) => e.preventDefault()}
+                      onPointerLeave={(e) => e.preventDefault()}
+                      className="hover:bg-accent hover:text-accent-foreground"
+                    >
+                      <DropdownRadioItemContent
+                        label={commandInvocationToken(cmd.name)}
+                        hint={commandInputHint(cmd)}
+                        description={cmd.description}
+                      />
+                    </DropdownMenuItem>
+                  ))
+                )}
+              </div>
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        ) : null}
         {/* A custom-dir pi can't have skills managed by codeg's default-dir
             store, so hide these shortcuts instead of offering ones that lock
             with a Settings path the Experts/Office matrices also hide for this
             agent. */}
-        {shortcuts.skillManagementSupported && (
+        {shortcuts?.skillManagementSupported && (
           <>
             <DropdownMenuSub>
               <DropdownMenuSubTrigger disabled={shortcuts.experts.length === 0}>

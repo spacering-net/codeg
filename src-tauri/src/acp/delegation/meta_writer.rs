@@ -368,6 +368,14 @@ pub fn build_delegation_meta(
             "assistant_name".to_string(),
             serde_json::Value::String(a.name.clone()),
         );
+        // The owner's assistant it runs as: with it, `assistant_id` is that
+        // assistant's row, not the collaboration settings' one.
+        if let Some(uid) = a.bot_uid.as_deref() {
+            inner.insert(
+                "bot_uid".to_string(),
+                serde_json::Value::String(uid.to_string()),
+            );
+        }
     }
     let mut outer = serde_json::Map::new();
     outer.insert(

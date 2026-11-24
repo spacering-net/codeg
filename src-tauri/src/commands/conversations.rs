@@ -1308,12 +1308,18 @@ fn build_historical_delegation_meta(child: &DbConversationSummary) -> serde_json
         );
     }
     // The assistant the child ran as, off its row: the reloaded card draws it
-    // even when no live binding or tool result remains.
+    // even when no live binding or tool result remains — the owner's
+    // assistant by its uid, else the collaboration settings' by its id.
     if let Some(assistant_id) = child.assistant_id {
         obj.insert(
             "assistant_id".into(),
             serde_json::Value::Number(assistant_id.into()),
         );
+    }
+    if let Some(uid) = child.bot_uid.as_deref() {
+        obj.insert("bot_uid".into(), serde_json::Value::String(uid.into()));
+    }
+    if child.assistant_id.is_some() || child.bot_uid.is_some() {
         if let Some(name) = child.assistant_name.as_deref() {
             obj.insert(
                 "assistant_name".into(),
@@ -3543,6 +3549,7 @@ mod tests {
             assistant_id: None,
             source: None,
             assistant_name: None,
+            bot_uid: None,
             tag_ids: Vec::new(),
         }
     }
@@ -4191,6 +4198,22 @@ mod tests {
             .unwrap();
         assert!(inner.get("assistant_id").is_none());
         assert!(inner.get("assistant_name").is_none());
+
+        // One run as an owner's assistant: by its uid, its name with it.
+        let mut turns = vec![tool_use_turn(
+            Some("tu-c"),
+            "mcp__codeg-mcp__delegate_to_agent",
+        )];
+        let mut child = summary_child(45, "tu-c", "completed");
+        child.bot_uid = Some("0123456789abcdef0123456789abcdef".into());
+        child.assistant_name = Some("研发".into());
+        inject_delegation_meta(&mut turns, &[child]);
+        let inner = first_block_meta(&turns[0])
+            .and_then(|m| m.get("codeg.delegation").cloned())
+            .unwrap();
+        assert!(inner.get("assistant_id").is_none());
+        assert_eq!(inner["bot_uid"], "0123456789abcdef0123456789abcdef");
+        assert_eq!(inner["assistant_name"], "研发");
     }
 
     fn tool_result_turn(tool_use_id: &str, output: &str) -> MessageTurn {
@@ -8016,6 +8039,7 @@ mod tests {
                 assistant_id: None,
                 source: None,
                 assistant_name: None,
+                bot_uid: None,
                 tag_ids: Vec::new(),
             },
             turns,

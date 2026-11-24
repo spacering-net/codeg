@@ -162,6 +162,7 @@ function bindingFor(
     taskId,
     assistantId: null,
     assistantName: null,
+    botUid: null,
   })
 }
 

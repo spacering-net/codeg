@@ -304,6 +304,14 @@ impl SettingsWindowState {
             .ok()
             .and_then(|mut owners| owners.remove(settings_label))
     }
+
+    /// The window a settings window was opened from, left in place.
+    fn owner_of(&self, settings_label: &str) -> Option<String> {
+        self.owner_by_settings_label
+            .lock()
+            .ok()
+            .and_then(|owners| owners.get(settings_label).cloned())
+    }
 }
 
 impl Default for SettingsWindowState {
@@ -2052,6 +2060,33 @@ pub async fn resize_pet_panel(app: AppHandle, height: f64) -> Result<(), AppComm
     Ok(())
 }
 
+/// From the settings window: bring the workspace window it was opened from
+/// to the front, on the assistants page with its settings open at `page`
+/// (the executor configs, from Collaboration's "moved to the assistants
+/// page"). An event, not a reload, so the workspace keeps its state; the
+/// workspace's `PersonalAgentOpenBridge` takes it.
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn open_personal_agent_page(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, SettingsWindowState>,
+    page: String,
+) -> Result<(), AppCommandError> {
+    let owner = state
+        .owner_of(window.label())
+        .filter(|label| app.get_webview_window(label).is_some())
+        .unwrap_or_else(|| "main".to_string());
+    show_and_focus_window(&app, &owner);
+    app.emit_to(
+        owner.as_str(),
+        "workspace://open-personal-agent",
+        serde_json::json!({ "page": page }),
+    )
+    .map_err(|e| AppCommandError::window("Failed to signal the workspace window", e.to_string()))?;
+    Ok(())
+}
+
 /// Bring the main workspace to the foreground and ask it to focus a specific
 /// conversation. Uses an event (not a URL reload) so the in-memory tab/session
 /// state survives — `PetFocusBridge` in the main window calls `openTab`.
@@ -2282,6 +2317,13 @@ fn load_macos_tray_template_icon() -> Result<tauri::image::Image<'static>, Strin
 pub const TRAY_MENU_ID_PREFIX: &str = "tray:";
 pub const TRAY_MENU_ID_SHOW: &str = "tray:show";
 pub const TRAY_MENU_ID_QUIT: &str = "tray:quit";
+/// "Settings…": the assistants' settings, on the page with the menu bar's
+/// switches (10.10).
+pub const TRAY_MENU_ID_SETTINGS: &str = "tray:settings";
+/// One of the latest assistants: `tray:bot:<id>` opens it.
+pub const TRAY_MENU_ID_BOT_PREFIX: &str = "tray:bot:";
+/// The latest assistants' heading (not clickable).
+const TRAY_MENU_ID_RECENT: &str = "tray:recent";
 pub const TRAY_ICON_ID: &str = "codeg-tray";
 
 /// True after `install_tray_icon` returns `Ok`. The hide-on-close path
@@ -2630,6 +2672,8 @@ pub fn open_local_workspace(app: AppHandle) {
 struct TrayLabels {
     show_workspace: &'static str,
     quit: &'static str,
+    recent: &'static str,
+    settings: &'static str,
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -2639,42 +2683,62 @@ fn tray_labels_for(locale: crate::models::system::AppLocale) -> TrayLabels {
         AppLocale::ZhCn => TrayLabels {
             show_workspace: "显示工作台",
             quit: "退出 Codeg",
+            recent: "最近的助手",
+            settings: "设置…",
         },
         AppLocale::ZhTw => TrayLabels {
             show_workspace: "顯示工作臺",
             quit: "退出 Codeg",
+            recent: "最近的助手",
+            settings: "設定…",
         },
         AppLocale::Ja => TrayLabels {
             show_workspace: "ワークスペースを表示",
             quit: "Codeg を終了",
+            recent: "最近のアシスタント",
+            settings: "設定…",
         },
         AppLocale::Ko => TrayLabels {
             show_workspace: "워크스페이스 표시",
             quit: "Codeg 종료",
+            recent: "최근 어시스턴트",
+            settings: "설정…",
         },
         AppLocale::Es => TrayLabels {
             show_workspace: "Mostrar el área de trabajo",
             quit: "Salir de Codeg",
+            recent: "Asistentes recientes",
+            settings: "Ajustes…",
         },
         AppLocale::De => TrayLabels {
             show_workspace: "Arbeitsbereich anzeigen",
             quit: "Codeg beenden",
+            recent: "Letzte Assistenten",
+            settings: "Einstellungen…",
         },
         AppLocale::Fr => TrayLabels {
             show_workspace: "Afficher l'espace de travail",
             quit: "Quitter Codeg",
+            recent: "Assistants récents",
+            settings: "Réglages…",
         },
         AppLocale::Pt => TrayLabels {
             show_workspace: "Mostrar área de trabalho",
             quit: "Sair do Codeg",
+            recent: "Assistentes recentes",
+            settings: "Configurações…",
         },
         AppLocale::Ar => TrayLabels {
             show_workspace: "إظهار مساحة العمل",
             quit: "إنهاء Codeg",
+            recent: "المساعدون الأخيرون",
+            settings: "الإعدادات…",
         },
         AppLocale::En => TrayLabels {
             show_workspace: "Show Workspace",
             quit: "Quit Codeg",
+            recent: "Recent assistants",
+            settings: "Settings…",
         },
     }
 }
@@ -2689,22 +2753,14 @@ pub fn install_tray_icon(
     app: &AppHandle,
     locale: crate::models::system::AppLocale,
 ) -> tauri::Result<()> {
-    use tauri::menu::{MenuBuilder, MenuItem, PredefinedMenuItem};
     use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
-    let labels = tray_labels_for(locale);
-    let show_item = MenuItem::with_id(
-        app,
-        TRAY_MENU_ID_SHOW,
-        labels.show_workspace,
-        true,
-        None::<&str>,
-    )?;
-    let separator = PredefinedMenuItem::separator(app)?;
-    let quit_item = MenuItem::with_id(app, TRAY_MENU_ID_QUIT, labels.quit, true, None::<&str>)?;
-    let menu = MenuBuilder::new(app)
-        .items(&[&show_item, &separator, &quit_item])
-        .build()?;
+    let bots = {
+        let mut state = tray_menu_state();
+        state.locale = locale;
+        state.bots.clone()
+    };
+    let menu = build_tray_menu(app, locale, bots.as_deref())?;
 
     let mut builder = TrayIconBuilder::with_id(TRAY_ICON_ID)
         .tooltip("Codeg")
@@ -2766,11 +2822,120 @@ pub fn refresh_tray_menu(
     app: &AppHandle,
     locale: crate::models::system::AppLocale,
 ) -> tauri::Result<()> {
-    use tauri::menu::{MenuBuilder, MenuItem, PredefinedMenuItem};
+    tray_menu_state().locale = locale;
+    apply_tray_menu(app)
+}
 
+/// Rebuild the tray's menu from what it is built from. One rebuild at a
+/// time (off the main thread: building waits on it), so the last change
+/// is the menu shown.
+#[cfg(feature = "tauri-runtime")]
+fn apply_tray_menu(app: &AppHandle) -> tauri::Result<()> {
+    static ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
     let Some(tray) = app.tray_by_id(TRAY_ICON_ID) else {
         return Ok(());
     };
+    let (locale, bots) = {
+        let state = tray_menu_state();
+        (state.locale, state.bots.clone())
+    };
+    let menu = build_tray_menu(app, locale, bots.as_deref())?;
+    tray.set_menu(Some(menu))?;
+    Ok(())
+}
+
+/// The workspace's event that opens an assistant, as a followed
+/// notification does (`listenPersonalAgentFollow`).
+pub const PERSONAL_AGENT_FOLLOW_EVENT: &str = "workspace://follow-personal-agent";
+
+/// The tray's "Settings…": the workspace in front, on the assistants'
+/// settings page with the menu bar's switches.
+#[cfg(feature = "tauri-runtime")]
+pub fn tray_open_settings(app: &AppHandle) {
+    show_main_window(app);
+    if let Err(e) = app.emit_to(
+        "main",
+        "workspace://open-personal-agent",
+        serde_json::json!({ "page": "proactive" }),
+    ) {
+        tracing::warn!("[Tray] settings not opened: {e}");
+    }
+}
+
+/// One of the tray's latest assistants: the workspace in front, on its
+/// conversation.
+#[cfg(feature = "tauri-runtime")]
+pub fn tray_open_bot(app: &AppHandle, bot: i32) {
+    show_main_window(app);
+    if let Err(e) = app.emit_to(
+        "main",
+        PERSONAL_AGENT_FOLLOW_EVENT,
+        serde_json::json!({ "kind": "bot", "bot_id": bot, "row_id": null }),
+    ) {
+        tracing::warn!("[Tray] assistant not opened: {e}");
+    }
+}
+
+/// An assistant in the tray's menu (10.10).
+#[cfg(feature = "tauri-runtime")]
+#[derive(Debug, Clone)]
+pub struct TrayBotRow {
+    pub id: i32,
+    /// As the owner named it; empty: the default name.
+    pub name: String,
+    pub primary: bool,
+    pub unread: bool,
+    /// Its face, open-eyed.
+    pub icon: Option<crate::personal_agent::menubar::Rgba>,
+}
+
+/// What the tray's menu is built from: the locale, and the latest
+/// assistants (`None`: the menu bar's switch is off — the menu as it was).
+#[cfg(feature = "tauri-runtime")]
+struct TrayMenuState {
+    locale: crate::models::system::AppLocale,
+    bots: Option<Vec<TrayBotRow>>,
+}
+
+#[cfg(feature = "tauri-runtime")]
+static TRAY_MENU: std::sync::Mutex<TrayMenuState> = std::sync::Mutex::new(TrayMenuState {
+    locale: crate::models::system::AppLocale::En,
+    bots: None,
+});
+
+#[cfg(feature = "tauri-runtime")]
+fn tray_menu_state() -> std::sync::MutexGuard<'static, TrayMenuState> {
+    TRAY_MENU.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The name a row of the menu shows: the owner's, else the default one.
+#[cfg(feature = "tauri-runtime")]
+fn tray_bot_label(row: &TrayBotRow, locale: crate::models::system::AppLocale) -> String {
+    let name = if !row.name.is_empty() {
+        row.name.clone()
+    } else if row.primary {
+        crate::personal_agent::reach::primary_name(locale).to_string()
+    } else {
+        format!("#{}", row.id)
+    };
+    if row.unread {
+        format!("● {name}")
+    } else {
+        name
+    }
+}
+
+/// The tray's menu: with the latest assistants, then "Show Workspace",
+/// "Settings…" and "Quit" (10.10); without them, the two items it always
+/// had.
+#[cfg(feature = "tauri-runtime")]
+fn build_tray_menu(
+    app: &AppHandle,
+    locale: crate::models::system::AppLocale,
+    bots: Option<&[TrayBotRow]>,
+) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    use tauri::menu::{IconMenuItem, MenuBuilder, MenuItem, PredefinedMenuItem};
 
     let labels = tray_labels_for(locale);
     let show_item = MenuItem::with_id(
@@ -2780,14 +2945,138 @@ pub fn refresh_tray_menu(
         true,
         None::<&str>,
     )?;
-    let separator = PredefinedMenuItem::separator(app)?;
     let quit_item = MenuItem::with_id(app, TRAY_MENU_ID_QUIT, labels.quit, true, None::<&str>)?;
-    let menu = MenuBuilder::new(app)
-        .items(&[&show_item, &separator, &quit_item])
-        .build()?;
+    let Some(bots) = bots else {
+        let separator = PredefinedMenuItem::separator(app)?;
+        return MenuBuilder::new(app)
+            .items(&[&show_item, &separator, &quit_item])
+            .build();
+    };
+    let mut builder = MenuBuilder::new(app);
+    if !bots.is_empty() {
+        let heading =
+            MenuItem::with_id(app, TRAY_MENU_ID_RECENT, labels.recent, false, None::<&str>)?;
+        builder = builder.item(&heading);
+        for row in bots {
+            let icon = row
+                .icon
+                .as_ref()
+                .map(|f| tauri::image::Image::new_owned(f.data.clone(), f.width, f.height));
+            let item = IconMenuItem::with_id(
+                app,
+                format!("{TRAY_MENU_ID_BOT_PREFIX}{}", row.id),
+                tray_bot_label(row, locale),
+                true,
+                icon,
+                None::<&str>,
+            )?;
+            builder = builder.item(&item);
+        }
+        builder = builder.separator();
+    }
+    let settings_item = MenuItem::with_id(
+        app,
+        TRAY_MENU_ID_SETTINGS,
+        labels.settings,
+        true,
+        None::<&str>,
+    )?;
+    builder
+        .item(&show_item)
+        .item(&settings_item)
+        .separator()
+        .item(&quit_item)
+        .build()
+}
 
-    tray.set_menu(Some(menu))?;
-    Ok(())
+/// The latest assistants in the tray's menu (`None`: the menu as it was).
+#[cfg(feature = "tauri-runtime")]
+pub fn set_tray_bots(app: &AppHandle, bots: Option<Vec<TrayBotRow>>) {
+    tray_menu_state().bots = bots;
+    if let Err(e) = apply_tray_menu(app) {
+        tracing::warn!("[Tray] menu not set: {e}");
+    }
+}
+
+/// The tray's icon: an assistant's face (`None`: codeg's own, as it was).
+#[cfg(feature = "tauri-runtime")]
+pub fn set_tray_face(app: &AppHandle, frame: Option<&crate::personal_agent::menubar::Rgba>) {
+    let Some(tray) = app.tray_by_id(TRAY_ICON_ID) else {
+        return;
+    };
+    let done = match frame {
+        // In colour: on macOS no longer a template the bar tints.
+        Some(f) => tray.set_icon_with_as_template(
+            Some(tauri::image::Image::new_owned(
+                f.data.clone(),
+                f.width,
+                f.height,
+            )),
+            false,
+        ),
+        None => {
+            #[cfg(target_os = "macos")]
+            {
+                match load_macos_tray_template_icon() {
+                    Ok(icon) => tray.set_icon_with_as_template(Some(icon), true),
+                    Err(e) => {
+                        tracing::warn!("[Tray] template icon: {e}");
+                        Ok(())
+                    }
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                match app.default_window_icon() {
+                    Some(icon) => tray.set_icon(Some(icon.clone())),
+                    None => Ok(()),
+                }
+            }
+        }
+    };
+    if let Err(e) = done {
+        tracing::warn!("[Tray] icon not set: {e}");
+    }
+}
+
+/// The number beside the tray's icon: the assistants with unread (0: none).
+/// Windows shows no text there: the tooltip says it; Linux shows it where
+/// the panel shows a label at all (no tooltips there).
+#[cfg(feature = "tauri-runtime")]
+pub fn set_tray_count(app: &AppHandle, count: u32) {
+    let Some(tray) = app.tray_by_id(TRAY_ICON_ID) else {
+        return;
+    };
+    let title = (count > 0).then(|| count.to_string());
+    if let Err(e) = tray.set_title(title.as_deref()) {
+        tracing::warn!("[Tray] title not set: {e}");
+    }
+    let tooltip = match count {
+        0 => "Codeg".to_string(),
+        n => format!("Codeg ({n})"),
+    };
+    if let Err(e) = tray.set_tooltip(Some(tooltip)) {
+        tracing::warn!("[Tray] tooltip not set: {e}");
+    }
+}
+
+/// The dock's badge (0: none). On Windows the taskbar button's overlay
+/// icon stands in for it.
+#[cfg(feature = "tauri-runtime")]
+pub fn set_dock_badge(app: &AppHandle, count: u32) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    #[cfg(target_os = "windows")]
+    let done = window.set_overlay_icon((count > 0).then(|| {
+        let icon = crate::personal_agent::menubar::badge_icon(count);
+        tauri::image::Image::new_owned(icon.data, icon.width, icon.height)
+    }));
+    #[cfg(not(target_os = "windows"))]
+    let done = window.set_badge_count((count > 0).then_some(i64::from(count)));
+    if let Err(e) = done {
+        tracing::warn!("[Tray] badge not set: {e}");
+    }
 }
 
 /// Push the current effective UI locale to the system tray. Called by

@@ -1,4 +1,3 @@
-use chrono::Utc;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 
 use super::i18n::{self, Lang};
@@ -47,17 +46,10 @@ pub async fn handle_search(db: &DatabaseConnection, keyword: &str, lang: Lang) -
 }
 
 pub async fn handle_today(db: &DatabaseConnection, lang: Lang) -> RichMessage {
-    let now = Utc::now();
-    let today_start = now.date_naive().and_hms_opt(0, 0, 0).unwrap().and_utc();
-
-    let rows = match conversation::Entity::find()
-        .filter(conversation::Column::DeletedAt.is_null())
-        .filter(conversation::Column::CreatedAt.gte(today_start))
-        .order_by_desc(conversation::Column::CreatedAt)
-        .all(db)
-        .await
-    {
-        Ok(rows) => rows,
+    // The local day (18 #1), as the daily report counts it.
+    let day = crate::db::service::day_activity_service::local_today();
+    let activity = match crate::db::service::day_activity_service::day_activity(db, day, 5).await {
+        Ok(a) => a,
         Err(e) => {
             return RichMessage {
                 title: Some(i18n::query_failed_title(lang).to_string()),
@@ -68,39 +60,27 @@ pub async fn handle_today(db: &DatabaseConnection, lang: Lang) -> RichMessage {
         }
     };
 
-    if rows.is_empty() {
+    if activity.total == 0 {
         return RichMessage::info(i18n::no_activity_today(lang))
             .with_title(i18n::today_activity_title(lang));
     }
 
-    // Group by agent_type
-    let mut by_agent: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
-    let mut titles: Vec<String> = Vec::new();
-    for conv in &rows {
-        *by_agent.entry(conv.agent_type.clone()).or_insert(0) += 1;
-        if let Some(t) = &conv.title {
-            if titles.len() < 5 {
-                titles.push(t.clone());
-            }
-        }
-    }
-
-    let mut body = i18n::total_sessions(lang, rows.len() as u32);
+    let mut body = i18n::total_sessions(lang, activity.total);
     body.push_str(&format!("\n\n{}", i18n::by_agent_label(lang)));
-    for (agent, count) in &by_agent {
+    for (agent, count) in &activity.by_agent {
         body.push_str(&format!("\n  {}", i18n::agent_count(lang, agent, *count)));
     }
 
-    if !titles.is_empty() {
+    if !activity.titles.is_empty() {
         body.push_str(&format!("\n\n{}", i18n::recent_activity_label(lang)));
-        for t in &titles {
+        for t in &activity.titles {
             body.push_str(&format!("\n  • {t}"));
         }
     }
 
     RichMessage::info(body).with_title(i18n::today_activity_date_title(
         lang,
-        &now.format("%Y-%m-%d").to_string(),
+        &activity.date.format("%Y-%m-%d").to_string(),
     ))
 }
 
