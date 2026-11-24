@@ -2286,6 +2286,12 @@
       "sectionFolders": "資料夾",
       "sectionChats": "聊天",
       "sectionRecent": "最近",
+      "timeGroupPriorities": "優先事項（進行中）",
+      "timeGroupToday": "今天",
+      "timeGroupYesterday": "昨天",
+      "timeGroupPrevious7Days": "前 7 天",
+      "timeGroupPrevious30Days": "過去 30 天",
+      "timeGroupOlder": "更早",
       "noChats": "沒有聊天",
       "noRecent": "暫無最近對話",
       "showMoreRecent": "顯示更多（{count}）",
@@ -2321,7 +2327,10 @@
       "noRecentChats": "沒有最近的聊天",
       "noRecentFolders": "沒有最近的資料夾對話",
       "noRecentCli": "沒有最近從命令列啟動的對話",
-      "recentFilterMenuLabel": "最近顯示"
+      "recentFilterMenuLabel": "最近顯示",
+      "timeGroupPrioritiesTooltip": "包含目前正在執行的任務",
+      "recentGroupingModeTime": "切換為時間分組",
+      "recentGroupingModeFlat": "切換為平鋪列表"
     },
     "conversation": {
       "reloadFailed": "會話重新載入失敗：{message}",

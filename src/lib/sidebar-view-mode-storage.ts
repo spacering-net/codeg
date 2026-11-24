@@ -14,6 +14,7 @@ const SECTION_ORDER_KEY = "workspace:sidebar-section-order"
 const SECTION_COLLAPSED_KEY = "workspace:sidebar-section-collapsed"
 const CONVERSATION_EXPANDED_KEY = "workspace:sidebar-conversation-expanded"
 const TAG_FILTER_KEY = "workspace:sidebar-tag-filter"
+export const RECENT_GROUPING_MODE_KEY = "workspace:sidebar-recent-grouping-mode"
 
 export type SidebarSortMode = "created" | "updated"
 
@@ -496,6 +497,31 @@ export function saveTagFilter(filter: TagFilter): void {
       TAG_FILTER_KEY,
       JSON.stringify({ tagIds: filter.tagIds, mode: filter.mode })
     )
+  } catch {
+    /* ignore */
+  }
+}
+
+export type SidebarRecentGroupingMode = "time" | "flat"
+
+/** How the Recent section displays its conversations: grouped by time horizons
+ *  ("time") or in a flat list by updated_at ("flat"). Defaults to "time". */
+export function loadRecentGroupingMode(): SidebarRecentGroupingMode {
+  if (typeof window === "undefined") return "time"
+  try {
+    const raw = localStorage.getItem(RECENT_GROUPING_MODE_KEY)
+    if (raw === "flat") return "flat"
+    if (raw === "time") return "time"
+  } catch {
+    /* ignore */
+  }
+  return "time"
+}
+
+export function saveRecentGroupingMode(mode: SidebarRecentGroupingMode): void {
+  if (typeof window === "undefined") return
+  try {
+    localStorage.setItem(RECENT_GROUPING_MODE_KEY, mode)
   } catch {
     /* ignore */
   }

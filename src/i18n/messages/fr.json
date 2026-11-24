@@ -2286,6 +2286,12 @@
       "sectionFolders": "Dossiers",
       "sectionChats": "Discussion",
       "sectionRecent": "Récents",
+      "timeGroupPriorities": "Priorités (En cours)",
+      "timeGroupToday": "Aujourd'hui",
+      "timeGroupYesterday": "Hier",
+      "timeGroupPrevious7Days": "7 derniers jours",
+      "timeGroupPrevious30Days": "30 derniers jours",
+      "timeGroupOlder": "Plus ancien",
       "noChats": "Aucune discussion",
       "noRecent": "Aucune conversation récente",
       "showMoreRecent": "Afficher plus ({count})",
@@ -2321,7 +2327,10 @@
       "noRecentChats": "Aucune discussion récente",
       "noRecentFolders": "Aucune conversation de dossier récente",
       "noRecentCli": "Aucune conversation récente depuis la ligne de commande",
-      "recentFilterMenuLabel": "Afficher dans Récents"
+      "recentFilterMenuLabel": "Afficher dans Récents",
+      "timeGroupPrioritiesTooltip": "Comprend les sessions actuellement en cours d'exécution",
+      "recentGroupingModeTime": "Passer au regroupement par date",
+      "recentGroupingModeFlat": "Passer à la liste plate"
     },
     "conversation": {
       "reloadFailed": "Échec du rechargement de la conversation : {message}",

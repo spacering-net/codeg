@@ -2286,6 +2286,12 @@
       "sectionFolders": "Folders",
       "sectionChats": "Chat",
       "sectionRecent": "Recent",
+      "timeGroupPriorities": "Priorities (In Progress)",
+      "timeGroupToday": "Today",
+      "timeGroupYesterday": "Yesterday",
+      "timeGroupPrevious7Days": "Previous 7 Days",
+      "timeGroupPrevious30Days": "Previous 30 Days",
+      "timeGroupOlder": "Older",
       "noChats": "No chats",
       "noRecent": "No recent conversations",
       "showMoreRecent": "Show more ({count})",
@@ -2321,7 +2327,10 @@
       "noRecentChats": "No recent chats",
       "noRecentFolders": "No recent folder conversations",
       "noRecentCli": "No recent conversations from the command line",
-      "recentFilterMenuLabel": "Show in Recent"
+      "recentFilterMenuLabel": "Show in Recent",
+      "timeGroupPrioritiesTooltip": "Includes active sessions currently running",
+      "recentGroupingModeTime": "Switch to time grouping",
+      "recentGroupingModeFlat": "Switch to flat list"
     },
     "conversation": {
       "reloadFailed": "Failed to reload conversation: {message}",
