@@ -2888,6 +2888,20 @@ describe("TabProvider tab groups", () => {
   // mode exists to display. A tiled group hands the preview a slot of its own;
   // an untiled group keeps the single preview slot it has always had.
   describe("preview opens in a tiled group", () => {
+    beforeEach(() => {
+      // These opens all belong to the same folder. The shared fixture otherwise
+      // places conversation 3 in folder 2, which owns its canonical tab id.
+      useAppWorkspaceStore.setState({
+        conversations: ["First", "Second", "Third", "Fourth", "Fifth"].map(
+          (title, index) => ({
+            ...defaultConversationsMock[0],
+            id: index + 1,
+            title,
+          })
+        ),
+      })
+    })
+
     /** `[id, isPinned]` for each tab the group holds, in strip order. */
     const paneState = (groupId: string) =>
       store()
