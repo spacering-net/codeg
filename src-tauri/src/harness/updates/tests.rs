@@ -957,8 +957,9 @@ async fn switched_off_nothing_is_read_asked_or_kept() {
     assert_eq!(read, HarnessUpdates::switched_off());
     let checked = checker.check_now(true).await.unwrap();
     assert_eq!(checked, HarnessUpdates::switched_off());
-    let next = checker.turn(base()).await;
-    assert_eq!(next, base() + MAX_SLEEP);
+    let t = base();
+    let next = checker.turn(t).await;
+    assert_eq!(next, t + MAX_SLEEP);
 
     assert!(site.requests().is_empty());
     assert!(!sandbox.paths.cache.exists());
