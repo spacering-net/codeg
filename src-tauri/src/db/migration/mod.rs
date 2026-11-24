@@ -62,9 +62,9 @@ mod m20261116_000001_srn_web;
 mod m20261119_000001_session_message;
 mod m20261123_000001_conversation_selector_state;
 mod m20261124_000006_conversation_collaborator;
-mod m20261124_000003_session_delivery;
-mod m20261124_000004_conversation_context;
-mod m20261124_000005_session_digest;
+mod m20261124_000007_session_delivery;
+mod m20261124_000008_conversation_context;
+mod m20261124_000009_session_digest;
 
 pub struct Migrator;
 
@@ -134,9 +134,9 @@ impl MigratorTrait for Migrator {
             Box::new(m20261119_000001_session_message::Migration),
             Box::new(m20261123_000001_conversation_selector_state::Migration),
             Box::new(m20261124_000006_conversation_collaborator::Migration),
-            Box::new(m20261124_000003_session_delivery::Migration),
-            Box::new(m20261124_000004_conversation_context::Migration),
-            Box::new(m20261124_000005_session_digest::Migration),
+            Box::new(m20261124_000007_session_delivery::Migration),
+            Box::new(m20261124_000008_conversation_context::Migration),
+            Box::new(m20261124_000009_session_digest::Migration),
         ]
     }
 }
