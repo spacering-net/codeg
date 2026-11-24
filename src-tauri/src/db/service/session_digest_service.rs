@@ -367,7 +367,7 @@ mod tests {
         let mut next = input();
         next.suggestions[0].id = "changed".into();
         let saved = update(&db.conn, id, next).await.unwrap();
-        assert!(saved.suggestions.is_empty());
+        assert!(saved.content.suggestions.is_empty());
         assert_eq!(saved.dismissed_suggestions, vec!["Try tests"]);
     }
     #[tokio::test]
