@@ -108,6 +108,10 @@ function QueueItem({
       {canSteer && (
         <button
           type="button"
+          // The head row's button is also the empty-composer Enter's target:
+          // the panel clicks this node instead of calling the steer handler
+          // itself, so one knock and one real click behave identically.
+          data-queue-steer=""
           onClick={() => void onSteerStart(item.id)}
           disabled={steering}
           className="shrink-0 rounded-sm p-0.5 hover:bg-muted-foreground/15 text-muted-foreground disabled:opacity-50"
