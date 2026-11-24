@@ -6093,6 +6093,7 @@ mod tests {
 
     const PERSONAL_AGENT_ONLY: CompanionFeatures = CompanionFeatures {
         delegation: false,
+        mention_only: false,
         feedback: false,
         ask: false,
         sessions: false,
