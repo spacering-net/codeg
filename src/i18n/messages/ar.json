@@ -2340,6 +2340,12 @@
       "sectionFolders": "المجلدات",
       "sectionChats": "محادثة",
       "sectionRecent": "الأحدث",
+      "timeGroupPriorities": "الأولويات (قيد التنفيذ)",
+      "timeGroupToday": "اليوم",
+      "timeGroupYesterday": "أمس",
+      "timeGroupPrevious7Days": "آخر 7 أيام",
+      "timeGroupPrevious30Days": "آخر 30 يومًا",
+      "timeGroupOlder": "أقدم",
       "noChats": "لا توجد محادثات",
       "noRecent": "لا توجد محادثات حديثة",
       "showMoreRecent": "عرض المزيد ({count})",
@@ -2379,7 +2385,10 @@
       "personalAgent": "الوكيل الشخصي",
       "personalAgentUnreadBots": "{count, plural, zero {لا مساعدين لديهم رسائل غير مقروءة} one {مساعد واحد لديه رسائل غير مقروءة} two {مساعدان لديهما رسائل غير مقروءة} few {# مساعدين لديهم رسائل غير مقروءة} many {# مساعدًا لديهم رسائل غير مقروءة} other {# مساعد لديهم رسائل غير مقروءة}}",
       "personalAgentBadge": "أسندها الوكيل الشخصي",
-      "sectionAssistants": "الوكلاء الشخصيون"
+      "sectionAssistants": "الوكلاء الشخصيون",
+      "timeGroupPrioritiesTooltip": "يتضمن الجلسات قيد التشغيل حاليًا",
+      "recentGroupingModeTime": "التبديل إلى التجميع حسب الوقت",
+      "recentGroupingModeFlat": "التبديل إلى قائمة بسيطة"
     },
     "conversation": {
       "reloadFailed": "فشل إعادة تحميل المحادثة: {message}",

@@ -167,6 +167,8 @@ export function pruneEmpty(model: DeepSeekCatalogModel): DeepSeekCatalogModel {
     // Not editable here, but an entry that declares it must keep it: dropping
     // it moves that model to the other system-prompt delivery mode silently.
     "systemPromptUpdate",
+    // The same for how tool-list changes reach the route.
+    "toolUpdate",
   ] as const) {
     if (next[key] === undefined) delete next[key]
   }
@@ -233,45 +235,69 @@ export function rowsForPicks(
   return [...picked, ...rows.filter((row) => !row.id.trim())]
 }
 
-/** The first deepseek-acp release that no longer reads the catalog this
- *  editor writes. */
-const DEEPSEEK_BUILT_IN_CATALOG_SINCE: readonly [number, number, number] = [
-  0, 10, 0,
-]
+type Version = readonly [number, number, number]
 
-/**
- * Whether the deepseek-acp `version` still takes its model list from
- * `llm-deepseek.models` in `$DSH_HOME/settings.yaml`, i.e. whether
- * {@link DeepSeekModelListEditor} has any effect on it.
- *
- * Through 0.9.0 the bridge mounted the harness's file-backed settings
- * provider, so that section overrode the catalog it launches with. 0.10.0
- * (DSH 0.2) drops that provider: the official route takes the catalog built
- * into the bridge, and the bridge's own document
- * (`$DSH_HOME/deepseek-acp/settings.yaml`) holds only `llm-pi-ai` routes. A
- * list saved here is then still written but never read.
- *
- * Only a version that parses as below 0.10.0 counts. Anything else, a missing
- * or unparseable one included, is treated as the pinned release, which is
- * later than that.
- */
-export function deepseekReadsHarnessCatalog(
-  version: string | null | undefined
-): boolean {
+/** The deepseek-acp releases that ignore the catalog this editor writes:
+ *  from 0.10.0 (DSH 0.2) up to, not including, 0.12.0. */
+const DEEPSEEK_CATALOG_IGNORED_SINCE: Version = [0, 10, 0]
+const DEEPSEEK_CATALOG_READ_AGAIN_SINCE: Version = [0, 12, 0]
+
+function parseVersion(version: string | null | undefined): Version | null {
   const match = /^v?(\d+)\.(\d+)\.(\d+)/.exec(version?.trim() ?? "")
-  if (!match) return false
-  const parts = [match[1], match[2], match[3]].map(Number)
+  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null
+}
+
+function below(a: Version, b: Version): boolean {
   for (let i = 0; i < 3; i++) {
-    if (parts[i] !== DEEPSEEK_BUILT_IN_CATALOG_SINCE[i]) {
-      return parts[i] < DEEPSEEK_BUILT_IN_CATALOG_SINCE[i]
-    }
+    if (a[i] !== b[i]) return a[i] < b[i]
   }
   return false
 }
 
 /**
+ * Whether the deepseek-acp `version` takes its model list from an
+ * `llm-deepseek.models` this editor writes, i.e. whether
+ * {@link DeepSeekModelListEditor} has any effect on it.
+ *
+ * Through 0.9.0 the bridge mounted the harness's file-backed settings
+ * provider, so that section in `$DSH_HOME/settings.yaml` overrode the catalog
+ * it launches with. 0.10.0 (DSH 0.2) dropped that provider, and 0.10.0 and
+ * 0.11.0 take the catalog built into the bridge whatever the file says.
+ * 0.12.0 lays the section over that catalog again (upstream issue #13),
+ * taking it from the bridge's own document, `settings.yaml` or
+ * `settings.yaml.imported`, whichever first has one; the backend edits that
+ * one.
+ *
+ * A missing or unparseable version is treated as the pinned release, which
+ * reads it.
+ */
+export function deepseekReadsHarnessCatalog(
+  version: string | null | undefined
+): boolean {
+  const parsed = parseVersion(version)
+  if (!parsed) return true
+  return (
+    below(parsed, DEEPSEEK_CATALOG_IGNORED_SINCE) ||
+    !below(parsed, DEEPSEEK_CATALOG_READ_AGAIN_SINCE)
+  )
+}
+
+/**
+ * Whether the deepseek-acp `version` reads `llm-pi-ai` provider routes from
+ * the bridge's own document ({@link DeepSeekProviderRoutesEditor}): 0.10.0
+ * on. A missing or unparseable version is treated as the pinned release.
+ */
+export function deepseekReadsProviderRoutes(
+  version: string | null | undefined
+): boolean {
+  const parsed = parseVersion(version)
+  return !parsed || !below(parsed, DEEPSEEK_CATALOG_IGNORED_SINCE)
+}
+
+/**
  * Editor for the DeepSeek Harness **deployment** model catalog:
- * `llm-deepseek.models` in `$DSH_HOME/settings.yaml`, which the agent's
+ * `llm-deepseek.models` in `$DSH_HOME/settings.yaml` (from 0.12.0, in whichever
+ * of the bridge's documents first has the section), which the agent's
  * `listModels` returns verbatim and the bridge turns into the composer's model
  * dropdown.
  *
@@ -281,14 +307,19 @@ export function deepseekReadsHarnessCatalog(
  * model ids, an internal deployment, or a dated preview build all need an entry
  * here before they can be picked at all.
  *
- * Only deepseek-acp 0.9.0 and earlier read that section; for later releases
- * the settings page offers the provider-route editor instead, because the
- * built-in catalog itself cannot be changed there.
+ * deepseek-acp 0.9.0 and earlier read that section, and 0.12.0 and later read
+ * it again ({@link deepseekReadsHarnessCatalog}); for 0.10.0 and 0.11.0 the
+ * settings page offers only the provider-route editor, because the built-in
+ * catalog itself cannot be changed there.
  */
 export function DeepSeekModelListEditor({
+  version,
   launchModel,
   endpoint,
 }: {
+  /** The deepseek-acp version the page judges by (installed, else pinned):
+   *  the backend picks the document and the built-in list by it. */
+  version?: string | null
   /** `DEEPSEEK_ACP_MODEL` from the agent's env, when it sets one. */
   launchModel?: string
   /** The endpoint and key the agent's env routes to, to import its models. */
@@ -317,19 +348,20 @@ export function DeepSeekModelListEditor({
   // inherited defaults, so the rows on screen would otherwise differ from the
   // document a new session will read.
   const refresh = useCallback(async () => {
-    const next = await loadDeepSeekModelCatalog()
+    const next = await loadDeepSeekModelCatalog(version)
     setCatalog(next)
     setDraft(next.models)
     // The rows are keyed by position, so an expanded index only means anything
     // against the list it was opened on — after a reseed (a restore especially)
     // it would point at a different row, or none.
     setExpanded(null)
-  }, [])
+  }, [version])
 
   useEffect(() => {
-    // `loading` starts true, and this mount-only load is its only producer.
+    // `loading` starts true, and this load (per version: the page keys the
+    // editor by it) is its only producer.
     let alive = true
-    void loadDeepSeekModelCatalog()
+    void loadDeepSeekModelCatalog(version)
       .then((next) => {
         if (!alive) return
         setCatalog(next)
@@ -344,7 +376,7 @@ export function DeepSeekModelListEditor({
     return () => {
       alive = false
     }
-  }, [])
+  }, [version])
 
   const issue = useMemo(() => validateDeepSeekModels(draft), [draft])
   const changed = useMemo(
@@ -374,7 +406,7 @@ export function DeepSeekModelListEditor({
     if (!canSave) return
     setSaving(true)
     try {
-      await updateDeepSeekModelCatalog(draft.map(pruneEmpty))
+      await updateDeepSeekModelCatalog(draft.map(pruneEmpty), version)
       await refresh()
       toast.success(t("toastSaved"))
     } catch (error) {
@@ -392,7 +424,7 @@ export function DeepSeekModelListEditor({
   const handleRestoreDefaults = async () => {
     setSaving(true)
     try {
-      await updateDeepSeekModelCatalog(null)
+      await updateDeepSeekModelCatalog(null, version)
       await refresh()
       toast.success(t("toastRestored"))
     } catch (error) {

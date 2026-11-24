@@ -2340,6 +2340,12 @@
       "sectionFolders": "文件夹",
       "sectionChats": "聊天",
       "sectionRecent": "最近",
+      "timeGroupPriorities": "优先事项（进行中）",
+      "timeGroupToday": "今天",
+      "timeGroupYesterday": "昨天",
+      "timeGroupPrevious7Days": "前 7 天",
+      "timeGroupPrevious30Days": "过去 30 天",
+      "timeGroupOlder": "更早",
       "noChats": "没有聊天",
       "noRecent": "暂无最近会话",
       "showMoreRecent": "显示更多（{count}）",
@@ -2379,7 +2385,10 @@
       "personalAgent": "个人助手",
       "personalAgentUnreadBots": "{count} 个助手有未读消息",
       "personalAgentBadge": "由个人助手派出",
-      "sectionAssistants": "个人助手"
+      "sectionAssistants": "个人助手",
+      "timeGroupPrioritiesTooltip": "包含当前正在执行的任务",
+      "recentGroupingModeTime": "切换为时间分组",
+      "recentGroupingModeFlat": "切换为平铺列表"
     },
     "conversation": {
       "reloadFailed": "会话重新加载失败：{message}",

@@ -1516,6 +1516,83 @@ describe("AcpConnectionsProvider failed-turn line", () => {
     ])
   })
 
+  // Antigravity tells a dead executor as an ordinary reply chunk (fused onto
+  // whatever the model said first, maybe followed by a citation notice); the
+  // backend reads the typed record off its trajectory and marks it
+  // `echoed_in_reply`. The line takes those words' place, as on reload.
+  it("takes the place of the account the reply already streamed", async () => {
+    const handlers = await promptingOwner()
+    const account = "Your current account is not eligible."
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "content_delta",
+      text: `Let me look first.${account}`,
+    })
+    emitAcpEvent(handlers, {
+      seq: 3,
+      connection_id: "spawned-conn",
+      type: "content_delta",
+      text: "\n\nSources: x",
+    })
+    emitAcpEvent(handlers, {
+      seq: 4,
+      connection_id: "spawned-conn",
+      type: "session_failure",
+      record: { ...failureRecord(1, "error", account), echoed_in_reply: true },
+    })
+    expect(h.store!.getConnection(TAB)!.liveMessage!.content).toEqual([
+      { type: "text", text: "Let me look first.\n\nSources: x" },
+      { type: "turn_error", message: account, fromAgent: true },
+    ])
+  })
+
+  it("leaves no reply behind when the account was all the turn said", async () => {
+    const handlers = await promptingOwner()
+    const account = "Usage Limit Reached\n\nYou have reached your quota."
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "content_delta",
+      text: account,
+    })
+    emitAcpEvent(handlers, {
+      seq: 3,
+      connection_id: "spawned-conn",
+      type: "session_failure",
+      record: { ...failureRecord(1, "error", account), echoed_in_reply: true },
+    })
+    expect(h.store!.getConnection(TAB)!.liveMessage!.content).toEqual([
+      { type: "turn_error", message: account, fromAgent: true },
+    ])
+  })
+
+  // An AIR adapter's own record carries no such mark: prose that happens to
+  // say the same words is the model's, and stays.
+  it("keeps reply text an unmarked record merely repeats", async () => {
+    const handlers = await promptingOwner()
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "content_delta",
+      text: "Set the banner to: The connection was lost.",
+    })
+    emitAcpEvent(handlers, {
+      seq: 3,
+      connection_id: "spawned-conn",
+      type: "session_failure",
+      record: failureRecord(1, "error", "The connection was lost."),
+    })
+    expect(h.store!.getConnection(TAB)!.liveMessage!.content).toEqual([
+      { type: "text", text: "Set the banner to: The connection was lost." },
+      {
+        type: "turn_error",
+        message: "The connection was lost.",
+        fromAgent: true,
+      },
+    ])
+  })
+
   it("keeps the agent's own words over codeg's verdict, whichever comes first", async () => {
     const handlers = await promptingOwner()
     emitAcpEvent(handlers, {

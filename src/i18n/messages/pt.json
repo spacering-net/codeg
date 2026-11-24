@@ -2340,6 +2340,12 @@
       "sectionFolders": "Pastas",
       "sectionChats": "Chat",
       "sectionRecent": "Recentes",
+      "timeGroupPriorities": "Prioridades (Em andamento)",
+      "timeGroupToday": "Hoje",
+      "timeGroupYesterday": "Ontem",
+      "timeGroupPrevious7Days": "Últimos 7 dias",
+      "timeGroupPrevious30Days": "Últimos 30 dias",
+      "timeGroupOlder": "Mais antigos",
       "noChats": "Sem chats",
       "noRecent": "Sem conversas recentes",
       "showMoreRecent": "Mostrar mais ({count})",
@@ -2379,7 +2385,10 @@
       "personalAgent": "Agente pessoal",
       "personalAgentUnreadBots": "{count, plural, one {# assistente tem mensagens não lidas} other {# assistentes têm mensagens não lidas}}",
       "personalAgentBadge": "Atribuída pelo agente pessoal",
-      "sectionAssistants": "Agentes pessoais"
+      "sectionAssistants": "Agentes pessoais",
+      "timeGroupPrioritiesTooltip": "Inclui sessões atualmente em execução",
+      "recentGroupingModeTime": "Mudar para agrupamento por data",
+      "recentGroupingModeFlat": "Mudar para lista simples"
     },
     "conversation": {
       "reloadFailed": "Falha ao recarregar conversa: {message}",

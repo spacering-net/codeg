@@ -31,6 +31,7 @@ import {
   useAppWorkspaceStore,
 } from "@/stores/app-workspace-store"
 import enMessages from "@/i18n/messages/en.json"
+import { RECENT_GROUPING_MODE_KEY } from "@/lib/sidebar-view-mode-storage"
 import {
   resetFolderTabsStore,
   useFolderTabsStore,
@@ -2400,5 +2401,82 @@ describe("SidebarConversationList — folder header and folder-tabs mode", () =>
       before === "true" ? "false" : "true"
     )
     expect(useFolderTabsStore.getState().scope).toBe(1)
+  })
+})
+
+describe("SidebarConversationList — Recent time grouping", () => {
+  const groups = () =>
+    Array.from(document.querySelectorAll("[data-recent-time-group]")).map(
+      (el) => el.getAttribute("data-recent-time-group")
+    )
+  const recent = () => (
+    <NextIntlClientProvider locale="en" messages={enMessages}>
+      <SidebarConversationList showCompleted showRecent />
+    </NextIntlClientProvider>
+  )
+
+  beforeEach(() => {
+    localStorage.clear()
+    const folders = [folder(1, "Folder 1")]
+    useAppWorkspaceStore.setState({ folders, allFolders: folders })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    localStorage.clear()
+  })
+
+  it("groups by time by default and the header toggle flattens it", () => {
+    const now = new Date(2026, 10, 21, 12).getTime()
+    vi.useFakeTimers({ now })
+    useAppWorkspaceStore.setState({
+      conversations: [
+        conv(101, 1, {
+          status: "in_progress",
+          updated_at: new Date(now - MINUTE).toISOString(),
+        }),
+        conv(102, 1, {
+          status: "completed",
+          updated_at: new Date(2026, 10, 20, 12).toISOString(),
+        }),
+      ],
+    })
+    render(recent())
+    expect(groups()).toEqual(["priorities", "yesterday"])
+
+    fireEvent.click(
+      document.querySelector(
+        `[aria-label="${enMessages.Folder.sidebar.recentGroupingModeFlat}"]`
+      )!
+    )
+    expect(groups()).toEqual([])
+    expect(localStorage.getItem(RECENT_GROUPING_MODE_KEY)).toBe("flat")
+    expect(document.querySelector('[data-conversation-id="101"]')).toBeTruthy()
+    expect(document.querySelector('[data-conversation-id="102"]')).toBeTruthy()
+  })
+
+  it("restores a saved flat mode", () => {
+    localStorage.setItem(RECENT_GROUPING_MODE_KEY, "flat")
+    useAppWorkspaceStore.setState({ conversations: [conv(101, 1)] })
+    render(recent())
+    expect(groups()).toEqual([])
+  })
+
+  it("moves Today to Yesterday at local midnight with no data change", () => {
+    vi.useFakeTimers({ now: new Date(2026, 10, 21, 23, 59, 30).getTime() })
+    useAppWorkspaceStore.setState({
+      conversations: [
+        conv(101, 1, {
+          status: "completed",
+          updated_at: new Date(2026, 10, 21, 23).toISOString(),
+        }),
+      ],
+    })
+    render(recent())
+    expect(groups()).toEqual(["today"])
+    act(() => {
+      vi.advanceTimersByTime(60_000)
+    })
+    expect(groups()).toEqual(["yesterday"])
   })
 })

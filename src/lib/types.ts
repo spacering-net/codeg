@@ -6044,6 +6044,10 @@ export interface LiveMessage {
   role: MessageRole
   content: LiveContentBlock[]
   started_at: string
+  /** The turn failed, in the agent's words (a terminal `SessionFailure`
+   *  applied while it ran): the reducer's closing `turn_error` block, for a
+   *  client hydrating before `TurnComplete`. */
+  turn_error?: string | null
 }
 
 export interface PendingPermissionState {
@@ -6199,6 +6203,11 @@ export interface SessionFailureRecord {
    *  silenced, not fixed — saying otherwise would be a lie whenever the
    *  connection is still down. */
   dismissed?: boolean
+  /** codeg's own, never an adapter's: this terminal record's `title` also
+   *  streamed as one whole reply chunk of the turn it ended (Antigravity tells
+   *  a dead executor that way), so the failure line takes those words' place
+   *  (`dropEchoedFailureText`). */
+  echoed_in_reply?: boolean
 }
 
 /**
@@ -8705,6 +8714,11 @@ export interface DeepSeekCatalogModel {
    *  untouched. Dropping it does not fail: it silently moves that model to the
    *  other delivery mode, which is why it must survive a round trip. */
   systemPromptUpdate?: "in-history"
+  /** How a mid-session change to the tool list reaches this route (DSH 0.2,
+   *  deepseek-acp 0.12.0 on). Carried through untouched like
+   *  `systemPromptUpdate`; the agent's own default model declares
+   *  `"addition-only"`, which keeps the cached prompt prefix. */
+  toolUpdate?: "in-history" | "addition-only"
 }
 
 /** What the settings panel reads about the stored catalog. */

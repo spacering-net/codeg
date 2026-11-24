@@ -155,6 +155,14 @@ pub struct SessionFailureRecord {
     /// Emitted `false` from the parser; flipped by the two stores.
     #[serde(default)]
     pub resolved: bool,
+    /// codeg's own (never on an adapter's wire): this terminal record's
+    /// `title` also streamed as one whole reply chunk of the turn it ended —
+    /// Antigravity tells a dead executor that way (see
+    /// `connection::antigravity_turn_failure`). Those words are no reply, so
+    /// the failure line takes their place in the live message, here
+    /// (`SessionState::apply_event`) and in the frontend reducer alike.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub echoed_in_reply: bool,
 }
 
 /// Cumulative cost of one async task, as the adapter last reported it

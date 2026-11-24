@@ -12538,6 +12538,7 @@ mod tests {
                 details: None,
                 actions: Vec::new(),
                 resolved,
+                echoed_in_reply: false,
             },
         }
     }

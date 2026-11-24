@@ -2340,6 +2340,12 @@
       "sectionFolders": "Ordner",
       "sectionChats": "Chat",
       "sectionRecent": "Zuletzt",
+      "timeGroupPriorities": "Prioritäten (In Bearbeitung)",
+      "timeGroupToday": "Heute",
+      "timeGroupYesterday": "Gestern",
+      "timeGroupPrevious7Days": "Letzte 7 Tage",
+      "timeGroupPrevious30Days": "Letzte 30 Tage",
+      "timeGroupOlder": "Älter",
       "noChats": "Keine Chats",
       "noRecent": "Keine kürzlichen Konversationen",
       "showMoreRecent": "Mehr anzeigen ({count})",
@@ -2379,7 +2385,10 @@
       "personalAgent": "Persönlicher Agent",
       "personalAgentUnreadBots": "{count, plural, one {# Assistent hat ungelesene Nachrichten} other {# Assistenten haben ungelesene Nachrichten}}",
       "personalAgentBadge": "Vom persönlichen Agenten zugewiesen",
-      "sectionAssistants": "Persönliche Agenten"
+      "sectionAssistants": "Persönliche Agenten",
+      "timeGroupPrioritiesTooltip": "Enthält aktuell laufende Sitzungen",
+      "recentGroupingModeTime": "Zu Zeitgruppierung wechseln",
+      "recentGroupingModeFlat": "Zu flacher Liste wechseln"
     },
     "conversation": {
       "reloadFailed": "Konversation konnte nicht neu geladen werden: {message}",

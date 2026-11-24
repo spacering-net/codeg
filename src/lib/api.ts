@@ -1019,8 +1019,12 @@ export async function listPiModelCapabilities(): Promise<PiModelCatalog> {
  * "inheriting the agent's built-in list", not an error; an unreadable one
  * arrives as `error` so the panel can refuse to edit it.
  */
-export async function loadDeepSeekModelCatalog(): Promise<DeepSeekModelCatalog> {
-  return getTransport().call("acp_load_deepseek_model_catalog", {})
+export async function loadDeepSeekModelCatalog(
+  version?: string | null
+): Promise<DeepSeekModelCatalog> {
+  return getTransport().call("acp_load_deepseek_model_catalog", {
+    version: version ?? null,
+  })
 }
 
 /**
@@ -1033,9 +1037,13 @@ export async function loadDeepSeekModelCatalog(): Promise<DeepSeekModelCatalog> 
  * after it, not the ones already running.
  */
 export async function updateDeepSeekModelCatalog(
-  models: DeepSeekCatalogModel[] | null
+  models: DeepSeekCatalogModel[] | null,
+  version?: string | null
 ): Promise<void> {
-  return getTransport().call("acp_update_deepseek_model_catalog", { models })
+  return getTransport().call("acp_update_deepseek_model_catalog", {
+    models,
+    version: version ?? null,
+  })
 }
 
 /**

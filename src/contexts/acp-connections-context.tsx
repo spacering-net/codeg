@@ -904,6 +904,9 @@ type Action =
       message: string
       /** The agent's own words, as opposed to codeg's verdict. */
       fromAgent: boolean
+      /** `message` also streamed as reply text, which the line replaces
+       *  (`SessionFailureRecord.echoed_in_reply`). */
+      echoedInReply?: boolean
     }
   | {
       type: "CLAUDE_API_RETRY"
@@ -1746,6 +1749,42 @@ function ensureLiveMessage(prev: LiveMessage | null): LiveMessage {
     content: [],
     startedAt: Date.now(),
   }
+}
+
+/**
+ * `content` without the failure account `message` a reply chunk told (see
+ * `SessionFailureRecord.echoed_in_reply`): its LAST occurrence in the last
+ * main-thread text block is cut out — anything the agent appended after it
+ * (Antigravity's citation notice) stays — and the block goes once nothing is
+ * left. Returned as is (same reference) when there is no such occurrence.
+ *
+ * The backend's `drop_echoed_failure_text` (`acp/session_state.rs`) is the
+ * same rule, so a snapshot and a watching client agree; keep them in step.
+ */
+export function dropEchoedFailureText(
+  content: LiveContentBlock[],
+  message: string
+): LiveContentBlock[] {
+  const account = message.trim()
+  if (!account) return content
+  let index = -1
+  for (let i = content.length - 1; i >= 0; i--) {
+    const block = content[i]
+    if (block.type === "text" && block.parentToolUseId === undefined) {
+      index = i
+      break
+    }
+  }
+  if (index < 0) return content
+  const block = content[index] as Extract<LiveContentBlock, { type: "text" }>
+  const at = block.text.lastIndexOf(account)
+  if (at < 0) return content
+  const before = block.text.slice(0, at).trimEnd()
+  const after = block.text.slice(at + account.length).trimStart()
+  const rest = before && after ? `${before}\n\n${after}` : before || after
+  return rest
+    ? content.map((b, i) => (i === index ? { ...block, text: rest } : b))
+    : content.filter((_, i) => i !== index)
 }
 
 /** Shared empty `steeredMessageIds`, so a turn that steers nothing (almost all
@@ -3290,13 +3329,19 @@ function connectionsReducer(
           return state
         }
       }
+      // The account already streamed as reply text (Antigravity tells a dead
+      // executor as an ordinary reply chunk, and only its trajectory says it
+      // ended the turn): the line takes those words' place, as on reload.
+      const content = action.echoedInReply
+        ? dropEchoedFailureText(prev.content, message)
+        : prev.content
       const next = new Map(state)
       next.set(action.contextKey, {
         ...conn,
         liveMessage: {
           ...prev,
           content: [
-            ...prev.content.filter((block) => block.type !== "turn_error"),
+            ...content.filter((block) => block.type !== "turn_error"),
             {
               type: "turn_error" as const,
               message,
@@ -6093,6 +6138,8 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
                 own ||
                 tFailure(sessionFailureCategoryLabelKey(e.record.category)),
               fromAgent: own.length > 0,
+              echoedInReply:
+                own.length > 0 && e.record.echoed_in_reply === true,
             })
           }
           if (quiet || !failureConn) break

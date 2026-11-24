@@ -2340,6 +2340,12 @@
       "sectionFolders": "폴더",
       "sectionChats": "채팅",
       "sectionRecent": "최근",
+      "timeGroupPriorities": "우선순위 (진행 중)",
+      "timeGroupToday": "오늘",
+      "timeGroupYesterday": "어제",
+      "timeGroupPrevious7Days": "지난 7일",
+      "timeGroupPrevious30Days": "지난 30일",
+      "timeGroupOlder": "이전",
       "noChats": "채팅 없음",
       "noRecent": "최근 대화 없음",
       "showMoreRecent": "더 보기 ({count})",
@@ -2379,7 +2385,10 @@
       "personalAgent": "개인 에이전트",
       "personalAgentUnreadBots": "읽지 않은 메시지가 있는 어시스턴트 {count}명",
       "personalAgentBadge": "개인 에이전트가 배정함",
-      "sectionAssistants": "개인 에이전트"
+      "sectionAssistants": "개인 에이전트",
+      "timeGroupPrioritiesTooltip": "현재 실행 중인 세션이 포함됩니다",
+      "recentGroupingModeTime": "시간별 그룹으로 전환",
+      "recentGroupingModeFlat": "일반 목록으로 전환"
     },
     "conversation": {
       "reloadFailed": "대화 다시 불러오기 실패: {message}",

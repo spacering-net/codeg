@@ -2340,6 +2340,12 @@
       "sectionFolders": "Folders",
       "sectionChats": "Chat",
       "sectionRecent": "Recent",
+      "timeGroupPriorities": "Priorities (In Progress)",
+      "timeGroupToday": "Today",
+      "timeGroupYesterday": "Yesterday",
+      "timeGroupPrevious7Days": "Previous 7 Days",
+      "timeGroupPrevious30Days": "Previous 30 Days",
+      "timeGroupOlder": "Older",
       "noChats": "No chats",
       "noRecent": "No recent conversations",
       "showMoreRecent": "Show more ({count})",
@@ -2379,7 +2385,10 @@
       "personalAgent": "Personal agent",
       "personalAgentUnreadBots": "{count, plural, one {# assistant has unread messages} other {# assistants have unread messages}}",
       "personalAgentBadge": "Dispatched by the personal agent",
-      "sectionAssistants": "Personal assistants"
+      "sectionAssistants": "Personal assistants",
+      "timeGroupPrioritiesTooltip": "Includes active sessions currently running",
+      "recentGroupingModeTime": "Switch to time grouping",
+      "recentGroupingModeFlat": "Switch to flat list"
     },
     "conversation": {
       "reloadFailed": "Failed to reload conversation: {message}",
