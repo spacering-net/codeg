@@ -3545,6 +3545,7 @@
         "queueMessage": "Adicionar à fila",
         "steerIntoTurn": "Inserir no turno atual",
         "steerAsNote": "Enviar nota para a próxima verificação",
+        "codexSettingsNextTurn": "O modelo, o esforço de raciocínio e as permissões se aplicam no próximo turno.",
         "steerQueuedInstead": "Adicionado à fila — será enviado no próximo turno.",
         "heldWhileResponding": "Ainda respondendo — sua mensagem continua na caixa de entrada. Envie-a quando a resposta terminar.",
         "steerFailed": "Não foi possível inserir no turno atual",

@@ -540,7 +540,12 @@ export function useConnectionLifecycle({
           // calls before CurrentModeUpdate arrives from the agent.
           modeIdRef.current = modeId
         }
-        await sendPrompt(draft.blocks, opts)
+        await sendPrompt(
+          draft.blocks,
+          draft.turnSettings
+            ? { ...opts, turnSettings: draft.turnSettings }
+            : opts
+        )
       })().catch((e: unknown) => {
         if (e instanceof TurnBusyError) {
           // A turn was already in flight on the connection (another

@@ -12792,18 +12792,19 @@ pub async fn acp_prompt(
     folder_id: Option<i32>,
     conversation_id: Option<i32>,
     client_message_id: Option<String>,
+    turn_settings: Option<crate::acp::types::CodexTurnSettings>,
     db: State<'_, crate::db::AppDatabase>,
     manager: State<'_, ConnectionManager>,
 ) -> Result<(), AcpError> {
     manager
-        .send_prompt_linked_with_message_id(
+        .send_user_prompt(
             &db,
             &connection_id,
             blocks,
             folder_id,
             conversation_id,
-            None,
             client_message_id,
+            turn_settings,
         )
         .await
         .map(|_| ())

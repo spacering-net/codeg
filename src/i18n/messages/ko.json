@@ -3545,6 +3545,7 @@
         "queueMessage": "대기열에 추가",
         "steerIntoTurn": "현재 턴에 삽입",
         "steerAsNote": "다음 확인용 메모 보내기",
+        "codexSettingsNextTurn": "모델, 추론 강도 및 권한 설정은 다음 턴부터 적용됩니다.",
         "steerQueuedInstead": "대신 대기열에 추가되었습니다. 다음 턴에 전송됩니다.",
         "heldWhileResponding": "아직 응답 중입니다. 메시지는 입력창에 남겨 두었으니 응답이 끝난 뒤 보내세요.",
         "steerFailed": "현재 턴에 삽입하지 못했습니다",

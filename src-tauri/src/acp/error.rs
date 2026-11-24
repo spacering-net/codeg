@@ -26,6 +26,10 @@ pub enum AcpError {
     /// to sending the text as an ordinary prompt instead.
     #[error("no active turn to send feedback to")]
     NoActiveTurn,
+    #[error("no active turn with the selected Codex settings")]
+    SteerSettingsChanged,
+    #[error("could not apply Codex turn setting {0}")]
+    TurnSettingRejected(String),
     /// Live feedback was submitted while the feature is disabled. The settings
     /// toggle gates both MCP tool injection and the UI affordance; this is the
     /// backend's defense-in-depth for a direct/stale call.
@@ -155,6 +159,8 @@ impl AcpError {
             Self::AgentAuthRequired(_) => Some("agent_auth_required"),
             Self::AgentRuntimeOutdated(_) => Some("agent_runtime_outdated"),
             Self::ConversationMoved { .. } => Some("conversation_moved"),
+            Self::SteerSettingsChanged => Some("steer_settings_changed"),
+            Self::TurnSettingRejected(_) => Some("turn_setting_rejected"),
             Self::Protocol(_) => None,
         }
     }

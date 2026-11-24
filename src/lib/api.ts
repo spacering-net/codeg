@@ -171,6 +171,7 @@ import type {
   TerminalInfo,
   TerminalSnapshot,
   PromptInputBlock,
+  CodexTurnSettings,
   FileTreeNode,
   WorkspaceFileEntry,
   DirectoryEntry,
@@ -355,7 +356,8 @@ export async function acpPrompt(
   blocks: PromptInputBlock[],
   folderId: number | null = null,
   conversationId: number | null = null,
-  clientMessageId: string | null = null
+  clientMessageId: string | null = null,
+  turnSettings?: CodexTurnSettings
 ): Promise<void> {
   try {
     await getTransport().call("acp_prompt", {
@@ -369,6 +371,7 @@ export async function acpPrompt(
       folderId,
       conversationId,
       clientMessageId,
+      ...(turnSettings ? { turnSettings } : {}),
     })
   } catch (e) {
     if (isTurnInProgressRejection(e)) throw new TurnBusyError()
@@ -5919,11 +5922,13 @@ export async function setFeedbackSettings(
 export async function submitSessionFeedback(
   connectionId: string,
   text: string,
-  blocks?: PromptInputBlock[] | null
+  blocks?: PromptInputBlock[] | null,
+  turnSettings?: CodexTurnSettings
 ): Promise<FeedbackItem> {
   return getTransport().call("submit_session_feedback", {
     connectionId,
     text,
+    ...(turnSettings ? { turnSettings } : {}),
     blocks:
       blocks && blocks.length > 0
         ? stripUploadedImagePayloads(

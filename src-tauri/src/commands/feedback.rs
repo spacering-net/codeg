@@ -145,9 +145,12 @@ pub async fn submit_session_feedback(
     connection_id: String,
     text: String,
     blocks: Option<Vec<crate::acp::types::PromptInputBlock>>,
+    turn_settings: Option<crate::acp::types::CodexTurnSettings>,
     manager: tauri::State<'_, crate::acp::manager::ConnectionManager>,
 ) -> Result<crate::acp::feedback::FeedbackItem, crate::acp::error::AcpError> {
-    manager.submit_feedback(&connection_id, text, blocks).await
+    manager
+        .submit_feedback_with_settings(&connection_id, text, blocks, turn_settings)
+        .await
 }
 
 #[cfg(test)]

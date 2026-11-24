@@ -8,6 +8,7 @@ import type {
   ConnectionStatus,
   PromptCapabilitiesInfo,
   PromptDraft,
+  CodexTurnSettings,
   PromptInputBlock,
   SessionConfigOptionInfo,
   SessionModeInfo,
@@ -77,7 +78,11 @@ interface ChatInputProps {
    *  `MessageInputProps.onSteer` — the optional second parameter makes a
    *  stale one-arg declaration here assignable, so tsc would NOT catch a
    *  wrapper that silently drops the blocks. */
-  onSteer?: (text: string, blocks?: PromptInputBlock[]) => Promise<void>
+  onSteer?: (
+    text: string,
+    blocks?: PromptInputBlock[],
+    turnSettings?: CodexTurnSettings
+  ) => Promise<void>
   /** Which channel `onSteer` rides (`useSessionFeedback().channel`); picks
    *  the composer's honest copy. See `MessageInput`. */
   steerChannel?: "native" | "pull"

@@ -8,6 +8,7 @@ import type {
   PlanApprovalAnswer,
   PromptCapabilitiesInfo,
   PromptDraft,
+  CodexTurnSettings,
   PromptInputBlock,
   QuestionAnswer,
   SessionConfigOptionInfo,
@@ -139,7 +140,11 @@ interface ConversationShellProps {
    *  `MessageInputProps.onSteer` — the optional second parameter makes a
    *  stale one-arg declaration here assignable, so tsc would NOT catch a
    *  wrapper that silently drops the blocks. */
-  onSteer?: (text: string, blocks?: PromptInputBlock[]) => Promise<void>
+  onSteer?: (
+    text: string,
+    blocks?: PromptInputBlock[],
+    turnSettings?: CodexTurnSettings
+  ) => Promise<void>
   /** Which channel `onSteer` rides (picks the composer's honest copy);
    *  threaded straight through. See `MessageInput`. */
   steerChannel?: "native" | "pull"

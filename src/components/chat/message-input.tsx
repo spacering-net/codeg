@@ -32,6 +32,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import {
@@ -62,6 +63,7 @@ import type {
   AvailableCommandInfo,
   PromptCapabilitiesInfo,
   PromptDraft,
+  CodexTurnSettings,
   PromptInputBlock,
   SessionConfigOptionInfo,
   SessionModeInfo,
@@ -254,7 +256,11 @@ interface MessageInputProps {
    *  resolve = recorded (clear the draft); reject = failure, where a turn-end
    *  `NoActiveTurn` race falls back to the queue and anything else keeps the
    *  draft. */
-  onSteer?: (text: string, blocks?: PromptInputBlock[]) => Promise<void>
+  onSteer?: (
+    text: string,
+    blocks?: PromptInputBlock[],
+    turnSettings?: CodexTurnSettings
+  ) => Promise<void>
   /** Which channel {@link onSteer} rides (`useSessionFeedback().channel`).
    *  Picks the honest copy for the mid-turn action: `native` = inserted into
    *  the turn immediately, `pull` = recorded as a note the agent reads on its
@@ -1572,6 +1578,7 @@ export function MessageInput({
     }
   }, [attachmentTabId])
 
+  const steeringRef = useRef(false)
   const buildDraft = useCallback((): PromptDraft | null => {
     const editor = editorRef.current?.getEditor()
     // Authoritative prefix normalization at the send boundary. A skill / expert
@@ -1628,13 +1635,30 @@ export function MessageInput({
     const displayText =
       displayProse ||
       `Attached ${attachments.length} attachment${attachments.length > 1 ? "s" : ""}`
-    return { blocks, displayText }
+    const turnSettings: CodexTurnSettings = {}
+    if (agentType === "codex") {
+      for (const { id, kind } of availableConfigOptions) {
+        if (
+          kind.type === "select" &&
+          (id === "model" || id === "reasoning_effort" || id === "mode")
+        ) {
+          turnSettings[id] = kind.current_value
+        }
+      }
+    }
+    return {
+      blocks,
+      displayText,
+      ...(Object.keys(turnSettings).length > 0 ? { turnSettings } : {}),
+    }
   }, [
     attachments,
     skillPrefix,
     expertInvocation,
     imagePromptBlocks,
     embeddedPayloadsRef,
+    agentType,
+    availableConfigOptions,
   ])
 
   // Clear the editor + attachments after a send / enqueue / save.
@@ -1663,6 +1687,7 @@ export function MessageInput({
   })
 
   const handleSend = useCallback(() => {
+    if (steeringRef.current) return
     // The editor stays editable while `disabled` (the agent is busy) so the user
     // can keep typing, but a plain send is blocked — only enqueue / queue-edit
     // save go through. Mirrors the legacy textarea's keydown guard.
@@ -1742,7 +1767,7 @@ export function MessageInput({
   // hydrate from yet), since the enqueue fallback below bypasses its gate.
   const [steering, setSteering] = useState(false)
   const handleSteerClick = useCallback(async () => {
-    if (!onSteer || steering) return
+    if (!onSteer || steeringRef.current) return
     if (hasUploadingImage) {
       toast.error(tAttach("attachUploadInProgress"))
       return
@@ -1757,7 +1782,9 @@ export function MessageInput({
       if (
         current.draftStorageKey === effectiveDraftStorageKey &&
         editorRef.current?.getEditor() === sentEditor &&
-        JSON.stringify(current.buildDraft()) === JSON.stringify(draft)
+        JSON.stringify(current.buildDraft()?.blocks) ===
+          JSON.stringify(draft.blocks) &&
+        current.buildDraft()?.displayText === draft.displayText
       ) {
         resetComposer()
       }
@@ -1770,9 +1797,14 @@ export function MessageInput({
     }
     const payload = buildSteerPayload(draft)
     if (!payload) return
+    steeringRef.current = true
     setSteering(true)
     try {
-      await onSteer(payload.text, payload.blocks)
+      if (draft.turnSettings) {
+        await onSteer(payload.text, payload.blocks, draft.turnSettings)
+      } else {
+        await onSteer(payload.text, payload.blocks)
+      }
       clearSentDraft()
     } catch (err) {
       if (isNoActiveTurnRejection(err)) {
@@ -1785,11 +1817,11 @@ export function MessageInput({
         )
       }
     } finally {
+      steeringRef.current = false
       setSteering(false)
     }
   }, [
     onSteer,
-    steering,
     hasUploadingImage,
     tAttach,
     buildDraft,
@@ -1993,6 +2025,11 @@ export function MessageInput({
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" side="top">
+              {agentType === "codex" && (
+                <DropdownMenuLabel className="max-w-64 whitespace-normal font-normal text-muted-foreground">
+                  {t("codexSettingsNextTurn")}
+                </DropdownMenuLabel>
+              )}
               <DropdownMenuItem
                 onSelect={() => void handleSteerClick()}
                 disabled={steering}

@@ -141,6 +141,7 @@ import {
   type MessageTurn,
   type PlanApprovalAnswer,
   type PromptDraft,
+  type CodexTurnSettings,
   type PromptInputBlock,
   type QuestionAnswer,
   type UserMessageBlock,
@@ -943,6 +944,7 @@ const ConversationTabView = memo(function ConversationTabView({
   // round-trip is enough, and cannot strand the queue: `handleQueueSteer`
   // always clears this in a `finally`, which re-runs the flush effect.
   const [queueSteerInFlight, setQueueSteerInFlight] = useState(false)
+  const queueSteerRef = useRef(false)
 
   // Flush queued messages whenever the agent is idle. This is the queue's send
   // engine, covering BOTH:
@@ -976,6 +978,7 @@ const ConversationTabView = memo(function ConversationTabView({
     const wait = flushRetryDelayMs(Date.now(), lastFlushBounceAtRef.current)
     const timer = setTimeout(() => {
       if (!connectionReadyRef.current) return
+      if (queueSteerRef.current) return
       const next = autoSendQueueRef.current()
       if (next) {
         // Mark this as the queue auto-flush: it sends the dequeued head now and,
@@ -2348,8 +2351,12 @@ const ConversationTabView = memo(function ConversationTabView({
   // recorded/display form.
   const feedbackSteer = feedback.steer
   const handleSteer = useCallback(
-    async (text: string, blocks?: PromptInputBlock[]) => {
-      await feedbackSteer(text, blocks)
+    async (
+      text: string,
+      blocks?: PromptInputBlock[],
+      turnSettings?: CodexTurnSettings
+    ) => {
+      await feedbackSteer(text, blocks, turnSettings)
     },
     [feedbackSteer]
   )
@@ -2362,6 +2369,7 @@ const ConversationTabView = memo(function ConversationTabView({
   // Failures keep the row available for retry.
   const handleQueueSteer = useCallback(
     async (id: string) => {
+      if (queueSteerRef.current) return
       const item = msgQueue.find((m) => m.id === id)
       if (!item) return
       const payload = buildSteerPayload(item.draft)
@@ -2372,10 +2380,16 @@ const ConversationTabView = memo(function ConversationTabView({
       if (!payload) return
       // Set before the first await so the flush effect above is already held
       // when the turn-end edge lands mid-round-trip.
+      queueSteerRef.current = true
       setQueueSteerInFlight(true)
       try {
         const delivered = await deliverQueuedSteer(
-          () => feedbackSteer(payload.text, payload.blocks),
+          () =>
+            feedbackSteer(
+              payload.text,
+              payload.blocks,
+              item.draft.turnSettings
+            ),
           () => mqMoveToFront(id)
         )
         // Not delivered means the turn ended first, so the row goes out as the
@@ -2392,6 +2406,7 @@ const ConversationTabView = memo(function ConversationTabView({
           description: toErrorMessage(err),
         })
       } finally {
+        queueSteerRef.current = false
         setQueueSteerInFlight(false)
       }
     },

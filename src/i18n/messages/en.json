@@ -3547,6 +3547,7 @@
         "queueMessage": "Queue message",
         "steerIntoTurn": "Insert into current turn",
         "steerAsNote": "Send note for next check",
+        "codexSettingsNextTurn": "Model, reasoning effort and permissions take effect on the next turn.",
         "steerQueuedInstead": "Queued instead — it will be sent with the next turn.",
         "heldWhileResponding": "Still responding — your message stays in the input. Send it once the reply finishes.",
         "steerFailed": "Couldn't insert into the current turn",

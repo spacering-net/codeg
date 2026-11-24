@@ -45,6 +45,7 @@ import { isNoActiveTurnRejection } from "@/lib/turn-busy"
 import type {
   ConnectionStatus,
   FeedbackItem,
+  CodexTurnSettings,
   PromptInputBlock,
 } from "@/lib/types"
 
@@ -131,7 +132,11 @@ export interface UseSessionFeedback {
    *  `NoActiveTurn` rejection on the pull path reroutes it to the queue
    *  whole, so an attachment is never silently dropped); `text` stays the
    *  recorded/display form. */
-  steer: (text: string, blocks?: PromptInputBlock[]) => Promise<FeedbackItem>
+  steer: (
+    text: string,
+    blocks?: PromptInputBlock[],
+    turnSettings?: CodexTurnSettings
+  ) => Promise<FeedbackItem>
 }
 
 export function useSessionFeedback({
@@ -448,13 +453,16 @@ export function useSessionFeedback({
   const steer = useCallback(
     async (
       rawText: string,
-      blocks?: PromptInputBlock[]
+      blocks?: PromptInputBlock[],
+      turnSettings?: CodexTurnSettings
     ): Promise<FeedbackItem> => {
       const text = rawText.trim()
       if (!text || !connectionId) {
         throw new Error("nothing to steer")
       }
-      const item = await submitSessionFeedback(connectionId, text, blocks)
+      const item = await (turnSettings
+        ? submitSessionFeedback(connectionId, text, blocks, turnSettings)
+        : submitSessionFeedback(connectionId, text, blocks))
       // A resolution that landed after a connection switch must not touch the
       // new connection's channel state or note list (reconcileChannel guards
       // itself too; the append needs the same protection).

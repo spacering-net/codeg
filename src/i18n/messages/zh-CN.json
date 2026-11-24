@@ -3547,6 +3547,7 @@
         "queueMessage": "加入队列",
         "steerIntoTurn": "插入当前回合",
         "steerAsNote": "发送留言，供下次检查时读取",
+        "codexSettingsNextTurn": "模型、思考强度和权限设置从下一轮开始生效。",
         "steerQueuedInstead": "已转入队列——将随下一回合发送。",
         "heldWhileResponding": "仍在响应中——消息已留在输入框里，等响应结束后再发送。",
         "steerFailed": "无法插入当前回合",

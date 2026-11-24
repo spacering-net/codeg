@@ -29,8 +29,9 @@ use crate::acp::question::{
 };
 use crate::acp::terminal_runtime::TerminalShellRuntimeConfig;
 use crate::acp::types::{
-    AcpEvent, AgentOptionsSnapshot, ConfigStaleKind, ConnectionInfo, ConnectionStatus,
-    ForkResultInfo, PermissionAnswerOrigin, PromptCapabilitiesInfo, PromptInputBlock,
+    AcpEvent, AgentOptionsSnapshot, CodexTurnSettings, ConfigStaleKind, ConnectionInfo,
+    ConnectionStatus, ForkResultInfo, PermissionAnswerOrigin, PromptCapabilitiesInfo,
+    PromptInputBlock,
 };
 use crate::db::entities::conversation::{self, ConversationKind, ConversationStatus};
 use crate::db::service::conversation_service;
@@ -1324,6 +1325,7 @@ impl ConnectionManager {
         mut blocks: Vec<PromptInputBlock>,
         user_message: Option<(String, Vec<crate::acp::UserMessageBlock>)>,
         internal_suffix: Vec<PromptInputBlock>,
+        turn_settings: Option<CodexTurnSettings>,
     ) -> Result<(), AcpError> {
         // Reject an empty prompt BEFORE touching the concurrency gate. An empty
         // prompt produces no turn — and thus no `TurnComplete` to clear the gate
@@ -1381,11 +1383,22 @@ impl ConnectionManager {
             }
             s.turn_in_flight = true;
         }
+        let (settings, answer) = match turn_settings {
+            Some(settings) => {
+                let (reply, answer) = tokio::sync::oneshot::channel();
+                (Some((settings, reply)), Some(answer))
+            }
+            None => (None, None),
+        };
         permit.send(ConnectionCommand::Prompt {
+            settings,
             blocks,
             user_message,
             internal_suffix,
         });
+        if let Some(answer) = answer {
+            answer.await.map_err(|_| AcpError::ProcessExited)??;
+        }
         Ok(())
     }
 
@@ -1410,7 +1423,7 @@ impl ConnectionManager {
     ) -> Result<(), AcpError> {
         let prompt_lock = self.clone_prompt_lock(conn_id).await?;
         let _guard = prompt_lock.lock_owned().await;
-        self.send_prompt_inner(conn_id, blocks, None, Vec::new())
+        self.send_prompt_inner(conn_id, blocks, None, Vec::new(), None)
             .await
     }
 
@@ -1481,6 +1494,34 @@ impl ConnectionManager {
             delegation,
             client_message_id,
             Vec::new(),
+            None,
+        )
+        .await
+    }
+
+    /// For a user-confirmed send. Callers must obtain the settings from the
+    /// user's selections, never from agent-authored text or tool arguments.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send_user_prompt(
+        &self,
+        db: &AppDatabase,
+        conn_id: &str,
+        blocks: Vec<PromptInputBlock>,
+        folder_id: Option<i32>,
+        conversation_id: Option<i32>,
+        client_message_id: Option<String>,
+        turn_settings: Option<CodexTurnSettings>,
+    ) -> Result<Option<i32>, AcpError> {
+        self.send_prompt_linked_full(
+            db,
+            conn_id,
+            blocks,
+            folder_id,
+            conversation_id,
+            None,
+            client_message_id,
+            Vec::new(),
+            turn_settings,
         )
         .await
     }
@@ -1510,6 +1551,7 @@ impl ConnectionManager {
             delegation,
             None,
             internal_suffix,
+            None,
         )
         .await
     }
@@ -1525,6 +1567,7 @@ impl ConnectionManager {
         delegation: Option<crate::acp::delegation::spawner::DelegationLink>,
         client_message_id: Option<String>,
         internal_suffix: Vec<PromptInputBlock>,
+        turn_settings: Option<CodexTurnSettings>,
     ) -> Result<Option<i32>, AcpError> {
         // Reject an empty prompt up front, BEFORE any side effects: linking /
         // creating the conversation row, flipping it to InProgress, or emitting
@@ -2003,7 +2046,13 @@ impl ConnectionManager {
         // lifecycle subscriber's PendingReview write also never fires and the
         // row would be stuck until a follow-up `send_prompt_linked` re-flipped it.
         match self
-            .send_prompt_inner(conn_id, blocks, user_message, internal_suffix)
+            .send_prompt_inner(
+                conn_id,
+                blocks,
+                user_message,
+                internal_suffix,
+                turn_settings,
+            )
             .await
         {
             Ok(()) => {
@@ -3805,11 +3854,23 @@ impl ConnectionManager {
     /// image attachments) to deliver on the native wire instead of the bare
     /// `text` — `text` then serves as the recorded note. Only the native
     /// channel can carry blocks; see the pull-path gate below.
+    #[cfg(test)]
     pub async fn submit_feedback(
         &self,
         conn_id: &str,
         text: String,
         blocks: Option<Vec<PromptInputBlock>>,
+    ) -> Result<FeedbackItem, AcpError> {
+        self.submit_feedback_with_settings(conn_id, text, blocks, None)
+            .await
+    }
+
+    pub async fn submit_feedback_with_settings(
+        &self,
+        conn_id: &str,
+        text: String,
+        blocks: Option<Vec<PromptInputBlock>>,
+        turn_settings: Option<CodexTurnSettings>,
     ) -> Result<FeedbackItem, AcpError> {
         let trimmed = text.trim();
         if trimmed.is_empty() {
@@ -3850,8 +3911,16 @@ impl ConnectionManager {
         }
 
         if native {
-            return Self::submit_feedback_native(conn_id, state, cmd_tx, emitter, text, blocks)
-                .await;
+            return Self::submit_feedback_native(
+                conn_id,
+                state,
+                cmd_tx,
+                emitter,
+                text,
+                blocks,
+                turn_settings,
+            )
+            .await;
         }
 
         // The pull tool delivers plain text (`PendingFeedback`), so a draft
@@ -3868,11 +3937,9 @@ impl ConnectionManager {
             return Err(AcpError::NoActiveTurn);
         }
 
-        let item = FeedbackItem::new_pending(
-            uuid::Uuid::new_v4().to_string(),
-            text,
-            chrono::Utc::now(),
-        );
+        let mut settings_changed = false;
+        let item =
+            FeedbackItem::new_pending(uuid::Uuid::new_v4().to_string(), text, chrono::Utc::now());
         // Gate on `turn_in_flight` and append in ONE critical section (via the
         // gated emit): a `TurnComplete` (flips the flag) or `UserMessage`
         // (clears `feedback`) can't slip between the gate and the append+seq, so
@@ -3881,11 +3948,20 @@ impl ConnectionManager {
             &state,
             &emitter,
             AcpEvent::FeedbackSubmitted { item: item.clone() },
-            |s| s.turn_in_flight,
+            |s| {
+                settings_changed = turn_settings
+                    .as_ref()
+                    .is_some_and(|settings| !settings.matches(&s.codex_turn_settings));
+                s.turn_in_flight && !settings_changed
+            },
         )
         .await;
         if !applied {
-            return Err(AcpError::NoActiveTurn);
+            return Err(if settings_changed {
+                AcpError::SteerSettingsChanged
+            } else {
+                AcpError::NoActiveTurn
+            });
         }
         Ok(item)
     }
@@ -3926,6 +4002,7 @@ impl ConnectionManager {
         emitter: EventEmitter,
         text: String,
         blocks: Option<Vec<PromptInputBlock>>,
+        turn_settings: Option<CodexTurnSettings>,
     ) -> Result<FeedbackItem, AcpError> {
         // Cheap pre-flight, NOT the authoritative check (that's the loop's
         // idle arm replying `NoActiveTurn`): skip the round-trip when no turn
@@ -4036,13 +4113,15 @@ impl ConnectionManager {
                 cmd_tx
                     .send(ConnectionCommand::Steer {
                         blocks: wire_blocks,
+                        expected_turn: Some(admitted_turns_completed),
+                        settings: turn_settings,
                         reply: reply_tx,
                     })
                     .await
                     .map_err(|_| AcpError::ProcessExited)?;
-                let steer = reply_rx.await.map_err(|_| {
-                    AcpError::protocol("Steer reply channel closed".to_string())
-                })??;
+                let steer = reply_rx
+                    .await
+                    .map_err(|_| AcpError::protocol("Steer reply channel closed".to_string()))??;
                 match steer {
                     // Honored opt-in: the content was NOT consumed and is
                     // still host-owned. Surface the frontend's existing
@@ -4084,7 +4163,7 @@ impl ConnectionManager {
             // detached task's Result would otherwise drop silently).
             // `NoActiveTurn` is an expected reroute, not a failure.
             if let Err(ref e) = outcome {
-                if !matches!(e, AcpError::NoActiveTurn) {
+                if !matches!(e, AcpError::NoActiveTurn | AcpError::SteerSettingsChanged) {
                     tracing::error!(
                         "[ACP][ERROR] native feedback submit failed (conn={conn_id_for_task}): {e}"
                     );
@@ -7808,6 +7887,7 @@ mod tests {
             .clone();
         for _ in 0..4 {
             tx.send(crate::acp::connection::ConnectionCommand::Prompt {
+                settings: None,
                 blocks: vec![PromptInputBlock::Text {
                     text: "filler".into(),
                 }],
@@ -7826,6 +7906,7 @@ mod tests {
             }],
             None,
             Vec::new(),
+            None,
         );
         let res = tokio::time::timeout(std::time::Duration::from_millis(50), fut).await;
         assert!(
@@ -10673,7 +10754,7 @@ mod tests {
     ) -> tokio::task::JoinHandle<Vec<PromptInputBlock>> {
         tokio::spawn(async move {
             match rx.recv().await {
-                Some(ConnectionCommand::Steer { blocks, reply }) => {
+                Some(ConnectionCommand::Steer { blocks, reply, .. }) => {
                     let _ = reply.send(outcome);
                     blocks
                 }

@@ -3545,6 +3545,7 @@
         "queueMessage": "In Warteschlange stellen",
         "steerIntoTurn": "In laufenden Turn einfügen",
         "steerAsNote": "Notiz für die nächste Prüfung senden",
+        "codexSettingsNextTurn": "Modell, Denkaufwand und Berechtigungen gelten ab dem nächsten Durchlauf.",
         "steerQueuedInstead": "Stattdessen in die Warteschlange gestellt – wird mit dem nächsten Turn gesendet.",
         "heldWhileResponding": "Antwortet noch – deine Nachricht bleibt im Eingabefeld. Sende sie, sobald die Antwort fertig ist.",
         "steerFailed": "Konnte nicht in den laufenden Turn eingefügt werden",

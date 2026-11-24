@@ -2464,6 +2464,36 @@ describe("MessageInput mid-turn send (live-feedback channel)", () => {
     })
   }
 
+  it("queues a Codex draft with the settings selected at submission", async () => {
+    const onEnqueue = vi.fn()
+    const editor = await mountPrompting({
+      agentType: "codex",
+      onSteer: vi.fn(),
+      onEnqueue,
+      configOptions: Object.entries({
+        model: "gpt-6.2-sol",
+        reasoning_effort: "medium",
+        mode: "agent-full-access",
+      }).map(([id, value]) => ({
+        id,
+        name: id,
+        kind: { type: "select", current_value: value, options: [], groups: [] },
+      })),
+    })
+    typeDraft(editor, "Use these settings")
+    await userEvent.setup().click(screen.getByTitle(MI.queueMessage))
+    expect(onEnqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        turnSettings: {
+          model: "gpt-6.2-sol",
+          reasoning_effort: "medium",
+          mode: "agent-full-access",
+        },
+      }),
+      null
+    )
+  })
+
   it("keeps the historical Stop-only form when onSteer is absent", async () => {
     const editor = await mountPrompting()
     typeDraft(editor, "draft text")

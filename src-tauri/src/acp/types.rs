@@ -1,6 +1,40 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+/// Codex selectors captured when a user submits a message.
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CodexTurnSettings {
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub mode: Option<String>,
+}
+
+impl CodexTurnSettings {
+    pub(crate) fn from_values(values: &BTreeMap<String, String>) -> Self {
+        Self {
+            model: values.get("model").cloned(),
+            reasoning_effort: values.get("reasoning_effort").cloned(),
+            mode: values.get("mode").cloned(),
+        }
+    }
+
+    pub(crate) fn values(&self) -> impl Iterator<Item = (&'static str, &str)> {
+        [
+            ("model", self.model.as_deref()),
+            ("reasoning_effort", self.reasoning_effort.as_deref()),
+            ("mode", self.mode.as_deref()),
+        ]
+        .into_iter()
+        .filter_map(|(id, value)| value.map(|value| (id, value)))
+    }
+
+    pub(crate) fn matches(&self, active: &BTreeMap<String, String>) -> bool {
+        self.values()
+            .all(|(id, expected)| active.get(id).is_some_and(|actual| actual == expected))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PromptInputBlock {

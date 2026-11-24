@@ -202,6 +202,7 @@ pub struct AcpPromptParams {
     pub conversation_id: Option<i32>,
     #[serde(default)]
     pub client_message_id: Option<String>,
+    pub turn_settings: Option<crate::acp::types::CodexTurnSettings>,
 }
 
 pub async fn acp_prompt(
@@ -210,14 +211,14 @@ pub async fn acp_prompt(
 ) -> Result<Json<()>, AppCommandError> {
     state
         .connection_manager
-        .send_prompt_linked_with_message_id(
+        .send_user_prompt(
             &state.db,
             &params.connection_id,
             params.blocks,
             params.folder_id,
             params.conversation_id,
-            None,
             params.client_message_id,
+            params.turn_settings,
         )
         .await
         .map_err(|e| {
@@ -231,7 +232,7 @@ pub async fn acp_prompt(
                 }
                 // The conversation was moved to another folder: expected, and
                 // the client recovers by re-pointing its tab — not a fault.
-                AcpError::ConversationMoved { .. } => {
+                AcpError::ConversationMoved { .. } | AcpError::TurnSettingRejected(_) => {
                     AppCommandError::new(AppErrorCode::InvalidInput, message)
                 }
                 _ => AppCommandError::task_execution_failed(message),
@@ -253,9 +254,10 @@ pub async fn acp_preflight(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AcpPreflightParams>,
 ) -> Result<Json<PreflightResult>, AppCommandError> {
-    let result = acp_commands::acp_preflight_core(&state.db, params.agent_type, params.force_refresh)
-        .await
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    let result =
+        acp_commands::acp_preflight_core(&state.db, params.agent_type, params.force_refresh)
+            .await
+            .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(result))
 }
 

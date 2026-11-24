@@ -3545,6 +3545,7 @@
         "queueMessage": "キューに追加",
         "steerIntoTurn": "現在のターンに挿入",
         "steerAsNote": "次の確認用にメモを送信",
+        "codexSettingsNextTurn": "モデル、推論の強度、権限の設定は次のターンから適用されます。",
         "steerQueuedInstead": "代わりにキューに追加しました。次のターンで送信されます。",
         "heldWhileResponding": "まだ応答中です。メッセージは入力欄に残してあります。応答が終わってから送信してください。",
         "steerFailed": "現在のターンに挿入できませんでした",

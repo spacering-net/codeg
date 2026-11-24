@@ -28,6 +28,7 @@ import type {
   SessionFailureRecord,
   SessionModeStateInfo,
   PromptInputBlock,
+  CodexTurnSettings,
 } from "@/lib/types"
 import {
   EMPTY_TOOL_APPROVALS,
@@ -165,6 +166,7 @@ export interface UseConnectionReturn {
       folderId?: number | null
       conversationId?: number | null
       clientMessageId?: string | null
+      turnSettings?: CodexTurnSettings
     }
   ) => Promise<void>
   setMode: (modeId: string) => Promise<void>
@@ -381,6 +383,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
         folderId?: number | null
         conversationId?: number | null
         clientMessageId?: string | null
+        turnSettings?: CodexTurnSettings
       }
     ) => actions.sendPrompt(contextKey, blocks, opts),
     [actions, contextKey]

@@ -822,6 +822,8 @@ pub struct SessionState {
     /// seeing success. Not serialized: it is a connection-loop liveness flag,
     /// not part of the client-visible snapshot.
     pub turn_in_flight: bool,
+    /// The selectors used when the active Codex prompt was dispatched.
+    pub(crate) codex_turn_settings: std::collections::BTreeMap<String, String>,
 
     /// Whether the open turn is one the AGENT started on its own (Grok's
     /// follow-up to a background workflow), which the idle loop renders as a
@@ -1053,6 +1055,7 @@ impl SessionState {
             pending_user_message: None,
             pending_user_message_started_at: None,
             turn_in_flight: false,
+            codex_turn_settings: Default::default(),
             agent_initiated_turn: false,
             turns_completed: 0,
             turn_file_jobs: Vec::new(),
@@ -1696,6 +1699,7 @@ impl SessionState {
                 // flag then belongs to a prompt admitted while it ran.
                 if !self.agent_initiated_turn {
                     self.turn_in_flight = false;
+                    self.codex_turn_settings.clear();
                 }
                 self.agent_initiated_turn = false;
                 // Same edge, the identity half: anyone holding "the turn I was

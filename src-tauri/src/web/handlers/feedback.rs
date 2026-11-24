@@ -57,6 +57,7 @@ pub struct SubmitSessionFeedbackParams {
     /// like `/acp_prompt`, and are re-hydrated server-side.
     #[serde(default)]
     pub blocks: Option<Vec<crate::acp::types::PromptInputBlock>>,
+    pub turn_settings: Option<crate::acp::types::CodexTurnSettings>,
 }
 
 pub async fn submit_session_feedback(
@@ -67,7 +68,12 @@ pub async fn submit_session_feedback(
     // in `submit_feedback`; recoverable rejections map to 4xx below.
     let item = state
         .connection_manager
-        .submit_feedback(&params.connection_id, params.text, params.blocks)
+        .submit_feedback_with_settings(
+            &params.connection_id,
+            params.text,
+            params.blocks,
+            params.turn_settings,
+        )
         .await
         .map_err(|e| {
             let message = e.to_string();
@@ -76,6 +82,7 @@ pub async fn submit_session_feedback(
                 // frontend recognizes NoActiveTurn (falls back to an ordinary
                 // prompt) and surfaces the others.
                 AcpError::NoActiveTurn
+                | AcpError::SteerSettingsChanged
                 | AcpError::FeedbackDisabled
                 | AcpError::InvalidFeedback(_) => {
                     AppCommandError::new(AppErrorCode::InvalidInput, message)
