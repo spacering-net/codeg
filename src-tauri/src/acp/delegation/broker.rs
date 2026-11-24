@@ -118,6 +118,7 @@ pub trait ConversationDepthLookup: Send + Sync {
 /// child's own session (viewable via the frontend's child-session sheet).
 #[derive(Debug, Clone)]
 pub struct ChildStatusRecord {
+    pub persisted_outcome: Option<DelegationOutcome>,
     pub child_conversation_id: i32,
     pub status: TaskStatus,
     pub agent_type: AgentType,
@@ -1207,19 +1208,27 @@ fn unknown_report(task_id: &str) -> DelegationTaskReport {
 }
 
 /// Status report recovered from the DB after the in-memory result was evicted.
-/// Carries status only — the full output lives in the child session.
 fn db_report(task_id: &str, rec: &ChildStatusRecord) -> DelegationTaskReport {
+    let (status, text, error_code, message) = match rec.persisted_outcome.as_ref() {
+        Some(outcome) => terminal_fields(outcome),
+        None => (
+            rec.status,
+            None,
+            (rec.status == TaskStatus::Canceled).then(|| "canceled".to_string()),
+            Some(format!(
+                "Result no longer cached; open child session {} for the full output.",
+                rec.child_conversation_id
+            )),
+        ),
+    };
     DelegationTaskReport {
         task_id: Some(task_id.to_string()),
-        status: rec.status,
+        status,
         child_conversation_id: Some(rec.child_conversation_id),
         agent_type: Some(rec.agent_type),
-        text: None,
-        error_code: (rec.status == TaskStatus::Canceled).then(|| "canceled".to_string()),
-        message: Some(format!(
-            "Result no longer cached; open child session {} for the full output.",
-            rec.child_conversation_id
-        )),
+        text,
+        error_code,
+        message,
         duration_ms: None,
         blocked_on: None,
         assistant_id: None,
@@ -5092,7 +5101,22 @@ impl ChildStatusLookup for DbChildStatusLookup {
         .await
         .ok()
         .flatten()?;
+        let persisted_outcome =
+            crate::db::service::turn_delivery_service::delegation_result(&self.db.conn, summary.id)
+                .await
+                .map_err(|error| tracing::warn!(%error, conversation_id = summary.id, "Could not read persisted delegation result"))
+                .ok()
+                .flatten()
+                .and_then(|turn| {
+                    Some(crate::acp::lifecycle::delegation_turn_outcome(
+                        summary.id,
+                        summary.agent_type,
+                        turn.stop_reason.as_deref()?,
+                        turn.result_text,
+                    ))
+                });
         Some(ChildStatusRecord {
+            persisted_outcome,
             child_conversation_id: summary.id,
             status: task_status_from_row(&summary.status),
             agent_type: summary.agent_type,
@@ -10305,6 +10329,7 @@ mod tests {
     impl ChildStatusLookup for MockResumeLookup {
         async fn find_by_call_id(&self, _call_id: &str) -> Option<ChildStatusRecord> {
             self.ctx.lock().await.as_ref().map(|c| ChildStatusRecord {
+                persisted_outcome: None,
                 child_conversation_id: c.child_conversation_id,
                 status: c.status,
                 agent_type: c.agent_type,

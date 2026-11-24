@@ -643,8 +643,17 @@ async fn forward_turn_complete_to_broker(
         );
         return;
     }
-    let agent_type = row.agent_type;
-    let outcome = match stop_reason {
+    let outcome = delegation_turn_outcome(conversation_id, row.agent_type, stop_reason, last_text);
+    broker.complete_call(&call_id, outcome).await;
+}
+
+pub(crate) fn delegation_turn_outcome(
+    conversation_id: i32,
+    agent_type: crate::models::AgentType,
+    stop_reason: &str,
+    last_text: Option<String>,
+) -> DelegationOutcome {
+    match stop_reason {
         "end_turn" => DelegationOutcome::Ok(DelegationSuccess {
             text: last_text.unwrap_or_default(),
             child_conversation_id: conversation_id,
@@ -684,8 +693,7 @@ async fn forward_turn_complete_to_broker(
             DelegationError::ChildUnknown(other.to_string()),
             Some(conversation_id),
         ),
-    };
-    broker.complete_call(&call_id, outcome).await;
+    }
 }
 
 /// Snapshot the connection's `(state, emitter)` into the lifecycle cache when
