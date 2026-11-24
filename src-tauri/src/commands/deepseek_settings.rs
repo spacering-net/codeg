@@ -23,6 +23,22 @@
 //! the editor only for an install older than 0.10.0
 //! (`deepseekReadsHarnessCatalog`); these commands stay for it.
 //!
+//! The other half of this module is the surface that DOES still move a 0.10.0+
+//! model list: the `llm-pi-ai` provider routes in that bridge document
+//! ([`DeepSeekProviderRoute`]). `@deepseek-ai/dsh-llm-pi-ai` turns each route
+//! into models the session can pick, so the composer's dropdown grows by a
+//! group per configured provider — including gateways and vendors the official
+//! DeepSeek route does not serve. codeg does not drive the adapter's UNSTABLE
+//! `providers/*` ACP plane; it edits the same document that plane writes, which
+//! keeps the behaviour identical with one fewer protocol dependency.
+//!
+//! On a fresh 0.10.0+ install that document does not exist yet, and the bridge
+//! imports `llm-pi-ai` from `$DSH_HOME/settings.yaml` (then
+//! `settings.yaml.imported`) read-only. The panel shows those imported routes
+//! and moves them into the bridge document on the first save — after which the
+//! agent stops looking at the legacy files, exactly as it does for its own
+//! `providers/*` writes.
+//!
 //! Two upstream facts shape the surface:
 //!
 //! * The settings provider is mounted with `watch: false` — one client
@@ -56,6 +72,37 @@ const SECTION_KEY: &str = "llm-deepseek";
 /// The key inside that section this module owns. Everything else in the
 /// section — `baseURL`, `thinking`, `retryPolicy`, … — is left untouched.
 const MODELS_KEY: &str = "models";
+
+/// The section `@deepseek-ai/dsh-llm-pi-ai` registers (`settingsNamespace`
+/// with the plugin's own short name).
+const PI_SECTION_KEY: &str = "llm-pi-ai";
+/// The key inside that section this module owns: one entry per provider route,
+/// keyed by the route id a request selects with.
+const PI_PROVIDERS_KEY: &str = "providers";
+
+/// Wire protocols a route may name — `supportedProtocols()` in
+/// `@deepseek-ai/dsh-llm-pi-ai`, in the order that package lists them.
+const PI_PROTOCOLS: &[&str] = &[
+    "openai-completions",
+    "openai-responses",
+    "anthropic-messages",
+    "google-generative-ai",
+];
+
+/// pi-ai 1.x renamed these built-in providers (old id → new id).
+/// `RENAMED_PROVIDERS` in the bridge's `composition/settings.ts`: it applies the
+/// rename while importing a legacy document, and an old id left in place turns
+/// into a broken hand-declared route with no models. The panel reads (and on
+/// the first save migrates) the same legacy section, so it renames the same way.
+const PI_RENAMED_PROVIDERS: &[(&str, &str)] = &[("azure-openai-responses", "azure")];
+
+/// The grammar `apiKeyEnv` must satisfy: `REF_PATTERN` in
+/// `@deepseek-ai/dsh-credentials`.
+fn is_credential_ref_name(value: &str) -> bool {
+    let mut chars = value.chars();
+    matches!(chars.next(), Some('A'..='Z' | 'a'..='z' | '_'))
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
 
 /// `DEFAULT_CONTEXT_WINDOW` in the adapter (1,000,000 tokens).
 const DEFAULT_CONTEXT_WINDOW: u64 = 1_000_000;
@@ -1199,6 +1246,791 @@ fn verify_patch(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Provider routes (`llm-pi-ai.providers`)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// One `llm-pi-ai` provider route: a provider the bridge may serve models
+/// from, keyed by the route id a request selects with.
+///
+/// Only the fields the panel edits are modelled. Everything else a profile can
+/// carry — `models`, `modelOverrides`, `compat`, `retryPolicy`, … — is
+/// round-tripped untouched from the document being written, because dropping a
+/// hand-written `models` list on save would silently change which models the
+/// route serves.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeepSeekProviderRoute {
+    /// Route id: any non-empty key, as pi-ai accepts. A stored sign-in
+    /// addresses it as a credential-key segment, which catalog ids
+    /// (`[a-z][a-z0-9-]*`) already are; any other id authenticates through
+    /// `apiKeyEnv`.
+    pub id: String,
+    /// Selector label; absent falls back to the provider's own name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    /// Credential reference resolved through the harness credential store
+    /// (`$DSH_HOME/.credentials.yaml`). Absent defers to pi-ai's own ambient
+    /// environment discovery for that provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key_env: Option<String>,
+    /// Wire protocol override; absent takes the pi-ai catalog's protocol.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api: Option<String>,
+    /// Endpoint override; absent takes the pi-ai catalog's endpoint.
+    #[serde(rename = "baseURL", default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+}
+
+/// What the settings panel reads.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeepSeekProviderRoutes {
+    /// Where a save lands: the bridge's own document
+    /// (`$DSH_HOME/deepseek-acp/settings.yaml`).
+    pub path: String,
+    /// Whether that document exists at all.
+    pub exists: bool,
+    /// Whether the effective document declares `llm-pi-ai.providers`.
+    /// `false` means the bridge serves only the official DeepSeek route.
+    pub configured: bool,
+    /// The document the routes on screen came from — the bridge's own document,
+    /// or a legacy harness document the bridge imports from until this panel
+    /// writes one. `None` when nothing is configured anywhere.
+    pub source: Option<String>,
+    pub routes: Vec<DeepSeekProviderRoute>,
+    /// Why the effective document could not be read. Set only when it exists
+    /// and is unusable — the panel then refuses to edit rather than overwriting
+    /// something it never understood.
+    pub error: Option<String>,
+    /// Why the stored routes are ones the agent will refuse (a malformed route
+    /// id, a bad credential reference, an unsupported protocol…). The document
+    /// was understood, so its rows stay editable; what it means meanwhile is
+    /// that the bridge logs the failure and keeps the routes it had before.
+    pub invalid: Option<String>,
+}
+
+/// `$DSH_HOME/deepseek-acp/settings.yaml` — the document deepseek-acp 0.10.0
+/// and later keep their `llm-pi-ai` routes in (and the one `providers/*`
+/// writes). Its `llm-deepseek` section, if a hand editor added one, is not read
+/// by the bridge.
+pub fn pi_settings_path() -> PathBuf {
+    crate::parsers::deepseek::resolve_dsh_home_dir()
+        .join("deepseek-acp")
+        .join("settings.yaml")
+}
+
+/// The documents a 0.10.0+ bridge imports `llm-pi-ai` from while its own
+/// document does not exist: the file 0.9.0 wrote, then what DSH 0.2 renames
+/// that file to on its first launch.
+fn legacy_pi_settings_paths() -> Vec<PathBuf> {
+    let home = crate::parsers::deepseek::resolve_dsh_home_dir();
+    vec![
+        home.join("settings.yaml"),
+        home.join("settings.yaml.imported"),
+    ]
+}
+
+/// Read a document, telling "absent" apart from "unreadable".
+fn read_document(path: &Path) -> Result<Option<String>, std::io::Error> {
+    match fs::read_to_string(path) {
+        Ok(raw) => Ok(Some(raw)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
+/// Parse `llm-pi-ai.providers` out of a settings document. `Ok(None)` is a
+/// well-formed document that does not declare the section (or declares
+/// `providers:` with no value); `Ok(Some(empty))` is a declared-but-empty map.
+fn read_pi_providers(raw: &str) -> Result<Option<serde_yaml::Mapping>, String> {
+    if raw.trim().is_empty() {
+        return Ok(None);
+    }
+    let root: serde_yaml::Value =
+        serde_yaml::from_str(raw).map_err(|err| format!("could not parse the YAML: {err}"))?;
+    if root.is_null() {
+        return Ok(None);
+    }
+    let Some(map) = root.as_mapping() else {
+        return Err("the settings document's root is not a mapping".to_string());
+    };
+    let section = match map.get(serde_yaml::Value::String(PI_SECTION_KEY.to_string())) {
+        None | Some(serde_yaml::Value::Null) => return Ok(None),
+        Some(section) => section
+            .as_mapping()
+            .ok_or_else(|| format!("`{PI_SECTION_KEY}` is not a mapping"))?,
+    };
+    match section.get(serde_yaml::Value::String(PI_PROVIDERS_KEY.to_string())) {
+        None | Some(serde_yaml::Value::Null) => Ok(None),
+        Some(providers) => providers
+            .as_mapping()
+            .cloned()
+            .map(Some)
+            .ok_or_else(|| format!("`{PI_SECTION_KEY}.{PI_PROVIDERS_KEY}` is not a mapping")),
+    }
+}
+
+/// Whether a legacy document carries the `llm-pi-ai` key at all.
+///
+/// The bridge's importer stops at the first legacy document whose section is
+/// PRESENT — an empty one shadows every later file — so the panel has to stop
+/// in the same place, or it would show routes from a file the agent never
+/// reads.
+fn legacy_declares_pi_ai(raw: &str) -> bool {
+    serde_yaml::from_str::<serde_yaml::Value>(raw)
+        .ok()
+        .and_then(|root| {
+            let map = root.as_mapping()?;
+            Some(map.contains_key(serde_yaml::Value::String(PI_SECTION_KEY.to_string())))
+        })
+        .unwrap_or(false)
+}
+
+/// Whether a legacy document's `llm-pi-ai` value is a mapping. The bridge's
+/// importer skips a document only when it cannot read the section as a mapping
+/// at all; a mapping section ends the search even when its `providers` is
+/// malformed (pi-ai then reports the schema error), so the panel must stop at
+/// that document too rather than fall through to a later file the agent never
+/// reads.
+fn legacy_pi_section_is_mapping(raw: &str) -> bool {
+    serde_yaml::from_str::<serde_yaml::Value>(raw)
+        .ok()
+        .and_then(|root| {
+            root.as_mapping()?
+                .get(serde_yaml::Value::String(PI_SECTION_KEY.to_string()))
+                .map(serde_yaml::Value::is_mapping)
+        })
+        .unwrap_or(false)
+}
+
+/// Project the stored profiles onto the fields the panel edits.
+fn routes_from_profiles(
+    profiles: &serde_yaml::Mapping,
+) -> Result<Vec<DeepSeekProviderRoute>, String> {
+    let mut out = Vec::with_capacity(profiles.len());
+    for (key, value) in profiles {
+        let Some(id) = key.as_str() else {
+            return Err("a provider route name is not a string".to_string());
+        };
+        let empty = serde_yaml::Mapping::new();
+        let profile = match value {
+            serde_yaml::Value::Mapping(map) => map,
+            // `opencode-go:` with nothing under it is how YAML spells an empty
+            // profile, and it is exactly what a route with only catalog
+            // defaults looks like.
+            serde_yaml::Value::Null => &empty,
+            _ => {
+                return Err(format!(
+                    "`{PI_SECTION_KEY}.{PI_PROVIDERS_KEY}.{id}` is not a mapping"
+                ))
+            }
+        };
+        let field = |name: &str| -> Result<Option<String>, String> {
+            match profile.get(serde_yaml::Value::String(name.to_string())) {
+                None | Some(serde_yaml::Value::Null) => Ok(None),
+                Some(serde_yaml::Value::String(text)) => Ok(Some(text.clone())),
+                Some(_) => Err(format!(
+                    "`{PI_SECTION_KEY}.{PI_PROVIDERS_KEY}.{id}.{name}` is not a string"
+                )),
+            }
+        };
+        out.push(DeepSeekProviderRoute {
+            id: id.to_string(),
+            display_name: field("displayName")?,
+            api_key_env: field("apiKeyEnv")?,
+            api: field("api")?,
+            base_url: field("baseURL")?,
+        });
+    }
+    Ok(out)
+}
+
+/// Judge submitted routes by pi-ai's own configuration rules, so a document
+/// codeg writes is one the adapter actually loads. Returns the normalized
+/// routes to store (every field trimmed, blanks removed).
+fn validate_provider_routes(
+    routes: &[DeepSeekProviderRoute],
+) -> Result<Vec<DeepSeekProviderRoute>, String> {
+    let mut seen: Vec<String> = Vec::with_capacity(routes.len());
+    let mut out: Vec<DeepSeekProviderRoute> = Vec::with_capacity(routes.len());
+    let trimmed = |value: &Option<String>| -> Option<String> {
+        value
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(str::to_string)
+    };
+
+    for route in routes {
+        // pi-ai takes any non-empty route key (`resolveProfiles`). Only a
+        // stored sign-in needs the credential-key grammar, and a route outside
+        // it authenticates through `apiKeyEnv` instead — so a hand-declared
+        // `my_gateway` is a working route, not one to refuse.
+        let id = route.id.trim().to_string();
+        if id.is_empty() {
+            return Err("every provider route needs an id".to_string());
+        }
+        if seen.iter().any(|prev| prev == &id) {
+            return Err(format!("duplicate provider route \"{id}\""));
+        }
+        seen.push(id.clone());
+
+        let api_key_env = match trimmed(&route.api_key_env) {
+            None => None,
+            Some(name) if is_credential_ref_name(&name) => Some(name),
+            Some(name) => {
+                return Err(format!(
+                    "provider route \"{id}\" has an API key reference \"{name}\"; it must be an \
+                     environment-variable name"
+                ))
+            }
+        };
+
+        let api = match trimmed(&route.api) {
+            None => None,
+            Some(api) if PI_PROTOCOLS.contains(&api.as_str()) => Some(api),
+            Some(api) => {
+                return Err(format!(
+                    "provider route \"{id}\" names protocol \"{api}\"; the agent accepts {}",
+                    PI_PROTOCOLS.join(", ")
+                ))
+            }
+        };
+
+        let base_url = match trimmed(&route.base_url) {
+            None => None,
+            Some(url) if is_usable_base_url(&url) => Some(url),
+            Some(url) => {
+                return Err(format!(
+                    "provider route \"{id}\" has an unusable endpoint \"{url}\"; use an http(s) \
+                     URL with no credentials, query or fragment"
+                ))
+            }
+        };
+
+        out.push(DeepSeekProviderRoute {
+            id,
+            display_name: trimmed(&route.display_name),
+            api_key_env,
+            api,
+            base_url,
+        });
+    }
+    Ok(out)
+}
+
+/// The endpoint check the DeepSeek base-URL field uses, for the same reason:
+/// the adapter concatenates paths onto this string, so a query or fragment does
+/// not travel as one.
+fn is_usable_base_url(value: &str) -> bool {
+    if value.contains(['?', '#']) {
+        return false;
+    }
+    match url::Url::parse(value) {
+        Ok(url) => {
+            matches!(url.scheme(), "http" | "https")
+                && url.host_str().is_some_and(|host| !host.is_empty())
+                && url.username().is_empty()
+                && url.password().is_none()
+        }
+        Err(_) => false,
+    }
+}
+
+/// Read the routes the agent is actually serving from today.
+pub fn load_deepseek_provider_routes_core() -> DeepSeekProviderRoutes {
+    load_deepseek_provider_routes_at(&pi_settings_path(), &legacy_pi_settings_paths())
+}
+
+fn load_deepseek_provider_routes_at(
+    path: &Path,
+    legacy: &[PathBuf],
+) -> DeepSeekProviderRoutes {
+    let display = path.display().to_string();
+    let unreadable = |exists: bool, message: String| DeepSeekProviderRoutes {
+        path: display.clone(),
+        exists,
+        configured: false,
+        source: None,
+        routes: Vec::new(),
+        error: Some(message),
+        invalid: None,
+    };
+
+    let bridge = match read_document(path) {
+        Ok(document) => document,
+        Err(err) => {
+            return unreadable(
+                true,
+                format!("could not read the provider settings document: {err}"),
+            )
+        }
+    };
+
+    // An existing bridge document is authoritative even when it declares no
+    // routes: the bridge stops importing the legacy documents at that point, so
+    // reporting the legacy routes here would offer a list no session can use.
+    if let Some(raw) = bridge.as_deref() {
+        return provider_routes_view(
+            read_pi_providers(raw),
+            display,
+            true,
+            Some(display_from(path)),
+        );
+    }
+
+    for candidate in legacy {
+        let Ok(Some(raw)) = read_document(candidate) else {
+            continue;
+        };
+        // A legacy document belongs to the harness and to older releases;
+        // unreadable content there is skipped rather than blocking the panel,
+        // exactly as the bridge's own importer does.
+        let profiles = match read_pi_providers(&raw) {
+            Ok(Some(profiles)) => Ok(Some(upgrade_legacy_profiles(profiles))),
+            // An empty section still ends the search: the bridge imports this
+            // file and never looks at the next one.
+            Ok(None) if legacy_declares_pi_ai(&raw) => Ok(None),
+            // So does a mapping section with a malformed `providers`: the
+            // bridge imports it and fails on it, so the panel reports it (and
+            // refuses to edit) instead of showing a later file's routes.
+            Err(message) if legacy_pi_section_is_mapping(&raw) => Err(message),
+            _ => continue,
+        };
+        return provider_routes_view(
+            profiles,
+            display,
+            false,
+            Some(display_from(candidate)),
+        );
+    }
+
+    DeepSeekProviderRoutes {
+        path: display,
+        exists: false,
+        configured: false,
+        source: None,
+        routes: Vec::new(),
+        error: None,
+        invalid: None,
+    }
+}
+
+fn display_from(path: &Path) -> String {
+    path.display().to_string()
+}
+
+/// Fold a `read_pi_providers` result into the panel's view.
+fn provider_routes_view(
+    profiles: Result<Option<serde_yaml::Mapping>, String>,
+    path: String,
+    exists: bool,
+    source: Option<String>,
+) -> DeepSeekProviderRoutes {
+    match profiles {
+        Ok(None) => DeepSeekProviderRoutes {
+            path,
+            exists,
+            configured: false,
+            source,
+            routes: Vec::new(),
+            error: None,
+            invalid: None,
+        },
+        Ok(Some(profiles)) => match routes_from_profiles(&profiles) {
+            Ok(routes) => DeepSeekProviderRoutes {
+                path,
+                exists,
+                configured: true,
+                source,
+                invalid: validate_provider_routes(&routes).err(),
+                routes,
+                error: None,
+            },
+            Err(message) => DeepSeekProviderRoutes {
+                path,
+                exists,
+                configured: true,
+                source,
+                routes: Vec::new(),
+                error: Some(message),
+                invalid: None,
+            },
+        },
+        Err(message) => DeepSeekProviderRoutes {
+            path,
+            exists,
+            configured: false,
+            source,
+            routes: Vec::new(),
+            error: Some(message),
+            invalid: None,
+        },
+    }
+}
+
+/// Write (or clear) `llm-pi-ai.providers` in the bridge's own document.
+///
+/// `None` — and an empty list, which the panel emits when the last row is
+/// deleted — REMOVES the key so the bridge serves the official DeepSeek route
+/// alone. When the cleared routes came from a legacy document instead, it
+/// leaves an empty `llm-pi-ai` section behind, because an absent bridge
+/// document is what makes the agent import them again. The rest of the
+/// document, including fields this panel does not model inside a route
+/// profile, is left untouched.
+pub fn update_deepseek_provider_routes_core(
+    routes: Option<Vec<DeepSeekProviderRoute>>,
+    emitter: &EventEmitter,
+) -> Result<(), AcpError> {
+    let validated = match routes {
+        Some(routes) if !routes.is_empty() => {
+            Some(validate_provider_routes(&routes).map_err(|message| {
+                AcpError::protocol(format!("invalid DeepSeek provider routes: {message}"))
+            })?)
+        }
+        _ => None,
+    };
+
+    update_deepseek_provider_routes_at(
+        &pi_settings_path(),
+        &legacy_pi_settings_paths(),
+        validated.as_deref(),
+    )?;
+    emit_acp_agents_updated(emitter, "config_updated", Some(AgentType::DeepSeek));
+    Ok(())
+}
+
+fn update_deepseek_provider_routes_at(
+    path: &Path,
+    legacy: &[PathBuf],
+    routes: Option<&[DeepSeekProviderRoute]>,
+) -> Result<(), AcpError> {
+    let protocol_err =
+        |message: String| AcpError::protocol(format!("DeepSeek settings: {message}"));
+
+    let (existing, document_exists) = match read_document(path) {
+        Ok(Some(existing)) => (existing, true),
+        Ok(None) => (String::new(), false),
+        Err(err) => {
+            return Err(AcpError::protocol(format!(
+                "could not read the DeepSeek provider settings document: {err}"
+            )))
+        }
+    };
+
+    // Profiles whose unmodelled fields (`models`, `compat`, `retryPolicy`…)
+    // have to survive the save. An existing bridge document wins; before the
+    // first save that document does not exist and the agent serves the imported
+    // legacy section, so those are the profiles to carry over.
+    let base = if document_exists {
+        read_pi_providers(&existing).map_err(protocol_err)?
+    } else {
+        legacy_pi_profiles(legacy)
+    }
+    .unwrap_or_default();
+
+    // Clearing imported routes has to leave something behind: the legacy
+    // document is read-only to us, and an ABSENT bridge document is exactly
+    // what makes the agent import it. An empty section in the bridge document
+    // shadows the import without mounting pi-ai.
+    if routes.into_iter().flatten().next().is_none() && !document_exists && !base.is_empty() {
+        let body = format!("{PI_SECTION_KEY}: {{}}\n");
+        write_settings_document(path, &body)?;
+        return Ok(());
+    }
+
+    let mut profiles = serde_yaml::Mapping::new();
+    for route in routes.into_iter().flatten() {
+        let previous = base
+            .get(serde_yaml::Value::String(route.id.clone()))
+            .and_then(serde_yaml::Value::as_mapping);
+        profiles.insert(
+            serde_yaml::Value::String(route.id.clone()),
+            serde_yaml::Value::Mapping(profile_from_route(route, previous)),
+        );
+    }
+
+    let providers = if profiles.is_empty() {
+        None
+    } else {
+        Some(&profiles)
+    };
+    let patched = patch_pi_providers(&existing, providers).map_err(protocol_err)?;
+    if patched != existing {
+        write_settings_document(path, &patched)?;
+    }
+    Ok(())
+}
+
+/// The `llm-pi-ai.providers` mapping an existing bridge would import, if any.
+fn legacy_pi_profiles(legacy: &[PathBuf]) -> Option<serde_yaml::Mapping> {
+    for candidate in legacy {
+        let Ok(Some(raw)) = read_document(candidate) else {
+            continue;
+        };
+        match read_pi_providers(&raw) {
+            Ok(Some(profiles)) => return Some(upgrade_legacy_profiles(profiles)),
+            Ok(None) if legacy_declares_pi_ai(&raw) => return None,
+            // The bridge stops at this document too; it carries no profile
+            // the panel could merge from.
+            Err(_) if legacy_pi_section_is_mapping(&raw) => return None,
+            _ => continue,
+        }
+    }
+    None
+}
+
+/// Apply the bridge's legacy-import renames ([`PI_RENAMED_PROVIDERS`]) to a
+/// legacy `providers` mapping. When both the old and the new id are present
+/// the new one wins — it is the one configured on a current release — and the
+/// old one is dropped either way, exactly as `upgradeLegacySection` does.
+fn upgrade_legacy_profiles(mut profiles: serde_yaml::Mapping) -> serde_yaml::Mapping {
+    for (from, to) in PI_RENAMED_PROVIDERS {
+        let from = serde_yaml::Value::String((*from).to_string());
+        let to = serde_yaml::Value::String((*to).to_string());
+        if let Some(profile) = profiles.shift_remove(&from) {
+            if !profiles.contains_key(&to) {
+                profiles.insert(to, profile);
+            }
+        }
+    }
+    profiles
+}
+
+/// The fields this panel owns inside one provider profile.
+const PI_ROUTE_FIELDS: &[&str] = &["displayName", "apiKeyEnv", "api", "baseURL"];
+
+/// Render one route as a profile mapping, keeping every field the panel does
+/// not model from `base`.
+fn profile_from_route(
+    route: &DeepSeekProviderRoute,
+    base: Option<&serde_yaml::Mapping>,
+) -> serde_yaml::Mapping {
+    let mut out = serde_yaml::Mapping::new();
+    let mut insert = |key: &str, value: &Option<String>| {
+        if let Some(value) = value {
+            out.insert(
+                serde_yaml::Value::String(key.to_string()),
+                serde_yaml::Value::String(value.clone()),
+            );
+        }
+    };
+    insert("displayName", &route.display_name);
+    insert("apiKeyEnv", &route.api_key_env);
+    insert("api", &route.api);
+    insert("baseURL", &route.base_url);
+    if let Some(base) = base {
+        for (key, value) in base {
+            let known = key
+                .as_str()
+                .is_some_and(|key| PI_ROUTE_FIELDS.contains(&key));
+            if !known {
+                out.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    out
+}
+
+/// Replace, insert or delete `llm-pi-ai.providers` in `existing`, leaving every
+/// other section of the document alone.
+fn patch_pi_providers(
+    existing: &str,
+    providers: Option<&serde_yaml::Mapping>,
+) -> Result<String, String> {
+    let newline = if existing.contains("\r\n") { "\r\n" } else { "\n" };
+
+    let before: Option<serde_yaml::Value> = if existing.trim().is_empty() {
+        None
+    } else {
+        let parsed: serde_yaml::Value = serde_yaml::from_str(existing)
+            .map_err(|err| format!("could not parse the YAML: {err}"))?;
+        if !parsed.is_mapping() && !parsed.is_null() {
+            return Err("the settings document's root is not a mapping".to_string());
+        }
+        let section = parsed
+            .as_mapping()
+            .and_then(|map| map.get(serde_yaml::Value::String(PI_SECTION_KEY.to_string())));
+        if section.is_some_and(|value| !value.is_mapping() && !value.is_null()) {
+            return Err(format!("`{PI_SECTION_KEY}` is not a mapping"));
+        }
+        Some(parsed)
+    };
+
+    let mut section = before
+        .as_ref()
+        .and_then(serde_yaml::Value::as_mapping)
+        .and_then(|map| map.get(serde_yaml::Value::String(PI_SECTION_KEY.to_string())))
+        .and_then(serde_yaml::Value::as_mapping)
+        .cloned()
+        .unwrap_or_default();
+    match providers {
+        Some(providers) if !providers.is_empty() => {
+            section.insert(
+                serde_yaml::Value::String(PI_PROVIDERS_KEY.to_string()),
+                serde_yaml::Value::Mapping(providers.clone()),
+            );
+        }
+        _ => {
+            section.remove(serde_yaml::Value::String(PI_PROVIDERS_KEY.to_string()));
+        }
+    }
+
+    let inline_section_is_empty = before
+        .as_ref()
+        .and_then(serde_yaml::Value::as_mapping)
+        .and_then(|map| map.get(serde_yaml::Value::String(PI_SECTION_KEY.to_string())))
+        .is_none_or(|value| {
+            value.is_null() || value.as_mapping().is_some_and(serde_yaml::Mapping::is_empty)
+        });
+
+    let lines = split_lines(existing);
+    let mut header: Option<usize> = None;
+    for (index, line) in lines.iter().enumerate() {
+        if line.indent != Some(0) || line.comment {
+            continue;
+        }
+        match classify_key_line(&line.text, PI_SECTION_KEY) {
+            KeyLine::Block => {
+                header = Some(index);
+                break;
+            }
+            // An empty inline section (`llm-pi-ai: {}`) holds nothing to lose,
+            // and it is exactly what clearing imported routes writes — and what
+            // the bridge's own YAML writer emits for an empty section — so it is
+            // replaced like a block header. `verify_pi_patch` still checks the
+            // result.
+            KeyLine::Inline if inline_section_is_empty => {
+                header = Some(index);
+                break;
+            }
+            KeyLine::Inline => {
+                return Err(format!(
+                    "`{PI_SECTION_KEY}` is written inline in this document; edit it by hand \
+                     instead"
+                ))
+            }
+            KeyLine::Other => {}
+        }
+    }
+
+    let (prefix_end, suffix_start) = match header {
+        Some(index) => {
+            let body_end = lines
+                .iter()
+                .enumerate()
+                .skip(index + 1)
+                .find(|(_, line)| line.indent == Some(0))
+                .map_or(lines.len(), |(index, _)| index);
+            let suffix = if body_end == lines.len() {
+                existing.len()
+            } else {
+                lines[body_end].range.start
+            };
+            (lines[index].range.start, suffix)
+        }
+        // No section yet: append one at the end.
+        None => (existing.len(), existing.len()),
+    };
+
+    let replacement = if section.is_empty() {
+        String::new()
+    } else {
+        render_pi_section(&section, newline)?
+    };
+
+    let mut out = String::with_capacity(existing.len() + 256);
+    out.push_str(&existing[..prefix_end]);
+    if !replacement.is_empty() && prefix_end == existing.len() {
+        // Appending: separate the new section from whatever came before.
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push_str(newline);
+        }
+        out.push_str(&replacement);
+    } else if prefix_end < existing.len() {
+        out.push_str(&replacement);
+    }
+    out.push_str(&existing[suffix_start..]);
+
+    verify_pi_patch(&out, before.as_ref(), &section)?;
+    Ok(out)
+}
+
+/// Render the whole `llm-pi-ai` section at the top level, so a section that
+/// nests a mapping under its key stays readable in a hand-edited document.
+fn render_pi_section(
+    section: &serde_yaml::Mapping,
+    newline: &str,
+) -> Result<String, String> {
+    let body = serde_yaml::to_string(&serde_yaml::Value::Mapping(section.clone()))
+        .map_err(|err| format!("could not serialize the provider routes: {err}"))?;
+    let mut out = format!("{PI_SECTION_KEY}:{newline}");
+    for line in body.lines() {
+        if line.is_empty() {
+            out.push_str(newline);
+        } else {
+            out.push_str("  ");
+            out.push_str(line);
+            out.push_str(newline);
+        }
+    }
+    Ok(out)
+}
+
+/// Re-read the patched document and refuse it unless `llm-pi-ai` says exactly
+/// what the splice meant to say and no other section moved.
+fn verify_pi_patch(
+    patched: &str,
+    before: Option<&serde_yaml::Value>,
+    expected: &serde_yaml::Mapping,
+) -> Result<(), String> {
+    let unsafe_edit = |detail: &str| {
+        format!(
+            "could not update `{PI_SECTION_KEY}.{PI_PROVIDERS_KEY}` without disturbing the rest \
+             of the document ({detail}); edit it by hand instead"
+        )
+    };
+
+    let after: serde_yaml::Value = if patched.trim().is_empty() {
+        serde_yaml::Value::Null
+    } else {
+        serde_yaml::from_str(patched).map_err(|err| unsafe_edit(&format!("re-parse failed: {err}")))?
+    };
+
+    let section_key = serde_yaml::Value::String(PI_SECTION_KEY.to_string());
+    let stored = match after
+        .as_mapping()
+        .and_then(|map| map.get(&section_key))
+    {
+        None | Some(serde_yaml::Value::Null) => None,
+        Some(value) => Some(value.clone()),
+    };
+    let wanted = if expected.is_empty() {
+        None
+    } else {
+        Some(serde_yaml::Value::Mapping(expected.clone()))
+    };
+    if stored != wanted {
+        return Err(unsafe_edit("the provider routes did not land where they were aimed"));
+    }
+
+    // Nothing outside the section moved.
+    let without = |value: Option<&serde_yaml::Value>| -> serde_yaml::Mapping {
+        let mut map = match value {
+            Some(serde_yaml::Value::Mapping(map)) => map.clone(),
+            _ => serde_yaml::Mapping::new(),
+        };
+        map.remove(&section_key);
+        map
+    };
+    if without(before) != without(Some(&after)) {
+        return Err(unsafe_edit("another section would have changed"));
+    }
+
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Commands
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1221,6 +2053,28 @@ pub async fn acp_update_deepseek_model_catalog(
 ) -> Result<(), AcpError> {
     let emitter = EventEmitter::from_app(&app);
     update_deepseek_model_catalog_core(models, &emitter)
+}
+
+/// Read the DeepSeek Harness provider routes for the settings panel. Desktop
+/// command; the web handler calls [`load_deepseek_provider_routes_core`]
+/// directly.
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn acp_load_deepseek_provider_routes(
+) -> Result<DeepSeekProviderRoutes, AcpError> {
+    Ok(load_deepseek_provider_routes_core())
+}
+
+/// Store (or clear) the DeepSeek Harness provider routes. Desktop command; the
+/// web handler calls [`update_deepseek_provider_routes_core`] directly.
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn acp_update_deepseek_provider_routes(
+    routes: Option<Vec<DeepSeekProviderRoute>>,
+    app: tauri::AppHandle,
+) -> Result<(), AcpError> {
+    let emitter = EventEmitter::from_app(&app);
+    update_deepseek_provider_routes_core(routes, &emitter)
 }
 
 #[cfg(test)]
@@ -2044,5 +2898,456 @@ mod tests {
             fs::metadata(&path).expect("file").permissions().mode() & 0o777,
             0o640
         );
+    }
+
+    // ── provider routes ──────────────────────────────────────────────────
+
+    fn route(id: &str) -> DeepSeekProviderRoute {
+        DeepSeekProviderRoute {
+            id: id.to_string(),
+            display_name: None,
+            api_key_env: None,
+            api: None,
+            base_url: None,
+        }
+    }
+
+    fn written(path: &Path, routes: &[DeepSeekProviderRoute]) -> String {
+        update_deepseek_provider_routes_at(path, &[], Some(routes)).expect("write routes");
+        fs::read_to_string(path).expect("document")
+    }
+
+    fn yaml_at<'a>(root: &'a serde_yaml::Value, path: &[&str]) -> &'a serde_yaml::Value {
+        let mut current = root;
+        for key in path {
+            current = match current {
+                serde_yaml::Value::Sequence(items) => items
+                    .get(key.parse::<usize>().expect("sequence index"))
+                    .unwrap_or_else(|| panic!("missing {key} in {current:?}")),
+                _ => current
+                    .as_mapping()
+                    .and_then(|map| map.get(serde_yaml::Value::String((*key).to_string())))
+                    .unwrap_or_else(|| panic!("missing {key} in {current:?}")),
+            };
+        }
+        current
+    }
+
+    #[test]
+    fn reads_routes_from_the_bridge_document() {
+        let raw = "llm-pi-ai:\n  providers:\n    opencode-go:\n      apiKeyEnv: OPENCODE_GO_API_KEY\n";
+        let profiles = read_pi_providers(raw)
+            .expect("parses")
+            .expect("section present");
+        let routes = routes_from_profiles(&profiles).expect("routes");
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].id, "opencode-go");
+        assert_eq!(routes[0].api_key_env.as_deref(), Some("OPENCODE_GO_API_KEY"));
+        assert!(routes[0].api.is_none());
+        assert!(routes[0].base_url.is_none());
+
+        // A section-level key this panel does not own is fine; a `providers:`
+        // that is not a mapping is not.
+        assert!(read_pi_providers("llm-pi-ai:\n  providers: nope\n").is_err());
+        assert!(read_pi_providers("llm-pi-ai: 3\n").is_err());
+        // A route profile that is a scalar cannot be edited blind.
+        assert!(
+            read_pi_providers("llm-pi-ai:\n  providers:\n    x: 1\n")
+                .expect("parses")
+                .map(|profiles| routes_from_profiles(&profiles))
+                .transpose()
+                .is_err()
+        );
+        // A field with the wrong type is reported rather than guessed at.
+        assert!(
+            read_pi_providers("llm-pi-ai:\n  providers:\n    x:\n      apiKeyEnv: [a]\n")
+                .expect("parses")
+                .map(|profiles| routes_from_profiles(&profiles))
+                .transpose()
+                .is_err()
+        );
+        // Absent in every spelling the panel may meet.
+        assert!(read_pi_providers("").expect("empty").is_none());
+        assert!(read_pi_providers("other: {}\n").expect("parses").is_none());
+        assert!(read_pi_providers("llm-pi-ai:\n").expect("parses").is_none());
+    }
+
+    #[test]
+    fn a_legacy_document_is_read_until_the_bridge_has_its_own() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bridge = dir.path().join("deepseek-acp").join("settings.yaml");
+        let legacy = dir.path().join("settings.yaml");
+        let imported = dir.path().join("settings.yaml.imported");
+        fs::write(
+            &legacy,
+            "llm-pi-ai:\n  providers:\n    opencode-go:\n      apiKeyEnv: OPENCODE_GO_API_KEY\n",
+        )
+        .expect("legacy document");
+        let roots = [legacy.clone(), imported.clone()];
+
+        let view = load_deepseek_provider_routes_at(&bridge, &roots);
+        assert!(!view.exists);
+        assert!(view.configured);
+        assert_eq!(view.routes.len(), 1);
+        assert_eq!(view.routes[0].id, "opencode-go");
+        assert_eq!(
+            view.source.as_deref(),
+            Some(legacy.display().to_string().as_str())
+        );
+
+        // An existing bridge document is authoritative even when it declares
+        // nothing: that is the point at which the bridge stops importing.
+        fs::create_dir_all(bridge.parent().expect("parent")).expect("dirs");
+        fs::write(&bridge, "llm-pi-ai: {}\n").expect("bridge document");
+        let view = load_deepseek_provider_routes_at(&bridge, &roots);
+        assert!(view.exists);
+        assert!(!view.configured);
+        assert!(view.routes.is_empty());
+        assert!(view.source.is_some());
+
+        // `settings.yaml.imported` is the second legacy fallback.
+        fs::remove_file(&bridge).expect("remove");
+        fs::remove_file(&legacy).expect("remove");
+        fs::write(
+            &imported,
+            "llm-pi-ai:\n  providers:\n    opencode:\n      apiKeyEnv: OPENCODE_API_KEY\n",
+        )
+        .expect("imported document");
+        let view = load_deepseek_provider_routes_at(&bridge, &roots);
+        assert_eq!(view.routes[0].id, "opencode");
+        assert_eq!(
+            view.source.as_deref(),
+            Some(imported.display().to_string().as_str())
+        );
+
+        // An EMPTY section in the first legacy file still ends the search: the
+        // bridge imports that file and never reads the next one, so the panel
+        // must not show routes no session can pick.
+        fs::write(&legacy, "llm-pi-ai:\n  providers:\n").expect("legacy");
+        let view = load_deepseek_provider_routes_at(&bridge, &roots);
+        assert!(!view.configured);
+        assert!(view.routes.is_empty());
+        assert_eq!(
+            view.source.as_deref(),
+            Some(legacy.display().to_string().as_str())
+        );
+    }
+
+    #[test]
+    fn a_save_keeps_the_rest_of_the_document_and_unmodelled_profile_fields() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("deepseek-acp").join("settings.yaml");
+        fs::create_dir_all(path.parent().expect("parent")).expect("dirs");
+        fs::write(
+            &path,
+            r#"# hand-written
+llm-pi-ai:
+  providers:
+    opencode-go:
+      apiKeyEnv: OLD_KEY
+      models:
+        - id: deepseek-v4.1-flash
+      compat:
+        thinkingFormat: deepseek
+llm-deepseek:
+  models:
+    - id: keep-me
+"#,
+        )
+        .expect("document");
+
+        let mut route = route("opencode-go");
+        route.api_key_env = Some("NEW_KEY".to_string());
+        let saved = written(&path, &[route]);
+
+        // The comment and the sibling section survive.
+        assert!(saved.contains("# hand-written"));
+        assert!(saved.contains("keep-me"));
+
+        let doc: serde_yaml::Value = serde_yaml::from_str(&saved).expect("parses");
+        let profile = yaml_at(
+            &doc,
+            &["llm-pi-ai", "providers", "opencode-go"],
+        );
+        assert_eq!(
+            yaml_at(profile, &["apiKeyEnv"]).as_str(),
+            Some("NEW_KEY")
+        );
+        // Fields this panel does not model ride along untouched.
+        assert_eq!(
+            yaml_at(profile, &["models", "0", "id"]).as_str(),
+            Some("deepseek-v4.1-flash")
+        );
+        assert_eq!(
+            yaml_at(profile, &["compat", "thinkingFormat"]).as_str(),
+            Some("deepseek")
+        );
+    }
+
+    #[test]
+    fn clearing_the_last_route_drops_the_section_but_not_its_neighbours() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("deepseek-acp").join("settings.yaml");
+        fs::create_dir_all(path.parent().expect("parent")).expect("dirs");
+        let first = written(&path, &[route("opencode-go")]);
+        assert!(first.contains("llm-pi-ai:"));
+
+        update_deepseek_provider_routes_at(&path, &[], None).expect("clear");
+        let cleared = fs::read_to_string(&path).expect("document");
+        assert!(!cleared.contains("llm-pi-ai"));
+
+        // A save that only edits a different document must not touch this one.
+        fs::write(
+            &path,
+            "llm-deepseek:\n  models:\n    - id: keep\n",
+        )
+        .expect("document");
+        update_deepseek_provider_routes_at(&path, &[], None).expect("no-op");
+        assert_eq!(
+            fs::read_to_string(&path).expect("document"),
+            "llm-deepseek:\n  models:\n    - id: keep\n"
+        );
+    }
+
+    #[test]
+    fn the_first_save_moves_imported_routes_into_the_bridge_document() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bridge = dir.path().join("deepseek-acp").join("settings.yaml");
+        let legacy = dir.path().join("settings.yaml");
+        fs::write(
+            &legacy,
+            r#"llm-pi-ai:
+  providers:
+    opencode-go:
+      apiKeyEnv: OPENCODE_GO_API_KEY
+      compat:
+        thinkingFormat: deepseek
+"#,
+        )
+        .expect("legacy");
+
+        let mut route = route("opencode-go");
+        route.api_key_env = Some("OPENCODE_GO_API_KEY".to_string());
+        update_deepseek_provider_routes_at(
+            &bridge,
+            std::slice::from_ref(&legacy),
+            Some(&[route]),
+        )
+        .expect("write");
+
+        let saved = fs::read_to_string(&bridge).expect("bridge document");
+        let doc: serde_yaml::Value = serde_yaml::from_str(&saved).expect("parses");
+        let profile = yaml_at(&doc, &["llm-pi-ai", "providers", "opencode-go"]);
+        assert_eq!(
+            yaml_at(profile, &["apiKeyEnv"]).as_str(),
+            Some("OPENCODE_GO_API_KEY")
+        );
+        // The legacy profile's unmodelled fields came along.
+        assert_eq!(
+            yaml_at(profile, &["compat", "thinkingFormat"]).as_str(),
+            Some("deepseek")
+        );
+        // The legacy file is read-only to us.
+        assert!(!fs::read_to_string(&legacy)
+            .expect("legacy")
+            .is_empty());
+    }
+
+    #[test]
+    fn clearing_imported_routes_shadows_the_legacy_document() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bridge = dir.path().join("deepseek-acp").join("settings.yaml");
+        let legacy = dir.path().join("settings.yaml");
+        fs::write(
+            &legacy,
+            "llm-pi-ai:\n  providers:\n    opencode-go:\n      apiKeyEnv: OPENCODE_GO_API_KEY\n",
+        )
+        .expect("legacy");
+
+        // Before the save the panel shows the imported route.
+        let view = load_deepseek_provider_routes_at(&bridge, std::slice::from_ref(&legacy));
+        assert!(view.configured);
+        assert_eq!(view.routes.len(), 1);
+
+        update_deepseek_provider_routes_at(&bridge, std::slice::from_ref(&legacy), None)
+            .expect("clear");
+
+        // The bridge document now exists with an empty section, which shadows
+        // the legacy file the agent would otherwise import.
+        let saved = fs::read_to_string(&bridge).expect("bridge document");
+        assert!(saved.contains("llm-pi-ai: {}"), "{saved}");
+        let view = load_deepseek_provider_routes_at(&bridge, std::slice::from_ref(&legacy));
+        assert!(view.exists);
+        assert!(!view.configured);
+        assert!(view.routes.is_empty());
+
+        // The legacy file is read-only to us.
+        assert!(fs::read_to_string(&legacy)
+            .expect("legacy")
+            .contains("opencode-go"));
+    }
+
+    #[test]
+    fn validation_rejects_routes_the_agent_cannot_address() {
+        assert!(validate_provider_routes(&[route("")]).is_err());
+        assert!(validate_provider_routes(&[route("  ")]).is_err());
+        assert!(validate_provider_routes(&[route("dup"), route("dup")]).is_err());
+        // pi-ai takes any non-empty route key; only a stored sign-in needs the
+        // credential-key grammar, so a hand-declared gateway id is served.
+        assert!(validate_provider_routes(&[route("my_gateway")]).is_ok());
+        assert!(validate_provider_routes(&[route("OpenCode")]).is_ok());
+
+        let mut bad = route("ok");
+        bad.api_key_env = Some("not a ref".to_string());
+        assert!(validate_provider_routes(std::slice::from_ref(&bad)).is_err());
+        bad.api_key_env = None;
+        bad.api = Some("bedrock-converse-stream".to_string());
+        assert!(validate_provider_routes(std::slice::from_ref(&bad)).is_err());
+        // Every protocol `supportedProtocols()` lists is accepted.
+        for api in PI_PROTOCOLS {
+            bad.api = Some((*api).to_string());
+            assert!(
+                validate_provider_routes(std::slice::from_ref(&bad)).is_ok(),
+                "{api}"
+            );
+        }
+        bad.api = Some("openai-completions".to_string());
+        bad.base_url = Some("ftp://gateway/v1".to_string());
+        assert!(validate_provider_routes(std::slice::from_ref(&bad)).is_err());
+        bad.base_url = Some("https://user:pw@gateway/v1".to_string());
+        assert!(validate_provider_routes(std::slice::from_ref(&bad)).is_err());
+        bad.base_url = Some("https://gateway/v1?x=1".to_string());
+        assert!(validate_provider_routes(std::slice::from_ref(&bad)).is_err());
+
+        // Trimmed on the way in, and the wire fields survive.
+        bad.base_url = Some("  https://gateway/v1  ".to_string());
+        bad.display_name = Some("  Gateway  ".to_string());
+        let valid = validate_provider_routes(&[bad]).expect("valid");
+        assert_eq!(valid[0].base_url.as_deref(), Some("https://gateway/v1"));
+        assert_eq!(valid[0].display_name.as_deref(), Some("Gateway"));
+        assert!(validate_provider_routes(&[route("ok")]).is_ok());
+    }
+
+    #[test]
+    fn legacy_routes_take_the_bridges_provider_renames() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bridge = dir.path().join("deepseek-acp").join("settings.yaml");
+        let legacy = dir.path().join("settings.yaml");
+        fs::write(
+            &legacy,
+            r#"llm-pi-ai:
+  providers:
+    azure-openai-responses:
+      apiKeyEnv: AZURE_OPENAI_API_KEY
+      headers:
+        x-team: platform
+    opencode-go:
+      apiKeyEnv: OPENCODE_API_KEY
+"#,
+        )
+        .expect("legacy");
+        let roots = std::slice::from_ref(&legacy);
+
+        // The panel shows the route under the id the bridge serves it as.
+        let view = load_deepseek_provider_routes_at(&bridge, roots);
+        let ids: Vec<&str> = view.routes.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, ["opencode-go", "azure"]);
+        assert!(view.invalid.is_none(), "{:?}", view.invalid);
+
+        // The first save carries the renamed profile's unmodelled fields over.
+        update_deepseek_provider_routes_at(&bridge, roots, Some(&view.routes)).expect("write");
+        let saved = fs::read_to_string(&bridge).expect("bridge document");
+        let doc: serde_yaml::Value = serde_yaml::from_str(&saved).expect("parses");
+        assert_eq!(
+            yaml_at(&doc, &["llm-pi-ai", "providers", "azure", "headers", "x-team"]).as_str(),
+            Some("platform")
+        );
+        assert!(!saved.contains("azure-openai-responses"), "{saved}");
+
+        // When both ids are present the new one wins and the old one is dropped.
+        let mut both = serde_yaml::Mapping::new();
+        both.insert("azure-openai-responses".into(), "old".into());
+        both.insert("azure".into(), "new".into());
+        let upgraded = upgrade_legacy_profiles(both);
+        assert_eq!(upgraded.len(), 1);
+        assert_eq!(upgraded.get("azure").and_then(|v| v.as_str()), Some("new"));
+    }
+
+    #[test]
+    fn routes_can_be_added_again_after_clearing_imported_ones() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bridge = dir.path().join("deepseek-acp").join("settings.yaml");
+        let legacy = dir.path().join("settings.yaml");
+        fs::write(
+            &legacy,
+            "llm-pi-ai:\n  providers:\n    opencode-go:\n      apiKeyEnv: OPENCODE_API_KEY\n",
+        )
+        .expect("legacy");
+        let roots = std::slice::from_ref(&legacy);
+
+        // Clearing imported routes leaves `llm-pi-ai: {}` behind …
+        update_deepseek_provider_routes_at(&bridge, roots, None).expect("clear");
+        assert!(fs::read_to_string(&bridge)
+            .expect("bridge")
+            .contains("llm-pi-ai: {}"));
+
+        // … which the next save must be able to replace.
+        let mut route = route("openrouter");
+        route.api_key_env = Some("OPENROUTER_API_KEY".to_string());
+        update_deepseek_provider_routes_at(&bridge, roots, Some(&[route])).expect("re-add");
+        let view = load_deepseek_provider_routes_at(&bridge, roots);
+        let ids: Vec<&str> = view.routes.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, ["openrouter"]);
+
+        // A null inline section is just as empty; a non-empty one stays refused.
+        let patched = patch_pi_providers("other: 1\nllm-pi-ai: ~\n", Some(&{
+            let mut providers = serde_yaml::Mapping::new();
+            providers.insert("xai".into(), serde_yaml::Value::Mapping(Default::default()));
+            providers
+        }))
+        .expect("null inline section");
+        assert!(patched.starts_with("other: 1\nllm-pi-ai:\n"), "{patched}");
+    }
+
+    #[test]
+    fn a_malformed_legacy_providers_table_still_ends_the_import_search() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bridge = dir.path().join("deepseek-acp").join("settings.yaml");
+        let legacy = dir.path().join("settings.yaml");
+        let imported = dir.path().join("settings.yaml.imported");
+        // The bridge imports the first file (its section is a mapping) and
+        // fails on it; it never reads the second.
+        fs::write(&legacy, "llm-pi-ai:\n  providers: []\n").expect("legacy");
+        fs::write(
+            &imported,
+            "llm-pi-ai:\n  providers:\n    opencode:\n      apiKeyEnv: OPENCODE_API_KEY\n",
+        )
+        .expect("imported");
+        let roots = [legacy.clone(), imported.clone()];
+
+        let view = load_deepseek_provider_routes_at(&bridge, &roots);
+        assert!(view.error.is_some(), "{view:?}");
+        assert!(view.routes.is_empty());
+        assert_eq!(
+            view.source.as_deref(),
+            Some(legacy.display().to_string().as_str())
+        );
+        assert!(legacy_pi_profiles(&roots).is_none());
+
+        // A section the bridge cannot read as a mapping is skipped, as before.
+        fs::write(&legacy, "llm-pi-ai: 3\n").expect("legacy");
+        let view = load_deepseek_provider_routes_at(&bridge, &roots);
+        assert!(view.error.is_none(), "{view:?}");
+        assert_eq!(view.routes[0].id, "opencode");
+    }
+
+    #[test]
+    fn an_inline_section_is_refused_rather_than_rewritten() {
+        let error = patch_pi_providers(
+            "llm-pi-ai: {providers: {}}\n",
+            Some(&serde_yaml::Mapping::new()),
+        )
+        .expect_err("inline section");
+        assert!(error.contains("inline"), "{error}");
     }
 }

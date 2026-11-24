@@ -107,6 +107,7 @@ import {
   SubsessionAncestorRails,
   CONV_RAIL_DEPTH_STEP,
 } from "./sidebar-conversation-card"
+import { createSidebarRelativeClock } from "./sidebar-relative-time"
 import { MoveConversationDialog } from "./move-conversation-dialog"
 import {
   applyLayoutMove,
@@ -123,7 +124,6 @@ import {
   conversationRowTimestamp,
   flatIndexOfConversation,
   folderHeaderFlatIndices,
-  formatRelative,
   groupByFolderWithReuse,
   headerIndexForFolder,
   mergeChildrenById,
@@ -1212,7 +1212,7 @@ export function SidebarConversationList({
 
   // Floating sticky folder header. `stickyFolderId` is the ONLY new render
   // state and changes solely when the scroll crosses into a different folder —
-  // never on a status event or the per-minute `now` tick — so the card/header
+  // never on a status event or a label refresh — so the card/header
   // memo budget is untouched. The per-frame handoff translateY is written
   // straight to the overlay node (no re-render); see `recomputeSticky`.
   const [stickyFolderId, setStickyFolderId] = useState<number | null>(null)
@@ -1403,15 +1403,12 @@ export function SidebarConversationList({
   const scrollToActiveRef = useRef<() => void>(() => {})
   const pendingScrollRef = useRef(false)
 
-  // Single "now" shared by every relative time label, refreshed once a minute.
-  // Threading one value through all rows (instead of each row calling
-  // `Date.now()` during render) keeps `timeLabel` referentially stable within a
-  // render tick, so a single status event re-renders only the affected card.
-  const [now, setNow] = useState(() => Date.now())
+  // Share one clock without scheduling a list render on every tick.
+  const [relativeClock] = useState(createSidebarRelativeClock)
   useEffect(() => {
-    const interval = setInterval(() => setNow(Date.now()), 60_000)
+    const interval = setInterval(relativeClock.tick, 60_000)
     return () => clearInterval(interval)
-  }, [])
+  }, [relativeClock])
 
   // The tag filter narrows what every section DRAWS — pinned, folders, chats
   // and recent all bucket from this. It never touches the per-folder counts
@@ -1644,9 +1641,8 @@ export function SidebarConversationList({
 
   // Flat row model for windowing — the pinned section, the folders section, and
   // every conversation live in this ONE array fed to the single Virtualizer (no
-  // separate, un-virtualized pinned list). Deliberately excludes `now` (see
-  // buildRows): the per-minute label tick must not rebuild rows and break the
-  // card memo.
+  // separate, un-virtualized pinned list). Label refreshes run independently
+  // of the row model and card memoization.
   const rows = useMemo(
     () =>
       buildRows({
@@ -3322,7 +3318,8 @@ export function SidebarConversationList({
         // Recent's and Chat's own rows read their last activity even while the
         // rest of the sidebar is sorted by creation time, and sub-sessions
         // their creation time even while it is sorted by activity.
-        timeLabel={formatRelative(conversationRowTimestamp(row, sortMode), now)}
+        relativeTimeAt={conversationRowTimestamp(row, sortMode)}
+        relativeTimeClock={relativeClock}
         onSelect={handleSelect}
         onDoubleClick={handleDoubleClick}
         onRename={handleRename}

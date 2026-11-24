@@ -11,7 +11,6 @@ import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import {
-  DeepSeekBuiltInCatalogNotice,
   DeepSeekModelListEditor,
   deepSeekAcceptsImages,
   deepseekReadsHarnessCatalog,
@@ -106,22 +105,6 @@ describe("deepseekReadsHarnessCatalog", () => {
     expect(deepseekReadsHarnessCatalog(undefined)).toBe(false)
     expect(deepseekReadsHarnessCatalog("")).toBe(false)
     expect(deepseekReadsHarnessCatalog("local")).toBe(false)
-  })
-})
-
-describe("DeepSeekBuiltInCatalogNotice", () => {
-  it("says the list is built in and offers no editor", () => {
-    vi.mocked(loadDeepSeekModelCatalog).mockClear()
-    render(
-      <NextIntlClientProvider locale="en" messages={enMessages}>
-        <DeepSeekBuiltInCatalogNotice />
-      </NextIntlClientProvider>
-    )
-    expect(
-      screen.getByText(enMessages.DeepSeekModelEditor.builtInCatalogNotice)
-    ).toBeTruthy()
-    expect(screen.queryByRole("button")).toBeNull()
-    expect(loadDeepSeekModelCatalog).not.toHaveBeenCalled()
   })
 })
 

@@ -185,6 +185,11 @@ function connection(agentType: string, status: string) {
     configOptions: agentType === "claude_code" ? CLAUDE_CONFIG : null,
     availableCommands:
       agentType === "claude_code" ? [{ name: "review", description: "" }] : [],
+    composerModeId: null,
+    selectorsLocked: false,
+    beginFirstSend: () => 1,
+    releaseFirstSend: () => {},
+    setComposerMode: () => Promise.resolve(true),
   }
 }
 
@@ -247,8 +252,15 @@ describe("a draft card whose connection still belongs to the previous agent", ()
     // Codex's own list, not Claude's. An edit to it is kept off Claude's
     // connection by the lifecycle hook (use-connection-lifecycle.agent-switch).
     expect(shell.props?.configOptions).toEqual(CODEX_CONFIG)
-    expect(shell.props?.onConfigOptionChange).toBe(
-      lifecycle.handleSetConfigOption
+    // A draft's pick goes through and becomes the new-conversation default.
+    const onConfig = shell.props?.onConfigOptionChange as
+      | ((configId: string, valueId: string) => void)
+      | undefined
+    onConfig?.("model", "gpt-5")
+    expect(lifecycle.handleSetConfigOption).toHaveBeenCalledWith(
+      "model",
+      "gpt-5",
+      { saveAsDefault: true }
     )
     expect(shell.props?.selectedModeId).toBe("auto")
     expect(shell.props?.availableCommands).toEqual([])

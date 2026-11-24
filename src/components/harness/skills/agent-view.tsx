@@ -16,6 +16,7 @@ import {
   FolderInput,
   PencilLine,
   PowerOff,
+  Puzzle,
   Sparkles,
   Trash2,
   TriangleAlert,
@@ -37,6 +38,7 @@ import { useHarnessSlot, useHarnessView } from "@/contexts/harness-view-context"
 import { useOpenHarness } from "@/hooks/use-open-harness"
 import { acpReadAgentSkill } from "@/lib/api"
 import { isHarnessPackTab } from "@/lib/harness-sections"
+import { HARNESS_INSTALLED } from "@/lib/harness/mcp-install-state"
 import {
   isSkillBusy,
   requestRepair,
@@ -235,6 +237,7 @@ function OwnerMarks({
   size?: "sm" | "md"
 }) {
   const t = useTranslations("Harness.skills.byAgent")
+  const tMarks = useTranslations("Harness.skills.marks")
   const labels = useSkillsLabels()
   const tone =
     facts.owner === "broken"
@@ -250,6 +253,11 @@ function OwnerMarks({
         {facts.owner === "broken" && <Unlink aria-hidden="true" />}
         {labels.owner(facts.owner, facts.pack)}
       </DiscoverMark>
+      {facts.plugin && (
+        <DiscoverMark size={size} tone="info">
+          {tMarks("belongsTo", { plugin: facts.plugin })}
+        </DiscoverMark>
+      )}
       {facts.codegCopy && (
         <DiscoverMark size={size}>{t("copyMark")}</DiscoverMark>
       )}
@@ -357,6 +365,7 @@ export function AgentSkillDetail({
   const { slots } = useHarnessView()
   const { openHarness } = useOpenHarness()
   const [busy] = useHarnessSlot(SKILLS_LINKS.busy)
+  const [installed] = useHarnessSlot(HARNESS_INSTALLED)
   const headingId = useId()
   const headingRef = useRef<HTMLHeadingElement>(null)
   useEffect(() => {
@@ -575,6 +584,31 @@ export function AgentSkillDetail({
       </Button>
     )
   }
+  // A plugin's member skill has no actions of its own: the plugin is
+  // managed as a whole, in the Plugins section.
+  if (facts.plugin) {
+    actions.length = 0
+    const owner = installed.value?.plugins?.find(
+      (plugin) => plugin.name === facts.plugin
+    )
+    if (owner) {
+      actions.push(
+        <Button
+          key="plugin"
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={() =>
+            openHarness({ section: "plugins", itemId: owner.item_id })
+          }
+          className="max-md:h-10"
+        >
+          <Puzzle aria-hidden="true" />
+          {t("showPlugin")}
+        </Button>
+      )
+    }
+  }
   actions.push(<ShowInFolder key="folder" path={item.path} />)
 
   const about = item.read_only
@@ -629,7 +663,7 @@ export function AgentSkillDetail({
               <SkillPath path={facts.linkTarget} />
             </p>
           )}
-          <p className={DETAIL_NOTE_CLASS}>{about}</p>
+          {!facts.plugin && <p className={DETAIL_NOTE_CLASS}>{about}</p>}
           {readers.length > 0 && (
             <p className="flex min-w-0 items-start gap-1.5 text-xs text-tone-warning">
               <TriangleAlert

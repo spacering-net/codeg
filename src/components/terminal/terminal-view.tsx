@@ -441,8 +441,32 @@ export function TerminalView({
       let exitsWhileBuffering: TerminalEvent[] = []
       let currentGeneration: string | null = null
       let exitShown = false
-      let unlistenReconnect: (() => void) | null = null
+      const stopListening: (() => void)[] = []
       let reconnectGeneration = 0
+      let fitTimer: ReturnType<typeof setTimeout> | null = null
+
+      // The view owns these resources as soon as they exist. Neither a late
+      // subscription nor a pending snapshot/spawn should delay their disposal.
+      cleanup = () => {
+        cleanup = undefined
+        replayBuffer = null
+        exitsWhileBuffering = []
+        writeQueue.dispose()
+        writeQueueRef.current = null
+        if (resizeTimer) clearTimeout(resizeTimer)
+        if (fitTimer) clearTimeout(fitTimer)
+        themeObserver.disconnect()
+        onDataDisposable.dispose()
+        onResizeDisposable.dispose()
+        for (const stop of stopListening) stop()
+        stopListening.length = 0
+        term.dispose()
+        fitAddonRef.current = null
+        termRef.current = null
+        ligaturesAddonRef.current = null
+        lastResizeRef.current = null
+        if (replayGateRef.current === replays) replayGateRef.current = null
+      }
 
       const showExit = (code?: number | null) => {
         if (exitShown) return
@@ -496,9 +520,10 @@ export function TerminalView({
       }
 
       // Subscribe to events BEFORE spawning so no initial output is lost
-      const unlisten = await subscribe<TerminalEvent>(
+      const unsubscribeOutput = await subscribe<TerminalEvent>(
         `terminal://output/${terminalId}`,
         (payload) => {
+          if (cancelled) return
           if (replayBuffer) {
             replayBuffer.push(payload)
             return
@@ -506,6 +531,11 @@ export function TerminalView({
           writeEvent(payload)
         }
       )
+      if (cancelled) {
+        unsubscribeOutput()
+        return
+      }
+      stopListening.push(unsubscribeOutput)
 
       /** 放行攒着的事件，跳过快照里已经有的那一段。 */
       const flushReplay = (snapshotSeq: number | null) => {
@@ -520,24 +550,19 @@ export function TerminalView({
         if (exits.some(isCurrentExit)) showExit()
       }
 
-      const unlistenExit = await subscribe<TerminalEvent>(
+      const unsubscribeExit = await subscribe<TerminalEvent>(
         `terminal://exit/${terminalId}`,
         (event) => {
+          if (cancelled) return
           if (replayBuffer) exitsWhileBuffering.push(event)
           else if (isCurrentExit(event)) showExit()
         }
       )
-
       if (cancelled) {
-        writeQueue.dispose()
-        themeObserver.disconnect()
-        onDataDisposable.dispose()
-        onResizeDisposable.dispose()
-        unlisten()
-        unlistenExit()
-        term.dispose()
+        unsubscribeExit()
         return
       }
+      stopListening.push(unsubscribeExit)
 
       const fitIfReady = () => {
         const el = containerRef.current
@@ -590,20 +615,6 @@ export function TerminalView({
         setLoading(false)
       }
 
-      /** 卸载已经发生：拆掉这次挂载建立的一切。attach 模式下 PTY 不归这次挂载，
-       *  所以调用方各自决定要不要 kill。 */
-      const teardown = () => {
-        if (replayGateRef.current === replays) replayGateRef.current = null
-        writeQueue.dispose()
-        themeObserver.disconnect()
-        onDataDisposable.dispose()
-        onResizeDisposable.dispose()
-        unlisten()
-        unlistenExit()
-        unlistenReconnect?.()
-        term.dispose()
-      }
-
       // Web and remote-desktop event sockets can miss chunks while offline.
       // Their ready notification fires after the server subscribes, so buffer
       // live chunks, redraw from one backend snapshot, then apply only events
@@ -641,7 +652,7 @@ export function TerminalView({
             flushReplay(null)
           })
       }
-      unlistenReconnect = onTransportReady(() => {
+      const unlistenReconnect = onTransportReady(() => {
         // If the first server ready lands while the startup snapshot is still
         // in flight, let that snapshot finish, then resample. The ready event
         // cannot be missed between the probe and listener registration.
@@ -651,6 +662,7 @@ export function TerminalView({
         }
         syncFromBackend()
       })
+      if (unlistenReconnect) stopListening.push(unlistenReconnect)
 
       // A restored tab only knows an ID. A reload can beat a terminal_spawn
       // request still in flight, so probe for a short bounded interval before
@@ -684,10 +696,7 @@ export function TerminalView({
       let previousCompleted: TerminalSnapshot | null = null
       if (attach) {
         const snapshot = await readSnapshot(!spawnOnMissing)
-        if (cancelled) {
-          teardown()
-          return
-        }
+        if (cancelled) return
         confirmedMissing =
           snapshot != null && !snapshot.alive && !snapshot.exists
         if (snapshot?.exists && !snapshot.alive) previousCompleted = snapshot
@@ -713,17 +722,20 @@ export function TerminalView({
           // outlives this view (a drawer swiped shut mid-spawn), and whichever
           // view mounts for it next must attach, never launch the command twice.
           onSpawnedRef.current?.(terminalId)
+          if (cancelled) {
+            // In attach mode the tab/card, not this view, owns the PTY.
+            if (!attach) terminalKill(terminalId).catch(() => {})
+            return
+          }
           // This handshake gives buffered output its PTY generation. A delayed
           // event from a previous process with this same id must not leak in,
           // so a failed request is retried rather than taken as "no filter".
           const launched = attach ? await readSnapshot(true, () => true) : null
-          if (cancelled) {
-            teardown()
-            return
-          }
+          if (cancelled) return
           if (launched?.alive || launched?.exists) applySnapshot(launched)
           else flushReplay(null)
         } catch (err) {
+          if (cancelled) return
           // A second mount can lose to the first while its PTY is still in
           // openpty/spawn and absent from snapshots. Wait only for that known
           // duplicate race; a genuine launch error should surface promptly.
@@ -745,10 +757,7 @@ export function TerminalView({
           const retry = attach
             ? await readSnapshot(duplicateId, isNewProcess)
             : null
-          if (cancelled) {
-            teardown()
-            return
-          }
+          if (cancelled) return
           if (retry && isNewProcess(retry)) {
             attached = true
             applySnapshot(retry)
@@ -765,15 +774,7 @@ export function TerminalView({
         }
       }
 
-      // If unmounted while spawn was in flight, clean up the spawned PTY.
-      // NOT in attach mode: there the PTY belongs to the card that placed it,
-      // not to this mount — that is the whole point of attaching, and killing
-      // here would take a running command down with a view switch.
-      if (cancelled) {
-        if (!attach) terminalKill(terminalId).catch(() => {})
-        teardown()
-        return
-      }
+      if (cancelled) return
 
       bootstrapping = false
       if (readyDuringStartup) syncFromBackend()
@@ -784,34 +785,14 @@ export function TerminalView({
       })
 
       // Debounced fit on container resize while active
-      let fitTimer: ReturnType<typeof setTimeout> | null = null
       const resizeObserver = new ResizeObserver(() => {
         if (fitTimer) clearTimeout(fitTimer)
         fitTimer = setTimeout(() => {
           fitIfReady()
         }, 30)
       })
+      stopListening.push(() => resizeObserver.disconnect())
       resizeObserver.observe(containerRef.current)
-
-      cleanup = () => {
-        writeQueue.dispose()
-        writeQueueRef.current = null
-        if (resizeTimer) clearTimeout(resizeTimer)
-        if (fitTimer) clearTimeout(fitTimer)
-        themeObserver.disconnect()
-        onDataDisposable.dispose()
-        onResizeDisposable.dispose()
-        unlisten()
-        unlistenExit()
-        unlistenReconnect?.()
-        resizeObserver.disconnect()
-        term.dispose()
-        fitAddonRef.current = null
-        termRef.current = null
-        ligaturesAddonRef.current = null
-        lastResizeRef.current = null
-        if (replayGateRef.current === replays) replayGateRef.current = null
-      }
     }
 
     init()

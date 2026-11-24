@@ -131,6 +131,10 @@ pub(crate) fn message(issue: &SkillsIssue, origin: SkillOrigin, id: &str) -> Str
             format!("a broken link already exists at '{path}' — repair or remove it first")
         }
         codes::AGENT_UNSUPPORTED => "this agent has no skill directory".to_string(),
+        codes::PLUGIN_OWNED => format!(
+            "'{path}' is the Harness plugin {}'s skill — it changes with the plugin",
+            issue.detail.clone().unwrap_or_default()
+        ),
         _ => match &issue.detail {
             Some(detail) => format!("{}: {path}: {detail}", issue.code),
             None => format!("{}: {path}", issue.code),

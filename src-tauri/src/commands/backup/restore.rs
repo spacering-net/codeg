@@ -647,6 +647,23 @@ pub(crate) fn apply_pending_restore_with_paths(
     write_snapshot_manifest(&backup_dir, &pending.created_at, &units)?;
 
     let state_dir = staging.join(SWAP_STATE_DIR);
+    // The plugins' files, their record and the skills-only members in the
+    // skill store are one state: replaced under the plugins lock (taken
+    // before the skills lock, as every plugin operation takes them), and
+    // every agent of every plugin marked for repair once they are in.
+    let plugins_ctx = units
+        .iter()
+        .any(|unit| PLUGIN_STATE_SECTIONS.contains(&unit.id.as_str()))
+        .then(|| plugins_ctx(live_roots))
+        .flatten();
+    let plugins_lock = match &plugins_ctx {
+        Some(ctx) => Some(ctx.lock_blocking().map_err(|err| {
+            std::io::Error::other(format!(
+                "{err}; the restore will be applied at the next start"
+            ))
+        })?),
+        None => None,
+    };
     // Replacing Codeg's skill store happens under the skills lock, like every
     // other write to it (another Codeg of this user may be writing there).
     // Not had in time: nothing moves, and the next start tries again.
@@ -671,6 +688,16 @@ pub(crate) fn apply_pending_restore_with_paths(
             tracing::warn!("[RESTORE] skills link record: {err}");
         }
     }
+    if let (Some(ctx), Some(guard)) = (&plugins_ctx, &plugins_lock) {
+        // Before the marker goes: a start that stops here marks them on the
+        // next try (the swaps themselves are not repeated).
+        let before = units
+            .iter()
+            .find(|unit| unit.id == "harness-plugins.json")
+            .map(|unit| unit.snapshot.clone());
+        mark_plugins_restored(ctx, guard, before.as_deref())?;
+    }
+    drop(plugins_lock);
 
     // Commit only after a fully successful swap. On a mid-swap crash we return
     // Err with marker + staging + safety snapshot all intact, so the next boot
@@ -684,6 +711,63 @@ pub(crate) fn apply_pending_restore_with_paths(
     Ok(RestoreApplied::Applied {
         safety_snapshot: Some(backup_dir),
     })
+}
+
+/// The sections that hold the plugins' state (see `sections.rs`).
+const PLUGIN_STATE_SECTIONS: &[&str] = &["plugins", "harness-plugins.json", "skills"];
+
+/// Where the restore finds the plugin store and its record; the plugins lock
+/// beside the store. `None`: the table has no such sections.
+fn plugins_ctx(live_roots: &LiveRoots) -> Option<crate::harness::plugins::PluginsCtx> {
+    let mut ctx = crate::harness::plugins::PluginsCtx::over(
+        live_roots.path("plugins")?,
+        live_roots.path("harness-plugins.json")?,
+    );
+    ctx.lock_wait = crate::skills::lock::RESTORE_LOCK_WAIT;
+    Some(ctx)
+}
+
+/// After a restore that brought in the plugin store, its record or the
+/// skill store: first the restored operations' journals are finished or
+/// rolled back (file work only, as at startup), and what the record from
+/// before the restore (`before`, in the safety snapshot) had that the
+/// restored one lacks is carried in (the hosts may still have it); then
+/// every agent of every plugin needs repair (what it has is as old as the
+/// backup at best), and the repair only checks it, switches it off and
+/// repoints it (`RepairNote::restored`). A record this Codeg cannot read is
+/// left as it is (every plugin operation refuses it anyway); one that cannot
+/// be written fails the restore, which the next start finishes.
+pub(crate) fn mark_plugins_restored(
+    ctx: &crate::harness::plugins::PluginsCtx,
+    guard: &crate::harness::plugins::lock::PluginsGuard,
+    before: Option<&Path>,
+) -> std::io::Result<()> {
+    use crate::harness::plugins::{journal, record};
+    // First, durably: the operations that came with the backup, so that a
+    // rollback of one (now, or at a later start for one that waits) marks
+    // its agents as restored in the same write as it marks them for repair.
+    journal::mark_restored_journals(ctx)?;
+    let recovered = journal::recover(ctx, guard);
+    if !recovered.problems.is_empty() {
+        tracing::warn!("[RESTORE] plugin journals: {:?}", recovered.problems);
+    }
+    if let Some(before) = before {
+        let carried = record::carry_after_restore(ctx, guard, before)?;
+        if !carried.is_empty() {
+            tracing::info!("[RESTORE] kept from before the restore: {carried:?}");
+        }
+    }
+    match record::mark_restored(ctx, guard)? {
+        Some(0) => {}
+        Some(marked) => {
+            tracing::info!("[RESTORE] {marked} plugin agent(s) marked for repair after the restore")
+        }
+        None => tracing::warn!(
+            "[RESTORE] the plugins record cannot be read; its agents are not marked for repair"
+        ),
+    }
+    // A journal that waits keeps the mark for the start that recovers it.
+    journal::clear_restored_mark(ctx)
 }
 
 /// One thing the swap moves: the database, one of its WAL sidecars, or a
@@ -1889,5 +1973,291 @@ mod tests {
             apply_pending_restore_with_paths(data_dir, &live).unwrap(),
             RestoreApplied::None
         ));
+    }
+
+    fn plugins_record(state: serde_json::Value) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "format": 1,
+            "plugins": { "superpowers": {
+                "item_id": "01a1", "ref": "obra/superpowers", "revision": 1,
+                "exec_sha256": "e", "state_sha256": "s",
+                "installed_at": "2026-11-19T09:30:00.000Z", "op": "op-1",
+                "hosts": {
+                    "claude_code": { "mode": "native", "state": state, "host_name": "superpowers" },
+                    "gemini": { "mode": "skills", "state": { "suspended": { "reason": "yanked" } },
+                                "skills": ["brainstorming"] }
+                } } }
+        }))
+        .unwrap()
+    }
+
+    fn restore(dir: &Path, managed: Option<Vec<String>>, files: &[(&str, &[u8])], live: &Path) {
+        let data_dir = dir.join("data");
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let src = dir.join(format!("{}.zip", uuid::Uuid::new_v4().simple()));
+        write_archive(&src, managed, files);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(stage_restore_core(
+            &src,
+            &data_dir,
+            &EventEmitter::Noop,
+            "pl",
+            &CancellationToken::new(),
+        ))
+        .unwrap();
+        apply_pending_restore_with_paths(&data_dir, &LiveRoots::rooted_at(live)).unwrap();
+    }
+
+    fn hosts_of(record: &Path) -> serde_json::Map<String, serde_json::Value> {
+        let record: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(record).unwrap()).unwrap();
+        record["plugins"]["superpowers"]["hosts"]
+            .as_object()
+            .unwrap()
+            .clone()
+    }
+
+    /// The plugin store and its record come back together, and every agent
+    /// of every plugin is marked for repair — noting the state it had, and
+    /// that its repair only checks, switches off and repoints.
+    #[test]
+    fn a_restore_with_the_plugins_marks_every_agent_for_repair() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("live");
+        let record = plugins_record(serde_json::json!("active"));
+        restore(
+            dir.path(),
+            Some(sections::all_section_ids()),
+            &[
+                ("db/codeg.db", b"NEW-DB"),
+                ("harness-plugins.json", &record),
+                ("plugins/superpowers/1/index.js", b"export default {}\n"),
+            ],
+            &live,
+        );
+        assert_eq!(
+            std::fs::read(live.join("plugins/superpowers/1/index.js")).unwrap(),
+            b"export default {}\n"
+        );
+        let hosts = hosts_of(&live.join("harness-plugins.json"));
+        assert_eq!(hosts["claude_code"]["state"], "needs_repair");
+        assert_eq!(hosts["claude_code"]["repair"]["was"], "active");
+        assert_eq!(hosts["claude_code"]["repair"]["restored"], true);
+        assert_eq!(hosts["claude_code"]["host_name"], "superpowers");
+        assert_eq!(hosts["gemini"]["state"], "needs_repair");
+        assert_eq!(
+            hosts["gemini"]["repair"]["was"]["suspended"]["reason"],
+            "yanked"
+        );
+        assert_eq!(hosts["gemini"]["repair"]["restored"], true);
+    }
+
+    /// A restore that brings back only the skill store (where the
+    /// skills-only members are) leaves this machine's plugins in place,
+    /// marked all the same; a legacy archive, which knows neither, leaves
+    /// them alone.
+    #[test]
+    fn a_restore_of_the_skills_alone_marks_the_plugins_too_a_legacy_one_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("live");
+        let record_path = live.join("harness-plugins.json");
+        std::fs::create_dir_all(&live).unwrap();
+        std::fs::write(&record_path, plugins_record(serde_json::json!("active"))).unwrap();
+        std::fs::create_dir_all(live.join("plugins/superpowers/1")).unwrap();
+        std::fs::write(live.join("plugins/superpowers/1/index.js"), b"live").unwrap();
+
+        restore(
+            dir.path(),
+            None,
+            &[("db/codeg.db", b"NEW-DB"), ("uploads/a.txt", b"A")],
+            &live,
+        );
+        assert_eq!(hosts_of(&record_path)["claude_code"]["state"], "active");
+
+        let again = tempfile::tempdir().unwrap();
+        restore(
+            again.path(),
+            Some(vec!["skills".to_string()]),
+            &[("db/codeg.db", b"NEW-DB"), ("skills/mine/SKILL.md", b"x")],
+            &live,
+        );
+        assert_eq!(
+            std::fs::read(live.join("plugins/superpowers/1/index.js")).unwrap(),
+            b"live"
+        );
+        let hosts = hosts_of(&record_path);
+        assert_eq!(hosts["claude_code"]["state"], "needs_repair");
+        assert_eq!(hosts["claude_code"]["repair"]["restored"], true);
+        assert_eq!(hosts["gemini"]["state"], "needs_repair");
+    }
+
+    /// A plugins record this Codeg cannot read does not stop the restore.
+    #[test]
+    fn an_unreadable_plugins_record_is_left_as_it_is() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("live");
+        restore(
+            dir.path(),
+            Some(sections::all_section_ids()),
+            &[
+                ("db/codeg.db", b"NEW-DB"),
+                ("harness-plugins.json", b"{ not json"),
+            ],
+            &live,
+        );
+        assert_eq!(
+            std::fs::read(live.join("harness-plugins.json")).unwrap(),
+            b"{ not json"
+        );
+    }
+
+    /// A plugin (or an agent of one) installed since the backup is kept in
+    /// the record after it — its host may still have it — and marked like
+    /// the rest; an operation the backup caught midway is rolled back first
+    /// (its agents marked as restored too, so their repair never puts the
+    /// plugin into a host).
+    #[test]
+    fn what_was_installed_since_the_backup_and_what_it_caught_midway_need_repair() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("live");
+        std::fs::create_dir_all(&live).unwrap();
+        let mut before: serde_json::Value =
+            serde_json::from_slice(&plugins_record(serde_json::json!("active"))).unwrap();
+        before["plugins"]["later"] = before["plugins"]["superpowers"].clone();
+        before["plugins"]["later"]["item_id"] = serde_json::json!("02b2");
+        before["plugins"]["superpowers"]["hosts"]["codex"] =
+            serde_json::json!({ "mode": "native", "state": "active", "host_name": "superpowers" });
+        // Gemini switched to the other way since the backup.
+        before["plugins"]["superpowers"]["hosts"]["gemini"] =
+            serde_json::json!({ "mode": "native", "state": "active", "host_name": "superpowers" });
+        // An item installed since under another name (it renamed itself):
+        // the entry from before replaces the restored one.
+        let mut renamed = before["plugins"]["superpowers"].clone();
+        renamed["item_id"] = serde_json::json!("04d4");
+        before["plugins"]["renamed"] = renamed;
+        std::fs::write(
+            live.join("harness-plugins.json"),
+            serde_json::to_vec(&before).unwrap(),
+        )
+        .unwrap();
+
+        let mut journal_after: serde_json::Value =
+            serde_json::from_slice(&plugins_record(serde_json::json!("active"))).unwrap();
+        let mut caught = journal_after["plugins"]["superpowers"].take();
+        caught["item_id"] = serde_json::json!("03c3");
+        caught["op"] = serde_json::json!("op-9");
+        caught["hosts"]
+            .as_object_mut()
+            .unwrap()
+            .retain(|agent, _| agent == "claude_code");
+        let journal = serde_json::json!({
+            "kind": "harness_plugin", "format": 1, "op": "op-9", "action": "install",
+            "name": "midway", "before": null, "after": caught,
+            "steps": [{ "agent": "claude_code", "mode": "native", "action": "install",
+                        "state": "planned" }],
+            "created_at": "2026-11-19T09:30:00.000Z"
+        });
+        let mut restored: serde_json::Value =
+            serde_json::from_slice(&plugins_record(serde_json::json!("active"))).unwrap();
+        let mut oldname = restored["plugins"]["superpowers"].clone();
+        oldname["item_id"] = serde_json::json!("04d4");
+        restored["plugins"]["oldname"] = oldname;
+        let restored = serde_json::to_vec(&restored).unwrap();
+        let journal = serde_json::to_vec(&journal).unwrap();
+        restore(
+            dir.path(),
+            Some(sections::all_section_ids()),
+            &[
+                ("db/codeg.db", b"NEW-DB"),
+                ("harness-plugins.json", &restored),
+                ("plugins/.ops/op-9.json", &journal),
+            ],
+            &live,
+        );
+        let record: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(live.join("harness-plugins.json")).unwrap())
+                .unwrap();
+        let plugins = record["plugins"].as_object().unwrap();
+        let mut names: Vec<&String> = plugins.keys().collect();
+        names.sort();
+        // `oldname` (the restored entry of item 04d4) gave way to `renamed`.
+        assert_eq!(names, ["later", "midway", "renamed", "superpowers"]);
+        for (name, entry) in plugins {
+            for (agent, host) in entry["hosts"].as_object().unwrap() {
+                assert_eq!(host["state"], "needs_repair", "{name} {agent}");
+                assert_eq!(host["repair"]["restored"], true, "{name} {agent}");
+            }
+        }
+        assert!(plugins["superpowers"]["hosts"].get("codex").is_some());
+        let gemini = &plugins["superpowers"]["hosts"]["gemini"];
+        assert_eq!(gemini["mode"], "skills");
+        assert_eq!(gemini["repair"]["other_modes"], serde_json::json!(["native"]));
+        assert_eq!(gemini["host_name"], "superpowers");
+        assert!(!live.join("plugins/.ops/op-9.json").exists());
+        assert!(!live.join("plugins/.restored").exists());
+    }
+
+    /// A journal the restore cannot recover waits for a later start, which
+    /// marks the agents again once it has (`.restored`).
+    #[test]
+    fn a_journal_the_restore_cannot_recover_leaves_the_mark_for_a_later_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("live");
+        let restored = plugins_record(serde_json::json!("active"));
+        restore(
+            dir.path(),
+            Some(sections::all_section_ids()),
+            &[
+                ("db/codeg.db", b"NEW-DB"),
+                ("harness-plugins.json", &restored),
+                ("plugins/.ops/op-7.json", b"{ not json"),
+            ],
+            &live,
+        );
+        assert!(live.join("plugins/.ops/op-7.json").exists());
+        assert!(live.join("plugins/.restored").exists());
+        assert_eq!(
+            hosts_of(&live.join("harness-plugins.json"))["claude_code"]["repair"]["restored"],
+            true
+        );
+    }
+
+    /// A restored journal of a plugin whose name is another item's in the
+    /// record by the time it is rolled back leaves that entry alone.
+    #[test]
+    fn a_rollback_never_marks_another_items_entry_under_the_same_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = crate::harness::plugins::PluginsCtx::over(
+            &dir.path().join("plugins"),
+            &dir.path().join("harness/plugins.json"),
+        );
+        // `superpowers` is item 01a1 in the record.
+        std::fs::create_dir_all(dir.path().join("harness")).unwrap();
+        let record = plugins_record(serde_json::json!("active"));
+        std::fs::write(&ctx.record, &record).unwrap();
+        // A journal of item 05e5's uninstall under that name.
+        let mut theirs: serde_json::Value = serde_json::from_slice(&record).unwrap();
+        let mut before = theirs["plugins"]["superpowers"].take();
+        before["item_id"] = serde_json::json!("05e5");
+        let journal = serde_json::json!({
+            "kind": "harness_plugin", "format": 1, "op": "op-5", "action": "uninstall",
+            "name": "superpowers", "before": before, "after": null,
+            "steps": [{ "agent": "claude_code", "mode": "native", "action": "uninstall",
+                        "state": "planned" }],
+            "created_at": "2026-11-19T09:30:00.000Z"
+        });
+        std::fs::create_dir_all(ctx.ops_dir()).unwrap();
+        std::fs::write(ctx.journal_path("op-5"), serde_json::to_vec(&journal).unwrap()).unwrap();
+
+        let guard = ctx.lock_blocking().unwrap();
+        let report = crate::harness::plugins::journal::recover(&ctx, &guard);
+        drop(guard);
+        assert_eq!(report.rolled_back, 1, "{:?}", report.problems);
+        assert!(report.needs_repair.is_empty());
+        assert_eq!(std::fs::read(&ctx.record).unwrap(), record);
+        assert!(!ctx.journal_path("op-5").exists());
     }
 }

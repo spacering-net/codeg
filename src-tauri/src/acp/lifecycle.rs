@@ -38,8 +38,11 @@ use tokio::sync::RwLock;
 /// of times per turn, so 64 slots is comfortable headroom for a sustained
 /// SQLite stall without forcing the dispatcher to block on `send`.
 /// (SessionStarted, TurnComplete, ConversationLinked, NativeSessionTitle,
-/// TranscriptRolledOver, ToolApproval, Disconnected, Error.) `ToolApproval`
-/// is one per answered permission card, so it is paced by a person.
+/// TranscriptRolledOver, ToolApproval, Disconnected, Error, and the selector
+/// events the conversation's stored selection follows — SessionModes,
+/// ModeChanged, SessionConfigOptions, SelectorsReady, ComposerModeChanged —
+/// which arrive per establishment or per pick.) `ToolApproval` is one per
+/// answered permission card, so it is paced by a person.
 const WORKER_QUEUE_CAPACITY: usize = 64;
 
 /// Whether an event needs to reach the per-connection worker. Mirrors the
@@ -67,6 +70,11 @@ fn is_lifecycle_relevant(event: &AcpEvent) -> bool {
         AcpEvent::SessionStarted { .. }
             | AcpEvent::TurnComplete { .. }
             | AcpEvent::ConversationLinked { .. }
+            | AcpEvent::SessionModes { .. }
+            | AcpEvent::ModeChanged { .. }
+            | AcpEvent::SessionConfigOptions { .. }
+            | AcpEvent::SelectorsReady
+            | AcpEvent::ComposerModeChanged { .. }
             | AcpEvent::NativeSessionTitle { .. }
             | AcpEvent::TranscriptRolledOver { .. }
             | AcpEvent::ToolApproval { .. }
@@ -3185,14 +3193,53 @@ async fn connection_worker_loop(
     // the terminal work; the second one is a no-op so the broker / DB
     // aren't double-touched.
     let mut terminal_dispatched = false;
+    // The connection's state + emitter, kept from the first event handled so a
+    // selection persist never needs a manager lookup: `disconnect` removes the
+    // entry before the connection stops, and a queued event would otherwise
+    // find nothing. The driver's own final flush covers a connection removed
+    // before this worker saw any event.
+    let mut selection_handle: Option<(Arc<RwLock<SessionState>>, EventEmitter)> = None;
     while let Some(envelope_arc) = rx.recv().await {
         let envelope: &EventEnvelope = envelope_arc.as_ref();
+        if selection_handle.is_none() {
+            selection_handle = manager.get_state_and_emitter(&connection_id).await;
+        }
+        let persists_selection = matches!(
+            envelope.payload,
+            AcpEvent::SessionModes { .. }
+                | AcpEvent::ModeChanged { .. }
+                | AcpEvent::SessionConfigOptions { .. }
+                | AcpEvent::SelectorsReady
+                | AcpEvent::ComposerModeChanged { .. }
+                | AcpEvent::ConversationLinked { .. }
+                | AcpEvent::TurnComplete { .. }
+        );
+        if persists_selection {
+            if let Some((state, emitter)) = selection_handle.as_ref() {
+                // (A link's write authority is taken at the link itself, in
+                // `send_prompt_linked_full` / `fork_session` — never here,
+                // where a delayed event could take it back from a newer
+                // binder.)
+                //
+                // Before the broker forward on `TurnComplete`, so a delegation
+                // child is persisted before the broker can disconnect it.
+                manager
+                    .selection
+                    .persist(&connection_id, state, Some(emitter))
+                    .await;
+            }
+        }
         match &envelope.payload {
             AcpEvent::ConversationLinked {
                 conversation_id, ..
             } => {
                 try_cache_link(&mut cache, &manager, &connection_id, *conversation_id).await;
             }
+            AcpEvent::SessionModes { .. }
+            | AcpEvent::ModeChanged { .. }
+            | AcpEvent::SessionConfigOptions { .. }
+            | AcpEvent::SelectorsReady
+            | AcpEvent::ComposerModeChanged { .. } => {}
             AcpEvent::StatusChanged {
                 status: ConnectionStatus::Disconnected,
             } => {
@@ -3284,6 +3331,7 @@ pub fn lifecycle_subscriber_task(
 ) -> impl Future<Output = ()> + Send + 'static {
     let mut rx = bus.subscribe();
     let metrics = Arc::clone(bus.metrics());
+    manager.install_selection_db(db_conn.clone());
     async move {
         // connection_id → worker mailbox. Workers are spawned lazily on the
         // connection's first relevant event and torn down after a terminal
@@ -4411,6 +4459,18 @@ mod tests {
             code: None,
             details: None,
             terminal: true,
+        }));
+        // The conversation's stored selection follows these.
+        assert!(is_lifecycle_relevant(&AcpEvent::ModeChanged {
+            mode_id: "plan".into(),
+        }));
+        assert!(is_lifecycle_relevant(&AcpEvent::SessionConfigOptions {
+            config_options: Vec::new(),
+        }));
+        assert!(is_lifecycle_relevant(&AcpEvent::SelectorsReady));
+        assert!(is_lifecycle_relevant(&AcpEvent::ComposerModeChanged {
+            mode_id: None,
+            explicit: false,
         }));
 
         // Rejected (worker no-ops on these — must not enter the queue):

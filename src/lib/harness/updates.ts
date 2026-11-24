@@ -5,9 +5,11 @@
  *
  * The host's Codeg asks SpaceRing (`POST /resolve`) once a day in the
  * background and keeps the answer; these commands only read it, or ask the
- * host to check — never this window. It only tells: nothing here installs,
- * updates or disables anything; "Update" opens the install dialog, where the
- * user confirms as for any install.
+ * host to check — never this window. Nothing here installs, updates or
+ * disables anything; "Update" opens the install dialog, where the user
+ * confirms as for any install. (The host's check itself switches off a
+ * plugin's autorun parts when SRN no longer vouches for the installed
+ * revision; the answer then says `suspended`.)
  *
  * Kept in a slot (`harness-slots.ts`), read by the sidebar's badge (always
  * mounted) and by the MCP, Skills and Discover sections. Requests to the
@@ -30,8 +32,13 @@ export const HARNESS_UPDATE_STATES = [
   "latest",
   "update_available",
   "yanked",
+  /** A plugin installed whole somewhere: the installed revision's approval
+   *  was withdrawn. */
+  "unapproved",
   "disabled_by_author",
   "removed_by_harness",
+  /** The item is no longer on SRN (any kind, whatever the reason). */
+  "gone",
   "unknown",
 ] as const
 
@@ -42,8 +49,22 @@ export type HarnessRemoteState =
   | "latest"
   | "updateAvailable"
   | "yanked"
+  | "unapproved"
   | "disabledByAuthor"
   | "removedByHarness"
+  | "gone"
+
+/** What an installed plugin's update would be. */
+export interface HarnessUpdatePlugin {
+  /** The revision an update goes to: the one to install whole while any
+   *  agent has it as a plugin, else the newest; `null` when there is none. */
+  target: { revision: number; version: string | null } | null
+  /** The update will ask again for agreement to what runs on its own (the
+   *  update's plan says for sure). */
+  needs_consent: boolean
+  /** Codeg switched it off for an agent; only an update turns it on. */
+  suspended: boolean
+}
 
 export interface HarnessUpdateItem {
   id: string
@@ -56,8 +77,11 @@ export interface HarnessUpdateItem {
   latest: { revision: number; version: string | null } | null
   /** The item's address now, as the catalog last told it. */
   ref: string | null
-  /** Why the state is unknown: not asked yet, or asked and not told. */
+  /** Why the state is unknown: not asked yet, or asked and not told (the
+   *  item is there, not the revision asked about). */
   unknown: "not_checked" | "unavailable" | null
+  /** Plugins only. */
+  plugin: HarnessUpdatePlugin | null
 }
 
 export interface HarnessCheckError {
@@ -115,6 +139,26 @@ function stateOf(value: unknown): HarnessUpdateState {
     : "unknown"
 }
 
+function revisionOf(
+  value: unknown
+): { revision: number; version: string | null } | null {
+  const source = record(value)
+  const revision = source ? wholeOrNull(source.revision) : null
+  return source && revision !== null
+    ? { revision, version: textOrNull(source.version) }
+    : null
+}
+
+function pluginOf(value: unknown): HarnessUpdatePlugin | null {
+  const source = record(value)
+  if (!source) return null
+  return {
+    target: revisionOf(source.target),
+    needs_consent: source.needs_consent === true,
+    suspended: source.suspended === true,
+  }
+}
+
 function item(source: Json): HarnessUpdateItem | null {
   const id = textOrNull(source.id)
   const revision = wholeOrNull(source.revision)
@@ -122,15 +166,19 @@ function item(source: Json): HarnessUpdateItem | null {
   const latest = record(source.latest)
   const latestRevision = latest ? wholeOrNull(latest.revision) : null
   const state = stateOf(source.state)
+  const plugin = pluginOf(source.plugin)
+  // Only a newer revision the answer names is an update to offer — for a
+  // plugin, its target; one Codeg switched off also at the revision it has.
+  const offered = plugin
+    ? plugin.target !== null &&
+      (plugin.target.revision > revision ||
+        (plugin.suspended && plugin.target.revision === revision))
+    : latestRevision !== null && latestRevision > revision
   return {
     id,
     revision,
     state,
-    // Only a newer revision the answer names is an update to offer.
-    update_available:
-      source.update_available === true &&
-      latestRevision !== null &&
-      latestRevision > revision,
+    update_available: source.update_available === true && offered,
     latest:
       latest && latestRevision !== null
         ? { revision: latestRevision, version: textOrNull(latest.version) }
@@ -142,7 +190,15 @@ function item(source: Json): HarnessUpdateItem | null {
         : source.unknown === "unavailable"
           ? "unavailable"
           : "not_checked",
+    plugin,
   }
+}
+
+/** One item of an answer — also the `update` an installed plugin's row
+ *  carries in `harness_installed`. `null` for what is not one. */
+export function normalizeUpdateItem(value: unknown): HarnessUpdateItem | null {
+  const source = record(value)
+  return source ? item(source) : null
 }
 
 /** The answer of either command, read defensively: a newer or older Codeg
@@ -379,10 +435,14 @@ export function remoteStateOf(
       return "updateAvailable"
     case "yanked":
       return "yanked"
+    case "unapproved":
+      return "unapproved"
     case "disabled_by_author":
       return "disabledByAuthor"
     case "removed_by_harness":
       return "removedByHarness"
+    case "gone":
+      return "gone"
     default:
       return null
   }
@@ -413,12 +473,21 @@ export function remoteFor(
   if (!entry) {
     return { remote: null, updateAvailable: false, latest: null, ref: null }
   }
+  // A plugin's update goes to its target (one Codeg switched off: also to
+  // the revision it has, to turn it on again); anything else's to the
+  // newest.
+  const offered = entry.plugin ? entry.plugin.target : entry.latest
   const updateAvailable =
     entry.update_available &&
-    entry.latest !== null &&
-    entry.latest.revision > revision
+    offered !== null &&
+    (offered.revision > revision ||
+      (entry.plugin?.suspended === true && offered.revision === revision))
+  // An item stopped by its author or no longer on SRN is so at every
+  // revision.
+  const itemWide =
+    entry.state === "gone" || entry.state === "disabled_by_author"
   const remote =
-    entry.revision === revision
+    entry.revision === revision || itemWide
       ? remoteStateOf(entry)
       : updateAvailable
         ? "updateAvailable"

@@ -40,6 +40,8 @@ import type {
   AutomationDraft,
   DeepSeekCatalogModel,
   DeepSeekModelCatalog,
+  DeepSeekProviderRoute,
+  DeepSeekProviderRoutes,
   ForgeAutoScanReport,
   ForgeAutoStatus,
   ForgeApproveResult,
@@ -268,7 +270,11 @@ export async function acpConnect(
   workingDir?: string,
   sessionId?: string,
   preferredModeId?: string | null,
-  preferredConfigValues?: Record<string, string> | null
+  preferredConfigValues?: Record<string, string> | null,
+  /** The existing conversation this connect opens (a real row id). Its own
+   *  stored selection then wins over the preferences above, which are only
+   *  the new-conversation default (codeg#1179). */
+  conversationId?: number | null
 ): Promise<string> {
   return getTransport().call("acp_connect", {
     agentType,
@@ -276,6 +282,25 @@ export async function acpConnect(
     sessionId: sessionId ?? null,
     preferredModeId: preferredModeId ?? null,
     preferredConfigValues: preferredConfigValues ?? null,
+    conversationId: conversationId ?? null,
+  })
+}
+
+/**
+ * Record the composer's pending mode pick on a connection — never sent to the
+ * agent; the tab applies it at its next send. `initial` = a draft's one-time
+ * hand-over at its first send: applied only while no pick was made on the
+ * connection. Resolves to whether it applied.
+ */
+export async function acpSetComposerMode(
+  connectionId: string,
+  modeId: string | null,
+  initial = false
+): Promise<boolean> {
+  return getTransport().call("acp_set_composer_mode", {
+    connectionId,
+    modeId,
+    initial,
   })
 }
 
@@ -486,8 +511,19 @@ export async function acpAnswerPlanApproval(
   })
 }
 
-export async function acpDisconnect(connectionId: string): Promise<void> {
-  return getTransport().call("acp_disconnect", { connectionId })
+export function acpDisconnect(connectionId: string): Promise<void>
+export function acpDisconnect(
+  connectionId: string,
+  onlyIfIdle: true
+): Promise<boolean>
+export function acpDisconnect(
+  connectionId: string,
+  onlyIfIdle?: true
+): Promise<void | boolean> {
+  return getTransport().call(
+    "acp_disconnect",
+    onlyIfIdle ? { connectionId, onlyIfIdle } : { connectionId }
+  )
 }
 
 export async function acpTouchConnection(
@@ -957,6 +993,28 @@ export async function updateDeepSeekModelCatalog(
   models: DeepSeekCatalogModel[] | null
 ): Promise<void> {
   return getTransport().call("acp_update_deepseek_model_catalog", { models })
+}
+
+/**
+ * Read the DeepSeek Harness provider routes — `llm-pi-ai.providers` in the
+ * bridge's own `$DSH_HOME/deepseek-acp/settings.yaml`. While that document does
+ * not exist the routes come from the legacy harness documents the bridge
+ * imports, and `source` says which one.
+ */
+export async function loadDeepSeekProviderRoutes(): Promise<DeepSeekProviderRoutes> {
+  return getTransport().call("acp_load_deepseek_provider_routes", {})
+}
+
+/**
+ * Store the DeepSeek Harness provider routes, replacing `llm-pi-ai.providers`
+ * in the bridge's own document and leaving every other key (and every other
+ * section) alone. `null` — and an empty list — REMOVE the routes, so only the
+ * official DeepSeek route remains.
+ */
+export async function updateDeepSeekProviderRoutes(
+  routes: DeepSeekProviderRoute[] | null
+): Promise<void> {
+  return getTransport().call("acp_update_deepseek_provider_routes", { routes })
 }
 
 /**
@@ -4085,11 +4143,24 @@ function stripUploadedTaskConfig(config: WorkTaskConfig): WorkTaskConfig {
 
 export async function workTaskUpdate(
   id: number,
-  draft: WorkTaskDraft
+  draft: WorkTaskDraft,
+  /** How the server treats the selector tuple (codeg#1179): untouched keeps
+   *  the CURRENT row's, reset re-resolves the folder's task settings now.
+   *  Older servers ignore both and apply the draft as sent. */
+  flags?: {
+    selectionUntouched?: boolean
+    selectionReset?: boolean
+    /** Only the selector tuple changes; refused if the task's title, folder
+     *  or brief moved since the dialog opened. */
+    selectorOnly?: boolean
+  }
 ): Promise<WorkTask> {
   return getTransport().call("work_task_update", {
     id,
     draft: { ...draft, config: stripUploadedTaskConfig(draft.config) },
+    selectionUntouched: flags?.selectionUntouched ?? false,
+    selectionReset: flags?.selectionReset ?? false,
+    selectorOnly: flags?.selectorOnly ?? false,
   })
 }
 

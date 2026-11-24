@@ -98,7 +98,7 @@ pub async fn harness_mcp_install(
 pub async fn harness_installed(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<HarnessInstalled>, AppCommandError> {
-    commands::harness_installed_core(&state.db, &state.emitter)
+    commands::harness_installed_core(&state.db, &state.data_dir, &state.emitter)
         .await
         .map(Json)
 }

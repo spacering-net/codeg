@@ -56,6 +56,9 @@ pub mod harness;
 /// Installing MCP servers from Harness, and the record of what was installed
 /// (both runtimes).
 pub mod harness_mcp;
+/// Installing plugins from Harness, updating, switching and repairing them
+/// (both runtimes).
+pub mod harness_plugins;
 /// Installing skills from Harness through the skills engine (both
 /// runtimes).
 pub mod harness_skills;

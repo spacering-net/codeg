@@ -40,7 +40,7 @@ function renderView(discoverEnabled?: boolean) {
 beforeEach(() => localStorage.clear())
 
 describe("HarnessViewProvider — current section", () => {
-  it("opens on Discover the first time, with all four sections", () => {
+  it("opens on Discover the first time, with all five sections", () => {
     const { result } = renderView()
 
     expect(result.current.section).toBe("discover")
@@ -48,6 +48,7 @@ describe("HarnessViewProvider — current section", () => {
       "discover",
       "mcp",
       "skills",
+      "plugins",
       "packs",
     ])
     expect(result.current.discoverEnabled).toBe(true)
@@ -72,7 +73,12 @@ describe("HarnessViewProvider — current section", () => {
     const { result } = renderView(false)
 
     expect(result.current.discoverEnabled).toBe(false)
-    expect(result.current.sections).toEqual(["mcp", "skills", "packs"])
+    expect(result.current.sections).toEqual([
+      "mcp",
+      "skills",
+      "plugins",
+      "packs",
+    ])
     expect(result.current.section).toBe("mcp")
   })
 

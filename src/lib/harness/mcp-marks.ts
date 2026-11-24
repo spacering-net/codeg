@@ -6,10 +6,10 @@
  * A mark has two halves. `local` is how the agents' entries stand against
  * what Codeg wrote (the record's scan, known now). `remote` is what the
  * catalog says of the installed version — up to date, a newer one out,
- * withdrawn, taken down — which the host's update check tells (H6,
- * `./updates.ts`): `null` until it has, and where it has nothing to say, so
- * the section then shows no "update available" and offers no filter for it
- * (a filter that can never match is not offered).
+ * withdrawn, taken down, no longer on SRN — which the host's update check
+ * tells (H6, `./updates.ts`): `null` until it has, and where it has nothing
+ * to say, so the section then shows no "update available" and offers no
+ * filter for it (a filter that can never match is not offered).
  *
  * Nor can anything tell a server added in Codeg by hand from one that was
  * already in the agent's file: the engine keeps no record of who wrote what,
@@ -47,8 +47,10 @@ export const MCP_HARNESS_REMOTE_STATES = [
   "latest",
   "updateAvailable",
   "yanked",
+  "unapproved",
   "disabledByAuthor",
   "removedByHarness",
+  "gone",
 ] as const
 
 export type McpHarnessRemoteState = (typeof MCP_HARNESS_REMOTE_STATES)[number]

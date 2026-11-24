@@ -677,7 +677,7 @@ export function OpenCodeCustomProviderDialog({
             <Textarea
               value={customModels}
               onChange={(e) => setCustomModels(e.target.value)}
-              placeholder={"gpt-6-astra\nclaude-sonnet-5-5"}
+              placeholder={"gpt-6.2-sol\nclaude-sonnet-5-5"}
               className="min-h-20 font-mono text-xs"
             />
             <p className="text-3xs text-muted-foreground">

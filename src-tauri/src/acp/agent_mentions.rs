@@ -10,7 +10,7 @@ use crate::models::agent::{is_valid_custom_agent_id, BUILTIN_AGENT_TYPES};
 // Reserved at every Codeg prompt ingress before any routing frame is appended.
 // The parser may therefore treat a structurally valid RS-bounded frame as
 // Codeg-authored without deleting an API caller's control-character text.
-const ROUTE_FRAME_SEPARATOR: char = '\u{001e}';
+pub(crate) const ROUTE_FRAME_SEPARATOR: char = '\u{001e}';
 const ROUTE_FRAME_KIND: &str = "codeg_internal_agent_routes";
 /// Opening bytes of the frame's descriptor line — the anchor used to find a
 /// frame in a transcript that no longer has the separators around it (see

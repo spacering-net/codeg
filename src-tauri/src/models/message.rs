@@ -293,9 +293,8 @@ pub struct MessageTurn {
     /// the stored record, which is why the parsers can derive them offline
     /// instead of having to have captured the live `messageId` chunk field.
     ///
-    /// `None` for every parser with no such id (codex rollouts record no item
-    /// ids at all, so that side forks by content fingerprint instead) and for
-    /// synthesized turns, which name nothing the agent stored.
+    /// Codex assistant response items can record their native message id.
+    /// Older records and synthesized turns may have no native message id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_message_id: Option<String>,
 }
