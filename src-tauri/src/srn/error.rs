@@ -27,7 +27,7 @@ pub const I18N_NAMESPACE: &str = "SrnAccount.errors";
 /// was asked for.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SrnError {
-    #[error("SpaceRing online services are disabled")]
+    #[error("SRN online services are disabled")]
     OnlineDisabled,
     /// No answer: offline, DNS, TLS, refused, timed out, cut off. The text is
     /// the transport's own account (no request ever carries a secret in its
@@ -191,7 +191,7 @@ impl Problem {
     /// The English text, for a frontend without the key.
     fn message(&self) -> String {
         match self {
-            Self::OnlineDisabled => "SpaceRing online services are disabled".into(),
+            Self::OnlineDisabled => "SRN online services are disabled".into(),
             Self::Network { .. } => "SRN could not be reached".into(),
             Self::RateLimited { seconds } => {
                 format!("SRN asked Codeg to wait {seconds} s before trying again")
