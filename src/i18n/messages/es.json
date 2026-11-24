@@ -3545,7 +3545,7 @@
         "queueMessage": "Poner en cola",
         "steerIntoTurn": "Insertar en el turno actual",
         "steerAsNote": "Enviar nota para la próxima comprobación",
-        "codexSettingsNextTurn": "El modelo, el esfuerzo de razonamiento y los permisos se aplican en el siguiente turno.",
+        "codexSteerRestartsTurn": "Usar un modelo, un esfuerzo de razonamiento o permisos nuevos reinicia el turno.",
         "steerQueuedInstead": "Se puso en cola: se enviará con el siguiente turno.",
         "heldWhileResponding": "Todavía está respondiendo: tu mensaje sigue en el cuadro de entrada. Envíalo cuando termine la respuesta.",
         "steerFailed": "No se pudo insertar en el turno actual",

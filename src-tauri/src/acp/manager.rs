@@ -3902,42 +3902,37 @@ impl ConnectionManager {
         // `native_steering_available` is re-read on every call so a
         // `startedNewTurn` downgrade mid-session silently reroutes later
         // notes to the pull path.
-        let (native, tool_available) = {
+        let (native, tool_available, admitted_turn, turn_settings, settings_changed) = {
             let s = state.read().await;
-            (s.native_steering_available, s.feedback_tool_available)
+            let turn_settings = turn_settings.filter(|_| s.agent_type == AgentType::Codex);
+            let settings_changed = turn_settings.as_ref().is_some_and(|settings| {
+                !settings.matches(&s.codex_turn_settings)
+            });
+            (
+                s.native_steering_available,
+                s.feedback_tool_available,
+                s.turn_in_flight.then_some(s.turns_completed),
+                turn_settings,
+                settings_changed,
+            )
         };
         if !native && !tool_available {
             return Err(AcpError::FeedbackDisabled);
         }
 
-        if native {
+        let admitted_turn = admitted_turn.ok_or(AcpError::NoActiveTurn)?;
+        if native || settings_changed {
             return Self::submit_feedback_native(
-                conn_id,
-                state,
-                cmd_tx,
-                emitter,
-                text,
-                blocks,
-                turn_settings,
+                conn_id, state, cmd_tx, emitter, text, blocks, turn_settings,
+                admitted_turn, native,
             )
             .await;
         }
 
-        // The pull tool delivers plain text (`PendingFeedback`), so a draft
-        // carrying attachment blocks cannot ride it without silently dropping
-        // them. Two ways to get here: an ordinary pull session (the composer
-        // offers its mid-turn send on every session with a delivery channel,
-        // so a codex/grok/gemini draft with an image lands right here), or a
-        // native session that downgraded between the frontend's channel read
-        // and this call (startedNewTurn latch). `NoActiveTurn` is the
-        // rejection the caller already maps to its queue fallback, which
-        // re-routes the WHOLE draft — attachments included — as the next
-        // turn's prompt.
+        // The pull tool delivers plain text. Queue attachment drafts whole.
         if blocks.is_some() {
             return Err(AcpError::NoActiveTurn);
         }
-
-        let mut settings_changed = false;
         let item =
             FeedbackItem::new_pending(uuid::Uuid::new_v4().to_string(), text, chrono::Utc::now());
         // Gate on `turn_in_flight` and append in ONE critical section (via the
@@ -3948,20 +3943,11 @@ impl ConnectionManager {
             &state,
             &emitter,
             AcpEvent::FeedbackSubmitted { item: item.clone() },
-            |s| {
-                settings_changed = turn_settings
-                    .as_ref()
-                    .is_some_and(|settings| !settings.matches(&s.codex_turn_settings));
-                s.turn_in_flight && !settings_changed
-            },
+            |s| s.turn_in_flight && s.turns_completed == admitted_turn,
         )
         .await;
         if !applied {
-            return Err(if settings_changed {
-                AcpError::SteerSettingsChanged
-            } else {
-                AcpError::NoActiveTurn
-            });
+            return Err(AcpError::NoActiveTurn);
         }
         Ok(item)
     }
@@ -3995,6 +3981,7 @@ impl ConnectionManager {
     ///   injection can cause. The frontend relies on that ordering to tell the
     ///   agent's own copy of the message from the same words sent in an
     ///   earlier round (`suppressPersistedSteeredPrompts`).
+    #[allow(clippy::too_many_arguments)]
     async fn submit_feedback_native(
         conn_id: &str,
         state: Arc<tokio::sync::RwLock<crate::acp::session_state::SessionState>>,
@@ -4003,16 +3990,21 @@ impl ConnectionManager {
         text: String,
         blocks: Option<Vec<PromptInputBlock>>,
         turn_settings: Option<CodexTurnSettings>,
+        admitted_turns_completed: u64,
+        native: bool,
     ) -> Result<FeedbackItem, AcpError> {
         // Cheap pre-flight, NOT the authoritative check (that's the loop's
         // idle arm replying `NoActiveTurn`): skip the round-trip when no turn
         // is in flight at all. The counter read alongside it identifies WHICH
         // turn this steer was admitted against — see the re-check below.
-        let admitted_turns_completed = {
+        {
             let s = state.read().await;
-            if !s.turn_in_flight {
+            if steered_turn_changed(admitted_turns_completed, s.turn_in_flight, s.turns_completed) {
                 return Err(AcpError::NoActiveTurn);
             }
+            let settings_match = turn_settings.as_ref().is_none_or(|settings| {
+                settings.matches(&s.codex_turn_settings)
+            });
             // An agent that drops an injected note when an open card's answer
             // aborts the turn (codex's `cancel`) takes it as the next prompt
             // instead — the same reroute as an ended turn. A card that opens
@@ -4020,11 +4012,14 @@ impl ConnectionManager {
             // the wire.
             if s.pending_permission.is_some()
                 && crate::acp::registry::steering_waits_out_open_permission(s.agent_type)
+                && settings_match
             {
                 return Err(AcpError::NoActiveTurn);
             }
-            s.turns_completed
-        };
+            if !native && settings_match {
+                return Err(AcpError::NoActiveTurn);
+            }
+        }
         // The wire payload: the caller's full draft when it carried blocks
         // (attachments included), else the recorded text as a single block —
         // byte-identical to the historical text-only steer. Uploaded-image

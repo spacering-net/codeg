@@ -20,6 +20,16 @@ describe("queued native insert", () => {
     expect(prioritize).toHaveBeenCalledOnce()
   })
 
+  it("prioritizes the message that restarts the turn with the selected settings", async () => {
+    const prioritize = vi.fn()
+    await expect(
+      deliverQueuedSteer(async () => {
+        throw new Error("restarting turn with the selected Codex settings")
+      }, prioritize)
+    ).resolves.toBe(false)
+    expect(prioritize).toHaveBeenCalledOnce()
+  })
+
   it("rethrows any other failure and leaves the row where it was", async () => {
     const failure = new Error("connection lost")
     const prioritize = vi.fn()

@@ -16442,6 +16442,23 @@ async fn run_conversation_loop(
                             .await;
                         }
                         cmd = cmd_rx.recv() => {
+                            let (cmd, restart_reply) = match cmd {
+                                Some(ConnectionCommand::Steer { blocks, expected_turn, settings, reply }) => {
+                                    let state = state.read().await;
+                                    if expected_turn.is_some_and(|turn| turn != state.turns_completed) {
+                                        let _ = reply.send(Err(AcpError::NoActiveTurn));
+                                        continue;
+                                    }
+                                    if settings.as_ref().is_some_and(|settings| {
+                                        !settings.matches(&state.codex_turn_settings)
+                                    }) {
+                                        (Some(ConnectionCommand::Cancel), Some(reply))
+                                    } else {
+                                        (Some(ConnectionCommand::Steer { blocks, expected_turn, settings, reply }), None)
+                                    }
+                                }
+                                other => (other, None),
+                            };
                             match cmd {
                                 Some(ConnectionCommand::RespondPermission {
                                     request_id,
@@ -16583,20 +16600,7 @@ async fn run_conversation_loop(
                                         let _ = reply.send(landed);
                                     }
                                 }
-                                Some(ConnectionCommand::Steer { blocks, expected_turn, settings, reply }) => {
-                                    {
-                                        let state = state.read().await;
-                                        if expected_turn.is_some_and(|turn| turn != state.turns_completed) {
-                                            let _ = reply.send(Err(AcpError::NoActiveTurn));
-                                            continue;
-                                        }
-                                        if settings.as_ref().is_some_and(|settings| {
-                                            !settings.matches(&state.codex_turn_settings)
-                                        }) {
-                                            let _ = reply.send(Err(AcpError::SteerSettingsChanged));
-                                            continue;
-                                        }
-                                    }
+                                Some(ConnectionCommand::Steer { blocks, reply, .. }) => {
                                     // Protocol round-trip only — the manager's
                                     // cancellation-shielded task records the
                                     // note + broadcasts `FeedbackSubmitted`
@@ -16813,6 +16817,9 @@ async fn run_conversation_loop(
                                             let _ = answered.send(tokio::time::Instant::now());
                                         }
                                     });
+                                    if let Some(reply) = restart_reply {
+                                        let _ = reply.send(Err(AcpError::SteerSettingsChanged));
+                                    }
                                     break;
                                 }
                                 Some(ConnectionCommand::Disconnect) | None => {

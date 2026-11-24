@@ -141,7 +141,6 @@ import {
   type MessageTurn,
   type PlanApprovalAnswer,
   type PromptDraft,
-  type CodexTurnSettings,
   type PromptInputBlock,
   type QuestionAnswer,
   type UserMessageBlock,
@@ -2351,14 +2350,25 @@ const ConversationTabView = memo(function ConversationTabView({
   // recorded/display form.
   const feedbackSteer = feedback.steer
   const handleSteer = useCallback(
-    async (
-      text: string,
-      blocks?: PromptInputBlock[],
-      turnSettings?: CodexTurnSettings
-    ) => {
-      await feedbackSteer(text, blocks, turnSettings)
+    async (text: string, blocks?: PromptInputBlock[], draft?: PromptDraft) => {
+      if (!draft?.turnSettings) {
+        await feedbackSteer(text, blocks)
+        return
+      }
+      if (queueSteerRef.current) throw new TurnBusyError()
+      queueSteerRef.current = true
+      setQueueSteerInFlight(true)
+      try {
+        await deliverQueuedSteer(
+          () => feedbackSteer(text, blocks, draft.turnSettings),
+          () => mqRequeueFront(draft, null)
+        )
+      } finally {
+        queueSteerRef.current = false
+        setQueueSteerInFlight(false)
+      }
     },
-    [feedbackSteer]
+    [feedbackSteer, mqRequeueFront]
   )
 
   // Click-to-insert for a queued row: send THAT item into the running turn

@@ -8,7 +8,6 @@ import type {
   PlanApprovalAnswer,
   PromptCapabilitiesInfo,
   PromptDraft,
-  CodexTurnSettings,
   PromptInputBlock,
   QuestionAnswer,
   SessionConfigOptionInfo,
@@ -143,7 +142,7 @@ interface ConversationShellProps {
   onSteer?: (
     text: string,
     blocks?: PromptInputBlock[],
-    turnSettings?: CodexTurnSettings
+    draft?: PromptDraft
   ) => Promise<void>
   /** Which channel `onSteer` rides (picks the composer's honest copy);
    *  threaded straight through. See `MessageInput`. */

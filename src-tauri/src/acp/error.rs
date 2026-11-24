@@ -26,7 +26,7 @@ pub enum AcpError {
     /// to sending the text as an ordinary prompt instead.
     #[error("no active turn to send feedback to")]
     NoActiveTurn,
-    #[error("no active turn with the selected Codex settings")]
+    #[error("restarting turn with the selected Codex settings")]
     SteerSettingsChanged,
     #[error("could not apply Codex turn setting {0}")]
     TurnSettingRejected(String),

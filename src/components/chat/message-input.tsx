@@ -259,7 +259,7 @@ interface MessageInputProps {
   onSteer?: (
     text: string,
     blocks?: PromptInputBlock[],
-    turnSettings?: CodexTurnSettings
+    draft?: PromptDraft
   ) => Promise<void>
   /** Which channel {@link onSteer} rides (`useSessionFeedback().channel`).
    *  Picks the honest copy for the mid-turn action: `native` = inserted into
@@ -1801,7 +1801,7 @@ export function MessageInput({
     setSteering(true)
     try {
       if (draft.turnSettings) {
-        await onSteer(payload.text, payload.blocks, draft.turnSettings)
+        await onSteer(payload.text, payload.blocks, draft)
       } else {
         await onSteer(payload.text, payload.blocks)
       }
@@ -2027,7 +2027,7 @@ export function MessageInput({
             <DropdownMenuContent align="end" side="top">
               {agentType === "codex" && (
                 <DropdownMenuLabel className="max-w-64 whitespace-normal font-normal text-muted-foreground">
-                  {t("codexSettingsNextTurn")}
+                  {t("codexSteerRestartsTurn")}
                 </DropdownMenuLabel>
               )}
               <DropdownMenuItem
