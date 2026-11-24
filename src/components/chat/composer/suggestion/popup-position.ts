@@ -16,6 +16,16 @@ export interface PopupSize {
 export interface Viewport {
   width: number
   height: number
+  /**
+   * Client-coordinate origin of the visible band. Zero on a desktop window; on
+   * a phone with the on-screen keyboard up (or under pinch-zoom) the visual
+   * viewport is a window onto the layout viewport, and this is where it starts.
+   * Both `getBoundingClientRect` and `position: fixed` resolve against the
+   * LAYOUT viewport, so the panel's coordinates stay layout-relative and it is
+   * the band — not the panel — that moves. Defaults to 0/0.
+   */
+  left?: number
+  top?: number
 }
 
 export type PopupPlacement = "above" | "below"
@@ -75,6 +85,11 @@ function clamp(value: number, min: number, max: number): number {
  *   viewport.
  * - **No anchor** (rare IME states where `clientRect` is null): pin to the
  *   top-left corner, still clamped.
+ *
+ * "Viewport" here is the VISIBLE band ({@link readViewport}), not the window:
+ * on a phone the on-screen keyboard covers the bottom of the layout viewport
+ * without shrinking `window.innerHeight`, so measuring the window would happily
+ * park the panel behind the keyboard.
  */
 export function placeAnchoredPopup(
   anchor: AnchorRect | null,
@@ -85,15 +100,27 @@ export function placeAnchoredPopup(
   const margin = options.margin ?? DEFAULT_MARGIN
   const gap = options.gap ?? DEFAULT_GAP
   const prefer = options.prefer ?? "above"
+  const viewLeft = viewport.left ?? 0
+  const viewTop = viewport.top ?? 0
+  const viewRight = viewLeft + viewport.width
+  const viewBottom = viewTop + viewport.height
 
   if (!anchor) {
-    return { left: margin, top: margin, placement: "below" }
+    return {
+      left: viewLeft + margin,
+      top: viewTop + margin,
+      placement: "below",
+    }
   }
 
-  const left = clamp(anchor.left, margin, viewport.width - size.width - margin)
+  const left = clamp(
+    anchor.left,
+    viewLeft + margin,
+    viewRight - size.width - margin
+  )
 
-  const roomAbove = anchor.top - margin
-  const roomBelow = viewport.height - anchor.bottom - margin
+  const roomAbove = anchor.top - viewTop - margin
+  const roomBelow = viewBottom - anchor.bottom - margin
   const needed = size.height + gap
   const other: PopupPlacement = prefer === "above" ? "below" : "above"
   const roomFor = (side: PopupPlacement) =>
@@ -108,7 +135,45 @@ export function placeAnchoredPopup(
   const rawTop =
     placement === "above" ? anchor.top - gap - size.height : anchor.bottom + gap
   // Final clamp so even the "more room" fallback can't leave the viewport.
-  const top = clamp(rawTop, margin, viewport.height - size.height - margin)
+  const top = clamp(rawTop, viewTop + margin, viewBottom - size.height - margin)
 
   return { left, top, placement }
+}
+
+/**
+ * Measure the band the panel must stay inside, in client coordinates.
+ *
+ * `window.innerWidth/Height` is the LAYOUT viewport. On a phone that is the
+ * wrong box twice over: the on-screen keyboard can cover its bottom third
+ * without changing `innerHeight` at all (iOS never resizes the layout viewport
+ * for the keyboard; Android's behaviour depends on the page's
+ * `interactive-widget` setting, which this app leaves at the platform default),
+ * and a pinch-zoom — or the keyboard scrolling a focused field into view —
+ * shifts the visible band down inside it. `visualViewport` reports both, the
+ * size of what the user can actually see and where it sits, so a panel clamped
+ * against it lands above the keyboard instead of under it.
+ *
+ * The offsets are what keeps this correct for a `position: fixed` panel: fixed
+ * placement and `getBoundingClientRect` are both layout-viewport relative, so
+ * the band moves and the coordinate space does not. That holds for the case
+ * this targets — the keyboard, at scale 1, where the offset comes from the
+ * browser scrolling the focused field into view. Under an active pinch-zoom
+ * WebKit's fixed-element/client-rect alignment is famously not exact, so treat
+ * the panel's placement there as best-effort rather than pixel-true.
+ *
+ * Falls back to the window where `visualViewport` is missing (jsdom, older
+ * WebViews), which is the old behaviour exactly.
+ */
+export function readViewport(): Viewport {
+  const visual =
+    typeof window !== "undefined" ? (window.visualViewport ?? null) : null
+  if (visual) {
+    return {
+      width: visual.width,
+      height: visual.height,
+      left: visual.offsetLeft,
+      top: visual.offsetTop,
+    }
+  }
+  return { width: window.innerWidth, height: window.innerHeight }
 }

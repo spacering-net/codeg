@@ -1,7 +1,14 @@
 "use client"
 
 import type { ReactElement } from "react"
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 import {
   ArrowRight,
   ChevronsDownUp,
@@ -43,6 +50,7 @@ import {
   CommitTimestamp,
 } from "@/components/ai-elements/commit"
 import { DiffViewer } from "@/components/diff/diff-viewer"
+import { ImageDiffView } from "@/components/diff/image-diff-view"
 import { Button } from "@/components/ui/button"
 import {
   Select,
@@ -53,7 +61,8 @@ import {
 } from "@/components/ui/select"
 import { gitLog, gitPush, gitPushInfo, gitShowFile } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
-import { languageFromPath } from "@/lib/language-detect"
+import { loadImageDiffSides, type ImageDiffSides } from "@/lib/image-diff"
+import { isBinaryImageFile, languageFromPath } from "@/lib/language-detect"
 import type { GitLogEntry, GitLogFileChange, GitPushInfo } from "@/lib/types"
 import {
   useGitCredential,
@@ -309,8 +318,14 @@ export function PushWorkspace({
   // Mirrors the live target so an in-flight load can tell whether the branch it
   // describes is still the one on screen — the generation counter alone can't,
   // since a retarget resets state without going through `loadCommits`.
+  // Synced in a layout effect: its only readers are `loadCommits`'s
+  // post-`await` continuations, and a retarget (a default-priority event
+  // update) renders and commits in one task, so no continuation can observe
+  // the gap between the render and this layout effect.
   const targetBranchRef = useRef(targetBranch)
-  targetBranchRef.current = targetBranch
+  useLayoutEffect(() => {
+    targetBranchRef.current = targetBranch
+  })
   const [pushInfoData, setPushInfoData] = useState<GitPushInfo | null>(null)
   const [selectedRemote, setSelectedRemote] = useState<string | null>(null)
   const [commits, setCommits] = useState<GitLogEntry[]>([])
@@ -323,7 +338,16 @@ export function PushWorkspace({
   const [selectedCommit, setSelectedCommit] = useState<string | null>(null)
   const [originalContent, setOriginalContent] = useState("")
   const [modifiedContent, setModifiedContent] = useState("")
+  // Keyed by the (commit, file) it was loaded for: two quick selections can
+  // settle out of order, and the key keeps one revision's pixels from being
+  // painted under another's label.
+  const [imageSides, setImageSides] = useState<{
+    commit: string
+    file: string
+    sides: ImageDiffSides
+  } | null>(null)
   const [diffLoading, setDiffLoading] = useState(false)
+  const diffRequestRef = useRef(0)
 
   const unpushedCommits = useMemo(
     () => commits.filter((c) => c.pushed === false),
@@ -491,26 +515,48 @@ export function PushWorkspace({
   // Reload commits when selected remote changes
   useEffect(() => {
     if (selectedRemote !== null) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- kicks off an async commit-log fetch (flips the loading flag first)
       loadCommits(selectedRemote)
     }
   }, [selectedRemote, loadCommits])
 
   async function handleSelectFile(commitHash: string, file: string) {
+    // Only the newest selection may write to the diff pane: two loads can
+    // settle in either order, and an older one landing last would overwrite
+    // the current file's content and clear its spinner.
+    const requestId = ++diffRequestRef.current
     setSelectedFile(file)
     setSelectedCommit(commitHash)
     setDiffLoading(true)
+    setImageSides(null)
     try {
+      if (isBinaryImageFile(file)) {
+        const sides = await loadImageDiffSides(
+          folderPath,
+          file,
+          // A parent that does not resolve — root commit, or a shallow
+          // clone's boundary — reads as "nothing came before", matching what
+          // git itself reports for those commits.
+          { kind: "ref", ref: `${commitHash}~1`, missingRefIsAbsent: true },
+          { kind: "ref", ref: commitHash }
+        )
+        if (requestId !== diffRequestRef.current) return
+        setImageSides({ commit: commitHash, file, sides })
+        return
+      }
       const [orig, mod] = await Promise.all([
         gitShowFile(folderPath, file, `${commitHash}~1`).catch(() => ""),
         gitShowFile(folderPath, file, commitHash).catch(() => ""),
       ])
+      if (requestId !== diffRequestRef.current) return
       setOriginalContent(orig)
       setModifiedContent(mod)
     } catch {
+      if (requestId !== diffRequestRef.current) return
       setOriginalContent("")
       setModifiedContent("")
     } finally {
-      setDiffLoading(false)
+      if (requestId === diffRequestRef.current) setDiffLoading(false)
     }
   }
 
@@ -704,14 +750,26 @@ export function PushWorkspace({
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
             </div>
           ) : selectedFile && selectedCommit ? (
-            <DiffViewer
-              original={originalContent}
-              modified={modifiedContent}
-              originalLabel={`${selectedCommit.slice(0, 7)}~ (${t("before")})`}
-              modifiedLabel={`${selectedCommit.slice(0, 7)} (${t("after")})`}
-              language={languageFromPath(selectedFile)}
-              className="h-full"
-            />
+            imageSides &&
+            imageSides.file === selectedFile &&
+            imageSides.commit === selectedCommit ? (
+              <ImageDiffView
+                original={imageSides.sides.original}
+                modified={imageSides.sides.modified}
+                originalLabel={`${selectedCommit.slice(0, 7)}~ (${t("before")})`}
+                modifiedLabel={`${selectedCommit.slice(0, 7)} (${t("after")})`}
+                className="h-full"
+              />
+            ) : (
+              <DiffViewer
+                original={originalContent}
+                modified={modifiedContent}
+                originalLabel={`${selectedCommit.slice(0, 7)}~ (${t("before")})`}
+                modifiedLabel={`${selectedCommit.slice(0, 7)} (${t("after")})`}
+                language={languageFromPath(selectedFile)}
+                className="h-full"
+              />
+            )
           ) : (
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
               {t("selectFileToViewDiff")}
@@ -746,10 +804,15 @@ function PushCommitFilesTree({
   }, [treeNodes])
   const [expandedPaths, setExpandedPaths] =
     useState<Set<string>>(allDirectoryPaths)
-
-  useEffect(() => {
+  // A new file list re-expands every directory. Adjusted during render (React's
+  // "reset state on prop change" pattern) so the new tree never paints with
+  // the previous commit's expansion.
+  const [prevAllDirectoryPaths, setPrevAllDirectoryPaths] =
+    useState(allDirectoryPaths)
+  if (allDirectoryPaths !== prevAllDirectoryPaths) {
+    setPrevAllDirectoryPaths(allDirectoryPaths)
     setExpandedPaths(allDirectoryPaths)
-  }, [allDirectoryPaths])
+  }
 
   const canExpandAll = useMemo(() => {
     if (allDirectoryPaths.size === 0) return false
@@ -796,7 +859,8 @@ function PushCommitFilesTree({
         title={file.path}
       >
         <>
-          <span className="size-4 shrink-0" />
+          {/* Leading glyph == the status letter, in the same column as a
+              sibling folder's chevron (no spacer in front of it). */}
           <CommitFileInfo className="flex-1 min-w-0 gap-1.5">
             <CommitFileStatus status={mapFileStatus(file.status)}>
               {file.status}
@@ -816,9 +880,7 @@ function PushCommitFilesTree({
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-[11px] text-muted-foreground">
-          {tLog("filesTitle")}
-        </p>
+        <p className="text-2xs text-muted-foreground">{tLog("filesTitle")}</p>
         <div className="flex items-center gap-1">
           <Button
             variant="ghost"

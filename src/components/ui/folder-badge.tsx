@@ -22,7 +22,7 @@ export const FolderBadge = memo(function FolderBadge({
       title={folderName}
       className={cn(
         "inline-flex items-center justify-center shrink-0 rounded text-white font-medium",
-        size === "sm" ? "w-3.5 h-3.5 text-[9px]" : "w-4 h-4 text-[10px]",
+        size === "sm" ? "w-3.5 h-3.5 text-[0.5625rem]" : "w-4 h-4 text-3xs",
         folderBadgeColor(folderId),
         className
       )}

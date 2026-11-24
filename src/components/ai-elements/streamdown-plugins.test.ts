@@ -26,15 +26,15 @@ vi.mock("@streamdown/cjk", () => ({
 }))
 // The three heavy engines are dynamically imported by `ensure()`; vitest mocks
 // intercept dynamic `import()` too, so these stand in for shiki/katex/mermaid.
-vi.mock("@streamdown/code", () => ({
-  code: {
+vi.mock("@/lib/code-highlighter", () => ({
+  createCodePlugin: async () => ({
     name: "shiki",
     type: "code-highlighter",
     highlight: mocks.highlight,
     supportsLanguage: mocks.supportsLanguage,
     getSupportedLanguages: () => [],
     getThemes: () => ["light", "dark"],
-  },
+  }),
 }))
 vi.mock("@streamdown/math", () => ({
   createMathPlugin: mocks.createMathPlugin,
@@ -83,10 +83,15 @@ describe("detectHeavyPlugins", () => {
     expect(detectHeavyPlugins("prose with no indent or tab").code).toBe(false)
   })
 
-  it("flags math for `$` and the pre-normalized `\\[` / `\\(` escapes", () => {
-    expect(detectHeavyPlugins("price $5").math).toBe(true)
+  it("flags math for $$ / \\[ / \\( / math fences, not a lone $", () => {
+    expect(detectHeavyPlugins("price $5").math).toBe(false)
+    expect(detectHeavyPlugins("Set $HOME and $1").math).toBe(false)
+    expect(detectHeavyPlugins("energy $$E=mc^2$$").math).toBe(true)
+    expect(detectHeavyPlugins("令 $T$ 和 $AV$ 满足 $A - T$。").math).toBe(true)
     expect(detectHeavyPlugins("\\[ x^2 \\]").math).toBe(true)
     expect(detectHeavyPlugins("\\( y \\)").math).toBe(true)
+    expect(detectHeavyPlugins("```math\nx\n```").math).toBe(true)
+    expect(detectHeavyPlugins("~~~math\nx\n~~~").math).toBe(true)
     expect(detectHeavyPlugins("no dollar, no math").math).toBe(false)
   })
 
@@ -122,7 +127,7 @@ describe("prefetchHeavyPlugins", () => {
     // math was never requested ⇒ its engine factory is never invoked.
     expect(mocks.createMathPlugin).not.toHaveBeenCalled()
 
-    const math = renderHook(() => useStreamdownPlugins("energy $E=mc^2$"))
+    const math = renderHook(() => useStreamdownPlugins("energy $$E=mc^2$$"))
     await waitFor(() => expect(math.result.current.math).toBeDefined())
     const code = renderHook(() => useStreamdownPlugins("```\nx\n```"))
     // code was prefetched ⇒ available immediately, no waitFor needed.
@@ -170,14 +175,16 @@ describe("useStreamdownPlugins", () => {
     expect(result.current.code).toMatchObject({ type: "code-highlighter" })
   })
 
-  it("loads math only, not code/mermaid, for a `$`-only document", async () => {
-    const { result } = renderHook(() => useStreamdownPlugins("energy $E=mc^2$"))
+  it("loads math only, not code/mermaid, for a `$$`-only document", async () => {
+    const { result } = renderHook(() =>
+      useStreamdownPlugins("energy $$E=mc^2$$")
+    )
 
     await waitFor(() => expect(result.current.math).toBeDefined())
     expect(result.current.code).toBeUndefined()
     expect(result.current.mermaid).toBeUndefined()
     expect(mocks.createMathPlugin).toHaveBeenCalledWith({
-      singleDollarTextMath: true,
+      singleDollarTextMath: false,
     })
   })
 

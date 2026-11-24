@@ -27,7 +27,7 @@ export function WorkspaceDegradedBanner({
 
   return (
     <div
-      className="flex items-start gap-2 px-2 py-1.5 text-[11px] text-amber-700 dark:text-amber-400 bg-amber-100/60 dark:bg-amber-900/20 border-b border-amber-300/50 dark:border-amber-800/50"
+      className="flex items-start gap-2 px-2 py-1.5 text-2xs text-amber-700 dark:text-amber-400 bg-amber-100/60 dark:bg-amber-900/20 border-b border-amber-300/50 dark:border-amber-800/50"
       role="status"
       aria-live="polite"
       title={t("degradedHint")}

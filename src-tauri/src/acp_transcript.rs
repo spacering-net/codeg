@@ -52,9 +52,10 @@
 //! argues why the reader cannot tell the difference).
 //!
 //! Everything else is written the moment it arrives: prompts, turn ends and
-//! headers never wait, and neither does anything recorded outside a live turn
-//! (a `session/load` replay is stored verbatim — it is already merged, and
-//! merging it would need turn boundaries it does not have).
+//! headers never wait, and neither does anything recorded outside a live turn.
+//! A `session/load` replay is stored verbatim — it is already merged, and
+//! merging it would need turn boundaries it does not have — and so is a turn
+//! the agent runs on its own between prompts, which starts at its first chunk.
 //!
 //! Writes are pure appends: no record is ever rewritten or truncated once it
 //! has landed. A crash therefore costs at most the last unflushed window of an
@@ -153,6 +154,14 @@ pub struct TranscriptEntry {
     pub t: u64,
     pub k: EntryKind,
     pub p: serde_json::Value,
+    /// On a [`EntryKind::Prompt`]: codeg delivered it INTO the running turn
+    /// (a native steer) instead of starting a turn with it. The reader still
+    /// splits the turn there — the steer is a user message of its own — but
+    /// the turn did not start at it, so the turn end's whole-turn duration does
+    /// not belong to the part that follows. Absent (false) everywhere else; a
+    /// reader that predates it sees an ordinary prompt.
+    #[serde(rename = "s", default, skip_serializing_if = "std::ops::Not::not")]
+    pub steer: bool,
 }
 
 /// A parsed transcript: its header (when present and readable) plus every
@@ -362,7 +371,8 @@ struct SessionWriter {
     /// Whether records arriving now belong to a live prompt turn — the only
     /// place merging streamed chunks is sound. Set by a written `Prompt`,
     /// cleared by a written `TurnEnd`, so a `session/load` replay (which has
-    /// neither) is always written verbatim.
+    /// neither) is always written verbatim, and so is whatever the agent does
+    /// between a turn end and the next prompt.
     compactable: bool,
     header_written: bool,
     /// The file can no longer be safely appended to: a partial write that could
@@ -645,9 +655,9 @@ fn mergeable_chunk_kind(payload: &serde_json::Value) -> Option<&'static str> {
 ///   a `TurnEnd` to overwrite it, which a turn flushed early by a mid-turn user
 ///   chunk never gets.
 /// * **Start of the turn.** That comes from the prompt's timestamp, and prompts
-///   are never merged. The one case where a turn starts from a chunk instead is
-///   a transcript with no prompts at all — a replay — which `compactable`
-///   excludes.
+///   are never merged. A turn starts from a chunk instead in a transcript with
+///   no prompts at all — a replay — and in a turn the agent runs on its own
+///   after a turn end; `compactable` excludes both.
 /// * **Everything else** (tool calls, plans, user chunks, images, resource
 ///   links) is written through unchanged.
 fn compact_batch(pending: &[Queued], compactable: bool) -> (String, bool) {
@@ -684,7 +694,9 @@ fn compact_batch(pending: &[Queued], compactable: bool) -> (String, bool) {
             // absent on both) is the only case where merging loses nothing.
             Some(kind)
                 if open.as_ref().is_some_and(|(open_kind, open_entry)| {
-                    *open_kind == kind && open_entry.p.get("_meta") == entry.p.get("_meta")
+                    *open_kind == kind
+                        && open_entry.p.get("_meta") == entry.p.get("_meta")
+                        && open_entry.p.get("messageId") == entry.p.get("messageId")
                 }) =>
             {
                 let (_, open_entry) = open.as_mut().expect("guard matched Some");
@@ -877,6 +889,39 @@ pub fn record_entry_in(
         t: now_epoch_ms(),
         k: kind,
         p: payload,
+        steer: false,
+    };
+    queue_for(root, agent_dir, session_id, PendingRecord::Entry(entry))
+}
+
+/// Record a message delivered into the running turn (a native steer): a
+/// [`EntryKind::Prompt`] carrying the ACP content blocks that were sent,
+/// marked [`TranscriptEntry::steer`].
+pub fn record_steer(
+    agent_dir: &str,
+    session_id: &str,
+    payload: serde_json::Value,
+) -> tokio::sync::oneshot::Receiver<()> {
+    record_steer_in(
+        &crate::paths::codeg_acp_transcripts_root(),
+        agent_dir,
+        session_id,
+        payload,
+    )
+}
+
+/// Root-injectable core of [`record_steer`].
+pub fn record_steer_in(
+    root: &Path,
+    agent_dir: &str,
+    session_id: &str,
+    payload: serde_json::Value,
+) -> tokio::sync::oneshot::Receiver<()> {
+    let entry = TranscriptEntry {
+        t: now_epoch_ms(),
+        k: EntryKind::Prompt,
+        p: payload,
+        steer: true,
     };
     queue_for(root, agent_dir, session_id, PendingRecord::Entry(entry))
 }
@@ -1151,6 +1196,51 @@ pub fn read_chain_in(root: &Path, agent_dir: &str, session_id: &str) -> Transcri
     merged
 }
 
+/// The session ids `session_id` continues, transitively — newest first.
+///
+/// Headers only, so this is cheap enough to call on every session bind: one
+/// short read per link, and the overwhelmingly common answer is an empty vec
+/// after a single read. Shares [`read_chain_in`]'s cycle and depth guards.
+///
+/// This is the "same conversation, new agent session" signal. When a custom
+/// agent has forgotten a session, codeg opens a fresh one and links it back
+/// (see [`TranscriptHeader::continues_from`]); the reader then renders the
+/// whole chain as ONE conversation, and the generic parser hides the
+/// superseded ids for exactly that reason. So a bind moving from an id in
+/// this set to `session_id` is a continuation, NOT a conversation losing its
+/// history — the earlier turns stay reachable through the new id.
+pub fn continuation_ancestors_in(root: &Path, agent_dir: &str, session_id: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
+    visited.insert(session_id.to_string());
+    let mut cursor = read_header_in(root, agent_dir, session_id).and_then(|h| h.continues_from);
+
+    while let Some(id) = cursor.take() {
+        if !visited.insert(id.clone()) {
+            tracing::debug!("[acp-transcript] continuation cycle at {id}; stopping walk");
+            break;
+        }
+        if out.len() >= MAX_CONTINUATION_DEPTH {
+            tracing::debug!(
+                "[acp-transcript] continuation chain exceeded {MAX_CONTINUATION_DEPTH}; truncating"
+            );
+            break;
+        }
+        cursor = read_header_in(root, agent_dir, &id).and_then(|h| h.continues_from);
+        out.push(id);
+    }
+    out
+}
+
+/// [`continuation_ancestors_in`] against the real transcripts root.
+pub fn continuation_ancestors(agent_dir: &str, session_id: &str) -> Vec<String> {
+    continuation_ancestors_in(
+        &crate::paths::codeg_acp_transcripts_root(),
+        agent_dir,
+        session_id,
+    )
+}
+
 /// Session ids under `<root>/<agent_dir>/` that some other transcript continues.
 ///
 /// A superseded transcript is a prefix of its successor, so listing both would
@@ -1237,6 +1327,7 @@ mod tests {
         serde_json::to_string(&TranscriptEntry {
             t: 1_750_000_000_001,
             k: kind,
+            steer: false,
             p: payload,
         })
         .unwrap()
@@ -1372,6 +1463,60 @@ mod tests {
         assert_eq!(superseded.len(), 2);
         assert!(superseded.contains("s0") && superseded.contains("s1"));
         assert!(!superseded.contains("s2"), "the head is never superseded");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn continuation_ancestors_lists_what_a_session_carries_forward() {
+        // The session-binding guard reads this to tell "same conversation, new
+        // agent session" from "an unrelated session landed on this row". Get it
+        // wrong in the first direction and every restart of a memory-only
+        // custom agent clones the conversation in the sidebar; wrong in the
+        // second and the history it was supposed to protect is lost.
+        let root = temp_root();
+        append_line_in(&root, "goose", "s0", &header_line("s0"));
+        for (id, prev) in [("s1", "s0"), ("s2", "s1")] {
+            let header = TranscriptHeader::new("custom:goose", id, "/elsewhere", 9_999)
+                .continuing(prev);
+            append_line_in(&root, "goose", id, &serde_json::to_string(&header).unwrap());
+        }
+
+        assert_eq!(
+            continuation_ancestors_in(&root, "goose", "s2"),
+            vec!["s1".to_string(), "s0".to_string()],
+            "the whole chain, newest first — a bind may skip a link"
+        );
+        assert_eq!(
+            continuation_ancestors_in(&root, "goose", "s1"),
+            vec!["s0".to_string()]
+        );
+        assert!(
+            continuation_ancestors_in(&root, "goose", "s0").is_empty(),
+            "the root of a chain carries nothing forward"
+        );
+        assert!(
+            continuation_ancestors_in(&root, "goose", "never-recorded").is_empty(),
+            "an unknown session carries nothing forward — the caller must then \
+             treat a rebind as unrelated and preserve the old history"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn continuation_ancestors_survives_a_cycle() {
+        // Same guards as `read_chain_in`: a hand-edited or corrupted pair of
+        // headers must not hang the bind path.
+        let root = temp_root();
+        for (id, prev) in [("a", "b"), ("b", "a")] {
+            let header =
+                TranscriptHeader::new("custom:goose", id, "/repo", 1).continuing(prev);
+            append_line_in(&root, "goose", id, &serde_json::to_string(&header).unwrap());
+        }
+        assert_eq!(
+            continuation_ancestors_in(&root, "goose", "a"),
+            vec!["b".to_string()],
+            "the walk stops when it revisits the session it started from"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1661,6 +1806,7 @@ mod tests {
         PendingRecord::Entry(TranscriptEntry {
             t,
             k: EntryKind::Update,
+            steer: false,
             p: serde_json::json!({
                 "sessionUpdate": kind,
                 "content": { "type": "text", "text": text }
@@ -1672,6 +1818,7 @@ mod tests {
         PendingRecord::Entry(TranscriptEntry {
             t,
             k: EntryKind::Prompt,
+            steer: false,
             p: serde_json::json!([{ "type": "text", "text": text }]),
         })
     }
@@ -1680,6 +1827,7 @@ mod tests {
         PendingRecord::Entry(TranscriptEntry {
             t,
             k: EntryKind::TurnEnd,
+            steer: false,
             p: serde_json::json!({ "stopReason": "end_turn" }),
         })
     }
@@ -1702,6 +1850,7 @@ mod tests {
             PendingRecord::Entry(TranscriptEntry {
                 t,
                 k: EntryKind::Update,
+                steer: false,
                 p: serde_json::json!({
                     "sessionUpdate": "tool_call", "toolCallId": id,
                     "title": "Bash", "kind": "execute", "status": status
@@ -1712,6 +1861,7 @@ mod tests {
             PendingRecord::Entry(TranscriptEntry {
                 t,
                 k: EntryKind::Update,
+                steer: false,
                 p: serde_json::json!({
                     "sessionUpdate": "agent_message_chunk",
                     "content": {"type": "image", "data": "AAA", "mimeType": "image/png"}
@@ -1722,6 +1872,7 @@ mod tests {
             PendingRecord::Entry(TranscriptEntry {
                 t,
                 k: EntryKind::Update,
+                steer: false,
                 p: serde_json::json!({
                     "sessionUpdate": "agent_message_chunk",
                     "content": {"type": "resource_link", "uri": "file:///a", "name": "a"}
@@ -1879,6 +2030,34 @@ mod tests {
         assert_same_projection(records, &[], "replay");
     }
 
+    /// A turn the agent runs on its own between prompts (issue #903) has no
+    /// prompt to fix its start, so it starts at its FIRST chunk — and must land
+    /// unmerged like a replay: a merged record carries the run's last
+    /// timestamp, which would start the turn where it ended.
+    #[test]
+    fn a_turn_the_agent_runs_between_prompts_keeps_its_start_time() {
+        let records = || {
+            vec![
+                prompt_record(1_000, "start the job"),
+                chunk(1_100, "agent_message_chunk", "Started."),
+                turn_end(1_200),
+                chunk(5_000, "agent_message_chunk", "The job "),
+                chunk(5_400, "agent_message_chunk", "finished."),
+                prompt_record(9_000, "thanks"),
+                chunk(9_100, "agent_message_chunk", "Welcome."),
+                turn_end(9_200),
+            ]
+        };
+        // All in one flush window: the batch a merge could reach.
+        assert_same_projection(records(), &[], "a turn of the agent's own");
+
+        let (verbatim, _) = projected_both_ways(records(), &[]);
+        let own = &verbatim[2];
+        assert!(matches!(own.role, TurnRole::Assistant));
+        assert_eq!(own.timestamp.timestamp_millis(), 5_000);
+        assert_eq!(own.duration_ms, Some(400));
+    }
+
     /// Chunks carrying different `_meta` are opaque extension data; merging
     /// them would silently keep one and discard the rest.
     #[test]
@@ -1887,6 +2066,7 @@ mod tests {
             PendingRecord::Entry(TranscriptEntry {
                 t,
                 k: EntryKind::Update,
+                steer: false,
                 p: serde_json::json!({
                     "sessionUpdate": "agent_message_chunk",
                     "content": {"type": "text", "text": "x"},
@@ -1912,6 +2092,36 @@ mod tests {
         );
         assert_eq!(entries[1].p["_meta"], serde_json::json!({"a": 1}));
         assert_eq!(entries[2].p["_meta"], serde_json::json!({"a": 2}));
+    }
+
+    #[test]
+    fn typed_message_ids_survive_recording_and_separate_compacted_messages() {
+        use agent_client_protocol::schema::v1::SessionUpdate;
+        let message = |t, id| {
+            // Exercise the same typed decode/encode boundary as the live
+            // notification handler, not only hand-built transcript JSON.
+            let update: SessionUpdate = serde_json::from_value(serde_json::json!({
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": "x"},
+                "messageId": id,
+            })).unwrap();
+            PendingRecord::Entry(TranscriptEntry {
+                t, k: EntryKind::Update, steer: false,
+                p: serde_json::to_value(update).unwrap(),
+            })
+        };
+        let pending: Vec<_> = vec![
+            prompt_record(1, "hi"),
+            message(2, "msg-first"), message(3, "msg-first"),
+            message(4, "msg-second"), message(5, "msg-second"),
+        ].into_iter().map(queued).collect();
+        let (lines, _) = compact_batch(&pending, false);
+        let entries = parse_transcript(&lines).entries;
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[1].p["messageId"], "msg-first");
+        assert_eq!(entries[2].p["messageId"], "msg-second");
+        assert_eq!(entries[1].p["content"]["text"], "xx");
+        assert_eq!(entries[2].p["content"]["text"], "xx");
     }
 
     /// The frontend refetches conversation detail the moment a turn completes,
@@ -2129,6 +2339,42 @@ mod tests {
     /// The gate that keeps a `session/load` replay from appending a second copy
     /// of history codeg already has. It reads the file, so a prompt sitting in
     /// the writer's buffer would make it answer "empty" and let the replay in.
+    #[tokio::test]
+    async fn a_continuation_link_is_readable_as_soon_as_its_ack_resolves() {
+        // The session-binding guard reads the chain from disk to decide whether
+        // a new agent session continues an existing conversation or is
+        // unrelated. Headers are written by a background thread, so the
+        // recovery path AWAITS this ack before emitting `SessionStarted` —
+        // otherwise a subscriber can read an empty chain, call the sessions
+        // unrelated, and split the conversation into a duplicate row that
+        // nothing ever removes.
+        //
+        // This pins the half that makes that await meaningful: once the ack
+        // resolves, the link IS visible to the reader.
+        let root = temp_root();
+        record_header_in(
+            &root,
+            "goose",
+            &TranscriptHeader::new("custom:goose", "s0", "/repo", 1),
+        )
+        .await
+        .unwrap();
+        record_header_in(
+            &root,
+            "goose",
+            &TranscriptHeader::new("custom:goose", "s1", "/repo", 2).continuing("s0"),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            continuation_ancestors_in(&root, "goose", "s1"),
+            vec!["s0".to_string()],
+            "an acked continuation header must be readable immediately"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[tokio::test]
     async fn a_prompt_is_on_disk_before_its_ack_resolves() {
         let root = temp_root();

@@ -13,6 +13,10 @@
  * The store marks those calls from the backend's `in_flight_user_turn_id` — an
  * affirmative "a turn is running on this connection", never an inference from
  * missing output (an empty result still writes a `tool_result`).
+ *
+ * The same marker also flags the turns themselves (`isInFlightRound`), which is
+ * what tells the render layer that a "persisted" reply is not finished. That
+ * flag is scoped to the DB projection on purpose — see the tests at the bottom.
  */
 
 import { afterEach, describe, expect, it } from "vitest"
@@ -90,7 +94,11 @@ function makeDetail(
   }
 }
 
-function seedSession(detail: DbConversationDetail, liveMessage?: LiveMessage) {
+function seedSession(
+  detail: DbConversationDetail,
+  liveMessage?: LiveMessage,
+  localTurns: MessageTurn[] = []
+) {
   const session = {
     conversationId: CID,
     externalId: null,
@@ -99,9 +107,10 @@ function seedSession(detail: DbConversationDetail, liveMessage?: LiveMessage) {
     detailLoading: false,
     detailError: null,
     acpLoadError: null,
-    localTurns: [],
+    localTurns,
     backgroundTurns: [],
     pendingBackgroundSettlements: [],
+    pendingCancelledTurnReports: null,
     optimisticTurns: [],
     liveMessage: liveMessage ?? null,
     syncState: "idle" as const,
@@ -115,11 +124,18 @@ function seedSession(detail: DbConversationDetail, liveMessage?: LiveMessage) {
     batchBoundaryPrefixHash: null,
     loadingOlderTurns: false,
     olderTurnsPrependEpoch: 0,
+    pendingOutOfTurnContent: false,
     pendingCleanup: false,
   }
   const next = new Map(useConversationRuntimeStore.getState().byConversationId)
   next.set(CID, session)
   useConversationRuntimeStore.setState({ byConversationId: next })
+}
+
+/** The in-flight-round flag the store attached to the turn with the given id. */
+function inFlightRoundOf(turnId: string): boolean | undefined {
+  return getTimelineTurns(CID).find((t) => t.turn.id === turnId)
+    ?.isInFlightRound
 }
 
 /** The set the store attached to the persisted turn with the given id. */
@@ -215,5 +231,51 @@ describe("in-flight tool calls inside a persisted transcript", () => {
       )
     )
     expect(inProgressOf("a1")).toBeUndefined()
+  })
+})
+
+describe("isInFlightRound", () => {
+  it("flags the persisted reply of the round the backend says is running", () => {
+    seedSession(
+      makeDetail([userTurn("u1"), assistantTurn("a1", [poll("t1")])], "u1")
+    )
+    expect(inFlightRoundOf("u1")).toBe(false)
+    expect(inFlightRoundOf("a1")).toBe(true)
+  })
+
+  it("leaves an earlier settled round alone", () => {
+    seedSession(
+      makeDetail(
+        [
+          userTurn("u1"),
+          assistantTurn("a1", [poll("t1"), pollResult("t1")]),
+          userTurn("u2"),
+          assistantTurn("a2", [poll("t2")]),
+        ],
+        "u2"
+      )
+    )
+    expect(inFlightRoundOf("a1")).toBe(false)
+    expect(inFlightRoundOf("a2")).toBe(true)
+  })
+
+  it("flags nothing when the named prompt is outside the loaded window", () => {
+    seedSession(makeDetail([assistantTurn("a1", [poll("t1")])], "u-not-here"))
+    expect(inFlightRoundOf("a1")).toBe(false)
+  })
+
+  it("never flags a locally promoted reply, however stale the marker", () => {
+    // `completeTurn` promotes the finished reply into localTurns and
+    // deliberately does NOT refetch, and the live-transcript viewer has no
+    // settle-time refetch — so `detail` can keep naming `u1` as in flight for
+    // the whole life of the view. Deriving the flag from the raw marker over
+    // the assembled timeline (rather than over the DB projection) would leave
+    // this finished reply "running" forever: never collapsing its progress and
+    // permanently hiding its stats row and artifacts card.
+    seedSession(makeDetail([userTurn("u1")], "u1"), undefined, [
+      assistantTurn("local-a1", [poll("t1"), pollResult("t1")]),
+    ])
+    expect(inFlightRoundOf("u1")).toBe(false)
+    expect(inFlightRoundOf("local-a1")).toBeUndefined()
   })
 })

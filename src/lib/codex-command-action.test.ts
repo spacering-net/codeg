@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  isCodexGrepNoMatchEnvelope,
   parseCodexCommandEnvelope,
   parseCodexListFilesTitle,
   parseCodexSearchTitle,
@@ -121,5 +122,46 @@ describe("parseCodexCommandEnvelope", () => {
     expect(parseCodexCommandEnvelope("not json")).toBeNull()
     expect(parseCodexCommandEnvelope("[1,2]")).toBeNull()
     expect(parseCodexCommandEnvelope('"a string"')).toBeNull()
+  })
+})
+
+describe("isCodexGrepNoMatchEnvelope", () => {
+  it("accepts exit 1 with empty or whitespace-only output", () => {
+    for (const formatted_output of ["", "\n", "\r\n", "   "]) {
+      expect(
+        isCodexGrepNoMatchEnvelope(
+          JSON.stringify({ exit_code: 1, formatted_output })
+        )
+      ).toBe(true)
+    }
+  })
+
+  it("rejects a real failure: any diagnostic text, or exit >= 2", () => {
+    expect(
+      isCodexGrepNoMatchEnvelope(
+        JSON.stringify({
+          exit_code: 1,
+          formatted_output: "rg: unclosed group",
+        })
+      )
+    ).toBe(false)
+    expect(
+      isCodexGrepNoMatchEnvelope(
+        JSON.stringify({ exit_code: 2, formatted_output: "" })
+      )
+    ).toBe(false)
+  })
+
+  it("rejects a successful search and anything that is not the envelope", () => {
+    expect(
+      isCodexGrepNoMatchEnvelope(
+        JSON.stringify({ exit_code: 0, formatted_output: "a.ts:1:hit" })
+      )
+    ).toBe(false)
+    expect(isCodexGrepNoMatchEnvelope("")).toBe(false)
+    expect(isCodexGrepNoMatchEnvelope("rg: no such file")).toBe(false)
+    expect(isCodexGrepNoMatchEnvelope(JSON.stringify({ exit_code: 1 }))).toBe(
+      false
+    )
   })
 })

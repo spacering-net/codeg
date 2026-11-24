@@ -1,3 +1,4 @@
+use crate::acp::temp_reclaim as codeg_temp_reclaim;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -5,16 +6,17 @@ use axum::{extract::Extension, Json};
 use serde::Deserialize;
 
 use crate::acp::error::AcpError;
-use crate::acp::opencode_plugins::PluginCheckSummary;
+use crate::acp::opencode_plugins::PluginList;
 use crate::acp::preflight::PreflightResult;
 use crate::acp::types::{
-    AcpAgentInfo, AcpAgentStatus, AgentDiagnosticsReport, AgentSkillContent, AgentSkillLayout,
-    AgentSkillScope, AgentSkillsListResult, ConnectionInfo, ForkResultInfo,
+    AcpAgentInfo, AcpAgentStatus, AgentDiagnosticsReport, AgentSkillContent, AgentSkillItem,
+    AgentSkillLayout, AgentSkillScope, AgentSkillsListResult, ConnectionInfo, ForkResultInfo,
 };
 use crate::app_error::{AppCommandError, AppErrorCode};
 use crate::app_state::AppState;
 use crate::commands::acp as acp_commands;
 use crate::commands::custom_agents as custom_agent_commands;
+use crate::commands::deepseek_settings as deepseek_settings_commands;
 use crate::models::agent::AgentType;
 
 #[derive(Deserialize)]
@@ -72,6 +74,11 @@ pub struct AcpConnectParams {
     pub preferred_mode_id: Option<String>,
     #[serde(default)]
     pub preferred_config_values: Option<BTreeMap<String, String>>,
+    /// The conversation this connect opens, when it is an existing one: its
+    /// stored selection wins over the client's default (codeg#1179). Older
+    /// clients omit it and fall back to the session-id lookup.
+    #[serde(default)]
+    pub conversation_id: Option<i32>,
 }
 
 pub async fn acp_connect(
@@ -98,39 +105,78 @@ pub async fn acp_connect(
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
 
     let emitter = state.emitter.clone();
-    let connection_id = manager
-        .spawn_agent(
-            params.agent_type,
-            params.working_dir,
-            params.session_id,
-            runtime_env,
-            "web".to_string(),
-            emitter,
-            params.preferred_mode_id,
-            params.preferred_config_values.unwrap_or_default(),
-        )
-        .await
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    let connection_id = acp_commands::spawn_with_conversation_selection(
+        manager,
+        &db.conn,
+        params.agent_type,
+        params.working_dir,
+        params.session_id,
+        runtime_env,
+        "web".to_string(),
+        emitter,
+        params.conversation_id,
+        params.preferred_mode_id,
+        params.preferred_config_values.unwrap_or_default(),
+    )
+    .await
+    .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
 
     Ok(Json(connection_id))
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AcpSetComposerModeParams {
+    pub connection_id: String,
+    #[serde(default)]
+    pub mode_id: Option<String>,
+    #[serde(default)]
+    pub initial: Option<bool>,
+}
+
+pub async fn acp_set_composer_mode(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AcpSetComposerModeParams>,
+) -> Result<Json<bool>, AppCommandError> {
+    let applied = state
+        .connection_manager
+        .set_composer_mode(
+            &params.connection_id,
+            params.mode_id,
+            params.initial.unwrap_or(false),
+        )
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(applied))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AcpDisconnectParams {
     pub connection_id: String,
+    #[serde(default)]
+    pub only_if_idle: bool,
 }
 
 pub async fn acp_disconnect(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AcpDisconnectParams>,
-) -> Result<Json<()>, AppCommandError> {
+) -> Result<Json<Option<bool>>, AppCommandError> {
     let manager = &state.connection_manager;
-    manager
-        .disconnect(&params.connection_id)
-        .await
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
-    Ok(Json(()))
+    let result = if params.only_if_idle {
+        manager
+            .release_idle(&params.connection_id, chrono::Utc::now())
+            .await
+            .map(Some)
+    } else {
+        manager
+            .disconnect(&params.connection_id)
+            .await
+            .map(|()| None)
+    };
+    result
+        .map(Json)
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))
 }
 
 #[derive(Deserialize)]
@@ -183,6 +229,11 @@ pub async fn acp_prompt(
                 AcpError::TurnInProgress => {
                     AppCommandError::new(AppErrorCode::TurnInProgress, message)
                 }
+                // The conversation was moved to another folder: expected, and
+                // the client recovers by re-pointing its tab — not a fault.
+                AcpError::ConversationMoved { .. } => {
+                    AppCommandError::new(AppErrorCode::InvalidInput, message)
+                }
                 _ => AppCommandError::task_execution_failed(message),
             }
         })?;
@@ -199,9 +250,10 @@ pub struct AcpPreflightParams {
 }
 
 pub async fn acp_preflight(
+    Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AcpPreflightParams>,
 ) -> Result<Json<PreflightResult>, AppCommandError> {
-    let result = acp_commands::acp_preflight(params.agent_type, params.force_refresh)
+    let result = acp_commands::acp_preflight_core(&state.db, params.agent_type, params.force_refresh)
         .await
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(result))
@@ -216,19 +268,63 @@ pub async fn acp_clear_binary_cache(
     Ok(Json(()))
 }
 
+pub async fn acp_scan_leaked_temp(
+) -> Result<Json<codeg_temp_reclaim::LeakedTempScan>, AppCommandError> {
+    let result = acp_commands::acp_scan_leaked_temp()
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpReclaimLeakedTempParams {
+    pub paths: Vec<String>,
+}
+
+pub async fn acp_reclaim_leaked_temp(
+    Json(params): Json<AcpReclaimLeakedTempParams>,
+) -> Result<Json<codeg_temp_reclaim::LeakedTempReclaim>, AppCommandError> {
+    let result = acp_commands::acp_reclaim_leaked_temp(params.paths)
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(result))
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpListAgentSkillsParams {
     pub agent_type: AgentType,
     pub workspace_path: Option<String>,
+    /// List dangling links under a skill's name too (owner `broken`).
+    #[serde(default)]
+    pub include_broken: Option<bool>,
 }
 
 pub async fn acp_list_agent_skills(
     Json(params): Json<AcpListAgentSkillsParams>,
 ) -> Result<Json<AgentSkillsListResult>, AppCommandError> {
-    let result = acp_commands::acp_list_agent_skills(params.agent_type, params.workspace_path)
-        .await
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    let result = acp_commands::acp_list_agent_skills_with(
+        params.agent_type,
+        params.workspace_path,
+        params.include_broken.unwrap_or(false),
+    )
+    .await
+    .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(result))
+}
+
+pub async fn acp_list_agent_runtime_skills(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AcpListAgentSkillsParams>,
+) -> Result<Json<AgentSkillsListResult>, AppCommandError> {
+    let result = acp_commands::acp_list_agent_runtime_skills_core(
+        params.agent_type,
+        params.workspace_path,
+        &state.db,
+    )
+    .await
+    .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(result))
 }
 
@@ -264,22 +360,27 @@ pub struct AcpSaveAgentSkillParams {
     pub content: String,
     pub workspace_path: Option<String>,
     pub layout: Option<AgentSkillLayout>,
+    /// A new skill: refused when the id is already used (`id_taken`).
+    #[serde(default)]
+    pub create: Option<bool>,
 }
 
 pub async fn acp_save_agent_skill(
+    Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AcpSaveAgentSkillParams>,
-) -> Result<Json<()>, AppCommandError> {
-    acp_commands::acp_save_agent_skill(
+) -> Result<Json<AgentSkillItem>, AppCommandError> {
+    let skill = acp_commands::acp_save_agent_skill_core(
+        &state.emitter,
         params.agent_type,
         params.scope,
         params.skill_id,
         params.content,
         params.workspace_path,
         params.layout,
+        params.create.unwrap_or(false),
     )
-    .await
-    .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
-    Ok(Json(()))
+    .await?;
+    Ok(Json(skill))
 }
 
 #[derive(Deserialize)]
@@ -289,20 +390,32 @@ pub struct AcpDeleteAgentSkillParams {
     pub scope: AgentSkillScope,
     pub skill_id: String,
     pub workspace_path: Option<String>,
+    /// Say what the delete would do (who else loses the skill), do nothing.
+    #[serde(default)]
+    pub preflight: Option<bool>,
+    /// The `ack` the preflight returned, for a delete in a folder other
+    /// agents read.
+    #[serde(default)]
+    pub ack: Option<String>,
 }
 
 pub async fn acp_delete_agent_skill(
+    Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AcpDeleteAgentSkillParams>,
-) -> Result<Json<()>, AppCommandError> {
-    acp_commands::acp_delete_agent_skill(
+) -> Result<Json<acp_commands::SkillPageDeleteResult>, AppCommandError> {
+    let result = acp_commands::acp_delete_agent_skill_core(
+        &state.emitter,
         params.agent_type,
         params.scope,
         params.skill_id,
         params.workspace_path,
+        acp_commands::SkillPageDeleteConfirm {
+            preflight: params.preflight.unwrap_or(false),
+            ack: params.ack,
+        },
     )
-    .await
-    .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
-    Ok(Json(()))
+    .await?;
+    Ok(Json(result))
 }
 
 // --- Pattern C: ConnectionManager handlers ---
@@ -325,6 +438,10 @@ pub struct AcpForkParams {
     pub conversation_id: Option<i32>,
     #[serde(default)]
     pub folder_id: Option<i32>,
+    /// "Fork from here": the rendered turn to fork at. Absent = fork at the
+    /// tail, the composer's fork-send behaviour.
+    #[serde(default)]
+    pub fork_from_turn_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -391,6 +508,10 @@ pub struct AcpDescribeAgentOptionsParams {
     pub agent_type: crate::models::AgentType,
     #[serde(default)]
     pub working_dir: Option<String>,
+    /// Config selections to apply on the probe session before reading the
+    /// snapshot — callers pass the model so per-model option lists match.
+    #[serde(default)]
+    pub config_values: Option<std::collections::BTreeMap<String, String>>,
 }
 
 pub async fn acp_describe_agent_options(
@@ -403,6 +524,7 @@ pub async fn acp_describe_agent_options(
         &state.data_dir,
         params.agent_type,
         params.working_dir,
+        params.config_values.unwrap_or_default(),
     )
     .await
     .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
@@ -432,6 +554,7 @@ pub async fn acp_fork(
             &params.connection_id,
             params.conversation_id,
             params.folder_id,
+            params.fork_from_turn_id,
         )
         .await
         .map_err(|e| {
@@ -447,6 +570,27 @@ pub async fn acp_fork(
             }
         })?;
     Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpStopAsyncTaskParams {
+    pub connection_id: String,
+    pub task_id: String,
+}
+
+/// `Ok(false)` = the adapter declined to stop the task — a real answer, not a
+/// failure, so it is a 200 with `false` rather than an error status.
+pub async fn acp_stop_async_task(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AcpStopAsyncTaskParams>,
+) -> Result<Json<bool>, AppCommandError> {
+    let stopped = state
+        .connection_manager
+        .stop_async_task(&params.connection_id, &params.task_id)
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(stopped))
 }
 
 #[derive(Deserialize)]
@@ -573,6 +717,7 @@ pub async fn acp_find_connection_for_conversation(
 ) -> Result<Json<Option<crate::acp::ConversationConnectionInfo>>, AppCommandError> {
     let info = acp_commands::acp_find_connection_for_conversation_core(
         &state.connection_manager,
+        &state.db.conn,
         params.conversation_id,
         params.session_id.as_deref(),
         params.agent_type,
@@ -591,7 +736,6 @@ pub struct AcpUpdateAgentPreferencesParams {
     pub enabled: bool,
     pub env: BTreeMap<String, String>,
     pub config_json: Option<String>,
-    pub opencode_auth_json: Option<String>,
     pub codex_auth_json: Option<String>,
     pub codex_config_toml: Option<String>,
 }
@@ -607,7 +751,6 @@ pub async fn acp_update_agent_preferences(
         params.enabled,
         params.env,
         params.config_json,
-        params.opencode_auth_json,
         params.codex_auth_json,
         params.codex_config_toml,
         db,
@@ -655,9 +798,13 @@ pub async fn acp_update_agent_env(
 pub struct AcpUpdateAgentConfigParams {
     pub agent_type: AgentType,
     pub config_json: Option<String>,
-    pub opencode_auth_json: Option<String>,
+    pub system_instructions_content: Option<String>,
+    #[serde(default)]
+    pub system_instructions_file_path: Option<String>,
     pub codex_auth_json: Option<String>,
     pub codex_config_toml: Option<String>,
+    #[serde(default)]
+    pub codex_config_toml_baseline: Option<String>,
     pub codex_model_catalog: Option<String>,
     pub codex_sandbox: Option<crate::acp::types::CodexSandboxStructuredConfig>,
     pub grok_config_toml: Option<String>,
@@ -674,9 +821,11 @@ pub async fn acp_update_agent_config(
     let affected = acp_commands::acp_update_agent_config_and_refresh(
         params.agent_type,
         params.config_json,
-        params.opencode_auth_json,
+        params.system_instructions_content,
+        params.system_instructions_file_path,
         params.codex_auth_json,
         params.codex_config_toml,
+        params.codex_config_toml_baseline,
         params.codex_model_catalog,
         params.codex_sandbox,
         params.grok_config_toml,
@@ -691,6 +840,23 @@ pub async fn acp_update_agent_config(
     .await
     .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(affected))
+}
+
+/// Optional live personal access token from the Qoder settings form, forwarded
+/// so the `status` probe reports on what's on screen.
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct QoderProbeParams {
+    pub personal_access_token: Option<String>,
+}
+
+pub async fn acp_qoder_auth_status(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<QoderProbeParams>,
+) -> Result<Json<crate::acp::types::QoderAuthStatus>, AppCommandError> {
+    Ok(Json(
+        acp_commands::acp_qoder_auth_status_core(&state.db, params.personal_access_token).await,
+    ))
 }
 
 /// Optional live API key from the Cursor settings form, forwarded so the
@@ -784,6 +950,26 @@ pub struct AcpUpdateKimiCodeConfigParams {
     pub default_effort: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub struct AcpUpdateClaudeModelPickerParams {
+    pub models: Vec<String>,
+}
+
+pub async fn acp_update_claude_model_picker(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AcpUpdateClaudeModelPickerParams>,
+) -> Result<Json<usize>, AppCommandError> {
+    let affected = acp_commands::acp_update_claude_model_picker_core(
+        params.models,
+        &state.db,
+        &state.connection_manager,
+        &state.data_dir,
+    )
+    .await
+    .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(affected))
+}
+
 pub async fn acp_update_kimi_code_config(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AcpUpdateKimiCodeConfigParams>,
@@ -818,22 +1004,6 @@ pub async fn acp_update_kimi_code_config(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AcpFetchKimiModelsParams {
-    pub base_url: String,
-    pub api_key: String,
-}
-
-pub async fn acp_fetch_kimi_models(
-    Json(params): Json<AcpFetchKimiModelsParams>,
-) -> Result<Json<Vec<String>>, AppCommandError> {
-    let models = acp_commands::acp_fetch_kimi_models_core(&params.base_url, &params.api_key)
-        .await
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
-    Ok(Json(models))
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct AcpUpdatePiConfigParams {
     pub provider: String,
     pub model: String,
@@ -847,6 +1017,8 @@ pub struct AcpUpdatePiConfigParams {
     pub custom_api: Option<String>,
     #[serde(default)]
     pub model_reasoning: Option<acp_commands::PiModelReasoningSpec>,
+    #[serde(default)]
+    pub custom_models: Option<Vec<String>>,
 }
 
 pub async fn acp_update_pi_config(
@@ -863,6 +1035,7 @@ pub async fn acp_update_pi_config(
             custom_base_url: params.custom_base_url,
             custom_api: params.custom_api,
             model_reasoning: params.model_reasoning,
+            custom_models: params.custom_models,
         },
         &state.db,
         &emitter,
@@ -873,8 +1046,72 @@ pub async fn acp_update_pi_config(
 }
 
 pub async fn acp_load_pi_config(
+    Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<acp_commands::PiConfigProjection>, AppCommandError> {
-    Ok(Json(acp_commands::load_pi_config_core()))
+    let config = acp_commands::load_pi_config_for_db(&state.db)
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(config))
+}
+
+pub async fn acp_list_pi_model_capabilities(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<acp_commands::PiModelCatalog>, AppCommandError> {
+    Ok(Json(
+        acp_commands::list_pi_model_catalog_core(&state.db, &state.data_dir).await,
+    ))
+}
+
+pub async fn acp_load_deepseek_model_catalog(
+) -> Result<Json<deepseek_settings_commands::DeepSeekModelCatalog>, AppCommandError> {
+    Ok(Json(
+        deepseek_settings_commands::load_deepseek_model_catalog_core(),
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpUpdateDeepSeekModelCatalogParams {
+    /// Absent (or empty) clears the stored catalog so the agent's built-in one
+    /// is inherited again.
+    #[serde(default)]
+    pub models: Option<Vec<deepseek_settings_commands::DeepSeekCatalogModel>>,
+}
+
+pub async fn acp_update_deepseek_model_catalog(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AcpUpdateDeepSeekModelCatalogParams>,
+) -> Result<Json<()>, AppCommandError> {
+    let emitter = state.emitter.clone();
+    deepseek_settings_commands::update_deepseek_model_catalog_core(params.models, &emitter)
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(()))
+}
+
+pub async fn acp_load_deepseek_provider_routes(
+) -> Result<Json<deepseek_settings_commands::DeepSeekProviderRoutes>, AppCommandError> {
+    Ok(Json(
+        deepseek_settings_commands::load_deepseek_provider_routes_core(),
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpUpdateDeepSeekProviderRoutesParams {
+    /// Absent (or empty) clears the stored routes so only the official
+    /// DeepSeek route remains.
+    #[serde(default)]
+    pub routes: Option<Vec<deepseek_settings_commands::DeepSeekProviderRoute>>,
+}
+
+pub async fn acp_update_deepseek_provider_routes(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AcpUpdateDeepSeekProviderRoutesParams>,
+) -> Result<Json<()>, AppCommandError> {
+    let emitter = state.emitter.clone();
+    deepseek_settings_commands::update_deepseek_provider_routes_core(params.routes, &emitter)
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(()))
 }
 
 #[derive(Deserialize)]
@@ -889,6 +1126,71 @@ pub async fn acp_validate_pi_command(
     Ok(Json(acp_commands::acp_validate_pi_command_core(
         params.command,
     )))
+}
+
+pub async fn acp_sync_antigravity_settings(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<crate::acp::connection::AntigravitySyncReport>, AppCommandError> {
+    let result = acp_commands::acp_sync_antigravity_settings_core(&state.db)
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpAntigravityLoginStartParams {
+    pub method_id: String,
+}
+
+pub async fn acp_antigravity_login_start(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AcpAntigravityLoginStartParams>,
+) -> Result<Json<crate::acp::antigravity_login::AntigravityLoginStart>, AppCommandError> {
+    let result = acp_commands::acp_antigravity_login_start_core(&state.db, params.method_id)
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpAntigravityLoginFinishParams {
+    pub handle: String,
+    pub redirect: String,
+}
+
+pub async fn acp_antigravity_login_finish(
+    Json(params): Json<AcpAntigravityLoginFinishParams>,
+) -> Result<Json<crate::acp::antigravity_login::AntigravityLoginOutcome>, AppCommandError> {
+    let result = acp_commands::acp_antigravity_login_finish_core(params.handle, params.redirect)
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpAntigravityLoginCancelParams {
+    pub handle: String,
+}
+
+pub async fn acp_antigravity_login_cancel(
+    Json(params): Json<AcpAntigravityLoginCancelParams>,
+) -> Result<Json<()>, AppCommandError> {
+    acp_commands::acp_antigravity_login_cancel_core(params.handle)
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(()))
+}
+
+pub async fn acp_antigravity_sign_out(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<crate::acp::connection::AntigravitySyncReport>, AppCommandError> {
+    let result = acp_commands::acp_antigravity_sign_out_core(&state.db, &state.connection_manager)
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(result))
 }
 
 #[derive(Deserialize)]
@@ -978,6 +1280,29 @@ pub async fn acp_download_agent_binary(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AcpUpdateSystemAgentParams {
+    pub agent_type: AgentType,
+    pub task_id: String,
+}
+
+pub async fn acp_update_system_agent(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AcpUpdateSystemAgentParams>,
+) -> Result<Json<Option<String>>, AppCommandError> {
+    let emitter = state.emitter.clone();
+    let version = acp_commands::acp_update_system_agent_core(
+        params.agent_type,
+        params.task_id,
+        &state.db,
+        &emitter,
+    )
+    .await
+    .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(version))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AcpInstallUvToolParams {
     pub task_id: String,
 }
@@ -1003,6 +1328,15 @@ pub async fn acp_detect_agent_local_version(
         acp_commands::acp_detect_agent_local_version_core(params.agent_type, &db.conn, &emitter)
             .await
             .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(result))
+}
+
+pub async fn acp_fetch_agent_latest_release(
+    Json(params): Json<AgentTypeParams>,
+) -> Result<Json<Option<crate::acp::latest_release::AgentLatestRelease>>, AppCommandError> {
+    let result = acp_commands::acp_fetch_agent_latest_release_core(params.agent_type)
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(result))
 }
 
@@ -1103,7 +1437,7 @@ pub async fn acp_reorder_agents(
     Ok(Json(()))
 }
 
-pub async fn opencode_list_plugins() -> Result<Json<PluginCheckSummary>, AppCommandError> {
+pub async fn opencode_list_plugins() -> Result<Json<PluginList>, AppCommandError> {
     let result = acp_commands::opencode_list_plugins_core()
         .await
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
@@ -1145,37 +1479,88 @@ pub async fn codex_bundled_catalog(
     ))
 }
 
+/// Wrapper matching the Tauri commands' single `params` argument.
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OpencodeInstallPluginsParams {
-    pub names: Option<Vec<String>>,
-    pub task_id: String,
+pub struct CodexCatalogRequestBody {
+    pub params: crate::commands::codex_catalog::CodexCatalogRequestParams,
 }
 
-pub async fn opencode_install_plugins(
+#[derive(Deserialize)]
+pub struct CodexPlanPreviewBody {
+    pub params: crate::commands::codex_catalog::CodexPlanPreviewParams,
+}
+
+pub async fn codex_catalog_plan_preview(
+    Json(body): Json<CodexPlanPreviewBody>,
+) -> Result<Json<crate::acp::codex_catalog_commit::PlanPreview>, AppCommandError> {
+    crate::commands::codex_catalog::codex_catalog_plan_preview_core(body.params)
+        .await
+        .map(Json)
+}
+
+pub async fn codex_fetch_endpoint_catalog(
     Extension(state): Extension<Arc<AppState>>,
-    Json(params): Json<OpencodeInstallPluginsParams>,
-) -> Result<Json<()>, AppCommandError> {
-    let emitter = crate::web::event_bridge::EventEmitter::web_only(
-        state.event_broadcaster.clone(),
-        state.acp_event_bus.clone(),
-    );
-    acp_commands::opencode_install_plugins_core(params.names, params.task_id, &emitter)
+    Json(body): Json<CodexCatalogRequestBody>,
+) -> Result<Json<crate::commands::codex_catalog::CodexEndpointCatalogView>, AppCommandError> {
+    crate::commands::codex_catalog::codex_fetch_endpoint_catalog_core(&state.db, body.params)
+        .await
+        .map(Json)
+}
+
+pub async fn codex_endpoint_catalog_published(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(body): Json<CodexCatalogRequestBody>,
+) -> Result<Json<crate::commands::codex_catalog::CatalogLookup>, AppCommandError> {
+    crate::commands::codex_catalog::codex_endpoint_catalog_published_core(&state.db, body.params)
+        .await
+        .map(Json)
+}
+
+pub async fn codex_endpoint_catalog_cached(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(body): Json<CodexCatalogRequestBody>,
+) -> Result<Json<crate::commands::codex_catalog::CatalogLookup>, AppCommandError> {
+    crate::commands::codex_catalog::codex_endpoint_catalog_cached_core(&state.db, body.params)
+        .await
+        .map(Json)
+}
+
+pub async fn codex_endpoint_catalog_status(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<crate::commands::codex_catalog::CodexCatalogStatus>, AppCommandError> {
+    crate::commands::codex_catalog::codex_endpoint_catalog_status_core(&state.db)
+        .await
+        .map(Json)
+}
+
+pub async fn codex_refresh_endpoint_catalog(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<crate::commands::codex_catalog::CodexCatalogStatus>, AppCommandError> {
+    let emitter = state.emitter.clone();
+    crate::commands::codex_catalog::codex_refresh_endpoint_catalog_core(&state.db, &emitter)
+        .await
+        .map(Json)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpencodePluginSpecParams {
+    pub spec: String,
+}
+
+pub async fn opencode_add_plugin(
+    Json(params): Json<OpencodePluginSpecParams>,
+) -> Result<Json<PluginList>, AppCommandError> {
+    let result = acp_commands::opencode_add_plugin_core(params.spec)
         .await
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
-    Ok(Json(()))
+    Ok(Json(result))
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OpencodeUninstallPluginParams {
-    pub name: String,
-}
-
-pub async fn opencode_uninstall_plugin(
-    Json(params): Json<OpencodeUninstallPluginParams>,
-) -> Result<Json<PluginCheckSummary>, AppCommandError> {
-    let result = acp_commands::opencode_uninstall_plugin_core(params.name)
+pub async fn opencode_remove_plugin(
+    Json(params): Json<OpencodePluginSpecParams>,
+) -> Result<Json<PluginList>, AppCommandError> {
+    let result = acp_commands::opencode_remove_plugin_core(params.spec)
         .await
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(result))
@@ -1295,4 +1680,96 @@ pub async fn acp_add_registry_agent(
 
 pub async fn acp_current_platform() -> Json<String> {
     Json(custom_agent_commands::acp_current_platform_core())
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    use crate::acp::agent_mentions::append_agent_routes;
+
+    /// The editor reopens what it just saved from this response, so the web
+    /// endpoint must return the saved item as the desktop command does.
+    #[cfg(not(windows))] // a home of its own: `skills::tests::with_hermetic_home`
+    #[tokio::test]
+    async fn skill_save_returns_the_item_the_web_editor_needs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let params = serde_json::from_value(serde_json::json!({
+            "agentType": "zcode",
+            "scope": "project",
+            "skillId": "web-skill",
+            "content": "---\nname: web-skill\ndescription: Test\n---\nbody",
+            "workspacePath": tmp.path().to_string_lossy(),
+            "layout": "markdown_file"
+        }))
+        .unwrap();
+        // The handler announces the change through the server's emitter, and
+        // the save consults Codeg's skill store: under a home of the test's own.
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let state = Arc::new(AppState::new_for_test(db, tmp.path().join("data")));
+        let home = tempfile::tempdir().unwrap();
+        let response = crate::skills::tests::with_hermetic_home(
+            home.path(),
+            acp_save_agent_skill(Extension(state), Json(params)),
+        )
+        .await
+        .unwrap();
+        let value = serde_json::to_value(response.0).unwrap();
+        assert_eq!(value["id"], "web-skill");
+        assert_eq!(value["scope"], "project");
+        assert_eq!(value["layout"], "skill_directory");
+        assert_eq!(value["description"], "Test");
+        let directory = tmp.path().join(".zcode/skills/web-skill");
+        assert_eq!(
+            std::path::Path::new(value["path"].as_str().unwrap()),
+            directory
+        );
+        assert!(std::fs::read_to_string(directory.join("SKILL.md"))
+            .unwrap()
+            .ends_with("body"));
+    }
+
+    #[test]
+    fn prompt_params_deserialize_camel_case_fields() {
+        let params: AcpPromptParams = serde_json::from_value(serde_json::json!({
+            "connectionId": "conn-1",
+            "blocks": [{"type": "text", "text": "delegate this"}],
+            "folderId": 7,
+            "conversationId": 9,
+            "clientMessageId": "optimistic-1"
+        }))
+        .unwrap();
+
+        assert_eq!(params.connection_id, "conn-1");
+        assert_eq!(params.folder_id, Some(7));
+        assert_eq!(params.client_message_id.as_deref(), Some("optimistic-1"));
+    }
+
+    #[test]
+    fn an_older_clients_agent_mentions_sidecar_is_ignored_not_rejected() {
+        // The sidecar was removed; a client that still posts it must keep
+        // working, since routing now comes from the prompt's own visible link.
+        let params: AcpPromptParams = serde_json::from_value(serde_json::json!({
+            "connectionId": "conn-1",
+            "blocks": [{
+                "type": "text",
+                "text": "ask [@Antigravity](codeg://agent/antigravity)"
+            }],
+            "agentMentions": [{"agentType": "codex", "proof": "whatever"}]
+        }))
+        .expect("an unknown field must not fail the request");
+
+        let mut blocks = params.blocks;
+        append_agent_routes(&mut blocks, true);
+
+        // The frame follows the VISIBLE link, so the stale sidecar's `codex`
+        // has no effect either way.
+        assert_eq!(blocks.len(), 2);
+        let crate::acp::types::PromptInputBlock::Text { text } = &blocks[1] else {
+            panic!("expected a routing text block");
+        };
+        assert!(text.contains(r#"{"agentType":"antigravity"}"#));
+        assert!(!text.contains("codex"));
+    }
 }

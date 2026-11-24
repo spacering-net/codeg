@@ -1,7 +1,7 @@
 "use client"
 
 import { useRef, useState } from "react"
-import { Image as ImageIcon } from "lucide-react"
+import { Image as ImageIcon, Store } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
@@ -14,13 +14,16 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { useWorkspaceBackground } from "@/hooks/use-appearance"
+import { WorkspaceBackgroundMarketDialog } from "./workspace-background-market-dialog"
 import {
   MAX_WORKSPACE_BG_BYTES,
+  WORKSPACE_BG_ACCEPT,
   WORKSPACE_BG_FILL_MODES,
   WORKSPACE_BG_IMAGE_BLUR_RANGE,
   WORKSPACE_BG_MASK_OPACITY_RANGE,
   WORKSPACE_BG_PANEL_OPACITY_RANGE,
   arrayBufferToBase64,
+  sniffWorkspaceBgMime,
   type WorkspaceBgFillMode,
 } from "@/lib/workspace-background"
 import { cn } from "@/lib/utils"
@@ -41,11 +44,14 @@ export function WorkspaceBackgroundSection() {
     workspaceBgImageUrl,
     setWorkspaceBackgroundImage,
     removeWorkspaceBackground,
+    downloadMarketWorkspaceBackground,
+    workspaceBgSourceUrl,
   } = useWorkspaceBackground()
 
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [marketOpen, setMarketOpen] = useState(false)
 
   const onChooseFile = async (file: File) => {
     setError(null)
@@ -55,9 +61,16 @@ export function WorkspaceBackgroundSection() {
     }
     setBusy(true)
     try {
-      const buffer = await file.arrayBuffer()
-      const base64 = arrayBufferToBase64(new Uint8Array(buffer))
-      await setWorkspaceBackgroundImage(base64)
+      const bytes = new Uint8Array(await file.arrayBuffer())
+      // Sniff before the round trip: the backend rejects anything outside the
+      // allowlist anyway, but it does so behind a generic failure. Catching it
+      // here — off the real bytes, not the extension-derived `File.type` —
+      // lets us name the formats that would have worked.
+      if (sniffWorkspaceBgMime(bytes) === null) {
+        setError(t("workspaceBackground.errorUnsupportedFormat"))
+        return
+      }
+      await setWorkspaceBackgroundImage(arrayBufferToBase64(bytes))
     } catch {
       setError(t("workspaceBackground.errorUploadFailed"))
     } finally {
@@ -131,7 +144,7 @@ export function WorkspaceBackgroundSection() {
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/png,image/jpeg,image/webp,image/*"
+              accept={WORKSPACE_BG_ACCEPT}
               className="hidden"
               onChange={(e) => {
                 const file = e.target.files?.[0]
@@ -150,6 +163,16 @@ export function WorkspaceBackgroundSection() {
                 ? t("workspaceBackground.replaceImage")
                 : t("workspaceBackground.chooseImage")}
             </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={disabled || busy}
+              onClick={() => setMarketOpen(true)}
+            >
+              <Store className="h-3.5 w-3.5" />
+              {t("workspaceBackground.market.open")}
+            </Button>
             {workspaceBgImageUrl && (
               <Button
                 type="button"
@@ -163,7 +186,10 @@ export function WorkspaceBackgroundSection() {
             )}
           </div>
         </div>
-        {error && <p className="text-[11px] text-destructive">{error}</p>}
+        <p className="text-2xs text-muted-foreground leading-4">
+          {t("workspaceBackground.formatHint")}
+        </p>
+        {error && <p className="text-2xs text-destructive">{error}</p>}
       </div>
 
       {/* ===== 填充模式 ===== */}
@@ -197,7 +223,7 @@ export function WorkspaceBackgroundSection() {
           <label className={fieldLabel}>
             {t("workspaceBackground.maskOpacity")}
           </label>
-          <span className="text-[11px] tabular-nums text-muted-foreground">
+          <span className="text-2xs tabular-nums text-muted-foreground">
             {pct(workspaceBgMaskOpacity)}
           </span>
         </div>
@@ -210,7 +236,7 @@ export function WorkspaceBackgroundSection() {
           onValueChange={([v]) => setWorkspaceBgMaskOpacity(v)}
           aria-label={t("workspaceBackground.maskOpacity")}
         />
-        <p className="text-[11px] text-muted-foreground leading-4">
+        <p className="text-2xs text-muted-foreground leading-4">
           {t("workspaceBackground.maskOpacityHint")}
         </p>
       </div>
@@ -221,7 +247,7 @@ export function WorkspaceBackgroundSection() {
           <label className={fieldLabel}>
             {t("workspaceBackground.imageBlur")}
           </label>
-          <span className="text-[11px] tabular-nums text-muted-foreground">
+          <span className="text-2xs tabular-nums text-muted-foreground">
             {workspaceBgImageBlur}px
           </span>
         </div>
@@ -242,7 +268,7 @@ export function WorkspaceBackgroundSection() {
           <label className={fieldLabel}>
             {t("workspaceBackground.panelOpacity")}
           </label>
-          <span className="text-[11px] tabular-nums text-muted-foreground">
+          <span className="text-2xs tabular-nums text-muted-foreground">
             {pct(workspaceBgPanelOpacity)}
           </span>
         </div>
@@ -255,10 +281,17 @@ export function WorkspaceBackgroundSection() {
           onValueChange={([v]) => setWorkspaceBgPanelOpacity(v)}
           aria-label={t("workspaceBackground.panelOpacity")}
         />
-        <p className="text-[11px] text-muted-foreground leading-4">
+        <p className="text-2xs text-muted-foreground leading-4">
           {t("workspaceBackground.panelOpacityHint")}
         </p>
       </div>
+
+      <WorkspaceBackgroundMarketDialog
+        open={marketOpen}
+        onOpenChange={setMarketOpen}
+        appliedSourceUrl={workspaceBgSourceUrl}
+        onApply={downloadMarketWorkspaceBackground}
+      />
     </section>
   )
 }

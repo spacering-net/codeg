@@ -72,6 +72,11 @@ pub struct CodeModeScript {
     /// `Some` only when EVERY call site in the script resolved. `None` means
     /// the caller must fall back to the script card.
     pub calls: Option<Vec<CodeModeCall>>,
+    /// Tool names found lexically, in execution-source order, even when an
+    /// argument object contains variables and therefore cannot be resolved.
+    /// Semantic app-server items can supply those arguments without evaluating
+    /// the script, while still checking that every detected call is covered.
+    pub tool_names: Vec<String>,
     /// Human title for the script card (best effort, survives resolve failure).
     pub summary: Option<String>,
     /// Number of `tools.*` call sites detected, resolved or not.
@@ -196,6 +201,7 @@ pub fn parse_code_mode_script(src: &str) -> CodeModeScript {
     if let Some(calls) = expand_table_fanout(src, &sites) {
         let summary = best_effort_summary(src, &calls, &sites);
         return CodeModeScript {
+            tool_names: calls.iter().map(|call| call.tool_name.clone()).collect(),
             calls: Some(calls),
             summary,
             call_sites: sites.len(),
@@ -218,6 +224,7 @@ pub fn parse_code_mode_script(src: &str) -> CodeModeScript {
 
     let summary = best_effort_summary(src, if resolved { &calls } else { &[] }, &sites);
     CodeModeScript {
+        tool_names: sites.iter().map(|site| site.tool_name.clone()).collect(),
         calls: if resolved { Some(calls) } else { None },
         summary,
         call_sites: sites.len(),
@@ -1862,6 +1869,12 @@ fn chunk_text(value: &Value) -> Option<String> {
         Value::String(s) => Some(s.clone()),
         Value::Object(map) => match map.get("text").and_then(|t| t.as_str()) {
             Some(text) => Some(text.to_string()),
+            // A picture (`view_image` returns one, a script's `image()` hands
+            // it back) is a base64 data URL, not text. It keeps its slot, so
+            // the chunks still divide per call; it just has nothing to say.
+            None if map.get("type").and_then(|t| t.as_str()) == Some("input_image") => {
+                Some(String::new())
+            }
             None => Some(value.to_string()),
         },
         other => Some(other.to_string()),
@@ -2436,7 +2449,7 @@ mod tests {
         assert_eq!(got[0].tool_name, "update_plan");
         assert_eq!(
             got[0].input_preview,
-            r#"{"plan":[{"status":"pending","step":"a"}]}"#
+            r#"{"plan":[{"step":"a","status":"pending"}]}"#
         );
         assert_eq!(got[1].tool_name, "mcp__codeg_mcp__get_delegation_status");
         assert_eq!(
@@ -2759,6 +2772,32 @@ mod tests {
         let parsed = split_code_mode_output(Some(&output));
         assert_eq!(parsed.status, ScriptStatus::Unknown);
         assert_eq!(parsed.chunks, vec!["just text"]);
+    }
+
+    /// A script's `image()` hands back the picture itself (what `view_image`
+    /// returns): a base64 data URL, which is no text to show. Each image keeps
+    /// its slot, so the chunks still divide per call exactly as before.
+    #[test]
+    fn image_items_keep_their_slot_without_their_bytes() {
+        let image = serde_json::json!({
+            "type": "input_image",
+            "image_url": "data:image/png;base64,iVBORw0KGgo=",
+            "detail": "high",
+        });
+        let output = serde_json::json!([
+            {"type": "input_text", "text": "Script completed\nWall time 0.0 seconds\nOutput:\n"},
+            {"type": "input_text", "text": "mobile"},
+            image,
+            {"type": "input_text", "text": "desktop"},
+            image,
+        ]);
+        let parsed = split_code_mode_output(Some(&output));
+        assert_eq!(parsed.status, ScriptStatus::Completed);
+        assert_eq!(parsed.chunks, vec!["mobile", "", "desktop", ""]);
+
+        // `view_image` called directly: the image is its whole output.
+        let parsed = split_code_mode_output(Some(&serde_json::json!([image])));
+        assert!(parsed.chunks.is_empty(), "{:?}", parsed.chunks);
     }
 
     /// One call SITE is not one invocation, and arguments reached through a

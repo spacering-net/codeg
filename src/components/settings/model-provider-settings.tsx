@@ -58,6 +58,7 @@ export function ModelProviderSettings() {
   }, [t])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial provider list fetch
     loadProviders().catch(console.error)
   }, [loadProviders])
 
@@ -156,10 +157,7 @@ export function ModelProviderSettings() {
                     </div>
                   </div>
                   <div className="flex shrink-0 gap-1">
-                    <Badge
-                      variant="secondary"
-                      className="text-[10px] px-1.5 py-0"
-                    >
+                    <Badge variant="secondary" className="text-3xs px-1.5 py-0">
                       {getAgentLabel(p.agent_type) ?? p.agent_type}
                     </Badge>
                   </div>

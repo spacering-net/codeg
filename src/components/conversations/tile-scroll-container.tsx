@@ -6,6 +6,26 @@ import {
   type UseOverlayScrollbarsParams,
 } from "overlayscrollbars-react"
 
+const TILE_SELECTOR = "[data-tile-scroll-item]"
+
+// OverlayScrollbars' content MutationObserver measures the viewport inside its
+// callback for every mutation it does not ignore: a `scrollWidth` read, so a
+// synchronous style + layout pass over whatever the DOM write just dirtied.
+// Tiled, that viewport holds every conversation in the group, so each
+// streaming commit — and every frame of a JS-driven shimmer — paid one.
+// Only the row can change the scroll width: a tile clips its content and its
+// width does not depend on it, so anything strictly inside a tile is ignored.
+// A tile's own attributes (class, style) still count — they can resize it.
+function ignoreTileContent(mutation: MutationRecord): boolean {
+  const node = mutation.target
+  // Detached by delivery (React swapped the text node in the same commit):
+  // the removal itself is reported on a still-attached ancestor, judged here.
+  if (!node.isConnected) return true
+  const element =
+    node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement
+  return element?.parentElement?.closest(TILE_SELECTOR) != null
+}
+
 // Mirrors ui/scroll-area.tsx's ScrollArea with x="scroll" y="hidden".
 const TILE_SCROLL_OPTIONS: UseOverlayScrollbarsParams["options"] = {
   scrollbars: {
@@ -14,6 +34,7 @@ const TILE_SCROLL_OPTIONS: UseOverlayScrollbarsParams["options"] = {
     clickScroll: true,
   },
   overflow: { x: "scroll", y: "hidden" },
+  update: { ignoreMutation: ignoreTileContent },
 }
 
 /**
@@ -26,6 +47,10 @@ const TILE_SCROLL_OPTIONS: UseOverlayScrollbarsParams["options"] = {
  * `canTile` mid-stream never remounts the children (which would tear down a
  * live response); only the OverlayScrollbars decoration is created/destroyed
  * around them.
+ *
+ * Each tile must carry `data-tile-scroll-item` and clip its own content
+ * (`overflow-hidden` with a content-independent width): what renders inside a
+ * marked tile is never observed (see `ignoreTileContent`).
  */
 export function TileScrollContainer({
   canTile,

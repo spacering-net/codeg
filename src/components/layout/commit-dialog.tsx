@@ -1,7 +1,14 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { Check, ChevronDown, ChevronRight, Loader2, Upload } from "lucide-react"
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Loader2,
+  Settings2,
+  Upload,
+} from "lucide-react"
 import { useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -57,12 +64,23 @@ import type { GitStatusEntry } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import { DiffViewer } from "@/components/diff/diff-viewer"
-import { languageFromPath } from "@/lib/language-detect"
+import { ImageDiffView } from "@/components/diff/image-diff-view"
+import { loadImageDiffSides, type ImageDiffSides } from "@/lib/image-diff"
+import { isBinaryImageFile, languageFromPath } from "@/lib/language-detect"
 import { toErrorMessage } from "@/lib/app-error"
+import {
+  sameFiles,
+  useCommitMessageGeneration,
+} from "@/hooks/use-commit-message-generation"
+import { CommitMessageGenerateButton } from "@/components/layout/commit-message-generate-button"
+import { CommitMessageSettingsDialog } from "@/components/layout/commit-message-settings-dialog"
 
 interface CommitWorkspaceProps {
   folderPath: string
   folderId?: number | null
+  /** The project folder whose commit message settings apply — a worktree
+   *  folder's repository. Defaults to `folderId`. */
+  projectFolderId?: number | null
   onCommitted?: () => void
   onCancel?: () => void
 }
@@ -222,11 +240,13 @@ const CONFIRM_INITIAL: ConfirmState = {
 export function CommitWorkspace({
   folderPath,
   folderId,
+  projectFolderId,
   onCommitted,
   onCancel,
 }: CommitWorkspaceProps) {
   const t = useTranslations("Folder.commitDialog")
   const tCommon = useTranslations("Folder.common")
+  const tGenerate = useTranslations("CommitMessageGeneration")
   const { withCredentialRetry } = useGitCredential()
   const [entries, setEntries] = useState<GitStatusEntry[]>([])
   const containerRef = useRef<HTMLDivElement>(null)
@@ -236,7 +256,17 @@ export function CommitWorkspace({
   const [diffModified, setDiffModified] = useState("")
   const [diffLanguage, setDiffLanguage] = useState("plaintext")
   const [diffFile, setDiffFile] = useState<string | null>(null)
+  // Carries the file it was loaded for: the several places that drop the diff
+  // only reset `diffFile`, and matching on it keeps a previous file's pixels
+  // from outliving the selection that produced them.
+  const [diffImage, setDiffImage] = useState<{
+    file: string
+    sides: ImageDiffSides
+  } | null>(null)
   const messageRef = useRef("")
+  // The box is uncontrolled (typing must not re-render the file tree); a
+  // generated message is written into it through this.
+  const messageBoxRef = useRef<HTMLTextAreaElement>(null)
   const [hasMessage, setHasMessage] = useState(false)
   const [messageInputKey, setMessageInputKey] = useState(0)
   const [loadingStatus, setLoadingStatus] = useState(false)
@@ -255,6 +285,8 @@ export function CommitWorkspace({
   // Use refs to track mutable values without causing callback recreation
   const diffFileRef = useRef(diffFile)
   diffFileRef.current = diffFile
+  const selectedRef = useRef(selected)
+  selectedRef.current = selected
   const entriesRef = useRef(entries)
   entriesRef.current = entries
 
@@ -292,20 +324,42 @@ export function CommitWorkspace({
     [untrackedEntries]
   )
 
+  // Only the newest selection may write to the diff pane. Two selections in
+  // flight can settle in either order, and an older one landing last would
+  // otherwise overwrite the current file's content — or clear its spinner —
+  // with something the user is no longer looking at.
+  const diffRequestRef = useRef(0)
+
   // Shared diff loading logic — extracted to avoid duplication
   const loadDiff = useCallback(
     async (file: string, allEntries?: GitStatusEntry[]) => {
       if (!folderPath) return
+      const requestId = ++diffRequestRef.current
       setDiffFile(file)
       setDiffLanguage(languageFromPath(file))
       setLoadingDiff(true)
       setDiffOriginal("")
       setDiffModified("")
+      setDiffImage(null)
 
       try {
         const statusSource = allEntries ?? entriesRef.current
         const isUntracked =
           statusSource.find((e) => e.file === file)?.status === UNTRACKED_STATUS
+
+        if (isBinaryImageFile(file)) {
+          // An untracked file has no blob at HEAD either way, so the ref read
+          // resolves to "absent" on its own — no need to special-case it.
+          const sides = await loadImageDiffSides(
+            folderPath,
+            file,
+            { kind: "ref", ref: "HEAD", missingRefIsAbsent: true },
+            { kind: "worktree" }
+          )
+          if (diffRequestRef.current !== requestId) return
+          setDiffImage({ file, sides })
+          return
+        }
 
         const [originalContent, modifiedContent] = await Promise.all([
           isUntracked
@@ -316,13 +370,15 @@ export function CommitWorkspace({
             .catch(() => ""),
         ])
 
+        if (diffRequestRef.current !== requestId) return
         setDiffOriginal(originalContent)
         setDiffModified(modifiedContent)
       } catch {
+        if (diffRequestRef.current !== requestId) return
         setDiffOriginal("")
         setDiffModified("")
       } finally {
-        setLoadingDiff(false)
+        if (diffRequestRef.current === requestId) setLoadingDiff(false)
       }
     },
     [folderPath]
@@ -370,6 +426,7 @@ export function CommitWorkspace({
     if (!folderPath) return
     setDiffOriginal("")
     setDiffModified("")
+    setDiffImage(null)
     setDiffLanguage("plaintext")
     setDiffFile(null)
     messageRef.current = ""
@@ -700,6 +757,41 @@ export function CommitWorkspace({
     []
   )
 
+  const generation = useCommitMessageGeneration({
+    path: folderPath || null,
+    folderId: folderId ?? null,
+  })
+  const { generating } = generation
+  // The checked files are what the commit takes, so they are what the
+  // message describes.
+  const generateDisabledReason = committing
+    ? tGenerate("busyCommitting")
+    : selected.size === 0
+      ? tGenerate("selectFiles")
+      : null
+  const handleGenerate = useCallback(async () => {
+    const files = Array.from(selected)
+    const generated = await generation.generate({
+      files,
+      draft: messageRef.current,
+      // A commit window shows no session; the folder's default agent stands in.
+      fallbackAgent: null,
+    })
+    const box = messageBoxRef.current
+    if (generated === null || !box) return
+    box.value = generated.message
+    messageRef.current = generated.message
+    setHasMessage(generated.message.trim().length > 0)
+    if (!generated.autoCommit) return
+    // Only ever the files the message was written for: a selection changed
+    // meanwhile leaves the message in the box for the user to check.
+    if (!sameFiles(files, Array.from(selectedRef.current))) {
+      toast.info(tGenerate("toasts.autoCommitSkipped"))
+      return
+    }
+    await handleCommit()
+  }, [generation, handleCommit, selected, tGenerate])
+
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
@@ -783,11 +875,10 @@ export function CommitWorkspace({
       return (
         <ContextMenu key={`tracked:${node.path}`}>
           <ContextMenuTrigger>
-            <FileTreeFile
-              name={node.name}
-              path={node.path}
-              className="gap-1 px-1.5 py-1"
-            >
+            {/* No padding override: the row keeps the primitive's own px-2 so
+                the checkbox lands in the column a sibling folder spends on its
+                chevron, and both rows end flush on the right. */}
+            <FileTreeFile name={node.name} path={node.path}>
               <button
                 type="button"
                 onClick={(e) => {
@@ -888,11 +979,10 @@ export function CommitWorkspace({
       return (
         <ContextMenu key={`untracked:${node.path}`}>
           <ContextMenuTrigger>
-            <FileTreeFile
-              name={node.name}
-              path={node.path}
-              className="gap-1 px-1.5 py-1"
-            >
+            {/* No padding override: the row keeps the primitive's own px-2 so
+                the checkbox lands in the column a sibling folder spends on its
+                chevron, and both rows end flush on the right. */}
+            <FileTreeFile name={node.name} path={node.path}>
               <button
                 type="button"
                 onClick={(e) => {
@@ -1027,7 +1117,7 @@ export function CommitWorkspace({
                   <div className="space-y-3 p-2">
                     {trackedEntries.length > 0 && (
                       <section className="space-y-1">
-                        <div className="flex items-center gap-2 px-1 text-[11px] text-muted-foreground">
+                        <div className="flex items-center gap-2 px-1 text-2xs text-muted-foreground">
                           <button
                             type="button"
                             onClick={toggleTrackedGroup}
@@ -1097,7 +1187,7 @@ export function CommitWorkspace({
 
                     {untrackedEntries.length > 0 && (
                       <section className="space-y-1">
-                        <div className="flex w-full items-center gap-2 px-1 py-0.5 text-[11px] text-muted-foreground">
+                        <div className="flex w-full items-center gap-2 px-1 py-0.5 text-2xs text-muted-foreground">
                           <button
                             type="button"
                             onClick={toggleUntrackedGroup}
@@ -1188,15 +1278,49 @@ export function CommitWorkspace({
             </div>
 
             <div className="border-t p-3">
-              <div className="mb-2 text-xs text-muted-foreground">
-                {t("commitMessage")}
+              <div className="mb-1 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                <span>{t("commitMessage")}</span>
+                <div className="flex items-center">
+                  <CommitMessageGenerateButton
+                    generating={generating}
+                    elapsedSeconds={generation.elapsedSeconds}
+                    disabledReason={generateDisabledReason}
+                    onGenerate={() => void handleGenerate()}
+                    onStop={generation.stop}
+                    className="size-7 text-muted-foreground"
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="size-7 text-muted-foreground"
+                    title={tGenerate("settings")}
+                    aria-label={tGenerate("settings")}
+                    onClick={() => generation.setSettingsOpen(true)}
+                  >
+                    <Settings2 className="size-3.5" />
+                  </Button>
+                </div>
               </div>
               <Textarea
                 key={messageInputKey}
-                placeholder={t("commitMessagePlaceholder")}
+                ref={messageBoxRef}
+                placeholder={
+                  generating
+                    ? tGenerate("generating", {
+                        seconds: generation.elapsedSeconds,
+                      })
+                    : t("commitMessagePlaceholder")
+                }
                 defaultValue=""
+                readOnly={generating}
                 onChange={handleMessageChange}
-                className="min-h-[90px] max-h-[200px] resize-y"
+                className="field-scrollbar min-h-[5.625rem] max-h-[12.5rem] resize-y"
+              />
+              <CommitMessageSettingsDialog
+                open={generation.settingsOpen}
+                onOpenChange={generation.setSettingsOpen}
+                folderId={projectFolderId ?? folderId ?? null}
               />
               <div className="mt-3 flex items-center justify-end gap-2">
                 <Button variant="outline" onClick={onCancel}>
@@ -1204,7 +1328,12 @@ export function CommitWorkspace({
                 </Button>
                 <div className="flex">
                   <Button
-                    disabled={committing || !hasMessage || selected.size === 0}
+                    disabled={
+                      committing ||
+                      generating ||
+                      !hasMessage ||
+                      selected.size === 0
+                    }
                     onClick={() => handleCommit()}
                     className="rounded-r-none"
                   >
@@ -1217,7 +1346,10 @@ export function CommitWorkspace({
                     <DropdownMenuTrigger asChild>
                       <Button
                         disabled={
-                          committing || !hasMessage || selected.size === 0
+                          committing ||
+                          generating ||
+                          !hasMessage ||
+                          selected.size === 0
                         }
                         className="rounded-l-none border-l border-l-primary-foreground/20 px-1.5"
                       >
@@ -1273,6 +1405,15 @@ export function CommitWorkspace({
                   {t("loadingDiff")}
                 </div>
               </>
+            ) : diffImage && diffImage.file === diffFile ? (
+              <ImageDiffView
+                key={diffFile}
+                original={diffImage.sides.original}
+                modified={diffImage.sides.modified}
+                originalLabel={t("head")}
+                modifiedLabel={t("workingTree")}
+                className="h-full [&>div:first-child]:h-9 [&>div:first-child]:py-0"
+              />
             ) : (
               <DiffViewer
                 key={diffFile}

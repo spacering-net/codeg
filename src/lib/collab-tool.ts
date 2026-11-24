@@ -9,7 +9,8 @@
  *   { [threadId]: { status: CollabAgentStatus, message: string | null } }
  * and the ACP `title` is the collab op (`CollabAgentTool`, e.g. `spawnAgent` /
  * `wait` / `closeAgent`). We detect collab calls by that distinctive rawInput
- * shape (independent of the title) and route them to a dedicated capsule.
+ * shape (independent of the title) and route them to a dedicated timeline row
+ * (`CollabAgentRow`).
  *
  * The op (title) is otherwise dropped downstream (only ACP `meta` is forwarded),
  * so the live input shaper merges it back in under `COLLAB_OP_KEY` — see
@@ -34,7 +35,7 @@ export const COLLAB_AGENT_TOOL_NAME = "collab_agent"
 
 /**
  * Synthetic rawInput key the live input shaper uses to smuggle the collab op
- * (the ACP `title`, e.g. `spawnAgent`/`wait`/`closeAgent`) through to the card,
+ * (the ACP `title`, e.g. `spawnAgent`/`wait`/`closeAgent`) through to the row,
  * since the title is otherwise dropped. Not a codex field.
  */
 export const COLLAB_OP_KEY = "__codegCollabOp"
@@ -114,15 +115,22 @@ export function isErrorCollabStatusKind(kind: CollabStatusKind): boolean {
 }
 
 /** Display kind for the collab op (the ACP title), used for op-aware titles. */
-export type CollabOpKind = "spawn" | "wait" | "close" | "resume" | "other"
+export type CollabOpKind =
+  | "spawn"
+  | "wait"
+  | "close"
+  | "resume"
+  | "list"
+  | "other"
 
 /**
  * Classify the collab op spelling-agnostically. The op reaches us as the ACP
  * `title` (`CollabAgentTool`), which codex-acp emits camelCase (`spawnAgent` /
  * `wait` / `closeAgent` / `resumeAgent`), but the rollout/alias spellings are
- * snake_case (`spawn_agent` / `wait_agent` / `close_agent`). Normalize both so
- * the op-aware title survives either spelling. `sendInput`/unknown → "other"
- * (these normally carry a prompt, which the title prefers anyway).
+ * snake_case (`spawn_agent` / `wait_agent` / `close_agent` / `list_agents`).
+ * Normalize both so the op-aware title survives either spelling.
+ * `sendInput`/unknown → "other" (these normally carry a prompt, which the title
+ * prefers anyway).
  */
 export function classifyCollabOp(op: string | null): CollabOpKind {
   const s = (op ?? "").toLowerCase().replace(/[_-]/g, "")
@@ -130,7 +138,34 @@ export function classifyCollabOp(op: string | null): CollabOpKind {
   if (s.includes("wait")) return "wait"
   if (s.includes("close")) return "close"
   if (s.includes("resume")) return "resume"
+  // `listAgents` (live) / `list_agents` (rollout): a roster of the team, not an
+  // action on one agent — but it carries each finished child's full report,
+  // which with the native team-of-agents is one of the few places that text is
+  // readable at all.
+  if (s.includes("list")) return "list"
   return "other"
+}
+
+/**
+ * Whether an `agentsStates` key is a codex THREAD id — i.e. names a rollout on
+ * disk that can be opened as a session — rather than a display name.
+ *
+ * The keys are not uniform, and the difference is not visible from the op alone.
+ * `spawn`/`wait`/`close`/`resume` key by thread id (live: codex-acp's
+ * `agentsStates`; history: `build_collab_wait_input`, whose keys come straight
+ * off the `wait_agent` output). `list_agents` keys by `agent_name`
+ * (`build_collab_list_input`) — codex's roster reports names, not ids, so a
+ * "open this agent's session" entry point built on those keys would try to open
+ * a session called `pnpm_build` and find nothing.
+ *
+ * Checking the shape rather than the op keeps that honest without having to
+ * predict how the next op spells its map: a codex thread id is a UUID, and an
+ * agent name never is.
+ */
+export function isCodexThreadId(id: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    id
+  )
 }
 
 /**

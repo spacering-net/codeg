@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react"
 import { Check, Copy, Loader2 } from "lucide-react"
 import { useLocale, useTranslations } from "next-intl"
 import type {
+  AgentType,
   ConversationStatus,
   DbConversationSummary,
   SessionStats,
@@ -19,16 +20,20 @@ import {
 } from "@/lib/context-window"
 import { getFolderConversation } from "@/lib/api"
 import { useCopiedFlag } from "@/hooks/use-copied-flag"
+import { useModelLabels } from "@/hooks/use-model-labels"
 import { pickModelFromTurns } from "./active-session-details"
 import { AgentIcon } from "@/components/agent-icon"
+import { AssistantAvatar } from "@/components/assistants/assistant-avatar"
+import { useDelegationIdentityLabel } from "@/components/message/delegation-identity"
+import { useAssistant } from "@/stores/assistants-store"
 import { ConversationStatusDot } from "./conversation-status-dot"
 
 interface SessionDetailsContentProps {
   summary: DbConversationSummary
   /**
    * Pre-loaded session stats. When a value (or `null`) is passed the content
-   * trusts it and renders without a fetch — the detail panel / session-details
-   * tab read it straight from the live runtime session. When `undefined` (the
+   * trusts it and renders without a fetch — the detail panel reads it
+   * straight from the live runtime session. When `undefined` (the
    * sidebar card, which only holds the summary) it fetches the conversation
    * detail while `active` to fill in token usage.
    */
@@ -44,14 +49,85 @@ interface SessionDetailsContentProps {
   /**
    * Whether the content is currently visible/active. Gates the sidebar
    * cold-fetch effect and the loading state so it only runs while shown. The
-   * dialog passes its `open` flag; the always-mounted sidebar tab passes whether
-   * the panel + tab are actually surfaced. Defaults to `true`.
+   * dialog passes its `open` flag. Defaults to `true`.
    */
   active?: boolean
 }
 
 function isKnownStatus(value: string): value is ConversationStatus {
   return (STATUS_ORDER as string[]).includes(value)
+}
+
+/**
+ * The identity chips that sit under a conversation's title: the agent always,
+ * then the model and the status when the surface wants them. Shared with the
+ * sidebar's hover bubble (`sidebar-conversation-hover-details.tsx`) so the two
+ * stay identical — including the a11y details below, which are easy to lose in
+ * a copy.
+ *
+ * The two surfaces ask for different chips because they sit beside different
+ * things. This dialog spells the model out in its own labelled field and its
+ * status is worth naming next to the title, so it passes `status` and no
+ * `model`. The bubble hangs off a row that already badges a running or
+ * cancelled session, and has no field to spare for the model, so it does the
+ * reverse.
+ */
+export function SessionIdentityChips({
+  agentType,
+  status,
+  model,
+}: {
+  agentType: AgentType
+  /** Omit to drop the status chip. */
+  status?: string | null
+  /** Omit (or pass empty) to drop the model chip. The RAW id as recorded — the
+   *  chip renders whatever the agent calls it when that is known. */
+  model?: string | null
+}) {
+  const tStatus = useTranslations("Folder.statusLabels")
+  const modelLabel = useModelLabels(agentType)
+  const displayModel = modelLabel(model)
+  return (
+    <div className="flex flex-wrap items-center gap-x-1 gap-y-1 text-xs text-muted-foreground">
+      <span className="inline-flex items-center gap-1.5">
+        {/* Decorative: the visible label already names the agent, and the icon
+            SVG carries its own <title>, so hide it from the a11y tree to avoid
+            a duplicate reading. */}
+        <span aria-hidden="true" className="inline-flex">
+          <AgentIcon agentType={agentType} className="h-3.5 w-3.5" />
+        </span>
+        {getAgentLabel(agentType)}
+      </span>
+      {displayModel && (
+        // The separator rides INSIDE the model chip, with the row's own gap
+        // repeated around it so it sits evenly between the two names, and so
+        // the two are one flex item: a dot of its own would be left on the line
+        // above when a long model id wraps, orphaned at the end of it. Wrapping
+        // rather than truncating — a chip row has no width of its own to
+        // truncate against, and a model id is the kind of value whose tail is
+        // what distinguishes it.
+        <span className="inline-flex min-w-0 items-center gap-x-1">
+          <span aria-hidden="true">·</span>
+          <span dir="ltr" className="wrap-anywhere min-w-0 font-mono">
+            {displayModel}
+          </span>
+        </span>
+      )}
+      {status != null && (
+        // `ms-2` puts back what the row gap gave up. That gap is tight so the
+        // model's separator can hug the two names it divides; this chip is a
+        // second label rather than a division, and reads as crowded against the
+        // agent without the 0.75rem it had.
+        <span className="ms-2 inline-flex items-center gap-1.5">
+          <ConversationStatusDot
+            status={isKnownStatus(status) ? status : null}
+            size="sm"
+          />
+          {isKnownStatus(status) ? tStatus(status) : status}
+        </span>
+      )}
+    </div>
+  )
 }
 
 function trimZero(value: string): string {
@@ -94,21 +170,61 @@ function resolveSessionDurationMs(
  * the cell shrink below its content so a long value wraps in place instead of
  * widening the grid track. Rendered as a `<div>` grouping `<dt>`/`<dd>`, which
  * HTML permits as a direct child of `<dl>`.
+ *
+ * Exported so the sidebar's hover bubble
+ * (`sidebar-conversation-hover-details.tsx`) renders its fields in the exact
+ * same shape as this view rather than growing a near-copy.
  */
-function InfoItem({
+/** The assistant a delegation sub-session ran as: its avatar and name, by
+ *  the same fallback order the delegation cards use. */
+function AssistantInline({
+  id,
+  snapshotName,
+}: {
+  id: number
+  snapshotName: string | null
+}) {
+  const t = useTranslations("Folder.chat.delegation")
+  const assistant = useAssistant(id)
+  const { name, deleted } = useDelegationIdentityLabel({
+    agentType: null,
+    assistantId: id,
+    assistantName: snapshotName,
+  })
+  return (
+    <span className="inline-flex min-w-0 items-center gap-1.5">
+      <AssistantAvatar
+        avatar={assistant?.avatar ?? null}
+        name={name}
+        size={16}
+      />
+      <span className="min-w-0 truncate">{name}</span>
+      {deleted ? (
+        <span className="shrink-0 text-muted-foreground">
+          {t("deletedAssistant")}
+        </span>
+      ) : null}
+    </span>
+  )
+}
+
+export function InfoItem({
   label,
   children,
   className,
   valueClassName,
 }: {
-  label: string
+  /** Usually plain text; a node so a caller can hang a badge off the label. */
+  label: ReactNode
   children: ReactNode
   className?: string
   valueClassName?: string
 }) {
   return (
     <div className={cn("min-w-0 space-y-0.5", className)}>
-      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dt className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+        {label}
+      </dt>
       <dd className={cn("min-w-0 leading-snug", valueClassName)}>{children}</dd>
     </div>
   )
@@ -116,7 +232,7 @@ function InfoItem({
 
 /**
  * A value with a copy button that fades in on hover (or keyboard focus). Used
- * for identifiers worth copying — the session id and the extension id.
+ * for identifiers worth copying — the session id and the session index.
  */
 function CopyableValue({
   text,
@@ -158,12 +274,240 @@ function CopyableValue({
 }
 
 /**
- * The presentational body of the Session Details view — the conversation's
- * identity, identifiers, token usage, and timestamps. Extracted from the
- * dialog so it can be rendered both inside the modal
- * (`SessionDetailsDialog`) and inline in the aux-panel Session Details tab.
- * Data inputs are dialog-agnostic: a `summary` plus the tri-state
- * `stats`/`model` contract (see the prop docs).
+ * A copy button for one property of `SessionDetailsCard`: hidden until its
+ * cell is pointed at or holds focus (shown on a touch screen, which can't
+ * point), and while it says the copy went through. It hangs off the value's
+ * end rather than taking room beside it, so the value stays centred in its
+ * column whether it shows or not.
+ */
+function CopyPropertyButton({
+  text,
+  copyLabel,
+  copiedLabel,
+}: {
+  text: string
+  copyLabel: string
+  copiedLabel: string
+}) {
+  const [copied, markCopied] = useCopiedFlag()
+  const handleCopy = () => {
+    void copyTextToClipboard(text).then((ok) => {
+      if (ok) markCopied()
+    })
+  }
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      aria-label={copied ? copiedLabel : copyLabel}
+      title={copied ? copiedLabel : copyLabel}
+      className={cn(
+        "absolute start-full top-1/2 ms-0.5 inline-flex size-4 -translate-y-1/2 items-center justify-center rounded text-muted-foreground outline-none transition-[opacity,color] hover:bg-foreground/5 hover:text-foreground focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 group-focus-within/prop:opacity-100 group-hover/prop:opacity-100 [@media(hover:none)]:opacity-100",
+        copied ? "opacity-100" : "opacity-0"
+      )}
+    >
+      {copied ? (
+        <Check className="size-3 text-green-500" />
+      ) : (
+        <Copy className="size-3" />
+      )}
+    </button>
+  )
+}
+
+/**
+ * One label-over-value cell of `SessionDetailsCard`'s properties, centred in
+ * its column, the value a size up from its label. The cells of a line share
+ * its width evenly and are split by hairlines.
+ * The cell groups its label and value for the hover that lights its copy
+ * button.
+ */
+function PropertyCell({
+  label,
+  children,
+}: {
+  label: string
+  children: ReactNode
+}) {
+  return (
+    <div className="group/prop min-w-0 px-1.5 text-center">
+      <dt className="truncate text-2xs leading-4 text-muted-foreground">
+        {label}
+      </dt>
+      <dd className="mt-1 flex h-5 min-w-0 items-center justify-center gap-1 text-[0.8125rem] font-medium text-foreground">
+        {children}
+      </dd>
+    </div>
+  )
+}
+
+/** A line of property cells, as wide as each other, a hairline between each
+ *  two. */
+const PROPERTY_LINE =
+  "grid min-w-0 auto-cols-fr grid-flow-col [&>*+*]:border-s [&>*+*]:border-border/60"
+
+/** The card's own colour (its `bg-muted/40` over the page), for the ring
+ *  that cuts the status dot out of the agent icon. */
+const CARD_RING =
+  "ring-[color-mix(in_oklab,var(--muted)_40%,var(--background))]"
+
+/** The part of the session index (the agent's own id for the session) shown:
+ *  its first segment, which is enough to tell two apart at a glance; the
+ *  whole one is copied. */
+function externalIdHead(value: string): string {
+  return value.split("-")[0] || value
+}
+
+/**
+ * The Session Details side panel's summary of the active conversation, as a
+ * card. Its head: the agent's icon, the status a dot on its corner as the
+ * conversation list draws it; beside it the title, and under the title the
+ * agent's name and the model. Under a hairline its properties, label over
+ * value, a column each, centred: the branch, the conversation's id and its
+ * session index — the agent's own id for it — (both copyable); then the
+ * parent conversation and the assistant when it has them. The panel's room goes to the plan and the message
+ * navigator under it; the dialog (`SessionDetailsContent`) is the full view,
+ * with token usage and timestamps.
+ *
+ * `model` is the raw id the transcript recorded (the tab resolves it the way
+ * the detail panel does); it is shown by the name the agent's picker uses.
+ */
+export function SessionDetailsCard({
+  summary,
+  model,
+}: {
+  summary: DbConversationSummary
+  model: string | null
+}) {
+  const t = useTranslations("Folder.sessionDetails")
+  const tStatus = useTranslations("Folder.statusLabels")
+  const modelLabel = useModelLabels(summary.agent_type)
+  const displayModel = modelLabel(model ?? summary.model ?? null)
+  const title = formatConversationTitle(summary.title) || t("untitled")
+  const knownStatus = isKnownStatus(summary.status) ? summary.status : null
+  const statusLabel = knownStatus ? tStatus(knownStatus) : summary.status
+  const agentLabel = getAgentLabel(summary.agent_type)
+  const hasExtraLine = summary.parent_id != null || summary.assistant_id != null
+
+  return (
+    <section className="min-w-0 rounded-xl border border-border/70 bg-muted/40 p-3">
+      <div className="flex min-w-0 items-start gap-3">
+        {/* Decorative: the name under the title says which agent it is, the
+            icon's SVG carries a <title> of its own that would repeat it, and
+            the status is said in words beside the name. */}
+        <span
+          data-testid="session-agent-avatar"
+          aria-hidden="true"
+          className="relative mt-0.5 flex shrink-0"
+        >
+          <AgentIcon agentType={summary.agent_type} className="size-9" />
+          <ConversationStatusDot
+            status={knownStatus}
+            className={cn(
+              "absolute -end-0.5 -bottom-0.5 size-2.5 ring-2",
+              CARD_RING
+            )}
+          />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p
+            title={title}
+            className="line-clamp-2 text-sm leading-5 font-semibold text-foreground [overflow-wrap:anywhere]"
+          >
+            {title}
+          </p>
+          <p
+            data-testid="session-agent-line"
+            className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground"
+          >
+            <span className="max-w-[50%] shrink-0 truncate">{agentLabel}</span>
+            {displayModel && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span title={displayModel} className="min-w-0 truncate">
+                  {displayModel}
+                </span>
+              </>
+            )}
+            <span className="sr-only">{`${t("status")}: ${statusLabel}`}</span>
+          </p>
+        </div>
+      </div>
+      <dl className="mt-3 space-y-2.5 border-t border-border/60 pt-3">
+        <div className={PROPERTY_LINE}>
+          <PropertyCell label={t("gitBranch")}>
+            {summary.git_branch ? (
+              <span
+                dir="ltr"
+                title={summary.git_branch}
+                className="min-w-0 truncate"
+              >
+                {summary.git_branch}
+              </span>
+            ) : (
+              t("none")
+            )}
+          </PropertyCell>
+          <PropertyCell label={t("sessionId")}>
+            <span className="relative flex min-w-0">
+              <span className="truncate tabular-nums">{summary.id}</span>
+              <CopyPropertyButton
+                text={String(summary.id)}
+                copyLabel={t("copyField", { field: t("sessionId") })}
+                copiedLabel={t("copiedField", { field: t("sessionId") })}
+              />
+            </span>
+          </PropertyCell>
+          <PropertyCell label={t("externalId")}>
+            {summary.external_id ? (
+              <span className="relative flex min-w-0">
+                <span
+                  dir="ltr"
+                  title={summary.external_id}
+                  className="truncate tabular-nums"
+                >
+                  {externalIdHead(summary.external_id)}
+                </span>
+                <CopyPropertyButton
+                  text={summary.external_id}
+                  copyLabel={t("copyField", { field: t("externalId") })}
+                  copiedLabel={t("copiedField", { field: t("externalId") })}
+                />
+              </span>
+            ) : (
+              t("none")
+            )}
+          </PropertyCell>
+        </div>
+        {hasExtraLine && (
+          <div className={PROPERTY_LINE}>
+            {summary.parent_id != null && (
+              <PropertyCell label={t("parentId")}>
+                <span className="tabular-nums">{summary.parent_id}</span>
+              </PropertyCell>
+            )}
+            {summary.assistant_id != null && (
+              <PropertyCell label={t("assistant")}>
+                <AssistantInline
+                  id={summary.assistant_id}
+                  snapshotName={summary.assistant_name ?? null}
+                />
+              </PropertyCell>
+            )}
+          </div>
+        )}
+      </dl>
+    </section>
+  )
+}
+
+/**
+ * The presentational body of the Session Details dialog — the conversation's
+ * identity, identifiers, token usage, and timestamps. Kept apart from the
+ * modal (`SessionDetailsDialog`) so its data contract is dialog-agnostic: a
+ * `summary` plus the tri-state `stats`/`model` contract (see the prop docs).
+ * The aux-panel Session Details tab shows the compact `SessionDetailsCard`
+ * instead.
  */
 export function SessionDetailsContent({
   summary: summaryProp,
@@ -172,7 +516,6 @@ export function SessionDetailsContent({
   active = true,
 }: SessionDetailsContentProps) {
   const t = useTranslations("Folder.sessionDetails")
-  const tStatus = useTranslations("Folder.statusLabels")
   const locale = useLocale()
 
   // The only mirrored state is the outcome of the sidebar fetch, held as one
@@ -233,7 +576,12 @@ export function SessionDetailsContent({
   // use what the fetch derived, then fall back to the (usually empty) summary.
   const resolvedModel =
     modelProp !== undefined ? modelProp : result?.ok ? result.model : null
-  const displayModel = resolvedModel ?? summary.model ?? null
+  const rawModel = resolvedModel ?? summary.model ?? null
+  // Every source above yields the id the transcript recorded. Some agents name
+  // their models with an account-internal key, so show what the agent's own
+  // picker calls it (unknown ids fall through unchanged).
+  const modelLabel = useModelLabels(summary.agent_type)
+  const displayModel = modelLabel(rawModel)
 
   const dateFormatter = useMemo(
     () =>
@@ -291,36 +639,17 @@ export function SessionDetailsContent({
 
   return (
     // `@container` drives the identifier / token / timestamp grids: one column
-    // in the narrow aux-panel tab, two in the wider details dialog.
+    // when the dialog is narrow, two once it has the room.
     <div className="@container min-w-0 space-y-5 text-sm">
       {/* Identity: the conversation title with its agent and status. */}
       <div className="min-w-0 space-y-2">
         <p className="wrap-anywhere text-base font-medium leading-snug">
           {formatConversationTitle(summary.title) || t("untitled")}
         </p>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-          <span className="inline-flex items-center gap-1.5">
-            {/* Decorative: the visible label already names the agent, and
-                the icon SVG carries its own <title>, so hide it from the
-                a11y tree to avoid a duplicate reading. */}
-            <span aria-hidden="true" className="inline-flex">
-              <AgentIcon
-                agentType={summary.agent_type}
-                className="h-3.5 w-3.5"
-              />
-            </span>
-            {getAgentLabel(summary.agent_type)}
-          </span>
-          <span className="inline-flex items-center gap-1.5">
-            <ConversationStatusDot
-              status={isKnownStatus(summary.status) ? summary.status : null}
-              size="sm"
-            />
-            {isKnownStatus(summary.status)
-              ? tStatus(summary.status)
-              : summary.status}
-          </span>
-        </div>
+        <SessionIdentityChips
+          agentType={summary.agent_type}
+          status={summary.status}
+        />
       </div>
 
       {/* Identifiers, packed two-up to keep the view short. */}
@@ -344,6 +673,14 @@ export function SessionDetailsContent({
         {summary.parent_id != null && (
           <InfoItem label={t("parentId")} valueClassName={numeric}>
             {summary.parent_id}
+          </InfoItem>
+        )}
+        {summary.assistant_id != null && (
+          <InfoItem label={t("assistant")}>
+            <AssistantInline
+              id={summary.assistant_id}
+              snapshotName={summary.assistant_name ?? null}
+            />
           </InfoItem>
         )}
         <InfoItem label={t("externalId")} className="@[20rem]:col-span-2">

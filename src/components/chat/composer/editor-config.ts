@@ -4,6 +4,7 @@ import StarterKit from "@tiptap/starter-kit"
 
 import { InactiveSelectionHighlight } from "./inactive-selection"
 import { Reference } from "./nodes/reference-node"
+import { QuoteLineDecoration } from "./quote-decoration"
 import {
   MentionSuggestion,
   type MentionController,
@@ -84,6 +85,9 @@ export function buildComposerExtensions(
     Reference,
     // Keeps the selection visible when focus moves to the right-click menu.
     InactiveSelectionHighlight,
+    // Paints line-leading `> ` markers as a blockquote rule. Decoration only —
+    // the characters stay in the document, so send/copy/draft text is unchanged.
+    QuoteLineDecoration,
   ]
   if (options.mentionController) {
     extensions.push(

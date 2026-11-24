@@ -7,6 +7,7 @@ import {
   expandedKeysForBranch,
   localBranchItems,
   sectionKey,
+  worktreeBranchNodes,
   type BranchTreeItem,
   type BranchTreeNode,
 } from "@/lib/branch-tree"
@@ -287,6 +288,91 @@ describe("sectionKey", () => {
     expect(sectionKey("local")).toBe("s local")
     expect(sectionKey("remote")).toBe("s remote")
     expect(sectionKey("remote:origin")).toBe("s remote:origin")
+  })
+})
+
+describe("worktreeBranchNodes", () => {
+  it("returns nothing when the repo has no other worktree", () => {
+    expect(worktreeBranchNodes([], null)).toEqual([])
+  })
+
+  it("groups branches that share a prefix, exactly like the local tree", () => {
+    expect(worktreeBranchNodes(["task/b", "task/a"], null)).toEqual([
+      {
+        type: "group",
+        label: "task/",
+        key: "g worktree task",
+        count: 2,
+        children: [
+          {
+            type: "leaf",
+            fullName: "task/a",
+            label: "a",
+            key: "l worktree task/a",
+          },
+          {
+            type: "leaf",
+            fullName: "task/b",
+            label: "b",
+            key: "l worktree task/b",
+          },
+        ],
+      },
+    ])
+  })
+
+  it("collapses a branch that shares no prefix into one whole-ref leaf", () => {
+    expect(worktreeBranchNodes(["loop/x"], null)).toEqual([
+      {
+        type: "leaf",
+        fullName: "loop/x",
+        label: "loop/x",
+        key: "l worktree loop/x",
+      },
+    ])
+  })
+
+  it("puts the main working tree first, above the prefix groups", () => {
+    // Groups sort before leaves, so `main` only stays on top because it is
+    // hoisted out of the trie — that's the "back to the project root" target.
+    const nodes = worktreeBranchNodes(
+      ["task/b", "Loop/x", "main", "task/a"],
+      "main"
+    )
+    expect(nodes.map((node) => node.label)).toEqual(["main", "task/", "Loop/x"])
+  })
+
+  it("hoists the main branch even when it would fall inside a group", () => {
+    const nodes = worktreeBranchNodes(
+      ["task/base", "task/a", "task/b"],
+      "task/base"
+    )
+    expect(nodes[0]).toMatchObject({
+      type: "leaf",
+      fullName: "task/base",
+      label: "task/base",
+    })
+    expect(nodes[1]).toMatchObject({ type: "group", label: "task/", count: 2 })
+  })
+
+  it("ignores a main branch no worktree actually holds", () => {
+    expect(
+      worktreeBranchNodes(["task/a", "task/b"], "main").map(
+        (node) => node.label
+      )
+    ).toEqual(["task/"])
+  })
+
+  it("scopes keys to the worktree section, so the local tree's leaf differs", () => {
+    const [worktreeLeaf] = worktreeBranchNodes(["dev"], null)
+    const [localLeaf] = buildBranchTree(localBranchItems(["dev"]), "local")
+    expect(worktreeLeaf.key).not.toBe(localLeaf.key)
+  })
+
+  it("leaves the caller's array untouched", () => {
+    const branches = ["task/b", "task/a"]
+    worktreeBranchNodes(branches, null)
+    expect(branches).toEqual(["task/b", "task/a"])
   })
 })
 

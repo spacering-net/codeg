@@ -11,17 +11,27 @@ use crate::models::{
     AgentExecutionStats, AgentToolCall, AgentType, ContentBlock, ConversationDetail,
     ConversationSummary, MessageRole, MessageTurn, TurnRole, TurnUsage, UnifiedMessage,
 };
+use crate::parsers::claude::{
+    capture_tag, task_notification_status_regex, task_notification_summary_regex,
+    task_notification_task_id_regex, BACKGROUND_TASK_MARKER,
+};
 use crate::parsers::{
     backfill_turn_durations, compute_session_stats, folder_name_from_path,
     infer_context_window_max_tokens, is_safe_subagent_id, latest_turn_total_usage_tokens,
     merge_context_window_stats, relocate_orphaned_tool_results, resolve_patch_line_numbers,
-    structurize_read_tool_output, title_from_user_text, truncate_str, AgentParser, ParseError,
+    structurize_read_tool_output, title_from_user_text, truncate_str, AgentEnv, AgentParser,
+    ParseError,
 };
 
 /// Resolve CodeBuddy's config dir, honoring `CODEBUDDY_CONFIG_DIR`, else
 /// `~/.codebuddy` (mirrors `resolve_claude_config_dir`).
 pub(crate) fn resolve_codebuddy_config_dir() -> PathBuf {
-    resolve_codebuddy_config_dir_from(std::env::var_os("CODEBUDDY_CONFIG_DIR"), dirs::home_dir())
+    resolve_codebuddy_config_dir_for_env(&AgentEnv::inherited())
+}
+
+/// The config dir of the CodeBuddy launched with `env`.
+pub(crate) fn resolve_codebuddy_config_dir_for_env(env: &AgentEnv) -> PathBuf {
+    resolve_codebuddy_config_dir_from(env.var_os("CODEBUDDY_CONFIG_DIR"), dirs::home_dir())
 }
 
 fn resolve_codebuddy_config_dir_from(
@@ -48,8 +58,13 @@ pub struct CodeBuddyParser {
 
 impl CodeBuddyParser {
     pub fn new() -> Self {
+        Self::for_env(&AgentEnv::inherited())
+    }
+
+    /// The history of the CodeBuddy launched with `env`.
+    pub fn for_env(env: &AgentEnv) -> Self {
         Self {
-            base_dir: resolve_codebuddy_config_dir().join("projects"),
+            base_dir: resolve_codebuddy_config_dir_for_env(env).join("projects"),
         }
     }
 
@@ -58,6 +73,23 @@ impl CodeBuddyParser {
     #[cfg(any(test, feature = "test-utils"))]
     pub fn with_base_dir(base_dir: PathBuf) -> Self {
         Self { base_dir }
+    }
+
+    /// The images a prompt record carried, read from the blob store beside the
+    /// `projects` dir this parser reads ([`read_prompt_image`]).
+    fn prompt_images(&self, value: &Value) -> Vec<ContentBlock> {
+        let (Some(config_dir), Some(items)) = (
+            self.base_dir.parent(),
+            value.get("content").and_then(Value::as_array),
+        ) else {
+            return Vec::new();
+        };
+        let blobs = config_dir.join("blobs");
+        items
+            .iter()
+            .filter(|item| item.get("type").and_then(Value::as_str) == Some("image_blob_ref"))
+            .filter_map(|item| read_prompt_image(&blobs, item))
+            .collect()
     }
 
     fn parse_summary(&self, path: &Path) -> Option<ConversationSummary> {
@@ -104,10 +136,16 @@ impl CodeBuddyParser {
             match record_type {
                 "custom-title" | "ai-title" | "topic" => titles.feed(record_type, &value),
                 "message" => match value.get("role").and_then(|r| r.as_str()).unwrap_or("") {
-                    "user" => {
+                    // A system-injected user record is not a prompt (see
+                    // `is_injected_user_record`): it must not be counted, nor
+                    // become the fallback title. The guard makes it fall to the
+                    // `_` arm — `parse_detail` applies the SAME exclusion, and
+                    // the two paths MUST agree or the auto-title backfill would
+                    // oscillate between them.
+                    "user" if !is_injected_user_record(&value) => {
                         message_count += 1;
                         if first_user_text.is_none() {
-                            let text = collect_text(&value, "input_text");
+                            let text = shown_user_text(collect_text(&value, "input_text"));
                             if !text.trim().is_empty() {
                                 first_user_text = Some(title_from_user_text(text.trim()));
                             }
@@ -169,6 +207,18 @@ impl CodeBuddyParser {
         // and the Claude-style "Task"+subagent_type form alike.
         let mut agent_call_ids: std::collections::HashSet<String> =
             std::collections::HashSet::new();
+        // Async `Agent` launch acks: tool `callId` → the detached worker's task
+        // id (`spawned_task_id`). Joined with `background_notifications` by
+        // `apply_background_lifecycle` once every record has been read.
+        let mut background_acks: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        // task id → `(status, summary)` of its LATEST `<task-notification>`. The
+        // same id can notify more than once (a resumed worker re-notifies), so
+        // last wins — mirroring `claude.rs`.
+        let mut background_notifications: std::collections::HashMap<
+            String,
+            (String, Option<String>),
+        > = std::collections::HashMap::new();
 
         for (idx, line) in reader.lines().enumerate() {
             let Ok(line) = line else { continue };
@@ -200,20 +250,39 @@ impl CodeBuddyParser {
                 "custom-title" | "ai-title" | "topic" => titles.feed(record_type, &value),
                 "message" => match value.get("role").and_then(|r| r.as_str()).unwrap_or("") {
                     "user" => {
-                        message_count += 1;
                         let text = collect_text(&value, "input_text");
-                        if first_user_text.is_none() && !text.trim().is_empty() {
-                            first_user_text = Some(title_from_user_text(text.trim()));
-                        }
-                        if !text.trim().is_empty() {
-                            messages.push(text_message(
-                                format!("cb-user-{idx}"),
-                                MessageRole::User,
-                                text,
-                                ts,
-                                None,
-                                None,
-                            ));
+                        if is_injected_user_record(&value) {
+                            // Never a prompt (see `is_injected_user_record`):
+                            // harvest the background-worker settlement it
+                            // carries for the lifecycle fold, then drop the
+                            // record entirely — no user turn, no message count,
+                            // no fallback title.
+                            capture_task_notification(&text, &mut background_notifications);
+                        } else {
+                            let text = shown_user_text(text);
+                            message_count += 1;
+                            if first_user_text.is_none() && !text.trim().is_empty() {
+                                first_user_text = Some(title_from_user_text(text.trim()));
+                            }
+                            // The typed text, then the prompt's images: what
+                            // CodeBuddy's own replay shows for the record.
+                            let mut content = Vec::new();
+                            if !text.trim().is_empty() {
+                                content.push(ContentBlock::Text { text });
+                            }
+                            content.extend(self.prompt_images(&value));
+                            if !content.is_empty() {
+                                let mut message = text_message(
+                                    format!("cb-user-{idx}"),
+                                    MessageRole::User,
+                                    String::new(),
+                                    ts,
+                                    None,
+                                    None,
+                                );
+                                message.content = content;
+                                messages.push(message);
+                            }
                         }
                     }
                     "assistant" => {
@@ -244,6 +313,7 @@ impl CodeBuddyParser {
                             duration_ms: None,
                             model: record_model(&value),
                             completed_at: Some(ts),
+                        agent_message_id: None,
                         });
                     }
                 }
@@ -266,22 +336,37 @@ impl CodeBuddyParser {
                             meta: None,
                         }],
                         timestamp: ts,
-                        usage: None,
+                        // A model request's usage is written on the LAST item of
+                        // its response, which is a `function_call` whenever the
+                        // request ends in a tool call. Each request carries it
+                        // once, so reading it here counts nothing twice.
+                        usage: usage_from_raw(&value),
                         duration_ms: None,
                         model: None,
                         completed_at: Some(ts),
+                    agent_message_id: None,
                     });
                 }
                 "function_call_result" => {
                     let tool_call_id = call_id(&value);
-                    // Load the sub-agent transcript only for a result paired (by
+                    // Both the sub-agent transcript load and the async-launch
+                    // accounting below are gated on the result being paired (by
                     // callId) to a `function_call` we classified as an `Agent`
                     // delegation — the historical mirror of the live path. Every
-                    // ordinary tool result stays `None`, even one that carries a
-                    // stray `subAgent` block, so non-Agent results are unchanged.
-                    let agent_stats = tool_call_id
+                    // ordinary tool result stays untouched, even one that carries
+                    // a stray `subAgent` / spawn renderer (corruption, schema
+                    // drift, a future tool).
+                    let is_agent_result = tool_call_id
                         .as_deref()
-                        .is_some_and(|id| agent_call_ids.contains(id))
+                        .is_some_and(|id| agent_call_ids.contains(id));
+                    if is_agent_result {
+                        if let (Some(id), Some(task_id)) =
+                            (tool_call_id.clone(), spawned_task_id(&value))
+                        {
+                            background_acks.insert(id, task_id);
+                        }
+                    }
+                    let agent_stats = is_agent_result
                         .then(|| agent_stats_from_subagent(&value, path))
                         .flatten();
                     messages.push(UnifiedMessage {
@@ -293,17 +378,21 @@ impl CodeBuddyParser {
                             is_error: tool_is_error(&value),
                             agent_stats,
                             images: Vec::new(),
+                            exit_code: None,
                         }],
                         timestamp: ts,
                         usage: None,
                         duration_ms: None,
                         model: None,
                         completed_at: Some(ts),
+                    agent_message_id: None,
                     });
                 }
                 _ => {}
             }
         }
+
+        apply_background_lifecycle(&mut messages, &background_acks, &background_notifications);
 
         let mut turns = group_into_turns(messages);
         relocate_orphaned_tool_results(&mut turns);
@@ -493,9 +582,73 @@ impl CodeBuddyTitles {
 /// was nothing to summarize. Showing one of these as the session name is worse
 /// than falling through to the first user message.
 fn is_placeholder_title(text: &str) -> bool {
-    text == "(No content)"
-        || text == "/compact"
-        || (text.starts_with("<image_local_path>") && text.ends_with("</image_local_path>"))
+    text == "(No content)" || text == "/compact" || is_image_local_path_block(text)
+}
+
+/// CodeBuddy's `isImageLocalPathBlock`: the text item its prompt converter adds
+/// after each image a prompt carried, telling the model where it saved the file
+/// (`<image_local_path>…/clipboard-….png</image_local_path>`). The person never
+/// typed it, and CodeBuddy's own replay leaves it out.
+fn is_image_local_path_block(text: &str) -> bool {
+    let text = text.trim();
+    text.starts_with("<image_local_path>") && text.ends_with("</image_local_path>")
+}
+
+/// The extension CodeBuddy's blob store gives a file of `mime` (the image
+/// entries of `PathUtils.MIME_EXT_MAP`); any other type is stored as `.bin`.
+fn blob_extension(mime: &str) -> &'static str {
+    match mime {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/svg+xml" => "svg",
+        "image/bmp" => "bmp",
+        "image/tiff" => "tiff",
+        _ => "bin",
+    }
+}
+
+/// One `image_blob_ref` item of a prompt, read back from CodeBuddy's blob store
+/// under the checks its own `BlobStore.read` makes: the id is a lowercase
+/// 64-digit hex digest, the file is the one `getBlobPath` names
+/// (`blobs/<first two digits>/<id>.<ext>`), its length matches the recorded
+/// `size` when there is one, and its SHA-256 is the id. The record's
+/// `blob_path` is never read, so a record cannot point the parser at another
+/// file. A blob that is gone or fails a check is left out, as CodeBuddy's
+/// replay leaves it out.
+fn read_prompt_image(blobs: &Path, item: &Value) -> Option<ContentBlock> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    use sha2::{Digest, Sha256};
+
+    let id = item.get("blob_id")?.as_str()?;
+    if id.len() != 64 || !id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+        return None;
+    }
+    let mime = item.get("mime")?.as_str()?;
+    if !mime.starts_with("image/") {
+        return None;
+    }
+    let path = blobs
+        .join(&id[..2])
+        .join(format!("{id}.{}", blob_extension(mime)));
+    let bytes = fs::read(path).ok()?;
+    if let Some(size) = item.get("size") {
+        if size.as_u64() != Some(bytes.len() as u64) {
+            return None;
+        }
+    }
+    if format!("{:x}", Sha256::digest(&bytes)) != id {
+        return None;
+    }
+    Some(ContentBlock::Image {
+        data: STANDARD.encode(&bytes),
+        mime_type: mime.to_string(),
+        uri: item
+            .get("original_filename")
+            .and_then(Value::as_str)
+            .map(String::from),
+    })
 }
 
 /// Record types that carry actual conversation content, as opposed to the
@@ -535,17 +688,46 @@ fn call_id(value: &Value) -> Option<String> {
         .map(String::from)
 }
 
+/// What a prompt record shows: the text the person typed.
+///
+/// A prompt command is persisted as the command tags Claude Code introduced
+/// followed by the prompt it expands to: `<command-message>init
+/// </command-message> <command-name>/init</command-name>`, plus ` <command-args>
+/// …</command-args>` when it has arguments, then a line break and the expansion.
+/// CodeBuddy's custom commands, MCP prompts and workflows were already stored
+/// this way in 2.164.0, and since 2.167.0 its built-in ones such as `/init` are
+/// too, where they used to be stored as the bare expansion. CodeBuddy's own
+/// history replay shows the invocation alone, and so does this; the expansion is
+/// written for the model. Only a record that OPENS with the tags is one, so a
+/// prompt that merely mentions them is left as typed.
+fn shown_user_text(text: String) -> String {
+    let head = text.trim_start();
+    if head.starts_with("<command-message>") || head.starts_with("<command-name>") {
+        if let Some(display) = crate::parsers::claude::slash_command_display(head) {
+            return display;
+        }
+    }
+    text
+}
+
 /// Concatenate the `text` of every `content[]` item of the given `item_type`
-/// (`input_text` for user turns, `output_text` for assistant turns).
+/// (`input_text` for user turns, `output_text` for assistant turns), leaving
+/// out the note a prompt carries for each of its images
+/// ([`is_image_local_path_block`]).
 fn collect_text(value: &Value, item_type: &str) -> String {
     let mut out = String::new();
     if let Some(items) = value.get("content").and_then(|c| c.as_array()) {
         for item in items {
-            if item.get("type").and_then(|t| t.as_str()) == Some(item_type) {
-                if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
-                    out.push_str(text);
-                }
+            if item.get("type").and_then(|t| t.as_str()) != Some(item_type) {
+                continue;
             }
+            let Some(text) = item.get("text").and_then(|t| t.as_str()) else {
+                continue;
+            };
+            if item_type == "input_text" && is_image_local_path_block(text) {
+                continue;
+            }
+            out.push_str(text);
         }
     }
     out
@@ -570,21 +752,35 @@ fn reasoning_text(value: &Value) -> String {
     String::new()
 }
 
-/// Map CodeBuddy's `providerData.rawUsage` (OpenAI completions shape) onto
-/// `TurnUsage`. `prompt_tokens` already includes the cached prefix, so subtract
-/// `cached_tokens` to get the non-cached input.
+/// Map CodeBuddy's `providerData.rawUsage` onto `TurnUsage`.
+///
+/// CodeBuddy writes one of two shapes there. A Chat Completions model gets the
+/// provider's own usage object, taken off the raw stream: `prompt_tokens` /
+/// `completion_tokens`, the cached count under
+/// `prompt_tokens_details.cached_tokens`. A Responses-API model (a custom model
+/// can be one since 2.163.0) carries no usage on its raw stream events, so the
+/// record gets the agents SDK's `response_done` usage instead: `inputTokens` /
+/// `outputTokens`, the cached count under `inputTokensDetails.cached_tokens`.
+/// The API's own spelling of those (`input_tokens`, `output_tokens`,
+/// `input_tokens_details`) is accepted as well, as the SDK's `Usage` reader
+/// accepts it. Either input count already includes the cached prefix, so the
+/// cached tokens are subtracted to get the non-cached input.
 fn usage_from_raw(value: &Value) -> Option<TurnUsage> {
     let raw = value.get("providerData")?.get("rawUsage")?;
-    let prompt = raw.get("prompt_tokens").and_then(Value::as_u64).unwrap_or(0);
-    let completion = raw
-        .get("completion_tokens")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let cached = raw
-        .get("prompt_tokens_details")
-        .and_then(|d| d.get("cached_tokens"))
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
+    let first = |keys: &[&str]| {
+        keys.iter()
+            .find_map(|key| raw.get(*key).and_then(Value::as_u64))
+    };
+    let prompt = first(&["prompt_tokens", "inputTokens", "input_tokens"]).unwrap_or(0);
+    let completion = first(&["completion_tokens", "outputTokens", "output_tokens"]).unwrap_or(0);
+    let cached = [
+        "prompt_tokens_details",
+        "inputTokensDetails",
+        "input_tokens_details",
+    ]
+    .iter()
+    .find_map(|key| raw.get(*key)?.get("cached_tokens").and_then(Value::as_u64))
+    .unwrap_or(0);
     if prompt == 0 && completion == 0 && cached == 0 {
         return None;
     }
@@ -706,6 +902,45 @@ fn deferred_result_envelope(value: &Value) -> Option<String> {
     .ok()
 }
 
+/// `text` without the line-range hint CodeBuddy (2.184.0 on) appends to a Read
+/// result, or `text` itself when it has none.
+///
+/// The hint is one line addressed to the model, after the numbered lines and
+/// the empty `N→` line that ends them:
+/// `\n<system-reminder data-role="tool-hint">Read lines 1-2 of 2.</system-reminder>`
+/// (a partial read gets a `[Truncated: …]` notice naming the next offset, a
+/// read past the end "Read 0 lines from line N"). It reaches codeg live, in a
+/// `session/load` replay and in the transcript's `output.text`, and left in
+/// place it would become the last line of the file card's text. Only a hint
+/// that closes the text, right after a numbered line, is taken off, so any
+/// other result keeps its text as sent; what is left is exactly what 2.183.0
+/// sent for the same read.
+pub(crate) fn strip_read_range_hint(text: &str) -> &str {
+    const OPEN: &str = "\n<system-reminder data-role=\"tool-hint\">";
+    const CLOSE: &str = "</system-reminder>";
+    let Some(body) = text.strip_suffix(CLOSE) else {
+        return text;
+    };
+    let Some(at) = body.rfind(OPEN) else {
+        return text;
+    };
+    let hint = &body[at + OPEN.len()..];
+    if hint.contains('\n') || hint.contains("<system-reminder") {
+        return text;
+    }
+    let kept = &text[..at];
+    let last_line = kept.rsplit('\n').next().unwrap_or(kept);
+    let is_numbered = last_line
+        .trim_start()
+        .split_once('→')
+        .is_some_and(|(num, _)| !num.is_empty() && num.bytes().all(|b| b.is_ascii_digit()));
+    if is_numbered {
+        kept
+    } else {
+        text
+    }
+}
+
 /// `function_call_result.output` is `{type:"text", text}`; fall back to the raw
 /// string or `providerData.toolResult.content`. Deferred MCP tools first surface
 /// their structured `mcpMeta` envelope (see `deferred_result_envelope`).
@@ -716,10 +951,10 @@ fn tool_output_preview(value: &Value) -> Option<String> {
     if let Some(output) = value.get("output") {
         if let Some(text) = output.as_str() {
             if !text.is_empty() {
-                return Some(text.to_string());
+                return Some(strip_read_range_hint(text).to_string());
             }
         } else if let Some(text) = output.get("text").and_then(|t| t.as_str()) {
-            return Some(text.to_string());
+            return Some(strip_read_range_hint(text).to_string());
         }
     }
     let content = value.get("providerData")?.get("toolResult")?.get("content")?;
@@ -767,20 +1002,176 @@ fn tool_is_error(value: &Value) -> bool {
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("error:"))
 }
 
-/// The sub-agent transcript id CodeBuddy records on an `Agent` tool result
-/// (`providerData.toolResult.subAgent.sessionId`, e.g. `"agent-cdd7c1ea"`). The
-/// transcript lives at `<session_dir>/subagents/<id>.jsonl` — Claude Code's
-/// directory layout. Ordinary tool results carry no `subAgent` block, so this
-/// returns `None` for them.
-fn subagent_transcript_id(result: &Value) -> Option<&str> {
-    result
+/// True when a `message`/`role:"user"` record is one of CodeBuddy's
+/// SYSTEM-INJECTED messages rather than something the human typed. CodeBuddy
+/// marks every one of them `providerData.isMeta: true` — the
+/// `<task-notification>` a finished background worker enqueues
+/// (`BackgroundTaskNotifier::enqueueAndScheduleDrain` calls
+/// `kQ(xml, {isMeta: true})`), a `/goal` kick-off, and the like. Since 2.159.0
+/// that includes an ACP `session/prompt` sent with
+/// `_meta["codebuddy.ai"].isMeta` (advertised as
+/// `agentCapabilities.metaPromptSupport`; per the 2.159.0 changelog it reaches
+/// the model but is not shown, broadcast or replayed as a user message):
+/// `markAcpMetaPromptItems` stamps the same flag on its user items. codeg never
+/// sends one, but another client's would land here. It also covers the
+/// task-list reminders CodeBuddy 2.162.0 through 2.164.0 persisted for the
+/// model: a `<system-reminder>` text flagged `{isMeta, skipRun,
+/// startsNewUserRequest: false, taskReminderKind: "task" | "todo",
+/// taskReminderAnchorId}` that it leaves out of its own replay. 2.167.0 stopped
+/// writing them (and dropped the `CODEBUDDY_DISABLE_TASK_REMINDERS` switch), but
+/// the ones already on disk stay there.
+///
+/// CodeBuddy's OWN renderer skips exactly these records when it replays a
+/// session (`"message" === type && "user" === role && (isMeta ||
+/// !InputItemUtils.isRealUserMessageItem(item))` → `continue`), so rendering
+/// them as user turns was a codeg-only artifact: it split one exchange into two
+/// prompts and dropped the raw notification XML — plus the model-facing guidance
+/// prose that follows the closing tag — into a chat bubble. The payload is not
+/// lost: `capture_task_notification` folds it onto the launching Agent card.
+///
+/// Read only on `role:"user"` records, so an assistant/tool record that happens
+/// to carry the flag is unaffected.
+fn is_injected_user_record(value: &Value) -> bool {
+    value
+        .get("providerData")
+        .and_then(|p| p.get("isMeta"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Record the `<task-notification>` an injected user message carries, keyed by
+/// `<task-id>`. Anything else (a `/goal` kick-off, a future injection kind) is
+/// ignored — it is simply dropped from the stream by the caller.
+///
+/// Status defaults to `"completed"` when the tag is absent, matching
+/// `claude.rs`. CodeBuddy writes NO `<result>` tag — neither
+/// `buildAgentTaskNotificationXml` (agent workers) nor
+/// `BackgroundTaskNotifier::buildNotificationXml` (background shells) emits one
+/// — so the fold carries the headline only; the full report stays on the
+/// `TaskOutput` card that read it.
+fn capture_task_notification(
+    text: &str,
+    out: &mut std::collections::HashMap<String, (String, Option<String>)>,
+) {
+    if !text.trim_start().starts_with("<task-notification>") {
+        return;
+    }
+    let Some(task_id) = capture_tag(task_notification_task_id_regex(), text) else {
+        return;
+    };
+    let status = capture_tag(task_notification_status_regex(), text)
+        .unwrap_or_else(|| "completed".to_string());
+    let summary = capture_tag(task_notification_summary_regex(), text);
+    out.insert(task_id, (status, summary));
+}
+
+/// Decode a `providerData.toolResult.renderer` payload of the given `type`.
+/// CodeBuddy serializes every renderer `value` to a JSON *string* (not an
+/// object), so it needs a second parse; an already-decoded object is accepted
+/// defensively.
+fn renderer_payload(result: &Value, expected_type: &str) -> Option<Value> {
+    let renderer = result
         .get("providerData")?
         .get("toolResult")?
-        .get("subAgent")?
-        .get("sessionId")?
+        .get("renderer")?;
+    if renderer.get("type").and_then(|t| t.as_str()) != Some(expected_type) {
+        return None;
+    }
+    match renderer.get("value")? {
+        Value::String(s) => serde_json::from_str(s).ok(),
+        obj @ Value::Object(_) => Some(obj.clone()),
+        _ => None,
+    }
+}
+
+/// The detached worker's task id on an ASYNC `Agent` launch
+/// (`run_in_background: true`). Such a call returns an ack immediately, so its
+/// result carries an `agent-spawned` renderer naming the worker
+/// (`{"taskId":"agent-…","description":…,"subagentType":…}`) INSTEAD of the
+/// `subAgent` block a BLOCKING delegation gets — that block only exists once the
+/// child has actually finished. `None` for a blocking delegation and for every
+/// ordinary tool.
+fn spawned_task_id(result: &Value) -> Option<String> {
+    renderer_payload(result, "agent-spawned")?
+        .get("taskId")?
         .as_str()
         .map(str::trim)
         .filter(|s| !s.is_empty())
+        .map(String::from)
+}
+
+/// The sub-agent transcript id CodeBuddy records on an `Agent` tool result. The
+/// transcript lives at `<session_dir>/subagents/<id>.jsonl` — Claude Code's
+/// directory layout.
+///
+/// A BLOCKING delegation names it directly
+/// (`providerData.toolResult.subAgent.sessionId`, e.g. `"agent-cdd7c1ea"`). An
+/// ASYNC launch has no `subAgent` block at all, but its detached worker writes
+/// the SAME transcript under its task id, so the spawn renderer's `taskId`
+/// reaches it too — without this fallback every backgrounded worker's nested
+/// tool calls were dropped. Ordinary tool results carry neither, so this returns
+/// `None` for them.
+fn subagent_transcript_id(result: &Value) -> Option<String> {
+    result
+        .get("providerData")
+        .and_then(|p| p.get("toolResult"))
+        .and_then(|tr| tr.get("subAgent"))
+        .and_then(|sa| sa.get("sessionId"))
+        .and_then(|s| s.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .or_else(|| spawned_task_id(result))
+}
+
+/// Rewrite each async `Agent` launch ack's `output_preview` into the structured
+/// [`BACKGROUND_TASK_MARKER`] payload the frontend's lifecycle card reads
+/// (`lib/background-agent.ts`), joined with the latest `<task-notification>`
+/// observed for that task.
+///
+/// The ack CodeBuddy returns is model-facing scheduling instruction ("The worker
+/// is running detached (no team). The returned agent_id is the task_id. End this
+/// turn unless the user asked for progress. …"), so rendering it verbatim leaked
+/// plumbing into the card where a settled/pending badge belongs.
+///
+/// `status: null` means no notification was observed — the frontend renders that
+/// as "launched, result pending", NEVER as "running": a transcript alone cannot
+/// distinguish a live worker from one whose CLI died. `result` is always null
+/// here (CodeBuddy emits no `<result>` tag; see `capture_task_notification`).
+/// Mirrors `claude.rs`'s `ClaudeRecordAccumulator::apply_background_lifecycle`,
+/// including its `is_error: false` gate — a failed ack has a real error to show.
+fn apply_background_lifecycle(
+    messages: &mut [UnifiedMessage],
+    acks: &std::collections::HashMap<String, String>,
+    notifications: &std::collections::HashMap<String, (String, Option<String>)>,
+) {
+    if acks.is_empty() {
+        return;
+    }
+    for msg in messages {
+        for block in &mut msg.content {
+            let ContentBlock::ToolResult {
+                tool_use_id: Some(id),
+                output_preview,
+                is_error: false,
+                ..
+            } = block
+            else {
+                continue;
+            };
+            let Some(task_id) = acks.get(id) else {
+                continue;
+            };
+            let notification = notifications.get(task_id);
+            let payload = serde_json::json!({
+                "task_id": task_id,
+                "status": notification.map(|(status, _)| status.clone()),
+                "summary": notification.and_then(|(_, summary)| summary.clone()),
+                "result": Value::Null,
+            });
+            *output_preview = Some(format!("{BACKGROUND_TASK_MARKER}{payload}"));
+        }
+    }
 }
 
 /// Parse a CodeBuddy sub-agent transcript and extract its tool calls.
@@ -847,10 +1238,12 @@ fn parse_codebuddy_subagent_tool_calls(path: &Path) -> Vec<AgentToolCall> {
 /// historical mirror of the live path, which synthesizes the same `agent_stats`
 /// from the streamed child tool calls (`conversation-runtime-context.tsx`).
 ///
-/// Returns `None` for ordinary results (no `subAgent` linkage), a
-/// missing/empty transcript, or a sub-agent that ran no tools, so the common
-/// case stays a plain tool result. `main_session_path` is the real `.jsonl`
-/// path the parser is reading; the transcript sits beside it under
+/// Returns `None` for ordinary results (no sub-agent linkage — see
+/// [`subagent_transcript_id`]), a missing/empty transcript, or a sub-agent that
+/// ran no tools, so the common case stays a plain tool result. A still-running
+/// async worker also lands here (its transcript has no completed calls yet) and
+/// recovers on the next refetch. `main_session_path` is the real `.jsonl` path
+/// the parser is reading; the transcript sits beside it under
 /// `<session_dir>/subagents/`.
 fn agent_stats_from_subagent(
     result: &Value,
@@ -860,7 +1253,7 @@ fn agent_stats_from_subagent(
     // Path-traversal guard: `id` becomes a filename under the session dir, so it
     // must be a single plain component (rejects separators, `..`, a Windows
     // drive colon, and NUL). See `is_safe_subagent_id`.
-    if !is_safe_subagent_id(id) {
+    if !is_safe_subagent_id(&id) {
         return None;
     }
     let transcript = main_session_path
@@ -889,6 +1282,8 @@ fn agent_stats_from_subagent(
         lines_removed: None,
         other_tool_count: None,
         tool_calls,
+        timeline: Vec::new(),
+        recovered_result: None,
         // CodeBuddy's sub-agent transcript is a file under the parent session,
         // not a session of its own.
         child_session_id: None,
@@ -912,6 +1307,7 @@ fn text_message(
         duration_ms: None,
         model,
         completed_at: Some(ts),
+    agent_message_id: None,
     }
 }
 
@@ -937,6 +1333,7 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
                 duration_ms: None,
                 model: None,
                 completed_at: msg.completed_at,
+            agent_message_id: None,
             });
             i += 1;
         } else if matches!(msg.role, MessageRole::System) {
@@ -949,6 +1346,7 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
                 duration_ms: None,
                 model: None,
                 completed_at: msg.completed_at,
+            agent_message_id: None,
             });
             i += 1;
         } else {
@@ -987,6 +1385,7 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
                 duration_ms,
                 model: turn_model,
                 completed_at,
+            agent_message_id: None,
             });
         }
     }
@@ -1105,6 +1504,370 @@ mod tests {
         assert_eq!(usage.input_tokens, 24049 - 12800);
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Each model request's usage is written once, on the last item of its
+    /// response, and when the request ends in a tool call that item is the
+    /// `function_call`. The figures are from a real session: one tool round,
+    /// then the answer. Both requests must count.
+    #[test]
+    fn usage_written_on_a_function_call_counts() {
+        let root = std::env::temp_dir().join(format!("codeg-cb-fc-usage-{}", uuid::Uuid::new_v4()));
+        let sid = "sess-fc-usage";
+        write_session(
+            &root,
+            "Users-demo-app",
+            sid,
+            &[
+                json!({"type":"message","role":"user","timestamp":1781821844178i64,"cwd":"/Users/demo/app","sessionId":sid,
+                       "content":[{"type":"input_text","text":"what is this app?"}]}),
+                json!({"type":"function_call","timestamp":1781821845000i64,"cwd":"/Users/demo/app","sessionId":sid,
+                       "name":"Read","callId":"call_1","arguments":"{\"file_path\":\"/Users/demo/app/README.md\"}",
+                       "providerData":{"messageId":"m1","rawUsage":{"prompt_tokens":12995,"completion_tokens":267,"total_tokens":13262,
+                         "prompt_tokens_details":{"cached_tokens":0}}}}),
+                json!({"type":"function_call_result","timestamp":1781821846000i64,"cwd":"/Users/demo/app","sessionId":sid,
+                       "name":"Read","callId":"call_1","status":"completed","output":{"type":"text","text":"# demo"},
+                       "providerData":{"messageId":"m1"}}),
+                json!({"type":"message","role":"assistant","timestamp":1781821847000i64,"cwd":"/Users/demo/app","sessionId":sid,
+                       "content":[{"type":"output_text","text":"A demo app."}],
+                       "providerData":{"messageId":"m2","rawUsage":{"prompt_tokens":13388,"completion_tokens":52,"total_tokens":13440,
+                         "prompt_tokens_details":{"cached_tokens":12992}}}}),
+            ],
+        );
+
+        let parser = CodeBuddyParser::with_base_dir(root.clone());
+        let detail = parser.get_conversation(sid).expect("detail");
+        let usage = detail
+            .session_stats
+            .as_ref()
+            .and_then(|s| s.total_usage.as_ref())
+            .expect("usage");
+        assert_eq!(usage.output_tokens, 267 + 52);
+        assert_eq!(usage.cache_read_input_tokens, 12992);
+        assert_eq!(usage.input_tokens, 12995 + (13388 - 12992));
+
+        // And it is attributed to the turn that made the tool call.
+        let tool_turn = detail
+            .turns
+            .iter()
+            .find(|t| {
+                t.blocks
+                    .iter()
+                    .any(|b| matches!(b, ContentBlock::ToolUse { .. }))
+            })
+            .expect("tool-call turn");
+        let tool_usage = tool_turn.usage.as_ref().expect("tool-call turn usage");
+        assert_eq!(
+            (tool_usage.input_tokens, tool_usage.output_tokens),
+            (12995, 267)
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// CodeBuddy's TUI starts new sessions in PTC mode since 2.168.2: the
+    /// model's only direct tool is `REPL`, whose JavaScript calls the other
+    /// tools. These records are a real 2.168.2 session (ids and paths
+    /// shortened, `providerData` trimmed) that ran one PTC step, was reopened
+    /// by a host without `mainAgentSupport` (which gets standard mode) and
+    /// continued there. The Read and Bash the code called left no records,
+    /// and `session-meta` still says `ptc` after the standard turn; only each
+    /// record's `providerData.agent` (`ptc`, then `cli`) tells the turns apart.
+    #[test]
+    fn ptc_session_shows_each_repl_step_as_one_tool_card() {
+        let root = std::env::temp_dir().join(format!("codeg-cb-ptc-{}", uuid::Uuid::new_v4()));
+        let sid = "01a1490d-c719-7ac6-9dca-77bf22758389";
+        let code = "const r = await Read({ file_path: \"/Users/demo/app/notes.txt\" });\n\
+                    const b = await Bash({ command: \"echo ptc-ok | tee ptc-marker.txt\", description: \"probe echo\" });\n\
+                    return { read: JSON.stringify(r).slice(0, 300), bash: JSON.stringify(b).slice(0, 300) };";
+        let arguments =
+            serde_json::to_string(&json!({"code": code, "description": "read notes and run echo"}))
+                .expect("serialize arguments");
+        let output = r#"{"result":{"read":"\"TEXTFILE_MARKER line one\\nline two\\n\"","bash":"{\"stdout\":\"ptc-ok\\n\",\"stderr\":\"\",\"exitCode\":0,\"signal\":null}"},"stdout":"","stderr":""}"#;
+        write_session(
+            &root,
+            "Users-demo-app",
+            sid,
+            &[
+                json!({"type":"session-meta","id":"m1","sessionId":sid,"timestamp":1792227002225i64,
+                       "meta":{"codebuddy.ai/mainAgent":"ptc"}}),
+                json!({"id":"u1","timestamp":1792227002501i64,"type":"message","role":"user","sessionId":sid,"cwd":"/Users/demo/app",
+                       "content":[{"type":"input_text","text":"PLEASE_PTC read notes and echo"}],"providerData":{"agent":"ptc"}}),
+                json!({"type":"file-history-snapshot","timestamp":1792227002510i64,"messageId":"u1","snapshot":{},
+                       "isSnapshotUpdate":false,"cwd":"/Users/demo/app"}),
+                json!({"id":"c1","parentId":"u1","timestamp":1792227002817i64,"type":"function_call","sessionId":sid,"cwd":"/Users/demo/app",
+                       "callId":"call_ptc_1","name":"REPL","arguments":arguments,
+                       "providerData":{"agent":"ptc","messageId":"r1","requestModelName":"Auto","argumentsDisplayText":code,
+                         "rawUsage":{"prompt_tokens":1001,"completion_tokens":11,"total_tokens":1012}}}),
+                json!({"id":"c2","parentId":"c1","timestamp":1792227002991i64,"type":"function_call_result","sessionId":sid,"cwd":"/Users/demo/app",
+                       "name":"REPL","callId":"call_ptc_1","status":"completed","output":{"type":"text","text":output},
+                       "providerData":{"agent":"ptc","messageId":"r1","requestModelName":"Auto",
+                         "toolResult":{"title":"read notes and run echo","content":output,
+                           "renderer":{"type":"text","value":"· 1s\n{}"}}}}),
+                json!({"id":"a1","parentId":"c2","timestamp":1792227003016i64,"type":"message","role":"assistant","status":"completed",
+                       "sessionId":sid,"cwd":"/Users/demo/app",
+                       "content":[{"providerData":{"annotations":[]},"type":"output_text","text":"FINAL_ANSWER: done after tool result"}],
+                       "providerData":{"agent":"ptc","messageId":"r2","requestModelName":"Auto",
+                         "rawUsage":{"prompt_tokens":1002,"completion_tokens":12,"total_tokens":1014}}}),
+                json!({"type":"session-meta","id":"m2","sessionId":sid,"timestamp":1792227032000i64,
+                       "meta":{"codebuddy.ai/mainAgent":"ptc","codebuddy.ai/hostKind":"unopted"}}),
+                json!({"type":"session-meta","id":"m3","sessionId":sid,"timestamp":1792227032000i64,
+                       "meta":{"codebuddy.ai/mainAgent":"ptc","codebuddy.ai/hostKind":"unopted"}}),
+                json!({"id":"u2","parentId":"a1","timestamp":1792227036112i64,"type":"message","role":"user","sessionId":sid,"cwd":"/Users/demo/app",
+                       "content":[{"type":"input_text","text":"PLEASE_PTC again"}],"providerData":{"agent":"cli"}}),
+                json!({"id":"a2","parentId":"u2","timestamp":1792227036201i64,"type":"message","role":"assistant","status":"completed",
+                       "sessionId":sid,"cwd":"/Users/demo/app",
+                       "content":[{"type":"output_text","text":"hello from fake model"}],
+                       "providerData":{"agent":"cli","messageId":"r3","requestModelName":"Auto",
+                         "rawUsage":{"prompt_tokens":1002,"completion_tokens":12,"total_tokens":1014,
+                           "prompt_tokens_details":{"cached_tokens":100}}}}),
+                json!({"id":"s1","timestamp":1792227036204i64,"type":"summary","summary":"PLEASE_PTC read notes and echo"}),
+            ],
+        );
+
+        let parser = CodeBuddyParser::with_base_dir(root.clone());
+        let summaries = parser.list_conversations().expect("list");
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].message_count, 4);
+
+        let detail = parser.get_conversation(sid).expect("detail");
+        let blocks = || detail.turns.iter().flat_map(|t| t.blocks.iter());
+
+        let tool_uses: Vec<_> = blocks()
+            .filter_map(|b| match b {
+                ContentBlock::ToolUse {
+                    tool_use_id,
+                    tool_name,
+                    input_preview,
+                    ..
+                } => Some((
+                    tool_use_id.as_deref(),
+                    tool_name.as_str(),
+                    input_preview.as_deref(),
+                )),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tool_uses.len(), 1, "one card for the step: {tool_uses:?}");
+        let (id, name, input) = tool_uses[0];
+        assert_eq!((id, name), (Some("call_ptc_1"), "REPL"));
+        let input: Value = serde_json::from_str(input.expect("input")).expect("JSON input");
+        assert_eq!(input["code"], code);
+        assert_eq!(input["description"], "read notes and run echo");
+
+        let results: Vec<_> = blocks()
+            .filter_map(|b| match b {
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    output_preview,
+                    is_error,
+                    ..
+                } => Some((tool_use_id.as_deref(), output_preview.as_deref(), *is_error)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(results, vec![(Some("call_ptc_1"), Some(output), false)]);
+
+        // The prompts and answers of both turns, and nothing from `session-meta`.
+        let texts: Vec<(&str, &str)> = detail
+            .turns
+            .iter()
+            .flat_map(|t| {
+                let role = if matches!(t.role, TurnRole::User) {
+                    "user"
+                } else {
+                    "assistant"
+                };
+                t.blocks.iter().filter_map(move |b| match b {
+                    ContentBlock::Text { text } => Some((role, text.as_str())),
+                    _ => None,
+                })
+            })
+            .collect();
+        assert_eq!(
+            texts,
+            vec![
+                ("user", "PLEASE_PTC read notes and echo"),
+                ("assistant", "FINAL_ANSWER: done after tool result"),
+                ("user", "PLEASE_PTC again"),
+                ("assistant", "hello from fake model"),
+            ]
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A Responses-API model's record carries the agents SDK's `response_done`
+    /// usage, which is what CodeBuddy stores when the raw stream reports none.
+    #[test]
+    fn responses_api_usage_is_read() {
+        let record = json!({"providerData":{"rawUsage":{
+            "inputTokens":5000,"outputTokens":120,"totalTokens":5120,
+            "inputTokensDetails":{"cached_tokens":4096},
+            "outputTokensDetails":{"reasoning_tokens":64},
+            "requestUsageEntries":[{"inputTokens":5000,"outputTokens":120,"totalTokens":5120}]
+        }}});
+        let usage = usage_from_raw(&record).expect("usage");
+        assert_eq!(usage.input_tokens, 5000 - 4096);
+        assert_eq!(usage.output_tokens, 120);
+        assert_eq!(usage.cache_read_input_tokens, 4096);
+
+        let api_spelling = json!({"providerData":{"rawUsage":{
+            "input_tokens":900,"output_tokens":30,"input_tokens_details":{"cached_tokens":512}
+        }}});
+        let usage = usage_from_raw(&api_spelling).expect("usage");
+        assert_eq!(usage.input_tokens, 900 - 512);
+        assert_eq!(usage.output_tokens, 30);
+        assert_eq!(usage.cache_read_input_tokens, 512);
+
+        // Through the parser, as the session's usage.
+        let root =
+            std::env::temp_dir().join(format!("codeg-cb-responses-{}", uuid::Uuid::new_v4()));
+        let sid = "sess-responses";
+        write_session(
+            &root,
+            "Users-demo-app",
+            sid,
+            &[
+                json!({"type":"message","role":"user","timestamp":1781821844178i64,"cwd":"/Users/demo/app","sessionId":sid,
+                       "content":[{"type":"input_text","text":"hi"}]}),
+                json!({"type":"message","role":"assistant","timestamp":1781821845000i64,"cwd":"/Users/demo/app","sessionId":sid,
+                       "content":[{"type":"output_text","text":"Hello."}],
+                       "providerData":{"messageId":"m1","rawUsage":{
+                         "inputTokens":5000,"outputTokens":120,"totalTokens":5120,
+                         "inputTokensDetails":{"cached_tokens":4096},"outputTokensDetails":{"reasoning_tokens":64}}}}),
+            ],
+        );
+        let detail = CodeBuddyParser::with_base_dir(root.clone())
+            .get_conversation(sid)
+            .expect("detail");
+        let usage = detail
+            .session_stats
+            .as_ref()
+            .and_then(|s| s.total_usage.as_ref())
+            .expect("usage");
+        assert_eq!(
+            (
+                usage.input_tokens,
+                usage.output_tokens,
+                usage.cache_read_input_tokens
+            ),
+            (5000 - 4096, 120, 4096)
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 2.162.0 persists the task-list reminders it adds for the model as
+    /// `<system-reminder>` user records flagged `isMeta`. The record below has
+    /// the shape its reminder factory builds; it is no prompt, so it adds no
+    /// user turn and no message count.
+    #[test]
+    fn task_list_reminders_are_not_prompts() {
+        let root = std::env::temp_dir().join(format!("codeg-cb-reminder-{}", uuid::Uuid::new_v4()));
+        let sid = "sess-reminder";
+        let reminder = "<system-reminder>\nThe TodoWrite tool hasn't been used recently. If you're working on tasks that would benefit from tracking progress, consider using the TodoWrite tool to track progress. Make sure that you NEVER mention this reminder to the user\n\n</system-reminder>";
+        write_session(
+            &root,
+            "Users-demo-app",
+            sid,
+            &[
+                json!({"id":"u1","type":"message","role":"user","timestamp":1781821844178i64,"cwd":"/Users/demo/app","sessionId":sid,
+                       "content":[{"type":"input_text","text":"fix the bug"}]}),
+                json!({"id":"a1","type":"message","role":"assistant","timestamp":1781821845000i64,"cwd":"/Users/demo/app","sessionId":sid,
+                       "content":[{"type":"output_text","text":"Fixed."}]}),
+                json!({"id":"r1","type":"message","role":"user","timestamp":1781821846000i64,"cwd":"/Users/demo/app","sessionId":sid,
+                       "content":[{"type":"input_text","text":reminder}],
+                       "providerData":{"isMeta":true,"skipRun":true,"startsNewUserRequest":false,
+                         "taskReminderKind":"todo","taskReminderAnchorId":"a1"}}),
+            ],
+        );
+
+        let parser = CodeBuddyParser::with_base_dir(root.clone());
+        let summaries = parser.list_conversations().expect("list");
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].message_count, 2);
+
+        let detail = parser.get_conversation(sid).expect("detail");
+        assert_eq!(detail.summary.message_count, 2);
+        let user_texts: Vec<_> = detail
+            .turns
+            .iter()
+            .filter(|t| matches!(t.role, TurnRole::User))
+            .flat_map(|t| t.blocks.iter())
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(user_texts, vec!["fix the bug"]);
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    // Since 2.167.0 `/init` is stored the way custom commands already were:
+    // the command tags, then the prompt they expand to. The bubble shows what
+    // was typed, as CodeBuddy's own replay does; a prompt that only mentions the
+    // tags stays as typed.
+    #[test]
+    fn prompt_commands_show_as_typed() {
+        let root = std::env::temp_dir().join(format!("codeg-cb-command-{}", uuid::Uuid::new_v4()));
+        let sid = "sess-command";
+        let user = |id: &str, ts: i64, text: &str| {
+            json!({"id":id,"type":"message","role":"user","timestamp":ts,"cwd":"/Users/demo/app",
+                   "sessionId":sid,"content":[{"type":"input_text","text":text}]})
+        };
+        write_session(
+            &root,
+            "Users-demo-app",
+            sid,
+            &[
+                user(
+                    "u1",
+                    1781821844178,
+                    "<command-message>init</command-message> <command-name>/init</command-name>\n\
+                     Please analyze this codebase and create a CODEBUDDY.md file",
+                ),
+                json!({"id":"a1","type":"message","role":"assistant","timestamp":1781821845000i64,
+                       "cwd":"/Users/demo/app","sessionId":sid,"content":[{"type":"output_text","text":"Created."}]}),
+                user(
+                    "u2",
+                    1781821846000,
+                    "<command-message>review</command-message> <command-name>/review</command-name> \
+                     <command-args>src/main.rs</command-args>\nReview the file for bugs",
+                ),
+                user(
+                    "u3",
+                    1781821847000,
+                    "why does <command-name>/x</command-name> appear here?",
+                ),
+            ],
+        );
+
+        let parser = CodeBuddyParser::with_base_dir(root.clone());
+        let summaries = parser.list_conversations().expect("list");
+        let detail = parser.get_conversation(sid).expect("detail");
+        std::fs::remove_dir_all(&root).ok();
+
+        assert_eq!(summaries[0].title.as_deref(), Some("/init"));
+        assert_eq!(detail.summary.title.as_deref(), Some("/init"));
+        let user_texts: Vec<_> = detail
+            .turns
+            .iter()
+            .filter(|t| matches!(t.role, TurnRole::User))
+            .flat_map(|t| t.blocks.iter())
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            user_texts,
+            vec![
+                "/init",
+                "/review src/main.rs",
+                "why does <command-name>/x</command-name> appear here?",
+            ]
+        );
     }
 
     /// Parse one session through BOTH title paths (list + detail) and assert
@@ -1381,6 +2144,82 @@ mod tests {
         assert!(
             !read_output.contains("1→"),
             "line-number prefixes must be stripped, got: {read_output}"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A 2.184.0 Read result as its transcript stores it: the numbered lines,
+    /// the empty `N→` line and the line-range hint for the model (captured).
+    const READ_2184: &str = "   1→outside one\n   2→outside two\n   3→\n<system-reminder data-role=\"tool-hint\">Read lines 1-2 of 2.</system-reminder>";
+
+    #[test]
+    fn read_range_hint_comes_off_and_leaves_what_2183_sent() {
+        assert_eq!(
+            strip_read_range_hint(READ_2184),
+            "   1→outside one\n   2→outside two\n   3→"
+        );
+        // A partial read's notice and a read past the end (captured).
+        let partial = " 119→big line 119\n 120→\n<system-reminder data-role=\"tool-hint\">[Truncated: PARTIAL view — big.txt: showing lines 100-119 (total unknown). Call Read with offset=120 limit=20 for the next page, or Grep to find a specific section. Do NOT answer from this page alone if the answer may be further in the file.]</system-reminder>";
+        assert_eq!(strip_read_range_hint(partial), " 119→big line 119\n 120→");
+        let past_end = "1000→\n<system-reminder data-role=\"tool-hint\">Read 0 lines from line 1000 (total unknown).</system-reminder>";
+        assert_eq!(strip_read_range_hint(past_end), "1000→");
+    }
+
+    #[test]
+    fn a_tool_hint_after_anything_but_numbered_lines_stays() {
+        // A background task snapshot's hint follows prose, not numbered lines.
+        let snapshot = "Status: running\n<system-reminder data-role=\"tool-hint\">Do NOT poll TaskOutput in a loop.</system-reminder>";
+        assert_eq!(strip_read_range_hint(snapshot), snapshot);
+        // Not at the end, another role, or spanning lines: kept as sent.
+        let not_last = format!("{READ_2184}\nmore");
+        assert_eq!(strip_read_range_hint(&not_last), not_last);
+        let other_role = "   1→a\n   2→\n<system-reminder data-role=\"other\">x</system-reminder>";
+        assert_eq!(strip_read_range_hint(other_role), other_role);
+        let multi_line =
+            "   1→a\n   2→\n<system-reminder data-role=\"tool-hint\">x\ny</system-reminder>";
+        assert_eq!(strip_read_range_hint(multi_line), multi_line);
+        assert_eq!(strip_read_range_hint("   1→a\n   2→b"), "   1→a\n   2→b");
+    }
+
+    #[test]
+    fn read_result_with_a_range_hint_shows_only_the_file_lines() {
+        let root = std::env::temp_dir().join(format!("codeg-cb-readhint-{}", uuid::Uuid::new_v4()));
+        let sid = "sess-readhint";
+        write_session(
+            &root,
+            "Users-demo-app",
+            sid,
+            &[
+                json!({"type":"message","role":"user","timestamp":1781821844000i64,"cwd":"/Users/demo/app","sessionId":sid,
+                       "content":[{"type":"input_text","text":"read it"}]}),
+                json!({"type":"function_call","timestamp":1781821845000i64,"cwd":"/Users/demo/app","sessionId":sid,
+                       "name":"Read","callId":"r1","arguments":"{\"file_path\": \"/x\"}"}),
+                json!({"type":"function_call_result","timestamp":1781821845100i64,"cwd":"/Users/demo/app","sessionId":sid,
+                       "name":"Read","callId":"r1","status":"completed",
+                       "output":{"type":"text","text":READ_2184}}),
+            ],
+        );
+
+        let parser = CodeBuddyParser::with_base_dir(root.clone());
+        let detail = parser.get_conversation(sid).expect("detail");
+        let read_output = detail
+            .turns
+            .iter()
+            .flat_map(|t| &t.blocks)
+            .find_map(|b| match b {
+                ContentBlock::ToolResult {
+                    tool_use_id: Some(id),
+                    output_preview,
+                    ..
+                } if id == "r1" => output_preview.clone(),
+                _ => None,
+            })
+            .expect("read tool result");
+        assert_eq!(
+            Some(read_output),
+            crate::parsers::strip_numbered_lines("   1→outside one\n   2→outside two\n   3→"),
+            "the card gets the same lines as for 2.183.0's result"
         );
 
         std::fs::remove_dir_all(&root).ok();
@@ -1672,6 +2511,317 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    /// An async `Agent` launch's result renderer: CodeBuddy serializes the
+    /// payload to a JSON *string*, which is what the parser has to decode.
+    fn spawn_renderer(task_id: &str) -> Value {
+        json!({
+            "type": "agent-spawned",
+            "value": serde_json::to_string(&json!({
+                "taskId": task_id,
+                "description": "Run pnpm build",
+                "displayName": "pnpm-build",
+                "subagentType": "general-purpose",
+                "alreadyLive": false,
+            }))
+            .expect("serialize renderer value"),
+        })
+    }
+
+    /// The `providerData.isMeta` user record CodeBuddy injects when a detached
+    /// worker settles — the notification XML plus the model-facing guidance
+    /// prose that follows the closing tag (verbatim shape from a real session).
+    fn task_notification_record(ts: i64, task_id: &str, status: &str, summary: &str) -> Value {
+        json!({
+            "type": "message", "role": "user", "timestamp": ts,
+            "cwd": "/Users/demo/app", "sessionId": "sess-bg",
+            "content": [{"type": "input_text", "text": format!(
+                "<task-notification>\n<task-id>{task_id}</task-id>\n<kind>agent</kind>\n\
+                 <status>{status}</status>\n<summary>{summary}</summary>\n</task-notification>\n\n\
+                 A worker finished. Notification <summary> is a short headline, not the report \
+                 body. Call TaskOutput once (block is forced false) to read the full report."
+            )}],
+            "providerData": {"isMeta": true, "agent": "multitask"},
+        })
+    }
+
+    /// `[[codeg-background-task]]{…}` payload of the tool result with this id.
+    fn lifecycle_marker(detail: &ConversationDetail, tool_use_id: &str) -> Value {
+        let raw = detail
+            .turns
+            .iter()
+            .flat_map(|t| &t.blocks)
+            .find_map(|b| match b {
+                ContentBlock::ToolResult {
+                    tool_use_id: Some(id),
+                    output_preview,
+                    ..
+                } if id == tool_use_id => output_preview.clone(),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("tool result {tool_use_id}"));
+        let json = raw.strip_prefix(BACKGROUND_TASK_MARKER).unwrap_or_else(|| {
+            panic!("async launch ack must be rewritten to the lifecycle marker, got: {raw}")
+        });
+        serde_json::from_str(json).expect("marker payload is one-line JSON")
+    }
+
+    /// Records for a session that dispatches ONE async worker; the caller
+    /// appends the settlement (or not).
+    fn async_launch_records() -> Vec<Value> {
+        vec![
+            json!({"type":"message","role":"user","timestamp":1789450922480i64,"cwd":"/Users/demo/app","sessionId":"sess-bg",
+                   "content":[{"type":"input_text","text":"派发worker 执行 pnpm build"}]}),
+            json!({"type":"function_call","timestamp":1789450928193i64,"cwd":"/Users/demo/app","sessionId":"sess-bg",
+                   "name":"Agent","callId":"a1",
+                   "arguments":"{\"description\": \"Run pnpm build\", \"prompt\": \"run it\", \"name\": \"pnpm-build\", \"run_in_background\": true}"}),
+            json!({"type":"function_call_result","timestamp":1789450928182i64,"cwd":"/Users/demo/app","sessionId":"sess-bg",
+                   "name":"Agent","callId":"a1","status":"completed",
+                   "output":{"type":"text","text":"Started general-purpose agent: Run pnpm build\nagent_id: agent-x1\nThe worker is running detached (no team). The returned agent_id is the task_id. End this turn unless the user asked for progress.\n[Agent ID: agent-x1]"},
+                   "providerData":{"toolResult":{"content":"Started general-purpose agent: Run pnpm build","renderer": spawn_renderer("agent-x1")}}}),
+            json!({"type":"message","role":"assistant","timestamp":1789450930520i64,"cwd":"/Users/demo/app","sessionId":"sess-bg",
+                   "content":[{"type":"output_text","text":"Worker dispatched. I'll wait for it to finish."}],
+                   "providerData":{"requestModelName":"Hy3"}}),
+        ]
+    }
+
+    #[test]
+    fn injected_meta_user_record_is_not_a_prompt() {
+        // Regression: CodeBuddy enqueues a worker settlement as a
+        // `providerData.isMeta` user message. It used to render as a SECOND user
+        // bubble inside one exchange, dumping the raw notification XML and its
+        // model-facing guidance prose into the chat. CodeBuddy's own renderer
+        // skips these records; codeg folds the payload onto the launch card
+        // instead.
+        let root = std::env::temp_dir().join(format!("codeg-cb-meta-user-{}", uuid::Uuid::new_v4()));
+        let sid = "sess-bg";
+        let mut records = async_launch_records();
+        records.push(task_notification_record(
+            1789450948007,
+            "agent-x1",
+            "completed",
+            "Build succeeded (exit code 0).",
+        ));
+        records.push(
+            json!({"type":"message","role":"assistant","timestamp":1789450954134i64,"cwd":"/Users/demo/app","sessionId":sid,
+                   "content":[{"type":"output_text","text":"构建成功。"}],
+                   "providerData":{"requestModelName":"Hy3"}}),
+        );
+        write_session(&root, "Users-demo-app", sid, &records);
+
+        let parser = CodeBuddyParser::with_base_dir(root.clone());
+        let detail = parser.get_conversation(sid).expect("detail");
+        let listed = parser.list_conversations().expect("list");
+
+        // (1) Exactly one User turn — the human's prompt.
+        let user_turns: Vec<&MessageTurn> = detail
+            .turns
+            .iter()
+            .filter(|t| matches!(t.role, TurnRole::User))
+            .collect();
+        assert_eq!(
+            user_turns.len(),
+            1,
+            "an injected settlement must not become a second user turn"
+        );
+        assert!(user_turns[0]
+            .blocks
+            .iter()
+            .any(|b| matches!(b, ContentBlock::Text { text } if text.contains("派发worker"))));
+
+        // (2) Neither the XML nor its guidance prose leaks into ANY block.
+        let rendered: String = detail
+            .turns
+            .iter()
+            .flat_map(|t| &t.blocks)
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } | ContentBlock::Thinking { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !rendered.contains("<task-notification>"),
+            "raw notification XML must never reach a rendered text block"
+        );
+        assert!(
+            !rendered.contains("Call TaskOutput once"),
+            "the notification's model-facing guidance prose must not reach the chat"
+        );
+
+        // (3) Both paths agree on the count, and neither counts the injection
+        // (user + 2 assistant = 3).
+        assert_eq!(detail.summary.message_count, 3);
+        assert_eq!(listed[0].message_count, 3);
+
+        // (4) The settlement is folded onto the launch card instead.
+        let marker = lifecycle_marker(&detail, "a1");
+        assert_eq!(marker["task_id"], "agent-x1");
+        assert_eq!(marker["status"], "completed");
+        assert_eq!(marker["summary"], "Build succeeded (exit code 0).");
+        assert!(
+            marker["result"].is_null(),
+            "CodeBuddy writes no <result> tag, so the marker must not invent one"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn unsettled_async_launch_marker_reports_no_status() {
+        // No `<task-notification>` yet (the worker is still running, or the CLI
+        // died): `status: null` renders as "launched, result pending" — never as
+        // a zombie "running". Mirrors `claude.rs`.
+        let root = std::env::temp_dir().join(format!("codeg-cb-unsettled-{}", uuid::Uuid::new_v4()));
+        let sid = "sess-bg";
+        write_session(&root, "Users-demo-app", sid, &async_launch_records());
+
+        let parser = CodeBuddyParser::with_base_dir(root.clone());
+        let detail = parser.get_conversation(sid).expect("detail");
+        let marker = lifecycle_marker(&detail, "a1");
+        assert_eq!(marker["task_id"], "agent-x1");
+        assert!(marker["status"].is_null());
+        assert!(marker["summary"].is_null());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_failed_worker_notification_keeps_its_status() {
+        let root = std::env::temp_dir().join(format!("codeg-cb-bgfail-{}", uuid::Uuid::new_v4()));
+        let sid = "sess-bg";
+        let mut records = async_launch_records();
+        // A resumed worker re-notifies under the SAME id — last wins.
+        records.push(task_notification_record(
+            1789450948007,
+            "agent-x1",
+            "completed",
+            "first",
+        ));
+        records.push(task_notification_record(
+            1789450949007,
+            "agent-x1",
+            "failed",
+            "worker failed",
+        ));
+        write_session(&root, "Users-demo-app", sid, &records);
+
+        let parser = CodeBuddyParser::with_base_dir(root.clone());
+        let detail = parser.get_conversation(sid).expect("detail");
+        let marker = lifecycle_marker(&detail, "a1");
+        assert_eq!(marker["status"], "failed");
+        assert_eq!(marker["summary"], "worker failed");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn async_launch_loads_the_detached_workers_transcript() {
+        // An async launch carries no `subAgent` block (that only appears once a
+        // BLOCKING delegation finishes), but the detached worker still writes
+        // `<session>/subagents/<taskId>.jsonl`. Without the spawn-renderer
+        // fallback every backgrounded worker's nested tool calls were dropped.
+        let root = std::env::temp_dir().join(format!("codeg-cb-asyncsub-{}", uuid::Uuid::new_v4()));
+        let sid = "sess-bg";
+        write_session(&root, "Users-demo-app", sid, &async_launch_records());
+        write_subagent(
+            &root,
+            "Users-demo-app",
+            sid,
+            "agent-x1",
+            &[
+                json!({"type":"function_call","timestamp":1789450930000i64,"sessionId":"agent-x1",
+                       "name":"Bash","callId":"s1","arguments":"{\"command\": \"pnpm build\"}"}),
+                json!({"type":"function_call_result","timestamp":1789450931000i64,"sessionId":"agent-x1",
+                       "name":"Bash","callId":"s1","status":"completed",
+                       "output":{"type":"text","text":"Compiled successfully"}}),
+            ],
+        );
+
+        let parser = CodeBuddyParser::with_base_dir(root.clone());
+        let detail = parser.get_conversation(sid).expect("detail");
+        let stats = detail
+            .turns
+            .iter()
+            .flat_map(|t| &t.blocks)
+            .find_map(|b| match b {
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    agent_stats,
+                    ..
+                } if tool_use_id.as_deref() == Some("a1") => agent_stats.clone(),
+                _ => None,
+            })
+            .expect("async launch must load the detached worker's transcript");
+        assert_eq!(stats.total_tool_use_count, Some(1));
+        assert_eq!(stats.tool_calls[0].tool_name, "Bash");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_non_agent_result_is_never_touched_by_the_background_fold() {
+        // Isolation, mirroring `subagent_tool_calls_loaded_into_agent_stats`'s
+        // stray-`subAgent` guard: both the lifecycle rewrite and the transcript
+        // load are gated on the PAIRED CALL being an `Agent`, not on the
+        // renderer's presence — so a stray spawn renderer on a Bash result can
+        // neither rewrite its output nor pull in a transcript.
+        let root = std::env::temp_dir().join(format!("codeg-cb-bgiso-{}", uuid::Uuid::new_v4()));
+        let sid = "sess-bg";
+        let mut records = async_launch_records();
+        records.push(
+            json!({"type":"function_call","timestamp":1789450940000i64,"cwd":"/Users/demo/app","sessionId":sid,
+                   "name":"Bash","callId":"b1","arguments":"{\"command\": \"ls\"}"}),
+        );
+        records.push(
+            json!({"type":"function_call_result","timestamp":1789450940100i64,"cwd":"/Users/demo/app","sessionId":sid,
+                   "name":"Bash","callId":"b1","status":"completed",
+                   "output":{"type":"text","text":"a.ts"},
+                   "providerData":{"toolResult":{"content":"a.ts","renderer": spawn_renderer("agent-x1")}}}),
+        );
+        records.push(task_notification_record(
+            1789450948007,
+            "agent-x1",
+            "completed",
+            "done",
+        ));
+        write_session(&root, "Users-demo-app", sid, &records);
+        write_subagent(
+            &root,
+            "Users-demo-app",
+            sid,
+            "agent-x1",
+            &[
+                json!({"type":"function_call","timestamp":1789450930000i64,"sessionId":"agent-x1",
+                       "name":"Bash","callId":"s1","arguments":"{\"command\": \"pnpm build\"}"}),
+                json!({"type":"function_call_result","timestamp":1789450931000i64,"sessionId":"agent-x1",
+                       "name":"Bash","callId":"s1","status":"completed",
+                       "output":{"type":"text","text":"ok"}}),
+            ],
+        );
+
+        let parser = CodeBuddyParser::with_base_dir(root.clone());
+        let detail = parser.get_conversation(sid).expect("detail");
+        let (output, stats) = detail
+            .turns
+            .iter()
+            .flat_map(|t| &t.blocks)
+            .find_map(|b| match b {
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    output_preview,
+                    agent_stats,
+                    ..
+                } if tool_use_id.as_deref() == Some("b1") => {
+                    Some((output_preview.clone(), agent_stats.clone()))
+                }
+                _ => None,
+            })
+            .expect("bash result");
+        assert_eq!(output.as_deref(), Some("a.ts"));
+        assert!(stats.is_none());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     #[test]
     fn deferred_mcp_tool_is_unwrapped() {
         let root = std::env::temp_dir().join(format!("codeg-cb-defer-{}", uuid::Uuid::new_v4()));
@@ -1903,5 +3053,174 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// #948: built with an agent's launch env, the parser reads where THAT
+    /// env puts the agent's files, not where codeg's own environment does.
+    #[test]
+    fn for_env_reads_the_config_dir_of_the_launch_env() {
+        let env = AgentEnv::with_overrides(&[("CODEBUDDY_CONFIG_DIR", "/relocated/codebuddy")]);
+        assert_eq!(
+            CodeBuddyParser::for_env(&env).base_dir,
+            PathBuf::from("/relocated/codebuddy").join("projects")
+        );
+    }
+
+    const PROMPT_IMAGE_BYTES: &[u8] = b"\x89PNG\r\n\x1a\nnot-really-pixels";
+
+    /// CodeBuddy names a blob by the SHA-256 of its bytes.
+    fn prompt_image_blob_id() -> String {
+        use sha2::{Digest, Sha256};
+        format!("{:x}", Sha256::digest(PROMPT_IMAGE_BYTES))
+    }
+
+    /// A config dir whose blob store holds the prompt image, laid out the way
+    /// CodeBuddy's `getBlobPath` writes it.
+    fn home_with_prompt_image(tag: &str) -> PathBuf {
+        let home = std::env::temp_dir().join(format!("codeg-cb-{tag}-{}", uuid::Uuid::new_v4()));
+        let id = prompt_image_blob_id();
+        let blob_dir = home.join("blobs").join(&id[..2]);
+        std::fs::create_dir_all(&blob_dir).expect("create blob dir");
+        std::fs::write(blob_dir.join(format!("{id}.png")), PROMPT_IMAGE_BYTES).expect("write blob");
+        home
+    }
+
+    fn prompt_record(sid: &str, timestamp: i64, content: Value) -> Value {
+        json!({"type":"message","role":"user","timestamp":timestamp,"cwd":"/Users/demo/app",
+               "sessionId":sid,"content":content})
+    }
+
+    fn user_blocks(detail: &ConversationDetail) -> Vec<Vec<ContentBlock>> {
+        detail
+            .turns
+            .iter()
+            .filter(|turn| matches!(turn.role, TurnRole::User))
+            .map(|turn| turn.blocks.clone())
+            .collect()
+    }
+
+    // CodeBuddy stores an image a prompt carried as an `image_blob_ref`, then
+    // adds a text item telling the model where it saved the file. Its own
+    // replay shows the typed text and the image and drops that note. Reading
+    // every `input_text` showed the note as part of what the person typed, and
+    // in the title, and never showed the image. The records are a real 2.170.0
+    // prompt with its paths trimmed; `blob_path` points nowhere on purpose,
+    // because the store location is CodeBuddy's, not the record's.
+    #[test]
+    fn a_prompt_image_shows_as_the_image_not_as_its_saved_path() {
+        let home = home_with_prompt_image("image");
+        let sid = "sess-image";
+        let image_ref = json!({"type":"image_blob_ref","blob_id":prompt_image_blob_id(),
+            "mime":"image/png","size":PROMPT_IMAGE_BYTES.len(),
+            "blob_path":"/moved/away/blobs/24/elsewhere.png"});
+        let saved_path = json!({"type":"input_text",
+            "text":"<image_local_path>/tmp/workbuddy-clipboard-images/clipboard-1.png</image_local_path>"});
+        write_session(
+            &home.join("projects"),
+            "Users-demo-app",
+            sid,
+            &[
+                prompt_record(
+                    sid,
+                    1792505064302,
+                    json!([{"type":"input_text","text":"hello image"}, image_ref, saved_path]),
+                ),
+                json!({"type":"message","role":"assistant","timestamp":1792505064496i64,
+                       "cwd":"/Users/demo/app","sessionId":sid,
+                       "content":[{"type":"output_text","text":"hello from fake"}]}),
+                // An image with no typed text keeps its bubble: the image is it.
+                prompt_record(sid, 1792505065000, json!([image_ref, saved_path])),
+            ],
+        );
+        let parser = CodeBuddyParser::with_base_dir(home.join("projects"));
+
+        let summaries = parser.list_conversations().expect("list");
+        assert_eq!(summaries[0].title.as_deref(), Some("hello image"));
+        // Both prompts still count, the image-only one included.
+        assert_eq!(summaries[0].message_count, 3);
+
+        let detail = parser.get_conversation(sid).expect("detail");
+        assert_eq!(detail.summary.title.as_deref(), Some("hello image"));
+        assert_eq!(detail.summary.message_count, 3);
+        let encoded = {
+            use base64::{engine::general_purpose::STANDARD, Engine as _};
+            STANDARD.encode(PROMPT_IMAGE_BYTES)
+        };
+        let users = user_blocks(&detail);
+        assert_eq!(users.len(), 2, "{users:?}");
+        assert!(
+            matches!(
+                users[0].as_slice(),
+                [ContentBlock::Text { text }, ContentBlock::Image { data, mime_type, .. }]
+                    if text == "hello image" && *data == encoded && mime_type == "image/png"
+            ),
+            "{:?}",
+            users[0]
+        );
+        assert!(
+            matches!(
+                users[1].as_slice(),
+                [ContentBlock::Image { data, .. }] if *data == encoded
+            ),
+            "{:?}",
+            users[1]
+        );
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    // A blob is read the way CodeBuddy's own store reads it, and only then: a
+    // lowercase 64-digit hex id, the file its `getBlobPath` names, the recorded
+    // size when there is one, and bytes whose SHA-256 is the id. So a record
+    // cannot point the parser at another file, and a blob CodeBuddy would
+    // refuse is not shown. The typed text still is.
+    #[test]
+    fn a_blob_ref_reads_nothing_outside_the_image_store() {
+        let home = home_with_prompt_image("blob-guard");
+        let id = prompt_image_blob_id();
+        std::fs::write(home.join("secret.png"), b"not for the history view").unwrap();
+        // The same bytes stored under a non-image type (which CodeBuddy files
+        // as `.bin`) are still not an image.
+        std::fs::write(
+            home.join("blobs").join(&id[..2]).join(format!("{id}.bin")),
+            PROMPT_IMAGE_BYTES,
+        )
+        .unwrap();
+        // A file at a well-formed id whose bytes are not that id's.
+        let forged = "0".repeat(64);
+        std::fs::create_dir_all(home.join("blobs").join("00")).unwrap();
+        std::fs::write(
+            home.join("blobs").join("00").join(format!("{forged}.png")),
+            PROMPT_IMAGE_BYTES,
+        )
+        .unwrap();
+        let sid = "sess-guard";
+        write_session(
+            &home.join("projects"),
+            "Users-demo-app",
+            sid,
+            &[prompt_record(
+                sid,
+                1792505064302,
+                json!([
+                    {"type":"input_text","text":"look"},
+                    {"type":"image_blob_ref","blob_id":"../../secret","mime":"image/png",
+                     "blob_path":home.join("secret.png")},
+                    {"type":"image_blob_ref","blob_id":id.to_uppercase(),"mime":"image/png"},
+                    {"type":"image_blob_ref","blob_id":id,"mime":"application/octet-stream"},
+                    {"type":"image_blob_ref","blob_id":id,"mime":"image/png","size":1},
+                    {"type":"image_blob_ref","blob_id":forged,"mime":"image/png"},
+                ]),
+            )],
+        );
+        let detail = CodeBuddyParser::with_base_dir(home.join("projects"))
+            .get_conversation(sid)
+            .expect("detail");
+        let users = user_blocks(&detail);
+        assert!(
+            matches!(users.as_slice(), [blocks] if matches!(blocks.as_slice(),
+                [ContentBlock::Text { text }] if text == "look")),
+            "{users:?}"
+        );
+        std::fs::remove_dir_all(&home).ok();
     }
 }

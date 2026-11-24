@@ -8,7 +8,7 @@ import {
   Coins,
   CopyIcon,
   ListTodo,
-  Timer,
+  Split,
 } from "lucide-react"
 import { useLocale, useTranslations } from "next-intl"
 import {
@@ -18,8 +18,10 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { useMessageScroll } from "@/components/message/message-scroll-context"
+import { useChatAnimationsEnabled } from "@/hooks/use-appearance"
+import { useArrivedOnCompletion } from "@/hooks/use-chat-motion"
+import { useModelLabel } from "@/components/message/model-label-context"
 import { useCreateTaskFromMessage } from "./use-create-task-from-message"
-import { formatElapsedLabel } from "@/lib/format-elapsed"
 import { formatTokenCount } from "@/lib/token-format"
 import { cn, copyTextToClipboard } from "@/lib/utils"
 import type { TurnUsage } from "@/lib/types"
@@ -34,6 +36,18 @@ interface TurnStatsProps {
   copyText?: string
   /** ISO timestamp marking when the assistant reply finished. */
   completedAt?: string | null
+  /** Fork the session at THIS reply. Undefined hides the affordance — the
+   * session has no live connection, the agent has no `session/fork`, or this
+   * surface doesn't own the conversation. */
+  onForkFromHere?: () => void
+  /** Forking is possible here but not right now. The button stays in place,
+   * greyed out, and says why on hover — it used to vanish for the length of
+   * every reply, which moved the whole icon row. */
+  forkDisabled?: boolean
+  /** Why it is greyed out: a turn is in flight (`busy`), or this reply has no
+   * name the backend can resolve yet (`unnamed` — the post-turn reparse fills
+   * it in a moment later). Only read while `forkDisabled`. */
+  forkDisabledReason?: "busy" | "unnamed"
 }
 
 const iconButtonClass =
@@ -48,14 +62,16 @@ export function TurnStats({
   isResponseComplete = true,
   copyText = "",
   completedAt,
+  onForkFromHere,
+  forkDisabled = false,
+  forkDisabledReason = "busy",
 }: TurnStatsProps) {
   const locale = useLocale()
   const t = useTranslations("Folder.chat.messageList")
-  // Reuse the live timer's elapsed-unit strings so the per-turn duration
-  // tooltip renders the exact same localized "Xh Ym Zs" format.
-  const tLive = useTranslations("Folder.chat.liveTurnStats")
   const tTasks = useTranslations("Tasks")
   const scroll = useMessageScroll()
+  const chatAnimations = useChatAnimationsEnabled()
+  const modelLabel = useModelLabel()
   const [isCopied, setIsCopied] = useState(false)
   const timeoutRef = useRef<number>(0)
   const shortTimeFormatter = useMemo(
@@ -89,13 +105,37 @@ export function TurnStats({
     ? fullTimeFormatter.format(completedAtDate)
     : null
 
-  const displayModels = models?.length ? models : model ? [model] : []
+  // The transcript records whatever id the agent's backend used, which for some
+  // agents is an account-internal key (qoder writes `qfmodel` for the model its
+  // own picker calls `Qwen3.8-Flash`). Show the picker's name so this row and
+  // the composer's selector can't disagree; unknown ids pass through unchanged.
+  const displayModels = (models?.length ? models : model ? [model] : []).map(
+    (id) => modelLabel(id) ?? id
+  )
   const hasCopy = copyText.trim().length > 0
   const hasUsage = Boolean(usage)
+  // An all-zero usage means "nobody said", not "nothing was spent": a reply
+  // that exists cannot have cost zero tokens. Qoder zeroes every counter for
+  // its own hosted models (see `QODER_EXPOSE_TOKEN_USAGE` in the registry), and
+  // a confident "Input 0" reads as a broken counter rather than as absent data.
+  // Same judgement the composer's context popover makes about cache rows.
+  //
+  // Deliberately NOT folded into `hasUsage`: that one gates `hasJump`, where a
+  // reply IS substantial whether or not its counters survived.
+  const hasTokenCounts =
+    usage != null &&
+    usage.input_tokens +
+      usage.output_tokens +
+      usage.cache_creation_input_tokens +
+      usage.cache_read_input_tokens >
+      0
+  // The duration itself is shown by the reply's fold header
+  // (`CompletedTurnContent`), not here — this row only uses it as a signal that
+  // the turn was substantial.
   const hasDuration = typeof duration_ms === "number" && duration_ms > 0
   const hasCompletedAt = Boolean(completedLabel)
   // Usage OR duration: some agents (Cursor) never report per-turn token
-  // usage, but a turn with a duration chip is still a substantial reply
+  // usage, but a turn that took real time is still a substantial reply
   // worth jumping back from.
   const hasJump =
     isResponseComplete &&
@@ -105,8 +145,12 @@ export function TurnStats({
 
   const handleJump = useCallback(() => {
     if (typeof previousUserIndex !== "number") return
-    scroll?.scrollToIndex(previousUserIndex, { align: "start", smooth: true })
-  }, [previousUserIndex, scroll])
+    scroll?.scrollToIndex(previousUserIndex, {
+      align: "start",
+      // Settings → Appearance → "Chat animations" off jumps instead of gliding.
+      smooth: chatAnimations,
+    })
+  }, [previousUserIndex, scroll, chatAnimations])
 
   const getTaskText = useCallback(() => copyText ?? "", [copyText])
   const handleCreateTask = useCreateTaskFromMessage(getTaskText)
@@ -127,12 +171,21 @@ export function TurnStats({
     []
   )
 
+  const arrived = useArrivedOnCompletion(isResponseComplete)
+
   if (!isResponseComplete) return null
-  if (!hasCopy && !hasUsage && !hasDuration && !hasCompletedAt && !hasJump)
+  // Deliberately not gated on `hasDuration`: nothing in this row renders a
+  // duration any more, so a turn carrying only one would open an empty row.
+  if (!hasCopy && !hasUsage && !hasCompletedAt && !hasJump && !onForkFromHere)
     return null
 
   return (
-    <div className="mt-2 -ms-[0.3125rem] flex items-center justify-start gap-1 text-xs text-muted-foreground">
+    <div
+      className={cn(
+        "mt-2 -ms-[0.3125rem] flex items-center justify-start gap-1 text-xs text-muted-foreground",
+        arrived && "chat-enter"
+      )}
+    >
       <TooltipProvider delayDuration={150}>
         {hasCopy && (
           <Tooltip>
@@ -172,6 +225,36 @@ export function TurnStats({
             </TooltipContent>
           </Tooltip>
         )}
+        {onForkFromHere && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              {/* `aria-disabled`, deliberately NOT the native `disabled`: a
+                  disabled element receives no pointer events, so the tooltip —
+                  the only thing that says WHY the button is dead — would never
+                  open. Staying focusable also keeps it reachable by keyboard. */}
+              <button
+                type="button"
+                onClick={forkDisabled ? undefined : onForkFromHere}
+                aria-disabled={forkDisabled || undefined}
+                className={cn(
+                  iconButtonClass,
+                  forkDisabled &&
+                    "cursor-not-allowed opacity-50 hover:bg-transparent hover:text-muted-foreground"
+                )}
+                aria-label={t("forkFromHere")}
+              >
+                <Split aria-hidden="true" className="h-3.5 w-3.5" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              {forkDisabled
+                ? forkDisabledReason === "unnamed"
+                  ? t("forkNotReady")
+                  : t("forkBusy")
+                : t("forkFromHere")}
+            </TooltipContent>
+          </Tooltip>
+        )}
         {displayModels.length > 0 && (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -190,7 +273,7 @@ export function TurnStats({
             </TooltipContent>
           </Tooltip>
         )}
-        {hasUsage && usage && (
+        {hasTokenCounts && usage && (
           <Tooltip>
             <TooltipTrigger asChild>
               <button
@@ -209,9 +292,9 @@ export function TurnStats({
                     {formatTokenCount(usage.input_tokens)}
                   </span>
                 </div>
-                {/* Some agents (e.g. Grok) report only a single cumulative token
-                    total, mapped to input; suppress a misleading "Output: 0"
-                    row. Symmetric with the cache rows' `> 0` gating below. */}
+                {/* An agent that reports no output split at all would otherwise
+                    show a misleading "Output: 0" row. Symmetric with the cache
+                    rows' `> 0` gating below. */}
                 {usage.output_tokens > 0 && (
                   <div className="flex justify-between gap-3">
                     <span>{t("tokenOutput")}</span>
@@ -237,24 +320,6 @@ export function TurnStats({
                   </div>
                 )}
               </div>
-            </TooltipContent>
-          </Tooltip>
-        )}
-        {hasDuration && duration_ms != null && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                className={cn(iconButtonClass, "cursor-default")}
-                aria-label={t("duration")}
-              >
-                <Timer aria-hidden="true" className="h-3.5 w-3.5" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="top">
-              <span className="font-mono tabular-nums">
-                {formatElapsedLabel(duration_ms, tLive)}
-              </span>
             </TooltipContent>
           </Tooltip>
         )}

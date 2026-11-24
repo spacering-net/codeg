@@ -63,19 +63,16 @@ export function SessionRow({ session }: SessionRowProps) {
       >
         <AgentIcon agentType={session.agentType} className="h-4 w-4 shrink-0" />
         <span className="flex min-w-0 flex-1 flex-col">
-          <span className="truncate text-sm">
-            {formatConversationTitle(session.title) ||
-              getAgentLabel(session.agentType)}
-          </span>
+          <span className="truncate text-sm">{rowTitle(session)}</span>
           {parent ? (
-            <span className="truncate text-[11px] text-muted-foreground">
+            <span className="truncate text-2xs text-muted-foreground">
               {t("panel.subAgentOf")} ·{" "}
               {formatConversationTitle(parent.title) ||
                 getAgentLabel(parent.agentType)}
             </span>
           ) : null}
         </span>
-        <span className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
+        <span className="flex shrink-0 items-center gap-1 text-2xs text-muted-foreground">
           <span
             className={cn(
               "h-1.5 w-1.5 rounded-full",
@@ -92,8 +89,18 @@ export function SessionRow({ session }: SessionRowProps) {
         <PanelPermissionCard
           connectionId={session.connectionId}
           permission={session.pending}
+          agentType={session.agentType}
         />
       ) : null}
     </div>
   )
+}
+
+/** The row's name: the conversation's title — after the assistant a
+ *  sub-agent runs as, when it runs as one — or the agent's name. */
+function rowTitle(session: PetSessionEntry): string {
+  const title = formatConversationTitle(session.title)
+  const assistant = session.assistantName
+  if (assistant) return title ? `${assistant} · ${title}` : assistant
+  return title || getAgentLabel(session.agentType)
 }

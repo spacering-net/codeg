@@ -1,14 +1,24 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { Fragment, useMemo, useState } from "react"
 import { useTranslations } from "next-intl"
+import { Columns2, Rows3 } from "lucide-react"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { cn } from "@/lib/utils"
+import { useDiffViewMode, type DiffViewMode } from "@/lib/diff-view-mode-prefs"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@/components/ui/resizable"
 import { FilePathLink } from "@/components/ai-elements/link-safety"
+import { useSyncedScroll } from "./use-synced-scroll"
 
 type RowMarker = "none" | "added" | "deleted" | "modified"
-type DiffFileMode = "modified" | "added" | "deleted" | "renamed"
+export type DiffFileMode = "modified" | "added" | "deleted" | "renamed"
+
+export type { DiffViewMode }
 
 interface RawDiffRow {
   kind: "context" | "add" | "del"
@@ -17,7 +27,7 @@ interface RawDiffRow {
   newLine: number | null
 }
 
-interface ParsedDiffRow {
+export interface ParsedDiffRow {
   type: "context" | "added" | "deleted" | "modified"
   text: string
   sign: " " | "+" | "-"
@@ -25,7 +35,7 @@ interface ParsedDiffRow {
   newLine: number | null
 }
 
-interface ParsedDiffHunk {
+export interface ParsedDiffHunk {
   key: string
   oldStart: number | null
   oldCount: number | null
@@ -34,12 +44,15 @@ interface ParsedDiffHunk {
   rows: ParsedDiffRow[]
 }
 
-interface ParsedDiffFile {
+export interface ParsedDiffFile {
   key: string
   path: string
   oldPath: string | null
   newPath: string | null
   mode: DiffFileMode
+  /** git refused to line-diff this one ("Binary files … differ"). It has no
+   *  hunks and is kept only so the change stays visible in the list. */
+  binary: boolean
   additions: number
   deletions: number
   hunks: ParsedDiffHunk[]
@@ -60,6 +73,7 @@ interface WorkingFile {
   oldPath: string | null
   newPath: string | null
   mode: DiffFileMode
+  binary: boolean
   additions: number
   deletions: number
   hunks: WorkingHunk[]
@@ -67,14 +81,14 @@ interface WorkingFile {
 
 const ROW_CLASS: Record<RowMarker, string> = {
   none: "",
-  added: "bg-green-500/10 text-green-900 dark:text-green-300",
-  deleted: "bg-red-500/10 text-red-900 dark:text-red-300",
-  modified: "bg-blue-500/10 text-blue-900 dark:text-blue-300",
+  added: "bg-diff-added",
+  deleted: "bg-diff-deleted",
+  modified: "bg-diff-modified",
 }
 
 const SIGN_CLASS: Record<string, string> = {
-  "+": "text-green-700 dark:text-green-400",
-  "-": "text-red-700 dark:text-red-400",
+  "+": "text-diff-added-fg",
+  "-": "text-diff-deleted-fg",
   " ": "text-muted-foreground/50",
 }
 
@@ -88,7 +102,23 @@ function normalizePath(raw: string): string | null {
 }
 
 function parsePathFromDiffGitLine(line: string): string | null {
-  const match = line.match(/^diff --git\s+(.+?)\s+(.+)$/)
+  const rest = line.slice("diff --git ".length).trim()
+
+  // git does not quote plain spaces, so `a/<p1> b/<p2>` is genuinely ambiguous
+  // for a path like "my icon.png". Both sides name the same file unless this is
+  // a rename, so look for the split that makes them equal before falling back
+  // to the (lazy, first-space) guess. Text files recover either way — their
+  // `--- `/`+++ ` lines overwrite the path — but a binary file has none of
+  // those, and this line is all it gets.
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] !== " ") continue
+    const left = rest.slice(0, i)
+    const right = rest.slice(i + 1)
+    if (!left.startsWith("a/") || !right.startsWith("b/")) continue
+    if (left.slice(2) === right.slice(2)) return normalizePath(right)
+  }
+
+  const match = rest.match(/^(.+?)\s+(.+)$/)
   if (!match) return null
   return normalizePath(match[2]) ?? normalizePath(match[1])
 }
@@ -232,7 +262,13 @@ function resolveFileMode(file: WorkingFile): DiffFileMode {
   return "modified"
 }
 
-function parseUnifiedDiff(diffText: string): ParsedDiffFile[] {
+/**
+ * Parse a unified diff — git's, `apply_patch`'s, or the chunks the transcript
+ * builds for an edit or a write — into files of numbered, classified rows.
+ * Shared with `CompactDiff`, the narrow inline view, so both read a diff the
+ * same way.
+ */
+export function parseUnifiedDiff(diffText: string): ParsedDiffFile[] {
   const lines = diffText.replace(/\r\n/g, "\n").split("\n")
   const files: WorkingFile[] = []
 
@@ -275,6 +311,7 @@ function parseUnifiedDiff(diffText: string): ParsedDiffFile[] {
       oldPath: null,
       newPath: null,
       mode,
+      binary: false,
       additions: 0,
       deletions: 0,
       hunks: [],
@@ -332,6 +369,50 @@ function parseUnifiedDiff(diffText: string): ParsedDiffFile[] {
       continue
     }
 
+    // A rename names each side on a line of its own, which is the only
+    // unambiguous statement of the paths git makes when they contain spaces —
+    // and for a binary rename, the only one at all.
+    if (line.startsWith("rename from ")) {
+      const renamedFrom = normalizePath(line.slice("rename from ".length))
+      const file = ensureFile()
+      if (renamedFrom) file.oldPath = renamedFrom
+      continue
+    }
+
+    if (line.startsWith("rename to ")) {
+      const renamedTo = normalizePath(line.slice("rename to ".length))
+      const file = ensureFile()
+      if (renamedTo) {
+        file.newPath = renamedTo
+        file.path = renamedTo
+      }
+      continue
+    }
+
+    // git's extended headers. A binary add/delete carries no `--- /dev/null`
+    // line for `resolveFileMode` to read the mode off, so take it from here.
+    if (line.startsWith("new file mode ")) {
+      ensureFile().mode = "added"
+      continue
+    }
+
+    if (line.startsWith("deleted file mode ")) {
+      ensureFile().mode = "deleted"
+      continue
+    }
+
+    // "Binary files a/logo.png and b/logo.png differ", or the base85 payload
+    // header of `git diff --binary`. Either way there is nothing to line up in
+    // a text grid — the file is kept, flagged, and rendered as a stub.
+    if (
+      (line.startsWith("Binary files ") && line.endsWith(" differ")) ||
+      line === "GIT binary patch"
+    ) {
+      flushHunk()
+      ensureFile().binary = true
+      continue
+    }
+
     if (line.startsWith("--- ")) {
       const file = ensureFile()
       const oldPath = normalizePath(line.slice(4))
@@ -352,6 +433,11 @@ function parseUnifiedDiff(diffText: string): ParsedDiffFile[] {
       startHunk(line)
       continue
     }
+
+    // A binary payload is not diff rows: `git diff --binary` emits base85,
+    // whose alphabet includes "+" and "-", and letting those through would
+    // paint a wall of fake added/deleted lines.
+    if (getActiveFile()?.binary) continue
 
     let hunk = getActiveHunk()
     // Auto-create an implicit hunk for patch formats (e.g. *** Add File)
@@ -426,7 +512,7 @@ function parseUnifiedDiff(diffText: string): ParsedDiffFile[] {
           rows: classifyRows(hunk.rows),
         })),
     }))
-    .filter((file) => file.hunks.length > 0)
+    .filter((file) => file.hunks.length > 0 || file.binary)
 }
 
 function modeKey(
@@ -459,38 +545,145 @@ function rowMarker(row: ParsedDiffRow): RowMarker {
   return "none"
 }
 
+/** One half of a side-by-side row. `text === null` marks the filler cell a
+ *  delete-only or add-only block leaves on the opposite side. */
+export interface SplitCell {
+  line: number | null
+  text: string | null
+  marker: RowMarker
+}
+
+export interface SplitRow {
+  left: SplitCell
+  right: SplitCell
+}
+
+const EMPTY_CELL: SplitCell = { line: null, text: null, marker: "none" }
+
+/**
+ * Re-pair a hunk's unified rows for the side-by-side view: context rows span
+ * both sides, and each delete-run followed by its add-run is zipped
+ * positionally — the i-th deleted line faces the i-th added line, and the
+ * longer run's remainder faces a filler cell (the same alignment GitHub's
+ * split view uses; the lines share a row, they are not claimed to be
+ * related).
+ */
+export function toSplitRows(rows: ParsedDiffRow[]): SplitRow[] {
+  const out: SplitRow[] = []
+  let index = 0
+
+  while (index < rows.length) {
+    const row = rows[index]
+    if (!row) break
+
+    // Everything that is not part of a delete/add run spans both sides. The
+    // branch keys off "not added and not deleted" rather than "is context" so
+    // that the loop is guaranteed to consume a row on every pass: a row of the
+    // fourth `ParsedDiffRow` type ("modified") would otherwise match neither
+    // this branch nor either run below, leaving `index` unmoved and spinning
+    // the tab forever.
+    if (row.type !== "added" && row.type !== "deleted") {
+      out.push({
+        left: { line: row.oldLine, text: row.text, marker: "none" },
+        right: { line: row.newLine, text: row.text, marker: "none" },
+      })
+      index += 1
+      continue
+    }
+
+    const dels: ParsedDiffRow[] = []
+    const adds: ParsedDiffRow[] = []
+    while (index < rows.length && rows[index]?.type === "deleted") {
+      dels.push(rows[index]!)
+      index += 1
+    }
+    while (index < rows.length && rows[index]?.type === "added") {
+      adds.push(rows[index]!)
+      index += 1
+    }
+
+    const pairs = Math.max(dels.length, adds.length)
+    for (let p = 0; p < pairs; p++) {
+      const del = dels[p]
+      const add = adds[p]
+      out.push({
+        left: del
+          ? { line: del.oldLine, text: del.text, marker: "deleted" }
+          : EMPTY_CELL,
+        right: add
+          ? { line: add.newLine, text: add.text, marker: "added" }
+          : EMPTY_CELL,
+      })
+    }
+  }
+
+  return out
+}
+
 function HunkSeparator({ hunk }: { hunk: ParsedDiffHunk }) {
   const label =
     hunk.oldStart != null && hunk.oldCount != null
       ? `@@ -${hunk.oldStart},${hunk.oldCount} +${hunk.newStart ?? hunk.oldStart},${hunk.newCount ?? hunk.oldCount} @@`
       : "···"
   return (
-    <div className="flex items-center gap-2 border-y border-border/50 bg-muted/30 px-3 py-0.5 font-mono text-[11px] text-muted-foreground/60">
-      <span className="select-none">{label}</span>
+    <div className="flex items-center gap-2 border-y border-border/50 bg-muted/30 px-3 py-0.5 font-mono text-2xs text-muted-foreground/60">
+      {/* Rides along with the line numbers rather than sliding off to the
+          left. Nothing scrolls underneath it, so the band needs no backing. */}
+      <span className="sticky left-3 select-none">{label}</span>
     </div>
   )
 }
 
+/**
+ * Holds the line numbers (and, inline, the +/- sign) against the left edge
+ * while the code scrolls under them — the numbers are how you keep your place
+ * in a long line, and they were the first thing to leave the screen.
+ *
+ * `bg-background` is load-bearing: the row tints are translucent, so a rail
+ * carrying only its row's tint would let the code slide visibly through the
+ * digits. The opaque base goes on the rail and `STICKY_RAIL_TINT` re-applies
+ * the row's colour on top, which composites to exactly what the row looks like
+ * further right. No `z-index` — a sticky (positioned) box already paints above
+ * its static siblings, and adding one here would put the rail above the
+ * scrollbars.
+ *
+ * `left-0` is safe as a physical edge because the scroll bodies pin themselves
+ * to `dir="ltr"`; the numbers are always on the physical left.
+ */
+const STICKY_RAIL = "sticky left-0 flex shrink-0 bg-background"
+
+/**
+ * The tinted layer inside the rail. Everything the rail covers goes in here,
+ * including the trailing gap that keeps scrolled code off the digits: put that
+ * padding on the rail itself and it stays card-coloured, drawing a bare stripe
+ * down the middle of every added and deleted row.
+ */
+const STICKY_RAIL_TINT = "flex pr-1"
+
 function HunkLines({ rows }: { rows: ParsedDiffRow[] }) {
   return (
-    <div className="font-mono text-[12px] leading-[20px]">
+    <div className="font-mono text-xs leading-[1.25rem]">
       {rows.map((row, i) => {
-        const marker = rowMarker(row)
+        const tint = ROW_CLASS[rowMarker(row)]
         return (
-          <div key={i} className={cn("flex", ROW_CLASS[marker])}>
-            <span className="w-[3.5rem] shrink-0 select-none pr-1 text-right text-muted-foreground/40">
-              {row.oldLine ?? ""}
-            </span>
-            <span className="w-[3.5rem] shrink-0 select-none pr-1 text-right text-muted-foreground/40">
-              {row.newLine ?? ""}
-            </span>
-            <span
-              className={cn(
-                "w-4 shrink-0 select-none text-center",
-                SIGN_CLASS[row.sign] ?? ""
-              )}
-            >
-              {row.sign === " " ? "" : row.sign}
+          <div key={i} className={cn("flex", tint)}>
+            <span className={STICKY_RAIL}>
+              <span className={cn(STICKY_RAIL_TINT, tint)}>
+                <span className="w-[3.5rem] select-none pr-1 text-right text-muted-foreground/40">
+                  {row.oldLine ?? ""}
+                </span>
+                <span className="w-[3.5rem] select-none pr-1 text-right text-muted-foreground/40">
+                  {row.newLine ?? ""}
+                </span>
+                <span
+                  className={cn(
+                    "w-4 select-none text-center",
+                    SIGN_CLASS[row.sign] ?? ""
+                  )}
+                >
+                  {row.sign === " " ? "" : row.sign}
+                </span>
+              </span>
             </span>
             <span className="flex-1 whitespace-pre pr-3">{row.text}</span>
           </div>
@@ -503,11 +696,15 @@ function HunkLines({ rows }: { rows: ParsedDiffRow[] }) {
 /** Clean file content view for new files (no diff signs, green highlight as added) */
 function NewFileLines({ rows }: { rows: ParsedDiffRow[] }) {
   return (
-    <div className="font-mono text-[12px] leading-[20px]">
+    <div className="font-mono text-xs leading-[1.25rem]">
       {rows.map((row, i) => (
         <div key={i} className={cn("flex", ROW_CLASS.added)}>
-          <span className="w-[3.5rem] shrink-0 select-none pr-1 text-right text-muted-foreground/40">
-            {row.newLine ?? i + 1}
+          <span className={STICKY_RAIL}>
+            <span className={cn(STICKY_RAIL_TINT, ROW_CLASS.added)}>
+              <span className="w-[3.5rem] select-none pr-1 text-right text-muted-foreground/40">
+                {row.newLine ?? i + 1}
+              </span>
+            </span>
           </span>
           <span className="flex-1 whitespace-pre pr-3">{row.text}</span>
         </div>
@@ -516,8 +713,182 @@ function NewFileLines({ rows }: { rows: ParsedDiffRow[] }) {
   )
 }
 
+function SplitCellView({ cell }: { cell: SplitCell }) {
+  const empty = cell.text === null
+  const tint = empty ? "bg-muted/20" : ROW_CLASS[cell.marker]
+  return (
+    // `min-h-[1.25rem]` (one `leading-[1.25rem]` line) is what holds a filler cell
+    // open. It carries neither a number nor text, so its flex line has nothing
+    // to give it height: the old single grid let the opposite cell hold the row
+    // open, but independent panes each lay out alone, and a collapsed filler
+    // slides every row below it one line out of step with the other side.
+    <div className={cn("flex min-h-[1.25rem]", tint)}>
+      <span className={STICKY_RAIL}>
+        <span className={cn(STICKY_RAIL_TINT, tint)}>
+          <span
+            className={cn(
+              "w-[3rem] select-none pr-1 text-right",
+              empty ? "text-transparent" : "text-muted-foreground/40"
+            )}
+          >
+            {cell.line ?? ""}
+          </span>
+        </span>
+      </span>
+      <span className="flex-1 whitespace-pre pr-3">{cell.text}</span>
+    </div>
+  )
+}
+
+/** A file's hunks, paired for the side-by-side view. Both panes walk this same
+ *  list — identical block sequence, identical row heights — which is what keeps
+ *  the two sides on the same baseline now that each scrolls on its own. */
+interface SplitBlock {
+  key: string
+  hunk: ParsedDiffHunk
+  /** Every hunk but the first is preceded by its `@@` marker. */
+  separator: boolean
+  rows: SplitRow[]
+}
+
+function toSplitBlocks(hunks: ParsedDiffHunk[]): SplitBlock[] {
+  return hunks.map((hunk, index) => ({
+    key: hunk.key,
+    hunk,
+    separator: index > 0,
+    rows: toSplitRows(hunk.rows),
+  }))
+}
+
+/** The hunk marker, split across the panes: each side shows only its own
+ *  range. The box is identical on both sides so the rows below it stay level. */
+function SplitHunkSeparator({
+  hunk,
+  side,
+}: {
+  hunk: ParsedDiffHunk
+  side: "left" | "right"
+}) {
+  const start = side === "left" ? hunk.oldStart : hunk.newStart
+  const count = side === "left" ? hunk.oldCount : hunk.newCount
+  const sign = side === "left" ? "-" : "+"
+  const label =
+    start != null && count != null ? `@@ ${sign}${start},${count} @@` : "···"
+  return (
+    <div className="border-y border-border/50 bg-muted/30 px-3 text-2xs text-muted-foreground/60">
+      <span className="sticky left-3 inline-block select-none">{label}</span>
+    </div>
+  )
+}
+
+/**
+ * One side of the split view. `w-max` sizes the pane to its widest line so the
+ * enclosing `x="scroll"` ScrollArea has something to scroll; `min-w-full` keeps
+ * a short diff filling its half instead of leaving the row tints ending
+ * mid-way.
+ */
+function SplitPane({
+  blocks,
+  side,
+}: {
+  blocks: SplitBlock[]
+  side: "left" | "right"
+}) {
+  return (
+    <div className="w-max min-w-full font-mono text-xs leading-[1.25rem]">
+      {blocks.map((block) => (
+        <Fragment key={block.key}>
+          {block.separator && (
+            <SplitHunkSeparator hunk={block.hunk} side={side} />
+          )}
+          {block.rows.map((row, i) => (
+            <SplitCellView
+              key={i}
+              cell={side === "left" ? row.left : row.right}
+            />
+          ))}
+        </Fragment>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * The side-by-side layout: two independent scroll containers, split down the
+ * middle by a draggable handle.
+ *
+ * Two scrollers rather than one two-column grid, because a shared scroller ties
+ * the columns' horizontal position together — scrolling to read the end of a
+ * long line on one side drags the other side's text off-screen with it. Each
+ * pane now scrolls to its own longest line, and `useSyncedScroll` puts the two
+ * back in step so the row under the cursor stays the row under the cursor.
+ */
+function SplitDiffPanes({
+  hunks,
+  bounded,
+}: {
+  hunks: ParsedDiffHunk[]
+  /** The section caps its own height, so each pane owns a vertical scrollbar.
+   *  When false the host scrolls the whole preview and the panes just grow. */
+  bounded: boolean
+}) {
+  const blocks = useMemo(() => toSplitBlocks(hunks), [hunks])
+  const { registerLeft, registerRight, handleLeftScroll, handleRightScroll } =
+    useSyncedScroll()
+
+  return (
+    <ResizablePanelGroup
+      direction="horizontal"
+      // A diff is left-to-right whatever the UI language, and under `dir="rtl"`
+      // (the app switches the document over for Arabic) every part of this
+      // layout inverts: the panes swap so "before" lands on the right,
+      // react-resizable-panels reads the group's own computed direction and
+      // flips the drag delta, each scrollport reports `scrollLeft` as 0 at its
+      // right edge counting down into negatives — which the sync clamp would
+      // pin at 0 — and the sticky rail below sticks to the wrong edge. Pinning
+      // the body to LTR settles all four at the source.
+      dir="ltr"
+      // `min-h-0` lets the group shrink inside the section's capped height
+      // instead of pushing past it; unbounded, it takes its content's height.
+      className={cn("min-h-0", bounded ? undefined : "h-auto")}
+    >
+      <ResizablePanel defaultSize={50} minSize={20}>
+        <ScrollArea
+          className={bounded ? "h-full" : undefined}
+          x="scroll"
+          y={bounded ? "scroll" : "hidden"}
+          onViewportRef={registerLeft}
+          onScroll={handleLeftScroll}
+        >
+          <SplitPane blocks={blocks} side="left" />
+        </ScrollArea>
+      </ResizablePanel>
+      <ResizableHandle />
+      <ResizablePanel defaultSize={50} minSize={20}>
+        <ScrollArea
+          className={bounded ? "h-full" : undefined}
+          x="scroll"
+          y={bounded ? "scroll" : "hidden"}
+          onViewportRef={registerRight}
+          onScroll={handleRightScroll}
+        >
+          <SplitPane blocks={blocks} side="right" />
+        </ScrollArea>
+      </ResizablePanel>
+    </ResizablePanelGroup>
+  )
+}
+
 function isNewFileOnly(file: ParsedDiffFile): boolean {
-  return file.mode === "added" && file.deletions === 0
+  return !file.binary && file.mode === "added" && file.deletions === 0
+}
+
+/** New files render as plain content in BOTH modes (there is no "before" side
+ *  to put anything on), so a diff made only of them has nothing to switch —
+ *  offering the toggle there would be a control that visibly does nothing.
+ *  Write-tool previews in a transcript are exactly this shape. */
+function supportsSplitView(files: ParsedDiffFile[]): boolean {
+  return files.some((file) => !file.binary && !isNewFileOnly(file))
 }
 
 // Beyond this many rows a single file is rendered as a bounded preview: each
@@ -550,12 +921,16 @@ function capHunks(hunks: ParsedDiffHunk[], limit: number): ParsedDiffHunk[] {
 
 function DiffFileSection({
   file,
+  view,
+  switchView,
   embedded,
   clickableFilePath,
   folderPath,
   unbounded,
 }: {
   file: ParsedDiffFile
+  view: DiffViewMode
+  switchView: (mode: DiffViewMode) => void
   embedded: boolean
   clickableFilePath: boolean
   folderPath: string | null
@@ -600,67 +975,89 @@ function DiffFileSection({
         // Self-capped by default: the section owns a scroll box so a huge file
         // can't stretch its host. `unbounded` hands both back to the host (it
         // supplies its own cap + reveal), which keeps the two from nesting.
-        unbounded ? "min-h-0" : "max-h-[420px]",
+        unbounded ? "min-h-0" : "max-h-[26.25rem]",
         embedded
           ? "bg-transparent"
           : "rounded-lg border border-border bg-background"
       )}
     >
       {!embedded && (
-        <header className="flex shrink-0 items-center gap-2 border-b border-border bg-muted/40 px-3 py-2 text-[11px]">
-          <span className="shrink-0 rounded border border-border bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground">
+        // The counters sit with the path they belong to; the far right of the
+        // bar is the view toggle's, so it lands in the same spot on every file.
+        <header className="flex shrink-0 items-center gap-2 border-b border-border bg-muted/40 px-3 py-2 text-2xs">
+          <span className="shrink-0 rounded border border-border bg-background px-1.5 py-0.5 text-3xs text-muted-foreground">
             {newFile ? "WRITE" : t(modeKey(file.mode))}
           </span>
           {clickableFilePath ? (
             <FilePathLink
               filePath={file.path}
-              className="min-w-0 flex-1 font-mono text-foreground"
+              className="min-w-0 font-mono text-foreground"
               title={file.path}
             >
               {toDisplayPath(file.path, folderPath)}
             </FilePathLink>
           ) : (
             <span
-              className="min-w-0 flex-1 truncate font-mono text-foreground"
+              className="min-w-0 truncate font-mono text-foreground"
               title={file.path}
             >
               {toDisplayPath(file.path, folderPath)}
             </span>
           )}
-          {!newFile && (
-            <span className="ml-auto inline-flex shrink-0 items-center gap-2 font-mono">
-              <span className="text-green-700 dark:text-green-400">
-                +{file.additions}
-              </span>
-              <span className="text-red-700 dark:text-red-400">
-                -{file.deletions}
-              </span>
+          {!newFile && !file.binary && (
+            // The counters are one LTR unit inside a header that still follows
+            // the UI direction: without this, RTL reorders them to "3- 2+",
+            // moving each sign behind its number. A no-op everywhere else.
+            <span
+              dir="ltr"
+              className="inline-flex shrink-0 items-center gap-2 font-mono"
+            >
+              <span className="text-tone-success">+{file.additions}</span>
+              <span className="text-tone-danger">-{file.deletions}</span>
             </span>
+          )}
+          {!newFile && !file.binary && (
+            <ViewModeToggle
+              view={view}
+              onSwitch={switchView}
+              className="ml-auto"
+            />
           )}
         </header>
       )}
 
-      <ScrollArea x="scroll" y={unbounded ? "hidden" : "scroll"}>
-        <div className="inline-block min-w-full">
-          {newFile
-            ? hunks.map((hunk) => (
-                <NewFileLines key={hunk.key} rows={hunk.rows} />
-              ))
-            : hunks.map((hunk, hunkIdx) => (
-                <div key={hunk.key}>
-                  {hunkIdx > 0 && <HunkSeparator hunk={hunk} />}
-                  <HunkLines rows={hunk.rows} />
-                </div>
-              ))}
+      {file.binary ? (
+        <div className="px-3 py-2 text-2xs text-muted-foreground">
+          {t("binaryFile")}
         </div>
-      </ScrollArea>
+      ) : view === "split" && !newFile ? (
+        <SplitDiffPanes hunks={hunks} bounded={!unbounded} />
+      ) : (
+        // `dir="ltr"` for the same reason the split panes force it: the rows
+        // are code, and under `dir="rtl"` the sticky rail would pin itself to
+        // the edge the numbers are no longer on.
+        <ScrollArea dir="ltr" x="scroll" y={unbounded ? "hidden" : "scroll"}>
+          <div className="inline-block min-w-full">
+            {newFile
+              ? hunks.map((hunk) => (
+                  <NewFileLines key={hunk.key} rows={hunk.rows} />
+                ))
+              : hunks.map((hunk, hunkIdx) => (
+                  <div key={hunk.key}>
+                    {hunkIdx > 0 && <HunkSeparator hunk={hunk} />}
+                    <HunkLines rows={hunk.rows} />
+                  </div>
+                ))}
+          </div>
+        </ScrollArea>
+      )}
 
       {capped && (
         <button
           type="button"
           onClick={() => setExpanded(true)}
           className={cn(
-            "shrink-0 select-none px-3 py-1 text-left font-mono text-[11px] text-muted-foreground hover:bg-muted/40 hover:text-foreground",
+            "shrink-0 select-none px-3 py-1 text-left font-mono text-2xs text-muted-foreground hover:bg-muted/40 hover:text-foreground",
             embedded ? "border-t border-border/50" : "border-t border-border"
           )}
         >
@@ -677,6 +1074,7 @@ export function UnifiedDiffPreview({
   clickableFilePath = false,
   embedded = false,
   unbounded = false,
+  hideViewToggle = false,
 }: {
   diffText: string
   /** @deprecated No longer used — kept for API compat */
@@ -698,10 +1096,23 @@ export function UnifiedDiffPreview({
    * scroll inside another one.
    */
   unbounded?: boolean
+  /**
+   * Suppress the `embedded` layout's own toggle row, for a host that renders
+   * `ViewModeToggle` itself somewhere better.
+   *
+   * The repository panel does: it mounts one preview per expanded file, so the
+   * built-in row would appear once per file, halfway down a list, and only
+   * after something was expanded — while the control belongs in the header
+   * above that list. The mode is one global preference either way (see
+   * `useDiffViewMode`), so the host's toggle and every preview under it move
+   * together through the same broadcast.
+   */
+  hideViewToggle?: boolean
 }) {
   const t = useTranslations("Folder.diffPreview")
   const { activeFolder: folder } = useActiveFolder()
   const files = useMemo(() => parseUnifiedDiff(diffText), [diffText])
+  const [view, switchView] = useDiffViewMode()
 
   if (!diffText.trim()) {
     return (
@@ -718,7 +1129,10 @@ export function UnifiedDiffPreview({
 
   if (files.length === 0) {
     const pre = (
-      <pre className="font-mono text-[11px] leading-5 whitespace-pre-wrap text-muted-foreground p-3">
+      <pre
+        dir="ltr"
+        className="font-mono text-2xs leading-5 whitespace-pre-wrap text-muted-foreground p-3"
+      >
         {diffText}
       </pre>
     )
@@ -738,10 +1152,20 @@ export function UnifiedDiffPreview({
   return (
     <Frame className={className}>
       <div className={embedded ? "space-y-2" : "space-y-3"}>
+        {/* Every file renders its own toggle in its header. Embedded previews
+            have no header to put it in, so they keep a row of their own —
+            unless the host said it has somewhere better for it. */}
+        {embedded && !hideViewToggle && supportsSplitView(files) && (
+          <div className="flex items-center justify-end">
+            <ViewModeToggle view={view} onSwitch={switchView} />
+          </div>
+        )}
         {files.map((file) => (
           <DiffFileSection
             key={file.key}
             file={file}
+            view={view}
+            switchView={switchView}
             embedded={embedded}
             clickableFilePath={clickableFilePath}
             folderPath={folder?.path ?? null}
@@ -750,6 +1174,49 @@ export function UnifiedDiffPreview({
         ))}
       </div>
     </Frame>
+  )
+}
+
+/**
+ * One button for both layouts, showing the view it switches TO rather than the
+ * one already on screen — the icon reads as "go here", which is also what the
+ * `viewMode` labels say ("Switch to …"). A pair of buttons spent twice the
+ * header's width to say the same thing.
+ *
+ * Exported for hosts that place it themselves (see `hideViewToggle`). Its
+ * chrome is a default rather than a fixture: a host that puts it in a row of
+ * its own icon buttons overrides `className`/`iconClassName` so the pair reads
+ * as one control set, and the *decision* — which mode is next, which glyph and
+ * which label say so — stays in one place regardless.
+ */
+export function ViewModeToggle({
+  view,
+  onSwitch,
+  className,
+  iconClassName,
+}: {
+  view: DiffViewMode
+  onSwitch: (mode: DiffViewMode) => void
+  className?: string
+  iconClassName?: string
+}) {
+  const t = useTranslations("Folder.diffPreview")
+  const next: DiffViewMode = view === "split" ? "unified" : "split"
+  const label = t(`viewMode.${next}`)
+  const Icon = next === "split" ? Columns2 : Rows3
+  return (
+    <button
+      type="button"
+      onClick={() => onSwitch(next)}
+      aria-label={label}
+      title={label}
+      className={cn(
+        "inline-flex h-5 w-5 shrink-0 items-center justify-center rounded border border-border bg-background text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
+        className
+      )}
+    >
+      <Icon className={cn("h-3 w-3", iconClassName)} />
+    </button>
   )
 }
 

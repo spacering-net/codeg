@@ -8,7 +8,7 @@ use crate::app_state::AppState;
 use crate::commands::work_task as core;
 use crate::models::{
     WorkTaskChangedFile, WorkTaskDraft, WorkTaskEventInfo, WorkTaskFolderSettings, WorkTaskInfo,
-    WorkTaskTemplateDraft, WorkTaskTemplateInfo,
+    WorkTaskTemplateDraft, WorkTaskTemplateInfo, WorkTaskUncommittedFile,
 };
 
 fn default_event_limit() -> u64 {
@@ -47,6 +47,13 @@ pub struct CreateParams {
 pub struct UpdateParams {
     pub id: i32,
     pub draft: WorkTaskDraft,
+    /// See `work_task_service::WorkTaskUpdateFlags`; older clients omit both.
+    #[serde(default)]
+    pub selection_untouched: bool,
+    #[serde(default)]
+    pub selection_reset: bool,
+    #[serde(default)]
+    pub selector_only: bool,
 }
 
 #[derive(Deserialize)]
@@ -95,6 +102,10 @@ pub struct RestartParams {
     /// Out-of-band attachments (images, pasted bytes) as raw prompt blocks.
     #[serde(default)]
     pub blocks: Vec<serde_json::Value>,
+    /// Waive the forge resurrection guard (the user confirmed re-opening a
+    /// work item that already has another active task).
+    #[serde(default)]
+    pub allow_duplicate_source: bool,
 }
 
 /// Plan a to-do task's start. `scheduledAt` is RFC 3339; absent or null clears
@@ -107,14 +118,18 @@ pub struct ScheduleParams {
     pub scheduled_at: Option<String>,
 }
 
-/// A cancel that may carry the user's reason for stopping the task. Like
-/// `RestartParams`, the note defaults so `{ "id": 1 }` still deserializes.
+/// A cancel that may carry the user's reason for stopping the task, and
+/// whether to take the worktree along. Like `RestartParams`, both default so
+/// `{ "id": 1 }` still deserializes.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CancelParams {
     pub id: i32,
     #[serde(default)]
     pub reason: Option<String>,
+    /// Take the worktree (and its work branch) along with the stop.
+    #[serde(default)]
+    pub delete_worktree: bool,
 }
 
 #[derive(Deserialize)]
@@ -125,6 +140,10 @@ pub struct MergeParams {
     #[serde(default)]
     pub message: Option<String>,
     pub delete_worktree: bool,
+    /// Extra directions for the merge agent; absent from every client that
+    /// predates the field, which is what `default` covers.
+    #[serde(default)]
+    pub instructions: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -132,6 +151,35 @@ pub struct MergeParams {
 pub struct CompleteParams {
     pub id: i32,
     pub delete_worktree: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeliverPrParams {
+    pub id: i32,
+    /// `None` → the task title becomes the pull request title.
+    #[serde(default)]
+    pub pr_title: Option<String>,
+    #[serde(default)]
+    pub draft: bool,
+    /// Take the checkout along once the delivery lands. Defaults to `false`,
+    /// so a client that predates the field keeps its worktree — the harmless
+    /// half of a choice nobody made.
+    #[serde(default)]
+    pub delete_worktree: bool,
+    /// Finish the task with this delivery. Absent = `true`: a client that
+    /// predates the choice delivers the way every delivery always did.
+    #[serde(default)]
+    pub mark_done: Option<bool>,
+    /// Which issues the pull request closes — a task made from several
+    /// related issues only. Absent keeps the list already fixed for the task,
+    /// or closes every issue on its first delivery.
+    #[serde(default)]
+    pub closes: Option<Vec<i64>>,
+    /// Commit what the worktree holds uncommitted, with this message, before
+    /// the push. Absent refuses a dirty worktree, as it always did.
+    #[serde(default)]
+    pub commit_message: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -147,6 +195,23 @@ pub struct StartAllParams {
 pub struct ArchiveParams {
     pub id: i32,
     pub archived: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetWritebackParams {
+    pub id: i32,
+    pub run_seq: i32,
+    pub writeback: bool,
+    #[serde(default)]
+    pub drafts: std::collections::BTreeMap<i64, String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeferParams {
+    pub id: i32,
+    pub deferred: bool,
 }
 
 #[derive(Deserialize)]
@@ -223,9 +288,20 @@ pub async fn work_task_update(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<UpdateParams>,
 ) -> Result<Json<WorkTaskInfo>, AppCommandError> {
-    let result = core::work_task_update_core(&state.emitter, &state.db, params.id, params.draft)
-        .await
-        .map_err(AppCommandError::from)?;
+    let result = core::work_task_update_core(
+        &state.emitter,
+        &state.db,
+        &state.chat_channel_manager,
+        params.id,
+        params.draft,
+        crate::db::service::work_task_service::WorkTaskUpdateFlags {
+            selection_untouched: params.selection_untouched,
+            selection_reset: params.selection_reset,
+            selector_only: params.selector_only,
+        },
+    )
+    .await
+    .map_err(AppCommandError::from)?;
     Ok(Json(result))
 }
 
@@ -275,7 +351,7 @@ pub async fn work_task_start_all(
 pub async fn work_task_retry(
     Json(params): Json<RestartParams>,
 ) -> Result<Json<()>, AppCommandError> {
-    core::work_task_retry_core(params.id, params.note, params.blocks)
+    core::work_task_retry_core(params.id, params.note, params.blocks, params.allow_duplicate_source)
         .await
         .map_err(AppCommandError::from)?;
     Ok(Json(()))
@@ -291,6 +367,7 @@ pub async fn work_task_requeue(
         params.id,
         params.note,
         params.blocks,
+        params.allow_duplicate_source,
     )
     .await
         .map_err(AppCommandError::from)?;
@@ -319,7 +396,16 @@ pub async fn work_task_return(
 pub async fn work_task_cancel(
     Json(params): Json<CancelParams>,
 ) -> Result<Json<()>, AppCommandError> {
-    core::work_task_cancel_core(params.id, params.reason)
+    core::work_task_cancel_core(params.id, params.reason, params.delete_worktree)
+        .await
+        .map_err(AppCommandError::from)?;
+    Ok(Json(()))
+}
+
+pub async fn work_task_stop_background_wait(
+    Json(params): Json<IdParams>,
+) -> Result<Json<()>, AppCommandError> {
+    core::work_task_stop_background_wait_core(params.id)
         .await
         .map_err(AppCommandError::from)?;
     Ok(Json(()))
@@ -330,9 +416,14 @@ pub async fn work_task_cancel(
 pub async fn work_task_merge(
     Json(params): Json<MergeParams>,
 ) -> Result<Json<bool>, AppCommandError> {
-    let queued = core::work_task_merge_core(params.id, params.message, params.delete_worktree)
-        .await
-        .map_err(AppCommandError::from)?;
+    let queued = core::work_task_merge_core(
+        params.id,
+        params.message,
+        params.delete_worktree,
+        params.instructions,
+    )
+    .await
+    .map_err(AppCommandError::from)?;
     Ok(Json(queued))
 }
 
@@ -344,6 +435,25 @@ pub async fn work_task_merge_unqueue(
         .await
         .map_err(AppCommandError::from)?;
     Ok(Json(()))
+}
+
+/// Returns the pull request URL. Awaits the whole delivery, so an error here
+/// is the real reason it failed — the task is already back in review by then.
+pub async fn work_task_deliver_pr(
+    Json(params): Json<DeliverPrParams>,
+) -> Result<Json<String>, AppCommandError> {
+    let url = core::work_task_deliver_pr_core(
+        params.id,
+        params.pr_title,
+        params.draft,
+        params.delete_worktree,
+        params.mark_done,
+        params.closes,
+        params.commit_message,
+    )
+    .await
+    .map_err(AppCommandError::from)?;
+    Ok(Json(url))
 }
 
 pub async fn work_task_complete(
@@ -360,6 +470,33 @@ pub async fn work_task_archive(
     Json(params): Json<ArchiveParams>,
 ) -> Result<Json<()>, AppCommandError> {
     core::work_task_archive_core(&state.emitter, &state.db, params.id, params.archived)
+        .await
+        .map_err(AppCommandError::from)?;
+    Ok(Json(()))
+}
+
+pub async fn work_task_set_writeback(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<SetWritebackParams>,
+) -> Result<Json<()>, AppCommandError> {
+    core::work_task_set_writeback_core(
+        &state.emitter,
+        &state.db,
+        params.id,
+        params.run_seq,
+        params.writeback,
+        params.drafts,
+    )
+    .await
+    .map_err(AppCommandError::from)?;
+    Ok(Json(()))
+}
+
+pub async fn work_task_defer(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<DeferParams>,
+) -> Result<Json<()>, AppCommandError> {
+    core::work_task_defer_core(&state.emitter, &state.db, params.id, params.deferred)
         .await
         .map_err(AppCommandError::from)?;
     Ok(Json(()))
@@ -387,6 +524,14 @@ pub async fn work_task_changed_files(
     Json(params): Json<IdParams>,
 ) -> Result<Json<Vec<WorkTaskChangedFile>>, AppCommandError> {
     let result = core::work_task_changed_files_core(&state.db, params.id).await?;
+    Ok(Json(result))
+}
+
+pub async fn work_task_uncommitted_files(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<IdParams>,
+) -> Result<Json<Vec<WorkTaskUncommittedFile>>, AppCommandError> {
+    let result = core::work_task_uncommitted_files_core(&state.db, params.id).await?;
     Ok(Json(result))
 }
 

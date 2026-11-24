@@ -10,6 +10,7 @@ import {
   useSyncExternalStore,
 } from "react"
 import { NextIntlClientProvider, type AbstractIntlMessages } from "next-intl"
+import { Direction } from "radix-ui"
 import { getFallbackMessages, getMessagesForLocale } from "@/i18n/messages"
 import {
   fromIntlLocale,
@@ -251,11 +252,12 @@ export function AppI18nProvider({
   const localeReady = appLocale === messagesLocale
   const appReady = languageSettingsLoaded && localeReady
   const activeIntlLocale = toIntlLocale(messagesLocale)
+  const dir = activeIntlLocale === "ar" ? "rtl" : "ltr"
 
   useEffect(() => {
     document.documentElement.lang = activeIntlLocale
-    document.documentElement.dir = activeIntlLocale === "ar" ? "rtl" : "ltr"
-  }, [activeIntlLocale])
+    document.documentElement.dir = dir
+  }, [activeIntlLocale, dir])
 
   const contextValue = useMemo<AppI18nContextValue>(
     () => ({
@@ -270,7 +272,13 @@ export function AppI18nProvider({
   return (
     <AppI18nContext.Provider value={contextValue}>
       <NextIntlClientProvider locale={activeIntlLocale} messages={messages}>
-        {appReady ? children : <AppBootLoading />}
+        {/* Radix components take their direction from context, not from the
+            page: without this, every Tabs root stamps `dir="ltr"` on itself,
+            so in Arabic whatever sits inside a tab (switches, rows, menus)
+            stays left-to-right while the page around it is right-to-left. */}
+        <Direction.DirectionProvider dir={dir}>
+          {appReady ? children : <AppBootLoading />}
+        </Direction.DirectionProvider>
       </NextIntlClientProvider>
     </AppI18nContext.Provider>
   )

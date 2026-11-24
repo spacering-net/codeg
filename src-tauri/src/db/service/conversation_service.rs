@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use chrono::Utc;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, DatabaseConnection, EntityTrait,
@@ -7,7 +9,8 @@ use sea_orm::{
 use crate::db::entities::conversation::ConversationKind;
 use crate::db::entities::{conversation, folder};
 use crate::db::error::DbError;
-use crate::models::{AgentType, DbConversationSummary};
+use crate::db::service::conversation_tag_service;
+use crate::models::{AgentType, AssistantRunSnapshot, ConversationSelection, DbConversationSummary};
 
 pub async fn create(
     conn: &DatabaseConnection,
@@ -70,7 +73,10 @@ pub async fn create_with_delegation(
     } else {
         ConversationKind::Regular
     };
-    create_inner(conn, folder_id, agent_type, title, git_branch, delegation, kind).await
+    create_inner(
+        conn, folder_id, agent_type, title, git_branch, delegation, kind,
+    )
+    .await
 }
 
 async fn create_inner(
@@ -87,13 +93,24 @@ async fn create_inner(
         .and_then(|v| v.as_str().map(String::from))
         .unwrap_or_default();
     let now = Utc::now();
-    let (parent_id, parent_tool_use_id, delegation_call_id) = match delegation {
+    let (parent_id, parent_tool_use_id, delegation_call_id, assistant) = match delegation {
         Some(link) => (
             Some(link.parent_conversation_id),
             Some(link.parent_tool_use_id),
             Some(link.delegation_call_id),
+            link.assistant,
         ),
-        None => (None, None, None),
+        None => (None, None, None, None),
+    };
+    let (assistant_id, assistant_snapshot) = match assistant {
+        Some(a) => (
+            Some(a.id),
+            Some(
+                serde_json::to_string(&a.snapshot)
+                    .map_err(|e| DbError::Migration(format!("assistant snapshot: {e}")))?,
+            ),
+        ),
+        None => (None, None),
     };
     let model = conversation::ActiveModel {
         id: NotSet,
@@ -115,6 +132,10 @@ async fn create_inner(
         deleted_at: Set(None),
         pinned_at: Set(None),
         origin_cwd: Set(None),
+        assistant_id: Set(assistant_id),
+        assistant_snapshot: Set(assistant_snapshot),
+        source: Set(None),
+        selector_state: Set(None),
     };
     Ok(model.insert(conn).await?)
 }
@@ -205,6 +226,7 @@ pub async fn refresh_auto_title(
         .col_expr(conversation::Column::Title, Expr::value(title))
         .filter(conversation::Column::Id.eq(conversation_id))
         .filter(conversation::Column::TitleLocked.eq(false))
+        .filter(conversation::Column::DeletedAt.is_null())
         .filter(
             sea_orm::Condition::any()
                 .add(conversation::Column::Title.is_null())
@@ -213,6 +235,296 @@ pub async fn refresh_auto_title(
         .exec(conn)
         .await?;
     Ok(res.rows_affected > 0)
+}
+
+/// First-prompt seed: write `title` ONLY when the row is unlocked AND still
+/// empty. Unlike [`refresh_auto_title`], this will not replace an existing
+/// name — a later user prompt must not overwrite the first one, and an
+/// agent-generated ACP title that already landed must not be clobbered by
+/// the next send. Returns `true` when a row was written so the caller can
+/// broadcast a sidebar upsert. Does not bump `updated_at` or set the lock.
+pub async fn seed_auto_title_if_empty(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    title: String,
+) -> Result<bool, DbError> {
+    use sea_orm::sea_query::Expr;
+    let title = title.trim();
+    if title.is_empty() {
+        return Ok(false);
+    }
+    let res = conversation::Entity::update_many()
+        .col_expr(conversation::Column::Title, Expr::value(title))
+        .filter(conversation::Column::Id.eq(conversation_id))
+        .filter(conversation::Column::TitleLocked.eq(false))
+        .filter(conversation::Column::DeletedAt.is_null())
+        .filter(
+            sea_orm::Condition::any()
+                .add(conversation::Column::Title.is_null())
+                .add(conversation::Column::Title.eq("")),
+        )
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected > 0)
+}
+
+/// Write the session's `model` ONLY when the row still has none. The sibling
+/// of [`seed_auto_title_if_empty`], and for the same reason: a conversation
+/// row is inserted before the agent has named a model, so the column is NULL
+/// for every session started in-app and only the transcript knows the answer.
+/// Without this the sidebar — which reads the row, not the transcript — could
+/// only show a model for imported sessions.
+///
+/// First value wins. The detail view re-reads the transcript on every open and
+/// stays exact, so the stored value is a cheap projection for the list rather
+/// than a second source of truth; re-writing it on every model switch would
+/// buy a row write per switch for a chip nobody reads mid-turn.
+///
+/// Returns `true` when a row was written so the caller can broadcast a sidebar
+/// upsert. Does not bump `updated_at` — the sidebar sorts on it, and merely
+/// opening a conversation must not float it to the top of Recent (same
+/// reasoning as [`update_pin`]).
+pub async fn seed_model_if_empty(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    model: &str,
+) -> Result<bool, DbError> {
+    use sea_orm::sea_query::Expr;
+    let model = model.trim();
+    if model.is_empty() {
+        return Ok(false);
+    }
+    let res = conversation::Entity::update_many()
+        .col_expr(conversation::Column::Model, Expr::value(model))
+        .filter(conversation::Column::Id.eq(conversation_id))
+        .filter(conversation::Column::DeletedAt.is_null())
+        .filter(
+            sea_orm::Condition::any()
+                .add(conversation::Column::Model.is_null())
+                .add(conversation::Column::Model.eq("")),
+        )
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected > 0)
+}
+
+/// Lock a row's title WITHOUT rewriting it. For a conversation whose name was
+/// typed by the user somewhere else — a work task's title, an automation's name
+/// — the seed passed to [`create`] already IS the name; all that's missing is
+/// the promise that [`refresh_auto_title`] will keep its hands off it, exactly
+/// as it does after a manual rename ([`update_title`]).
+///
+/// Without this, a task-launched session drifts to whatever the agent's session
+/// file parses to — for agents with no title of their own, the first line of the
+/// composed prompt — and the board's own name for the work is lost (issue #495).
+///
+/// Deliberately does NOT touch `title` or bump `updated_at`: like
+/// [`refresh_auto_title`], flipping this flag is metadata, not user activity,
+/// and must not float the row to the top of a recency-sorted sidebar. A
+/// non-existent row simply matches nothing.
+///
+/// Callers must lock BEFORE broadcasting the row's first sidebar upsert: the
+/// conversation id is not knowable to any client until that broadcast, so
+/// locking first makes an auto-title backfill on this row impossible rather
+/// than merely unlikely.
+/// Record where conversation `conversation_id` was started from (see
+/// `conversation::Model::source`). Written once, right after the row is
+/// created and before it is announced, so the first upsert carries it.
+pub async fn set_source(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    source: &str,
+) -> Result<(), DbError> {
+    use sea_orm::sea_query::Expr;
+    conversation::Entity::update_many()
+        .col_expr(conversation::Column::Source, Expr::value(source))
+        .filter(conversation::Column::Id.eq(conversation_id))
+        .exec(conn)
+        .await?;
+    Ok(())
+}
+
+pub async fn lock_title(conn: &DatabaseConnection, conversation_id: i32) -> Result<(), DbError> {
+    use sea_orm::sea_query::Expr;
+    conversation::Entity::update_many()
+        .col_expr(conversation::Column::TitleLocked, Expr::value(true))
+        .filter(conversation::Column::Id.eq(conversation_id))
+        .exec(conn)
+        .await?;
+    Ok(())
+}
+
+/// Rename a locked title when its OWNER was renamed: write `new_title` only if
+/// the row still carries `expected`. Used when a work task is retitled — the
+/// session it produced should follow the card it came from, but only while the
+/// two are still in sync.
+///
+/// The equality guard is the whole point. Both a task-derived title and a hand
+/// picked one leave `title_locked = true`, so the flag alone cannot tell them
+/// apart; `expected` (the task's PREVIOUS title) can. If the user renamed the
+/// conversation themselves, nothing matches and not a byte is written. Same
+/// optimistic shape as [`refresh_auto_title`]: one conditional UPDATE, so the
+/// comparison happens at write time in the database and a rename landing in
+/// between can never be clobbered. Returns `true` when a row was written.
+///
+/// Leaves `title_locked` alone (already true for every row this can match) and,
+/// like its siblings, does not bump `updated_at`.
+pub async fn retitle_if_unchanged(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    expected: &str,
+    new_title: &str,
+) -> Result<bool, DbError> {
+    use sea_orm::sea_query::Expr;
+    let new_title = new_title.trim();
+    if new_title.is_empty() || new_title == expected {
+        return Ok(false);
+    }
+    let res = conversation::Entity::update_many()
+        .col_expr(conversation::Column::Title, Expr::value(new_title))
+        .filter(conversation::Column::Id.eq(conversation_id))
+        .filter(conversation::Column::Title.eq(expected))
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected > 0)
+}
+
+/// Conditionally adopt one title discovered from Codex's session index.
+///
+/// Every field used to select the candidate is re-checked in the UPDATE, plus
+/// the title observed by the candidate read. This prevents a delayed refresh
+/// from writing an index title after the row was re-pointed, deleted, manually
+/// renamed, moved into a deleted folder, or refreshed by another task.
+///
+/// `kind` is deliberately absent: it is written once at insert and never
+/// updated, so the candidate query's filter cannot go stale between the two.
+async fn refresh_codex_auto_title_candidate(
+    conn: &DatabaseConnection,
+    candidate: &conversation::Model,
+    title: &str,
+) -> Result<bool, DbError> {
+    use sea_orm::sea_query::Expr;
+
+    let title = title.trim();
+    let Some(external_id) = candidate.external_id.as_deref() else {
+        return Ok(false);
+    };
+    if title.is_empty() || candidate.title.as_deref() == Some(title) {
+        return Ok(false);
+    }
+
+    let old_title = match candidate.title.as_deref() {
+        Some(old_title) => conversation::Column::Title.eq(old_title),
+        None => conversation::Column::Title.is_null(),
+    };
+    let res = conversation::Entity::update_many()
+        .col_expr(conversation::Column::Title, Expr::value(title))
+        .filter(conversation::Column::Id.eq(candidate.id))
+        .filter(conversation::Column::AgentType.eq(AgentType::Codex.as_wire().into_owned()))
+        .filter(conversation::Column::ExternalId.eq(external_id))
+        .filter(conversation::Column::DeletedAt.is_null())
+        .filter(conversation::Column::TitleLocked.eq(false))
+        .filter(
+            conversation::Column::FolderId.in_subquery(
+                sea_orm::sea_query::Query::select()
+                    .column(folder::Column::Id)
+                    .from(folder::Entity)
+                    .and_where(folder::Column::DeletedAt.is_null())
+                    .to_owned(),
+            ),
+        )
+        .filter(old_title)
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected > 0)
+}
+
+/// Refresh every live, unlocked Codex conversation whose external session id
+/// has a title in `titles`. Candidate selection is limited to indexed session
+/// ids and chunked below SQLite's bound-variable limit. Each UPDATE atomically
+/// re-checks the complete candidate identity via
+/// [`refresh_codex_auto_title_candidate`]. Converged rows issue no UPDATE and
+/// title refreshes never bump `updated_at`. This is a best-effort reconciliation:
+/// a failed chunk or row is logged and skipped while successful row ids are
+/// retained for downstream notifications.
+///
+/// Candidate scope mirrors [`list_all`]'s own visibility rules — a live folder
+/// and `kind != 'loop'` — because every refreshed id is broadcast as a sidebar
+/// upsert. Refreshing a row this query would never return would push a row the
+/// list deliberately hides into every client's sidebar until its next refetch.
+///
+/// Each candidate keeps its OWN autocommit UPDATE rather than sharing one
+/// transaction per chunk: the guarantee callers rely on is that a row that
+/// failed (or lost its CAS) never holds back the rows that succeeded, and a
+/// chunk-wide transaction would roll those back together.
+pub(crate) async fn refresh_codex_auto_titles(
+    conn: &DatabaseConnection,
+    titles: &HashMap<String, String>,
+) -> Vec<i32> {
+    if titles.is_empty() {
+        return Vec::new();
+    }
+
+    const SQLITE_TITLE_QUERY_CHUNK_SIZE: usize = 500;
+    let external_ids: Vec<String> = titles
+        .iter()
+        .filter(|(_, title)| !title.trim().is_empty())
+        .map(|(external_id, _)| external_id.clone())
+        .collect();
+    let mut refreshed = Vec::new();
+
+    for external_id_chunk in external_ids.chunks(SQLITE_TITLE_QUERY_CHUNK_SIZE) {
+        let candidates = match conversation::Entity::find()
+            .filter(conversation::Column::AgentType.eq(AgentType::Codex.as_wire().into_owned()))
+            .filter(conversation::Column::ExternalId.is_in(external_id_chunk.iter().cloned()))
+            .filter(conversation::Column::DeletedAt.is_null())
+            .filter(conversation::Column::TitleLocked.eq(false))
+            .filter(conversation::Column::Kind.ne(ConversationKind::Loop))
+            .filter(
+                conversation::Column::FolderId.in_subquery(
+                    sea_orm::sea_query::Query::select()
+                        .column(folder::Column::Id)
+                        .from(folder::Entity)
+                        .and_where(folder::Column::DeletedAt.is_null())
+                        .to_owned(),
+                ),
+            )
+            .order_by_asc(conversation::Column::Id)
+            .all(conn)
+            .await
+        {
+            Ok(candidates) => candidates,
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    session_count = external_id_chunk.len(),
+                    "failed to select Codex title refresh candidates; skipping chunk"
+                );
+                continue;
+            }
+        };
+
+        for candidate in candidates {
+            let Some(external_id) = candidate.external_id.as_deref() else {
+                continue;
+            };
+            let Some(title) = titles.get(external_id) else {
+                continue;
+            };
+            match refresh_codex_auto_title_candidate(conn, &candidate, title).await {
+                Ok(true) => refreshed.push(candidate.id),
+                Ok(false) => {}
+                Err(error) => tracing::warn!(
+                    error = %error,
+                    conversation_id = candidate.id,
+                    external_id,
+                    "failed to refresh Codex title candidate; skipping row"
+                ),
+            }
+        }
+    }
+
+    refreshed
 }
 
 /// Adopt an imported conversation's newest activity from its agent-side
@@ -283,61 +595,779 @@ pub async fn update_pin(
     Ok(())
 }
 
-/// Persist the agent session id (`external_id`) for a conversation as a single
-/// conditional UPDATE guarded on `deleted_at IS NULL`. A soft-deleted (or
-/// missing) row matches nothing and the call is a silent no-op — it returns Ok
-/// either way, since every caller treats "no live row" as nothing to do.
+/// Bind an agent session id (`external_id`) to a conversation row WITHOUT ever
+/// orphaning the session it was previously bound to.
 ///
-/// The `deleted_at IS NULL` guard matters because `SessionStarted` writes are
-/// not serialized against deletes: a conversation can be soft-deleted while its
-/// ACP connection stays live and bound (delete only soft-marks the row; it does
-/// not disconnect the agent). A fork in particular emits `SessionStarted{S2}`
-/// whose lifecycle handler calls this with the still-bound `conversation_id`;
-/// without the guard that late write would re-point a deleted row's session id
-/// from S1 to S2 and bump `updated_at`, half-resurrecting an invisible row.
-/// Writing `WHERE id = ? AND deleted_at IS NULL` makes such a stale event a
-/// no-op. (Fork's own current-row re-point in `persist_fork_outcome` is guarded
-/// the same way.)
-pub async fn update_external_id(
+/// Returns `Some(preserved_row_id)` when the previous session had to be moved
+/// onto a freshly inserted row to keep it reachable, `None` when the write was
+/// an ordinary (re)binding that created nothing.
+///
+/// Either `Ok` is a promise the caller builds on: **the row is now bound to
+/// `external_id`**. `send_prompt_linked` flips the row to `InProgress` and
+/// dispatches the prompt on exactly that basis. When the id cannot be taken
+/// because another row holds it, this returns [`DbError::Conflict`] rather than
+/// a quiet `Ok(None)` — see the conflict guard in the body for why reporting a
+/// refusal as success would misfile the user's turn.
+///
+/// # The invariant
+///
+/// **After this commits, the previous session's history is still reachable.**
+///
+/// Stated as a post-condition on purpose. The tempting phrasing ("before
+/// re-pointing, some other row must already hold S1") reads as an ordering
+/// requirement and leads straight into the unique index below.
+///
+/// Note "history is reachable", not "some row holds the id". `continues` is
+/// what separates the two: it lists the sessions the INCOMING id carries
+/// forward (see [`crate::acp::continued_session_ids`]). When the outgoing id
+/// is one of them, this is the same conversation moving to a new agent
+/// session — its turns are still readable through the new id, so the row just
+/// advances and nothing is split off. Passing an empty slice is always safe
+/// in the sense that it never loses data; it only risks splitting a
+/// continuation into a duplicate conversation.
+///
+/// Why it matters: the conversation list is built purely from DB rows
+/// (`list_all`) — nothing scans the agent's own transcript store. So a session
+/// id that no row references is invisible in the UI even though its transcript
+/// is intact on disk, and the user reasonably reads that as "my conversation
+/// was deleted". That is codeg#500: a connection spawned with `session_id =
+/// None` mints a fresh session, then a prompt carrying an existing
+/// `conversation_id` adopts that row and the fresh id lands on top of the id
+/// the row's whole history hangs off.
+///
+/// # Why the writes are ordered the way they are
+///
+/// `idx_conversation_external_agent` is UNIQUE over
+/// `(external_id, agent_type)` (see the init migration). So the preserving row
+/// can only be inserted AFTER the current row has released S1 — insert-first
+/// fails the constraint every time. Both statements share one transaction, so
+/// the "S1 released but nobody holds it" window can never be observed by
+/// another connection and never commits. (SQLite treats NULLs as distinct, so
+/// any number of rows may sit at `external_id IS NULL`.)
+///
+/// The claim write that opens the transaction is a SELF-ASSIGNMENT
+/// (`updated_at = updated_at`). It exists for the same reason as the one in
+/// `persist_fork_outcome` — lead with a write so SQLite takes the writer lock
+/// immediately instead of a deferred read snapshot it may fail to promote
+/// (`SQLITE_BUSY_SNAPSHOT`, surfaced as a bogus "database is locked") — but it
+/// must not CHANGE `updated_at`, because the row is read straight afterwards
+/// and the preserving row copies that pre-transition timestamp to hold its
+/// place in the sidebar's activity ordering. A self-assigning UPDATE still
+/// matches the row and still claims the lock.
+///
+/// The `deleted_at IS NULL` guard is inherited from the previous
+/// `update_external_id`: `SessionStarted` writes are not serialized against
+/// deletes (deleting only soft-marks the row; the agent stays connected and
+/// bound), so a late event must not half-resurrect an invisible row.
+pub async fn bind_external_id(
     conn: &DatabaseConnection,
     conversation_id: i32,
+    external_id: &str,
+    continues: &[String],
+) -> Result<Option<i32>, DbError> {
+    use sea_orm::sea_query::Expr;
+    use sea_orm::TransactionTrait;
+
+    let external_id = external_id.to_string();
+    let continues: Vec<String> = continues.to_vec();
+    // The closure below MOVES `external_id`; keep a copy for the conflict
+    // message, which is built after the transaction has returned.
+    let requested_id = external_id.clone();
+    let outcome = conn
+        .transaction::<_, BindTxOutcome, sea_orm::DbErr>(|txn| {
+            Box::pin(async move {
+                let now = Utc::now();
+
+                // Claim the writer lock without disturbing any value.
+                let claimed = conversation::Entity::update_many()
+                    .col_expr(
+                        conversation::Column::UpdatedAt,
+                        Expr::col(conversation::Column::UpdatedAt).into(),
+                    )
+                    .filter(conversation::Column::Id.eq(conversation_id))
+                    .filter(conversation::Column::DeletedAt.is_null())
+                    .exec(txn)
+                    .await?;
+                if claimed.rows_affected == 0 {
+                    // Gone or soft-deleted. Every caller treats "no live row" as
+                    // nothing to do, so this stays Ok — same contract the old
+                    // `update_external_id` had.
+                    return Ok(BindTxOutcome::Bound(None));
+                }
+
+                // Read under the write lock: pristine values, and no other
+                // writer can interpose before this transaction finishes.
+                let current = conversation::Entity::find_by_id(conversation_id)
+                    .one(txn)
+                    .await?
+                    .ok_or_else(|| {
+                        sea_orm::DbErr::Custom(format!("conversation {conversation_id} not found"))
+                    })?;
+
+                let previous = current.external_id.clone();
+                let repoints_away = matches!(
+                    previous.as_deref(),
+                    Some(prev) if prev != external_id && !continues.iter().any(|c| c == prev)
+                );
+
+                // Conflict guard, covering BOTH write branches below.
+                //
+                // `idx_conversation_external_agent` is UNIQUE over
+                // `(external_id, agent_type)` and — unlike every read in this
+                // module — carries no `deleted_at` predicate, so a soft-deleted
+                // row still occupies its id. Claiming an id another row holds
+                // therefore fails the constraint outright, rolls the whole
+                // transaction back, and surfaces a raw "UNIQUE constraint
+                // failed" out of `send_prompt_linked`: the user's prompt just
+                // errors. Both branches are exposed — the plain bind (a fresh
+                // row whose connection resumed a session codeg already has a
+                // row for) as much as the split's release.
+                //
+                // Refuse instead, and change nothing. The invariant still
+                // holds, from both ends: this row keeps the session it had, and
+                // the incoming session is already reachable through the row
+                // that holds it. Taking the id would orphan THAT row's history
+                // — the very failure this function exists to prevent — so there
+                // is no better move available here, only a louder one.
+                //
+                // A soft-deleted holder is refused on the same terms rather
+                // than having its id taken, matching how the rest of this
+                // module treats rows the sidebar never shows (`import_one` and
+                // `refresh_existing` return `Skipped` for one instead of
+                // rewriting it). Conversations have no restore path, so such a
+                // row is inert — but it is inert with the id, and the index
+                // counts it.
+                //
+                // Skipped when this row already holds the id: it is then the
+                // holder, so by the same index no other row can be.
+                //
+                // Surfaced as `DbError::Conflict`, NOT as a quiet `Ok(None)`.
+                // The distinction is load-bearing: `Ok` here means "this row is
+                // bound to `external_id`", and `send_prompt_linked` goes on to
+                // flip the row to `InProgress` and dispatch the prompt on that
+                // basis. A refusal reported as success would send the turn into
+                // a session the row does not own — it would land in the HOLDER
+                // row's transcript while every event named the refused row, so
+                // the user's message would move conversations on reload. An
+                // `Err` returns before either step, exactly as the raw unique
+                // violation used to, and the retry in
+                // `lifecycle::handle_event_with_retry` gives up after three
+                // attempts.
+                if previous.as_deref() != Some(external_id.as_str()) {
+                    let holder = conversation::Entity::find()
+                        .filter(conversation::Column::ExternalId.eq(external_id.clone()))
+                        .filter(conversation::Column::AgentType.eq(current.agent_type.clone()))
+                        .filter(conversation::Column::Id.ne(conversation_id))
+                        .one(txn)
+                        .await?;
+                    if let Some(holder) = holder {
+                        // Logged here rather than left to the caller: these
+                        // fields are what post-hoc diagnosis needs, and the
+                        // error string that reaches the user must stay short.
+                        tracing::warn!(
+                            conversation_id,
+                            holder_row_id = holder.id,
+                            holder_deleted = holder.deleted_at.is_some(),
+                            from_session = previous.as_deref().unwrap_or("<none>"),
+                            to_session = %external_id,
+                            agent_type = %current.agent_type,
+                            "[conversation] refused to bind a session another row \
+                             already holds; both histories left where they are"
+                        );
+                        return Ok(BindTxOutcome::Refused {
+                            holder_row_id: holder.id,
+                        });
+                    }
+                }
+
+                // A row that already holds this id, or holds none yet, is an
+                // ordinary bind: first bind, resume, or a duplicate
+                // SessionStarted. A row whose id the INCOMING session carries
+                // forward is one too — same conversation, new agent session,
+                // with the earlier turns still readable through the new id (see
+                // `continues`). Splitting that would clone the conversation in
+                // the sidebar every time a memory-only custom agent restarts.
+                // Nothing to preserve in any of these.
+                if !repoints_away {
+                    let mut active: conversation::ActiveModel = current.into();
+                    active.external_id = Set(Some(external_id));
+                    active.updated_at = Set(now);
+                    active.update(txn).await?;
+                    return Ok(BindTxOutcome::Bound(None));
+                }
+
+                let previous = previous.expect("repoints_away implies a previous id");
+
+                // Does another live row already carry the outgoing session?
+                //
+                // Under today's schema it cannot: this row holds `previous`,
+                // and the unique index admits exactly one holder per
+                // `(external_id, agent_type)`. The cases that look like they
+                // produce it do not. Fork writes its sibling INSERT and its
+                // re-point in ONE transaction, so `previous` is observable only
+                // on this row (before) or on the sibling with this row already
+                // advanced (after — and then `repoints_away` is false and we
+                // never reach here). A replayed `SessionStarted` is likewise
+                // the idempotent branch above.
+                //
+                // Kept as a guard rather than an assert because the cost is one
+                // indexed lookup and the failure it covers is silent data loss:
+                // if the index is ever narrowed (a partial `WHERE deleted_at IS
+                // NULL` would do it), two rows COULD hold `previous`, and
+                // preserving it a second time would then insert a duplicate
+                // conversation for history that already has a home.
+                let already_preserved = conversation::Entity::find()
+                    .filter(conversation::Column::ExternalId.eq(previous.clone()))
+                    .filter(conversation::Column::AgentType.eq(current.agent_type.clone()))
+                    .filter(conversation::Column::Id.ne(conversation_id))
+                    .filter(conversation::Column::DeletedAt.is_null())
+                    .one(txn)
+                    .await?
+                    .is_some();
+
+                // Snapshot what the preserving row inherits BEFORE the re-point
+                // consumes `current`.
+                let carried = CarriedOverRow::from(&current);
+
+                // Release S1 first — the unique index leaves no other order.
+                let mut active: conversation::ActiveModel = current.into();
+                active.external_id = Set(Some(external_id.clone()));
+                // The model described the session being released, and `carried`
+                // has already taken it for the row that keeps S1's history. Left
+                // in place it would name S1's model on a row that is now S2 —
+                // and `seed_model_if_empty` only fills an EMPTY column, so
+                // nothing would ever correct it. Cleared, S2 seeds itself on its
+                // next open.
+                active.model = Set(None);
+                active.updated_at = Set(now);
+                active.update(txn).await?;
+
+                if already_preserved {
+                    tracing::info!(
+                        conversation_id,
+                        from_session = %previous,
+                        to_session = %external_id,
+                        "[conversation] re-pointed a conversation to a new session; the \
+                         previous session is already held by another row"
+                    );
+                    return Ok(BindTxOutcome::Bound(None));
+                }
+
+                let agent_type = carried.agent_type.clone();
+                let preserved = carried.into_active_model(previous.clone()).insert(txn).await?;
+                // The preserving row IS the old conversation as far as the user
+                // can tell, so it keeps the tags they put on it.
+                conversation_tag_service::copy_conversation_tags(txn, conversation_id, preserved.id)
+                    .await?;
+                // The one signal that this happened at all. Deliberately WARN:
+                // every occurrence means a connection bound to a row while
+                // holding a session unrelated to that row's history, which is
+                // never intentional — the split keeps it from destroying data,
+                // but the cause is still worth finding. These five fields are
+                // what post-hoc diagnosis actually needs (codeg#500 was
+                // reconstructed by hand from WAL dumps for want of them).
+                tracing::warn!(
+                    conversation_id,
+                    preserved_row_id = preserved.id,
+                    from_session = %previous,
+                    to_session = %external_id,
+                    agent_type = %agent_type,
+                    "[conversation] session changed under a bound conversation; \
+                     preserved the previous session's history on a new row"
+                );
+                Ok(BindTxOutcome::Bound(Some(preserved.id)))
+            })
+        })
+        .await
+        .map_err(|e| match e {
+            sea_orm::TransactionError::Connection(e)
+            | sea_orm::TransactionError::Transaction(e) => DbError::Database(e),
+        })?;
+    match outcome {
+        BindTxOutcome::Bound(preserved) => Ok(preserved),
+        // Raised AFTER the transaction commits rather than by rolling it back:
+        // the only statement it ran is the self-assigning claim, which changes
+        // no value, so commit and rollback are indistinguishable on disk and
+        // committing keeps the writer lock held for the shortest time.
+        //
+        // The message is what reaches the user through
+        // `AcpError::protocol(e.to_string())`, so it names the conflict in
+        // terms the sidebar can be read against; the WARN inside the
+        // transaction carries the full diagnostic tuple.
+        BindTxOutcome::Refused { holder_row_id } => Err(DbError::Conflict(format!(
+            "agent session {requested_id} is already bound to conversation \
+             {holder_row_id}; refusing to move it onto conversation \
+             {conversation_id}"
+        ))),
+    }
+}
+
+/// What [`bind_external_id`]'s transaction concluded.
+///
+/// A refusal has to leave the closure as a distinct VALUE rather than an early
+/// `Ok(None)`, because the two mean opposite things to a caller: `Bound` means
+/// the row now holds the requested session and it is safe to build on that,
+/// while `Refused` means nothing was written and the operation must be
+/// abandoned. It is translated to [`DbError::Conflict`] outside the
+/// transaction (a `sea_orm::DbErr` raised inside would be flattened into
+/// `DbError::Database` by the `TransactionError` mapping and become
+/// indistinguishable from transient contention).
+enum BindTxOutcome {
+    /// The row holds `external_id`. `Some(id)` when the outgoing session had to
+    /// be split onto a new row to stay reachable.
+    Bound(Option<i32>),
+    /// Another row already holds `(external_id, agent_type)`. Nothing written.
+    Refused { holder_row_id: i32 },
+}
+
+/// The fields a preserving row inherits from the row it is splitting off from.
+///
+/// Snapshotted before the re-point because turning the model into an
+/// `ActiveModel` consumes it.
+struct CarriedOverRow {
+    folder_id: i32,
+    title: Option<String>,
+    title_locked: bool,
+    agent_type: String,
+    status: conversation::ConversationStatus,
+    kind: ConversationKind,
+    model: Option<String>,
+    git_branch: Option<String>,
+    parent_id: Option<i32>,
+    message_count: i32,
+    created_at: chrono::DateTime<Utc>,
+    updated_at: chrono::DateTime<Utc>,
+    origin_cwd: Option<String>,
+    assistant_id: Option<i32>,
+    assistant_snapshot: Option<String>,
+    source: Option<String>,
+    selector_state: Option<String>,
+}
+
+impl CarriedOverRow {
+    fn from(row: &conversation::Model) -> Self {
+        Self {
+            folder_id: row.folder_id,
+            title: row.title.clone(),
+            title_locked: row.title_locked,
+            agent_type: row.agent_type.clone(),
+            // `InProgress` is deliberately NOT carried over: no agent is
+            // attached to the outgoing session any more, so copying it would
+            // leave a row spinning in the sidebar forever. This is the same
+            // call `persist_fork_outcome` makes for its sibling. A row that
+            // already reached a terminal state keeps it — that state is
+            // user-visible and still true of the history being preserved.
+            status: match row.status {
+                conversation::ConversationStatus::InProgress => {
+                    conversation::ConversationStatus::PendingReview
+                }
+                ref settled => settled.clone(),
+            },
+            kind: row.kind.clone(),
+            model: row.model.clone(),
+            git_branch: row.git_branch.clone(),
+            // Carried so the `kind == Delegate ⟺ parent_id IS NOT NULL`
+            // invariant survives, and so a preserved child stays inside its
+            // parent's sub-session subtree instead of surfacing as a root.
+            parent_id: row.parent_id,
+            message_count: row.message_count,
+            // Copied, not stamped `now`: the preserving row IS the old
+            // conversation, so it must keep its place in the sidebar's
+            // activity ordering rather than jumping to the top as if new.
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            // The Gemini/Cline stale-external-id fallback matches on
+            // `origin_cwd ?? folder.path`, so dropping this would break
+            // history lookup for a re-parented conversation.
+            origin_cwd: row.origin_cwd.clone(),
+            // Carried: the preserved history is what ran as that assistant,
+            // so it keeps drawing as it.
+            assistant_id: row.assistant_id,
+            assistant_snapshot: row.assistant_snapshot.clone(),
+            // Carried: the history was started where the conversation was.
+            source: row.source.clone(),
+            // Carried: the preserved history ran with this selection. A fork
+            // overwrites it afterwards with the selection the fork actually
+            // inherited (`persist_fork_outcome`).
+            selector_state: row.selector_state.clone(),
+        }
+    }
+
+    fn into_active_model(self, external_id: String) -> conversation::ActiveModel {
+        conversation::ActiveModel {
+            id: NotSet,
+            folder_id: Set(self.folder_id),
+            title: Set(self.title),
+            title_locked: Set(self.title_locked),
+            agent_type: Set(self.agent_type),
+            status: Set(self.status),
+            kind: Set(self.kind),
+            model: Set(self.model),
+            git_branch: Set(self.git_branch),
+            external_id: Set(Some(external_id)),
+            parent_id: Set(self.parent_id),
+            // Deliberately NOT carried: both are close to unique per delegation
+            // call, and duplicating them would point the parent's tool-call view
+            // at two children for one call.
+            parent_tool_use_id: Set(None),
+            delegation_call_id: Set(None),
+            message_count: Set(self.message_count),
+            created_at: Set(self.created_at),
+            updated_at: Set(self.updated_at),
+            deleted_at: Set(None),
+            // Pinning is a view preference attached to the row the user pinned,
+            // not to the history.
+            pinned_at: Set(None),
+            origin_cwd: Set(self.origin_cwd),
+            assistant_id: Set(self.assistant_id),
+            assistant_snapshot: Set(self.assistant_snapshot),
+            source: Set(self.source),
+            selector_state: Set(self.selector_state),
+        }
+    }
+}
+
+/// Re-point a conversation at a DIFFERENT SPELLING of the session it is already
+/// bound to — an alias normalization, not a session change.
+///
+/// The one caller is the detail load, which resolves an ACP-minted UUID to the
+/// branch id the parser actually indexes by (Gemini / Cline) and writes it back
+/// so later lookups go direct. Because both ids denote the same session, there
+/// is no history to preserve and [`bind_external_id`]'s split would be wrong
+/// here — it would manufacture a phantom conversation for the old spelling.
+///
+/// `expected_old` makes that narrow intent explicit and doubles as a CAS: the
+/// caller passes the exact id it resolved FROM, so a concurrent rebind (a
+/// `SessionStarted` landing mid-parse) leaves the write matching nothing
+/// instead of clobbering the newer binding. A no-match is a silent no-op.
+pub async fn renormalize_external_id_alias(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    expected_old: Option<&str>,
     external_id: String,
 ) -> Result<(), DbError> {
     use sea_orm::sea_query::Expr;
-    conversation::Entity::update_many()
+    let mut query = conversation::Entity::update_many()
         .col_expr(conversation::Column::ExternalId, Expr::value(external_id))
         .col_expr(conversation::Column::UpdatedAt, Expr::value(Utc::now()))
         .filter(conversation::Column::Id.eq(conversation_id))
-        .filter(conversation::Column::DeletedAt.is_null())
-        .exec(conn)
-        .await?;
+        .filter(conversation::Column::DeletedAt.is_null());
+    query = match expected_old {
+        Some(old) => query.filter(conversation::Column::ExternalId.eq(old)),
+        None => query.filter(conversation::Column::ExternalId.is_null()),
+    };
+    query.exec(conn).await?;
     Ok(())
 }
 
 /// Re-parent every live conversation of `from_folder_id` (a task worktree
-/// folder about to be removed) onto the project folder, stamping `origin_cwd`
-/// with the worktree's original path. History loading is external_id-driven and
-/// unaffected; the Gemini/Cline/OpenClaw stale-id fallback matches on
-/// `origin_cwd ?? folder.path`, which this preserves.
+/// folder about to be removed) onto the project folder, remembering where each
+/// one ran. History loading is external_id-driven and unaffected; the
+/// Gemini/Cline/OpenClaw stale-id fallback matches on `origin_cwd ?? folder.path`,
+/// which [`effective_origin_after_move`] preserves.
+///
+/// A thin wrapper over [`relocate_conversations`] — the same primitive a user's
+/// "move to project" uses — so both paths share the `origin_cwd` rule. Bumps
+/// `updated_at`, as this always has. `origin_cwd` is the worktree folder's own
+/// path. Returns the number of rows moved.
 pub async fn reparent_folder_conversations(
     conn: &DatabaseConnection,
     from_folder_id: i32,
     to_folder_id: i32,
     origin_cwd: &str,
 ) -> Result<u64, DbError> {
+    let target_path = folder::Entity::find_by_id(to_folder_id)
+        .one(conn)
+        .await?
+        .map(|f| f.path)
+        .unwrap_or_default();
+    let outcome = relocate_conversations(
+        conn,
+        RelocateSelection::Folder {
+            from_folder_id,
+            from_path: origin_cwd.to_string(),
+        },
+        to_folder_id,
+        &target_path,
+        RelocateOptions {
+            touch_updated_at: true,
+        },
+    )
+    .await?;
+    Ok(match outcome {
+        RelocateOutcome::Moved(rows) => rows.len() as u64,
+        RelocateOutcome::Skipped(_) => 0,
+    })
+}
+
+/// The `origin_cwd` a conversation should carry after it moves from a folder at
+/// `from_path` to one at `to_path`.
+///
+/// `origin_cwd` names the directory the agent's session was actually recorded
+/// in, which is what the stale-id history fallback has to match. So:
+/// - empty → the source folder's path (the conversation ran where it lived);
+/// - already set → kept (it moved before; its session still lives at the
+///   first place, not at the folder it is leaving);
+/// - the destination IS that place → cleared (back home, nothing to remember).
+pub fn effective_origin_after_move(
+    existing: Option<&str>,
+    from_path: &str,
+    to_path: &str,
+) -> Option<String> {
+    let effective = existing.filter(|s| !s.is_empty()).unwrap_or(from_path);
+    if effective.is_empty() || crate::parsers::path_eq_for_matching(effective, to_path) {
+        None
+    } else {
+        Some(effective.to_string())
+    }
+}
+
+/// Which rows [`relocate_conversations`] moves.
+#[derive(Debug, Clone)]
+pub enum RelocateSelection {
+    /// Every live row in a folder, children included (a removed worktree).
+    /// `from_path` is the folder's own registered path.
+    Folder {
+        from_folder_id: i32,
+        from_path: String,
+    },
+    /// A root conversation plus its live delegation subtree that shares the
+    /// root's folder (a user's "move to project"). A child that was delegated
+    /// into a different folder stays where it is.
+    Tree { root_id: i32 },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RelocateOptions {
+    /// Stamp `updated_at` on the moved rows. Worktree re-parenting does (it
+    /// always has); a user's move does not — reorganizing is not activity.
+    pub touch_updated_at: bool,
+}
+
+/// One row [`relocate_conversations`] moved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelocatedRow {
+    pub id: i32,
+    pub from_folder_id: i32,
+    /// The row was a chat conversation and is now a regular one.
+    pub was_chat: bool,
+}
+
+/// Why a `Tree` relocation moved nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelocateSkip {
+    /// No such row, or it is soft-deleted.
+    NotFound,
+    /// A loop or delegation row — only root regular/chat conversations move.
+    NotMovable,
+    /// Already in the target folder.
+    AlreadyThere,
+    /// A row changed folder (or was deleted) between the read and the write;
+    /// nothing was moved.
+    Conflict,
+    /// The target is no longer an open project folder (closed, removed, or not
+    /// a regular folder) — checked inside the transaction, so a folder removed
+    /// after the caller's own check never receives the rows.
+    TargetUnavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RelocateOutcome {
+    Moved(Vec<RelocatedRow>),
+    Skipped(RelocateSkip),
+}
+
+/// Move conversations to `target_folder_id` (at `target_path`), in one
+/// transaction. Shared by the worktree re-parent and the user's "move to
+/// project", so the two cannot drift on what a move does to a row:
+///
+/// - `folder_id` → the target;
+/// - `origin_cwd` → [`effective_origin_after_move`];
+/// - `kind` chat → regular (a chat conversation that lands in a project is an
+///   ordinary project conversation from then on — the sidebar groups by the
+///   row's own kind, so it would otherwise stay in the Chat section);
+/// - `updated_at` only when [`RelocateOptions::touch_updated_at`].
+///
+/// Each row is written with a compare-and-set on the folder it was read in,
+/// so a concurrent move or delete is never overwritten. In `Tree` mode a lost
+/// CAS rolls the whole tree back (`Skipped(Conflict)`) — a tree is never split
+/// across folders; in `Folder` mode the row that changed is simply left alone.
+///
+/// The transaction opens with a self-assigning write, the same claim
+/// `bind_external_id` uses: it takes SQLite's writer lock up front instead of
+/// a read snapshot that could fail to upgrade ("database is locked").
+pub async fn relocate_conversations(
+    conn: &DatabaseConnection,
+    selection: RelocateSelection,
+    target_folder_id: i32,
+    target_path: &str,
+    opts: RelocateOptions,
+) -> Result<RelocateOutcome, DbError> {
     use sea_orm::sea_query::Expr;
-    let res = conversation::Entity::update_many()
-        .col_expr(conversation::Column::FolderId, Expr::value(to_folder_id))
-        .col_expr(
-            conversation::Column::OriginCwd,
-            Expr::value(Some(origin_cwd.to_string())),
-        )
-        .col_expr(conversation::Column::UpdatedAt, Expr::value(Utc::now()))
-        .filter(conversation::Column::FolderId.eq(from_folder_id))
+    use sea_orm::TransactionTrait;
+
+    let txn = conn.begin().await?;
+
+    // Claim the writer lock without changing anything.
+    let claim = conversation::Entity::update_many().col_expr(
+        conversation::Column::UpdatedAt,
+        Expr::col(conversation::Column::UpdatedAt).into(),
+    );
+    let claim = match &selection {
+        RelocateSelection::Folder { from_folder_id, .. } => {
+            claim.filter(conversation::Column::FolderId.eq(*from_folder_id))
+        }
+        RelocateSelection::Tree { root_id } => claim.filter(conversation::Column::Id.eq(*root_id)),
+    };
+    claim
         .filter(conversation::Column::DeletedAt.is_null())
-        .exec(conn)
+        .exec(&txn)
         .await?;
-    Ok(res.rows_affected)
+
+    let (rows, from_path, strict) = match &selection {
+        RelocateSelection::Folder {
+            from_folder_id,
+            from_path,
+        } => {
+            let rows = conversation::Entity::find()
+                .filter(conversation::Column::FolderId.eq(*from_folder_id))
+                .filter(conversation::Column::DeletedAt.is_null())
+                .all(&txn)
+                .await?;
+            (rows, from_path.clone(), false)
+        }
+        RelocateSelection::Tree { root_id } => {
+            let Some(root) = conversation::Entity::find_by_id(*root_id)
+                .filter(conversation::Column::DeletedAt.is_null())
+                .one(&txn)
+                .await?
+            else {
+                return Ok(RelocateOutcome::Skipped(RelocateSkip::NotFound));
+            };
+            if root.parent_id.is_some()
+                || !matches!(
+                    root.kind,
+                    ConversationKind::Regular | ConversationKind::Chat
+                )
+            {
+                return Ok(RelocateOutcome::Skipped(RelocateSkip::NotMovable));
+            }
+            if root.folder_id == target_folder_id {
+                return Ok(RelocateOutcome::Skipped(RelocateSkip::AlreadyThere));
+            }
+            // Re-validated under the writer lock: a target closed or removed
+            // since the caller looked must not end up holding the rows.
+            let target_open = folder::Entity::find_by_id(target_folder_id)
+                .one(&txn)
+                .await?
+                .is_some_and(|f| {
+                    f.deleted_at.is_none()
+                        && f.is_open
+                        && f.kind == crate::db::entities::folder::FolderKind::Regular
+                });
+            if !target_open {
+                return Ok(RelocateOutcome::Skipped(RelocateSkip::TargetUnavailable));
+            }
+            let from_path = folder::Entity::find_by_id(root.folder_id)
+                .one(&txn)
+                .await?
+                .map(|f| f.path)
+                .unwrap_or_default();
+            let rows = collect_same_folder_subtree(&txn, root).await?;
+            (rows, from_path, true)
+        }
+    };
+
+    let now = Utc::now();
+    let mut moved = Vec::with_capacity(rows.len());
+    for row in rows {
+        let origin =
+            effective_origin_after_move(row.origin_cwd.as_deref(), &from_path, target_path);
+        let was_chat = row.kind == ConversationKind::Chat;
+        let mut update = conversation::Entity::update_many()
+            .col_expr(
+                conversation::Column::FolderId,
+                Expr::value(target_folder_id),
+            )
+            .col_expr(conversation::Column::OriginCwd, Expr::value(origin));
+        if was_chat {
+            update = update.col_expr(
+                conversation::Column::Kind,
+                Expr::value(ConversationKind::Regular),
+            );
+        }
+        if opts.touch_updated_at {
+            update = update.col_expr(conversation::Column::UpdatedAt, Expr::value(now));
+        }
+        let res = update
+            .filter(conversation::Column::Id.eq(row.id))
+            .filter(conversation::Column::FolderId.eq(row.folder_id))
+            .filter(conversation::Column::DeletedAt.is_null())
+            .exec(&txn)
+            .await?;
+        if res.rows_affected == 0 {
+            if strict {
+                txn.rollback().await?;
+                return Ok(RelocateOutcome::Skipped(RelocateSkip::Conflict));
+            }
+            continue;
+        }
+        moved.push(RelocatedRow {
+            id: row.id,
+            from_folder_id: row.folder_id,
+            was_chat,
+        });
+    }
+    txn.commit().await?;
+    Ok(RelocateOutcome::Moved(moved))
+}
+
+/// `root` plus every live descendant (by `parent_id`) that sits in the root's
+/// folder. A descendant elsewhere is not followed: it was delegated into
+/// another folder on purpose, and so were its own children.
+async fn collect_same_folder_subtree<C: sea_orm::ConnectionTrait>(
+    conn: &C,
+    root: conversation::Model,
+) -> Result<Vec<conversation::Model>, DbError> {
+    let folder_id = root.folder_id;
+    let mut frontier = vec![root.id];
+    let mut seen: std::collections::HashSet<i32> = frontier.iter().copied().collect();
+    let mut out = vec![root];
+    while !frontier.is_empty() {
+        let children = conversation::Entity::find()
+            .filter(conversation::Column::ParentId.is_in(frontier.clone()))
+            .filter(conversation::Column::FolderId.eq(folder_id))
+            .filter(conversation::Column::DeletedAt.is_null())
+            .all(conn)
+            .await?;
+        frontier.clear();
+        for child in children {
+            if seen.insert(child.id) {
+                frontier.push(child.id);
+                out.push(child);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Every non-empty `origin_cwd` a live conversation remembers. The chat
+/// scratch-dir GC keeps these: a chat conversation moved into a project still
+/// has its session — and whatever the agent wrote — in its old scratch dir.
+pub async fn list_live_origin_cwds(conn: &DatabaseConnection) -> Result<Vec<String>, DbError> {
+    let rows: Vec<Option<String>> = conversation::Entity::find()
+        .select_only()
+        .column(conversation::Column::OriginCwd)
+        .filter(conversation::Column::DeletedAt.is_null())
+        .filter(conversation::Column::OriginCwd.is_not_null())
+        .into_tuple()
+        .all(conn)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .flatten()
+        .filter(|p| !p.is_empty())
+        .collect())
 }
 
 pub async fn soft_delete(conn: &DatabaseConnection, conversation_id: i32) -> Result<(), DbError> {
@@ -352,7 +1382,65 @@ pub async fn soft_delete(conn: &DatabaseConnection, conversation_id: i32) -> Res
     Ok(())
 }
 
-fn parse_agent_type(s: &str) -> AgentType {
+/// Undo [`soft_delete`] for a conversation the user re-selected in the
+/// import picker. Returns `true` when this call is the one that brought the row
+/// back, `false` when it was already live (or is a delegation child, which is
+/// never a sidebar row) — so a caller can count restores without double-
+/// counting a concurrent one.
+///
+/// Deleting a conversation in codeg never touches the agent's own session file
+/// and never removes the row: it only stamps `deleted_at`. Everything needed to
+/// bring it back is therefore still on both sides, which is what makes restore
+/// a single conditional UPDATE rather than a re-insert — the conversation keeps
+/// its id, so bound tabs, token-usage rows and delegation children all still
+/// point at it.
+///
+/// Three columns move, and only these:
+/// * `deleted_at → NULL` — the restore itself.
+/// * `folder_id → folder_id` — the folder the import is landing this session's
+///   group in, which `add_folder` has just made live AND open. The row's own
+///   `folder_id` is deliberately NOT preserved: it may point at a folder the
+///   user has since removed or closed, and restoring into an invisible folder
+///   looks exactly like a restore that did not work. This is also the folder
+///   header the user checked the row under in the picker. (Live rows are still
+///   never moved — see `import_service::refresh_existing`; this applies only to
+///   a row being brought back.)
+/// * `status → pending_review` — the same status a fresh import lands on, and
+///   for the same reason: the sidebar's "show completed" filter defaults OFF,
+///   so a conversation restored as `completed` would come back invisible.
+///
+/// `updated_at` is deliberately left alone: a restore is not activity, and the
+/// caller's `refresh_external_activity` pass adopts the transcript's real
+/// last-activity time right after, so the row sorts where it belongs.
+///
+/// The `deleted_at IS NOT NULL` guard is re-evaluated by the database at write
+/// time, so a row that was un-deleted between the caller's read and this write
+/// is not clobbered back to `pending_review`.
+pub async fn restore_soft_deleted(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    folder_id: i32,
+) -> Result<bool, DbError> {
+    use sea_orm::sea_query::Expr;
+    let res = conversation::Entity::update_many()
+        .col_expr(
+            conversation::Column::DeletedAt,
+            Expr::value(None::<chrono::DateTime<Utc>>),
+        )
+        .col_expr(conversation::Column::FolderId, Expr::value(folder_id))
+        .col_expr(
+            conversation::Column::Status,
+            Expr::value(conversation::ConversationStatus::PendingReview),
+        )
+        .filter(conversation::Column::Id.eq(conversation_id))
+        .filter(conversation::Column::DeletedAt.is_not_null())
+        .filter(conversation::Column::ParentId.is_null())
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected > 0)
+}
+
+pub(crate) fn parse_agent_type(s: &str) -> AgentType {
     match serde_json::from_value(serde_json::Value::String(s.to_string())) {
         Ok(at) => at,
         Err(_) => {
@@ -394,6 +1482,14 @@ fn conv_to_summary(r: conversation::Model) -> DbConversationSummary {
         parent_tool_use_id: r.parent_tool_use_id,
         delegation_call_id: r.delegation_call_id,
         origin_cwd: r.origin_cwd,
+        assistant_name: r
+            .assistant_snapshot
+            .as_deref()
+            .and_then(AssistantRunSnapshot::name_from_json),
+        assistant_id: r.assistant_id,
+        source: r.source,
+        // Backfilled by `fill_summary_extras`, like `child_count`.
+        tag_ids: Vec::new(),
     }
 }
 
@@ -434,6 +1530,87 @@ async fn fill_child_counts(
     Ok(())
 }
 
+/// Backfill what a summary carries but its row does not: `child_count` and
+/// `tag_ids`, each with ONE query over the whole set. Every summary that leaves
+/// this module for the UI goes through here — the sidebar replaces a row
+/// wholesale on each `conversation://changed` upsert, so a path that skipped the
+/// tags would wipe them from the sidebar until the next full refresh.
+async fn fill_summary_extras(
+    conn: &DatabaseConnection,
+    summaries: &mut [DbConversationSummary],
+) -> Result<(), DbError> {
+    fill_child_counts(conn, summaries).await?;
+    if summaries.is_empty() {
+        return Ok(());
+    }
+    let ids: Vec<i32> = summaries.iter().map(|s| s.id).collect();
+    let mut tags = conversation_tag_service::tag_ids_by_conversation(conn, &ids).await?;
+    for s in summaries.iter_mut() {
+        s.tag_ids = tags.remove(&s.id).unwrap_or_default();
+    }
+    Ok(())
+}
+
+/// The stored selection of a LIVE conversation row. `None` when the row is
+/// missing, deleted, has no stored selection (legacy NULL) or holds
+/// unparsable JSON.
+pub async fn get_selector_state<C: sea_orm::ConnectionTrait>(
+    conn: &C,
+    conversation_id: i32,
+) -> Result<Option<ConversationSelection>, DbError> {
+    let row = conversation::Entity::find_by_id(conversation_id)
+        .filter(conversation::Column::DeletedAt.is_null())
+        .one(conn)
+        .await?;
+    Ok(row.and_then(|r| ConversationSelection::parse(r.selector_state.as_deref())))
+}
+
+/// Write a live row's selection. Unchanged values are a no-op, and the write
+/// never bumps `updated_at` — the selection is not activity and must not
+/// reorder the sidebar. Returns whether a row changed.
+pub async fn set_selector_state<C: sea_orm::ConnectionTrait>(
+    conn: &C,
+    conversation_id: i32,
+    selection: &ConversationSelection,
+) -> Result<bool, DbError> {
+    use sea_orm::sea_query::{Condition, Expr};
+    let json = selection.to_json();
+    let res = conversation::Entity::update_many()
+        .col_expr(conversation::Column::SelectorState, Expr::value(json.clone()))
+        .filter(conversation::Column::Id.eq(conversation_id))
+        .filter(conversation::Column::DeletedAt.is_null())
+        .filter(
+            Condition::any()
+                .add(conversation::Column::SelectorState.is_null())
+                .add(conversation::Column::SelectorState.ne(json)),
+        )
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected > 0)
+}
+
+/// Write a selection only where none is stored yet (`selector_state IS
+/// NULL`) — freezes a legacy row so its next reopen never takes the
+/// new-conversation default. Returns whether a row changed.
+pub async fn set_selector_state_if_absent<C: sea_orm::ConnectionTrait>(
+    conn: &C,
+    conversation_id: i32,
+    selection: &ConversationSelection,
+) -> Result<bool, DbError> {
+    use sea_orm::sea_query::Expr;
+    let res = conversation::Entity::update_many()
+        .col_expr(
+            conversation::Column::SelectorState,
+            Expr::value(selection.to_json()),
+        )
+        .filter(conversation::Column::Id.eq(conversation_id))
+        .filter(conversation::Column::DeletedAt.is_null())
+        .filter(conversation::Column::SelectorState.is_null())
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected > 0)
+}
+
 pub async fn get_by_id(
     conn: &DatabaseConnection,
     conversation_id: i32,
@@ -445,8 +1622,59 @@ pub async fn get_by_id(
         .ok_or_else(|| DbError::Migration(format!("Conversation not found: {conversation_id}")))?;
 
     let mut summary = conv_to_summary(conv);
-    fill_child_counts(conn, std::slice::from_mut(&mut summary)).await?;
+    fill_summary_extras(conn, std::slice::from_mut(&mut summary)).await?;
     Ok(summary)
+}
+
+/// Resolve a `codeg://session/<ref>` path to a live (non-deleted) conversation.
+///
+/// `session_ref` is either Codeg's numeric primary key (what MCP and the
+/// `codeg://session/<id>` markdown mentions use) or the agent's own session
+/// id stored as `external_id` (a Grok UUID, a Codex thread id, …). Several
+/// rows can share an `external_id` across agents; the most recently updated
+/// live row wins. Missing rows return `Ok(None)` — a stale deep link is not
+/// an error.
+///
+/// A numeric ref is tried as a primary key *first* and as an `external_id`
+/// only if no live row carries that id: nothing stops an agent from handing
+/// out all-digit session ids, and silently resolving one to an unrelated
+/// conversation that happens to own that PK is worse than a second query.
+pub async fn find_live_by_session_ref(
+    conn: &DatabaseConnection,
+    session_ref: &str,
+) -> Result<Option<DbConversationSummary>, DbError> {
+    let session_ref = session_ref.trim();
+    if session_ref.is_empty() {
+        return Ok(None);
+    }
+    let by_pk = match session_ref.parse::<i32>() {
+        Ok(id) if id > 0 => {
+            conversation::Entity::find_by_id(id)
+                .filter(conversation::Column::DeletedAt.is_null())
+                .one(conn)
+                .await?
+        }
+        _ => None,
+    };
+    let conv = match by_pk {
+        Some(conv) => Some(conv),
+        None => {
+            conversation::Entity::find()
+                .filter(conversation::Column::ExternalId.eq(session_ref))
+                .filter(conversation::Column::DeletedAt.is_null())
+                .order_by_desc(conversation::Column::UpdatedAt)
+                .one(conn)
+                .await?
+        }
+    };
+    match conv {
+        Some(conv) => {
+            let mut summary = conv_to_summary(conv);
+            fill_summary_extras(conn, std::slice::from_mut(&mut summary)).await?;
+            Ok(Some(summary))
+        }
+        None => Ok(None),
+    }
 }
 
 /// Look up a child conversation by its `delegation_call_id` (the broker's
@@ -465,6 +1693,36 @@ pub async fn get_by_delegation_call_id(
         .one(conn)
         .await?;
     Ok(conv.map(conv_to_summary))
+}
+
+/// The assistant a delegation child ran as, with the snapshot its row was
+/// written with. `None` for any row that is not an assistant child (or no
+/// row); `Some((id, None))` for an assistant child whose snapshot is missing or
+/// no longer parses — the caller must not mistake that for "no options".
+pub async fn get_assistant_run(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+) -> Result<Option<(i32, Option<AssistantRunSnapshot>)>, DbError> {
+    let Some(row) = conversation::Entity::find_by_id(conversation_id)
+        .one(conn)
+        .await?
+    else {
+        return Ok(None);
+    };
+    let Some(assistant_id) = row.assistant_id else {
+        return Ok(None);
+    };
+    let snapshot = row.assistant_snapshot.as_deref().and_then(|raw| {
+        serde_json::from_str::<AssistantRunSnapshot>(raw)
+            .map_err(|e| {
+                tracing::warn!(
+                    "[conversation_service] conversation {conversation_id}: unreadable \
+                     assistant snapshot: {e}"
+                );
+            })
+            .ok()
+    });
+    Ok(Some((assistant_id, snapshot)))
 }
 
 pub async fn list_by_folder(
@@ -513,7 +1771,7 @@ pub async fn list_by_folder(
     let rows = query.all(conn).await?;
 
     let mut summaries: Vec<DbConversationSummary> = rows.into_iter().map(conv_to_summary).collect();
-    fill_child_counts(conn, &mut summaries).await?;
+    fill_summary_extras(conn, &mut summaries).await?;
 
     Ok(summaries)
 }
@@ -595,7 +1853,7 @@ pub async fn list_all(
 
     let rows = query.all(conn).await?;
     let mut summaries: Vec<DbConversationSummary> = rows.into_iter().map(conv_to_summary).collect();
-    fill_child_counts(conn, &mut summaries).await?;
+    fill_summary_extras(conn, &mut summaries).await?;
     Ok(summaries)
 }
 
@@ -621,7 +1879,7 @@ pub async fn list_children(
         .all(conn)
         .await?;
     let mut summaries: Vec<DbConversationSummary> = rows.into_iter().map(conv_to_summary).collect();
-    fill_child_counts(conn, &mut summaries).await?;
+    fill_summary_extras(conn, &mut summaries).await?;
     Ok(summaries)
 }
 
@@ -646,6 +1904,7 @@ mod tests {
             parent_conversation_id: parent.id,
             parent_tool_use_id: "tu-1".into(),
             delegation_call_id: "call-1".into(),
+            assistant: None,
         };
         let child = create_with_delegation(
             conn,
@@ -717,9 +1976,15 @@ mod tests {
     async fn list_children_orders_newest_first() {
         let db = fresh_in_memory_db().await;
         let folder = seed_folder(&db, "/tmp/codeg-list-children-order").await;
-        let parent = create(&db.conn, folder, AgentType::ClaudeCode, Some("P".into()), None)
-            .await
-            .expect("parent");
+        let parent = create(
+            &db.conn,
+            folder,
+            AgentType::ClaudeCode,
+            Some("P".into()),
+            None,
+        )
+        .await
+        .expect("parent");
         // Two children created oldest → newest under the same parent.
         let first = create_with_delegation(
             &db.conn,
@@ -731,6 +1996,7 @@ mod tests {
                 parent_conversation_id: parent.id,
                 parent_tool_use_id: "tu-1".into(),
                 delegation_call_id: "call-1".into(),
+                assistant: None,
             }),
         )
         .await
@@ -745,6 +2011,7 @@ mod tests {
                 parent_conversation_id: parent.id,
                 parent_tool_use_id: "tu-2".into(),
                 delegation_call_id: "call-2".into(),
+                assistant: None,
             }),
         )
         .await
@@ -793,6 +2060,7 @@ mod tests {
             parent_conversation_id: child,
             parent_tool_use_id: "tu-2".into(),
             delegation_call_id: "call-2".into(),
+            assistant: None,
         };
         create_with_delegation(
             &db.conn,
@@ -818,7 +2086,9 @@ mod tests {
         let folder = seed_folder(&db, "/tmp/codeg-child-count-deleted").await;
         let (parent, child) = seed_parent_with_child(&db.conn, folder).await;
 
-        soft_delete(&db.conn, child).await.expect("soft delete child");
+        soft_delete(&db.conn, child)
+            .await
+            .expect("soft delete child");
 
         // A removed sub-session must not keep the parent's chevron alive: the
         // aggregate filters deleted_at IS NULL, matching list_children.
@@ -833,12 +2103,104 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn seed_model_fills_an_empty_column_once_without_bumping_updated_at() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-seed-model").await;
+        let conv = create(
+            &db.conn,
+            folder,
+            AgentType::Codex,
+            Some("c".into()),
+            None,
+        )
+        .await
+        .expect("create");
+
+        // The gap this closes: a row created in-app carries no model at all,
+        // which is why the sidebar could only ever show one for imported
+        // sessions.
+        let before = get_by_id(&db.conn, conv.id).await.expect("get before");
+        assert!(before.model.is_none(), "a new row names no model");
+        let updated_at_before = before.updated_at;
+
+        assert!(
+            seed_model_if_empty(&db.conn, conv.id, "  gpt-5-codex  ")
+                .await
+                .expect("seed"),
+            "an empty column must be filled, and report that it was so the \
+             caller knows to broadcast"
+        );
+        let seeded = get_by_id(&db.conn, conv.id).await.expect("get seeded");
+        assert_eq!(seeded.model.as_deref(), Some("gpt-5-codex"), "trimmed");
+        assert_eq!(
+            seeded.updated_at, updated_at_before,
+            "seeding must not bump updated_at: the sidebar sorts on it, and \
+             merely opening a conversation must not float it to the top"
+        );
+
+        // First value wins. The detail view re-reads the transcript and stays
+        // exact; the column is a projection for the list, not a second source
+        // of truth that fights the parse.
+        assert!(
+            !seed_model_if_empty(&db.conn, conv.id, "gpt-5.2")
+                .await
+                .expect("second seed"),
+            "a populated column must be left alone, and say nothing was written"
+        );
+        assert_eq!(
+            get_by_id(&db.conn, conv.id)
+                .await
+                .expect("get after")
+                .model
+                .as_deref(),
+            Some("gpt-5-codex")
+        );
+
+        // A transcript that names no model asks for no write at all.
+        assert!(
+            !seed_model_if_empty(&db.conn, conv.id, "   ")
+                .await
+                .expect("blank seed")
+        );
+    }
+
+    #[tokio::test]
+    async fn seed_model_skips_a_soft_deleted_row() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-seed-model-deleted").await;
+        let conv = create(
+            &db.conn,
+            folder,
+            AgentType::Codex,
+            Some("c".into()),
+            None,
+        )
+        .await
+        .expect("create");
+        soft_delete(&db.conn, conv.id).await.expect("delete");
+
+        assert!(
+            !seed_model_if_empty(&db.conn, conv.id, "gpt-5-codex")
+                .await
+                .expect("seed"),
+            "a deleted conversation is not something an open can resurrect a \
+             column on"
+        );
+    }
+
+    #[tokio::test]
     async fn update_pin_sets_and_clears_without_bumping_updated_at() {
         let db = fresh_in_memory_db().await;
         let folder = seed_folder(&db, "/tmp/codeg-update-pin").await;
-        let conv = create(&db.conn, folder, AgentType::ClaudeCode, Some("c".into()), None)
-            .await
-            .expect("create");
+        let conv = create(
+            &db.conn,
+            folder,
+            AgentType::ClaudeCode,
+            Some("c".into()),
+            None,
+        )
+        .await
+        .expect("create");
 
         // Freshly created rows are unpinned, and the summary projection carries
         // the field through (conv_to_summary mapping).
@@ -853,7 +2215,10 @@ mod tests {
         // preference, not activity).
         update_pin(&db.conn, conv.id, true).await.expect("pin");
         let pinned = get_by_id(&db.conn, conv.id).await.expect("get pinned");
-        assert!(pinned.pinned_at.is_some(), "pinned_at must be set after pin");
+        assert!(
+            pinned.pinned_at.is_some(),
+            "pinned_at must be set after pin"
+        );
         assert_eq!(
             pinned.updated_at, updated_at_before,
             "pinning must not bump updated_at"
@@ -891,11 +2256,20 @@ mod tests {
     async fn create_leaves_title_unlocked() {
         let db = fresh_in_memory_db().await;
         let folder = seed_folder(&db, "/tmp/codeg-title-unlocked").await;
-        let row = create(&db.conn, folder, AgentType::ClaudeCode, Some("hi".into()), None)
-            .await
-            .expect("create");
+        let row = create(
+            &db.conn,
+            folder,
+            AgentType::ClaudeCode,
+            Some("hi".into()),
+            None,
+        )
+        .await
+        .expect("create");
         let summary = get_by_id(&db.conn, row.id).await.expect("get");
-        assert!(!summary.title_locked, "new conversation must start unlocked");
+        assert!(
+            !summary.title_locked,
+            "new conversation must start unlocked"
+        );
     }
 
     #[tokio::test]
@@ -913,11 +2287,534 @@ mod tests {
         assert!(summary.title_locked, "manual rename must lock the title");
     }
 
+    /// Read a row straight from the table — `get_by_id` returns a summary and
+    /// filters deleted rows, but these tests assert on raw persisted columns.
+    async fn raw_row(conn: &DatabaseConnection, id: i32) -> conversation::Model {
+        conversation::Entity::find_by_id(id)
+            .one(conn)
+            .await
+            .expect("query")
+            .expect("row")
+    }
+
+    /// The single live row (if any) holding `external_id`, whatever its id.
+    async fn rows_holding(conn: &DatabaseConnection, external_id: &str) -> Vec<conversation::Model> {
+        conversation::Entity::find()
+            .filter(conversation::Column::ExternalId.eq(external_id))
+            .filter(conversation::Column::DeletedAt.is_null())
+            .all(conn)
+            .await
+            .expect("query by external_id")
+    }
+
     #[tokio::test]
-    async fn update_external_id_skips_soft_deleted_row() {
+    async fn bind_external_id_preserves_the_outgoing_session_on_a_new_row() {
+        // codeg#500 in miniature: a row bound to S1 is handed S2 (a fresh
+        // session that knows nothing about it). S1 must survive on a row of its
+        // own, wearing the identity the user recognises, or it disappears from
+        // a sidebar that is built purely from DB rows.
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-bind-preserve").await;
+        let row = create(
+            &db.conn,
+            folder,
+            AgentType::Codex,
+            Some("nouveauté de cette version".into()),
+            Some("main".into()),
+        )
+        .await
+        .expect("create");
+        bind_external_id(&db.conn, row.id, "S1", &[])
+            .await
+            .expect("first bind");
+        seed_model_if_empty(&db.conn, row.id, "gpt-5-codex")
+            .await
+            .expect("seed S1's model");
+        let before = raw_row(&db.conn, row.id).await;
+
+        let preserved_id = bind_external_id(&db.conn, row.id, "S2", &[])
+            .await
+            .expect("rebind")
+            .expect("a session change with nothing holding S1 must preserve it");
+
+        let current = raw_row(&db.conn, row.id).await;
+        assert_eq!(
+            current.external_id.as_deref(),
+            Some("S2"),
+            "the live row advances to the new session"
+        );
+        assert!(
+            current.model.is_none(),
+            "the model described S1; left behind it would name S1's model on a \
+             row that is now S2, and `seed_model_if_empty` only fills an EMPTY \
+             column, so nothing would ever correct it"
+        );
+
+        let preserved = raw_row(&db.conn, preserved_id).await;
+        assert_eq!(preserved.external_id.as_deref(), Some("S1"));
+        assert_eq!(
+            preserved.title.as_deref(),
+            Some("nouveauté de cette version"),
+            "the preserved row must keep the name the user recognises"
+        );
+        assert_eq!(preserved.folder_id, before.folder_id);
+        assert_eq!(preserved.agent_type, before.agent_type);
+        assert_eq!(preserved.git_branch.as_deref(), Some("main"));
+        assert_eq!(
+            preserved.model.as_deref(),
+            Some("gpt-5-codex"),
+            "the model belongs to S1, and this row is what S1 becomes"
+        );
+        assert_eq!(
+            preserved.created_at, before.created_at,
+            "created_at is carried, not stamped now — the preserved row IS the \
+             old conversation and must not read as freshly created"
+        );
+        assert_eq!(
+            preserved.updated_at, before.updated_at,
+            "updated_at is carried so the sidebar's activity ordering keeps the \
+             conversation in place instead of floating it to the top. This also \
+             pins the self-assigning claim write: bumping updated_at to claim \
+             the writer lock would make the SELECT read the clobbered value."
+        );
+        assert!(preserved.deleted_at.is_none());
+        assert!(
+            preserved.pinned_at.is_none(),
+            "pinning belongs to the row the user pinned, not to the history"
+        );
+    }
+
+    #[tokio::test]
+    async fn bind_external_id_advances_in_place_when_the_session_is_carried_forward() {
+        // A custom agent that keeps sessions in memory forgets them on every
+        // restart. codeg's answer is to open a fresh session and link the
+        // transcripts (`continues_from`), and both the reader and the generic
+        // parser then render the chain as ONE conversation — the parser even
+        // hides the superseded ids, precisely so the conversation isn't listed
+        // twice.
+        //
+        // So a bind whose incoming session carries the outgoing one forward
+        // must NOT split. Splitting would clone the conversation in the sidebar
+        // on every restart, with each copy rendering a longer prefix of the
+        // same history (S1, S1+S2, S1+S2+S3...), and double-count its tokens.
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-bind-continues").await;
+        let row = create(
+            &db.conn,
+            folder,
+            AgentType::Custom("goose"),
+            Some("Long-running chat".into()),
+            None,
+        )
+        .await
+        .expect("create");
+        bind_external_id(&db.conn, row.id, "S1", &[])
+            .await
+            .expect("first bind");
+
+        // Restart 1: S2 continues S1.
+        let preserved = bind_external_id(&db.conn, row.id, "S2", &["S1".to_string()])
+            .await
+            .expect("continuation bind");
+        assert_eq!(
+            preserved, None,
+            "a carried-forward session is the same conversation, not a new one"
+        );
+
+        // Restart 2: S3 continues S2 (and transitively S1).
+        let preserved = bind_external_id(
+            &db.conn,
+            row.id,
+            "S3",
+            &["S2".to_string(), "S1".to_string()],
+        )
+        .await
+        .expect("second continuation bind");
+        assert_eq!(preserved, None);
+
+        let rows = conversation::Entity::find()
+            .filter(conversation::Column::DeletedAt.is_null())
+            .all(&db.conn)
+            .await
+            .expect("list");
+        assert_eq!(
+            rows.len(),
+            1,
+            "two restarts must leave ONE conversation, got {rows:?}"
+        );
+        assert_eq!(rows[0].external_id.as_deref(), Some("S3"));
+
+        // The guard is not over-broad: an UNRELATED session on the same row is
+        // still split off, which is the bug this whole primitive exists for.
+        let preserved = bind_external_id(&db.conn, row.id, "UNRELATED", &[])
+            .await
+            .expect("unrelated bind")
+            .expect("an unrelated session must still preserve the history");
+        assert_eq!(
+            raw_row(&db.conn, preserved).await.external_id.as_deref(),
+            Some("S3")
+        );
+    }
+
+    #[tokio::test]
+    async fn bind_external_id_survives_the_unique_index() {
+        // `idx_conversation_external_agent` is UNIQUE over
+        // `(external_id, agent_type)`, so the preserving row can only be
+        // inserted after the current row has released S1. Insert-first would
+        // fail the constraint every single time — this test exists so a
+        // refactor that "tidies" the two writes into the intuitive order gets
+        // caught here rather than in production.
+        //
+        // The migrations run in `fresh_in_memory_db`, so the index is real.
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-bind-unique").await;
+        let row = create(&db.conn, folder, AgentType::Codex, None, None)
+            .await
+            .expect("create");
+        bind_external_id(&db.conn, row.id, "S1", &[])
+            .await
+            .expect("first bind");
+
+        bind_external_id(&db.conn, row.id, "S2", &[])
+            .await
+            .expect("the split must not trip the unique index")
+            .expect("preserved");
+
+        assert_eq!(
+            rows_holding(&db.conn, "S1").await.len(),
+            1,
+            "exactly one row holds the old session"
+        );
+        assert_eq!(
+            rows_holding(&db.conn, "S2").await.len(),
+            1,
+            "exactly one row holds the new session"
+        );
+    }
+
+    #[tokio::test]
+    async fn bind_external_id_refuses_a_session_another_row_already_holds() {
+        // The incoming id is exposed to the unique index in BOTH branches, and
+        // neither used to check for a holder, so each of these used to raise a
+        // raw `UNIQUE constraint failed`.
+        //
+        // Two things are asserted together because they only make sense
+        // together: the DB is left completely untouched, AND the caller is told
+        // so. `Conflict` rather than `Ok(None)` is the load-bearing half —
+        // `send_prompt_linked` reads any `Ok` as "the row is bound now" and
+        // goes on to dispatch the prompt, which would then land in the HOLDER
+        // row's transcript while every event named this row.
+        for repointing in [false, true] {
+            let db = fresh_in_memory_db().await;
+            let folder = seed_folder(&db, "/tmp/codeg-bind-conflict").await;
+            let holder = create(&db.conn, folder, AgentType::Codex, None, None)
+                .await
+                .expect("holder");
+            bind_external_id(&db.conn, holder.id, "S_SHARED", &[])
+                .await
+                .expect("seed holder");
+
+            let row = create(&db.conn, folder, AgentType::Codex, None, None)
+                .await
+                .expect("create");
+            // `false` exercises the plain-bind branch (a fresh row whose
+            // connection resumed a session codeg already indexed); `true` the
+            // split branch, which would otherwise fail on the release write
+            // before ever reaching its INSERT.
+            if repointing {
+                bind_external_id(&db.conn, row.id, "S_OWN", &[])
+                    .await
+                    .expect("seed own session");
+            }
+
+            let err = bind_external_id(&db.conn, row.id, "S_SHARED", &[])
+                .await
+                .expect_err("a taken session id must be refused, not reported bound");
+
+            assert!(
+                matches!(err, DbError::Conflict(_)),
+                "must be distinguishable from transient contention, got {err:?}"
+            );
+            assert!(
+                err.to_string().contains(&holder.id.to_string()),
+                "the message must name the row that actually holds the session, got {err}"
+            );
+            assert_eq!(
+                raw_row(&db.conn, row.id).await.external_id.as_deref(),
+                repointing.then_some("S_OWN"),
+                "the refused row keeps exactly the session it had"
+            );
+            let holders = rows_holding(&db.conn, "S_SHARED").await;
+            assert_eq!(holders.len(), 1, "the original holder is untouched");
+            assert_eq!(holders[0].id, holder.id);
+        }
+    }
+
+    #[tokio::test]
+    async fn bind_external_id_refuses_a_session_a_soft_deleted_row_holds() {
+        // The unique index carries no `deleted_at` predicate, so a soft-deleted
+        // row still occupies its id — a lookup that filtered on `deleted_at IS
+        // NULL` would miss it and walk straight into the constraint. Refused on
+        // the same terms as a live holder rather than having its id taken,
+        // matching `import_one` / `refresh_existing`, which skip such a row
+        // instead of rewriting it.
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-bind-conflict-deleted").await;
+        let holder = create(&db.conn, folder, AgentType::Codex, None, None)
+            .await
+            .expect("holder");
+        bind_external_id(&db.conn, holder.id, "S_SHARED", &[])
+            .await
+            .expect("seed holder");
+        soft_delete(&db.conn, holder.id).await.expect("soft delete");
+
+        let row = create(&db.conn, folder, AgentType::Codex, None, None)
+            .await
+            .expect("create");
+        bind_external_id(&db.conn, row.id, "S_OWN", &[])
+            .await
+            .expect("seed own session");
+
+        let err = bind_external_id(&db.conn, row.id, "S_SHARED", &[])
+            .await
+            .expect_err("a deleted row's id is still taken; refuse it");
+
+        assert!(matches!(err, DbError::Conflict(_)), "got {err:?}");
+        assert_eq!(
+            raw_row(&db.conn, row.id).await.external_id.as_deref(),
+            Some("S_OWN")
+        );
+        let holder_after = raw_row(&db.conn, holder.id).await;
+        assert_eq!(holder_after.external_id.as_deref(), Some("S_SHARED"));
+        assert!(
+            holder_after.deleted_at.is_some(),
+            "a refused bind must not resurrect the deleted holder"
+        );
+    }
+
+    #[tokio::test]
+    async fn bind_external_id_is_a_plain_write_on_first_bind() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-bind-first").await;
+        let row = create(&db.conn, folder, AgentType::ClaudeCode, None, None)
+            .await
+            .expect("create");
+
+        let preserved = bind_external_id(&db.conn, row.id, "S1", &[])
+            .await
+            .expect("first bind");
+
+        assert_eq!(
+            preserved, None,
+            "a row with no session yet has nothing to preserve"
+        );
+        assert_eq!(raw_row(&db.conn, row.id).await.external_id.as_deref(), Some("S1"));
+    }
+
+    #[tokio::test]
+    async fn bind_external_id_is_idempotent_for_the_same_session() {
+        // A duplicate SessionStarted (replay, agent re-init, or simply both
+        // subscribers handling the same event) must not fork the history.
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-bind-idem").await;
+        let row = create(&db.conn, folder, AgentType::ClaudeCode, None, None)
+            .await
+            .expect("create");
+        bind_external_id(&db.conn, row.id, "S1", &[]).await.expect("bind");
+
+        let preserved = bind_external_id(&db.conn, row.id, "S1", &[])
+            .await
+            .expect("rebind to the same id");
+
+        assert_eq!(preserved, None, "rebinding the same id preserves nothing");
+        assert_eq!(rows_holding(&db.conn, "S1").await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn bind_external_id_adopts_a_row_that_already_holds_the_old_session() {
+        // What fork establishes: a sibling already carries S1, so the invariant
+        // holds before we start and re-preserving would both duplicate the row
+        // and (given the unique index) fail outright. Either race order must
+        // land on exactly two rows.
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-bind-adopt").await;
+        let row = create(&db.conn, folder, AgentType::Codex, None, None)
+            .await
+            .expect("create");
+        bind_external_id(&db.conn, row.id, "S1", &[]).await.expect("bind");
+        // Stand in for fork's sibling insert.
+        let sibling = create(&db.conn, folder, AgentType::Codex, None, None)
+            .await
+            .expect("sibling");
+        bind_external_id(&db.conn, sibling.id, "S1_HOLDER", &[])
+            .await
+            .expect("seed");
+        let mut active: conversation::ActiveModel = raw_row(&db.conn, sibling.id).await.into();
+        active.external_id = Set(Some("S1".into()));
+        // Release S1 on the original first, exactly as the real fork does.
+        let mut original: conversation::ActiveModel = raw_row(&db.conn, row.id).await.into();
+        original.external_id = Set(Some("S2".into()));
+        original.update(&db.conn).await.expect("release");
+        active.update(&db.conn).await.expect("hand S1 to the sibling");
+
+        // Now the late SessionStarted{S2} arrives for the original row.
+        let preserved = bind_external_id(&db.conn, row.id, "S2", &[])
+            .await
+            .expect("late rebind");
+
+        assert_eq!(
+            preserved, None,
+            "S1 already has a home; preserving again would duplicate it"
+        );
+        assert_eq!(rows_holding(&db.conn, "S1").await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn bind_external_id_maps_in_progress_to_pending_review() {
+        // The preserved row has no agent attached any more, so carrying
+        // `InProgress` over would leave it spinning in the sidebar forever.
+        // Settled states are carried as-is — they are user-visible and still
+        // true of the history being preserved.
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-bind-status").await;
+
+        for (original, expected) in [
+            (
+                conversation::ConversationStatus::InProgress,
+                conversation::ConversationStatus::PendingReview,
+            ),
+            (
+                conversation::ConversationStatus::Completed,
+                conversation::ConversationStatus::Completed,
+            ),
+            (
+                conversation::ConversationStatus::Cancelled,
+                conversation::ConversationStatus::Cancelled,
+            ),
+        ] {
+            let row = create(&db.conn, folder, AgentType::Codex, None, None)
+                .await
+                .expect("create");
+            let seed = format!("S1-{original:?}");
+            bind_external_id(&db.conn, row.id, &seed, &[]).await.expect("bind");
+            update_status(&db.conn, row.id, original.clone())
+                .await
+                .expect("status");
+
+            let preserved_id = bind_external_id(&db.conn, row.id, &format!("S2-{original:?}"), &[])
+                .await
+                .expect("rebind")
+                .expect("preserved");
+
+            assert_eq!(
+                raw_row(&db.conn, preserved_id).await.status,
+                expected,
+                "{original:?} must be preserved as {expected:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn bind_external_id_keeps_a_delegation_child_inside_its_parent() {
+        // `kind == Delegate ⟺ parent_id IS NOT NULL` is a documented invariant,
+        // and a preserved child that lost its parent would surface as a stray
+        // root in the sidebar. The two near-unique delegation identity fields
+        // are deliberately NOT carried — duplicating them would point the
+        // parent's tool-call view at two children for one call.
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-bind-delegate").await;
+        let (parent_id, child_id) = seed_parent_with_child(&db.conn, folder).await;
+        bind_external_id(&db.conn, child_id, "S1", &[])
+            .await
+            .expect("bind child");
+
+        let preserved_id = bind_external_id(&db.conn, child_id, "S2", &[])
+            .await
+            .expect("rebind child")
+            .expect("preserved");
+
+        let preserved = raw_row(&db.conn, preserved_id).await;
+        assert_eq!(preserved.parent_id, Some(parent_id));
+        assert_eq!(preserved.kind, ConversationKind::Delegate);
+        assert_eq!(preserved.parent_tool_use_id, None);
+        assert_eq!(preserved.delegation_call_id, None);
+    }
+
+    #[tokio::test]
+    async fn bind_external_id_ignores_the_same_session_under_another_agent() {
+        // The uniqueness the index enforces is per-AGENT, and so is the
+        // "already preserved" lookup. A row belonging to a different agent that
+        // happens to share the id string must not be mistaken for a home for
+        // this agent's outgoing session.
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-bind-agent-scope").await;
+        let other_agent = create(&db.conn, folder, AgentType::ClaudeCode, None, None)
+            .await
+            .expect("other agent row");
+        bind_external_id(&db.conn, other_agent.id, "S1", &[])
+            .await
+            .expect("bind other agent");
+        let row = create(&db.conn, folder, AgentType::Codex, None, None)
+            .await
+            .expect("create");
+        bind_external_id(&db.conn, row.id, "S1", &[])
+            .await
+            .expect("same id, different agent is allowed by the index");
+
+        let preserved = bind_external_id(&db.conn, row.id, "S2", &[])
+            .await
+            .expect("rebind")
+            .expect("the other agent's row is not a home for OUR session");
+
+        let preserved = raw_row(&db.conn, preserved).await;
+        assert_eq!(preserved.agent_type, row.agent_type);
+    }
+
+    #[tokio::test]
+    async fn renormalize_external_id_alias_is_a_compare_and_swap() {
+        // The alias path rewrites one spelling of a session into another and
+        // must NOT split history. Its expected-old guard exists so a
+        // `SessionStarted` that rebound the row while the parse was running
+        // cannot be clobbered by the stale write that follows.
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-alias").await;
+        let row = create(&db.conn, folder, AgentType::Gemini, None, None)
+            .await
+            .expect("create");
+        bind_external_id(&db.conn, row.id, "acp-uuid", &[])
+            .await
+            .expect("bind");
+
+        renormalize_external_id_alias(&db.conn, row.id, Some("acp-uuid"), "branch-id".into())
+            .await
+            .expect("normalize");
+        assert_eq!(
+            raw_row(&db.conn, row.id).await.external_id.as_deref(),
+            Some("branch-id"),
+            "the alias is normalized in place, with no second row"
+        );
+        assert_eq!(
+            rows_holding(&db.conn, "acp-uuid").await.len(),
+            0,
+            "an alias rewrite must not leave a phantom conversation behind"
+        );
+
+        // Stale write: the row has since moved on. It must match nothing.
+        renormalize_external_id_alias(&db.conn, row.id, Some("acp-uuid"), "stale".into())
+            .await
+            .expect("a no-match is a silent no-op, not an error");
+        assert_eq!(
+            raw_row(&db.conn, row.id).await.external_id.as_deref(),
+            Some("branch-id"),
+            "a stale alias write must not clobber a newer binding"
+        );
+    }
+
+    #[tokio::test]
+    async fn bind_external_id_skips_soft_deleted_row() {
         // A late/stale `SessionStarted` write — e.g. a fork's SessionStarted{S2}
         // landing after the user deleted the conversation — must NOT mutate a
-        // soft-deleted row. `update_external_id` is guarded on `deleted_at IS
+        // soft-deleted row. `bind_external_id` is guarded on `deleted_at IS
         // NULL`, so it is a silent no-op: the deleted row keeps its old
         // external_id and is never half-resurrected.
         let db = fresh_in_memory_db().await;
@@ -931,15 +2828,22 @@ mod tests {
         )
         .await
         .expect("create");
-        update_external_id(&db.conn, row.id, "session-S1".into())
+        bind_external_id(&db.conn, row.id, "session-S1", &[])
             .await
             .expect("seed external_id");
         soft_delete(&db.conn, row.id).await.expect("soft delete");
 
         // The guarded write must no-op (Ok) without touching the deleted row.
-        update_external_id(&db.conn, row.id, "session-S2".into())
+        // Critically it must ALSO not preserve anything: a deleted row's
+        // session is not being orphaned, so manufacturing a preserving row
+        // here would resurrect a conversation the user just deleted.
+        let preserved = bind_external_id(&db.conn, row.id, "session-S2", &[])
             .await
             .expect("a stale SessionStarted write must be a no-op, not an error");
+        assert_eq!(
+            preserved, None,
+            "a soft-deleted row must not spawn a preserving row"
+        );
 
         // Inspect the raw row directly — `get_by_id` filters deleted rows out.
         let raw = conversation::Entity::find_by_id(row.id)
@@ -964,7 +2868,7 @@ mod tests {
         )
         .await
         .expect("create live");
-        update_external_id(&db.conn, live.id, "session-S9".into())
+        bind_external_id(&db.conn, live.id, "session-S9", &[])
             .await
             .expect("live update");
         let live_raw = conversation::Entity::find_by_id(live.id)
@@ -1083,6 +2987,701 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn seed_auto_title_if_empty_writes_only_when_untitled() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-title-seed").await;
+        let row = create(&db.conn, folder, AgentType::ClaudeCode, None, None)
+            .await
+            .expect("create");
+        let before = row.updated_at;
+
+        assert!(
+            seed_auto_title_if_empty(&db.conn, row.id, "  First prompt  ".into())
+                .await
+                .expect("seed"),
+            "an empty unlocked title must be seeded"
+        );
+        let summary = get_by_id(&db.conn, row.id).await.expect("get");
+        assert_eq!(summary.title.as_deref(), Some("First prompt"));
+        assert!(!summary.title_locked);
+        assert_eq!(summary.updated_at, before, "seed must not bump updated_at");
+
+        assert!(
+            !seed_auto_title_if_empty(&db.conn, row.id, "Second prompt".into())
+                .await
+                .expect("seed-2"),
+            "a later prompt must not replace the first-prompt seed"
+        );
+        let summary = get_by_id(&db.conn, row.id).await.expect("get-2");
+        assert_eq!(summary.title.as_deref(), Some("First prompt"));
+    }
+
+    #[tokio::test]
+    async fn seed_auto_title_if_empty_skips_locked_and_empty() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-title-seed-skip").await;
+        let row = create(&db.conn, folder, AgentType::ClaudeCode, None, None)
+            .await
+            .expect("create");
+        update_title(&db.conn, row.id, "User pick".into())
+            .await
+            .expect("rename");
+
+        assert!(
+            !seed_auto_title_if_empty(&db.conn, row.id, "First prompt".into())
+                .await
+                .expect("seed-locked"),
+            "a locked title must not be seeded over"
+        );
+        assert!(
+            !seed_auto_title_if_empty(&db.conn, row.id, String::new())
+                .await
+                .expect("seed-empty")
+        );
+        let summary = get_by_id(&db.conn, row.id).await.expect("get");
+        assert_eq!(summary.title.as_deref(), Some("User pick"));
+    }
+
+    /// Neither auto-title primitive may write a soft-deleted row. Both are now
+    /// driven from the live ACP path (a title can land while the user is
+    /// deleting the conversation), and a late write to a deleted row is a
+    /// resurrection the sidebar can never show — `emit_conversation_upsert`
+    /// filters it out, so the row would silently diverge from every client.
+    #[tokio::test]
+    async fn auto_title_writes_skip_soft_deleted_rows() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-title-deleted").await;
+
+        // Untitled + deleted: the first-prompt seed must not name it.
+        let seeded = create(&db.conn, folder, AgentType::ClaudeCode, None, None)
+            .await
+            .expect("create");
+        soft_delete(&db.conn, seeded.id).await.expect("soft delete");
+        assert!(
+            !seed_auto_title_if_empty(&db.conn, seeded.id, "First prompt".into())
+                .await
+                .expect("seed"),
+            "a soft-deleted row must not be seeded"
+        );
+
+        // Titled + deleted: a live ACP title must not replace it either.
+        let refreshed = create(
+            &db.conn,
+            folder,
+            AgentType::ClaudeCode,
+            Some("Old name".into()),
+            None,
+        )
+        .await
+        .expect("create");
+        soft_delete(&db.conn, refreshed.id).await.expect("soft delete");
+        assert!(
+            !refresh_auto_title(&db.conn, refreshed.id, "Agent title".into())
+                .await
+                .expect("refresh"),
+            "a soft-deleted row must not be auto-retitled"
+        );
+
+        for (id, expected) in [(seeded.id, None), (refreshed.id, Some("Old name"))] {
+            let row = conversation::Entity::find_by_id(id)
+                .one(&db.conn)
+                .await
+                .expect("query")
+                .expect("row still present");
+            assert_eq!(row.title.as_deref(), expected);
+        }
+    }
+
+    /// The work-task / automation launch path: the seed IS the name, so locking
+    /// must keep the title byte-identical, keep the row where it is in a
+    /// recency-sorted sidebar, and make the next auto-title a no-op.
+    #[tokio::test]
+    async fn lock_title_freezes_the_seed_without_rewriting_or_bumping() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-title-lock-seed").await;
+        let row = create(
+            &db.conn,
+            folder,
+            AgentType::ClaudeCode,
+            Some("Fix the login flow".into()),
+            None,
+        )
+        .await
+        .expect("create");
+        let before = row.updated_at;
+        assert!(!row.title_locked, "a fresh row starts unlocked");
+
+        lock_title(&db.conn, row.id).await.expect("lock");
+
+        let locked = get_by_id(&db.conn, row.id).await.expect("get");
+        assert!(locked.title_locked, "lock_title must set the flag");
+        assert_eq!(
+            locked.title.as_deref(),
+            Some("Fix the login flow"),
+            "lock_title must not rewrite the title"
+        );
+        assert_eq!(
+            locked.updated_at, before,
+            "locking is metadata, not activity — it must not bump updated_at"
+        );
+
+        // The whole point: the parsed session title can no longer take over.
+        assert!(
+            !refresh_auto_title(&db.conn, row.id, "项目：/Users/me/app".into())
+                .await
+                .expect("auto"),
+            "a seeded-and-locked title must survive the per-turn backfill"
+        );
+        let after = get_by_id(&db.conn, row.id).await.expect("get again");
+        assert_eq!(after.title.as_deref(), Some("Fix the login flow"));
+    }
+
+    /// A missing row must not be an error — the caller locks on a best-effort
+    /// path where a failure would be worse than the drift it prevents.
+    #[tokio::test]
+    async fn lock_title_on_a_missing_row_is_a_no_op() {
+        let db = fresh_in_memory_db().await;
+        lock_title(&db.conn, 999_999).await.expect("no-op lock");
+    }
+
+    #[tokio::test]
+    async fn retitle_if_unchanged_follows_the_owner_rename() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-retitle-follow").await;
+        let row = create(
+            &db.conn,
+            folder,
+            AgentType::ClaudeCode,
+            Some("old".into()),
+            None,
+        )
+        .await
+        .expect("create");
+        let before = row.updated_at;
+        lock_title(&db.conn, row.id).await.expect("lock");
+
+        let wrote = retitle_if_unchanged(&db.conn, row.id, "old", "new")
+            .await
+            .expect("retitle");
+        assert!(wrote, "a title still in sync with its owner must follow it");
+
+        let summary = get_by_id(&db.conn, row.id).await.expect("get");
+        assert_eq!(summary.title.as_deref(), Some("new"));
+        assert!(summary.title_locked, "the row must stay locked");
+        assert_eq!(
+            summary.updated_at, before,
+            "following an owner rename is metadata, not activity"
+        );
+    }
+
+    /// The guard that makes the sync safe: once the user names the conversation
+    /// themselves, the owner's rename must not reach it. `title_locked` is true
+    /// in BOTH cases, so only the expected-value comparison can tell them apart.
+    #[tokio::test]
+    async fn retitle_if_unchanged_refuses_after_a_manual_rename() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-retitle-refuse").await;
+        let row = create(
+            &db.conn,
+            folder,
+            AgentType::ClaudeCode,
+            Some("old".into()),
+            None,
+        )
+        .await
+        .expect("create");
+        update_title(&db.conn, row.id, "User pick".into())
+            .await
+            .expect("rename");
+
+        let wrote = retitle_if_unchanged(&db.conn, row.id, "old", "new")
+            .await
+            .expect("retitle");
+        assert!(!wrote, "a hand-picked title must not follow the owner");
+        let summary = get_by_id(&db.conn, row.id).await.expect("get");
+        assert_eq!(summary.title.as_deref(), Some("User pick"));
+    }
+
+    #[tokio::test]
+    async fn retitle_if_unchanged_skips_empty_and_identical() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-retitle-skip").await;
+        let row = create(
+            &db.conn,
+            folder,
+            AgentType::ClaudeCode,
+            Some("same".into()),
+            None,
+        )
+        .await
+        .expect("create");
+
+        assert!(
+            !retitle_if_unchanged(&db.conn, row.id, "same", "same")
+                .await
+                .expect("identical"),
+            "an unchanged owner name must be a no-op"
+        );
+        assert!(
+            !retitle_if_unchanged(&db.conn, row.id, "same", "   ")
+                .await
+                .expect("blank"),
+            "a blank new title must never erase the name"
+        );
+        let summary = get_by_id(&db.conn, row.id).await.expect("get");
+        assert_eq!(summary.title.as_deref(), Some("same"));
+    }
+
+    #[tokio::test]
+    async fn refresh_codex_auto_titles_converges_without_bumping_updated_at() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-codex-index-title").await;
+        let row = create(
+            &db.conn,
+            folder,
+            AgentType::Codex,
+            Some("Makefile 文件的作用".into()),
+            None,
+        )
+        .await
+        .expect("create");
+        bind_external_id(&db.conn, row.id, "codex-session-1", &[])
+            .await
+            .expect("set external id");
+        let before = get_by_id(&db.conn, row.id).await.expect("get before");
+        let titles = HashMap::from([(
+            "codex-session-1".to_string(),
+            "解释 Makefile 文件作用".to_string(),
+        )]);
+
+        assert_eq!(
+            refresh_codex_auto_titles(&db.conn, &titles).await,
+            vec![row.id]
+        );
+        let refreshed = get_by_id(&db.conn, row.id).await.expect("get refreshed");
+        assert_eq!(refreshed.title.as_deref(), Some("解释 Makefile 文件作用"));
+        assert_eq!(
+            refreshed.updated_at, before.updated_at,
+            "index title refresh must not count as conversation activity"
+        );
+
+        assert_eq!(
+            refresh_codex_auto_titles(&db.conn, &titles).await,
+            Vec::<i32>::new(),
+            "a converged title map must issue no UPDATE"
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_codex_auto_titles_keeps_partial_successes_after_row_failure() {
+        use sea_orm::{ConnectionTrait, DbBackend, Statement};
+
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-codex-index-partial-failure").await;
+        let successful = create(
+            &db.conn,
+            folder,
+            AgentType::Codex,
+            Some("old success".into()),
+            None,
+        )
+        .await
+        .expect("create successful candidate");
+        bind_external_id(&db.conn, successful.id, "session-success", &[])
+            .await
+            .expect("set successful external id");
+        let failing = create(
+            &db.conn,
+            folder,
+            AgentType::Codex,
+            Some("old failure".into()),
+            None,
+        )
+        .await
+        .expect("create failing candidate");
+        bind_external_id(&db.conn, failing.id, "session-failure", &[])
+            .await
+            .expect("set failing external id");
+        db.conn
+            .execute(Statement::from_string(
+                DbBackend::Sqlite,
+                format!(
+                    r#"CREATE TRIGGER fail_second_codex_title_sync
+                       BEFORE UPDATE OF title ON conversation
+                       WHEN OLD.id = {}
+                       BEGIN
+                         SELECT RAISE(FAIL, 'injected partial title sync failure');
+                       END"#,
+                    failing.id
+                ),
+            ))
+            .await
+            .expect("install title failure trigger");
+        let titles = HashMap::from([
+            ("session-success".to_string(), "new success".to_string()),
+            ("session-failure".to_string(), "new failure".to_string()),
+        ]);
+
+        let refreshed = refresh_codex_auto_titles(&db.conn, &titles).await;
+
+        assert_eq!(refreshed, vec![successful.id]);
+        assert_eq!(
+            get_by_id(&db.conn, successful.id)
+                .await
+                .expect("get successful row")
+                .title
+                .as_deref(),
+            Some("new success")
+        );
+        assert_eq!(
+            get_by_id(&db.conn, failing.id)
+                .await
+                .expect("get failing row")
+                .title
+                .as_deref(),
+            Some("old failure")
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_codex_auto_title_candidate_rechecks_external_id_at_write_time() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-codex-index-race").await;
+        let row = create(
+            &db.conn,
+            folder,
+            AgentType::Codex,
+            Some("old title".into()),
+            None,
+        )
+        .await
+        .expect("create");
+        bind_external_id(&db.conn, row.id, "session-before", &[])
+            .await
+            .expect("set initial external id");
+        let stale_candidate = conversation::Entity::find_by_id(row.id)
+            .one(&db.conn)
+            .await
+            .expect("query candidate")
+            .expect("candidate exists");
+
+        // In-place re-point: this test is about the CAS seeing a changed
+        // `external_id`, not about session preservation, so it uses the alias
+        // rewrite rather than `bind_external_id` (which would additionally
+        // split `session-before` onto a preserving row and put a second
+        // candidate-shaped row in front of the assertions below).
+        renormalize_external_id_alias(
+            &db.conn,
+            row.id,
+            Some("session-before"),
+            "session-after".into(),
+        )
+        .await
+        .expect("re-point conversation");
+        let wrote = refresh_codex_auto_title_candidate(
+            &db.conn,
+            &stale_candidate,
+            "title for session-before",
+        )
+        .await
+        .expect("conditional refresh");
+
+        assert!(!wrote, "a stale candidate must not update a re-pointed row");
+        let current = get_by_id(&db.conn, row.id).await.expect("read current row");
+        assert_eq!(current.external_id.as_deref(), Some("session-after"));
+        assert_eq!(current.title.as_deref(), Some("old title"));
+    }
+
+    #[tokio::test]
+    async fn refresh_codex_auto_title_candidate_rechecks_original_title_at_write_time() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-codex-index-title-race").await;
+        let row = create(
+            &db.conn,
+            folder,
+            AgentType::Codex,
+            Some("candidate title".into()),
+            None,
+        )
+        .await
+        .expect("create");
+        bind_external_id(&db.conn, row.id, "session-title-race", &[])
+            .await
+            .expect("set external id");
+        let stale_candidate = conversation::Entity::find_by_id(row.id)
+            .one(&db.conn)
+            .await
+            .expect("query candidate")
+            .expect("candidate exists");
+
+        refresh_auto_title(&db.conn, row.id, "newer automatic title".into())
+            .await
+            .expect("apply concurrent automatic title");
+        let wrote = refresh_codex_auto_title_candidate(
+            &db.conn,
+            &stale_candidate,
+            "stale session index title",
+        )
+        .await
+        .expect("conditional refresh");
+
+        assert!(!wrote, "a stale candidate must not overwrite a newer title");
+        let current = get_by_id(&db.conn, row.id).await.expect("read current row");
+        assert_eq!(current.title.as_deref(), Some("newer automatic title"));
+    }
+
+    #[tokio::test]
+    async fn refresh_codex_auto_title_candidate_rechecks_deleted_at_at_write_time() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-codex-index-delete-race").await;
+        let row = create(
+            &db.conn,
+            folder,
+            AgentType::Codex,
+            Some("candidate title".into()),
+            None,
+        )
+        .await
+        .expect("create");
+        bind_external_id(&db.conn, row.id, "session-delete-race", &[])
+            .await
+            .expect("set external id");
+        let stale_candidate = conversation::Entity::find_by_id(row.id)
+            .one(&db.conn)
+            .await
+            .expect("query candidate")
+            .expect("candidate exists");
+
+        soft_delete(&db.conn, row.id)
+            .await
+            .expect("concurrently delete candidate");
+        let wrote = refresh_codex_auto_title_candidate(
+            &db.conn,
+            &stale_candidate,
+            "stale session index title",
+        )
+        .await
+        .expect("conditional refresh");
+
+        assert!(!wrote, "a stale candidate must not update a deleted row");
+        let current = conversation::Entity::find_by_id(row.id)
+            .one(&db.conn)
+            .await
+            .expect("read current row")
+            .expect("soft-deleted row remains persisted");
+        assert!(current.deleted_at.is_some());
+        assert_eq!(current.title.as_deref(), Some("candidate title"));
+    }
+
+    #[tokio::test]
+    async fn refresh_codex_auto_title_candidate_rechecks_title_lock_at_write_time() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-codex-index-lock-race").await;
+        let row = create(
+            &db.conn,
+            folder,
+            AgentType::Codex,
+            Some("same manual title".into()),
+            None,
+        )
+        .await
+        .expect("create");
+        bind_external_id(&db.conn, row.id, "session-lock-race", &[])
+            .await
+            .expect("set external id");
+        let stale_candidate = conversation::Entity::find_by_id(row.id)
+            .one(&db.conn)
+            .await
+            .expect("query candidate")
+            .expect("candidate exists");
+
+        update_title(&db.conn, row.id, "same manual title".into())
+            .await
+            .expect("lock title without changing its value");
+        let wrote = refresh_codex_auto_title_candidate(
+            &db.conn,
+            &stale_candidate,
+            "stale session index title",
+        )
+        .await
+        .expect("conditional refresh");
+
+        assert!(
+            !wrote,
+            "a stale candidate must not overwrite a locked title"
+        );
+        let current = get_by_id(&db.conn, row.id).await.expect("read current row");
+        assert!(current.title_locked);
+        assert_eq!(current.title.as_deref(), Some("same manual title"));
+    }
+
+    #[tokio::test]
+    async fn refresh_codex_auto_title_candidate_rechecks_folder_deletion_at_write_time() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-codex-index-folder-race").await;
+        let row = create(
+            &db.conn,
+            folder,
+            AgentType::Codex,
+            Some("old title".into()),
+            None,
+        )
+        .await
+        .expect("create");
+        bind_external_id(&db.conn, row.id, "session-folder-race", &[])
+            .await
+            .expect("set external id");
+        let stale_candidate = conversation::Entity::find_by_id(row.id)
+            .one(&db.conn)
+            .await
+            .expect("query candidate")
+            .expect("candidate exists");
+
+        crate::db::service::folder_service::soft_delete_folder(&db.conn, folder)
+            .await
+            .expect("soft delete folder");
+        let wrote =
+            refresh_codex_auto_title_candidate(&db.conn, &stale_candidate, "index title").await;
+
+        assert!(
+            !wrote.expect("conditional refresh"),
+            "a row whose folder was deleted mid-refresh must not be rewritten (and so must not be broadcast)"
+        );
+        let current = get_by_id(&db.conn, row.id).await.expect("read current row");
+        assert_eq!(current.title.as_deref(), Some("old title"));
+    }
+
+    #[tokio::test]
+    async fn refresh_codex_auto_title_candidate_adopts_a_title_over_null() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-codex-index-null-title").await;
+        let row = create(&db.conn, folder, AgentType::Codex, None, None)
+            .await
+            .expect("create");
+        bind_external_id(&db.conn, row.id, "session-null-title", &[])
+            .await
+            .expect("set external id");
+        let candidate = conversation::Entity::find_by_id(row.id)
+            .one(&db.conn)
+            .await
+            .expect("query candidate")
+            .expect("candidate exists");
+        assert!(candidate.title.is_none(), "fixture must start titleless");
+
+        assert!(
+            refresh_codex_auto_title_candidate(&db.conn, &candidate, "first Codex title")
+                .await
+                .expect("conditional refresh"),
+            "the IS NULL branch of the observed-title CAS must still write"
+        );
+        assert_eq!(
+            get_by_id(&db.conn, row.id)
+                .await
+                .expect("read current row")
+                .title
+                .as_deref(),
+            Some("first Codex title")
+        );
+
+        // ...and once a title exists, the same stale (title = NULL) candidate
+        // must no longer match.
+        assert!(
+            !refresh_codex_auto_title_candidate(&db.conn, &candidate, "second Codex title")
+                .await
+                .expect("conditional refresh"),
+            "a stale titleless candidate must not clobber the title it just wrote"
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_codex_auto_titles_skips_rows_the_sidebar_list_hides() {
+        let db = fresh_in_memory_db().await;
+        let live_folder = seed_folder(&db, "/tmp/codeg-codex-index-visible").await;
+        let dead_folder = seed_folder(&db, "/tmp/codeg-codex-index-hidden").await;
+
+        let visible = create(
+            &db.conn,
+            live_folder,
+            AgentType::Codex,
+            Some("old visible".into()),
+            None,
+        )
+        .await
+        .expect("create visible");
+        bind_external_id(&db.conn, visible.id, "session-visible", &[])
+            .await
+            .expect("set visible external id");
+
+        let in_dead_folder = create(
+            &db.conn,
+            dead_folder,
+            AgentType::Codex,
+            Some("old hidden".into()),
+            None,
+        )
+        .await
+        .expect("create hidden");
+        bind_external_id(&db.conn, in_dead_folder.id, "session-hidden", &[])
+            .await
+            .expect("set hidden external id");
+        crate::db::service::folder_service::soft_delete_folder(&db.conn, dead_folder)
+            .await
+            .expect("soft delete folder");
+
+        let loop_row = create(
+            &db.conn,
+            live_folder,
+            AgentType::Codex,
+            Some("old loop".into()),
+            None,
+        )
+        .await
+        .expect("create loop row");
+        bind_external_id(&db.conn, loop_row.id, "session-loop", &[])
+            .await
+            .expect("set loop external id");
+        // No public write path mints kind='loop' yet, so flip it directly.
+        let mut active: conversation::ActiveModel = conversation::Entity::find_by_id(loop_row.id)
+            .one(&db.conn)
+            .await
+            .expect("query loop row")
+            .expect("loop row exists")
+            .into();
+        active.kind = Set(ConversationKind::Loop);
+        active.update(&db.conn).await.expect("flip kind");
+
+        let titles = HashMap::from([
+            ("session-visible".to_string(), "new visible".to_string()),
+            ("session-hidden".to_string(), "new hidden".to_string()),
+            ("session-loop".to_string(), "new loop".to_string()),
+        ]);
+
+        let refreshed = refresh_codex_auto_titles(&db.conn, &titles).await;
+
+        assert_eq!(
+            refreshed,
+            vec![visible.id],
+            "only rows `list_all` would return may be refreshed — every refreshed id is broadcast as a sidebar upsert"
+        );
+        assert_eq!(
+            get_by_id(&db.conn, in_dead_folder.id)
+                .await
+                .expect("read hidden row")
+                .title
+                .as_deref(),
+            Some("old hidden")
+        );
+        assert_eq!(
+            get_by_id(&db.conn, loop_row.id)
+                .await
+                .expect("read loop row")
+                .title
+                .as_deref(),
+            Some("old loop")
+        );
+    }
+
+    #[tokio::test]
     async fn refresh_external_activity_moves_forward_only() {
         let db = fresh_in_memory_db().await;
         let folder = seed_folder(&db, "/tmp/codeg-activity").await;
@@ -1147,6 +3746,7 @@ mod tests {
                 parent_conversation_id: parent.id,
                 parent_tool_use_id: "tu-activity".into(),
                 delegation_call_id: "call-activity".into(),
+                assistant: None,
             }),
         )
         .await
@@ -1207,6 +3807,7 @@ mod tests {
                 parent_conversation_id: regular.id,
                 parent_tool_use_id: "tu-kind".into(),
                 delegation_call_id: "call-kind".into(),
+                assistant: None,
             }),
         )
         .await
@@ -1250,6 +3851,311 @@ mod tests {
         assert!(
             !rows.iter().any(|r| r.title.as_deref() == Some("hide")),
             "loop row must be excluded"
+        );
+    }
+
+    // -- relocation (move to project / worktree re-parent) -------------------
+
+    async fn raw(conn: &DatabaseConnection, id: i32) -> conversation::Model {
+        conversation::Entity::find_by_id(id)
+            .one(conn)
+            .await
+            .expect("query")
+            .expect("row")
+    }
+
+    async fn tree_move(
+        conn: &DatabaseConnection,
+        root_id: i32,
+        target: i32,
+        target_path: &str,
+    ) -> RelocateOutcome {
+        relocate_conversations(
+            conn,
+            RelocateSelection::Tree { root_id },
+            target,
+            target_path,
+            RelocateOptions {
+                touch_updated_at: false,
+            },
+        )
+        .await
+        .expect("relocate")
+    }
+
+    #[test]
+    fn effective_origin_follows_the_session_not_the_folder() {
+        // Never moved: the session was recorded where the row lived.
+        assert_eq!(
+            effective_origin_after_move(None, "/x", "/y").as_deref(),
+            Some("/x")
+        );
+        // Moved before: the session is still at the first place.
+        assert_eq!(
+            effective_origin_after_move(Some("/x"), "/w", "/y").as_deref(),
+            Some("/x")
+        );
+        // Back where it started: nothing to remember (trailing slash ignored).
+        assert_eq!(effective_origin_after_move(Some("/x"), "/w", "/x/"), None);
+        assert_eq!(effective_origin_after_move(None, "/x", "/x"), None);
+        // An empty stored value counts as unset.
+        assert_eq!(
+            effective_origin_after_move(Some(""), "/x", "/y").as_deref(),
+            Some("/x")
+        );
+    }
+
+    #[tokio::test]
+    async fn tree_move_takes_the_same_folder_subtree_and_leaves_the_rest() {
+        let db = fresh_in_memory_db().await;
+        let from = seed_folder(&db, "/tmp/codeg-move-from").await;
+        let to = seed_folder(&db, "/tmp/codeg-move-to").await;
+        let elsewhere = seed_folder(&db, "/tmp/codeg-move-elsewhere").await;
+        let (root, child) = seed_parent_with_child(&db.conn, from).await;
+        // A grandchild in the same folder moves too.
+        let grandchild = create_with_delegation(
+            &db.conn,
+            from,
+            AgentType::Codex,
+            None,
+            None,
+            Some(DelegationLink {
+                parent_conversation_id: child,
+                parent_tool_use_id: "tu-2".into(),
+                delegation_call_id: "call-2".into(),
+                assistant: None,
+            }),
+        )
+        .await
+        .expect("grandchild")
+        .id;
+        // A child delegated into another folder stays there.
+        let remote = create_with_delegation(
+            &db.conn,
+            elsewhere,
+            AgentType::Codex,
+            None,
+            None,
+            Some(DelegationLink {
+                parent_conversation_id: root,
+                parent_tool_use_id: "tu-3".into(),
+                delegation_call_id: "call-3".into(),
+                assistant: None,
+            }),
+        )
+        .await
+        .expect("remote child")
+        .id;
+        let before = raw(&db.conn, root).await.updated_at;
+
+        let outcome = tree_move(&db.conn, root, to, "/tmp/codeg-move-to").await;
+        let RelocateOutcome::Moved(rows) = outcome else {
+            panic!("expected a move, got {outcome:?}");
+        };
+        let mut ids: Vec<i32> = rows.iter().map(|r| r.id).collect();
+        ids.sort_unstable();
+        let mut expected = vec![root, child, grandchild];
+        expected.sort_unstable();
+        assert_eq!(ids, expected);
+        assert!(rows.iter().all(|r| r.from_folder_id == from && !r.was_chat));
+
+        for id in [root, child, grandchild] {
+            let row = raw(&db.conn, id).await;
+            assert_eq!(row.folder_id, to);
+            assert_eq!(row.origin_cwd.as_deref(), Some("/tmp/codeg-move-from"));
+        }
+        assert_eq!(raw(&db.conn, child).await.kind, ConversationKind::Delegate);
+        assert_eq!(
+            raw(&db.conn, root).await.updated_at,
+            before,
+            "a user's move is not activity"
+        );
+        let remote_row = raw(&db.conn, remote).await;
+        assert_eq!(remote_row.folder_id, elsewhere);
+        assert_eq!(remote_row.origin_cwd, None);
+    }
+
+    #[tokio::test]
+    async fn tree_move_turns_a_chat_root_into_a_regular_conversation() {
+        let db = fresh_in_memory_db().await;
+        let chat_folder = crate::db::service::folder_service::add_chat_folder(
+            &db.conn,
+            "/data/chat-sessions/2026-11-12/abc",
+        )
+        .await
+        .expect("chat folder")
+        .id;
+        let to = seed_folder(&db, "/tmp/codeg-move-chat-to").await;
+        let chat = create_chat(&db.conn, chat_folder, AgentType::ClaudeCode, None, None)
+            .await
+            .expect("chat");
+
+        let RelocateOutcome::Moved(rows) =
+            tree_move(&db.conn, chat.id, to, "/tmp/codeg-move-chat-to").await
+        else {
+            panic!("chat root should move");
+        };
+        assert_eq!(
+            rows,
+            vec![RelocatedRow {
+                id: chat.id,
+                from_folder_id: chat_folder,
+                was_chat: true,
+            }]
+        );
+        let row = raw(&db.conn, chat.id).await;
+        assert_eq!(row.kind, ConversationKind::Regular);
+        assert_eq!(row.folder_id, to);
+        assert_eq!(
+            row.origin_cwd.as_deref(),
+            Some("/data/chat-sessions/2026-11-12/abc")
+        );
+    }
+
+    #[tokio::test]
+    async fn tree_move_skips_what_it_must_not_move() {
+        let db = fresh_in_memory_db().await;
+        let from = seed_folder(&db, "/tmp/codeg-move-skip-from").await;
+        let to = seed_folder(&db, "/tmp/codeg-move-skip-to").await;
+        let (_root, child) = seed_parent_with_child(&db.conn, from).await;
+        let deleted = create(&db.conn, from, AgentType::ClaudeCode, None, None)
+            .await
+            .unwrap()
+            .id;
+        soft_delete(&db.conn, deleted).await.unwrap();
+        let looped = create(&db.conn, from, AgentType::ClaudeCode, None, None)
+            .await
+            .unwrap();
+        let mut active: conversation::ActiveModel = looped.clone().into();
+        active.kind = Set(ConversationKind::Loop);
+        active.update(&db.conn).await.unwrap();
+        let home = create(&db.conn, to, AgentType::ClaudeCode, None, None)
+            .await
+            .unwrap()
+            .id;
+
+        let path = "/tmp/codeg-move-skip-to";
+        assert_eq!(
+            tree_move(&db.conn, 9999, to, path).await,
+            RelocateOutcome::Skipped(RelocateSkip::NotFound)
+        );
+        assert_eq!(
+            tree_move(&db.conn, deleted, to, path).await,
+            RelocateOutcome::Skipped(RelocateSkip::NotFound)
+        );
+        assert_eq!(
+            tree_move(&db.conn, child, to, path).await,
+            RelocateOutcome::Skipped(RelocateSkip::NotMovable)
+        );
+        assert_eq!(
+            tree_move(&db.conn, looped.id, to, path).await,
+            RelocateOutcome::Skipped(RelocateSkip::NotMovable)
+        );
+        assert_eq!(
+            tree_move(&db.conn, home, to, path).await,
+            RelocateOutcome::Skipped(RelocateSkip::AlreadyThere)
+        );
+        assert_eq!(raw(&db.conn, child).await.folder_id, from);
+        assert_eq!(raw(&db.conn, looped.id).await.folder_id, from);
+
+        // A target closed (or removed) after the caller checked it is refused
+        // inside the transaction; nothing moves.
+        let movable = create(&db.conn, from, AgentType::ClaudeCode, None, None)
+            .await
+            .unwrap()
+            .id;
+        crate::db::service::folder_service::set_folder_open(&db.conn, to, false)
+            .await
+            .unwrap();
+        assert_eq!(
+            tree_move(&db.conn, movable, to, path).await,
+            RelocateOutcome::Skipped(RelocateSkip::TargetUnavailable)
+        );
+        crate::db::service::folder_service::set_folder_open(&db.conn, to, true)
+            .await
+            .unwrap();
+        crate::db::service::folder_service::soft_delete_folder(&db.conn, to)
+            .await
+            .unwrap();
+        assert_eq!(
+            tree_move(&db.conn, movable, to, path).await,
+            RelocateOutcome::Skipped(RelocateSkip::TargetUnavailable)
+        );
+        assert_eq!(raw(&db.conn, movable).await.folder_id, from);
+    }
+
+    #[tokio::test]
+    async fn worktree_reparent_keeps_the_first_origin_and_clears_it_at_home() {
+        let db = fresh_in_memory_db().await;
+        let x = seed_folder(&db, "/tmp/codeg-origin-x").await;
+        let p = seed_folder(&db, "/tmp/codeg-origin-p").await;
+        let w = seed_folder(&db, "/tmp/codeg-origin-w").await;
+        let from_x = create(&db.conn, x, AgentType::ClaudeCode, None, None)
+            .await
+            .unwrap()
+            .id;
+        let from_p = create(&db.conn, p, AgentType::ClaudeCode, None, None)
+            .await
+            .unwrap()
+            .id;
+        let born_in_w = create(&db.conn, w, AgentType::ClaudeCode, None, None)
+            .await
+            .unwrap()
+            .id;
+        // X → W and P → W by the user…
+        tree_move(&db.conn, from_x, w, "/tmp/codeg-origin-w").await;
+        tree_move(&db.conn, from_p, w, "/tmp/codeg-origin-w").await;
+        let before = raw(&db.conn, born_in_w).await.updated_at;
+
+        // …then W is removed and everything in it goes back to P.
+        let moved = reparent_folder_conversations(&db.conn, w, p, "/tmp/codeg-origin-w")
+            .await
+            .unwrap();
+        assert_eq!(moved, 3);
+
+        let x_row = raw(&db.conn, from_x).await;
+        assert_eq!(x_row.folder_id, p);
+        assert_eq!(
+            x_row.origin_cwd.as_deref(),
+            Some("/tmp/codeg-origin-x"),
+            "the session is still where it was first recorded"
+        );
+        assert_eq!(
+            raw(&db.conn, from_p).await.origin_cwd,
+            None,
+            "back at its first folder, there is nothing to remember"
+        );
+        let w_row = raw(&db.conn, born_in_w).await;
+        assert_eq!(w_row.origin_cwd.as_deref(), Some("/tmp/codeg-origin-w"));
+        assert!(
+            w_row.updated_at >= before,
+            "the worktree re-parent keeps bumping updated_at"
+        );
+    }
+
+    #[tokio::test]
+    async fn live_origin_cwds_skip_deleted_rows() {
+        let db = fresh_in_memory_db().await;
+        let x = seed_folder(&db, "/tmp/codeg-origins-x").await;
+        let y = seed_folder(&db, "/tmp/codeg-origins-y").await;
+        let kept = create(&db.conn, x, AgentType::ClaudeCode, None, None)
+            .await
+            .unwrap()
+            .id;
+        let gone = create(&db.conn, x, AgentType::Codex, None, None)
+            .await
+            .unwrap()
+            .id;
+        create(&db.conn, x, AgentType::Gemini, None, None)
+            .await
+            .unwrap();
+        tree_move(&db.conn, kept, y, "/tmp/codeg-origins-y").await;
+        tree_move(&db.conn, gone, y, "/tmp/codeg-origins-y").await;
+        soft_delete(&db.conn, gone).await.unwrap();
+
+        assert_eq!(
+            list_live_origin_cwds(&db.conn).await.unwrap(),
+            vec!["/tmp/codeg-origins-x".to_string()]
         );
     }
 }

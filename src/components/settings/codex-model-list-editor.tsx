@@ -1,13 +1,14 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 import {
   ChevronDown,
   ChevronRight,
   Info,
+  ListChecks,
+  Loader2,
   Plus,
-  RefreshCw,
   Star,
   Trash2,
 } from "lucide-react"
@@ -18,17 +19,45 @@ import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import {
+  CodexCatalogPickerDialog,
+  CodexCatalogStatusLine,
+  CodexListNotices,
+  CodexListUrlField,
+  CodexProviderListSummary,
+  CodexSourceSwitch,
+  deriveCatalogUrl,
+  templateHint,
+  useCodexProviderList,
+  type CodexCatalogEndpoint,
+  type CodexPickerItem,
+} from "@/components/settings/codex-catalog-source"
+import { ProviderModelsRefreshButton } from "@/components/settings/provider-models"
 import { codexBundledCatalog } from "@/lib/api"
-import type {
-  CodexCustomEntry,
-  CodexModelConfig,
-  CodexModelInfo,
+import type { CodexCatalogTranslator } from "@/lib/codex-catalog-error"
+import {
+  applyCodexCompatOverrides,
+  hasCodexCustomization,
+  isCodexCompatEntry,
+  pruneCodexGhostExclusions,
+  type CodexCatalogSource,
+  type CodexCustomEntry,
+  type CodexEndpointCatalogView,
+  type CodexModelConfig,
+  type CodexModelInfo,
+  type CodexOpenAiIdView,
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -107,7 +136,31 @@ type EnumField = {
   options: string[]
   nullable?: boolean
 }
-type BoolField = { key: string; labelKey: string }
+/** `defaultOn` marks a flag codex treats as **true when absent** (it is skipped
+ *  during serialization at its default), so the switch must not read as off. */
+type BoolField = { key: string; labelKey: string; defaultOn?: boolean }
+
+/** Wire-protocol shape. These decide whether codex speaks plain OpenAI
+ *  Responses or its own GPT-only dialect, which is what makes or breaks a
+ *  third-party gateway — see `CODEX_COMPAT_OVERRIDES`. */
+const PROTOCOL_ENUM_FIELDS: EnumField[] = [
+  {
+    key: "tool_mode",
+    labelKey: "fieldToolMode",
+    options: ["direct", "code_mode", "code_mode_only"],
+    nullable: true,
+  },
+  {
+    key: "multi_agent_version",
+    labelKey: "fieldMultiAgent",
+    options: ["v1", "v2"],
+    nullable: true,
+  },
+]
+
+const PROTOCOL_BOOL_FIELDS: BoolField[] = [
+  { key: "use_responses_lite", labelKey: "fieldResponsesLite" },
+]
 
 const ENUM_FIELDS: EnumField[] = [
   {
@@ -127,19 +180,43 @@ const ENUM_FIELDS: EnumField[] = [
     options: ["default", "local", "unified_exec", "disabled", "shell_command"],
   },
   {
-    // codex 0.144 accepts only `freeform` (or none); `function` is not a variant.
+    // codex 0.147 accepts only `freeform` (or none); `function` is not a variant.
     key: "apply_patch_tool_type",
     labelKey: "fieldApplyPatch",
     options: ["freeform"],
     nullable: true,
   },
+  {
+    key: "web_search_tool_type",
+    labelKey: "fieldWebSearchType",
+    options: ["text", "text_and_image"],
+  },
 ]
 
 const BOOL_FIELDS: BoolField[] = [
-  { key: "supports_reasoning_summaries", labelKey: "fieldReasoningSummaries" },
+  // Renamed from `supports_reasoning_summaries` in codex 0.147, and omitted from
+  // the catalog while it holds its `true` default.
+  {
+    key: "supports_reasoning_summary_parameter",
+    labelKey: "fieldReasoningSummaryParam",
+    defaultOn: true,
+  },
   { key: "support_verbosity", labelKey: "fieldSupportVerbosity" },
   { key: "supports_parallel_tool_calls", labelKey: "fieldParallelToolCalls" },
   { key: "supports_search_tool", labelKey: "fieldSearchTool" },
+  {
+    key: "supports_image_detail_original",
+    labelKey: "fieldImageDetailOriginal",
+  },
+  { key: "include_apps_usage_instructions", labelKey: "fieldAppsInstructions" },
+  {
+    key: "include_plugin_usage_instructions",
+    labelKey: "fieldPluginInstructions",
+  },
+  {
+    key: "include_skills_usage_instructions",
+    labelKey: "fieldSkillsInstructions",
+  },
 ]
 
 function asRecord(info: CodexModelInfo | undefined): Record<string, unknown> {
@@ -168,15 +245,54 @@ function isListable(m: CodexModelInfo): boolean {
 
 export function CodexModelListEditor({
   value,
-  onChange,
+  onChange: rawOnChange,
   readOnly = false,
+  endpoint = null,
 }: {
   value: CodexModelConfig
   onChange: (next: CodexModelConfig) => void
   readOnly?: boolean
+  /** Where a provider's own list would come from. `null` offers codex's
+   *  built-in list only (no provider to ask, e.g. the ChatGPT subscription). */
+  endpoint?: CodexCatalogEndpoint | null
 }) {
   const t = useTranslations("CodexModelEditor")
+  const ts = useTranslations("CodexModelEditor.catalogSource")
+  const tl = ts as unknown as CodexCatalogTranslator
   const { catalog, refreshing, refresh } = useCodexCatalog()
+  const source = endpoint ? value.catalog : undefined
+  const provider = useCodexProviderList(endpoint, source)
+  const valueRef = useRef(value)
+  useEffect(() => {
+    valueRef.current = value
+  }, [value])
+
+  // The shape the provider's rows have: the one recorded when the list was
+  // applied, else what the rows at hand say.
+  const format = source ? (source.format ?? provider.rows?.format) : undefined
+  const providerModels = useMemo(
+    () =>
+      source && format === "native" && provider.rows?.models
+        ? provider.rows.models
+        : null,
+    [source, format, provider.rows]
+  )
+
+  // Heal ghost exclusions (officials codex has since retired to `hide`, or a
+  // provider stopped listing) on the way out: they are invisible here yet
+  // would keep codeg replacing codex's whole model table. Pruning on emit —
+  // not on mount — keeps an untouched form byte-identical to what was stored,
+  // so nothing reports a spurious change. Without rows to judge by (a provider
+  // list not fetched yet) nothing is pruned.
+  const pruneAgainst = useMemo(
+    () => (source ? (providerModels ?? []) : catalog),
+    [source, providerModels, catalog]
+  )
+  const onChange = useCallback(
+    (next: CodexModelConfig) =>
+      rawOnChange(pruneCodexGhostExclusions(next, pruneAgainst)),
+    [rawOnChange, pruneAgainst]
+  )
 
   const customs = value.customs ?? []
   const excluded = useMemo(
@@ -186,27 +302,189 @@ export function CodexModelListEditor({
   // Once the user adds a custom or removes an official, codeg writes codex's
   // whole `model_catalog_json` (a full-table replace), so officials codex ships
   // later stop appearing on their own until this list is refreshed + re-saved.
-  // Surface that caveat wherever this editor is mounted.
-  const hasCustomization = customs.length > 0 || excluded.size > 0
+  // Surface that caveat wherever this editor is mounted — but only for removals
+  // that still apply, or a long-retired one keeps the warning up forever. A
+  // provider's list is refreshed on its own, so it carries no such caveat.
+  const hasCustomization = !source && hasCodexCustomization(value, catalog)
   const bySlug = useMemo(() => {
     const map = new Map<string, CodexModelInfo>()
     for (const m of catalog) map.set(m.slug, m)
     return map
   }, [catalog])
 
-  const officials = useMemo(() => catalog.filter(isListable), [catalog])
+  const officials = useMemo(
+    () => (source ? (providerModels ?? []) : catalog).filter(isListable),
+    [source, providerModels, catalog]
+  )
   const shownOfficials = officials.filter((m) => !excluded.has(m.slug))
   const excludedOfficials = officials.filter((m) => excluded.has(m.slug))
+  const selected = useMemo(
+    () => (format === "openai_list" ? (source?.selected ?? []) : []),
+    [format, source]
+  )
+  const idViews = useMemo(() => {
+    const map = new Map<string, CodexOpenAiIdView>()
+    for (const v of provider.rows?.missing ?? []) map.set(v.id, v)
+    for (const v of provider.rows?.ids ?? []) map.set(v.id, v)
+    return map
+  }, [provider.rows])
+  const returned = useMemo(
+    () => new Set((provider.rows?.ids ?? []).map((v) => v.id)),
+    [provider.rows]
+  )
 
   // Effective default mirrors the backend: explicit default when it names a
-  // shown model, else the first custom, else the first shown official.
+  // shown model, else the first custom, else the first shown official (or
+  // picked id).
+  const shownSlugs =
+    format === "openai_list" ? selected : shownOfficials.map((m) => m.slug)
   const isShown = (slug: string) =>
-    customs.some((c) => c.slug === slug) ||
-    shownOfficials.some((m) => m.slug === slug)
+    customs.some((c) => c.slug === slug) || shownSlugs.includes(slug)
   const effectiveDefault =
     value.default && isShown(value.default)
       ? value.default
-      : (customs[0]?.slug ?? shownOfficials[0]?.slug)
+      : (customs[0]?.slug ?? shownSlugs[0])
+
+  // ── The provider's list ──
+  const [picker, setPicker] = useState<{
+    mode: "manage" | "repick"
+    view: CodexEndpointCatalogView
+  } | null>(null)
+  const autoFetch = useRef(false)
+
+  const fetchList = useCallback(async () => {
+    const view = await provider.fetchNow()
+    const current = valueRef.current
+    if (!view || !current.catalog) return
+    if (!current.catalog.format) {
+      // The first answer fixes the shape, and with it what removing means.
+      rawOnChange({
+        ...current,
+        catalog: { ...current.catalog, format: view.format },
+      })
+      if (view.format === "openai_list") setPicker({ mode: "manage", view })
+    }
+    // `setPicker` is a stable state setter; listed only because the compiler
+    // infers it as a dependency here.
+  }, [provider, rawOnChange, setPicker])
+
+  useEffect(() => {
+    if (autoFetch.current && provider.request && !provider.fetching) {
+      autoFetch.current = false
+      void fetchList()
+    }
+  }, [provider.request, provider.fetching, fetchList])
+
+  const setSource = (next: CodexCatalogSource | undefined) => {
+    const current = valueRef.current
+    const out: CodexModelConfig = { ...current }
+    if (next) out.catalog = next
+    else delete out.catalog
+    // Switched on: ask the provider at once.
+    if (next && !current.catalog) autoFetch.current = true
+    rawOnChange(out)
+  }
+
+  const unselect = (id: string) =>
+    onChange({
+      ...value,
+      catalog: { ...source, selected: selected.filter((s) => s !== id) },
+      default: value.default === id ? undefined : value.default,
+    })
+
+  const asCustom = (id: string): CodexCustomEntry => ({
+    slug: id,
+    base:
+      catalog.find((m) => id.startsWith(m.slug))?.slug ??
+      catalog[0]?.slug ??
+      id,
+  })
+
+  const pickerProps = (() => {
+    if (!picker) return null
+    const view = picker.view
+    if (picker.mode === "manage" || view.format === "openai_list") {
+      const ids = view.ids ?? []
+      const previous =
+        picker.mode === "manage" ? selected : shownOfficials.map((m) => m.slug)
+      const newIds = new Set(view.diff.added)
+      const items: CodexPickerItem[] = ids.map((v) => ({
+        id: v.id,
+        hint: templateHint(v, tl),
+        badge: newIds.has(v.id) && !previous.includes(v.id) ? "new" : undefined,
+      }))
+      const listed = new Set(ids.map((v) => v.id))
+      if (picker.mode === "manage") {
+        // Picked ids the provider stopped returning stay picked until the
+        // user lets them go.
+        for (const id of selected.filter((s) => !listed.has(s))) {
+          items.push({
+            id,
+            hint: templateHint(idViews.get(id), tl),
+            badge: "gone",
+          })
+        }
+      }
+      return {
+        title: ts(picker.mode === "manage" ? "pickerTitle" : "repickTitle"),
+        description: ts(
+          picker.mode === "manage" ? "pickerHint" : "repickHintOpenai"
+        ),
+        items,
+        initial:
+          picker.mode === "manage"
+            ? previous
+            : previous.filter((id) => listed.has(id)),
+        removals:
+          picker.mode === "manage"
+            ? []
+            : previous.filter((id) => !listed.has(id)),
+        onConfirm: (picked: string[], keep: string[]) => {
+          const current = valueRef.current
+          onChange({
+            ...current,
+            customs: [...(current.customs ?? []), ...keep.map(asCustom)],
+            catalog: {
+              ...current.catalog,
+              format: "openai_list",
+              selected: picked,
+            },
+          })
+        },
+      }
+    }
+    // Into a native catalog: what stays unpicked is hidden.
+    const models = (view.models ?? []).filter(isListable)
+    const slugs = new Set(models.map((m) => m.slug))
+    return {
+      title: ts("repickTitle"),
+      description: ts("repickHintNative"),
+      items: models.map((m) => ({
+        id: m.slug,
+        hint:
+          m.display_name && m.display_name !== m.slug
+            ? m.display_name
+            : undefined,
+      })),
+      initial: selected.filter((id) => slugs.has(id)),
+      removals: selected.filter((id) => !slugs.has(id)),
+      onConfirm: (picked: string[], keep: string[]) => {
+        const current = valueRef.current
+        const kept = new Set(picked)
+        const next: CodexModelConfig = {
+          ...current,
+          customs: [...(current.customs ?? []), ...keep.map(asCustom)],
+          catalog: { ...current.catalog, format: "native" },
+          excludedOfficials: models
+            .map((m) => m.slug)
+            .filter((slug) => !kept.has(slug)),
+        }
+        delete next.catalog?.selected
+        if (!next.excludedOfficials?.length) delete next.excludedOfficials
+        rawOnChange(next)
+      },
+    }
+  })()
 
   const setDefault = (slug: string) => onChange({ ...value, default: slug })
   const excludeOfficial = (slug: string) =>
@@ -220,14 +498,22 @@ export function CodexModelListEditor({
       ...value,
       excludedOfficials: [...excluded].filter((s) => s !== slug),
     })
-  const addCustom = () =>
+  const addCustom = (compat: boolean) => {
+    const base = catalog[0]?.slug ?? ""
+    const entry: CodexCustomEntry = { slug: "", base }
     onChange({
       ...value,
       customs: [
         ...customs,
-        { slug: "", base: catalog[0]?.slug ?? "", overrides: {} },
+        {
+          ...entry,
+          overrides: compat
+            ? applyCodexCompatOverrides(entry, asRecord(bySlug.get(base)), true)
+            : undefined,
+        },
       ],
     })
+  }
   const patchCustom = (index: number, patch: Partial<CodexCustomEntry>) =>
     onChange({
       ...value,
@@ -242,117 +528,225 @@ export function CodexModelListEditor({
     })
   }
 
+  const providerRowsMissing = !!source && !provider.rows
+  const managed = !!endpoint?.managedBy
+  const editable = !readOnly && !managed
+  const officialsHint = !source
+    ? t("officialsHint")
+    : format === "openai_list"
+      ? ts("providerModelsHintOpenai")
+      : ts("providerModelsHintNative")
+  const listUrl = source
+    ? source.url?.trim() || deriveCatalogUrl(endpoint?.baseUrl ?? "") || ""
+    : ""
+
+  const emptyText =
+    format === "openai_list"
+      ? providerRowsMissing
+        ? ts("fetchFirst")
+        : ts("nothingPicked")
+      : providerRowsMissing
+        ? ts("fetchFirst")
+        : t("officialsEmpty")
+  const rows =
+    format === "openai_list"
+      ? selected.map((id) => (
+          <CodexModelRow
+            key={id}
+            name={id}
+            mono
+            detail={templateHint(idViews.get(id), tl)}
+            badge={
+              provider.rows && !returned.has(id) ? ts("badgeGone") : undefined
+            }
+            isDefault={id === effectiveDefault}
+            readOnly={readOnly}
+            onMakeDefault={() => onChange({ ...value, default: id })}
+            onRemove={() => unselect(id)}
+          />
+        ))
+      : shownOfficials.map((m) => (
+          <CodexModelRow
+            key={m.slug}
+            name={m.display_name || m.slug}
+            mono={!m.display_name || m.display_name === m.slug}
+            detail={m.display_name && m.display_name !== m.slug ? m.slug : ""}
+            detailMono
+            isDefault={m.slug === effectiveDefault}
+            readOnly={readOnly}
+            onMakeDefault={() => setDefault(m.slug)}
+            onRemove={() => excludeOfficial(m.slug)}
+          />
+        ))
+
   return (
     <div className="space-y-4">
-      {hasCustomization && (
-        <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[11px] text-amber-500">
-          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          <span>{t("customizedNotice")}</span>
-        </div>
-      )}
-
-      {/* Officials: auto-included from the live catalog, deletable. */}
+      {/* The models Codex offers: where they come from, how that list
+          stands, and the rows themselves — one section. */}
       <section className="space-y-2">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-xs font-semibold">{t("officialsTitle")}</p>
-            <p className="text-[11px] text-muted-foreground">
-              {t("officialsHint")}
-            </p>
-          </div>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7 shrink-0 text-muted-foreground"
-            onClick={refresh}
-            disabled={refreshing}
-            title={t("refresh")}
-            aria-label={t("refresh")}
-          >
-            <RefreshCw
-              className={cn("h-3.5 w-3.5", refreshing && "animate-spin")}
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+          <p className="text-xs font-semibold">{t("modelsTitle")}</p>
+          {endpoint && (
+            <CodexSourceSwitch
+              value={source ? "provider" : "builtin"}
+              disabled={readOnly || managed}
+              onChange={(next) =>
+                setSource(next === "provider" ? (source ?? {}) : undefined)
+              }
             />
-          </Button>
+          )}
         </div>
-
-        {shownOfficials.length === 0 ? (
-          <p className="rounded-md border border-dashed px-3 py-3 text-center text-[11px] text-muted-foreground">
-            {t("officialsEmpty")}
+        {managed && (
+          <p className="text-2xs font-medium text-muted-foreground">
+            {ts("managedBy", { name: endpoint?.managedBy ?? "" })}
           </p>
-        ) : (
-          <div className="space-y-1.5">
-            {shownOfficials.map((m) => (
-              <div
-                key={m.slug}
-                className="flex items-center gap-2 rounded-md border px-2 py-1.5"
-              >
-                <button
-                  type="button"
-                  title={
-                    m.slug === effectiveDefault
-                      ? t("defaultHint")
-                      : t("makeDefault")
-                  }
-                  onClick={() => setDefault(m.slug)}
-                  disabled={readOnly}
-                  className={cn(
-                    "shrink-0 text-muted-foreground transition-colors hover:text-amber-500 disabled:opacity-40",
-                    m.slug === effectiveDefault && "text-amber-500"
-                  )}
-                >
-                  <Star
-                    className={cn(
-                      "h-4 w-4",
-                      m.slug === effectiveDefault && "fill-current"
-                    )}
-                  />
-                </button>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-xs">{m.display_name || m.slug}</p>
-                  <p className="truncate text-[11px] text-muted-foreground">
-                    {m.slug}
-                  </p>
-                </div>
-                {!readOnly && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 shrink-0 text-muted-foreground hover:text-red-500"
-                    onClick={() => excludeOfficial(m.slug)}
-                    aria-label={t("remove")}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                )}
-              </div>
-            ))}
+        )}
+        <p className="text-2xs text-muted-foreground">{officialsHint}</p>
+        {source && endpoint && editable && (
+          <CodexListUrlField
+            endpoint={endpoint}
+            source={source}
+            onSourceChange={setSource}
+          />
+        )}
+        {source && managed && listUrl && (
+          <p className="truncate font-mono text-2xs text-muted-foreground">
+            {listUrl}
+          </p>
+        )}
+        {source && (
+          <CodexListNotices
+            list={provider}
+            editable={editable}
+            onRepick={() =>
+              provider.formatChanged &&
+              setPicker({ mode: "repick", view: provider.formatChanged })
+            }
+          />
+        )}
+        {hasCustomization && (
+          <div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-2xs text-amber-600 dark:text-amber-400">
+            <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>{t("customizedNotice")}</span>
           </div>
         )}
 
-        {!readOnly && excludedOfficials.length > 0 && (
-          <Select value="" onValueChange={readdOfficial}>
-            <SelectTrigger className="h-7 w-auto gap-1 text-xs">
-              <Plus className="h-3.5 w-3.5" />
-              <SelectValue placeholder={t("readdOfficial")} />
-            </SelectTrigger>
-            <SelectContent>
-              {excludedOfficials.map((m) => (
-                <SelectItem key={m.slug} value={m.slug} className="text-xs">
-                  {m.display_name || m.slug}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
+        <div className="overflow-hidden rounded-xl border">
+          <div className="flex min-h-9 items-center gap-2 border-b bg-muted/30 ps-3 pe-1.5 py-1 text-2xs">
+            <div className="flex min-w-0 flex-1 items-center">
+              {source && endpoint ? (
+                <CodexProviderListSummary
+                  endpoint={endpoint}
+                  list={provider}
+                  tally={
+                    format === "openai_list"
+                      ? {
+                          kind: "picked",
+                          // Picks the provider no longer returns are rows
+                          // of their own, marked; they are not of these.
+                          picked: selected.filter((id) => returned.has(id))
+                            .length,
+                          offered: returned.size,
+                        }
+                      : {
+                          kind: "models",
+                          shown: shownOfficials.length,
+                          removed: excludedOfficials.length,
+                        }
+                  }
+                />
+              ) : (
+                <span className="truncate text-muted-foreground">
+                  {[
+                    t("builtinSummary", { count: shownOfficials.length }),
+                    excludedOfficials.length > 0
+                      ? ts("summaryRemoved", {
+                          count: excludedOfficials.length,
+                        })
+                      : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </span>
+              )}
+            </div>
+            {!source ? (
+              <ProviderModelsRefreshButton
+                fetching={refreshing}
+                onRefresh={refresh}
+                label={t("refresh")}
+              />
+            ) : (
+              editable && (
+                <>
+                  {format === "openai_list" && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="xs"
+                      disabled={!provider.rows}
+                      onClick={() =>
+                        provider.rows &&
+                        setPicker({ mode: "manage", view: provider.rows })
+                      }
+                    >
+                      <ListChecks />
+                      {ts("manage")}
+                    </Button>
+                  )}
+                  <ProviderModelsRefreshButton
+                    fetching={provider.fetching}
+                    onRefresh={() => void fetchList()}
+                    disabled={!provider.request}
+                    label={ts("fetch")}
+                  />
+                </>
+              )
+            )}
+          </div>
+          {rows.length > 0 ? (
+            <div>{rows}</div>
+          ) : providerRowsMissing && provider.fetching ? (
+            // The line above says it is on its way.
+            <div className="flex justify-center px-3 py-4 text-muted-foreground">
+              <Loader2 className="size-3.5 animate-spin" />
+            </div>
+          ) : (
+            <p className="px-3 py-4 text-center text-2xs text-muted-foreground">
+              {emptyText}
+            </p>
+          )}
+          {!readOnly &&
+            format !== "openai_list" &&
+            excludedOfficials.length > 0 && (
+              <div className="border-t px-1.5 py-1">
+                <Select value="" onValueChange={readdOfficial}>
+                  <SelectTrigger className="h-7 w-auto gap-1 border-transparent bg-transparent px-2 text-xs text-muted-foreground shadow-none hover:text-foreground">
+                    <Plus className="h-3.5 w-3.5" />
+                    <SelectValue placeholder={t("readdOfficial")} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {excludedOfficials.map((m) => (
+                      <SelectItem
+                        key={m.slug}
+                        value={m.slug}
+                        className="text-xs"
+                      >
+                        {m.display_name || m.slug}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+        </div>
       </section>
 
       {/* Customs: user-defined models cloning an official base. */}
       <section className="space-y-2">
         <p className="text-xs font-semibold">{t("customsTitle")}</p>
         {customs.length === 0 ? (
-          <p className="rounded-md border border-dashed px-3 py-3 text-center text-[11px] text-muted-foreground">
+          <p className="rounded-xl border border-dashed px-3 py-3 text-center text-2xs text-muted-foreground">
             {t("customsEmpty")}
           </p>
         ) : (
@@ -373,18 +767,130 @@ export function CodexModelListEditor({
           </div>
         )}
         {!readOnly && (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-7 text-xs"
-            onClick={addCustom}
-          >
-            <Plus className="mr-1 h-3.5 w-3.5" />
-            {t("addCustom")}
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button type="button" variant="outline" size="xs" className="h-7">
+                <Plus />
+                {t("addCustom")}
+                <ChevronDown />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuItem
+                className="text-xs"
+                onSelect={() => addCustom(false)}
+              >
+                {t("addCustomGpt")}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="text-xs"
+                onSelect={() => addCustom(true)}
+              >
+                {t("addCustomCompat")}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
       </section>
+
+      {/* What Codex runs now, once a list is published. */}
+      {(endpoint?.showStatus || endpoint?.statusBinding) && (
+        <CodexCatalogStatusLine
+          onPublished={endpoint.onPublished}
+          binding={endpoint.statusBinding}
+        />
+      )}
+
+      {/* eslint-disable-next-line react-hooks/refs -- `valueRef` is only read inside the onConfirm handlers, never during render */}
+      {pickerProps && (
+        <CodexCatalogPickerDialog
+          open={!!picker}
+          onOpenChange={(open) => !open && setPicker(null)}
+          {...pickerProps}
+        />
+      )}
+    </div>
+  )
+}
+
+/** One model Codex offers: its name, a note in a lighter ink (the slug, or
+ *  what an OpenAI-list id is built from), the star that makes it the
+ *  default, and the bin. */
+function CodexModelRow({
+  name,
+  detail,
+  mono = false,
+  detailMono = false,
+  badge,
+  isDefault,
+  readOnly,
+  onMakeDefault,
+  onRemove,
+}: {
+  name: string
+  detail?: string
+  /** The name is an id. */
+  mono?: boolean
+  /** The note is one (a slug). */
+  detailMono?: boolean
+  badge?: string
+  isDefault: boolean
+  readOnly: boolean
+  onMakeDefault: () => void
+  onRemove: () => void
+}) {
+  const t = useTranslations("CodexModelEditor")
+  return (
+    <div
+      data-model-row
+      className="flex min-h-9 items-center gap-2 ps-2 pe-1.5 py-1 text-xs [&+&]:border-t"
+    >
+      <button
+        type="button"
+        title={isDefault ? t("defaultHint") : t("makeDefault")}
+        aria-label={isDefault ? t("defaultHint") : t("makeDefault")}
+        aria-pressed={isDefault}
+        onClick={onMakeDefault}
+        disabled={readOnly}
+        className={cn(
+          "flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground outline-none transition-colors hover:text-amber-500 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40",
+          isDefault && "text-amber-500"
+        )}
+      >
+        <Star className={cn("h-3.5 w-3.5", isDefault && "fill-current")} />
+      </button>
+      <span className={cn("min-w-0 truncate", mono && "font-mono")}>
+        {name}
+      </span>
+      {detail ? (
+        <span
+          className={cn(
+            "min-w-0 truncate text-2xs text-muted-foreground",
+            detailMono && "font-mono"
+          )}
+        >
+          {detail}
+        </span>
+      ) : null}
+      <span className="flex-1" />
+      {badge ? (
+        <span className="shrink-0 rounded-full bg-amber-500/10 px-1.5 text-2xs text-amber-600 dark:text-amber-400">
+          {badge}
+        </span>
+      ) : null}
+      {!readOnly && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          className="text-muted-foreground hover:text-red-500"
+          onClick={onRemove}
+          aria-label={t("remove")}
+          title={t("remove")}
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </Button>
+      )}
     </div>
   )
 }
@@ -446,7 +952,7 @@ function CodexCustomRow({
         : options
     return (
       <div key={f.key} className="space-y-1">
-        <Label className="text-[11px] font-medium text-muted-foreground">
+        <Label className="text-2xs font-medium text-muted-foreground">
           {t(f.labelKey as Parameters<typeof t>[0])}
         </Label>
         <Select
@@ -474,21 +980,28 @@ function CodexCustomRow({
     )
   }
 
-  const renderBool = (f: BoolField) => (
-    <div
-      key={f.key}
-      className="flex items-center justify-between gap-2 rounded-md border px-2 py-1.5"
-    >
-      <Label className="text-[11px] font-medium text-muted-foreground">
-        {t(f.labelKey as Parameters<typeof t>[0])}
-      </Label>
-      <Switch
-        checked={effective(f.key) === true}
-        disabled={readOnly}
-        onCheckedChange={(v) => setField(f.key, v)}
-      />
-    </div>
-  )
+  const renderBool = (f: BoolField) => {
+    const raw = effective(f.key)
+    return (
+      <div
+        key={f.key}
+        className="flex items-center justify-between gap-2 rounded-md border px-2 py-1.5"
+      >
+        <Label className="text-2xs font-medium text-muted-foreground">
+          {t(f.labelKey as Parameters<typeof t>[0])}
+        </Label>
+        <Switch
+          checked={typeof raw === "boolean" ? raw : !!f.defaultOn}
+          disabled={readOnly}
+          onCheckedChange={(v) => setField(f.key, v)}
+        />
+      </div>
+    )
+  }
+
+  const isCompat = isCodexCompatEntry(entry, base)
+  const setCompat = (enabled: boolean) =>
+    onPatch({ overrides: applyCodexCompatOverrides(entry, base, enabled) })
 
   const descBase = typeof base.description === "string" ? base.description : ""
   const descValue =
@@ -563,7 +1076,7 @@ function CodexCustomRow({
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        className="mt-1.5 flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+        className="mt-1.5 flex items-center gap-1 text-2xs text-muted-foreground hover:text-foreground"
       >
         {expanded ? (
           <ChevronDown className="h-3 w-3" />
@@ -576,7 +1089,36 @@ function CodexCustomRow({
       {expanded && (
         <div className="mt-2 space-y-3 border-t pt-2">
           <div className="space-y-1">
-            <Label className="text-[11px] font-medium text-muted-foreground">
+            <Label className="text-2xs font-medium text-muted-foreground">
+              {t("presetLabel")}
+            </Label>
+            <div className="flex gap-1.5">
+              <Button
+                type="button"
+                variant={isCompat ? "outline" : "secondary"}
+                size="sm"
+                disabled={readOnly}
+                className="h-7 flex-1 text-xs"
+                onClick={() => setCompat(false)}
+              >
+                {t("presetGpt")}
+              </Button>
+              <Button
+                type="button"
+                variant={isCompat ? "secondary" : "outline"}
+                size="sm"
+                disabled={readOnly}
+                className="h-7 flex-1 text-xs"
+                onClick={() => setCompat(true)}
+              >
+                {t("presetCompat")}
+              </Button>
+            </div>
+            <p className="text-2xs text-muted-foreground">{t("presetHint")}</p>
+          </div>
+
+          <div className="space-y-1">
+            <Label className="text-2xs font-medium text-muted-foreground">
               {t("baseTemplate")}
             </Label>
             <Select
@@ -595,13 +1137,25 @@ function CodexCustomRow({
                 ))}
               </SelectContent>
             </Select>
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-2xs text-muted-foreground">
               {t("baseTemplateHint")}
             </p>
           </div>
 
           <div className="space-y-2">
-            <p className="text-[11px] font-semibold text-muted-foreground">
+            <p className="text-2xs font-semibold text-muted-foreground">
+              {t("groupProtocol")}
+            </p>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {PROTOCOL_ENUM_FIELDS.map((f) => renderEnum(f, f.options))}
+            </div>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {PROTOCOL_BOOL_FIELDS.map(renderBool)}
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <p className="text-2xs font-semibold text-muted-foreground">
               {t("groupBehavior")}
             </p>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -622,11 +1176,11 @@ function CodexCustomRow({
           </div>
 
           <div className="space-y-2">
-            <p className="text-[11px] font-semibold text-muted-foreground">
+            <p className="text-2xs font-semibold text-muted-foreground">
               {t("groupInstructions")}
             </p>
             <div className="space-y-1">
-              <Label className="text-[11px] font-medium text-muted-foreground">
+              <Label className="text-2xs font-medium text-muted-foreground">
                 {t("fieldDescription")}
               </Label>
               <Textarea
@@ -634,11 +1188,11 @@ function CodexCustomRow({
                 readOnly={readOnly}
                 rows={2}
                 onChange={(e) => setField("description", e.target.value)}
-                className="max-h-20 resize-y text-[11px]"
+                className="max-h-20 resize-y text-2xs"
               />
             </div>
             <div className="space-y-1">
-              <Label className="text-[11px] font-medium text-muted-foreground">
+              <Label className="text-2xs font-medium text-muted-foreground">
                 {t("baseInstructions")}
               </Label>
               <Textarea
@@ -646,7 +1200,7 @@ function CodexCustomRow({
                 readOnly={readOnly}
                 rows={6}
                 onChange={(e) => setField("base_instructions", e.target.value)}
-                className="max-h-48 resize-y overflow-y-auto font-mono text-[11px]"
+                className="max-h-48 resize-y overflow-y-auto font-mono text-2xs"
               />
             </div>
           </div>

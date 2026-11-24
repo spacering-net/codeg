@@ -1,47 +1,7 @@
 import { describe, expect, it } from "vitest"
 
-import {
-  classifyToolKind,
-  isAgentLikeToolName,
-  TOOL_KIND_ORDER,
-  type ToolKindLabel,
-} from "./tool-kind-classifier"
-
-describe("classifyToolKind", () => {
-  it.each([
-    ["grep", "search"],
-    ["GLOB", "search"],
-    ["list_files", "search"],
-    ["bash", "command"],
-    ["execute_command", "command"],
-    ["read", "read"],
-    ["Read File", "read"],
-    ["view", "read"],
-    ["edit", "edit"],
-    ["NotebookEdit", "edit"],
-    ["replace_in_file", "edit"],
-    ["webfetch", "fetch"],
-    ["browser_action", "fetch"],
-    ["think", "think"],
-    ["EnterPlanMode", "think"],
-    ["TodoWrite", "todo"],
-    ["update_todo_list", "todo"],
-    ["task", "task"],
-    ["new_task", "task"],
-    ["skill", "task"],
-    ["memory_recall", "memory"],
-    ["MEMORY_RECALL", "memory"],
-    ["my_custom_tool", "other"],
-    ["", "other"],
-  ] as const)("classifies %s as %s", (name, expected) => {
-    expect(classifyToolKind(name)).toBe(expected as ToolKindLabel)
-  })
-
-  it("normalizes whitespace and case", () => {
-    expect(classifyToolKind("  Grep  ")).toBe("search")
-    expect(classifyToolKind("BASH")).toBe("command")
-  })
-})
+import { CODEG_MCP_WORKBENCH_TOOLS } from "@/lib/codeg-mcp-tool"
+import { isAgentLikeToolName } from "./tool-kind-classifier"
 
 describe("isAgentLikeToolName", () => {
   it("matches the agent tool exactly", () => {
@@ -82,6 +42,37 @@ describe("isAgentLikeToolName", () => {
     }
   })
 
+  // The classifier keeps its own copy of the workbench list; when
+  // `resume_delegation` was added to `CODEG_MCP_WORKBENCH_TOOLS` the copy was
+  // not updated once already. Pin the relationship so it can't drift again.
+  it("covers every tool that owns a CodegMcpToolCard", () => {
+    for (const tool of CODEG_MCP_WORKBENCH_TOOLS) {
+      expect(isAgentLikeToolName(tool)).toBe(true)
+    }
+  })
+
+  it("matches the codeg-mcp workbench companions across host naming conventions", () => {
+    // Each owns a CodegMcpToolCard.
+    for (const tool of [
+      "get_session_info",
+      "task_progress",
+      "task_complete",
+      "create_automation",
+      "create_work_task",
+      "resume_delegation",
+    ]) {
+      expect(isAgentLikeToolName(tool)).toBe(true)
+      expect(isAgentLikeToolName(`mcp__codeg-mcp__${tool}`)).toBe(true)
+      expect(isAgentLikeToolName(`mcp__codeg__${tool}`)).toBe(true)
+      expect(isAgentLikeToolName(`codeg-mcp/${tool}`)).toBe(true)
+      expect(isAgentLikeToolName(`codeg-mcp.${tool}`)).toBe(true)
+      expect(isAgentLikeToolName(`codeg-mcp:${tool}`)).toBe(true)
+    }
+    // …without dragging the generic task tools along with them.
+    expect(isAgentLikeToolName("task")).toBe(false)
+    expect(isAgentLikeToolName("taskcreate")).toBe(false)
+  })
+
   it("matches Codex goal tools as standalone card tools", () => {
     expect(isAgentLikeToolName("create_goal")).toBe(true)
     expect(isAgentLikeToolName("update_goal")).toBe(true)
@@ -100,16 +91,22 @@ describe("isAgentLikeToolName", () => {
 
   it("matches codex's Plan-mode request_user_input", () => {
     // History keeps the raw name (the live path collapses it to "question"); it
-    // owns the AskQuestionResultCard, so it must render standalone, not folded.
+    // owns the AskQuestionResultCard.
     expect(isAgentLikeToolName("request_user_input")).toBe(true)
   })
 
   it("matches Kimi's native AskUserQuestion history name", () => {
     // The Kimi Code wire.jsonl (and Claude's SDK) record the camel-case tool
-    // name; history passes it raw, so without this the answered capsule was
-    // wrapped inside a generic tool-group (the reported bug).
+    // name, and history passes it raw.
     expect(isAgentLikeToolName("AskUserQuestion")).toBe(true)
     expect(isAgentLikeToolName("askuserquestion")).toBe(true)
+  })
+
+  it("matches Antigravity's bare ask_question history name only", () => {
+    expect(isAgentLikeToolName("ask_question")).toBe(true)
+    // A host-prefixed one is a third-party MCP tool (DeepWiki's, for one).
+    expect(isAgentLikeToolName("mcp__deepwiki__ask_question")).toBe(false)
+    expect(isAgentLikeToolName("deepwiki/ask_question")).toBe(false)
   })
 
   it("matches check_user_feedback across host naming conventions", () => {
@@ -133,24 +130,5 @@ describe("isAgentLikeToolName", () => {
     expect(isAgentLikeToolName("xcancel_delegation")).toBe(false)
     expect(isAgentLikeToolName("xask_user_question")).toBe(false)
     expect(isAgentLikeToolName("xcheck_user_feedback")).toBe(false)
-  })
-})
-
-describe("TOOL_KIND_ORDER", () => {
-  it("includes every label exactly once", () => {
-    const expected: ToolKindLabel[] = [
-      "search",
-      "command",
-      "read",
-      "memory",
-      "edit",
-      "fetch",
-      "think",
-      "todo",
-      "task",
-      "other",
-    ]
-    expect([...TOOL_KIND_ORDER].sort()).toEqual([...expected].sort())
-    expect(new Set(TOOL_KIND_ORDER).size).toBe(TOOL_KIND_ORDER.length)
   })
 })

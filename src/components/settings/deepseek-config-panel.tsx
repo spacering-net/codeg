@@ -14,11 +14,23 @@ const DEEPSEEK_API_KEY_ENV = "DEEPSEEK_API_KEY"
 /** Endpoint override. `llm-deepseek` resolves it per request through the
  * launch-environment snapshot, which falls back to `process.env` when the host
  * installs none — deepseek-acp installs none, so codeg's launch env reaches it.
- * Empty ⇒ the adapter's own default, `https://api.deepseek.com`. */
+ * Empty ⇒ the adapter's own default, {@link DEEPSEEK_DEFAULT_BASE_URL}. */
 const DEEPSEEK_BASE_URL_ENV = "DEEPSEEK_BASE_URL"
 
-/** The adapter's public default endpoint, shown as the placeholder. */
-export const DEEPSEEK_DEFAULT_BASE_URL = "https://api.deepseek.com"
+/** The adapter's public default endpoint, shown as the placeholder.
+ *
+ * Since deepseek-acp 0.10.0 (DSH 0.2) the official route speaks DeepSeek's
+ * Anthropic-compatible Messages API: it posts to `<endpoint>/v1/messages`
+ * (`/v1` is not added again when the path already ends in it) with an
+ * `x-api-key` header, and its default endpoint is this one. 0.9.0 and earlier
+ * spoke OpenAI Chat Completions against {@link DEEPSEEK_LEGACY_BASE_URL}. */
+export const DEEPSEEK_DEFAULT_BASE_URL = "https://api.deepseek.com/anthropic"
+
+/** The default endpoint of deepseek-acp 0.9.0 and earlier, which spoke OpenAI
+ * Chat Completions (`<endpoint>/chat/completions`) and listed models at
+ * `<endpoint>/models`. Only the model list editor, which those releases alone
+ * read, still talks to it. */
+export const DEEPSEEK_LEGACY_BASE_URL = "https://api.deepseek.com"
 
 /** Every env key this panel owns. The settings page folds exactly these into
  * the raw editor's draft after a save, and rebases them onto it when the
@@ -71,8 +83,9 @@ export function buildDeepSeekEnv(
     delete env[DEEPSEEK_PROVIDER_ENV]
   }
   setOrDelete(DEEPSEEK_API_KEY_ENV, apiKey)
-  // Trailing slashes are stripped: the adapter concatenates
-  // `${baseURL}/chat/completions`, so `https://host/` would request `//chat`.
+  // Trailing slashes are stripped. 0.9.0 and earlier concatenate
+  // `${baseURL}/chat/completions`, so `https://host/` would request `//chat`;
+  // since 0.10.0 the adapter strips them itself before adding `/v1/messages`.
   setOrDelete(DEEPSEEK_BASE_URL_ENV, baseUrl.trim().replace(/\/+$/, ""))
   return env
 }
@@ -81,17 +94,18 @@ export function buildDeepSeekEnv(
  * from — an endpoint without a scheme cannot be fetched, and the failure would
  * only show up at the first turn.
  *
- * A query string or fragment is rejected for the same reason the trailing
- * slash is stripped: the adapter concatenates `${baseURL}/chat/completions`
- * textually, so `https://gw/v1?api-version=1` would request the path `/v1`
- * with the query `api-version=1/chat/completions` — a request that reaches the
- * gateway and fails as if the deployment were misconfigured. */
+ * A query string or fragment is rejected because the adapter appends its path
+ * to the text: `${baseURL}/v1/messages` since 0.10.0 (`/v1` left out when the
+ * path already ends in it), `${baseURL}/chat/completions` before. So
+ * `https://gw/v1?api-version=1` would request the path `/v1` with the query
+ * `api-version=1/messages` — a request that reaches the gateway and fails as if
+ * the deployment were misconfigured. */
 export function isValidDeepSeekBaseUrl(value: string): boolean {
   const trimmed = value.trim()
   if (!trimmed) return true // empty = use the adapter default
   // Tested on the RAW text, not on the parsed URL: what gets persisted (and
   // concatenated) is this string, and a bare `https://gw/v1?` parses to an
-  // EMPTY `search` while still turning the request into `/v1?/chat/completions`.
+  // EMPTY `search` while still turning the request into `/v1?/messages`.
   if (/[?#]/.test(trimmed)) return false
   try {
     const url = new URL(trimmed)
@@ -108,13 +122,19 @@ export function isValidDeepSeekBaseUrl(value: string): boolean {
  * Dedicated settings panel for DeepSeek Harness (through the `deepseek-acp`
  * bridge). Deliberately small: endpoint and key, in that order.
  *
- * Nothing else belongs here. Model and reasoning effort are ACP config options
- * the bridge advertises per session, so the composer's own selectors are where
- * they are chosen; duplicating them here only creates two places to disagree
- * about what a session actually starts on. The model's launch default is still
- * settable by hand as `DEEPSEEK_ACP_MODEL` in the raw env editor below.
+ * No per-session selector belongs here. Model and reasoning effort are ACP
+ * config options the bridge advertises per session, so the composer's own
+ * selectors are where they are chosen; duplicating them here only creates two
+ * places to disagree about what a session actually starts on. The model's
+ * launch default is still settable by hand as `DEEPSEEK_ACP_MODEL` in the raw
+ * env editor below.
  *
- * Both fields are plain per-agent env vars, read at spawn — a save reaches
+ * The list those selectors choose FROM is a different thing. Through 0.9.0 it
+ * lives in a different file — `llm-deepseek.models` in the harness settings
+ * document, edited by the sibling `DeepSeekModelListEditor` under its own
+ * section; since 0.10.0 it is built into the bridge and cannot be edited.
+ *
+ * Both fields here are plain per-agent env vars, read at spawn — a save reaches
  * sessions started after it, not the ones already running.
  */
 export function DeepSeekConfigPanel({
@@ -160,10 +180,8 @@ export function DeepSeekConfigPanel({
   const seeded = useRef({ apiKey: persistedKey, baseUrl: persistedBaseUrl })
   const dirty = useRef({ apiKey: false, baseUrl: false })
   useEffect(() => {
-    // Seeding state from a prop change is exactly what this rule warns about,
-    // and here it is the point: the fields mirror `agent.env` until the user
-    // types in them.
-    /* eslint-disable react-hooks/set-state-in-effect */
+    // Seeding state from a prop change is the point here: the fields mirror
+    // `agent.env` until the user types in them.
     const last = seeded.current
     if (last.apiKey !== persistedKey) {
       last.apiKey = persistedKey
@@ -173,7 +191,6 @@ export function DeepSeekConfigPanel({
       last.baseUrl = persistedBaseUrl
       if (!dirty.current.baseUrl) setBaseUrl(persistedBaseUrl)
     }
-    /* eslint-enable react-hooks/set-state-in-effect */
   }, [persistedKey, persistedBaseUrl])
 
   const baseUrlValid = isValidDeepSeekBaseUrl(baseUrl)
@@ -211,7 +228,7 @@ export function DeepSeekConfigPanel({
         <label className="text-xs font-medium">
           {t("deepseek.configManagement")}
         </label>
-        <p className="mt-1 text-[11px] text-muted-foreground">
+        <p className="mt-1 text-2xs text-muted-foreground">
           {t("deepseek.configDescription")}
         </p>
       </div>
@@ -220,7 +237,7 @@ export function DeepSeekConfigPanel({
       <div className="space-y-1.5">
         <label
           htmlFor="deepseek-base-url"
-          className="text-[11px] text-muted-foreground"
+          className="text-2xs text-muted-foreground"
         >
           {t("deepseek.baseUrlLabel")}
         </label>
@@ -241,7 +258,7 @@ export function DeepSeekConfigPanel({
         <p
           id="deepseek-base-url-hint"
           className={cn(
-            "text-[11px]",
+            "text-2xs",
             baseUrlValid ? "text-muted-foreground" : "text-destructive"
           )}
         >
@@ -255,7 +272,7 @@ export function DeepSeekConfigPanel({
       <div className="space-y-1.5">
         <label
           htmlFor="deepseek-api-key"
-          className="text-[11px] text-muted-foreground"
+          className="text-2xs text-muted-foreground"
         >
           {t("deepseek.apiKeyLabel")}
         </label>
@@ -285,7 +302,7 @@ export function DeepSeekConfigPanel({
             )}
           </Button>
         </div>
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-2xs text-muted-foreground">
           {t("deepseek.apiKeyHint")}
         </p>
       </div>

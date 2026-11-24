@@ -361,6 +361,7 @@ impl ChatChannelManager {
             manager_for_events,
             db_conn.clone(),
             bridge.clone(),
+            conn_mgr.clone_ref(),
         );
 
         // Spawn session event subscriber (ACP event routing to channels)
@@ -371,6 +372,10 @@ impl ChatChannelManager {
             manager_for_session_events,
             conn_mgr.clone_ref(),
             db_conn.clone(),
+            // Cloned rather than moved: the command dispatcher below still
+            // takes the original. The subscriber needs one that outlives any
+            // individual connection — see the fn's own doc.
+            emitter.clone(),
         );
 
         // Spawn command dispatcher

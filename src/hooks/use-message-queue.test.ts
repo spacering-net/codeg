@@ -12,6 +12,48 @@ function texts(q: { draft: PromptDraft }[]): string[] {
 }
 
 describe("useMessageQueue bounce FIFO ordering", () => {
+  it("prioritizes a clicked item using its latest draft and mode without dropping new items", () => {
+    const { result } = renderHook(() => useMessageQueue())
+    act(() => {
+      result.current.enqueue(draft("A"), null)
+      result.current.enqueue(draft("B"), "plan", { adoptSendTimeMode: true })
+    })
+    const target = result.current.queue[1]
+    act(() => {
+      result.current.updateItem(target.id, draft("edited B"))
+      result.current.enqueue(draft("C"), "agent")
+      result.current.moveToFront(target.id)
+    })
+    expect(texts(result.current.queue)).toEqual(["edited B", "A", "C"])
+    expect(result.current.queue[0]).toMatchObject({
+      id: target.id,
+      modeId: "plan",
+      adoptSendTimeMode: true,
+    })
+    let sent: ReturnType<typeof result.current.dequeue>
+    act(() => {
+      sent = result.current.dequeue()
+    })
+    expect(sent).toEqual({
+      ...target,
+      draft: draft("edited B"),
+    })
+  })
+
+  it("does not resurrect a removed item when an insertion reply arrives late", () => {
+    const { result } = renderHook(() => useMessageQueue())
+    act(() => {
+      result.current.enqueue(draft("A"), null)
+      result.current.enqueue(draft("B"), null)
+    })
+    const target = result.current.queue[1]
+    act(() => {
+      result.current.remove(target.id)
+      result.current.moveToFront(target.id)
+    })
+    expect(texts(result.current.queue)).toEqual(["A"])
+  })
+
   it("requeueFront keeps a bounced head ahead of items behind it", () => {
     const { result } = renderHook(() => useMessageQueue())
 
@@ -53,8 +95,8 @@ describe("useMessageQueue bounce FIFO ordering", () => {
     const { result } = renderHook(() => useMessageQueue())
     // Multiple mutations within a single act() — getQueueLength must observe
     // each one immediately, without waiting for a React commit. This is what
-    // the fork-send guard relies on: a draft re-queued by a same-tick bounce
-    // is visible before the next render hides the fork affordance.
+    // the direct-send routing relies on: a draft re-queued by a same-tick
+    // bounce must be visible before the next send decides whether to tail-route.
     act(() => {
       expect(result.current.getQueueLength()).toBe(0)
       result.current.enqueue(draft("A"), null)

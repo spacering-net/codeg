@@ -1,663 +1,275 @@
-# ScholarEval Evaluation Framework
-
-## Overview
-
-This document provides detailed evaluation criteria, rubrics, and quality indicators for each dimension of the ScholarEval framework. Use these standards when conducting systematic evaluations of scholarly work.
-
----
-
-## Dimension 1: Problem Formulation & Research Questions
-
-### Quality Indicators
-
-**Excellent (5):**
-- Research question is specific, measurable, and clearly articulated
-- Problem addresses significant gap in literature with high impact potential
-- Scope is appropriate and feasible within constraints
-- Novel contribution is clearly differentiated from existing work
-- Theoretical or practical significance is compellingly justified
-
-**Good (4):**
-- Research question is clear with minor ambiguities
-- Problem is relevant with moderate impact potential
-- Scope is generally appropriate with minor feasibility concerns
-- Contribution is identifiable though not groundbreaking
-- Significance is adequately justified
-
-**Adequate (3):**
-- Research question is present but lacks specificity
-- Problem relevance is unclear or incremental
-- Scope may be too broad or narrow
-- Contribution is unclear or overlaps heavily with existing work
-- Significance justification is weak
-
-**Needs Improvement (2):**
-- Research question is vague or poorly defined
-- Problem lacks clear relevance or significance
-- Scope is inappropriate or infeasible
-- Contribution is not articulated
-- No clear justification for significance
-
-**Poor (1):**
-- No clear research question
-- Problem is trivial or irrelevant
-- Scope is fundamentally flawed
-- No identifiable contribution
-- No significance justification
-
-### Assessment Checklist
-
-- [ ] Is the research question clearly stated?
-- [ ] Can the question be answered with the proposed approach?
-- [ ] Is the problem significant to the field?
-- [ ] Is the scope feasible within resource constraints?
-- [ ] Is the novelty/contribution clearly articulated?
-- [ ] Are key assumptions explicitly stated?
-- [ ] Are success criteria or expected outcomes defined?
-
----
-
-## Dimension 2: Literature Review
-
-### Quality Indicators
-
-**Excellent (5):**
-- Comprehensive coverage of relevant literature across key areas
-- Critical synthesis identifying patterns, contradictions, and gaps
-- Literature is current (majority from last 3-5 years for rapidly evolving fields)
-- Sources are authoritative and peer-reviewed
-- Clear positioning of current work within scholarly conversation
-- Identifies genuine research gaps that the work addresses
-
-**Good (4):**
-- Good coverage with minor gaps in key areas
-- Mostly synthesis with some description
-- Literature is mostly current with some older foundational works
-- Sources are generally authoritative
-- Work positioning is present but could be stronger
-- Research gaps are identified but may not be critical
-
-**Adequate (3):**
-- Partial coverage with notable gaps
-- More descriptive summarization than synthesis
-- Literature mix of current and dated sources
-- Mix of authoritative and less rigorous sources
-- Weak positioning within existing literature
-- Research gaps are vague or questionable
-
-**Needs Improvement (2):**
-- Minimal coverage with major gaps
-- Purely descriptive without synthesis
-- Literature is largely outdated
-- Sources lack authority or rigor
-- Little to no positioning of current work
-- No clear research gaps identified
-
-**Poor (1):**
-- Inadequate or absent literature review
-- No synthesis
-- Outdated or inappropriate sources
-- No engagement with scholarly conversation
-- No gap identification
-
-### Assessment Checklist
-
-- [ ] Does review cover all major relevant areas?
-- [ ] Is literature synthesized rather than just summarized?
-- [ ] Are sources current and authoritative?
-- [ ] Are contrasting viewpoints presented?
-- [ ] Are research gaps clearly identified?
-- [ ] Is the current work positioned within existing literature?
-- [ ] Is citation balance appropriate (not over-relying on few authors)?
-- [ ] Are seminal/foundational works included?
-
-### Common Issues
-
-- **Insufficient coverage**: Missing key papers or research streams
-- **Descriptive listing**: Summarizing papers sequentially without synthesis
-- **Outdated sources**: Relying on literature more than 5-10 years old
-- **Cherry-picking**: Only citing work that supports hypothesis
-- **Poor organization**: Lack of thematic or conceptual structure
-- **Weak gap identification**: Gaps are trivial or not actually gaps
-
----
-
-## Dimension 3: Methodology & Research Design
-
-### Quality Indicators
-
-**Excellent (5):**
-- Research design perfectly aligned with research questions
-- Methods are rigorous, valid, and reliable
-- Procedures are detailed enough for replication
-- Controls, randomization, or triangulation appropriate
-- Potential biases acknowledged and mitigated
-- Ethical considerations addressed comprehensively
-- Limitations are explicitly discussed
-
-**Good (4):**
-- Design is appropriate with minor alignment issues
-- Methods are sound with small validity concerns
-- Procedures are mostly replicable
-- Some controls or validation present
-- Major biases addressed
-- Ethical considerations mentioned
-- Some limitations discussed
-
-**Adequate (3):**
-- Design partially appropriate for questions
-- Methods have notable validity concerns
-- Procedures lack detail for full replication
-- Limited controls or validation
-- Bias mitigation is minimal
-- Ethics addressed superficially
-- Limitations minimally discussed
-
-**Needs Improvement (2):**
-- Design poorly aligned with research questions
-- Methods have serious validity issues
-- Procedures too vague to replicate
-- No controls or validation
-- Biases not addressed
-- Ethical concerns not addressed
-- No limitation discussion
-
-**Poor (1):**
-- Inappropriate or absent methodology
-- Methods fundamentally flawed
-- Not replicable
-- No validity considerations
-- No ethical considerations
-- No acknowledgment of limitations
-
-### Assessment Checklist
-
-- [ ] Is methodology appropriate for research questions?
-- [ ] Are procedures described in sufficient detail?
-- [ ] Can the study be replicated from the description?
-- [ ] Are validity and reliability addressed?
-- [ ] Are potential biases identified and mitigated?
-- [ ] Are ethical considerations discussed?
-- [ ] Are limitations acknowledged?
-- [ ] Is sample size justified (for quantitative work)?
-- [ ] Are qualitative methods rigorous (if applicable)?
-
-### Design-Specific Considerations
-
-**Quantitative Studies:**
-- Sample size with power analysis
-- Control groups and randomization
-- Measurement validity and reliability
-- Statistical assumptions checking
-
-**Qualitative Studies:**
-- Sampling strategy and saturation
-- Data collection procedures
-- Coding and analysis framework
-- Trustworthiness criteria (credibility, transferability, etc.)
-
-**Mixed Methods:**
-- Integration rationale
-- Sequencing justification
-- Data convergence strategy
-
----
-
-## Dimension 4: Data Collection & Sources
-
-### Quality Indicators
-
-**Excellent (5):**
-- Data sources are highly credible and appropriate
-- Sample size is sufficient and well-justified
-- Data collection procedures are rigorous and systematic
-- Data quality controls are in place
-- Sampling strategy ensures representativeness
-- Missing data is minimal and handled appropriately
-
-**Good (4):**
-- Data sources are credible with minor concerns
-- Sample size is adequate
-- Collection procedures are systematic
-- Some quality controls present
-- Sampling is reasonable
-- Missing data is addressed
-
-**Adequate (3):**
-- Data sources are acceptable but not optimal
-- Sample size is marginal
-- Collection procedures lack some rigor
-- Limited quality controls
-- Sampling may have bias concerns
-- Missing data handling is basic
-
-**Needs Improvement (2):**
-- Data sources have credibility issues
-- Sample size is insufficient
-- Collection procedures are ad hoc
-- No quality controls
-- Sampling is clearly biased
-- Missing data not addressed
-
-**Poor (1):**
-- Data sources are inappropriate or unreliable
-- Sample size is inadequate
-- Collection is unsystematic
-- No quality considerations
-- Sampling is fundamentally flawed
-- Excessive missing data
-
-### Assessment Checklist
-
-- [ ] Are data sources credible and appropriate?
-- [ ] Is sample size sufficient for conclusions?
-- [ ] Is sampling strategy clearly described?
-- [ ] Is the sample representative of target population?
-- [ ] Are data collection procedures systematic?
-- [ ] Are data quality controls described?
-- [ ] Is missing data addressed?
-- [ ] Are any potential data biases discussed?
-
----
-
-## Dimension 5: Analysis & Interpretation
-
-### Quality Indicators
-
-**Excellent (5):**
-- Analytical methods perfectly suited to data and questions
-- Analysis is rigorous with appropriate techniques
-- Results interpretation is logical and well-supported
-- Alternative explanations are considered
-- Claims are proportionate to evidence
-- Assumptions are validated
-- Analysis is transparent and reproducible
-
-**Good (4):**
-- Methods are appropriate with minor issues
-- Analysis is sound
-- Interpretation is mostly logical
-- Some alternatives considered
-- Claims generally match evidence
-- Key assumptions checked
-- Analysis is mostly transparent
-
-**Adequate (3):**
-- Methods are acceptable but not optimal
-- Analysis has some technical issues
-- Interpretation has logical gaps
-- Alternatives not thoroughly explored
-- Some claims exceed evidence
-- Assumptions not fully validated
-- Analysis transparency is limited
-
-**Needs Improvement (2):**
-- Methods are questionable for data/questions
-- Analysis has significant technical flaws
-- Interpretation is poorly supported
-- No alternative explanations
-- Claims significantly exceed evidence
-- Assumptions not checked
-- Analysis is not transparent
-
-**Poor (1):**
-- Methods are inappropriate
-- Analysis is fundamentally flawed
-- Interpretation is illogical
-- No consideration of alternatives
-- Claims unsupported by evidence
-- No assumption validation
-- Analysis is opaque
-
-### Assessment Checklist
-
-- [ ] Are analytical methods appropriate?
-- [ ] Are statistical tests/qualitative methods properly applied?
-- [ ] Are assumptions tested?
-- [ ] Is interpretation logical and well-supported?
-- [ ] Are alternative explanations considered?
-- [ ] Do claims align with evidence strength?
-- [ ] Is analysis reproducible from description?
-- [ ] Are uncertainties acknowledged?
-
-### Quantitative Analysis
-
-- Appropriate statistical tests
-- Assumptions checked (normality, homogeneity, etc.)
-- Effect sizes reported
-- Confidence intervals provided
-- Multiple testing corrections (if applicable)
-- Model diagnostics performed
-
-### Qualitative Analysis
-
-- Coding framework is clear
-- Inter-rater reliability (if applicable)
-- Saturation discussed
-- Negative cases examined
-- Member checking or validation
-- Clear audit trail
-
----
-
-## Dimension 6: Results & Findings
-
-### Quality Indicators
-
-**Excellent (5):**
-- Results are clearly and comprehensively presented
-- Visualizations are effective and appropriate
-- Statistical or qualitative rigor is evident
-- Key findings are highlighted effectively
-- Results directly address research questions
-- Patterns and relationships are clearly shown
-- Negative and null results are reported
-
-**Good (4):**
-- Results are clear with minor presentation issues
-- Visualizations are generally effective
-- Rigor is present
-- Main findings are identifiable
-- Results mostly address questions
-- Patterns are shown
-- Some negative results included
-
-**Adequate (3):**
-- Results presentation is adequate but could be clearer
-- Visualizations are basic or have issues
-- Rigor is questionable in places
-- Findings are present but not emphasized
-- Partial alignment with questions
-- Patterns are unclear
-- Negative results may be omitted
-
-**Needs Improvement (2):**
-- Results presentation is unclear or confusing
-- Visualizations are poor or misleading
-- Lack of rigor
-- Findings are difficult to identify
-- Weak alignment with questions
-- No clear patterns
-- Only positive results shown
-
-**Poor (1):**
-- Results are poorly presented or absent
-- Visualizations are inappropriate or missing
-- No evidence of rigor
-- Findings are unclear
-- Results don't address questions
-- No identifiable patterns
-- Results appear selective
-
-### Assessment Checklist
-
-- [ ] Are results clearly presented?
-- [ ] Do results directly address research questions?
-- [ ] Are visualizations appropriate and effective?
-- [ ] Are key findings highlighted?
-- [ ] Are negative/null results reported?
-- [ ] Is appropriate precision reported (p-values, CIs, effect sizes)?
-- [ ] Are qualitative findings supported by data excerpts?
-- [ ] Is there evidence of selective reporting?
-
-### Presentation Quality
-
-**Tables:**
-- Clear labels and captions
-- Appropriate precision
-- Organized logically
-- Not overly complex
-
-**Figures:**
-- Clear axes and legends
-- Appropriate chart type
-- Professional appearance
-- Accessible (color-blind friendly)
-
-**Text:**
-- Highlights key findings
-- Avoids redundancy with tables/figures
-- Uses appropriate statistical language
-
----
-
-## Dimension 7: Scholarly Writing & Presentation
-
-### Quality Indicators
-
-**Excellent (5):**
-- Writing is clear, concise, and precise
-- Organization is logical with excellent flow
-- Academic tone is appropriate and consistent
-- Grammar and mechanics are flawless
-- Technical terms are used correctly
-- Accessible to target audience
-- Abstract/summary is comprehensive and accurate
-
-**Good (4):**
-- Writing is clear with minor awkwardness
-- Organization is logical with good flow
-- Tone is mostly appropriate
-- Few grammar/mechanical errors
-- Technical terms mostly correct
-- Generally accessible
-- Abstract is adequate
-
-**Adequate (3):**
-- Writing is understandable but has clarity issues
-- Organization has some logical gaps
-- Tone inconsistencies
-- Noticeable grammar/mechanical errors
-- Some technical term misuse
-- Accessibility issues for target audience
-- Abstract is incomplete or vague
-
-**Needs Improvement (2):**
-- Writing is often unclear or verbose
-- Poor organization and flow
-- Tone is inappropriate
-- Frequent grammar/mechanical errors
-- Technical terminology problems
-- Not accessible to target audience
-- Abstract is poor or missing
-
-**Poor (1):**
-- Writing is unclear and difficult to follow
-- No clear organization
-- Tone is inappropriate
-- Pervasive grammar/mechanical errors
-- Incorrect technical terminology
-- Inaccessible
-- No adequate abstract
-
-### Assessment Checklist
-
-- [ ] Is writing clear and concise?
-- [ ] Is organization logical?
-- [ ] Is tone appropriate for academic writing?
-- [ ] Are grammar and mechanics correct?
-- [ ] Are technical terms used appropriately?
-- [ ] Is jargon explained when necessary?
-- [ ] Does abstract accurately summarize the work?
-- [ ] Are transitions between sections smooth?
-- [ ] Is the target audience clear?
-
-### Common Writing Issues
-
-- **Wordiness**: Unnecessarily complex or lengthy prose
-- **Passive voice overuse**: Reduces clarity and directness
-- **Paragraph structure**: Lack of topic sentences or coherence
-- **Redundancy**: Repeating information unnecessarily
-- **Logical flow**: Poor transitions between ideas
-- **Precision**: Vague or ambiguous language
-- **Accessibility**: Too technical or not technical enough
-
----
-
-## Dimension 8: Citations & References
-
-### Quality Indicators
-
-**Excellent (5):**
-- All claims are appropriately cited
-- Sources are authoritative and current
-- Citations are accurate and complete
-- Diverse perspectives are represented
-- Citation format is consistent and correct
-- Balance between self-citation and others
-- Primary sources used appropriately
-
-**Good (4):**
-- Most claims are cited
-- Sources are generally authoritative
-- Few citation errors
-- Reasonable diversity of sources
-- Format is mostly consistent
-- Citation balance is good
-- Mix of primary and secondary sources
-
-**Adequate (3):**
-- Some claims lack citations
-- Source quality is mixed
-- Several citation errors
-- Limited source diversity
-- Format inconsistencies
-- Citation balance issues
-- Over-reliance on secondary sources
-
-**Needs Improvement (2):**
-- Many claims uncited
-- Sources are questionable
-- Numerous citation errors
-- Narrow source base
-- Format is inconsistent
-- Excessive self-citation or narrow citing
-- Inappropriate sources (e.g., only secondary)
-
-**Poor (1):**
-- Inadequate citations
-- Unreliable sources
-- Pervasive citation errors
-- Minimal source diversity
-- No consistent format
-- Severe citation imbalance
-- Inappropriate source types
-
-### Assessment Checklist
-
-- [ ] Are all factual claims cited?
-- [ ] Are citations to primary sources when appropriate?
-- [ ] Are sources authoritative and peer-reviewed?
-- [ ] Is there balance in perspectives cited?
-- [ ] Are citations accurate (authors, dates, pages)?
-- [ ] Is citation format consistent?
-- [ ] Are self-citations appropriate (typically <20%)?
-- [ ] Are sources current (for time-sensitive topics)?
-- [ ] Are classic/seminal works included where relevant?
-
-### Citation Quality Assessment
-
-**Source Types (in order of preference for most academic work):**
-1. Peer-reviewed journal articles
-2. Academic books from reputable publishers
-3. Conference proceedings (field-dependent)
-4. Technical reports from reputable institutions
-5. Dissertations/theses
-6. Preprints (with caution, field-dependent)
-7. Grey literature (limited use)
-8. Websites (rarely appropriate, except for factual data)
-
-**Red Flags:**
-- Wikipedia as a primary source
-- Excessive self-citation (>30%)
-- Only citing papers that support hypothesis
-- Outdated sources when current ones exist
-- Missing key papers in the field
-- Citing abstracts only when full papers are available
-- Inconsistent or incorrect citation format
-
----
-
-## Cross-Cutting Considerations
-
-### Reproducibility
-
-Assess across dimensions:
-- Are methods detailed enough to replicate?
-- Are data and code available (or availability explained)?
-- Are analysis steps transparent?
-- Are materials/instruments specified?
-
-### Ethics
-
-Consider:
-- IRB approval (for human subjects)
-- Informed consent
-- Privacy and confidentiality
-- Conflicts of interest
-- Research integrity
-- Data sharing ethics
-
-### Bias and Limitations
-
-Evaluate whether:
-- Potential biases are acknowledged
-- Limitations are discussed honestly
-- Boundary conditions are specified
-- Generalizability is appropriately claimed
-
-### Impact and Significance
-
-Consider:
-- Theoretical contribution
-- Practical implications
-- Policy relevance
-- Methodological innovation
-- Field advancement
-
----
-
-## Scoring Guidelines
-
-### Dimension Weighting (Suggested, Adjust by Context)
-
-- Problem Formulation: 15%
-- Literature Review: 15%
-- Methodology: 20%
-- Data Collection: 10%
-- Analysis: 15%
-- Results: 10%
-- Writing: 10%
-- Citations: 5%
-
-### Overall Assessment Thresholds
-
-- **Exceptional (4.5-5.0)**: Ready for top-tier publication
-- **Strong (4.0-4.4)**: Publication-ready with minor revisions
-- **Good (3.5-3.9)**: Major revisions required, promising work
-- **Acceptable (3.0-3.4)**: Significant revisions needed
-- **Weak (2.0-2.9)**: Fundamental issues, major rework required
-- **Poor (<2.0)**: Not suitable for publication without complete revision
-
-### Contextual Adjustments
-
-Adjust standards based on:
-- **Stage**: Proposal < Draft < Final submission
-- **Venue**: Student thesis < Conference < Journal < Top-tier journal
-- **Type**: Theoretical < Empirical < Meta-analysis
-- **Field**: Standards vary by discipline
-- **Purpose**: Educational < Professional < Publication
-
----
-
-## Using This Framework
-
-1. **Read the work thoroughly** before beginning evaluation
-2. **Score each dimension** using the 5-point scale
-3. **Document evidence** for each score with specific examples
-4. **Consider context** and adjust expectations appropriately
-5. **Synthesize findings** across dimensions
-6. **Provide actionable feedback** prioritized by impact
-7. **Balance criticism with recognition** of strengths
-
-This framework is a guide, not a rigid checklist. Professional judgment should always be applied in context.
+# Evaluation Framework
+
+## What ScholarEval is—and is not
+
+The paper currently referenced by this skill is Moussa et al.,
+[*ScholarEval: Research Idea Evaluation Grounded in
+Literature*](https://arxiv.org/abs/2510.16234), arXiv:2510.16234v2,
+revised 2026-02-28.
+
+The preprint describes an experimental retrieval-augmented system for evaluating
+research ideas on:
+
+- **soundness:** whether existing literature empirically supports proposed
+  methods; and
+- **contribution:** how an idea advances beyond prior work along comparison
+  dimensions.
+
+It reports a 117-idea, four-discipline dataset, coverage comparisons with
+expert-annotated review points, and a user study. Those studies evaluate that
+framework. They do **not** validate the generalized rubric in this skill as a
+psychometric instrument, establish stable score meaning across disciplines, or
+authorize use in consequential decisions.
+
+As of the dated source review, arXiv and the official project repository were
+the verified primary publication records. No peer-reviewed publication status
+was verified. Cite it as an arXiv preprint unless a later primary record is
+checked. See `references/source_ledger.md`.
+
+## Relationship to this skill
+
+This skill borrows the useful discipline of:
+
+1. defining what is being assessed;
+2. grounding judgments in traceable literature and work evidence;
+3. separating soundness-like questions from contribution-like questions; and
+4. auditing whether generated feedback covers expert concerns.
+
+It does not reproduce ScholarEval's model pipeline, prompts, retrieval system,
+dataset, or reported metrics. The bundled scripts do not call ScholarEval,
+search the web, invoke a model, or evaluate private documents.
+
+The template is a **locally governed developmental rubric**. Its default
+construct is:
+
+> Traceable support for a scholarly work's claims and methods: the degree to
+> which a work states a bounded question, situates its contribution, uses
+> fit-for-purpose methods, aligns analysis with claims, and documents
+> transparent and responsible practices using traceable evidence.
+
+This construct must be reviewed and adapted by relevant disciplinary experts.
+
+## Five template criteria
+
+### 1. Question and scope
+
+Review:
+
+- a clear, bounded question or objective;
+- significance rationale appropriate to the field and work stage;
+- assumptions, boundary conditions, and success conditions; and
+- feasibility of the proposed or reported scope.
+
+Do not treat fashionable topics, institutional affiliation, or venue
+expectations as evidence of significance.
+
+### 2. Literature grounding and contribution claim
+
+Review:
+
+- source-selection or search boundaries;
+- engagement with relevant and contrary evidence;
+- traceable primary sources for comparison claims;
+- comparison dimensions used to define the contribution; and
+- limits on novelty or advancement claims.
+
+Failure to find prior work does not establish novelty. Search coverage varies by
+database, language, date, indexing, terminology, discipline, and access.
+
+### 3. Method and design fit
+
+Review:
+
+- alignment between question, design, data or materials, and method;
+- sampling, corpus, inclusion, exclusion, and measurement choices;
+- alternatives and design rationale;
+- validity threats, bias, and mitigation;
+- ethics, consent, privacy, safety, and governance; and
+- detail sufficient for appropriate checking or reproduction.
+
+Use discipline-specific reporting and methods standards. Do not reward
+complexity for its own sake.
+
+### 4. Analysis, claims, and uncertainty
+
+Review:
+
+- fit of analytical methods to data and inferential target;
+- assumptions and diagnostics;
+- robustness, sensitivity, negative cases, and alternative explanations;
+- appropriate statistical or qualitative uncertainty;
+- alignment between results and claims; and
+- explicit limits on generalization and causal language.
+
+The rubric's `uncertainty` value is a rater-supplied bounded judgment range. It
+is not a sampling confidence interval, posterior interval, or standard error.
+
+### 5. Transparency, integrity, and reproducibility
+
+Review:
+
+- complete reporting, provenance, and stable evidence locators;
+- protocols, registrations, data, code, materials, and justified restrictions;
+- negative, null, and contradictory findings where relevant;
+- conflicts, limitations, corrections, and research-integrity safeguards;
+- accessible communication; and
+- transparent attribution of contributions.
+
+Open practice is not an absolute requirement when privacy, consent, safety,
+security, Indigenous data governance, commercial constraints, or other
+legitimate restrictions apply. Assess whether restrictions are justified and
+whether safe access or metadata alternatives are provided.
+
+## Scale semantics
+
+The template uses an ordinal 0–4 scale:
+
+- **0 — observed lack of support**
+- **1 — limited support**
+- **2 — mixed support**
+- **3 — substantial support**
+- **4 — strong support**
+
+These are evidence anchors, not labels of a person or universal levels of
+research quality. The rubric defines criterion-specific anchors. Raters must use
+the anchor text, not intuition about what a number “usually means.”
+
+Do not convert the score to:
+
+- accept/reject or publication readiness;
+- exceptional/poor labels;
+- predicted success or impact;
+- person ranking; or
+- funding, hiring, promotion, tenure, admissions, award, or discipline advice.
+
+## Rating statuses
+
+Each criterion has exactly one status:
+
+- `rated`: score, uncertainty, evidence identifiers, and rationale reference
+  are required;
+- `missing`: evidence needed for assessment is absent or unavailable; score and
+  uncertainty are null; or
+- `not_applicable`: the criterion does not apply to this work under a documented
+  rationale; score and uncertainty are null.
+
+A rated zero must cite inspected evidence demonstrating lack of support or a
+contradiction. An inaccessible section or unassessed evidence is `missing`, not
+zero. Do not encode missing or not-applicable as zero.
+
+## Transparent score math
+
+Numeric averaging additionally assumes meaningful spacing between anchors and
+compensatory tradeoffs between criteria. Ordinal labels alone do not justify
+these assumptions. Use a composite only when the local rubric owner documents
+them for the stated developmental purpose; otherwise retain criterion findings.
+
+For rated criteria \(R\), score \(s_i\), and predeclared weight \(w_i\):
+
+\[
+\text{descriptive score}
+=
+\frac{\sum_{i \in R} w_i s_i}
+     {\sum_{i \in R} w_i}
+\]
+
+The score report separately provides:
+
+- total, applicable, rated, missing, and not-applicable weight;
+- coverage of applicable weight;
+- each weighted contribution;
+- the normalized descriptive score; and
+- a bounded aggregation of criterion uncertainty ranges.
+
+The uncertainty aggregation is not a confidence interval. Normalization does
+not make incomplete evaluations comparable. Review missingness before looking
+at any score.
+
+## Rubric development record
+
+Before replacing `content_validity_status: not_established`, document:
+
+1. the exact discipline, work type, language, stage, and intended use;
+2. construct definition and excluded constructs;
+3. literature and standard review used to draft criteria;
+4. disciplinary expert and stakeholder selection;
+5. systematic mapping of criteria to construct components;
+6. cognitive interviews or rater response-process evidence;
+7. accessibility and translation review;
+8. pilot sample and evidence-availability analysis;
+9. revisions, dissent, unresolved gaps, and approval; and
+10. the limits of any validity claim.
+
+Rubric provenance must identify the version, owner role, source identifiers,
+review date, and content-evidence reference.
+
+## Rater protocol
+
+At minimum:
+
+1. select qualified raters with relevant disciplinary and methods expertise;
+2. disclose conflicts and recuse where required;
+3. train on construct boundaries, anchors, evidence rules, missingness,
+   accessibility, bias, and privacy;
+4. calibrate on synthetic or authorized examples;
+5. rate independently before discussion;
+6. record evidence identifiers and uncertainty;
+7. summarize agreement and investigate systematic disagreements;
+8. resolve only through documented evidence and rationale, not forced averaging;
+9. monitor drift over time; and
+10. retrain, revise, or suspend the rubric when evidence warrants.
+
+The bundled agreement script compares raters only within the same criterion,
+work, and evaluation round. It reports exact agreement, within-one-step agreement,
+and mean absolute difference, pooling rater pairs. More heavily rated rounds
+contribute more pairs; pairs sharing a rater/work are dependent observations. Those summaries do not replace a
+design-appropriate reliability analysis. The rubric therefore separately
+records `inter_rater_reliability_status` and
+`inter_rater_reliability_ref`; the template leaves reliability not established.
+
+## Evidence traceability
+
+Each rated criterion must point to one or more entries in the evidence manifest.
+Each entry records:
+
+- pseudonymous evidence identifier;
+- linked criterion identifiers;
+- source type;
+- local stable locator;
+- local claim reference;
+- access status; and
+- verification status.
+
+Never place an excerpt or raw private document in the manifest. Keep source
+content in the authorized source system.
+
+## Weight sensitivity and order instability
+
+Weights are value judgments. Predeclare and justify them. Run
+`scripts/weight_sensitivity.py` before interpreting a composite.
+
+The script increases and decreases one weight at a time and renormalizes the
+weights. It reports score ranges and whether pairwise ordinal relationships
+among scholarly works change, using unrounded scores and a stated numerical
+tolerance. Tied pairs are explicit. Different applicable or rated criterion sets
+limit comparability even at 100% applicable coverage. Instability is evidence that an apparent order
+depends on contestable weights.
+
+The output must not be used to rank people or decide a high-impact outcome.
+Even stable ordering does not establish validity.
+
+## Interpretation template
+
+For each criterion, qualified reviewers should record:
+
+1. status and evidence references;
+2. observed evidence;
+3. interpretation against the anchor;
+4. score and uncertainty, if rated;
+5. missing or not-applicable rationale;
+6. disciplinary and stage context;
+7. strengths and limitations; and
+8. non-prescriptive improvement options.
+
+Conclude with construct, provenance, coverage, agreement, sensitivity, bias,
+privacy, accessibility, and validity limitations—not a decision recommendation.

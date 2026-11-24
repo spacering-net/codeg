@@ -293,7 +293,7 @@ export function FontSettingsSection() {
           enabledLabel={t("fonts.ligatures")}
           unavailableLabel={t("fonts.ligaturesUnavailable")}
         />
-        <p className="text-[11px] text-muted-foreground leading-4">
+        <p className="text-2xs text-muted-foreground leading-4">
           {t("fonts.terminalLigaturesHint")}
         </p>
       </div>

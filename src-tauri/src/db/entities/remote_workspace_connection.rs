@@ -9,6 +9,10 @@ pub struct Model {
     pub base_url: String,
     #[sea_orm(column_type = "Text")]
     pub token: String,
+    /// JSON `Vec<RemoteWorkspaceHeader>` — extra headers the desktop client
+    /// sends on every request to this connection.
+    #[sea_orm(column_type = "Text")]
+    pub headers: String,
     pub sort_order: i32,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,

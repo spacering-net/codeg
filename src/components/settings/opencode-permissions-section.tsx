@@ -11,6 +11,7 @@ import {
 } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
+import { BrowserLink } from "@/components/ui/browser-link"
 import { Button } from "@/components/ui/button"
 import {
   Collapsible,
@@ -47,7 +48,7 @@ import {
 /** Radix Select rejects "" as a value, so "not configured" needs a sentinel. */
 const UNSET = "__opencode_permission_unset__"
 
-const DOCS_URL = "https://opencode.ai/docs/permissions/"
+const DOCS_URL = "https://opencode.ai/v2/docs/permissions"
 
 /** Rule-capable keys get a fine-grained editor; the rest are action-only. */
 const FINE_GRAINED = new Map(
@@ -82,20 +83,22 @@ interface RuleEditor {
 }
 
 /**
- * Visual editor for OpenCode's `permission` block in `opencode.json`.
+ * Visual editor for OpenCode 2's `permissions` rules in its config file.
  *
- * Mirrors https://opencode.ai/docs/permissions/ one-to-one: a global default
- * (`"*"`), a per-tool action for every key the published schema names, and
- * ordered pattern rules for the keys typed as `PermissionRuleConfig`. The
- * headline control is the auto-accept switch, which is the whole point of the
- * block for most users — it writes `"permission": { "*": "allow" }` so no tool
- * call ever stops for approval.
+ * The rules are an ordered list where the last match wins; the editor shows
+ * them grouped: a global default (the `*` action's `*` rule), a base effect
+ * per action, and each action's resource rules. The headline control is the
+ * auto-accept switch, which writes one `{action: "*", resource: "*", effect:
+ * "allow"}` rule so no tool call stops for approval. 1.x's `permission` and
+ * `tools` keys are read the way OpenCode reads them and rewritten as
+ * `permissions` by the next edit.
  *
  * The component is stateless with respect to the config: it renders whatever
  * `configText` says and hands a rewritten document back through `onChange`.
  * Only the in-progress "add a rule" inputs are local — an existing rule is
  * edited straight through, which round-trips because the writer emits rules in
- * array order.
+ * the grouped order. A list written in another order is read-only until Fix
+ * order (or the native JSON) puts it in that order.
  */
 export function OpenCodePermissionsSection({
   configText,
@@ -109,7 +112,10 @@ export function OpenCodePermissionsSection({
   const t = useTranslations("AcpAgentSettings")
   const view = useMemo(() => readOpenCodePermissions(configText), [configText])
   const editable = isOpenCodeConfigEditable(configText)
-  const locked = disabled || !editable || view.invalid
+  // Rules written in another order than the rows show would be rewritten in
+  // the shown order by any edit, changing what untouched rules decide. The
+  // rows wait for Fix order (or a fix in the native JSON).
+  const locked = disabled || !editable || view.invalid || view.orderingUnsafe
 
   const [expandedKey, setExpandedKey] = useState<string | null>(null)
   const [draftPattern, setDraftPattern] = useState("")
@@ -142,21 +148,19 @@ export function OpenCodePermissionsSection({
    */
   const keyHints = useMemo<Record<string, string>>(
     () => ({
-      bash: t("openCode.permissions.keys.bash"),
+      shell: t("openCode.permissions.keys.shell"),
       edit: t("openCode.permissions.keys.edit"),
       read: t("openCode.permissions.keys.read"),
       external_directory: t("openCode.permissions.keys.external_directory"),
-      task: t("openCode.permissions.keys.task"),
+      subagent: t("openCode.permissions.keys.subagent"),
       skill: t("openCode.permissions.keys.skill"),
-      glob: t("openCode.permissions.keys.glob"),
-      grep: t("openCode.permissions.keys.grep"),
-      list: t("openCode.permissions.keys.list"),
       webfetch: t("openCode.permissions.keys.webfetch"),
       websearch: t("openCode.permissions.keys.websearch"),
-      lsp: t("openCode.permissions.keys.lsp"),
-      todowrite: t("openCode.permissions.keys.todowrite"),
+      glob: t("openCode.permissions.keys.glob"),
+      grep: t("openCode.permissions.keys.grep"),
+      execute: t("openCode.permissions.keys.execute"),
       question: t("openCode.permissions.keys.question"),
-      doom_loop: t("openCode.permissions.keys.doom_loop"),
+      todowrite: t("openCode.permissions.keys.todowrite"),
     }),
     [t]
   )
@@ -264,40 +268,39 @@ export function OpenCodePermissionsSection({
     <div className="space-y-2.5 rounded-md border bg-background/60 p-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
-          <label className="text-[11px] font-medium">
+          <label className="text-2xs font-medium">
             {t("openCode.permissions.title")}
           </label>
-          <p className="mt-1 text-[10px] text-muted-foreground">
+          <p className="mt-1 text-3xs text-muted-foreground">
             {t("openCode.permissions.description")}
           </p>
         </div>
-        <a
+        <BrowserLink
           href={DOCS_URL}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex shrink-0 items-center gap-1 text-[11px] text-primary hover:underline"
+          className="inline-flex shrink-0 items-center gap-1 text-2xs text-primary hover:underline"
         >
           {t("openCode.permissions.docsLink")}
           <ExternalLink className="h-3 w-3" />
-        </a>
+        </BrowserLink>
       </div>
 
       {!editable && (
-        <p className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-[11px] text-amber-500">
+        <p className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-2xs text-amber-500">
           {t("openCode.permissions.unparsableConfig")}
         </p>
       )}
       {editable && view.invalid && (
-        <p className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-[11px] text-amber-500">
+        <p className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-2xs text-amber-500">
           {t("openCode.permissions.invalidBlock")}
         </p>
       )}
       {editable && !view.invalid && view.orderingUnsafe && (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5">
-          <p className="min-w-0 flex-1 text-[11px] text-amber-500">
+          <p className="min-w-0 flex-1 text-2xs text-amber-500">
             {view.orderingFixable
               ? t("openCode.permissions.orderingUnsafe")
-              : t("openCode.permissions.orderingUnsafeManual")}
+              : t("openCode.permissions.orderingUnsafeManual")}{" "}
+            {t("openCode.permissions.orderingLocked")}
           </p>
           {view.orderingFixable && (
             <Button
@@ -315,15 +318,15 @@ export function OpenCodePermissionsSection({
         </div>
       )}
       {editable && view.agentOverrides.length > 0 && (
-        <p className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-[11px] text-amber-500">
+        <p className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-2xs text-amber-500">
           {t("openCode.permissions.agentOverrides", {
             agents: view.agentOverrides.join(", "),
           })}
         </p>
       )}
-      {editable && view.legacyToolsDeny && (
-        <p className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-[11px] text-amber-500">
-          {t("openCode.permissions.legacyTools")}
+      {editable && !view.invalid && view.legacy && (
+        <p className="rounded-md border bg-muted/20 px-2.5 py-1.5 text-2xs text-muted-foreground">
+          {t("openCode.permissions.legacyRules")}
         </p>
       )}
 
@@ -335,14 +338,16 @@ export function OpenCodePermissionsSection({
             <div className="text-xs font-medium">
               {t("openCode.permissions.autoAcceptTitle")}
             </div>
-            <p className="mt-0.5 text-[10px] text-muted-foreground">
+            <p className="mt-0.5 text-3xs text-muted-foreground">
               {t("openCode.permissions.autoAcceptHint")}
             </p>
           </div>
         </div>
         <Switch
           checked={view.autoAcceptAll}
-          disabled={locked}
+          // Auto-accept replaces every rule, so it stays available while the
+          // order is off (it is never on then: see `autoAcceptAll`).
+          disabled={disabled || !editable || view.invalid}
           onCheckedChange={(checked) => {
             // Off only drops the global "*" — anything the user set per tool
             // survives, and a block that held nothing else disappears anyway.
@@ -359,10 +364,10 @@ export function OpenCodePermissionsSection({
       {/* ---- Global default ("*") ---- */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
-          <div className="text-[11px] font-medium">
+          <div className="text-2xs font-medium">
             {t("openCode.permissions.globalLabel")}
           </div>
-          <p className="mt-0.5 text-[10px] text-muted-foreground">
+          <p className="mt-0.5 text-3xs text-muted-foreground">
             {t("openCode.permissions.globalHint")}
           </p>
         </div>
@@ -390,7 +395,7 @@ export function OpenCodePermissionsSection({
       {/* ---- Per-tool grid ---- */}
       <div className="space-y-1.5 border-t pt-2">
         <div className="flex items-center justify-between gap-2">
-          <div className="text-[11px] font-medium text-muted-foreground">
+          <div className="text-2xs font-medium text-muted-foreground">
             {t("openCode.permissions.perToolTitle")}
           </div>
           <Button
@@ -434,7 +439,7 @@ export function OpenCodePermissionsSection({
 
       {customEntries.length > 0 && (
         <div className="space-y-1.5 border-t pt-2">
-          <div className="text-[11px] font-medium text-muted-foreground">
+          <div className="text-2xs font-medium text-muted-foreground">
             {t("openCode.permissions.customKeys")}
           </div>
           <div className="space-y-1">
@@ -443,9 +448,14 @@ export function OpenCodePermissionsSection({
                 key={entry.key}
                 entry={entry}
                 label={entry.key}
-                hint={t("openCode.permissions.customKeyHint")}
+                hint={
+                  entry.key === "*"
+                    ? t("openCode.permissions.allToolsResourcesHint")
+                    : t("openCode.permissions.customKeyHint")
+                }
                 fineGrained
                 patternExample="*"
+                baseEditable={entry.key !== "*"}
                 inheritLabel={t("openCode.permissions.actionInherit", {
                   action: actionLabel(
                     effectiveOpenCodeDefault(entry.key, view.globalAction)
@@ -480,6 +490,7 @@ function PermissionRow({
   ruleEditor,
   onToggleExpanded,
   onActionChange,
+  baseEditable = true,
 }: {
   entry: OpenCodePermissionEntry
   label: string
@@ -493,6 +504,8 @@ function PermissionRow({
   ruleEditor: RuleEditor
   onToggleExpanded: (key: string) => void
   onActionChange: (key: string, value: string) => void
+  /** False for the `*` row, whose base effect is the global default above. */
+  baseEditable?: boolean
 }) {
   const t = useTranslations("AcpAgentSettings")
   const { draftPattern, draftAction, editingRule } = ruleEditor
@@ -518,36 +531,38 @@ function PermissionRow({
         <div className="flex flex-wrap items-center gap-2 px-2.5 py-1.5">
           <div className="flex min-w-0 flex-1 flex-col">
             <span className="truncate font-mono text-xs">{label}</span>
-            <span className="truncate text-[10px] text-muted-foreground">
+            <span className="truncate text-3xs text-muted-foreground">
               {hint}
             </span>
           </div>
           {entry.rules.length > 0 && (
-            <Badge variant="secondary" className="text-[10px]">
+            <Badge variant="secondary" className="text-3xs">
               {t("openCode.permissions.ruleCount", {
                 count: entry.rules.length,
               })}
             </Badge>
           )}
-          <Select
-            value={entry.action ?? UNSET}
-            disabled={locked}
-            onValueChange={(value) => onActionChange(entry.key, value)}
-          >
-            <SelectTrigger
-              className={cn("h-7 w-40 text-xs", actionTone(entry.action))}
+          {baseEditable && (
+            <Select
+              value={entry.action ?? UNSET}
+              disabled={locked}
+              onValueChange={(value) => onActionChange(entry.key, value)}
             >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent align="end">
-              <SelectItem value={UNSET}>{inheritLabel}</SelectItem>
-              {OPENCODE_PERMISSION_ACTIONS.map((action) => (
-                <SelectItem key={action} value={action}>
-                  {actionLabel(action)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+              <SelectTrigger
+                className={cn("h-7 w-40 text-xs", actionTone(entry.action))}
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent align="end">
+                <SelectItem value={UNSET}>{inheritLabel}</SelectItem>
+                {OPENCODE_PERMISSION_ACTIONS.map((action) => (
+                  <SelectItem key={action} value={action}>
+                    {actionLabel(action)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
           {fineGrained && (
             <CollapsibleTrigger asChild>
               <Button
@@ -574,12 +589,12 @@ function PermissionRow({
         {fineGrained && (
           <CollapsibleContent className="px-2.5 pb-2.5">
             <div className="space-y-1.5 border-t pt-2">
-              <p className="text-[10px] text-muted-foreground">
+              <p className="text-3xs text-muted-foreground">
                 {t("openCode.permissions.rulesHint")}
               </p>
 
               {entry.rules.length === 0 ? (
-                <p className="text-[11px] text-muted-foreground">
+                <p className="text-2xs text-muted-foreground">
                   {t("openCode.permissions.noRules")}
                 </p>
               ) : (
@@ -710,7 +725,7 @@ function PermissionRow({
                 </Button>
               </div>
               {(duplicate || editRejected) && (
-                <p className="text-[10px] text-destructive">
+                <p className="text-3xs text-destructive">
                   {editRejected && editedText.length === 0
                     ? t("openCode.permissions.blankRule")
                     : t("openCode.permissions.duplicateRule")}

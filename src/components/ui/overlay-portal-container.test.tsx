@@ -2,12 +2,12 @@ import { render } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
 
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
+import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer"
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover"
-import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet"
 
 function popoverContent() {
   return document.querySelector("[data-slot=popover-content]")
@@ -49,21 +49,28 @@ describe("overlay portal container", () => {
     expect(wrapper?.style.position).toBe("fixed")
   })
 
-  it("renders a popover inside the sheet that owns it", () => {
+  /**
+   * The drawer is non-modal, so it has no scroll lock to escape — its reason is
+   * the popup, not the content: the popup carries a `transform`, making it the
+   * containing block for `fixed` descendants, while the content in between is
+   * `overflow-hidden` and would clip anything portalled into it.
+   */
+  it("renders a popover inside the popup of the drawer that owns it", () => {
     render(
-      <Sheet open>
-        <SheetContent>
-          <SheetTitle>Title</SheetTitle>
+      <Drawer open>
+        <DrawerContent>
+          <DrawerTitle>Title</DrawerTitle>
           <Popover open>
             <PopoverTrigger>Pick</PopoverTrigger>
             <PopoverContent>Options</PopoverContent>
           </Popover>
-        </SheetContent>
-      </Sheet>
+        </DrawerContent>
+      </Drawer>
     )
 
-    const sheet = document.querySelector("[data-slot=sheet-content]")
-    expect(sheet!.contains(popoverContent()!)).toBe(true)
+    const popup = document.querySelector("[data-slot=drawer-popup]")
+    expect(popup).toBeTruthy()
+    expect(popup!.contains(popoverContent()!)).toBe(true)
   })
 
   it("leaves a popover outside any modal layer on the body", () => {

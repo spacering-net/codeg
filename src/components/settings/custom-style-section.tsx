@@ -107,7 +107,7 @@ function TokenField({
   return (
     <div className="flex items-center gap-2">
       <label
-        className="w-40 shrink-0 truncate font-mono text-[11px] text-muted-foreground"
+        className="w-40 shrink-0 truncate font-mono text-2xs text-muted-foreground"
         htmlFor={`custom-token-${token}`}
         title={`--${token}`}
       >
@@ -134,7 +134,7 @@ function TokenField({
           if (e.key === "Enter") commit()
         }}
         className={cn(
-          "h-7 font-mono text-[11px]",
+          "h-7 font-mono text-2xs",
           invalid && "border-destructive focus-visible:ring-destructive/30"
         )}
       />
@@ -311,7 +311,7 @@ export function CustomStyleSection() {
               </span>
               <span
                 className={cn(
-                  "truncate text-[11px] font-normal text-muted-foreground",
+                  "truncate text-2xs font-normal text-muted-foreground",
                   customStyleSuppressed && "text-foreground"
                 )}
               >
@@ -369,7 +369,7 @@ export function CustomStyleSection() {
               </span>
             </label>
 
-            <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <p className="flex items-center gap-1.5 text-2xs text-muted-foreground">
               {isDarkMode ? (
                 <Moon className="size-3 shrink-0" />
               ) : (
@@ -390,7 +390,7 @@ export function CustomStyleSection() {
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <label className={fieldLabel}>{t("customStyle.radius")}</label>
-                <span className="text-[11px] tabular-nums text-muted-foreground">
+                <span className="text-2xs tabular-nums text-muted-foreground">
                   {radiusRem.toFixed(3).replace(/0+$/, "").replace(/\.$/, "")}
                   rem
                 </span>
@@ -406,7 +406,7 @@ export function CustomStyleSection() {
                   setCustomThemeToken("radius", `${v}rem`)
                 }
               />
-              <p className="text-[11px] text-muted-foreground leading-4">
+              <p className="text-2xs text-muted-foreground leading-4">
                 {t("customStyle.radiusHint")}
               </p>
             </div>
@@ -447,7 +447,7 @@ export function CustomStyleSection() {
                 {t("customStyle.enableCss")}
               </span>
             </label>
-            <p className="flex items-start gap-1.5 text-[11px] leading-4 text-muted-foreground">
+            <p className="flex items-start gap-1.5 text-2xs leading-4 text-muted-foreground">
               <ShieldAlert className="mt-px size-3 shrink-0" />
               {t("customStyle.cssRisk")}
             </p>
@@ -461,7 +461,7 @@ export function CustomStyleSection() {
                 <Code2 className="size-3.5" />
                 {t("customStyle.editCss")}
               </Button>
-              <span className="text-[11px] tabular-nums text-muted-foreground">
+              <span className="text-2xs tabular-nums text-muted-foreground">
                 {customCss
                   ? t("customStyle.cssPresent", {
                       size: (customCss.length / 1024).toFixed(1),
@@ -469,7 +469,7 @@ export function CustomStyleSection() {
                   : t("customStyle.cssEmpty")}
               </span>
             </div>
-            <p className="text-[11px] text-muted-foreground leading-4">
+            <p className="text-2xs text-muted-foreground leading-4">
               {escapeHint}
             </p>
           </div>
@@ -503,7 +503,7 @@ export function CustomStyleSection() {
               {t("customStyle.clearTheme")}
             </Button>
           </div>
-          <p className="text-[11px] text-muted-foreground leading-4">
+          <p className="text-2xs text-muted-foreground leading-4">
             {t("customStyle.interopHint")}
           </p>
 
@@ -525,7 +525,7 @@ export function CustomStyleSection() {
                 onChange={(e) => setImportDraft(e.target.value)}
                 spellCheck={false}
                 rows={10}
-                className="font-mono text-[11px]"
+                className="font-mono text-2xs"
                 placeholder='{"cssVars":{"light":{"primary":"oklch(0.6 0.2 250)"}}}'
               />
               <DialogFooter>

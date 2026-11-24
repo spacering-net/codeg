@@ -13,6 +13,7 @@ import {
   AgentConfigSection,
   effectiveSelections,
   snapshotLabels,
+  useBooleanOptionLabels,
 } from "@/components/automations/agent-config-section"
 import { useAgentOptions } from "@/components/automations/use-agent-options"
 import { getAgentLabel } from "@/lib/custom-agents"
@@ -28,32 +29,49 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover"
+import { BranchPicker } from "@/components/shared/branch-picker"
 import { FolderSelect } from "@/components/shared/folder-select"
 import { useScrollbarSafeDismiss } from "@/hooks/use-scrollbar-safe-dismiss"
 import {
+  workTaskGet,
   workTaskSettingsEffective,
   workTaskTemplateDelete,
   workTaskTemplateList,
   workTaskTemplateSave,
 } from "@/lib/api"
+import { toErrorMessage } from "@/lib/app-error"
 import type {
   AgentType,
   WorkTask,
   WorkTaskConfig,
+  WorkTaskConversationSelection,
   WorkTaskDraft,
   WorkTaskTemplate,
 } from "@/lib/types"
+import { TaskConversationSelection } from "./task-conversation-selection"
+import { taskConversationSettling } from "./use-open-task-conversation"
+
+/** How an edit treats the task's selector tuple (see `workTaskUpdate`). */
+export interface TaskEditorSubmitFlags {
+  selectionUntouched?: boolean
+  selectionReset?: boolean
+  selectorOnly?: boolean
+}
 
 interface TaskEditorDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   /** Existing task to edit, or null for a blank create. */
   task: WorkTask | null
-  /** Preselected folder for a create (the board's folder filter). */
+  /** Preselected folder for a create (the board's folder filter, the aux
+   *  panel's project, or the project of the conversation a message is in). */
   defaultFolderId: number | null
-  /** Seed text for a create (the "task from message" hand-off). */
+  /** Seed text for a create from a chat message (`TaskFromMessageHost`). */
   prefillText?: string | null
-  onSubmit: (draft: WorkTaskDraft) => Promise<void>
+  onSubmit: (
+    draft: WorkTaskDraft,
+    flags?: TaskEditorSubmitFlags
+  ) => Promise<void>
 }
 
 /**
@@ -61,8 +79,14 @@ interface TaskEditorDialogProps {
  * the agent pill above the real conversation composer (rich text +
  * @-mentions) with the ACP-probed mode/model bar inside the box, and a Target
  * section for the folder. The agent controls prefill from the folder's
- * EFFECTIVE task settings; untouched they keep inheriting (nothing is frozen
- * into the task), and only an explicit change is saved as a per-task override.
+ * EFFECTIVE task settings, and what they SHOW is saved with the task: a task
+ * runs with the agent / mode / options it was created (or explicitly edited)
+ * with, never with later folder settings (codeg#1179).
+ *
+ * A task that already has a conversation keeps its agent (locked here and on
+ * the server). Its model / options are the conversation's own — shown
+ * read-only with "Open conversation to change", and the next retry / return /
+ * merge continues that conversation with them.
  */
 export function TaskEditorDialog({
   open,
@@ -100,7 +124,10 @@ function TaskEditorBody({
   task: WorkTask | null
   defaultFolderId: number | null
   prefillText: string | null
-  onSubmit: (draft: WorkTaskDraft) => Promise<void>
+  onSubmit: (
+    draft: WorkTaskDraft,
+    flags?: TaskEditorSubmitFlags
+  ) => Promise<void>
   onCancel: () => void
 }) {
   const t = useTranslations("Tasks")
@@ -123,6 +150,12 @@ function TaskEditorBody({
   const [folderId, setFolderId] = useState<number | null>(
     task?.folder_id ?? defaultFolderId ?? projectFolders[0]?.id ?? null
   )
+  // The branch this task is for. "" = the project folder's current branch when
+  // the task starts, which is what every task did before the choice existed.
+  // The REQUEST, never the recorded base: this is what the next save writes
+  // back, and a task that branched from the checkout by accident must not come
+  // out of the editor asking for that branch by name.
+  const [baseBranch, setBaseBranch] = useState(task?.config?.base_branch ?? "")
   // `agentDirty` = the user explicitly chose agent/mode/config for THIS task.
   // While clean, the controls display the folder's effective task settings and
   // the draft keeps inheriting (agent_type null) — nothing is frozen.
@@ -130,6 +163,17 @@ function TaskEditorBody({
   const [agentType, setAgentType] = useState<AgentType>(
     task?.config?.agent_type ?? "claude_code"
   )
+  // What an agent-less task launches with in this folder, resolved the way the
+  // engine does it: the effective task settings' agent, else the folder's
+  // default agent — `null` when neither names one. Keyed by folder, so the
+  // answer for a previous folder never stands in for the current one's.
+  const [inherited, setInherited] = useState<{
+    folderId: number
+    agent: AgentType | null
+  } | null>(null)
+  // Whether the selector shows any agent as picked: with none enabled and
+  // available here it shows none.
+  const [agentShown, setAgentShown] = useState(false)
   const [modeId, setModeId] = useState<string | null>(
     task?.config?.mode_id ?? null
   )
@@ -138,6 +182,57 @@ function TaskEditorBody({
   )
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  // An edit's selector intent (codeg#1179): untouched → the server keeps the
+  // CURRENT row's tuple, whatever this (possibly stale) dialog holds; reset →
+  // the folder's task settings are resolved now and saved.
+  const [selectionTouched, setSelectionTouched] = useState(false)
+  const [selectionReset, setSelectionReset] = useState(false)
+  const touchSelection = () => {
+    setSelectionTouched(true)
+    setSelectionReset(false)
+  }
+
+  // A task that already has a conversation keeps its agent; its model and
+  // options are the conversation's own. Fetched fresh on open — the board's
+  // row may predate a pick made in the conversation since.
+  const bound = task?.conversation_id != null
+  const [fresh, setFresh] = useState<WorkTask | null>(null)
+  const [freshFailed, setFreshFailed] = useState(false)
+  useEffect(() => {
+    if (task == null || task.conversation_id == null) return
+    let cancelled = false
+    workTaskGet(task.id)
+      .then((row) => {
+        if (!cancelled) setFresh(row)
+      })
+      .catch(() => {
+        if (!cancelled) setFreshFailed(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [task])
+  // `undefined` while loading; `null` when the server did not say (older).
+  const conversationSelection:
+    | WorkTaskConversationSelection
+    | null
+    | undefined = !bound
+    ? null
+    : fresh != null
+      ? (fresh.conversation_selection ?? null)
+      : freshFailed
+        ? null
+        : undefined
+  // A legacy task whose agent changed while bound: its next run starts a new
+  // conversation with the task's own tuple, so that tuple stays editable
+  // (agent still locked).
+  const replacesConversation =
+    conversationSelection?.replaces_conversation === true
+  const selectionReadOnly = bound && !replacesConversation
+  // Opened from review (a legacy mismatched-agent task, whose Return / Merge
+  // start a new conversation with the task's tuple): only that tuple changes;
+  // the work order is kept exactly as stored.
+  const selectorOnly = task?.status === "review"
 
   // Saved blueprints (global). Applying one reseeds the composer via a key
   // bump — RichComposer only reads defaultText on mount.
@@ -186,13 +281,19 @@ function TaskEditorBody({
     workTaskSettingsEffective(folderId)
       .then((s) => {
         if (cancelled) return
-        setAgentType(
-          s.default_agent_type ?? folderDefaultAgent ?? "claude_code"
-        )
+        const agent = s.default_agent_type ?? folderDefaultAgent ?? null
+        setInherited({ folderId, agent })
+        // Nothing to inherit: a placeholder, which a save keeps rather than
+        // inherits (see `pinsShownAgent`).
+        setAgentType(agent ?? "claude_code")
         setModeId(s.mode_id ?? null)
         setConfigValues(s.config_values ?? {})
       })
-      .catch(() => {})
+      .catch(() => {
+        // Never hold a create's Save forever: fall back to the folder's
+        // default agent, as the engine would.
+        if (!cancelled) setInherited({ folderId, agent: folderDefaultAgent })
+      })
     return () => {
       cancelled = true
     }
@@ -203,24 +304,69 @@ function TaskEditorBody({
     [folders, folderId]
   )
 
-  const agentOptions = useAgentOptions(agentType, folderPath, true)
+  // A task that has already minted its worktree: its folder and the branch it
+  // branched from are recorded facts by then, not settings.
+  const pinned = task != null && task.worktree_folder_id != null
+  // A pull-request task has no branch to choose: it starts on the pull request
+  // and is reviewed against that review's base ref, so a pick here would be
+  // quietly ignored.
+  const choosesBranch = task?.source_kind !== "forge_pr"
+
+  const agentOptions = useAgentOptions(
+    agentType,
+    folderPath,
+    true,
+    configValues
+  )
+  const booleanLabels = useBooleanOptionLabels()
+
+  // An untouched pill is saved as "inherit" only while it shows the agent that
+  // inheriting launches. It can show another: the placeholder when nothing is
+  // configured to inherit, or the selector's own substitute when the inherited
+  // agent is disabled or unavailable here. Inheriting would then launch an
+  // agent other than the one on screen, or none at all ("no agent
+  // configured"), so the agent on screen is saved with the task instead. Until
+  // this folder's settings have answered, the pill inherits as it always has.
+  const pinsShownAgent =
+    !agentDirty &&
+    agentShown &&
+    inherited != null &&
+    inherited.folderId === folderId &&
+    inherited.agent !== agentType
+  const createAwaitsSettings =
+    task == null &&
+    !agentDirty &&
+    folderId != null &&
+    (inherited == null || inherited.folderId !== folderId)
+  const agentHint = !pinsShownAgent
+    ? t("agentInheritedHint")
+    : inherited?.agent == null
+      ? t("agentNoDefaultHint")
+      : t("agentInheritedUnavailableHint", {
+          agent: getAgentLabel(inherited.agent),
+        })
 
   // The captured composer + agent state as a `WorkTaskConfig` — the shared
-  // payload of both the task draft and a saved template.
-  const buildConfig = async (): Promise<WorkTaskConfig> => {
+  // payload of both the task draft and a saved template. Without `ownAgent`
+  // the config inherits its agent, mode and options.
+  const buildConfig = async (ownAgent: boolean): Promise<WorkTaskConfig> => {
     const displayText = (composerRef.current?.getText() ?? prompt).trim()
     // Prose + inline references + attached images, exactly as a chat send
     // composes them; the engine replays these blocks when the task launches.
     const blocks = composerRef.current?.getPromptBlocks() ?? [
       { type: "text", text: displayText },
     ]
-    if (!agentDirty) {
+    // Explicitly null rather than absent when nothing is picked: clearing the
+    // choice has to travel, and the save replaces the stored config wholesale.
+    const base_branch = baseBranch.trim() || null
+    if (!ownAgent) {
       return {
         prompt_blocks: blocks,
         display_text: displayText,
         agent_type: null,
         mode_id: null,
         config_values: {},
+        base_branch,
       }
     }
     const snapshot = await agentOptions.ensure()
@@ -237,8 +383,9 @@ function TaskEditorBody({
       config_values,
       label_snapshot: {
         agent_label: getAgentLabel(agentType) ?? agentType,
-        ...snapshotLabels(snapshot, mode_id, config_values),
+        ...snapshotLabels(snapshot, mode_id, config_values, booleanLabels),
       },
+      base_branch,
     }
   }
 
@@ -257,15 +404,58 @@ function TaskEditorBody({
     }
 
     setSaving(true)
+    if (selectorOnly && task != null) {
+      try {
+        const built = await buildConfig(true)
+        const stored = task.config ?? built
+        await onSubmit(
+          {
+            folder_id: task.folder_id,
+            title: task.title,
+            config: {
+              ...stored,
+              agent_type: built.agent_type,
+              mode_id: built.mode_id,
+              config_values: built.config_values,
+              label_snapshot: built.label_snapshot,
+            },
+          },
+          // Untouched → the server keeps the CURRENT tuple; either way it
+          // refuses if the work order moved since this dialog opened.
+          {
+            selectionUntouched: !selectionTouched,
+            selectionReset: false,
+            selectorOnly: true,
+          }
+        )
+      } catch (e) {
+        setError(toErrorMessage(e))
+      } finally {
+        setSaving(false)
+      }
+      return
+    }
     try {
+      // What the selectors SHOW is what the task keeps (codeg#1179); only
+      // when no agent is shown at all does the server resolve one.
       const draft: WorkTaskDraft = {
         folder_id: folderId,
         title: title.trim(),
-        config: await buildConfig(),
+        config: await buildConfig(
+          task == null ? agentShown : agentDirty || pinsShownAgent
+        ),
       }
-      await onSubmit(draft)
+      await onSubmit(
+        draft,
+        task == null
+          ? undefined
+          : {
+              selectionUntouched: !selectionTouched && !selectionReset,
+              selectionReset: selectionReset && !selectionTouched,
+            }
+      )
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(toErrorMessage(e))
     } finally {
       setSaving(false)
     }
@@ -281,14 +471,20 @@ function TaskEditorBody({
       text,
       blocks: cfg?.prompt_blocks ?? null,
     }))
-    if (cfg?.agent_type != null) {
+    if (bound) {
+      // A task with a conversation keeps its agent and the conversation's
+      // selection: a template brings its work order only.
+    } else if (cfg?.agent_type != null) {
       setAgentDirty(true)
       setAgentType(cfg.agent_type)
       setModeId(cfg.mode_id ?? null)
       setConfigValues(cfg.config_values ?? {})
+      touchSelection()
     } else {
-      // Back to inheriting — the prefill effect reseeds from settings.
+      // Back to the task settings — the prefill effect reseeds from them.
       setAgentDirty(false)
+      setSelectionTouched(false)
+      setSelectionReset(true)
     }
     setTemplatesOpen(false)
   }
@@ -310,14 +506,21 @@ function TaskEditorBody({
     }
     setTemplateBusy(true)
     try {
+      // A blueprint is global — the folder is picked at creation time — so a
+      // branch name from one repository must not ride along into another,
+      // where it would only fail the launch. For the same reason an untouched
+      // agent stays inherited even where this folder has nothing to inherit:
+      // the task created from it settles that against its own folder.
+      const config = await buildConfig(agentDirty)
+      delete config.base_branch
       await workTaskTemplateSave({
         name: title.trim(),
         title: title.trim(),
-        config: await buildConfig(),
+        config,
       })
       setTemplates(await workTaskTemplateList())
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(toErrorMessage(e))
     } finally {
       setTemplateBusy(false)
     }
@@ -328,7 +531,7 @@ function TaskEditorBody({
       await workTaskTemplateDelete(id)
       setTemplates((prev) => prev.filter((tpl) => tpl.id !== id))
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(toErrorMessage(e))
     }
   }
 
@@ -341,8 +544,14 @@ function TaskEditorBody({
       </DialogHeader>
 
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-3">
+        {selectorOnly ? (
+          <p className="text-xs text-muted-foreground" role="note">
+            {t("selectorOnlyHint")}
+          </p>
+        ) : null}
         <input
           value={title}
+          disabled={selectorOnly}
           onChange={(e) => setTitle(e.target.value)}
           placeholder={t("titlePlaceholder")}
           aria-label={t("titleLabel")}
@@ -354,30 +563,54 @@ function TaskEditorBody({
         <div className="flex flex-wrap items-center gap-2">
           <AgentSelector
             defaultAgentType={agentType}
+            // A task with a conversation keeps its agent (the server rejects
+            // a change too).
+            disabled={bound}
             onSelect={(a) => {
               setAgentDirty(true)
               setAgentType(a)
               setModeId(null)
               setConfigValues({})
+              touchSelection()
             }}
             // A system substitution (agent unavailable) must not count as a
-            // user override choice.
-            onFallback={setAgentType}
+            // user override choice. The mode and options loaded for the agent
+            // it replaces are not the substitute's, though, and a substitute
+            // on an untouched pill is saved with the task.
+            onFallback={(a) => {
+              setAgentType(a)
+              setModeId(null)
+              setConfigValues({})
+            }}
+            onAgentsLoaded={(agents) =>
+              setAgentShown(agents.some((a) => a.enabled && a.available))
+            }
           />
-          {agentDirty ? (
+          {bound ? (
+            <span className="text-xs text-muted-foreground">
+              {t("agentLockedHint")}
+            </span>
+          ) : agentDirty ? (
             <button
               type="button"
-              onClick={() => setAgentDirty(false)}
+              onClick={() => {
+                setAgentDirty(false)
+                setSelectionTouched(false)
+                setSelectionReset(true)
+              }}
               className="text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
             >
               {t("agentOverrideReset")}
             </button>
           ) : (
-            <span className="text-xs text-muted-foreground">
-              {t("agentInheritedHint")}
-            </span>
+            <span className="text-xs text-muted-foreground">{agentHint}</span>
           )}
         </div>
+        {bound && replacesConversation ? (
+          <p className="text-xs text-muted-foreground" role="note">
+            {t("conversationSelectionReplaced")}
+          </p>
+        ) : null}
 
         {/* The conversation composer, whole: `@` references, `/` commands, the
             "+" shortcuts menu and image attachments, with the ACP-probed
@@ -395,33 +628,53 @@ function TaskEditorBody({
           onChange={setPrompt}
           onAttachmentsChange={setAttachmentCount}
           editorClassName="max-h-[14rem] min-h-[6rem]"
+          // The bar below probes with these; so must the composer, or the two
+          // stop sharing one probe and the agent is spawned twice.
+          probeConfigValues={configValues}
           bottomBarExtra={
-            <AgentConfigSection
-              snapshot={agentOptions.snapshot}
-              loading={agentOptions.loading}
-              error={agentOptions.error}
-              onReload={agentOptions.reload}
-              modeId={modeId}
-              configValues={configValues}
-              layout="inline"
-              onModeChange={(m) => {
-                setAgentDirty(true)
-                setModeId(m)
-              }}
-              onConfigChange={(optionId, valueId) => {
-                setAgentDirty(true)
-                setConfigValues((prev) => {
-                  const next = { ...prev }
-                  if (valueId === null) delete next[optionId]
-                  else next[optionId] = valueId
-                  return next
-                })
-              }}
-            />
+            selectionReadOnly ? undefined : (
+              <AgentConfigSection
+                agentType={agentOptions.snapshotAgentType}
+                snapshot={agentOptions.snapshot}
+                loading={agentOptions.loading}
+                stale={!agentOptions.current}
+                error={agentOptions.error}
+                onReload={agentOptions.reload}
+                modeId={modeId}
+                configValues={configValues}
+                layout="inline"
+                onModeChange={(m) => {
+                  setAgentDirty(true)
+                  setModeId(m)
+                  touchSelection()
+                }}
+                onConfigChange={(optionId, valueId) => {
+                  setAgentDirty(true)
+                  touchSelection()
+                  setConfigValues((prev) => {
+                    const next = { ...prev }
+                    if (valueId === null) delete next[optionId]
+                    else next[optionId] = valueId
+                    return next
+                  })
+                }}
+              />
+            )
           }
         />
 
-        {/* Target — which project board the task lives on. */}
+        {task != null && selectionReadOnly ? (
+          <TaskConversationSelection
+            taskId={task.id}
+            selection={conversationSelection}
+            configOptions={agentOptions.snapshot?.config_options ?? null}
+            settling={taskConversationSettling(fresh ?? task)}
+            onOpened={onCancel}
+          />
+        ) : null}
+
+        {/* Target — which project board the task lives on, and which branch of
+            it the task is for. */}
         <div className="flex flex-col gap-2">
           <h3 className="text-[0.6875rem] font-medium uppercase tracking-wide text-muted-foreground">
             {t("sectionTarget")}
@@ -431,13 +684,48 @@ function TaskEditorBody({
               variant="field"
               folders={projectFolders}
               value={folderId}
-              onChange={setFolderId}
+              // A branch belongs to a specific repository, so switching folders
+              // drops the previous folder's pick rather than saving it against
+              // the new one. In the handler, not a folderId effect, so the
+              // initial state never wipes an edited task's branch.
+              onChange={(id) => {
+                setFolderId(id)
+                setBaseBranch("")
+              }}
               placeholder={t("folderPlaceholder")}
               // A task that already ran is pinned to its folder (its worktree
               // lives there) — the backend rejects a move too.
-              disabled={task != null && task.worktree_folder_id != null}
+              disabled={pinned}
             />
+            {choosesBranch ? (
+              <BranchPicker
+                folderPath={folderPath}
+                // Read-only, so it can show the branch the task actually
+                // branched from; the moment it is editable again it shows the
+                // request, because that is what a save would write back.
+                value={pinned ? (task?.base_branch ?? baseBranch) : baseBranch}
+                onChange={(b) => setBaseBranch(b)}
+                // No pick means the project folder's checkout when the task
+                // starts, i.e. HEAD, so the picker says HEAD and names the
+                // branch it is on right now.
+                defaultFollowsHead
+                defaultLabel={t("baseBranchDefault")}
+                title={t("baseBranch")}
+                // The base is recorded when the worktree is minted, and every
+                // later decision (merge, delivery, diff) reads THAT — so once
+                // a task has run, its branch is history, not a setting.
+                disabled={folderId == null || pinned}
+                // The merge lands into the project checkout, which can only be
+                // on a local branch.
+                allowRemote={false}
+              />
+            ) : null}
           </div>
+          {choosesBranch ? (
+            <p className="text-xs text-muted-foreground">
+              {t("baseBranchHint")}
+            </p>
+          ) : null}
         </div>
 
         {error ? (
@@ -544,7 +832,13 @@ function TaskEditorBody({
           >
             {t("cancel")}
           </Button>
-          <Button type="button" onClick={submit} disabled={saving}>
+          <Button
+            type="button"
+            onClick={submit}
+            // A create saves what the selectors show, so it waits until they
+            // show this folder's settings (the probe is awaited at save).
+            disabled={saving || createAwaitsSettings}
+          >
             {t("save")}
           </Button>
         </div>

@@ -39,15 +39,32 @@ import {
   acpUpdatePiConfig,
   acpValidatePiCommand,
   loadPiConfig,
+  listPiModelCapabilities,
+  type PiModelCatalog,
   type PiTrustEntry,
 } from "@/lib/api"
+import { toErrorMessage } from "@/lib/app-error"
 import { useAgentInstallStream } from "@/hooks/use-agent-install-stream"
-import { PI_CONFIG_DIR_ENV } from "@/lib/pi-config"
+import { useProviderModels } from "@/hooks/use-provider-models"
+import {
+  ModelIdInputWithFetch,
+  ModelIdListField,
+} from "@/components/settings/provider-models"
+import type { ProviderModelsProtocol } from "@/lib/types"
+import {
+  PI_CONFIG_DIR_ENV,
+  PI_MIN_RUNTIME_VERSION,
+  piRuntimeIsTooOld,
+} from "@/lib/pi-config"
+import { PI_BUILTIN_PROVIDERS } from "@/lib/pi-providers"
 import {
   PI_THINKING_LEVELS,
+  clampThinkingLevel,
   implicitWireValue,
+  isPiThinkingLevel,
   reasoningFromModel,
   reasoningToMap,
+  supportedLevels,
   toggleLevel,
   type PiModelReasoning,
   type PiThinkingLevel,
@@ -97,46 +114,6 @@ const NO_REASONING: PiModelReasoning = {
   wireValues: {},
 }
 
-/**
- * Curated built-in providers for the enum, as `{ id, label }`: the Select stores
- * the `id` (pi's provider key, written to settings.json / auth.json) but shows the
- * brand `label`. Mirrors pi's authoritative `env-api-keys.ts` `envMap` — the
- * single-API-key subset most users want. Labels are brand names, not localized
- * (same convention as `HERMES_PROVIDERS`). Special-auth providers (azure /
- * bedrock / vertex / cloudflare / github-copilot) are omitted on purpose — they
- * need more than a single key, so they don't fit this flow; use "Custom" for them.
- */
-const PI_BUILTIN_PROVIDERS: { id: string; label: string }[] = [
-  { id: "anthropic", label: "Anthropic" },
-  { id: "openai", label: "OpenAI" },
-  { id: "google", label: "Google Gemini" },
-  { id: "openrouter", label: "OpenRouter" },
-  { id: "vercel-ai-gateway", label: "Vercel AI Gateway" },
-  { id: "xai", label: "xAI" },
-  { id: "deepseek", label: "DeepSeek" },
-  { id: "groq", label: "Groq" },
-  { id: "cerebras", label: "Cerebras" },
-  { id: "mistral", label: "Mistral" },
-  { id: "nvidia", label: "NVIDIA NIM" },
-  { id: "together", label: "Together AI" },
-  { id: "fireworks", label: "Fireworks" },
-  { id: "huggingface", label: "Hugging Face" },
-  { id: "kimi-coding", label: "Kimi For Coding" },
-  { id: "moonshotai", label: "Moonshot AI" },
-  { id: "moonshotai-cn", label: "Moonshot AI (China)" },
-  { id: "zai", label: "Z.AI Coding Plan (Global)" },
-  { id: "zai-coding-cn", label: "Z.AI Coding Plan (China)" },
-  { id: "minimax", label: "MiniMax" },
-  { id: "minimax-cn", label: "MiniMax (China)" },
-  { id: "ant-ling", label: "Ant Ling" },
-  { id: "xiaomi", label: "Xiaomi MiMo" },
-  { id: "xiaomi-token-plan-cn", label: "Xiaomi MiMo Token Plan (China)" },
-  { id: "xiaomi-token-plan-ams", label: "Xiaomi MiMo Token Plan (Amsterdam)" },
-  { id: "xiaomi-token-plan-sgp", label: "Xiaomi MiMo Token Plan (Singapore)" },
-  { id: "opencode", label: "OpenCode Zen" },
-  { id: "opencode-go", label: "OpenCode Go" },
-]
-
 /** Sentinel Select value that switches the credentials form to custom mode. */
 const PI_CUSTOM_SENTINEL = "__custom__"
 
@@ -147,6 +124,41 @@ const PI_CUSTOM_API_PROTOCOLS = [
   "anthropic-messages",
   "google-generative-ai",
 ]
+
+/** How a custom provider speaking `api` lists its models. */
+function piModelsProtocol(api: string): ProviderModelsProtocol {
+  if (api === "anthropic-messages") return "anthropic"
+  if (api === "google-generative-ai") return "gemini"
+  return "openai"
+}
+
+function isAbsolutePiPath(path: string): boolean {
+  return (
+    path.startsWith("/") ||
+    path.startsWith("\\\\") ||
+    /^[A-Za-z]:[\\/]/.test(path)
+  )
+}
+
+function hasRelativePiCommandPath(command: string): boolean {
+  const value = command.trim()
+  return (
+    value !== "" &&
+    (value.includes("/") || value.includes("\\") || /^[A-Za-z]:/.test(value)) &&
+    !isAbsolutePiPath(value)
+  )
+}
+
+function hasRelativePiAgentDir(dir: string): boolean {
+  const value = dir.trim()
+  return (
+    value !== "" &&
+    value !== "~" &&
+    !value.startsWith("~/") &&
+    !value.startsWith("~\\") &&
+    !isAbsolutePiPath(value)
+  )
+}
 
 type PiValidation = {
   found: boolean
@@ -186,6 +198,64 @@ export function buildPiRuntimeEnv(
 }
 
 /**
+ * What pi itself says about the selected built-in model's thinking levels.
+ * Advisory only, and worded from the catalog's status: "pi does not list this
+ * model" is only said when pi actually answered.
+ */
+function PiModelLevelsHint({
+  model,
+  catalog,
+  levels,
+  requested,
+  clamped,
+}: {
+  model: string
+  catalog: PiModelCatalog | null
+  levels: readonly PiThinkingLevel[] | null
+  requested: PiThinkingLevel | null
+  clamped: PiThinkingLevel | null
+}) {
+  const t = useTranslations("AcpAgentSettings")
+  const label = (level: PiThinkingLevel) => t(`pi.thinking.${level}`)
+  // Still asking — or a relative runtime path, whose own error is shown above.
+  if (!catalog || catalog.status === "relative_path") return null
+  if (catalog.status !== "ok") {
+    return (
+      <p className="text-2xs text-muted-foreground">
+        {t("pi.catalogUnavailable")}
+      </p>
+    )
+  }
+  if (!levels) {
+    return (
+      <p className="text-2xs text-muted-foreground">{t("pi.modelNotListed")}</p>
+    )
+  }
+  if (requested && clamped && clamped !== requested) {
+    return (
+      <p className="text-2xs text-amber-600 dark:text-amber-400">
+        {t("pi.levelClamped", {
+          model,
+          level: label(requested),
+          effective: label(clamped),
+        })}
+      </p>
+    )
+  }
+  const thinks = levels.some((level) => level !== "off")
+  return (
+    <p className="text-2xs text-muted-foreground">
+      {thinks
+        ? t("pi.modelLevels", {
+            model,
+            levels: levels.map(label).join(" · "),
+          })
+        : t("pi.modelNoThinking", { model })}
+    </p>
+  )
+}
+
+/**
  * Dedicated settings panel for pi. Two concerns, two stores:
  *  - Credentials/model — written to pi's native `~/.pi/agent/settings.json`
  *    (`defaultProvider`/`defaultModel`/`defaultThinkingLevel`) and `auth.json`
@@ -206,6 +276,7 @@ export function PiConfigPanel({
   onSaved: () => Promise<void>
 }) {
   const t = useTranslations("AcpAgentSettings")
+  const tModels = useTranslations("ProviderModels")
 
   // --- Credentials (pi's native ~/.pi/agent/{settings,auth,models}.json) ---
   // `selectedProvider` is the Select value: a built-in id, a loaded-but-not-
@@ -216,6 +287,9 @@ export function PiConfigPanel({
   const [customBaseUrl, setCustomBaseUrl] = useState("")
   const [customApi, setCustomApi] = useState(PI_CUSTOM_API_PROTOCOLS[0])
   const [customProviders, setCustomProviders] = useState<PiCustomProvider[]>([])
+  /** The custom provider's model list as edited; `null` until touched, so a
+   *  save leaves the list on disk as it is. */
+  const [customModels, setCustomModels] = useState<string[] | null>(null)
   const [model, setModel] = useState("")
   const [thinkingLevel, setThinkingLevel] = useState("")
   const [apiKey, setApiKey] = useState("")
@@ -225,9 +299,54 @@ export function PiConfigPanel({
   const [loadingCreds, setLoadingCreds] = useState(true)
   const [reasoning, setReasoning] = useState<PiModelReasoning>(NO_REASONING)
   const [showWireValues, setShowWireValues] = useState(false)
+  const [configLoadError, setConfigLoadError] = useState<string | null>(null)
+  // pi's own model catalog, tagged with the runtime it came from (see
+  // `catalogSource` below). Only ever a hint source — nothing is refused on it.
+  const [catalog, setCatalog] = useState<{
+    source: string
+    value: PiModelCatalog
+  } | null>(null)
+  // Bumped whenever the runtime's answer may have changed although the saved
+  // runtime did not: a new API key (pi lists only providers it can
+  // authenticate), a (re)installed or rechecked binary, a re-saved runtime.
+  const [catalogRevision, setCatalogRevision] = useState(0)
+  const savedAgentDir = agent.env?.[PI_CONFIG_DIR_ENV] ?? ""
+  const savedCommand = agent.env?.[PI_COMMAND_ENV] ?? ""
+  const invalidSavedAgentDir = hasRelativePiAgentDir(savedAgentDir)
+  const invalidSavedCommand = hasRelativePiCommandPath(savedCommand)
+  // Which runtime a catalog describes. A catalog from another runtime is not
+  // shown at all; one from this runtime stays up while a newer answer loads.
+  const catalogSource = `${savedCommand}\n${savedAgentDir}`
 
   const isCustom = selectedProvider === PI_CUSTOM_SENTINEL
   const effectiveProvider = (isCustom ? customId : selectedProvider).trim()
+
+  // The edited model list belongs to one provider; another one starts from
+  // its own list on disk.
+  const [customModelsFor, setCustomModelsFor] = useState(effectiveProvider)
+  if (customModelsFor !== effectiveProvider) {
+    setCustomModelsFor(effectiveProvider)
+    setCustomModels(null)
+  }
+  const storedCustomModels =
+    customProviders
+      .find((provider) => provider.id === effectiveProvider)
+      ?.models?.map((entry) => entry.id) ?? []
+  // The custom provider's own models, asked the way its protocol lists them —
+  // with the key typed here, else the one pi keeps for it.
+  const providerModels = useProviderModels(
+    isCustom
+      ? {
+          protocol: piModelsProtocol(customApi),
+          baseUrl: customBaseUrl,
+          apiKey,
+          storedKey:
+            effectiveProvider && authProviders.includes(effectiveProvider)
+              ? { kind: "piAuth", provider: effectiveProvider }
+              : null,
+        }
+      : null
+  )
 
   // Rehydrate the reasoning controls whenever the edited model's identity changes
   // (provider switch, or a different model id typed in). Reading the stored entry
@@ -250,9 +369,24 @@ export function PiConfigPanel({
     )
   }
 
+  // The form mirrors pi's native files in the agent dir, so it reloads when —
+  // and only when — that dir changes. Anything else (the command, the sessions
+  // dir, a save) leaves the files where they are, and reloading then would
+  // throw away edits the user has not saved yet.
   useEffect(() => {
     let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reload of pi's config files when the agent dir changes
     setLoadingCreds(true)
+    setConfigLoadError(null)
+    if (invalidSavedAgentDir) {
+      setSelectedProvider("")
+      setModel("")
+      setThinkingLevel("")
+      setAuthProviders([])
+      setCustomProviders([])
+      setLoadingCreds(false)
+      return
+    }
     loadPiConfig()
       .then((cfg) => {
         if (cancelled) return
@@ -275,6 +409,15 @@ export function PiConfigPanel({
       })
       .catch((error) => {
         console.error("[Pi] load config failed", error)
+        if (cancelled) return
+        // Nothing the form still shows belongs to this agent dir; a save from
+        // it would write another profile's provider and model here.
+        setSelectedProvider("")
+        setModel("")
+        setThinkingLevel("")
+        setAuthProviders([])
+        setCustomProviders([])
+        setConfigLoadError(toErrorMessage(error))
       })
       .finally(() => {
         if (!cancelled) setLoadingCreds(false)
@@ -282,23 +425,82 @@ export function PiConfigPanel({
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [savedAgentDir, invalidSavedAgentDir])
 
-  // Levels the picker may offer. A built-in provider keeps pi's full vocabulary —
-  // pi carries its own, more accurate declaration for those models.
-  const availableLevels: readonly PiThinkingLevel[] =
-    isCustom && reasoning.enabled ? reasoning.levels : PI_THINKING_LEVELS
-  // pi's `defaultThinkingLevel` is global, not per-model, so a level that suits one
-  // model can be unreachable on another. Say so instead of letting pi clamp it.
+  useEffect(() => {
+    let cancelled = false
+    if (invalidSavedAgentDir || invalidSavedCommand) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- the no-fetch branch of the catalog load below
+      setCatalog({
+        source: catalogSource,
+        value: { status: "relative_path", models: [] },
+      })
+      return
+    }
+    listPiModelCapabilities()
+      .then((value) => {
+        if (!cancelled) setCatalog({ source: catalogSource, value })
+      })
+      .catch((error) => {
+        console.error("[Pi] list model catalog failed", error)
+        if (!cancelled) {
+          setCatalog({
+            source: catalogSource,
+            value: { status: "failed", models: [] },
+          })
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [
+    catalogSource,
+    catalogRevision,
+    invalidSavedAgentDir,
+    invalidSavedCommand,
+  ])
+
+  const currentCatalog =
+    catalog?.source === catalogSource ? catalog.value : null
+  const trimmedModel = model.trim()
+  // What pi says about the selected built-in model, derived at render time so a
+  // late answer can never attach one model's levels to another.
+  const catalogModel =
+    !isCustom && currentCatalog?.status === "ok"
+      ? currentCatalog.models.find(
+          (entry) =>
+            entry.provider === effectiveProvider && entry.id === trimmedModel
+        )
+      : undefined
+  const catalogLevels = catalogModel ? supportedLevels(catalogModel) : null
+  // `defaultThinkingLevel` is ONE global preference: pi re-applies it, clamped,
+  // each time it selects a model. So a built-in model lacking the level is
+  // told, not refused — refusing would force the user to lower the level every
+  // other model gets too. A custom provider declares its levels in this very
+  // form, where a level outside them is a contradiction to fix before saving.
+  const availableLevels: readonly PiThinkingLevel[] = isCustom
+    ? reasoning.enabled
+      ? reasoning.levels
+      : ["off"]
+    : PI_THINKING_LEVELS
   const defaultLevelUnlisted =
     isCustom &&
     reasoning.enabled &&
     thinkingLevel !== "" &&
     !reasoning.levels.includes(thinkingLevel as PiThinkingLevel)
+  const requestedLevel = isPiThinkingLevel(thinkingLevel) ? thinkingLevel : null
+  const clampedLevel =
+    requestedLevel && catalogLevels
+      ? clampThinkingLevel(requestedLevel, catalogLevels)
+      : null
   const effectiveThinkingLevel =
     isCustom && !reasoning.enabled ? "off" : thinkingLevel
 
   const handleSaveCreds = useCallback(async () => {
+    if (invalidSavedAgentDir) {
+      toast.error(t("pi.relativeAgentDir"))
+      return
+    }
     const trimmedModel = model.trim()
     if (!effectiveProvider || !trimmedModel) {
       toast.error(t("pi.providerModelRequired"))
@@ -339,6 +541,8 @@ export function PiConfigPanel({
               >,
             }
           : undefined,
+        customModels:
+          isCustom && customModels !== null ? customModels : undefined,
       })
       if (apiKey.trim()) {
         setApiKey("")
@@ -354,9 +558,16 @@ export function PiConfigPanel({
         // the chips that are now on disk rather than a stale read.
         setCustomProviders((prev) => {
           const previous = prev.find((c) => c.id === effectiveProvider)
+          const listed = customModels === null ? null : new Set(customModels)
           const models = (previous?.models ?? []).filter(
-            (entry) => entry.id !== trimmedModel
+            (entry) =>
+              entry.id !== trimmedModel && (!listed || listed.has(entry.id))
           )
+          for (const id of customModels ?? []) {
+            if (id !== trimmedModel && !models.some((m) => m.id === id)) {
+              models.push({ id, reasoning: null, thinkingLevelMap: {} })
+            }
+          }
           models.push({
             id: trimmedModel,
             reasoning: reasoning.enabled,
@@ -375,6 +586,9 @@ export function PiConfigPanel({
         })
       }
       await onSaved()
+      // pi lists only providers it has credentials for, so a new key can add
+      // the model this form is about.
+      setCatalogRevision((previous) => previous + 1)
       toast.success(t("toasts.piSaved"))
     } catch (error) {
       console.error("[Pi] save config failed", error)
@@ -383,6 +597,7 @@ export function PiConfigPanel({
       setSavingCreds(false)
     }
   }, [
+    invalidSavedAgentDir,
     effectiveProvider,
     isCustom,
     customBaseUrl,
@@ -392,6 +607,7 @@ export function PiConfigPanel({
     defaultLevelUnlisted,
     reasoning,
     apiKey,
+    customModels,
     onSaved,
     t,
   ])
@@ -464,6 +680,7 @@ export function PiConfigPanel({
   }, [])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- binary detection on mount; the loader flips its loading flag first
     void detectPiBinary()
   }, [detectPiBinary])
 
@@ -484,6 +701,7 @@ export function PiConfigPanel({
       await acpInstallPiBinary(taskId)
       toast.success(t("toasts.piBinaryInstalled"))
       await detectPiBinary()
+      setCatalogRevision((previous) => previous + 1)
     } catch (error) {
       console.error("[Pi] install binary failed", error)
       toast.error(t("toasts.piBinaryInstallFailed"))
@@ -500,6 +718,7 @@ export function PiConfigPanel({
       await acpUninstallPiBinary(taskId)
       toast.success(t("toasts.piBinaryUninstalled"))
       await detectPiBinary()
+      setCatalogRevision((previous) => previous + 1)
     } catch (error) {
       console.error("[Pi] uninstall binary failed", error)
       toast.error(t("toasts.piBinaryUninstallFailed"))
@@ -522,20 +741,51 @@ export function PiConfigPanel({
   const [validating, setValidating] = useState(false)
   const [validation, setValidation] = useState<PiValidation>(null)
 
+  const savedPiCommand = savedCommand.trim()
+  useEffect(() => {
+    if (
+      !savedPiCommand ||
+      invalidSavedCommand ||
+      mode !== "custom" ||
+      command.trim() !== savedPiCommand
+    ) {
+      return
+    }
+    let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset paired with the command validation fetch below
+    setValidation(null)
+    acpValidatePiCommand(savedPiCommand)
+      .then((result) => {
+        if (!cancelled) setValidation(result)
+      })
+      .catch(() => {
+        if (!cancelled)
+          setValidation({ found: false, resolvedPath: null, version: null })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [savedPiCommand, invalidSavedCommand, mode, command])
+
   // Project-trust decisions recorded in pi's `trust.json`, listed for review.
   const [trustEntries, setTrustEntries] = useState<PiTrustEntry[] | null>(null)
   const [revoking, setRevoking] = useState<string | null>(null)
 
   const loadTrustEntries = useCallback(async () => {
+    if (invalidSavedAgentDir) {
+      setTrustEntries([])
+      return
+    }
     try {
       setTrustEntries(await acpPiListTrustEntries())
     } catch (error) {
       console.error("[Pi] list project trust failed", error)
       setTrustEntries([])
     }
-  }, [])
+  }, [invalidSavedAgentDir])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- trust list fetch from pi's trust.json
     void loadTrustEntries()
   }, [loadTrustEntries])
 
@@ -571,8 +821,13 @@ export function PiConfigPanel({
   }, [command])
 
   const customIncomplete = mode === "custom" && !command.trim()
+  const invalidEnteredCommand =
+    mode === "custom" && hasRelativePiCommandPath(command)
+  const invalidEnteredAgentDir =
+    mode === "custom" && hasRelativePiAgentDir(configDir)
 
   const handleSaveRuntime = useCallback(async () => {
+    if (invalidEnteredCommand || invalidEnteredAgentDir) return
     const env = buildPiRuntimeEnv(
       agent.env,
       mode,
@@ -582,6 +837,14 @@ export function PiConfigPanel({
     )
     try {
       await onSaveEnv(env, agent.enabled)
+      // A changed runtime re-asks pi by itself (the catalog follows the saved
+      // env); an unchanged one may still point at a replaced binary.
+      if (
+        env[PI_COMMAND_ENV] === agent.env[PI_COMMAND_ENV] &&
+        env[PI_CONFIG_DIR_ENV] === agent.env[PI_CONFIG_DIR_ENV]
+      ) {
+        setCatalogRevision((previous) => previous + 1)
+      }
       toast.success(t("toasts.piRuntimeSaved"))
     } catch (error) {
       console.error("[Pi] save runtime failed", error)
@@ -590,6 +853,8 @@ export function PiConfigPanel({
   }, [
     agent.env,
     agent.enabled,
+    invalidEnteredCommand,
+    invalidEnteredAgentDir,
     mode,
     command,
     configDir,
@@ -609,7 +874,7 @@ export function PiConfigPanel({
             <Cpu className="h-3.5 w-3.5 text-muted-foreground" />
             {t("pi.runtimeTitle")}
           </label>
-          <p className="mt-1 text-[11px] text-muted-foreground">
+          <p className="mt-1 text-2xs text-muted-foreground">
             {t("pi.runtimeDescription")}
           </p>
         </div>
@@ -622,7 +887,7 @@ export function PiConfigPanel({
           <label
             htmlFor="pi-mode-default"
             className={cn(
-              "flex cursor-pointer items-start gap-2 rounded-md border p-2.5 text-[11px]",
+              "flex cursor-pointer items-start gap-2 rounded-md border p-2.5 text-2xs",
               mode === "default"
                 ? "border-primary bg-primary/5"
                 : "border-input"
@@ -645,7 +910,7 @@ export function PiConfigPanel({
           <label
             htmlFor="pi-mode-custom"
             className={cn(
-              "flex cursor-pointer items-start gap-2 rounded-md border p-2.5 text-[11px]",
+              "flex cursor-pointer items-start gap-2 rounded-md border p-2.5 text-2xs",
               mode === "custom" ? "border-primary bg-primary/5" : "border-input"
             )}
           >
@@ -670,7 +935,7 @@ export function PiConfigPanel({
         {mode === "default" && (
           <div className="space-y-2.5 rounded-md border border-dashed p-2.5">
             <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0 flex-1 text-[11px]">
+              <div className="min-w-0 flex-1 text-2xs">
                 {checkingPi ? (
                   <span className="flex items-center gap-1.5 text-muted-foreground">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -703,7 +968,10 @@ export function PiConfigPanel({
                   type="button"
                   variant="ghost"
                   size="sm"
-                  onClick={detectPiBinary}
+                  onClick={() => {
+                    void detectPiBinary()
+                    setCatalogRevision((previous) => previous + 1)
+                  }}
                   disabled={checkingPi || piOp !== null}
                   title={t("pi.recheck")}
                   className="h-7 px-2"
@@ -758,8 +1026,13 @@ export function PiConfigPanel({
               </div>
             </div>
 
+            {piRuntimeIsTooOld(piStatus?.version) && (
+              <p className="text-2xs text-amber-600 dark:text-amber-400">
+                {t("pi.runtimeTooOld", { min: PI_MIN_RUNTIME_VERSION })}
+              </p>
+            )}
             {piInstallStatus !== "idle" && (
-              <div className="max-h-[200px] overflow-y-auto rounded-md border bg-muted/50 p-3 font-mono text-[11px] leading-relaxed text-muted-foreground">
+              <div className="max-h-[12.5rem] overflow-y-auto rounded-md border bg-muted/50 p-3 font-mono text-2xs leading-relaxed text-muted-foreground">
                 {piInstallLogs.map((line, i) => (
                   <div
                     key={i}
@@ -780,7 +1053,7 @@ export function PiConfigPanel({
         {mode === "custom" && (
           <>
             <div className="space-y-1.5">
-              <label className="text-[11px] text-muted-foreground">
+              <label className="text-2xs text-muted-foreground">
                 {t("pi.commandLabel")}
               </label>
               <div className="flex items-center gap-2">
@@ -790,7 +1063,7 @@ export function PiConfigPanel({
                     setCommand(event.target.value)
                     setValidation(null)
                   }}
-                  placeholder="/path/to/pi · pi · ./pi-test.sh"
+                  placeholder="/path/to/pi · pi"
                   spellCheck={false}
                 />
                 <Button
@@ -812,7 +1085,7 @@ export function PiConfigPanel({
               {validation && (
                 <p
                   className={cn(
-                    "flex items-start gap-1.5 text-[11px]",
+                    "flex items-start gap-1.5 text-2xs",
                     validation.found ? "text-emerald-600" : "text-destructive"
                   )}
                 >
@@ -832,18 +1105,28 @@ export function PiConfigPanel({
                   )}
                 </p>
               )}
-              <p className="text-[11px] text-muted-foreground">
+              {invalidEnteredCommand && (
+                <p className="text-2xs text-destructive">
+                  {t("pi.relativeCommandPath")}
+                </p>
+              )}
+              {piRuntimeIsTooOld(validation?.version) && (
+                <p className="text-2xs text-amber-600 dark:text-amber-400">
+                  {t("pi.runtimeTooOld", { min: PI_MIN_RUNTIME_VERSION })}
+                </p>
+              )}
+              <p className="text-2xs text-muted-foreground">
                 {t("pi.commandHint")}
               </p>
             </div>
 
             <details className="rounded-md border border-dashed">
-              <summary className="cursor-pointer list-none px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground">
+              <summary className="cursor-pointer list-none px-2.5 py-1.5 text-2xs font-medium text-muted-foreground">
                 {t("pi.advanced")}
               </summary>
               <div className="space-y-2.5 px-2.5 pb-2.5">
                 <div className="space-y-1.5">
-                  <label className="text-[11px] text-muted-foreground">
+                  <label className="text-2xs text-muted-foreground">
                     {t("pi.configDirLabel")}
                   </label>
                   <Input
@@ -852,14 +1135,19 @@ export function PiConfigPanel({
                     placeholder="~/.pi/agent"
                     spellCheck={false}
                   />
+                  {invalidEnteredAgentDir && (
+                    <p className="text-2xs text-destructive">
+                      {t("pi.relativeAgentDir")}
+                    </p>
+                  )}
                   {configDir.trim() !== "" && (
-                    <p className="text-[11px] text-amber-600 dark:text-amber-400">
+                    <p className="text-2xs text-amber-600 dark:text-amber-400">
                       {t("pi.configDirSkillsNote")}
                     </p>
                   )}
                 </div>
                 <div className="space-y-1.5">
-                  <label className="text-[11px] text-muted-foreground">
+                  <label className="text-2xs text-muted-foreground">
                     {t("pi.sessionDirLabel")}
                   </label>
                   <Input
@@ -869,7 +1157,20 @@ export function PiConfigPanel({
                     spellCheck={false}
                   />
                 </div>
-                <p className="text-[11px] text-muted-foreground">
+                {/*
+                  Both dirs persist to the per-agent `env_json`, which is injected
+                  into the spawned pi child and nowhere else — while the history
+                  parser resolves pi's sessions directory from codeg's OWN process
+                  environment. So a custom dir here splits the two: pi writes and
+                  resumes fine, and the sessions never show up in the list. Saying
+                  so beats letting the user discover it as missing history.
+                */}
+                {(configDir.trim() !== "" || sessionDir.trim() !== "") && (
+                  <p className="text-2xs text-amber-600 dark:text-amber-400">
+                    {t("pi.dirHistoryNote")}
+                  </p>
+                )}
+                <p className="text-2xs text-muted-foreground">
                   {t("pi.flagsHint")}
                 </p>
               </div>
@@ -878,14 +1179,19 @@ export function PiConfigPanel({
         )}
 
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[11px] text-muted-foreground">
+          <span className="text-2xs text-muted-foreground">
             {customIncomplete ? t("pi.customIncomplete") : ""}
           </span>
           <Button
             type="button"
             size="sm"
             onClick={handleSaveRuntime}
-            disabled={saving || customIncomplete}
+            disabled={
+              saving ||
+              customIncomplete ||
+              invalidEnteredCommand ||
+              invalidEnteredAgentDir
+            }
             className="gap-1.5"
           >
             {saving ? (
@@ -910,13 +1216,23 @@ export function PiConfigPanel({
             <KeyRound className="h-3.5 w-3.5 text-muted-foreground" />
             {t("pi.configManagement")}
           </label>
-          <p className="mt-1 text-[11px] text-muted-foreground">
+          <p className="mt-1 text-2xs text-muted-foreground">
             {t("pi.configDescription")}
           </p>
+          {invalidSavedAgentDir && (
+            <p className="mt-1 text-2xs text-destructive">
+              {t("pi.relativeAgentDir")}
+            </p>
+          )}
+          {configLoadError && (
+            <p className="mt-1 text-2xs text-destructive">
+              {t("pi.configLoadFailed", { message: configLoadError })}
+            </p>
+          )}
         </div>
 
         <div className="space-y-1.5">
-          <label className="text-[11px] text-muted-foreground">
+          <label className="text-2xs text-muted-foreground">
             {t("pi.providerLabel")}
           </label>
           <Select
@@ -945,7 +1261,7 @@ export function PiConfigPanel({
           <div className="space-y-2.5 rounded-md border border-dashed p-2.5">
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1.5">
-                <label className="text-[11px] text-muted-foreground">
+                <label className="text-2xs text-muted-foreground">
                   {t("pi.providerIdLabel")}
                 </label>
                 <Input
@@ -957,7 +1273,7 @@ export function PiConfigPanel({
                 />
               </div>
               <div className="space-y-1.5">
-                <label className="text-[11px] text-muted-foreground">
+                <label className="text-2xs text-muted-foreground">
                   {t("pi.apiProtocolLabel")}
                 </label>
                 <Select
@@ -979,7 +1295,7 @@ export function PiConfigPanel({
               </div>
             </div>
             <div className="space-y-1.5">
-              <label className="text-[11px] text-muted-foreground">
+              <label className="text-2xs text-muted-foreground">
                 {t("pi.baseUrlLabel")}
               </label>
               <Input
@@ -990,24 +1306,35 @@ export function PiConfigPanel({
                 disabled={savingCreds || loadingCreds}
               />
             </div>
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-2xs text-muted-foreground">
               {t("pi.customProviderHint")}
             </p>
           </div>
         )}
 
         <div className="space-y-1.5">
-          <label className="text-[11px] text-muted-foreground">
+          <label className="text-2xs text-muted-foreground">
             {t("pi.modelLabel")}
           </label>
-          <Input
+          <ModelIdInputWithFetch
             value={model}
-            onChange={(event) => setModel(event.target.value)}
-            placeholder="claude-sonnet-5"
-            spellCheck={false}
+            onChange={setModel}
+            state={providerModels}
+            placeholder="claude-sonnet-5-5"
             disabled={savingCreds || loadingCreds}
           />
         </div>
+
+        {isCustom && (
+          <ModelIdListField
+            ids={customModels ?? storedCustomModels}
+            onChange={setCustomModels}
+            state={providerModels}
+            readOnly={savingCreds || loadingCreds}
+            title={tModels("piList.title")}
+            hint={tModels("piList.hint")}
+          />
+        )}
 
         {/* ---- Reasoning card ----
             pi reads `reasoning: modelDef.reasoning ?? false`, and an undeclared
@@ -1018,10 +1345,10 @@ export function PiConfigPanel({
         {isCustom && (
           <div className="space-y-2 rounded-md border bg-background/60 p-2.5">
             <div className="flex items-center justify-between gap-2">
-              <span className="text-[11px] font-medium">
+              <span className="text-2xs font-medium">
                 {t("pi.reasoningTitle")}
               </span>
-              <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground">
+              <label className="flex cursor-pointer items-center gap-1.5 text-2xs text-muted-foreground">
                 <Switch
                   checked={reasoning.enabled}
                   onCheckedChange={(checked) =>
@@ -1033,7 +1360,7 @@ export function PiConfigPanel({
                       levels:
                         checked && prev.levels.length === 0
                           ? PI_THINKING_LEVELS.filter(
-                              (level) => level !== "xhigh"
+                              (level) => level !== "xhigh" && level !== "max"
                             )
                           : prev.levels,
                     }))
@@ -1044,14 +1371,14 @@ export function PiConfigPanel({
                 {t("pi.reasoningEnableLabel")}
               </label>
             </div>
-            <p className="text-[10px] text-muted-foreground">
+            <p className="text-3xs text-muted-foreground">
               {t("pi.reasoningDescription")}
             </p>
 
             {reasoning.enabled && (
               <>
                 <div className="space-y-1">
-                  <label className="text-[11px] text-muted-foreground">
+                  <label className="text-2xs text-muted-foreground">
                     {t("pi.levelsLabel")}
                   </label>
                   <div className="flex flex-wrap gap-1.5">
@@ -1070,7 +1397,7 @@ export function PiConfigPanel({
                           }
                           aria-pressed={active}
                           className={cn(
-                            "rounded-full border px-2 py-0.5 font-mono text-[11px] transition-colors",
+                            "rounded-full border px-2 py-0.5 font-mono text-2xs transition-colors",
                             active
                               ? "border-primary/40 bg-primary/10 text-foreground"
                               : "border-border text-muted-foreground hover:bg-muted"
@@ -1081,7 +1408,7 @@ export function PiConfigPanel({
                       )
                     })}
                   </div>
-                  <p className="text-[10px] text-muted-foreground">
+                  <p className="text-3xs text-muted-foreground">
                     {reasoning.levels.length === 0
                       ? t("pi.levelsEmptyError")
                       : t("pi.levelsHint")}
@@ -1093,7 +1420,7 @@ export function PiConfigPanel({
                     <button
                       type="button"
                       onClick={() => setShowWireValues((prev) => !prev)}
-                      className="text-[11px] text-muted-foreground hover:text-foreground"
+                      className="text-2xs text-muted-foreground hover:text-foreground"
                     >
                       {showWireValues ? "▾ " : "▸ "}
                       {t("pi.wireValuesTitle")}
@@ -1102,7 +1429,7 @@ export function PiConfigPanel({
                       <div className="space-y-1.5 rounded-md border border-dashed p-2">
                         {reasoning.levels.map((level) => (
                           <div key={level} className="flex items-center gap-2">
-                            <span className="w-16 shrink-0 font-mono text-[11px] text-muted-foreground">
+                            <span className="w-16 shrink-0 font-mono text-2xs text-muted-foreground">
                               {level}
                             </span>
                             <Input
@@ -1124,7 +1451,7 @@ export function PiConfigPanel({
                             />
                           </div>
                         ))}
-                        <p className="text-[10px] text-muted-foreground">
+                        <p className="text-3xs text-muted-foreground">
                           {t("pi.wireValuesHint")}
                         </p>
                       </div>
@@ -1137,7 +1464,7 @@ export function PiConfigPanel({
         )}
 
         <div className="space-y-1.5">
-          <label className="text-[11px] text-muted-foreground">
+          <label className="text-2xs text-muted-foreground">
             {t("pi.thinkingLabel")}
           </label>
           <Select
@@ -1160,15 +1487,24 @@ export function PiConfigPanel({
               ))}
             </SelectContent>
           </Select>
+          {!isCustom && effectiveProvider && trimmedModel && (
+            <PiModelLevelsHint
+              model={trimmedModel}
+              catalog={currentCatalog}
+              levels={catalogLevels}
+              requested={requestedLevel}
+              clamped={clampedLevel}
+            />
+          )}
           {defaultLevelUnlisted && (
-            <p className="text-[11px] text-destructive">
+            <p className="text-2xs text-destructive">
               {t("pi.defaultLevelUnlisted")}
             </p>
           )}
         </div>
 
         <div className="space-y-1.5">
-          <label className="text-[11px] text-muted-foreground">
+          <label className="text-2xs text-muted-foreground">
             {t("pi.apiKeyLabel")}
           </label>
           <div className="flex items-center gap-2">
@@ -1197,9 +1533,7 @@ export function PiConfigPanel({
               )}
             </Button>
           </div>
-          <p className="text-[11px] text-muted-foreground">
-            {t("pi.apiKeyHint")}
-          </p>
+          <p className="text-2xs text-muted-foreground">{t("pi.apiKeyHint")}</p>
         </div>
 
         <div className="flex justify-end">
@@ -1207,7 +1541,12 @@ export function PiConfigPanel({
             type="button"
             size="sm"
             onClick={handleSaveCreds}
-            disabled={savingCreds || loadingCreds || credsIncomplete}
+            disabled={
+              savingCreds ||
+              loadingCreds ||
+              credsIncomplete ||
+              invalidSavedAgentDir
+            }
             className="gap-1.5"
           >
             {savingCreds ? (
@@ -1238,17 +1577,17 @@ export function PiConfigPanel({
             <ShieldCheck className="h-3.5 w-3.5 text-muted-foreground" />
             {t("pi.projectTrustTitle")}
           </div>
-          <p className="mt-1 text-[11px] text-muted-foreground">
+          <p className="mt-1 text-2xs text-muted-foreground">
             {t("pi.projectTrustDescription")}
           </p>
         </div>
 
         {trustEntries === null ? (
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-2xs text-muted-foreground">
             {t("pi.projectTrustLoading")}
           </p>
         ) : trustEntries.length === 0 ? (
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-2xs text-muted-foreground">
             {t("pi.projectTrustEmpty")}
           </p>
         ) : (
@@ -1260,7 +1599,7 @@ export function PiConfigPanel({
               >
                 <span
                   className={cn(
-                    "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium",
+                    "shrink-0 rounded px-1.5 py-0.5 text-3xs font-medium",
                     entry.trusted
                       ? "bg-amber-500/15 text-amber-700 dark:text-amber-300"
                       : "bg-muted text-muted-foreground"
@@ -1271,7 +1610,7 @@ export function PiConfigPanel({
                     : t("pi.projectTrustDenied")}
                 </span>
                 <span
-                  className="min-w-0 flex-1 truncate font-mono text-[11px]"
+                  className="min-w-0 flex-1 truncate font-mono text-2xs"
                   title={entry.path}
                 >
                   {entry.path}
@@ -1279,7 +1618,7 @@ export function PiConfigPanel({
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="h-6 shrink-0 px-2 text-[11px]"
+                  className="h-6 shrink-0 px-2 text-2xs"
                   disabled={revoking === entry.path}
                   onClick={() => void handleRevokeTrust(entry.path)}
                 >

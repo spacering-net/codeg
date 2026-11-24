@@ -1,11 +1,54 @@
+/**
+ * The separator `path` writes its own segments with. A path that already
+ * contains a backslash is Windows-native; so is a bare drive designator
+ * (`C:`), which a user can type into a directory field before any separator
+ * exists. Everything else — POSIX paths, and Windows paths typed with forward
+ * slashes — gets `/`, so appending to a path never mixes the two forms.
+ */
+export function fsSeparator(path: string): "\\" | "/" {
+  if (path.includes("\\")) return "\\"
+  if (path.includes("/")) return "/"
+  return /^[A-Za-z]:$/.test(path) ? "\\" : "/"
+}
+
 export function joinFsPath(basePath: string, relPath: string): string {
   if (!relPath) return basePath
-  const separator = basePath.includes("\\") ? "\\" : "/"
+  const separator = fsSeparator(basePath)
   const normalizedRel = relPath.replace(/[\\/]/g, separator)
   if (basePath.endsWith("/") || basePath.endsWith("\\")) {
     return `${basePath}${normalizedRel}`
   }
   return `${basePath}${separator}${normalizedRel}`
+}
+
+/**
+ * The final segment of an OS path, accepting either separator so a Windows
+ * path (`C:\work\repo`) yields `repo` rather than the whole string — which is
+ * what a `split("/")` would hand back. Trailing separators are ignored.
+ * Returns an empty string when the path is a bare root (`/`, `C:\`) and so has
+ * no name of its own, letting callers substitute their own fallback. A UNC
+ * share (`\\server\share`) does name something, and yields `share`.
+ */
+export function fsBaseName(path: string): string {
+  const trimmed = path.replace(/[\\/]+$/, "")
+  if (!trimmed) return ""
+  // `C:` after trimming — a drive designator, not a directory name.
+  if (/^[A-Za-z]:$/.test(trimmed)) return ""
+  const index = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"))
+  return index >= 0 ? trimmed.slice(index + 1) : trimmed
+}
+
+/**
+ * A path named `name` sitting next to `path`.
+ *
+ * At a root (`/`, `C:\`, `\\server\share`) there is no sibling to offer, so
+ * the result lands INSIDE the root instead. Staying absolute matters more than
+ * keeping the sibling shape: a bare relative name would make git resolve a new
+ * worktree inside the repository and then hand that unresolved string back to
+ * be registered as the folder's working directory.
+ */
+export function siblingFsPath(path: string, name: string): string {
+  return joinFsPath(parentFsPath(path) ?? path, name)
 }
 
 /**

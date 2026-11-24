@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest"
 
+import { parseStatusReports } from "@/lib/delegation-status"
 import { denormalizeSnapshot } from "@/lib/snapshot-denormalize"
-import type { LiveSessionSnapshot } from "@/lib/types"
+import type { LiveSessionSnapshot, ToolCallState } from "@/lib/types"
 
 function baseSnapshot(
   overrides: Partial<LiveSessionSnapshot> = {}
@@ -53,6 +54,35 @@ describe("denormalizeSnapshot — active_delegations", () => {
     delete (snap as { active_delegations?: unknown }).active_delegations
     const patch = denormalizeSnapshot(snap)
     expect(patch.activeDelegations).toEqual([])
+  })
+
+  // Every running delegation, card or not: the parent's busy signal.
+  it("carries delegated_children, defaulting to [] when absent", () => {
+    expect(
+      denormalizeSnapshot(baseSnapshot({ delegated_children: ["c1", "c2"] }))
+        .delegatedChildren
+    ).toEqual(["c1", "c2"])
+    expect(denormalizeSnapshot(baseSnapshot()).delegatedChildren).toEqual([])
+  })
+})
+
+describe("denormalizeSnapshot — hasPrompted", () => {
+  it("is false for a connection no prompt has linked yet", () => {
+    // A new conversation's draft, or a reopened one before its first prompt:
+    // the backend binds `conversation_id` at the first prompt, not at connect.
+    expect(denormalizeSnapshot(baseSnapshot()).hasPrompted).toBe(false)
+  })
+
+  it("is true once a prompt has linked the connection to its row", () => {
+    expect(
+      denormalizeSnapshot(baseSnapshot({ conversation_id: 42 })).hasPrompted
+    ).toBe(true)
+  })
+
+  it("is true mid-turn, linked or not", () => {
+    expect(
+      denormalizeSnapshot(baseSnapshot({ status: "prompting" })).hasPrompted
+    ).toBe(true)
   })
 })
 
@@ -114,6 +144,119 @@ describe("denormalizeSnapshot — config staleness", () => {
   })
 })
 
+describe("denormalizeSnapshot — tool call raw output", () => {
+  function snapshotWithOutput(
+    output: ToolCallState["output"]
+  ): LiveSessionSnapshot {
+    return baseSnapshot({
+      live_message: {
+        id: "lm-1",
+        role: "assistant",
+        started_at: "2026-08-19T00:00:00Z",
+        content: [{ kind: "tool_call_ref", tool_call_id: "tc-1" }],
+      },
+      active_tool_calls: [
+        {
+          id: "tc-1",
+          kind: "other",
+          label: "get_delegation_status",
+          status: "completed",
+          input: null,
+          output,
+          content: null,
+          locations: null,
+          meta: null,
+        },
+      ],
+    })
+  }
+
+  function hydratedToolInfo(output: ToolCallState["output"]) {
+    const block = denormalizeSnapshot(snapshotWithOutput(output)).liveMessage
+      ?.content[0]
+    if (block?.type !== "tool_call") throw new Error("expected a tool_call")
+    return block.info
+  }
+
+  // The bug: `JSON.stringify(tc.output)` shipped the backend's tagged enum as
+  // the "raw output", so a delegation poll hydrated from a snapshot painted
+  // `{"kind":"json","value":{"tasks":[…]}}` into the card instead of its rows.
+  it("hydrates a json output as the payload text, not the {kind,value} envelope", () => {
+    const info = hydratedToolInfo({
+      kind: "json",
+      value: {
+        tasks: [
+          {
+            task_id: "48464f33-2df2-4b9f-9eba-9134a9cafbd9",
+            status: "running",
+            agent_type: "codex",
+            message: "Running.",
+          },
+        ],
+      },
+    })
+    expect(info.raw_output_chunks).toEqual([
+      '{"tasks":[{"task_id":"48464f33-2df2-4b9f-9eba-9134a9cafbd9","status":"running","agent_type":"codex","message":"Running."}]}',
+    ])
+    expect(info.raw_output_total_bytes).toBe(info.raw_output_chunks[0].length)
+
+    // ...and the card's parser reads it, which is the user-visible symptom.
+    const reports = parseStatusReports(info.raw_output_chunks.join(""), null)
+    expect(reports).toHaveLength(1)
+    expect(reports[0].taskId).toBe("48464f33-2df2-4b9f-9eba-9134a9cafbd9")
+    expect(reports[0].status).toBe("running")
+    expect(reports[0].text).toBe("Running.")
+  })
+
+  it("hydrates a text output verbatim", () => {
+    const info = hydratedToolInfo({ kind: "text", content: "file contents" })
+    expect(info.raw_output_chunks).toEqual(["file contents"])
+    expect(info.raw_output_total_bytes).toBe("file contents".length)
+  })
+
+  it("bounds oversized plain text when a reconnect hydrates the call", () => {
+    const info = hydratedToolInfo({
+      kind: "text",
+      content: "x".repeat(300_000) + "\nlatest",
+    })
+    expect(info.raw_output_total_bytes).toBe(200_000)
+    expect(info.raw_output_chunks.join("")).toHaveLength(200_000)
+    expect(info.raw_output_chunks.join("")).toMatch(/\nlatest$/)
+  })
+
+  it("keeps oversized structured output parseable after hydration", () => {
+    const payload = {
+      tasks: [{ task_id: "task-1", message: "x".repeat(300_000) }],
+    }
+    const info = hydratedToolInfo({ kind: "json", value: payload })
+    expect(JSON.parse(info.raw_output_chunks.join(""))).toEqual(payload)
+  })
+
+  // The backend promotes `{"error": "…"}` raw output to this variant, so the
+  // inverse is that same object — readers find the error where they look.
+  it("hydrates an error output as the {error} object it was promoted from", () => {
+    const info = hydratedToolInfo({ kind: "error", message: "boom" })
+    expect(info.raw_output_chunks).toEqual(['{"error":"boom"}'])
+    expect(JSON.parse(info.raw_output_chunks[0])).toEqual({ error: "boom" })
+  })
+
+  it("leaves the chunks empty when the tool call has no output yet", () => {
+    const info = hydratedToolInfo(null)
+    expect(info.raw_output_chunks).toEqual([])
+    expect(info.raw_output_total_bytes).toBe(0)
+  })
+
+  // An empty output is a real (empty) output, not an absent one — the live
+  // reducer pushes `[""]` for `raw_output: ""` too, and the consumer's
+  // `chunks.length > 0 ? joined : content` precedence must read the same on
+  // both paths.
+  it("keeps an empty text output as an empty chunk, not as no output", () => {
+    const info = hydratedToolInfo({ kind: "text", content: "" })
+    expect(info.raw_output_chunks).toEqual([""])
+    expect(info.raw_output_total_bytes).toBe(0)
+  })
+})
+
 describe("denormalizeSnapshot — last_error", () => {
   it("carries last_error.message into the patch", () => {
     const patch = denormalizeSnapshot(
@@ -125,7 +268,23 @@ describe("denormalizeSnapshot — last_error", () => {
       })
     )
     expect(patch.lastError).toBe("ACP protocol error: Forbidden")
+    // The code rides along so the provider can localize the message the same
+    // way it localizes the live `error` event.
+    expect(patch.lastErrorCode).toBe("forbidden")
+    expect(patch.lastErrorLevel).toBe("error")
     expect(patch.status).toBe("connected")
+  })
+
+  it("routes the level off the code", () => {
+    const patch = denormalizeSnapshot(
+      baseSnapshot({
+        last_error: {
+          message: "Failed to load session, starting new: gone",
+          code: "session_load_fallback",
+        },
+      })
+    )
+    expect(patch.lastErrorLevel).toBe("warning")
   })
 
   it("defaults lastError to null when the field is absent", () => {
@@ -133,6 +292,47 @@ describe("denormalizeSnapshot — last_error", () => {
     delete (snap as { last_error?: unknown }).last_error
     const patch = denormalizeSnapshot(snap)
     expect(patch.lastError).toBeNull()
+    expect(patch.lastErrorCode).toBeNull()
     expect(patch.status).toBe("connected")
   })
+})
+
+it("does not treat agent-supplied snapshot metadata as trusted OAuth progress", () => {
+  const patch = denormalizeSnapshot(
+    baseSnapshot({
+      status: "prompting",
+      live_message: {
+        id: "lm",
+        role: "assistant",
+        started_at: "2026-11-11T09:00:00Z",
+        content: [{ kind: "tool_call_ref", tool_call_id: "auth" }],
+      },
+      active_tool_calls: [
+        {
+          id: "auth",
+          label: "mcp__notion__authenticate",
+          kind: "other",
+          status: "in_progress",
+          input: {},
+          output: null,
+          content: null,
+          locations: null,
+          meta: {
+            keep: true,
+            "codeg.kimiMcpOAuth": {
+              toolName: "mcp__notion__authenticate",
+              server: "notion",
+              phase: "waiting",
+              url: "https://untrusted.example.test/authorize",
+            },
+          },
+        },
+      ],
+    })
+  )
+  const block = patch.liveMessage?.content[0]
+  expect(block?.type).toBe("tool_call")
+  if (block?.type !== "tool_call") throw new Error("tool call missing")
+  expect(block.info.meta?.["codeg.kimiMcpOAuth"]).toBeNull()
+  expect(block.info.meta?.keep).toBe(true)
 })

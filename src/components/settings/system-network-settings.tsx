@@ -1,11 +1,18 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react"
 import {
   ArrowUpCircle,
   CheckCircle2,
   Languages,
   Loader2,
+  Power,
   RefreshCw,
   RotateCcw,
   Wifi,
@@ -13,8 +20,10 @@ import {
 import { useLocale, useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { useAppI18n } from "@/components/i18n-provider"
-import { BackupSettings } from "@/components/settings/backup-settings"
+import { CliAccessSettings } from "@/components/settings/cli-access-settings"
+import { DataSyncSettings } from "@/components/settings/data-sync-settings"
 import { ReleaseNotes } from "@/components/settings/release-notes"
+import { SettingsSection } from "@/components/shared/settings-section"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -35,22 +44,22 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 import {
+  getSystemAutostartSettings,
   getSystemProxySettings,
+  updateSystemAutostartSettings,
   updateSystemLanguageSettings,
   updateSystemProxySettings,
 } from "@/lib/api"
-import { openUrl } from "@/lib/platform"
+import { isLocalDesktop, openUrl } from "@/lib/platform"
 import type { AppLocale } from "@/lib/types"
 import { readLastCheck } from "@/lib/update-check-storage"
-import {
-  appUpdateErrorMessageKey,
-  normalizeAppUpdateError,
-  usesTauriUpdater,
-} from "@/lib/updater"
+import { describeAppUpdateError, usesTauriUpdater } from "@/lib/updater"
 import { useAppUpdate } from "@/components/providers/update-provider"
 import { APP_LOCALES } from "@/lib/i18n"
 import { toErrorMessage } from "@/lib/app-error"
+import type { AppCommandError } from "@/lib/types"
 
 function GithubMarkIcon({ className }: { className?: string }) {
   return (
@@ -74,6 +83,18 @@ function formatBytes(bytes: number): string {
 }
 
 const PROXY_EXAMPLE = "http://127.0.0.1:7890"
+// Written exactly as the backend stores the list — comma-separated, no spaces —
+// so the example, the placeholder and the saved value all read the same.
+const PROXY_BYPASS_EXAMPLE = "git.example.com,.example.org,192.168.1.10"
+
+// A value in a hint, set apart from the prose so its punctuation is not read
+// as the sentence's. `dir="ltr"` keeps it intact in Arabic, where the leading
+// `.` of `.example.com` would otherwise move to the far end.
+const hintLiteral = (chunks: ReactNode) => (
+  <code dir="ltr" className="rounded bg-muted px-1 font-mono break-words">
+    {chunks}
+  </code>
+)
 const APP_LANGUAGE_VALUES = APP_LOCALES
 
 type LanguageSelectValue = "system" | AppLocale
@@ -97,8 +118,20 @@ export function SystemNetworkSettings() {
   const [enabled, setEnabled] = useState(false)
   const [proxyUrl, setProxyUrl] = useState("")
   const [proxyUrlError, setProxyUrlError] = useState<string | null>(null)
+  const [noProxy, setNoProxy] = useState("")
   const [loadError, setLoadError] = useState<string | null>(null)
   const [rollbackConfirmOpen, setRollbackConfirmOpen] = useState(false)
+
+  // Launch at login registers *this* machine's executable with the OS, so it
+  // only means something for a local Tauri shell — a remote workspace window
+  // routes every call to a server that has no login items to speak of.
+  const autostartVisible = isLocalDesktop()
+  const [autostartEnabled, setAutostartEnabled] = useState(false)
+  const [savingAutostart, setSavingAutostart] = useState(false)
+  // Non-null when the OS refused to report the registration (no home dir, a
+  // locked-down registry, …). The row stays on screen but inert, which beats
+  // hiding a setting the user came looking for.
+  const [autostartError, setAutostartError] = useState<string | null>(null)
 
   // Both halves of the update flow — "is a newer release out there" and the
   // in-flight download / install / restart lifecycle — live in the app-wide
@@ -122,6 +155,7 @@ export function SystemNetworkSettings() {
     liveProgress: serverLiveProgress,
     runtime: serverRuntime,
     rollbackAvailable: serverRollbackAvailable,
+    selfUpdateBlocker,
     canInstallInPlace,
     checkNow,
     refreshLocalStatus,
@@ -135,10 +169,14 @@ export function SystemNetworkSettings() {
   // "Restart to update" prompt). For a server that speaks the live-progress
   // protocol, wait for the authoritative snapshot to hydrate before trusting
   // the status (the default is a placeholder `idle`); older servers don't
-  // hydrate, so they're allowed through on their reported availability.
+  // hydrate, so they're allowed through on their reported availability. A
+  // rollback renames within the same directories as an update: one the server
+  // refuses to write rules it out, while a full disk (which only stops the
+  // update from creating files) does not.
   const canRollback =
     serverSelfUpdate &&
     serverRollbackAvailable &&
+    selfUpdateBlocker?.code !== "permission_denied" &&
     !usesTauriUpdater() &&
     (updateState.status === "idle" || updateState.status === "error") &&
     (updateHydrated || !serverLiveProgress)
@@ -159,7 +197,11 @@ export function SystemNetworkSettings() {
     languageSettings.mode === "system" ? "system" : languageSettings.language
   )
 
+  // Follow the stored setting on every update from the provider, including
+  // one that saves back the same value: the backend's answer overrides an
+  // optimistic pick in the select.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- re-syncs from the provider's stored setting object
     setAppLanguage(
       languageSettings.mode === "system" ? "system" : languageSettings.language
     )
@@ -189,16 +231,17 @@ export function SystemNetworkSettings() {
     }).format(lastCheckedAt)
   }, [lastCheckedAt, locale])
 
+  const availableUpdateDate = availableUpdate?.date
   const formattedUpdateDate = useMemo(() => {
-    if (!availableUpdate?.date) return null
+    if (!availableUpdateDate) return null
 
-    const parsed = new Date(availableUpdate.date)
-    if (Number.isNaN(parsed.getTime())) return availableUpdate.date
+    const parsed = new Date(availableUpdateDate)
+    if (Number.isNaN(parsed.getTime())) return availableUpdateDate
 
     return new Intl.DateTimeFormat(locale, {
       dateStyle: "medium",
     }).format(parsed)
-  }, [availableUpdate?.date, locale])
+  }, [availableUpdateDate, locale])
 
   const updateNotes = useMemo(
     () => availableUpdate?.body?.trim() ?? "",
@@ -218,9 +261,29 @@ export function SystemNetworkSettings() {
     setLoadError(null)
 
     try {
-      const proxySettings = await getSystemProxySettings()
+      const [proxySettings, autostart] = await Promise.all([
+        getSystemProxySettings(),
+        // Kept out of the shared rejection path: a machine that cannot report
+        // its login items must not blank out the proxy and language cards.
+        autostartVisible
+          ? getSystemAutostartSettings().then(
+              (settings) => ({ settings, error: null }),
+              (err) => {
+                console.error("[Settings] load autostart settings failed:", err)
+                return { settings: null, error: toErrorMessage(err) }
+              }
+            )
+          : Promise.resolve(null),
+      ])
+
       setEnabled(proxySettings.enabled)
       setProxyUrl(proxySettings.proxy_url ?? "")
+      setNoProxy(proxySettings.no_proxy ?? "")
+
+      if (autostart) {
+        setAutostartEnabled(autostart.settings?.enabled ?? false)
+        setAutostartError(autostart.error)
+      }
     } catch (err) {
       const message = toErrorMessage(err)
       setLoadError(message)
@@ -228,9 +291,10 @@ export function SystemNetworkSettings() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [autostartVisible])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial settings fetch
     loadSettings().catch((err) => {
       console.error("[Settings] load system settings failed:", err)
     })
@@ -250,7 +314,7 @@ export function SystemNetworkSettings() {
   }, [])
 
   const saveProxySettings = useCallback(
-    async (nextEnabled: boolean, nextProxyUrl: string) => {
+    async (nextEnabled: boolean, nextProxyUrl: string, nextNoProxy: string) => {
       if (nextEnabled && !nextProxyUrl.trim()) return
 
       setSaving(true)
@@ -258,14 +322,37 @@ export function SystemNetworkSettings() {
         const next = await updateSystemProxySettings({
           enabled: nextEnabled,
           proxy_url: nextProxyUrl.trim() || null,
+          no_proxy: nextNoProxy.trim() || null,
         })
         setEnabled(next.enabled)
         setProxyUrl(next.proxy_url ?? "")
+        setNoProxy(next.no_proxy ?? "")
       } catch (err) {
         const message = toErrorMessage(err)
         toast.error(t("saveFailed", { message }))
       } finally {
         setSaving(false)
+      }
+    },
+    [t]
+  )
+
+  const saveAutostartSettings = useCallback(
+    async (next: boolean, prev: boolean) => {
+      setSavingAutostart(true)
+      try {
+        // The backend answers with what the OS settled on, not with the
+        // request — Windows can veto a Run entry through Task Manager, so the
+        // switch has to follow the reply rather than the optimistic value.
+        const result = await updateSystemAutostartSettings({ enabled: next })
+        setAutostartEnabled(result.enabled)
+        setAutostartError(null)
+      } catch (err) {
+        setAutostartEnabled(prev)
+        const message = toErrorMessage(err)
+        toast.error(t("autostartSaveFailed", { message }))
+      } finally {
+        setSavingAutostart(false)
       }
     },
     [t]
@@ -293,12 +380,19 @@ export function SystemNetworkSettings() {
   )
 
   const formatUpdateError = useCallback(
-    (error: unknown, action: UpdateAction): string => {
-      const { kind, rawMessage } = normalizeAppUpdateError(error)
-      if (kind === "unknown" && action === "check") {
-        console.error("[Settings] updater unknown error:", rawMessage)
+    (
+      error: unknown,
+      action: UpdateAction,
+      info?: AppCommandError | null
+    ): string => {
+      const { key, values } = describeAppUpdateError(error, action, info)
+      if (key === "updateErrors.unknown") {
+        console.error(
+          "[Settings] updater unknown error:",
+          toErrorMessage(error)
+        )
       }
-      return t(appUpdateErrorMessageKey(kind, action))
+      return t(key, values)
     },
     [t]
   )
@@ -308,27 +402,37 @@ export function SystemNetworkSettings() {
   // same way as a check error — and it stays visible after navigating back.
   const lifecycleError =
     updateState.status === "error" && updateState.error
-      ? formatUpdateError(updateState.error, "install")
+      ? formatUpdateError(updateState.error, "install", updateState.errorInfo)
       : null
 
   // The shared check records the raw failure; classify it for display here.
   const updateError = checkError ? formatUpdateError(checkError, "check") : null
+  // The banner shows one of the two; a failed check takes precedence.
+  const bannerError = updateError || lifecycleError
+
+  // What keeps this server from updating in place, said up front rather than
+  // after a click that is certain to fail — unless the banner already says it.
+  const blockerMessage = selfUpdateBlocker
+    ? formatUpdateError(selfUpdateBlocker.message, "install", selfUpdateBlocker)
+    : null
+  const blockerHint = blockerMessage !== bannerError ? blockerMessage : null
 
   // A user-initiated check, so failures toast (the provider's own periodic
-  // checks stay silent).
+  // checks stay silent). Re-reads the local status too: that is where a
+  // blocker the operator has since fixed gets cleared.
   const checkForUpdates = useCallback(() => {
+    void refreshLocalStatus()
     void checkNow({ silent: false })
-  }, [checkNow])
+  }, [checkNow, refreshLocalStatus])
 
   // Close a stale rollback confirm dialog if the lifecycle leaves a
   // rollback-able state — e.g. another window staged an update while the dialog
   // sat open — so it can't fire a now-conflicting rollback. The backend also
-  // rejects such a rollback; this avoids the user even reaching it.
-  useEffect(() => {
-    if (rollbackConfirmOpen && !canRollback) {
-      setRollbackConfirmOpen(false)
-    }
-  }, [rollbackConfirmOpen, canRollback])
+  // rejects such a rollback; this avoids the user even reaching it. Adjusted
+  // while rendering, so the stale dialog never paints.
+  if (rollbackConfirmOpen && !canRollback) {
+    setRollbackConfirmOpen(false)
+  }
 
   // Manual rollback runs through the provider (it owns the restart + verify
   // flow); afterwards refresh the rollback affordance — a single-generation
@@ -357,7 +461,7 @@ export function SystemNetworkSettings() {
             <Button
               variant="ghost"
               className="size-5 rounded-full"
-              onClick={() => openUrl("https://github.com/xintaofei/codeg")}
+              onClick={() => openUrl("https://github.com/spacering-net/codeg")}
             >
               <GithubMarkIcon className="size-5" />
             </Button>
@@ -437,7 +541,7 @@ export function SystemNetworkSettings() {
                     size="sm"
                     onClick={() =>
                       openUrl(
-                        "https://github.com/xintaofei/codeg/releases/latest"
+                        "https://github.com/spacering-net/codeg/releases/latest"
                       )
                     }
                   >
@@ -514,7 +618,7 @@ export function SystemNetworkSettings() {
 
             {canRollback && (
               <div className="flex items-center justify-between gap-3 pt-1">
-                <span className="text-muted-foreground/80 text-[11px] leading-5">
+                <span className="text-muted-foreground/80 text-2xs leading-5">
                   {t("rollbackDescription")}
                 </span>
                 <Button
@@ -538,10 +642,15 @@ export function SystemNetworkSettings() {
               </div>
             )}
 
+            {blockerHint && (
+              <p className="text-2xs leading-5 text-amber-500">{blockerHint}</p>
+            )}
+
             {availableUpdate &&
               serverSelfUpdate &&
+              !selfUpdateBlocker &&
               serverRuntime === "docker" && (
-                <p className="text-muted-foreground/80 text-[11px] leading-5">
+                <p className="text-muted-foreground/80 text-2xs leading-5">
                   {t("dockerUpgradeHint")}
                 </p>
               )}
@@ -553,7 +662,7 @@ export function SystemNetworkSettings() {
                     {t("upgradableVersion")}：v{availableUpdate.version}
                   </span>
                   {formattedUpdateDate && (
-                    <span className="text-muted-foreground text-[11px]">
+                    <span className="text-muted-foreground text-2xs">
                       {formattedUpdateDate}
                     </span>
                   )}
@@ -567,14 +676,44 @@ export function SystemNetworkSettings() {
             )}
           </div>
 
-          {(updateError || lifecycleError) && (
+          {bannerError && (
             <div className="rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-400">
-              {t("updateError", {
-                message: updateError || lifecycleError || "",
-              })}
+              {t("updateError", { message: bannerError })}
             </div>
           )}
         </section>
+
+        {/* Titled by the option itself: the section *is* the one switch, so a
+            card holding a single row would only say the heading back one line
+            lower. */}
+        {autostartVisible && (
+          <SettingsSection
+            icon={Power}
+            title={t("autostartTitle")}
+            description={t("autostartDescription")}
+            htmlFor="launch-at-login"
+            control={
+              <Switch
+                id="launch-at-login"
+                checked={autostartEnabled}
+                disabled={savingAutostart || autostartError !== null}
+                onCheckedChange={(next) => {
+                  const prev = autostartEnabled
+                  setAutostartEnabled(next)
+                  void saveAutostartSettings(next, prev)
+                }}
+              />
+            }
+          >
+            {autostartError !== null && (
+              <p className="text-2xs text-amber-500">
+                {t("autostartUnavailable", { message: autostartError })}
+              </p>
+            )}
+          </SettingsSection>
+        )}
+
+        <CliAccessSettings />
 
         <section className="rounded-xl border bg-card p-4 space-y-4">
           <div className="flex items-center gap-2">
@@ -605,7 +744,7 @@ export function SystemNetworkSettings() {
                 }
                 setProxyUrlError(null)
                 setEnabled(next)
-                saveProxySettings(next, proxyUrl)
+                saveProxySettings(next, proxyUrl, noProxy)
               }}
             />
             {t("enableProxy")}
@@ -627,17 +766,43 @@ export function SystemNetworkSettings() {
                   return
                 }
                 setProxyUrlError(null)
-                saveProxySettings(enabled, proxyUrl)
+                saveProxySettings(enabled, proxyUrl, noProxy)
               }}
               placeholder={PROXY_EXAMPLE}
               disabled={saving}
               aria-invalid={proxyUrlError ? true : undefined}
             />
             {proxyUrlError && (
-              <p className="text-[11px] text-destructive">{proxyUrlError}</p>
+              <p className="text-2xs text-destructive">{proxyUrlError}</p>
             )}
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-2xs text-muted-foreground">
               {t("proxyHint", { example: PROXY_EXAMPLE })}
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <label
+              htmlFor="system-proxy-bypass"
+              className="text-xs font-medium text-muted-foreground"
+            >
+              {t("proxyBypass")}
+            </label>
+            <Input
+              id="system-proxy-bypass"
+              // Hosts read left to right in every locale; in Arabic an entry
+              // typed first as `.example.com` would show its dot at the end.
+              dir="ltr"
+              value={noProxy}
+              onChange={(event) => setNoProxy(event.target.value)}
+              onBlur={() => saveProxySettings(enabled, proxyUrl, noProxy)}
+              placeholder={PROXY_BYPASS_EXAMPLE}
+              disabled={saving}
+            />
+            <p className="text-2xs text-muted-foreground">
+              {t.rich("proxyBypassHint", {
+                example: PROXY_BYPASS_EXAMPLE,
+                code: hintLiteral,
+              })}
             </p>
           </div>
         </section>
@@ -694,7 +859,7 @@ export function SystemNetworkSettings() {
           </div>
         </section>
 
-        <BackupSettings />
+        <DataSyncSettings />
 
         <AlertDialog
           open={rollbackConfirmOpen}

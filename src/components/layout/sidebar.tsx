@@ -1,13 +1,25 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react"
+import {
+  DraftingCompass,
   Crosshair,
-  Funnel,
+  Eye,
+  FolderSync,
   ListChevronsDownUp,
   ListChevronsUpDown,
-  Search,
+  LayoutTemplate,
   ListTodo,
+  Map as MapIcon,
+  Menu,
+  MessagesSquare,
   SquarePen,
   Zap,
   type LucideIcon,
@@ -16,24 +28,29 @@ import { useTranslations } from "next-intl"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useSidebarContext } from "@/contexts/sidebar-context"
 import { useTabActions } from "@/contexts/tab-context"
-import { useSearchDialog } from "@/contexts/search-dialog-context"
 import { useAutomationsView } from "@/contexts/automations-view-context"
+import { useHarnessView } from "@/contexts/harness-view-context"
 import { useTasksView } from "@/contexts/tasks-view-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
+import { useFolderTabsStore } from "@/stores/folder-tabs-store"
 import {
   SidebarConversationList,
   type SidebarConversationListHandle,
 } from "@/components/conversations/sidebar-conversation-list"
+import { HarnessUpdatesBadge } from "@/components/harness/harness-updates-badge"
+import { LabelWithHint } from "@/components/layout/label-with-hint"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { useIsMobile } from "@/hooks/use-mobile"
@@ -45,26 +62,45 @@ import { formatShortcutLabel } from "@/lib/keyboard-shortcuts"
 import { isDesktop } from "@/lib/platform"
 import { leftChromeReserve } from "@/lib/window-chrome"
 import {
+  isNavItemVisible,
+  loadNavItemVisibility,
+  loadTagFilter,
+  saveTagFilter,
   loadShowCompleted,
   loadShowRecent,
   loadShowWorktrees,
   loadSortMode,
   loadSectionOrder,
   moveSectionInOrder,
+  saveNavItemVisibility,
   saveShowCompleted,
   saveShowRecent,
   saveShowWorktrees,
   saveSortMode,
   saveSectionOrder,
   DEFAULT_SECTION_ORDER,
+  SIDEBAR_NAV_ITEM_IDS,
+  type SidebarNavItemId,
+  type SidebarNavItemVisibility,
   type SidebarSectionId,
   type SidebarSortMode,
   type SidebarSectionOrder,
 } from "@/lib/sidebar-view-mode-storage"
+import { useCanvasBoardsStore } from "@/stores/canvas-boards-store"
+import { useConversationTagsStore } from "@/stores/conversation-tags-store"
+import {
+  EMPTY_TAG_FILTER,
+  pruneTagFilter,
+  type TagFilter,
+} from "@/lib/conversation-tags"
+import {
+  SidebarTagFilterBar,
+  SidebarTagFilterSubmenu,
+} from "@/components/conversations/sidebar-tag-filter"
 import { SidebarSectionOrderControl } from "./sidebar-section-order-control"
 import { cn } from "@/lib/utils"
 
-// Keyboard-shortcut hint at the trailing edge of the New chat / Search rows.
+// Keyboard-shortcut hint at the trailing edge of the New chat row.
 // Mirrors the folder count badge exactly — same chip (0.9375rem height,
 // 0.3125rem radius, bg-primary/10, text-primary, 0.625rem text) per the request
 // to match it. That pairing is also solidly legible (text-primary on
@@ -86,6 +122,17 @@ const SHORTCUT_BADGE_CLASS = cn(
 const NO_HIDDEN_SECTIONS: ReadonlySet<SidebarSectionId> = new Set()
 const RECENT_HIDDEN: ReadonlySet<SidebarSectionId> = new Set(["recent"])
 
+// Icon per optional nav row. The visibility checkboxes in the view-options menu
+// carry the same glyph as the row they switch, so that group reads as a mirror
+// of the nav block rather than a column of bare labels.
+const NAV_ITEM_ICONS: Record<SidebarNavItemId, LucideIcon> = {
+  automations: Zap,
+  tasks: ListTodo,
+  forge: LayoutTemplate,
+  canvas: MapIcon,
+  harness: DraftingCompass,
+}
+
 /**
  * A fixed top-of-sidebar action / route row. `active` marks the row as the
  * current workbench route (selected styling); `trailing` carries a shortcut hint
@@ -98,12 +145,15 @@ function SidebarNavButton({
   label,
   onClick,
   active,
+  hint,
   trailing,
 }: {
   icon: LucideIcon
   label: string
   onClick: () => void
   active?: boolean
+  /** Small text after the label: what the page holds. */
+  hint?: string
   trailing?: ReactNode
 }) {
   return (
@@ -121,7 +171,11 @@ function SidebarNavButton({
       )}
     >
       <Icon className="h-[0.875rem] w-[0.875rem] shrink-0 text-muted-foreground" />
-      <span className="truncate">{label}</span>
+      {hint ? (
+        <LabelWithHint label={label} hint={hint} />
+      ) : (
+        <span className="truncate">{label}</span>
+      )}
       {trailing}
     </button>
   )
@@ -132,9 +186,9 @@ export function Sidebar() {
   const { isOpen, toggle } = useSidebarContext()
   const { activeFolder } = useActiveFolder()
   const { openNewConversationTab, openChatModeTab } = useTabActions()
-  const { setOpen: setSearchOpen } = useSearchDialog()
   const { unseenFailures } = useAutomationsView()
   const { attentionCount } = useTasksView()
+  const { updatesCount: harnessUpdates } = useHarnessView()
   const { routeId, setRoute, openConversations } = useWorkbenchRoute()
   const isMac = useIsMac()
   const { isMac: platformIsMac } = usePlatform()
@@ -145,7 +199,7 @@ export function Sidebar() {
   // On desktop the header's top-left is owned by the fixed window-chrome overlay
   // (sidebar toggle + remote); reserve exactly its width so the view controls
   // and drag region clear it. The reserve scales with the app zoom to track the
-  // rem-sized overlay buttons. Mobile has no overlay (the sidebar is a Sheet).
+  // rem-sized overlay buttons. Mobile has no overlay (the sidebar is a Drawer).
   const leftReserve = leftChromeReserve(platformIsMac && isDesktop(), zoomLevel)
 
   // `showCompleted` defaults OFF; `showWorktrees` and `showRecent` default ON
@@ -155,22 +209,42 @@ export function Sidebar() {
   const [showCompleted, setShowCompleted] = useState(false)
   const [showWorktrees, setShowWorktrees] = useState(true)
   const [showRecent, setShowRecent] = useState(true)
+  // Empty = every nav row shown, which is also the hydrated default — so the
+  // pre-hydration render matches for a user who never hid one.
+  const [navItems, setNavItems] = useState<SidebarNavItemVisibility>({})
   const [sortMode, setSortMode] = useState<SidebarSortMode>("created")
   const [sectionOrder, setSectionOrder] = useState<SidebarSectionOrder>(
     DEFAULT_SECTION_ORDER
   )
   const [allExpanded, setAllExpanded] = useState(true)
-  const searchShortcutLabel = formatShortcutLabel(
-    shortcuts.toggle_search,
-    isMac
+  // Not a list preference like the rows above: it decides which conversation
+  // and file tabs the window shows. Its store owns the stored value (hydrated
+  // with the tab set, see `TabProvider`), so this reads it live.
+  const tabsFollowFolder = useFolderTabsStore((s) => s.enabled)
+  const setTabsFollowFolder = useFolderTabsStore((s) => s.setEnabled)
+  // Controlled only so the tag filter's "Manage tags…" can close the menu on
+  // its way to the dialog: that entry is a plain button in a panel, not a menu
+  // item, so it does not close the menu by itself.
+  const [viewOptionsOpen, setViewOptionsOpen] = useState(false)
+  // What the user picked, persisted as picked. The list gets it PRUNED to tags
+  // that still exist (below) — but only once the tag list has loaded: matching
+  // needs nothing but ids, so a persisted filter applies from the first paint
+  // instead of flashing the whole list and then narrowing it.
+  const [rawTagFilter, setRawTagFilter] = useState<TagFilter>(EMPTY_TAG_FILTER)
+  const tagsById = useConversationTagsStore((s) => s.tagsById)
+  const tagsHydrated = useConversationTagsStore((s) => s.hydrated)
+  const tagFilter = useMemo(
+    () =>
+      tagsHydrated ? pruneTagFilter(rawTagFilter, tagsById) : rawTagFilter,
+    [rawTagFilter, tagsById, tagsHydrated]
   )
   const newConversationShortcutLabel = formatShortcutLabel(
     shortcuts.new_conversation,
     isMac
   )
-  // General umbrella name for the funnel menu (show-completed + sort + section
-  // order). Kept generic so the accessible name / tooltip stays accurate as the
-  // menu gains options.
+  // General umbrella name for the eye menu (tag filter + list toggles + nav
+  // rows + sort + section order). Kept generic so the accessible name / tooltip
+  // stays accurate as the menu gains options.
   const viewOptionsLabel = t("viewOptions")
   const toggleExpandLabel = allExpanded
     ? t("collapseAllGroups")
@@ -183,9 +257,18 @@ export function Sidebar() {
     setShowCompleted(loadShowCompleted())
     setShowWorktrees(loadShowWorktrees())
     setShowRecent(loadShowRecent())
+    setNavItems(loadNavItemVisibility())
     setSortMode(loadSortMode())
     setSectionOrder(loadSectionOrder())
+    setRawTagFilter(loadTagFilter())
   }, [])
+
+  const handleSetTagFilter = useCallback((next: TagFilter) => {
+    setRawTagFilter(next)
+    saveTagFilter(next)
+  }, [])
+
+  const closeViewOptions = useCallback(() => setViewOptionsOpen(false), [])
 
   const handleSetShowCompleted = useCallback((value: boolean) => {
     setShowCompleted(value)
@@ -201,6 +284,17 @@ export function Sidebar() {
     setShowRecent(value)
     saveShowRecent(value)
   }, [])
+
+  const handleSetNavItem = useCallback(
+    (id: SidebarNavItemId, visible: boolean) => {
+      setNavItems((prev) => {
+        const next = { ...prev, [id]: visible }
+        saveNavItemVisibility(next)
+        return next
+      })
+    },
+    []
+  )
 
   const handleSetSortMode = useCallback((value: string) => {
     const mode: SidebarSortMode = value === "updated" ? "updated" : "created"
@@ -233,7 +327,7 @@ export function Sidebar() {
   }, [allExpanded])
 
   const handleNewConversation = useCallback(() => {
-    // On mobile the sidebar is a Sheet overlay — close it so the new
+    // On mobile the sidebar is a Drawer overlay — close it so the new
     // conversation is visible (mirrors tapping a conversation card, which the
     // list wrapper already closes on).
     if (isMobile) toggle()
@@ -271,7 +365,7 @@ export function Sidebar() {
           // while those headers sit on the transparent canvas: with a workspace
           // background image on, a border-border/50 hairline washes out against the
           // frosted shade, so it takes the boosted `ws-chrome-border` (like the
-          // frosted status bar) to stay legible. Mobile (Sheet): keep the original
+          // frosted status bar) to stay legible. Mobile (Drawer): keep the original
           // title padding + a full-strength divider — mobile is unchanged.
           isMobile
             ? "border-b border-border pl-4"
@@ -298,9 +392,9 @@ export function Sidebar() {
         <div data-tauri-drag-region className="h-full min-w-0 flex-1" />
         <div className="flex items-center gap-0.5">
           {/* Locate the active conversation in the list below (moved here from
-              the conversation detail header). Always shown, sitting just before
-              the view-options funnel. The sidebar is unmounted while collapsed,
-              so `listRef` is live whenever this button is visible. */}
+              the conversation detail header). Always shown, leading the header
+              cluster. The sidebar is unmounted while collapsed, so `listRef` is
+              live whenever this button is visible. */}
           <Button
             variant="ghost"
             size="icon"
@@ -311,31 +405,30 @@ export function Sidebar() {
           >
             <Crosshair aria-hidden="true" className="h-3.5 w-3.5" />
           </Button>
-          {/* Expand/collapse-all keeps a standalone header button on mobile; on
-              desktop it's folded into the view-options menu below. */}
-          {isMobile && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6 shrink-0 text-muted-foreground"
-              onClick={handleToggleExpandAll}
-              title={toggleExpandLabel}
-              aria-label={toggleExpandLabel}
-            >
-              {allExpanded ? (
-                <ListChevronsDownUp
-                  aria-hidden="true"
-                  className="h-3.5 w-3.5"
-                />
-              ) : (
-                <ListChevronsUpDown
-                  aria-hidden="true"
-                  className="h-3.5 w-3.5"
-                />
-              )}
-            </Button>
-          )}
-          <DropdownMenu>
+          {/* Expand/collapse-all is an icon-only header button on every
+              viewport (it used to be a labelled row inside the view-options
+              menu on desktop): it acts on the list right now instead of storing
+              a display preference, so it does not belong among that menu's
+              settings rows — and it took two clicks there. The icon itself
+              states the direction, hence label-free with a tooltip. */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6 shrink-0 text-muted-foreground"
+            onClick={handleToggleExpandAll}
+            title={toggleExpandLabel}
+            aria-label={toggleExpandLabel}
+          >
+            {allExpanded ? (
+              <ListChevronsDownUp aria-hidden="true" className="h-3.5 w-3.5" />
+            ) : (
+              <ListChevronsUpDown aria-hidden="true" className="h-3.5 w-3.5" />
+            )}
+          </Button>
+          <DropdownMenu
+            open={viewOptionsOpen}
+            onOpenChange={setViewOptionsOpen}
+          >
             <DropdownMenuTrigger asChild>
               <Button
                 variant="ghost"
@@ -344,54 +437,113 @@ export function Sidebar() {
                 title={viewOptionsLabel}
                 aria-label={viewOptionsLabel}
               >
-                <Funnel aria-hidden="true" className="h-3.5 w-3.5" />
+                {/* An eye, not a funnel: the menu as a whole decides what the
+                    list shows and in what order. Its one filter, by tags, wears
+                    the funnel on its own row, and a filter that is on announces
+                    itself in the strip above the list. */}
+                <Eye aria-hidden="true" className="h-3.5 w-3.5" />
               </Button>
             </DropdownMenuTrigger>
             {/* Wider than the shared `min-w-48`: the section-order rows carry a
                 position chip and two move buttons beside the name, and the menu
                 clips overflow-x — 48 would start truncating longer localized
-                section names (and already wrapped the checkbox labels). */}
+                section names. */}
             <DropdownMenuContent align="end" className="min-w-56">
-              {/* Desktop only: expand/collapse lives in this menu (it kept its
-                  standalone header button on mobile). */}
-              {!isMobile && (
-                <>
-                  <DropdownMenuItem onSelect={handleToggleExpandAll}>
-                    {allExpanded ? (
-                      <ListChevronsDownUp className="h-4 w-4" />
-                    ) : (
-                      <ListChevronsUpDown className="h-4 w-4" />
-                    )}
-                    {toggleExpandLabel}
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                </>
-              )}
-              {/* Every option below keeps the menu open on select (the default
-                  is to close): this menu is a settings panel, not a command
-                  list, and flipping two of them used to cost two round trips
-                  through the trigger. The expand/collapse-all entry above is
-                  the one real action here, so it still closes. */}
+              {/* Five groups: what the list shows → which nav rows exist →
+                  which tabs the window shows → how the list is sorted → how its
+                  sections are stacked. The first group is the tag filter plus
+                  the list toggles, and those and the nav rows are hover-opened
+                  submenus rather than inline blocks. The two inventories are
+                  set-and-forget on/off sets, six checkboxes between them, and
+                  inlining all six left a fifteen-row menu with Sort by /
+                  Section order — the two settings people actually come back for
+                  — stranded at the bottom of it. The tag filter, which people
+                  come back for too, leads the menu instead: it is a whole panel
+                  (search, match mode, tag list) that only a submenu has room
+                  for. Sort by and Section order stay inline: a pair of radios
+                  and a ranked list read wrong behind another hop, and the order
+                  rows need this menu's width. Tabs-follow-folder is one inline
+                  checkbox: a single switch, and the sidebar is where it is used
+                  (clicking a folder header then selects that folder's tabs).
+                  Every option keeps the menu open on select (the default is to
+                  close): this menu is a settings panel, not a command list, and
+                  flipping two of them used to cost two round trips through the
+                  trigger. The one action it used to carry — expand/collapse
+                  all — is now a header button of its own. */}
+              <SidebarTagFilterSubmenu
+                filter={tagFilter}
+                onChange={handleSetTagFilter}
+                onCloseMenu={closeViewOptions}
+              />
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger>
+                  <MessagesSquare className="text-muted-foreground" />
+                  {t("listOptions")}
+                </DropdownMenuSubTrigger>
+                {/* No width override: unlike the root content — held at exactly
+                    `min-w-56` and clipping overflow-x — the sub-content grows to
+                    fit its rows, which is the headroom these three (the longest
+                    labels in the menu) want. */}
+                <DropdownMenuSubContent>
+                  <DropdownMenuCheckboxItem
+                    checked={showCompleted}
+                    onCheckedChange={handleSetShowCompleted}
+                    onSelect={(event) => event.preventDefault()}
+                  >
+                    {t("showCompleted")}
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem
+                    checked={showWorktrees}
+                    onCheckedChange={handleSetShowWorktrees}
+                    onSelect={(event) => event.preventDefault()}
+                  >
+                    {t("showWorktrees")}
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem
+                    checked={showRecent}
+                    onCheckedChange={handleSetShowRecent}
+                    onSelect={(event) => event.preventDefault()}
+                  >
+                    {t("showRecent")}
+                  </DropdownMenuCheckboxItem>
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger>
+                  <Menu className="text-muted-foreground" />
+                  {t("navigationItems")}
+                </DropdownMenuSubTrigger>
+                {/* Driven by the id list itself, so a route added there can
+                    never ship a row without its toggle. Each id doubles as its
+                    message key. Hiding one only drops the sidebar shortcut: the
+                    status bar's quick-actions menu still reaches every route, so
+                    no choice here can strand the user on a page. */}
+                <DropdownMenuSubContent>
+                  {SIDEBAR_NAV_ITEM_IDS.map((id) => {
+                    const Icon = NAV_ITEM_ICONS[id]
+                    return (
+                      <DropdownMenuCheckboxItem
+                        key={id}
+                        checked={isNavItemVisible(navItems, id)}
+                        onCheckedChange={(value) => handleSetNavItem(id, value)}
+                        onSelect={(event) => event.preventDefault()}
+                      >
+                        <Icon className="text-muted-foreground" />
+                        {t(id)}
+                      </DropdownMenuCheckboxItem>
+                    )
+                  })}
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+              <DropdownMenuSeparator />
               <DropdownMenuCheckboxItem
-                checked={showCompleted}
-                onCheckedChange={handleSetShowCompleted}
+                checked={tabsFollowFolder}
+                onCheckedChange={setTabsFollowFolder}
                 onSelect={(event) => event.preventDefault()}
+                title={t("tabsFollowFolderHint")}
               >
-                {t("showCompleted")}
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={showWorktrees}
-                onCheckedChange={handleSetShowWorktrees}
-                onSelect={(event) => event.preventDefault()}
-              >
-                {t("showWorktrees")}
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={showRecent}
-                onCheckedChange={handleSetShowRecent}
-                onSelect={(event) => event.preventDefault()}
-              >
-                {t("showRecent")}
+                <FolderSync className="text-muted-foreground" />
+                {t("tabsFollowFolder")}
               </DropdownMenuCheckboxItem>
               <DropdownMenuSeparator />
               <DropdownMenuLabel>{t("sortBy")}</DropdownMenuLabel>
@@ -445,58 +597,110 @@ export function Sidebar() {
             ) : null
           }
         />
-        <SidebarNavButton
-          icon={Search}
-          label={t("search")}
-          onClick={() => setSearchOpen(true)}
-          trailing={
-            searchShortcutLabel ? (
-              <kbd className={SHORTCUT_BADGE_CLASS}>{searchShortcutLabel}</kbd>
-            ) : null
-          }
-        />
-        {/* Both route rows close the mobile Sheet on the way out, like tapping a
+        {/* Search is deliberately NOT a row here: it moved to the fixed top-left
+            window chrome (`LeftEdgeChrome`, plus the mobile `FolderTitleBar`),
+            which — unlike this sidebar — never unmounts, so the button survives
+            a collapse. ⌘K still works from anywhere. */}
+        {/* Each route row can be switched off from the view-options menu's
+            "Navigation items" group — for a workspace that never uses one of
+            them, this block is pure noise above the list. The routes stay
+            reachable from the status bar's quick-actions menu either way.
+            They all close the mobile Drawer on the way out, like tapping a
             conversation card (handled by the list wrapper below) — otherwise the
-            page they just opened stays hidden behind the sidebar. "Search" above
-            is deliberately left alone: it opens a dialog that sits on top of the
-            sidebar, and closing it would only cost the user their place. */}
-        <SidebarNavButton
-          icon={Zap}
-          label={t("automations")}
-          active={routeId === "automations"}
-          onClick={() => {
-            if (isMobile) toggle()
-            setRoute("automations")
-          }}
-          trailing={
-            unseenFailures > 0 ? (
-              <span className="ml-auto inline-flex h-[0.9375rem] min-w-[0.9375rem] shrink-0 items-center justify-center rounded-full bg-destructive/15 px-1 font-mono text-[0.625rem] font-medium leading-none text-destructive">
-                {unseenFailures}
-              </span>
-            ) : null
-          }
-        />
-        <SidebarNavButton
-          icon={ListTodo}
-          label={t("tasks")}
-          active={routeId === "tasks"}
-          onClick={() => {
-            if (isMobile) toggle()
-            setRoute("tasks")
-          }}
-          trailing={
-            attentionCount > 0 ? (
-              // Attention (not failure): tasks waiting on the user — primary
-              // tint like the shortcut chips, not destructive.
-              <span className="ml-auto inline-flex h-[0.9375rem] min-w-[0.9375rem] shrink-0 items-center justify-center rounded-full bg-primary/10 px-1 font-mono text-[0.625rem] font-medium leading-none text-primary">
-                {attentionCount}
-              </span>
-            ) : null
-          }
-        />
+            page they just opened stays hidden behind the sidebar. */}
+        {isNavItemVisible(navItems, "automations") && (
+          <SidebarNavButton
+            icon={Zap}
+            label={t("automations")}
+            active={routeId === "automations"}
+            onClick={() => {
+              if (isMobile) toggle()
+              setRoute("automations")
+            }}
+            trailing={
+              unseenFailures > 0 ? (
+                <span className="ml-auto inline-flex h-[0.9375rem] min-w-[0.9375rem] shrink-0 items-center justify-center rounded-full bg-destructive/15 px-1 font-mono text-[0.625rem] font-medium leading-none text-destructive">
+                  {unseenFailures}
+                </span>
+              ) : null
+            }
+          />
+        )}
+        {isNavItemVisible(navItems, "tasks") && (
+          <SidebarNavButton
+            icon={ListTodo}
+            label={t("tasks")}
+            active={routeId === "tasks"}
+            onClick={() => {
+              if (isMobile) toggle()
+              setRoute("tasks")
+            }}
+            trailing={
+              attentionCount > 0 ? (
+                // Attention (not failure): tasks waiting on the user — primary
+                // tint like the shortcut chips, not destructive.
+                <span className="ml-auto inline-flex h-[0.9375rem] min-w-[0.9375rem] shrink-0 items-center justify-center rounded-full bg-primary/10 px-1 font-mono text-[0.625rem] font-medium leading-none text-primary">
+                  {attentionCount}
+                </span>
+              ) : null
+            }
+          />
+        )}
+        {isNavItemVisible(navItems, "forge") && (
+          <SidebarNavButton
+            icon={LayoutTemplate}
+            label={t("forge")}
+            active={routeId === "forge"}
+            onClick={() => {
+              if (isMobile) toggle()
+              setRoute("forge")
+            }}
+          />
+        )}
+        {isNavItemVisible(navItems, "canvas") && (
+          <SidebarNavButton
+            icon={MapIcon}
+            label={t("canvas")}
+            active={routeId === "canvas"}
+            onClick={() => {
+              if (isMobile) toggle()
+              // Coming from elsewhere returns to the canvas that was open;
+              // clicking it again from inside one goes up to the list — the
+              // route's own home, like re-tapping an active tab.
+              if (routeId === "canvas") {
+                useCanvasBoardsStore.getState().closeBoard()
+              }
+              setRoute("canvas")
+            }}
+          />
+        )}
+        {isNavItemVisible(navItems, "harness") && (
+          <SidebarNavButton
+            icon={DraftingCompass}
+            label={t("harness")}
+            hint={t("harnessHint")}
+            active={routeId === "harness"}
+            onClick={() => {
+              if (isMobile) toggle()
+              // Opens on the section the page was last on: which one that is
+              // lives in HarnessViewProvider, not in the route.
+              setRoute("harness")
+            }}
+            trailing={
+              harnessUpdates > 0 ? (
+                // Updates waiting (not a failure): the To-dos chip's primary
+                // tint.
+                <HarnessUpdatesBadge
+                  count={harnessUpdates}
+                  className="ml-auto"
+                />
+              ) : null
+            }
+          />
+        )}
       </div>
 
-      {/* On mobile, clicking a conversation card auto-closes the Sheet */}
+      {/* On mobile, clicking a conversation card auto-closes the Drawer */}
       <div
         className="flex flex-col flex-1 min-h-0 overflow-hidden pt-1.5"
         onClick={
@@ -510,6 +714,7 @@ export function Sidebar() {
             : undefined
         }
       >
+        <SidebarTagFilterBar filter={tagFilter} onChange={handleSetTagFilter} />
         <SidebarConversationList
           ref={listRef}
           showCompleted={showCompleted}
@@ -517,6 +722,7 @@ export function Sidebar() {
           showRecent={showRecent}
           sortMode={sortMode}
           sectionOrder={sectionOrder}
+          tagFilter={tagFilter}
         />
       </div>
     </aside>

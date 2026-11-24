@@ -9,13 +9,15 @@ const getMock = vi.fn()
 const getOwnMock = vi.fn()
 const setMock = vi.fn().mockResolvedValue(undefined)
 const deleteMock = vi.fn().mockResolvedValue(undefined)
+const commandsMock = vi.fn()
 
 vi.mock("@/lib/api", () => ({
+  workTaskGet: vi.fn().mockRejectedValue(new Error("not in this test")),
   workTaskSettingsGet: (...args: unknown[]) => getMock(...args),
   workTaskSettingsGetOwn: (...args: unknown[]) => getOwnMock(...args),
   workTaskSettingsSet: (...args: unknown[]) => setMock(...args),
   workTaskSettingsDelete: (...args: unknown[]) => deleteMock(...args),
-  listFolderCommands: () => Promise.resolve([]),
+  listFolderCommands: (...args: unknown[]) => commandsMock(...args),
 }))
 
 // The agent surface probes a live CLI; none of it is under test here.
@@ -30,6 +32,7 @@ vi.mock("@/components/automations/agent-config-section", () => ({
     configValues: Record<string, string>
   ) => ({ mode_id: modeId, config_values: configValues }),
   snapshotLabels: () => ({}),
+  useBooleanOptionLabels: () => ({ on: "On", off: "Off" }),
 }))
 vi.mock("@/components/automations/use-agent-options", () => ({
   useAgentOptions: () => ({
@@ -76,6 +79,7 @@ function settings(
     merge_strategy: "squash",
     auto_merge: false,
     delete_worktree_default: true,
+    auto_compact_percent: 0,
     ...overrides,
   }
 }
@@ -130,6 +134,7 @@ beforeEach(() => {
   getOwnMock.mockReset().mockResolvedValue(settings())
   setMock.mockClear()
   deleteMock.mockClear()
+  commandsMock.mockReset().mockResolvedValue([])
 })
 
 describe("TaskSettingsDialog stage prompts", () => {
@@ -283,6 +288,53 @@ describe("TaskSettingsDialog merge tab", () => {
 })
 
 describe("TaskSettingsDialog worktree tab", () => {
+  it("carries a legacy preflight reference over as the command it names", async () => {
+    getOwnMock.mockResolvedValue(settings({ preflight_command_id: 7 }))
+    commandsMock.mockResolvedValue([
+      {
+        id: 7,
+        folder_id: 1,
+        name: "test",
+        command: "pnpm test",
+        sort_order: 0,
+        run_local: false,
+        created_at: "",
+        updated_at: "",
+      },
+    ])
+    const user = userEvent.setup()
+    renderDialog(1)
+    await saveButton()
+    await openTab(user, "Worktree")
+    expect(
+      screen.getByRole("textbox", { name: "Preflight command" })
+    ).toHaveValue("pnpm test")
+  })
+
+  it("doesn't carry over a legacy reference to a command run on the desktop", async () => {
+    // The preflight runs on the folder's host.
+    getOwnMock.mockResolvedValue(settings({ preflight_command_id: 7 }))
+    commandsMock.mockResolvedValue([
+      {
+        id: 7,
+        folder_id: 1,
+        name: "zed",
+        command: "zed .",
+        sort_order: 0,
+        run_local: true,
+        created_at: "",
+        updated_at: "",
+      },
+    ])
+    const user = userEvent.setup()
+    renderDialog(1)
+    await saveButton()
+    await openTab(user, "Worktree")
+    expect(
+      screen.getByRole("textbox", { name: "Preflight command" })
+    ).toHaveValue("")
+  })
+
   it("saves a chosen worktree directory, and blanks it back to the default", async () => {
     const user = userEvent.setup()
     renderDialog(1)
@@ -322,6 +374,74 @@ describe("TaskSettingsDialog worktree tab", () => {
     expect(
       screen.getByRole("textbox", { name: "Worktree location" })
     ).toHaveValue("/var/trees")
+  })
+})
+
+describe("TaskSettingsDialog auto-compact", () => {
+  it("saves the threshold and the command, and seeds both back", async () => {
+    const user = userEvent.setup()
+    renderDialog(1)
+    const save = await saveButton()
+
+    const box = screen.getByRole("textbox", { name: "Auto-compact threshold" })
+    expect(box).toHaveValue("0")
+    await user.clear(box)
+    await user.type(box, "80")
+    await user.type(
+      screen.getByRole("textbox", { name: "Compact command" }),
+      "  /compress  "
+    )
+    await user.click(save)
+
+    await waitFor(() => expect(setMock).toHaveBeenCalled())
+    const [, saved] = setMock.mock.calls[0] as [number, WorkTaskFolderSettings]
+    expect(saved.auto_compact_percent).toBe(80)
+    // Trimmed: the value is sent to the agent as a prompt, verbatim.
+    expect(saved.compact_command).toBe("/compress")
+  })
+
+  it("seeds the threshold and the command from the stored row", async () => {
+    getOwnMock.mockResolvedValue(
+      settings({ auto_compact_percent: 80, compact_command: "/compress" })
+    )
+    renderDialog(1)
+    await saveButton()
+
+    expect(
+      screen.getByRole("textbox", { name: "Auto-compact threshold" })
+    ).toHaveValue("80")
+    expect(
+      screen.getByRole("textbox", { name: "Compact command" })
+    ).toHaveValue("/compress")
+  })
+
+  it("reads a percentage it cannot honour as off", async () => {
+    const user = userEvent.setup()
+    renderDialog(1)
+    const save = await saveButton()
+
+    const box = screen.getByRole("textbox", { name: "Auto-compact threshold" })
+    // Above 100 there is no occupancy that could ever reach it — storing it
+    // would look enabled while behaving exactly like off.
+    await user.clear(box)
+    await user.type(box, "120")
+    await user.click(save)
+
+    await waitFor(() => expect(setMock).toHaveBeenCalled())
+    const [, saved] = setMock.mock.calls[0] as [number, WorkTaskFolderSettings]
+    expect(saved.auto_compact_percent).toBe(0)
+
+    // And an emptied box is off too, rather than NaN.
+    setMock.mockClear()
+    await user.clear(box)
+    await user.click(save)
+    await waitFor(() => expect(setMock).toHaveBeenCalled())
+    const [, blanked] = setMock.mock.calls[0] as [
+      number,
+      WorkTaskFolderSettings,
+    ]
+    expect(blanked.auto_compact_percent).toBe(0)
+    expect(blanked.compact_command).toBeNull()
   })
 })
 

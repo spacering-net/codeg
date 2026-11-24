@@ -3,14 +3,12 @@
  *
  * Extracted verbatim from `message-input.tsx` so the conversation composer and
  * the to-do task composers classify, name and encode a dropped/pasted/picked
- * file exactly the same way — one MIME table, one base64 reader, one "is this
- * text-like" rule. Nothing here touches React or the editor except
- * {@link editorHasFileReference}, which only reads a Tiptap document.
+ * file exactly the same way — one MIME table, one base64 reader. Nothing here
+ * touches React or the editor except {@link editorHasFileReference}, which only
+ * reads a Tiptap document.
  */
 
 import type { Editor } from "@tiptap/core"
-
-import { randomUUID } from "@/lib/utils"
 
 const MIME_BY_EXT: Record<string, string> = {
   txt: "text/plain",
@@ -149,55 +147,18 @@ export function getFilePath(file: File): string | null {
   return null
 }
 
-const TEXT_LIKE_MIME_PREFIXES = [
-  "text/",
-  "application/json",
-  "application/xml",
-  "application/yaml",
-  "application/x-yaml",
-  "application/toml",
-  "application/javascript",
-  "application/typescript",
-]
-
-export function isTextLikeFile(file: File): boolean {
-  const mime = file.type.toLowerCase()
-  if (mime) {
-    if (TEXT_LIKE_MIME_PREFIXES.some((prefix) => mime.startsWith(prefix))) {
-      return true
-    }
-  }
-  const ext = file.name.split(".").pop()?.toLowerCase()
-  if (!ext) return false
-  return Boolean(
-    MIME_BY_EXT[ext]?.startsWith("text/") ||
-    ["json", "yaml", "yml", "xml", "toml", "md", "csv"].includes(ext)
-  )
-}
-
-export function buildClipboardResourceUri(name: string): string {
-  const normalizedName = name.trim() || "clipboard-resource"
-  return `clipboard://${encodeURIComponent(normalizedName)}-${randomUUID()}`
-}
-
-export function buildDataUri(
-  base64Data: string,
-  mimeType: string | null
-): string {
-  const safeMime =
-    mimeType && mimeType.trim() ? mimeType : "application/octet-stream"
-  return `data:${safeMime};base64,${base64Data}`
-}
-
-/** Whether the document already holds a file reference badge for `uri` (used to
- *  dedupe repeated drops/picks of the same path, mirroring the old seen-set). */
-export function editorHasFileReference(editor: Editor, uri: string): boolean {
+/** Whether the document already holds a `refType` reference badge for `uri`. */
+export function editorHasReference(
+  editor: Editor,
+  refType: string,
+  uri: string
+): boolean {
   let found = false
   editor.state.doc.descendants((node) => {
     if (found) return false
     if (
       node.type.name === "reference" &&
-      node.attrs?.refType === "file" &&
+      node.attrs?.refType === refType &&
       node.attrs?.uri === uri
     ) {
       found = true
@@ -206,4 +167,10 @@ export function editorHasFileReference(editor: Editor, uri: string): boolean {
     return true
   })
   return found
+}
+
+/** Whether the document already holds a file reference badge for `uri` (used to
+ *  dedupe repeated drops/picks of the same path, mirroring the old seen-set). */
+export function editorHasFileReference(editor: Editor, uri: string): boolean {
+  return editorHasReference(editor, "file", uri)
 }

@@ -186,7 +186,7 @@ async fn perform_impl(state: Arc<AppState>) -> Result<AppUpdateState, AppCommand
                 );
             }
             Err(e) => {
-                update_state::set_error(&state.update_state, &emitter, e.to_string());
+                update_state::set_command_error(&state.update_state, &emitter, &e);
             }
         });
     });
@@ -278,12 +278,11 @@ async fn rollback_impl(state: Arc<AppState>) -> Result<UpdateActionResult, AppCo
         })?;
     let restart_delay_ms = crate::update::runtime::restart_delay_ms();
     if let Err(e) = crate::update::install::rollback() {
-        let msg = e.to_string();
         // Release the op-lock BEFORE publishing the claimable `Error` so a
         // concurrent perform/rollback that claims it can immediately take the
         // now-free lock (see `publish_after_releasing`).
         publish_after_releasing(guard, || {
-            crate::update::state::set_error(&state.update_state, &state.emitter, msg);
+            crate::update::state::set_command_error(&state.update_state, &state.emitter, &e);
         });
         return Err(e);
     }

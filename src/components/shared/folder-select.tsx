@@ -19,8 +19,8 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover"
+import { SelectorTooltip } from "@/components/chat/selector-tooltip"
 import { FolderAliasLabel } from "@/components/conversations/folder-alias-label"
-import { formatFolderLabelWithAlias } from "@/lib/folder-display"
 import { cn } from "@/lib/utils"
 
 /** The minimum a folder has to carry to be listed. `alias`/`path` are optional
@@ -87,13 +87,19 @@ export const FolderOptionItem = memo(function FolderOptionItem({
 
 /** Trigger looks. `"pill"` is the borderless muted filter pill the workbench
  *  toolbars use; `"field"` is the bordered form control the editor dialogs put
- *  in their Target section (metrics copied from `SelectTrigger size="sm"`). */
-type FolderSelectVariant = "pill" | "field"
+ *  in their Target section (metrics copied from `SelectTrigger size="sm"`);
+ *  `"ghost"` is the pill with no surface of its own, for a picker sitting
+ *  INSIDE another chip — a second fill there reads as a nested control, and
+ *  `ws-msg-chip` would draw one whatever the caller sets, since it paints from
+ *  an unlayered rule that outranks a utility class. */
+type FolderSelectVariant = "pill" | "field" | "ghost"
 
 const TRIGGER_CLASS: Record<FolderSelectVariant, string> = {
   pill: "h-8 w-auto min-w-0 max-w-[14rem] gap-1.5 rounded-full border-transparent bg-muted/70 px-3 text-[0.8125rem] font-medium shadow-none ws-msg-chip hover:bg-muted",
   field:
     "h-7 w-auto min-w-0 max-w-[16rem] gap-1.5 rounded-4xl border-input bg-input/30 px-3 text-xs font-normal hover:bg-input/50 dark:hover:bg-input/50",
+  ghost:
+    "h-7 w-auto min-w-0 max-w-[14rem] gap-1.5 rounded-full border-transparent px-2.5 text-[0.8125rem] font-medium shadow-none hover:bg-muted dark:hover:bg-muted",
 }
 
 interface FolderSelectProps {
@@ -111,9 +117,9 @@ interface FolderSelectProps {
   onSelectAll?: () => void
   variant?: FolderSelectVariant
   disabled?: boolean
-  /** Prefixes the trigger tooltip, e.g. "Working folder". Tooltip only — the
-   *  accessible name stays the trigger's own text, so a screen reader announces
-   *  WHICH folder is picked rather than just the axis. */
+  /** Names the axis in the trigger's hover hint, e.g. "Working folder". Hint
+   *  only — the accessible name stays the trigger's own text, so a screen
+   *  reader announces WHICH folder is picked rather than just the axis. */
   title?: string
   className?: string
 }
@@ -154,20 +160,14 @@ export function FolderSelect({
   // the page is doing. Named by the only handle left, its id — the same `#<id>`
   // idiom the Automations list uses for a folder it can only name that way.
   const unresolved = value != null && !current
-  // The full `alias [ name ]` plus the path go in the tooltip — the trigger
-  // truncates, and the path is the only thing that separates same-named repos.
-  const currentText = current
-    ? formatFolderLabelWithAlias({
-        name: current.name,
-        alias: current.alias ?? null,
-      })
-    : null
   const fallbackText = unresolved
     ? `#${value}`
     : (allLabel ?? placeholder ?? "")
-  const tooltip = [title, currentText ?? fallbackText, current?.path]
-    .filter(Boolean)
-    .join(" · ")
+  // Hover hint: the axis the caller named ("Working folder"), over the selected
+  // folder's path — the one thing the trigger never shows, and the only thing
+  // that separates same-named repos. The folder's own name is deliberately NOT
+  // repeated: it is the trigger's own text. A filter pill that names no axis
+  // and has no selection therefore has nothing to say, and shows no hint.
 
   return (
     <Popover
@@ -176,47 +176,59 @@ export function FolderSelect({
         if (!disabled) setOpen(o)
       }}
     >
-      <PopoverTrigger asChild>
-        <Button
-          type="button"
-          variant={variant === "pill" ? "ghost" : "outline"}
-          size="sm"
-          disabled={disabled}
-          title={tooltip}
-          className={cn(TRIGGER_CLASS[variant], className)}
-        >
-          <Folder
-            className="size-3.5 shrink-0 text-muted-foreground"
-            aria-hidden="true"
-          />
-          <span
-            className={cn(
-              // `flex-1` + `text-start` only bite when a caller stretches the
-              // trigger past its content (a fixed-width filter column): the
-              // label takes the slack and stays left-aligned with the icon,
-              // instead of the whole icon/label/chevron group floating in the
-              // middle of the pill. At the default content width there is no
-              // slack, so nothing moves.
-              "min-w-0 flex-1 truncate text-start",
-              !current && (placeholder || unresolved) && "text-muted-foreground"
-            )}
+      {/* `suppressed` while the list is open: the Popover is non-modal, so the
+          trigger keeps taking hover underneath its own panel. `disabled` falls
+          the hint back to a native `title` — a disabled trigger takes no
+          pointer events, and a pinned folder can't be opened to inspect. */}
+      <SelectorTooltip
+        label={title}
+        description={current?.path}
+        suppressed={open}
+        disabled={disabled}
+      >
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant={variant === "field" ? "outline" : "ghost"}
+            size="sm"
+            disabled={disabled}
+            className={cn(TRIGGER_CLASS[variant], className)}
           >
-            {current ? (
-              <FolderAliasLabel
-                name={current.name}
-                alias={current.alias ?? null}
-                bracketClassName="text-muted-foreground"
-              />
-            ) : (
-              fallbackText
-            )}
-          </span>
-          <ChevronDown
-            className="size-3.5 shrink-0 text-muted-foreground/60"
-            aria-hidden="true"
-          />
-        </Button>
-      </PopoverTrigger>
+            <Folder
+              className="size-3.5 shrink-0 text-muted-foreground"
+              aria-hidden="true"
+            />
+            <span
+              className={cn(
+                // `flex-1` + `text-start` only bite when a caller stretches the
+                // trigger past its content (a fixed-width filter column): the
+                // label takes the slack and stays left-aligned with the icon,
+                // instead of the whole icon/label/chevron group floating in the
+                // middle of the pill. At the default content width there is no
+                // slack, so nothing moves.
+                "min-w-0 flex-1 truncate text-start",
+                !current &&
+                  (placeholder || unresolved) &&
+                  "text-muted-foreground"
+              )}
+            >
+              {current ? (
+                <FolderAliasLabel
+                  name={current.name}
+                  alias={current.alias ?? null}
+                  bracketClassName="text-muted-foreground"
+                />
+              ) : (
+                fallbackText
+              )}
+            </span>
+            <ChevronDown
+              className="size-3.5 shrink-0 text-muted-foreground/60"
+              aria-hidden="true"
+            />
+          </Button>
+        </PopoverTrigger>
+      </SelectorTooltip>
       <PopoverContent align="start" className="w-72 overflow-hidden p-0">
         <Command className="rounded-2xl">
           <CommandInput placeholder={t("searchFolder")} />

@@ -192,7 +192,7 @@ export function ImagePreview({ tab }: { tab: FileWorkspaceTab }) {
   return (
     <div className="h-full flex flex-col">
       {tab.loading && (
-        <div className="absolute top-2 right-3 z-10 rounded-md bg-background/70 px-2 py-1 text-[11px] text-muted-foreground backdrop-blur-sm">
+        <div className="absolute top-2 right-3 z-10 rounded-md bg-background/70 px-2 py-1 text-2xs text-muted-foreground backdrop-blur-sm">
           {t("loading")}
         </div>
       )}
@@ -212,7 +212,7 @@ export function ImagePreview({ tab }: { tab: FileWorkspaceTab }) {
             <button
               type="button"
               onClick={handleZoomReset}
-              className="rounded px-1.5 py-0.5 hover:bg-muted transition-colors text-[11px] font-mono text-muted-foreground min-w-[3.5rem] text-center"
+              className="rounded px-1.5 py-0.5 hover:bg-muted transition-colors text-2xs font-mono text-muted-foreground min-w-[3.5rem] text-center"
               title={t("imageZoomReset")}
             >
               {zoomPercent}%
@@ -235,7 +235,7 @@ export function ImagePreview({ tab }: { tab: FileWorkspaceTab }) {
               <RotateCcw className="h-3.5 w-3.5" />
             </button>
 
-            <div className="ml-auto flex items-center gap-3 text-[11px] text-muted-foreground">
+            <div className="ml-auto flex items-center gap-3 text-2xs text-muted-foreground">
               {naturalWidth > 0 && naturalHeight > 0 && (
                 <span>
                   {naturalWidth} x {naturalHeight}

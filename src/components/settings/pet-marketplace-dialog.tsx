@@ -138,21 +138,32 @@ export function PetMarketplaceDialog({
 
   useEffect(() => {
     if (!open) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- marketplace fetch on open and on every query change
     void reload()
   }, [open, reload])
 
   // Reset transient UI state when dialog closes
   useEffect(() => {
     if (!open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset when the parent closes the dialog
       setReinstallTarget(null)
       setInstallingId(null)
       setPreviewPetId(null)
     }
   }, [open])
 
-  useEffect(() => {
+  // A preview belongs to the page of results it was opened on. Adjusted while
+  // rendering whenever any query input actually changes.
+  const [previewQuery, setPreviewQuery] = useState({ page, q, kind, sort })
+  if (
+    previewQuery.page !== page ||
+    previewQuery.q !== q ||
+    previewQuery.kind !== kind ||
+    previewQuery.sort !== sort
+  ) {
+    setPreviewQuery({ page, q, kind, sort })
     setPreviewPetId(null)
-  }, [page, q, kind, sort])
+  }
 
   const performInstall = useCallback(
     async (pet: MarketplacePet, overwrite: boolean) => {
@@ -472,7 +483,7 @@ function PetMarketCard({
                   {pet.displayName}
                 </div>
                 {pet.kind ? (
-                  <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase text-muted-foreground">
+                  <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-3xs uppercase text-muted-foreground">
                     {pet.kind}
                   </span>
                 ) : null}
@@ -490,7 +501,7 @@ function PetMarketCard({
                   {tags.map((tag) => (
                     <span
                       key={tag}
-                      className="rounded bg-accent px-1.5 py-0.5 text-[10px] text-accent-foreground"
+                      className="rounded bg-accent px-1.5 py-0.5 text-3xs text-accent-foreground"
                     >
                       {tag}
                     </span>
@@ -500,7 +511,7 @@ function PetMarketCard({
             </div>
           </button>
           <div className="mt-auto flex items-center justify-between gap-2 px-3 pb-3 pt-1">
-            <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+            <div className="flex items-center gap-2 text-3xs text-muted-foreground">
               <span title={labels.views} className="flex items-center gap-0.5">
                 <Eye className="h-3 w-3" />
                 {pet.viewCount}

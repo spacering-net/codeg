@@ -108,10 +108,14 @@ describe("ConversationDetailHeader dialog target snapshot", () => {
 
     await waitFor(() => {
       expect(h.deleteConversation).toHaveBeenCalledWith(1)
-      expect(h.closeTab).toHaveBeenCalledWith("tab-a")
+      // `recordForReopen: false`: the row is deleted, so "reopen closed tab"
+      // must not be able to mint a tab pointing back at it.
+      expect(h.closeTab).toHaveBeenCalledWith("tab-a", {
+        recordForReopen: false,
+      })
     })
     expect(h.deleteConversation).not.toHaveBeenCalledWith(2)
-    expect(h.closeTab).not.toHaveBeenCalledWith("tab-b")
+    expect(h.closeTab).not.toHaveBeenCalledWith("tab-b", expect.anything())
   })
 
   it("renames the conversation the dialog was opened for, even after the active tab switches", async () => {

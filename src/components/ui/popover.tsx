@@ -31,9 +31,10 @@ function PopoverContent({
   // the popover closes the popover too.
   const { setNode, onPointerDownOutside: guardOutsidePress } =
     useNestedLayerDismissGuard<HTMLDivElement>(ref)
-  // Inside a modal Dialog / Sheet this is the dialog's own content element, so
-  // the content lands inside the scroll lock's whitelisted subtree and a wheel
-  // over a long list actually scrolls it. `null` elsewhere = portal to the body.
+  // Inside a modal Dialog this is the dialog's own content element, so the
+  // content lands inside the scroll lock's whitelisted subtree and a wheel over
+  // a long list actually scrolls it; inside a Drawer it is the drawer's popup.
+  // `null` elsewhere = portal to the body.
   const container = useOverlayPortalContainer()
   return (
     <PopoverPrimitive.Portal container={container ?? undefined}>

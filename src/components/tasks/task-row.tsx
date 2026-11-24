@@ -11,6 +11,8 @@ import {
 import { formatRelative } from "@/components/conversations/sidebar-conversation-grouping"
 import { cn } from "@/lib/utils"
 import {
+  isLiveStatus,
+  liveNote,
   MergeQueuedChip,
   ScheduleChip,
   statusAccent,
@@ -18,6 +20,7 @@ import {
   TaskAgentMark,
   WorktreeRemovedChip,
 } from "./task-card"
+import { isDeferred } from "./task-acceptance"
 import {
   buildTaskActions,
   type TaskActionHandlers,
@@ -43,11 +46,11 @@ export const TASK_LIST_CELLS = {
   location: "hidden w-[11rem] shrink-0 overflow-hidden lg:flex",
   changes: "hidden w-[4.5rem] shrink-0 justify-end md:flex",
   updated: "hidden w-[3rem] shrink-0 justify-end sm:flex",
-  /** Four 24px buttons with 4px gutters = 108px, the widest action set any
-   *  status offers (to-do: start / edit / schedule / session). Icon-only, so
-   *  this width is locale-independent — and fixed, so the right edge is a rule
-   *  rather than a ragged margin. */
-  actions: "w-[7rem] shrink-0 justify-end",
+  /** Five 24px buttons with 4px gutters = 136px, the widest action set any
+   *  status offers (failed: retry / edit / handle later / archive / session).
+   *  Icon-only, so this width is locale-independent — and fixed, so the right
+   *  edge is a rule rather than a ragged margin. */
+  actions: "w-[8.5rem] shrink-0 justify-end",
 } as const
 
 /** Horizontal rhythm of one list line — header and rows share it. */
@@ -94,15 +97,13 @@ export function TaskRow({
 }: TaskRowProps) {
   const t = useTranslations("Tasks")
   const archived = task.archived_at != null
-  const live =
-    task.status === "running" ||
-    task.status === "awaiting_input" ||
-    task.status === "merging"
   const { primary, secondaries } = buildTaskActions(task, t, handlers)
   // The filled primary is reserved for "this one is waiting on you". An
-  // archived task is settled by definition, however it got there.
+  // archived task is settled by definition, however it got there — and one
+  // put aside to handle later is, by the user's own word, not waiting yet.
   const needsUser =
     !archived &&
+    !isDeferred(task) &&
     (task.status === "review" ||
       task.status === "awaiting_input" ||
       task.status === "failed")
@@ -111,11 +112,8 @@ export function TaskRow({
     task.last_error && (task.status === "failed" || task.status === "review")
   const note = showError
     ? task.last_error
-    : live && task.latest_progress
-      ? task.latest_progress
-      : task.status === "review" && task.result_summary
-        ? task.result_summary
-        : null
+    : (liveNote(task, t) ??
+      (task.status === "review" ? task.result_summary : null))
 
   const when = formatRelative(
     task.finished_at ?? task.settled_at ?? task.started_at ?? task.created_at,
@@ -183,7 +181,7 @@ export function TaskRow({
               className={cn(
                 "flex min-w-0 items-center gap-1 text-[0.6875rem] leading-snug",
                 showError ? "text-destructive" : "text-muted-foreground",
-                !showError && live && "italic"
+                !showError && isLiveStatus(task) && "italic"
               )}
             >
               {showError ? (
@@ -285,7 +283,18 @@ function RowIconAction({
           <item.icon aria-hidden="true" />
         </Button>
       </TooltipTrigger>
-      <TooltipContent side="top">{item.label}</TooltipContent>
+      <TooltipContent side="top">
+        {item.hint ? (
+          // Named first, then explained: icon-only, the tooltip is the only
+          // place this button says what it is.
+          <div className="flex flex-col gap-0.5">
+            <span className="font-medium">{item.label}</span>
+            <span className="opacity-80">{item.hint}</span>
+          </div>
+        ) : (
+          item.label
+        )}
+      </TooltipContent>
     </Tooltip>
   )
 }

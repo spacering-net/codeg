@@ -9,7 +9,14 @@ import {
   type PointerEvent,
   type ReactNode,
 } from "react"
-import { GripVertical, Loader2, Plus, Save, Trash2 } from "lucide-react"
+import {
+  ChevronRight,
+  GripVertical,
+  Loader2,
+  Plus,
+  Save,
+  Trash2,
+} from "lucide-react"
 import { Reorder, useDragControls } from "motion/react"
 import { useTranslations } from "next-intl"
 import {
@@ -20,7 +27,10 @@ import {
   updateRemoteWorkspaceConnection,
 } from "@/lib/remote-workspace"
 import { toErrorMessage } from "@/lib/app-error"
-import type { RemoteWorkspaceConnection } from "@/lib/types"
+import type {
+  RemoteWorkspaceConnection,
+  RemoteWorkspaceHeader,
+} from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import {
   AlertDialog,
@@ -38,6 +48,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -61,6 +76,7 @@ interface Draft {
   name: string
   baseUrl: string
   token: string
+  headers: RemoteWorkspaceHeader[]
 }
 
 interface RemoteWorkspaceReorderItemProps {
@@ -79,6 +95,7 @@ const EMPTY_DRAFT: Draft = {
   name: "",
   baseUrl: "",
   token: "",
+  headers: [],
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -159,6 +176,7 @@ export function RemoteWorkspaceManageDialog({
   const [deleting, setDeleting] = useState(false)
   const [deleteTargetId, setDeleteTargetId] = useState<number | null>(null)
   const [reordering, setReordering] = useState(false)
+  const [headersOpen, setHeadersOpen] = useState(false)
   const pendingOrderRef = useRef<number[] | null>(null)
   const panelContainerRef = useRef<HTMLDivElement | null>(null)
   const [panelContainerWidth, setPanelContainerWidth] = useState(0)
@@ -188,6 +206,7 @@ export function RemoteWorkspaceManageDialog({
 
   useEffect(() => {
     if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset paired with an external fetch on open
       setFormError(null)
       void refresh()
     }
@@ -225,19 +244,27 @@ export function RemoteWorkspaceManageDialog({
     [connections, deleteTargetId]
   )
 
-  useEffect(() => {
+  // Re-seed the editable form whenever the selected connection changes
+  // (including a refresh that returns a new object for it). Adjusted during
+  // render (React's "reset state on prop change" pattern); on mount nothing is
+  // selected yet and the initial state already matches the empty form.
+  const [prevSelected, setPrevSelected] = useState(selected)
+  if (selected !== prevSelected) {
+    setPrevSelected(selected)
     setFormError(null)
-    if (!selected) {
-      setDraft(EMPTY_DRAFT)
-      return
-    }
-    setDraft({
-      id: selected.id,
-      name: selected.name,
-      baseUrl: selected.base_url,
-      token: selected.token,
-    })
-  }, [selected])
+    setHeadersOpen((selected?.headers?.length ?? 0) > 0)
+    setDraft(
+      selected
+        ? {
+            id: selected.id,
+            name: selected.name,
+            baseUrl: selected.base_url,
+            token: selected.token,
+            headers: selected.headers ?? [],
+          }
+        : EMPTY_DRAFT
+    )
+  }
 
   const filteredConnections = useMemo(() => {
     const query = searchQuery.trim().toLowerCase()
@@ -272,6 +299,36 @@ export function RemoteWorkspaceManageDialog({
     setSelectedId(null)
     setFormError(null)
     setDraft(EMPTY_DRAFT)
+    setHeadersOpen(false)
+  }, [])
+
+  const updateHeader = useCallback(
+    (index: number, patch: Partial<RemoteWorkspaceHeader>) => {
+      setFormError(null)
+      setDraft((prev) => ({
+        ...prev,
+        headers: prev.headers.map((header, position) =>
+          position === index ? { ...header, ...patch } : header
+        ),
+      }))
+    },
+    []
+  )
+
+  const addHeader = useCallback(() => {
+    setFormError(null)
+    setDraft((prev) => ({
+      ...prev,
+      headers: [...prev.headers, { name: "", value: "" }],
+    }))
+  }, [])
+
+  const removeHeader = useCallback((index: number) => {
+    setFormError(null)
+    setDraft((prev) => ({
+      ...prev,
+      headers: prev.headers.filter((_, position) => position !== index),
+    }))
   }, [])
 
   const persistReorder = useCallback(
@@ -313,6 +370,7 @@ export function RemoteWorkspaceManageDialog({
         name: draft.name,
         baseUrl: draft.baseUrl,
         token: draft.token,
+        headers: draft.headers,
       }
       const saved =
         draft.id === null
@@ -331,6 +389,7 @@ export function RemoteWorkspaceManageDialog({
         name: saved.name,
         baseUrl: saved.base_url,
         token: saved.token,
+        headers: saved.headers ?? [],
       })
       onChanged()
     } catch (err) {
@@ -367,7 +426,7 @@ export function RemoteWorkspaceManageDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="flex h-[min(760px,calc(100vh-4rem))] max-w-[min(980px,calc(100vw-2rem))] flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl">
+        <DialogContent className="flex h-[min(47.5rem,calc(100vh-4rem))] max-w-[min(61.25rem,calc(100vw-2rem))] flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl">
           <DialogHeader className="border-b px-4 py-3">
             <DialogTitle>{t("manageTitle")}</DialogTitle>
           </DialogHeader>
@@ -408,9 +467,7 @@ export function RemoteWorkspaceManageDialog({
                     </div>
                   ) : filteredConnections.length === 0 ? (
                     <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-muted-foreground">
-                      {connections.length === 0
-                        ? t("empty")
-                        : t("searchPlaceholder")}
+                      {connections.length === 0 ? t("empty") : t("noMatches")}
                     </div>
                   ) : (
                     <Reorder.Group
@@ -464,7 +521,7 @@ export function RemoteWorkspaceManageDialog({
                                   <div className="truncate text-sm font-medium">
                                     {connection.name}
                                   </div>
-                                  <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                                  <div className="mt-0.5 truncate text-2xs text-muted-foreground">
                                     {connection.base_url}
                                   </div>
                                 </div>
@@ -530,6 +587,73 @@ export function RemoteWorkspaceManageDialog({
                         }
                       />
                     </div>
+                    <Collapsible
+                      open={headersOpen}
+                      onOpenChange={setHeadersOpen}
+                      className="space-y-2"
+                    >
+                      <CollapsibleTrigger className="flex h-6 w-full items-center gap-1.5 rounded-md text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40">
+                        <ChevronRight
+                          className={cn(
+                            "h-3.5 w-3.5 transition-transform",
+                            headersOpen && "rotate-90"
+                          )}
+                        />
+                        {t("customHeaders")}
+                        {draft.headers.length > 0 ? (
+                          <span className="rounded bg-muted px-1.5 text-3xs leading-4 text-muted-foreground">
+                            {draft.headers.length}
+                          </span>
+                        ) : null}
+                      </CollapsibleTrigger>
+                      <CollapsibleContent className="space-y-2">
+                        {draft.headers.map((header, index) => (
+                          <div
+                            key={index}
+                            className="flex items-center gap-2"
+                            data-remote-workspace-header-row={index}
+                          >
+                            <Input
+                              className="flex-1"
+                              value={header.name}
+                              placeholder={t("customHeaderName")}
+                              aria-label={t("customHeaderName")}
+                              onChange={(event) =>
+                                updateHeader(index, {
+                                  name: event.target.value,
+                                })
+                              }
+                            />
+                            <Input
+                              className="flex-1"
+                              type="password"
+                              value={header.value}
+                              placeholder={t("customHeaderValue")}
+                              aria-label={t("customHeaderValue")}
+                              onChange={(event) =>
+                                updateHeader(index, {
+                                  value: event.target.value,
+                                })
+                              }
+                            />
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-7 w-7 shrink-0 text-destructive"
+                              aria-label={t("removeCustomHeader")}
+                              title={t("removeCustomHeader")}
+                              onClick={() => removeHeader(index)}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        ))}
+                        <Button size="sm" variant="outline" onClick={addHeader}>
+                          <Plus className="h-3.5 w-3.5" />
+                          {t("addCustomHeader")}
+                        </Button>
+                      </CollapsibleContent>
+                    </Collapsible>
                   </div>
 
                   <div className="space-y-3 border-t px-4 py-3">

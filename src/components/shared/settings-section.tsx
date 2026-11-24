@@ -12,10 +12,16 @@
  * with two different error banners and five subtly different save footers.
  */
 
+import { Children } from "react"
 import type { LucideIcon } from "lucide-react"
-import { AlertCircle, Loader2 } from "lucide-react"
+import { AlertCircle, ChevronDown, Loader2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
 import { Label } from "@/components/ui/label"
 import { cn } from "@/lib/utils"
 
@@ -31,8 +37,22 @@ interface SettingsSectionProps {
    * heading back at the reader.
    */
   control?: React.ReactNode
-  /** Ties the heading to the control it labels (`Switch`, `Select`, …). */
+  /**
+   * Ties the heading to the control it labels (`Switch`, `Select`, …). A
+   * `collapsible` section only uses it while it has nothing to fold; once the
+   * heading is a disclosure button the control has to name itself
+   * (`aria-label`), since a button cannot double as a label.
+   */
   htmlFor?: string
+  /**
+   * Turns the heading into a disclosure button that shows and hides
+   * `children` — pass a constant, not a condition: whether there is anything
+   * to fold is read off `children`. Controlled on purpose, so a section that
+   * only wants to work while open (fetch, claim a resource) can see that too.
+   */
+  collapsible?: boolean
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
   children?: React.ReactNode
   className?: string
 }
@@ -52,6 +72,11 @@ interface SettingsSectionProps {
  * The bordered `bg-card` surface is deliberately the same shell the other
  * settings tabs use, so adopting this component changes the grammar *inside* a
  * section without making one tab look foreign next to its siblings.
+ *
+ * With `collapsible`, the heading also folds the section away — same disclosure
+ * grammar as the appearance tab's custom-style block (chevron on the heading,
+ * hairline under it once open). It composes with `control`: the master switch
+ * stays reachable on the heading line whether the body is showing or not.
  */
 export function SettingsSection({
   icon: Icon,
@@ -59,6 +84,9 @@ export function SettingsSection({
   description,
   control,
   htmlFor,
+  collapsible,
+  open,
+  onOpenChange,
   children,
   className,
 }: SettingsSectionProps) {
@@ -73,6 +101,86 @@ export function SettingsSection({
       {title}
     </>
   )
+
+  const descriptionNode = description ? (
+    <p className="text-xs leading-5 text-muted-foreground">{description}</p>
+  ) : null
+
+  if (collapsible) {
+    // A master switch that gates every child leaves nothing to disclose when
+    // it is off, and a chevron that opens onto an empty box is a dead control.
+    // Asking the children rather than taking a second prop keeps that decision
+    // in one place — `Children.toArray` drops the `false`s a `cond && <x/>`
+    // child leaves behind.
+    const foldable = Children.toArray(children).length > 0
+    const expanded = foldable && open === true
+
+    return (
+      // Rendered whether or not anything is foldable right now: swapping this
+      // wrapper in and out would remount the header, and the control on it
+      // would lose keyboard focus the moment it was used.
+      <Collapsible open={expanded} onOpenChange={onOpenChange} asChild>
+        <section
+          className={cn("overflow-hidden rounded-xl border bg-card", className)}
+        >
+          {/* `relative` is the anchor the trigger stretches its hit area to,
+              and `has-…:hover` paints the hover state from the trigger rather
+              than from the row: pointing at the switch then leaves the row
+              plain, because clicking there does not fold anything. */}
+          <div
+            className={cn(
+              "relative flex justify-between gap-3 border-b border-transparent p-4 transition-colors has-[[data-slot=collapsible-trigger]:hover]:bg-muted/50",
+              description ? "items-start" : "items-center",
+              expanded && "border-border"
+            )}
+          >
+            <div className="min-w-0 flex-1 space-y-1">
+              {/* The button goes inside the h2, not the other way round:
+                  role=button flattens its descendants' semantics, which would
+                  drop the section out of the page's heading list — so the
+                  button can only wrap the title. `before:inset-0` then spreads
+                  its hit area (and its focus ring) over the whole row, which is
+                  how the description and the empty space beside it fold the
+                  section too. */}
+              <h2 className="text-sm font-semibold">
+                {foldable ? (
+                  <CollapsibleTrigger asChild>
+                    <button
+                      type="button"
+                      className="group/settings-section flex cursor-pointer items-center gap-2 text-left outline-none before:absolute before:inset-0 focus-visible:before:ring-2 focus-visible:before:ring-ring/50 focus-visible:before:ring-inset"
+                    >
+                      {heading}
+                      <ChevronDown className="size-3.5 shrink-0 text-muted-foreground transition-transform duration-200 group-data-[state=open]/settings-section:rotate-180" />
+                    </button>
+                  </CollapsibleTrigger>
+                ) : htmlFor ? (
+                  // Nothing to fold, so the heading goes back to labelling the
+                  // control — the same one-line section it was before.
+                  <Label
+                    htmlFor={htmlFor}
+                    className="gap-2 text-sm leading-normal font-semibold"
+                  >
+                    {heading}
+                  </Label>
+                ) : (
+                  <span className="flex items-center gap-2">{heading}</span>
+                )}
+              </h2>
+              {descriptionNode}
+            </div>
+            {/* Positioned, so it paints above the trigger's overlay — without
+                this the overlay would swallow every click on the switch. */}
+            {control ? (
+              <div className="relative shrink-0">{control}</div>
+            ) : null}
+          </div>
+          <CollapsibleContent className="space-y-3 p-4">
+            {children}
+          </CollapsibleContent>
+        </section>
+      </Collapsible>
+    )
+  }
 
   return (
     <section
@@ -101,11 +209,7 @@ export function SettingsSection({
               <span className="flex items-center gap-2">{heading}</span>
             )}
           </h2>
-          {description ? (
-            <p className="text-xs leading-5 text-muted-foreground">
-              {description}
-            </p>
-          ) : null}
+          {descriptionNode}
         </div>
         {control ? <div className="shrink-0">{control}</div> : null}
       </div>

@@ -1,23 +1,34 @@
 pub mod acp_native;
+mod agent_env;
+pub mod antigravity;
 pub mod claude;
 pub mod cline;
 pub mod codebuddy;
 pub mod codex;
 pub mod codex_code_mode;
+mod codex_desktop_attachments;
+mod codex_async_questions;
+mod codex_file_citations;
 pub mod cursor;
 pub mod deepseek;
 pub mod gemini;
 pub mod grok;
 pub mod hermes;
 pub mod kimi_code;
+pub mod kiro;
 pub mod openclaw;
 pub mod opencode;
+mod opencode_context_window;
 pub mod pi;
+pub mod qoder;
 mod summary_cache;
+mod trae_usage;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::OnceLock;
+
+pub use agent_env::{AgentEnv, AgentEnvs};
 
 /// A root of external agent-CLI transcript data, archived under
 /// `external/<agent>/` by the optional "include conversation content" toggle.
@@ -29,12 +40,51 @@ pub struct ExternalSource {
     /// Live source path (a directory, or a single file when `is_file`).
     pub root: PathBuf,
     pub is_file: bool,
+    /// This source's `.db` files are SQLite databases owned by the agent CLI.
+    ///
+    /// Backup then snapshots each one with a read-only page copy — never
+    /// `VACUUM` (it renumbers implicit rowids, and we cannot audit a
+    /// third-party schema for tables that treat rowid as a key) and never a
+    /// read-write open (that runs WAL recovery inside someone else's live
+    /// store). Exactly one self-contained file per database enters the
+    /// archive, never a `-wal`/`-shm`; restore deletes the live sidecars
+    /// before the rename so a stale WAL can never be replayed onto a database
+    /// it does not belong to. See `commands::backup::external`.
+    pub sqlite: bool,
     /// When `Some`, only entries whose first path component (relative to
     /// `root`) is in this allowlist are archived. Used to keep the backup to
     /// transcript/session data and exclude sibling credential/config/cache
     /// files in shared base dirs (e.g. `~/.gemini/oauth_creds.json`). `None`
     /// means the whole root is already transcript-scoped.
     pub include_top: Option<&'static [&'static str]>,
+    /// The append-only JSONL indexes among this source's files. Restore
+    /// merges one into the live copy instead of skipping or replacing it —
+    /// see [`AppendOnlyIndex`].
+    pub indexes: &'static [AppendOnlyIndex],
+}
+
+/// A file the agent CLI only ever appends to, one JSON object per line, the
+/// newest usable line for a key winning (codex's `session_index.jsonl`,
+/// kimi's).
+///
+/// The live copy usually exists when a backup is restored — every session the
+/// CLI created since is in it — so neither conflict policy fits a whole-file
+/// restore: skipping drops the restored sessions' lines, replacing drops every
+/// line written since the backup. Restore appends the backup's lines for the
+/// keys the live copy lacks instead (`commands::backup::external`).
+#[derive(Clone, Copy, Debug)]
+pub struct AppendOnlyIndex {
+    /// Path relative to the source's [`ExternalSource::restore_base`],
+    /// `/`-separated.
+    pub path: &'static str,
+    /// The string field naming the record a line describes.
+    pub key: &'static str,
+    /// The string field a line exists to set.
+    pub value: &'static str,
+    /// Whether a value is one the index's reader acts on — the reader's own
+    /// test, so the merge and the reader agree on every line. A line the
+    /// reader skips (an empty name, say) never counts as a key's newest line.
+    pub usable: fn(&str) -> bool,
 }
 
 impl ExternalSource {
@@ -61,13 +111,40 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             agent: "claude",
             root: claude::resolve_claude_config_dir().join("projects"),
             is_file: false,
+            sqlite: false,
             include_top: None,
+            indexes: &[],
         },
         ExternalSource {
             agent: "codex",
             root: codex::resolve_codex_home_dir().join("sessions"),
             is_file: false,
+            sqlite: false,
             include_top: None,
+            indexes: &[],
+        },
+        ExternalSource {
+            // Every thread name — a `/rename`, or the title codex-acp
+            // generates — lives only in `~/.codex/session_index.jsonl`, never
+            // in a rollout (`parsers::codex::load_thread_name_index`), so
+            // without it a restored session reads as its first prompt.
+            //
+            // A SEPARATE source rather than re-rooting the one above at
+            // `~/.codex`: `agent` is the restore key, and every archive made
+            // so far holds its rollouts relative to `sessions/`. Under an
+            // allowlist at the new root those would map to nothing and be
+            // dropped on restore without a word.
+            agent: "codex-session-index",
+            root: codex::resolve_codex_home_dir().join("session_index.jsonl"),
+            is_file: true,
+            sqlite: false,
+            include_top: None,
+            indexes: &[AppendOnlyIndex {
+                path: "session_index.jsonl",
+                key: "id",
+                value: "thread_name",
+                usable: codex::is_usable_thread_name,
+            }],
         },
         ExternalSource {
             // Gemini's base dir mixes transcripts with credentials/config; only
@@ -75,31 +152,51 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             agent: "gemini",
             root: gemini::resolve_gemini_base_dir(),
             is_file: false,
+            sqlite: false,
             include_top: Some(&["tmp", "history", "projects.json"]),
+            indexes: &[],
         },
         ExternalSource {
+            // cline 3.x keeps transcripts in `sessions/` and indexes them in
+            // the live SQLite store `db/sessions.db`; `state/` + `tasks/` are
+            // the pre-3.x layout, still read by the parser. Everything else
+            // under the same base dir is credentials and machine state —
+            // `secrets.json`, `settings/`, `cache/`, `locks/` — so the
+            // allowlist is what keeps a backup from carrying API keys.
+            //
+            // `sqlite: true` because of `db/`: archiving a live store as plain
+            // files would pack its main file next to a `-wal` written at
+            // another moment, which is a corrupt store on restore.
             agent: "cline",
             root: cline::cline_data_dir(),
             is_file: false,
-            include_top: None,
+            sqlite: true,
+            include_top: Some(&["sessions", "db", "state", "tasks"]),
+            indexes: &[],
         },
         ExternalSource {
+            // The default file even when `$OPENCODE_DB` moves the database the
+            // history is read from: the archive keys this entry by file name,
+            // and only a `.db` name is snapshotted as SQLite.
             agent: "opencode",
-            root: opencode::resolve_opencode_base_dir().join("opencode.db"),
+            root: opencode::resolve_opencode_base_dir().join(opencode::OPENCODE_DB_FILE),
             is_file: true,
+            sqlite: true,
             include_top: None,
+            indexes: &[],
         },
         ExternalSource {
             // Hermes self-manages its session store at `~/.hermes/state.db`.
-            // WAL caveat: `is_file` archives only the main DB file, not the
-            // `-wal`/`-shm` sidecars, so a cold backup taken mid-write can miss
-            // the newest un-checkpointed frames (same known limitation as
-            // OpenCode). This does NOT affect live reads — the parser's `mode=ro`
-            // connection sees committed WAL frames.
+            // `sqlite: true` is what makes the backup carry the frames that
+            // only exist in the WAL: the store is page-copied through a
+            // read-only connection into one self-contained archive entry,
+            // rather than the raw main file being copied and its WAL dropped.
             agent: "hermes",
             root: hermes::resolve_hermes_home_dir().join("state.db"),
             is_file: true,
+            sqlite: true,
             include_top: None,
+            indexes: &[],
         },
         ExternalSource {
             // CodeBuddy stores its JSONL transcripts under
@@ -108,7 +205,9 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             agent: "codebuddy",
             root: codebuddy::resolve_codebuddy_config_dir().join("projects"),
             is_file: false,
+            sqlite: false,
             include_top: None,
+            indexes: &[],
         },
         ExternalSource {
             // Kimi Code keeps a directory-per-session transcript store under
@@ -119,7 +218,14 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             agent: "kimi-code",
             root: kimi_code::resolve_kimi_code_home_dir(),
             is_file: false,
+            sqlite: false,
             include_top: Some(&["sessions", "session_index.jsonl"]),
+            indexes: &[AppendOnlyIndex {
+                path: "session_index.jsonl",
+                key: "sessionId",
+                value: "workDir",
+                usable: kimi_code::is_usable_work_dir,
+            }],
         },
         ExternalSource {
             // Grok keeps a directory-per-session transcript store under
@@ -130,7 +236,9 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             agent: "grok",
             root: grok::resolve_grok_home_dir().join("sessions"),
             is_file: false,
+            sqlite: false,
             include_top: None,
+            indexes: &[],
         },
         ExternalSource {
             // Cursor keeps a SQLite blob store per chat under
@@ -142,7 +250,9 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             agent: "cursor",
             root: cursor::resolve_cursor_config_dir(),
             is_file: false,
+            sqlite: true,
             include_top: Some(&["chats", "acp-sessions"]),
+            indexes: &[],
         },
         ExternalSource {
             // pi writes one JSONL per session under `~/.pi/agent/sessions/`
@@ -153,7 +263,9 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             agent: "pi",
             root: pi::resolve_pi_sessions_dir(),
             is_file: false,
+            sqlite: false,
             include_top: None,
+            indexes: &[],
         },
         ExternalSource {
             // DeepSeek Harness (deepseek-acp) keeps a directory-per-session
@@ -164,7 +276,77 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             agent: "deepseek",
             root: deepseek::resolve_deepseek_sessions_root(),
             is_file: false,
+            sqlite: false,
             include_top: None,
+            indexes: &[],
+        },
+        ExternalSource {
+            // Since deepseek-acp 0.6.0 a prompt can carry images, and the log
+            // keeps only a `sha256:` reference — the pixels live in the
+            // content-addressed store at `$DSH_HOME/attachments/v1/objects/`.
+            // Without this source a backup restores every image as the
+            // `[image …]` placeholder `parsers::deepseek` falls back to, which
+            // is unrecoverable: the bytes exist nowhere else.
+            //
+            // A SEPARATE source rather than widening the one above, for two
+            // reasons. `DEEPSEEK_ACP_SESSIONS_ROOT` relocates the logs
+            // INDEPENDENTLY of `DSH_HOME`, so re-rooting both at `$DSH_HOME`
+            // would silently stop archiving the logs of any deployment that
+            // uses it. And `agent` is the restore key — `map_external_to_target`
+            // resolves `external/<agent>/…` by `find(|s| s.agent == agent)`, so
+            // two sources sharing a name would restore this one's entries under
+            // the sessions root.
+            //
+            // Scoped to `objects/`: the siblings are `tmp/` (upload staging)
+            // and `request-images/` (per-provider re-encodings derived from
+            // `objects/`), neither of which is conversation content, and both
+            // of which the agent rebuilds on demand.
+            agent: "deepseek-attachments",
+            root: deepseek::resolve_deepseek_attachments_root(),
+            is_file: false,
+            sqlite: false,
+            include_top: Some(&["objects"]),
+            indexes: &[],
+        },
+        ExternalSource {
+            // Qoder keeps one JSONL per session under
+            // `~/.qoder/projects/<encoded-cwd>/<sessionId>.jsonl` (relocatable
+            // via `QODER_CONFIG_DIR`). The resolver already points at the
+            // `projects/` subtree, so the sibling `settings.json` /
+            // `security/` / `cache/` under `~/.qoder` are never archived.
+            agent: "qoder",
+            root: qoder::resolve_qoder_config_dir().join("projects"),
+            is_file: false,
+            sqlite: false,
+            include_top: None,
+            indexes: &[],
+        },
+        ExternalSource {
+            // Antigravity keeps one SQLite trajectory + `.meta` sidecar per
+            // session under `<GEMINI_HOME>/antigravity-acp/conversations`
+            // (default `~/.gemini/...`). The root points at `conversations`
+            // and NOT at `antigravity-acp` itself, whose siblings are the
+            // OAuth token files (`acp_token.json`, `acp_business_token.json`)
+            // — those must never end up in a backup archive.
+            agent: "antigravity",
+            root: antigravity::resolve_antigravity_sessions_dir(),
+            is_file: false,
+            sqlite: true,
+            include_top: None,
+            indexes: &[],
+        },
+        ExternalSource {
+            // Kiro keeps each session as `<id>.jsonl` (event log) + `<id>.json`
+            // (metadata) under `<KIRO_HOME>/sessions/cli/` (default
+            // `~/.kiro/...`). The root is the `sessions/` subtree, never
+            // `<KIRO_HOME>` itself, whose `settings/`, `agents/` and MCP config
+            // are the user's configuration, not conversation content.
+            agent: "kiro",
+            root: kiro::resolve_kiro_sessions_root(),
+            is_file: false,
+            sqlite: false,
+            include_top: None,
+            indexes: &[],
         },
     ];
     if let Some(home) = dirs::home_dir() {
@@ -172,7 +354,9 @@ pub fn external_transcript_sources() -> Vec<ExternalSource> {
             agent: "openclaw",
             root: home.join(".openclaw").join("agents"),
             is_file: false,
+            sqlite: false,
             include_top: None,
+            indexes: &[],
         });
     }
     sources
@@ -182,8 +366,8 @@ use chrono::{DateTime, Utc};
 use regex::Regex;
 
 use crate::models::{
-    ContentBlock, ConversationDetail, ConversationSummary, MessageTurn, SessionStats, TurnRole,
-    TurnUsage,
+    AgentType, ContentBlock, ConversationDetail, ConversationSummary, MessageTurn, SessionStats,
+    TurnRole, TurnUsage,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -203,6 +387,216 @@ pub enum ParseError {
 pub trait AgentParser {
     fn list_conversations(&self) -> Result<Vec<ConversationSummary>, ParseError>;
     fn get_conversation(&self, conversation_id: &str) -> Result<ConversationDetail, ParseError>;
+}
+
+/// The ONE place a history parser is constructed.
+///
+/// Every caller goes through here so the internal `@agent` routing frame is
+/// stripped from every agent's history — not just the one agent whose parser
+/// happens to know about it. `codeg-mcp` is injected into every MCP-capable
+/// agent, so the frame lands in each of their native transcripts; a per-parser
+/// fix would silently miss whichever parser was written next.
+///
+/// `env` is the environment this agent is launched with — load it with
+/// `agent_setting_service::load_agent_env`. Each agent keeps its history where
+/// THAT environment points (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, …), and a
+/// relocation set in the agent's settings never reaches codeg's own process,
+/// so a parser handed [`AgentEnv::inherited`] instead reads the default
+/// directory while the agent writes elsewhere (#948).
+pub fn build_agent_parser(agent_type: AgentType, env: &AgentEnv) -> Box<dyn AgentParser> {
+    build_agent_parser_with_text(agent_type, env, codex::CodexText::Display)
+}
+
+pub(crate) fn build_agent_parser_with_text(
+    agent_type: AgentType,
+    env: &AgentEnv,
+    text: codex::CodexText,
+) -> Box<dyn AgentParser> {
+    let inner: Box<dyn AgentParser> = match agent_type {
+        AgentType::ClaudeCode => Box::new(claude::ClaudeParser::for_env(env)),
+        AgentType::Codex => Box::new(codex::CodexParser::for_env(env).with_text(text)),
+        AgentType::OpenCode => Box::new(opencode::OpenCodeParser::for_env(env)),
+        AgentType::Gemini => Box::new(gemini::GeminiParser::for_env(env)),
+        // This parser reads a fixed `~/.openclaw/agents` and follows no
+        // relocation variable at all — not even codeg's own — so `env` has
+        // nothing to move for it.
+        AgentType::OpenClaw => Box::new(openclaw::OpenClawParser::new()),
+        AgentType::Cline => Box::new(cline::ClineParser::for_env(env)),
+        AgentType::Hermes => Box::new(hermes::HermesParser::for_env(env)),
+        AgentType::CodeBuddy => Box::new(codebuddy::CodeBuddyParser::for_env(env)),
+        AgentType::KimiCode => Box::new(kimi_code::KimiCodeParser::for_env(env)),
+        AgentType::Pi => Box::new(pi::PiParser::for_env(env)),
+        AgentType::Grok => Box::new(grok::GrokParser::for_env(env)),
+        AgentType::Cursor => Box::new(cursor::CursorParser::for_env(env)),
+        AgentType::DeepSeek => Box::new(deepseek::DeepSeekParser::for_env(env)),
+        AgentType::Qoder => Box::new(qoder::QoderParser::for_env(env)),
+        AgentType::Antigravity => Box::new(antigravity::AntigravityParser::for_env(env)),
+        AgentType::Kiro => Box::new(kiro::KiroParser::for_env(env)),
+        // Custom ACP agents have no native store to reverse-engineer; their
+        // history is codeg's own ACP transcript. TRAE CLI takes the same route
+        // for message history, but AcpNativeParser enriches those turns from
+        // the precise token_usage_record rows in TRAE's native rollouts.
+        // Command Code's undocumented session tree remains ACP-only.
+        AgentType::Custom(_)
+        | AgentType::ZCode
+        | AgentType::Trae
+        | AgentType::CommandCode
+        | AgentType::MiniMaxCode => {
+            Box::new(acp_native::AcpNativeParser::for_env(agent_type, env))
+        }
+    };
+    Box::new(RouteSanitized(inner))
+}
+
+/// A parser wrapped the way [`build_agent_parser`] wraps every one, for tests
+/// that build their parser over a fixture directory.
+#[cfg(test)]
+pub(crate) fn sanitized(inner: impl AgentParser + 'static) -> Box<dyn AgentParser> {
+    Box::new(RouteSanitized(Box::new(inner)))
+}
+
+/// Removes Codeg's internal prompt frames — the `@agent` and `@assistant`
+/// routing frames and the assistant brief — from whatever a parser read back
+/// out of an agent's own transcript.
+///
+/// Only complete frames that re-render byte-for-byte are touched (see
+/// [`crate::acp::agent_mentions::strip_internal_frames`]), and the
+/// separator that opens one is scrubbed from every prompt at ingress, so
+/// look-alike user prose is never eligible. A BLOCK left with no content after
+/// stripping carried nothing but the frame and is dropped; a user turn left
+/// with no content at all was a transport-only record and is dropped rather
+/// than rendered as a phantom turn.
+///
+/// Not every agent hands the frame back the way it was sent: Antigravity's ACP
+/// server joins the prompt's text blocks with a space and replaces each
+/// separator with one, so its trajectory holds the frame's body with the
+/// separators gone. That form is matched on the body alone and removed here
+/// too — which is also why the [`sanitize_text`] trim below is not optional for
+/// those agents, since the spaces that replaced the separators survive the
+/// strip.
+///
+/// Dropping the emptied block — not just emptying it — is what keeps an
+/// `@`-mention turn from growing a blank band when it is reopened from history.
+/// `append_agent_routes` appends the frame as its OWN prompt block, and the
+/// parsers that keep one block per recorded text item (claude's
+/// `extract_user_content`, `acp_native`'s `prompt_blocks`) therefore hand back
+/// `[Text(prose), Text(frame)]`. Emptying the second in place left a zero-height
+/// text part that still takes a `space-y-4` gap in the bubble.
+///
+/// The Codex parser additionally handles route-only records STRUCTURALLY
+/// (canonical-channel coverage is positional and cannot be repaired after the
+/// fact); this pass is idempotent on top of that.
+struct RouteSanitized(Box<dyn AgentParser>);
+
+impl AgentParser for RouteSanitized {
+    fn list_conversations(&self) -> Result<Vec<ConversationSummary>, ParseError> {
+        let mut summaries = self.0.list_conversations()?;
+        for summary in &mut summaries {
+            sanitize_summary(summary);
+        }
+        Ok(summaries)
+    }
+
+    fn get_conversation(&self, conversation_id: &str) -> Result<ConversationDetail, ParseError> {
+        let mut detail = self.0.get_conversation(conversation_id)?;
+        let before = detail.turns.len();
+        detail.turns.retain_mut(|turn| {
+            if !matches!(turn.role, TurnRole::User) {
+                return true;
+            }
+            turn.blocks.retain_mut(|block| {
+                let ContentBlock::Text { text } = block else {
+                    return true;
+                };
+                // Only a block that actually HELD a frame is eligible to go: an
+                // empty text block a parser produced for some other reason is
+                // left exactly as it was found.
+                !(sanitize_text(text) && text.trim().is_empty())
+            });
+            // A turn whose ONLY content was the frame carried no user message.
+            !turn.blocks.iter().all(|block| match block {
+                ContentBlock::Text { text } => text.trim().is_empty(),
+                _ => false,
+            })
+        });
+        // Keep the count the sidebar shows in step with the turns actually
+        // rendered; the summary rides along inside the detail.
+        let dropped = (before - detail.turns.len()) as u32;
+        detail.summary.message_count = detail.summary.message_count.saturating_sub(dropped);
+        sanitize_summary(&mut detail.summary);
+        Ok(detail)
+    }
+}
+
+fn sanitize_summary(summary: &mut ConversationSummary) {
+    if let Some(title) = summary.title.as_mut() {
+        sanitize_text(title);
+        // Titles are capped by their parser BEFORE reaching here, so a frame can
+        // straddle the cut and survive `sanitize_text`, which only removes whole
+        // frames. Anything from a leftover marker on is truncated frame.
+        crate::acp::agent_mentions::cut_at_route_frame_marker(title);
+        if title.trim().is_empty() {
+            summary.title = None;
+        }
+    }
+}
+
+/// Strip every complete frame from `text`, reporting whether one was there.
+///
+/// The trailing trim only runs when a frame WAS removed, and it is load-bearing
+/// for the agents that join a prompt's text blocks into one record with a blank
+/// line: `strip_internal_frames` absorbs a single newline adjacent to the
+/// frame, so `"prose\n\n<frame>"` comes back as `"prose\n"` — which
+/// `whitespace-pre-wrap` paints as an extra blank line under the message. Text
+/// with no frame in it is never touched.
+fn sanitize_text(text: &mut String) -> bool {
+    // Single scan short-circuit: history with no frame pays one memchr per
+    // string, not a parse attempt.
+    if !crate::acp::agent_mentions::contains_internal_frames(text) {
+        return false;
+    }
+    *text = crate::acp::agent_mentions::strip_internal_frames(text);
+    text.truncate(text.trim_end().len());
+    true
+}
+
+/// Expand a leading `~` in a relocation env var, for the agents whose OWN
+/// resolver does that.
+///
+/// Handles a bare `~` and a `~/` — or, on Windows, `~\` — prefix.
+///
+/// A `~user` form is left VERBATIM, which is a deliberate divergence rather
+/// than a match: Python's `os.path.expanduser` does attempt a passwd lookup for
+/// it on unix, and Node's does not. Resolving another account's home here would
+/// mean duplicating that lookup to guess at a directory, so the value is passed
+/// through instead — and because a literal `~user/...` is not an absolute path,
+/// every consumer of this treats it as unresolvable and fails closed (the fs
+/// sandbox refuses the slot; the Antigravity settings sync refuses the write).
+/// The cost is that this rare form is unsupported, not that it resolves wrongly.
+///
+/// Deliberately NOT applied everywhere. Antigravity runs `os.path.expanduser`
+/// on `GEMINI_HOME` (`acp_server/paths.py`) and DeepSeek expands `DSH_HOME`
+/// (`dsh-home-paths`' `expandHomePath`), but Hermes's `get_hermes_home` is a
+/// bare `Path(val.strip())` and Codex, Claude and the rest are likewise
+/// verbatim. Expanding for one of those would point codeg at `$HOME/...` while
+/// the agent used a literal `~` directory — and, in the fs sandbox, would hand
+/// out `$HOME` as a writable root the user never selected.
+///
+/// Shared so the rule lives in ONE place: it is mirrored by
+/// `acp::file_system_runtime`'s root table (`EXPANDS_TILDE`), and a copy that
+/// drifts from the resolver it mirrors is exactly how the agent ends up unable
+/// to write its own directory.
+pub fn expand_home_prefix(value: &str, home_dir: Option<&PathBuf>) -> PathBuf {
+    let Some(home) = home_dir else {
+        return PathBuf::from(value);
+    };
+    if value == "~" {
+        return home.clone();
+    }
+    if let Some(rest) = value.strip_prefix("~/").or_else(|| value.strip_prefix("~\\")) {
+        return home.join(rest);
+    }
+    PathBuf::from(value)
 }
 
 /// Truncate a string to `max_len` characters, appending "..." if truncated.
@@ -416,6 +810,89 @@ pub fn title_from_user_text(text: &str) -> String {
     truncate_str(&fold_reference_links(text), 100)
 }
 
+/// Widen one projected prompt block into a rendered turn's block type.
+///
+/// The projection itself is [`crate::acp::types::project_user_prompt_block`] —
+/// the SINGLE rule shared with the live broadcast. This only carries the result
+/// across into `models::message`, keeping the image `uri` that the live wire
+/// type has nowhere to put but the frontend uses for an image's display name.
+pub fn user_turn_block(block: &crate::acp::types::PromptInputBlock) -> ContentBlock {
+    match crate::acp::types::project_user_prompt_block(block) {
+        crate::acp::types::UserTurnBlock::Text { text } => ContentBlock::Text { text },
+        crate::acp::types::UserTurnBlock::Image {
+            data,
+            mime_type,
+            uri,
+        } => ContentBlock::Image {
+            data,
+            mime_type,
+            uri,
+        },
+    }
+}
+
+/// Read one recorded ACP content block off disk and project it the way the
+/// live path projects the same prompt. `None` when the block has nothing to
+/// render — see [`crate::acp::types::prompt_block_from_wire`].
+///
+/// Every history parser that reconstructs a user turn from raw ACP content
+/// goes through here, so "how an attachment appears in a user message" is
+/// decided once rather than per agent.
+pub fn user_turn_block_from_wire(item: &serde_json::Value) -> Option<ContentBlock> {
+    crate::acp::types::prompt_block_from_wire(item).map(|b| user_turn_block(&b))
+}
+
+/// The record an agent wrote for a turn that FAILED, as the message closing
+/// its round: a `System` message holding the agent's account of why as one
+/// [`ContentBlock::TurnError`] — `None` when it gives no account.
+///
+/// A `System` turn, never an assistant one: the error is not the model's
+/// reply, so rendering it as one put it in the model's mouth (the reason the
+/// parsers used to drop these records), and every reply count —
+/// `syncTurnMetadata`'s alignment of live replies with parsed ones, the
+/// window's history baseline — counts assistant turns only, so a failure the
+/// live view and the transcript disagree about can never shift those.
+pub(crate) fn turn_error_message(
+    id: String,
+    message: &str,
+    timestamp: DateTime<Utc>,
+) -> Option<crate::models::UnifiedMessage> {
+    let message = message.trim();
+    if message.is_empty() {
+        return None;
+    }
+    Some(crate::models::UnifiedMessage {
+        id,
+        role: crate::models::MessageRole::System,
+        content: vec![ContentBlock::TurnError {
+            message: message.to_string(),
+        }],
+        timestamp,
+        usage: None,
+        duration_ms: None,
+        model: None,
+        completed_at: Some(timestamp),
+        agent_message_id: None,
+    })
+}
+
+/// How many of `turns` are somebody's message: all but a failed turn's line
+/// ([`turn_error_message`]), which reports a failure rather than saying
+/// anything — the list summaries never counted its record either.
+pub(crate) fn message_turn_count(turns: &[MessageTurn]) -> u32 {
+    turns
+        .iter()
+        .filter(|turn| {
+            !(matches!(turn.role, TurnRole::System)
+                && !turn.blocks.is_empty()
+                && turn
+                    .blocks
+                    .iter()
+                    .all(|block| matches!(block, ContentBlock::TurnError { .. })))
+        })
+        .count() as u32
+}
+
 /// Fill in `duration_ms` for assistant turns whose agent reports no timing of
 /// its own, by *tiling* the conversation timeline: a reply took as long as the
 /// span between the end of the previous activity and its own completion.
@@ -478,13 +955,20 @@ fn advance_duration_cursor(cursor: &mut Option<DateTime<Utc>>, candidate: DateTi
 }
 
 /// Aggregate turn-level usage and duration into a single `SessionStats`.
+///
+/// The two halves stand on their own: an agent that times its turns but reports
+/// no token split still gets its duration (mirrors `acp_native::session_stats`,
+/// which already had to hand-roll this). Token totals stay `None` in that case
+/// rather than becoming a row of zeros — the footer reads `None` as "this agent
+/// doesn't say" and omits the breakdown, where zeros would read as "it says the
+/// reply was free".
 pub fn compute_session_stats(turns: &[MessageTurn]) -> Option<SessionStats> {
     let mut total_in = 0u64;
     let mut total_out = 0u64;
     let mut total_cache_create = 0u64;
     let mut total_cache_read = 0u64;
     let mut total_duration = 0u64;
-    let mut has_data = false;
+    let mut has_usage = false;
 
     for turn in turns {
         if let Some(ref u) = turn.usage {
@@ -492,25 +976,26 @@ pub fn compute_session_stats(turns: &[MessageTurn]) -> Option<SessionStats> {
             total_out += u.output_tokens;
             total_cache_create += u.cache_creation_input_tokens;
             total_cache_read += u.cache_read_input_tokens;
-            has_data = true;
+            has_usage = true;
         }
         if let Some(d) = turn.duration_ms {
             total_duration += d;
         }
     }
 
-    if !has_data {
+    if !has_usage && total_duration == 0 {
         return None;
     }
 
     Some(SessionStats {
-        total_usage: Some(TurnUsage {
+        total_usage: has_usage.then_some(TurnUsage {
             input_tokens: total_in,
             output_tokens: total_out,
             cache_creation_input_tokens: total_cache_create,
             cache_read_input_tokens: total_cache_read,
         }),
-        total_tokens: Some(total_in + total_out + total_cache_create + total_cache_read),
+        total_tokens: has_usage
+            .then_some(total_in + total_out + total_cache_create + total_cache_read),
         total_duration_ms: total_duration,
         context_window_used_tokens: None,
         context_window_max_tokens: None,
@@ -541,6 +1026,42 @@ fn claude_one_million_id_regex() -> &'static Regex {
 /// [`parse_model_capacity_suffix`], which reads the bracketed number directly.
 fn is_claude_one_million_context_id(model: &str) -> bool {
     claude_one_million_id_regex().is_match(model)
+}
+
+/// `claude-<family>-<major>[-<minor>]`, then a snapshot date, a gateway
+/// suffix or nothing. The minor may be dotted (`claude-opus-4.7`), as gateways
+/// that rename Anthropic's ids write it. It is at most two digits, so a
+/// snapshot date such as `-20251001` is never read as one.
+fn claude_family_version_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"^claude-(opus|sonnet|haiku|fable|mythos)-(\d{1,2})(?:[-.](\d{1,2}))?(?:$|\D)")
+            .expect("valid claude family regex")
+    })
+}
+
+/// Whether `model` (lowercased, provider prefix stripped) is a Claude model
+/// whose DEFAULT window is 1M, with no opt-in. This follows the `native_1m`
+/// flag of the model catalog baked into Claude Code (CLI 2.1.293): every Fable
+/// and Mythos, Opus from 4.7, Sonnet from 5, and Haiku from 5.5. Opus 4.6 and
+/// Sonnet 4.5 / 4.6 reach 1M only through the beta lane, which an id spells as
+/// `-1m` ([`is_claude_one_million_context_id`]).
+fn is_claude_native_one_million_model(model: &str) -> bool {
+    let Some(captures) = claude_family_version_regex().captures(model) else {
+        return false;
+    };
+    let major: u32 = captures[2].parse().unwrap_or(0);
+    let minor: u32 = captures
+        .get(3)
+        .and_then(|m| m.as_str().parse().ok())
+        .unwrap_or(0);
+    match &captures[1] {
+        "fable" | "mythos" => true,
+        "opus" => (major, minor) >= (4, 7),
+        "sonnet" => major >= 5,
+        "haiku" => (major, minor) >= (5, 5),
+        _ => false,
+    }
 }
 
 fn parse_model_capacity_suffix(model: &str) -> Option<u64> {
@@ -583,21 +1104,44 @@ pub fn infer_context_window_max_tokens(model: Option<&str>) -> Option<u64> {
         .trim()
         .to_ascii_lowercase();
 
-    // Anthropic's default lane is 200K; the 1M lane is opt-in and shows up in
-    // the model id itself. Agents other than Claude Code record the id the way
-    // their backend named it, so the marker survives here — unlike Claude
-    // Code's own transcripts, where it is stripped (see
+    // The current Claude models are natively 1M (Opus from 4.7, Sonnet from 5,
+    // Haiku from 5.5, every Fable and Mythos). For the older ones the default
+    // lane is 200K, and the opt-in 1M lane shows up in the model id itself.
+    // Agents other than Claude Code record the id the way their backend named
+    // it, so the marker survives here — unlike Claude Code's own transcripts,
+    // where it is stripped (see
     // `claude::claude_context_window_max_tokens_for_model`).
     if normalized.starts_with("claude") {
-        if is_claude_one_million_context_id(&normalized) {
+        if is_claude_one_million_context_id(&normalized)
+            || is_claude_native_one_million_model(&normalized)
+        {
             return Some(1_000_000);
         }
         return Some(200_000);
     }
+    // gemini-cli's own `tokenLimit()` (packages/core/src/core/tokenLimits.ts,
+    // 0.60.0): 1 << 20 for every Gemini model, a separate 256K bucket for the
+    // Gemma family. The round 1_000_000 that used to sit here reported the
+    // gauge ~4.9% high.
     if normalized.starts_with("gemini") {
-        return Some(1_000_000);
+        return Some(1_048_576);
+    }
+    if normalized.starts_with("gemma") {
+        return Some(256_000);
     }
     if normalized.starts_with("kimi") {
+        // The k3 family is the 1M lane; k2.x and everything older is 256K.
+        // Source of truth is the models.dev catalog kimi-code bundles itself
+        // (`app/kosongConfig/builtInModelsDev.ts`): under Moonshot's own
+        // `moonshotai` provider, `kimi-k3` is 1048576 while `kimi-k2.6` /
+        // `kimi-k2.7-code` / `kimi-k2.7-code-highspeed` are all 262144, and
+        // across every third-party provider in that catalog the `kimi-k3*` ids
+        // cluster on 1048576 (a handful round it to 1000000). Only the HISTORY
+        // gauge lands here — a live Kimi session gets the real window from the
+        // agent's own `usage_update {used, size}` frame.
+        if normalized.starts_with("kimi-k3") {
+            return Some(1_048_576);
+        }
         return Some(262_144);
     }
     if normalized.starts_with("grok") {
@@ -642,7 +1186,21 @@ pub fn infer_context_window_max_tokens(model: Option<&str>) -> Option<u64> {
         "gpt-4" => Some(8_192),
         "o3" | "o3-mini" | "o1" => Some(200_000),
         _ => {
-            if normalized.starts_with("gpt-5") {
+            // 258K is the *effective* window OpenAI's own catalog advertises for
+            // this whole generation: `context_window: 272000` with
+            // `effective_context_window_percent: 95`. gpt-6 shares that profile
+            // byte for byte (see `resources/codex/bundled-catalog.json`), so it
+            // rides the same lane rather than falling through to `None` and
+            // leaving those sessions with no context meter at all. The
+            // exceptions are the 500K models at the same 95%: GPT-6.1 Terra
+            // (codex 0.165), and from codex 0.170 GPT-6.2 Sol and GPT-6.1 Sol
+            // (272K up to 0.166). GPT-6.2 Astra stays on 272K.
+            if normalized.starts_with("gpt-6.1-terra")
+                || normalized.starts_with("gpt-6.1-sol")
+                || normalized.starts_with("gpt-6.2-sol")
+            {
+                Some(475_000)
+            } else if normalized.starts_with("gpt-5") || normalized.starts_with("gpt-6") {
                 Some(258_000)
             } else if normalized.starts_with("gpt-4o")
                 || normalized.starts_with("gpt-4.1")
@@ -668,6 +1226,27 @@ pub fn latest_turn_total_usage_tokens(turns: &[MessageTurn]) -> Option<u64> {
                 .saturating_add(usage.output_tokens)
                 .saturating_add(usage.cache_creation_input_tokens)
                 .saturating_add(usage.cache_read_input_tokens)
+        })
+    })
+}
+
+/// Context-window occupancy for agents whose transcripts carry ANTHROPIC-SHAPED
+/// usage counters (`input_tokens` + `cache_creation_input_tokens` +
+/// `cache_read_input_tokens` are the whole prompt; `output_tokens` is the reply).
+///
+/// Deliberately NOT [`latest_turn_total_usage_tokens`], which adds
+/// `output_tokens` too: for this counter shape the reply is not resident in the
+/// prompt window that produced it, so including it over-reports the gauge by
+/// the last turn's output. Claude Code, Qoder and OpenCode all write this
+/// shape (OpenCode's `tokens.input` already has the cached part taken out).
+pub fn latest_turn_prompt_usage_tokens(turns: &[MessageTurn]) -> Option<u64> {
+    turns.iter().rev().find_map(|turn| {
+        turn.usage.as_ref().and_then(|usage| {
+            let used = usage
+                .input_tokens
+                .saturating_add(usage.cache_creation_input_tokens)
+                .saturating_add(usage.cache_read_input_tokens);
+            (used > 0).then_some(used)
         })
     })
 }
@@ -702,6 +1281,84 @@ pub fn merge_context_window_stats(
             context_window_usage_percent: usage_percent,
         }),
     }
+}
+
+/// Stamp a context-window occupancy the AGENT stated directly, overriding
+/// whatever [`merge_context_window_stats`] recomputed from used/max.
+///
+/// Most agents publish token counts and codeg derives the percentage. Qoder
+/// publishes the percentage (`usage.context_usage_ratio`) and, for its own
+/// hosted models, redacts the token counters to zero — so for those sessions
+/// the stated figure is the ONLY occupancy signal that exists, and
+/// `merge_context_window_stats` has nothing to divide. It wins even when the
+/// counters ARE present, because a recomputation would divide by a window this
+/// parser had to back-derive or guess.
+///
+/// `None` leaves `stats` untouched. A non-finite value is dropped and an
+/// out-of-range one is clamped rather than dropped: a gauge is drawn from this,
+/// and "no ring" is a worse answer than "pinned at 100%".
+pub fn with_reported_context_percent(
+    stats: Option<SessionStats>,
+    percent: Option<f64>,
+) -> Option<SessionStats> {
+    let Some(percent) = percent.filter(|p| p.is_finite()) else {
+        return stats;
+    };
+    let percent = percent.clamp(0.0, 100.0);
+    match stats {
+        Some(mut s) => {
+            s.context_window_usage_percent = Some(percent);
+            Some(s)
+        }
+        None => Some(SessionStats {
+            total_usage: None,
+            total_tokens: None,
+            total_duration_ms: 0,
+            context_window_used_tokens: None,
+            context_window_max_tokens: None,
+            context_window_usage_percent: Some(percent),
+        }),
+    }
+}
+
+/// `_meta` key claiming that a context-compaction call's result IS the summary
+/// the agent kept of the history it dropped.
+///
+/// The live reader stamps it on every call it translates from the ACP
+/// compaction lifecycle (`acp::connection::session_compaction_event`); a history
+/// parser stamps it through [`attach_compaction_summary`] on a divider whose
+/// summary its transcript still holds. Codeg-namespaced (like
+/// `codeg.delegation`) rather than nested in `contextCompaction`, whose members
+/// are the adapters' reserved vocabulary. The frontend twin is
+/// `COMPACTION_SUMMARY_META_KEY` in `src/lib/context-compaction.ts`, which shows
+/// a compaction call's output as its summary only under this claim.
+pub(crate) const COMPACTION_SUMMARY_META_KEY: &str = "codeg.compactionSummary";
+
+/// Hand a synthesized compaction divider — the `_meta.contextCompaction`
+/// ToolUse and its paired ToolResult that every parser emits for a compaction —
+/// the summary its agent retained, so the reopened divider opens onto the same
+/// "Summary" the live one does: the result carries the text, the call carries
+/// the claim.
+///
+/// Returns `false`, touching nothing, unless `blocks` is such a pair still
+/// waiting for its summary; a divider takes exactly one.
+pub(crate) fn attach_compaction_summary(blocks: &mut [ContentBlock], summary: String) -> bool {
+    let [ContentBlock::ToolUse {
+        meta: Some(serde_json::Value::Object(meta)),
+        ..
+    }, ContentBlock::ToolResult { output_preview, .. }] = blocks
+    else {
+        return false;
+    };
+    if !meta.contains_key("contextCompaction") || output_preview.is_some() {
+        return false;
+    }
+    meta.insert(
+        COMPACTION_SUMMARY_META_KEY.to_string(),
+        serde_json::Value::Bool(true),
+    );
+    *output_preview = Some(summary);
+    true
 }
 
 /// Relocate orphaned tool_result blocks to the turn that contains their matching tool_use.
@@ -1181,6 +1838,416 @@ pub fn path_eq_for_matching(left: &str, right: &str) -> bool {
 }
 
 #[cfg(test)]
+mod route_sanitizer_tests {
+
+    use super::{AgentParser, ParseError, RouteSanitized};
+    use crate::acp::agent_mentions::append_agent_routes;
+    use crate::acp::types::PromptInputBlock;
+    use crate::models::{
+        AgentType, ContentBlock, ConversationDetail, ConversationSummary, MessageTurn, TurnRole,
+    };
+
+    /// The exact bytes `append_agent_routes` puts on the wire — the same thing
+    /// every MCP-capable agent then persists into its own transcript.
+    fn routing_frame(agent_wire: &str) -> String {
+        let mut blocks = vec![PromptInputBlock::Text {
+            text: format!("ask [@A](codeg://agent/{agent_wire}) to help"),
+        }];
+        append_agent_routes(&mut blocks, true);
+        match &blocks[1] {
+            PromptInputBlock::Text { text } => text.clone(),
+            _ => unreachable!("the routing block is text"),
+        }
+    }
+
+    fn turn(role: TurnRole, text: &str) -> MessageTurn {
+        MessageTurn {
+            id: format!("{role:?}-{}", text.len()),
+            role,
+            blocks: vec![ContentBlock::Text { text: text.into() }],
+            timestamp: "2026-03-01T10:00:00Z".parse().expect("valid timestamp"),
+            usage: None,
+            duration_ms: None,
+            model: None,
+            completed_at: None,
+        agent_message_id: None,
+        }
+    }
+
+    fn summary(title: Option<&str>, message_count: u32) -> ConversationSummary {
+        ConversationSummary {
+            id: "conv-1".into(),
+            agent_type: AgentType::ClaudeCode,
+            folder_path: None,
+            folder_name: None,
+            title: title.map(str::to_string),
+            started_at: "2026-03-01T10:00:00Z".parse().expect("valid timestamp"),
+            ended_at: None,
+            message_count,
+            model: None,
+            git_branch: None,
+            parent_id: None,
+            parent_tool_use_id: None,
+            delegation_call_id: None,
+        }
+    }
+
+    struct Fixture {
+        summary: ConversationSummary,
+        turns: Vec<MessageTurn>,
+    }
+
+    impl AgentParser for Fixture {
+        fn list_conversations(&self) -> Result<Vec<ConversationSummary>, ParseError> {
+            Ok(vec![self.summary.clone()])
+        }
+        fn get_conversation(&self, _id: &str) -> Result<ConversationDetail, ParseError> {
+            Ok(ConversationDetail {
+                summary: self.summary.clone(),
+                turns: self.turns.clone(),
+                session_stats: None,
+                transcript_watermark: None,
+            })
+        }
+    }
+
+    fn sanitized(fixture: Fixture) -> ConversationDetail {
+        RouteSanitized(Box::new(fixture))
+            .get_conversation("conv-1")
+            .expect("fixture parses")
+    }
+
+    /// A title is capped by its parser BEFORE it reaches the decorator, and the
+    /// cap has no idea where the frame starts. A short first prompt puts the cut
+    /// inside the frame, leaving an opening separator and half a descriptor with
+    /// no closing one — which the whole-frame strip pass will not touch.
+    #[test]
+    fn a_title_truncated_mid_frame_leaks_no_route_metadata() {
+        let frame = routing_frame("antigravity");
+        // Exactly what `acp_native::first_prompt_title` builds: the prompt's
+        // text blocks joined with no separator, then capped at 80.
+        let truncated = super::truncate_str(format!("hi{frame}").trim(), 80);
+        assert!(
+            truncated.contains('\u{001e}')
+                && !crate::acp::agent_mentions::contains_internal_frames(&truncated),
+            "fixture must straddle the frame, or it proves nothing"
+        );
+
+        let fixture = || Fixture {
+            summary: summary(Some(&truncated), 1),
+            turns: vec![turn(TurnRole::User, &format!("hi\n{frame}"))],
+        };
+        assert_eq!(sanitized(fixture()).summary.title.as_deref(), Some("hi"));
+        // The sidebar reads the list path, which never sees the turns.
+        let listed = RouteSanitized(Box::new(fixture()))
+            .list_conversations()
+            .expect("fixture parses");
+        assert_eq!(listed[0].title.as_deref(), Some("hi"));
+    }
+
+    #[test]
+    fn frames_are_stripped_from_any_agents_history_not_just_codex() {
+        // The whole point of the shared decorator: this fixture stands in for
+        // claude / gemini / opencode / … , none of which know about the frame.
+        let frame = routing_frame("antigravity");
+        let visible = "ask [@A](codeg://agent/antigravity) to help";
+        let detail = sanitized(Fixture {
+            summary: summary(Some(&format!("{visible}\n{frame}")), 2),
+            turns: vec![
+                turn(TurnRole::User, &format!("{visible}\n{frame}")),
+                turn(TurnRole::Assistant, "on it"),
+            ],
+        });
+
+        assert_eq!(detail.summary.title.as_deref(), Some(visible));
+        assert_eq!(detail.turns.len(), 2);
+        assert!(matches!(
+            detail.turns[0].blocks.as_slice(),
+            [ContentBlock::Text { text }] if text == visible
+        ));
+        assert_eq!(detail.summary.message_count, 2);
+    }
+
+    /// The shape `append_agent_routes` ACTUALLY produces: the frame is its own
+    /// prompt block, so every parser that keeps one block per recorded text item
+    /// (claude's `extract_user_content`, `acp_native`'s `prompt_blocks`) hands
+    /// back two. Emptying the second in place used to leave a zero-height text
+    /// part that the transcript's `space-y-4` stack still gave a full gap — the
+    /// blank band under an `@`-mention bubble reopened from history.
+    #[test]
+    fn a_frame_in_its_own_block_leaves_no_empty_block_behind() {
+        let visible = "ask [@A](codeg://agent/claude_code) to help";
+        let mut user = turn(TurnRole::User, visible);
+        user.blocks.push(ContentBlock::Text {
+            text: routing_frame("claude_code"),
+        });
+        let detail = sanitized(Fixture {
+            summary: summary(Some(visible), 2),
+            turns: vec![user, turn(TurnRole::Assistant, "on it")],
+        });
+
+        assert_eq!(detail.turns.len(), 2);
+        assert!(matches!(
+            detail.turns[0].blocks.as_slice(),
+            [ContentBlock::Text { text }] if text == visible
+        ));
+        assert_eq!(detail.summary.message_count, 2);
+    }
+
+    /// An agent that joins the prompt's text blocks with a BLANK line leaves the
+    /// strip one newline to spare (it absorbs a single adjacent one), and
+    /// `whitespace-pre-wrap` paints the survivor as an empty line under the
+    /// message — same symptom, different transcript shape.
+    #[test]
+    fn a_blank_line_before_the_frame_is_not_left_behind() {
+        let visible = "ask [@A](codeg://agent/codex) to help";
+        let frame = routing_frame("codex");
+        let detail = sanitized(Fixture {
+            summary: summary(Some(visible), 1),
+            turns: vec![turn(TurnRole::User, &format!("{visible}\n\n{frame}"))],
+        });
+
+        assert!(matches!(
+            detail.turns[0].blocks.as_slice(),
+            [ContentBlock::Text { text }] if text == visible
+        ));
+    }
+
+    /// Antigravity does not persist the prompt verbatim: its ACP server joins
+    /// the text blocks with a space and replaces each separator with one, so the
+    /// trajectory holds ONE block of prose with the frame trailing it and no
+    /// separator anywhere. The whole frame used to render inside the user's
+    /// bubble when such a session was reopened — and, sliced by the title cap,
+    /// inside the sidebar title as well.
+    #[test]
+    fn a_frame_an_agent_stored_without_separators_leaves_neither_prose_nor_title() {
+        let visible = "ask [@A](codeg://agent/antigravity) to help";
+        let frame = routing_frame("antigravity");
+        // ` ` block join + each separator rewritten to ` `.
+        let persisted = format!("{visible} {}", frame.replace('\u{001e}', " "));
+        assert!(!persisted.contains('\u{001e}'), "fixture must lose its separators");
+
+        // The title the parser hands over: folded, then capped mid-frame — the
+        // cap is 100 chars and the body alone runs past 500.
+        let capped = super::title_from_user_text(&persisted);
+        assert!(
+            capped.contains("codeg_internal_agent_routes"),
+            "fixture must straddle the frame, or the cut proves nothing"
+        );
+        let detail = sanitized(Fixture {
+            summary: summary(Some(&capped), 1),
+            turns: vec![turn(TurnRole::User, &persisted)],
+        });
+
+        assert!(matches!(
+            detail.turns[0].blocks.as_slice(),
+            [ContentBlock::Text { text }] if text == visible
+        ));
+        assert_eq!(detail.summary.title.as_deref(), Some("ask @A to help"));
+    }
+
+    /// The 100-char cap can land INSIDE the descriptor prefix rather than
+    /// before it, for any first prompt whose prose length falls in a 37-wide
+    /// band. A separator can never be halved that way, so this shape only
+    /// exists for the agents that rewrite the separators away.
+    #[test]
+    fn a_title_capped_halfway_through_the_marker_still_leaks_nothing() {
+        let prose = format!("{} ask [@A](codeg://agent/antigravity) to help", "x".repeat(66));
+        let frame = routing_frame("antigravity");
+        let persisted = format!("{prose} {}", frame.replace('\u{001e}', " "));
+
+        let capped = super::title_from_user_text(&persisted);
+        let marker = "{\"kind\":\"codeg_internal_agent_routes\"";
+        assert!(
+            capped.contains("{\"kind\":\"codeg") && !capped.contains(marker),
+            "the cap must land INSIDE the marker, or this repeats the previous \
+             test — got {capped:?}"
+        );
+
+        let detail = sanitized(Fixture {
+            summary: summary(Some(&capped), 1),
+            turns: vec![turn(TurnRole::User, &persisted)],
+        });
+        assert_eq!(
+            detail.summary.title.as_deref(),
+            Some(format!("{} ask @A to help", "x".repeat(66)).as_str())
+        );
+    }
+
+    #[test]
+    fn an_empty_block_the_parser_produced_itself_is_left_in_place() {
+        // The drop is scoped to blocks that HELD a frame. An empty text block
+        // from anywhere else is the parser's business, not this decorator's, and
+        // silently pruning it would hide a bug rather than fix one.
+        let mut user = turn(TurnRole::User, "real prompt");
+        user.blocks.push(ContentBlock::Text {
+            text: String::new(),
+        });
+        let detail = sanitized(Fixture {
+            summary: summary(Some("real prompt"), 1),
+            turns: vec![user],
+        });
+
+        assert_eq!(detail.turns[0].blocks.len(), 2);
+    }
+
+    #[test]
+    fn a_turn_whose_only_prose_was_the_frame_keeps_its_image() {
+        // Dropping the emptied block must not take the turn with it: an image
+        // pasted alongside an `@`-mention is the whole message.
+        let mut user = turn(TurnRole::User, &routing_frame("codex"));
+        user.blocks.push(ContentBlock::Image {
+            data: "QUJD".into(),
+            mime_type: "image/png".into(),
+            uri: None,
+        });
+        let detail = sanitized(Fixture {
+            summary: summary(None, 1),
+            turns: vec![user],
+        });
+
+        assert_eq!(detail.turns.len(), 1);
+        assert!(matches!(
+            detail.turns[0].blocks.as_slice(),
+            [ContentBlock::Image { .. }]
+        ));
+        assert_eq!(detail.summary.message_count, 1);
+    }
+
+    #[test]
+    fn a_route_only_user_turn_is_dropped_and_uncounted() {
+        // Some adapters persist each ACP text block as its own record; the
+        // transport-only one must not render as a phantom turn.
+        let detail = sanitized(Fixture {
+            summary: summary(Some("real prompt"), 3),
+            turns: vec![
+                turn(TurnRole::User, "real prompt"),
+                turn(TurnRole::User, &routing_frame("codex")),
+                turn(TurnRole::Assistant, "done"),
+            ],
+        });
+
+        assert_eq!(detail.turns.len(), 2);
+        assert_eq!(detail.summary.message_count, 2);
+        assert!(matches!(
+            detail.turns[0].blocks.as_slice(),
+            [ContentBlock::Text { text }] if text == "real prompt"
+        ));
+    }
+
+    /// A delegated assistant child's first prompt is the task plus the brief
+    /// frame. History shows the task alone — in its own block or joined into
+    /// the task's — the title carries no instruction text, and a record that
+    /// held only the brief is neither rendered nor counted.
+    #[test]
+    fn an_assistant_brief_never_surfaces_in_history() {
+        let task = "Review the diff in /repo and report findings";
+        let brief = crate::acp::agent_mentions::render_assistant_brief(
+            "Reviewer",
+            "Cite file and line.\n- Be terse",
+        )
+        .expect("brief");
+
+        let mut own_block = turn(TurnRole::User, task);
+        own_block.blocks.push(ContentBlock::Text {
+            text: brief.clone(),
+        });
+        let joined = turn(TurnRole::User, &format!("{task}\n\n{brief}"));
+        for user in [own_block, joined] {
+            let detail = sanitized(Fixture {
+                summary: summary(Some(&format!("{task} {brief}")[..120]), 2),
+                turns: vec![user, turn(TurnRole::Assistant, "found two issues")],
+            });
+            assert_eq!(detail.turns.len(), 2);
+            assert!(matches!(
+                detail.turns[0].blocks.as_slice(),
+                [ContentBlock::Text { text }] if text == task
+            ));
+            assert_eq!(detail.summary.message_count, 2);
+            let title = detail.summary.title.expect("title kept");
+            assert!(title.starts_with("Review the diff"));
+            assert!(!title.contains("codeg_internal") && !title.contains('\u{1e}'));
+        }
+
+        let detail = sanitized(Fixture {
+            summary: summary(Some(task), 3),
+            turns: vec![
+                turn(TurnRole::User, task),
+                turn(TurnRole::User, &brief),
+                turn(TurnRole::Assistant, "done"),
+            ],
+        });
+        assert_eq!(detail.turns.len(), 2, "the brief-only record is dropped");
+        assert_eq!(detail.summary.message_count, 2);
+    }
+
+    #[test]
+    fn assistant_turns_and_look_alike_user_prose_are_left_alone() {
+        // Only a complete frame that re-renders byte-for-byte is removed, so
+        // prose that merely resembles one stays verbatim, on both roles. The
+        // separator is scrubbed from every prompt at ingress, so prose a user
+        // can actually type is the tag text WITHOUT it.
+        let look_alike =
+            "see <codeg_internal_agent_routes version=\"2\">note</codeg_internal_agent_routes>";
+        // Each frame carries its own nonce, so capture ONE and compare to it.
+        let echoed = routing_frame("codex");
+        let detail = sanitized(Fixture {
+            summary: summary(Some(look_alike), 2),
+            turns: vec![
+                turn(TurnRole::User, look_alike),
+                turn(TurnRole::Assistant, &echoed),
+            ],
+        });
+
+        assert_eq!(detail.summary.title.as_deref(), Some(look_alike));
+        assert_eq!(detail.turns.len(), 2);
+        assert!(matches!(
+            detail.turns[0].blocks.as_slice(),
+            [ContentBlock::Text { text }] if text == look_alike
+        ));
+        assert!(matches!(
+            detail.turns[1].blocks.as_slice(),
+            [ContentBlock::Text { text }] if text == &echoed
+        ));
+    }
+
+    /// The cut is deliberately asymmetric, so pin both halves.
+    #[test]
+    fn only_a_title_is_cut_at_a_dangling_separator() {
+        // A parser caps a title but never a turn's text, so a lone separator is
+        // evidence of a sliced frame in the first case and not in the second.
+        let dangling = "see \u{001e}<codeg_internal_agent_routes version=\"2\">no";
+        let detail = sanitized(Fixture {
+            summary: summary(Some(dangling), 1),
+            turns: vec![turn(TurnRole::User, dangling)],
+        });
+
+        assert_eq!(detail.summary.title.as_deref(), Some("see"));
+        assert!(matches!(
+            detail.turns[0].blocks.as_slice(),
+            [ContentBlock::Text { text }] if text == dangling
+        ));
+    }
+
+    #[test]
+    fn a_title_that_was_only_a_frame_falls_back_to_none() {
+        let detail = sanitized(Fixture {
+            summary: summary(Some(&routing_frame("codex")), 1),
+            turns: vec![turn(TurnRole::Assistant, "hi")],
+        });
+        assert_eq!(detail.summary.title, None);
+
+        let listed = RouteSanitized(Box::new(Fixture {
+            summary: summary(Some(&routing_frame("codex")), 1),
+            turns: Vec::new(),
+        }))
+        .list_conversations()
+        .expect("fixture lists");
+        assert_eq!(listed[0].title, None);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use chrono::Utc;
 
@@ -1206,6 +2273,7 @@ mod tests {
             duration_ms: None,
             model: None,
             completed_at: Some(base + chrono::Duration::seconds(end_s)),
+        agent_message_id: None,
         }
     }
 
@@ -1418,9 +2486,14 @@ mod tests {
             infer_context_window_max_tokens(Some("claude-sonnet-4-6")),
             Some(200_000)
         );
+        // gemini-cli's `tokenLimit()` is 1 << 20, not a round million.
         assert_eq!(
             infer_context_window_max_tokens(Some("gemini-2.5-pro")),
-            Some(1_000_000)
+            Some(1_048_576)
+        );
+        assert_eq!(
+            infer_context_window_max_tokens(Some("gemma-4-31b-it")),
+            Some(256_000)
         );
         assert_eq!(
             infer_context_window_max_tokens(Some("claude-sonnet-4-6 [1.5M]")),
@@ -1441,6 +2514,50 @@ mod tests {
             infer_context_window_max_tokens(Some("claude-opus-4-6-10m-preview")),
             Some(200_000)
         );
+        // Natively 1M models need no marker: Claude Code's baked catalog
+        // (CLI 2.1.293) flags Opus from 4.7, Sonnet from 5, Haiku from 5.5 and
+        // every Fable and Mythos as `native_1m` (CLI 2.1.321 adds Fable 5.2 and
+        // Mythos 5.2, both `native_1m`).
+        for model in [
+            "claude-haiku-5-5",
+            "claude-sonnet-5",
+            "claude-sonnet-5-5",
+            "claude-sonnet-5-20260101",
+            "claude-opus-4-7",
+            "claude-opus-4-8",
+            "claude-opus-5",
+            "claude-opus-5-5",
+            "claude-fable-5",
+            "claude-fable-5-1",
+            "claude-fable-5-2",
+            "claude-mythos-5-1",
+            "claude-mythos-5-2",
+            "anthropic/claude-opus-4.7",
+            "claude-opus-4-7@20260101",
+        ] {
+            assert_eq!(
+                infer_context_window_max_tokens(Some(model)),
+                Some(1_000_000),
+                "{model}"
+            );
+        }
+        // The older models stay on the 200K default lane, snapshot dates
+        // included (`-20251001` is not a minor version).
+        for model in [
+            "claude-haiku-4-5",
+            "claude-haiku-4-5-20251001",
+            "claude-sonnet-4-5",
+            "claude-opus-4-6",
+            "claude-opus-4-20250514",
+            "claude-3-7-sonnet-20250219",
+            "claude-mythos-preview",
+        ] {
+            assert_eq!(
+                infer_context_window_max_tokens(Some(model)),
+                Some(200_000),
+                "{model}"
+            );
+        }
         // Grok context windows per x.ai docs: grok-4.5 = 500K, grok-4.3 /
         // grok-4.20 = 1M, the coding/build models = 256K (grok-code-fast-1
         // despite "fast"), the general -fast variants = 2M, and any unknown
@@ -1479,6 +2596,67 @@ mod tests {
             infer_context_window_max_tokens(Some("grok-7-experimental")),
             Some(256_000)
         );
+        // gpt-6 shares gpt-5's 272K/95% profile, so it takes the same effective
+        // window instead of falling through to `None`.
+        assert_eq!(
+            infer_context_window_max_tokens(Some("gpt-6-astra")),
+            Some(258_000)
+        );
+        assert_eq!(
+            infer_context_window_max_tokens(Some("gpt-5.6-sol")),
+            Some(258_000)
+        );
+        // …bar GPT-6.1 Terra, whose catalog window is 500K at the same 95%.
+        assert_eq!(
+            infer_context_window_max_tokens(Some("gpt-6.1-terra")),
+            Some(475_000)
+        );
+        assert_eq!(
+            infer_context_window_max_tokens(Some("openai/gpt-6.1-terra")),
+            Some(475_000)
+        );
+        // codex 0.170 moves GPT-6.1 Sol to 500K and ships GPT-6.2 Sol there;
+        // GPT-6.2 Astra keeps the 272K profile.
+        assert_eq!(
+            infer_context_window_max_tokens(Some("gpt-6.1-sol")),
+            Some(475_000)
+        );
+        assert_eq!(
+            infer_context_window_max_tokens(Some("gpt-6.2-sol")),
+            Some(475_000)
+        );
+        assert_eq!(
+            infer_context_window_max_tokens(Some("gpt-6.2-astra")),
+            Some(258_000)
+        );
+        // Kimi's k3 family is the 1M lane; k2.x stays on 256K. The provider
+        // prefix and the `:tag` suffix are stripped before matching, and the
+        // whole id is lowercased, so the catalog's `Kimi-K3-TEE` /
+        // `moonshotai/kimi-k3` / `kimi-k3:fast` spellings all land on 1M.
+        assert_eq!(
+            infer_context_window_max_tokens(Some("kimi-k3")),
+            Some(1_048_576)
+        );
+        assert_eq!(
+            infer_context_window_max_tokens(Some("moonshotai/kimi-k3")),
+            Some(1_048_576)
+        );
+        assert_eq!(
+            infer_context_window_max_tokens(Some("kimi-k3:fast")),
+            Some(1_048_576)
+        );
+        assert_eq!(
+            infer_context_window_max_tokens(Some("Kimi-K3-TEE")),
+            Some(1_048_576)
+        );
+        assert_eq!(
+            infer_context_window_max_tokens(Some("kimi-k2.7-code")),
+            Some(262_144)
+        );
+        assert_eq!(
+            infer_context_window_max_tokens(Some("kimi-k2.6")),
+            Some(262_144)
+        );
         assert_eq!(infer_context_window_max_tokens(Some("unknown-model")), None);
     }
 
@@ -1500,6 +2678,7 @@ mod tests {
                 duration_ms: None,
                 model: None,
                 completed_at: None,
+            agent_message_id: None,
             },
             MessageTurn {
                 id: "turn-1".to_string(),
@@ -1515,6 +2694,7 @@ mod tests {
                 duration_ms: None,
                 model: None,
                 completed_at: None,
+            agent_message_id: None,
             },
         ];
 

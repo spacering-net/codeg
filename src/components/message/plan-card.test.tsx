@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import { describe, expect, it } from "vitest"
 
-import { PlanCard, PlanEntriesList } from "./plan-card"
+import { PlanEntriesList } from "./plan-card"
 import enMessages from "@/i18n/messages/en.json"
 import type { PlanEntryInfo } from "@/lib/types"
 
@@ -20,34 +20,33 @@ const sampleEntries: PlanEntryInfo[] = [
   { content: "Third step", priority: "low", status: "pending" },
 ]
 
-describe("PlanCard", () => {
-  it("renders nothing when there are no entries", () => {
-    const { container } = renderWithIntl(<PlanCard entries={[]} />)
-    expect(container.firstChild).toBeNull()
-  })
-
-  it("renders the title, completed/total progress, and every entry", () => {
-    renderWithIntl(<PlanCard entries={sampleEntries} />)
-    expect(screen.getByText("Agent Plan")).toBeInTheDocument()
-    expect(screen.getByText("1/3")).toBeInTheDocument()
-    expect(screen.getByText("First step")).toBeInTheDocument()
-    expect(screen.getByText("Second step")).toBeInTheDocument()
-    expect(screen.getByText("Third step")).toBeInTheDocument()
-  })
-
-  it("strikes through completed entries only", () => {
-    renderWithIntl(<PlanCard entries={sampleEntries} />)
-    expect(screen.getByText("First step").className).toContain("line-through")
-    expect(screen.getByText("Second step").className).not.toContain(
-      "line-through"
-    )
-  })
-})
-
 describe("PlanEntriesList", () => {
   it("renders nothing when there are no entries", () => {
     const { container } = renderWithIntl(<PlanEntriesList entries={[]} />)
     expect(container.firstChild).toBeNull()
+  })
+
+  it("greys out finished steps and sets the current one in ink", () => {
+    renderWithIntl(<PlanEntriesList entries={sampleEntries} />)
+    expect(screen.getByText("First step").className).toContain(
+      "text-muted-foreground"
+    )
+    expect(screen.getByText("Second step").className).toContain(
+      "font-medium text-foreground"
+    )
+    expect(screen.getByText("Third step").className).not.toContain(
+      "text-muted-foreground"
+    )
+  })
+
+  it("says each step's status to assistive tech", () => {
+    renderWithIntl(<PlanEntriesList entries={sampleEntries} />)
+    const items = screen.getAllByRole("listitem")
+    expect(items.map((item) => item.textContent)).toEqual([
+      "CompletedFirst stepHigh",
+      "In ProgressSecond stepMedium",
+      "PendingThird stepLow",
+    ])
   })
 
   it("renders each entry's content and priority label", () => {
@@ -56,5 +55,19 @@ describe("PlanEntriesList", () => {
     expect(screen.getByText("High")).toBeInTheDocument()
     expect(screen.getByText("Medium")).toBeInTheDocument()
     expect(screen.getByText("Low")).toBeInTheDocument()
+  })
+
+  it("leaves the priority out when every step shares it", () => {
+    // Agents that rank nothing get "medium" on every step.
+    renderWithIntl(
+      <PlanEntriesList
+        entries={sampleEntries.map((entry) => ({
+          ...entry,
+          priority: "medium",
+        }))}
+      />
+    )
+    expect(screen.getByText("First step")).toBeInTheDocument()
+    expect(screen.queryByText("Medium")).toBeNull()
   })
 })

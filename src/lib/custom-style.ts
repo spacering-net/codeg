@@ -464,7 +464,12 @@ function getColorContext(): CanvasRenderingContext2D | null {
   try {
     // 归一到 null：jsdom 的未实现桩返回 undefined，而 undefined 正是「尚未求值」
     // 的哨兵值，不归一的话缓存永远不命中。
-    cachedCtx = document.createElement("canvas").getContext("2d") ?? null
+    // willReadFrequently：下方 readPixelHex 要反复 getImageData 读回 1px，加这个提示
+    // 让浏览器把画布留在 CPU 侧，省掉每次读回的 GPU 同步（也消掉 Chrome 的相关告警）。
+    cachedCtx =
+      document
+        .createElement("canvas")
+        .getContext("2d", { willReadFrequently: true }) ?? null
   } catch {
     cachedCtx = null
   }
@@ -472,11 +477,45 @@ function getColorContext(): CanvasRenderingContext2D | null {
 }
 
 /**
- * 把任意 CSS 颜色（`oklch()` / `hsl()` / 具名色 / hex）转成 `#rrggbb`。
+ * 把一个**已确认合法**的 CSS 颜色画进 1px 画布再读回像素，转成 `#rrggbb`。
  *
- * 用 canvas 的 `fillStyle` 做转换：赋一个非法值时 `fillStyle` 保持不变，所以用
+ * 用于 `fillStyle` 回读保持原语法、拿不到十六进制的场合：浏览器对现代色彩语法
+ * （本仓库 token 用的 `oklch()`、`color-mix()` 出来的 `color(srgb …)`）只做规范化，
+ * 不会降级成 `#rrggbb`，只有走一遍光栅化才能取到 sRGB 值。
+ *
+ * 半透明一律判失败：`getImageData` 对半透明像素给的是去预乘后的近似值、会失真，
+ * 而调用方（色板 / Monaco / 终端主题）要的都是不透明底色。
+ */
+function readPixelHex(
+  ctx: CanvasRenderingContext2D,
+  value: string
+): string | null {
+  // copy：直接覆盖上一次留下的像素，结果不受画布历史内容影响。画布是本模块私有的，
+  // 但仍在 finally 里还原合成模式，免得中途抛错把 "copy" 留给后续调用方。
+  const prevOp = ctx.globalCompositeOperation
+  try {
+    ctx.globalCompositeOperation = "copy"
+    ctx.fillStyle = value
+    ctx.fillRect(0, 0, 1, 1)
+    const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data
+    if (a !== 255) return null
+    return `#${[r, g, b].map((c) => c.toString(16).padStart(2, "0")).join("")}`
+  } catch {
+    // getImageData 在画布被跨源污染时会抛（这里的画布不会，但保持与本文件其余
+    // canvas 调用一致的兜底），读不到就让调用方回落到自己的预设值。
+    return null
+  } finally {
+    ctx.globalCompositeOperation = prevOp
+  }
+}
+
+/**
+ * 把任意 CSS 颜色（`oklch()` / `color(srgb …)` / `hsl()` / 具名色 / hex）转成 `#rrggbb`。
+ *
+ * 用 canvas 的 `fillStyle` 做合法性判定：赋一个非法值时 `fillStyle` 保持不变，所以用
  * 两个不同的哨兵各试一次，结果不一致即判定为非法 —— 否则黑色输入会被误判成
- * 「解析失败」。无法转换时返回 null，调用方回落到预设的硬编码值。
+ * 「解析失败」。合法但回读不是十六进制的（现代色彩语法会保持原样）再走一次
+ * `readPixelHex` 光栅化取色。半透明与无法转换时返回 null，调用方回落到预设的硬编码值。
  */
 export function toHexColor(value: string): string | null {
   const v = value?.trim()
@@ -499,7 +538,8 @@ export function toHexColor(value: string): string | null {
     ctx.fillStyle = v
     const second = ctx.fillStyle
     if (typeof first !== "string" || first !== second) return null
-    return /^#[0-9a-f]{6}$/i.test(first) ? first.toLowerCase() : null
+    if (/^#[0-9a-f]{6}$/i.test(first)) return first.toLowerCase()
+    return readPixelHex(ctx, first)
   } catch {
     return null
   }

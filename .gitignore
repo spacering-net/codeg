@@ -21,6 +21,10 @@ next-env.d.ts
 # Monaco editor local files (copied from node_modules)
 public/vs
 
+# PDF.js runtime files: worker, CMaps, standard fonts, wasm decoders, ICC
+# profiles (copied from node_modules by postinstall; see src/lib/pdfjs.ts)
+public/pdfjs
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -55,3 +59,9 @@ src-tauri/binaries/
 
 # pnpm local store (pnpm 11+)
 .pnpm-store/
+
+# `rustc foo.rs` with no -o writes its binary here. Scratch compiles are how
+# you check a borrow or a lifetime question in isolation, and the leftover
+# executable then sits untracked in the repo root — which is enough to fail a
+# work task's "worktree is clean" check at delivery.
+/rust_out

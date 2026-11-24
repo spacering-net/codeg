@@ -1,198 +1,203 @@
-# Hypothesis Quality Criteria
+# Human Review Criteria for Candidate Hypotheses
 
-## Framework for Evaluating Scientific Hypotheses
+## No automatic quality score
 
-Use these criteria to assess the quality and rigor of generated hypotheses. A robust hypothesis should score well across multiple dimensions.
+These criteria structure expert review. Do not sum them, assign weights, calculate a “quality score,” rank candidates automatically, or select a winner. Trade-offs and domain assumptions are not commensurable numbers.
 
-**Note on Report Structure:** When generating hypothesis reports, provide a brief quality assessment summary in the main text (comparative table with ratings), and include detailed evaluation with strengths, weaknesses, and comprehensive analysis in **Appendix C: Quality Assessment**.
+For each criterion record:
 
-## Core Criteria
+- evidence or rationale;
+- uncertainty and missing information;
+- source IDs;
+- reviewer role and date;
+- revision or test needed.
 
-### 1. Testability
+## Question-level review
 
-**Definition:** The hypothesis can be empirically tested through observation or experimentation.
+### Feasibility
 
-**Evaluation questions:**
-- Can specific experiments or observations test this hypothesis?
-- Are the predicted outcomes measurable?
-- Can the hypothesis be tested with current or near-future methods?
-- Are there multiple independent ways to test it?
+- Are required data, samples, methods, expertise, time, and resources available?
+- Is the unit of analysis attainable without pseudoreplication?
+- Can the needed precision or information be achieved?
+- Are approvals and governance pathways realistically available?
+- Would a pilot answer feasibility rather than the scientific hypothesis?
 
-**Strong testability examples:**
-- "Increased expression of protein X will reduce cell proliferation rate by >30%"
-- "Patients receiving treatment Y will show 50% reduction in symptom Z within 4 weeks"
+### Interest and relevance
 
-**Weak testability examples:**
-- "This process is influenced by complex interactions" (vague, no specific prediction)
-- "The mechanism involves quantum effects" (if no method to test quantum effects exists)
+- Which scientific, stakeholder, policy, or practical decision could the answer inform?
+- Were affected groups or domain experts involved where appropriate?
+- Is the burden of the work proportionate to its expected informational value?
 
-### 2. Falsifiability
+### Novelty
 
-**Definition:** Clear conditions or observations would disprove the hypothesis (Popperian criterion).
+Treat novelty as a separate evidence claim:
 
-**Evaluation questions:**
-- What specific observations would prove this hypothesis wrong?
-- Are the falsifying conditions realistic to observe?
-- Is the hypothesis stated clearly enough to be disproven?
-- Can null results meaningfully falsify the hypothesis?
+- What databases, indexes, registries, patents, repositories, and grey literature were searched?
+- What queries, dates, languages, and screening limits were used?
+- Was prior work examined for conceptually equivalent terminology?
+- Did a domain expert assess near neighbors and historical literature?
 
-**Strong falsifiability examples:**
-- "If we knock out gene X, phenotype Y will disappear" (can be falsified if phenotype persists)
-- "Drug A will outperform placebo in 80% of patients" (clear falsification threshold)
+Use “not located within the documented search boundary” when that is all the evidence supports. Absence from a quick search is not evidence of novelty.
 
-**Weak falsifiability examples:**
-- "Multiple factors contribute to the outcome" (too vague to falsify)
-- "The effect may vary depending on context" (built-in escape clauses)
+### Ethics
 
-### 3. Parsimony (Occam's Razor)
+- Are human, animal, environmental, privacy, community, biosafety, dual-use, and regulatory implications assessed?
+- Is there a less burdensome way to answer the question?
+- Are harms, benefits, fairness, consent, and stewardship addressed?
+- Are required reviews complete before work begins?
 
-**Definition:** Among competing hypotheses with equal explanatory power, prefer the simpler explanation.
+FINER—Feasible, Interesting, Novel, Ethical, Relevant—is a mnemonic for refining a question, not a pass/fail instrument. The earliest source located in this refresh is the first edition of *Designing Clinical Research* (Hulley and Cummings, 1988); later editions and current methodological articles present the mnemonic. The dated search did not establish that the 1988 edition was the first printed use, so do not claim coinage without checking the primary text.
 
-**Evaluation questions:**
-- Does the hypothesis invoke the minimum number of entities/mechanisms needed?
-- Are all proposed elements necessary to explain the phenomenon?
-- Could a simpler mechanism account for the observations?
-- Does it avoid unnecessary assumptions?
+## Hypothesis-level review
 
-**Parsimony considerations:**
-- Simple ≠ simplistic; complexity is justified when evidence demands it
-- Established mechanisms are "simpler" than novel, unproven ones
-- Direct mechanisms are simpler than elaborate multi-step pathways
-- One well-supported mechanism beats multiple speculative ones
+### Clarity
 
-### 4. Explanatory Power
+- Is the statement a candidate proposition rather than an observation or question?
+- Are population/system, conditions, variables, direction, and timeframe explicit?
+- Is the mechanism separate from the hypothesis statement?
+- Are undefined terms and escape clauses removed?
 
-**Definition:** The hypothesis accounts for a substantial portion of the observed phenomenon.
+### Testability
 
-**Evaluation questions:**
-- How much of the observed data does this hypothesis explain?
-- Does it account for both typical and atypical observations?
-- Can it explain related phenomena beyond the immediate observation?
-- Does it resolve apparent contradictions in existing data?
+- Are observables and measurements available?
+- Does the candidate generate at least one prospective prediction?
+- Can a feasible design bear on the prediction?
+- Are assumptions needed to connect result to candidate stated?
 
-**Strong explanatory power indicators:**
-- Explains multiple independent observations
-- Accounts for quantitative relationships, not just qualitative patterns
-- Resolves previously puzzling findings
-- Makes sense of seemingly contradictory results
+### Falsifiability and vulnerability
 
-**Limited explanatory power indicators:**
-- Only explains part of the phenomenon
-- Requires additional hypotheses for complete explanation
-- Leaves major observations unexplained
+- What result would be incompatible under the stated assumptions?
+- Could the candidate explain every possible outcome after the fact?
+- Are indeterminate outcomes acknowledged?
+- Does the proposed test risk only “confirming” the preferred candidate?
 
-### 5. Scope
+A null result can be uninformative because of low precision, failed manipulation, insensitive measurement, missingness, or assumption failure. Record these possibilities before calling a result falsifying.
 
-**Definition:** The range of phenomena and contexts the hypothesis can address.
+### Discriminability
 
-**Evaluation questions:**
-- Does it apply only to the specific case or to broader situations?
-- Can it generalize across conditions, species, or systems?
-- Does it connect to larger theoretical frameworks?
-- What are its boundaries and limitations?
+- Which rival predicts a different observable pattern?
+- Is the difference larger than expected measurement uncertainty?
+- Can the test distinguish mixed mechanisms?
+- Are positive, procedural, and negative controls informative?
+- What result supports neither candidate?
 
-**Broader scope (generally preferable):**
-- Applies across multiple experimental conditions
-- Generalizes to related systems or species
-- Connects phenomenon to established principles
+### Mechanistic adequacy
 
-**Narrower scope (acceptable if explicitly defined):**
-- Limited to specific conditions or contexts
-- Requires different mechanisms in different settings
-- Context-dependent with clear boundaries
+- Does the mechanism specify entities, activities, ordering, and context?
+- Does it respect established constraints or explicitly identify where it departs?
+- Are intermediate steps measurable?
+- Could a simpler bias or measurement explanation produce the observation?
 
-### 6. Consistency with Established Knowledge
+Mechanistic detail is not evidence. A more elaborate story can be less testable.
 
-**Definition:** Alignment with well-supported theories, principles, and empirical findings.
+### Boundary conditions and transport
 
-**Evaluation questions:**
-- Is it consistent with established physical, chemical, or biological principles?
-- Does it align with or reasonably extend current theories?
-- If contradicting established knowledge, is there strong justification?
-- Does it require violating well-supported laws or findings?
+- Where, when, and for whom should the candidate apply?
+- What exposure/intervention versions matter?
+- What effect modifiers or contextual dependencies are plausible?
+- Which populations, species, platforms, or scales are outside scope?
+- What independent replication or external-validation test is planned?
 
-**Levels of consistency:**
-- **Fully consistent:** Applies established mechanisms in new context
-- **Mostly consistent:** Extends current understanding in plausible ways
-- **Partially inconsistent:** Contradicts some findings but has explanatory value
-- **Highly inconsistent:** Requires rejecting well-established principles (requires exceptional evidence)
+### Assumption transparency
 
-### 7. Novelty and Insight
+Separate:
 
-**Definition:** The hypothesis offers new understanding beyond merely restating known facts.
+- scientific assumptions;
+- measurement assumptions;
+- design/identification assumptions;
+- statistical/model assumptions;
+- implementation assumptions.
 
-**Evaluation questions:**
-- Does it provide new mechanistic insight?
-- Does it challenge assumptions or conventional wisdom?
-- Does it suggest unexpected connections or relationships?
-- Does it open new research directions?
+State which assumptions are testable, partially diagnosable, or fundamentally untestable with available data.
 
-**Novel contributions:**
-- Proposes previously unconsidered mechanisms
-- Reframes the problem in a productive way
-- Connects disparate observations
-- Suggests non-obvious testable predictions
+### Evidence alignment
 
-**Note:** Novelty alone doesn't make a hypothesis valuable; it must also be testable, parsimonious, and explanatory.
+For every source:
 
-## Comparative Evaluation
+- identify the exact claim it bears on;
+- distinguish direct from indirect or analogous evidence;
+- note design, population/system, and limitations;
+- include challenging and null evidence;
+- avoid venue prestige, citation count, or author reputation as a substitute for appraisal.
 
-When evaluating multiple competing hypotheses:
+### Uncertainty
 
-### Trade-offs and Balancing
+- Are direction, magnitude, and interval uncertainty separated?
+- Is model or structural uncertainty acknowledged?
+- Is measurement uncertainty propagated or discussed?
+- Are unknown alternatives and residual confounding visible?
+- Are conclusions calibrated to the evidence?
 
-Hypotheses often involve trade-offs:
-- More parsimonious but less explanatory power
-- Broader scope but less testable with current methods
-- Novel insights but less consistent with current knowledge
+## Prediction-level review
 
-**Evaluation approach:**
-- No hypothesis needs to be perfect on all dimensions
-- Identify each hypothesis's strengths and weaknesses
-- Consider which criteria are most important for the specific phenomenon
-- Note which hypotheses are most immediately testable
-- Identify which would be most informative if supported
+A prediction should identify:
 
-### Distinguishability
+- prediction ID and parent candidate;
+- conditions and boundary conditions;
+- observable and measurement ID;
+- expected pattern, direction, magnitude/range if justified, and timing;
+- rival and rival-expected pattern;
+- falsifier/incompatible result;
+- indeterminate outcome;
+- linked analysis ID;
+- assumptions and uncertainty.
 
-**Key question:** Can experiments distinguish between competing hypotheses?
+Do not invent numerical effect sizes merely to appear specific. If magnitude is unknown, prespecify the direction, smallest effect of scientific interest, precision target, or a range of plausible values with rationale.
 
-- Identify predictions that differ between hypotheses
-- Prioritize hypotheses that make distinct predictions
-- Note which experiments would most efficiently narrow the field
-- Consider whether hypotheses could all be partially correct
+## Operationalization review
 
-## Common Pitfalls
+For each construct ask:
 
-### Untestable Hypotheses
-- Too vague to generate specific predictions
-- Invoke unobservable or unmeasurable entities
-- Require technology that doesn't exist
+- Does the variable actually represent the construct?
+- Is the instrument validated in the target context?
+- Are reliability, calibration, detection limits, and quality control addressed?
+- Are timing and aggregation aligned with the mechanism?
+- Are cut points prespecified and justified?
+- Are missingness and measurement error mechanisms considered?
+- Is comparability across groups, time, sites, species, or devices established?
+- Could the measurement itself be affected by exposure, outcome, or selection?
 
-### Unfalsifiable Hypotheses
-- Built-in escape clauses ("may or may not occur")
-- Post-hoc explanations that fit any outcome
-- No specification of what would disprove them
+## Causal-claim review
 
-### Overly Complex Hypotheses
-- Invoke multiple unproven mechanisms
-- Add unnecessary steps or entities
-- Complexity not justified by explanatory gains
+Require:
 
-### Just-So Stories
-- Plausible narratives without testable predictions
-- Explain observations but don't predict new ones
-- Impossible to distinguish from alternative stories
+- a well-defined intervention/exposure contrast;
+- causal estimand;
+- target population and horizon;
+- design/target-trial analogue;
+- identification assumptions;
+- confounding, selection, collider, measurement, and reverse-causation assessment;
+- positivity/overlap and interference considerations where applicable;
+- sensitivity analyses and negative controls where scientifically defensible.
 
-## Practical Application
+Predictive performance does not identify a causal effect. Adjustment does not guarantee exchangeability. Conditioning on a mediator or collider can introduce bias.
 
-When generating hypotheses:
+## Analysis-plan review
 
-1. **Draft initial hypotheses** focusing on mechanistic explanations
-2. **Apply quality criteria** to identify weaknesses
-3. **Refine hypotheses** to improve testability and clarity
-4. **Develop specific predictions** to enhance testability and falsifiability
-5. **Compare systematically** across all criteria
-6. **Prioritize for testing** based on distinguishability and feasibility
+Check:
 
-Remember: The goal is not a perfect hypothesis, but a set of testable, falsifiable, informative hypotheses that advance understanding of the phenomenon.
+- unit and dependence structure;
+- sample-size/precision rationale;
+- exclusions and stopping;
+- outcome and analysis populations;
+- transformations and model specification;
+- effect/summary measures and uncertainty;
+- missing data and intercurrent events;
+- multiplicity across hypotheses, outcomes, subgroups, models, and looks;
+- assumptions and diagnostics;
+- robustness and sensitivity analyses;
+- confirmatory/exploratory labels;
+- deviation-reporting process.
+
+## Decision record
+
+End human review with one of:
+
+- `revise_before_test`;
+- `ready_for_preregistration_review`;
+- `blocked_by_safety_or_ethics_gate`;
+- `blocked_by_measurement_or_feasibility`;
+- `retain_as_exploratory_candidate`;
+- `requires_specialist_review`.
+
+These are workflow states, not scientific truth judgments and not outputs of a score.

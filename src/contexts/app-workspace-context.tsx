@@ -11,10 +11,12 @@ import {
   CONVERSATIONS_BULK_CHANGED_EVENT,
   CONVERSATION_CHANGED_EVENT,
   FOLDER_CHANGED_EVENT,
+  FOLDER_GROUP_CHANGED_EVENT,
   type ConversationChange,
   type ConversationsBulkChanged,
   type EventEnvelope,
   type FolderChange,
+  type FolderGroupChange,
 } from "@/lib/types"
 
 interface AppWorkspaceProviderProps {
@@ -179,6 +181,36 @@ export function AppWorkspaceProvider({ children }: AppWorkspaceProviderProps) {
       disposed = true
       unlisten?.()
       offReconnect?.()
+    }
+  }, [])
+
+  // Sidebar folder groups are edited in one window but rendered in every client,
+  // so a rename / recolor / delete has to reach them all. Group CRUD carries its
+  // detail and is applied in place; a `layout` nudge carries nothing by design
+  // (one drag rewrites `group_id`/`sort_order` across every visible folder) and
+  // is answered with a re-read. That re-read is silent — nothing renders
+  // `foldersLoading` — and it also lands on the client that STARTED the change,
+  // which is deliberate: it converges the optimistic patch on server truth at
+  // the cost of one local query per gesture, instead of needing an origin tag to
+  // tell an echo from a peer's edit.
+  useEffect(() => {
+    let disposed = false
+    let unlisten: (() => void) | undefined
+
+    void (async () => {
+      const dispose = await subscribe<FolderGroupChange>(
+        FOLDER_GROUP_CHANGED_EVENT,
+        (change) => {
+          useAppWorkspaceStore.getState().applyFolderGroupChange(change)
+        }
+      )
+      if (disposed) dispose()
+      else unlisten = dispose
+    })()
+
+    return () => {
+      disposed = true
+      unlisten?.()
     }
   }, [])
 

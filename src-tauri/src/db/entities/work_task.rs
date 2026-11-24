@@ -4,8 +4,11 @@ use serde::{Deserialize, Serialize};
 /// Lifecycle of a work task. The pipeline is
 /// `todo → queued → preparing → running ⇄ awaiting_input → review → merging →
 /// done`, with `failed` / `canceled` as side paths. Two hard invariants:
-/// - `done` ⟺ merged: only the merge landing (or its crash recovery) writes
-///   `done`, and `done` never rolls back.
+/// - `done` ⟺ an ACCEPTED final success, and it never rolls back. Three ways
+///   in — the merge landing (or its crash recovery), a delivery to a pull
+///   request, and an explicit acceptance with nothing to land — each recording
+///   which one it was in `completion_kind`. All three pass through `review`
+///   first: nothing reaches `done` unseen.
 /// - Every transition is a conditional UPDATE (CAS) guarded by the expected
 ///   status (and, for engine-driven transitions, the current `run_seq`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
@@ -96,6 +99,11 @@ pub struct Model {
     pub additions: Option<i32>,
     pub deletions: Option<i32>,
     pub merge_commit: Option<String>,
+    /// How this task reached `done`: 'merged' | 'delivered_pr' |
+    /// 'accepted_without_merge'. NULL on every non-done row, and on done rows
+    /// that predate the column. Written in the same transaction as the status,
+    /// so a `done` row never carries an unexplained ending.
+    pub completion_kind: Option<String>,
     /// JSON `WorkTaskPreflight` — result of the folder's preflight command run
     /// when this generation settled into review (P2 acceptance light).
     #[sea_orm(column_type = "Text")]
@@ -108,6 +116,48 @@ pub struct Model {
     /// exactly once — and every explicit claim clears it too, because a task
     /// that already started has no start left to plan.
     pub scheduled_at: Option<DateTimeUtc>,
+    /// The user put this settled task aside ("handle later"): the board files
+    /// it under Done instead of "needs you", and it stops counting toward the
+    /// attention badge, until they pick it back up. NULL = not put aside.
+    ///
+    /// Only ever set on a `review` / `failed` row, and NOT a status of its own:
+    /// the task stays exactly as resumable as it was (a follow-up or a retry
+    /// starts a new run from here), so its review or failure remains the truth
+    /// about it. Every transition out of those two statuses clears it, so a
+    /// task that comes back from another run always lands in "needs you"
+    /// again — and the unattended merge refuses a row carrying it.
+    pub deferred_at: Option<DateTimeUtc>,
+    /// Forge provenance: 'forge_issue' | 'forge_pr'; NULL = not forge-sourced.
+    /// Set once at creation by the forge trigger command, never by the public
+    /// create/update DTO paths, and never mutated afterwards.
+    pub source_kind: Option<String>,
+    /// Canonical key (`forge::source_key` output) of the task's LEAD item —
+    /// its only item, unless the task was made from several related issues.
+    /// Display and deep-link only: which items a task handles is recorded in
+    /// `work_task_source_key`, and every query asking "which tasks handle item
+    /// X" (dedup, the resurrection guards, the reverse lookup, auto-processing)
+    /// goes there instead. Reading this column for that would miss every item
+    /// of a combined task but its first.
+    pub source_key: Option<String>,
+    /// JSON snapshot of the source (URL, title, account id, PR head/base …).
+    /// Same discipline as `config`: replayed/displayed, never queried.
+    #[sea_orm(column_type = "Text")]
+    pub source_meta: Option<String>,
+    /// JSON `WorkTaskDelivery` — for a task WITHOUT forge provenance only:
+    /// the repository and account its first delivery resolved from the
+    /// project's `origin` (pinned from then on), and the pull request it
+    /// opened there. NULL until such a task is first delivered. A
+    /// forge-sourced task records its pull request in `source_meta` instead,
+    /// which already names its repository and the account that triggered it.
+    #[sea_orm(column_type = "Text")]
+    pub delivery: Option<String>,
+    /// JSON `{"<item number>": "<markdown>"}` — the reply drafted for each
+    /// thread a forge-sourced task handles: written by the agent through
+    /// `task_complete` (sanitized on the way in), editable by the user while
+    /// the task waits in review, and posted by the write-back once the task is
+    /// accepted. Cleared by every claim of a new run. NULL = no draft.
+    #[sea_orm(column_type = "Text")]
+    pub writeback_drafts: Option<String>,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
     pub started_at: Option<DateTimeUtc>,
@@ -122,6 +172,8 @@ pub struct Model {
 pub enum Relation {
     #[sea_orm(has_many = "super::work_task_event::Entity")]
     Events,
+    #[sea_orm(has_many = "super::work_task_source_key::Entity")]
+    SourceKeys,
     #[sea_orm(
         belongs_to = "super::folder::Entity",
         from = "Column::FolderId",
@@ -133,6 +185,12 @@ pub enum Relation {
 impl Related<super::work_task_event::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Events.def()
+    }
+}
+
+impl Related<super::work_task_source_key::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::SourceKeys.def()
     }
 }
 

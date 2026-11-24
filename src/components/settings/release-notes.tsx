@@ -17,7 +17,7 @@ const NOTES_PROSE =
   "[&_h3]:text-xs [&_h3]:font-semibold [&_h3]:mt-2 [&_h3]:mb-1 [&_h3]:text-foreground " +
   "[&_p]:mb-2 [&_p:last-child]:mb-0 " +
   "[&_ul]:list-disc [&_ul]:pl-5 [&_ul]:mb-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:mb-2 [&_li]:mb-1 " +
-  "[&_code]:font-mono [&_code]:text-[11px] [&_code]:bg-muted [&_code]:rounded [&_code]:px-1 " +
+  "[&_code]:font-mono [&_code]:text-2xs [&_code]:bg-muted [&_code]:rounded [&_code]:px-1 " +
   "[&_pre]:bg-muted [&_pre]:rounded-md [&_pre]:p-2 [&_pre]:overflow-x-auto [&_pre]:mb-2 " +
   "[&_a]:text-primary [&_a]:underline [&_a]:underline-offset-2 " +
   "[&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground/80 " +

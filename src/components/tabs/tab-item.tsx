@@ -337,7 +337,7 @@ export const TabItem = memo(function TabItem({
                 // the whole width is used. Standalone: ellipsis cap in the scroll row.
                 embedded
                   ? "min-w-0 flex-1 overflow-hidden whitespace-nowrap browser-tab-label"
-                  : "truncate max-w-[140px]",
+                  : "truncate max-w-[8.75rem]",
                 !tab.isPinned && "[font-style:oblique]"
               )}
               title={tooltip}

@@ -10,12 +10,14 @@ use crate::models::{
     AgentExecutionStats, AgentToolCall, AgentType, ContentBlock, ConversationDetail,
     ConversationSummary, MessageTurn, TurnRole, TurnUsage,
 };
+use crate::acp::connection::grok_failed_compaction_meta;
+use crate::acp::types::PromptInputBlock;
 use crate::parsers::claude::BACKGROUND_TASK_MARKER;
 use crate::parsers::{
     backfill_turn_durations, compute_session_stats, folder_name_from_path,
-    infer_context_window_max_tokens, is_safe_subagent_id, latest_turn_total_usage_tokens,
-    merge_context_window_stats, relocate_orphaned_tool_results, structurize_read_tool_output,
-    title_from_user_text, truncate_str, AgentParser, ParseError,
+    infer_context_window_max_tokens, is_safe_subagent_id, merge_context_window_stats,
+    relocate_orphaned_tool_results, structurize_read_tool_output, title_from_user_text,
+    truncate_str, AgentEnv, AgentParser, ParseError,
 };
 
 /// Cap for a single tool result / tool input preview stored on a turn. Grok's
@@ -63,7 +65,12 @@ const GROK_SUBAGENT_PREVIEW_CAP: usize = 500;
 /// CLI's own `GROK_HOME` override). The transcript store lives under the
 /// `sessions/` subdirectory of this path.
 pub(crate) fn resolve_grok_home_dir() -> PathBuf {
-    resolve_grok_home_from(std::env::var_os("GROK_HOME"), dirs::home_dir())
+    resolve_grok_home_dir_for_env(&AgentEnv::inherited())
+}
+
+/// The data home of the Grok launched with `env`.
+pub(crate) fn resolve_grok_home_dir_for_env(env: &AgentEnv) -> PathBuf {
+    resolve_grok_home_from(env.var_os("GROK_HOME"), dirs::home_dir())
 }
 
 fn resolve_grok_home_from(grok_home_env: Option<OsString>, home_dir: Option<PathBuf>) -> PathBuf {
@@ -117,18 +124,46 @@ fn grok_context_window_from_models_cache(raw: &str, model: &str) -> Option<u64> 
 
 /// `[model.<id>].context_window` from Grok's `config.toml` — a BYO endpoint's
 /// declared window. Mirrors the read `commands::acp::parse_grok_settings` does
-/// for the settings panel. Non-positive / missing / malformed → `None`.
+/// for the settings panel.
+///
+/// Since Grok 1.0.64 a table without a window takes the window of another
+/// table that sends the same model, where it used to fall back to 200,000. A
+/// table sends its `model`, or its own id when it names none, and when several
+/// tables send that model with a window, the one declared last in the file is
+/// the one Grok uses. So the file is read in its own order, which `toml::Table`
+/// does not keep. Grok counts a window only when it is a non-negative integer:
+/// a negative, fractional or non-numeric one is no window at all, so its table
+/// inherits and other tables pass over it. A 0 is a window, though, and the
+/// table it settles on gets Grok's 200,000 default instead, whether the 0 is
+/// its own or the last match's. All of this was seen live on 1.0.70, which
+/// reports the window on the wire. That default is not a window Grok
+/// assigned, so it reads as `None` here, as do an unknown model and malformed
+/// TOML.
 fn grok_context_window_from_config_toml(raw: &str, model: &str) -> Option<u64> {
-    raw.parse::<toml::Table>()
-        .ok()?
-        .get("model")?
-        .as_table()?
-        .get(model)?
-        .as_table()?
-        .get("context_window")?
-        .as_integer()
-        .filter(|window| *window > 0)
-        .map(|window| window as u64)
+    let doc = raw.parse::<toml_edit::Document>().ok()?;
+    let tables = doc.get("model")?.as_table_like()?;
+    // A window Grok counts, 0 included.
+    let declared = |table: &toml_edit::Item| {
+        let window = table.get("context_window")?.as_integer()?;
+        u64::try_from(window).ok()
+    };
+    let sends = |id: &str, table: &toml_edit::Item| {
+        table
+            .get("model")
+            .and_then(toml_edit::Item::as_str)
+            .unwrap_or(id)
+            .to_string()
+    };
+    let own = tables.get(model)?;
+    let window = declared(own).or_else(|| {
+        let sent = sends(model, own);
+        tables
+            .iter()
+            .filter(|(id, table)| *id != model && sends(id, table) == sent)
+            .filter_map(|(_, table)| declared(table))
+            .last()
+    })?;
+    (window > 0).then_some(window)
 }
 
 /// Grok Build (xAI) stores each conversation as a **directory-per-session**,
@@ -194,8 +229,14 @@ pub struct GrokParser {
 
 impl GrokParser {
     pub fn new() -> Self {
+        Self::for_env(&AgentEnv::inherited())
+    }
+
+    /// The history of the Grok launched with `env`. Its model catalog
+    /// (`models_cache.json`, `config.toml`) is read from the same home.
+    pub fn for_env(env: &AgentEnv) -> Self {
         Self {
-            base_dir: resolve_grok_home_dir().join("sessions"),
+            base_dir: resolve_grok_home_dir_for_env(env).join("sessions"),
         }
     }
 
@@ -284,12 +325,17 @@ impl GrokParser {
         // launch's ack text into the structured background-task marker.
         self.attach_subagent_stats(session_dir, &mut parsed);
 
-        // Grok resolves its native `ask_user_question` over the `_x.ai/ask_user_question`
-        // ext round-trip and never writes the answer into `updates.jsonl`, so the
-        // parsed ToolResult is empty and the `AskQuestionResultCard` shows "未选择".
+        // Grok's native `ask_user_question` leaves no picks the
+        // `AskQuestionResultCard` can read in `updates.jsonl`: the call's completed
+        // `tool_call_update` carries only the sentence the model gets ("User has
+        // answered your questions: "Q"="A". …", seen on 1.0.62, 1.0.70 and 1.0.77;
+        // from 1.0.70 it also adds a structured `rawOutput.UserAnswered.answers`
+        // list beside it),
+        // not the card's `{answers, declined}` envelope, so the card shows "未选择".
         // Recover the user's picks from `chat_history.jsonl` (the model-facing
-        // transcript, which DOES record the answer as a `tool_result`) and inject
-        // them as the tool output. No-op when the file is absent or there's no ask.
+        // transcript, whose `tool_result` carries the same sentence), parse them
+        // into the envelope and inject that as the tool output. No-op when the
+        // file is absent or there's no ask.
         inject_grok_ask_answers(&mut parsed.turns, &session_dir.join("chat_history.jsonl"));
 
         // Fill assistant turns that carried no in-stream `modelId` with the
@@ -309,11 +355,13 @@ impl GrokParser {
         backfill_turn_durations(&mut parsed.turns, &[]);
 
         // Grok sends no ACP `usage_update`, so the live meter stays empty; derive
-        // the context ring here instead. Grok reports a cumulative per-turn token
-        // count (mapped to `usage.input_tokens`), which is exactly the context
-        // "used"; pair it with the model's window so the status bar shows the ring
-        // (mirrors gemini/kimi/opencode — the bare `compute_session_stats` leaves
-        // the context fields `None`).
+        // the context ring here instead. The "used" figure is Grok's own
+        // `params._meta.totalTokens` (`ParsedUpdates::context_tokens`) — NOT the
+        // turn usage totals, which are the token SPEND and run to many multiples
+        // of the resident context once a turn makes several model calls. Pair it
+        // with the model's window so the status bar shows the ring (mirrors
+        // gemini/kimi/opencode — the bare `compute_session_stats` leaves the
+        // context fields `None`).
         let session_model = meta.model.as_deref().or(parsed.model.as_deref());
         // Grok publishes each model's real window in its own on-disk catalog, so
         // read that first and keep the id-shaped guess only as the fallback for
@@ -324,7 +372,7 @@ impl GrokParser {
         });
         let session_stats = merge_context_window_stats(
             compute_session_stats(&parsed.turns),
-            latest_turn_total_usage_tokens(&parsed.turns),
+            parsed.context_tokens,
             context_window,
         );
         let summary = self.summary_from(session_id, &meta, &parsed);
@@ -471,6 +519,8 @@ impl GrokParser {
             lines_removed: None,
             other_tool_count: None,
             tool_calls,
+            timeline: Vec::new(),
+            recovered_result: None,
             // Grok runs every sub-agent as a full session of its own, so the
             // card can offer to open the child's transcript. Only hand over an
             // id that passed the path-traversal guard — it is used to look up a
@@ -612,6 +662,11 @@ struct ParsedUpdates {
     /// (`subagent_spawned` opens one, `subagent_finished` completes it), in
     /// spawn order.
     subagents: Vec<GrokSubagentLifecycle>,
+    /// Context-window occupancy: `params._meta.totalTokens` as of the last turn
+    /// to state one. Feeds the context ring, and is kept apart from turn `usage`
+    /// because the two measure different things — occupancy is what currently
+    /// sits in the window, `usage` is what the turn spent getting there.
+    context_tokens: Option<u64>,
 }
 
 /// One subagent's lifecycle, folded from the parent-stream extension
@@ -720,7 +775,7 @@ fn parse_updates(path: &Path) -> ParsedUpdates {
                 .is_none_or(|(a, b)| a == b);
         if kind == "user_message_chunk" && !user_chunk_continues {
             if let Some(prev) = assistant.as_mut() {
-                turn_meta.apply(prev);
+                turn_meta.apply(prev, &mut out.context_tokens);
             }
             flush_assistant(&mut assistant, &mut out.turns, &mut tool_result_idx);
             turn_meta = GrokTurnMeta::default();
@@ -729,11 +784,13 @@ fn parse_updates(path: &Path) -> ParsedUpdates {
 
         match kind {
             "user_message_chunk" => {
-                let block = user_chunk_to_block(update);
+                let input = user_chunk_to_input(update);
+                let block = input.as_ref().map(crate::parsers::user_turn_block);
                 out.content_events += 1;
-                // Title/first-prompt text comes only from prose chunks; an image
-                // chunk carries no text and must not overwrite it.
-                if let Some(ContentBlock::Text { text }) = &block {
+                // Title/first-prompt text comes only from PROSE chunks: an image
+                // chunk carries no text, and an attachment projects to a
+                // `[name](uri)` marker that would make a poor title.
+                if let Some(PromptInputBlock::Text { text }) = &input {
                     if out.first_user_text.is_none() && !text.trim().is_empty() {
                         out.first_user_text = Some(text.clone());
                     }
@@ -762,6 +819,7 @@ fn parse_updates(path: &Path) -> ParsedUpdates {
                         duration_ms: None,
                         model: None,
                         completed_at: None,
+                    agent_message_id: None,
                     });
                 }
             }
@@ -831,6 +889,7 @@ fn parse_updates(path: &Path) -> ParsedUpdates {
                     is_error: false,
                     agent_stats: None,
                     images: Vec::new(),
+                    exit_code: None,
                 });
                 if !id.is_empty() {
                     tool_result_idx.insert(id, turn.blocks.len() - 1);
@@ -849,7 +908,10 @@ fn parse_updates(path: &Path) -> ParsedUpdates {
             }
             "turn_completed" => {
                 if let Some(mut turn) = assistant.take() {
-                    turn_meta.apply(&mut turn);
+                    // The one place Grok states real token spend, scoped to the
+                    // prompt this update closes (see `prompt_usage`).
+                    turn_meta.usage = update.get("usage").and_then(prompt_usage);
+                    turn_meta.apply(&mut turn, &mut out.context_tokens);
                     turn.completed_at = Some(now);
                     out.turns.push(turn);
                 }
@@ -898,6 +960,35 @@ fn parse_updates(path: &Path) -> ParsedUpdates {
                     is_error: false,
                     agent_stats: None,
                     images: Vec::new(),
+                    exit_code: None,
+                });
+            }
+            // A failed auto-compaction: the same card in its failed state, as the
+            // live mapper renders it (the two share `grok_failed_compaction_meta`,
+            // whose `error` is the card's reason). `is_error` on the paired
+            // result is what marks the card failed.
+            "auto_compact_failed" => {
+                out.content_events += 1;
+                let id = params_meta
+                    .and_then(|m| m.get("eventId"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| format!("grok-compaction-{}", out.content_events));
+                let turn = ensure_assistant(&mut assistant, now);
+                turn.blocks.push(ContentBlock::ToolUse {
+                    tool_use_id: Some(id.clone()),
+                    tool_name: "context_compaction".to_string(),
+                    input_preview: None,
+                    status: None,
+                    meta: Some(grok_failed_compaction_meta(update)),
+                });
+                turn.blocks.push(ContentBlock::ToolResult {
+                    tool_use_id: Some(id),
+                    output_preview: None,
+                    is_error: true,
+                    agent_stats: None,
+                    images: Vec::new(),
+                    exit_code: None,
                 });
             }
             // Sub-agent lifecycle (namespaced `_x.ai/session/update` method).
@@ -986,9 +1077,10 @@ fn parse_updates(path: &Path) -> ParsedUpdates {
     }
 
     // A session that ends mid-turn (no trailing `turn_completed`) still gets its
-    // accumulated stats.
+    // accumulated stats. Its `usage` stays `None` — Grok has not stated the
+    // spend yet — but the context occupancy it did state still reaches the ring.
     if let Some(prev) = assistant.as_mut() {
-        turn_meta.apply(prev);
+        turn_meta.apply(prev, &mut out.context_tokens);
     }
     flush_assistant(&mut assistant, &mut out.turns, &mut tool_result_idx);
 
@@ -1013,59 +1105,24 @@ fn update_text(update: &Value) -> String {
 /// Grok sends prose as `{type:"text"}`. Current codeg prompts send a native
 /// `{type:"image"}` chunk (so grok's describe sidecar runs). Older transcripts
 /// still carry the embedded `{type:"resource", resource:{blob, mimeType, uri}}`
-/// shape from when we followed grok's `image:false` advertisement. Both
-/// image-mime forms become [`ContentBlock::Image`] so they render as a
-/// thumbnail; a non-image embedded resource folds to a `[uri](uri)` link
-/// (same as the live [`crate::acp::user_blocks_from_prompt`]). Anything else
-/// falls back to a (possibly empty) text block.
-fn user_chunk_to_block(update: &Value) -> Option<ContentBlock> {
-    let content = update.get("content")?;
-    match content.get("type").and_then(Value::as_str).unwrap_or("") {
-        "resource" => {
-            let resource = content.get("resource")?;
-            let mime = resource.get("mimeType").and_then(Value::as_str);
-            let blob = resource.get("blob").and_then(Value::as_str);
-            match (mime, blob) {
-                (Some(mime), Some(blob)) if mime.starts_with("image/") => {
-                    Some(ContentBlock::Image {
-                        data: blob.to_string(),
-                        mime_type: mime.to_string(),
-                        uri: resource
-                            .get("uri")
-                            .and_then(Value::as_str)
-                            .map(str::to_string),
-                    })
-                }
-                _ => {
-                    let uri = resource.get("uri").and_then(Value::as_str).unwrap_or("");
-                    Some(ContentBlock::Text {
-                        text: format!("[{uri}]({uri})"),
-                    })
-                }
-            }
-        }
-        // Native ACP image content — the live send path for every grok that
-        // decodes the format (see `normalize_grok_image_blocks`).
-        "image" => {
-            let data = content.get("data").and_then(Value::as_str)?;
-            Some(ContentBlock::Image {
-                data: data.to_string(),
-                mime_type: content
-                    .get("mimeType")
-                    .and_then(Value::as_str)
-                    .unwrap_or("image/png")
-                    .to_string(),
-                uri: content
-                    .get("uri")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-            })
-        }
-        // "text" and unknown kinds: existing behavior (reads `/content/text`).
-        _ => Some(ContentBlock::Text {
-            text: update_text(update),
-        }),
-    }
+/// shape from when we followed grok's `image:false` advertisement.
+///
+/// All of it goes through [`crate::parsers::user_turn_block_from_wire`], the
+/// one projection every surface uses for a user's own message — so both image
+/// carriages become a thumbnail, and an attached file becomes the same
+/// `[name](uri)` marker a viewer saw live. This parser used to fold resources
+/// itself and had no `resource_link` case at all, which silently dropped
+/// plain file attachments from a reloaded grok turn.
+///
+/// Returns the block the chunk was SENT as, so the caller can both render it
+/// (via [`crate::parsers::user_turn_block`]) and tell prose from an attachment
+/// — an attachment projects to a `Text` marker, and the conversation's title
+/// must not latch onto `[report.pdf](…)` when the prose follows it.
+///
+/// `None` for a chunk with nothing to render (empty prose, a malformed
+/// resource): the caller still opens the user turn, it just starts empty.
+fn user_chunk_to_input(update: &Value) -> Option<PromptInputBlock> {
+    crate::acp::types::prompt_block_from_wire(update.get("content")?)
 }
 
 // ---------------------------------------------------------------------------
@@ -1492,26 +1549,32 @@ fn apply_tool_result(
 
 /// Per-turn stats accumulated from Grok's metadata and applied to the assistant
 /// turn at its boundary. Grok exposes the numbers the message footer needs, but
-/// in two sibling places the update loop otherwise ignores: token count + timing
-/// in the OUTER `params._meta` (`totalTokens`, `turnStartMs`, `agentTimestampMs`)
-/// and the model in `params.update._meta.modelId`. Grok reports a single
-/// cumulative `totalTokens` (context/prompt tokens) rather than an input/output
-/// split, so it maps to `input_tokens` — consistent with how other agents report
-/// history-inclusive input. Duration is `end - start` in ms.
+/// in three sibling places the update loop otherwise ignores: context occupancy
+/// and timing in the OUTER `params._meta` (`totalTokens`, `turnStartMs`,
+/// `agentTimestampMs`), the model in `params.update._meta.modelId`, and the real
+/// token split in `turn_completed`'s `update.usage` (see [`prompt_usage`]).
+/// Duration is `end - start` in ms.
 #[derive(Default)]
 struct GrokTurnMeta {
+    /// `params._meta.totalTokens` — the context-window OCCUPANCY, not a spend.
+    /// It rides nearly every update and feeds the context ring; it is
+    /// deliberately never folded into `usage`, which would bill a prompt's
+    /// resident context as if it were freshly consumed input.
     total_tokens: Option<u64>,
     start_ms: Option<i64>,
     end_ms: Option<i64>,
     model: Option<String>,
+    /// The prompt's real token spend, stated once by `turn_completed`. `None`
+    /// for a turn that never completed.
+    usage: Option<TurnUsage>,
 }
 
 impl GrokTurnMeta {
     /// Fold one update's metadata in. `params_meta` is `params._meta` (token
     /// total + timing); `update_meta` is `params.update._meta` (carries
-    /// `modelId`). `totalTokens` is cumulative, so keep the max; `turnStartMs`
-    /// is constant per turn (keep the min defensively); `agentTimestampMs`
-    /// advances (keep the max as the turn end).
+    /// `modelId`). `totalTokens` climbs as the turn fills the window, so keep
+    /// the max; `turnStartMs` is constant per turn (keep the min defensively);
+    /// `agentTimestampMs` advances (keep the max as the turn end).
     fn observe(&mut self, params_meta: Option<&Value>, update_meta: Option<&Value>) {
         if let Some(pm) = params_meta {
             if let Some(tt) = pm.get("totalTokens").and_then(Value::as_u64) {
@@ -1533,22 +1596,22 @@ impl GrokTurnMeta {
         }
     }
 
-    /// Apply the accumulated stats to a finalized assistant turn. Never
-    /// overwrites a field already set.
-    fn apply(&self, turn: &mut MessageTurn) {
+    /// Apply the accumulated stats to a finalized assistant turn, publishing the
+    /// turn's context occupancy into the session-level `context_tokens` (the last
+    /// turn to state one wins — that is the session's occupancy now). Never
+    /// overwrites a turn field already set.
+    fn apply(&self, turn: &mut MessageTurn, context_tokens: &mut Option<u64>) {
         if turn.model.is_none() {
             if let Some(model) = &self.model {
                 turn.model = Some(model.clone());
             }
         }
+        if let Some(tt) = self.total_tokens.filter(|t| *t > 0) {
+            *context_tokens = Some(tt);
+        }
         if turn.usage.is_none() {
-            if let Some(tt) = self.total_tokens.filter(|t| *t > 0) {
-                turn.usage = Some(TurnUsage {
-                    input_tokens: tt,
-                    output_tokens: 0,
-                    cache_creation_input_tokens: 0,
-                    cache_read_input_tokens: 0,
-                });
+            if let Some(usage) = &self.usage {
+                turn.usage = Some(usage.clone());
             }
         }
         if turn.duration_ms.is_none() {
@@ -1559,6 +1622,61 @@ impl GrokTurnMeta {
             }
         }
     }
+}
+
+/// Read the `usage` object Grok attaches to `turn_completed` into disjoint
+/// `TurnUsage` buckets. `None` when it states nothing at all (every counter
+/// absent or zero).
+///
+/// The figures are PER PROMPT, not running session totals — each
+/// `turn_completed` carries its own `prompt_id` and, per Grok's docs, "`usage`
+/// sums tokens for the prompt, including subagents that finished before turn
+/// end" (`~/.grok/docs/user-guide/14-headless-mode.md`). So the snapshot is
+/// attached to its own turn as-is and `compute_session_stats` sums the prompts.
+/// The counters do climb from one `turn_completed` to the next in a captured
+/// session, which reads as cumulative at a glance; it isn't. In `019f96d5` the
+/// second prompt states 198457 input over 7 `modelCalls` — a shade under 28.4K
+/// per call against that session's 31628-token peak occupancy — whereas reading
+/// the pair as cumulative would charge its 2 additional calls 112283 tokens
+/// (56K per call), which no call could have sent through a window that size.
+///
+/// Bucket semantics: this is the ACP `PromptUsage` flavour, whose `inputTokens`
+/// is the WHOLE prompt side, with `cachedReadTokens` / `cacheCreationTokens`
+/// naming cached SLICES OF IT rather than separate addends —
+/// `inputTokens + outputTokens == totalTokens` holds in every capture, which it
+/// could not if the cache counters sat outside `inputTokens`. `TurnUsage`
+/// follows Anthropic's DISJOINT convention, where `input_tokens` excludes both
+/// cache buckets (see `parsers::claude`), so the cached slices are subtracted
+/// back out; the four buckets then re-sum to Grok's own `totalTokens`, which is
+/// what the composer's breakdown adds up for its "total" row.
+/// `reasoningTokens` is a subset of `outputTokens` and so is deliberately
+/// dropped, mirroring `parsers::deepseek`.
+///
+/// Only the ACP spellings are read. Grok's headless projector publishes the same
+/// quantities under `cacheReadInputTokens` / `input_tokens`, but with the cache
+/// ALREADY subtracted out ("`usage.input_tokens` … are **uncached only**" —
+/// same doc). Aliasing those names in here would silently double-subtract the
+/// cached prefix the day a build emits them.
+fn prompt_usage(usage: &Value) -> Option<TurnUsage> {
+    let field = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
+    let input = field("inputTokens");
+    let output = field("outputTokens");
+    // `cacheCreationTokens` reaches only newer Grok builds; older ones report
+    // reads alone, and an absent counter reads as 0 either way.
+    let cache_read = field("cachedReadTokens");
+    let cache_create = field("cacheCreationTokens");
+    if input == 0 && output == 0 && cache_read == 0 && cache_create == 0 {
+        return None;
+    }
+    Some(TurnUsage {
+        // Saturating rather than wrapping: a build that ever reports cache
+        // counters exceeding `inputTokens` keeps its cache buckets and drops the
+        // uncached remainder to zero, instead of inventing a colossal input.
+        input_tokens: input.saturating_sub(cache_read).saturating_sub(cache_create),
+        output_tokens: output,
+        cache_creation_input_tokens: cache_create,
+        cache_read_input_tokens: cache_read,
+    })
 }
 
 fn ensure_assistant(
@@ -1575,6 +1693,7 @@ fn ensure_assistant(
             duration_ms: None,
             model: None,
             completed_at: None,
+        agent_message_id: None,
         });
     }
     assistant.as_mut().expect("assistant just set")
@@ -2075,6 +2194,47 @@ mod tests {
     }
 
     #[test]
+    fn history_renders_failed_auto_compaction_as_failed_compaction_tool() {
+        // The live mapper renders `auto_compact_failed` as the compaction card in
+        // its failed state; a reopened conversation has to show the same card,
+        // not drop the failure.
+        let updates = concat!(
+            r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"plan a page"},"_meta":{"promptIndex":0}}},"timestamp":1783584019}"#, "\n",
+            r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"ok"}}},"timestamp":1783584020}"#, "\n",
+            r#"{"method":"_x.ai/session/update","params":{"sessionId":"s","update":{"sessionUpdate":"auto_compact_failed","reason":"API error (status 503)"},"_meta":{"eventId":"ev-compact-failed"}},"timestamp":1783584021}"#, "\n",
+            r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"turn_completed","stop_reason":"end_turn"}},"timestamp":1783584022}"#, "\n",
+        );
+        let (_tmp, sessions) = fixture(SUMMARY, updates);
+        let detail = GrokParser::with_base_dir(sessions)
+            .get_conversation("019f45e3-e1ef-7690-a29f-fe2554382b49")
+            .unwrap();
+        let blocks: Vec<_> = detail.turns.iter().flat_map(|t| &t.blocks).collect();
+        let meta = blocks
+            .iter()
+            .find_map(|b| match b {
+                ContentBlock::ToolUse {
+                    tool_use_id: Some(id),
+                    meta: Some(m),
+                    ..
+                } if id == "ev-compact-failed" => Some(m.clone()),
+                _ => None,
+            })
+            .expect("failed compaction tool_use present in history");
+        assert_eq!(
+            meta,
+            serde_json::json!({
+                "contextCompaction": { "version": 1, "error": "API error (status 503)" }
+            })
+        );
+        // The paired result is what marks the card failed.
+        assert!(blocks.iter().any(|b| matches!(
+            b,
+            ContentBlock::ToolResult { tool_use_id: Some(id), is_error: true, .. }
+                if id == "ev-compact-failed"
+        )));
+    }
+
+    #[test]
     fn merges_prompt_text_and_native_image_into_one_user_turn() {
         // Grok echoes a native ACP image as its own `user_message_chunk` (same
         // `promptIndex` as the prose) — the shape captured from a live 1.0.0 and
@@ -2141,8 +2301,39 @@ mod tests {
         assert!(matches!(turns[1].role, TurnRole::Assistant));
     }
 
+    /// A plain (non-image) file attachment. This parser folded resources
+    /// itself and had no `resource_link` case at all, so an attached file came
+    /// back from history as an empty block — the same gap `acp_native` had.
+    /// Both now go through the one projection a viewer saw live.
+    #[test]
+    fn plain_file_attachments_survive_a_reload_as_their_markers() {
+        let updates = concat!(
+            r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"看看"},"_meta":{"promptIndex":0}}},"timestamp":1783584019}"#, "\n",
+            r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"user_message_chunk","content":{"type":"resource_link","name":"report.pdf","uri":"file:///tmp/report.pdf"},"_meta":{"promptIndex":0}}},"timestamp":1783584019}"#, "\n",
+            r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"user_message_chunk","content":{"type":"resource","resource":{"text":"body","mimeType":"text/plain","uri":"clipboard://notes.txt-1"}},"_meta":{"promptIndex":0}}},"timestamp":1783584019}"#, "\n",
+            r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"读了"}}},"timestamp":1783584024}"#, "\n",
+            r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"turn_completed","stop_reason":"end_turn"}},"timestamp":1783584024}"#, "\n",
+        );
+        let (_tmp, sessions) = fixture(SUMMARY, updates);
+        let parser = GrokParser::with_base_dir(sessions);
+        let detail = parser
+            .get_conversation("019f45e3-e1ef-7690-a29f-fe2554382b49")
+            .unwrap();
+        let turns = &detail.turns;
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].blocks.len(), 3);
+        assert!(matches!(&turns[0].blocks[0], ContentBlock::Text { text } if text == "看看"));
+        assert!(
+            matches!(&turns[0].blocks[1], ContentBlock::Text { text } if text == "[report.pdf](file:///tmp/report.pdf)")
+        );
+        // A text resource: the attachment it is shown as, without its body.
+        assert!(
+            matches!(&turns[0].blocks[2], ContentBlock::Text { text } if text == "clipboard://notes.txt-1\n<context ref=\"clipboard://notes.txt-1\">\n\n</context>")
+        );
+    }
+
     /// One turn whose stats live where Grok really puts them: model in
-    /// `update._meta.modelId`, cumulative `totalTokens` + timing in the OUTER
+    /// `update._meta.modelId`, occupancy `totalTokens` and timing in the OUTER
     /// `params._meta`. Shared by the context-ring tests below.
     const RING_UPDATES: &str = concat!(
         r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"hi"},"_meta":{"modelId":"grok-4.5-fast","promptIndex":0}},"_meta":{"turnStartMs":1000,"totalTokens":100}},"timestamp":1783584019}"#, "\n",
@@ -2153,8 +2344,8 @@ mod tests {
     #[test]
     fn assistant_turn_carries_model_tokens_and_duration() {
         // Grok reports the footer's stats in two sibling metadata places the
-        // loop must fold in: model in `update._meta.modelId`, and token total +
-        // timing in the OUTER `params._meta` (`totalTokens` cumulative,
+        // loop must fold in: model in `update._meta.modelId`, and context
+        // occupancy + timing in the OUTER `params._meta` (`totalTokens`,
         // `turnStartMs` → `agentTimestampMs`).
         let updates = RING_UPDATES;
         let (_tmp, sessions) = fixture(SUMMARY, updates);
@@ -2166,19 +2357,20 @@ mod tests {
         assert!(matches!(assistant.role, TurnRole::Assistant));
         // In-stream modelId wins over the summary's current_model_id.
         assert_eq!(assistant.model.as_deref(), Some("grok-4.5-fast"));
-        // Single cumulative totalTokens (max = 500) maps to input_tokens.
-        let usage = assistant.usage.as_ref().expect("usage");
-        assert_eq!(usage.input_tokens, 500);
-        assert_eq!(usage.output_tokens, 0);
+        // `totalTokens` is occupancy, not spend: it feeds the ring below and
+        // must NOT be dressed up as `input_tokens`. This fixture's
+        // `turn_completed` states no `usage`, so the turn honestly has none.
+        assert!(assistant.usage.is_none());
         // Duration = last agentTimestampMs (5000) − turnStartMs (1000).
         assert_eq!(assistant.duration_ms, Some(4000));
 
-        // Session stats aggregate the turn usage/duration.
+        // Session stats aggregate the turn duration; with no turn stating usage
+        // there is no token breakdown to report.
         let stats = detail.session_stats.expect("session stats");
-        assert_eq!(stats.total_usage.as_ref().unwrap().input_tokens, 500);
+        assert!(stats.total_usage.is_none());
         assert_eq!(stats.total_duration_ms, 4000);
-        // Context ring: cumulative tokens (500) as "used", paired with the
-        // session model's window (summary current_model_id = grok-4.5 → 500K).
+        // Context ring: occupancy (500) as "used", paired with the session
+        // model's window (summary current_model_id = grok-4.5 → 500K).
         // Without this the status bar shows no context ring for Grok.
         assert_eq!(stats.context_window_used_tokens, Some(500));
         assert_eq!(stats.context_window_max_tokens, Some(500_000));
@@ -2186,6 +2378,141 @@ mod tests {
             .context_window_usage_percent
             .expect("context window percent");
         assert!((pct - 0.1).abs() < 1e-6, "pct = {pct}");
+    }
+
+    /// Two prompts, each closed by a `turn_completed` stating that PROMPT's own
+    /// `usage`. Numbers (and the distinct `prompt_id`s) lifted verbatim from a
+    /// real capture (`~/.grok/sessions/…/019f96d5…/updates.jsonl`), which is what
+    /// makes the arithmetic below meaningful rather than self-referential.
+    const USAGE_UPDATES: &str = concat!(
+        r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"one"},"_meta":{"promptIndex":0}},"_meta":{"turnStartMs":1000,"totalTokens":9000}},"timestamp":1783584019}"#, "\n",
+        r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"first"}},"_meta":{"totalTokens":18000,"agentTimestampMs":3000}},"timestamp":1783584024}"#, "\n",
+        r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"turn_completed","prompt_id":"e526ba42","stop_reason":"rate_limit","usage":{"inputTokens":86174,"outputTokens":1652,"totalTokens":87826,"cachedReadTokens":56960,"reasoningTokens":574,"modelCalls":5,"numTurns":5}}},"timestamp":1783584025}"#, "\n",
+        r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"two"},"_meta":{"promptIndex":1}},"_meta":{"turnStartMs":6000,"totalTokens":22000}},"timestamp":1783584030}"#, "\n",
+        r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"second"}},"_meta":{"totalTokens":31628,"agentTimestampMs":9000}},"timestamp":1783584035}"#, "\n",
+        r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"turn_completed","prompt_id":"56468252","stop_reason":"end_turn","usage":{"inputTokens":198457,"outputTokens":6224,"totalTokens":204681,"cachedReadTokens":167680,"reasoningTokens":931,"modelCalls":7,"numTurns":7}}},"timestamp":1783584036}"#, "\n",
+    );
+
+    #[test]
+    fn turn_completed_usage_fills_the_token_breakdown() {
+        // The bug this covers: Grok's real token split rides `turn_completed`'s
+        // `usage`, and the parser used to ignore it wholesale — synthesizing
+        // usage from `_meta.totalTokens` with output and both cache buckets
+        // hardcoded to 0, so the composer's breakdown read "output 0, cache 0"
+        // for every Grok session no matter how much it had actually spent.
+        let (_tmp, sessions) = fixture(SUMMARY, USAGE_UPDATES);
+        let parser = GrokParser::with_base_dir(sessions);
+        let detail = parser
+            .get_conversation("019f45e3-e1ef-7690-a29f-fe2554382b49")
+            .unwrap();
+        let assistants: Vec<_> = detail
+            .turns
+            .iter()
+            .filter(|t| matches!(t.role, TurnRole::Assistant))
+            .collect();
+        assert_eq!(assistants.len(), 2);
+
+        // Each prompt's own spend, split into DISJOINT buckets: the cached read
+        // is carved OUT of `inputTokens` (86174 − 56960), not added to it.
+        let first = assistants[0].usage.as_ref().expect("first usage");
+        assert_eq!(first.input_tokens, 29_214);
+        assert_eq!(first.output_tokens, 1_652);
+        assert_eq!(first.cache_read_input_tokens, 56_960);
+        assert_eq!(first.cache_creation_input_tokens, 0);
+        // The four buckets re-sum to Grok's own `totalTokens` for that prompt,
+        // which is what keeps the composer's "total" row honest.
+        assert_eq!(total_of(first), 87_826);
+
+        // The second prompt is taken at face value, NOT deltaed against the
+        // first: `usage` is per-prompt, so the climb from 86174 to 198457 is the
+        // second prompt being bigger, not a running total being restated.
+        let second = assistants[1].usage.as_ref().expect("second usage");
+        assert_eq!(second.input_tokens, 30_777);
+        assert_eq!(second.output_tokens, 6_224);
+        assert_eq!(second.cache_read_input_tokens, 167_680);
+        assert_eq!(total_of(second), 204_681);
+
+        // So the session total is the SUM of the two prompts. Deltaing would
+        // report 204681 here and silently drop the first prompt's 87826.
+        let stats = detail.session_stats.expect("session stats");
+        let total = stats.total_usage.as_ref().expect("total usage");
+        assert_eq!(total_of(total), 87_826 + 204_681);
+        assert_eq!(stats.total_tokens, Some(292_507));
+        assert_eq!(total.output_tokens, 1_652 + 6_224);
+        assert_eq!(total.cache_read_input_tokens, 56_960 + 167_680);
+
+        // And the context ring still reads the OCCUPANCY (`_meta.totalTokens`,
+        // last value 31628) — not the 204681 the session spent getting there.
+        assert_eq!(stats.context_window_used_tokens, Some(31_628));
+        assert_eq!(stats.context_window_max_tokens, Some(500_000));
+    }
+
+    /// The sum the composer's "total" row shows for a usage record.
+    fn total_of(usage: &TurnUsage) -> u64 {
+        usage.input_tokens
+            + usage.output_tokens
+            + usage.cache_creation_input_tokens
+            + usage.cache_read_input_tokens
+    }
+
+    #[test]
+    fn repeated_prompt_usage_is_not_mistaken_for_a_running_total() {
+        // Two prompts that spend exactly the same amount state the same numbers
+        // — they are per-prompt, not a counter. A delta-based reading would see
+        // "no movement" and report the second prompt as free.
+        let usage = serde_json::json!({
+            "inputTokens": 15_000, "outputTokens": 500,
+            "totalTokens": 15_500, "cachedReadTokens": 6_000,
+        });
+        let first = prompt_usage(&usage).expect("first");
+        let second = prompt_usage(&usage).expect("second");
+        assert_eq!(total_of(&first), 15_500);
+        assert_eq!(total_of(&second), 15_500);
+
+        // An absent or all-zero `usage` still states nothing.
+        assert!(prompt_usage(&serde_json::json!({})).is_none());
+        assert!(prompt_usage(&serde_json::json!({
+            "inputTokens": 0, "outputTokens": 0, "cachedReadTokens": 0,
+        }))
+        .is_none());
+    }
+
+    #[test]
+    fn headless_only_usage_spellings_are_not_aliased() {
+        // Grok's headless projector publishes `cacheReadInputTokens` with the
+        // cache ALREADY subtracted from its `inputTokens`. Reading those names
+        // here would double-subtract, so they are deliberately not accepted —
+        // this record states nothing rather than something wrong.
+        assert!(prompt_usage(&serde_json::json!({
+            "cacheReadInputTokens": 41_000, "cache_creation_input_tokens": 2_000,
+        }))
+        .is_none());
+    }
+
+    #[test]
+    fn cache_creation_tokens_are_carved_out_of_input_too() {
+        // Newer Grok builds add `cacheCreationTokens` alongside the reads. It is
+        // a slice of `inputTokens` on the same footing, so it is subtracted out
+        // as well — leaving the four buckets summing to `totalTokens`.
+        let usage = serde_json::json!({
+            "inputTokens": 10_000, "outputTokens": 400, "totalTokens": 10_400,
+            "cachedReadTokens": 6_000, "cacheCreationTokens": 1_500,
+        });
+        let parsed = prompt_usage(&usage).expect("usage");
+        assert_eq!(parsed.input_tokens, 2_500);
+        assert_eq!(parsed.cache_read_input_tokens, 6_000);
+        assert_eq!(parsed.cache_creation_input_tokens, 1_500);
+        assert_eq!(parsed.output_tokens, 400);
+        assert_eq!(total_of(&parsed), 10_400);
+
+        // Cache counters that overshoot `inputTokens` saturate to a zero
+        // remainder rather than wrapping to a colossal input.
+        let overshoot = serde_json::json!({
+            "inputTokens": 100, "outputTokens": 10, "cachedReadTokens": 900,
+        });
+        let parsed = prompt_usage(&overshoot).expect("usage");
+        assert_eq!(parsed.input_tokens, 0);
+        assert_eq!(parsed.cache_read_input_tokens, 900);
     }
 
     /// Grok's own catalog outranks the id-shaped guess. The fixture's session
@@ -2274,6 +2601,130 @@ mod tests {
         assert_eq!(grok_context_window_from_config_toml("[model", "mine"), None);
         assert_eq!(
             grok_context_window_from_config_toml("[model.mine]\ncontext_window = -1\n", "mine"),
+            None
+        );
+    }
+
+    /// Grok 1.0.64+ gives a `[model.<id>]` table without a window the window of
+    /// another table that sends the same model. Each case is a config whose
+    /// windows Grok 1.0.70 reported live in `session/new`.
+    #[test]
+    fn a_windowless_model_table_takes_the_window_of_one_sending_the_same_model() {
+        let ep = "base_url = \"http://127.0.0.1:9/v1\"\napi_key = \"x\"\n";
+        // The holder names no `model`, so it sends its own id: 500000.
+        let named_by_id = format!(
+            "[model.big]\n{ep}context_window = 500000\n\n[model.alias]\nmodel = \"big\"\n{ep}"
+        );
+        assert_eq!(
+            grok_context_window_from_config_toml(&named_by_id, "alias"),
+            Some(500_000)
+        );
+        // The alias names no `model` either way round: it sends `alias`.
+        let alias_by_id = format!(
+            "[model.big]\nmodel = \"alias\"\n{ep}context_window = 500000\n\n[model.alias]\n{ep}"
+        );
+        assert_eq!(
+            grok_context_window_from_config_toml(&alias_by_id, "alias"),
+            Some(500_000)
+        );
+        // Several holders: the one declared last wins, whatever the windows
+        // and whatever the key order (live: 400000, 300000, 400000).
+        let holders = |first: (&str, u64), second: (&str, u64)| {
+            format!(
+                "[model.{}]\nmodel = \"m\"\n{ep}context_window = {}\n\n\
+                 [model.{}]\nmodel = \"m\"\n{ep}context_window = {}\n\n\
+                 [model.alias]\nmodel = \"m\"\n{ep}",
+                first.0, first.1, second.0, second.1
+            )
+        };
+        for (config, expected) in [
+            (holders(("w1", 300_000), ("w2", 400_000)), 400_000),
+            (holders(("w1", 400_000), ("w2", 300_000)), 300_000),
+            (holders(("z1", 300_000), ("a2", 400_000)), 400_000),
+        ] {
+            assert_eq!(
+                grok_context_window_from_config_toml(&config, "alias"),
+                Some(expected),
+                "{config}"
+            );
+        }
+        // Nobody else sends the alias's model: Grok falls back to 200000,
+        // which is not a window Grok assigned, so no opinion here.
+        let unmatched = format!("[model.alias]\nmodel = \"nobody\"\n{ep}");
+        assert_eq!(
+            grok_context_window_from_config_toml(&unmatched, "alias"),
+            None
+        );
+        // A table's own window still comes first.
+        let own = format!(
+            "[model.big]\n{ep}context_window = 500000\n\n\
+             [model.alias]\nmodel = \"big\"\n{ep}context_window = 64000\n"
+        );
+        assert_eq!(
+            grok_context_window_from_config_toml(&own, "alias"),
+            Some(64_000)
+        );
+    }
+
+    /// Grok counts a window only when it is a non-negative integer, and a 0
+    /// leaves the table on Grok's 200000 default. Each case is a config whose
+    /// windows Grok 1.0.70 reported live in `session/new`.
+    #[test]
+    fn grok_counts_a_zero_window_and_passes_over_an_invalid_one() {
+        let ep = "base_url = \"http://127.0.0.1:9/v1\"\napi_key = \"x\"\n";
+        // The alias's own window, next to a holder of 500000.
+        let own = |window: &str| {
+            format!(
+                "[model.big]\n{ep}context_window = 500000\n\n\
+                 [model.alias]\nmodel = \"big\"\n{ep}context_window = {window}\n"
+            )
+        };
+        // Live: 200000, the default, so no opinion.
+        assert_eq!(
+            grok_context_window_from_config_toml(&own("0"), "alias"),
+            None
+        );
+        // Live: 500000 for each, the holder's window.
+        for window in ["-5", "\"abc\"", "150000.5"] {
+            assert_eq!(
+                grok_context_window_from_config_toml(&own(window), "alias"),
+                Some(500_000),
+                "{window}"
+            );
+        }
+        // Two holders of the alias's model, the later one with `window`.
+        let later = |window: &str| {
+            format!(
+                "[model.w1]\nmodel = \"m\"\n{ep}context_window = 300000\n\n\
+                 [model.w2]\nmodel = \"m\"\n{ep}context_window = {window}\n\n\
+                 [model.alias]\nmodel = \"m\"\n{ep}"
+            )
+        };
+        // Live: 200000 for w2 and the alias.
+        assert_eq!(
+            grok_context_window_from_config_toml(&later("0"), "alias"),
+            None
+        );
+        assert_eq!(
+            grok_context_window_from_config_toml(&later("0"), "w2"),
+            None
+        );
+        // Live: 300000 for both, w1's window.
+        assert_eq!(
+            grok_context_window_from_config_toml(&later("-5"), "alias"),
+            Some(300_000)
+        );
+        assert_eq!(
+            grok_context_window_from_config_toml(&later("-5"), "w2"),
+            Some(300_000)
+        );
+        // The only holder declares 0. Live: 200000 for both.
+        let zero_only = format!(
+            "[model.w1]\nmodel = \"m\"\n{ep}context_window = 0\n\n\
+             [model.alias]\nmodel = \"m\"\n{ep}"
+        );
+        assert_eq!(
+            grok_context_window_from_config_toml(&zero_only, "alias"),
             None
         );
     }
@@ -2973,5 +3424,17 @@ mod tests {
         assert_eq!(status_of(&detail, "c-empty"), Some("completed"));
         // Absent everywhere stays absent — unknown, never a guess.
         assert_eq!(status_of(&detail, "c-silent"), None);
+    }
+
+    /// #948: built with an agent's launch env, the parser reads where THAT
+    /// env puts the agent's files, not where codeg's own environment does.
+    #[test]
+    fn for_env_reads_the_home_of_the_launch_env() {
+        let env = AgentEnv::with_overrides(&[("GROK_HOME", "/relocated/grok")]);
+        // The model catalog is read from the sessions dir's parent.
+        assert_eq!(
+            GrokParser::for_env(&env).base_dir,
+            PathBuf::from("/relocated/grok").join("sessions")
+        );
     }
 }

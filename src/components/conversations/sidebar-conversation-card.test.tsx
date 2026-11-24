@@ -1,12 +1,29 @@
 import { type ReactElement } from "react"
-import { fireEvent, render } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
-import { describe, expect, it, vi, beforeEach } from "vitest"
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest"
 
 import { SidebarConversationCard } from "./sidebar-conversation-card"
 import { formatRelative } from "./sidebar-conversation-grouping"
+import {
+  resetAppWorkspaceStore,
+  useAppWorkspaceStore,
+} from "@/stores/app-workspace-store"
+import { useTabStore, type TabItem } from "@/stores/tab-store"
+import {
+  resetConversationTagsStore,
+  useConversationTagsStore,
+} from "@/stores/conversation-tags-store"
+import {
+  ATTACH_SESSION_TO_SESSION_EVENT,
+  type AttachSessionToSessionDetail,
+} from "@/lib/session-attachment-events"
 import type { DbConversationSummary } from "@/lib/types"
 import enMessages from "@/i18n/messages/en.json"
+import {
+  resetAssistantsStore,
+  useAssistantsStore,
+} from "@/stores/assistants-store"
 
 // AgentIcon renders exactly once per card body execution, so counting its
 // renders counts how many cards actually re-rendered (a card that bails out via
@@ -201,6 +218,183 @@ describe("SidebarConversationCard pin action", () => {
   })
 })
 
+describe("SidebarConversationCard move to folder", () => {
+  const onMoveToFolder = vi.fn()
+  const onManageConversations = vi.fn()
+  beforeEach(() => {
+    onMoveToFolder.mockClear()
+    onManageConversations.mockClear()
+    resetAppWorkspaceStore()
+    const base = {
+      git_branch: null,
+      default_agent_type: null,
+      last_opened_at: "2026-11-12T00:00:00Z",
+      color: "inherit",
+      parent_id: null,
+      alias: null,
+      group_id: null,
+    } as const
+    useAppWorkspaceStore.setState({
+      folders: [
+        {
+          ...base,
+          id: 1,
+          name: "repo",
+          path: "/w/repo",
+          sort_order: 1,
+          kind: "regular",
+        },
+        {
+          ...base,
+          id: 2,
+          name: "other",
+          path: "/w/other",
+          sort_order: 2,
+          kind: "regular",
+        },
+      ],
+    })
+  })
+
+  function renderCard(c: DbConversationSummary) {
+    return renderWithIntl(
+      <SidebarConversationCard
+        conversation={c}
+        isSelected={false}
+        timeLabel=""
+        onSelect={onSelect}
+        onDoubleClick={onDoubleClick}
+        onRename={onRename}
+        onDelete={onDelete}
+        onStatusChange={onStatusChange}
+        onMoveToFolder={onMoveToFolder}
+        onManageConversations={onManageConversations}
+      />
+    )
+  }
+
+  function openMoveSubmenu() {
+    fireEvent.keyDown(screen.getByText("Move to"), { key: "ArrowRight" })
+  }
+
+  it("lists the other open folders and hands the pick over", async () => {
+    const c = conv(1)
+    const { getByText } = renderCard(c)
+    fireEvent.contextMenu(getByText("conv-1"))
+    openMoveSubmenu()
+    const other = await screen.findByText("other")
+    // The conversation's own folder is no destination.
+    expect(screen.queryByText("repo")).toBeNull()
+    fireEvent.click(other)
+    expect(onMoveToFolder).toHaveBeenCalledWith(c, 2)
+  })
+
+  it("says so when there is no other folder", async () => {
+    useAppWorkspaceStore.setState({
+      folders: useAppWorkspaceStore.getState().folders.slice(0, 1),
+    })
+    const { getByText } = renderCard(conv(1))
+    fireEvent.contextMenu(getByText("conv-1"))
+    openMoveSubmenu()
+    expect(await screen.findByText("No other open folder")).toBeDefined()
+  })
+
+  it("offers the move on a chat conversation", () => {
+    const { getByText } = renderCard({ ...conv(2), kind: "chat" })
+    fireEvent.contextMenu(getByText("conv-2"))
+    expect(screen.getByText("Move to")).toBeDefined()
+  })
+
+  it("does not offer it on a sub-session — it moves with its root", () => {
+    const child: DbConversationSummary = {
+      ...conv(3),
+      kind: "delegate",
+      parent_id: 1,
+    }
+    const { getByText } = renderCard(child)
+    fireEvent.contextMenu(getByText("conv-3"))
+    expect(screen.queryByText("Move to")).toBeNull()
+  })
+
+  it("opens Manage conversations for a folder conversation", () => {
+    const c = conv(4)
+    const { getByText } = renderCard(c)
+    fireEvent.contextMenu(getByText("conv-4"))
+    fireEvent.click(getByText("Manage conversations…"))
+    expect(onManageConversations).toHaveBeenCalledWith(c)
+  })
+
+  it("leaves Manage conversations off a sub-session", () => {
+    const child: DbConversationSummary = {
+      ...conv(6),
+      kind: "delegate",
+      parent_id: 1,
+    }
+    const { getByText } = renderCard(child)
+    fireEvent.contextMenu(getByText("conv-6"))
+    expect(screen.queryByText("Manage conversations…")).toBeNull()
+  })
+
+  it("leaves Manage conversations off a chat — no folder scope names it", () => {
+    const { getByText } = renderCard({ ...conv(5), kind: "chat" })
+    fireEvent.contextMenu(getByText("conv-5"))
+    expect(screen.queryByText("Manage conversations…")).toBeNull()
+  })
+})
+
+describe("SidebarConversationCard command-line badge", () => {
+  function renderCard(c: DbConversationSummary) {
+    return renderWithIntl(
+      <SidebarConversationCard
+        conversation={c}
+        isSelected={false}
+        timeLabel=""
+        onSelect={onSelect}
+        onDoubleClick={onDoubleClick}
+        onRename={onRename}
+        onDelete={onDelete}
+        onStatusChange={onStatusChange}
+      />
+    )
+  }
+
+  it("marks a conversation codeg-cli started, and only that one", () => {
+    const fromCli = renderCard({ ...conv(1), source: "cli" })
+    expect(fromCli.getByTitle("Started from the command line")).toBeTruthy()
+    fromCli.unmount()
+    const fromWindow = renderCard(conv(2))
+    expect(fromWindow.queryByTitle("Started from the command line")).toBeNull()
+    fromWindow.unmount()
+    // A source this build does not know is shown as nothing.
+    const unknown = renderCard({ ...conv(3), source: "future" })
+    expect(unknown.queryByTitle("Started from the command line")).toBeNull()
+  })
+})
+
+describe("SidebarConversationCard running badge", () => {
+  it("turns a span around its icon, never the icon itself", () => {
+    // An SVG element's turn animates on the main thread and lays the page out
+    // every frame, for as long as the conversation runs.
+    const { getByTitle } = renderWithIntl(
+      <SidebarConversationCard
+        conversation={{ ...conv(1), status: "in_progress" }}
+        isSelected={false}
+        timeLabel=""
+        onSelect={onSelect}
+        onDoubleClick={onDoubleClick}
+        onRename={onRename}
+        onDelete={onDelete}
+        onStatusChange={onStatusChange}
+      />
+    )
+    const badge = getByTitle("Running")
+    const turning = badge.querySelector(".animate-spin")
+    expect(turning?.tagName).toBe("SPAN")
+    expect(turning?.querySelector("svg")).not.toBeNull()
+    expect(badge.querySelector("svg.animate-spin")).toBeNull()
+  })
+})
+
 // The hover-reveal icon buttons live in the row's right slot as siblings of the
 // clickable row button (never nested). They carry only an aria-label (icon, no
 // text), so getByLabelText addresses them unambiguously — distinct from the
@@ -277,6 +471,130 @@ describe("SidebarConversationCard hover quick actions", () => {
     expect(queryByLabelText("Unpin")).toBeNull()
     expect(queryByLabelText("Mark as completed")).toBeNull()
     expect(queryByLabelText("Reopen")).toBeNull()
+  })
+})
+
+// "Add to session" mirrors the file tree's action: it drops an `@`-style mention
+// of the right-clicked conversation into the ACTIVE conversation tab's composer,
+// addressed by a window event the composer listens for. The target tab is read
+// from the tab store when the menu opens (not subscribed), so each test seeds the
+// store before firing the context menu.
+describe("SidebarConversationCard add to session", () => {
+  function tab(id: string, conversationId: number | null): TabItem {
+    return {
+      id,
+      kind: "conversation",
+      folderId: 1,
+      conversationId,
+      agentType: "claude_code",
+      title: "tab",
+      isPinned: false,
+    }
+  }
+
+  function seedTabs(tabs: TabItem[], activeTabId: string | null) {
+    useTabStore.setState({ tabs, activeTabId })
+  }
+
+  let events: AttachSessionToSessionDetail[]
+  let listener: (event: Event) => void
+
+  beforeEach(() => {
+    events = []
+    listener = (event: Event) => {
+      events.push((event as CustomEvent<AttachSessionToSessionDetail>).detail)
+    }
+    window.addEventListener(ATTACH_SESSION_TO_SESSION_EVENT, listener)
+    seedTabs([], null)
+  })
+
+  afterEach(() => {
+    window.removeEventListener(ATTACH_SESSION_TO_SESSION_EVENT, listener)
+    seedTabs([], null)
+  })
+
+  function renderCard(c: DbConversationSummary) {
+    return renderWithIntl(
+      <SidebarConversationCard
+        conversation={c}
+        isSelected={false}
+        timeLabel="5m"
+        onSelect={onSelect}
+        onDoubleClick={onDoubleClick}
+        onRename={onRename}
+        onDelete={onDelete}
+        onStatusChange={onStatusChange}
+      />
+    )
+  }
+
+  it("emits the mention for the active conversation tab", () => {
+    seedTabs([tab("tab-1", 7), tab("tab-2", 9)], "tab-2")
+    const target = conv(3)
+    const { getByText } = renderCard(target)
+    fireEvent.contextMenu(getByText("conv-3"))
+    fireEvent.click(getByText("Add to session"))
+    expect(events).toHaveLength(1)
+    expect(events[0].tabId).toBe("tab-2")
+    // The whole summary rides along so the composer can build the badge through
+    // the same adapter the `@` panel uses.
+    expect(events[0].conversation).toBe(target)
+  })
+
+  it("disables the item when no conversation tab is open", () => {
+    seedTabs([], null)
+    const { getByText } = renderCard(conv(4))
+    fireEvent.contextMenu(getByText("conv-4"))
+    const item = getByText("Add to session")
+    expect(item.getAttribute("aria-disabled")).toBe("true")
+    fireEvent.click(item)
+    expect(events).toHaveLength(0)
+  })
+
+  it("allows mentioning the conversation the active tab already holds", () => {
+    // Self-mention is permitted, matching the composer's own `@` panel — it
+    // lists every session including the one being typed in.
+    seedTabs([tab("tab-1", 5)], "tab-1")
+    const { getByText } = renderCard(conv(5))
+    fireEvent.contextMenu(getByText("conv-5"))
+    const item = getByText("Add to session")
+    expect(item.getAttribute("aria-disabled")).not.toBe("true")
+    fireEvent.click(item)
+    expect(events).toHaveLength(1)
+    expect(events[0].tabId).toBe("tab-1")
+  })
+
+  // The open-time snapshot only drives the disabled state. `mod+tab` / `mod+w`
+  // live on a document keydown handler that Radix lets modifier combos through
+  // to, so the active tab CAN move under an open menu — the click must therefore
+  // re-read the store rather than post to a stale (possibly closed) tab.
+  it("re-resolves the target at click time when the active tab moved", () => {
+    seedTabs([tab("tab-1", 7), tab("tab-2", 9)], "tab-1")
+    const { getByText } = renderCard(conv(3))
+    fireEvent.contextMenu(getByText("conv-3"))
+    // Menu is open, snapshot says tab-1 — now the active tab moves under it.
+    seedTabs([tab("tab-1", 7), tab("tab-2", 9)], "tab-2")
+    fireEvent.click(getByText("Add to session"))
+    expect(events).toHaveLength(1)
+    expect(events[0].tabId).toBe("tab-2")
+  })
+
+  it("emits nothing when the target tab was closed under the open menu", () => {
+    seedTabs([tab("tab-1", 7)], "tab-1")
+    const { getByText } = renderCard(conv(3))
+    fireEvent.contextMenu(getByText("conv-3"))
+    seedTabs([], null)
+    fireEvent.click(getByText("Add to session"))
+    expect(events).toHaveLength(0)
+  })
+
+  it("stays enabled for an unsaved draft tab (no bound conversation yet)", () => {
+    seedTabs([tab("tab-draft", null)], "tab-draft")
+    const { getByText } = renderCard(conv(6))
+    fireEvent.contextMenu(getByText("conv-6"))
+    fireEvent.click(getByText("Add to session"))
+    expect(events).toHaveLength(1)
+    expect(events[0].tabId).toBe("tab-draft")
   })
 })
 
@@ -365,5 +683,359 @@ describe("SidebarConversationCard sub-session chevron", () => {
   it("draws no ancestor guide rails for a root row", () => {
     const { container } = renderCard(conv(5), { depth: 0 })
     expect(container.querySelectorAll("[data-subsession-rail]")).toHaveLength(0)
+  })
+})
+
+// The row truncates to one line and never says where the session lives, so
+// resting the pointer on it floats a read-only bubble out to the right with the
+// folder, its absolute path, and the branch. Radix portals the content to the
+// body, hence the `screen` queries.
+describe("SidebarConversationCard hover details bubble", () => {
+  const FOLDER_PATH = "/Users/dev/projects/codeg"
+
+  function renderCard(c: DbConversationSummary) {
+    return renderWithIntl(
+      <SidebarConversationCard
+        conversation={c}
+        isSelected={false}
+        timeLabel="5m"
+        onSelect={onSelect}
+        onDoubleClick={onDoubleClick}
+        onRename={onRename}
+        onDelete={onDelete}
+        onStatusChange={onStatusChange}
+      />
+    )
+  }
+
+  function rowOf(container: HTMLElement): HTMLElement {
+    return container.querySelector("[data-conv-key]") as HTMLElement
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    resetAppWorkspaceStore()
+    useAppWorkspaceStore.setState({
+      allFolders: [
+        {
+          id: 1,
+          name: "codeg",
+          path: FOLDER_PATH,
+          git_branch: null,
+          default_agent_type: null,
+          last_opened_at: new Date(NOW).toISOString(),
+          sort_order: 0,
+          color: "inherit",
+          parent_id: null,
+          kind: "regular",
+          alias: null,
+          group_id: null,
+        },
+      ],
+    })
+  })
+
+  afterEach(() => {
+    // Unmount before resetting: the reset is a zustand write, and a bubble still
+    // mounted when it lands would re-render outside `act()`.
+    cleanup()
+    resetAppWorkspaceStore()
+    vi.useRealTimers()
+  })
+
+  it("opens on pointer enter, but only after the open delay", () => {
+    const { container } = renderCard(conv(1))
+    fireEvent.pointerEnter(rowOf(container), { pointerType: "mouse" })
+
+    // Sweeping the pointer down the list must stay quiet, so nothing yet.
+    expect(screen.queryByText(FOLDER_PATH)).toBeNull()
+
+    act(() => {
+      vi.advanceTimersByTime(600)
+    })
+    expect(screen.getByText(FOLDER_PATH)).toBeDefined()
+    expect(screen.getByText("codeg")).toBeDefined()
+  })
+
+  // Companion to the `select-none` pin in the content's own test: with the
+  // bubble unpointable, a press always lands outside it and the dismissable
+  // layer tears it down before Radix can latch onto a stray document selection
+  // and refuse to ever close. jsdom models neither selections nor hit-testing,
+  // so this pins the CSS contract; the behaviour was verified in a real browser.
+  it("renders the bubble inert to the pointer", () => {
+    const { container } = renderCard(conv(1))
+    fireEvent.pointerEnter(rowOf(container), { pointerType: "mouse" })
+    act(() => {
+      vi.advanceTimersByTime(600)
+    })
+
+    const content = document.querySelector('[data-slot="hover-card-content"]')
+    expect(content?.className).toContain("pointer-events-none")
+  })
+
+  it("closes again once the pointer leaves", () => {
+    const { container } = renderCard(conv(1))
+    const row = rowOf(container)
+    fireEvent.pointerEnter(row, { pointerType: "mouse" })
+    act(() => {
+      vi.advanceTimersByTime(600)
+    })
+    expect(screen.getByText(FOLDER_PATH)).toBeDefined()
+
+    fireEvent.pointerLeave(row, { pointerType: "mouse" })
+    act(() => {
+      vi.advanceTimersByTime(600)
+    })
+    expect(screen.queryByText(FOLDER_PATH)).toBeNull()
+  })
+
+  // Radix's trigger opens on ANY focus, and its touch filter covers only
+  // pointer enter/leave. Tapping a row focuses the button inside it, so without
+  // the `isKeyboardFocus` guard a tap would strand a bubble on screen with no
+  // pointer that could ever leave and dismiss it.
+  it("does not open on a non-keyboard focus", () => {
+    const { container } = renderCard(conv(1))
+    const focusIn = new FocusEvent("focusin", {
+      bubbles: true,
+      cancelable: true,
+    })
+    rowOf(container).dispatchEvent(focusIn)
+
+    // The card's guard default-prevents, which is what makes Radix's composed
+    // handler bail — asserting it here keeps the "stays closed" check below from
+    // passing vacuously (i.e. because the event never reached React at all).
+    expect(focusIn.defaultPrevented).toBe(true)
+    act(() => {
+      vi.advanceTimersByTime(600)
+    })
+    expect(screen.queryByText(FOLDER_PATH)).toBeNull()
+  })
+
+  it("drops the bubble when the context menu takes the row over", () => {
+    const { container } = renderCard(conv(1))
+    const row = rowOf(container)
+    fireEvent.pointerEnter(row, { pointerType: "mouse" })
+    act(() => {
+      vi.advanceTimersByTime(600)
+    })
+    expect(screen.getByText(FOLDER_PATH)).toBeDefined()
+
+    fireEvent.contextMenu(row)
+    expect(screen.queryByText(FOLDER_PATH)).toBeNull()
+  })
+
+  it("leaves a removed source worktree to the bubble, with no mark on the row", () => {
+    const origin = "/Users/dev/projects/codeg-feature-x"
+    const { container } = renderCard({ ...conv(1), origin_cwd: origin })
+
+    expect(screen.queryByText("Original working directory")).toBeNull()
+    expect(screen.queryByTitle("Original working directory")).toBeNull()
+
+    fireEvent.pointerEnter(rowOf(container), { pointerType: "mouse" })
+    act(() => {
+      vi.advanceTimersByTime(600)
+    })
+    expect(screen.getByText("Original working directory")).toBeDefined()
+    expect(screen.getByText(origin)).toBeDefined()
+  })
+
+  // NOT covered here: touch. Radix's `excludeTouch` drops enter/leave whose
+  // `pointerType === "touch"`, so a tap never strands a bubble on screen — but
+  // jsdom ships no `PointerEvent`, so every synthetic pointer event arrives as a
+  // `MouseEvent` with `pointerType: undefined` and the branch can't be reached.
+  // Verify that one in a real browser, not here.
+})
+
+describe("SidebarConversationCard tag chips", () => {
+  beforeEach(() => {
+    resetConversationTagsStore()
+    probe.agentIconRenders = 0
+    const store = useConversationTagsStore.getState()
+    for (const [id, name] of [
+      [1, "bug"],
+      [2, "idea"],
+      [3, "ui"],
+    ] as const) {
+      store.applyChange({
+        kind: "upsert",
+        tag: { id, folder_id: null, name, color: "#cf222e", sort_order: id },
+      })
+    }
+  })
+
+  it("draws two chips, folds the rest into +N, and skips unknown tags", () => {
+    const tagged = { ...conv(1), tag_ids: [1, 2, 3, 99] }
+    renderWithIntl(<CardList conversations={[tagged]} now={NOW} />)
+    expect(screen.getByText("bug")).toBeTruthy()
+    expect(screen.getByText("idea")).toBeTruthy()
+    expect(screen.queryByText("ui")).toBeNull()
+    // 99 names no tag this client knows: it is neither drawn nor counted.
+    expect(screen.getByText("+1")).toBeTruthy()
+    expect(screen.getByTitle("ui")).toBeTruthy()
+  })
+
+  it("re-renders only the cards showing a tag whose definition changed", () => {
+    const list = [
+      { ...conv(1), tag_ids: [1] },
+      { ...conv(2), tag_ids: [2] },
+      conv(3),
+    ]
+    renderWithIntl(<CardList conversations={list} now={NOW} />)
+    probe.agentIconRenders = 0
+    act(() => {
+      useConversationTagsStore.getState().applyChange({
+        kind: "upsert",
+        tag: {
+          id: 1,
+          folder_id: null,
+          name: "Bug!",
+          color: "#cf222e",
+          sort_order: 1,
+        },
+      })
+    })
+    expect(screen.getByText("Bug!")).toBeTruthy()
+    expect(probe.agentIconRenders).toBe(1)
+  })
+})
+
+describe("SidebarConversationCard branch chip", () => {
+  beforeEach(() => {
+    resetConversationTagsStore()
+    probe.agentIconRenders = 0
+    const store = useConversationTagsStore.getState()
+    for (const [id, name] of [
+      [1, "bug"],
+      [2, "idea"],
+    ] as const) {
+      store.applyChange({
+        kind: "upsert",
+        tag: { id, folder_id: null, name, color: "#cf222e", sort_order: id },
+      })
+    }
+  })
+
+  const setBranchTag = (enabled: boolean, color = "#0969da") =>
+    act(() => {
+      useConversationTagsStore
+        .getState()
+        .applyChange({ kind: "branch_tag", setting: { enabled, color } })
+    })
+
+  const follows = (a: Node, b: Node) =>
+    (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+
+  it("comes first after the title, in the branch tag's colour, and counts toward the two chips", () => {
+    setBranchTag(true)
+    const row = { ...conv(1), git_branch: "feature/x", tag_ids: [1, 2] }
+    renderWithIntl(<CardList conversations={[row]} now={NOW} />)
+
+    const title = screen.getByText("conv-1")
+    const chip = screen.getByTitle("Branch: feature/x")
+    const bug = screen.getByText("bug")
+    expect(follows(title, chip)).toBe(true)
+    expect(follows(chip, bug)).toBe(true)
+    expect(chip.style.getPropertyValue("--fl-bg")).toBe("#0969da")
+    // Branch + one tag is the row's two chips; the other tag folds away.
+    expect(screen.queryByText("idea")).toBeNull()
+    expect(screen.getByText("+1")).toBeTruthy()
+    // The title grows only as far as its own text, so the chips follow it
+    // rather than the row's far end (layout itself is checked in a browser).
+    expect(title.className).toMatch(/(^|\s)max-w-max(\s|$)/)
+  })
+
+  it("follows the setting live, and skips rows without a branch and sub-sessions", () => {
+    const list = [
+      { ...conv(1), git_branch: "main" },
+      conv(2),
+      { ...conv(3), git_branch: "main", parent_id: 1 },
+    ]
+    renderWithIntl(<CardList conversations={list} now={NOW} />)
+    expect(screen.queryByTitle("Branch: main")).toBeNull()
+
+    setBranchTag(true)
+    // One chip, on the root row: conv(2) has no branch, conv(3) is a
+    // sub-session.
+    const rowOf = (id: number) =>
+      document.querySelector(`[data-conv-key="claude_code:${id}"]`)!
+    expect(screen.getAllByTitle("Branch: main")).toHaveLength(1)
+    expect(rowOf(1).contains(screen.getByTitle("Branch: main"))).toBe(true)
+    expect(rowOf(3).querySelector("[data-branch-chip]")).toBeNull()
+
+    setBranchTag(true, "#1a7f37")
+    expect(
+      screen.getByTitle("Branch: main").style.getPropertyValue("--fl-bg")
+    ).toBe("#1a7f37")
+
+    setBranchTag(false, "#1a7f37")
+    expect(screen.queryByTitle("Branch: main")).toBeNull()
+  })
+})
+
+describe("SidebarConversationCard — assistant sub-sessions", () => {
+  beforeEach(() => {
+    resetAssistantsStore()
+  })
+
+  function renderChild(c: DbConversationSummary) {
+    return renderWithIntl(
+      <SidebarConversationCard
+        conversation={c}
+        isSelected={false}
+        timeLabel=""
+        onSelect={onSelect}
+        onDoubleClick={onDoubleClick}
+        onRename={onRename}
+        onDelete={onDelete}
+        onStatusChange={onStatusChange}
+      />
+    )
+  }
+
+  it("shows the assistant's avatar where the agent icon goes", () => {
+    useAssistantsStore.getState().merge([
+      {
+        id: 3,
+        uid: "u-3",
+        name: "Reviewer",
+        description: "",
+        avatar: { kind: "emoji", emoji: "🦉", color: "teal" },
+        agent_type: "codex",
+        agent_options: { config_values: {} },
+        label_snapshot: { agent: "Codex", mode: null, options: [] },
+        instructions: "",
+        enabled: true,
+        sort_order: 1,
+        revision: 1,
+        created_at: "2026-10-16T00:00:00Z",
+        updated_at: "2026-10-16T00:00:00Z",
+        deleted_at: null,
+      },
+    ])
+    const before = probe.agentIconRenders
+    const { container } = renderChild({
+      ...conv(7),
+      parent_id: 1,
+      assistant_id: 3,
+      assistant_name: "Reviewer",
+    })
+    expect(
+      container.querySelector('[data-slot="assistant-avatar"]')
+    ).toHaveTextContent("🦉")
+    expect(probe.agentIconRenders).toBe(before)
+  })
+
+  it("draws the generic assistant glyph when the store lacks the row", () => {
+    const before = probe.agentIconRenders
+    const { container } = renderChild({
+      ...conv(8),
+      parent_id: 1,
+      assistant_id: 9,
+      assistant_name: "Planner",
+    })
+    const avatar = container.querySelector('[data-slot="assistant-avatar"]')
+    expect(avatar?.querySelector("svg")).not.toBeNull()
+    // Still not the agent's icon: the row ran as an assistant.
+    expect(probe.agentIconRenders).toBe(before)
   })
 })

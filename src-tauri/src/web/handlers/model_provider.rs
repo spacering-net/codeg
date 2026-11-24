@@ -93,3 +93,17 @@ pub async fn delete_model_provider(
     mp_commands::delete_model_provider_core(&state.db, params.id).await?;
     Ok(Json(()))
 }
+
+#[derive(Deserialize)]
+pub struct ListProviderModelsBody {
+    pub params: mp_commands::ListProviderModelsParams,
+}
+
+pub async fn list_provider_models(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(body): Json<ListProviderModelsBody>,
+) -> Result<Json<crate::acp::provider_models::ModelList>, AppCommandError> {
+    mp_commands::list_provider_models_core(&state.db, &state.data_dir, body.params)
+        .await
+        .map(Json)
+}

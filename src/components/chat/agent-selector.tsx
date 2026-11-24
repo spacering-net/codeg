@@ -14,6 +14,7 @@ import { useAcpAgents } from "@/hooks/use-acp-agents"
 import type { AgentType, AcpAgentInfo } from "@/lib/types"
 import { getAgentLabel } from "@/lib/custom-agents"
 import { AgentIcon } from "@/components/agent-icon"
+import { SelectorTooltip } from "@/components/chat/selector-tooltip"
 import {
   Popover,
   PopoverContent,
@@ -50,6 +51,7 @@ interface AgentSelectorProps {
   onFallback?: (agentType: AgentType) => void
   onAgentsLoaded?: (agents: AcpAgentInfo[]) => void
   onOpenAgentsSettings?: () => void
+  /** Lock a bound conversation; draft pickers stay usable during startup. */
   disabled?: boolean
   /**
    * Where the pill sits inside the row it is given. The selector now spans the
@@ -149,6 +151,17 @@ export function AgentSelector({
   // One pass, two answers: how many pills fit, and where the droplet goes.
   // Both read the same boxes, and the fit result changes those boxes, so
   // splitting them would just make the two measurements disagree for a frame.
+  //
+  // ⚠️ Every measurement here is LAYOUT px (`offsetWidth` / `offsetLeft`), never
+  // `getBoundingClientRect()`. The rects are in SCREEN px — scaled by any CSS
+  // transform above us — while `scrollWidth` below (the label's natural width)
+  // is not, so mixing the two makes the fit arithmetic wrong the moment this
+  // selector is rendered inside something scaled. The infinite-conversation
+  // canvas does exactly that: a card at 60% zoom compared a shrunken `inner`
+  // against a full-size `labelWidth` and collapsed the row, and the droplet —
+  // positioned with screen px inside the scaled subtree — sat off its pill
+  // entirely. `offsetWidth`/`offsetLeft` are transform-independent, which also
+  // covers the app's own zoom control rewriting the root font-size.
   const measure = useCallback(() => {
     const wrapper = wrapperRef.current
     const frame = frameRef.current
@@ -159,12 +172,12 @@ export function AgentSelector({
     // is handed down by the layout and never reflects what we put inside it.
     // That is what makes this loop converge: dropping a pill narrows the frame
     // but leaves `outer` untouched.
-    const outer = wrapper.getBoundingClientRect().width
+    const outer = wrapper.offsetWidth
     let unit = 0
     let samples = 0
     for (const [agentType, el] of itemRefs.current) {
       if (agentType === selected) continue
-      const width = el.getBoundingClientRect().width
+      const width = el.offsetWidth
       // Smallest sample wins: a pill that was just deselected is still
       // shrinking out of its label, and its in-flight width would overstate
       // how much room its settled siblings need.
@@ -208,7 +221,7 @@ export function AgentSelector({
     } else if (selectedWidth + others * unit <= inner) {
       next = null
     } else {
-      const moreWidth = moreRef.current?.getBoundingClientRect().width || unit
+      const moreWidth = moreRef.current?.offsetWidth || unit
       const fits = Math.floor((inner - selectedWidth - moreWidth) / unit)
       next = Math.max(0, Math.min(others, fits))
     }
@@ -225,11 +238,11 @@ export function AgentSelector({
       setIndicator(null)
       return
     }
-    const frameRect = frame.getBoundingClientRect()
-    const btnRect = btn.getBoundingClientRect()
+    // `offsetLeft` is already relative to the frame: it is `position: relative`,
+    // making it the offsetParent of every pill.
     setIndicator({
-      left: btnRect.left - frameRect.left,
-      width: btnRect.width,
+      left: btn.offsetLeft,
+      width: btn.offsetWidth,
     })
   }, [agents.length, selected])
 
@@ -369,95 +382,109 @@ export function AgentSelector({
           const notInstalled = agent.available && !agent.installed_version
           const label = getAgentLabel(agent.agent_type)
           return (
-            <button
+            // A collapsed pill is icon-only, so the hint names it; the selected
+            // one already spells its name out and only gets a hint when there
+            // is something extra to say. `disabled` (a platform-unavailable
+            // agent) falls back to a native `title`: those pills are the
+            // icon-only ones that most need naming, and a disabled element
+            // takes no pointer events.
+            <SelectorTooltip
               key={agent.agent_type}
-              ref={setItemRef(agent.agent_type)}
-              data-slot="agent-pill"
-              aria-pressed={isSelected}
-              title={
-                notInstalled
-                  ? `${label} · ${t("notInstalled")}`
-                  : !isSelected
-                    ? label
-                    : undefined
-              }
+              label={notInstalled || !isSelected ? label : null}
+              description={notInstalled ? t("notInstalled") : null}
               disabled={disabled || !agent.available}
-              onClick={() => handleSelect(agent.agent_type)}
-              className={cn(
-                // `shrink-0` keeps every pill at its natural width. Without it
-                // a row that briefly overflows (the frame before the first
-                // measurement, or a window narrower than a single pill) gets
-                // squeezed by flexbox, and since the label below is
-                // `min-w-0 overflow-hidden` the SELECTED agent's name is the
-                // first thing to be crushed to zero — the one label the row
-                // exists to show.
-                "relative z-10 inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full text-xs font-medium transition-all duration-300",
-                isSelected ? "px-3 py-2" : "px-2 py-2",
-                disabled || !agent.available
-                  ? "cursor-not-allowed opacity-40"
-                  : "cursor-pointer",
-                isSelected
-                  ? "text-foreground"
-                  : "text-muted-foreground hover:text-foreground/70"
-              )}
             >
-              {/* `inline-flex` is load-bearing, not decoration: as a bare
-                  inline box this wrapper would lay its icon out on a text
-                  baseline, so the strut's descender (~4px at text-xs/Inter)
-                  hung below the 16px mark and made the wrapper 20px tall. The
-                  row's `items-center` then centered *that* box, parking every
-                  icon 2px above the pill's true center while the label — a grid
-                  item with no strut — sat dead center. Making the wrapper a
-                  flex container drops the line box entirely: its height is the
-                  icon's, so icon and label share one centerline. Keep it a flex
-                  box if this markup is ever touched. */}
-              <span className="relative inline-flex shrink-0 items-center">
-                <AgentIcon agentType={agent.agent_type} className="h-4 w-4" />
-                {notInstalled ? (
-                  <span
-                    aria-hidden
-                    className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-amber-500 ring-1 ring-background"
-                  />
-                ) : null}
-              </span>
-              <span
+              <button
+                ref={setItemRef(agent.agent_type)}
+                data-slot="agent-pill"
+                aria-pressed={isSelected}
+                disabled={disabled || !agent.available}
+                onClick={() => handleSelect(agent.agent_type)}
                 className={cn(
-                  "grid transition-[grid-template-columns] duration-300",
-                  isSelected ? "grid-cols-[1fr]" : "grid-cols-[0fr]"
+                  // `shrink-0` keeps every pill at its natural width. Without it
+                  // a row that briefly overflows (the frame before the first
+                  // measurement, or a window narrower than a single pill) gets
+                  // squeezed by flexbox, and since the label below is
+                  // `min-w-0 overflow-hidden` the SELECTED agent's name is the
+                  // first thing to be crushed to zero — the one label the row
+                  // exists to show.
+                  "relative z-10 inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full text-xs font-medium transition-all duration-300",
+                  isSelected ? "px-3 py-2" : "px-2 py-2",
+                  disabled || !agent.available
+                    ? "cursor-not-allowed opacity-40"
+                    : "cursor-pointer",
+                  isSelected
+                    ? "text-foreground"
+                    : "text-muted-foreground hover:text-foreground/70"
                 )}
               >
+                {/* `inline-flex` is load-bearing, not decoration: as a bare
+                    inline box this wrapper would lay its icon out on a text
+                    baseline, so the strut's descender (~4px at text-xs/Inter)
+                    hung below the 16px mark and made the wrapper 20px tall. The
+                    row's `items-center` then centered *that* box, parking every
+                    icon 2px above the pill's true center while the label — a
+                    grid item with no strut — sat dead center. Making the wrapper
+                    a flex container drops the line box entirely: its height is
+                    the icon's, so icon and label share one centerline. Keep it a
+                    flex box if this markup is ever touched. */}
+                <span className="relative inline-flex shrink-0 items-center">
+                  <AgentIcon agentType={agent.agent_type} className="h-4 w-4" />
+                  {notInstalled ? (
+                    <span
+                      aria-hidden
+                      className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-amber-500 ring-1 ring-background"
+                    />
+                  ) : null}
+                </span>
                 <span
-                  ref={isSelected ? selectedLabelRef : undefined}
                   className={cn(
-                    "min-w-0 overflow-hidden whitespace-nowrap transition-opacity duration-300",
-                    isSelected ? "opacity-100" : "opacity-0"
+                    "grid transition-[grid-template-columns] duration-300",
+                    isSelected ? "grid-cols-[1fr]" : "grid-cols-[0fr]"
                   )}
                 >
-                  {label}
+                  <span
+                    ref={isSelected ? selectedLabelRef : undefined}
+                    className={cn(
+                      "min-w-0 overflow-hidden whitespace-nowrap transition-opacity duration-300",
+                      isSelected ? "opacity-100" : "opacity-0"
+                    )}
+                  >
+                    {label}
+                  </span>
                 </span>
-              </span>
-            </button>
+              </button>
+            </SelectorTooltip>
           )
         })}
         {hidden.length > 0 ? (
           <Popover open={moreOpen} onOpenChange={setMoreOpen}>
-            <PopoverTrigger asChild>
-              <button
-                ref={moreRef}
-                type="button"
-                data-slot="agent-selector-more"
-                disabled={disabled}
-                title={t("moreAgents", { count: hidden.length })}
-                aria-label={t("moreAgents", { count: hidden.length })}
-                className={cn(
-                  "relative z-10 inline-flex shrink-0 cursor-pointer items-center justify-center rounded-full px-2 py-2 text-muted-foreground transition-colors",
-                  "hover:text-foreground/70 data-[state=open]:bg-background/70 data-[state=open]:text-foreground",
-                  disabled && "cursor-not-allowed opacity-40"
-                )}
-              >
-                <MoreHorizontal className="h-4 w-4" aria-hidden />
-              </button>
-            </PopoverTrigger>
+            <SelectorTooltip
+              label={t("moreAgents", { count: hidden.length })}
+              suppressed={moreOpen}
+              disabled={disabled}
+            >
+              <PopoverTrigger asChild>
+                <button
+                  ref={moreRef}
+                  type="button"
+                  data-slot="agent-selector-more"
+                  disabled={disabled}
+                  aria-label={t("moreAgents", { count: hidden.length })}
+                  className={cn(
+                    "relative z-10 inline-flex shrink-0 cursor-pointer items-center justify-center rounded-full px-2 py-2 text-muted-foreground transition-colors",
+                    "hover:text-foreground/70",
+                    // Driven off `moreOpen`, NOT `data-[state=open]`: the
+                    // wrapping TooltipTrigger's own `data-state` lands on this
+                    // button and shadows the Popover's (see SelectorTooltip).
+                    moreOpen && "bg-background/70 text-foreground",
+                    disabled && "cursor-not-allowed opacity-40"
+                  )}
+                >
+                  <MoreHorizontal className="h-4 w-4" aria-hidden />
+                </button>
+              </PopoverTrigger>
+            </SelectorTooltip>
             <PopoverContent
               align="end"
               className="w-56 gap-0.5 p-1"

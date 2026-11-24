@@ -61,8 +61,12 @@ pub async fn get_system_terminal_settings(
 }
 
 pub async fn get_available_terminal_shells(
+    Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<AvailableTerminalShells>, AppCommandError> {
-    Ok(Json(settings_commands::build_available_terminal_shells()))
+    let settings = settings_commands::load_system_terminal_settings(&state.db.conn).await?;
+    Ok(Json(settings_commands::build_available_terminal_shells(
+        settings.default_shell.as_deref(),
+    )))
 }
 
 #[derive(Deserialize)]
@@ -86,11 +90,12 @@ pub async fn update_system_proxy_settings(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<UpdateProxySettingsParams>,
 ) -> Result<Json<SystemProxySettings>, AppCommandError> {
-    let settings = params.settings;
     let db = &state.db;
 
-    // TODO: call normalize_proxy_settings once it is made pub(crate) in
-    // commands/system_settings.rs. For now the frontend validates the URL.
+    // Normalize before storing, exactly like the desktop command does. The
+    // frontend only checks for emptiness, so this is the only thing that
+    // validates the URL and gives it an explicit scheme in server mode.
+    let settings = settings_commands::normalize_proxy_settings(params.settings)?;
     let serialized = serde_json::to_string(&settings).map_err(|e| {
         AppCommandError::invalid_input("Failed to serialize proxy settings")
             .with_detail(e.to_string())
@@ -101,6 +106,10 @@ pub async fn update_system_proxy_settings(
         .map_err(AppCommandError::from)?;
 
     proxy::apply_system_proxy_settings(&settings)?;
+    #[cfg(feature = "tauri-runtime")]
+    if let crate::web::event_bridge::EventEmitter::Tauri(app) = &state.emitter {
+        crate::browser::profile::proxy_settings_changed(app);
+    }
     Ok(Json(settings))
 }
 

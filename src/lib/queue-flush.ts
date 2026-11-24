@@ -49,36 +49,39 @@ export function shouldQueueDirectSend(
 }
 
 /**
- * Whether a fork-and-send must be blocked because the message queue is
- * non-empty. Fork is an immediate session side effect (it re-points the live
- * session), so it cannot run while drafts are queued for the CURRENT session —
- * the queued items would otherwise flush onto the forked session, i.e. the fork
- * would jump ahead of the queue. The user drains/clears the queue first.
- */
-export function forkSendBlockedByQueue(queueLength: number): boolean {
-  return queueLength > 0
-}
-
-/**
- * Whether the live connection is ready to accept a send for THIS tab: connected
- * AND its established cwd matches the tab's intended working dir.
+ * Whether the live connection is ready to accept a send for THIS tab: connected,
+ * its established cwd matches the tab's intended working dir, AND it belongs to
+ * the agent the tab currently has selected.
  *
  * Bare `connStatus === "connected"` is insufficient. A chat draft that just
  * retargeted into folderless mode (or any tab mid-reconnect) can read a stale
  * "connected" belonging to the PREVIOUS cwd for a render or two before the
  * reconnect lands. Sending then would deliver the prompt to the wrong
- * agent/workspace. Both the direct send (handleSend) and the queue auto-flush
- * gate on this. Nullish cwds are normalized so `null`/`undefined` compare equal
- * (both mean "no cwd yet").
+ * agent/workspace.
+ *
+ * The agent check covers the same hazard on the other axis: switching a draft's
+ * agent leaves the OLD agent's connection live — at the same cwd — until the
+ * lifecycle's reconnect lands, and for a not-installed target it never lands at
+ * all. All three terms belong together because the queue auto-flush DEQUEUES
+ * before handing the message to the send path: if the flush gate were weaker
+ * than the send's own check, the message would be taken off the queue and then
+ * silently dropped.
+ *
+ * Nullish cwds are normalized so `null`/`undefined` compare equal (both mean "no
+ * cwd yet"). A nullish `connectedAgentType` means no agent has been recorded for
+ * the connection yet, which is not a mismatch.
  */
 export function isConnectionReady(
   connStatus: string | null | undefined,
   connectedWorkingDir: string | null | undefined,
-  intendedWorkingDir: string | null | undefined
+  intendedWorkingDir: string | null | undefined,
+  connectedAgentType: string | null | undefined,
+  selectedAgentType: string | null | undefined
 ): boolean {
   return (
     connStatus === "connected" &&
-    (connectedWorkingDir ?? null) === (intendedWorkingDir ?? null)
+    (connectedWorkingDir ?? null) === (intendedWorkingDir ?? null) &&
+    (connectedAgentType == null || connectedAgentType === selectedAgentType)
   )
 }
 

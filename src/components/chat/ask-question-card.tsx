@@ -4,7 +4,9 @@ import { useMemo, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 import {
   Check,
+  ChevronDown,
   ChevronRight,
+  ChevronUp,
   Loader2,
   MessageCircleQuestionMark,
 } from "lucide-react"
@@ -106,6 +108,12 @@ export function AskQuestionCard({
   // than relying on the caller to supply a fresh React key.
   const [renderedId, setRenderedId] = useState(question.question_id)
 
+  // Panel-presence state (live card only): shrink the card to its header row
+  // so a long set stops squeezing the message list, while the question stays
+  // pending and visible. Reset alongside the rest whenever a different set
+  // renders into this instance — see the swap guard below.
+  const [collapsed, setCollapsed] = useState(false)
+
   // How many questions are answered — drives the progress bar, the counter, and
   // the submit gate (every question must be answered).
   const answeredCount = useMemo(
@@ -116,10 +124,16 @@ export function AskQuestionCard({
 
   // Reserve one stable content height for the whole set so switching between a
   // few-option tab and a many-option tab never resizes the card. Sized to the
-  // tallest question (its option count plus the always-present "Other" row),
+  // tallest question (its option count plus the "Other" row, unless that
+  // question disallows free text),
   // capped to the viewport; a taller-than-estimated tab scrolls internally.
   const maxRows = useMemo(
-    () => questions.reduce((m, q) => Math.max(m, q.options.length + 1), 1),
+    () =>
+      questions.reduce(
+        (m, q) =>
+          Math.max(m, q.options.length + (q.allow_other === false ? 0 : 1)),
+        1
+      ),
     [questions]
   )
   const bodyHeight = `min(${maxRows * 4 + 1}rem, 50svh)`
@@ -130,6 +144,12 @@ export function AskQuestionCard({
     setActiveId(questions[0]?.id ?? "")
     setSubmitting(false)
     setError(false)
+    // Collapsed too, and this one is not housekeeping. A replacement set is a
+    // NEW blocking request; left collapsed it renders as the same header row
+    // the user already dismissed from view — identical title, and an
+    // identically-sized set even shows the same counter — so they can miss it
+    // entirely and leave the agent stalled.
+    setCollapsed(false)
     // `inFlight` is intentionally not reset here — refs must not be written
     // during render. `run` clears it whenever the round-trip resolves (both the
     // success and failure paths), so it is already idle by the time a replacement
@@ -232,6 +252,10 @@ export function AskQuestionCard({
       setError(true)
       setSubmitting(false)
       inFlight.current = false
+      // Collapsing mid-flight hides the footer, and with it the retry and the
+      // error line — a failed answer to a still-blocking question would be
+      // silent. Come back out so the failure is where the user can see it.
+      setCollapsed(false)
     }
   }
 
@@ -284,7 +308,7 @@ export function AskQuestionCard({
       <span className="flex flex-wrap items-center gap-1.5 text-sm font-medium">
         {text}
         {recommended && (
-          <Badge variant="secondary" className="text-[10px]">
+          <Badge variant="secondary" className="text-3xs">
             {t("recommended")}
           </Badge>
         )}
@@ -359,16 +383,18 @@ export function AskQuestionCard({
               </Label>
             )
           })}
-          <Label className={cardClass(s?.otherActive ?? false)}>
-            <Checkbox
-              checked={s?.otherActive ?? false}
-              disabled={locked}
-              onCheckedChange={() => toggleOther(q)}
-              className="mt-0.5"
-            />
-            <span className="text-sm font-medium">{t("other")}</span>
-          </Label>
-          {otherInput}
+          {q.allow_other !== false && (
+            <Label className={cardClass(s?.otherActive ?? false)}>
+              <Checkbox
+                checked={s?.otherActive ?? false}
+                disabled={locked}
+                onCheckedChange={() => toggleOther(q)}
+                className="mt-0.5"
+              />
+              <span className="text-sm font-medium">{t("other")}</span>
+            </Label>
+          )}
+          {q.allow_other !== false && otherInput}
         </div>
       )
     }
@@ -405,25 +431,27 @@ export function AskQuestionCard({
               </Label>
             )
           })}
-          <Label className={cardClass(s?.otherActive ?? false)}>
-            <RadioGroupItem
-              value={OTHER_VALUE}
-              onClick={() => {
-                if (s?.otherActive) toggleOther(q)
-              }}
-              className="mt-0.5 data-[state=checked]:border-primary data-[state=checked]:bg-primary"
-            />
-            <span className="text-sm font-medium">{t("other")}</span>
-          </Label>
+          {q.allow_other !== false && (
+            <Label className={cardClass(s?.otherActive ?? false)}>
+              <RadioGroupItem
+                value={OTHER_VALUE}
+                onClick={() => {
+                  if (s?.otherActive) toggleOther(q)
+                }}
+                className="mt-0.5 data-[state=checked]:border-primary data-[state=checked]:bg-primary"
+              />
+              <span className="text-sm font-medium">{t("other")}</span>
+            </Label>
+          )}
         </RadioGroup>
-        {otherInput}
+        {q.allow_other !== false && otherInput}
       </div>
     )
   }
 
   const questionHeading = (q: QuestionSpec) => (
     <div className="flex items-center gap-2">
-      <Badge variant="outline" className="shrink-0 text-[10px]">
+      <Badge variant="outline" className="shrink-0 text-3xs">
         {q.multi_select ? t("multiSelect") : t("singleSelect")}
       </Badge>
       <p className="text-sm text-foreground/90">{q.question}</p>
@@ -438,6 +466,8 @@ export function AskQuestionCard({
   return (
     // Capped to the viewport (header + footer pinned, body scrolls) so a tall set
     // never covers the whole message list and always keeps Submit/Skip reachable.
+    // Collapsed, only the header row is left, so the message list gets the space
+    // back outright.
     // `overflow-hidden` clips the full-bleed progress bar to the rounded corners.
     <div
       role="group"
@@ -447,7 +477,7 @@ export function AskQuestionCard({
         readOnly ? "shadow-sm" : "shadow-lg"
       )}
     >
-      {isMulti && (
+      {isMulti && !collapsed && (
         <Progress
           value={(answeredCount / questions.length) * 100}
           aria-label={t("title")}
@@ -456,12 +486,15 @@ export function AskQuestionCard({
         />
       )}
 
-      <div className="flex min-h-0 flex-col gap-3 p-3">
-        {/* Header */}
+      <div
+        className={cn("flex min-h-0 flex-col gap-3 p-3", collapsed && "p-2")}
+      >
+        {/* Header. Collapsed, this row IS the card, so it centers on the single
+            line rather than top-aligning against a subtitle that is gone. */}
         <div
           className={cn(
             "flex shrink-0 gap-2.5",
-            resolvedSubtitle ? "items-start" : "items-center"
+            resolvedSubtitle && !collapsed ? "items-start" : "items-center"
           )}
         >
           <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-primary">
@@ -469,73 +502,94 @@ export function AskQuestionCard({
           </span>
           <div className="min-w-0 flex-1">
             <p className="text-sm font-medium">{title ?? t("title")}</p>
-            {resolvedSubtitle && (
+            {resolvedSubtitle && !collapsed && (
               <p className="text-xs text-muted-foreground">
                 {resolvedSubtitle}
               </p>
             )}
           </div>
           {isMulti && (
-            <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+            <span className="shrink-0 self-center text-xs tabular-nums text-muted-foreground">
               {`${answeredCount}/${questions.length}`}
             </span>
           )}
+          {/* Live card only: the read-only/answered record has its own
+              expand/collapse capsule (`AskQuestionResultCard`), so a second
+              chevron here would fight it. */}
+          {!readOnly && (
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              className="shrink-0 self-center"
+              aria-label={collapsed ? t("expand") : t("collapse")}
+              aria-expanded={!collapsed}
+              title={collapsed ? t("expand") : t("collapse")}
+              onClick={() => setCollapsed((v) => !v)}
+            >
+              {collapsed ? (
+                <ChevronUp className="size-3.5" />
+              ) : (
+                <ChevronDown className="size-3.5" />
+              )}
+            </Button>
+          )}
         </div>
 
-        {isMulti ? (
-          <Tabs
-            value={activeId}
-            onValueChange={setActiveId}
-            className="flex min-h-0 flex-col gap-2"
-          >
-            <TabsList className="w-full shrink-0">
-              {questions.map((q, i) => {
-                const done = isAnswered(state[q.id])
-                return (
-                  <TabsTrigger
-                    key={q.id}
-                    value={q.id}
-                    disabled={submitting}
-                    data-answered={done ? "true" : "false"}
-                    className="min-w-0 gap-1.5 data-[state=active]:bg-background data-[state=active]:shadow-sm data-[answered=true]:text-primary"
-                  >
-                    {done ? (
-                      <Check className="size-3.5 shrink-0 text-primary" />
-                    ) : (
-                      <span className="flex size-4 shrink-0 items-center justify-center rounded-full border border-current text-[10px] leading-none">
-                        {i + 1}
-                      </span>
-                    )}
-                    <span className="truncate">{q.header}</span>
-                  </TabsTrigger>
-                )
-              })}
-            </TabsList>
-            {questions.map((q) => (
-              <TabsContent
-                key={q.id}
-                value={q.id}
-                style={{ height: bodyHeight }}
-                className="mt-0 flex-none space-y-2.5 overflow-y-auto pr-1"
-              >
-                {questionHeading(q)}
-                {renderOptions(q)}
-              </TabsContent>
-            ))}
-          </Tabs>
-        ) : (
-          <div className="min-h-0 space-y-2.5 overflow-y-auto pr-1">
-            {questions.map((q) => (
-              <div key={q.id} className="space-y-2.5">
-                {questionHeading(q)}
-                {renderOptions(q)}
-              </div>
-            ))}
-          </div>
-        )}
+        {!collapsed &&
+          (isMulti ? (
+            <Tabs
+              value={activeId}
+              onValueChange={setActiveId}
+              className="flex min-h-0 flex-col gap-2"
+            >
+              <TabsList className="w-full shrink-0">
+                {questions.map((q, i) => {
+                  const done = isAnswered(state[q.id])
+                  return (
+                    <TabsTrigger
+                      key={q.id}
+                      value={q.id}
+                      disabled={submitting}
+                      data-answered={done ? "true" : "false"}
+                      className="min-w-0 gap-1.5 data-[state=active]:bg-background data-[state=active]:shadow-sm data-[answered=true]:text-primary"
+                    >
+                      {done ? (
+                        <Check className="size-3.5 shrink-0 text-primary" />
+                      ) : (
+                        <span className="flex size-4 shrink-0 items-center justify-center rounded-full border border-current text-3xs leading-none">
+                          {i + 1}
+                        </span>
+                      )}
+                      <span className="truncate">{q.header}</span>
+                    </TabsTrigger>
+                  )
+                })}
+              </TabsList>
+              {questions.map((q) => (
+                <TabsContent
+                  key={q.id}
+                  value={q.id}
+                  style={{ height: bodyHeight }}
+                  className="mt-0 flex-none space-y-2.5 overflow-y-auto pr-1"
+                >
+                  {questionHeading(q)}
+                  {renderOptions(q)}
+                </TabsContent>
+              ))}
+            </Tabs>
+          ) : (
+            <div className="min-h-0 space-y-2.5 overflow-y-auto pr-1">
+              {questions.map((q) => (
+                <div key={q.id} className="space-y-2.5">
+                  {questionHeading(q)}
+                  {renderOptions(q)}
+                </div>
+              ))}
+            </div>
+          ))}
 
-        {/* Footer — dropped in the read-only/answered view */}
-        {!readOnly && (
+        {/* Footer — dropped in the read-only/answered view and while collapsed */}
+        {!readOnly && !collapsed && (
           <div className="flex shrink-0 items-center gap-2">
             <Button
               variant="ghost"

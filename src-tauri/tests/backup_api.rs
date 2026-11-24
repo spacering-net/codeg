@@ -81,22 +81,30 @@ async fn export_download_upload_inspect_stage_roundtrip() {
         .expect("uploadId")
         .to_string();
 
-    // 4. Inspect → compatible (uses our own latest migration).
+    // 4. Prepare → decrypted once (a no-op here) and previewed as compatible.
     let ins = server
-        .post("/api/backup_inspect")
+        .post("/api/backup_prepare_source")
         .add_header(k, &v)
         .json(&json!({ "uploadId": upload_id }))
         .await;
-    assert_eq!(ins.status_code(), 200, "inspect: {:?}", ins.text());
-    let preview: Value = ins.json();
-    assert_eq!(preview["encrypted"], json!(false));
-    assert_eq!(preview["compatible"], json!(true), "preview: {preview}");
+    assert_eq!(ins.status_code(), 200, "prepare: {:?}", ins.text());
+    let prepared: Value = ins.json();
+    let source_id = prepared["sourceId"]
+        .as_str()
+        .expect("sourceId")
+        .to_string();
+    assert_eq!(prepared["preview"]["encrypted"], json!(false));
+    assert_eq!(
+        prepared["preview"]["compatible"],
+        json!(true),
+        "preview: {prepared}"
+    );
 
     // 5. Stage a restore → needs restart + a pending marker is written.
     let stage = server
         .post("/api/backup_restore_stage")
         .add_header(k, &v)
-        .json(&json!({ "uploadId": upload_id }))
+        .json(&json!({ "sourceId": source_id }))
         .await;
     assert_eq!(stage.status_code(), 200, "stage: {:?}", stage.text());
     assert_eq!(stage.json::<Value>()["needsRestart"], json!(true));
@@ -104,18 +112,58 @@ async fn export_download_upload_inspect_stage_roundtrip() {
         .path()
         .join(".codeg-restore-pending.json")
         .is_file());
+
+    // 6. The prepared source is released on a successful stage.
+    let released = server
+        .post("/api/backup_release_source")
+        .add_header(k, &v)
+        .json(&json!({ "sourceId": source_id }))
+        .await;
+    assert_eq!(released.status_code(), 200);
+    assert_eq!(released.json::<Value>(), json!(false), "already released");
+
+    // 7. And the escape hatch clears it again, so a failed restart is not a
+    //    dead end.
+    let discarded = server
+        .post("/api/backup_discard_pending")
+        .add_header(k, &v)
+        .json(&json!({}))
+        .await;
+    assert_eq!(discarded.status_code(), 200, "{:?}", discarded.text());
+    assert_eq!(discarded.json::<Value>(), json!(true));
+    assert!(!data_dir
+        .path()
+        .join(".codeg-restore-pending.json")
+        .exists());
 }
 
 #[tokio::test]
-async fn inspect_rejects_invalid_upload_id() {
+async fn prepare_rejects_invalid_upload_id() {
     let (server, _data, _static) = build_server().await;
     let (k, v) = auth();
     let resp = server
-        .post("/api/backup_inspect")
+        .post("/api/backup_prepare_source")
         .add_header(k, &v)
         .json(&json!({ "uploadId": "../../etc/passwd" }))
         .await;
     assert_eq!(resp.status_code(), 400);
+}
+
+/// A restore whose transcripts would be written back to the agents' own
+/// directories while an agent is running must NOT fail: the swap marker is
+/// already committed, so a 4xx would tell the client "don't restart" while the
+/// restore applies on the next launch anyway. It downgrades and says so.
+#[tokio::test]
+async fn active_agents_are_reported_for_the_original_locations_advisory() {
+    let (server, _data, _static) = build_server().await;
+    let (k, v) = auth();
+    let resp = server
+        .post("/api/backup_active_agents")
+        .add_header(k, &v)
+        .json(&json!({}))
+        .await;
+    assert_eq!(resp.status_code(), 200, "{:?}", resp.text());
+    assert_eq!(resp.json::<Value>(), json!([]), "no agents in a fresh state");
 }
 
 #[tokio::test]

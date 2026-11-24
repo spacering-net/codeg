@@ -13,6 +13,8 @@ import {
   MessageSquarePlus,
   PackagePlus,
   ShieldCheck,
+  Shrink,
+  SquareSlash,
   Trash2,
   Zap,
 } from "lucide-react"
@@ -22,6 +24,7 @@ import {
   AgentConfigSection,
   effectiveSelections,
   snapshotLabels,
+  useBooleanOptionLabels,
 } from "@/components/automations/agent-config-section"
 import { useAgentOptions } from "@/components/automations/use-agent-options"
 import { getAgentLabel } from "@/lib/custom-agents"
@@ -33,6 +36,7 @@ import {
   workTaskSettingsSet,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
+import { isLocalCommand } from "@/lib/local-command"
 import { cn } from "@/lib/utils"
 import {
   SettingCard,
@@ -221,6 +225,8 @@ function TaskSettingsBody({
   const [deleteWorktreeDefault, setDeleteWorktreeDefault] = useState(true)
   const [worktreeRoot, setWorktreeRoot] = useState("")
   const [initCommand, setInitCommand] = useState("")
+  const [autoCompactPercent, setAutoCompactPercent] = useState("0")
+  const [compactCommand, setCompactCommand] = useState("")
   const [preflightCommand, setPreflightCommand] = useState("")
   const [stagePrompts, setStagePrompts] = useState<Record<string, string>>({})
   const [stage, setStage] = useState<string>(PROMPT_STAGES[0].key)
@@ -262,11 +268,16 @@ function TaskSettingsBody({
         setDeleteWorktreeDefault(s.delete_worktree_default)
         setWorktreeRoot(s.worktree_root ?? "")
         setInitCommand(s.init_command ?? "")
+        setAutoCompactPercent(String(s.auto_compact_percent ?? 0))
+        setCompactCommand(s.compact_command ?? "")
         setStagePrompts(s.stage_prompts ?? {})
+        // Never one the desktop app runs on its own machine: the preflight
+        // runs on the folder's host.
         const legacy =
           s.preflight_command_id != null
-            ? (commands.find((c) => c.id === s.preflight_command_id)?.command ??
-              "")
+            ? (commands.find(
+                (c) => c.id === s.preflight_command_id && !isLocalCommand(c)
+              )?.command ?? "")
             : ""
         setPreflightCommand(s.preflight_command?.trim() || legacy)
       })
@@ -286,8 +297,10 @@ function TaskSettingsBody({
   const agentOptions = useAgentOptions(
     agentType,
     folder?.path ?? null,
-    loaded != null && editing
+    loaded != null && editing,
+    configValues
   )
+  const booleanLabels = useBooleanOptionLabels()
 
   const save = async () => {
     setSaving(true)
@@ -305,13 +318,16 @@ function TaskSettingsBody({
         configValues
       )
       const parsed = Number.parseInt(maxConcurrent, 10)
+      // A percentage the box can't represent (blank, or typed past 100) reads
+      // as "off" rather than as an accidental compact-every-round.
+      const compactPercent = Number.parseInt(autoCompactPercent, 10)
       const settings: WorkTaskFolderSettings = {
         default_agent_type: agentType,
         mode_id,
         config_values,
         label_snapshot: {
           agent_label: getAgentLabel(agentType) ?? agentType,
-          ...snapshotLabels(snapshot, mode_id, config_values),
+          ...snapshotLabels(snapshot, mode_id, config_values, booleanLabels),
         },
         auto_process: autoProcess,
         max_concurrent: Number.isFinite(parsed) && parsed >= 0 ? parsed : 2,
@@ -327,6 +343,13 @@ function TaskSettingsBody({
         preflight_command_id: null,
         preflight_command: preflightCommand.trim() || null,
         init_command: initCommand.trim() || null,
+        auto_compact_percent:
+          Number.isFinite(compactPercent) &&
+          compactPercent > 0 &&
+          compactPercent <= 100
+            ? compactPercent
+            : 0,
+        compact_command: compactCommand.trim() || null,
         // Blank stages are dropped rather than stored as "" — the engine
         // trims anyway, and an empty entry would only add noise to the blob.
         stage_prompts: Object.fromEntries(
@@ -457,8 +480,10 @@ function TaskSettingsBody({
                       />
                     </div>
                     <AgentConfigSection
+                      agentType={agentOptions.snapshotAgentType}
                       snapshot={agentOptions.snapshot}
                       loading={agentOptions.loading}
+                      stale={!agentOptions.current}
                       error={agentOptions.error}
                       onReload={agentOptions.reload}
                       modeId={modeId}
@@ -474,6 +499,9 @@ function TaskSettingsBody({
                         })
                       }
                     />
+                    <p className="text-xs text-muted-foreground">
+                      {t("settingsAgentFrozenHint")}
+                    </p>
                   </div>
                 </SettingRow>
               </SettingCard>
@@ -511,6 +539,49 @@ function TaskSettingsBody({
                     />
                   }
                 />
+              </SettingCard>
+
+              {/* Every round after the first resumes the same session, so its
+                  context only grows. The threshold and the command that acts
+                  on it belong together: the second is unreadable without the
+                  first. */}
+              <SettingCard>
+                <SettingRow
+                  icon={Shrink}
+                  title={t("settingsAutoCompact")}
+                  description={t("settingsAutoCompactHint")}
+                  htmlFor="task-auto-compact"
+                  control={
+                    <div className="flex items-center gap-1.5">
+                      <Input
+                        id="task-auto-compact"
+                        inputMode="numeric"
+                        value={autoCompactPercent}
+                        onChange={(e) =>
+                          setAutoCompactPercent(
+                            e.target.value.replace(/[^0-9]/g, "").slice(0, 3)
+                          )
+                        }
+                        className="h-8 w-16 bg-background text-center"
+                      />
+                      <span className="text-xs text-muted-foreground">%</span>
+                    </div>
+                  }
+                />
+                <SettingRow
+                  icon={SquareSlash}
+                  title={t("settingsCompactCommand")}
+                  description={t("settingsCompactCommandHint")}
+                  htmlFor="task-compact-command"
+                >
+                  <Input
+                    id="task-compact-command"
+                    value={compactCommand}
+                    onChange={(e) => setCompactCommand(e.target.value)}
+                    placeholder={t("settingsCompactCommandPlaceholder")}
+                    className="h-8 bg-background font-mono text-xs"
+                  />
+                </SettingRow>
               </SettingCard>
             </TabsContent>
 
@@ -603,6 +674,11 @@ function TaskSettingsBody({
                     />
                   }
                 />
+                {/* Writing the outcome back to the issue/PR used to be a
+                    switch here. It moved into the workbench's own start
+                    dialog: it is the one thing a task does in a thread other
+                    people are reading, so it is asked per work item, in front
+                    of the item. */}
               </SettingCard>
             </TabsContent>
 

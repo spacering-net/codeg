@@ -48,7 +48,7 @@ export const GitLogCommitMessage = memo(function GitLogCommitMessage({
           onClick={toggle}
           aria-expanded={expanded}
           aria-controls={contentId}
-          className="mt-1 flex shrink-0 items-center gap-1 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+          className="mt-1 flex shrink-0 items-center gap-1 text-2xs font-medium text-muted-foreground hover:text-foreground"
         >
           {expanded ? t("showLess") : t("showMore")}
           {expanded ? (

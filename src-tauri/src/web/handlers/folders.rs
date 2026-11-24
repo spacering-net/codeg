@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::app_error::AppCommandError;
 use crate::app_state::AppState;
+use crate::commands::create_directory::create_directory_core;
 use crate::commands::folders as folder_commands;
 use crate::models::*;
 
@@ -55,6 +56,14 @@ pub async fn open_folder(
     Ok(Json(
         folder_commands::open_folder_core(&state.db, params.path).await?,
     ))
+}
+
+/// Launch Visual Studio Code against a file or directory on this host.
+pub async fn open_in_code(
+    Json(params): Json<AddFolderParams>,
+) -> Result<Json<()>, AppCommandError> {
+    crate::commands::open_in::open_in_code_core(params.path).await?;
+    Ok(Json(()))
 }
 
 #[derive(serde::Deserialize)]
@@ -152,17 +161,110 @@ pub async fn remove_folder_from_workspace(
     Ok(Json(()))
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReorderFoldersParams {
-    pub ids: Vec<i32>,
+pub async fn list_folder_groups(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<Vec<FolderGroupDetail>>, AppCommandError> {
+    Ok(Json(
+        folder_commands::list_folder_groups_core(&state.db).await?,
+    ))
 }
 
-pub async fn reorder_folders(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateFolderGroupParams {
+    pub name: String,
+    #[serde(default)]
+    pub color: Option<String>,
+}
+
+pub async fn create_folder_group(
     Extension(state): Extension<Arc<AppState>>,
-    Json(params): Json<ReorderFoldersParams>,
+    Json(params): Json<CreateFolderGroupParams>,
+) -> Result<Json<FolderGroupDetail>, AppCommandError> {
+    Ok(Json(
+        folder_commands::create_folder_group_core(
+            &state.emitter,
+            &state.db,
+            params.name,
+            params.color,
+        )
+        .await?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateFolderGroupParams {
+    pub group_id: i32,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub color: Option<String>,
+}
+
+pub async fn update_folder_group(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<UpdateFolderGroupParams>,
+) -> Result<Json<FolderGroupDetail>, AppCommandError> {
+    Ok(Json(
+        folder_commands::update_folder_group_core(
+            &state.emitter,
+            &state.db,
+            params.group_id,
+            params.name,
+            params.color,
+        )
+        .await?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderGroupIdParams {
+    pub group_id: i32,
+}
+
+pub async fn delete_folder_group(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<FolderGroupIdParams>,
 ) -> Result<Json<()>, AppCommandError> {
-    folder_commands::reorder_folders_core(&state.db, params.ids).await?;
+    folder_commands::delete_folder_group_core(&state.emitter, &state.db, params.group_id).await?;
+    Ok(Json(()))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplySidebarLayoutParams {
+    pub entries: Vec<SidebarLayoutEntry>,
+}
+
+pub async fn apply_sidebar_layout(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ApplySidebarLayoutParams>,
+) -> Result<Json<()>, AppCommandError> {
+    folder_commands::apply_sidebar_layout_core(&state.emitter, &state.db, params.entries).await?;
+    Ok(Json(()))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetFolderGroupParams {
+    pub folder_id: i32,
+    #[serde(default)]
+    pub group_id: Option<i32>,
+}
+
+pub async fn set_folder_group(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<SetFolderGroupParams>,
+) -> Result<Json<()>, AppCommandError> {
+    folder_commands::set_folder_group_core(
+        &state.emitter,
+        &state.db,
+        params.folder_id,
+        params.group_id,
+    )
+    .await?;
     Ok(Json(()))
 }
 
@@ -260,6 +362,20 @@ pub async fn list_directory_entries(
     Ok(Json(result))
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateDirectoryParams {
+    pub parent_path: String,
+    pub name: String,
+}
+
+pub async fn create_directory(
+    Json(params): Json<CreateDirectoryParams>,
+) -> Result<Json<String>, AppCommandError> {
+    let created = create_directory_core(&params.parent_path, &params.name)?;
+    Ok(Json(created))
+}
+
 pub async fn list_directory_with_files(
     Json(params): Json<ListDirectoryEntriesParams>,
 ) -> Result<Json<Vec<folder_commands::DirectoryItem>>, AppCommandError> {
@@ -296,6 +412,54 @@ pub async fn list_workspace_files(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SearchWorkspaceFilesParams {
+    pub path: String,
+    pub query: String,
+    pub limit: Option<usize>,
+    pub files_only: Option<bool>,
+    pub refresh: Option<bool>,
+    pub request: Option<crate::commands::workspace_file_search::SearchRequest>,
+    pub max_age_ms: Option<u64>,
+}
+
+pub async fn search_workspace_files(
+    Json(params): Json<SearchWorkspaceFilesParams>,
+) -> Result<Json<Vec<folder_commands::WorkspaceFileEntry>>, AppCommandError> {
+    Ok(Json(
+        crate::commands::workspace_file_search::search_workspace_files(
+            params.path,
+            params.query,
+            params.limit,
+            params.files_only,
+            params.refresh,
+            params.request,
+            params.max_age_ms,
+        )
+        .await?,
+    ))
+}
+
+#[derive(Deserialize)]
+pub struct CancelWorkspaceFileSearchParams {
+    pub request: crate::commands::workspace_file_search::SearchRequest,
+}
+
+pub async fn cancel_workspace_file_search(
+    Json(params): Json<CancelWorkspaceFileSearchParams>,
+) -> Result<Json<()>, AppCommandError> {
+    crate::commands::workspace_file_search::cancel_workspace_file_search(params.request).await?;
+    Ok(Json(()))
+}
+
+pub async fn prepare_workspace_file_search(
+    Json(params): Json<ListWorkspaceFilesParams>,
+) -> Json<()> {
+    crate::commands::workspace_file_search::prepare_workspace_file_search(params.path).await;
+    Json(())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OpenSettingsWindowParams {
     pub section: Option<String>,
     pub agent_type: Option<String>,
@@ -307,23 +471,36 @@ pub struct SettingsNavigationResult {
     pub path: String,
 }
 
+/// The Settings page a section names, for a browser session: the desktop's
+/// `resolve_settings_route` without its Web service page, which the web nav
+/// does not offer (there is no second server to configure from inside the one
+/// the browser is talking to).
+///
+/// Anything else lands on Appearance, as an unnamed section does — including
+/// the MCP, Skills and Skill packs pages (and the Experts, Science and Office
+/// tools addresses that led to the last), which moved to the workspace's
+/// Harness page.
+fn resolve_web_settings_route(section: Option<&str>) -> &'static str {
+    match section {
+        Some("general") => "settings/general",
+        Some("appearance") => "settings/appearance",
+        Some("agents") => "settings/agents",
+        Some("collaboration") => "settings/collaboration",
+        Some("browser") => "settings/browser",
+        Some("computer-use") => "settings/computer-use",
+        Some("version-control") => "settings/version-control",
+        Some("shortcuts") => "settings/shortcuts",
+        Some("system") => "settings/system",
+        _ => "settings/appearance",
+    }
+}
+
 /// Web equivalent of `open_settings_window`: returns the target navigation path.
 /// The web client handles the actual navigation.
 pub async fn open_settings_window(
     Json(params): Json<OpenSettingsWindowParams>,
 ) -> Result<Json<SettingsNavigationResult>, AppCommandError> {
-    let route = match params.section.as_deref() {
-        Some("appearance") => "settings/appearance",
-        Some("agents") => "settings/agents",
-        Some("mcp") => "settings/mcp",
-        Some("skills") => "settings/skills",
-        Some("experts") => "settings/experts",
-        Some("science") => "settings/science",
-        Some("office-tools") => "settings/office-tools",
-        Some("shortcuts") => "settings/shortcuts",
-        Some("system") => "settings/system",
-        _ => "settings/appearance",
-    };
+    let route = resolve_web_settings_route(params.section.as_deref());
 
     let path = if route == "settings/agents" {
         if let Some(ref agent) = params.agent_type {
@@ -461,4 +638,57 @@ pub async fn create_folder_directory(
 ) -> Result<Json<()>, AppCommandError> {
     folder_commands::create_folder_directory(params.path).await?;
     Ok(Json(()))
+}
+
+#[cfg(test)]
+mod settings_route_web_tests {
+    use super::resolve_web_settings_route;
+
+    /// Every section the frontend's `SettingsSection` can send from a browser
+    /// session reaches its own page. `web-service` is the one it never sends
+    /// there: the web nav has no Web service page.
+    #[test]
+    fn every_web_settings_section_resolves_to_its_own_route() {
+        for section in [
+            "general",
+            "appearance",
+            "agents",
+            "collaboration",
+            "browser",
+            "computer-use",
+            "version-control",
+            "shortcuts",
+            "system",
+        ] {
+            assert_eq!(
+                resolve_web_settings_route(Some(section)),
+                format!("settings/{section}"),
+                "section {section} must route to its own page"
+            );
+        }
+        assert_eq!(resolve_web_settings_route(None), "settings/appearance");
+    }
+
+    /// The pages that moved to the workspace's Harness page, the redirects
+    /// that led to them, and the desktop-only Web service page all land where
+    /// an unknown section does, rather than on a route the build no longer has.
+    #[test]
+    fn sections_without_a_web_page_fall_back_like_unknown_ones() {
+        for section in [
+            "mcp",
+            "skills",
+            "skill-packs",
+            "experts",
+            "science",
+            "office-tools",
+            "web-service",
+            "no-such-section",
+        ] {
+            assert_eq!(
+                resolve_web_settings_route(Some(section)),
+                "settings/appearance",
+                "section {section} must land where an unknown section does"
+            );
+        }
+    }
 }

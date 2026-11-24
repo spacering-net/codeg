@@ -1,8 +1,15 @@
 "use client"
 
 /**
- * Persists user's selector preferences (mode & config option selections)
- * per agentType to localStorage, so they survive session restarts.
+ * The NEW-CONVERSATION DEFAULT (mode & config option selections) per
+ * agentType, in localStorage (codeg#1179). Written only by an explicit pick
+ * in a draft (the surfaces decide at pick time); read by new drafts, and once
+ * by a legacy conversation that never recorded a selection of its own. Every
+ * existing conversation keeps its own selection on its row
+ * (`conversation.selector_state`, written by the backend), which the backend
+ * replays on connect instead of this default — so picking in one
+ * conversation never changes another, and changing the default never changes
+ * an existing conversation.
  *
  * Structure hash is stored alongside values — when the saved value no
  * longer exists in the current option set (item renamed / removed) the
@@ -47,12 +54,29 @@ function writeAll(all: AllPrefs) {
   }
 }
 
+/**
+ * Built-in agent types that took over a custom agent, mapped to the custom
+ * agent's id. The database migration that retired it
+ * (`m20261015_000001_kiro_builtin_agent`) cannot reach this device-local
+ * store, so until the built-in has picks of its own it starts from the custom
+ * agent's: both ran the same `kiro-cli acp`, so its saved agent (the mode) is
+ * one the built-in offers too.
+ */
+const RETIRED_CUSTOM_AGENTS = new Map([["kiro", "custom:kiro-cli"]])
+
+function prefsOf(all: AllPrefs, agentType: string): SelectorPrefs | undefined {
+  const own = all[agentType]
+  if (own) return own
+  const retired = RETIRED_CUSTOM_AGENTS.get(agentType)
+  return retired ? all[retired] : undefined
+}
+
 function updatePrefs(
   agentType: string,
   fn: (prefs: SelectorPrefs) => SelectorPrefs
 ) {
   const all = readAll()
-  const existing = all[agentType]
+  const existing = prefsOf(all, agentType)
   // Re-project onto the current schema so legacy fields (`modesHash` /
   // `configHash` from before the backend took ownership of preference
   // application) don't survive across writes. Without this an upgrade
@@ -65,12 +89,69 @@ function updatePrefs(
   writeAll(all)
 }
 
+/**
+ * cursor-agent's model-parameter vocabulary, as it appeared inside the
+ * stringified variants its old picker used.
+ *
+ * The match below keys on these NAMES, not merely on a `key=value` shape,
+ * because healing runs for every agent (see [`healLegacyValues`]) and some
+ * agents accept arbitrary model ids: OpenCode builds its selector values as
+ * `<provider>/<modelId>` straight from the user's own config, so
+ * `mygw/llama[quant=q4]` is a perfectly legitimate id that a shape-only match
+ * would truncate on every reconnect.
+ */
+const CURSOR_VARIANT_KEYS = new Set(["thinking", "context", "effort", "fast"])
+
+/**
+ * Heal a `model` preference saved before codeg opted into cursor-agent's
+ * parameterized model picker.
+ *
+ * That older surface identified a model by a stringified variant —
+ * `claude-opus-5[thinking=true,context=300k,effort=high,fast=false]` — and the
+ * agent now rejects anything but the bare base id, so the saved value would
+ * fail to apply on every connect (logged and skipped, i.e. the user silently
+ * keeps landing on whatever model Cursor felt like). The base is the prefix
+ * before the bracket, which is exactly what the new surface wants; the
+ * parameters inside it are re-offered as their own selectors.
+ *
+ * Matched on the VALUE rather than on the agent id. Scoping this to
+ * `agentType === "cursor"` would strand every CUSTOM agent that wraps the same
+ * `cursor-agent … acp` binary: the capability gate that turns the new picker on
+ * keys on the resolved launch recipe, not on the built-in identity, so those
+ * agents get the new surface and carry the very same stale preference under a
+ * user-chosen id this module cannot enumerate. Running for everyone is only
+ * safe because the match demands cursor's own parameter names — see
+ * [`CURSOR_VARIANT_KEYS`].
+ */
+function healLegacyValues(
+  values: Record<string, string>
+): Record<string, string> {
+  const model = values.model
+  if (typeof model !== "string" || !model.endsWith("]")) return values
+  // `<= 0` also rejects a leading bracket, which would heal to an empty model.
+  const open = model.lastIndexOf("[")
+  if (open <= 0) return values
+  // Every cursor id is a flat slug — `composer-2.5`, `claude-opus-5-thinking-
+  // max-fast`. A namespaced id belongs to somebody else (OpenCode's values are
+  // `<provider>/<modelId>`, and the model half comes from the user's own
+  // config, so it may legitimately end in anything at all).
+  if (model.slice(0, open).includes("/")) return values
+  const isVariantSuffix = model
+    .slice(open + 1, -1)
+    .split(",")
+    .every((param) => {
+      const eq = param.indexOf("=")
+      return eq > 0 && CURSOR_VARIANT_KEYS.has(param.slice(0, eq))
+    })
+  if (!isVariantSuffix) return values
+  return { ...values, model: model.slice(0, open) }
+}
+
 // ── Read ──
 
 /** Read saved mode id for an agent (no validation, just the raw value). */
 export function getSavedModeId(agentType: string): string | null {
-  const all = readAll()
-  return all[agentType]?.modeId ?? null
+  return prefsOf(readAll(), agentType)?.modeId ?? null
 }
 
 /**
@@ -87,12 +168,11 @@ export function getSavedPrefsForConnect(agentType: string): {
   modeId: string | null
   configValues: Record<string, string> | null
 } {
-  const all = readAll()
-  const prefs = all[agentType]
+  const prefs = prefsOf(readAll(), agentType)
   if (!prefs) return { modeId: null, configValues: null }
   const configValues =
     prefs.configValues && Object.keys(prefs.configValues).length > 0
-      ? prefs.configValues
+      ? healLegacyValues(prefs.configValues)
       : null
   return {
     modeId: prefs.modeId ?? null,

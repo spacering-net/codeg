@@ -11,23 +11,14 @@ import {
   INPUT_SHORTCUT_IDS,
   SHORTCUT_DEFINITIONS,
   type ShortcutActionId,
+  canShareShortcut,
   formatShortcutLabel,
+  setShortcutRecorderArmed,
   shortcutFromKeyboardEvent,
+  shortcutsConflict,
 } from "@/lib/keyboard-shortcuts"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
-
-const SHARED_SHORTCUT_PAIRS: Array<[ShortcutActionId, ShortcutActionId]> = [
-  ["new_terminal_tab", "new_conversation"],
-  ["close_current_terminal_tab", "close_current_tab"],
-]
-
-function canShareShortcut(a: ShortcutActionId, b: ShortcutActionId): boolean {
-  return SHARED_SHORTCUT_PAIRS.some(
-    ([left, right]) =>
-      (left === a && right === b) || (left === b && right === a)
-  )
-}
 
 export function ShortcutSettings() {
   const t = useTranslations("ShortcutSettings")
@@ -54,12 +45,18 @@ export function ShortcutSettings() {
   )
 
   useEffect(() => {
+    setShortcutRecorderArmed(Boolean(recordingAction))
+    return () => setShortcutRecorderArmed(false)
+  }, [recordingAction])
+
+  useEffect(() => {
     if (!recordingAction) return
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.repeat) return
       event.preventDefault()
       event.stopPropagation()
+      event.stopImmediatePropagation()
 
       if (event.key === "Escape") {
         setRecordingAction(null)
@@ -70,11 +67,13 @@ export function ShortcutSettings() {
       const shortcut = shortcutFromKeyboardEvent(event, allowNoModifier)
       if (!shortcut) return
 
+      // Matcher semantics, not string equality: two different strings can fire
+      // on the same event (`mod+=` and `mod+shift++` both match Ctrl/Cmd+Shift+=).
       const conflict = SHORTCUT_DEFINITIONS.find(
         (definition) =>
           definition.id !== recordingAction &&
           !canShareShortcut(definition.id, recordingAction) &&
-          shortcuts[definition.id] === shortcut
+          shortcutsConflict(shortcuts[definition.id], shortcut)
       )
 
       if (conflict) {
@@ -155,7 +154,9 @@ export function ShortcutSettings() {
                   >
                     {isRecording
                       ? t("recording")
-                      : formatShortcutLabel(shortcuts[definition.id], isMac)}
+                      : shortcuts[definition.id]
+                        ? formatShortcutLabel(shortcuts[definition.id], isMac)
+                        : t("unassigned")}
                   </Button>
                 </div>
               )

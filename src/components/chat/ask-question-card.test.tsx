@@ -189,6 +189,63 @@ describe("AskQuestionCard", () => {
     expect(screen.queryByRole("radio")).not.toBeInTheDocument()
   })
 
+  it("hides the Other option when allow_other is false in single-select", () => {
+    renderCard({
+      question_id: "q-no-other-single",
+      created_at: "2026-01-01T00:00:00Z",
+      questions: [
+        {
+          id: "qa",
+          question: "Which approach?",
+          header: "Approach",
+          multi_select: false,
+          allow_other: false,
+          options: [
+            { label: "Incremental", description: "smaller diffs" },
+            { label: "Rewrite", description: "clean slate" },
+          ],
+        },
+      ],
+    })
+    expect(screen.getAllByRole("radio")).toHaveLength(2)
+    expect(
+      screen.queryByRole("radio", { name: "Other" })
+    ).not.toBeInTheDocument()
+    expect(screen.queryByText("Other")).not.toBeInTheDocument()
+    expect(
+      screen.queryByPlaceholderText("Type your answer…")
+    ).not.toBeInTheDocument()
+  })
+
+  it("hides the Other option when allow_other is false in multi-select", () => {
+    renderCard({
+      question_id: "q-no-other-multi",
+      created_at: "2026-01-01T00:00:00Z",
+      questions: [
+        {
+          id: "qb",
+          question: "Which modules?",
+          header: "Scope",
+          multi_select: true,
+          allow_other: false,
+          options: [
+            { label: "auth", description: "" },
+            { label: "billing", description: "" },
+            { label: "ui", description: "" },
+          ],
+        },
+      ],
+    })
+    expect(screen.getAllByRole("checkbox")).toHaveLength(3)
+    expect(
+      screen.queryByRole("checkbox", { name: "Other" })
+    ).not.toBeInTheDocument()
+    expect(screen.queryByText("Other")).not.toBeInTheDocument()
+    expect(
+      screen.queryByPlaceholderText("Type your answer…")
+    ).not.toBeInTheDocument()
+  })
+
   it("submits the typed Other text as the answer label", () => {
     const onAnswer = renderCard(single)
     fireEvent.click(screen.getByRole("radio", { name: "Other" }))
@@ -534,5 +591,101 @@ describe("AskQuestionCard", () => {
     // Submit would post an empty affirmative answer instead of a decline.
     const { container } = renderWith({ ...single, questions: [] }, vi.fn())
     expect(container).toBeEmptyDOMElement()
+  })
+})
+
+describe("AskQuestionCard collapse", () => {
+  it("collapses to a header-only bar and keeps the selection across the round-trip", () => {
+    const onAnswer = renderCard(single)
+    fireEvent.click(screen.getByRole("radio", { name: /Incremental/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Collapse" }))
+    // Header-only: options and the footer are unmounted.
+    expect(screen.queryByRole("radio")).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Submit" })
+    ).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Expand" }))
+    // The pick survived the collapse/expand round-trip.
+    expect(screen.getByRole("radio", { name: /Incremental/ })).toBeChecked()
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }))
+    expect(onAnswer).toHaveBeenCalledWith("q-1", {
+      answers: [{ questionId: "qa", labels: ["Incremental"] }],
+      declined: false,
+    })
+  })
+
+  it("keeps the header readable while collapsed", () => {
+    renderCard(twoSingle)
+    fireEvent.click(screen.getByRole("button", { name: "Collapse" }))
+    // The card still says whose turn it is and how far along the set is — a
+    // collapsed blocking question must not read as a dismissed one.
+    expect(screen.getByText("The agent needs your input")).toBeInTheDocument()
+    expect(screen.getByText("0/2")).toBeInTheDocument()
+    // The tab strip goes with the body.
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument()
+  })
+
+  it("reports the collapsed state on the toggle", () => {
+    renderCard(single)
+    expect(screen.getByRole("button", { name: "Collapse" })).toHaveAttribute(
+      "aria-expanded",
+      "true"
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Collapse" }))
+    expect(screen.getByRole("button", { name: "Expand" })).toHaveAttribute(
+      "aria-expanded",
+      "false"
+    )
+  })
+
+  it("offers no collapse control in the read-only view", () => {
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <AskQuestionCard question={single} onAnswer={vi.fn()} readOnly />
+      </NextIntlClientProvider>
+    )
+    // The in-message record has its own expand/collapse capsule; a second
+    // chevron here would fight it.
+    expect(
+      screen.queryByRole("button", { name: "Collapse" })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Expand" })
+    ).not.toBeInTheDocument()
+  })
+
+  it("re-opens when a different question set renders into the same card", () => {
+    const { rerender } = render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <AskQuestionCard question={single} onAnswer={vi.fn()} />
+      </NextIntlClientProvider>
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Collapse" }))
+    expect(screen.queryByRole("radio")).not.toBeInTheDocument()
+    // A replacement set is a NEW blocking request. Left collapsed it renders
+    // as the same header row the user already put away, so they would never
+    // see it and the agent would sit stalled.
+    rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <AskQuestionCard question={multi} onAnswer={vi.fn()} />
+      </NextIntlClientProvider>
+    )
+    expect(screen.getByRole("checkbox", { name: "auth" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Collapse" })).toBeInTheDocument()
+  })
+
+  it("re-opens itself when an answer collapsed mid-flight comes back failed", async () => {
+    const onAnswer = vi.fn().mockRejectedValueOnce(new Error("boom"))
+    renderWith(single, onAnswer)
+    fireEvent.click(screen.getByRole("radio", { name: /Rewrite/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }))
+    // Collapsing drops the footer — the error line and the retry live there,
+    // so a failure while collapsed would leave a blocking question looking
+    // answered.
+    fireEvent.click(screen.getByRole("button", { name: "Collapse" }))
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Couldn't submit. Please try again."
+    )
+    expect(screen.getByRole("button", { name: "Submit" })).not.toBeDisabled()
   })
 })

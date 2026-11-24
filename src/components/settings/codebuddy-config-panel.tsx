@@ -160,13 +160,13 @@ export function CodeBuddyConfigPanel({
         <label className="text-xs font-medium">
           {t("codebuddy.configManagement")}
         </label>
-        <p className="mt-1 text-[11px] text-muted-foreground">
+        <p className="mt-1 text-2xs text-muted-foreground">
           {t("codebuddy.configDescription")}
         </p>
       </div>
 
       <div className="space-y-1.5">
-        <label className="text-[11px] text-muted-foreground">
+        <label className="text-2xs text-muted-foreground">
           {t("codebuddy.apiKeyLabel")}
         </label>
         <div className="flex items-center gap-2">
@@ -191,7 +191,7 @@ export function CodeBuddyConfigPanel({
             )}
           </Button>
         </div>
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-2xs text-muted-foreground">
           {t(
             isSelfHosted
               ? "codebuddy.apiKeyHintSelfHosted"
@@ -201,7 +201,7 @@ export function CodeBuddyConfigPanel({
       </div>
 
       <div className="space-y-1.5">
-        <label className="text-[11px] text-muted-foreground">
+        <label className="text-2xs text-muted-foreground">
           {t("codebuddy.environmentLabel")}
         </label>
         <Select
@@ -228,7 +228,7 @@ export function CodeBuddyConfigPanel({
         {/* The region hint only applies to the hosted builds; for self_hosted
             the Base URL field below carries its own explanation. */}
         {!isSelfHosted && (
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-2xs text-muted-foreground">
             {t("codebuddy.environmentHint")}
           </p>
         )}
@@ -238,7 +238,7 @@ export function CodeBuddyConfigPanel({
         <div className="space-y-1.5">
           <label
             htmlFor="codebuddy-base-url"
-            className="text-[11px] text-muted-foreground"
+            className="text-2xs text-muted-foreground"
           >
             {t("codebuddy.baseUrlLabel")}
           </label>
@@ -256,14 +256,14 @@ export function CodeBuddyConfigPanel({
           {showBaseUrlError ? (
             <p
               id="codebuddy-base-url-hint"
-              className="text-[11px] text-destructive"
+              className="text-2xs text-destructive"
             >
               {t("codebuddy.baseUrlInvalid")}
             </p>
           ) : (
             <p
               id="codebuddy-base-url-hint"
-              className="text-[11px] text-muted-foreground"
+              className="text-2xs text-muted-foreground"
             >
               {t("codebuddy.baseUrlHint")}
             </p>
@@ -274,7 +274,7 @@ export function CodeBuddyConfigPanel({
       {/* CLI sign-in persists a token the --acp subprocess reuses for the hosted
           builds; it does not apply to a private endpoint, so hide it there. */}
       {!isSelfHosted && (
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-2xs text-muted-foreground">
           {t("codebuddy.loginHint")}
         </p>
       )}

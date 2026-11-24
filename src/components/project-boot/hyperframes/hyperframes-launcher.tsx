@@ -44,6 +44,7 @@ import {
 } from "@/lib/api"
 import type { HyperframesSkillAgent } from "@/lib/types"
 import { extractAppCommandError, toErrorMessage } from "@/lib/app-error"
+import { joinFsPath } from "@/lib/path-utils"
 import { DirectoryPathInput } from "@/components/shared/directory-path-input"
 import { PACKAGE_MANAGER_OPTIONS } from "../shadcn/constants"
 import {
@@ -53,7 +54,7 @@ import {
 
 function SectionHeader({ children }: { children: React.ReactNode }) {
   return (
-    <h4 className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70">
+    <h4 className="text-2xs font-medium uppercase tracking-wider text-muted-foreground/70">
       {children}
     </h4>
   )
@@ -101,6 +102,7 @@ export function HyperframesLauncher() {
   }, [])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- probes the local toolchain; flips the checking flag before awaiting
     checkPackageManager(packageManager)
   }, [packageManager, checkPackageManager])
 
@@ -124,6 +126,7 @@ export function HyperframesLauncher() {
   }, [])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- probes installed skills; flips the detecting flag before awaiting
     detectSkills()
   }, [detectSkills])
 
@@ -255,7 +258,7 @@ export function HyperframesLauncher() {
               {saveDirectory && projectName.trim() && (
                 <p className="text-xs text-muted-foreground">
                   {t("createDialog.projectPath", {
-                    path: `${saveDirectory}/${projectName.trim()}`,
+                    path: joinFsPath(saveDirectory, projectName.trim()),
                   })}
                 </p>
               )}
@@ -397,7 +400,7 @@ export function HyperframesLauncher() {
                           </span>
                         </span>
                         {installedMap[a.id] && (
-                          <span className="shrink-0 text-[10px] text-emerald-600 dark:text-emerald-500">
+                          <span className="shrink-0 text-3xs text-emerald-600 dark:text-emerald-500">
                             {t("hyperframes.installedBadge")}
                           </span>
                         )}

@@ -6,7 +6,22 @@ import { useTranslations } from "next-intl"
 import { Loader2, X } from "lucide-react"
 
 import { ImagePreviewDialog } from "@/components/ui/image-preview-dialog"
+import {
+  ImageActions,
+  useImageActions,
+} from "@/components/message/image-actions"
+import type { UserImageDisplay } from "@/lib/adapters/ai-elements-adapter"
 import type { ImageInputAttachment } from "@/components/chat/message-input-attachments"
+
+/** The staged attachment reshaped for the shared transcript image actions. */
+function toDisplay(attachment: ImageInputAttachment): UserImageDisplay {
+  return {
+    name: attachment.name,
+    data: attachment.data,
+    mime_type: attachment.mimeType,
+    uri: attachment.uri,
+  }
+}
 
 /**
  * The composer's image attachment strip: one thumbnail per pasted / dropped /
@@ -17,6 +32,11 @@ import type { ImageInputAttachment } from "@/components/chat/message-input-attac
  * alongside the context chips, while the to-do task composers put it in a plain
  * row above the editor. The preview dialog is owned here: it's an artifact of
  * clicking a tile, not state any host needs.
+ *
+ * Tiles and the blown-up preview carry the same right-click Copy / Download
+ * menu as transcript images (`ImageActions`); without it a right-click on a
+ * staged image fell through to the composer's own text context menu, whose
+ * Copy row copies nothing for an image.
  */
 export function ComposerImageThumbnails({
   attachments,
@@ -26,16 +46,22 @@ export function ComposerImageThumbnails({
   onRemove: (id: string) => void
 }) {
   const t = useTranslations("Folder.chat.messageInput")
+  // The shared image actions live in the transcript's namespace; reusing the
+  // exact keys keeps the two menus identical in every locale.
+  const tImage = useTranslations("Folder.chat.messageList")
   const [previewId, setPreviewId] = useState<string | null>(null)
+  const { canCopy, copy, download } = useImageActions()
   const preview = previewId
     ? (attachments.find((a) => a.id === previewId) ?? null)
     : null
+  const previewDisplay = preview ? toDisplay(preview) : null
 
   return (
     <>
       {attachments.map((attachment) => (
-        <div
+        <ImageActions
           key={attachment.id}
+          image={toDisplay(attachment)}
           className="relative shrink-0 overflow-hidden rounded-md border border-border/70 bg-muted/30"
         >
           <button
@@ -67,7 +93,7 @@ export function ComposerImageThumbnails({
           >
             <X className="h-3 w-3" />
           </button>
-        </div>
+        </ImageActions>
       ))}
       <ImagePreviewDialog
         src={preview ? `data:${preview.mimeType};base64,${preview.data}` : ""}
@@ -76,6 +102,23 @@ export function ComposerImageThumbnails({
         onOpenChange={(open) => {
           if (!open) setPreviewId(null)
         }}
+        onDownload={
+          previewDisplay ? () => void download(previewDisplay) : undefined
+        }
+        downloadLabel={tImage("downloadImage")}
+        onCopy={
+          previewDisplay && canCopy
+            ? () => void copy(previewDisplay)
+            : undefined
+        }
+        copyLabel={tImage("copyImage")}
+        renderImage={
+          previewDisplay
+            ? (image) => (
+                <ImageActions image={previewDisplay}>{image}</ImageActions>
+              )
+            : undefined
+        }
       />
     </>
   )

@@ -1,6 +1,5 @@
 "use client"
 
-import { memo } from "react"
 import { useTranslations } from "next-intl"
 import { ChevronDownIcon, ChevronUpIcon, ListTodoIcon } from "lucide-react"
 
@@ -11,20 +10,16 @@ import { useCollapsibleOverflow } from "@/hooks/use-collapsible-overflow"
 import { cn } from "@/lib/utils"
 
 /**
- * Dedicated rendering for plan-*mode* transition tools — Claude Code's
- * `EnterPlanMode`/`ExitPlanMode`, Cline's `switch_mode`, and codex-acp
- * ≥1.1.8's `plan_review` gate. These are mode signals, not work tools, so they
- * render directly here instead of folding into the misleading "思考 N 次"
- * tool-group (see `isPlanModeToolName` in `plan-parse.ts` and the run-break in
- * `groupConsecutiveToolCalls`).
+ * Plan-*mode* transition tools — Claude Code's `EnterPlanMode`/`ExitPlanMode`,
+ * Cline's `switch_mode`, and codex-acp ≥1.1.8's `plan_review` gate: what they
+ * say (`usePlanModeMarker`) and the plan document some of them carry
+ * (`PlanMarkdownCard`). The activity timeline's plan-mode row draws them.
  *
- * Content-driven, not name-driven:
- *   - input carries freeform plan markdown (ExitPlanMode, or a switch_mode that
- *     proposes a plan) → render the plan directly as a card.
- *   - otherwise → a compact, non-collapsible mode marker. `enterplanmode` and
- *     `exitplanmode` get plan-specific labels; a non-plan `switch_mode` gets a
- *     neutral "switched mode" marker (never mislabeled as a plan);
- *     `plan_review` reports the user's decision.
+ * Content-driven, not name-driven: input that carries freeform plan markdown
+ * (ExitPlanMode, or a switch_mode that proposes a plan) has a plan to open to;
+ * the marker label is plan-specific for `enterplanmode` / `exitplanmode`, a
+ * neutral "switched mode" for a non-plan `switch_mode` (never mislabeled as a
+ * plan), and the user's decision for `plan_review`.
  */
 
 function parseInput(input: string | null): Record<string, unknown> | null {
@@ -38,16 +33,28 @@ function parseInput(input: string | null): Record<string, unknown> | null {
 
 /**
  * Plan documents are frequently long enough to bury the rest of the turn, so
- * the body is clamped to the same height the sibling checklist `<PlanCard>`
- * scrolls at and gets a "Show more"/"Show less" footer once it's actually
- * clipped — the same `useCollapsibleOverflow` affordance user messages use.
+ * the body is clamped to a fixed height and gets a "Show more"/"Show less"
+ * footer once it's actually clipped — the same `useCollapsibleOverflow`
+ * affordance user messages use.
+ *
+ * Exported because a codex plan reaches the UI through two different carriers
+ * that must not look like two different features: the live `plan_review` tool
+ * call's `rawInput.plan` (here) and the `<proposed_plan>` block lifted out of
+ * assistant text (`ProposedPlanPart` in `content-parts-renderer.tsx`). Both
+ * render THIS component with the same label, so the prose styling and the
+ * clamp/expand affordance can't drift between live and reload.
+ *
+ * `emptyLabel` covers the streaming case where the block has opened but no
+ * markdown has arrived yet; without one an empty plan renders as bare chrome.
  */
-function PlanMarkdownCard({
+export function PlanMarkdownCard({
   markdown,
   label,
+  emptyLabel,
 }: {
   markdown: string
   label: string
+  emptyLabel?: string
 }) {
   const t = useTranslations("Folder.chat.messageList")
   const { contentRef, contentId, isOverflowing, expanded, toggle } =
@@ -66,12 +73,18 @@ function PlanMarkdownCard({
         id={contentId}
         data-testid="plan-mode-card-content"
         className={cn(
-          "prose prose-sm max-w-none px-3.5 py-3 text-sm dark:prose-invert [&_ol]:list-inside [&_ul]:list-inside",
+          "plan-markdown prose prose-sm max-w-none px-3.5 py-3 text-sm dark:prose-invert [&_ol]:list-inside [&_ul]:list-inside",
           clipped && "max-h-72 overflow-hidden",
           clipped && isOverflowing && "collapsed-content-fade"
         )}
       >
-        <MessageResponse>{markdown}</MessageResponse>
+        {markdown.length > 0 ? (
+          <MessageResponse>{markdown}</MessageResponse>
+        ) : (
+          emptyLabel && (
+            <span className="text-muted-foreground">{emptyLabel}</span>
+          )
+        )}
       </div>
       {isOverflowing && (
         <button
@@ -94,15 +107,6 @@ function PlanMarkdownCard({
   )
 }
 
-function PlanModeMarker({ label }: { label: string }) {
-  return (
-    <div className="inline-flex items-center gap-1.5 rounded-full bg-muted/60 px-3 py-1.5 text-xs font-medium text-muted-foreground">
-      <ListTodoIcon className="size-3.5 shrink-0 opacity-70" />
-      {label}
-    </div>
-  )
-}
-
 /**
  * codex-acp's own wording for an approved plan review, echoed back as the
  * tool call's `rawOutput` (`"User approved the plan."`; the other branch is
@@ -114,18 +118,20 @@ function PlanModeMarker({ label }: { label: string }) {
  */
 const CODEX_PLAN_APPROVED_PREFIX = "User approved"
 
-export const PlanModeCard = memo(function PlanModeCard({
+/**
+ * What a plan-mode tool call says: its plan document (when it carries one),
+ * the marker label for the transition, and whether it failed.
+ */
+export function usePlanModeMarker({
   toolName,
   input,
-  output = null,
+  output,
   errorText,
   state,
 }: {
-  /** Normalized (tool-call-normalization) form: enterplanmode|exitplanmode|switch_mode|plan_review. */
   toolName: string
   input: string | null
-  /** Tool result text. Only read for `plan_review`, to report the decision. */
-  output?: string | null
+  output: string | null
   errorText: string | null
   state: ToolCallState
 }) {
@@ -161,21 +167,5 @@ export const PlanModeCard = memo(function PlanModeCard({
     return t("planMode.entered")
   })()
 
-  return (
-    <div className={cn(planMarkdown ? "w-full space-y-2" : "space-y-2")}>
-      {planMarkdown ? (
-        <PlanMarkdownCard
-          markdown={planMarkdown}
-          label={t("planMode.planLabel")}
-        />
-      ) : (
-        <PlanModeMarker label={markerLabel} />
-      )}
-      {isError && errorText && (
-        <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md bg-destructive/10 p-3 text-xs text-destructive">
-          {errorText}
-        </pre>
-      )}
-    </div>
-  )
-})
+  return { planMarkdown, markerLabel, isError }
+}

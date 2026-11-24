@@ -42,6 +42,12 @@ pub struct Model {
     /// User-supplied display alias. NULL means "no alias" — the UI falls back to
     /// the path-derived `name`. When set, surfaces render `alias [name]`.
     pub alias: Option<String>,
+    /// Sidebar folder group this folder sits in; NULL = top level. Only
+    /// top-level folders carry one — a worktree child (`parent_id` set) always
+    /// stays NULL and follows its repo. A dangling id (group deleted
+    /// concurrently) is tolerated: the sidebar falls the folder back to top
+    /// level. See `super::folder_group`.
+    pub group_id: Option<i32>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -54,6 +60,13 @@ pub enum Relation {
 
     #[sea_orm(has_many = "super::folder_command::Entity")]
     FolderCommands,
+
+    #[sea_orm(
+        belongs_to = "super::folder_group::Entity",
+        from = "Column::GroupId",
+        to = "super::folder_group::Column::Id"
+    )]
+    FolderGroup,
 }
 
 impl Related<super::conversation::Entity> for Entity {
@@ -71,6 +84,12 @@ impl Related<super::opened_tab::Entity> for Entity {
 impl Related<super::folder_command::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::FolderCommands.def()
+    }
+}
+
+impl Related<super::folder_group::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::FolderGroup.def()
     }
 }
 

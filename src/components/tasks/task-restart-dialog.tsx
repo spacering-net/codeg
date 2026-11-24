@@ -21,6 +21,11 @@ import {
   TaskMessageComposer,
   type TaskMessageComposerHandle,
 } from "./task-message-composer"
+import {
+  duplicateActiveSource,
+  duplicateActiveSourceLabel,
+  type DuplicateActiveSource,
+} from "./task-restart-guard"
 import type { WorkTask } from "@/lib/types"
 
 export type TaskRestartKind = "retry" | "requeue"
@@ -64,12 +69,19 @@ export function TaskRestartDialog({
   const [submitting, setSubmitting] = useState(false)
   /** Synchronous in-flight latch — see `submit`. */
   const submittingRef = useRef(false)
+  /** Set when the resurrection guard refused — see `submit`'s catch. */
+  const [duplicate, setDuplicate] = useState<DuplicateActiveSource | null>(null)
 
   // A fresh box per open — a note belongs to one restart, not to the next.
   useEffect(() => {
     if (!open) return
+    // Kept as an effect (like the sibling dialogs): the reset also re-arms the
+    // submit latch ref, which cannot be written during render.
+    /* eslint-disable react-hooks/set-state-in-effect */
     setText("")
     setSubmitting(false)
+    setDuplicate(null)
+    /* eslint-enable react-hooks/set-state-in-effect */
     submittingRef.current = false
   }, [open, task])
 
@@ -84,7 +96,7 @@ export function TaskRestartDialog({
     folders: allFolders,
   })
 
-  const submit = async () => {
+  const submit = async (allowDuplicateSource = false) => {
     // Straight from the editor: reference badges serialize to their inline
     // token here, and this cannot lag a keystroke behind the state.
     const note = (composerRef.current?.getText() ?? text).trim() || null
@@ -104,11 +116,20 @@ export function TaskRestartDialog({
     submittingRef.current = true
     setSubmitting(true)
     try {
-      if (kind === "retry") await workTaskRetry(task.id, note, blocks)
-      else await workTaskRequeue(task.id, note, blocks)
+      if (kind === "retry") {
+        await workTaskRetry(task.id, note, blocks, allowDuplicateSource)
+      } else {
+        await workTaskRequeue(task.id, note, blocks, allowDuplicateSource)
+      }
       onOpenChange(false)
     } catch (e) {
-      toast.error(toErrorMessage(e))
+      // The resurrection guard is the one refusal with a way through, and it
+      // refuses EVERY restart of this card while the other task lives — a
+      // toast would leave the user with no next move. Everything else stays a
+      // toast: there is nothing here to decide.
+      const dup = duplicateActiveSource(e)
+      if (dup) setDuplicate(dup)
+      else toast.error(toErrorMessage(e))
       setSubmitting(false)
     } finally {
       submittingRef.current = false
@@ -143,9 +164,27 @@ export function TaskRestartDialog({
           newlineShortcut={shortcuts.newline_in_message}
           onChange={setText}
           onSubmit={() => {
-            void submit()
+            // Mirrors the footer button exactly: in this dialog the send key
+            // IS the primary, and once the warning is on screen the primary
+            // reads "restart anyway". Sending without the waiver there would
+            // silently re-run into the same refusal and look like a dead key.
+            void submit(duplicate != null)
           }}
         />
+
+        {duplicate ? (
+          // Announced, not just drawn: the refusal arrives while focus is in
+          // the editor, so a screen-reader user would otherwise get silence —
+          // the same dead key this whole affordance exists to remove.
+          <p role="alert" className="text-xs text-destructive">
+            {t("restartDuplicateSource", {
+              task: duplicateActiveSourceLabel(
+                duplicate,
+                t("restartDuplicateSourceAnon")
+              ),
+            })}
+          </p>
+        ) : null}
 
         <DialogFooter>
           <Button
@@ -156,8 +195,19 @@ export function TaskRestartDialog({
           >
             {t("cancel")}
           </Button>
-          <Button type="button" onClick={submit} disabled={submitting}>
-            {isRetry ? t("actionRetry") : t("actionRequeue")}
+          {/* Arrow-wrapped, never `onClick={submit}`: a bare handler hands the
+              click event straight to `allowDuplicateSource`, and a MouseEvent
+              is truthy — every restart would waive the guard. */}
+          <Button
+            type="button"
+            onClick={() => void submit(duplicate != null)}
+            disabled={submitting}
+          >
+            {duplicate
+              ? t("actionRestartAnyway")
+              : isRetry
+                ? t("actionRetry")
+                : t("actionRequeue")}
           </Button>
         </DialogFooter>
       </DialogContent>
