@@ -5,6 +5,7 @@ import {
   buildOwnerHeaderIndex,
   buildRows,
   computeStickyState,
+  conversationRowTimestamp,
   flatIndexOfConversation,
   folderHeaderFlatIndices,
   formatRelative,
@@ -21,6 +22,7 @@ import {
   selectRecentConversationsWithReuse,
   worktreeChildrenByParent,
   worktreeHeaderAlias,
+  type ConversationRow,
   type SidebarRow,
 } from "./sidebar-conversation-grouping"
 
@@ -86,6 +88,139 @@ describe("formatRelative", () => {
     const iso = new Date(now - 59 * MINUTE).toISOString()
     expect(formatRelative(iso, now)).toBe("59m")
     expect(formatRelative(iso, now + MINUTE)).toBe("1h")
+  })
+})
+
+describe("conversationRowTimestamp", () => {
+  // Created long ago, touched recently: the two stamps disagree, so every
+  // assertion pins which one a row's label reads.
+  const created = new Date(1_000).toISOString()
+  const updated = new Date(9_000_000).toISOString()
+  const parent = conv(1, 10, {
+    child_count: 1,
+    created_at: created,
+    updated_at: updated,
+  })
+  const kid = conv(2, 10, {
+    parent_id: 1,
+    created_at: created,
+    updated_at: updated,
+  })
+  // The parent is listed under its folder and in Recent, expanded both times,
+  // so each conversation comes out twice: its canonical row, then its Recent
+  // copy.
+  const rows = buildRows({
+    pinned: [],
+    pinnedExpanded: true,
+    orderedFolderIds: [10],
+    byFolder: new Map([[10, [parent]]]),
+    folderExpanded: { 10: true },
+    folderTotalCounts: new Map([[10, 1]]),
+    foldersExpanded: true,
+    chatConversations: [],
+    chatsExpanded: true,
+    recentConversations: [parent],
+    showRecent: true,
+    conversationExpanded: new Set([1]),
+    childrenByParent: new Map([[1, [kid]]]),
+  }).filter((r): r is ConversationRow => r.kind === "conversation")
+  const parents = rows.filter((r) => r.conversation.id === 1)
+  const kids = rows.filter((r) => r.conversation.id === 2)
+
+  it("reads the last activity on Recent's own rows, whatever the sort mode", () => {
+    expect(parents.map((r) => r.recent ?? false)).toEqual([false, true])
+    expect(conversationRowTimestamp(parents[1], "created")).toBe(updated)
+    expect(conversationRowTimestamp(parents[1], "updated")).toBe(updated)
+  })
+
+  it("follows the sort mode under the folder", () => {
+    expect(conversationRowTimestamp(parents[0], "created")).toBe(created)
+    expect(conversationRowTimestamp(parents[0], "updated")).toBe(updated)
+  })
+
+  it("reads the creation time on sub-sessions, which are sorted by it", () => {
+    // Creation-ordered under every parent and in either sort mode, so neither
+    // the activity stamp a Recent parent reads nor an activity sort moves
+    // their label off it, and the Recent copy matches its twin.
+    expect(kids.map((r) => [r.depth, r.recent ?? false])).toEqual([
+      [1, false],
+      [1, true],
+    ])
+    expect(kids.map((r) => conversationRowTimestamp(r, "created"))).toEqual([
+      created,
+      created,
+    ])
+    expect(kids.map((r) => conversationRowTimestamp(r, "updated"))).toEqual([
+      created,
+      created,
+    ])
+  })
+
+  it("tells a sub-session apart by its parent, not by its indent", () => {
+    // Under Show worktrees a repo's own rows and its worktree's rows both sit
+    // at depth 1, yet they are top-level conversations sorted by `sortMode`.
+    const rootConv = conv(5, 10, { created_at: created, updated_at: updated })
+    const wtConv = conv(6, 11, { created_at: created, updated_at: updated })
+    const nested = buildRows({
+      pinned: [],
+      pinnedExpanded: true,
+      orderedFolderIds: [10],
+      byFolder: new Map([
+        [10, [rootConv]],
+        [11, [wtConv]],
+      ]),
+      folderExpanded: {},
+      folderTotalCounts: new Map([
+        [10, 1],
+        [11, 1],
+      ]),
+      foldersExpanded: true,
+      chatConversations: [],
+      chatsExpanded: true,
+      containerChildren: new Map([[10, [11]]]),
+    }).filter((r): r is ConversationRow => r.kind === "conversation")
+    expect(nested.map((r) => [r.conversation.id, r.depth])).toEqual([
+      [5, 1],
+      [6, 1],
+    ])
+    expect(nested.map((r) => conversationRowTimestamp(r, "updated"))).toEqual([
+      updated,
+      updated,
+    ])
+  })
+
+  it("reads the last activity on Chat rows, which are sorted by it", () => {
+    const chat = conv(3, 99, {
+      kind: "chat",
+      created_at: created,
+      updated_at: updated,
+    })
+    // Pinned chats leave the Chat bucket for Pinned, which is ordered by pin
+    // time, so they keep the sort mode's stamp like every other pinned row.
+    const pinnedChat = conv(4, 99, {
+      kind: "chat",
+      created_at: created,
+      updated_at: updated,
+      pinned_at: updated,
+    })
+    const chatRows = buildRows({
+      pinned: [pinnedChat],
+      pinnedExpanded: true,
+      orderedFolderIds: [],
+      byFolder: new Map(),
+      folderExpanded: {},
+      folderTotalCounts: new Map(),
+      foldersExpanded: true,
+      chatConversations: [chat],
+      chatsExpanded: true,
+    }).filter((r): r is ConversationRow => r.kind === "conversation")
+    expect(chatRows.map((r) => r.conversation.id)).toEqual([4, 3])
+    expect(chatRows.map((r) => conversationRowTimestamp(r, "created"))).toEqual(
+      [created, updated]
+    )
+    expect(chatRows.map((r) => conversationRowTimestamp(r, "updated"))).toEqual(
+      [updated, updated]
+    )
   })
 })
 
@@ -1324,6 +1459,49 @@ describe("selectChatConversationsWithReuse", () => {
 describe("selectRecentConversationsWithReuse", () => {
   const open = new Set([10])
 
+  it("narrows to chats or to folder sessions when a filter is set", () => {
+    const folderConv = conv(1, 10)
+    const chatConv = conv(2, 99, { kind: "chat" })
+    const pick = (filter: "all" | "chats" | "folders") =>
+      selectRecentConversationsWithReuse(
+        [folderConv, chatConv],
+        true,
+        open,
+        [],
+        filter
+      ).map((c) => c.id)
+    expect(pick("all")).toEqual([2, 1])
+    expect(pick("chats")).toEqual([2])
+    expect(pick("folders")).toEqual([1])
+  })
+
+  it("narrows to what codeg-cli started under the cli filter", () => {
+    const fromCli = conv(1, 10, { source: "cli" })
+    const fromWindow = conv(2, 10)
+    const chat = conv(3, 99, { kind: "chat" })
+    const closedCli = conv(4, 20, { source: "cli" })
+    expect(
+      selectRecentConversationsWithReuse(
+        [fromCli, fromWindow, chat, closedCli],
+        true,
+        open,
+        [],
+        "cli"
+      ).map((c) => c.id)
+    ).toEqual([1])
+  })
+
+  it("still drops closed-folder sessions under the folders filter", () => {
+    const out = selectRecentConversationsWithReuse(
+      [conv(2, 77)],
+      true,
+      open,
+      [],
+      "folders"
+    )
+    expect(out).toEqual([])
+  })
+
   it("mixes folder and chat conversations, newest first, excluding pinned", () => {
     const folderConv = conv(1, 10)
     const chatConv = conv(2, 99, { kind: "chat" }) // higher id → later created_at
@@ -1331,7 +1509,6 @@ describe("selectRecentConversationsWithReuse", () => {
     const out = selectRecentConversationsWithReuse(
       [folderConv, chatConv, pinned],
       true,
-      "created",
       open,
       []
     )
@@ -1346,7 +1523,6 @@ describe("selectRecentConversationsWithReuse", () => {
     const out = selectRecentConversationsWithReuse(
       [inOpen, inClosed, chatConv],
       true,
-      "created",
       open,
       []
     )
@@ -1360,43 +1536,32 @@ describe("selectRecentConversationsWithReuse", () => {
     const done = conv(1, 10, { status: "completed" })
     const active = conv(2, 10)
     expect(
-      selectRecentConversationsWithReuse(
-        [done, active],
-        false,
-        "created",
-        open,
-        []
-      ).map((c) => c.id)
+      selectRecentConversationsWithReuse([done, active], false, open, []).map(
+        (c) => c.id
+      )
     ).toEqual([2])
     expect(
-      selectRecentConversationsWithReuse(
-        [done, active],
-        true,
-        "created",
-        open,
-        []
-      ).map((c) => c.id)
+      selectRecentConversationsWithReuse([done, active], true, open, []).map(
+        (c) => c.id
+      )
     ).toEqual([2, 1])
   })
 
-  it("sorts by the active sort mode so the order matches each card's label", () => {
-    const older = conv(1, 10, { updated_at: new Date(9_000_000).toISOString() })
-    const newer = conv(2, 10, { updated_at: new Date(1_000).toISOString() })
-    // Created-at descending puts the higher id first; updated-at flips them.
+  it("orders by last activity, not by creation time", () => {
+    // A session created long ago but touched this morning must outrank one
+    // created moments ago and left alone: that is what "Recent" means.
+    const longRunning = conv(1, 10, {
+      created_at: new Date(1_000).toISOString(),
+      updated_at: new Date(9_000_000).toISOString(),
+    })
+    const brandNew = conv(2, 10, {
+      created_at: new Date(5_000_000).toISOString(),
+      updated_at: new Date(5_000_000).toISOString(),
+    })
     expect(
       selectRecentConversationsWithReuse(
-        [older, newer],
+        [longRunning, brandNew],
         true,
-        "created",
-        open,
-        []
-      ).map((c) => c.id)
-    ).toEqual([2, 1])
-    expect(
-      selectRecentConversationsWithReuse(
-        [older, newer],
-        true,
-        "updated",
         open,
         []
       ).map((c) => c.id)
@@ -1405,20 +1570,8 @@ describe("selectRecentConversationsWithReuse", () => {
 
   it("returns the prev array when membership is referentially unchanged", () => {
     const a = conv(1, 10)
-    const first = selectRecentConversationsWithReuse(
-      [a],
-      true,
-      "created",
-      open,
-      []
-    )
-    const second = selectRecentConversationsWithReuse(
-      [a],
-      true,
-      "created",
-      open,
-      first
-    )
+    const first = selectRecentConversationsWithReuse([a], true, open, [])
+    const second = selectRecentConversationsWithReuse([a], true, open, first)
     expect(second).toBe(first)
   })
 })
@@ -1713,5 +1866,156 @@ describe("applyReorder", () => {
   it("clamps the destination and ignores an out-of-range source", () => {
     expect(applyReorder([1, 2, 3], 0, 99)).toEqual([2, 3, 1])
     expect(applyReorder([1, 2, 3], 5, 0)).toEqual([1, 2, 3])
+  })
+})
+
+describe("buildRows under a tag filter (hideEmptyFolders)", () => {
+  // The caller narrows the buckets; buildRows only decides what an EMPTY one
+  // means. Unfiltered it is "this folder is empty" (a hint row); filtered it is
+  // "nothing here matches", and the folder is dropped.
+  function rowsFor(args: {
+    orderedFolderIds: number[]
+    byFolder: Map<number, DbConversationSummary[]>
+    hideEmptyFolders: boolean
+    containerChildren?: Map<number, number[]>
+    layout?: Parameters<typeof buildRows>[0]["layout"]
+  }): SidebarRow[] {
+    const rows = buildRows({
+      pinned: [],
+      pinnedExpanded: true,
+      orderedFolderIds: args.orderedFolderIds,
+      byFolder: args.byFolder,
+      folderExpanded: {},
+      folderTotalCounts: new Map(),
+      foldersExpanded: true,
+      chatConversations: [],
+      chatsExpanded: true,
+      containerChildren: args.containerChildren,
+      layout: args.layout,
+      hideEmptyFolders: args.hideEmptyFolders,
+    })
+    const chatsIdx = rows.findIndex(
+      (r) => r.kind === "section" && r.section === "chats"
+    )
+    return chatsIdx === -1 ? rows : rows.slice(0, chatsIdx)
+  }
+
+  const shape = (rows: SidebarRow[]) =>
+    rows.map((r) =>
+      r.kind === "section"
+        ? `section:${r.section}:${r.count}`
+        : r.kind === "folder" || r.kind === "root-group" || r.kind === "empty"
+          ? `${r.kind}:${r.folderId}`
+          : r.kind === "folder-group" || r.kind === "group-empty"
+            ? `${r.kind}:${r.groupId}`
+            : r.kind === "conversation"
+              ? `conv:${r.conversation.id}`
+              : r.kind
+    )
+
+  it("drops folders with no match and counts only the folders shown", () => {
+    const byFolder = new Map([
+      [10, [conv(1, 10)]],
+      [20, []],
+    ])
+    expect(
+      shape(
+        rowsFor({
+          orderedFolderIds: [10, 20, 30],
+          byFolder,
+          hideEmptyFolders: true,
+        })
+      )
+    ).toEqual(["section:folders:1", "folder:10", "conv:1"])
+    // Unfiltered, the same buckets keep every folder and hint the empty ones.
+    expect(
+      shape(
+        rowsFor({
+          orderedFolderIds: [10, 20, 30],
+          byFolder,
+          hideEmptyFolders: false,
+        })
+      )
+    ).toEqual([
+      "section:folders:3",
+      "folder:10",
+      "conv:1",
+      "folder:20",
+      "empty:20",
+      "folder:30",
+      "empty:30",
+    ])
+  })
+
+  it("says so when no folder has a match", () => {
+    expect(
+      shape(
+        rowsFor({
+          orderedFolderIds: [10, 20],
+          byFolder: new Map(),
+          hideEmptyFolders: true,
+        })
+      )
+    ).toEqual(["section:folders:0", "folders-empty"])
+  })
+
+  it("keeps a container for a match in one worktree, and only that worktree", () => {
+    const byFolder = new Map([
+      [10, []],
+      [11, [conv(5, 11)]],
+      [12, []],
+    ])
+    expect(
+      shape(
+        rowsFor({
+          orderedFolderIds: [10],
+          byFolder,
+          containerChildren: new Map([[10, [11, 12]]]),
+          hideEmptyFolders: true,
+        })
+      )
+    ).toEqual(["section:folders:1", "folder:10", "folder:11", "conv:5"])
+  })
+
+  it("keeps a container's own sessions sub-group only when they match", () => {
+    const byFolder = new Map([
+      [10, [conv(2, 10)]],
+      [11, []],
+    ])
+    expect(
+      shape(
+        rowsFor({
+          orderedFolderIds: [10],
+          byFolder,
+          containerChildren: new Map([[10, [11]]]),
+          hideEmptyFolders: true,
+        })
+      )
+    ).toEqual(["section:folders:1", "folder:10", "root-group:10", "conv:2"])
+  })
+
+  it("drops a group none of whose folders match, and the unmatched members", () => {
+    const layout = {
+      top: [
+        { kind: "group" as const, id: 1 },
+        { kind: "group" as const, id: 2 },
+        { kind: "folder" as const, id: 30 },
+      ],
+      membersByGroup: new Map([
+        [1, [10, 20]],
+        [2, [40]],
+      ]),
+    }
+    const byFolder = new Map([[20, [conv(7, 20)]]])
+    expect(
+      shape(
+        rowsFor({
+          orderedFolderIds: [10, 20, 40, 30],
+          byFolder,
+          layout,
+          hideEmptyFolders: true,
+        })
+      )
+    ).toEqual(["section:folders:1", "folder-group:1", "folder:20", "conv:7"])
   })
 })

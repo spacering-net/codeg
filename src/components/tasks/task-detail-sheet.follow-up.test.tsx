@@ -27,6 +27,7 @@ const workTaskRetry = vi.fn().mockResolvedValue(undefined)
 const workTaskRequeue = vi.fn().mockResolvedValue(undefined)
 
 vi.mock("@/lib/api", () => ({
+  workTaskGet: vi.fn().mockRejectedValue(new Error("not in this test")),
   workTaskArchive: vi.fn().mockResolvedValue(undefined),
   workTaskCancel: vi.fn().mockResolvedValue(undefined),
   getFolderConversation: vi.fn().mockRejectedValue(new Error("no transcript")),

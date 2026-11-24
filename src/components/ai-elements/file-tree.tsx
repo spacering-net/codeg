@@ -8,12 +8,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
 import { cn } from "@/lib/utils"
-import {
-  ChevronRightIcon,
-  FileIcon,
-  FolderIcon,
-  FolderOpenIcon,
-} from "lucide-react"
+import { ChevronRightIcon, FileIcon } from "lucide-react"
 import {
   createContext,
   useCallback,
@@ -54,8 +49,13 @@ export function fileTreeRowElementId(treeId: string, path: string): string {
 // the row stays FULL-WIDTH and indents only its CONTENT via padding-left, so the
 // hover / selection / drop highlight spans the whole row at any depth. When
 // `depth` is omitted (callers that nest purely via <FileTreeFolder> children),
-// the classic margin/border/padding wrapper indentation is used, unchanged.
-const FILE_TREE_INDENT_STEP_REM = 1.5
+// the classic margin/border/padding wrapper indentation is used.
+//
+// One step == one leading-glyph width (the chevron / file icon column), which
+// keeps a deep tree readable inside a narrow panel. The wrapper path below is
+// built to match: `ml-2` + `pl-2` around its 1px guide border, i.e. 17px — a
+// hair wider than this 1rem, and uniform within any one tree.
+const FILE_TREE_INDENT_STEP_REM = 1
 function rowPaddingLeftStyle(
   depth: number | undefined,
   base: CSSProperties | undefined
@@ -194,6 +194,7 @@ export type FileTreeFolderProps = HTMLAttributes<HTMLDivElement> & {
   path: string
   name: string
   nameClassName?: string
+  /** Extra classes for the row's leading chevron (the folder's only glyph). */
   iconClassName?: string
   suffix?: ReactNode
   suffixClassName?: string
@@ -333,21 +334,17 @@ export const FileTreeFolder = ({
         // caller-provided tabIndex unchanged.
         tabIndex={keyboardNavigation ? -1 : rowTabIndex}
       >
+        {/* The chevron is the folder's ONLY glyph: it states both "directory"
+            and expanded/collapsed, so a folder icon beside it would be a second
+            copy of the same information — and it occupies the same leading
+            column as a file row's type icon, which keeps sibling names aligned. */}
         <ChevronRightIcon
           className={cn(
             "size-4 shrink-0 text-muted-foreground transition-transform",
-            isExpanded && "rotate-90"
+            isExpanded && "rotate-90",
+            iconClassName
           )}
         />
-        <FileTreeIcon>
-          {isExpanded ? (
-            <FolderOpenIcon
-              className={cn("size-4 text-blue-500", iconClassName)}
-            />
-          ) : (
-            <FolderIcon className={cn("size-4 text-blue-500", iconClassName)} />
-          )}
-        </FileTreeIcon>
         <FileTreeName className={nameClassName}>{name}</FileTreeName>
         {suffix ? (
           <span
@@ -396,7 +393,7 @@ export const FileTreeFolder = ({
                 padding, so this wrapper adds NO left inset (keeping their
                 highlights full-width). Without it, fall back to the classic
                 margin/border/padding inset. */}
-            <div className={depth == null ? "ml-4 border-l pl-2" : undefined}>
+            <div className={depth == null ? "ml-2 border-l pl-2" : undefined}>
               {children}
             </div>
           </CollapsibleContent>
@@ -486,8 +483,9 @@ export const FileTreeFile = ({
       >
         {children ?? (
           <>
-            {/* Spacer for alignment */}
-            <span className="size-4" />
+            {/* The type icon sits in the SAME leading column as a folder row's
+                chevron (no extra spacer in front of it), so a file and its
+                sibling directory line their names up at every depth. */}
             <FileTreeIcon>
               {icon ?? <FileIcon className="size-4 text-muted-foreground" />}
             </FileTreeIcon>

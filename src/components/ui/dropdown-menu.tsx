@@ -5,6 +5,8 @@ import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
 import { CheckIcon, ChevronRightIcon } from "lucide-react"
+import { acquireNativeSurfaceOcclusionFor } from "@/lib/browser/native-surface-occlusion"
+import { attachRef } from "@/lib/attach-ref"
 
 function DropdownMenu({
   ...props
@@ -35,11 +37,26 @@ function DropdownMenuContent({
   className,
   align = "start",
   sideOffset = 4,
+  ref,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Content>) {
+  // Occlusion lease for the built-in browser, held while the menu's DOM
+  // exists (see dialog.tsx).
+  const contentRef = React.useCallback(
+    (node: HTMLDivElement | null) => {
+      const detach = attachRef(ref, node)
+      const release = acquireNativeSurfaceOcclusionFor("dropdown-menu", true)
+      return () => {
+        release()
+        detach()
+      }
+    },
+    [ref]
+  )
   return (
     <DropdownMenuPrimitive.Portal>
       <DropdownMenuPrimitive.Content
+        ref={contentRef}
         data-slot="dropdown-menu-content"
         sideOffset={sideOffset}
         align={align}

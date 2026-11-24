@@ -31,6 +31,93 @@ const baseOptions = [
 ]
 
 describe("PermissionDialog", () => {
+  // `deepseek-acp` hardcodes its approval buttons in Simplified Chinese and has
+  // no locale switch, so the dialog re-labels them from the option ids.
+  it("localises an agent's hardcoded approval labels, keeping the ids it answers with", () => {
+    const onRespond = vi.fn()
+    const permission: PendingPermission = {
+      request_id: "req-ds",
+      tool_call: { title: "ls", kind: "execute" },
+      options: [
+        { option_id: "allow-once", name: "允许本次", kind: "allow_once" },
+        { option_id: "reject-once", name: "拒绝", kind: "reject_once" },
+      ],
+    }
+    renderWithIntl(
+      <PermissionDialog
+        permission={permission}
+        onRespond={onRespond}
+        agentType="deepseek"
+      />
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Allow once" }))
+    expect(screen.getByRole("button", { name: "Reject" })).toBeInTheDocument()
+    expect(screen.queryByText("允许本次")).not.toBeInTheDocument()
+    expect(onRespond).toHaveBeenCalledWith("req-ds", "allow-once")
+  })
+
+  it("leaves another agent's option labels verbatim", () => {
+    const permission: PendingPermission = {
+      request_id: "req-cx",
+      tool_call: { title: "ls", kind: "execute" },
+      options: [
+        { option_id: "allow-once", name: "允许本次", kind: "allow_once" },
+      ],
+    }
+    renderWithIntl(
+      <PermissionDialog
+        permission={permission}
+        onRespond={() => {}}
+        agentType="codex"
+      />
+    )
+    expect(screen.getByRole("button", { name: "允许本次" })).toBeInTheDocument()
+  })
+
+  // `bg-primary` is what the `default` Button variant contributes and the
+  // `outline` one does not, so it reads as "this is the emphasised button".
+  const isEmphasised = (name: string) =>
+    screen.getByRole("button", { name }).className.includes("bg-primary")
+
+  it("emphasises the approval on an ordinary ask", () => {
+    const permission: PendingPermission = {
+      request_id: "req-plain",
+      tool_call: { title: "ls", kind: "execute" },
+      options: baseOptions,
+    }
+    renderWithIntl(
+      <PermissionDialog permission={permission} onRespond={() => {}} />
+    )
+    expect(isEmphasised("Allow once")).toBe(true)
+    expect(isEmphasised("Reject")).toBe(false)
+  })
+
+  it("emphasises the decline when claude marks the ask defaultToNo", () => {
+    // claude-agent-acp ≥0.77.0: "must not be approvable by a stray keystroke".
+    // codeg pre-selects nothing and binds no key, so the only thing left to
+    // give the decline is the accent colour the approve normally holds.
+    const permission: PendingPermission = {
+      request_id: "req-danger",
+      tool_call: {
+        title: "rm -rf build",
+        kind: "execute",
+        _meta: {
+          permission: {
+            version: 1,
+            title: "Run command?",
+            defaultToNo: true,
+          },
+        },
+      },
+      options: baseOptions,
+    }
+    renderWithIntl(
+      <PermissionDialog permission={permission} onRespond={() => {}} />
+    )
+    expect(isEmphasised("Reject")).toBe(true)
+    expect(isEmphasised("Allow once")).toBe(false)
+  })
+
   it("returns nothing when permission is null", () => {
     const { container } = renderWithIntl(
       <PermissionDialog permission={null} onRespond={() => {}} />
@@ -180,6 +267,64 @@ describe("PermissionDialog", () => {
     expect(pre).not.toBeNull()
     expect(pre?.textContent).toContain("hello")
     expect(pre?.textContent).toContain("world")
+  })
+
+  it("frames a Claude Code sandbox network request by its host, not as raw JSON", () => {
+    // claude-agent-acp 0.98.0's request, recorded, with the tool name the
+    // connection store copies over from the live call it is about.
+    const permission: PendingPermission = {
+      request_id: "req-net",
+      tool_call: {
+        toolCallId: "344c0506-799d-474e-bc8a-3ad269fa228a",
+        title: "example.com",
+        rawInput: { host: "example.com" },
+        _meta: {
+          permission: { version: 1, title: "example.com" },
+          claudeCode: { toolName: "SandboxNetworkAccess" },
+        },
+        kind: "other",
+      },
+      options: [
+        { option_id: "allow-once", name: "Yes", kind: "allow_once" },
+        { option_id: "reject", name: "No", kind: "reject_once" },
+      ],
+    }
+    const { container } = renderWithIntl(
+      <PermissionDialog
+        permission={permission}
+        onRespond={() => {}}
+        agentType="claude_code"
+      />
+    )
+    expect(
+      screen.getByText("Network request outside the sandbox")
+    ).toBeInTheDocument()
+    expect(screen.getByText("Allow this connection?")).toBeInTheDocument()
+    expect(screen.getByText("Host")).toBeInTheDocument()
+    expect(screen.getByText("example.com")).toBeInTheDocument()
+    expect(screen.getByText("network")).toBeInTheDocument()
+    // Not the request's internals.
+    expect(container.querySelector("pre")).toBeNull()
+    expect(container.textContent).not.toContain("toolCallId")
+  })
+
+  it("keeps a host-only request from anything else on the JSON preview", () => {
+    const permission: PendingPermission = {
+      request_id: "req-host",
+      tool_call: {
+        toolCallId: "t1",
+        title: "ping",
+        rawInput: { host: "example.com" },
+      },
+      options: baseOptions,
+    }
+    const { container } = renderWithIntl(
+      <PermissionDialog permission={permission} onRespond={() => {}} />
+    )
+    expect(
+      screen.queryByText("Network request outside the sandbox")
+    ).not.toBeInTheDocument()
+    expect(container.querySelector("pre")?.textContent).toContain("example.com")
   })
 
   it("renders the agent description from ACP content text instead of raw JSON", () => {

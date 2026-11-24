@@ -1,6 +1,8 @@
+import { stripKimiMcpOAuth } from "@/lib/kimi-mcp-oauth"
 import type {
   ActiveDelegationState,
   AsyncTaskRecord,
+  BackgroundOutstandingTask,
   AvailableCommandInfo,
   ConfigStaleKind,
   ConnectionStatus,
@@ -10,13 +12,17 @@ import type {
   PendingPlanApprovalState,
   PendingQuestionState,
   PromptCapabilitiesInfo,
+  RemoteControlInfo,
   SessionConfigOptionInfo,
   SessionFailureRecord,
   SessionModeStateInfo,
   SessionUsageUpdateInfo,
+  ToolApprovalInfo,
   ToolCallState,
 } from "@/lib/types"
 
+import { routeAcpError, type AcpErrorLevel } from "@/lib/acp-error-presentation"
+import { replaceLiveToolRawOutput } from "@/lib/live-tool-output"
 import type {
   LiveContentBlock as LocalLiveContentBlock,
   LiveMessage as LocalLiveMessage,
@@ -40,11 +46,22 @@ export interface SnapshotPatch {
   // a freshly-started replacement at the same contextKey.
   connectionId: string
   status: ConnectionStatus
+  /** Whether a turn has run on the connection: it is mid-turn, or it is
+   *  linked to its conversation row (`conversation_id`), which the backend
+   *  does at the connection's first prompt (or a fork), never at connect.
+   *  Latched in `ConnectionState.hasPrompted`. */
+  hasPrompted: boolean
   sessionId: string | null
   modes: SessionModeStateInfo | null
   configOptions: SessionConfigOptionInfo[] | null
   availableCommands: AvailableCommandInfo[] | null
   usage: SessionUsageUpdateInfo | null
+  /** The follow-up prompt the agent last predicted, or `null`. Current state,
+   *  like `usage`: applied on the fresh hydrate branch only. */
+  promptSuggestion: string | null
+  /** Claude Code's Remote Control while it is on, or `null`. Current state,
+   *  like `usage`: applied on the fresh hydrate branch only. */
+  remoteControl: RemoteControlInfo | null
   liveMessage: LocalLiveMessage | null
   pendingPermission: PendingPermission | null
   /** Awaiting-answer multiple-choice `ask_user_question` carried by the
@@ -62,6 +79,8 @@ export interface SnapshotPatch {
   pendingUserMessage: PendingUserMessage | null
   promptCapabilities: PromptCapabilitiesInfo | null
   selectorsReady: boolean
+  /** The composer's pending mode pick on this connection, or `null`. */
+  composerModeId: string | null
   supportsFork: boolean
   /** Whether the running session is on stale (launch-time) config — recovered
    *  from the snapshot so a reconnect/refresh/new tile sees the banner state
@@ -73,6 +92,9 @@ export interface SnapshotPatch {
    *  `background_activity` events won't replay. `0` when the server omitted
    *  the field. */
   backgroundOutstanding: number
+  /** Those tasks one by one (`background_outstanding_tasks`), for the
+   *  composer's running list. Empty when the server omitted the field. */
+  backgroundTasks: readonly BackgroundOutstandingTask[]
   /** AIR typed session failure table carried by the snapshot — resolved
    *  entries and their revision watermarks included. MERGED into the in-memory
    *  table by the monotonic per-id rule (`mergeSessionFailures`) on BOTH
@@ -80,23 +102,31 @@ export interface SnapshotPatch {
    *  records, never clobber a fresher live one. `[]` when the server omitted
    *  the field. */
   sessionFailures: SessionFailureRecord[]
+  /** The connection's recent approval records. Merged into the in-memory map
+   *  on both hydrate branches by `mergeToolApprovals` (later decision per call
+   *  wins, so it can only add). `[]` when the server omitted the field. */
+  toolApprovals: ToolApprovalInfo[]
   /** AIR async tasks carried by the snapshot, already merged backend-side.
    *  Terminal rows included — they are the ids subsequent live deltas revise.
    *  `[]` when the server omitted the field. */
   asyncTasks: AsyncTaskRecord[]
-  /** Latest ACP runtime error carried by the snapshot. `null` means none. */
+  /** Latest ACP runtime error carried by the snapshot. `null` means none.
+   *  Raw backend text here; the connections provider localizes it by
+   *  `lastErrorCode` before hydrating, exactly as the live `error` event is. */
   lastError: string | null
-  /** Diagnostic evidence attached to `lastError` (agent stderr tail, unparsed
-   *  update counts) — only the inferred `turn_failed_empty*` family carries it.
-   *  Already redacted by the backend. Kept separate from `lastError` because
-   *  that string feeds the composer status tooltip, which must stay one line. */
-  lastErrorDetails: string | null
+  /** Stable code of `lastError` (e.g. `turn_failed_empty`), or `null`. */
+  lastErrorCode: string | null
+  /** How `lastError` is tinted — see `routeAcpError`. */
+  lastErrorLevel: AcpErrorLevel
   eventSeq: number
   /** Live sub-agent delegations carried by the snapshot. Consumed directly at
    *  the attach call sites to re-seed `DelegationProvider` bindings (see
    *  `seedDelegationsFromSnapshot`); the reducer does not store this on
    *  ConnectionState. `[]` when the server omitted the field. */
   activeDelegations: ActiveDelegationState[]
+  /** Child connection ids of every running codeg delegation — the parent's
+   *  busy signal (`ConnectionState.delegatedChildren`). `[]` when absent. */
+  delegatedChildren: string[]
 }
 
 const DEFAULT_PROMPT_CAPS: PromptCapabilitiesInfo = {
@@ -111,18 +141,21 @@ export function denormalizeSnapshot(wire: LiveSessionSnapshot): SnapshotPatch {
     toolMap.set(tc.id, tc)
   }
   const lastError = normalizeSnapshotLastError(wire.last_error)
-  const lastErrorDetails = wire.last_error?.details?.trim()
-    ? wire.last_error.details
-    : null
+  const lastErrorCode = wire.last_error?.code?.trim() || null
 
   return {
     connectionId: wire.connection_id,
     status: wire.status,
+    hasPrompted: wire.status === "prompting" || wire.conversation_id != null,
     sessionId: wire.external_id,
     modes: wire.modes,
     configOptions: wire.config_options,
     availableCommands: wire.available_commands ?? null,
     usage: wire.usage,
+    promptSuggestion: wire.prompt_suggestion ?? null,
+    remoteControl: wire.remote_control
+      ? { session_url: wire.remote_control.session_url ?? null }
+      : null,
     liveMessage: wire.live_message
       ? denormalizeLiveMessage(wire.live_message, toolMap)
       : null,
@@ -153,16 +186,21 @@ export function denormalizeSnapshot(wire: LiveSessionSnapshot): SnapshotPatch {
       : null,
     promptCapabilities: wire.prompt_capabilities ?? DEFAULT_PROMPT_CAPS,
     selectorsReady: wire.selectors_ready,
+    composerModeId: wire.composer_mode_id ?? null,
     supportsFork: wire.fork_supported,
     configStale: wire.config_stale ?? false,
     configStaleKind: wire.config_stale_kind ?? null,
     backgroundOutstanding: wire.background_outstanding ?? 0,
+    backgroundTasks: wire.background_outstanding_tasks ?? [],
     sessionFailures: wire.session_failures ?? [],
+    toolApprovals: wire.tool_approvals ?? [],
     asyncTasks: wire.async_tasks ?? [],
     lastError,
-    lastErrorDetails,
+    lastErrorCode,
+    lastErrorLevel: routeAcpError(lastErrorCode).level,
     eventSeq: wire.event_seq,
     activeDelegations: wire.active_delegations ?? [],
+    delegatedChildren: wire.delegated_children ?? [],
   }
 }
 
@@ -278,13 +316,8 @@ function toolStateToInfo(tc: ToolCallState): ToolCallInfo {
   // Backend's structured output is collapsed into a single raw chunk for
   // hydration. Chunk history isn't recoverable from the snapshot — the
   // frontend's per-chunk delta tracking will resume from subsequent events.
-  const outputChunks: string[] = []
-  let outputBytes = 0
-  const rawOutput = toolOutputRawText(tc.output)
-  if (rawOutput !== null) {
-    outputChunks.push(rawOutput)
-    outputBytes = rawOutput.length
-  }
+  const output = replaceLiveToolRawOutput(toolOutputRawText(tc.output))
+
   return {
     tool_call_id: tc.id,
     title: tc.label,
@@ -292,10 +325,9 @@ function toolStateToInfo(tc: ToolCallState): ToolCallInfo {
     status: tc.status,
     content: tc.content,
     raw_input: tc.input == null ? null : JSON.stringify(tc.input),
-    raw_output_chunks: outputChunks,
-    raw_output_total_bytes: outputBytes,
+    ...output,
     locations: tc.locations ?? null,
-    meta: tc.meta ?? null,
+    meta: stripKimiMcpOAuth(tc.meta ?? null),
     images: tc.images ?? [],
   }
 }

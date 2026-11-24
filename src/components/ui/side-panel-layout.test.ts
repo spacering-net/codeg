@@ -67,7 +67,7 @@ describe("transcript inside a side panel", () => {
    */
   it("does not re-pad a transcript the virtualizer already insets", () => {
     // The layer that owns the gutter, and the reason the wrapper must not.
-    expect(virtualized).toContain('"mx-auto max-w-3xl px-4"')
+    expect(virtualized).toContain('"mx-auto chat-content-w px-4"')
     expect(virtualized).toContain("padding = 16")
 
     const listIdx = liveTranscript.indexOf("<MessageListView")

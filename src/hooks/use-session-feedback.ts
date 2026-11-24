@@ -26,13 +26,21 @@
  * tombstones reconcile a consume event that races ahead of hydration.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 
 import { useAcpEvent } from "@/contexts/acp-connections-context"
 import { acpGetSessionSnapshot, submitSessionFeedback } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
+import { notify } from "@/lib/notify"
 import { isNoActiveTurnRejection } from "@/lib/turn-busy"
 import type {
   ConnectionStatus,
@@ -161,7 +169,6 @@ export function useSessionFeedback({
   // verify read that resolves after the user switched connections must not
   // latch the NEW connection's state.
   const connectionIdRef = useRef(connectionId)
-  connectionIdRef.current = connectionId
   // Tombstones for notes consumed via `feedback_consumed` whose
   // `feedback_submitted` we never held (a consume event that lands BEFORE the
   // matching submit — e.g. before snapshot hydration resolves, or out-of-order
@@ -178,7 +185,13 @@ export function useSessionFeedback({
   // that callback's identity stable across every note append, which the
   // returned memo (and the list's props) would otherwise churn on.
   const notesRef = useRef<FeedbackItem[]>(notes)
-  notesRef.current = notes
+  // Both "latest value" refs are synced in a layout effect rather than during
+  // render; every reader runs after an await or in a click handler, so always
+  // after the commit.
+  useLayoutEffect(() => {
+    connectionIdRef.current = connectionId
+    notesRef.current = notes
+  })
   // Bumped on every new turn (`user_message`). A snapshot fetch captures the
   // generation it started in; if a new turn lands before it resolves, its
   // (previous-turn) notes are discarded — feedback is turn-scoped and the new
@@ -194,9 +207,13 @@ export function useSessionFeedback({
   // capability. Live events arriving before the fetch resolves are preserved
   // (live wins in the merge); consumed-id tombstones override stale `pending`.
   useEffect(() => {
+    // The per-connection reset pairs with the snapshot fetch below and with
+    // the ref latches reset beside it.
+    /* eslint-disable react-hooks/set-state-in-effect */
     setNotes([])
     setToolAvailable(false)
     setNativeSteering(false)
+    /* eslint-enable react-hooks/set-state-in-effect */
     steeringDowngradedRef.current = false
     consumedRef.current = new Map()
     // `dismissedRef` deliberately survives this reset: note ids are uuids, so a
@@ -400,7 +417,12 @@ export function useSessionFeedback({
           setDialogOpen(false)
           toast.info(t("turnEndedResent"))
         } else {
-          toast.error(t("submitFailed"), { description: toErrorMessage(err) })
+          notify({
+            level: "error",
+            key: `feedback-submit-failed:${connectionId}`,
+            title: t("submitFailed"),
+            description: toErrorMessage(err),
+          })
         }
       } finally {
         setSubmitting(false)

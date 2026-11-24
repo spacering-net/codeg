@@ -23,6 +23,8 @@ vi.mock("@/contexts/acp-connections-context", async () => {
     useConnectionStore: () => ({
       subscribeKey: () => () => {},
       getConnection: () => undefined,
+      getConnectPending: () => undefined,
+      getConnectError: () => undefined,
       getActiveKey: () => null,
       subscribeActiveKey: () => () => {},
     }),
@@ -64,6 +66,8 @@ function bindingOf(overrides: Partial<DelegationBinding>): DelegationBinding {
     status: "running",
     task: null,
     taskId: null,
+    assistantId: null,
+    assistantName: null,
     ...overrides,
   }
 }
@@ -130,6 +134,24 @@ describe("SubAgentOverlay", () => {
     expect(screen.getAllByTestId("sub-agent-row")).toHaveLength(2)
     expect(screen.getByText("Investigate flaky test")).toBeInTheDocument()
     expect(screen.getByText("Write the fix")).toBeInTheDocument()
+  })
+
+  it("names a row after the assistant it runs as", () => {
+    bindings["pt-1"] = bindingOf({
+      assistantId: 3,
+      assistantName: "Reviewer",
+      agentType: "codex",
+    })
+    renderWithIntl(
+      <SubAgentOverlay
+        delegations={[source("pt-1", { assistant_id: 3, task: "Review" })]}
+        overlayKey="k-assistant"
+      />
+    )
+    fireEvent.click(screen.getByText("Sub-agents 1").closest("button")!)
+    expect(screen.getByTestId("sub-agent-row")).toHaveTextContent(
+      "Reviewer · Codex"
+    )
   })
 
   it("opens the child session dialog when a row with a child id is clicked", () => {

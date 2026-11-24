@@ -95,6 +95,7 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 
 use crate::acp::error::AcpError;
 use crate::acp::registry::{self, AgentDistribution};
+use crate::acp::scratch_dir::LaunchScratch;
 use crate::acp::stderr_tail::StderrTail;
 use crate::models::agent::AgentType;
 
@@ -140,6 +141,26 @@ const LOGOUT_WAIT: Duration = Duration::from_secs(60);
 /// `_LOGIN_TIMEOUT_SECONDS` has expired, the one-shot listener is closed, and
 /// delivering a redirect would only fail with "connection refused".
 const PENDING_TTL: Duration = Duration::from_secs(300);
+
+/// How long a helper gets to exit on its own after its stdin is closed.
+///
+/// Worth spending, and not only for politeness: the ACP server reads stdin EOF
+/// as "the client is gone" and shuts down, and a graceful exit is the one path
+/// on which a self-extracting build removes its OWN unpacked directory. Every
+/// hard kill below leaves that to codeg's scratch cleanup instead.
+const STDIN_EOF_GRACE: Duration = Duration::from_millis(1_500);
+
+/// How long the tree gets to honor `SIGTERM` before the escalation to
+/// `SIGKILL`. Mirrors `terminal_runtime::KILL_ESCALATE_GRACE`: `kill_tree`
+/// sends only `SIGTERM` by default, which a process that traps it can ignore
+/// forever.
+const KILL_ESCALATE_GRACE: Duration = Duration::from_secs(2);
+
+/// How long teardown waits to be able to REPORT the tree gone before returning
+/// anyway. Bounding this is what keeps a wedged helper from pinning the
+/// single sign-in slot — the process is already under `SIGKILL`, and whatever
+/// it leaves on disk is the scratch sweep's problem, not this caller's.
+const KILL_REPORT_BUDGET: Duration = Duration::from_secs(5);
 
 /// JSON-RPC ids for the three requests this module ever sends. `authenticate`
 /// and `logout` never share a child, so their ids only have to differ from
@@ -214,13 +235,18 @@ struct Pending {
     /// instead of oauthlib's `MismatchingStateError` three layers down.
     state: String,
     credential_path: Option<PathBuf>,
-    child: tokio::process::Child,
+    /// Ended as a TREE, and still ended if this `Pending` is dropped rather
+    /// than torn down — see [`HelperChild`].
+    child: HelperChild,
     /// Held open for the child's whole life. The ACP server treats stdin EOF as
     /// "the client is gone" and shuts down — which would abort the very
     /// `authenticate` call this sign-in is waiting on.
     _stdin: tokio::process::ChildStdin,
     responses: mpsc::UnboundedReceiver<serde_json::Value>,
     stderr: Arc<StderrTail>,
+    /// The helper's per-launch temp directory, carried so every teardown path
+    /// — delivered, rejected, stale, cancelled, displaced — can hand it back.
+    scratch: Option<LaunchScratch>,
     started: Instant,
 }
 
@@ -229,10 +255,148 @@ impl Pending {
         self.started.elapsed() >= PENDING_TTL
     }
 
-    /// Best-effort teardown. The child has no session, so it has no localharness
-    /// descendants to reap — killing the direct process is enough.
-    async fn kill(mut self) {
-        let _ = self.child.kill().await;
+    /// Teardown: end the helper's whole process TREE, then hand its scratch
+    /// directory back.
+    ///
+    /// This used to be a bare `child.kill()`, justified by "the child has no
+    /// session, so it has no localharness descendants to reap". That reasoning
+    /// covered the wrong descendant. The Windows build is a PyInstaller
+    /// *onefile*, whose bootloader unpacks ~1.17 GB and then runs the real
+    /// program as a CHILD of itself — so killing the direct process leaves the
+    /// payload alive, holding the very files the next step wants to delete.
+    async fn kill(self) {
+        let Pending {
+            child,
+            _stdin,
+            scratch,
+            ..
+        } = self;
+        reap_and_release(child, _stdin, scratch).await;
+    }
+}
+
+/// End a helper's process tree and release its scratch directory.
+///
+/// Graceful first, bounded throughout: closing stdin lets the ACP server exit
+/// on its own (and clean up its own unpacked directory, on the builds that do),
+/// and every wait afterwards has a ceiling so a process that refuses to die can
+/// never pin the single sign-in slot. Scratch removal is not on this path at
+/// all — [`LaunchScratch::release`] retries in the background and the sweeps
+/// are the backstop.
+async fn reap_and_release(
+    mut helper: HelperChild,
+    stdin: tokio::process::ChildStdin,
+    scratch: Option<LaunchScratch>,
+) {
+    // EOF on stdin is the agent's own shutdown signal.
+    drop(stdin);
+
+    let Some(child) = helper.child.as_mut() else {
+        return;
+    };
+    let exited = match child.id() {
+        // Already reaped by someone else; nothing to signal.
+        None => true,
+        Some(pid) => {
+            if tokio::time::timeout(STDIN_EOF_GRACE, child.wait())
+                .await
+                .is_ok()
+            {
+                true
+            } else {
+                kill_tree_signal(pid, "SIGTERM").await;
+                if tokio::time::timeout(KILL_ESCALATE_GRACE, child.wait())
+                    .await
+                    .is_ok()
+                {
+                    true
+                } else {
+                    kill_tree_signal(pid, "SIGKILL").await;
+                    tokio::time::timeout(KILL_REPORT_BUDGET, child.wait())
+                        .await
+                        .is_ok()
+                }
+            }
+        }
+    };
+    if !exited {
+        tracing::warn!(
+            "[ACP][Antigravity] helper did not confirm exit within the kill budget; \
+             its scratch directory is left to the sweep"
+        );
+    }
+
+    // Disarm LAST. Everything above is `.await`, so this function is itself
+    // cancellable, and until this line the guard is what covers that.
+    drop(helper.child.take());
+
+    if let Some(scratch) = scratch {
+        scratch.release();
+    }
+}
+
+/// A helper process that is ended as a TREE even if the future holding it is
+/// dropped instead of run to completion.
+///
+/// `kill_on_drop` — which this spawn does set — signals only the DIRECT
+/// process, and the Windows build is a PyInstaller onefile whose bootloader
+/// runs the real program as a child of itself. So an unwind that relies on
+/// `kill_on_drop` alone leaves the payload running with its ~1.17 GB unpacked
+/// tree open, which is the original bug wearing a different hat. And an unwind
+/// is reachable in ordinary operation: the HTTP handlers await these futures
+/// directly, so a client that disconnects mid-sign-in cancels one.
+///
+/// [`reap_and_release`] disarms this on every path that completes.
+#[derive(Debug)]
+struct HelperChild {
+    /// `None` once teardown has run. The `Option` is what makes "already
+    /// handled" and "dropped early" distinguishable inside `Drop`.
+    child: Option<tokio::process::Child>,
+}
+
+impl HelperChild {
+    fn new(child: tokio::process::Child) -> Self {
+        Self { child: Some(child) }
+    }
+}
+
+impl Drop for HelperChild {
+    fn drop(&mut self) {
+        let Some(child) = self.child.take() else {
+            return;
+        };
+        let Some(pid) = child.id() else {
+            return;
+        };
+        tracing::warn!(
+            "[ACP][Antigravity] teardown was cancelled; ending helper tree {pid} out of band"
+        );
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            // No runtime to finish the job on. `kill_on_drop` still gets the
+            // direct process as `child` falls out of scope here.
+            return;
+        };
+        handle.spawn(async move {
+            // The `Child` moves INTO the task and is not dropped until the wait
+            // returns. That is deliberate: releasing it first would let the OS
+            // recycle the pid while `kill_tree` is still walking it, and the
+            // tree we ended would not be the tree we meant.
+            let mut child = child;
+            kill_tree_signal(pid, "SIGKILL").await;
+            let _ = child.wait().await;
+        });
+    }
+}
+
+/// One signal pass over the process tree rooted at `pid`. Windows ignores the
+/// signal name and terminates unconditionally.
+async fn kill_tree_signal(pid: u32, signal: &str) {
+    let config = kill_tree::Config {
+        signal: signal.to_string(),
+        ..Default::default()
+    };
+    if let Err(e) = kill_tree::tokio::kill_tree_with_config(pid, &config).await {
+        tracing::debug!("[ACP][Antigravity] kill_tree({signal}) for pid {pid}: {e}");
     }
 }
 
@@ -412,18 +576,25 @@ async fn start_claimed(
     }
 
     let AgentChild {
-        mut child,
+        child,
         mut stdin,
         mut responses,
         url: mut url_rx,
         stderr: tail,
+        scratch,
     } = spawn_agent(runtime_env, sign_in_env).await?;
 
     // `initialize` first, and its answer awaited before `authenticate` goes
     // out. Not just protocol politeness: it keeps the URL `print` — which the
     // agent emits during `authenticate`, onto the same fd as the JSON-RPC
     // frames — from racing a response codeg still has to parse.
-    initialize(&mut stdin, &mut responses, &tail).await?;
+    // Not `?`: an early return here would drop `child` — which `kill_on_drop`
+    // turns into a signal to the DIRECT process only, leaving a onefile
+    // payload alive — and strand the scratch directory with it.
+    if let Err(e) = initialize(&mut stdin, &mut responses, &tail).await {
+        reap_and_release(child, stdin, scratch).await;
+        return Err(e);
+    }
 
     let authenticate = serde_json::json!({
         "jsonrpc": "2.0",
@@ -431,7 +602,10 @@ async fn start_claimed(
         "method": "authenticate",
         "params": { "methodId": method_id },
     });
-    write_frame(&mut stdin, &authenticate).await?;
+    if let Err(e) = write_frame(&mut stdin, &authenticate).await {
+        reap_and_release(child, stdin, scratch).await;
+        return Err(e);
+    }
 
     // From here the agent is inside its 300 s redirect wait, so any failure
     // must kill the child rather than leave it blocked.
@@ -472,7 +646,7 @@ async fn start_claimed(
     let auth_url = match signal {
         StartSignal::Url(url) => url,
         StartSignal::Authenticated => {
-            let _ = child.kill().await;
+            reap_and_release(child, stdin, scratch).await;
             tracing::info!(
                 "[ACP][Antigravity] {method_id} was already signed in; no link needed"
             );
@@ -486,13 +660,13 @@ async fn start_claimed(
             });
         }
         StartSignal::Failed(reason) => {
-            let _ = child.kill().await;
+            reap_and_release(child, stdin, scratch).await;
             return Err(AcpError::protocol(format!(
                 "Antigravity refused to start a sign-in: {reason}"
             )));
         }
         StartSignal::Gone | StartSignal::TimedOut => {
-            let _ = child.kill().await;
+            reap_and_release(child, stdin, scratch).await;
             let reported = drain_error(&mut responses, ID_AUTHENTICATE);
             return Err(AcpError::protocol(match reported {
                 Some(message) => format!("Antigravity refused to start a sign-in: {message}"),
@@ -507,7 +681,7 @@ async fn start_claimed(
     let redirect_uri = match extract_redirect_uri(&auth_url) {
         Ok(uri) => uri,
         Err(reason) => {
-            let _ = child.kill().await;
+            reap_and_release(child, stdin, scratch).await;
             return Err(AcpError::protocol(reason));
         }
     };
@@ -525,6 +699,7 @@ async fn start_claimed(
         _stdin: stdin,
         responses,
         stderr: tail,
+        scratch,
         started: Instant::now(),
     });
     // The spawn and handshake above ran OUTSIDE the lock, so a newer `start`
@@ -554,7 +729,7 @@ async fn start_claimed(
 /// A short-lived Antigravity process driven over raw JSON-RPC, with its three
 /// streams already split apart.
 struct AgentChild {
-    child: tokio::process::Child,
+    child: HelperChild,
     /// Must stay open for the child's whole life: the ACP server reads stdin
     /// EOF as "the client is gone" and shuts down — which would abort whatever
     /// request is in flight.
@@ -564,6 +739,9 @@ struct AgentChild {
     /// `authenticate`. Nothing else it does produces one.
     url: oneshot::Receiver<String>,
     stderr: Arc<StderrTail>,
+    /// See [`Pending::scratch`]. Moves into the `Pending` on the sign-in path
+    /// and is consumed directly by [`sign_out_claimed`].
+    scratch: Option<LaunchScratch>,
 }
 
 /// Spawn the installed Antigravity binary with a launch-identical environment.
@@ -581,7 +759,16 @@ async fn spawn_agent(
     extra_env: Vec<(String, String)>,
 ) -> Result<AgentChild, AcpError> {
     let binary = resolve_binary()?;
-    let mut env = crate::acp::connection::antigravity_launch_env(runtime_env);
+    // Same per-launch temp isolation the session path gets, and for the same
+    // reason: this spawns the identical self-extracting binary, so sign-in and
+    // sign-out each unpack a full copy. They were invisible in the leak report
+    // because neither emits the `[ACP] spawning connection` line the user
+    // counted — the directories were there all the same.
+    let scratch = crate::acp::scratch_dir::create(AgentType::Antigravity);
+    let mut env = crate::acp::connection::antigravity_launch_env(
+        runtime_env,
+        scratch.as_ref().map(|s| s.path()),
+    );
     env.extend(extra_env);
 
     let mut command = crate::process::tokio_command(&binary);
@@ -597,7 +784,7 @@ async fn spawn_agent(
         // the port and the attempt both linger with nothing able to reach them.
         .kill_on_drop(true);
     for (key, value) in &env {
-        // Mirrors the spawn layer's convention (vendored sacp-tokio): an empty
+        // Mirrors the spawn layer's convention (`acp::agent_process`): an empty
         // value means "do not let the child inherit this one".
         if value.is_empty() {
             command.env_remove(key);
@@ -606,19 +793,37 @@ async fn spawn_agent(
         }
     }
 
-    let mut child = crate::process::spawn_retrying_exec_busy(|| command.spawn())
-        .await
-        .map_err(|e| AcpError::SpawnFailed(e.to_string()))?;
+    // Every `?` from here down would drop `scratch` on the floor, so the
+    // fallible stretch is fenced and its failures release the directory before
+    // propagating. `LaunchScratch` deliberately has no `Drop`: removal needs to
+    // retry across a process tree that is still dying, which a synchronous drop
+    // cannot do without blocking whoever happens to drop it.
+    let spawned = async {
+        let mut child = crate::process::spawn_retrying_exec_busy(|| command.spawn())
+            .await
+            .map_err(|e| AcpError::SpawnFailed(e.to_string()))?;
 
-    let stdin = child.stdin.take().ok_or_else(|| {
-        AcpError::SpawnFailed("the Antigravity process has no stdin".to_string())
-    })?;
-    let stdout = child.stdout.take().ok_or_else(|| {
-        AcpError::SpawnFailed("the Antigravity process has no stdout".to_string())
-    })?;
-    let stderr = child.stderr.take().ok_or_else(|| {
-        AcpError::SpawnFailed("the Antigravity process has no stderr".to_string())
-    })?;
+        let stdin = child.stdin.take().ok_or_else(|| {
+            AcpError::SpawnFailed("the Antigravity process has no stdin".to_string())
+        })?;
+        let stdout = child.stdout.take().ok_or_else(|| {
+            AcpError::SpawnFailed("the Antigravity process has no stdout".to_string())
+        })?;
+        let stderr = child.stderr.take().ok_or_else(|| {
+            AcpError::SpawnFailed("the Antigravity process has no stderr".to_string())
+        })?;
+        Ok::<_, AcpError>((child, stdin, stdout, stderr))
+    }
+    .await;
+    let (child, stdin, stdout, stderr) = match spawned {
+        Ok(parts) => parts,
+        Err(e) => {
+            if let Some(scratch) = scratch {
+                scratch.release();
+            }
+            return Err(e);
+        }
+    };
 
     let (response_tx, responses) = mpsc::unbounded_channel::<serde_json::Value>();
     let (url_sink, url) = AuthUrlSink::new();
@@ -629,11 +834,12 @@ async fn spawn_agent(
     tokio::spawn(read_agent_stderr(stderr, Arc::clone(&tail), url_sink));
 
     Ok(AgentChild {
-        child,
+        child: HelperChild::new(child),
         stdin,
         responses,
         url,
         stderr: tail,
+        scratch,
     })
 }
 
@@ -793,16 +999,17 @@ async fn finish_delivering(target: String, pending: Pending) -> AntigravityLogin
     let Pending {
         method_id,
         credential_path,
-        mut child,
+        child,
         mut responses,
         stderr,
         _stdin,
+        scratch,
         ..
     } = pending;
     let credential_path = display_path(&credential_path);
 
     if let Err(reason) = deliver_redirect(&target).await {
-        let _ = child.kill().await;
+        reap_and_release(child, _stdin, scratch).await;
         return AntigravityLoginOutcome {
             signed_in: false,
             message: Some(reason),
@@ -812,7 +1019,7 @@ async fn finish_delivering(target: String, pending: Pending) -> AntigravityLogin
     }
 
     let outcome = await_response(&mut responses, ID_AUTHENTICATE, AUTHENTICATE_WAIT, &stderr).await;
-    let _ = child.kill().await;
+    reap_and_release(child, _stdin, scratch).await;
 
     match outcome {
         Ok(_) => {
@@ -941,8 +1148,15 @@ async fn sign_out_claimed(runtime_env: &BTreeMap<String, String>) -> Result<(), 
     let outcome = request_logout(&mut agent).await;
     // Reaped once here rather than on each early return inside: unlike a
     // sign-in, `logout` opens no listener and holds no port, so the only thing
-    // a failure leaves behind is the process.
-    let _ = agent.child.kill().await;
+    // a failure leaves behind is the process — and, since this spawns the same
+    // self-extracting binary, its unpacked copy.
+    let AgentChild {
+        child,
+        stdin,
+        scratch,
+        ..
+    } = agent;
+    reap_and_release(child, stdin, scratch).await;
     match &outcome {
         Ok(()) => tracing::info!("[ACP][Antigravity] signed out; the stored credential is gone"),
         Err(e) => tracing::warn!("[ACP][Antigravity] sign-out failed: {e}"),
@@ -1499,10 +1713,11 @@ mod tests {
             redirect_uri: "http://127.0.0.1:1/".to_string(),
             state: "st".to_string(),
             credential_path: None,
-            child,
+            child: HelperChild::new(child),
             _stdin: stdin,
             responses,
             stderr: Arc::new(StderrTail::new()),
+            scratch: None,
             started: Instant::now(),
         });
         (pending, stdout)

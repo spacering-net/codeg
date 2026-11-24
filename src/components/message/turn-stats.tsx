@@ -18,6 +18,9 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { useMessageScroll } from "@/components/message/message-scroll-context"
+import { useChatAnimationsEnabled } from "@/hooks/use-appearance"
+import { useArrivedOnCompletion } from "@/hooks/use-chat-motion"
+import { useModelLabel } from "@/components/message/model-label-context"
 import { useCreateTaskFromMessage } from "./use-create-task-from-message"
 import { formatTokenCount } from "@/lib/token-format"
 import { cn, copyTextToClipboard } from "@/lib/utils"
@@ -67,6 +70,8 @@ export function TurnStats({
   const t = useTranslations("Folder.chat.messageList")
   const tTasks = useTranslations("Tasks")
   const scroll = useMessageScroll()
+  const chatAnimations = useChatAnimationsEnabled()
+  const modelLabel = useModelLabel()
   const [isCopied, setIsCopied] = useState(false)
   const timeoutRef = useRef<number>(0)
   const shortTimeFormatter = useMemo(
@@ -100,9 +105,30 @@ export function TurnStats({
     ? fullTimeFormatter.format(completedAtDate)
     : null
 
-  const displayModels = models?.length ? models : model ? [model] : []
+  // The transcript records whatever id the agent's backend used, which for some
+  // agents is an account-internal key (qoder writes `qfmodel` for the model its
+  // own picker calls `Qwen3.8-Flash`). Show the picker's name so this row and
+  // the composer's selector can't disagree; unknown ids pass through unchanged.
+  const displayModels = (models?.length ? models : model ? [model] : []).map(
+    (id) => modelLabel(id) ?? id
+  )
   const hasCopy = copyText.trim().length > 0
   const hasUsage = Boolean(usage)
+  // An all-zero usage means "nobody said", not "nothing was spent": a reply
+  // that exists cannot have cost zero tokens. Qoder zeroes every counter for
+  // its own hosted models (see `QODER_EXPOSE_TOKEN_USAGE` in the registry), and
+  // a confident "Input 0" reads as a broken counter rather than as absent data.
+  // Same judgement the composer's context popover makes about cache rows.
+  //
+  // Deliberately NOT folded into `hasUsage`: that one gates `hasJump`, where a
+  // reply IS substantial whether or not its counters survived.
+  const hasTokenCounts =
+    usage != null &&
+    usage.input_tokens +
+      usage.output_tokens +
+      usage.cache_creation_input_tokens +
+      usage.cache_read_input_tokens >
+      0
   // The duration itself is shown by the reply's fold header
   // (`CompletedTurnContent`), not here — this row only uses it as a signal that
   // the turn was substantial.
@@ -119,8 +145,12 @@ export function TurnStats({
 
   const handleJump = useCallback(() => {
     if (typeof previousUserIndex !== "number") return
-    scroll?.scrollToIndex(previousUserIndex, { align: "start", smooth: true })
-  }, [previousUserIndex, scroll])
+    scroll?.scrollToIndex(previousUserIndex, {
+      align: "start",
+      // Settings → Appearance → "Chat animations" off jumps instead of gliding.
+      smooth: chatAnimations,
+    })
+  }, [previousUserIndex, scroll, chatAnimations])
 
   const getTaskText = useCallback(() => copyText ?? "", [copyText])
   const handleCreateTask = useCreateTaskFromMessage(getTaskText)
@@ -141,6 +171,8 @@ export function TurnStats({
     []
   )
 
+  const arrived = useArrivedOnCompletion(isResponseComplete)
+
   if (!isResponseComplete) return null
   // Deliberately not gated on `hasDuration`: nothing in this row renders a
   // duration any more, so a turn carrying only one would open an empty row.
@@ -148,7 +180,12 @@ export function TurnStats({
     return null
 
   return (
-    <div className="mt-2 -ms-[0.3125rem] flex items-center justify-start gap-1 text-xs text-muted-foreground">
+    <div
+      className={cn(
+        "mt-2 -ms-[0.3125rem] flex items-center justify-start gap-1 text-xs text-muted-foreground",
+        arrived && "chat-enter"
+      )}
+    >
       <TooltipProvider delayDuration={150}>
         {hasCopy && (
           <Tooltip>
@@ -236,7 +273,7 @@ export function TurnStats({
             </TooltipContent>
           </Tooltip>
         )}
-        {hasUsage && usage && (
+        {hasTokenCounts && usage && (
           <Tooltip>
             <TooltipTrigger asChild>
               <button

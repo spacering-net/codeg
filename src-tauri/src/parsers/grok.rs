@@ -10,12 +10,14 @@ use crate::models::{
     AgentExecutionStats, AgentToolCall, AgentType, ContentBlock, ConversationDetail,
     ConversationSummary, MessageTurn, TurnRole, TurnUsage,
 };
+use crate::acp::connection::grok_failed_compaction_meta;
+use crate::acp::types::PromptInputBlock;
 use crate::parsers::claude::BACKGROUND_TASK_MARKER;
 use crate::parsers::{
     backfill_turn_durations, compute_session_stats, folder_name_from_path,
     infer_context_window_max_tokens, is_safe_subagent_id, merge_context_window_stats,
     relocate_orphaned_tool_results, structurize_read_tool_output, title_from_user_text,
-    truncate_str, AgentParser, ParseError,
+    truncate_str, AgentEnv, AgentParser, ParseError,
 };
 
 /// Cap for a single tool result / tool input preview stored on a turn. Grok's
@@ -63,7 +65,12 @@ const GROK_SUBAGENT_PREVIEW_CAP: usize = 500;
 /// CLI's own `GROK_HOME` override). The transcript store lives under the
 /// `sessions/` subdirectory of this path.
 pub(crate) fn resolve_grok_home_dir() -> PathBuf {
-    resolve_grok_home_from(std::env::var_os("GROK_HOME"), dirs::home_dir())
+    resolve_grok_home_dir_for_env(&AgentEnv::inherited())
+}
+
+/// The data home of the Grok launched with `env`.
+pub(crate) fn resolve_grok_home_dir_for_env(env: &AgentEnv) -> PathBuf {
+    resolve_grok_home_from(env.var_os("GROK_HOME"), dirs::home_dir())
 }
 
 fn resolve_grok_home_from(grok_home_env: Option<OsString>, home_dir: Option<PathBuf>) -> PathBuf {
@@ -117,18 +124,46 @@ fn grok_context_window_from_models_cache(raw: &str, model: &str) -> Option<u64> 
 
 /// `[model.<id>].context_window` from Grok's `config.toml` — a BYO endpoint's
 /// declared window. Mirrors the read `commands::acp::parse_grok_settings` does
-/// for the settings panel. Non-positive / missing / malformed → `None`.
+/// for the settings panel.
+///
+/// Since Grok 1.0.64 a table without a window takes the window of another
+/// table that sends the same model, where it used to fall back to 200,000. A
+/// table sends its `model`, or its own id when it names none, and when several
+/// tables send that model with a window, the one declared last in the file is
+/// the one Grok uses. So the file is read in its own order, which `toml::Table`
+/// does not keep. Grok counts a window only when it is a non-negative integer:
+/// a negative, fractional or non-numeric one is no window at all, so its table
+/// inherits and other tables pass over it. A 0 is a window, though, and the
+/// table it settles on gets Grok's 200,000 default instead, whether the 0 is
+/// its own or the last match's. All of this was seen live on 1.0.70, which
+/// reports the window on the wire. That default is not a window Grok
+/// assigned, so it reads as `None` here, as do an unknown model and malformed
+/// TOML.
 fn grok_context_window_from_config_toml(raw: &str, model: &str) -> Option<u64> {
-    raw.parse::<toml::Table>()
-        .ok()?
-        .get("model")?
-        .as_table()?
-        .get(model)?
-        .as_table()?
-        .get("context_window")?
-        .as_integer()
-        .filter(|window| *window > 0)
-        .map(|window| window as u64)
+    let doc = raw.parse::<toml_edit::Document>().ok()?;
+    let tables = doc.get("model")?.as_table_like()?;
+    // A window Grok counts, 0 included.
+    let declared = |table: &toml_edit::Item| {
+        let window = table.get("context_window")?.as_integer()?;
+        u64::try_from(window).ok()
+    };
+    let sends = |id: &str, table: &toml_edit::Item| {
+        table
+            .get("model")
+            .and_then(toml_edit::Item::as_str)
+            .unwrap_or(id)
+            .to_string()
+    };
+    let own = tables.get(model)?;
+    let window = declared(own).or_else(|| {
+        let sent = sends(model, own);
+        tables
+            .iter()
+            .filter(|(id, table)| *id != model && sends(id, table) == sent)
+            .filter_map(|(_, table)| declared(table))
+            .last()
+    })?;
+    (window > 0).then_some(window)
 }
 
 /// Grok Build (xAI) stores each conversation as a **directory-per-session**,
@@ -194,8 +229,14 @@ pub struct GrokParser {
 
 impl GrokParser {
     pub fn new() -> Self {
+        Self::for_env(&AgentEnv::inherited())
+    }
+
+    /// The history of the Grok launched with `env`. Its model catalog
+    /// (`models_cache.json`, `config.toml`) is read from the same home.
+    pub fn for_env(env: &AgentEnv) -> Self {
         Self {
-            base_dir: resolve_grok_home_dir().join("sessions"),
+            base_dir: resolve_grok_home_dir_for_env(env).join("sessions"),
         }
     }
 
@@ -284,12 +325,17 @@ impl GrokParser {
         // launch's ack text into the structured background-task marker.
         self.attach_subagent_stats(session_dir, &mut parsed);
 
-        // Grok resolves its native `ask_user_question` over the `_x.ai/ask_user_question`
-        // ext round-trip and never writes the answer into `updates.jsonl`, so the
-        // parsed ToolResult is empty and the `AskQuestionResultCard` shows "未选择".
+        // Grok's native `ask_user_question` leaves no picks the
+        // `AskQuestionResultCard` can read in `updates.jsonl`: the call's completed
+        // `tool_call_update` carries only the sentence the model gets ("User has
+        // answered your questions: "Q"="A". …", seen on 1.0.62, 1.0.70 and 1.0.77;
+        // from 1.0.70 it also adds a structured `rawOutput.UserAnswered.answers`
+        // list beside it),
+        // not the card's `{answers, declined}` envelope, so the card shows "未选择".
         // Recover the user's picks from `chat_history.jsonl` (the model-facing
-        // transcript, which DOES record the answer as a `tool_result`) and inject
-        // them as the tool output. No-op when the file is absent or there's no ask.
+        // transcript, whose `tool_result` carries the same sentence), parse them
+        // into the envelope and inject that as the tool output. No-op when the
+        // file is absent or there's no ask.
         inject_grok_ask_answers(&mut parsed.turns, &session_dir.join("chat_history.jsonl"));
 
         // Fill assistant turns that carried no in-stream `modelId` with the
@@ -473,6 +519,8 @@ impl GrokParser {
             lines_removed: None,
             other_tool_count: None,
             tool_calls,
+            timeline: Vec::new(),
+            recovered_result: None,
             // Grok runs every sub-agent as a full session of its own, so the
             // card can offer to open the child's transcript. Only hand over an
             // id that passed the path-traversal guard — it is used to look up a
@@ -736,11 +784,13 @@ fn parse_updates(path: &Path) -> ParsedUpdates {
 
         match kind {
             "user_message_chunk" => {
-                let block = user_chunk_to_block(update);
+                let input = user_chunk_to_input(update);
+                let block = input.as_ref().map(crate::parsers::user_turn_block);
                 out.content_events += 1;
-                // Title/first-prompt text comes only from prose chunks; an image
-                // chunk carries no text and must not overwrite it.
-                if let Some(ContentBlock::Text { text }) = &block {
+                // Title/first-prompt text comes only from PROSE chunks: an image
+                // chunk carries no text, and an attachment projects to a
+                // `[name](uri)` marker that would make a poor title.
+                if let Some(PromptInputBlock::Text { text }) = &input {
                     if out.first_user_text.is_none() && !text.trim().is_empty() {
                         out.first_user_text = Some(text.clone());
                     }
@@ -839,6 +889,7 @@ fn parse_updates(path: &Path) -> ParsedUpdates {
                     is_error: false,
                     agent_stats: None,
                     images: Vec::new(),
+                    exit_code: None,
                 });
                 if !id.is_empty() {
                     tool_result_idx.insert(id, turn.blocks.len() - 1);
@@ -909,6 +960,35 @@ fn parse_updates(path: &Path) -> ParsedUpdates {
                     is_error: false,
                     agent_stats: None,
                     images: Vec::new(),
+                    exit_code: None,
+                });
+            }
+            // A failed auto-compaction: the same card in its failed state, as the
+            // live mapper renders it (the two share `grok_failed_compaction_meta`,
+            // whose `error` is the card's reason). `is_error` on the paired
+            // result is what marks the card failed.
+            "auto_compact_failed" => {
+                out.content_events += 1;
+                let id = params_meta
+                    .and_then(|m| m.get("eventId"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| format!("grok-compaction-{}", out.content_events));
+                let turn = ensure_assistant(&mut assistant, now);
+                turn.blocks.push(ContentBlock::ToolUse {
+                    tool_use_id: Some(id.clone()),
+                    tool_name: "context_compaction".to_string(),
+                    input_preview: None,
+                    status: None,
+                    meta: Some(grok_failed_compaction_meta(update)),
+                });
+                turn.blocks.push(ContentBlock::ToolResult {
+                    tool_use_id: Some(id),
+                    output_preview: None,
+                    is_error: true,
+                    agent_stats: None,
+                    images: Vec::new(),
+                    exit_code: None,
                 });
             }
             // Sub-agent lifecycle (namespaced `_x.ai/session/update` method).
@@ -1025,59 +1105,24 @@ fn update_text(update: &Value) -> String {
 /// Grok sends prose as `{type:"text"}`. Current codeg prompts send a native
 /// `{type:"image"}` chunk (so grok's describe sidecar runs). Older transcripts
 /// still carry the embedded `{type:"resource", resource:{blob, mimeType, uri}}`
-/// shape from when we followed grok's `image:false` advertisement. Both
-/// image-mime forms become [`ContentBlock::Image`] so they render as a
-/// thumbnail; a non-image embedded resource folds to a `[uri](uri)` link
-/// (same as the live [`crate::acp::user_blocks_from_prompt`]). Anything else
-/// falls back to a (possibly empty) text block.
-fn user_chunk_to_block(update: &Value) -> Option<ContentBlock> {
-    let content = update.get("content")?;
-    match content.get("type").and_then(Value::as_str).unwrap_or("") {
-        "resource" => {
-            let resource = content.get("resource")?;
-            let mime = resource.get("mimeType").and_then(Value::as_str);
-            let blob = resource.get("blob").and_then(Value::as_str);
-            match (mime, blob) {
-                (Some(mime), Some(blob)) if mime.starts_with("image/") => {
-                    Some(ContentBlock::Image {
-                        data: blob.to_string(),
-                        mime_type: mime.to_string(),
-                        uri: resource
-                            .get("uri")
-                            .and_then(Value::as_str)
-                            .map(str::to_string),
-                    })
-                }
-                _ => {
-                    let uri = resource.get("uri").and_then(Value::as_str).unwrap_or("");
-                    Some(ContentBlock::Text {
-                        text: format!("[{uri}]({uri})"),
-                    })
-                }
-            }
-        }
-        // Native ACP image content — the live send path for every grok that
-        // decodes the format (see `normalize_grok_image_blocks`).
-        "image" => {
-            let data = content.get("data").and_then(Value::as_str)?;
-            Some(ContentBlock::Image {
-                data: data.to_string(),
-                mime_type: content
-                    .get("mimeType")
-                    .and_then(Value::as_str)
-                    .unwrap_or("image/png")
-                    .to_string(),
-                uri: content
-                    .get("uri")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-            })
-        }
-        // "text" and unknown kinds: existing behavior (reads `/content/text`).
-        _ => Some(ContentBlock::Text {
-            text: update_text(update),
-        }),
-    }
+/// shape from when we followed grok's `image:false` advertisement.
+///
+/// All of it goes through [`crate::parsers::user_turn_block_from_wire`], the
+/// one projection every surface uses for a user's own message — so both image
+/// carriages become a thumbnail, and an attached file becomes the same
+/// `[name](uri)` marker a viewer saw live. This parser used to fold resources
+/// itself and had no `resource_link` case at all, which silently dropped
+/// plain file attachments from a reloaded grok turn.
+///
+/// Returns the block the chunk was SENT as, so the caller can both render it
+/// (via [`crate::parsers::user_turn_block`]) and tell prose from an attachment
+/// — an attachment projects to a `Text` marker, and the conversation's title
+/// must not latch onto `[report.pdf](…)` when the prose follows it.
+///
+/// `None` for a chunk with nothing to render (empty prose, a malformed
+/// resource): the caller still opens the user turn, it just starts empty.
+fn user_chunk_to_input(update: &Value) -> Option<PromptInputBlock> {
+    crate::acp::types::prompt_block_from_wire(update.get("content")?)
 }
 
 // ---------------------------------------------------------------------------
@@ -2149,6 +2194,47 @@ mod tests {
     }
 
     #[test]
+    fn history_renders_failed_auto_compaction_as_failed_compaction_tool() {
+        // The live mapper renders `auto_compact_failed` as the compaction card in
+        // its failed state; a reopened conversation has to show the same card,
+        // not drop the failure.
+        let updates = concat!(
+            r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"plan a page"},"_meta":{"promptIndex":0}}},"timestamp":1783584019}"#, "\n",
+            r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"ok"}}},"timestamp":1783584020}"#, "\n",
+            r#"{"method":"_x.ai/session/update","params":{"sessionId":"s","update":{"sessionUpdate":"auto_compact_failed","reason":"API error (status 503)"},"_meta":{"eventId":"ev-compact-failed"}},"timestamp":1783584021}"#, "\n",
+            r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"turn_completed","stop_reason":"end_turn"}},"timestamp":1783584022}"#, "\n",
+        );
+        let (_tmp, sessions) = fixture(SUMMARY, updates);
+        let detail = GrokParser::with_base_dir(sessions)
+            .get_conversation("019f45e3-e1ef-7690-a29f-fe2554382b49")
+            .unwrap();
+        let blocks: Vec<_> = detail.turns.iter().flat_map(|t| &t.blocks).collect();
+        let meta = blocks
+            .iter()
+            .find_map(|b| match b {
+                ContentBlock::ToolUse {
+                    tool_use_id: Some(id),
+                    meta: Some(m),
+                    ..
+                } if id == "ev-compact-failed" => Some(m.clone()),
+                _ => None,
+            })
+            .expect("failed compaction tool_use present in history");
+        assert_eq!(
+            meta,
+            serde_json::json!({
+                "contextCompaction": { "version": 1, "error": "API error (status 503)" }
+            })
+        );
+        // The paired result is what marks the card failed.
+        assert!(blocks.iter().any(|b| matches!(
+            b,
+            ContentBlock::ToolResult { tool_use_id: Some(id), is_error: true, .. }
+                if id == "ev-compact-failed"
+        )));
+    }
+
+    #[test]
     fn merges_prompt_text_and_native_image_into_one_user_turn() {
         // Grok echoes a native ACP image as its own `user_message_chunk` (same
         // `promptIndex` as the prose) — the shape captured from a live 1.0.0 and
@@ -2213,6 +2299,37 @@ mod tests {
                     && uri.as_deref() == Some("clipboard://image.png-abc")
         ));
         assert!(matches!(turns[1].role, TurnRole::Assistant));
+    }
+
+    /// A plain (non-image) file attachment. This parser folded resources
+    /// itself and had no `resource_link` case at all, so an attached file came
+    /// back from history as an empty block — the same gap `acp_native` had.
+    /// Both now go through the one projection a viewer saw live.
+    #[test]
+    fn plain_file_attachments_survive_a_reload_as_their_markers() {
+        let updates = concat!(
+            r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"看看"},"_meta":{"promptIndex":0}}},"timestamp":1783584019}"#, "\n",
+            r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"user_message_chunk","content":{"type":"resource_link","name":"report.pdf","uri":"file:///tmp/report.pdf"},"_meta":{"promptIndex":0}}},"timestamp":1783584019}"#, "\n",
+            r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"user_message_chunk","content":{"type":"resource","resource":{"text":"body","mimeType":"text/plain","uri":"clipboard://notes.txt-1"}},"_meta":{"promptIndex":0}}},"timestamp":1783584019}"#, "\n",
+            r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"读了"}}},"timestamp":1783584024}"#, "\n",
+            r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"turn_completed","stop_reason":"end_turn"}},"timestamp":1783584024}"#, "\n",
+        );
+        let (_tmp, sessions) = fixture(SUMMARY, updates);
+        let parser = GrokParser::with_base_dir(sessions);
+        let detail = parser
+            .get_conversation("019f45e3-e1ef-7690-a29f-fe2554382b49")
+            .unwrap();
+        let turns = &detail.turns;
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].blocks.len(), 3);
+        assert!(matches!(&turns[0].blocks[0], ContentBlock::Text { text } if text == "看看"));
+        assert!(
+            matches!(&turns[0].blocks[1], ContentBlock::Text { text } if text == "[report.pdf](file:///tmp/report.pdf)")
+        );
+        // A text resource: the attachment it is shown as, without its body.
+        assert!(
+            matches!(&turns[0].blocks[2], ContentBlock::Text { text } if text == "clipboard://notes.txt-1\n<context ref=\"clipboard://notes.txt-1\">\n\n</context>")
+        );
     }
 
     /// One turn whose stats live where Grok really puts them: model in
@@ -2484,6 +2601,130 @@ mod tests {
         assert_eq!(grok_context_window_from_config_toml("[model", "mine"), None);
         assert_eq!(
             grok_context_window_from_config_toml("[model.mine]\ncontext_window = -1\n", "mine"),
+            None
+        );
+    }
+
+    /// Grok 1.0.64+ gives a `[model.<id>]` table without a window the window of
+    /// another table that sends the same model. Each case is a config whose
+    /// windows Grok 1.0.70 reported live in `session/new`.
+    #[test]
+    fn a_windowless_model_table_takes_the_window_of_one_sending_the_same_model() {
+        let ep = "base_url = \"http://127.0.0.1:9/v1\"\napi_key = \"x\"\n";
+        // The holder names no `model`, so it sends its own id: 500000.
+        let named_by_id = format!(
+            "[model.big]\n{ep}context_window = 500000\n\n[model.alias]\nmodel = \"big\"\n{ep}"
+        );
+        assert_eq!(
+            grok_context_window_from_config_toml(&named_by_id, "alias"),
+            Some(500_000)
+        );
+        // The alias names no `model` either way round: it sends `alias`.
+        let alias_by_id = format!(
+            "[model.big]\nmodel = \"alias\"\n{ep}context_window = 500000\n\n[model.alias]\n{ep}"
+        );
+        assert_eq!(
+            grok_context_window_from_config_toml(&alias_by_id, "alias"),
+            Some(500_000)
+        );
+        // Several holders: the one declared last wins, whatever the windows
+        // and whatever the key order (live: 400000, 300000, 400000).
+        let holders = |first: (&str, u64), second: (&str, u64)| {
+            format!(
+                "[model.{}]\nmodel = \"m\"\n{ep}context_window = {}\n\n\
+                 [model.{}]\nmodel = \"m\"\n{ep}context_window = {}\n\n\
+                 [model.alias]\nmodel = \"m\"\n{ep}",
+                first.0, first.1, second.0, second.1
+            )
+        };
+        for (config, expected) in [
+            (holders(("w1", 300_000), ("w2", 400_000)), 400_000),
+            (holders(("w1", 400_000), ("w2", 300_000)), 300_000),
+            (holders(("z1", 300_000), ("a2", 400_000)), 400_000),
+        ] {
+            assert_eq!(
+                grok_context_window_from_config_toml(&config, "alias"),
+                Some(expected),
+                "{config}"
+            );
+        }
+        // Nobody else sends the alias's model: Grok falls back to 200000,
+        // which is not a window Grok assigned, so no opinion here.
+        let unmatched = format!("[model.alias]\nmodel = \"nobody\"\n{ep}");
+        assert_eq!(
+            grok_context_window_from_config_toml(&unmatched, "alias"),
+            None
+        );
+        // A table's own window still comes first.
+        let own = format!(
+            "[model.big]\n{ep}context_window = 500000\n\n\
+             [model.alias]\nmodel = \"big\"\n{ep}context_window = 64000\n"
+        );
+        assert_eq!(
+            grok_context_window_from_config_toml(&own, "alias"),
+            Some(64_000)
+        );
+    }
+
+    /// Grok counts a window only when it is a non-negative integer, and a 0
+    /// leaves the table on Grok's 200000 default. Each case is a config whose
+    /// windows Grok 1.0.70 reported live in `session/new`.
+    #[test]
+    fn grok_counts_a_zero_window_and_passes_over_an_invalid_one() {
+        let ep = "base_url = \"http://127.0.0.1:9/v1\"\napi_key = \"x\"\n";
+        // The alias's own window, next to a holder of 500000.
+        let own = |window: &str| {
+            format!(
+                "[model.big]\n{ep}context_window = 500000\n\n\
+                 [model.alias]\nmodel = \"big\"\n{ep}context_window = {window}\n"
+            )
+        };
+        // Live: 200000, the default, so no opinion.
+        assert_eq!(
+            grok_context_window_from_config_toml(&own("0"), "alias"),
+            None
+        );
+        // Live: 500000 for each, the holder's window.
+        for window in ["-5", "\"abc\"", "150000.5"] {
+            assert_eq!(
+                grok_context_window_from_config_toml(&own(window), "alias"),
+                Some(500_000),
+                "{window}"
+            );
+        }
+        // Two holders of the alias's model, the later one with `window`.
+        let later = |window: &str| {
+            format!(
+                "[model.w1]\nmodel = \"m\"\n{ep}context_window = 300000\n\n\
+                 [model.w2]\nmodel = \"m\"\n{ep}context_window = {window}\n\n\
+                 [model.alias]\nmodel = \"m\"\n{ep}"
+            )
+        };
+        // Live: 200000 for w2 and the alias.
+        assert_eq!(
+            grok_context_window_from_config_toml(&later("0"), "alias"),
+            None
+        );
+        assert_eq!(
+            grok_context_window_from_config_toml(&later("0"), "w2"),
+            None
+        );
+        // Live: 300000 for both, w1's window.
+        assert_eq!(
+            grok_context_window_from_config_toml(&later("-5"), "alias"),
+            Some(300_000)
+        );
+        assert_eq!(
+            grok_context_window_from_config_toml(&later("-5"), "w2"),
+            Some(300_000)
+        );
+        // The only holder declares 0. Live: 200000 for both.
+        let zero_only = format!(
+            "[model.w1]\nmodel = \"m\"\n{ep}context_window = 0\n\n\
+             [model.alias]\nmodel = \"m\"\n{ep}"
+        );
+        assert_eq!(
+            grok_context_window_from_config_toml(&zero_only, "alias"),
             None
         );
     }
@@ -3183,5 +3424,17 @@ mod tests {
         assert_eq!(status_of(&detail, "c-empty"), Some("completed"));
         // Absent everywhere stays absent — unknown, never a guess.
         assert_eq!(status_of(&detail, "c-silent"), None);
+    }
+
+    /// #948: built with an agent's launch env, the parser reads where THAT
+    /// env puts the agent's files, not where codeg's own environment does.
+    #[test]
+    fn for_env_reads_the_home_of_the_launch_env() {
+        let env = AgentEnv::with_overrides(&[("GROK_HOME", "/relocated/grok")]);
+        // The model catalog is read from the sessions dir's parent.
+        assert_eq!(
+            GrokParser::for_env(&env).base_dir,
+            PathBuf::from("/relocated/grok").join("sessions")
+        );
     }
 }

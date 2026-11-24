@@ -1,9 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+const callMock = vi.fn()
+
+vi.mock("@/lib/transport", () => ({
+  getTransport: () => ({ call: callMock }),
+}))
+
 import {
   SUPPORTED_WORKSPACE_BG_MIMES,
   WORKSPACE_BG_ACCEPT,
   createBackgroundObjectUrl,
+  readWorkspaceBackground,
+  setWorkspaceBackground,
   sniffWorkspaceBgMime,
 } from "./workspace-background"
 
@@ -141,5 +149,31 @@ describe("createBackgroundObjectUrl", () => {
     expect(seen).toHaveLength(1)
     expect(seen[0].type).toBe("image/gif")
     expect(seen[0].size).toBe("GIF89a-payload".length)
+  })
+})
+
+describe("background transport bindings", () => {
+  afterEach(() => {
+    callMock.mockReset()
+  })
+
+  // A 64 MiB image is ~85 MiB of base64 each way; the 60 s default would cut
+  // an ordinary uplink off, so both directions carry a 10-minute timeout.
+  it("gives background_set a long transport timeout", async () => {
+    callMock.mockResolvedValue(undefined)
+    await setWorkspaceBackground("eHg=")
+    expect(callMock).toHaveBeenCalledWith(
+      "background_set",
+      { imageBase64: "eHg=" },
+      { timeoutMs: 600_000 }
+    )
+  })
+
+  it("gives background_read a long transport timeout", async () => {
+    callMock.mockResolvedValue(null)
+    await readWorkspaceBackground()
+    expect(callMock).toHaveBeenCalledWith("background_read", undefined, {
+      timeoutMs: 600_000,
+    })
   })
 })

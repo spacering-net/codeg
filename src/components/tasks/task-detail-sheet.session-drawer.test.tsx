@@ -21,6 +21,7 @@ import type { WorkTask } from "@/lib/types"
 import { TaskDetailSheet } from "./task-detail-sheet"
 
 vi.mock("@/lib/api", () => ({
+  workTaskGet: vi.fn().mockRejectedValue(new Error("not in this test")),
   workTaskArchive: vi.fn().mockResolvedValue(undefined),
   workTaskCancel: vi.fn().mockResolvedValue(undefined),
   getFolderConversation: vi.fn().mockRejectedValue(new Error("no transcript")),
@@ -105,7 +106,7 @@ function task(overrides: Partial<WorkTask> = {}): WorkTask {
   } as WorkTask
 }
 
-function mount(row: WorkTask) {
+function mount(row: WorkTask, onCancel: (task: WorkTask) => void = () => {}) {
   return render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
       <TaskDetailSheet
@@ -116,7 +117,7 @@ function mount(row: WorkTask) {
         onMerge={() => {}}
         onComplete={() => {}}
         onDeliverPr={() => {}}
-        onCancel={() => {}}
+        onCancel={onCancel}
         onEdit={() => {}}
         onSchedule={() => {}}
       />
@@ -158,6 +159,55 @@ describe("task drawer session viewer", () => {
     await waitFor(() => expect(sheetPopup()).toBeTruthy())
     expect(
       screen.queryByRole("button", { name: "View session" })
+    ).not.toBeInTheDocument()
+  })
+})
+
+describe("task drawer awaiting input", () => {
+  /** The next-step panel's buttons, without the footer's utilities. */
+  function panelButton(name: string) {
+    return screen
+      .queryAllByRole("button", { name })
+      .find((b) => b.closest("section") != null)
+  }
+
+  it("explains the wait and leads with answering it in the session", async () => {
+    const user = userEvent.setup()
+    mount(task({ status: "awaiting_input" }))
+
+    // Says what the agent is waiting for, where a first-time user looks.
+    expect(
+      screen.getByText(enMessages.Tasks.awaitingInputHint)
+    ).toBeInTheDocument()
+    const respond = panelButton("Respond")
+    expect(respond).toHaveAttribute("data-variant", "default")
+    // No filled "cancel" competing with it.
+    expect(panelButton("Cancel")).toBeUndefined()
+
+    await user.click(respond!)
+    // The same nested viewer the footer opens — where the prompt is pinned.
+    await waitFor(() => expect(screen.getByText("Session")).toBeInTheDocument())
+    expect(sheetPopup()).toHaveAttribute("data-nested-drawer-open")
+  })
+
+  it("keeps stopping the task as the panel's escape hatch", async () => {
+    const user = userEvent.setup()
+    const onCancel = vi.fn()
+    const row = task({ status: "awaiting_input" })
+    mount(row, onCancel)
+
+    const cancel = panelButton("Cancel task")
+    expect(cancel).toHaveAttribute("data-variant", "ghost")
+    await user.click(cancel!)
+    expect(onCancel).toHaveBeenCalledWith(row)
+  })
+
+  it("leaves a running task's panel to its cancel", () => {
+    mount(task({ status: "running" }))
+    expect(panelButton("Cancel")).toHaveAttribute("data-variant", "default")
+    expect(panelButton("Respond")).toBeUndefined()
+    expect(
+      screen.queryByText(enMessages.Tasks.awaitingInputHint)
     ).not.toBeInTheDocument()
   })
 })

@@ -24,6 +24,7 @@
  * ever face the result itself.
  */
 
+import { progressFromReport, type StepProgress } from "@/lib/activity/progress"
 import { extractEmbeddedJsonObject } from "@/lib/embedded-json"
 import { peelMcpResultEnvelope } from "@/lib/mcp-result-envelope"
 import { isUnsettledToolCall } from "@/lib/tool-call-lifecycle"
@@ -80,6 +81,11 @@ export type StatusReport = {
    *  either "genuinely working" or "host dropped structuredContent" — the
    *  message text's own blocked line covers the latter. */
   blockedOn: BlockedKind | null
+  /** How far the sub-agent had got when this report was taken (Rust
+   *  `DelegationTaskReport.progress`): live on a running report, final on a
+   *  terminal one. `null` when the report predates the field or the sub-agent
+   *  called no tool. */
+  progress: StepProgress | null
 }
 
 /**
@@ -412,6 +418,7 @@ export function parseStatusReport(
     errorCode: null,
     durationMs: null,
     blockedOn: null,
+    progress: null,
   }
   const raw = (output ?? errorText ?? "").trim()
   if (!raw) return empty
@@ -464,6 +471,7 @@ export function parseStatusReport(
         report,
         text ?? str(report, "message") ?? contentText
       ),
+      progress: progressFromReport(report.progress),
     }
   }
 
@@ -492,6 +500,7 @@ function reportFromObject(report: Record<string, unknown>): StatusReport {
     errorCode: str(report, "error_code"),
     durationMs: num(report, "duration_ms"),
     blockedOn: parseBlockedOn(report, text),
+    progress: progressFromReport(report.progress),
   }
 }
 
@@ -600,6 +609,22 @@ export function deriveBadge(
   return { status: "starting" }
 }
 
+/**
+ * How a task ended, as a check on it reported — what a delegation's own card
+ * reads when nothing live or stored says more: a check that came back after the
+ * hand-over is newer than the ack it returned. Null while the task still runs,
+ * or when the check named no outcome.
+ */
+export function taskEnding(
+  report: StatusReport | null | undefined
+): { status: "ok" | "err"; errorCode?: string } | null {
+  if (!report?.status || report.status === "running") return null
+  const badge = deriveBadge("status", report, undefined, false)
+  return badge.status === "ok" || badge.status === "err"
+    ? { status: badge.status, errorCode: badge.errorCode }
+    : null
+}
+
 /** Compact human duration: `350ms`, `1.2s`, `12s`, `2m 0s`. Total seconds are
  *  rounded once before splitting so the remainder never rolls to `60s`. */
 export function formatDuration(ms: number): string {
@@ -621,6 +646,19 @@ export interface DelegationTaskRow {
   /** One entry per poll of this task, chronological (`null` where a poll
    *  returned no text) — paginated on expand; length is the `×N` header hint. */
   results: (string | null)[]
+  /**
+   * Whether the backend answered any of these polls with a `running` report
+   * for the task. It only does that for the CALLER's own task — anyone else's
+   * id gets `unknown` (`classify_locked` in `broker.rs`) — so this is what
+   * makes `taskId` more than an argument the model wrote, and what entitles
+   * the row to reach the live sub-agent behind it (`useDelegationTaskLive`).
+   */
+  runningConfirmed: boolean
+  /** The tool call id of the latest poll behind the row — the one its report
+   *  and badge come from. Names the row across the transcript: the
+   *  transcript's newest row for a task is the one whose `latestPollId` is the
+   *  task's last poll (`@/lib/delegation-status-index`). */
+  latestPollId: string
 }
 
 interface ParsedPollReport {
@@ -635,6 +673,7 @@ const EMPTY_STATUS_REPORT: StatusReport = {
   errorCode: null,
   durationMs: null,
   blockedOn: null,
+  progress: null,
 }
 
 /**
@@ -712,6 +751,17 @@ export function buildDelegationTaskRows(
     // One entry per poll, in order — so `×N` and the pager total both equal the
     // number of times this task was actually checked.
     const results = entry.polls.map(({ report }) => report.text)
-    return { key, taskId: entry.taskId, report: latest.report, badge, results }
+    const runningConfirmed = entry.polls.some(
+      ({ report }) => report.status === "running"
+    )
+    return {
+      key,
+      taskId: entry.taskId,
+      report: latest.report,
+      badge,
+      results,
+      runningConfirmed,
+      latestPollId: latest.poll.toolCallId,
+    }
   })
 }

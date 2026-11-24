@@ -9,7 +9,8 @@
  *   { [threadId]: { status: CollabAgentStatus, message: string | null } }
  * and the ACP `title` is the collab op (`CollabAgentTool`, e.g. `spawnAgent` /
  * `wait` / `closeAgent`). We detect collab calls by that distinctive rawInput
- * shape (independent of the title) and route them to a dedicated capsule.
+ * shape (independent of the title) and route them to a dedicated timeline row
+ * (`CollabAgentRow`).
  *
  * The op (title) is otherwise dropped downstream (only ACP `meta` is forwarded),
  * so the live input shaper merges it back in under `COLLAB_OP_KEY` — see
@@ -34,7 +35,7 @@ export const COLLAB_AGENT_TOOL_NAME = "collab_agent"
 
 /**
  * Synthetic rawInput key the live input shaper uses to smuggle the collab op
- * (the ACP `title`, e.g. `spawnAgent`/`wait`/`closeAgent`) through to the card,
+ * (the ACP `title`, e.g. `spawnAgent`/`wait`/`closeAgent`) through to the row,
  * since the title is otherwise dropped. Not a codex field.
  */
 export const COLLAB_OP_KEY = "__codegCollabOp"

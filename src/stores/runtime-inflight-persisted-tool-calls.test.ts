@@ -110,6 +110,7 @@ function seedSession(
     localTurns,
     backgroundTurns: [],
     pendingBackgroundSettlements: [],
+    pendingCancelledTurnReports: null,
     optimisticTurns: [],
     liveMessage: liveMessage ?? null,
     syncState: "idle" as const,
@@ -123,6 +124,7 @@ function seedSession(
     batchBoundaryPrefixHash: null,
     loadingOlderTurns: false,
     olderTurnsPrependEpoch: 0,
+    pendingOutOfTurnContent: false,
     pendingCleanup: false,
   }
   const next = new Map(useConversationRuntimeStore.getState().byConversationId)

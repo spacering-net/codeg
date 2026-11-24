@@ -17,6 +17,15 @@ import {
   parseLocalFileTarget,
   useStreamdownLinkSafety,
 } from "./link-safety"
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu"
+import { useOpenUrlTarget } from "@/hooks/use-open-url-target"
+import { copyTextToClipboard } from "@/lib/utils"
+import { useTranslations } from "next-intl"
 
 const RESOURCE_KIND_ICON: Record<ResourceKind, LucideIcon> = {
   file: FileText,
@@ -24,10 +33,6 @@ const RESOURCE_KIND_ICON: Record<ResourceKind, LucideIcon> = {
   email: Mail,
   phone: Phone,
 }
-
-// Streamdown swaps the href of a not-yet-closed markdown link with this
-// sentinel while the message is still streaming.
-const INCOMPLETE_LINK = "streamdown:incomplete-link"
 
 type MarkdownLinkProps = ComponentProps<"a"> & {
   // react-markdown passes the originating hast node; it must not reach the DOM.
@@ -67,20 +72,23 @@ export function MarkdownLink({
   ...rest
 }: MarkdownLinkProps) {
   const linkSafety = useStreamdownLinkSafety()
+  const openUrlTarget = useOpenUrlTarget()
+  const tLink = useTranslations("Browser.link")
   const [modalOpen, setModalOpen] = useState(false)
-
-  const isIncomplete = href === INCOMPLETE_LINK
 
   // Deliberately NOT async: `openLinkWithSafety` opens the tab inside this
   // handler's own call stack, because awaiting the (synchronous) safety verdict
   // costs the user gesture that WebKit's popup blocker requires — see #410.
   const handleClick = useCallback(
     (event: MouseEvent<HTMLButtonElement>) => {
-      if (!href || isIncomplete) return
+      if (!href) return
       event.preventDefault()
-      openLinkWithSafety(href, linkSafety, () => setModalOpen(true))
+      // The gesture's modifier rides along: ⌘/Ctrl-click opens a web link
+      // "the other way" (system browser instead of the built-in one, or vice
+      // versa) — see `resolveLinkAction`.
+      openLinkWithSafety(href, linkSafety, () => setModalOpen(true), event)
     },
-    [href, isIncomplete, linkSafety]
+    [href, linkSafety]
   )
 
   // No usable href: render an inert anchor, matching Streamdown's fallback.
@@ -104,12 +112,12 @@ export function MarkdownLink({
   // bytes travel out of band, so it has no openable target). The same parser the
   // editor uses on draft restore recovers refType/id/meta from the uri; the link
   // text is the label.
-  if (!isIncomplete && href.toLowerCase().startsWith("codeg:")) {
+  if (href.toLowerCase().startsWith("codeg:")) {
     const reference = parseCodegReferenceUri(href, nodeText(children))
     if (reference) return <ReferenceBadge data={reference} />
   }
 
-  const kind = isIncomplete ? null : classifyResourceKind(href)
+  const kind = classifyResourceKind(href)
   const Icon = kind ? RESOURCE_KIND_ICON[kind] : null
 
   const modalProps: LinkSafetyModalProps = {
@@ -181,28 +189,65 @@ export function MarkdownLink({
     )
   }
 
+  const button = (
+    <button
+      type="button"
+      data-streamdown="link"
+      data-resource-kind={kind ?? undefined}
+      title={href}
+      onClick={handleClick}
+      className={cn(
+        "wrap-anywhere appearance-none text-left font-medium text-primary underline",
+        className
+      )}
+    >
+      {Icon ? (
+        <Icon
+          aria-hidden="true"
+          className="mr-0.5 inline size-[1em] align-[-0.15em] opacity-80"
+        />
+      ) : null}
+      {children}
+    </button>
+  )
+
+  // A web link gets an explicit-choice menu: built-in browser, system
+  // browser, copy. Explicit choices bypass the per-source preference (but not
+  // the terminal rules — a blocked host stays blocked).
   return (
     <>
-      <button
-        type="button"
-        data-incomplete={isIncomplete}
-        data-streamdown="link"
-        data-resource-kind={kind ?? undefined}
-        title={isIncomplete ? undefined : href}
-        onClick={handleClick}
-        className={cn(
-          "wrap-anywhere appearance-none text-left font-medium text-primary underline",
-          className
-        )}
-      >
-        {Icon ? (
-          <Icon
-            aria-hidden="true"
-            className="mr-0.5 inline size-[1em] align-[-0.15em] opacity-80"
-          />
-        ) : null}
-        {children}
-      </button>
+      {kind === "web" ? (
+        <ContextMenu>
+          <ContextMenuTrigger asChild>{button}</ContextMenuTrigger>
+          <ContextMenuContent>
+            <ContextMenuItem
+              onSelect={() =>
+                openUrlTarget(href, {
+                  source: "transcript",
+                  forceTarget: "builtin",
+                })
+              }
+            >
+              {tLink("openBuiltin")}
+            </ContextMenuItem>
+            <ContextMenuItem
+              onSelect={() =>
+                openUrlTarget(href, {
+                  source: "transcript",
+                  forceTarget: "system",
+                })
+              }
+            >
+              {tLink("openSystem")}
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={() => void copyTextToClipboard(href)}>
+              {tLink("copy")}
+            </ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
+      ) : (
+        button
+      )}
       {linkSafety.renderModal ? linkSafety.renderModal(modalProps) : null}
     </>
   )

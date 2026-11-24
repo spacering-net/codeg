@@ -1,15 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import {
-  DatabaseBackup,
-  Download,
-  History,
-  Loader2,
-  ShieldAlert,
-  Upload,
-  X,
-} from "lucide-react"
+import { History, Loader2, ShieldAlert, X } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 
@@ -25,7 +17,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { TabsContent } from "@/components/ui/tabs"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -107,7 +99,23 @@ function isAlreadyPending(err: unknown): boolean {
   )
 }
 
-export function BackupSettings() {
+/** Which panel of the data & sync card is on show — see `data-sync-settings.tsx`. */
+export type DataSyncPane = "sync" | "backup" | "restore"
+
+/**
+ * The "Backup" and "Restore" panels of the data & sync card. Renders two
+ * `TabsContent`s and nothing around them, so it has to be mounted inside the
+ * `Tabs` root in `data-sync-settings.tsx` — that is where the tab strip, the
+ * heading and the card shell live. Keeping both panels in one component is
+ * what lets them share the progress feed, the busy flag and the archive that
+ * has been picked.
+ *
+ * `pane` is the card's selected tab: `forceMount` keeps both panels alive
+ * across a switch, and `hidden` is what actually takes the one not on show out
+ * of the tree — the wrapper's `data-[state=inactive]:hidden` only does that in
+ * a browser (see `data-sync-settings.tsx`).
+ */
+export function BackupSettings({ pane }: { pane: DataSyncPane }) {
   const t = useTranslations("BackupSettings")
   // Root-scoped translator so backend errors carrying dotted i18n keys
   // (`backup.restore.error.*`) localize; falls back to the English message when
@@ -322,10 +330,13 @@ export function BackupSettings() {
   // `SideLocation` is the safe default once an archive turns out to carry
   // transcripts: it hands the files over without touching any agent's
   // directory. (The API's own default stays `Skip` — changing that would alter
-  // what an omitted `externalMode` means for existing callers.)
-  useEffect(() => {
+  // what an omitted `externalMode` means for existing callers.) Applied while
+  // rendering, on the render where `hasExternal` flips to true.
+  const [prevHasExternal, setPrevHasExternal] = useState(hasExternal)
+  if (hasExternal !== prevHasExternal) {
+    setPrevHasExternal(hasExternal)
     if (hasExternal) setExternalChoice("side")
-  }, [hasExternal])
+  }
 
   const buildExternalMode = useCallback((): ExternalRestoreMode | null => {
     if (!hasExternal) return null
@@ -460,431 +471,443 @@ export function BackupSettings() {
 
   const showProgress = progress && ACTIVE_PHASES.includes(progress.phase)
 
-  // Embedded as a card inside the System settings page; the page owns the
-  // outer scroll + padding, so this renders a self-contained section.
+  // Both panels of the tab strip `DataSyncSettings` owns — the card shell, the
+  // heading and the strip itself live there, so this renders nothing but the
+  // two `TabsContent`s and the dialogs they open.
   if (remote) {
+    // Repeated per panel rather than replacing the card: the strip is not
+    // ours to collapse, and a tab that opens onto nothing explains nothing.
+    const unsupported = (
+      <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-500">
+        {t("remoteUnsupported")}
+      </div>
+    )
     return (
-      <section className="rounded-xl border bg-card p-4 space-y-4">
-        <div className="flex items-center gap-2">
-          <DatabaseBackup className="h-4 w-4" />
-          <h2 className="text-sm font-semibold">{t("title")}</h2>
-        </div>
-        <p className="text-xs text-muted-foreground">{t("description")}</p>
-        <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-500">
-          {t("remoteUnsupported")}
-        </div>
-      </section>
+      <>
+        <TabsContent
+          value="backup"
+          forceMount
+          hidden={pane !== "backup"}
+          className="pt-2"
+        >
+          {unsupported}
+        </TabsContent>
+        <TabsContent
+          value="restore"
+          forceMount
+          hidden={pane !== "restore"}
+          className="pt-2"
+        >
+          {unsupported}
+        </TabsContent>
+      </>
     )
   }
 
   return (
     <>
-      <section className="rounded-xl border bg-card p-4 space-y-4">
-        <div className="flex items-center gap-2">
-          <DatabaseBackup className="h-4 w-4" />
-          <h2 className="text-sm font-semibold">{t("title")}</h2>
+      {/* ── Backup ── */}
+      <TabsContent
+        value="backup"
+        forceMount
+        hidden={pane !== "backup"}
+        className="space-y-4 pt-2"
+      >
+        <p className="text-xs text-muted-foreground leading-5">
+          {t("export.description")}
+        </p>
+        <div className="flex items-center justify-between gap-3">
+          <div className="space-y-0.5">
+            <Label className="text-xs font-medium">
+              {t("export.includeExternal")}
+            </Label>
+            <p className="text-2xs text-muted-foreground">
+              {t("export.includeExternalHint")}
+            </p>
+          </div>
+          <Switch
+            checked={includeExternal}
+            onCheckedChange={setIncludeExternal}
+            disabled={busy}
+          />
         </div>
-        <p className="text-xs text-muted-foreground">{t("description")}</p>
 
-        <Tabs defaultValue="backup">
-          <TabsList className="w-full">
-            <TabsTrigger value="backup" className="flex-1" disabled={busy}>
-              <Download className="h-3.5 w-3.5" />
-              {t("tabs.backup")}
-            </TabsTrigger>
-            <TabsTrigger value="restore" className="flex-1" disabled={busy}>
-              <Upload className="h-3.5 w-3.5" />
-              {t("tabs.restore")}
-            </TabsTrigger>
-          </TabsList>
-
-          {/* ── Backup ── */}
-          <TabsContent value="backup" className="space-y-4 pt-2">
-            <div className="flex items-center justify-between gap-3">
-              <div className="space-y-0.5">
-                <Label className="text-xs font-medium">
-                  {t("export.includeExternal")}
-                </Label>
-                <p className="text-2xs text-muted-foreground">
-                  {t("export.includeExternalHint")}
-                </p>
-              </div>
-              <Switch
-                checked={includeExternal}
-                onCheckedChange={setIncludeExternal}
-                disabled={busy}
-              />
+        <div className="space-y-2">
+          <Label className="text-xs font-medium">
+            {t("export.passphrase")}
+          </Label>
+          <Input
+            type="password"
+            autoComplete="new-password"
+            value={passphrase}
+            onChange={(e) => setPassphrase(e.target.value)}
+            placeholder={t("export.passphrasePlaceholder")}
+            disabled={busy}
+          />
+          {passphrase.length > 0 && (
+            <Input
+              type="password"
+              autoComplete="new-password"
+              value={passphraseConfirm}
+              onChange={(e) => setPassphraseConfirm(e.target.value)}
+              placeholder={t("export.passphraseConfirm")}
+              disabled={busy}
+            />
+          )}
+          {passphraseMismatch && (
+            <p className="text-2xs text-red-400">
+              {t("export.passphraseMismatch")}
+            </p>
+          )}
+          {passphrase.length === 0 ? (
+            <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-2xs text-amber-500">
+              <ShieldAlert className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+              <span>{t("export.noPassphraseWarning")}</span>
             </div>
+          ) : (
+            <p className="text-2xs text-muted-foreground">
+              {t("export.passphraseLossWarning")}
+            </p>
+          )}
+        </div>
 
-            <div className="space-y-2">
-              <Label className="text-xs font-medium">
-                {t("export.passphrase")}
-              </Label>
-              <Input
-                type="password"
-                autoComplete="new-password"
-                value={passphrase}
-                onChange={(e) => setPassphrase(e.target.value)}
-                placeholder={t("export.passphrasePlaceholder")}
-                disabled={busy}
-              />
-              {passphrase.length > 0 && (
-                <Input
-                  type="password"
-                  autoComplete="new-password"
-                  value={passphraseConfirm}
-                  onChange={(e) => setPassphraseConfirm(e.target.value)}
-                  placeholder={t("export.passphraseConfirm")}
-                  disabled={busy}
-                />
-              )}
-              {passphraseMismatch && (
-                <p className="text-2xs text-red-400">
-                  {t("export.passphraseMismatch")}
-                </p>
-              )}
-              {passphrase.length === 0 ? (
-                <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-2xs text-amber-500">
-                  <ShieldAlert className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                  <span>{t("export.noPassphraseWarning")}</span>
-                </div>
-              ) : (
-                <p className="text-2xs text-muted-foreground">
-                  {t("export.passphraseLossWarning")}
-                </p>
-              )}
-            </div>
+        <Button
+          type="button"
+          size="sm"
+          onClick={handleExport}
+          disabled={busy || passphraseMismatch}
+        >
+          {exporting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+          {t("export.button")}
+        </Button>
 
+        {exporting && showProgress && (
+          <ProgressLine
+            progress={progress}
+            label={t("export.inProgress")}
+            cancelLabel={t("progress.cancel")}
+            onCancel={handleCancelOp}
+          />
+        )}
+
+        {degraded.length > 0 && (
+          <div className="space-y-1 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-2xs text-amber-500">
+            <p className="font-medium">{t("export.degradedTitle")}</p>
+            <p>{t("export.degradedHint")}</p>
+            <ul className="space-y-0.5 pt-1">
+              {degraded.slice(0, 8).map((d) => (
+                <li key={d.archivePath} className="truncate">
+                  {d.agent} — {t(`export.degradedLevel.${d.level}`)}
+                </li>
+              ))}
+            </ul>
+            {degraded.length > 8 && (
+              <p>{t("export.degradedMore", { count: degraded.length - 8 })}</p>
+            )}
+          </div>
+        )}
+      </TabsContent>
+
+      {/* ── Restore ── */}
+      <TabsContent
+        value="restore"
+        forceMount
+        hidden={pane !== "restore"}
+        className="space-y-4 pt-2"
+      >
+        <p className="text-xs text-muted-foreground leading-5">
+          {t("restore.description")}
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={busy || inspecting || uploading}
+            onClick={() => {
+              if (desktop) void handlePickDesktop()
+              else fileInputRef.current?.click()
+            }}
+          >
+            {(inspecting || uploading) && (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            )}
+            {t("restore.selectFile")}
+          </Button>
+          {restoreSource && (
+            <span className="text-xs text-muted-foreground truncate">
+              {restoreSource.name}
+            </span>
+          )}
+          {!desktop && (
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".codegbak,.zip,application/zip"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                if (file) void handlePickWeb(file)
+                e.target.value = ""
+              }}
+            />
+          )}
+        </div>
+
+        {pendingBlocked && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-2xs text-amber-500">
+            <span>{t("restore.pendingBlockedHint")}</span>
             <Button
               type="button"
               size="sm"
-              onClick={handleExport}
-              disabled={busy || passphraseMismatch}
+              variant="secondary"
+              onClick={handleDiscardPending}
             >
-              {exporting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              {t("export.button")}
+              {t("restore.discardPending")}
             </Button>
+          </div>
+        )}
 
-            {exporting && showProgress && (
-              <ProgressLine
-                progress={progress}
-                label={t("export.inProgress")}
-                cancelLabel={t("progress.cancel")}
-                onCancel={handleCancelOp}
+        {preview?.needsPassphrase && (
+          <div className="space-y-2">
+            <Label className="text-xs font-medium">
+              {t("restore.passphrasePrompt")}
+            </Label>
+            <div className="flex gap-2">
+              <Input
+                type="password"
+                value={restorePassphrase}
+                onChange={(e) => setRestorePassphrase(e.target.value)}
+                disabled={inspecting}
               />
-            )}
-
-            {degraded.length > 0 && (
-              <div className="space-y-1 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-2xs text-amber-500">
-                <p className="font-medium">{t("export.degradedTitle")}</p>
-                <p>{t("export.degradedHint")}</p>
-                <ul className="space-y-0.5 pt-1">
-                  {degraded.slice(0, 8).map((d) => (
-                    <li key={d.archivePath} className="truncate">
-                      {d.agent} — {t(`export.degradedLevel.${d.level}`)}
-                    </li>
-                  ))}
-                </ul>
-                {degraded.length > 8 && (
-                  <p>
-                    {t("export.degradedMore", { count: degraded.length - 8 })}
-                  </p>
-                )}
-              </div>
-            )}
-          </TabsContent>
-
-          {/* ── Restore ── */}
-          <TabsContent value="restore" className="space-y-4 pt-2">
-            <div className="flex flex-wrap items-center gap-2">
               <Button
                 type="button"
                 size="sm"
-                variant="outline"
-                disabled={busy || inspecting || uploading}
-                onClick={() => {
-                  if (desktop) void handlePickDesktop()
-                  else fileInputRef.current?.click()
-                }}
+                variant="secondary"
+                onClick={handleUnlock}
+                disabled={inspecting || restorePassphrase.length === 0}
               >
-                {(inspecting || uploading) && (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                )}
-                {t("restore.selectFile")}
+                {t("restore.unlock")}
               </Button>
-              {restoreSource && (
-                <span className="text-xs text-muted-foreground truncate">
-                  {restoreSource.name}
-                </span>
+            </div>
+          </div>
+        )}
+
+        {preview?.manifest && (
+          <div className="rounded-md border bg-muted/20 p-3 text-xs space-y-1.5">
+            <div className="flex items-center gap-2">
+              <span className="font-medium">{t("restore.preview.title")}</span>
+              {preview.encrypted && (
+                <Badge variant="secondary">
+                  {t("restore.preview.encrypted")}
+                </Badge>
               )}
-              {!desktop && (
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".codegbak,.zip,application/zip"
-                  className="hidden"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0]
-                    if (file) void handlePickWeb(file)
-                    e.target.value = ""
-                  }}
-                />
+              {preview.compatible ? (
+                <Badge variant="outline">
+                  {t("restore.preview.compatible")}
+                </Badge>
+              ) : (
+                <Badge variant="destructive">
+                  {t("restore.preview.incompatible")}
+                </Badge>
               )}
             </div>
-
-            {pendingBlocked && (
-              <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-2xs text-amber-500">
-                <span>{t("restore.pendingBlockedHint")}</span>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="secondary"
-                  onClick={handleDiscardPending}
-                >
-                  {t("restore.discardPending")}
-                </Button>
+            <div className="text-muted-foreground">
+              {t("restore.preview.createdAt", {
+                value: new Date(preview.manifest.createdAt).toLocaleString(),
+              })}
+            </div>
+            <div className="text-muted-foreground">
+              {t("restore.preview.appVersion", {
+                value: preview.manifest.appVersion,
+              })}
+            </div>
+            {!preview.compatible && (
+              <div className="text-red-400">
+                {t("restore.preview.incompatibleHint")}
               </div>
             )}
+          </div>
+        )}
 
-            {preview?.needsPassphrase && (
+        {hasExternal && preview?.compatible && (
+          <div className="space-y-2 rounded-md border bg-muted/20 p-3">
+            <div className="space-y-0.5">
+              <Label className="text-xs font-medium">
+                {t("restore.external.title")}
+              </Label>
+              <p className="text-2xs text-muted-foreground">
+                {t("restore.external.hint")}
+              </p>
+            </div>
+            <Select
+              value={externalChoice}
+              onValueChange={(v) =>
+                void handleExternalChoice(v as ExternalChoice)
+              }
+            >
+              <SelectTrigger className="h-8 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="skip">
+                  {t("restore.external.modeSkip")}
+                </SelectItem>
+                <SelectItem value="side">
+                  {t("restore.external.modeSide")}
+                </SelectItem>
+                <SelectItem value="original">
+                  {t("restore.external.modeOriginal")}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+            {externalChoice === "original" && (
               <div className="space-y-2">
-                <Label className="text-xs font-medium">
-                  {t("restore.passphrasePrompt")}
-                </Label>
-                <div className="flex gap-2">
-                  <Input
-                    type="password"
-                    value={restorePassphrase}
-                    onChange={(e) => setRestorePassphrase(e.target.value)}
-                    disabled={inspecting}
-                  />
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="secondary"
-                    onClick={handleUnlock}
-                    disabled={inspecting || restorePassphrase.length === 0}
-                  >
-                    {t("restore.unlock")}
-                  </Button>
-                </div>
-              </div>
-            )}
-
-            {preview?.manifest && (
-              <div className="rounded-md border bg-muted/20 p-3 text-xs space-y-1.5">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium">
-                    {t("restore.preview.title")}
-                  </span>
-                  {preview.encrypted && (
-                    <Badge variant="secondary">
-                      {t("restore.preview.encrypted")}
-                    </Badge>
-                  )}
-                  {preview.compatible ? (
-                    <Badge variant="outline">
-                      {t("restore.preview.compatible")}
-                    </Badge>
-                  ) : (
-                    <Badge variant="destructive">
-                      {t("restore.preview.incompatible")}
-                    </Badge>
-                  )}
-                </div>
-                <div className="text-muted-foreground">
-                  {t("restore.preview.createdAt", {
-                    value: new Date(
-                      preview.manifest.createdAt
-                    ).toLocaleString(),
-                  })}
-                </div>
-                <div className="text-muted-foreground">
-                  {t("restore.preview.appVersion", {
-                    value: preview.manifest.appVersion,
-                  })}
-                </div>
-                {!preview.compatible && (
-                  <div className="text-red-400">
-                    {t("restore.preview.incompatibleHint")}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {hasExternal && preview?.compatible && (
-              <div className="space-y-2 rounded-md border bg-muted/20 p-3">
-                <div className="space-y-0.5">
-                  <Label className="text-xs font-medium">
-                    {t("restore.external.title")}
-                  </Label>
+                {scanningConflicts ? (
                   <p className="text-2xs text-muted-foreground">
-                    {t("restore.external.hint")}
+                    {t("restore.external.scanning")}
                   </p>
-                </div>
-                <Select
-                  value={externalChoice}
-                  onValueChange={(v) =>
-                    void handleExternalChoice(v as ExternalChoice)
-                  }
-                >
-                  <SelectTrigger className="h-8 text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="skip">
-                      {t("restore.external.modeSkip")}
-                    </SelectItem>
-                    <SelectItem value="side">
-                      {t("restore.external.modeSide")}
-                    </SelectItem>
-                    <SelectItem value="original">
-                      {t("restore.external.modeOriginal")}
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-                {externalChoice === "original" && (
-                  <div className="space-y-2">
-                    {scanningConflicts ? (
-                      <p className="text-2xs text-muted-foreground">
-                        {t("restore.external.scanning")}
-                      </p>
-                    ) : conflicts && conflicts.length === 0 ? (
-                      <p className="text-2xs text-muted-foreground">
-                        {t("restore.external.noConflicts")}
-                      </p>
-                    ) : conflicts && conflicts.length > 0 ? (
-                      <div className="space-y-1">
-                        <p className="text-2xs text-amber-500">
-                          {t("restore.external.conflictCount", {
-                            count: conflicts.length,
-                          })}
-                        </p>
-                        <p className="text-2xs text-muted-foreground">
-                          {t("restore.external.conflictSkipNote")}
-                        </p>
-                      </div>
-                    ) : null}
-                    {runningAgents.length > 0 && (
-                      <p className="text-2xs text-amber-500">
-                        {t("restore.external.agentsRunning", {
-                          count: runningAgents.length,
-                          agents: runningAgents.join(", "),
-                        })}
-                      </p>
-                    )}
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="space-y-0.5">
-                        <Label className="text-xs font-medium">
-                          {t("restore.external.forceOverwrite")}
-                        </Label>
-                        <p className="text-2xs text-muted-foreground">
-                          {t("restore.external.forceOverwriteHint")}
-                        </p>
-                      </div>
-                      <Switch
-                        checked={forceOverwrite}
-                        onCheckedChange={setForceOverwrite}
-                        disabled={busy}
-                      />
-                    </div>
+                ) : conflicts && conflicts.length === 0 ? (
+                  <p className="text-2xs text-muted-foreground">
+                    {t("restore.external.noConflicts")}
+                  </p>
+                ) : conflicts && conflicts.length > 0 ? (
+                  <div className="space-y-1">
+                    <p className="text-2xs text-amber-500">
+                      {t("restore.external.conflictCount", {
+                        count: conflicts.length,
+                      })}
+                    </p>
+                    <p className="text-2xs text-muted-foreground">
+                      {t("restore.external.conflictSkipNote")}
+                    </p>
                   </div>
+                ) : null}
+                {runningAgents.length > 0 && (
+                  <p className="text-2xs text-amber-500">
+                    {t("restore.external.agentsRunning", {
+                      count: runningAgents.length,
+                      agents: runningAgents.join(", "),
+                    })}
+                  </p>
                 )}
+                <div className="flex items-center justify-between gap-3">
+                  <div className="space-y-0.5">
+                    <Label className="text-xs font-medium">
+                      {t("restore.external.forceOverwrite")}
+                    </Label>
+                    <p className="text-2xs text-muted-foreground">
+                      {t("restore.external.forceOverwriteHint")}
+                    </p>
+                  </div>
+                  <Switch
+                    checked={forceOverwrite}
+                    onCheckedChange={setForceOverwrite}
+                    disabled={busy}
+                  />
+                </div>
               </div>
             )}
+          </div>
+        )}
 
-            {preview?.manifest && (
-              <div className="flex items-start gap-2 rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-2xs text-red-400">
-                <ShieldAlert className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                <span>
-                  {t("restore.replaceWarning")}
-                  {/* Keyring note applies to local desktop only: GitHub/chat
+        {preview?.manifest && (
+          <div className="flex items-start gap-2 rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-2xs text-red-400">
+            <ShieldAlert className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+            <span>
+              {t("restore.replaceWarning")}
+              {/* Keyring note applies to local desktop only: GitHub/chat
                       tokens live in the OS keychain and are NOT in the backup,
                       so they need re-entry after a desktop restore. In
                       server/web mode those tokens are in tokens.json, which IS
                       backed up. */}
-                  {desktop ? ` ${t("restore.keyringNote")}` : ""}
-                </span>
-              </div>
-            )}
-
-            <Button
-              type="button"
-              size="sm"
-              variant="destructive"
-              disabled={
-                busy ||
-                !preview?.manifest ||
-                !preview.compatible ||
-                !restoreSource?.sourceId ||
-                inspecting
-              }
-              onClick={() => setConfirmOpen(true)}
-            >
-              {restoring && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              {t("restore.button")}
-            </Button>
-
-            {restoring && showProgress && (
-              <ProgressLine
-                progress={progress}
-                label={t("restore.staging")}
-                cancelLabel={t("progress.cancel")}
-                onCancel={handleCancelOp}
-              />
-            )}
-          </TabsContent>
-        </Tabs>
-      </section>
-
-      {/* ── Safety snapshots ── */}
-      <section className="rounded-xl border bg-card p-4 space-y-3">
-        <div className="flex items-center gap-2">
-          <History className="h-4 w-4" />
-          <h2 className="text-sm font-semibold">{t("snapshots.title")}</h2>
-        </div>
-        <p className="text-xs text-muted-foreground">{t("snapshots.hint")}</p>
-        {snapshots.length === 0 ? (
-          <p className="text-2xs text-muted-foreground">
-            {t("snapshots.empty")}
-          </p>
-        ) : (
-          <ul className="space-y-2">
-            {snapshots.map((snap) => (
-              <li
-                key={snap.id}
-                className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-muted/20 px-3 py-2"
-              >
-                <div className="min-w-0 space-y-0.5">
-                  <div className="text-xs">
-                    {snap.createdAt
-                      ? new Date(snap.createdAt).toLocaleString()
-                      : snap.id}
-                  </div>
-                  <div className="text-2xs text-muted-foreground truncate">
-                    {formatMb(snap.sizeBytes)} · {snap.path}
-                  </div>
-                </div>
-                {snap.rollbackSupported ? (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    disabled={busy}
-                    onClick={() => setRollbackTarget(snap)}
-                  >
-                    {t("snapshots.rollback")}
-                  </Button>
-                ) : (
-                  <span className="text-2xs text-muted-foreground">
-                    {t("snapshots.unsupported")}
-                  </span>
-                )}
-              </li>
-            ))}
-          </ul>
+              {desktop ? ` ${t("restore.keyringNote")}` : ""}
+            </span>
+          </div>
         )}
-      </section>
+
+        <Button
+          type="button"
+          size="sm"
+          variant="destructive"
+          disabled={
+            busy ||
+            !preview?.manifest ||
+            !preview.compatible ||
+            !restoreSource?.sourceId ||
+            inspecting
+          }
+          onClick={() => setConfirmOpen(true)}
+        >
+          {restoring && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+          {t("restore.button")}
+        </Button>
+
+        {restoring && showProgress && (
+          <ProgressLine
+            progress={progress}
+            label={t("restore.staging")}
+            cancelLabel={t("progress.cancel")}
+            onCancel={handleCancelOp}
+          />
+        )}
+
+        {/* ── Safety snapshots ──
+            The undo half of this panel: every restore snapshots the current
+            data first, so the way back sits under the way in rather than in a
+            card of its own. */}
+        <div className="space-y-2 border-t pt-4">
+          <div className="flex items-center gap-2">
+            <History className="h-3.5 w-3.5 text-muted-foreground" />
+            <Label className="text-xs font-medium">
+              {t("snapshots.title")}
+            </Label>
+          </div>
+          <p className="text-2xs text-muted-foreground">
+            {t("snapshots.hint")}
+          </p>
+          {snapshots.length === 0 ? (
+            <p className="text-2xs text-muted-foreground">
+              {t("snapshots.empty")}
+            </p>
+          ) : (
+            <ul className="space-y-2">
+              {snapshots.map((snap) => (
+                <li
+                  key={snap.id}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-muted/20 px-3 py-2"
+                >
+                  <div className="min-w-0 space-y-0.5">
+                    <div className="text-xs">
+                      {snap.createdAt
+                        ? new Date(snap.createdAt).toLocaleString()
+                        : snap.id}
+                    </div>
+                    <div className="text-2xs text-muted-foreground truncate">
+                      {formatMb(snap.sizeBytes)} · {snap.path}
+                    </div>
+                  </div>
+                  {snap.rollbackSupported ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={busy}
+                      onClick={() => setRollbackTarget(snap)}
+                    >
+                      {t("snapshots.rollback")}
+                    </Button>
+                  ) : (
+                    <span className="text-2xs text-muted-foreground">
+                      {t("snapshots.unsupported")}
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </TabsContent>
 
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <AlertDialogContent>

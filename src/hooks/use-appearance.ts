@@ -1,7 +1,15 @@
 "use client"
 
 import { useContext } from "react"
-import { AppearanceContext } from "@/components/appearance-provider"
+import {
+  AppearanceContext,
+  ChatAnimationsContext,
+} from "@/components/appearance-provider"
+import {
+  applyChatContentWidth,
+  commitChatContentWidth,
+  readChatContentWidth,
+} from "@/lib/chat-content-width"
 import { resolveFontStack } from "@/lib/font-presets"
 
 export function useAppearance() {
@@ -29,6 +37,37 @@ export function useWelcomeQuickActions() {
   const { showWelcomeQuickActions, setShowWelcomeQuickActions } =
     useAppearance()
   return { showWelcomeQuickActions, setShowWelcomeQuickActions }
+}
+
+/** 聊天区域动画开关（设置页用）。 */
+export function useChatAnimationsSetting() {
+  const { chatAnimations, setChatAnimations } = useAppearance()
+  return { chatAnimations, setChatAnimations }
+}
+
+/**
+ * 聊天区域是否播放动画。供 JS 驱动的动画（Shimmer、平滑滚动）读取；
+ * 在 Provider 之外（测试、独立窗口）回退为开启，不抛错。读的是只装这一个布尔值的
+ * ChatAnimationsContext，其它外观设置变化不会让这些热路径组件重渲染。
+ */
+export function useChatAnimationsEnabled(): boolean {
+  return useContext(ChatAnimationsContext)
+}
+
+/**
+ * 聊天内容宽度（100% 缩放下的 px）。拖拽手柄与外观设置页共用。在 Provider 之外
+ * （测试、独立窗口）回退为直接读写 lib 层（同一份 localStorage / CSS 变量），不抛错。
+ */
+export function useChatContentWidth() {
+  const ctx = useContext(AppearanceContext)
+  return {
+    chatContentWidth: ctx ? ctx.chatContentWidth : readChatContentWidth(),
+    setChatContentWidth: ctx?.setChatContentWidth ?? commitChatContentWidth,
+    previewChatContentWidth:
+      ctx?.previewChatContentWidth ?? applyChatContentWidth,
+    /** The stored width as of now, not as of the last render. */
+    getChatContentWidth: ctx?.getChatContentWidth ?? readChatContentWidth,
+  }
 }
 
 /** 界面字体（普通组件）。stack 已解析，可直接用于 style 或 CSS 变量。 */

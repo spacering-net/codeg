@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import { OverlayPortalContainerProvider } from "@/components/ui/overlay-portal-container"
 import { useNestedLayerDismissGuard } from "@/hooks/use-nested-layer-dismiss-guard"
 import { cn } from "@/lib/utils"
+import { acquireNativeSurfaceOcclusionFor } from "@/lib/browser/native-surface-occlusion"
 
 function Dialog({
   ...props
@@ -68,19 +69,33 @@ function DialogContent({
     setNode,
     onPointerDownOutside: guardOutsidePress,
   } = useNestedLayerDismissGuard<HTMLDivElement>(ref)
+  // A native browser surface would paint over this overlay, so it holds an
+  // occlusion lease exactly while its DOM exists (this component stays mounted
+  // with the dialog closed; only the primitive's content comes and goes).
+  const contentRef = React.useCallback(
+    (contentNode: HTMLDivElement | null) => {
+      const detach = setNode(contentNode)
+      const release = acquireNativeSurfaceOcclusionFor("dialog", true)
+      return () => {
+        release()
+        if (typeof detach === "function") detach()
+      }
+    },
+    [setNode]
+  )
   return (
     <DialogPortal>
       <DialogOverlay />
       <div className="pointer-events-none fixed inset-0 z-50 grid place-items-center p-4">
         <DialogPrimitive.Content
           data-slot="dialog-content"
-          ref={setNode}
+          ref={contentRef}
           onPointerDownOutside={(event) => {
             onPointerDownOutside?.(event)
             guardOutsidePress(event)
           }}
           className={cn(
-            "data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-95 bg-background ring-border pointer-events-auto relative grid max-h-[calc(100dvh-2rem)] w-full max-w-md gap-6 overflow-y-auto rounded-4xl p-6 shadow-2xl ring-1 duration-100 outline-none",
+            "data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-95 bg-background ring-border pointer-events-auto relative grid grid-cols-[minmax(0,1fr)] max-h-[calc(100dvh-2rem)] w-full max-w-md gap-6 overflow-y-auto rounded-4xl p-6 shadow-2xl ring-1 duration-100 outline-none",
             showCloseButton && "[&_[data-slot=dialog-header]]:pr-10",
             className
           )}

@@ -9,17 +9,17 @@ import {
 } from "react"
 import {
   Bot,
-  BookOpenText,
-  Boxes,
+  Bubbles,
+  Compass,
   FileSpreadsheet,
   GitBranch,
   Globe,
   Keyboard,
   Menu,
   MessageSquareText,
+  MonitorCog,
   SendHorizontal,
   Palette,
-  PlugZap,
   Server,
   Settings,
   SlidersHorizontal,
@@ -31,7 +31,10 @@ import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { AppToaster } from "@/components/ui/app-toaster"
 import { cn } from "@/lib/utils"
-import { detectEnvironment } from "@/lib/transport/detect"
+import {
+  detectEnvironment,
+  type TransportEnvironment,
+} from "@/lib/transport/detect"
 import { AppTitleBar } from "@/components/layout/app-title-bar"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer"
@@ -43,9 +46,9 @@ interface SettingsNavItem {
     | "appearance"
     | "agents"
     | "model_providers"
-    | "mcp"
-    | "skills"
-    | "skill_packs"
+    | "collaboration"
+    | "browser"
+    | "computer_use"
     | "quick_messages"
     | "shortcuts"
     | "version_control"
@@ -68,19 +71,9 @@ const SETTINGS_NAV_ITEMS: SettingsNavItem[] = [
     icon: SlidersHorizontal,
   },
   {
-    href: "/settings/mcp",
-    labelKey: "mcp",
-    icon: PlugZap,
-  },
-  {
-    href: "/settings/skills",
-    labelKey: "skills",
-    icon: BookOpenText,
-  },
-  {
-    href: "/settings/skill-packs",
-    labelKey: "skill_packs",
-    icon: Boxes,
+    href: "/settings/collaboration",
+    labelKey: "collaboration",
+    icon: Bubbles,
   },
   {
     href: "/settings/agents",
@@ -96,6 +89,16 @@ const SETTINGS_NAV_ITEMS: SettingsNavItem[] = [
     href: "/settings/quick-messages",
     labelKey: "quick_messages",
     icon: MessageSquareText,
+  },
+  {
+    href: "/settings/browser",
+    labelKey: "browser",
+    icon: Compass,
+  },
+  {
+    href: "/settings/computer-use",
+    labelKey: "computer_use",
+    icon: MonitorCog,
   },
   {
     href: "/settings/shortcuts",
@@ -131,6 +134,24 @@ const SETTINGS_NAV_ITEMS: SettingsNavItem[] = [
 
 interface SettingsShellProps {
   children: ReactNode
+}
+
+/**
+ * The nav for one runtime. Only one entry is runtime-bound: the Web service
+ * page configures the server a web client is already talking to, and there is
+ * no such server to configure from inside it.
+ *
+ * The Browser page is deliberately not on that list. Most of what it holds is
+ * a desktop browser engine, but site rules, what a server starting in a
+ * terminal does and the terminal's link menu all still decide something in a
+ * browser session, and that page is the only place they can be set.
+ */
+export function settingsNavItemsFor(
+  env: TransportEnvironment
+): SettingsNavItem[] {
+  return SETTINGS_NAV_ITEMS.filter(
+    (item) => !(item.labelKey === "web_service" && env === "web")
+  )
 }
 
 function normalizePath(path: string): string {
@@ -171,7 +192,7 @@ export function SettingsShell({ children }: SettingsShellProps) {
 
       // Preserve current query string so the active remote workspace context
       // (`?remoteConnectionId=N`) carries over to sub-pages — without this,
-      // navigating from /settings/appearance to /settings/mcp drops the
+      // navigating from /settings/appearance to /settings/agents drops the
       // remote id and the next page falls back to the local Tauri backend.
       const search = window.location.search
       const fullTarget = search ? `${target}${search}` : target
@@ -187,10 +208,7 @@ export function SettingsShell({ children }: SettingsShellProps) {
     [router, setNavOpen]
   )
 
-  const filteredNavItems = SETTINGS_NAV_ITEMS.filter(
-    (item) =>
-      !(item.labelKey === "web_service" && detectEnvironment() === "web")
-  )
+  const filteredNavItems = settingsNavItemsFor(detectEnvironment())
 
   const navContent = (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -250,7 +268,7 @@ export function SettingsShell({ children }: SettingsShellProps) {
       <div className="flex-1 min-h-0 flex">
         {/* Desktop sidebar */}
         {!isMobile && (
-          <aside className="flex min-h-0 w-56 shrink-0 flex-col border-r px-2 py-3">
+          <aside className="flex min-h-0 w-56 shrink-0 flex-col border-e px-2 py-3">
             {navContent}
           </aside>
         )}

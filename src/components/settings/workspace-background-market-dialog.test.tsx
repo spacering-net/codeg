@@ -52,12 +52,12 @@ const ITEM: MarketWallpaper = {
   category: "general",
 }
 
-/** Past the backend's 16 MiB ceiling — clicking it could only ever fail. */
+/** Past the backend's 64 MiB ceiling — clicking it could only ever fail. */
 const OVERSIZED: MarketWallpaper = {
   ...ITEM,
   id: "huge9",
   sourceUrl: "https://wallhaven.cc/w/huge9",
-  fileSizeBytes: 20 * 1024 * 1024,
+  fileSizeBytes: 80 * 1024 * 1024,
 }
 
 function renderDialog(
@@ -138,9 +138,9 @@ describe("WorkspaceBackgroundMarketDialog", () => {
     expect(card).toBeDisabled()
     // The reason names the actual size and the ceiling, not just "failed" —
     // on screen (a disabled button's tooltip is unreliable) and to AT.
-    expect(screen.getByText("20.0 MB")).toBeInTheDocument()
-    expect(card).toHaveAccessibleName(/20\.0 MB/)
-    expect(card).toHaveAccessibleName(/16\.0 MB/)
+    expect(screen.getByText("80.0 MB")).toBeInTheDocument()
+    expect(card).toHaveAccessibleName(/80\.0 MB/)
+    expect(card).toHaveAccessibleName(/64\.0 MB/)
     await userEvent.click(card)
     expect(onApply).not.toHaveBeenCalled()
   })
@@ -241,8 +241,13 @@ describe("WorkspaceBackgroundMarketDialog", () => {
       Promise.resolve({ items: [ITEM], page: Math.min(page, 2), lastPage: 5 })
     )
     renderDialog()
-    const next = () =>
-      userEvent.click(screen.getByRole("button", { name: `${NS}.nextPage` }))
+    // The label names a page as soon as it is asked for, but "next" stays
+    // locked until that page lands.
+    const next = async () => {
+      const button = screen.getByRole("button", { name: `${NS}.nextPage` })
+      await waitFor(() => expect(button).toBeEnabled())
+      await userEvent.click(button)
+    }
     await waitFor(() =>
       expect(
         screen.getByText(`${NS}.pageInfo(page=1,lastPage=5)`)

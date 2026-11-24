@@ -7,6 +7,7 @@ import {
   popClosedTab,
   pushClosedTab,
   resetClosedTabStackForTests,
+  snapshotBrowserTab,
   snapshotConversationTab,
   snapshotFileTab,
 } from "./closed-tab-stack"
@@ -147,6 +148,87 @@ describe("closed tab stack", () => {
       path: "/repo/a.ts",
       folderId: 2,
     })
+  })
+
+  // A browser tab reopens at the page it was showing, not the address it was
+  // opened with — the caller reads that from the live state.
+  it("records a browser tab at its live page", () => {
+    expect(
+      snapshotBrowserTab(
+        { id: "browser:abc", folderId: 3, browser: { profile: "p-work" } },
+        "https://example.com/deep",
+        "Deep page",
+        2
+      )
+    ).toEqual({
+      kind: "browser",
+      key: "browser:abc",
+      index: 2,
+      url: "https://example.com/deep",
+      title: "Deep page",
+      folderId: 3,
+      profile: "p-work",
+    })
+  })
+
+  it("records a remote browser tab as remote", () => {
+    expect(
+      snapshotBrowserTab(
+        {
+          id: "browser:r",
+          folderId: 3,
+          browser: { profile: "default", remote: true },
+        },
+        "http://localhost:3000/",
+        "localhost:3000",
+        0
+      )
+    ).toMatchObject({
+      kind: "browser",
+      url: "http://localhost:3000/",
+      remote: true,
+    })
+  })
+
+  it("records the device a browser tab was shown as", () => {
+    expect(
+      snapshotBrowserTab(
+        {
+          id: "browser:p",
+          folderId: 3,
+          browser: { profile: "default", device: "phone" },
+        },
+        "http://localhost:3000/",
+        "localhost:3000",
+        0
+      )
+    ).toMatchObject({ kind: "browser", device: "phone" })
+    // A custom device as its size: it reopens at that size.
+    expect(
+      snapshotBrowserTab(
+        {
+          id: "browser:c",
+          folderId: 3,
+          browser: {
+            profile: "default",
+            device: { width: 1440, height: 900 },
+          },
+        },
+        "http://localhost:3000/",
+        "localhost:3000",
+        0
+      )
+    ).toMatchObject({ device: { width: 1440, height: 900 } })
+    // The desktop is no device: the entry keeps the shape it always had.
+    expect(
+      "device" in
+        snapshotBrowserTab(
+          { id: "browser:d", folderId: 3, browser: { profile: "default" } },
+          "http://localhost:3000/",
+          "localhost:3000",
+          0
+        )
+    ).toBe(false)
   })
 
   // A diff tab carries the path it compares, but reopening goes through

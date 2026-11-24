@@ -112,7 +112,10 @@ export function FilePathBreadcrumb({
   }
 
   return (
-    <div className="flex min-w-0 items-center gap-0.5 text-sm">
+    // `gap-1.5` and the `h-3.5` chevron are the conversation detail header's
+    // folder › title crumb (conversation-detail-header.tsx), so a file tab and
+    // a conversation tab space their trails alike.
+    <div className="flex min-w-0 items-center gap-1.5 text-sm">
       {leadingDirs.map((dir) => (
         <Fragment key={dir.absPath}>
           <DirSegmentPopover
@@ -153,7 +156,9 @@ export function FilePathBreadcrumb({
 }
 
 function Separator() {
-  return <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground/50" />
+  return (
+    <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/50" />
+  )
 }
 
 function DirSegmentPopover({
@@ -185,9 +190,12 @@ function DirSegmentPopover({
           type="button"
           title={title}
           className={cn(
-            "flex min-w-0 shrink items-center rounded px-1 py-0.5",
+            // Bare text, no pill: the pill's padding made the gap before a
+            // `›` wider than the gap after it, and indented the trail from
+            // the header's edge. Hover and an open popover only recolor it.
+            "flex min-w-0 shrink items-center",
             "text-muted-foreground transition-colors",
-            "hover:bg-muted hover:text-foreground data-[state=open]:bg-muted data-[state=open]:text-foreground"
+            "hover:text-foreground data-[state=open]:text-foreground"
           )}
         >
           <span className="truncate">{label}</span>
@@ -251,6 +259,7 @@ function DirectoryTree({
   // Load the root level whenever the popover roots at a new directory.
   useEffect(() => {
     let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- resets the tree and shows the spinner as the fetch for the new root starts
     setRootLoading(true)
     setExpanded(new Set())
     loadedDirsRef.current = new Set()
@@ -305,19 +314,24 @@ function DirectoryTree({
 
   const renderNodes = useCallback(
     (dirAbs: string): ReactNode => {
-      const nodes = childrenByDir.get(dirAbs)
-      if (!nodes) return null
-      return nodes.map((node) => {
-        const abs = joinFsPath(dirAbs, node.name)
-        if (node.kind === "dir") {
-          return (
-            <FileTreeFolder key={abs} path={abs} name={node.name}>
-              {renderNodes(abs)}
-            </FileTreeFolder>
-          )
-        }
-        return <FileTreeFile key={abs} path={abs} name={node.name} />
-      })
+      // A plain inner function recurses into itself; the memoised callback
+      // can't reference its own binding before it is declared.
+      const render = (dir: string): ReactNode => {
+        const nodes = childrenByDir.get(dir)
+        if (!nodes) return null
+        return nodes.map((node) => {
+          const abs = joinFsPath(dir, node.name)
+          if (node.kind === "dir") {
+            return (
+              <FileTreeFolder key={abs} path={abs} name={node.name}>
+                {render(abs)}
+              </FileTreeFolder>
+            )
+          }
+          return <FileTreeFile key={abs} path={abs} name={node.name} />
+        })
+      }
+      return render(dirAbs)
     },
     [childrenByDir]
   )

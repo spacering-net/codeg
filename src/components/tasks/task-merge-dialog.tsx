@@ -19,6 +19,7 @@ import {
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import type { WorkTask } from "@/lib/types"
+import { ThreadCommentSection, useThreadComment } from "./task-thread-comment"
 
 interface TaskMergeDialogProps {
   open: boolean
@@ -67,6 +68,7 @@ export function TaskMergeDialog({
   const [submitting, setSubmitting] = useState(false)
   const [promisedQueue, setPromisedQueue] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const comment = useThreadComment(task, open)
 
   // Seeded off the task's VALUES, never off the row object: the board hands out
   // a fresh array on every refetch, and re-seeding on identity would wipe a
@@ -138,6 +140,9 @@ export function TaskMergeDialog({
     setSubmitting(true)
     setError(null)
     try {
+      // The comment's answer first: the landing is what posts it, and it
+      // reads the answer from the task when it does.
+      await comment.persist()
       const queued = await workTaskMerge(
         task.id,
         autoMessage ? null : message.trim(),
@@ -157,7 +162,9 @@ export function TaskMergeDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[28rem]">
+      <DialogContent
+        className={comment.applies ? "sm:max-w-[34rem]" : "sm:max-w-[28rem]"}
+      >
         <DialogHeader>
           <DialogTitle>
             {alreadyQueued ? t("mergeQueuedTitle") : t("mergeTitle")}
@@ -232,6 +239,8 @@ export function TaskMergeDialog({
             />
             {t("mergeDeleteWorktree")}
           </Label>
+
+          <ThreadCommentSection comment={comment} disabled={submitting} />
 
           {error ? (
             <p

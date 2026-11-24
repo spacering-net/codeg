@@ -1,11 +1,28 @@
 import type { Editor } from "@tiptap/core"
 
+import {
+  NO_KNOWN_INVOCATIONS,
+  type KnownInvocations,
+} from "@/lib/invocation-token"
 import type { PromptInputBlock } from "@/lib/types"
 
 import type { InputAttachment } from "../message-input-attachments"
 import { blocksToRestoredDraft } from "./from-prompt-blocks"
 import { textToSeededInlineContent } from "./plain-text-content"
+import { serializeDocToText } from "./to-prompt-blocks"
 import type { ReferenceAttrs } from "./types"
+
+/**
+ * What goes before content added after a document whose text is `existing`, so
+ * that content starts on a line of its own with a blank line above it: nothing
+ * for an empty document, and only the line breaks the document's own tail is
+ * missing otherwise.
+ */
+export function blankLineAfter(existing: string): string {
+  if (!existing.trim()) return ""
+  if (existing.endsWith("\n\n")) return ""
+  return existing.endsWith("\n") ? "\n" : "\n\n"
+}
 
 /**
  * Whether the composer has nothing sendable. Stricter than `editor.isEmpty`,
@@ -139,6 +156,42 @@ export function restampSkillPrefixes(
 }
 
 /**
+ * Re-stamp every expert badge that knows its expert's own id (`meta.expertId`)
+ * with the name the current agent sees that expert under (`nameOf`): a badge
+ * inserted for an agent that has the expert from a Harness plugin installed
+ * whole (`superpowers:brainstorming`) and then sent to another must carry that
+ * other agent's name. A badge `nameOf` has no answer for (`null`: not known
+ * yet) is left as it is. Attrs-only, kept out of the undo history. Returns
+ * true if anything changed.
+ */
+export function restampExpertNames(
+  editor: Editor,
+  nameOf: (expertId: string) => string | null
+): boolean {
+  const updates: { pos: number; attrs: ReferenceAttrs }[] = []
+  editor.state.doc.descendants((node, pos) => {
+    if (node.type.name !== "reference") return true
+    const attrs = node.attrs as ReferenceAttrs
+    const expertId = attrs.meta?.expertId
+    if (attrs.refType === "skill" && expertId) {
+      const name = nameOf(expertId)
+      if (name !== null && name !== attrs.id) {
+        updates.push({ pos, attrs: { ...attrs, id: name } })
+      }
+    }
+    return true
+  })
+  if (updates.length === 0) return false
+  const tr = editor.state.tr
+  for (const { pos, attrs } of updates) {
+    tr.setNodeMarkup(pos, undefined, attrs)
+  }
+  tr.setMeta("addToHistory", false)
+  editor.view.dispatch(tr)
+  return true
+}
+
+/**
  * Replay a previously-sent `PromptInputBlock[]` (a queued message's draft) back
  * into the editor: prose + reference badges in order, returning the out-of-band
  * attachments (images / embedded resources / non-composer links) for the host to
@@ -149,19 +202,36 @@ export function restampSkillPrefixes(
  * references `docToPromptBlocks` serialized INTO that text (it emits one text
  * block with every badge inline) come back as badges instead of raw
  * `[label](uri)` / `/cmd` source — the same treatment paste and the other
- * seeding paths get. Lossless: re-serializing the restored badges reproduces the
- * block text verbatim.
+ * seeding paths get, `known` included: a `/cmd` the agent no longer advertises
+ * comes back as the text it will be sent as, rather than as a badge claiming a
+ * command that isn't there. Lossless either way: re-serializing the restored
+ * content reproduces the block text verbatim.
+ *
+ * With `append`, the editor keeps what it holds and the restored prose and
+ * badges follow it, a blank line apart — for putting back a message the
+ * composer already let go of without overwriting anything typed since.
  */
 export function restoreBlocksIntoEditor(
   editor: Editor,
-  blocks: PromptInputBlock[]
+  blocks: PromptInputBlock[],
+  known: KnownInvocations = NO_KNOWN_INVOCATIONS,
+  { append = false }: { append?: boolean } = {}
 ): InputAttachment[] {
   const { segments, attachments } = blocksToRestoredDraft(blocks)
-  let chain = editor.chain().clearContent()
+  let chain = append
+    ? editor.chain().focus("end")
+    : editor.chain().clearContent()
+  // The resources come back as badges too, placed at the end by the host.
+  const addsInline =
+    segments.length > 0 || attachments.some((a) => a.type === "resource")
+  if (append && addsInline) {
+    const gap = blankLineAfter(serializeDocToText(editor.state.doc))
+    if (gap) chain = chain.insertContent(textToSeededInlineContent(gap, known))
+  }
   for (const segment of segments) {
     chain =
       segment.kind === "text"
-        ? chain.insertContent(textToSeededInlineContent(segment.text))
+        ? chain.insertContent(textToSeededInlineContent(segment.text, known))
         : chain.insertReference(segment.attrs)
   }
   chain.focus("end").run()

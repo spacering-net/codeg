@@ -15,7 +15,7 @@ use std::path::Path;
 
 use codeg_lib::parsers::{
     claude::ClaudeParser, cline::ClineParser, codex::CodexParser, gemini::GeminiParser,
-    hermes::HermesParser, kimi_code::KimiCodeParser, openclaw::OpenClawParser,
+    hermes::HermesParser, kimi_code::KimiCodeParser, kiro::KiroParser, openclaw::OpenClawParser,
     opencode::OpenCodeParser, AgentParser,
 };
 use insta::assert_json_snapshot;
@@ -779,6 +779,380 @@ fn opencode_tool_call_session_snapshot() {
     });
 }
 
+/// The record shapes OpenCode writes AROUND the conversation, all verified
+/// against a real `~/.local/share/opencode/opencode.db` (430 sessions, 12 804
+/// parts):
+///
+///   - `synthetic` text — plan/build switch reminders and the post-compaction
+///     continuation OpenCode injects into the USER message for the model's
+///     benefit. Its own CLI filters them out of the transcript, and a message
+///     left with nothing else is not a turn the user took;
+///   - `compaction` parts, which are the sole part of their message, so the
+///     compaction previously showed as an empty user bubble;
+///   - an assistant `error`, whose message carries the only record of a turn
+///     the provider rejected or the user cancelled;
+///   - the `question` tool's positional `metadata.answers`.
+#[test]
+fn opencode_session_edges_snapshot() {
+    use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
+
+    let temp = tempfile::tempdir().expect("create tempdir");
+    let base = temp.path().to_path_buf();
+    let db_path = base.join("opencode.db");
+    let session_id = "oc-edges-001";
+
+    // 2026-03-01T10:00:00Z in milliseconds.
+    let t0: i64 = 1_772_020_800_000;
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build tokio runtime");
+    rt.block_on(async {
+        let conn = Database::connect(format!("sqlite:{}?mode=rwc", db_path.display()))
+            .await
+            .expect("open sqlite");
+
+        for ddl in [
+            "CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT, parent_id TEXT, \
+             title TEXT, time_created INTEGER, time_updated INTEGER)",
+            "CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, \
+             time_created INTEGER, data TEXT)",
+            "CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, \
+             time_created INTEGER, data TEXT)",
+        ] {
+            conn.execute(Statement::from_string(DatabaseBackend::Sqlite, ddl))
+                .await
+                .expect("create table");
+        }
+
+        conn.execute(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "INSERT INTO session (id, directory, title, time_created, time_updated) \
+             VALUES (?, ?, ?, ?, ?)",
+            [
+                session_id.into(),
+                "/tmp/demo".into(),
+                "OpenCode session edges".into(),
+                t0.into(),
+                (t0 + 9_000).into(),
+            ],
+        ))
+        .await
+        .expect("insert session");
+
+        for (mid, offset, data) in [
+            // A real prompt with a reminder appended to the same message.
+            (
+                "m-user-mixed",
+                500_i64,
+                json!({ "role": "user", "time": { "created": t0 + 500 } }),
+            ),
+            // Nothing but the reminder: not a turn the user took.
+            (
+                "m-user-synthetic",
+                1_000,
+                json!({ "role": "user", "time": { "created": t0 + 1_000 } }),
+            ),
+            // The compaction boundary's own (synthetic) user message.
+            (
+                "m-user-compaction",
+                1_500,
+                json!({ "role": "user", "time": { "created": t0 + 1_500 } }),
+            ),
+            // A question answered in OpenCode's own TUI.
+            (
+                "m-asst-question",
+                2_000,
+                json!({
+                    "role": "assistant",
+                    "modelID": "claude-sonnet-4-6",
+                    "time": { "created": t0 + 2_000, "completed": t0 + 2_400 },
+                    "tokens": { "input": 10, "output": 4, "cache": { "read": 0, "write": 0 } },
+                }),
+            ),
+            // A turn the provider rejected: no parts at all, only the error.
+            (
+                "m-asst-error",
+                3_000,
+                json!({
+                    "role": "assistant",
+                    "modelID": "claude-sonnet-4-6",
+                    "time": { "created": t0 + 3_000, "completed": t0 + 3_100 },
+                    "tokens": { "input": 3, "output": 0, "cache": { "read": 0, "write": 0 } },
+                    "error": {
+                        "name": "APIError",
+                        "data": { "message": "Invalid Authentication" }
+                    },
+                }),
+            ),
+            // …and one the user stopped.
+            (
+                "m-asst-aborted",
+                4_000,
+                json!({
+                    "role": "assistant",
+                    "modelID": "claude-sonnet-4-6",
+                    "time": { "created": t0 + 4_000, "completed": t0 + 4_100 },
+                    "tokens": { "input": 2, "output": 0, "cache": { "read": 0, "write": 0 } },
+                    "error": {
+                        "name": "MessageAbortedError",
+                        "data": { "message": "The operation was aborted." }
+                    },
+                }),
+            ),
+        ] {
+            conn.execute(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "INSERT INTO message (id, session_id, time_created, data) VALUES (?, ?, ?, ?)",
+                [
+                    mid.into(),
+                    session_id.into(),
+                    (t0 + offset).into(),
+                    data.to_string().into(),
+                ],
+            ))
+            .await
+            .expect("insert message");
+        }
+
+        for (i, (pid, mid, data)) in [
+            (
+                "p-user-real",
+                "m-user-mixed",
+                json!({ "type": "text", "text": "ship the release notes" }),
+            ),
+            (
+                "p-user-reminder",
+                "m-user-mixed",
+                json!({
+                    "type": "text",
+                    "synthetic": true,
+                    "text": "You are now in build mode. You can edit files."
+                }),
+            ),
+            (
+                "p-user-only-reminder",
+                "m-user-synthetic",
+                json!({
+                    "type": "text",
+                    "synthetic": true,
+                    "text": "Summarize the task tool output above and continue with your task."
+                }),
+            ),
+            (
+                "p-compaction",
+                "m-user-compaction",
+                json!({ "type": "compaction", "auto": true }),
+            ),
+            (
+                "p-question",
+                "m-asst-question",
+                json!({
+                    "type": "tool",
+                    "tool": "question",
+                    "callID": "question:2",
+                    "state": {
+                        "status": "completed",
+                        "input": {
+                            "questions": [{
+                                "question": "Ship it now?",
+                                "header": "Release",
+                                "multiple": false,
+                                "options": [
+                                    { "label": "Yes", "description": "Publish" },
+                                    { "label": "Not yet", "description": "Hold" }
+                                ]
+                            }]
+                        },
+                        "output": "User has answered your questions: \"Ship it now?\"=\"Not yet\". You can now continue with the user's answers in mind.",
+                        "title": "Asked 1 question",
+                        "metadata": { "answers": [["Not yet"]], "truncated": false },
+                        "time": { "start": t0 + 2_100, "end": t0 + 2_300 }
+                    }
+                }),
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            conn.execute(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "INSERT INTO part (id, message_id, time_created, data) VALUES (?, ?, ?, ?)",
+                [
+                    pid.into(),
+                    mid.into(),
+                    (t0 + 1_000 + i as i64).into(),
+                    data.to_string().into(),
+                ],
+            ))
+            .await
+            .expect("insert part");
+        }
+    });
+
+    let parser = OpenCodeParser::with_base_dir(base);
+    let detail = parser
+        .get_conversation(session_id)
+        .expect("get conversation");
+    assert_json_snapshot!("opencode_edges_detail", detail, {
+        ".**.started_at" => "[ts]",
+        ".**.ended_at" => "[ts]",
+        ".**.timestamp" => "[ts]",
+        ".**.completed_at" => "[ts]",
+    });
+}
+
+/// OpenCode names a session `New session - <ISO>` at creation and is supposed to
+/// replace that on the first turn — but the rename is forked and its errors
+/// swallowed, so an unreachable small model leaves the placeholder as the
+/// session's name forever (243 of the 432 sessions in the author's store, every
+/// root session created since 2026-06-17). Both summary queries substitute the
+/// opening user message instead, the way OpenCode's own TUI does.
+///
+/// Exercises the correlated subquery rather than `resolve_title` alone: the
+/// `synthetic` filter and the ordering only exist in SQL, and a session whose
+/// first part is an injected reminder is exactly the case that would otherwise
+/// name the row after text nobody typed.
+#[test]
+fn opencode_placeholder_titles_fall_back_to_the_opening_message() {
+    use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
+
+    let temp = tempfile::tempdir().expect("create tempdir");
+    let base = temp.path().to_path_buf();
+    let db_path = base.join("opencode.db");
+    let t0: i64 = 1_772_020_800_000;
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build tokio runtime");
+    rt.block_on(async {
+        let conn = Database::connect(format!("sqlite:{}?mode=rwc", db_path.display()))
+            .await
+            .expect("open sqlite");
+
+        for ddl in [
+            "CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT, parent_id TEXT, \
+             title TEXT, time_created INTEGER, time_updated INTEGER)",
+            "CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, \
+             time_created INTEGER, data TEXT)",
+            "CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, \
+             time_created INTEGER, data TEXT)",
+        ] {
+            conn.execute(Statement::from_string(DatabaseBackend::Sqlite, ddl))
+                .await
+                .expect("create table");
+        }
+
+        // (session id, stored title, opening user text, whether that text is a
+        // synthetic injection the transcript also drops)
+        let sessions = [
+            (
+                "oc-placeholder",
+                "New session - 2026-03-01T10:00:00.000Z",
+                "执行一下 pnpm build",
+                false,
+            ),
+            (
+                "oc-fork",
+                "New session - 2026-03-01T10:00:00.000Z (fork #2)",
+                "look at [notes.md](file:///tmp/a/very/long/path/notes.md)",
+                false,
+            ),
+            ("oc-named", "Fix the login flow", "hi", false),
+            (
+                "oc-synthetic-only",
+                "New session - 2026-03-01T10:00:00.000Z",
+                "<system-reminder>switched to build mode</system-reminder>",
+                true,
+            ),
+        ];
+
+        for (i, (session_id, title, text, synthetic)) in sessions.iter().enumerate() {
+            let created = t0 + i as i64 * 1_000;
+            conn.execute(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "INSERT INTO session (id, directory, title, time_created, time_updated) \
+                 VALUES (?, ?, ?, ?, ?)",
+                [
+                    (*session_id).into(),
+                    "/tmp/demo".into(),
+                    (*title).into(),
+                    created.into(),
+                    created.into(),
+                ],
+            ))
+            .await
+            .expect("insert session");
+
+            let message_id = format!("m-{session_id}");
+            conn.execute(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "INSERT INTO message (id, session_id, time_created, data) VALUES (?, ?, ?, ?)",
+                [
+                    message_id.clone().into(),
+                    (*session_id).into(),
+                    created.into(),
+                    json!({ "role": "user", "time": { "created": created } })
+                        .to_string()
+                        .into(),
+                ],
+            ))
+            .await
+            .expect("insert message");
+
+            let mut part = json!({ "type": "text", "text": text });
+            if *synthetic {
+                part["synthetic"] = json!(true);
+            }
+            conn.execute(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "INSERT INTO part (id, message_id, time_created, data) VALUES (?, ?, ?, ?)",
+                [
+                    format!("p-{session_id}").into(),
+                    message_id.into(),
+                    created.into(),
+                    part.to_string().into(),
+                ],
+            ))
+            .await
+            .expect("insert part");
+        }
+    });
+
+    let parser = OpenCodeParser::with_base_dir(base);
+    let titles: std::collections::HashMap<String, Option<String>> = parser
+        .list_conversations()
+        .expect("list conversations")
+        .into_iter()
+        .map(|c| (c.id, c.title))
+        .collect();
+
+    assert_eq!(
+        titles["oc-placeholder"].as_deref(),
+        Some("执行一下 pnpm build")
+    );
+    // The fork marker survives — it is the only thing telling the fork apart
+    // from the session it came from — while the placeholder under it does not.
+    // The message itself is folded the way every other derived title is.
+    assert_eq!(
+        titles["oc-fork"].as_deref(),
+        Some("look at notes.md (fork #2)")
+    );
+    assert_eq!(titles["oc-named"].as_deref(), Some("Fix the login flow"));
+    // Only synthetic text to go on: report untitled so the UI shows its own
+    // label rather than naming the row after a reminder nobody typed.
+    assert_eq!(titles["oc-synthetic-only"], None);
+
+    // The single-session query has to agree with the listing, or a row renames
+    // itself the moment it is opened.
+    let detail = parser
+        .get_conversation("oc-placeholder")
+        .expect("get conversation");
+    assert_eq!(detail.summary.title.as_deref(), Some("执行一下 pnpm build"));
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Hermes (reads ~/.hermes/state.db via sea-orm)
 // ────────────────────────────────────────────────────────────────────────────
@@ -1037,6 +1411,283 @@ fn hermes_minimal_session_snapshot() {
     });
 }
 
+/// Hermes v0.21.6's ACP adapter stamps `ended_at` on every session it holds
+/// when its stdio closes, including one that was only loaded, so the column
+/// can be far later than anything in the transcript. A summary's `ended_at` is
+/// what codeg's import reads as the transcript's end, so it must be the newest
+/// active, non-system message, for a never-ended pre-v0.21.6 row as much as for
+/// a stamped one. A session with none falls back to the column, a timestamp
+/// outside upstream's epoch window does not count, and an unusable value is no
+/// activity at all rather than "now".
+#[test]
+fn hermes_summary_end_is_the_newest_message_not_the_adapter_exit() {
+    use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
+
+    let temp = tempfile::tempdir().expect("create tempdir");
+    let base = temp.path().to_path_buf();
+    let db_path = base.join("state.db");
+    // Whole and binary-fraction offsets keep the expected millis exact.
+    let t0 = 1_791_629_998.0_f64;
+    let millis = |secs: f64| (secs * 1000.0) as i64;
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build tokio runtime");
+    rt.block_on(async {
+        let conn = Database::connect(format!("sqlite:{}?mode=rwc", db_path.display()))
+            .await
+            .expect("open sqlite");
+        for ddl in [
+            "CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT, model TEXT, \
+             model_config TEXT, parent_session_id TEXT, started_at REAL, ended_at REAL, \
+             cwd TEXT, title TEXT, archived INTEGER DEFAULT 0, input_tokens INTEGER, \
+             output_tokens INTEGER, cache_read_tokens INTEGER, cache_write_tokens INTEGER)",
+            "CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, \
+             role TEXT, content TEXT, tool_call_id TEXT, tool_calls TEXT, tool_name TEXT, \
+             reasoning TEXT, reasoning_content TEXT, timestamp REAL, finish_reason TEXT, \
+             active INTEGER DEFAULT 1)",
+        ] {
+            conn.execute(Statement::from_string(DatabaseBackend::Sqlite, ddl))
+                .await
+                .expect("create table");
+        }
+
+        // Answered at t0 + 2.5, loaded again later and closed at t0 + 31.75
+        // without a word; its rewound draft and system row are not activity.
+        hermes_ins_session(
+            &conn,
+            "opened",
+            r#"{"cwd":"/w"}"#,
+            "/w",
+            "opened",
+            t0,
+            t0 + 31.75,
+            0,
+            0,
+            0,
+        )
+        .await;
+        hermes_ins_msg(
+            &conn,
+            "opened",
+            "user",
+            "hi".to_string(),
+            "",
+            "",
+            "",
+            "",
+            t0,
+            "",
+            1,
+        )
+        .await;
+        hermes_ins_msg(
+            &conn,
+            "opened",
+            "assistant",
+            "hello".to_string(),
+            "",
+            "",
+            "",
+            "",
+            t0 + 2.5,
+            "stop",
+            1,
+        )
+        .await;
+        hermes_ins_msg(
+            &conn,
+            "opened",
+            "assistant",
+            "(rewound)".to_string(),
+            "",
+            "",
+            "",
+            "",
+            t0 + 20.0,
+            "stop",
+            0,
+        )
+        .await;
+        hermes_ins_msg(
+            &conn,
+            "opened",
+            "system",
+            "SYSTEM PROMPT".to_string(),
+            "",
+            "",
+            "",
+            "",
+            t0 + 25.0,
+            "",
+            1,
+        )
+        .await;
+
+        // A garbage double salvaged from a damaged page must not pin recency.
+        hermes_ins_session(
+            &conn,
+            "garbage",
+            r#"{"cwd":"/w"}"#,
+            "/w",
+            "garbage",
+            t0,
+            t0 + 100.0,
+            0,
+            0,
+            0,
+        )
+        .await;
+        hermes_ins_msg(
+            &conn,
+            "garbage",
+            "user",
+            "hi".to_string(),
+            "",
+            "",
+            "",
+            "",
+            t0 + 1.0,
+            "",
+            1,
+        )
+        .await;
+        hermes_ins_msg(
+            &conn,
+            "garbage",
+            "assistant",
+            "hello".to_string(),
+            "",
+            "",
+            "",
+            "",
+            8.4e252,
+            "stop",
+            1,
+        )
+        .await;
+
+        // Nothing countable: not listed, and by id the column is all there is.
+        hermes_ins_session(
+            &conn,
+            "quiet",
+            r#"{"cwd":"/w"}"#,
+            "/w",
+            "quiet",
+            t0,
+            t0 + 50.0,
+            0,
+            0,
+            0,
+        )
+        .await;
+        hermes_ins_msg(
+            &conn,
+            "quiet",
+            "system",
+            "SYSTEM PROMPT".to_string(),
+            "",
+            "",
+            "",
+            "",
+            t0 + 10.0,
+            "",
+            1,
+        )
+        .await;
+
+        // The shape every ACP row had before v0.21.6: never ended at all.
+        hermes_exec(
+            &conn,
+            "INSERT INTO sessions (id, source, model, model_config, started_at, ended_at, \
+             cwd, title, archived) VALUES (?,?,?,?,?,NULL,?,?,0)",
+            vec![
+                "never-ended".into(),
+                "acp".into(),
+                "gpt-5.5".into(),
+                r#"{"cwd":"/w"}"#.into(),
+                t0.into(),
+                "/w".into(),
+                "never-ended".into(),
+            ],
+        )
+        .await;
+        hermes_ins_msg(
+            &conn,
+            "never-ended",
+            "user",
+            "hi".to_string(),
+            "",
+            "",
+            "",
+            "",
+            t0 + 4.0,
+            "",
+            1,
+        )
+        .await;
+
+        // Nothing usable anywhere: an unusable value is no activity, not "now".
+        hermes_ins_session(
+            &conn,
+            "unusable",
+            r#"{"cwd":"/w"}"#,
+            "/w",
+            "unusable",
+            t0,
+            -1.0,
+            0,
+            0,
+            0,
+        )
+        .await;
+        hermes_ins_msg(
+            &conn,
+            "unusable",
+            "user",
+            "hi".to_string(),
+            "",
+            "",
+            "",
+            "",
+            8.4e252,
+            "",
+            1,
+        )
+        .await;
+    });
+
+    let parser = HermesParser::with_base_dir(base);
+    let listed = parser.list_conversations().expect("list conversations");
+    let end_of = |id: &str| {
+        listed
+            .iter()
+            .find(|s| s.id == id)
+            .unwrap_or_else(|| panic!("{id} is listed"))
+            .ended_at
+            .map(|at| at.timestamp_millis())
+    };
+    assert_eq!(end_of("opened"), Some(millis(t0 + 2.5)));
+    assert_eq!(end_of("garbage"), Some(millis(t0 + 1.0)));
+    assert_eq!(end_of("never-ended"), Some(millis(t0 + 4.0)));
+    assert_eq!(end_of("unusable"), None);
+    assert!(listed.iter().all(|s| s.id != "quiet"));
+
+    let by_id = |id: &str| {
+        parser
+            .get_conversation(id)
+            .expect("get conversation")
+            .summary
+            .ended_at
+            .map(|at| at.timestamp_millis())
+    };
+    assert_eq!(by_id("opened"), Some(millis(t0 + 2.5)));
+    assert_eq!(by_id("garbage"), Some(millis(t0 + 1.0)));
+    assert_eq!(by_id("quiet"), Some(millis(t0 + 50.0)));
+    assert_eq!(by_id("unusable"), None);
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Kimi Code
 // ────────────────────────────────────────────────────────────────────────────
@@ -1110,6 +1761,84 @@ fn kimi_code_minimal_session_snapshot() {
         ".**.ended_at" => "[ts]",
     });
     assert_json_snapshot!("kimi_code_detail", detail, {
+        ".**.started_at" => "[ts]",
+        ".**.ended_at" => "[ts]",
+        ".**.timestamp" => "[ts]",
+        ".**.completed_at" => "[ts]",
+    });
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Kiro CLI
+// ────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn kiro_minimal_session_snapshot() {
+    let temp = tempfile::tempdir().expect("create tempdir");
+    // `<KIRO_HOME>/sessions/cli/<id>.jsonl` (event log) + `<id>.json` (metadata).
+    let base = temp.path().join("sessions").join("cli");
+    let session_id = "0b6c1f7e-4d2a-4c5e-9a55-3f1e2d7c8b90";
+
+    // The event log, in the shapes kiro-cli 2.24.1 writes: prompt → thinking +
+    // tool call → tool result (text + json parts) → answer; then a /compact
+    // summary, a /clear marker, and one more prompt/answer.
+    let log = [
+        json!({"version":"v1","kind":"Prompt","data":{"message_id":"m1","content":[{"kind":"text","data":"list the repo"}],"meta":{"timestamp":1772359201}}}),
+        json!({"version":"v1","kind":"AssistantMessage","data":{"message_id":"m2","content":[
+            {"kind":"thinking","data":{"text":"Look at the tree first.","signature":"sig","redactedContent":[],"modelId":"claude-opus-5.5","toolsDigest":"d"}},
+            {"kind":"text","data":""},
+            {"kind":"toolUse","data":{"toolUseId":"tooluse_1","name":"read","input":{"operations":[{"mode":"Directory","path":"/tmp/demo"}]}}}
+        ]}}),
+        json!({"version":"v1","kind":"ToolResults","data":{"message_id":"m3","content":[
+            {"kind":"toolResult","data":{"toolUseId":"tooluse_1","content":[{"kind":"text","data":"src\nREADME.md"},{"kind":"json","data":{"entries":2}}],"status":"success"}}
+        ],"results":{}}}),
+        json!({"version":"v1","kind":"AssistantMessage","data":{"message_id":"m4","content":[{"kind":"text","data":"Two entries: src and README.md."}]}}),
+        json!({"version":"v1","kind":"Compaction","data":{"summary":"The user listed the repo.","strategy":{"message_pairs_to_exclude":2},"messages_snapshot":[]}}),
+        json!({"version":"v1","kind":"Clear","data":{}}),
+        json!({"version":"v1","kind":"Prompt","data":{"message_id":"m5","content":[{"kind":"text","data":"thanks"}],"meta":{"timestamp":1772359300}}}),
+        json!({"version":"v1","kind":"AssistantMessage","data":{"message_id":"m6","content":[{"kind":"text","data":"Anytime."}]}}),
+    ];
+    let log_text = log
+        .iter()
+        .map(|v| v.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    write(
+        &base.join(format!("{session_id}.jsonl")),
+        &format!("{log_text}\n"),
+    );
+    write(
+        &base.join(format!("{session_id}.json")),
+        &json!({
+            "session_id": session_id,
+            "cwd": "/tmp/demo",
+            "created_at": "2026-03-01T10:00:00Z",
+            "updated_at": "2026-03-01T10:01:45Z",
+            "title": "list the repo",
+            "session_state": {
+                "version": "v1",
+                "conversation_metadata": {
+                    "user_turn_metadatas": [
+                        {"message_ids": ["m1", "m2", "m3", "m4"], "end_reason": "UserTurnEnd", "end_timestamp": "2026-03-01T10:00:09Z"},
+                        {"message_ids": ["m5", "m6"], "end_reason": "UserTurnEnd", "end_timestamp": "2026-03-01T10:01:44Z"}
+                    ],
+                    "last_context_usage": {"percentage": 2.5, "model_id": "claude-opus-5.5"}
+                },
+                "rts_model_state": {"model_info": {"model_id": "claude-opus-5.5", "context_window_tokens": 200000}}
+            }
+        })
+        .to_string(),
+    );
+
+    let parser = KiroParser::with_base_dir(base);
+    let summaries = parser.list_conversations().expect("list kiro");
+    let detail = parser.get_conversation(session_id).expect("detail kiro");
+
+    assert_json_snapshot!("kiro_list", summaries, {
+        ".**.started_at" => "[ts]",
+        ".**.ended_at" => "[ts]",
+    });
+    assert_json_snapshot!("kiro_detail", detail, {
         ".**.started_at" => "[ts]",
         ".**.ended_at" => "[ts]",
         ".**.timestamp" => "[ts]",

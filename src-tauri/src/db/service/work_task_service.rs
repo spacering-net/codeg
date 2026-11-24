@@ -13,17 +13,24 @@
 //!   `complete_without_merge` (a reviewed task with nothing to land), and never
 //!   rolls back; a failed worktree cleanup surfaces as `cleanup_state='failed'`
 //!   on the done row.
+//! - `deferred_at` (the user's "handle later") only ever sits on a `review` /
+//!   `failed` row: [`set_deferred`] is its one writer, and every transition
+//!   into or out of those two statuses clears it, so a task that runs again
+//!   always comes back to "needs you" rather than to the pile it left.
 
 use chrono::Utc;
 use sea_orm::sea_query::Expr;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, ConnectionTrait, DatabaseConnection,
-    EntityTrait, IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set,
-    TransactionTrait,
+    ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, Condition, ConnectionTrait,
+    DatabaseConnection, EntityTrait, IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder,
+    QuerySelect, Set, TransactionTrait,
 };
 
 use crate::db::entities::work_task::WorkTaskStatus;
-use crate::db::entities::{folder, work_task, work_task_event, work_task_settings, work_task_template};
+use crate::db::entities::{
+    folder, work_task, work_task_event, work_task_settings, work_task_source_key,
+    work_task_template,
+};
 use crate::db::error::DbError;
 use crate::models::{
     WorkTaskConfig, WorkTaskDraft, WorkTaskEventInfo, WorkTaskFolderSettings, WorkTaskInfo,
@@ -89,14 +96,25 @@ fn to_info(m: work_task::Model) -> WorkTaskInfo {
         merge_queued: queued_merge(m.pending_merge.as_deref()),
         archived_at: m.archived_at,
         scheduled_at: m.scheduled_at,
+        deferred_at: m.deferred_at,
         source_kind: m.source_kind,
         source_key: m.source_key,
         source_meta: m
             .source_meta
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok()),
+        delivery: m
+            .delivery
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok()),
+        writeback_drafts: m
+            .writeback_drafts
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok()),
         latest_progress: None,
         compacting: false,
+        background_wait: None,
+        conversation_selection: None,
         created_at: m.created_at,
         updated_at: m.updated_at,
         started_at: m.started_at,
@@ -138,6 +156,37 @@ pub async fn record_event<C: ConnectionTrait>(
     };
     active.insert(conn).await?;
     Ok(())
+}
+
+/// The payload of generation `run_seq`'s `background_wait` when no
+/// `background_wait_end` followed it: the engine was holding that run open for
+/// its agent's background work when the process went away. `None` when the
+/// generation never waited, or its wait was closed.
+pub async fn open_background_wait(
+    conn: &DatabaseConnection,
+    task_id: i32,
+    run_seq: i32,
+) -> Result<Option<serde_json::Value>, DbError> {
+    let events = work_task_event::Entity::find()
+        .filter(work_task_event::Column::TaskId.eq(task_id))
+        .filter(work_task_event::Column::Kind.is_in(["background_wait", "background_wait_end"]))
+        .order_by_desc(work_task_event::Column::Id)
+        .all(conn)
+        .await?;
+    for e in events {
+        let Some(payload) = e
+            .payload
+            .as_deref()
+            .and_then(|p| serde_json::from_str::<serde_json::Value>(p).ok())
+        else {
+            continue;
+        };
+        if payload.get("run_seq").and_then(serde_json::Value::as_i64) != Some(run_seq as i64) {
+            continue;
+        }
+        return Ok((e.kind == "background_wait").then_some(payload));
+    }
+    Ok(None)
 }
 
 async fn status_changed_event<C: ConnectionTrait>(
@@ -205,9 +254,12 @@ pub async fn list(
     if !live_ids.is_empty() {
         let events = work_task_event::Entity::find()
             .filter(work_task_event::Column::TaskId.is_in(live_ids))
-            .filter(
-                work_task_event::Column::Kind.is_in(["agent_progress", "context_compact"]),
-            )
+            .filter(work_task_event::Column::Kind.is_in([
+                "agent_progress",
+                "context_compact",
+                "background_wait",
+                "background_wait_end",
+            ]))
             .order_by_asc(work_task_event::Column::Id)
             .all(conn)
             .await?;
@@ -221,6 +273,10 @@ pub async fn list(
         let mut latest: std::collections::HashMap<i32, String> = std::collections::HashMap::new();
         let mut compacting: std::collections::HashMap<i32, bool> =
             std::collections::HashMap::new();
+        let mut waiting: std::collections::HashMap<
+            i32,
+            Option<crate::models::WorkTaskBackgroundWait>,
+        > = std::collections::HashMap::new();
         let by_id: std::collections::HashMap<i32, i32> =
             infos.iter().map(|t| (t.id, t.run_seq)).collect();
         for e in events {
@@ -261,6 +317,33 @@ pub async fn list(
                         payload.get("status").and_then(|s| s.as_str()) == Some("started");
                     compacting.insert(e.task_id, started);
                 }
+                // The engine opens a wait when the turn ends with work still
+                // running and closes it when it settles the run, so the last
+                // of the pair on this generation is the answer — as with the
+                // compaction above, and with the same tolerance for a lost
+                // closing write: the row's status still tells the truth.
+                "background_wait" => {
+                    let tasks = payload
+                        .get("tasks")
+                        .and_then(|t| t.as_array())
+                        .map(|tasks| {
+                            tasks
+                                .iter()
+                                .filter_map(|t| t.as_str().map(str::to_string))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    waiting.insert(
+                        e.task_id,
+                        Some(crate::models::WorkTaskBackgroundWait {
+                            since: e.created_at,
+                            tasks,
+                        }),
+                    );
+                }
+                "background_wait_end" => {
+                    waiting.insert(e.task_id, None);
+                }
                 _ => {}
             }
         }
@@ -269,6 +352,7 @@ pub async fn list(
                 t.latest_progress = Some(m.clone());
             }
             t.compacting = compacting.get(&t.id).copied().unwrap_or(false);
+            t.background_wait = waiting.get(&t.id).cloned().flatten();
         }
     }
     Ok(infos)
@@ -451,7 +535,8 @@ pub async fn active_launched_count(
 }
 
 /// Tasks needing the user ("等你处理"): awaiting_input + review + failed, over
-/// live folders. Drives the sidebar badge.
+/// live folders — minus the ones the user set aside, archived or deferred to
+/// handle later. Drives the sidebar badge.
 pub async fn attention_count(conn: &DatabaseConnection) -> Result<u64, DbError> {
     let count = work_task::Entity::find()
         .filter(work_task::Column::DeletedAt.is_null())
@@ -461,11 +546,184 @@ pub async fn attention_count(conn: &DatabaseConnection) -> Result<u64, DbError> 
             WorkTaskStatus::Failed,
         ]))
         .filter(work_task::Column::ArchivedAt.is_null())
+        .filter(work_task::Column::DeferredAt.is_null())
         .inner_join(folder::Entity)
         .filter(folder::Column::DeletedAt.is_null())
         .count(conn)
         .await?;
     Ok(count)
+}
+
+// ── agent config ────────────────────────────────────────────────────────────
+
+/// A task's agent + mode + config option values.
+pub type AgentTuple = (
+    Option<String>,
+    Option<String>,
+    std::collections::BTreeMap<String, String>,
+);
+
+/// Layered agent config: the task's own explicit tuple wins wholesale (kept
+/// verbatim); else the folder's task settings agent with its mode/options;
+/// else the folder's default agent WITH the task settings' mode/options.
+pub fn layer_agent_config(
+    cfg: &WorkTaskConfig,
+    settings: &WorkTaskFolderSettings,
+    folder_default_agent: Option<String>,
+) -> AgentTuple {
+    if let Some(agent) = cfg.agent_type.clone() {
+        return (Some(agent), cfg.mode_id.clone(), cfg.config_values.clone());
+    }
+    if let Some(agent) = settings.default_agent_type.clone() {
+        return (
+            Some(agent),
+            settings.mode_id.clone(),
+            settings.config_values.clone(),
+        );
+    }
+    (
+        folder_default_agent,
+        settings.mode_id.clone(),
+        settings.config_values.clone(),
+    )
+}
+
+/// The tuple a task runs with: verbatim when it is frozen (its own, possibly
+/// "no agent"), else resolved from the folder's task settings exactly like
+/// [`layer_agent_config`]. Shared by the engine, the create paths and the
+/// legacy backfill.
+pub async fn resolve_agent_config<C: ConnectionTrait>(
+    conn: &C,
+    folder_id: i32,
+    cfg: &WorkTaskConfig,
+) -> Result<AgentTuple, DbError> {
+    if cfg.agent_config_frozen {
+        return Ok((
+            cfg.agent_type.clone(),
+            cfg.mode_id.clone(),
+            cfg.config_values.clone(),
+        ));
+    }
+    let settings = settings_get_effective(conn, folder_id).await?;
+    let folder_default = folder::Entity::find_by_id(folder_id)
+        .one(conn)
+        .await?
+        .and_then(|f| f.default_agent_type);
+    Ok(layer_agent_config(cfg, &settings, folder_default))
+}
+
+/// Freeze a config that is not frozen yet: replace its selector tuple with
+/// the resolved one and stamp the marker. An explicit tuple is kept verbatim;
+/// nothing resolvable still freezes with no agent, so a later folder-settings
+/// change never configures the task silently. The label snapshot follows the
+/// source of the tuple.
+pub async fn freeze_agent_config<C: ConnectionTrait>(
+    conn: &C,
+    folder_id: i32,
+    cfg: &mut WorkTaskConfig,
+) -> Result<(), DbError> {
+    if cfg.agent_config_frozen {
+        return Ok(());
+    }
+    if cfg.agent_type.is_none() {
+        let settings = settings_get_effective(conn, folder_id).await?;
+        let (agent, mode, values) = resolve_agent_config(conn, folder_id, cfg).await?;
+        cfg.label_snapshot = if settings.default_agent_type.is_some() {
+            settings.label_snapshot.clone()
+        } else {
+            None
+        };
+        cfg.agent_type = agent;
+        cfg.mode_id = mode;
+        cfg.config_values = values;
+    }
+    cfg.agent_config_frozen = true;
+    Ok(())
+}
+
+/// Overwrite a config JSON's selector tuple and marker with `chosen`'s,
+/// leaving every other key (including ones this build does not know) as is.
+fn write_selector_tuple(config: &mut serde_json::Value, chosen: &WorkTaskConfig) {
+    let Some(obj) = config.as_object_mut() else {
+        return;
+    };
+    let tuple = serde_json::json!({
+        "agent_type": chosen.agent_type,
+        "mode_id": chosen.mode_id,
+        "config_values": chosen.config_values,
+        "label_snapshot": chosen.label_snapshot,
+    });
+    for (k, v) in tuple.as_object().into_iter().flatten() {
+        obj.insert(k.clone(), v.clone());
+    }
+    if chosen.agent_config_frozen {
+        obj.insert("agent_config_frozen".into(), serde_json::Value::Bool(true));
+    } else {
+        obj.remove("agent_config_frozen");
+    }
+}
+
+/// A draft's config with its selector tuple frozen (see
+/// [`freeze_agent_config`]): what every create path stores.
+pub async fn frozen_draft_config<C: ConnectionTrait>(
+    conn: &C,
+    folder_id: i32,
+    config: &serde_json::Value,
+) -> Result<serde_json::Value, DbError> {
+    let mut cfg = parse_config(config);
+    if cfg.agent_config_frozen {
+        return Ok(config.clone());
+    }
+    freeze_agent_config(conn, folder_id, &mut cfg).await?;
+    let mut out = config.clone();
+    write_selector_tuple(&mut out, &cfg);
+    Ok(out)
+}
+
+/// A launch's config: a frozen one as stored; a legacy one resolved now and
+/// written back frozen, guarded on the row still holding the config text,
+/// status and generation the launch read. `Ok(None)` = that write lost to a
+/// concurrent cancel / edit: abandon the launch. Nothing resolvable leaves
+/// the legacy config as is (today's "no agent configured" failure follows).
+pub async fn backfill_frozen_config(
+    conn: &DatabaseConnection,
+    task: &work_task::Model,
+) -> Result<Option<WorkTaskConfig>, DbError> {
+    let cfg: WorkTaskConfig = serde_json::from_str(&task.config).unwrap_or_default();
+    if cfg.agent_config_frozen {
+        return Ok(Some(cfg));
+    }
+    let original: serde_json::Value =
+        serde_json::from_str(&task.config).unwrap_or(serde_json::Value::Null);
+    let frozen_json = frozen_draft_config(conn, task.folder_id, &original).await?;
+    let frozen = parse_config(&frozen_json);
+    if frozen.agent_type.is_none() {
+        return Ok(Some(cfg));
+    }
+    let text = serde_json::to_string(&frozen_json)
+        .map_err(|e| DbError::Validation(format!("config not serializable: {e}")))?;
+    let res = work_task::Entity::update_many()
+        .col_expr(work_task::Column::Config, Expr::value(text))
+        .filter(work_task::Column::Id.eq(task.id))
+        .filter(work_task::Column::Config.eq(task.config.clone()))
+        .filter(work_task::Column::Status.eq(task.status))
+        .filter(work_task::Column::RunSeq.eq(task.run_seq))
+        .filter(work_task::Column::DeletedAt.is_null())
+        .exec(conn)
+        .await?;
+    if res.rows_affected != 1 {
+        return Ok(None);
+    }
+    Ok(Some(frozen))
+}
+
+/// The selector part of a task config, for "did the client change it?"
+fn selector_tuple(cfg: &WorkTaskConfig) -> AgentTuple {
+    (
+        cfg.agent_type.clone(),
+        cfg.mode_id.clone(),
+        cfg.config_values.clone(),
+    )
 }
 
 // ── CRUD ────────────────────────────────────────────────────────────────────
@@ -502,6 +760,10 @@ pub async fn create(
             "tasks must target a project folder, not a worktree".into(),
         ));
     }
+    // Fixed at creation: the task runs with this tuple, never with whatever
+    // the folder's task settings say at a later launch.
+    let mut draft = draft;
+    draft.config = frozen_draft_config(conn, draft.folder_id, &draft.config).await?;
     let config_str = serde_json::to_string(&draft.config)
         .map_err(|e| DbError::Validation(format!("config not serializable: {e}")))?;
     let now = Utc::now();
@@ -521,12 +783,24 @@ pub async fn create(
 }
 
 /// Outcome of a forge-triggered create: either the new task, or the ACTIVE
-/// task that already handles the same source_key (dedup hit, not an error —
-/// the UI offers "view it" / "create anyway").
+/// tasks that already handle its items (dedup hit, not an error — the UI
+/// offers "view it" / "create anyway").
 #[derive(Debug)]
 pub enum ForgeCreateOutcome {
-    Created(WorkTaskInfo),
-    Duplicate(WorkTaskInfo),
+    /// Boxed: the row dwarfs the conflict list beside it.
+    Created(Box<WorkTaskInfo>),
+    /// Every item of the new task that a live task already handles, in the
+    /// new task's own order, each with the newest such task. Never empty; a
+    /// task triggered from one item has exactly one entry.
+    Duplicate(Vec<SourceConflict>),
+}
+
+/// One item of a task being created that ANOTHER live task already handles.
+#[derive(Debug)]
+pub struct SourceConflict {
+    /// The item's canonical source key.
+    pub key: String,
+    pub existing: WorkTaskInfo,
 }
 
 /// Create a forge-triggered task. This is the ONLY path that writes the
@@ -550,6 +824,21 @@ pub async fn create_from_forge(
     source: crate::models::WorkTaskSource,
     force: bool,
 ) -> Result<ForgeCreateOutcome, DbError> {
+    create_from_forge_by(conn, draft, source, force, None).await
+}
+
+/// [`create_from_forge`], saying who asked: `auto_trigger = None` is a person
+/// (the trigger dialog), `Some(trigger)` is the repository panel's
+/// auto-processing and what woke it (`schedule` / `webhook` / `manual`). The
+/// timeline's `created` event carries it — actor `auto` and the trigger in its
+/// payload — so a task nobody clicked can say where it came from.
+pub async fn create_from_forge_by(
+    conn: &DatabaseConnection,
+    draft: WorkTaskDraft,
+    source: crate::models::WorkTaskSource,
+    force: bool,
+    auto_trigger: Option<&str>,
+) -> Result<ForgeCreateOutcome, DbError> {
     validate_draft(&draft)?;
     let folder = folder::Entity::find_by_id(draft.folder_id)
         .one(conn)
@@ -561,6 +850,9 @@ pub async fn create_from_forge(
             "tasks must target a project folder, not a worktree".into(),
         ));
     }
+    // Frozen at creation, read OUTSIDE the insert-first dedup transaction.
+    let mut draft = draft;
+    draft.config = frozen_draft_config(conn, draft.folder_id, &draft.config).await?;
     let config_str = serde_json::to_string(&draft.config)
         .map_err(|e| DbError::Validation(format!("config not serializable: {e}")))?;
     let now = Utc::now();
@@ -576,25 +868,71 @@ pub async fn create_from_forge(
     // FIRST statement: the write. See the doc comment — this is load-bearing.
     let row = insert_todo_row(&txn, &draft, config_str, max_order, now, Some(&source)).await?;
     if !force {
-        if let Some(existing) =
-            other_active_with_same_source(&txn, row.id, &source.key).await?
-        {
+        let keys: Vec<String> = source.keys().cloned().collect();
+        let conflicts = other_active_for_keys(&txn, row.id, &keys).await?;
+        if !conflicts.is_empty() {
             txn.rollback().await?;
-            return Ok(ForgeCreateOutcome::Duplicate(to_info(existing)));
+            return Ok(ForgeCreateOutcome::Duplicate(
+                conflicts
+                    .into_iter()
+                    .map(|(key, existing)| SourceConflict {
+                        key,
+                        existing: to_info(existing),
+                    })
+                    .collect(),
+            ));
         }
     }
-    record_event(&txn, row.id, "created", "user", None).await?;
-    record_event(
-        &txn,
-        row.id,
-        "forge_linked",
-        "user",
-        Some(serde_json::json!({ "source_key": source.key, "kind": source.kind })),
-    )
-    .await?;
+    let (actor, created_payload) = match auto_trigger {
+        None => ("user", None),
+        Some(trigger) => ("auto", Some(serde_json::json!({ "auto": trigger }))),
+    };
+    record_event(&txn, row.id, "created", actor, created_payload).await?;
+    // `source_key` is the lead item, as it always was; a task made from
+    // several items names all of them besides.
+    let mut linked = serde_json::json!({ "source_key": source.key, "kind": source.kind });
+    if !source.extra_keys.is_empty() {
+        linked["source_keys"] = serde_json::json!(source.keys().collect::<Vec<_>>());
+    }
+    record_event(&txn, row.id, "forge_linked", actor, Some(linked)).await?;
     txn.commit().await?;
-    Ok(ForgeCreateOutcome::Created(to_info(row)))
+    Ok(ForgeCreateOutcome::Created(Box::new(to_info(row))))
 }
+
+/// Which of `keys` have EVER had a task — any status, archived and deleted
+/// rows included.
+///
+/// The question auto-processing asks before it mints anything, and it is
+/// deliberately wider than the create dedup (live tasks only): an item whose
+/// automatic task was finished, canceled or deleted has been dealt with, and
+/// picking it up again on the next scan would undo the user's own decision
+/// every few minutes. Starting another task by hand stays possible — that path
+/// never asks this.
+pub async fn source_keys_ever_tasked(
+    conn: &DatabaseConnection,
+    keys: &[String],
+) -> Result<std::collections::HashSet<String>, DbError> {
+    let mut found = std::collections::HashSet::new();
+    // Chunked so a scan of a busy repository cannot outgrow SQLite's
+    // bound-parameter limit in one `IN (…)`. Straight off the item rows, which
+    // outlive their task's soft delete — every item of a task made from
+    // several issues counts, not only the one its row names.
+    for chunk in keys.chunks(KEY_CHUNK) {
+        let rows: Vec<String> = work_task_source_key::Entity::find()
+            .select_only()
+            .column(work_task_source_key::Column::SourceKey)
+            .filter(work_task_source_key::Column::SourceKey.is_in(chunk.iter().cloned()))
+            .into_tuple()
+            .all(conn)
+            .await?;
+        found.extend(rows);
+    }
+    Ok(found)
+}
+
+/// How many keys one `IN (…)` carries — far below SQLite's bound-parameter
+/// limit, whatever a caller hands in.
+const KEY_CHUNK: usize = 500;
 
 /// Every non-terminal status — the single definition of "active" shared by
 /// the create dedup and the resurrection guards, so the two can never drift.
@@ -617,28 +955,121 @@ fn duplicate_active_source_error(other: &work_task::Model) -> DbError {
     ))
 }
 
-/// Resurrection guard: does ANOTHER active task share this task's source_key?
-/// Called (inside the claiming/requeue transaction) before a failed/canceled
-/// forge task returns to the active set — without it, "trigger a replacement,
-/// then requeue the old card" silently ends with two live tasks on one issue.
+/// Does ANOTHER active task handle this work item? The newest one if so.
 pub async fn other_active_with_same_source<C: ConnectionTrait>(
     conn: &C,
     task_id: i32,
     source_key: &str,
 ) -> Result<Option<work_task::Model>, DbError> {
-    Ok(work_task::Entity::find()
-        .filter(work_task::Column::SourceKey.eq(source_key))
-        .filter(work_task::Column::Id.ne(task_id))
-        .filter(work_task::Column::DeletedAt.is_null())
-        .filter(work_task::Column::Status.is_in(ACTIVE_STATUSES))
-        .order_by_desc(work_task::Column::CreatedAt)
-        .one(conn)
+    Ok(other_active_for_keys(conn, task_id, &[source_key.to_string()])
+        .await?
+        .into_iter()
+        .next()
+        .map(|(_, task)| task))
+}
+
+/// For each of `keys` that ANOTHER active task (not `task_id`, not deleted)
+/// handles, that key with the newest such task — in the order `keys` came
+/// in, which for a task's own items is its own order.
+///
+/// The dedup of a create and the resurrection guards of a retry or requeue
+/// both ask this, inside their writing transaction. Read from the item rows,
+/// so an item a combined task handles is guarded like the one its row names.
+pub async fn other_active_for_keys<C: ConnectionTrait>(
+    conn: &C,
+    task_id: i32,
+    keys: &[String],
+) -> Result<Vec<(String, work_task::Model)>, DbError> {
+    let mut newest: std::collections::HashMap<String, work_task::Model> =
+        std::collections::HashMap::new();
+    for chunk in keys.chunks(KEY_CHUNK) {
+        let rows = work_task_source_key::Entity::find()
+            .filter(work_task_source_key::Column::SourceKey.is_in(chunk.iter().cloned()))
+            .filter(work_task_source_key::Column::TaskId.ne(task_id))
+            .find_also_related(work_task::Entity)
+            .filter(work_task::Column::DeletedAt.is_null())
+            .filter(work_task::Column::Status.is_in(ACTIVE_STATUSES))
+            .order_by_desc(work_task::Column::CreatedAt)
+            .order_by_desc(work_task::Column::Id)
+            .all(conn)
+            .await?;
+        for (item, task) in rows {
+            if let Some(task) = task {
+                newest.entry(item.source_key).or_insert(task);
+            }
+        }
+    }
+    Ok(keys
+        .iter()
+        .filter_map(|key| newest.remove(key).map(|task| (key.clone(), task)))
+        .collect())
+}
+
+/// The items a task handles, lead first.
+pub async fn task_source_keys<C: ConnectionTrait>(
+    conn: &C,
+    task_id: i32,
+) -> Result<Vec<String>, DbError> {
+    Ok(work_task_source_key::Entity::find()
+        .select_only()
+        .column(work_task_source_key::Column::SourceKey)
+        .filter(work_task_source_key::Column::TaskId.eq(task_id))
+        .order_by_asc(work_task_source_key::Column::Position)
+        .order_by_asc(work_task_source_key::Column::Id)
+        .into_tuple()
+        .all(conn)
         .await?)
+}
+
+/// The items of each of `task_ids`, lead first — what the reverse lookup
+/// says about a task made from several issues besides its status.
+pub async fn source_keys_of_tasks(
+    conn: &DatabaseConnection,
+    task_ids: &[i32],
+) -> Result<std::collections::HashMap<i32, Vec<String>>, DbError> {
+    let mut out: std::collections::HashMap<i32, Vec<String>> = std::collections::HashMap::new();
+    for chunk in task_ids.chunks(KEY_CHUNK) {
+        let rows = work_task_source_key::Entity::find()
+            .filter(work_task_source_key::Column::TaskId.is_in(chunk.iter().copied()))
+            .order_by_asc(work_task_source_key::Column::TaskId)
+            .order_by_asc(work_task_source_key::Column::Position)
+            .order_by_asc(work_task_source_key::Column::Id)
+            .all(conn)
+            .await?;
+        for row in rows {
+            out.entry(row.task_id).or_default().push(row.source_key);
+        }
+    }
+    Ok(out)
+}
+
+/// Resurrection guard: does ANOTHER active task handle one of this task's
+/// items? Called (inside the claiming/requeue transaction) before a
+/// failed/canceled forge task returns to the active set — without it,
+/// "trigger a replacement, then requeue the old card" silently ends with two
+/// live tasks on one issue. Every item counts: a combined task coming back
+/// while one of its issues has moved on to a task of its own is the same
+/// collision.
+async fn other_active_for_task<C: ConnectionTrait>(
+    conn: &C,
+    task_id: i32,
+) -> Result<Option<work_task::Model>, DbError> {
+    let keys = task_source_keys(conn, task_id).await?;
+    if keys.is_empty() {
+        return Ok(None);
+    }
+    Ok(other_active_for_keys(conn, task_id, &keys)
+        .await?
+        .into_iter()
+        .next()
+        .map(|(_, task)| task))
 }
 
 /// Latest task row (any state, newest `created_at` per key) for each of the
 /// given source keys — the workbench's reverse lookup for its visible rows.
-/// One indexed query; missing keys simply have no entry.
+/// One indexed query over the item rows; missing keys simply have no entry.
+/// The key handed back is the ITEM's, so every issue of a combined task maps
+/// to that task, not only the one its row names.
 pub async fn lookup_latest_by_source_keys(
     conn: &DatabaseConnection,
     keys: &[String],
@@ -646,21 +1077,25 @@ pub async fn lookup_latest_by_source_keys(
     if keys.is_empty() {
         return Ok(Vec::new());
     }
-    let rows = work_task::Entity::find()
-        .filter(work_task::Column::SourceKey.is_in(keys.iter().cloned()))
-        .filter(work_task::Column::DeletedAt.is_null())
-        .order_by_desc(work_task::Column::CreatedAt)
-        .order_by_desc(work_task::Column::Id)
-        .all(conn)
-        .await?;
     let mut seen = std::collections::HashSet::new();
-    Ok(rows
-        .into_iter()
-        .filter_map(|m| {
-            let key = m.source_key.clone()?;
-            seen.insert(key.clone()).then_some((key, m))
-        })
-        .collect())
+    let mut out = Vec::new();
+    for chunk in keys.chunks(KEY_CHUNK) {
+        let rows = work_task_source_key::Entity::find()
+            .filter(work_task_source_key::Column::SourceKey.is_in(chunk.iter().cloned()))
+            .find_also_related(work_task::Entity)
+            .filter(work_task::Column::DeletedAt.is_null())
+            .order_by_desc(work_task::Column::CreatedAt)
+            .order_by_desc(work_task::Column::Id)
+            .all(conn)
+            .await?;
+        for (item, task) in rows {
+            let Some(task) = task else { continue };
+            if seen.insert(item.source_key.clone()) {
+                out.push((item.source_key, task));
+            }
+        }
+    }
+    Ok(out)
 }
 
 async fn insert_todo_row<C: ConnectionTrait>(
@@ -706,9 +1141,12 @@ async fn insert_todo_row<C: ConnectionTrait>(
         preflight: Set(None),
         archived_at: Set(None),
         scheduled_at: Set(None),
+        deferred_at: Set(None),
         source_kind: Set(source.map(|s| s.kind.clone())),
         source_key: Set(source.map(|s| s.key.clone())),
         source_meta: Set(source_meta),
+        delivery: Set(None),
+        writeback_drafts: Set(None),
         created_at: Set(now),
         updated_at: Set(now),
         started_at: Set(None),
@@ -716,23 +1154,159 @@ async fn insert_todo_row<C: ConnectionTrait>(
         finished_at: Set(None),
         deleted_at: Set(None),
     };
-    Ok(active.insert(txn).await?)
+    let row = active.insert(txn).await?;
+    // The task's items, in the same transaction as the row that carries them
+    // — the one record every "which tasks handle item X" question reads.
+    if let Some(source) = source {
+        let items = source
+            .keys()
+            .enumerate()
+            .map(|(position, key)| work_task_source_key::ActiveModel {
+                id: NotSet,
+                task_id: Set(row.id),
+                source_key: Set(key.clone()),
+                position: Set(position as i32),
+            })
+            .collect::<Vec<_>>();
+        work_task_source_key::Entity::insert_many(items).exec(txn).await?;
+    }
+    Ok(row)
 }
 
 /// Edit title/config. Only meaningful outside an active run: allowed in
 /// todo / failed / canceled. Moving to another folder is allowed only for a
 /// pristine todo (no worktree minted yet).
+/// How an edit treats the task's selector tuple (agent / mode / options).
+/// Both default to `false`, which is what an older client sends.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkTaskUpdateFlags {
+    /// The editor's selectors were not touched: keep the CURRENT row's tuple
+    /// and marker, whatever the (possibly stale) dialog sent.
+    #[serde(default)]
+    pub selection_untouched: bool,
+    /// "Back to task settings": resolve the folder's task settings NOW and
+    /// freeze that.
+    #[serde(default)]
+    pub selection_reset: bool,
+    /// Only the selector tuple is edited (the review-time editor of a legacy
+    /// replaced-agent task): refused unless the title, folder and work order
+    /// still equal the CURRENT row's, so a stale dialog can never write an
+    /// older brief back.
+    #[serde(default)]
+    pub selector_only: bool,
+}
+
 pub async fn update(
     conn: &DatabaseConnection,
     id: i32,
     draft: WorkTaskDraft,
 ) -> Result<WorkTaskInfo, DbError> {
+    update_with(conn, id, draft, WorkTaskUpdateFlags::default()).await
+}
+
+/// The JSON keys of a config's selector tuple; the rest is the work order.
+const SELECTOR_KEYS: [&str; 5] = [
+    "agent_type",
+    "mode_id",
+    "config_values",
+    "label_snapshot",
+    "agent_config_frozen",
+];
+
+/// A config's work order, without its selector tuple — for "did a review
+/// edit change anything but the selection?".
+fn work_order_part(config: &serde_json::Value) -> serde_json::Value {
+    let mut v = config.clone();
+    if let Some(obj) = v.as_object_mut() {
+        for k in SELECTOR_KEYS {
+            obj.remove(k);
+        }
+    }
+    v
+}
+
+/// Edit a task. The selector tuple is merged server-side (codeg#1179):
+///
+/// - a task that already has a conversation keeps its AGENT — any edit that
+///   would change it is rejected — and its tuple is kept verbatim: its model
+///   and options are changed in that conversation, and a rerun continues it
+///   with the conversation's own selection. The exception is a legacy task
+///   whose agent was changed while bound (its conversation runs another
+///   agent): its next run starts a new conversation with the task's tuple, so
+///   deliberate tuple edits ARE kept (agent still locked), also as a
+///   selector-only edit while the task is in review;
+/// - otherwise an untouched selection, the same tuple, or an ambiguous
+///   `agent_type: null` without a reset keeps the CURRENT tuple and marker;
+///   a reset resolves the folder's task settings now; any other tuple is an
+///   explicit change. Every outcome is frozen — no edit ever re-inherits.
+///
+/// The marker is never taken from the payload. Read and written in one
+/// write-first transaction.
+pub async fn update_with(
+    conn: &DatabaseConnection,
+    id: i32,
+    draft: WorkTaskDraft,
+    flags: WorkTaskUpdateFlags,
+) -> Result<WorkTaskInfo, DbError> {
     validate_draft(&draft)?;
-    let row = get_model(conn, id).await?;
-    if !matches!(
+    let txn = conn.begin().await?;
+    // Write first: claim the writer lock before reading (see
+    // `persist_fork_outcome` for why a read-first transaction can fail).
+    let claimed = work_task::Entity::update_many()
+        .col_expr(work_task::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(work_task::Column::Id.eq(id))
+        .filter(work_task::Column::DeletedAt.is_null())
+        .exec(&txn)
+        .await?;
+    if claimed.rows_affected != 1 {
+        txn.rollback().await?;
+        return Err(DbError::NotFound(format!("work task {id}")));
+    }
+    let row = work_task::Entity::find_by_id(id)
+        .one(&txn)
+        .await?
+        .ok_or_else(|| DbError::NotFound(format!("work task {id}")))?;
+
+    let current: WorkTaskConfig = serde_json::from_str(&row.config).unwrap_or_default();
+    let incoming = parse_config(&draft.config);
+    let conv_agent = match row.conversation_id {
+        Some(cid) => crate::db::entities::conversation::Entity::find_by_id(cid)
+            .one(&txn)
+            .await?
+            .map(|c| c.agent_type),
+        None => None,
+    };
+    let bound = conv_agent.is_some();
+    let (current_agent, _, _) = resolve_agent_config(&txn, row.folder_id, &current).await?;
+    // A legacy task whose agent was changed while bound: its conversation
+    // runs another agent, so its next run replaces the conversation.
+    let mismatched = bound && current_agent.is_some() && current_agent != conv_agent;
+    let locked_agent = if mismatched {
+        current_agent.clone()
+    } else {
+        conv_agent.clone()
+    };
+
+    let editable = matches!(
         row.status,
         WorkTaskStatus::Todo | WorkTaskStatus::Failed | WorkTaskStatus::Canceled
-    ) {
+    );
+    let work_order_unchanged = draft.folder_id == row.folder_id
+        && draft.title.trim() == row.title
+        && work_order_part(&draft.config)
+            == work_order_part(
+                &serde_json::from_str::<serde_json::Value>(&row.config)
+                    .unwrap_or(serde_json::Value::Null),
+            );
+    if flags.selector_only && !work_order_unchanged {
+        return Err(DbError::Validation(
+            "the task changed since the editor opened — reopen it to edit".into(),
+        ));
+    }
+    let selector_only_review_edit =
+        row.status == WorkTaskStatus::Review && mismatched && work_order_unchanged;
+    if !editable && !selector_only_review_edit {
         return Err(DbError::Validation(
             "only todo, failed, or canceled tasks can be edited".into(),
         ));
@@ -753,6 +1327,43 @@ pub async fn update(
             "a forge-sourced task cannot move to another folder; trigger it again from the issue instead".into(),
         ));
     }
+
+    // The tuple the edit asks for, if it asks for one at all.
+    let requested: Option<WorkTaskConfig> = if flags.selection_untouched {
+        None
+    } else if flags.selection_reset {
+        let mut reset = WorkTaskConfig::default();
+        freeze_agent_config(&txn, draft.folder_id, &mut reset).await?;
+        Some(reset)
+    } else if selector_tuple(&incoming) == selector_tuple(&current) {
+        None
+    } else if incoming.agent_type.is_none() {
+        // Ambiguous: an older client's untouched save, possibly from a dialog
+        // opened before the task froze. Never a silent re-inherit.
+        None
+    } else {
+        let mut explicit = incoming.clone();
+        explicit.agent_config_frozen = true;
+        Some(explicit)
+    };
+    if bound {
+        if let Some(req) = requested.as_ref() {
+            // Including a reset that resolves to NO agent: a bound task keeps
+            // the agent it has.
+            if req.agent_type != locked_agent {
+                return Err(DbError::Validation(
+                    "this task already has a conversation — its agent can't be changed".into(),
+                ));
+            }
+        }
+    }
+    // What is stored: the requested tuple where an edit may change it, the
+    // current one otherwise.
+    let chosen: WorkTaskConfig = match requested {
+        Some(req) if !bound || mismatched => req,
+        _ => current.clone(),
+    };
+
     // `deliverable` is trigger-owned (a forge scenario stamps it; no editor
     // shows or edits it), and the dialog rebuilds the config from its own
     // fields — so an ABSENT key on an edit means "the client never knew",
@@ -772,6 +1383,7 @@ pub async fn update(
             }
         }
     }
+    write_selector_tuple(&mut config, &chosen);
     let config_str = serde_json::to_string(&config)
         .map_err(|e| DbError::Validation(format!("config not serializable: {e}")))?;
     let mut active = row.into_active_model();
@@ -779,7 +1391,9 @@ pub async fn update(
     active.title = Set(draft.title.trim().to_string());
     active.config = Set(config_str);
     active.updated_at = Set(Utc::now());
-    Ok(to_info(active.update(conn).await?))
+    let updated = active.update(&txn).await?;
+    txn.commit().await?;
+    Ok(to_info(updated))
 }
 
 /// Soft-delete, guarded on the status the caller validated.
@@ -904,9 +1518,14 @@ async fn claim_inner(
         // A fresh generation invalidates the previous run's self-reported
         // verdict (result_summary stays visible until the next settle).
         .col_expr(work_task::Column::Verdict, Expr::value(None::<String>))
+        // …and the thread replies it drafted: a reply describes the run it
+        // came from, and posting one written before a send-back would tell the
+        // thread about work the next run may have undone.
+        .col_expr(work_task::Column::WritebackDrafts, Expr::value(None::<String>))
         // A user-driven claim supersedes any auto-remerge intent and stale
-        // preflight light, resurrects an archived terminal task, and consumes
-        // the planned start (the task is starting now — there is no later start
+        // preflight light, resurrects an archived terminal task, picks a
+        // deferred one back up (this run IS the "later"), and consumes the
+        // planned start (the task is starting now — there is no later start
         // left to plan, and a plan surviving into `canceled → todo` would fire
         // a run the user never asked for).
         .col_expr(
@@ -917,6 +1536,10 @@ async fn claim_inner(
         .col_expr(work_task::Column::Preflight, Expr::value(None::<String>))
         .col_expr(
             work_task::Column::ArchivedAt,
+            Expr::value(None::<chrono::DateTime<Utc>>),
+        )
+        .col_expr(
+            work_task::Column::DeferredAt,
             Expr::value(None::<chrono::DateTime<Utc>>),
         )
         .col_expr(work_task::Column::FinishedAt, Expr::value(None::<chrono::DateTime<Utc>>))
@@ -944,11 +1567,9 @@ async fn claim_inner(
     if matches!(from, WorkTaskStatus::Failed | WorkTaskStatus::Canceled)
         && !allow_duplicate_source
     {
-        if let Some(key) = claimed.source_key.as_deref() {
-            if let Some(other) = other_active_with_same_source(&txn, id, key).await? {
-                txn.rollback().await?;
-                return Err(duplicate_active_source_error(&other));
-            }
+        if let Some(other) = other_active_for_task(&txn, id).await? {
+            txn.rollback().await?;
+            return Err(duplicate_active_source_error(&other));
         }
     }
     let run_seq = claimed.run_seq;
@@ -1049,6 +1670,7 @@ pub async fn auto_claim_next(
             // carried in from an older run (review → cancel → requeue → todo)
             // would decide an outcome it knows nothing about.
             .col_expr(work_task::Column::Verdict, Expr::value(None::<String>))
+            .col_expr(work_task::Column::WritebackDrafts, Expr::value(None::<String>))
             .col_expr(work_task::Column::FinishedAt, Expr::value(None::<chrono::DateTime<Utc>>))
             .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
             .filter(work_task::Column::Id.eq(head.id))
@@ -1180,6 +1802,7 @@ pub async fn claim_due_scheduled(
             // Same reason as every other claim: the settle path treats a
             // present `verdict` as this generation's self-report.
             .col_expr(work_task::Column::Verdict, Expr::value(None::<String>))
+            .col_expr(work_task::Column::WritebackDrafts, Expr::value(None::<String>))
             .col_expr(
                 work_task::Column::FinishedAt,
                 Expr::value(None::<chrono::DateTime<Utc>>),
@@ -1213,11 +1836,15 @@ pub async fn claim_due_scheduled(
 }
 
 /// canceled → todo ("requeue"): back to the board, worktree (if any) reused at
-/// the next start.
-/// canceled → todo, optionally carrying the note the user attached to the
-/// requeue. The note is written in the SAME transaction as the CAS: the moment
-/// this commits the task is schedulable, and an `auto_process` folder's pump
-/// can claim and launch it — a note written afterwards would lose that race.
+/// the next start, optionally carrying the note the user attached to the
+/// requeue.
+///
+/// The SESSION is not reused: the conversation link is dropped so the next start
+/// runs the task from the top rather than resuming the run the user canceled.
+///
+/// The note is written in the SAME transaction as the CAS: the moment this
+/// commits the task is schedulable, and an `auto_process` folder's pump can
+/// claim and launch it — a note written afterwards would lose that race.
 pub async fn requeue_canceled(
     conn: &DatabaseConnection,
     id: i32,
@@ -1227,6 +1854,23 @@ pub async fn requeue_canceled(
 ) -> Result<bool, DbError> {
     let now = Utc::now();
     let txn = conn.begin().await?;
+    // Claim first (write-first), then freeze the conversation the requeue is
+    // about to drop, so reopening it never applies the new-conversation
+    // default (codeg#1179).
+    let claimed = work_task::Entity::update_many()
+        .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
+        .filter(work_task::Column::Id.eq(id))
+        .filter(work_task::Column::Status.eq(WorkTaskStatus::Canceled))
+        .filter(work_task::Column::DeletedAt.is_null())
+        .exec(&txn)
+        .await?;
+    if claimed.rows_affected != 1 {
+        txn.rollback().await?;
+        return Ok(false);
+    }
+    if let Some(task) = work_task::Entity::find_by_id(id).one(&txn).await? {
+        freeze_outgoing_task_conversation(&txn, &task, None).await?;
+    }
     let res = work_task::Entity::update_many()
         .col_expr(
             work_task::Column::Status,
@@ -1240,6 +1884,15 @@ pub async fn requeue_canceled(
             Expr::value(None::<chrono::DateTime<Utc>>),
         )
         .col_expr(work_task::Column::FinishedAt, Expr::value(None::<chrono::DateTime<Utc>>))
+        // Drop the link to the run the user just canceled. `launch_mode_for`
+        // reads exactly this column to decide `Retry` vs `Fresh`, so leaving it
+        // meant the next start silently RESUMED the canceled session instead of
+        // starting the task over, and handed the reconcile sweep a conversation
+        // row whose `cancelled` status belongs to the previous generation. The
+        // worktree is still reused; the old conversation still exists in its
+        // folder. Unlike `retry` (failed -> queued), which deliberately
+        // continues the same session, a requeue puts the task back on the board.
+        .col_expr(work_task::Column::ConversationId, Expr::value(None::<i32>))
         .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
         .filter(work_task::Column::Id.eq(id))
         .filter(work_task::Column::Status.eq(WorkTaskStatus::Canceled))
@@ -1253,15 +1906,9 @@ pub async fn requeue_canceled(
     // Same resurrection guard as `claim_inner` — canceled → todo is the other
     // road back into the active set.
     if !allow_duplicate_source {
-        let row = work_task::Entity::find_by_id(id)
-            .one(&txn)
-            .await?
-            .ok_or_else(|| DbError::NotFound(format!("work task {id}")))?;
-        if let Some(key) = row.source_key.as_deref() {
-            if let Some(other) = other_active_with_same_source(&txn, id, key).await? {
-                txn.rollback().await?;
-                return Err(duplicate_active_source_error(&other));
-            }
+        if let Some(other) = other_active_for_task(&txn, id).await? {
+            txn.rollback().await?;
+            return Err(duplicate_active_source_error(&other));
         }
     }
     // An attachment is an instruction on its own: a screenshot with no sentence
@@ -1434,6 +2081,11 @@ pub async fn mark_preparing_live(
     conversation_id: i32,
     connection_id: &str,
 ) -> Result<bool, DbError> {
+    let txn = conn.begin().await?;
+    if !claim_binding(&txn, id, run_seq, WorkTaskStatus::Preparing, conversation_id).await? {
+        txn.rollback().await?;
+        return Ok(false);
+    }
     let res = work_task::Entity::update_many()
         .col_expr(
             work_task::Column::ConversationId,
@@ -1448,9 +2100,82 @@ pub async fn mark_preparing_live(
         .filter(work_task::Column::Status.eq(WorkTaskStatus::Preparing))
         .filter(work_task::Column::RunSeq.eq(run_seq))
         .filter(work_task::Column::DeletedAt.is_null())
-        .exec(conn)
+        .exec(&txn)
         .await?;
+    txn.commit().await?;
     Ok(res.rows_affected == 1)
+}
+
+/// The first statement of a binding CAS (`mark_preparing_live` /
+/// `mark_running` / `mark_merging_live`): a write that claims the row for
+/// this generation (write-first, see `persist_fork_outcome`), then — when the
+/// binding is about to REPLACE the task's conversation — freeze the outgoing
+/// one's selection in the same transaction. Returns `false` when the
+/// generation lost.
+async fn claim_binding<C: ConnectionTrait>(
+    txn: &C,
+    id: i32,
+    run_seq: i32,
+    status: WorkTaskStatus,
+    new_conversation_id: i32,
+) -> Result<bool, DbError> {
+    let claimed = work_task::Entity::update_many()
+        .col_expr(work_task::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(work_task::Column::Id.eq(id))
+        .filter(work_task::Column::Status.eq(status))
+        .filter(work_task::Column::RunSeq.eq(run_seq))
+        .filter(work_task::Column::DeletedAt.is_null())
+        .exec(txn)
+        .await?;
+    if claimed.rows_affected != 1 {
+        return Ok(false);
+    }
+    if let Some(task) = work_task::Entity::find_by_id(id).one(txn).await? {
+        freeze_outgoing_task_conversation(txn, &task, Some(new_conversation_id)).await?;
+    }
+    Ok(true)
+}
+
+/// A task's conversation is being replaced (resume fallback, legacy agent
+/// mismatch) or dropped (`requeue_canceled`, `new_conversation_id: None`):
+/// give the outgoing conversation a selection of its own if it has
+/// none, so reopening it never applies the new-conversation default — the
+/// task's tuple when it names that conversation's agent, else an empty one
+/// (replay nothing; the agent's restored selection is kept at its next bind).
+pub async fn freeze_outgoing_task_conversation<C: ConnectionTrait>(
+    txn: &C,
+    task: &work_task::Model,
+    new_conversation_id: Option<i32>,
+) -> Result<(), DbError> {
+    let Some(old) = task
+        .conversation_id
+        .filter(|old| Some(*old) != new_conversation_id)
+    else {
+        return Ok(());
+    };
+    let Some(conv) = crate::db::entities::conversation::Entity::find_by_id(old)
+        .one(txn)
+        .await?
+    else {
+        return Ok(());
+    };
+    if conv.selector_state.is_some() {
+        return Ok(());
+    }
+    let cfg: WorkTaskConfig = serde_json::from_str(&task.config).unwrap_or_default();
+    let (agent, mode_id, config_values) = resolve_agent_config(txn, task.folder_id, &cfg).await?;
+    let selection = if agent.as_deref() == Some(conv.agent_type.as_str()) {
+        crate::models::ConversationSelection {
+            mode_id,
+            composer_mode_id: None,
+            config_values,
+        }
+    } else {
+        crate::models::ConversationSelection::default()
+    };
+    crate::db::service::conversation_service::set_selector_state_if_absent(txn, old, &selection)
+        .await?;
+    Ok(())
 }
 
 /// preparing → running for the given generation; binds conversation +
@@ -1464,6 +2189,10 @@ pub async fn mark_running(
 ) -> Result<bool, DbError> {
     let now = Utc::now();
     let txn = conn.begin().await?;
+    if !claim_binding(&txn, id, run_seq, WorkTaskStatus::Preparing, conversation_id).await? {
+        txn.rollback().await?;
+        return Ok(false);
+    }
     let res = work_task::Entity::update_many()
         .col_expr(
             work_task::Column::Status,
@@ -1512,6 +2241,11 @@ pub async fn mark_merging_live(
     conversation_id: i32,
     connection_id: &str,
 ) -> Result<bool, DbError> {
+    let txn = conn.begin().await?;
+    if !claim_binding(&txn, id, run_seq, WorkTaskStatus::Merging, conversation_id).await? {
+        txn.rollback().await?;
+        return Ok(false);
+    }
     let res = work_task::Entity::update_many()
         .col_expr(
             work_task::Column::ConversationId,
@@ -1526,8 +2260,9 @@ pub async fn mark_merging_live(
         .filter(work_task::Column::Status.eq(WorkTaskStatus::Merging))
         .filter(work_task::Column::RunSeq.eq(run_seq))
         .filter(work_task::Column::DeletedAt.is_null())
-        .exec(conn)
+        .exec(&txn)
         .await?;
+    txn.commit().await?;
     Ok(res.rows_affected == 1)
 }
 
@@ -1558,6 +2293,13 @@ pub async fn fail(
         // Any failure abandons a pending auto-remerge — the user restarts the
         // cycle explicitly.
         .col_expr(work_task::Column::PendingMerge, Expr::value(None::<String>))
+        // A fresh failure is news, never a leftover of an earlier "handle
+        // later": it lands in "needs you". (Every claim already cleared the
+        // flag; this keeps the rule local to the status it is about.)
+        .col_expr(
+            work_task::Column::DeferredAt,
+            Expr::value(None::<chrono::DateTime<Utc>>),
+        )
         .col_expr(work_task::Column::SettledAt, Expr::value(Some(now)))
         .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
         .filter(work_task::Column::Id.eq(id))
@@ -1621,9 +2363,31 @@ pub async fn set_verdict(
     verdict: &str,
     summary: Option<&str>,
 ) -> Result<bool, DbError> {
+    set_verdict_with_drafts(conn, id, run_seq, verdict, summary, None).await
+}
+
+/// [`set_verdict`], also recording the thread replies the agent drafted
+/// (`writeback_drafts`, already sanitized and serialized by the caller) in the
+/// same CAS. `None` leaves whatever an earlier report of this run recorded:
+/// a second `task_complete` without replies must not wipe the first one's.
+pub async fn set_verdict_with_drafts(
+    conn: &DatabaseConnection,
+    id: i32,
+    run_seq: i32,
+    verdict: &str,
+    summary: Option<&str>,
+    writeback_drafts: Option<&str>,
+) -> Result<bool, DbError> {
     let now = Utc::now();
     let txn = conn.begin().await?;
-    let res = work_task::Entity::update_many()
+    let mut update = work_task::Entity::update_many();
+    if let Some(drafts) = writeback_drafts {
+        update = update.col_expr(
+            work_task::Column::WritebackDrafts,
+            Expr::value(Some(drafts.to_string())),
+        );
+    }
+    let res = update
         .col_expr(
             work_task::Column::Verdict,
             Expr::value(Some(verdict.to_string())),
@@ -1658,26 +2422,151 @@ pub async fn set_verdict(
     Ok(true)
 }
 
-/// Re-write the diff counters of a task that is ALREADY in review, without
-/// touching anything else about it (no status change, no timeline entry — the
-/// `diff_stat` event records what the settle measured and stays as it was).
+/// The user's answer about the thread comment, given while accepting a
+/// forge-sourced task: whether it is posted (`source_meta.writeback`, the
+/// trigger dialog's switch, overwritten) and the reply text to post with it
+/// (`writeback_drafts`, replaced — `None` clears it).
 ///
-/// Bound to the generation whose counters these are: a task that started
+/// Only while the task sits in review in generation `expect_run_seq` — the
+/// one whose reply the user was shown — and bound to the snapshot this read:
+/// the CAS covers status, `run_seq` AND the `source_meta` text, so neither a
+/// run claimed in between nor a delivery that pinned its closing list into the
+/// snapshot meanwhile can be overwritten with a stale copy, and a dialog left
+/// open across a send-back cannot sign off on a reply it never showed.
+/// `Ok(false)` = the task moved on (or is not forge-sourced); nothing was
+/// written.
+pub async fn set_writeback(
+    conn: &DatabaseConnection,
+    id: i32,
+    expect_run_seq: i32,
+    writeback: bool,
+    drafts: Option<&str>,
+) -> Result<bool, DbError> {
+    let task = get_model(conn, id).await?;
+    if task.status != WorkTaskStatus::Review
+        || task.run_seq != expect_run_seq
+        || task.source_kind.is_none()
+    {
+        return Ok(false);
+    }
+    let Some(old_meta) = task.source_meta.clone() else {
+        return Ok(false);
+    };
+    // Edited as a JSON object rather than through `ForgeSourceMeta`, so keys a
+    // newer build wrote survive the round trip.
+    let mut meta: serde_json::Value = serde_json::from_str(&old_meta)
+        .map_err(|e| DbError::Validation(format!("unreadable source snapshot: {e}")))?;
+    let Some(object) = meta.as_object_mut() else {
+        return Err(DbError::Validation("unreadable source snapshot".to_string()));
+    };
+    object.insert("writeback".to_string(), serde_json::Value::Bool(writeback));
+    let new_meta = serde_json::to_string(&meta)
+        .map_err(|e| DbError::Validation(format!("source snapshot not serializable: {e}")))?;
+    let res = work_task::Entity::update_many()
+        .col_expr(work_task::Column::SourceMeta, Expr::value(Some(new_meta)))
+        .col_expr(
+            work_task::Column::WritebackDrafts,
+            Expr::value(drafts.map(str::to_string)),
+        )
+        .col_expr(work_task::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(work_task::Column::Id.eq(id))
+        .filter(work_task::Column::Status.eq(WorkTaskStatus::Review))
+        .filter(work_task::Column::RunSeq.eq(task.run_seq))
+        .filter(work_task::Column::SourceMeta.eq(old_meta))
+        .filter(work_task::Column::DeletedAt.is_null())
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected == 1)
+}
+
+/// Re-write the diff counters of a task that is ALREADY in review because its
+/// worktree's content may have changed since they were measured — a turn sent
+/// to its session from outside the engine, a commit the user made by hand.
+/// No status change and no timeline entry — the `diff_stat` event records what
+/// the settle measured and stays as it was. Bound to the generation whose
+/// counters these are (review, `run_seq`, not deleted): a task that started
 /// another round between the read and this write must not be stamped with
 /// numbers taken from the previous one.
-pub async fn refresh_diff_stats(
+///
+/// `invalidate_preflight` clears the acceptance light in the same update: a
+/// light measured on the old content says nothing about the new one, and a
+/// green one left in place would let the auto-merge sweep land work no
+/// preflight ever ran on. The caller re-runs the preflight afterwards.
+pub async fn refresh_review_content(
     conn: &DatabaseConnection,
     id: i32,
     run_seq: i32,
     stats: (i32, i32, i32),
+    invalidate_preflight: bool,
+) -> Result<bool, DbError> {
+    let mut update = work_task::Entity::update_many()
+        .col_expr(work_task::Column::FilesChanged, Expr::value(Some(stats.0)))
+        .col_expr(work_task::Column::Additions, Expr::value(Some(stats.1)))
+        .col_expr(work_task::Column::Deletions, Expr::value(Some(stats.2)))
+        .col_expr(work_task::Column::UpdatedAt, Expr::value(Utc::now()));
+    if invalidate_preflight {
+        update = update.col_expr(work_task::Column::Preflight, Expr::value(None::<String>));
+    }
+    let res = update
+        .filter(work_task::Column::Id.eq(id))
+        .filter(work_task::Column::Status.eq(WorkTaskStatus::Review))
+        .filter(work_task::Column::RunSeq.eq(run_seq))
+        .filter(work_task::Column::DeletedAt.is_null())
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected == 1)
+}
+
+/// Tasks in review that a session's turn could have touched: the one whose
+/// session it is (`conversation_id`), and any whose worktree the session runs
+/// in (`folder_id` — another conversation opened inside the task's worktree).
+/// Either id may be absent; with both absent nothing matches.
+pub async fn list_review_tasks_for_session(
+    conn: &DatabaseConnection,
+    conversation_id: Option<i32>,
+    folder_id: Option<i32>,
+) -> Result<Vec<work_task::Model>, DbError> {
+    if conversation_id.is_none() && folder_id.is_none() {
+        return Ok(Vec::new());
+    }
+    let mut any = Condition::any();
+    if let Some(conv) = conversation_id {
+        any = any.add(work_task::Column::ConversationId.eq(conv));
+    }
+    if let Some(folder) = folder_id {
+        any = any.add(work_task::Column::WorktreeFolderId.eq(folder));
+    }
+    Ok(work_task::Entity::find()
+        .filter(any)
+        .filter(work_task::Column::Status.eq(WorkTaskStatus::Review))
+        .filter(work_task::Column::DeletedAt.is_null())
+        .order_by_asc(work_task::Column::Id)
+        .all(conn)
+        .await?)
+}
+
+/// What a push-back learned as its push landed: the counters it measured (what
+/// the push added to the pull request) and the source snapshot naming the head
+/// it went onto. Written while the delivery is still in flight, bound to that
+/// delivery (`merging`, its `run_seq`). See `TaskEngine::push_back_to_pull`.
+pub async fn record_push_back(
+    conn: &DatabaseConnection,
+    id: i32,
+    run_seq: i32,
+    stats: (i32, i32, i32),
+    source_meta_json: &str,
 ) -> Result<bool, DbError> {
     let res = work_task::Entity::update_many()
         .col_expr(work_task::Column::FilesChanged, Expr::value(Some(stats.0)))
         .col_expr(work_task::Column::Additions, Expr::value(Some(stats.1)))
         .col_expr(work_task::Column::Deletions, Expr::value(Some(stats.2)))
+        .col_expr(
+            work_task::Column::SourceMeta,
+            Expr::value(Some(source_meta_json.to_string())),
+        )
         .col_expr(work_task::Column::UpdatedAt, Expr::value(Utc::now()))
         .filter(work_task::Column::Id.eq(id))
-        .filter(work_task::Column::Status.eq(WorkTaskStatus::Review))
+        .filter(work_task::Column::Status.eq(WorkTaskStatus::Merging))
         .filter(work_task::Column::RunSeq.eq(run_seq))
         .filter(work_task::Column::DeletedAt.is_null())
         .exec(conn)
@@ -1713,6 +2602,12 @@ pub async fn settle_review(
         // A fresh review starts with a fresh light; the preflight runner
         // rewrites it right after when one is configured.
         .col_expr(work_task::Column::Preflight, Expr::value(None::<String>))
+        // ...and in "needs you", whatever an earlier generation's review was
+        // put aside as (every claim already cleared that; see `fail`).
+        .col_expr(
+            work_task::Column::DeferredAt,
+            Expr::value(None::<chrono::DateTime<Utc>>),
+        )
         .col_expr(work_task::Column::SettledAt, Expr::value(Some(now)))
         .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
         .filter(work_task::Column::Id.eq(id))
@@ -1819,6 +2714,14 @@ pub async fn begin_merge(
         // dispatch came from the pump draining the queue or from a click that
         // found the slot free.
         .col_expr(work_task::Column::PendingMerge, Expr::value(None::<String>))
+        // A merge the user started IS them handling the task, so a "handle
+        // later" mark goes with it — and if the landing bounces, the task comes
+        // back to "needs you", where a failed merge belongs. (The unattended
+        // dispatch never gets this far on a deferred row; see below.)
+        .col_expr(
+            work_task::Column::DeferredAt,
+            Expr::value(None::<chrono::DateTime<Utc>>),
+        )
         .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
         .filter(work_task::Column::Id.eq(id))
         .filter(work_task::Column::Status.eq(WorkTaskStatus::Review))
@@ -1840,6 +2743,11 @@ pub async fn begin_merge(
         // snapshot taken before the folder lock, so a merge queued while it
         // worked would otherwise slip through here.
         update = update.filter(work_task::Column::PendingMerge.is_null());
+        // Same shape for a task the user put aside to handle later: landing it
+        // behind their back would answer the very decision they postponed.
+        // Authoritative here for the same reason — the sweep's snapshot cannot
+        // see a deferral made while it waited for the folder lock.
+        update = update.filter(work_task::Column::DeferredAt.is_null());
     }
     // A dispatch OF a queued merge also binds to that exact intent: run_seq
     // alone cannot tell "the merge the pump picked up" from "the one the user
@@ -1893,7 +2801,9 @@ pub async fn begin_merge(
 ///
 /// Clears `last_error` like a manual dispatch does: the user re-asking for this
 /// merge IS the human intervention the banner was waiting for, and leaving it
-/// on would make the queued row look like it had already failed.
+/// on would make the queued row look like it had already failed. A "handle
+/// later" mark goes for the same reason — accepting the task is handling it,
+/// and its place in line is something the review column has to show.
 ///
 /// `expect_pending_merge` is the pump's re-queue guard: `Some(json)` demands
 /// that the row still hold exactly that intent, so a re-park cannot resurrect
@@ -1916,6 +2826,10 @@ pub async fn queue_merge(
             Expr::value(Some(intent_json)),
         )
         .col_expr(work_task::Column::LastError, Expr::value(None::<String>))
+        .col_expr(
+            work_task::Column::DeferredAt,
+            Expr::value(None::<chrono::DateTime<Utc>>),
+        )
         .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
         .filter(work_task::Column::Id.eq(id))
         .filter(work_task::Column::Status.eq(WorkTaskStatus::Review))
@@ -2010,11 +2924,44 @@ pub async fn begin_delivery(
     state: &WorkTaskMergeState,
     expect_run_seq: i32,
 ) -> Result<Option<i32>, DbError> {
+    begin_delivery_recording(conn, id, state, expect_run_seq, None).await
+}
+
+/// [`begin_delivery`], also replacing the row's `source_meta` with
+/// `source_meta` when given — how a task made from several issues fixes the
+/// list of issues its pull request closes at its first delivery: in the same
+/// write as the CAS, so the list is recorded exactly when the delivery that
+/// publishes it begins. Serialized by the CALLER from the row it read, and
+/// handed in beside the text it read (`(read, new)`): the CAS on status and
+/// `run_seq` keeps the run current, and the one on the read text keeps the
+/// snapshot current — the write-back answer ([`set_writeback`]) is written
+/// there while a task sits in review.
+pub async fn begin_delivery_recording(
+    conn: &DatabaseConnection,
+    id: i32,
+    state: &WorkTaskMergeState,
+    expect_run_seq: i32,
+    source_meta: Option<(Option<&str>, &str)>,
+) -> Result<Option<i32>, DbError> {
     let state_json = serde_json::to_string(state)
         .map_err(|e| DbError::Validation(format!("merge state not serializable: {e}")))?;
     let now = Utc::now();
     let txn = conn.begin().await?;
-    let res = work_task::Entity::update_many()
+    let mut update = work_task::Entity::update_many();
+    if let Some((read, meta)) = source_meta {
+        update = update.col_expr(
+            work_task::Column::SourceMeta,
+            Expr::value(Some(meta.to_string())),
+        );
+        // The snapshot is rewritten from the copy the caller read, so it must
+        // still be that copy: the user's write-back answer ([`set_writeback`])
+        // is the one other write a task in review takes there.
+        update = match read {
+            Some(read) => update.filter(work_task::Column::SourceMeta.eq(read)),
+            None => update.filter(work_task::Column::SourceMeta.is_null()),
+        };
+    }
+    let res = update
         .col_expr(
             work_task::Column::Status,
             Expr::value(status_str(WorkTaskStatus::Merging)),
@@ -2032,6 +2979,11 @@ pub async fn begin_delivery(
         .col_expr(work_task::Column::ConnectionId, Expr::value(None::<String>))
         .col_expr(work_task::Column::MergeState, Expr::value(Some(state_json)))
         .col_expr(work_task::Column::LastError, Expr::value(None::<String>))
+        // Delivering is handling it — same as a merge dispatch.
+        .col_expr(
+            work_task::Column::DeferredAt,
+            Expr::value(None::<chrono::DateTime<Utc>>),
+        )
         .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
         .filter(work_task::Column::Id.eq(id))
         .filter(work_task::Column::Status.eq(WorkTaskStatus::Review))
@@ -2072,24 +3024,45 @@ pub async fn begin_delivery(
     Ok(Some(run_seq))
 }
 
+/// Where a settling delivery records the pull request it reached, serialized
+/// by the CALLER (see [`complete_delivered`] for why it cannot be read and
+/// rewritten inside the settle's own transaction).
+#[derive(Debug, Clone, Copy)]
+pub enum DeliveryRecord<'a> {
+    /// A forge-sourced task: its provenance snapshot, `result_pr` filled in.
+    SourceMeta(&'a str),
+    /// A task without forge provenance: its `forge::WorkTaskDelivery`.
+    Delivery(&'a str),
+}
+
+impl DeliveryRecord<'_> {
+    fn column(self) -> (work_task::Column, String) {
+        match self {
+            DeliveryRecord::SourceMeta(json) => (work_task::Column::SourceMeta, json.to_string()),
+            DeliveryRecord::Delivery(json) => (work_task::Column::Delivery, json.to_string()),
+        }
+    }
+}
+
 /// merging → done for a delivery: the pull request carrying this task is open
 /// (or already merged) and anchored to the commit we pushed.
 ///
-/// `source_meta_json` is the row's provenance snapshot with `result_pr` filled
-/// in, serialized by the CALLER. That is not an accident of layering: the
-/// update below has to be the transaction's FIRST statement. A deferred SQLite
-/// transaction that reads before it writes cannot upgrade to a writer under
-/// WAL — it fails with `database is locked` instead of waiting — so any
-/// read-modify-write of `source_meta` happens outside, and the CAS filter is
-/// what makes a stale read harmless.
+/// `record` carries the pull request (see [`DeliveryRecord`]), serialized by
+/// the CALLER. That is not an accident of layering: the update below has to be
+/// the transaction's FIRST statement. A deferred SQLite transaction that reads
+/// before it writes cannot upgrade to a writer under WAL — it fails with
+/// `database is locked` instead of waiting — so any read-modify-write of the
+/// recorded JSON happens outside, and the CAS filter is what makes a stale
+/// read harmless.
 pub async fn complete_delivered(
     conn: &DatabaseConnection,
     id: i32,
     expect_run_seq: i32,
     pr_url: &str,
-    source_meta_json: &str,
+    record: DeliveryRecord<'_>,
 ) -> Result<bool, DbError> {
     let now = Utc::now();
+    let (record_column, record_json) = record.column();
     let txn = conn.begin().await?;
     let res = work_task::Entity::update_many()
         .col_expr(
@@ -2100,10 +3073,7 @@ pub async fn complete_delivered(
             work_task::Column::CompletionKind,
             Expr::value(Some(COMPLETION_DELIVERED_PR.to_string())),
         )
-        .col_expr(
-            work_task::Column::SourceMeta,
-            Expr::value(Some(source_meta_json.to_string())),
-        )
+        .col_expr(record_column, Expr::value(Some(record_json)))
         .col_expr(work_task::Column::MergeState, Expr::value(None::<String>))
         .col_expr(work_task::Column::LastError, Expr::value(None::<String>))
         .col_expr(work_task::Column::FinishedAt, Expr::value(Some(now)))
@@ -2132,6 +3102,66 @@ pub async fn complete_delivered(
         "engine",
         Some(WorkTaskStatus::Merging),
         WorkTaskStatus::Done,
+        Some(serde_json::json!({ "pr_url": pr_url })),
+    )
+    .await?;
+    txn.commit().await?;
+    Ok(true)
+}
+
+/// merging → review for a delivery that SUCCEEDED but was asked not to finish
+/// the task (`WorkTaskMergeState::keep_in_review`): the pull request is open
+/// (or merged) and anchored to the commit we pushed, exactly as for
+/// [`complete_delivered`], and the task goes back to waiting on its user with
+/// that pull request recorded — for another round on the same branch, a
+/// later delivery that does finish it, or any other acceptance.
+///
+/// Same CAS and the same caller-serialized `record` as [`complete_delivered`]
+/// (and for the same reason). No error is written — nothing failed — and the
+/// banner of an earlier attempt is cleared like a fresh dispatch clears it.
+pub async fn delivered_to_review(
+    conn: &DatabaseConnection,
+    id: i32,
+    expect_run_seq: i32,
+    pr_url: &str,
+    record: DeliveryRecord<'_>,
+) -> Result<bool, DbError> {
+    let now = Utc::now();
+    let (record_column, record_json) = record.column();
+    let txn = conn.begin().await?;
+    let res = work_task::Entity::update_many()
+        .col_expr(
+            work_task::Column::Status,
+            Expr::value(status_str(WorkTaskStatus::Review)),
+        )
+        .col_expr(record_column, Expr::value(Some(record_json)))
+        .col_expr(work_task::Column::MergeState, Expr::value(None::<String>))
+        .col_expr(work_task::Column::LastError, Expr::value(None::<String>))
+        .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
+        .filter(work_task::Column::Id.eq(id))
+        .filter(work_task::Column::Status.eq(WorkTaskStatus::Merging))
+        .filter(work_task::Column::RunSeq.eq(expect_run_seq))
+        .filter(work_task::Column::DeletedAt.is_null())
+        .exec(&txn)
+        .await?;
+    if res.rows_affected != 1 {
+        txn.rollback().await?;
+        return Ok(false);
+    }
+    record_event(
+        &txn,
+        id,
+        "delivered_pr",
+        "engine",
+        Some(serde_json::json!({ "pr_url": pr_url, "kept_in_review": true })),
+    )
+    .await?;
+    status_changed_event(
+        &txn,
+        id,
+        "engine",
+        Some(WorkTaskStatus::Merging),
+        WorkTaskStatus::Review,
         Some(serde_json::json!({ "pr_url": pr_url })),
     )
     .await?;
@@ -2218,9 +3248,14 @@ pub async fn complete_without_merge(
             Expr::value(Some(COMPLETION_ACCEPTED_WITHOUT_MERGE.to_string())),
         )
         // A refused merge attempt leaves its reason on the row; the task is
-        // finishing on purpose now, so that banner must not follow it.
+        // finishing on purpose now, so that banner must not follow it — and
+        // neither does a "handle later": this is the later.
         .col_expr(work_task::Column::LastError, Expr::value(None::<String>))
         .col_expr(work_task::Column::PendingMerge, Expr::value(None::<String>))
+        .col_expr(
+            work_task::Column::DeferredAt,
+            Expr::value(None::<chrono::DateTime<Utc>>),
+        )
         .col_expr(work_task::Column::FinishedAt, Expr::value(Some(now)))
         .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
         .filter(work_task::Column::Id.eq(id))
@@ -2251,6 +3286,13 @@ pub async fn complete_without_merge(
 /// path's toast has no one to pop for. Guarded on review + run_seq; a present
 /// `last_error` also excludes the row from later auto-merge attempts, so the
 /// banner doubles as the retry stop.
+///
+/// Never lands on a task the user put aside to handle later: both callers are
+/// unattended (the auto-merge sweep, the merge queue), and a sweep whose
+/// snapshot predates the deferral can still be refused for a reason of its own
+/// after it. Bannering then would decorate a row the user said can wait, and
+/// latch it out of the auto-merge it gets again once it is back in "needs
+/// you" — where a refusal that still holds banners as usual.
 pub async fn set_review_error(
     conn: &DatabaseConnection,
     id: i32,
@@ -2266,6 +3308,7 @@ pub async fn set_review_error(
         .filter(work_task::Column::Id.eq(id))
         .filter(work_task::Column::Status.eq(WorkTaskStatus::Review))
         .filter(work_task::Column::RunSeq.eq(run_seq))
+        .filter(work_task::Column::DeferredAt.is_null())
         .filter(work_task::Column::DeletedAt.is_null())
         .exec(conn)
         .await?;
@@ -2293,6 +3336,12 @@ pub async fn merge_back_to_review(
         )
         .col_expr(work_task::Column::MergeState, Expr::value(None::<String>))
         .col_expr(work_task::Column::LastError, Expr::value(error.clone()))
+        // A bounced landing is the user's to look at — back in "needs you"
+        // (the dispatch already cleared any deferral; see `settle_review`).
+        .col_expr(
+            work_task::Column::DeferredAt,
+            Expr::value(None::<chrono::DateTime<Utc>>),
+        )
         .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
         .filter(work_task::Column::Id.eq(id))
         .filter(work_task::Column::Status.eq(WorkTaskStatus::Merging))
@@ -2338,19 +3387,47 @@ pub async fn set_preflight(
     run_seq: i32,
     preflight: &crate::models::WorkTaskPreflight,
 ) -> Result<bool, DbError> {
+    write_preflight(conn, id, run_seq, preflight, None).await
+}
+
+/// Write a preflight run's verdict — only while the row still holds the exact
+/// `running` light that run wrote (`running_json`, as stored). Within one
+/// review generation the light can be cleared because the task's content
+/// changed (see [`refresh_review_content`]) or replaced by a newer run of the
+/// command; either way this run measured something the row no longer
+/// describes, and its verdict must not land.
+pub async fn finish_preflight(
+    conn: &DatabaseConnection,
+    id: i32,
+    run_seq: i32,
+    running_json: &str,
+    preflight: &crate::models::WorkTaskPreflight,
+) -> Result<bool, DbError> {
+    write_preflight(conn, id, run_seq, preflight, Some(running_json)).await
+}
+
+async fn write_preflight(
+    conn: &DatabaseConnection,
+    id: i32,
+    run_seq: i32,
+    preflight: &crate::models::WorkTaskPreflight,
+    expect: Option<&str>,
+) -> Result<bool, DbError> {
     let json = serde_json::to_string(preflight)
         .map_err(|e| DbError::Validation(format!("preflight not serializable: {e}")))?;
     let now = Utc::now();
     let txn = conn.begin().await?;
-    let res = work_task::Entity::update_many()
+    let mut update = work_task::Entity::update_many()
         .col_expr(work_task::Column::Preflight, Expr::value(Some(json)))
         .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
         .filter(work_task::Column::Id.eq(id))
         .filter(work_task::Column::Status.eq(WorkTaskStatus::Review))
         .filter(work_task::Column::RunSeq.eq(run_seq))
-        .filter(work_task::Column::DeletedAt.is_null())
-        .exec(&txn)
-        .await?;
+        .filter(work_task::Column::DeletedAt.is_null());
+    if let Some(expect) = expect {
+        update = update.filter(work_task::Column::Preflight.eq(expect));
+    }
+    let res = update.exec(&txn).await?;
     if res.rows_affected != 1 {
         txn.rollback().await?;
         return Ok(false);
@@ -2413,6 +3490,66 @@ pub async fn set_archived(
         "user_action",
         "user",
         Some(serde_json::json!({ "action": if archived { "archive" } else { "unarchive" } })),
+    )
+    .await?;
+    txn.commit().await?;
+    Ok(true)
+}
+
+/// The statuses a task can be put aside in: settled and waiting on the user,
+/// with nothing running that a deferral would leave hanging out of sight. An
+/// `awaiting_input` task is waiting on the user too, but its agent is live and
+/// holds a concurrency slot — that one is answered or canceled, not parked —
+/// and `merging` is in flight.
+pub const DEFERRABLE_STATUSES: [WorkTaskStatus; 2] =
+    [WorkTaskStatus::Review, WorkTaskStatus::Failed];
+
+/// Put a settled task aside to handle later, or bring it back to "needs you".
+/// No status change: the task stays exactly as resumable as it was, and its
+/// follow-up / retry / merge picks it back up on its own (each of those clears
+/// the mark — see the module invariants). Records the user action.
+///
+/// Deferring is refused (`false`) unless the row is reviewed or failed (see
+/// [`DEFERRABLE_STATUSES`]), not archived (archiving already put it away), not
+/// already deferred, and not waiting in its project's merge queue — a queued
+/// merge is an acceptance already made, and the decision left on it is whether
+/// to leave the queue, not when to look at the task. Bringing it back only
+/// needs the mark to be there, whatever the status, like unarchiving.
+pub async fn set_deferred(
+    conn: &DatabaseConnection,
+    id: i32,
+    deferred: bool,
+) -> Result<bool, DbError> {
+    let now = Utc::now();
+    let txn = conn.begin().await?;
+    let mut update = work_task::Entity::update_many()
+        .col_expr(
+            work_task::Column::DeferredAt,
+            Expr::value(deferred.then_some(now)),
+        )
+        .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
+        .filter(work_task::Column::Id.eq(id))
+        .filter(work_task::Column::DeletedAt.is_null());
+    if deferred {
+        update = update
+            .filter(work_task::Column::Status.is_in(DEFERRABLE_STATUSES))
+            .filter(work_task::Column::DeferredAt.is_null())
+            .filter(work_task::Column::ArchivedAt.is_null())
+            .filter(work_task::Column::PendingMerge.is_null());
+    } else {
+        update = update.filter(work_task::Column::DeferredAt.is_not_null());
+    }
+    let res = update.exec(&txn).await?;
+    if res.rows_affected != 1 {
+        txn.rollback().await?;
+        return Ok(false);
+    }
+    record_event(
+        &txn,
+        id,
+        "user_action",
+        "user",
+        Some(serde_json::json!({ "action": if deferred { "defer" } else { "undefer" } })),
     )
     .await?;
     txn.commit().await?;
@@ -2485,6 +3622,13 @@ async fn cancel_inner(
             work_task::Column::ScheduledAt,
             Expr::value(None::<chrono::DateTime<Utc>>),
         )
+        // Stopping a task the user had put aside settles the question it was
+        // put aside for; a later requeue starts from "canceled", not from a
+        // "handle later" nobody can see any more.
+        .col_expr(
+            work_task::Column::DeferredAt,
+            Expr::value(None::<chrono::DateTime<Utc>>),
+        )
         .col_expr(work_task::Column::FinishedAt, Expr::value(Some(now)))
         .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
         .filter(work_task::Column::Id.eq(id))
@@ -2551,6 +3695,28 @@ pub async fn clear_worktree(conn: &DatabaseConnection, id: i32) -> Result<(), Db
         .exec(conn)
         .await?;
     Ok(())
+}
+
+/// Which of `conversation_ids` a live (not deleted) to-do task is bound to, in
+/// any status — finished tasks included. A task's conversation belongs to the
+/// task: its resume, retry and transcript view all find the session through
+/// the task's worktree and row, so "move to project" refuses these outright.
+pub async fn conversations_bound_to_tasks(
+    conn: &DatabaseConnection,
+    conversation_ids: &[i32],
+) -> Result<std::collections::HashSet<i32>, DbError> {
+    if conversation_ids.is_empty() {
+        return Ok(Default::default());
+    }
+    let rows: Vec<Option<i32>> = work_task::Entity::find()
+        .select_only()
+        .column(work_task::Column::ConversationId)
+        .filter(work_task::Column::ConversationId.is_in(conversation_ids.to_vec()))
+        .filter(work_task::Column::DeletedAt.is_null())
+        .into_tuple()
+        .all(conn)
+        .await?;
+    Ok(rows.into_iter().flatten().collect())
 }
 
 /// Tasks in a status that is actively using their worktree — mid-run or
@@ -2649,8 +3815,8 @@ pub async fn boot_reconcile_interrupted(conn: &DatabaseConnection) -> Result<u64
 
 // ── per-folder settings ─────────────────────────────────────────────────────
 
-pub async fn settings_get(
-    conn: &DatabaseConnection,
+pub async fn settings_get<C: ConnectionTrait>(
+    conn: &C,
     folder_id: i32,
 ) -> Result<WorkTaskFolderSettings, DbError> {
     let row = work_task_settings::Entity::find()
@@ -2699,8 +3865,8 @@ pub const GLOBAL_SETTINGS_FOLDER_ID: i32 = 0;
 /// (`folder_id = 0`), then to the built-in defaults. Deliberately not a
 /// field-by-field merge — one save detaches the folder from the global row
 /// entirely, which keeps the behavior predictable.
-pub async fn settings_get_effective(
-    conn: &DatabaseConnection,
+pub async fn settings_get_effective<C: ConnectionTrait>(
+    conn: &C,
     folder_id: i32,
 ) -> Result<WorkTaskFolderSettings, DbError> {
     let own = work_task_settings::Entity::find()
@@ -3226,6 +4392,90 @@ mod tests {
         assert_eq!(actions, vec!["schedule", "unschedule"]);
     }
 
+    /// #649: start, cancel, requeue, start again used to land the task in
+    /// `canceled`. The requeue kept the conversation of the run the user had
+    /// just stopped, and `launch_mode_for` reads exactly that column to pick
+    /// `Retry` over `Fresh`, so the second start resumed the killed session
+    /// instead of running the task, on a conversation row still recorded as
+    /// `cancelled`, which the reconcile sweep then read as this generation's
+    /// verdict. A requeue puts the task back on the board, so it keeps the
+    /// worktree and drops the session.
+    #[tokio::test]
+    async fn a_requeue_drops_the_canceled_run_s_conversation() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-requeue-conversation").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+
+        let seq = claim_for_run(&db.conn, t.id, WorkTaskStatus::Todo, "user")
+            .await
+            .unwrap()
+            .unwrap();
+        attach_worktree(&db.conn, t.id, folder_id, "main", "abc123", "task/t")
+            .await
+            .unwrap();
+        assert!(start_running(&db.conn, t.id, seq, 41, "c1").await.unwrap());
+        assert!(cancel(&db.conn, t.id, None).await.unwrap());
+        assert_eq!(
+            get_model(&db.conn, t.id).await.unwrap().conversation_id,
+            Some(41),
+            "cancel keeps the link so the stopped run stays reachable"
+        );
+
+        assert!(requeue_canceled(&db.conn, t.id, None, &[], false)
+            .await
+            .unwrap());
+        let row = get_model(&db.conn, t.id).await.unwrap();
+        assert_eq!(row.status, WorkTaskStatus::Todo);
+        assert_eq!(
+            row.conversation_id, None,
+            "a requeued task must start over, not resume the canceled session"
+        );
+        assert_eq!(
+            row.worktree_folder_id,
+            Some(folder_id),
+            "the worktree is still reused"
+        );
+        // …and `started_at` outlives the requeue, unlike `finished_at` beside
+        // it. `compose_prompt`'s fresh arm reads exactly this column to decide
+        // whether to warn the new session that the worktree already holds an
+        // earlier run's work: clearing it here for symmetry would silently send
+        // a re-queued task back in reading like a first run.
+        assert!(
+            row.started_at.is_some(),
+            "the fresh arm's 'this worktree is not empty' warning keys off it"
+        );
+        assert!(row.finished_at.is_none());
+
+        // Retry (failed -> queued) is the path that DOES continue the same
+        // session, and it is untouched.
+        let seq = claim_for_run(&db.conn, t.id, WorkTaskStatus::Todo, "user")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(start_running(&db.conn, t.id, seq, 42, "c2").await.unwrap());
+        assert!(fail(
+            &db.conn,
+            t.id,
+            &[WorkTaskStatus::Running],
+            Some(seq),
+            "agent_error",
+            Some("boom".to_string()),
+        )
+        .await
+        .unwrap());
+        assert!(
+            claim_for_run(&db.conn, t.id, WorkTaskStatus::Failed, "user")
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(
+            get_model(&db.conn, t.id).await.unwrap().conversation_id,
+            Some(42),
+            "retry continues the same session"
+        );
+    }
+
     /// A plan must not outlive the task's stay in `todo`: cancel drops it, so
     /// a requeue weeks later cannot launch an agent at a time nobody remembers
     /// setting. And a claim — from any arm — invalidates the previous run's
@@ -3585,12 +4835,24 @@ mod tests {
         let meta = r#"{"provider":"github","result_pr":"https://x/pull/9"}"#;
         // A settle bound to the WRONG generation must miss, or a recovery pass
         // racing a live delivery could settle a run that already moved on.
-        assert!(!complete_delivered(&db.conn, id, seq, "https://x/pull/9", meta)
-            .await
-            .unwrap());
-        assert!(complete_delivered(&db.conn, id, deliver_seq, "https://x/pull/9", meta)
-            .await
-            .unwrap());
+        assert!(!complete_delivered(
+            &db.conn,
+            id,
+            seq,
+            "https://x/pull/9",
+            DeliveryRecord::SourceMeta(meta)
+        )
+        .await
+        .unwrap());
+        assert!(complete_delivered(
+            &db.conn,
+            id,
+            deliver_seq,
+            "https://x/pull/9",
+            DeliveryRecord::SourceMeta(meta)
+        )
+        .await
+        .unwrap());
 
         let done = get_model(&db.conn, id).await.unwrap();
         assert_eq!(done.status, WorkTaskStatus::Done);
@@ -3600,10 +4862,85 @@ mod tests {
         assert!(done.finished_at.is_some());
         // A second settle (event vs recovery race) is a no-op, and nothing
         // pulls a delivered task back to review.
-        assert!(!complete_delivered(&db.conn, id, deliver_seq, "https://x/pull/9", meta)
+        assert!(!complete_delivered(
+            &db.conn,
+            id,
+            deliver_seq,
+            "https://x/pull/9",
+            DeliveryRecord::SourceMeta(meta)
+        )
+        .await
+        .unwrap());
+        assert!(!merge_back_to_review(&db.conn, id, None, None, None)
             .await
             .unwrap());
         assert!(!merge_back_to_review(&db.conn, id, None, None, None).await.unwrap());
+    }
+
+    /// A delivery asked NOT to finish the task settles back to review: the
+    /// pull request lands in the record the caller named — the delivery
+    /// column for a task without provenance, nothing else touched — and the
+    /// settle binds to its own generation exactly like the `done` one.
+    #[tokio::test]
+    async fn a_delivery_kept_in_review_records_its_pull_request_and_stays_reviewable() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-deliver-keep").await;
+        let (id, seq) = reviewed(&db, folder_id, "deliver, keep reviewing").await;
+        let state = WorkTaskMergeState {
+            op: WorkTaskMergeOp::DeliverPr,
+            remote_branch: Some("task/1".into()),
+            expected_head: Some("abc123".into()),
+            keep_in_review: true,
+            ..Default::default()
+        };
+        let deliver_seq = begin_delivery(&db.conn, id, &state, seq)
+            .await
+            .unwrap()
+            .expect("CAS");
+
+        let delivery = r#"{"provider":"github","pr_url":"https://x/pull/9","pr_number":9}"#;
+        assert!(
+            !delivered_to_review(
+                &db.conn,
+                id,
+                seq,
+                "https://x/pull/9",
+                DeliveryRecord::Delivery(delivery)
+            )
+            .await
+            .unwrap(),
+            "a settle bound to the wrong generation misses"
+        );
+        assert!(delivered_to_review(
+            &db.conn,
+            id,
+            deliver_seq,
+            "https://x/pull/9",
+            DeliveryRecord::Delivery(delivery)
+        )
+        .await
+        .unwrap());
+
+        let row = get_model(&db.conn, id).await.unwrap();
+        assert_eq!(row.status, WorkTaskStatus::Review);
+        assert_eq!(row.delivery.as_deref(), Some(delivery));
+        assert!(
+            row.source_meta.is_none(),
+            "a local task grows no provenance"
+        );
+        assert!(row.completion_kind.is_none(), "it did not finish");
+        assert!(row.finished_at.is_none());
+        assert!(row.merge_state.is_none(), "the intent is spent");
+        assert!(row.last_error.is_none(), "nothing failed");
+        assert_eq!(
+            row.run_seq, deliver_seq,
+            "the next acceptance binds to this generation"
+        );
+        // Reviewable as ever: the next delivery starts from here.
+        assert!(begin_delivery(&db.conn, id, &state, deliver_seq)
+            .await
+            .unwrap()
+            .is_some());
     }
 
     /// Run a fresh task all the way to `review` — the state every acceptance
@@ -4513,6 +5850,7 @@ mod tests {
             command: "tests".into(),
             exit_code: None,
             output_tail: None,
+            run_id: None,
         };
         // Stale generation / wrong status writes are no-ops.
         assert!(!set_preflight(&db.conn, t.id, seq + 1, &light).await.unwrap());
@@ -4540,6 +5878,168 @@ mod tests {
         assert!(settle_review(&db.conn, t.id, seq2, None, None).await.unwrap());
         assert!(!set_preflight(&db.conn, t.id, seq, &light).await.unwrap());
         assert!(get_model(&db.conn, t.id).await.unwrap().preflight.is_none());
+    }
+
+    /// A run's verdict lands only on the `running` light that run wrote: a
+    /// content refresh that cleared it, or a newer run that replaced it, makes
+    /// the old run's finish a no-op — no stale verdict, no timeline entry.
+    #[tokio::test]
+    async fn a_preflight_verdict_needs_its_own_running_light() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-preflight-run").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+        let seq = to_review(&db, t.id).await;
+        let running = |run: &str| crate::models::WorkTaskPreflight {
+            status: "running".into(),
+            command: "tests".into(),
+            exit_code: None,
+            output_tail: None,
+            run_id: Some(run.into()),
+        };
+        let passed = |run: &str| crate::models::WorkTaskPreflight {
+            status: "passed".into(),
+            exit_code: Some(0),
+            ..running(run)
+        };
+        let json = |p: &crate::models::WorkTaskPreflight| serde_json::to_string(p).unwrap();
+        let verdicts = |events: Vec<crate::models::WorkTaskEventInfo>| {
+            events
+                .iter()
+                .filter(|e| e.kind == "preflight_result")
+                .count()
+        };
+
+        // Cleared by a content refresh while the run was going.
+        assert!(set_preflight(&db.conn, t.id, seq, &running("a"))
+            .await
+            .unwrap());
+        assert!(refresh_review_content(&db.conn, t.id, seq, (1, 1, 0), true)
+            .await
+            .unwrap());
+        assert!(
+            !finish_preflight(&db.conn, t.id, seq, &json(&running("a")), &passed("a"))
+                .await
+                .unwrap()
+        );
+        assert!(get_model(&db.conn, t.id).await.unwrap().preflight.is_none());
+
+        // Replaced by a newer run: only the newer one's verdict lands.
+        assert!(set_preflight(&db.conn, t.id, seq, &running("b"))
+            .await
+            .unwrap());
+        assert!(set_preflight(&db.conn, t.id, seq, &running("c"))
+            .await
+            .unwrap());
+        assert!(
+            !finish_preflight(&db.conn, t.id, seq, &json(&running("b")), &passed("b"))
+                .await
+                .unwrap()
+        );
+        assert_eq!(verdicts(list_events(&db.conn, t.id, 100).await.unwrap()), 0);
+        assert!(
+            finish_preflight(&db.conn, t.id, seq, &json(&running("c")), &passed("c"))
+                .await
+                .unwrap()
+        );
+        let stored = get_model(&db.conn, t.id).await.unwrap().preflight.unwrap();
+        assert_eq!(stored, json(&passed("c")));
+        assert_eq!(verdicts(list_events(&db.conn, t.id, 100).await.unwrap()), 1);
+    }
+
+    /// The content refresh is bound to the generation it measured: a task
+    /// that started another round meanwhile is not stamped. Without
+    /// `invalidate_preflight` the light survives the counters.
+    #[tokio::test]
+    async fn a_content_refresh_is_generation_guarded() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-refresh-content").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+        let seq = to_review(&db, t.id).await;
+        let light = crate::models::WorkTaskPreflight {
+            status: "passed".into(),
+            command: "tests".into(),
+            exit_code: Some(0),
+            output_tail: None,
+            run_id: None,
+        };
+        assert!(set_preflight(&db.conn, t.id, seq, &light).await.unwrap());
+
+        assert!(
+            !refresh_review_content(&db.conn, t.id, seq + 1, (9, 9, 9), true)
+                .await
+                .unwrap()
+        );
+        assert!(
+            refresh_review_content(&db.conn, t.id, seq, (2, 3, 4), false)
+                .await
+                .unwrap()
+        );
+        let row = get_model(&db.conn, t.id).await.unwrap();
+        assert_eq!(
+            (row.files_changed, row.additions, row.deletions),
+            (Some(2), Some(3), Some(4))
+        );
+        assert!(row.preflight.is_some(), "kept when not asked to clear it");
+
+        claim_for_run(&db.conn, t.id, WorkTaskStatus::Review, "user")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            !refresh_review_content(&db.conn, t.id, seq, (5, 5, 5), true)
+                .await
+                .unwrap(),
+            "a task that left review is its new round's to measure"
+        );
+    }
+
+    #[tokio::test]
+    async fn review_tasks_for_a_session_match_its_conversation_or_its_folder() {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-session-match").await;
+        let wt_a = seed_folder(&db, "/tmp/wt-session-match/a").await;
+        let wt_b = seed_folder(&db, "/tmp/wt-session-match/b").await;
+        let mut ids = Vec::new();
+        for (conv, wt) in [
+            (Some(11), Some(wt_a)),
+            (Some(12), Some(wt_b)),
+            (Some(13), None),
+        ] {
+            let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+            to_review(&db, t.id).await;
+            let mut active = get_model(&db.conn, t.id).await.unwrap().into_active_model();
+            active.conversation_id = Set(conv);
+            active.worktree_folder_id = Set(wt);
+            active.update(&db.conn).await.unwrap();
+            ids.push(t.id);
+        }
+        let found = |conv, folder| {
+            let conn = db.conn.clone();
+            async move {
+                list_review_tasks_for_session(&conn, conv, folder)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|t| t.id)
+                    .collect::<Vec<_>>()
+            }
+        };
+
+        assert_eq!(found(None, None).await, Vec::<i32>::new());
+        assert_eq!(found(Some(12), None).await, vec![ids[1]]);
+        assert_eq!(found(None, Some(wt_a)).await, vec![ids[0]]);
+        // One task matching both ways is listed once; the OR also picks up a
+        // second task through the other id.
+        assert_eq!(found(Some(11), Some(wt_a)).await, vec![ids[0]]);
+        assert_eq!(found(Some(13), Some(wt_b)).await, vec![ids[1], ids[2]]);
+
+        // Only review rows.
+        claim_for_run(&db.conn, ids[1], WorkTaskStatus::Review, "user")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(found(Some(12), None).await, Vec::<i32>::new());
     }
 
     #[tokio::test]
@@ -4592,6 +6092,322 @@ mod tests {
         assert!(!set_archived(&db.conn, t.id, false).await.unwrap());
     }
 
+    /// The `user_action` names a task's timeline recorded, oldest first.
+    async fn user_actions(db: &crate::db::AppDatabase, id: i32) -> Vec<String> {
+        list_events(&db.conn, id, 500)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.kind == "user_action")
+            .filter_map(|e| {
+                e.payload
+                    .and_then(|p| p.get("action").and_then(|a| a.as_str()).map(str::to_string))
+            })
+            .collect()
+    }
+
+    fn deferred(db_row: &work_task::Model) -> bool {
+        db_row.deferred_at.is_some()
+    }
+
+    /// "Handle later": a reviewed or failed task leaves the attention badge
+    /// without changing status, and comes back by hand. Everything else —
+    /// a live run, a merge in flight, a finished task, an archived or
+    /// merge-queued one — refuses the mark.
+    #[tokio::test]
+    async fn deferring_parks_a_settled_task_out_of_the_badge_and_back() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-defer").await;
+
+        // Nothing to put aside before the task has run.
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+        assert!(!set_deferred(&db.conn, t.id, true).await.unwrap());
+
+        // A live run is answered or stopped, never parked out of sight.
+        let seq = claim_for_run(&db.conn, t.id, WorkTaskStatus::Todo, "user")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(start_running(&db.conn, t.id, seq, 1, "c").await.unwrap());
+        assert!(!set_deferred(&db.conn, t.id, true).await.unwrap());
+        assert!(flip_awaiting(&db.conn, t.id, seq, true).await.unwrap());
+        assert!(!set_deferred(&db.conn, t.id, true).await.unwrap());
+        assert!(flip_awaiting(&db.conn, t.id, seq, false).await.unwrap());
+
+        // Reviewed: the badge counts it until it is put aside — and the status
+        // is untouched, so every acceptance stays on offer.
+        assert!(settle_review(&db.conn, t.id, seq, None, None)
+            .await
+            .unwrap());
+        assert_eq!(attention_count(&db.conn).await.unwrap(), 1);
+        assert!(set_deferred(&db.conn, t.id, true).await.unwrap());
+        let row = get_model(&db.conn, t.id).await.unwrap();
+        assert_eq!(row.status, WorkTaskStatus::Review);
+        assert!(deferred(&row));
+        assert!(get(&db.conn, t.id).await.unwrap().deferred_at.is_some());
+        assert_eq!(attention_count(&db.conn).await.unwrap(), 0);
+        // Once is enough; and the way back needs the mark to be there.
+        assert!(!set_deferred(&db.conn, t.id, true).await.unwrap());
+        assert!(set_deferred(&db.conn, t.id, false).await.unwrap());
+        assert!(!deferred(&get_model(&db.conn, t.id).await.unwrap()));
+        assert_eq!(attention_count(&db.conn).await.unwrap(), 1);
+        assert!(!set_deferred(&db.conn, t.id, false).await.unwrap());
+        assert_eq!(user_actions(&db, t.id).await, ["defer", "undefer"]);
+
+        // Waiting in the merge queue is an acceptance already made.
+        let intent = WorkTaskQueuedMerge {
+            message: None,
+            delete_worktree: true,
+            instructions: None,
+            queued_at: Utc::now(),
+        };
+        assert!(queue_merge(&db.conn, t.id, &intent, seq, None)
+            .await
+            .unwrap());
+        assert!(!set_deferred(&db.conn, t.id, true).await.unwrap());
+        assert!(unqueue_merge(&db.conn, t.id).await.unwrap());
+        assert!(set_deferred(&db.conn, t.id, true).await.unwrap());
+
+        // Failed: same deal. Archiving a deferred task keeps the mark (the way
+        // back out of the archive is to where it was), but an archived task is
+        // already put away and is not deferred on top.
+        let f = create(&db.conn, draft(folder_id, "f")).await.unwrap();
+        let fseq = claim_for_run(&db.conn, f.id, WorkTaskStatus::Todo, "user")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(start_running(&db.conn, f.id, fseq, 2, "cf").await.unwrap());
+        assert!(fail(
+            &db.conn,
+            f.id,
+            &[WorkTaskStatus::Running],
+            Some(fseq),
+            "agent_error",
+            None
+        )
+        .await
+        .unwrap());
+        assert_eq!(attention_count(&db.conn).await.unwrap(), 1);
+        assert!(set_archived(&db.conn, f.id, true).await.unwrap());
+        assert!(!set_deferred(&db.conn, f.id, true).await.unwrap());
+        assert!(set_archived(&db.conn, f.id, false).await.unwrap());
+        assert!(set_deferred(&db.conn, f.id, true).await.unwrap());
+        assert_eq!(attention_count(&db.conn).await.unwrap(), 0);
+        assert!(set_archived(&db.conn, f.id, true).await.unwrap());
+        assert!(set_archived(&db.conn, f.id, false).await.unwrap());
+        let row = get_model(&db.conn, f.id).await.unwrap();
+        assert_eq!(row.status, WorkTaskStatus::Failed);
+        assert!(deferred(&row));
+        assert_eq!(attention_count(&db.conn).await.unwrap(), 0);
+
+        // Finished or stopped tasks have nothing left to handle.
+        let d = create(&db.conn, draft(folder_id, "d")).await.unwrap();
+        to_review(&db, d.id).await;
+        assert!(complete_without_merge(&db.conn, d.id, "nothing to merge")
+            .await
+            .unwrap());
+        assert!(!set_deferred(&db.conn, d.id, true).await.unwrap());
+        let c = create(&db.conn, draft(folder_id, "c")).await.unwrap();
+        assert!(cancel(&db.conn, c.id, None).await.unwrap());
+        assert!(!set_deferred(&db.conn, c.id, true).await.unwrap());
+    }
+
+    /// A fresh task run to review and then put aside — returns (id, run_seq).
+    async fn parked(db: &crate::db::AppDatabase, folder_id: i32, title: &str) -> (i32, i32) {
+        let t = create(&db.conn, draft(folder_id, title)).await.unwrap();
+        let seq = to_review(db, t.id).await;
+        assert!(set_deferred(&db.conn, t.id, true).await.unwrap());
+        (t.id, seq)
+    }
+
+    /// A deferred task is picked back up by HANDLING it, whichever way: every
+    /// door out of review / failed takes the mark along, so the task that ran
+    /// again — or bounced — lands back in "needs you" instead of the pile it
+    /// was parked on.
+    #[tokio::test]
+    async fn every_way_of_handling_a_deferred_task_clears_the_mark() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-defer-exit").await;
+        let merge = WorkTaskMergeState {
+            pre_merge_head: "abc".into(),
+            message: String::new(),
+            strategy: "squash".into(),
+            delete_worktree: false,
+            auto_message: true,
+            ..Default::default()
+        };
+        // 继续处理: the follow-up claim starts the next run, and that run's
+        // review is news again.
+        let (id, _) = parked(&db, folder_id, "followed").await;
+        let seq = claim_for_run(&db.conn, id, WorkTaskStatus::Review, "user")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!deferred(&get_model(&db.conn, id).await.unwrap()));
+        assert!(start_running(&db.conn, id, seq, 1, "c2").await.unwrap());
+        assert!(settle_review(&db.conn, id, seq, None, None).await.unwrap());
+        assert!(!deferred(&get_model(&db.conn, id).await.unwrap()));
+        assert_eq!(attention_count(&db.conn).await.unwrap(), 1);
+
+        // A user's merge picks it up — and a bounced landing is theirs to see.
+        let (id, seq) = parked(&db, folder_id, "merged").await;
+        let merge_seq = begin_merge(&db.conn, id, &merge, seq, false, None)
+            .await
+            .unwrap()
+            .expect("a user's merge takes a deferred task");
+        assert!(!deferred(&get_model(&db.conn, id).await.unwrap()));
+        assert!(
+            merge_back_to_review(&db.conn, id, Some(merge_seq), Some("conflict".into()), None)
+                .await
+                .unwrap()
+        );
+        assert!(!deferred(&get_model(&db.conn, id).await.unwrap()));
+
+        // Queued behind another landing: its place in line belongs on review.
+        let (id, seq) = parked(&db, folder_id, "queued").await;
+        let intent = WorkTaskQueuedMerge {
+            message: None,
+            delete_worktree: false,
+            instructions: None,
+            queued_at: Utc::now(),
+        };
+        assert!(queue_merge(&db.conn, id, &intent, seq, None).await.unwrap());
+        assert!(!deferred(&get_model(&db.conn, id).await.unwrap()));
+
+        // Delivered, completed outright, or stopped.
+        let (id, seq) = parked(&db, folder_id, "delivered").await;
+        let delivery = WorkTaskMergeState {
+            op: WorkTaskMergeOp::DeliverPr,
+            remote_branch: Some("task/x".into()),
+            expected_head: Some("abc123".into()),
+            ..Default::default()
+        };
+        assert!(begin_delivery(&db.conn, id, &delivery, seq)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(!deferred(&get_model(&db.conn, id).await.unwrap()));
+        let (id, _) = parked(&db, folder_id, "completed").await;
+        assert!(complete_without_merge(&db.conn, id, "nothing to merge")
+            .await
+            .unwrap());
+        assert!(!deferred(&get_model(&db.conn, id).await.unwrap()));
+        let (id, _) = parked(&db, folder_id, "abandoned").await;
+        assert!(cancel(&db.conn, id, None).await.unwrap());
+        assert!(!deferred(&get_model(&db.conn, id).await.unwrap()));
+
+        // A deferred failure is retried by the same claim, and the retry's own
+        // failure is news too.
+        let f = create(&db.conn, draft(folder_id, "retried")).await.unwrap();
+        let seq = claim_for_run(&db.conn, f.id, WorkTaskStatus::Todo, "user")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(start_running(&db.conn, f.id, seq, 1, "cf").await.unwrap());
+        assert!(fail(
+            &db.conn,
+            f.id,
+            &[WorkTaskStatus::Running],
+            Some(seq),
+            "agent_error",
+            None
+        )
+        .await
+        .unwrap());
+        assert!(set_deferred(&db.conn, f.id, true).await.unwrap());
+        let seq = claim_for_run(&db.conn, f.id, WorkTaskStatus::Failed, "user")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!deferred(&get_model(&db.conn, f.id).await.unwrap()));
+        assert!(start_running(&db.conn, f.id, seq, 1, "cf2").await.unwrap());
+        assert!(fail(
+            &db.conn,
+            f.id,
+            &[WorkTaskStatus::Running],
+            Some(seq),
+            "agent_error",
+            None
+        )
+        .await
+        .unwrap());
+        assert!(!deferred(&get_model(&db.conn, f.id).await.unwrap()));
+    }
+
+    /// The unattended merge never lands a task the user put aside: the CAS
+    /// itself refuses it (the sweep's snapshot can predate the deferral), and
+    /// the row is left exactly as the user parked it.
+    #[tokio::test]
+    async fn auto_merge_refuses_a_deferred_task() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-defer-auto").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+        let seq = to_review(&db, t.id).await;
+        let state = WorkTaskMergeState {
+            pre_merge_head: "abc".into(),
+            message: String::new(),
+            strategy: "squash".into(),
+            delete_worktree: true,
+            auto_message: true,
+            ..Default::default()
+        };
+        assert!(set_deferred(&db.conn, t.id, true).await.unwrap());
+        assert!(begin_merge(&db.conn, t.id, &state, seq, true, None)
+            .await
+            .unwrap()
+            .is_none());
+        let row = get_model(&db.conn, t.id).await.unwrap();
+        assert_eq!(row.status, WorkTaskStatus::Review);
+        assert_eq!(row.run_seq, seq);
+        assert!(deferred(&row));
+
+        // Brought back, the same dispatch goes through.
+        assert!(set_deferred(&db.conn, t.id, false).await.unwrap());
+        assert!(begin_merge(&db.conn, t.id, &state, seq, true, None)
+            .await
+            .unwrap()
+            .is_some());
+    }
+
+    /// An unattended dispatch refused for a reason of its own (wrong base
+    /// branch, staged changes) after the user put the task aside — its sweep
+    /// snapshot predates the deferral — must not banner the parked row: that
+    /// would both decorate a task the user said can wait and latch it out of
+    /// the auto-merge it gets again once it is back in "needs you".
+    #[tokio::test]
+    async fn an_unattended_refusal_leaves_a_deferred_task_unbannered() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-defer-banner").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+        let seq = to_review(&db, t.id).await;
+
+        assert!(set_deferred(&db.conn, t.id, true).await.unwrap());
+        assert!(
+            !set_review_error(&db.conn, t.id, seq, "auto-merge failed: staged changes")
+                .await
+                .unwrap()
+        );
+        let row = get_model(&db.conn, t.id).await.unwrap();
+        assert!(row.last_error.is_none());
+        assert!(deferred(&row));
+
+        // Back in "needs you", the next refusal banners as before.
+        assert!(set_deferred(&db.conn, t.id, false).await.unwrap());
+        assert!(
+            set_review_error(&db.conn, t.id, seq, "auto-merge failed: staged changes")
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            get_model(&db.conn, t.id)
+                .await
+                .unwrap()
+                .last_error
+                .as_deref(),
+            Some("auto-merge failed: staged changes")
+        );
+    }
+
     #[tokio::test]
     async fn template_save_upserts_by_name() {
         let db = fresh_in_memory_db().await;
@@ -4626,6 +6442,7 @@ mod tests {
         crate::models::WorkTaskSource {
             kind: "forge_issue".to_string(),
             key: key.to_string(),
+            extra_keys: Vec::new(),
             meta: serde_json::json!({
                 "provider": "github",
                 "server_host": "github.com",
@@ -4672,7 +6489,11 @@ mod tests {
             .await
             .unwrap()
         {
-            ForgeCreateOutcome::Duplicate(existing) => assert_eq!(existing.id, first.id),
+            ForgeCreateOutcome::Duplicate(conflicts) => {
+                assert_eq!(conflicts.len(), 1);
+                assert_eq!(conflicts[0].key, key);
+                assert_eq!(conflicts[0].existing.id, first.id);
+            }
             other => panic!("expected Duplicate, got {other:?}"),
         }
         // …unless the user explicitly forces a second one.
@@ -4839,6 +6660,197 @@ mod tests {
         assert_eq!((created, duplicate), (1, 1));
     }
 
+    /// A task made from several related issues: the lead first, then the rest.
+    fn issues_source(keys: &[&str]) -> crate::models::WorkTaskSource {
+        let mut source = source(keys[0]);
+        source.extra_keys = keys[1..].iter().map(|k| k.to_string()).collect();
+        source
+    }
+
+    const K3: &str = "github:github.com:acme/app:issue:3";
+    const K5: &str = "github:github.com:acme/app:issue:5";
+    const K9: &str = "github:github.com:acme/app:issue:9";
+    const K12: &str = "github:github.com:acme/app:issue:12";
+
+    /// Every item of a task made from several issues counts, not only the
+    /// lead its own column names: a later trigger on ANY of them is a dedup
+    /// hit naming each colliding item, the reverse lookup maps each of them
+    /// to the task, and auto-processing's "ever had a task" knows them all —
+    /// soft-deleted or not.
+    #[tokio::test]
+    async fn every_item_of_a_task_of_several_is_seen_by_dedup_lookup_and_scan() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-forge-several").await;
+
+        let combined = match create_from_forge(
+            &db.conn,
+            draft(folder_id, "#3 #5 #9 · login"),
+            issues_source(&[K3, K5, K9]),
+            false,
+        )
+        .await
+        .unwrap()
+        {
+            ForgeCreateOutcome::Created(t) => t,
+            other => panic!("expected Created, got {other:?}"),
+        };
+        assert_eq!(combined.source_key.as_deref(), Some(K3), "the lead, for display");
+        assert_eq!(
+            task_source_keys(&db.conn, combined.id).await.unwrap(),
+            vec![K3, K5, K9]
+        );
+        let events = list_events(&db.conn, combined.id, 100).await.unwrap();
+        let linked = events
+            .iter()
+            .find(|e| e.kind == "forge_linked")
+            .and_then(|e| e.payload.clone())
+            .expect("forge_linked");
+        assert_eq!(linked["source_key"], serde_json::json!(K3));
+        assert_eq!(linked["source_keys"], serde_json::json!([K3, K5, K9]));
+
+        // A one-issue trigger on an item that is NOT the lead.
+        match create_from_forge(&db.conn, draft(folder_id, "#5"), source(K5), false)
+            .await
+            .unwrap()
+        {
+            ForgeCreateOutcome::Duplicate(conflicts) => {
+                let hit: Vec<(&str, i32)> = conflicts
+                    .iter()
+                    .map(|c| (c.key.as_str(), c.existing.id))
+                    .collect();
+                assert_eq!(hit, vec![(K5, combined.id)]);
+            }
+            other => panic!("expected Duplicate, got {other:?}"),
+        }
+        // Another task of several overlapping two of them: both named, in the
+        // new task's own order.
+        match create_from_forge(
+            &db.conn,
+            draft(folder_id, "#9 #12 #5"),
+            issues_source(&[K9, K12, K5]),
+            false,
+        )
+        .await
+        .unwrap()
+        {
+            ForgeCreateOutcome::Duplicate(conflicts) => {
+                let keys: Vec<&str> = conflicts.iter().map(|c| c.key.as_str()).collect();
+                assert_eq!(keys, vec![K9, K5]);
+            }
+            other => panic!("expected Duplicate, got {other:?}"),
+        }
+        // The refused attempts left no rows behind, item rows included.
+        assert_eq!(list(&db.conn, Some(folder_id)).await.unwrap().len(), 1);
+        assert_eq!(
+            source_keys_ever_tasked(&db.conn, &[K12.to_string()]).await.unwrap().len(),
+            0
+        );
+
+        let found = lookup_latest_by_source_keys(
+            &db.conn,
+            &[K5.to_string(), K9.to_string(), K12.to_string()],
+        )
+        .await
+        .unwrap();
+        let mapped: Vec<(&str, i32)> = found.iter().map(|(k, t)| (k.as_str(), t.id)).collect();
+        assert_eq!(mapped.len(), 2, "{mapped:?}");
+        assert!(mapped.contains(&(K5, combined.id)) && mapped.contains(&(K9, combined.id)));
+        let items = source_keys_of_tasks(&db.conn, &[combined.id]).await.unwrap();
+        assert_eq!(items.get(&combined.id), Some(&vec![K3.to_string(), K5.to_string(), K9.to_string()]));
+
+        let wanted = [K3, K5, K9, K12].map(str::to_string);
+        let ever = source_keys_ever_tasked(&db.conn, &wanted).await.unwrap();
+        assert_eq!(ever.len(), 3);
+        assert!(!ever.contains(K12));
+
+        // Deleted: gone from the lookup, still "handled" for the scan.
+        assert!(soft_delete(&db.conn, combined.id, WorkTaskStatus::Todo).await.unwrap());
+        assert!(lookup_latest_by_source_keys(&db.conn, &[K5.to_string()])
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(source_keys_ever_tasked(&db.conn, &wanted)
+            .await
+            .unwrap()
+            .contains(K9));
+        // …and no longer a dedup hit.
+        assert!(matches!(
+            create_from_forge(&db.conn, draft(folder_id, "#9"), source(K9), false)
+                .await
+                .unwrap(),
+            ForgeCreateOutcome::Created(_)
+        ));
+    }
+
+    /// The resurrection guards cover every item, both ways round: a failed
+    /// task of several cannot come back while one of its issues has a live
+    /// task of its own, and a failed one-issue task cannot come back while a
+    /// live task of several holds its issue.
+    #[tokio::test]
+    async fn resurrection_guards_cover_every_item_of_a_task_of_several() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-forge-several-res").await;
+        let set_status = |id: i32, status: WorkTaskStatus| {
+            let conn = db.conn.clone();
+            async move {
+                let mut active: work_task::ActiveModel =
+                    get_model(&conn, id).await.unwrap().into_active_model();
+                active.status = Set(status);
+                active.update(&conn).await.unwrap();
+            }
+        };
+        let created = |outcome: ForgeCreateOutcome| match outcome {
+            ForgeCreateOutcome::Created(t) => t,
+            other => panic!("expected Created, got {other:?}"),
+        };
+
+        let combined = created(
+            create_from_forge(&db.conn, draft(folder_id, "#3 #5"), issues_source(&[K3, K5]), false)
+                .await
+                .unwrap(),
+        );
+        set_status(combined.id, WorkTaskStatus::Failed).await;
+        let single =
+            created(create_from_forge(&db.conn, draft(folder_id, "#5"), source(K5), false).await.unwrap());
+
+        let err = claim_for_run_with_action(
+            &db.conn,
+            combined.id,
+            WorkTaskStatus::Failed,
+            "user",
+            None,
+            false,
+        )
+        .await
+        .expect_err("#5 is live elsewhere");
+        assert!(err.to_string().contains("duplicate_active_source"), "{err}");
+        assert!(err.to_string().contains(&format!("#{}", single.id)), "{err}");
+        set_status(combined.id, WorkTaskStatus::Canceled).await;
+        let err = requeue_canceled(&db.conn, combined.id, None, &[], false)
+            .await
+            .expect_err("requeue too");
+        assert!(err.to_string().contains("duplicate_active_source"), "{err}");
+
+        // The other way round.
+        set_status(single.id, WorkTaskStatus::Failed).await;
+        let _holder = created(
+            create_from_forge(&db.conn, draft(folder_id, "#5 #9"), issues_source(&[K5, K9]), false)
+                .await
+                .unwrap(),
+        );
+        let err = claim_for_run_with_action(
+            &db.conn,
+            single.id,
+            WorkTaskStatus::Failed,
+            "user",
+            None,
+            false,
+        )
+        .await
+        .expect_err("#5 is held by a task of several");
+        assert!(err.to_string().contains("duplicate_active_source"), "{err}");
+    }
+
     /// Resurrection guards on BOTH roads back into the active set: a failed
     /// retry claim and a canceled requeue must refuse while another active
     /// task holds the same source key — and the explicit override waives it.
@@ -4938,5 +6950,272 @@ mod tests {
         .unwrap()
         .is_some());
         let _ = replacement;
+    }
+
+    /// "Move to project" refuses a task's conversation whatever the task's
+    /// status — a finished task still owns its session — but not once the task
+    /// itself is deleted.
+    #[tokio::test]
+    async fn conversations_bound_to_tasks_ignores_status_but_not_deletion() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-bound-convs").await;
+        let bind = |id: i32, conv: i32, status: WorkTaskStatus, deleted: bool| {
+            let conn = db.conn.clone();
+            async move {
+                let mut q = work_task::Entity::update_many()
+                    .col_expr(work_task::Column::ConversationId, Expr::value(Some(conv)))
+                    .col_expr(work_task::Column::Status, Expr::value(status_str(status)));
+                if deleted {
+                    q = q.col_expr(work_task::Column::DeletedAt, Expr::value(Some(Utc::now())));
+                }
+                q.filter(work_task::Column::Id.eq(id))
+                    .exec(&conn)
+                    .await
+                    .unwrap();
+            }
+        };
+        let done = create(&db.conn, draft(folder_id, "done")).await.unwrap();
+        let running = create(&db.conn, draft(folder_id, "running")).await.unwrap();
+        let deleted = create(&db.conn, draft(folder_id, "deleted")).await.unwrap();
+        bind(done.id, 11, WorkTaskStatus::Done, false).await;
+        bind(running.id, 12, WorkTaskStatus::Running, false).await;
+        bind(deleted.id, 13, WorkTaskStatus::Done, true).await;
+
+        let bound = conversations_bound_to_tasks(&db.conn, &[11, 12, 13, 14])
+            .await
+            .unwrap();
+        assert_eq!(bound, [11, 12].into_iter().collect());
+        assert!(conversations_bound_to_tasks(&db.conn, &[])
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    // ── codeg#1179: frozen task configs and bound tasks ────────────────────
+
+    async fn settings_with(db: &crate::db::AppDatabase, folder_id: i32, agent: &str, model: &str) {
+        let mut st = WorkTaskFolderSettings {
+            default_agent_type: Some(agent.to_string()),
+            ..Default::default()
+        };
+        st.config_values.insert("model".into(), model.into());
+        settings_set(&db.conn, folder_id, &st).await.unwrap();
+    }
+
+    fn cfg_of(info: &WorkTaskInfo) -> WorkTaskConfig {
+        serde_json::from_value(info.config.clone()).unwrap()
+    }
+
+    async fn bind_conversation(
+        db: &crate::db::AppDatabase,
+        task_id: i32,
+        folder_id: i32,
+        agent: crate::models::AgentType,
+    ) -> i32 {
+        let conv = crate::db::service::conversation_service::create(
+            &db.conn, folder_id, agent, None, None,
+        )
+        .await
+        .unwrap();
+        work_task::Entity::update_many()
+            .col_expr(work_task::Column::ConversationId, Expr::value(Some(conv.id)))
+            .filter(work_task::Column::Id.eq(task_id))
+            .exec(&db.conn)
+            .await
+            .unwrap();
+        conv.id
+    }
+
+    #[tokio::test]
+    async fn a_created_task_keeps_its_settings_when_they_change_later() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-1179-freeze").await;
+        settings_with(&db, folder_id, "codex", "gpt-a").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+        let cfg = cfg_of(&t);
+        assert!(cfg.agent_config_frozen);
+        assert_eq!(cfg.agent_type.as_deref(), Some("codex"));
+        assert_eq!(cfg.config_values.get("model").map(String::as_str), Some("gpt-a"));
+
+        settings_with(&db, folder_id, "claude_code", "opus").await;
+        let row = get_model(&db.conn, t.id).await.unwrap();
+        let now = backfill_frozen_config(&db.conn, &row).await.unwrap().unwrap();
+        assert_eq!(now.agent_type.as_deref(), Some("codex"));
+        assert_eq!(now.config_values.get("model").map(String::as_str), Some("gpt-a"));
+    }
+
+    #[tokio::test]
+    async fn nothing_resolvable_still_freezes_with_no_agent() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-1179-none").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+        let cfg = cfg_of(&t);
+        assert!(cfg.agent_config_frozen);
+        assert_eq!(cfg.agent_type, None);
+        // Settings added afterwards never configure it silently.
+        settings_with(&db, folder_id, "codex", "gpt-a").await;
+        let (agent, _, _) = resolve_agent_config(&db.conn, folder_id, &cfg).await.unwrap();
+        assert_eq!(agent, None);
+    }
+
+    #[tokio::test]
+    async fn a_legacy_task_is_frozen_at_launch_and_loses_to_a_concurrent_edit() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-1179-legacy").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+        // Make it look pre-upgrade: no tuple, no marker.
+        work_task::Entity::update_many()
+            .col_expr(
+                work_task::Column::Config,
+                Expr::value(
+                    serde_json::json!({
+                        "display_text": "do the thing",
+                        "prompt_blocks": [{ "type": "text", "text": "do the thing" }],
+                    })
+                    .to_string(),
+                ),
+            )
+            .filter(work_task::Column::Id.eq(t.id))
+            .exec(&db.conn)
+            .await
+            .unwrap();
+        settings_with(&db, folder_id, "codex", "gpt-a").await;
+        let row = get_model(&db.conn, t.id).await.unwrap();
+
+        // A concurrent edit changed the stored config: the write-back loses.
+        let mut raced = row.clone();
+        raced.config = "{}".into();
+        assert!(backfill_frozen_config(&db.conn, &raced).await.unwrap().is_none());
+
+        let frozen = backfill_frozen_config(&db.conn, &row).await.unwrap().unwrap();
+        assert!(frozen.agent_config_frozen);
+        assert_eq!(frozen.agent_type.as_deref(), Some("codex"));
+        let stored: WorkTaskConfig =
+            serde_json::from_str(&get_model(&db.conn, t.id).await.unwrap().config).unwrap();
+        assert!(stored.agent_config_frozen);
+    }
+
+    #[tokio::test]
+    async fn an_untouched_or_ambiguous_edit_keeps_the_current_tuple() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-1179-untouched").await;
+        settings_with(&db, folder_id, "codex", "gpt-a").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+
+        // Flagged untouched: the stale dialog's tuple is ignored.
+        let mut stale = draft(folder_id, "renamed");
+        stale.config["agent_type"] = serde_json::json!("claude_code");
+        let flags = WorkTaskUpdateFlags {
+            selection_untouched: true,
+            selection_reset: false,
+            ..Default::default()
+        };
+        let u = update_with(&db.conn, t.id, stale, flags).await.unwrap();
+        assert_eq!(u.title, "renamed");
+        assert_eq!(cfg_of(&u).agent_type.as_deref(), Some("codex"));
+        assert!(cfg_of(&u).agent_config_frozen);
+
+        // An old client's unflagged `agent_type: null` save: kept too.
+        let u = update(&db.conn, t.id, draft(folder_id, "again")).await.unwrap();
+        assert_eq!(cfg_of(&u).agent_type.as_deref(), Some("codex"));
+        assert!(cfg_of(&u).agent_config_frozen);
+
+        // An explicit other tuple is a change, saved frozen.
+        let mut explicit = draft(folder_id, "again");
+        explicit.config["agent_type"] = serde_json::json!("claude_code");
+        let u = update(&db.conn, t.id, explicit).await.unwrap();
+        assert_eq!(cfg_of(&u).agent_type.as_deref(), Some("claude_code"));
+        assert!(cfg_of(&u).agent_config_frozen);
+
+        // A reset resolves the folder's settings now.
+        let reset = WorkTaskUpdateFlags {
+            selection_untouched: false,
+            selection_reset: true,
+            ..Default::default()
+        };
+        let u = update_with(&db.conn, t.id, draft(folder_id, "again"), reset)
+            .await
+            .unwrap();
+        assert_eq!(cfg_of(&u).agent_type.as_deref(), Some("codex"));
+    }
+
+    #[tokio::test]
+    async fn a_bound_task_keeps_its_agent_and_tuple() {
+        use crate::models::AgentType;
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-1179-bound").await;
+        settings_with(&db, folder_id, "codex", "gpt-a").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+        bind_conversation(&db, t.id, folder_id, AgentType::Codex).await;
+
+        let mut other_agent = draft(folder_id, "t");
+        other_agent.config["agent_type"] = serde_json::json!("claude_code");
+        assert!(matches!(
+            update(&db.conn, t.id, other_agent).await,
+            Err(DbError::Validation(_))
+        ));
+
+        // Same agent, other model: kept verbatim (changed in the conversation).
+        let mut other_model = draft(folder_id, "t2");
+        other_model.config["agent_type"] = serde_json::json!("codex");
+        other_model.config["config_values"] = serde_json::json!({ "model": "gpt-b" });
+        let u = update(&db.conn, t.id, other_model).await.unwrap();
+        assert_eq!(u.title, "t2");
+        assert_eq!(
+            cfg_of(&u).config_values.get("model").map(String::as_str),
+            Some("gpt-a")
+        );
+
+        // A reset resolving to another agent (or none) is refused.
+        settings_with(&db, folder_id, "claude_code", "opus").await;
+        let reset = WorkTaskUpdateFlags {
+            selection_untouched: false,
+            selection_reset: true,
+            ..Default::default()
+        };
+        assert!(update_with(&db.conn, t.id, draft(folder_id, "t"), reset)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn a_deleted_task_cannot_be_edited() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-1179-deleted").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+        assert!(soft_delete(&db.conn, t.id, WorkTaskStatus::Todo).await.unwrap());
+        assert!(matches!(
+            update(&db.conn, t.id, draft(folder_id, "x")).await,
+            Err(DbError::NotFound(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_replaced_conversation_keeps_a_selection_of_its_own() {
+        use crate::models::AgentType;
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-1179-outgoing").await;
+        settings_with(&db, folder_id, "codex", "gpt-a").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+        let old = bind_conversation(&db, t.id, folder_id, AgentType::Codex).await;
+        let row = get_model(&db.conn, t.id).await.unwrap();
+        freeze_outgoing_task_conversation(&db.conn, &row, Some(old + 1000))
+            .await
+            .unwrap();
+        let sel = crate::db::service::conversation_service::get_selector_state(&db.conn, old)
+            .await
+            .unwrap()
+            .expect("frozen");
+        assert_eq!(sel.config_values.get("model").map(String::as_str), Some("gpt-a"));
+
+        // Another agent's conversation gets an empty one (replay nothing).
+        let other = bind_conversation(&db, t.id, folder_id, AgentType::ClaudeCode).await;
+        let row = get_model(&db.conn, t.id).await.unwrap();
+        freeze_outgoing_task_conversation(&db.conn, &row, None).await.unwrap();
+        let sel = crate::db::service::conversation_service::get_selector_state(&db.conn, other)
+            .await
+            .unwrap()
+            .expect("frozen");
+        assert_eq!(sel, crate::models::ConversationSelection::default());
     }
 }

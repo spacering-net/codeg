@@ -9,6 +9,7 @@ import {
   Compass,
   FileText,
   Globe,
+  GlobeLock,
   Search,
   KeyRound,
 } from "lucide-react"
@@ -24,10 +25,19 @@ import {
   type PermissionChangeScope,
   type PermissionOptionChange,
 } from "@/lib/permission-request"
+import { useAgentVocabulary } from "@/hooks/use-agent-vocabulary"
+import type { AgentType } from "@/lib/types"
 
 interface PermissionDialogProps {
   permission: PendingPermission | null
   onRespond: (requestId: string, optionId: string) => void
+  /**
+   * Which agent asked. Only used to localise option labels an agent hardcodes
+   * in one language (`deepseek-acp` ships Simplified Chinese with no locale
+   * switch); optional so a caller with no agent in scope keeps today's verbatim
+   * rendering.
+   */
+  agentType?: AgentType | null
 }
 
 function formatKindLabel(kind: string, fallbackLabel: string): string {
@@ -52,11 +62,19 @@ const CHANGE_SCOPE_LABEL_KEYS = {
 export function PermissionDialog({
   permission,
   onRespond,
+  agentType,
 }: PermissionDialogProps) {
   const t = useTranslations("Folder.chat.permissionDialog")
+  const vocabulary = useAgentVocabulary(agentType)
   const parsed = useMemo(
     () => parsePermissionToolCall(permission?.tool_call),
     [permission?.tool_call]
+  )
+  // Both the grant list and the buttons below read this, so the two never
+  // disagree about what an option is called.
+  const options = useMemo(
+    () => vocabulary.permissionOptions(permission?.options ?? []),
+    [permission?.options, vocabulary]
   )
   // What each option would actually grant, keyed by option id. Empty for every
   // agent that ships no option-level `_meta.permission` — which, on the pinned
@@ -86,7 +104,12 @@ export function PermissionDialog({
   const hasPlanMarkdown = Boolean(parsed.planMarkdown)
   const hasAllowedPrompts = parsed.allowedPrompts.length > 0
   const hasWeb = Boolean(parsed.url) || Boolean(parsed.query)
+  // A Claude Code sandbox asking to let a command reach a host. The request
+  // is only that host, so it gets the CLI's own framing rather than a dump of
+  // the request: what is being asked, and of which host.
+  const networkHost = parsed.networkHost
   const hasOtherStructured =
+    Boolean(networkHost) ||
     Boolean(parsed.command) ||
     hasFileChanges ||
     hasPlan ||
@@ -111,9 +134,13 @@ export function PermissionDialog({
                 0.63–0.72 `_meta.claudeCode.title`, else `_meta.permission.title`
                 — codex ≥1.7.0 and claude ≥0.73.0, whose permission tool calls
                 carry no `claudeCode` block at all) over the raw title (the
-                shell command, which the command block below already shows). */}
+                shell command, which the command block below already shows).
+                `parsePermissionToolCall` also drops a description that IS that
+                command, which is what claude-agent-acp ≥0.79.0 puts there. */}
             <span className="truncate">
-              {parsed.description ?? parsed.title}
+              {networkHost
+                ? t("networkRequest")
+                : (parsed.description ?? parsed.title)}
             </span>
           </div>
           {/* The agent's own reason for asking, when it gave one — strictly
@@ -121,7 +148,8 @@ export function PermissionDialog({
               the only place codex-acp ≥1.7.0 still carries it. Wraps rather
               than truncating: this is the sentence the decision rests on. */}
           <p className="text-xs text-muted-foreground">
-            {parsed.reason ?? t("subtitle")}
+            {parsed.reason ??
+              (networkHost ? t("networkQuestion") : t("subtitle"))}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
@@ -133,12 +161,24 @@ export function PermissionDialog({
             </Badge>
           ) : null}
           <Badge variant="outline" className="text-3xs">
-            {formatKindLabel(parsed.normalizedKind, t("kindFallbackTool"))}
+            {networkHost
+              ? t("kindNetwork")
+              : formatKindLabel(parsed.normalizedKind, t("kindFallbackTool"))}
           </Badge>
         </div>
       </div>
 
       <div className="mt-3 max-h-[min(36vh,18rem)] space-y-2 overflow-y-auto pr-1">
+        {networkHost && (
+          <div className="flex items-center gap-2 rounded-md border border-border/60 bg-muted/20 p-2 text-xs">
+            <GlobeLock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span className="text-muted-foreground">{t("networkHost")}</span>
+            <span className="break-all font-mono text-foreground/90" dir="ltr">
+              {networkHost}
+            </span>
+          </div>
+        )}
+
         {parsed.command && (
           <div className="space-y-1.5 rounded-md border border-border/60 bg-muted/20 p-2">
             <div className="flex items-center gap-1 text-xs text-muted-foreground">
@@ -271,7 +311,7 @@ export function PermissionDialog({
               <span>{t("optionGrants")}</span>
             </div>
             <div className="space-y-2 rounded-md bg-muted/40 p-2">
-              {permission.options.map((opt) => {
+              {options.map((opt) => {
                 const changes = optionChanges[opt.option_id] ?? []
                 if (changes.length === 0) return null
                 return (
@@ -324,13 +364,20 @@ export function PermissionDialog({
         )}
       </div>
 
+      {/* `_meta.permission.defaultToNo` (claude-agent-acp ≥0.77.0) marks an ask
+          that "must not be approvable by a stray keystroke". codeg pre-selects
+          nothing and binds no key, and the adapter already sends the reject
+          options first — so all that is left is the emphasis, which today puts
+          the single filled button on "Allow". Inverting it keeps every option
+          one click away while making the decline the one the eye lands on. */}
       <div className="mt-3 flex flex-wrap gap-2">
-        {permission.options.map((opt) => {
+        {options.map((opt) => {
           const isReject = opt.kind.startsWith("reject")
+          const emphasized = parsed.defaultToNo ? isReject : !isReject
           return (
             <Button
               key={opt.option_id}
-              variant={isReject ? "outline" : "default"}
+              variant={emphasized ? "default" : "outline"}
               className="h-auto min-h-9 whitespace-normal break-words text-left"
               onClick={() => onRespond(permission.request_id, opt.option_id)}
             >

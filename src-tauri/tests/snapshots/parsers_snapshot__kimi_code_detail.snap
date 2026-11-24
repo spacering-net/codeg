@@ -54,7 +54,7 @@ expression: detail
         {
           "type": "tool_result",
           "tool_use_id": "Read_0",
-          "output_preview": "{\"content\":\"export const x = 1\\nexport const y = 2\",\"start_line\":1}",
+          "output_preview": "{\"start_line\":1,\"content\":\"export const x = 1\\nexport const y = 2\"}",
           "is_error": false
         }
       ],

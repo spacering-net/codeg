@@ -15,13 +15,12 @@ import {
 } from "@/lib/panel-state-storage"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { detectPlatform } from "@/hooks/use-platform"
+import type { AuxPanelTab } from "@/lib/aux-panel-tab-order"
 import { isDesktop } from "@/lib/platform"
 
-export type AuxPanelTab =
-  | "session_details"
-  | "file_tree"
-  | "changes"
-  | "git_log"
+// Defined beside the list it is derived from, so the tab ids and the stored
+// rail order can't drift apart.
+export type { AuxPanelTab }
 
 const STORAGE_KEY = "workspace:right-sidebar"
 
@@ -30,11 +29,12 @@ const MIN_WIDTH = 200
 const MAX_WIDTH = 900
 const DEFAULT_IS_OPEN = false
 
-// The tabs now sit on their own row below the fixed top-right window-chrome
-// overlay (terminal/aux/settings), so they no longer need extra width to clear
-// it. The minimum only has to keep that overlay — and, on Windows/Linux, the
-// native caption strip beside it (~116 + 138) — from spilling past the panel's
-// left edge over the middle column. Elsewhere the base 200 is plenty.
+// The tabs sit on the vertical rail at the panel's right edge, below the fixed
+// top-right window-chrome overlay (terminal/aux/settings), so they need no
+// extra width to clear it. The minimum only has to keep that overlay — and, on
+// Windows/Linux, the native caption strip beside it (~116 + 138) — from
+// spilling past the panel's left edge over the middle column. Elsewhere the
+// base 200 is plenty.
 function resolveAuxMinWidth(): number {
   const platform = detectPlatform()
   if (isDesktop() && (platform === "windows" || platform === "linux")) {
