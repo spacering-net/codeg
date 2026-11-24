@@ -6449,6 +6449,11 @@ export interface DeepSeekCatalogModel {
    *  untouched. Dropping it does not fail: it silently moves that model to the
    *  other delivery mode, which is why it must survive a round trip. */
   systemPromptUpdate?: "in-history"
+  /** How a mid-session change to the tool list reaches this route (DSH 0.2,
+   *  deepseek-acp 0.12.0 on). Carried through untouched like
+   *  `systemPromptUpdate`; the agent's own default model declares
+   *  `"addition-only"`, which keeps the cached prompt prefix. */
+  toolUpdate?: "in-history" | "addition-only"
 }
 
 /** What the settings panel reads about the stored catalog. */
