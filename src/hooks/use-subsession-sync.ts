@@ -34,8 +34,15 @@ function byCreatedAtDesc(
 // tombstone is permanent until FIFO-evicted.
 const DELETED_TOMBSTONE_CAP = 512
 
+// FIFO bound for the ids seen as roots. Most are roots that never were
+// children (a harmless no-op to remember); the bound only has to outlast one
+// child fetch, so the recently-touched end is what matters — a re-upserted id
+// moves to the fresh end.
+const ROOT_IDS_CAP = 512
+
 /**
- * Real-time sync for the sidebar's delegation sub-session subtree.
+ * Real-time sync for the sidebar's sub-session subtree: delegation children
+ * and ask conversations.
  *
  * Roots are handled by `AppWorkspaceProvider`'s own `conversation://changed`
  * subscription (which ignores `parent_id != null`); this is its mirror for
@@ -61,8 +68,13 @@ export function useSubsessionSync(params: {
    *  can't resurrect a deleted child — the child-cache analog of the root list's
    *  deletion guard. */
   deletedChildIdsRef: RefObject<Set<number>>
+  /** FIFO-bounded ids an upsert has shown as ROOTS (`parent_id` null), shared
+   *  the same way. A root never becomes a child, so a stale fetch snapshot or a
+   *  late upsert still showing one nested — an ask conversation converted into
+   *  an ordinary one while it was in flight — must not nest it back. */
+  rootIdsRef: RefObject<Set<number>>
 }): void {
-  const { setChildrenByParent, deletedChildIdsRef } = params
+  const { setChildrenByParent, deletedChildIdsRef, rootIdsRef } = params
 
   useEffect(() => {
     // Insert-or-replace a child in its parent's loaded array (reuse-stable). A
@@ -72,10 +84,35 @@ export function useSubsessionSync(params: {
     // a child, or by the context when it's a root).
     const applyChildUpsert = (summary: DbConversationSummary) => {
       const parentId = summary.parent_id
-      if (parentId == null) return
+      if (parentId == null) {
+        // A child that became a root — an ask conversation converted into an
+        // ordinary one — leaves the subtree it was nested in (the root list
+        // takes it in). Not a deletion: no tombstone, but remembered as a root.
+        const roots = rootIdsRef.current
+        roots.delete(summary.id)
+        roots.add(summary.id)
+        if (roots.size > ROOT_IDS_CAP) {
+          const oldest = roots.values().next().value
+          if (oldest !== undefined) roots.delete(oldest)
+        }
+        setChildrenByParent((prev) => {
+          for (const [loadedParentId, kids] of prev) {
+            if (!kids.some((c) => c.id === summary.id)) continue
+            const next = new Map(prev)
+            next.set(
+              loadedParentId,
+              kids.filter((c) => c.id !== summary.id)
+            )
+            return next
+          }
+          return prev
+        })
+        return
+      }
       // A stale / out-of-order upsert for an already-deleted child must not
       // resurrect it (mirrors the root list's tombstone guard).
       if (deletedChildIdsRef.current.has(summary.id)) return
+      if (rootIdsRef.current.has(summary.id)) return
       setChildrenByParent((prev) => {
         const existing = prev.get(parentId)
         if (existing === undefined) return prev
@@ -194,5 +231,5 @@ export function useSubsessionSync(params: {
       unlisten?.()
       offReconnect?.()
     }
-  }, [setChildrenByParent, deletedChildIdsRef])
+  }, [setChildrenByParent, deletedChildIdsRef, rootIdsRef])
 }

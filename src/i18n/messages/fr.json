@@ -2410,6 +2410,19 @@
       "copiedField": "{field} copié",
       "assistant": "Assistant"
     },
+    "askConversations": {
+      "title": "Conversations de questions",
+      "total": "{count, plural, one {# conversation} other {# conversations}}",
+      "untitled": "Nouvelle question",
+      "actions": "Plus d’actions",
+      "open": "Ouvrir",
+      "convertToRegular": "Convertir en conversation normale",
+      "converted": "Convertie en conversation normale",
+      "convertFailed": "Impossible de convertir la conversation",
+      "drawerTitle": "Conversation de question",
+      "drawerDescription": "Une conversation annexe ouverte depuis une sélection de cette conversation",
+      "pendingFirstMessage": "Votre question attend que l’agent soit prêt. Recommencez pour l’abandonner."
+    },
     "conversationCard": {
       "untitledConversation": "Conversation sans titre",
       "newConversation": "Nouvelle conversation",
@@ -3834,7 +3847,7 @@
         "selectionSaveAsNote": "Note",
         "selectionAsk": "Demander",
         "selectionAskPlaceholder": "Poser une question sur cette sélection…",
-        "selectionAskSubmit": "Poser la question dans une nouvelle conversation",
+        "selectionAskClose": "Fermer",
         "downloadImage": "Télécharger l'image",
         "copyImage": "Copier l'image",
         "copiedImage": "Image copiée",

@@ -1202,11 +1202,15 @@ export function SidebarConversationList({
   // stale fetch snapshot or out-of-order upsert can't resurrect a deleted child —
   // the child-cache analog of the context's root deletion guard.
   const deletedChildIdsRef = useRef<Set<number>>(new Set())
+  // Ids an upsert has shown as roots (FIFO-bounded in the sync hook): a root
+  // never becomes a child, so a stale fetch snapshot can't nest one back (an ask
+  // conversation converted while the fetch was in flight).
+  const rootIdsRef = useRef<Set<number>>(new Set())
 
   // Keep the lazily-loaded sub-session cache live in real time: route child
   // upsert/status/deleted events into `childrenByParent` (roots stay with the
   // AppWorkspace context). child_count converges via backend parent re-emits.
-  useSubsessionSync({ setChildrenByParent, deletedChildIdsRef })
+  useSubsessionSync({ setChildrenByParent, deletedChildIdsRef, rootIdsRef })
   const [removeConfirm, setRemoveConfirm] = useState<{
     folderId: number
     folderName: string
@@ -2027,9 +2031,22 @@ export function SidebarConversationList({
         // queried before the soft-delete committed) — then merge the snapshot
         // with live events buffered mid-flight (events win by id) so a child
         // created after the query isn't lost.
+        // Likewise a child that became a root while the fetch was in flight
+        // (an ask conversation converted into an ordinary one): the stale
+        // snapshot must not nest it back. Known as a root either from its
+        // `parent_id`-less upsert or from the root list — a refresh after a
+        // reconnect carries it when the upsert itself was missed.
         const tomb = deletedChildIdsRef.current
-        const liveFetched =
-          tomb.size > 0 ? fetched.filter((c) => !tomb.has(c.id)) : fetched
+        const seenRoots = rootIdsRef.current
+        const listedRoots = new Set(
+          fetched.length > 0
+            ? useAppWorkspaceStore.getState().conversations.map((c) => c.id)
+            : []
+        )
+        const liveFetched = fetched.filter(
+          (c) =>
+            !tomb.has(c.id) && !seenRoots.has(c.id) && !listedRoots.has(c.id)
+        )
         const buffered = prev.get(id)
         const merged =
           buffered && buffered.length > 0

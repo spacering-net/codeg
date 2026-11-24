@@ -2410,6 +2410,19 @@
       "copiedField": "{field} 복사됨",
       "assistant": "어시스턴트"
     },
+    "askConversations": {
+      "title": "질문 대화",
+      "total": "{count}개",
+      "untitled": "새 질문",
+      "actions": "추가 작업",
+      "open": "열기",
+      "convertToRegular": "일반 대화로 전환",
+      "converted": "일반 대화로 전환했습니다",
+      "convertFailed": "일반 대화로 전환하지 못했습니다",
+      "drawerTitle": "질문 대화",
+      "drawerDescription": "이 대화에서 선택한 내용으로 시작한 질문 대화",
+      "pendingFirstMessage": "질문이 에이전트가 준비되면 전송됩니다. 한 번 더 하면 질문이 삭제됩니다."
+    },
     "conversationCard": {
       "untitledConversation": "제목 없는 대화",
       "newConversation": "새 대화",
@@ -3834,7 +3847,7 @@
         "selectionSaveAsNote": "메모로 저장",
         "selectionAsk": "질문",
         "selectionAskPlaceholder": "선택 영역에 대해 질문…",
-        "selectionAskSubmit": "새 대화에서 질문하기",
+        "selectionAskClose": "닫기",
         "downloadImage": "이미지 다운로드",
         "copyImage": "이미지 복사",
         "copiedImage": "이미지를 복사했습니다",

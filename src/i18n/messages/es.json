@@ -2410,6 +2410,19 @@
       "copiedField": "{field} copiado",
       "assistant": "Asistente"
     },
+    "askConversations": {
+      "title": "Conversaciones de preguntas",
+      "total": "{count, plural, one {# conversación} other {# conversaciones}}",
+      "untitled": "Nueva pregunta",
+      "actions": "Más acciones",
+      "open": "Abrir",
+      "convertToRegular": "Convertir en conversación normal",
+      "converted": "Convertida en conversación normal",
+      "convertFailed": "No se pudo convertir la conversación",
+      "drawerTitle": "Conversación de pregunta",
+      "drawerDescription": "Una conversación aparte abierta desde una selección de esta conversación",
+      "pendingFirstMessage": "Tu pregunta espera a que el agente esté listo. Vuelve a hacerlo para descartarla."
+    },
     "conversationCard": {
       "untitledConversation": "Conversación sin título",
       "newConversation": "Nueva conversación",
@@ -3834,7 +3847,7 @@
         "selectionSaveAsNote": "Nota",
         "selectionAsk": "Preguntar",
         "selectionAskPlaceholder": "Pregunta sobre esta selección…",
-        "selectionAskSubmit": "Preguntar en una nueva conversación",
+        "selectionAskClose": "Cerrar",
         "downloadImage": "Descargar imagen",
         "copyImage": "Copiar imagen",
         "copiedImage": "Imagen copiada",

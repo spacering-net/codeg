@@ -4918,7 +4918,12 @@ impl ConversationDepthLookup for DbDepthLookup {
             .one(&self.db.conn)
             .await
             .map_err(|e| DelegationError::SubagentRuntimeError(format!("db: {e}")))?;
-        Ok(row.and_then(|r| r.parent_id))
+        // Only a delegation counts toward the depth: an ask conversation hangs
+        // off the conversation it was asked from, but the user drives it, so
+        // it delegates from the top like any root.
+        Ok(row
+            .filter(|r| r.kind == crate::db::entities::conversation::ConversationKind::Delegate)
+            .and_then(|r| r.parent_id))
     }
 }
 

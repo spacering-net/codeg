@@ -20,11 +20,17 @@ pub enum ConversationStatus {
 /// flat "Chat" section; `loop` belongs to the Loop Engineering workbench and is
 /// excluded from the sidebar list entirely (no write path yet — reserved for
 /// the loop engine); `delegate` is a delegation child nested under its
-/// parent's tool-call view. Invariant: `kind == Delegate` ⟺ `parent_id IS NOT
-/// NULL`. Written once at insert, with one exception: a chat conversation the
-/// user moves into a project becomes `regular`
-/// (`conversation_service::relocate_conversations`) — it is an ordinary project
-/// conversation from then on.
+/// parent's tool-call view; `ask` is an "ask about this selection"
+/// conversation, nested under the conversation it was asked from (its
+/// `parent_id`) in the sidebar and listed in that conversation's Session
+/// Details. Invariant: `kind ∈ {Delegate, Ask}` ⟺ `parent_id IS NOT NULL`, and
+/// only a `Delegate` row carries the delegation columns
+/// (`parent_tool_use_id`, `delegation_call_id`, `assistant_*`). Written once at
+/// insert, with two exceptions: a chat conversation the user moves into a
+/// project becomes `regular` (`conversation_service::relocate_conversations`)
+/// — it is an ordinary project conversation from then on — and an ask the user
+/// converts into an ordinary conversation becomes `regular` / `chat` with no
+/// `parent_id` (`conversation_service::detach_ask`).
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
 #[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
 #[serde(rename_all = "snake_case")]
@@ -37,6 +43,8 @@ pub enum ConversationKind {
     Loop,
     #[sea_orm(string_value = "delegate")]
     Delegate,
+    #[sea_orm(string_value = "ask")]
+    Ask,
 }
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]

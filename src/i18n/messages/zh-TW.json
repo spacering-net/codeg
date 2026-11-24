@@ -2410,6 +2410,19 @@
       "copiedField": "已複製{field}",
       "assistant": "助手"
     },
+    "askConversations": {
+      "title": "提問會話",
+      "total": "共 {count} 個",
+      "untitled": "新提問",
+      "actions": "更多操作",
+      "open": "開啟",
+      "convertToRegular": "轉為一般會話",
+      "converted": "已轉為一般會話",
+      "convertFailed": "轉為一般會話失敗",
+      "drawerTitle": "提問會話",
+      "drawerDescription": "從此會話選取內容發起的提問會話",
+      "pendingFirstMessage": "問題正等待智慧體就緒後傳送，再操作一次將放棄它。"
+    },
     "conversationCard": {
       "untitledConversation": "未命名會話",
       "newConversation": "新增會話",
@@ -3834,7 +3847,7 @@
         "selectionSaveAsNote": "存為便利貼",
         "selectionAsk": "提問",
         "selectionAskPlaceholder": "針對選取內容提問…",
-        "selectionAskSubmit": "在新建會話中提問",
+        "selectionAskClose": "關閉",
         "downloadImage": "下載圖片",
         "copyImage": "複製圖片",
         "copiedImage": "已複製圖片",

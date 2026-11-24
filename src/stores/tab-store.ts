@@ -43,7 +43,6 @@ import {
   moveMessageInputDraft,
   sweepOrphanDraftKeys,
 } from "@/lib/message-input-draft"
-import { discardAskSelectionPrompts } from "@/lib/ask-selection-handoff"
 import {
   batchCloseSlots,
   pushClosedTab,
@@ -1772,12 +1771,6 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
         closingTab.conversationId == null
           ? buildNewConversationDraftStorageKey(closingTab.id)
           : null
-      // An "ask about this selection" prompt parked for this tab has no panel
-      // left to drain it. Drop it rather than leave it in the module buffer for
-      // the rest of the session — the tab id is never reused, so it could only
-      // sit there.
-      discardAskSelectionPrompts(closingTab.id)
-
       let draftKeyHandedOver = false
 
       if (useFolderTabsStore.getState().enabled && !next.some(isTabInScope)) {

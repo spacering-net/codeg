@@ -292,6 +292,18 @@ pub fn build_router_with_srn(
             post(handlers::conversations::create_conversation),
         )
         .route(
+            "/create_ask_conversation",
+            post(handlers::conversations::create_ask_conversation),
+        )
+        .route(
+            "/list_ask_conversations",
+            post(handlers::conversations::list_ask_conversations),
+        )
+        .route(
+            "/detach_ask_conversation",
+            post(handlers::conversations::detach_ask_conversation),
+        )
+        .route(
             "/create_chat_conversation",
             post(handlers::conversations::create_chat_conversation),
         )
