@@ -23,6 +23,7 @@ pub mod opened_tab;
 pub mod prelude;
 pub mod quick_message;
 pub mod session_message;
+pub mod conversation_context;
 pub mod remote_workspace_connection;
 pub mod srn_web_login;
 pub mod srn_web_session;

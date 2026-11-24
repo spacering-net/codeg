@@ -495,6 +495,9 @@ impl DelegationListener {
             BrokerMessage::SessionMessage(req) => BrokerResponse {
                 outcome: self.process_session_message(req).await,
             },
+            BrokerMessage::SessionBrief { token, args } => BrokerResponse {
+                outcome: self.process_session_brief(&token, args).await,
+            },
             BrokerMessage::GetCurrentSession { token } => BrokerResponse {
                 outcome: self.process_session_discovery(&token, None).await,
             },
@@ -992,6 +995,19 @@ impl DelegationListener {
         }
     }
 
+    async fn process_session_brief(&self, token: &str, args: crate::db::service::conversation_context_service::BriefOperation) -> Value {
+        let Some(entry) = self.tokens.lookup(token).await else { return serde_json::json!({"error": "Session brief is unavailable"}); };
+        if entry.agent_hosts_tools || !self.broker.config_snapshot().await.session_messaging_enabled {
+            return serde_json::json!({"error": "Session messaging is disabled"});
+        }
+        let Some(id) = self.parent_lookup.current_conversation_id(&entry.parent_connection_id).await else { return serde_json::json!({"error": "Caller has no active conversation"}); };
+        let Some(db) = self.session_message_db.get() else { return serde_json::json!({"error": "Session brief is unavailable"}); };
+        match crate::db::service::conversation_context_service::update_brief(db, id, args).await {
+            Ok(brief) => serde_json::json!({"brief": brief}),
+            Err(error) => serde_json::json!({"error": error.to_string()}),
+        }
+    }
+
     async fn process_session_discovery(
         &self,
         token: &str,
@@ -1025,7 +1041,12 @@ impl DelegationListener {
                 Ok(folder) => folder.map(|folder| folder.path),
                 Err(error) => return json!({"error": error.to_string()}),
             };
+            let brief = match crate::db::service::conversation_context_service::read_brief(db, conversation_id).await {
+                Ok(brief) => brief,
+                Err(error) => return json!({"error": error.to_string()}),
+            };
             return json!({
+                "brief": brief,
                 "conversation_id": conversation_id,
                 "folder_id": caller.folder_id,
                 "folder_path": folder_path,

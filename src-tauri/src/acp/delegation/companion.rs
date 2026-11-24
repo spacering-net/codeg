@@ -326,7 +326,7 @@ impl CompanionFeatures {
             | "get_delegation_status"
             | "cancel_delegation"
             | "resume_delegation" => self.delegation,
-            "send_to_session" | "create_session" | "get_current_session" | "list_sessions" | "stop_session" => {
+            "send_to_session" | "create_session" | "get_current_session" | "list_sessions" | "stop_session" | "session_brief" => {
                 self.session_messaging
             }
             _ => false,
@@ -1250,6 +1250,15 @@ async fn build_tools_call_spawn(
             let round_trip =
                 Box::pin(async move { client_session_round_trip(&socket, &req).await });
             register_and_spawn(inflight, id, None, round_trip, render_session_result).await
+        }
+        "session_brief" => {
+            let args = match serde_json::from_value::<crate::db::service::conversation_context_service::BriefOperation>(arguments) {
+                Ok(args) => args,
+                Err(error) => return LineAction::Respond(err(id, -32602, format!("session_brief: {error}"))),
+            };
+            let token = ctx.token.clone();
+            let round_trip = Box::pin(async move { super::transport::client_session_brief_round_trip(&socket, token, args).await });
+            register_and_spawn(inflight, id, None, round_trip, render_session_action).await
         }
         "get_current_session" => {
             let token = ctx.token.clone();
@@ -5671,6 +5680,7 @@ mod tests {
         ).await);
         assert!(names.contains(&"create_session".into()));
         assert!(names.contains(&"send_to_session".into()));
+        assert!(names.contains(&"session_brief".into()));
         assert!(!names.contains(&"delegate_to_agent".into()));
 
         let invalid = json!({

@@ -1634,5 +1634,51 @@
         }
       }
     }
+  },
+{
+  "name": "session_brief",
+  "description": "Read, replace or edit your persistent session brief. Keep durable goals, decisions and context within 12000 characters. Every edit oldText must match exactly once; the entire edit batch commits atomically. The brief is included in get_current_session and in the first prompt of newly delegated children.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "operation": {
+        "type": "string",
+        "enum": [
+          "read",
+          "write",
+          "edit"
+        ]
+      },
+      "text": {
+        "type": "string",
+        "maxLength": 12000
+      },
+      "edits": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "properties": {
+            "oldText": {
+              "type": "string",
+              "minLength": 1
+            },
+            "newText": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "oldText",
+            "newText"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": [
+      "operation"
+    ],
+    "additionalProperties": false
   }
+}
 ]

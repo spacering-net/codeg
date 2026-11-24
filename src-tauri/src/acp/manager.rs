@@ -5160,6 +5160,9 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
                 .await
                 .map_err(|e| SpawnerError::Send(format!("ensure_folder_for_path: {e}")))?;
 
+        let shared = crate::db::service::conversation_context_service::read_brief(&self.db.conn, link.parent_conversation_id)
+            .await.map_err(|e| SpawnerError::Send(e.to_string()))?;
+        let brief = crate::db::service::conversation_context_service::delegation_brief(link.parent_conversation_id, &shared.text, brief);
         let result = self
             .manager
             .send_prompt_linked_with_suffix(
