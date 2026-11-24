@@ -440,11 +440,6 @@ pub(super) struct EngineState {
     seen_compactions: HashSet<String>,
     /// Dispatched conversations, by `connection_id`.
     pub(super) dispatch_conns: HashMap<String, DispatchConn>,
-    /// The failure a dispatched conversation's open round told as its reply
-    /// (`SessionFailureRecord::echoed_in_reply` — Antigravity's dead
-    /// executor), by `connection_id`: codeg took those words out of the
-    /// reply, so the round's `end_turn` is no success with an empty result.
-    pub(super) round_failures: HashMap<String, String>,
     /// Ledger operations running in this process: a follow-up being sent,
     /// until the executor confirms it or its round ends (`ledger`).
     pub(super) live_ops: HashSet<String>,

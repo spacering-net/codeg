@@ -6774,6 +6774,15 @@ async fn a_round_the_agent_told_failed_as_its_reply_fails_the_dispatch() {
     engine.on_event(&event("c-fine", 1, failure(false))).await;
     engine.on_event(&event("c-fine", 2, turn_complete("end_turn"))).await;
     assert_eq!(dispatch_state(&engine, fine).await.state, DispatchState::Completed);
+
+    // A failure a round told that nothing settled is not the next round's.
+    let again = session_dispatch(&engine, DispatchState::Running, "c-again").await;
+    engine.track_conn("c-again", again).await;
+    engine.open_round("c-again", again).await;
+    engine.on_event(&event("c-again", 1, failure(true))).await;
+    engine.open_round("c-again", again).await;
+    engine.on_event(&event("c-again", 2, turn_complete("end_turn"))).await;
+    assert_eq!(dispatch_state(&engine, again).await.state, DispatchState::Completed);
 }
 
 /// A round's told failure goes with its route: the worker deleted with its

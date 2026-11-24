@@ -343,9 +343,33 @@ pub(crate) struct DispatchConn {
     pub(crate) round_since: Option<u64>,
 }
 
-/// A dispatched session passed between engines: its connection, its route
-/// and the failure its open round already told (`round_failures`).
-pub(crate) type HandedConn = (String, DispatchConn, Option<String>);
+/// The failure a dispatched conversation's open round told as its reply
+/// (`SessionFailureRecord::echoed_in_reply` — Antigravity's dead executor),
+/// by `connection_id`: codeg took those words out of the reply, so the
+/// round's `end_turn` is no success with an empty result. Process-wide, as
+/// connection ids are, so it holds whichever engine routes the round (a
+/// hand-over moves the route, not this); every way of seeing the round end
+/// reads it, none takes it, so two racing to settle the round read the
+/// same; the next round's opening clears it. One short entry per
+/// connection whose round told a failure.
+static ROUND_FAILURES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, String>>> =
+    std::sync::LazyLock::new(Default::default);
+
+fn round_failure(conn_id: &str) -> Option<String> {
+    ROUND_FAILURES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(conn_id)
+        .cloned()
+}
+
+fn set_round_failure(conn_id: &str, failure: Option<String>) {
+    let mut map = ROUND_FAILURES.lock().unwrap_or_else(|e| e.into_inner());
+    match failure {
+        Some(f) => map.insert(conn_id.to_string(), f),
+        None => map.remove(conn_id),
+    };
+}
 
 /// How a dispatched conversation's round was seen to end.
 #[derive(Debug, Clone)]
@@ -1403,7 +1427,7 @@ impl PersonalAgentEngine {
             };
             if let Some(engine) = engine {
                 engine
-                    .adopt_dispatch_conns(vec![(conn_id.to_string(), conn, None)])
+                    .adopt_dispatch_conns(vec![(conn_id.to_string(), conn)])
                     .await;
                 return;
             }
@@ -1416,9 +1440,8 @@ impl PersonalAgentEngine {
     }
 
     /// Let go of the sessions of dispatches `ids` (their assistant is
-    /// deleted): what routes them, with the failure an open round already
-    /// told, for the engine taking them over.
-    pub(super) async fn take_dispatch_conns(&self, ids: &[i32]) -> Vec<HandedConn> {
+    /// deleted): what routes them, for the engine taking them over.
+    pub(super) async fn take_dispatch_conns(&self, ids: &[i32]) -> Vec<(String, DispatchConn)> {
         let mut st = self.state.lock().await;
         let keys: Vec<String> = st
             .dispatch_conns
@@ -1427,21 +1450,14 @@ impl PersonalAgentEngine {
             .map(|(k, _)| k.clone())
             .collect();
         keys.into_iter()
-            .filter_map(|k| {
-                let conn = st.dispatch_conns.remove(&k)?;
-                let failure = st.round_failures.remove(&k);
-                Some((k, conn, failure))
-            })
+            .filter_map(|k| st.dispatch_conns.remove(&k).map(|c| (k, c)))
             .collect()
     }
 
     /// Take over dispatched sessions another engine let go of.
-    pub(super) async fn adopt_dispatch_conns(&self, conns: Vec<HandedConn>) {
+    pub(super) async fn adopt_dispatch_conns(&self, conns: Vec<(String, DispatchConn)>) {
         let mut st = self.state.lock().await;
-        for (k, c, failure) in conns {
-            if let Some(f) = failure {
-                st.round_failures.insert(k.clone(), f);
-            }
+        for (k, c) in conns {
             st.dispatch_conns.insert(k, c);
         }
     }
@@ -1449,8 +1465,8 @@ impl PersonalAgentEngine {
     /// Open a round on `conn_id`, just before its prompt goes out.
     pub(super) async fn open_round(&self, conn_id: &str, id: i32) {
         let since = self.current_seq(conn_id).await;
-        // A failure an earlier round told and nothing settled is not this one's.
-        self.state.lock().await.round_failures.remove(conn_id);
+        // A failure an earlier round told is not this one's.
+        set_round_failure(conn_id, None);
         self.register_conn(
             conn_id,
             DispatchConn {
@@ -1680,14 +1696,16 @@ impl PersonalAgentEngine {
                 let Some(text) = crate::cli_run::events::error_text(&env.payload) else {
                     return;
                 };
-                let mut st = self.state.lock().await;
-                let in_round = st
+                let in_round = self
+                    .state
+                    .lock()
+                    .await
                     .dispatch_conns
                     .get(&env.connection_id)
                     .and_then(|c| c.round_since)
                     .is_some_and(|since| env.seq > since);
                 if in_round {
-                    st.round_failures.insert(env.connection_id.clone(), text);
+                    set_round_failure(&env.connection_id, Some(text));
                 }
             }
             AcpEvent::PermissionRequest { .. }
@@ -1760,8 +1778,7 @@ impl PersonalAgentEngine {
     async fn settle_conversation_turn(self: &std::sync::Arc<Self>, id: i32, conn_id: &str, end: RoundEnd) {
         // Whichever way the end was seen — its completion, the backstop, the
         // connection gone — a round that told a failure as its reply failed.
-        let told = self.state.lock().await.round_failures.remove(conn_id);
-        let end = end.told(told);
+        let end = end.told(round_failure(conn_id));
         // The send that claimed this round, read before anything can claim
         // the next one.
         let round_op = svc::get_dispatch(&self.db.conn, id)
