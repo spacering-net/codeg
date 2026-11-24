@@ -181,6 +181,34 @@ impl CleanupBlocked {
 
 static ENGINE: OnceLock<Arc<TaskEngine>> = OnceLock::new();
 
+/// Set once this process's boot reconcile has failed the tasks a restart
+/// interrupted. Something else in the process that starts tasks unattended
+/// (the personal agent's dispatcher) waits for it: a task started before the
+/// sweep would be failed with the interrupted ones.
+static BOOT_RECONCILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static BOOT_RECONCILED_NOTIFY: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+fn mark_boot_reconciled() {
+    BOOT_RECONCILED.store(true, std::sync::atomic::Ordering::SeqCst);
+    BOOT_RECONCILED_NOTIFY.notify_waiters();
+}
+
+/// Wait until this process's task engine has run its boot reconcile, or for
+/// `timeout` — whichever comes first (an engine that never boots must not
+/// hold its neighbours back forever).
+pub async fn wait_boot_reconciled(timeout: std::time::Duration) {
+    let wait = async {
+        loop {
+            let notified = BOOT_RECONCILED_NOTIFY.notified();
+            if BOOT_RECONCILED.load(std::sync::atomic::Ordering::SeqCst) {
+                return;
+            }
+            notified.await;
+        }
+    };
+    let _ = tokio::time::timeout(timeout, wait).await;
+}
+
 /// The process-global engine, set once at boot by [`build_task_engine`]. Read
 /// by the start/cancel/merge/cleanup commands.
 pub fn engine() -> Option<Arc<TaskEngine>> {
@@ -527,6 +555,9 @@ pub async fn run_task_engine(engine: Arc<TaskEngine>) {
         Ok(_) => {}
         Err(e) => tracing::warn!("[work_task] boot reconcile error: {e}"),
     }
+    // Past this point a task started by anyone else in this process survives:
+    // the sweep above is what fails every running row.
+    mark_boot_reconciled();
     match work_task_service::list_by_status(&engine.db.conn, &[WorkTaskStatus::Merging]).await {
         Ok(rows) => {
             for row in rows {
@@ -909,6 +940,22 @@ impl TaskEngine {
         attachments: Vec<serde_json::Value>,
         allow_duplicate_source: bool,
     ) -> Result<(), String> {
+        self.retry_with_op(task_id, note, attachments, allow_duplicate_source, None)
+            .await
+    }
+
+    /// [`Self::retry`] for the personal agent's ledger: `op_id` rides in the
+    /// claim's `user_action`, written in the claim's own transaction, so
+    /// that record alone tells whether this retry took effect
+    /// ([`work_task_service::user_action_by_op`]).
+    pub async fn retry_with_op(
+        self: &Arc<Self>,
+        task_id: i32,
+        note: Option<String>,
+        attachments: Vec<serde_json::Value>,
+        allow_duplicate_source: bool,
+        op_id: Option<String>,
+    ) -> Result<(), String> {
         let task = work_task_service::get_model(&self.db.conn, task_id)
             .await
             .map_err(|e| e.to_string())?;
@@ -916,14 +963,22 @@ impl TaskEngine {
         let note = note.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
         // An attachment is an instruction on its own: a screenshot with no
         // sentence still has to reach the retry prompt, so the action is
-        // recorded whenever EITHER part is present.
-        let action = (note.is_some() || !attachments.is_empty()).then(|| {
-            serde_json::json!({
+        // recorded whenever EITHER part is present. An operation id with
+        // neither rides an action the instruction scan passes over, so it
+        // never replays as an empty note.
+        let action = if note.is_some() || !attachments.is_empty() {
+            let mut action = serde_json::json!({
                 "action": "retry",
                 "note": note.unwrap_or_default(),
                 "blocks": attachments,
-            })
-        });
+            });
+            if let (Some(op), Some(map)) = (op_id, action.as_object_mut()) {
+                map.insert("op_id".into(), op.into());
+            }
+            Some(action)
+        } else {
+            op_id.map(|op| serde_json::json!({ "action": "agent_op", "op_id": op }))
+        };
         match work_task_service::claim_for_run_with_action(
             &self.db.conn,
             task_id,
@@ -957,21 +1012,39 @@ impl TaskEngine {
         feedback: String,
         attachments: Vec<serde_json::Value>,
     ) -> Result<(), String> {
+        self.return_task_with_op(task_id, intent, feedback, attachments, None)
+            .await
+    }
+
+    /// [`Self::return_task`] with the personal agent's ledger operation in
+    /// the claim's `user_action` (see [`Self::retry_with_op`]).
+    pub async fn return_task_with_op(
+        self: &Arc<Self>,
+        task_id: i32,
+        intent: FollowUpIntent,
+        feedback: String,
+        attachments: Vec<serde_json::Value>,
+        op_id: Option<String>,
+    ) -> Result<(), String> {
         let task = work_task_service::get_model(&self.db.conn, task_id)
             .await
             .map_err(|e| e.to_string())?;
         self.preflight_folder(task.folder_id).await?;
+        let mut action = serde_json::json!({
+            "action": "return",
+            "intent": intent.as_str(),
+            "feedback": feedback,
+            "blocks": attachments,
+        });
+        if let (Some(op), Some(map)) = (op_id, action.as_object_mut()) {
+            map.insert("op_id".into(), op.into());
+        }
         let Some(_) = work_task_service::claim_for_run_with_action(
             &self.db.conn,
             task_id,
             WorkTaskStatus::Review,
             "user",
-            Some(serde_json::json!({
-                "action": "return",
-                "intent": intent.as_str(),
-                "feedback": feedback,
-                "blocks": attachments,
-            })),
+            Some(action),
             false,
         )
         .await
@@ -1781,6 +1854,12 @@ impl TaskEngine {
             return Ok(());
         }
         self.emit_upsert(task_id);
+        // A task an assistant dispatched: that assistant answers its
+        // questions and plan approvals for the owner, so the windows hold
+        // back their notification of those (personal agent 7.3.1).
+        if let Some(host) = crate::personal_agent::host::host() {
+            host.task_connection_opened(&conn_id).await;
+        }
 
         let prompt_head = prompt_head(&blocks);
         match self
@@ -2987,7 +3066,7 @@ impl TaskEngine {
                 self.track_request(&env.connection_id, format!("q:{question_id}"), true)
                     .await;
             }
-            AcpEvent::QuestionResolved { question_id } => {
+            AcpEvent::QuestionResolved { question_id, .. } => {
                 self.track_request(&env.connection_id, format!("q:{question_id}"), false)
                     .await;
             }
@@ -3003,7 +3082,7 @@ impl TaskEngine {
                 self.track_request(&env.connection_id, format!("a:{approval_id}"), true)
                     .await;
             }
-            AcpEvent::PlanApprovalResolved { approval_id } => {
+            AcpEvent::PlanApprovalResolved { approval_id, .. } => {
                 self.track_request(&env.connection_id, format!("a:{approval_id}"), false)
                     .await;
             }
@@ -4615,6 +4694,13 @@ impl TaskEngine {
         let pre_merge_head = task_git::rev_parse(&root.path, "HEAD")
             .await
             .map_err(|e| e.to_string())?;
+        // An unattended landing of a task its personal assistant accepts
+        // lands the version accepted, read again here under the folder lock
+        // (personal agent 7.5): the generation is the one `begin_merge` binds
+        // to below, the worktree's fingerprint must still be the one checked.
+        if auto {
+            crate::personal_agent::acceptance::merge_gate(&self.db, &task, &_wt.path).await?;
+        }
 
         let state = WorkTaskMergeState {
             op: WorkTaskMergeOp::Land,
@@ -5186,6 +5272,21 @@ impl TaskEngine {
                 "this task is already merging — wait for the operation in flight".to_string(),
             );
         };
+        // A task its personal assistant accepted is delivered as the version
+        // accepted, and the head pushed is recorded on that round (personal
+        // agent 7.5). Compared before the leftovers are committed: what was
+        // accepted is the worktree as it stood, uncommitted changes included,
+        // and committing them changes nothing of that.
+        let accepted_round =
+            match crate::personal_agent::acceptance::delivery_gate(&self.db, &task, &wt.path)
+                .await
+            {
+                Ok(round) => round,
+                Err(e) => {
+                    self.release_in_flight(task_id, token).await;
+                    return Err(e);
+                }
+            };
         let expected_head = match self
             .commit_leftovers_and_resolve(task_id, &wt.path, &work_branch, commit_leftovers)
             .await
@@ -5242,6 +5343,9 @@ impl TaskEngine {
         if outcome.is_ok() && state.delete_worktree {
             self.remove_delivered_worktree(task_id, task.folder_id, &expected_head)
                 .await;
+        }
+        if let (true, Some(round)) = (outcome.is_ok(), accepted_round) {
+            crate::personal_agent::acceptance::delivered(&self.db, round, &expected_head).await;
         }
         self.release_in_flight(task_id, token).await;
         self.emit_upsert(task_id);
@@ -6617,6 +6721,11 @@ impl TaskEngine {
                 .into_iter()
                 .filter(|t| t.folder_id == folder_id && auto_merge_candidate(t, &settings))
                 .collect();
+        // A task its personal assistant accepts lands once the version there
+        // passed (personal agent 7.5); the gate under the folder lock in
+        // `merge_task` holds it to that version.
+        let held = crate::personal_agent::acceptance::merge_holds(&self.db, &candidates).await;
+        candidates.retain(|t| !held.contains(&t.id));
         candidates.sort_by_key(|t| (t.settled_at, t.id));
         for task in candidates {
             // A gone worktree cannot serve a merge generation; that task's
@@ -7527,7 +7636,7 @@ fn auto_merge_candidate(
 /// Whether the folder's settings would make `run_preflight` attempt a command
 /// at all — the sweep's gate must not wait for a light that will never be
 /// written.
-fn preflight_configured(settings: &WorkTaskFolderSettings) -> bool {
+pub(crate) fn preflight_configured(settings: &WorkTaskFolderSettings) -> bool {
     settings
         .preflight_command
         .as_deref()
@@ -7568,6 +7677,9 @@ fn is_benign_merge_race(error: &str) -> bool {
         || error.contains("already merging")
         || error == AUTO_MERGE_NO_LONGER_ELIGIBLE
         || is_queued_merge_superseded(error)
+        // Waiting on its personal assistant's acceptance: not a failure, and
+        // its card (not the board's banner) says what changed.
+        || error.contains(crate::personal_agent::acceptance::MERGE_HOLD)
 }
 
 /// An unattended landing whose row changed between the sweep's read and the
@@ -9377,6 +9489,17 @@ mod tests {
         task.source_kind = None;
         assert!(auto_merge_candidate(&task, &settings));
 
+        // A task the personal agent dispatched lands as the board's settings
+        // say, like the user's own: with every other gate met it IS a
+        // candidate.
+        task.personal_agent_dispatch_id = Some(7);
+        assert!(
+            auto_merge_candidate(&task, &settings),
+            "a personal-agent dispatched task follows the folder's auto-merge setting"
+        );
+        task.personal_agent_dispatch_id = None;
+        assert!(auto_merge_candidate(&task, &settings));
+
         // A merge the user queued belongs to the queue's own drain, with THEIR
         // commit message and worktree choice — the unattended dispatch has
         // neither, so it must not take this row (a drain that skipped it after
@@ -9632,6 +9755,7 @@ mod tests {
             source_key: None,
             source_meta: None,
             delivery: None,
+            personal_agent_dispatch_id: None,
             writeback_drafts: None,
             created_at: now,
             updated_at: now,
@@ -12414,6 +12538,7 @@ mod tests {
                 details: None,
                 actions: Vec::new(),
                 resolved,
+                echoed_in_reply: false,
             },
         }
     }
@@ -12980,6 +13105,7 @@ mod tests {
                 task_id: "task-1".into(),
                 assistant_id: None,
                 assistant_name: None,
+                bot_uid: None,
             },
         )
     }
@@ -12999,6 +13125,7 @@ mod tests {
                 },
                 assistant_id: None,
                 assistant_name: None,
+                bot_uid: None,
             },
         )
     }

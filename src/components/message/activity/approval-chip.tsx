@@ -52,7 +52,9 @@ export function ApprovalChip({ approval }: { approval: ToolApproval }) {
       ? t("viaChatChannel")
       : approval.origin === "cli_policy"
         ? t("byPolicy")
-        : null
+        : approval.origin === "assistant"
+          ? t("byAssistant")
+          : null
   const title = [
     approval.optionName,
     who,

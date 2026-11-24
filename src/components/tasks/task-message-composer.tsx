@@ -156,11 +156,14 @@ export function TaskMessageComposer({
   const containerRef = useRef<HTMLDivElement>(null)
   const chromeFocus = useComposerChromeFocus(editorRef)
 
-  const { groupLabels, uiLabels } = useComposerMentionLabels()
+  const { groupLabels, uiLabels, primaryAssistantName } =
+    useComposerMentionLabels()
   const referenceSearch = useReferenceSearch({
     defaultPath: folderPath,
     enabled: true,
     labels: groupLabels,
+
+    primaryAssistantName,
   })
 
   // One transient probe backs the `/` menu (the snapshot carries

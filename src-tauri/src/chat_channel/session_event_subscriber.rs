@@ -986,10 +986,15 @@ fn extract_agent_type(raw_input: &str) -> Option<String> {
 
 /// The `assistant_id` a `delegate_to_agent` raw_input names, by the same
 /// parser the listener dispatches with.
-fn extract_assistant_id(raw_input: &str) -> Option<i32> {
+/// The assistant the arguments name, as the relay says it when no name came
+/// with the report: an old link's by its number, the owner's by its uid as
+/// "an assistant" (its uid says nothing to a reader).
+fn extract_assistant_label(raw_input: &str) -> Option<String> {
+    use crate::acp::delegation::types::{delegation_target_from_args, DelegationTarget};
     let parsed: serde_json::Value = serde_json::from_str(raw_input).ok()?;
-    match crate::acp::delegation::types::delegation_target_from_args(&parsed) {
-        Ok(crate::acp::delegation::types::DelegationTarget::Assistant(id)) => Some(id),
+    match delegation_target_from_args(&parsed) {
+        Ok(DelegationTarget::Assistant(id)) => Some(format!("assistant #{id}")),
+        Ok(DelegationTarget::Bot(_)) => Some("an assistant".to_string()),
         _ => None,
     }
 }
@@ -998,7 +1003,7 @@ fn extract_assistant_id(raw_input: &str) -> Option<i32> {
 /// slug, or a task for an assistant.
 fn names_delegation_target(raw_input: &str) -> bool {
     extract_agent_type(raw_input).is_some()
-        || (extract_assistant_id(raw_input).is_some()
+        || (extract_assistant_label(raw_input).is_some()
             && serde_json::from_str::<serde_json::Value>(raw_input)
                 .ok()
                 .is_some_and(|v| v.get("task").is_some()))
@@ -1012,8 +1017,8 @@ fn delegation_target_label(raw_input: Option<&str>, assistant_name: Option<&str>
         return Some(name.to_string());
     }
     let raw_input = raw_input?;
-    if let Some(id) = extract_assistant_id(raw_input) {
-        return Some(format!("assistant #{id}"));
+    if let Some(label) = extract_assistant_label(raw_input) {
+        return Some(label);
     }
     extract_agent_type(raw_input)
 }
@@ -1200,6 +1205,17 @@ mod delegation_relay_tests {
         assert_eq!(delegation_target_label(None, Some("  ")), None);
         assert!(names_delegation_target(r#"{"assistant_id":3,"task":"x"}"#));
         assert!(!names_delegation_target(r#"{"assistant_id":3}"#));
+        // The owner's assistant by its uid: named, but not by the uid.
+        let by_bot = r#"{"bot":"0123456789abcdef0123456789abcdef","task":"x"}"#;
+        assert!(names_delegation_target(by_bot));
+        assert_eq!(
+            delegation_target_label(Some(by_bot), None),
+            Some("an assistant".into())
+        );
+        assert_eq!(
+            delegation_target_label(Some(by_bot), Some("研发")),
+            Some("研发".into())
+        );
         let report = parse_delegation_report(Some(
             r#"{"structuredContent":{"status":"running","assistant_name":"Reviewer"}}"#,
         ))
@@ -1472,6 +1488,7 @@ mod async_relay_dedup_tests {
                 },
                 assistant_id: None,
                 assistant_name: None,
+                bot_uid: None,
             },
         }
     }

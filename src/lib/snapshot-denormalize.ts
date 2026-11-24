@@ -1,6 +1,7 @@
 import { stripKimiMcpOAuth } from "@/lib/kimi-mcp-oauth"
 import type {
   ActiveDelegationState,
+  AskDelegate,
   AsyncTaskRecord,
   BackgroundOutstandingTask,
   AvailableCommandInfo,
@@ -73,6 +74,8 @@ export interface SnapshotPatch {
    *  so a client attaching mid-turn re-renders the plan-approval card. `null`
    *  when no approval is pending. */
   pendingPlanApproval: PendingPlanApprovalState | null
+  /** What the dispatching assistant answers here for the owner (7.3.1). */
+  askDelegate?: AskDelegate | null
   /** In-flight user prompt carried by the snapshot, so a client attaching
    *  mid-turn can synthesize the user turn (Bug-2 / cross-client viewing).
    *  `null` when no turn is in flight. */
@@ -178,6 +181,7 @@ export function denormalizeSnapshot(wire: LiveSessionSnapshot): SnapshotPatch {
     pendingAskQuestion: wire.pending_question ?? null,
     // The snapshot shape already matches PendingPlanApprovalState; pass through.
     pendingPlanApproval: wire.pending_plan_approval ?? null,
+    askDelegate: wire.ask_delegate ?? null,
     pendingUserMessage: wire.pending_user_message
       ? {
           messageId: wire.pending_user_message.message_id,
@@ -222,9 +226,22 @@ function denormalizeLiveMessage(
   return {
     id: wire.id,
     role: wire.role === "tool" ? "tool" : "assistant",
-    content: wire.content
-      .map((block) => denormalizeBlock(block, toolMap))
-      .filter((b): b is LocalLiveContentBlock => b !== null),
+    content: [
+      ...wire.content
+        .map((block) => denormalizeBlock(block, toolMap))
+        .filter((b): b is LocalLiveContentBlock => b !== null),
+      // Only the agent's own account is kept (a blank title is worded by the
+      // client from the category), so the line is the agent's.
+      ...(wire.turn_error
+        ? [
+            {
+              type: "turn_error" as const,
+              message: wire.turn_error,
+              fromAgent: true,
+            },
+          ]
+        : []),
+    ],
     startedAt: Number.isNaN(startedAtMs) ? Date.now() : startedAtMs,
   }
 }

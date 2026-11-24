@@ -1516,6 +1516,83 @@ describe("AcpConnectionsProvider failed-turn line", () => {
     ])
   })
 
+  // Antigravity tells a dead executor as an ordinary reply chunk (fused onto
+  // whatever the model said first, maybe followed by a citation notice); the
+  // backend reads the typed record off its trajectory and marks it
+  // `echoed_in_reply`. The line takes those words' place, as on reload.
+  it("takes the place of the account the reply already streamed", async () => {
+    const handlers = await promptingOwner()
+    const account = "Your current account is not eligible."
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "content_delta",
+      text: `Let me look first.${account}`,
+    })
+    emitAcpEvent(handlers, {
+      seq: 3,
+      connection_id: "spawned-conn",
+      type: "content_delta",
+      text: "\n\nSources: x",
+    })
+    emitAcpEvent(handlers, {
+      seq: 4,
+      connection_id: "spawned-conn",
+      type: "session_failure",
+      record: { ...failureRecord(1, "error", account), echoed_in_reply: true },
+    })
+    expect(h.store!.getConnection(TAB)!.liveMessage!.content).toEqual([
+      { type: "text", text: "Let me look first.\n\nSources: x" },
+      { type: "turn_error", message: account, fromAgent: true },
+    ])
+  })
+
+  it("leaves no reply behind when the account was all the turn said", async () => {
+    const handlers = await promptingOwner()
+    const account = "Usage Limit Reached\n\nYou have reached your quota."
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "content_delta",
+      text: account,
+    })
+    emitAcpEvent(handlers, {
+      seq: 3,
+      connection_id: "spawned-conn",
+      type: "session_failure",
+      record: { ...failureRecord(1, "error", account), echoed_in_reply: true },
+    })
+    expect(h.store!.getConnection(TAB)!.liveMessage!.content).toEqual([
+      { type: "turn_error", message: account, fromAgent: true },
+    ])
+  })
+
+  // An AIR adapter's own record carries no such mark: prose that happens to
+  // say the same words is the model's, and stays.
+  it("keeps reply text an unmarked record merely repeats", async () => {
+    const handlers = await promptingOwner()
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "content_delta",
+      text: "Set the banner to: The connection was lost.",
+    })
+    emitAcpEvent(handlers, {
+      seq: 3,
+      connection_id: "spawned-conn",
+      type: "session_failure",
+      record: failureRecord(1, "error", "The connection was lost."),
+    })
+    expect(h.store!.getConnection(TAB)!.liveMessage!.content).toEqual([
+      { type: "text", text: "Set the banner to: The connection was lost." },
+      {
+        type: "turn_error",
+        message: "The connection was lost.",
+        fromAgent: true,
+      },
+    ])
+  })
+
   it("keeps the agent's own words over codeg's verdict, whichever comes first", async () => {
     const handlers = await promptingOwner()
     emitAcpEvent(handlers, {
@@ -10339,5 +10416,133 @@ describe("hasPrompted: whether a turn has run on the connection", () => {
     })
     expect(h.store!.getConnection(TAB)!.connectionId).toBe("respawned-conn")
     expect(hasPrompted()).toBe(false)
+  })
+})
+
+describe("a dispatching assistant answers for the owner (personal agent 7.3.1)", () => {
+  async function connectOwner(): Promise<AttachHandlers> {
+    h.acpFindConnectionForConversation.mockResolvedValue(null)
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1", 42)
+    })
+    return latestAttachHandlers()
+  }
+
+  async function delegated(): Promise<AttachHandlers> {
+    const handlers = await connectOwner()
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "ask_delegate",
+      delegate: { bot_id: 3, questions: true, plans: true },
+    })
+    h.notifyDesktop.mockClear()
+    h.requestWindowAttention.mockClear()
+    return handlers
+  }
+
+  it("holds back a question and a plan approval the assistant answers, not a command's permission", async () => {
+    const handlers = await delegated()
+    expect(h.store!.getConnection(TAB)!.askDelegate).toEqual({
+      bot_id: 3,
+      questions: true,
+      plans: true,
+    })
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "question_request",
+      question_id: "q-1",
+      questions: [],
+    })
+    emitAcpEvent(handlers, {
+      seq: 3,
+      connection_id: "spawned-conn",
+      type: "permission_request",
+      request_id: "req-plan",
+      tool_call: { kind: "switch_mode", toolCallId: "call_plan" },
+      options: [
+        { option_id: "exit-plan-default", name: "Yes", kind: "allow_once" },
+        { option_id: "reject", name: "No", kind: "reject_once" },
+      ],
+    })
+    // The card still shows: only the notification waits.
+    expect(h.store!.getConnection(TAB)!.pendingAskQuestion?.question_id).toBe(
+      "q-1"
+    )
+    expect(h.notifyDesktop).not.toHaveBeenCalled()
+    expect(h.requestWindowAttention).not.toHaveBeenCalled()
+
+    emitAcpEvent(handlers, {
+      seq: 4,
+      connection_id: "spawned-conn",
+      type: "permission_request",
+      request_id: "req-cmd",
+      tool_call: { kind: "execute", toolCallId: "call_cmd" },
+      options: [{ option_id: "allow", name: "Allow", kind: "allow_once" }],
+    })
+    expect(h.requestWindowAttention).toHaveBeenCalledWith("permission_request")
+  })
+
+  it("notifies a question asking for a secret at once", async () => {
+    const handlers = await delegated()
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "question_request",
+      question_id: "q-secret",
+      questions: [
+        {
+          id: "k",
+          question: "API key?",
+          header: "",
+          multi_select: false,
+          options: [],
+          is_secret: true,
+        },
+      ],
+    })
+    expect(h.requestWindowAttention).toHaveBeenCalledWith("question_request")
+  })
+
+  it("leaves a forwarded one to the assistant's own notification", async () => {
+    const handlers = await delegated()
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "ask_forwarded",
+      request_id: "q-1",
+      kind: "question",
+    })
+    emitAcpEvent(handlers, {
+      seq: 3,
+      connection_id: "spawned-conn",
+      type: "ask_forwarded",
+      request_id: "ap-1",
+      kind: "plan",
+    })
+    // The backend tells the owner under the assistant's name (1.13).
+    expect(h.notifyDesktop).not.toHaveBeenCalled()
+    expect(h.requestWindowAttention).not.toHaveBeenCalled()
+  })
+
+  it("notifies as always once nobody answers for the owner", async () => {
+    const handlers = await delegated()
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "ask_delegate",
+      delegate: null,
+    })
+    emitAcpEvent(handlers, {
+      seq: 3,
+      connection_id: "spawned-conn",
+      type: "plan_approval_request",
+      approval_id: "ap-1",
+      tool_call_id: "call_plan",
+      plan_markdown: "# Plan",
+    })
+    expect(h.requestWindowAttention).toHaveBeenCalledWith("permission_request")
   })
 })

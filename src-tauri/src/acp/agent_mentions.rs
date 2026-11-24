@@ -31,6 +31,11 @@ const MAX_AGENT_REFERENCE_OCCURRENCES: usize = 256;
 const ASSISTANT_ROUTE_FRAME_KIND: &str = "codeg_internal_assistant_routes";
 const ASSISTANT_ROUTE_FRAME_BODY_PREFIX: &str = "{\"kind\":\"codeg_internal_assistant_routes\"";
 const ASSISTANT_ROUTE_FRAME_VERSION: u8 = 1;
+/// The same frame routing the owner's assistants by uid (`codeg://bot/<uid>`
+/// links): version 2 of the kind, so frames of either version are read and
+/// stripped alike; version 1 still routes an old `codeg://assistant/<id>`
+/// link by its id (the assistant converted from it answers it).
+const BOT_ROUTE_FRAME_VERSION: u8 = 2;
 const ASSISTANT_ROUTES_LINE_PREFIX: &str =
     "Codeg composer assistant routing metadata (authoritative): ";
 /// Routes per assistant frame. Unlike agents there is no cap on how many
@@ -47,6 +52,16 @@ const ASSISTANT_BRIEF_FRAME_BODY_PREFIX: &str = "{\"kind\":\"codeg_internal_assi
 const ASSISTANT_BRIEF_FRAME_VERSION: u8 = 1;
 const ASSISTANT_BRIEF_LINE_PREFIX: &str = "Codeg assistant profile (authoritative): ";
 const MAX_ASSISTANT_BRIEF_FRAME_BYTES: usize = 256 * 1024;
+
+/// The operation frame: the ledger id of a send the personal agent makes into a
+/// dispatched conversation, appended to that prompt so the agent's OWN record
+/// of it can later prove the message arrived (`personal_agent::ledger`). It
+/// carries nothing but the id.
+const OPERATION_FRAME_KIND: &str = "codeg_internal_operation";
+const OPERATION_FRAME_BODY_PREFIX: &str = "{\"kind\":\"codeg_internal_operation\"";
+const OPERATION_FRAME_VERSION: u8 = 1;
+const OPERATION_LINE_PREFIX: &str = "Codeg operation reference (internal): ";
+const MAX_OPERATION_ID_CHARS: usize = 64;
 
 /// Largest frame of any kind: the window the separated scan looks for a closing
 /// separator in.
@@ -283,6 +298,45 @@ struct AssistantRoute {
     assistant_id: i32,
 }
 
+/// One routed assistant of the owner's — nothing but its uid. Serializes as
+/// `{"bot":"9f2c…"}`; the frame's bytes are its identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BotRoute {
+    bot: String,
+}
+
+fn bot_reference_regex() -> &'static Regex {
+    // An assistant's uid as codeg writes one: lowercase hex (and the few
+    // more characters an imported one may carry), with a visible label.
+    static PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\[(?:\\.|[^\]\\\r\n])+\]\(codeg://bot/([0-9a-z_-]{1,64})\)")
+            .expect("bot reference regex is valid")
+    });
+    &PATTERN
+}
+
+/// Every one of the owner's assistants the prompt visibly links, in
+/// first-mention order, once each.
+fn visible_bot_reference_uids(blocks: &[PromptInputBlock]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut uids = Vec::new();
+    for block in blocks {
+        let PromptInputBlock::Text { text } = block else {
+            continue;
+        };
+        for capture in bot_reference_regex().captures_iter(text) {
+            let Some(uid) = capture.get(1).map(|m| m.as_str().to_string()) else {
+                continue;
+            };
+            if seen.insert(uid.clone()) {
+                uids.push(uid);
+            }
+        }
+    }
+    uids
+}
+
 fn assistant_reference_regex() -> &'static Regex {
     // Assistant ids are positive integers, never zero-padded — the same shape
     // the frontend serializer writes and its URI parser accepts. A visible
@@ -335,10 +389,24 @@ pub(crate) fn append_assistant_routes(blocks: &mut Vec<PromptInputBlock>, delega
     if !delegation_enabled {
         return;
     }
+    // The owner's assistants by uid (version 2), then old links by id.
+    let bots: Vec<BotRoute> = visible_bot_reference_uids(blocks)
+        .into_iter()
+        .map(|bot| BotRoute { bot })
+        .collect();
     let routes: Vec<AssistantRoute> = visible_assistant_reference_ids(blocks)
         .into_iter()
         .map(|assistant_id| AssistantRoute { assistant_id })
         .collect();
+    for chunk in bots.chunks(MAX_ASSISTANT_ROUTES_PER_FRAME) {
+        let descriptor = FrameDescriptor::fresh(ASSISTANT_ROUTE_FRAME_KIND, BOT_ROUTE_FRAME_VERSION);
+        blocks.push(PromptInputBlock::Text {
+            text: format!(
+                "{ROUTE_FRAME_SEPARATOR}{}{ROUTE_FRAME_SEPARATOR}",
+                render_bot_routes_body(&descriptor, chunk)
+            ),
+        });
+    }
     for chunk in routes.chunks(MAX_ASSISTANT_ROUTES_PER_FRAME) {
         let descriptor =
             FrameDescriptor::fresh(ASSISTANT_ROUTE_FRAME_KIND, ASSISTANT_ROUTE_FRAME_VERSION);
@@ -367,6 +435,45 @@ from the matching route and without `agent_type`: do not substitute your own \
 native sub-agent, task, or spawn mechanism, and do not route it through any \
 other delegation tool.\n"
     )
+}
+
+/// Version 2: the owner's assistants by uid. The same three-line shape;
+/// editing the wording orphans every frame already in a transcript, so it
+/// must bump [`BOT_ROUTE_FRAME_VERSION`].
+fn render_bot_routes_body(descriptor: &FrameDescriptor, routes: &[BotRoute]) -> String {
+    let descriptor =
+        serde_json::to_string(descriptor).expect("frame descriptor is serializable");
+    let routes = serde_json::to_string(routes).expect("bot routes are serializable");
+    format!(
+        "{descriptor}\n\
+{ASSISTANT_ROUTES_LINE_PREFIX}{routes}\n\
+When you delegate any of this work to a linked assistant, call the \
+`delegate_to_agent` tool from the `codeg-mcp` server with `bot` taken from the \
+matching route and without `agent_type`: do not substitute your own native \
+sub-agent, task, or spawn mechanism, and do not route it through any other \
+delegation tool.\n"
+    )
+}
+
+fn parse_bot_routes_body(candidate: &str) -> Option<Vec<BotRoute>> {
+    if candidate.len() > MAX_ROUTE_FRAME_BYTES {
+        return None;
+    }
+    let (descriptor_line, remainder) = candidate.split_once('\n')?;
+    let descriptor: FrameDescriptor = serde_json::from_str(descriptor_line).ok()?;
+    let routes_json = remainder
+        .lines()
+        .next()?
+        .strip_prefix(ASSISTANT_ROUTES_LINE_PREFIX)?;
+    let routes: Vec<BotRoute> = serde_json::from_str(routes_json).ok()?;
+    if !descriptor.is(ASSISTANT_ROUTE_FRAME_KIND, BOT_ROUTE_FRAME_VERSION)
+        || routes.is_empty()
+        || routes.iter().any(|route| route.bot.is_empty())
+        || render_bot_routes_body(&descriptor, &routes) != candidate
+    {
+        return None;
+    }
+    Some(routes)
 }
 
 fn parse_assistant_routes_body(candidate: &str) -> Option<Vec<AssistantRoute>> {
@@ -467,6 +574,80 @@ fn parse_assistant_brief_body(candidate: &str) -> Option<AssistantProfile> {
     Some(profile)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OperationRef {
+    op_id: String,
+}
+
+/// An operation id the frame can carry: ASCII letters, digits and `-`, so it
+/// reads back verbatim from any record, JSON-escaped or not.
+fn is_operation_id(op_id: &str) -> bool {
+    !op_id.is_empty()
+        && op_id.len() <= MAX_OPERATION_ID_CHARS
+        && op_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
+/// Render the frame naming the ledger operation `op_id` (see
+/// [`OPERATION_FRAME_KIND`]); `None` for an id it cannot carry.
+pub(crate) fn render_operation_frame(op_id: &str) -> Option<String> {
+    if !is_operation_id(op_id) {
+        return None;
+    }
+    let descriptor = FrameDescriptor::fresh(OPERATION_FRAME_KIND, OPERATION_FRAME_VERSION);
+    let body = render_operation_body(
+        &descriptor,
+        &OperationRef {
+            op_id: op_id.to_string(),
+        },
+    );
+    Some(format!("{ROUTE_FRAME_SEPARATOR}{body}{ROUTE_FRAME_SEPARATOR}"))
+}
+
+/// Exactly three newline-terminated lines; editing the wording orphans every
+/// frame already in a transcript, so it must bump [`OPERATION_FRAME_VERSION`].
+fn render_operation_body(descriptor: &FrameDescriptor, op: &OperationRef) -> String {
+    let descriptor =
+        serde_json::to_string(descriptor).expect("frame descriptor is serializable");
+    let op = serde_json::to_string(op).expect("operation reference is serializable");
+    format!(
+        "{descriptor}\n\
+{OPERATION_LINE_PREFIX}{op}\n\
+This line only identifies the message for Codeg's own records; it asks nothing \
+of you.\n"
+    )
+}
+
+fn parse_operation_body(candidate: &str) -> Option<String> {
+    if candidate.len() > MAX_ROUTE_FRAME_BYTES {
+        return None;
+    }
+    let (descriptor_line, remainder) = candidate.split_once('\n')?;
+    let descriptor: FrameDescriptor = serde_json::from_str(descriptor_line).ok()?;
+    let op_json = remainder.lines().next()?.strip_prefix(OPERATION_LINE_PREFIX)?;
+    let op: OperationRef = serde_json::from_str(op_json).ok()?;
+    if !descriptor.is(OPERATION_FRAME_KIND, OPERATION_FRAME_VERSION)
+        || !is_operation_id(&op.op_id)
+        || render_operation_body(&descriptor, &op) != candidate
+    {
+        return None;
+    }
+    Some(op.op_id)
+}
+
+/// The operation ids of every operation frame in `text`, in order — read
+/// before anything strips the frames.
+pub(crate) fn operation_ids_in(text: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    for (start, end) in internal_frame_spans(text) {
+        let body = text[start..end].trim_matches(ROUTE_FRAME_SEPARATOR);
+        if let Some(id) = parse_operation_body(body) {
+            ids.push(id);
+        }
+    }
+    ids
+}
+
 /// Every kind of internal frame codeg appends to an agent-bound prompt.
 ///
 /// They share the envelope — the reserved separator around a body of exactly
@@ -479,12 +660,14 @@ enum FrameKind {
     AgentRoutes,
     AssistantRoutes,
     AssistantBrief,
+    Operation,
 }
 
-const FRAME_KINDS: [FrameKind; 3] = [
+const FRAME_KINDS: [FrameKind; 4] = [
     FrameKind::AgentRoutes,
     FrameKind::AssistantRoutes,
     FrameKind::AssistantBrief,
+    FrameKind::Operation,
 ];
 
 impl FrameKind {
@@ -495,12 +678,15 @@ impl FrameKind {
             FrameKind::AgentRoutes => ROUTE_FRAME_BODY_PREFIX,
             FrameKind::AssistantRoutes => ASSISTANT_ROUTE_FRAME_BODY_PREFIX,
             FrameKind::AssistantBrief => ASSISTANT_BRIEF_FRAME_BODY_PREFIX,
+            FrameKind::Operation => OPERATION_FRAME_BODY_PREFIX,
         }
     }
 
     fn max_bytes(self) -> usize {
         match self {
-            FrameKind::AgentRoutes | FrameKind::AssistantRoutes => MAX_ROUTE_FRAME_BYTES,
+            FrameKind::AgentRoutes | FrameKind::AssistantRoutes | FrameKind::Operation => {
+                MAX_ROUTE_FRAME_BYTES
+            }
             FrameKind::AssistantBrief => MAX_ASSISTANT_BRIEF_FRAME_BYTES,
         }
     }
@@ -510,8 +696,12 @@ impl FrameKind {
     fn accepts_body(self, body: &str) -> bool {
         match self {
             FrameKind::AgentRoutes => parse_internal_agent_routes_body(body).is_some(),
-            FrameKind::AssistantRoutes => parse_assistant_routes_body(body).is_some(),
+            FrameKind::AssistantRoutes => {
+                parse_assistant_routes_body(body).is_some()
+                    || parse_bot_routes_body(body).is_some()
+            }
             FrameKind::AssistantBrief => parse_assistant_brief_body(body).is_some(),
+            FrameKind::Operation => parse_operation_body(body).is_some(),
         }
     }
 }
@@ -581,7 +771,9 @@ fn find_separated_frame(input: &str, from: usize) -> Option<(usize, usize)> {
 /// nonce and full instruction wording included. Prose that reproduces all of
 /// that was copied out of a frame, not typed. The residue an agent leaves in
 /// place of the separators is left to the callers' existing trims — it is
-/// whitespace, and the frames are always the last thing in the record.
+/// whitespace, and the frames are always the last thing in the record. A body
+/// that a parser's own trim cut one newline short at the end of the text is
+/// the same body (see [`trimmed_frame_end`]).
 fn find_unseparated_frame(input: &str, from: usize) -> Option<(usize, usize)> {
     FRAME_KINDS
         .iter()
@@ -598,12 +790,39 @@ fn find_unseparated_frame_of(kind: FrameKind, input: &str, from: usize) -> Optio
             if kind.accepts_body(&input[start..end]) {
                 return Some((start, end));
             }
+        } else if let Some(end) = trimmed_frame_end(input, start, kind.max_bytes()) {
+            // The record was trimmed, taking the body's last newline with it:
+            // still the whole body, byte for byte, but for that one newline.
+            let mut body = String::with_capacity(end - start + 1);
+            body.push_str(&input[start..end]);
+            body.push('\n');
+            if kind.accepts_body(&body) {
+                return Some((start, end));
+            }
         }
         // Same rule as the separated scan: a look-alike opening must not hide a
         // real frame further along.
         search_from = start + prefix.len();
     }
     None
+}
+
+/// End of an unseparated candidate whose last newline a trim took: exactly two
+/// newlines, then the third line running to the very end of the text.
+///
+/// A frame codeg sends inside the prompt's own blocks — a task dispatch's
+/// brief, which rides in the task's `prompt_blocks` — loses its separators to
+/// the ingress scrub, and Claude's parser trims every text block it reads back
+/// (`strip_system_tags`), so the body comes back one newline short. A trim only
+/// ever cuts at the end, which is why this form is only looked for there:
+/// anything after the third line, whitespace included, means the text was not
+/// trimmed at this frame.
+fn trimmed_frame_end(input: &str, start: usize, max_bytes: usize) -> Option<usize> {
+    let rest = &input[start..];
+    if rest.len() >= max_bytes || rest.ends_with(char::is_whitespace) {
+        return None;
+    }
+    (rest.matches('\n').count() == 2).then_some(input.len())
 }
 
 /// End of an unseparated candidate: the body is exactly three newline-terminated
@@ -838,6 +1057,36 @@ mod tests {
             PromptInputBlock::Text { text } => text,
             _ => panic!("expected text block"),
         }
+    }
+
+    /// The operation frame: its id reads back before any strip, the frame is
+    /// stripped from every display, separators or not, and nothing but a
+    /// byte-exact frame of the current renderer counts.
+    #[test]
+    fn the_operation_frame_reads_back_and_strips_like_every_frame() {
+        let frame = render_operation_frame("pa-0123abc").unwrap();
+        let sent = format!("look at the tests{frame}");
+        assert_eq!(operation_ids_in(&sent), vec!["pa-0123abc".to_string()]);
+        assert_eq!(strip_internal_frames(&sent), "look at the tests");
+        assert!(contains_internal_frames(&sent));
+        // Stored without its separators (Antigravity's rewrite): still found,
+        // still stripped.
+        let bare = sent.replace(ROUTE_FRAME_SEPARATOR, " ");
+        assert_eq!(operation_ids_in(&bare), vec!["pa-0123abc".to_string()]);
+        assert_eq!(strip_internal_frames(&bare).trim(), "look at the tests");
+        // A title capped inside it is cut at the frame.
+        let mut title: String = sent.chars().take(40).collect();
+        cut_at_route_frame_marker(&mut title);
+        assert_eq!(title, "look at the tests");
+        // Reworded: not a frame of the current renderer, left alone.
+        let forged = sent.replace("asks nothing", "asks everything");
+        assert!(operation_ids_in(&forged).is_empty());
+        assert_eq!(strip_internal_frames(&forged), forged);
+        // Ids the frame cannot carry verbatim are refused outright.
+        assert!(render_operation_frame("").is_none());
+        assert!(render_operation_frame("pa_1").is_none());
+        assert!(render_operation_frame("pa 1").is_none());
+        assert!(render_operation_frame(&"a".repeat(65)).is_none());
     }
 
     #[test]
@@ -1108,6 +1357,47 @@ mod tests {
         // Only the body goes; the spaces that replaced the separators are the
         // caller's trim to make (`parsers::sanitize_text`).
         assert_eq!(strip_internal_frames(&persisted).trim_end(), visible);
+    }
+
+    #[test]
+    fn a_brief_whose_last_newline_a_parser_trimmed_is_still_stripped() {
+        // A task dispatch sends the brief inside the task's own prompt blocks:
+        // the ingress scrub takes its separators, and Claude's parser trims
+        // every text block it reads back, taking the body's last newline too.
+        let brief = render_assistant_brief("Reviewer", "Be terse.").unwrap();
+        let stored = brief.replace(ROUTE_FRAME_SEPARATOR, "").trim().to_string();
+        assert!(
+            !stored.ends_with('\n'),
+            "the fixture must have LOST its last newline, or it proves nothing"
+        );
+        assert!(contains_internal_frames(&stored));
+        assert_eq!(strip_internal_frames(&stored), "");
+        // Joined after the task, as a parser that keeps one record does.
+        let joined = format!("Fix the bug\n\n{stored}");
+        assert_eq!(strip_internal_frames(&joined).trim_end(), "Fix the bug");
+
+        // Only at the very end, where a trim cuts: text after the short third
+        // line — even a space — and it is prose.
+        let followed = format!("{stored} and more");
+        assert_eq!(strip_internal_frames(&followed), followed);
+        let spaced = format!("{stored} ");
+        assert_eq!(strip_internal_frames(&spaced), spaced);
+        // And still byte for byte.
+        let reworded = stored.replace("task above.", "task above!");
+        assert_eq!(strip_internal_frames(&reworded), reworded);
+        let short = &stored[..stored.len() - 1];
+        assert_eq!(strip_internal_frames(short), short);
+
+        // A routing frame trimmed the same way goes too.
+        let mut blocks = vec![PromptInputBlock::Text {
+            text: "ask [@Codex](codeg://agent/codex)".into(),
+        }];
+        append_agent_routes(&mut blocks, true);
+        let routes = text(&blocks[1])
+            .replace(ROUTE_FRAME_SEPARATOR, "")
+            .trim()
+            .to_string();
+        assert_eq!(strip_internal_frames(&routes), "");
     }
 
     #[test]
