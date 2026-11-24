@@ -1283,10 +1283,12 @@ function pushConversationRow(
  * linear row list for windowing by the one Virtualizer — pinned conversations
  * are ordinary conversation rows in the SAME array, never a separate list.
  *
- * Pure and deliberately **does not take `now`**: the per-minute clock tick that
+ * Deliberately **does not take the minute clock**: the per-minute tick that
  * refreshes relative time labels must not rebuild this array (that would defeat
  * the Phase 1 memo chain). The row renderer passes only the row's timestamp;
- * each card's `SidebarRelativeTime` formats it against the shared clock.
+ * each card's `SidebarRelativeTime` formats it against the shared clock. The
+ * one time input is `currentTime`, which only Recent's time groups read and
+ * whose caller passes the local day's start, so it changes once a day.
  *
  * Structure (top to bottom): the "Pinned" section (when present) is always
  * first; the "Folders", "Chat" and "Recent" sections follow in the order set by
@@ -1316,7 +1318,9 @@ function pushConversationRow(
  *   `showRecent` — it is the one section the user can switch off, and a
  *   permanently-visible header for a hidden section would defeat that. When
  *   shown it mirrors the Chat section: header always, then either a single
- *   `recent-empty` hint or its flat conversation rows. Its rows are tagged
+ *   `recent-empty` hint or its conversation rows — under time-group headings
+ *   (`recent-time-group`) unless `recentGroupingMode` is `"flat"`, see
+ *   {@link classifyRecentConversation}. Its rows are tagged
  *   `recent` because they intentionally duplicate rows already emitted by
  *   Folders / Chat (see {@link ConversationRow.recent}).
  */
