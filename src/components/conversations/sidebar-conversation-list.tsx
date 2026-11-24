@@ -157,6 +157,14 @@ import {
 import { useRemoteWorkspaceConnections } from "@/hooks/use-remote-workspace-connections"
 import { useSubsessionSync } from "@/hooks/use-subsession-sync"
 import { SidebarSectionHeader } from "./sidebar-section-header"
+import {
+  AssistantsSectionActions,
+  AssistantsSectionBadge,
+  SidebarAssistants,
+  useSidebarAssistantsCount,
+  useSidebarRosterDialogs,
+  SHOW_SIDEBAR_ASSISTANTS_EVENT,
+} from "@/components/personal-agent/sidebar-assistants"
 import { SidebarFolderGroupHeader } from "./sidebar-folder-group-header"
 import { ConversationManageDialog } from "./conversation-manage-dialog"
 import { openConversationTagsManager } from "./conversation-tags-manager"
@@ -1128,6 +1136,11 @@ export function SidebarConversationList({
   const [sectionCollapsed, setSectionCollapsed] =
     useState<SidebarSectionCollapsed>({})
   const pinnedExpanded = !sectionCollapsed.pinned
+  const assistantsExpanded = !sectionCollapsed.assistants
+  // The personal assistants' section (its count beside its title), and the
+  // dialogs its head's [+] and its rows' menus share.
+  const assistantsCount = useSidebarAssistantsCount()
+  const rosterDialogs = useSidebarRosterDialogs()
   const foldersExpanded = !sectionCollapsed.folders
   const chatsExpanded = !sectionCollapsed.chats
   const recentExpanded = !sectionCollapsed.recent
@@ -1296,6 +1309,17 @@ export function SidebarConversationList({
     setRecentFilter(loadRecentFilter())
     setRecentGroupingMode(loadRecentGroupingMode())
     setConversationExpanded(new Set(loadConversationExpanded()))
+  }, [])
+
+  // "Manage assistants" from elsewhere: the assistants' section opened.
+  useEffect(() => {
+    // (Kept already by the one who asked.)
+    const open = () =>
+      setSectionCollapsed((prev) =>
+        prev.assistants ? { ...prev, assistants: false } : prev
+      )
+    window.addEventListener(SHOW_SIDEBAR_ASSISTANTS_EVENT, open)
+    return () => window.removeEventListener(SHOW_SIDEBAR_ASSISTANTS_EVENT, open)
   }, [])
 
   const toggleSection = useCallback((section: SidebarSectionKey) => {
@@ -1726,10 +1750,13 @@ export function SidebarConversationList({
         layout,
         groupExpanded: folderGroupExpanded,
         hideEmptyFolders: tagFilterActive,
+        assistants: { expanded: assistantsExpanded, count: assistantsCount },
         recentGroupingMode,
         currentTime: recentDayStart,
       }),
     [
+      assistantsExpanded,
+      assistantsCount,
       pinned,
       pinnedExpanded,
       reorderableFolderIds,
@@ -2914,6 +2941,68 @@ export function SidebarConversationList({
   const showEmptyWorkspaceActions =
     folders.length === 0 && conversations.length === 0
 
+  // The fully empty workspace's way in: under the assistants (the primary's
+  // set-up row among them), a row of the list, so both scroll as one.
+  // Nothing in the workspace yet: the assistants, then the way in.
+  const shownRows = useMemo<SidebarRow[]>(
+    () =>
+      showEmptyWorkspaceActions
+        ? [
+            ...rows.filter(
+              (r) =>
+                r.kind === "assistants" ||
+                (r.kind === "section" && r.section === "assistants")
+            ),
+            { kind: "workspace-empty" },
+          ]
+        : rows,
+    [rows, showEmptyWorkspaceActions]
+  )
+
+  const workspaceEmptyActions = (
+    <div
+      className="flex flex-col items-center justify-center gap-2 px-3 pt-6 pb-3"
+      data-sidebar-workspace-empty
+    >
+      <Button
+        variant="outline"
+        size="sm"
+        className="w-full max-w-[14rem] justify-start"
+        onClick={handleOpenFolderAction}
+      >
+        <FolderOpenDot className="h-3.5 w-3.5 mr-1.5" />
+        {tFolderDropdown("openFolder")}
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        className="w-full max-w-[14rem] justify-start"
+        onClick={handleOpenCloneDialog}
+      >
+        <FolderGit2 className="h-3.5 w-3.5 mr-1.5" />
+        {tFolderDropdown("cloneRepository")}
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        className="w-full max-w-[14rem] justify-start"
+        onClick={handleProjectBoot}
+      >
+        <Rocket className="h-3.5 w-3.5 mr-1.5" />
+        {tFolderDropdown("projectBoot")}
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        className="w-full max-w-[14rem] justify-start"
+        onClick={handleOpenImportWindow}
+      >
+        <Download className="h-3.5 w-3.5 mr-1.5" />
+        {t("importLocalSessions")}
+      </Button>
+    </div>
+  )
+
   // A folder's chosen colour, for the header's colour picker and for the tint
   // its TITLE takes. It used to also drive a per-row `data-theme` wrapper, which
   // re-themed every conversation card under the folder (hover pill, selection,
@@ -3086,6 +3175,27 @@ export function SidebarConversationList({
   }
 
   const renderRow = (row: SidebarRow) => {
+    if (row.kind === "assistants") {
+      return <SidebarAssistants dialogs={rosterDialogs.api} />
+    }
+    if (row.kind === "workspace-empty") return workspaceEmptyActions
+    if (row.kind === "section" && row.section === "assistants") {
+      return (
+        <SidebarSectionHeader
+          section="assistants"
+          expanded={row.expanded}
+          onToggle={toggleSection}
+          labelBadge={row.expanded ? null : <AssistantsSectionBadge />}
+          trailing={(className) => (
+            <AssistantsSectionActions
+              dialogs={rosterDialogs.api}
+              className={className}
+            />
+          )}
+          topGap
+        />
+      )
+    }
     if (row.kind === "section") {
       // Section headers are not folder-scoped, so they skip themeWrap.
       return (
@@ -3480,6 +3590,8 @@ export function SidebarConversationList({
   // prefix to stay distinct from its canonical twin.
   const rowKey = (row: SidebarRow): string => {
     if (row.kind === "section") return `section-${row.section}`
+    if (row.kind === "assistants") return "assistants"
+    if (row.kind === "workspace-empty") return "workspace-empty"
     if (row.kind === "folder-group") return `foldergroup-${row.groupId}`
     if (row.kind === "group-empty") return `groupempty-${row.groupId}`
     if (row.kind === "folder") return `folder-${row.folderId}`
@@ -3499,6 +3611,7 @@ export function SidebarConversationList({
 
   return (
     <div className="relative flex flex-col flex-1 min-h-0">
+      {rosterDialogs.node}
       {(loading || refreshing) && (
         // z-20 keeps the refresh spinner above the sticky header overlay (z-10),
         // which lives in a later sibling and would otherwise paint over it.
@@ -3514,49 +3627,21 @@ export function SidebarConversationList({
           ))}
         </div>
       ) : error ? (
-        <div className="flex-1 flex items-center justify-center px-3">
-          <p className="text-destructive text-xs">
+        // The conversations could not be read: the assistants still can be
+        // (their own store), so they stay, the error under them.
+        <div className="flex-1 min-h-0 overflow-y-auto px-1.5 pb-1.5">
+          {rows
+            .filter(
+              (r) =>
+                r.kind === "assistants" ||
+                (r.kind === "section" && r.section === "assistants")
+            )
+            .map((r) => (
+              <div key={rowKey(r)}>{renderRow(r)}</div>
+            ))}
+          <p className="px-2 py-6 text-center text-destructive text-xs">
             {t("error", { message: error })}
           </p>
-        </div>
-      ) : showEmptyWorkspaceActions ? (
-        <div className="flex-1 flex flex-col items-center justify-center px-3 gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full max-w-[14rem] justify-start"
-            onClick={handleOpenFolderAction}
-          >
-            <FolderOpenDot className="h-3.5 w-3.5 mr-1.5" />
-            {tFolderDropdown("openFolder")}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full max-w-[14rem] justify-start"
-            onClick={handleOpenCloneDialog}
-          >
-            <FolderGit2 className="h-3.5 w-3.5 mr-1.5" />
-            {tFolderDropdown("cloneRepository")}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full max-w-[14rem] justify-start"
-            onClick={handleProjectBoot}
-          >
-            <Rocket className="h-3.5 w-3.5 mr-1.5" />
-            {tFolderDropdown("projectBoot")}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full max-w-[14rem] justify-start"
-            onClick={handleOpenImportWindow}
-          >
-            <Download className="h-3.5 w-3.5 mr-1.5" />
-            {t("importLocalSessions")}
-          </Button>
         </div>
       ) : (
         <ContextMenu>
@@ -3661,7 +3746,7 @@ export function SidebarConversationList({
                   <Virtualizer
                     ref={virtualizerRef}
                     scrollRef={viewportRef}
-                    data={rows}
+                    data={shownRows}
                     itemSize={32}
                     bufferSize={400}
                     onScroll={handleVirtuaScroll}

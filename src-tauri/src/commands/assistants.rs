@@ -1,4 +1,8 @@
-//! Assistants: create, edit, delete and order them. See
+//! The collaboration settings' assistants: read only, now that each became
+//! one of the owner's personal assistants (the `m20261125` migration). The
+//! table stays for what still names a row of it — a delegation child from
+//! before, an old `codeg://assistant/<id>` link — and the writes below stay
+//! for config sync and tests; no command writes it any more. See
 //! `db::service::assistant_service` for the row rules.
 //!
 //! Every write goes out to every window and WebSocket client on
@@ -109,8 +113,18 @@ pub async fn assistant_create_core(
     db: &AppDatabase,
     draft: AssistantDraft,
 ) -> Result<AssistantInfo, AppCommandError> {
+    assistant_create_as_core(emitter, db, draft, uuid::Uuid::new_v4().to_string()).await
+}
+
+/// [`assistant_create_core`] under a uid chosen beforehand.
+pub async fn assistant_create_as_core(
+    emitter: &EventEmitter,
+    db: &AppDatabase,
+    draft: AssistantDraft,
+    uid: String,
+) -> Result<AssistantInfo, AppCommandError> {
     let _one_at_a_time = ASSISTANT_WRITE_LOCK.lock().await;
-    let assistant = assistant_service::create(&db.conn, &draft).await?;
+    let assistant = assistant_service::create_as(&db.conn, &draft, &uid).await?;
     emit_change(
         emitter,
         AssistantChange::Upsert {
@@ -182,47 +196,6 @@ pub async fn assistant_list(
     db: State<'_, AppDatabase>,
 ) -> Result<Vec<AssistantInfo>, AppCommandError> {
     assistant_list_core(&db).await
-}
-
-#[cfg(feature = "tauri-runtime")]
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn assistant_create(
-    app: tauri::AppHandle,
-    db: State<'_, AppDatabase>,
-    draft: AssistantDraft,
-) -> Result<AssistantInfo, AppCommandError> {
-    assistant_create_core(&EventEmitter::from_app(&app), &db, draft).await
-}
-
-#[cfg(feature = "tauri-runtime")]
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn assistant_update(
-    app: tauri::AppHandle,
-    db: State<'_, AppDatabase>,
-    id: i32,
-    patch: AssistantPatch,
-) -> Result<AssistantInfo, AppCommandError> {
-    assistant_update_core(&EventEmitter::from_app(&app), &db, id, patch).await
-}
-
-#[cfg(feature = "tauri-runtime")]
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn assistant_delete(
-    app: tauri::AppHandle,
-    db: State<'_, AppDatabase>,
-    id: i32,
-) -> Result<AssistantInfo, AppCommandError> {
-    assistant_delete_core(&EventEmitter::from_app(&app), &db, id).await
-}
-
-#[cfg(feature = "tauri-runtime")]
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn assistant_reorder(
-    app: tauri::AppHandle,
-    db: State<'_, AppDatabase>,
-    ids: Vec<i32>,
-) -> Result<Vec<AssistantInfo>, AppCommandError> {
-    assistant_reorder_core(&EventEmitter::from_app(&app), &db, ids).await
 }
 
 #[cfg(test)]

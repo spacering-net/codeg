@@ -142,6 +142,7 @@ const NAV_ITEM_ICONS: Record<SidebarNavItemId, LucideIcon> = {
  */
 function SidebarNavButton({
   icon: Icon,
+  leading,
   label,
   onClick,
   active,
@@ -149,6 +150,10 @@ function SidebarNavButton({
   trailing,
 }: {
   icon: LucideIcon
+  /** Drawn in the icon's place (the personal agent's avatar). It takes the
+   *  icon's width in the row, whatever its own, so every label starts on
+   *  the same line. */
+  leading?: ReactNode
   label: string
   onClick: () => void
   active?: boolean
@@ -170,7 +175,13 @@ function SidebarNavButton({
         active && "bg-sidebar-primary/8"
       )}
     >
-      <Icon className="h-[0.875rem] w-[0.875rem] shrink-0 text-muted-foreground" />
+      {leading ? (
+        <span className="flex w-[0.875rem] shrink-0 justify-center">
+          {leading}
+        </span>
+      ) : (
+        <Icon className="h-[0.875rem] w-[0.875rem] shrink-0 text-muted-foreground" />
+      )}
       {hint ? (
         <LabelWithHint label={label} hint={hint} />
       ) : (
@@ -180,6 +191,10 @@ function SidebarNavButton({
     </button>
   )
 }
+
+// The assistants' badge lives with the assistants; the window title reads
+// it from here as before.
+export { useAssistantsBadge } from "@/components/personal-agent/use-assistants-badge"
 
 export function Sidebar() {
   const t = useTranslations("Folder.sidebar")
@@ -707,7 +722,13 @@ export function Sidebar() {
           isMobile
             ? (e) => {
                 const target = e.target as HTMLElement
-                if (target.closest("[data-conversation-id]")) {
+                // A conversation card, or an assistant on its group's row
+                // (`data-pa-roster-bot`, its set-up row too).
+                if (
+                  target.closest(
+                    "[data-conversation-id], [data-pa-roster-bot], [data-pa-roster-setup]"
+                  )
+                ) {
                   toggle()
                 }
               }

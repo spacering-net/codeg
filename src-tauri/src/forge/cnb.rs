@@ -73,6 +73,11 @@ pub async fn list_issues(
         url.push_str("&state=");
         url.push_str(state);
     }
+    if req.review_requested_me {
+        return Err(ForgeError::Invalid(
+            "CNB cannot list pull requests by requested reviewer".into(),
+        ));
+    }
     if req.assigned_me {
         let login = current_login(auth).await?;
         url.push_str(&format!("&assignees={}", urlencode_query(&login)));
@@ -349,6 +354,26 @@ pub async fn set_item_state(
     Ok(raw.into_row(auth, &repo, kind == ForgeItemKind::Change))
 }
 
+/// `GET /{repo}/-/issues/{n}` or `/-/pulls/{n}` — one item's state. A merged
+/// pull request is `state: closed` with `is_merged: true`.
+pub async fn item_facts(
+    auth: &ResolvedAuth,
+    owner_repo: &str,
+    kind: ForgeItemKind,
+    number: i64,
+) -> Result<super::ItemFacts, ForgeError> {
+    let repo = repo_ref(owner_repo)?;
+    require_number(number)?;
+    let collection = collection_of_kind(kind);
+    let url = format!("{}/{repo}/-/{collection}/{number}", auth.api_base);
+    let raw: serde_json::Value = api_get(auth, &url)
+        .await?
+        .json()
+        .await
+        .map_err(|e| ForgeError::Network(format!("bad item payload: {e}")))?;
+    Ok(super::ItemFacts::from_json(&raw))
+}
+
 /// `POST /{repo}/-/issues` — open an issue.
 ///
 /// CNB takes label NAMES on creation (unlike Gitea's ids), so the chips the
@@ -430,6 +455,7 @@ pub async fn change_detail(
         // commit-status list the other clients fold into `ForgeCheck`; saying
         // "unavailable" is honest, and the panel draws no strip.
         checks: ForgeCheckList::unavailable(),
+        updated_at: None,
         // Only GitHub holds runs for a maintainer's approval through an API
         // this panel can act on.
         workflow_approval: None,

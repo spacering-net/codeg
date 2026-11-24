@@ -6,7 +6,8 @@
  *
  *   * "Multi-Agent Collaboration" — whether an agent may hand a sub-task to
  *     another agent at all, how deep the chain may go, and what each agent is
- *     spawned with (`delegation-settings.tsx`).
+ *     spawned with (`delegation-settings.tsx`). The assistants @ hands work to
+ *     are the owner's assistants, on the sidebar; a row there opens them.
  *   * "In-conversation tools" — the tool groups codeg-mcp injects when an
  *     agent starts: feedback, ask-user-question, session info, the built-in
  *     browser, computer use and the create-from-chat writers

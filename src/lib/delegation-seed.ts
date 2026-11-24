@@ -38,6 +38,7 @@ export function buildDelegationSeedEnvelopes(
       task_id: d.task_id ?? null,
       assistant_id: d.assistant_id ?? null,
       assistant_name: d.assistant_name ?? null,
+      bot_uid: d.bot_uid ?? null,
     })
   }
   return out

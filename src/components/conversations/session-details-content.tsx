@@ -23,9 +23,11 @@ import { useCopiedFlag } from "@/hooks/use-copied-flag"
 import { useModelLabels } from "@/hooks/use-model-labels"
 import { pickModelFromTurns } from "./active-session-details"
 import { AgentIcon } from "@/components/agent-icon"
-import { AssistantAvatar } from "@/components/assistants/assistant-avatar"
-import { useDelegationIdentityLabel } from "@/components/message/delegation-identity"
-import { useAssistant } from "@/stores/assistants-store"
+import {
+  useDelegationIdentityLabel,
+  useIdentityAssistant,
+} from "@/components/message/delegation-identity"
+import { BotAvatar } from "@/components/personal-agent/bot-avatar"
 import { ConversationStatusDot } from "./conversation-status-dot"
 
 interface SessionDetailsContentProps {
@@ -179,24 +181,28 @@ function resolveSessionDurationMs(
  *  the same fallback order the delegation cards use. */
 function AssistantInline({
   id,
+  botUid,
   snapshotName,
 }: {
-  id: number
+  id: number | null
+  botUid: string | null
   snapshotName: string | null
 }) {
   const t = useTranslations("Folder.chat.delegation")
-  const assistant = useAssistant(id)
+  const assistant = useIdentityAssistant({ assistantId: id, botUid })
   const { name, deleted } = useDelegationIdentityLabel({
     agentType: null,
     assistantId: id,
     assistantName: snapshotName,
+    botUid,
   })
   return (
     <span className="inline-flex min-w-0 items-center gap-1.5">
-      <AssistantAvatar
+      <BotAvatar
         avatar={assistant?.avatar ?? null}
         name={name}
         size={16}
+        star={assistant?.primary}
       />
       <span className="min-w-0 truncate">{name}</span>
       {deleted ? (
@@ -387,7 +393,8 @@ export function SessionDetailsCard({
   const knownStatus = isKnownStatus(summary.status) ? summary.status : null
   const statusLabel = knownStatus ? tStatus(knownStatus) : summary.status
   const agentLabel = getAgentLabel(summary.agent_type)
-  const hasExtraLine = summary.parent_id != null || summary.assistant_id != null
+  const ranAs = summary.assistant_id != null || summary.bot_uid != null
+  const hasExtraLine = summary.parent_id != null || ranAs
 
   return (
     <section className="min-w-0 rounded-xl border border-border/70 bg-muted/40 p-3">
@@ -486,10 +493,11 @@ export function SessionDetailsCard({
                 <span className="tabular-nums">{summary.parent_id}</span>
               </PropertyCell>
             )}
-            {summary.assistant_id != null && (
+            {ranAs && (
               <PropertyCell label={t("assistant")}>
                 <AssistantInline
-                  id={summary.assistant_id}
+                  id={summary.assistant_id ?? null}
+                  botUid={summary.bot_uid ?? null}
                   snapshotName={summary.assistant_name ?? null}
                 />
               </PropertyCell>
@@ -675,10 +683,11 @@ export function SessionDetailsContent({
             {summary.parent_id}
           </InfoItem>
         )}
-        {summary.assistant_id != null && (
+        {(summary.assistant_id != null || summary.bot_uid != null) && (
           <InfoItem label={t("assistant")}>
             <AssistantInline
-              id={summary.assistant_id}
+              id={summary.assistant_id ?? null}
+              botUid={summary.bot_uid ?? null}
               snapshotName={summary.assistant_name ?? null}
             />
           </InfoItem>
