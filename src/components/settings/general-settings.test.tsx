@@ -55,14 +55,24 @@ vi.mock("@/lib/api", () => ({
 }))
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
-vi.mock("@/lib/platform", () => ({ isDesktop: () => true }))
+vi.mock("@/lib/platform", () => ({
+  isDesktop: () => true,
+  isLocalDesktop: () => true,
+}))
 vi.mock("@/lib/transport", () => ({
   getActiveRemoteConnectionId: () => null,
   // Read by the desktop-notification section to decide whether permission is
   // the browser's to grant or the OS's; `false` puts it on the browser branch,
   // which is the one with visible controls to assert on.
   isDesktop: () => false,
-  getShellTransport: () => ({ call: vi.fn() }),
+  getShellTransport: () => ({
+    call: vi.fn(async (command: string) =>
+      command === "srn_online_settings"
+        ? { enabled: true, managed: false }
+        : undefined
+    ),
+    subscribe: async () => () => {},
+  }),
 }))
 // The rendering section is gated on the host webview having an env knob to
 // flip, so the platform has to be steerable per test. `vi.hoisted` because the
@@ -130,6 +140,10 @@ describe("GeneralSettings", () => {
     await waitFor(() =>
       expect(hwAccel).toHaveAttribute("data-state", "checked")
     )
+
+    expect(
+      await screen.findByRole("switch", { name: "SpaceRing online services" })
+    ).toHaveAttribute("aria-checked", "true")
 
     // Every child section mounted. A section that is one option is titled by
     // that option, so these double as the labels asserted above.
