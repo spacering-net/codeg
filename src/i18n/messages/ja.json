@@ -2268,6 +2268,7 @@
       "viewOptions": "表示オプション",
       "listOptions": "会話リスト",
       "showCompleted": "完了した会話を表示",
+      "showAssistant": "アシスタントの会話を表示",
       "showWorktrees": "ワークツリーブランチを表示",
       "showRecent": "「最近」グループを表示",
       "tabsFollowFolder": "タブをフォルダーに追従",
@@ -2472,14 +2473,21 @@
       "title": "質問の会話",
       "total": "{count} 件",
       "untitled": "新しい質問",
-      "actions": "その他の操作",
-      "open": "開く",
       "convertToRegular": "通常の会話に変換",
+      "convertConfirmTitle": "通常の会話に変換しますか？",
+      "convertConfirmDescription": "「{title}」はこの会話とのリンクが解除され、通常の会話として表示されます。この操作は元に戻せません。",
+      "convertConfirm": "変換",
+      "cancel": "キャンセル",
       "converted": "通常の会話に変換しました",
       "convertFailed": "通常の会話に変換できませんでした",
       "drawerTitle": "質問の会話",
       "drawerDescription": "この会話の選択内容から始めた質問の会話",
       "pendingFirstMessage": "質問はエージェントの準備ができ次第送信されます。もう一度操作すると破棄されます。"
+    },
+    "checkConversations": {
+      "title": "確認会話",
+      "untitled": "確認",
+      "drawerDescription": "この会話のメッセージをパーソナルエージェントが確認した過程"
     },
     "conversationCard": {
       "untitledConversation": "無題の会話",

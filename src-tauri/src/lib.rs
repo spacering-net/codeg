@@ -1927,6 +1927,7 @@ mod tauri_app {
                 conversations::create_conversation,
                 conversations::create_ask_conversation,
                 conversations::list_ask_conversations,
+                conversations::list_check_conversations,
                 conversations::detach_ask_conversation,
                 conversations::create_chat_conversation,
                 conversations::create_chat_dir,

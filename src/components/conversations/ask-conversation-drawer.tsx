@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/drawer"
 import { useAcpActions } from "@/contexts/acp-connections-context"
 import { useTabStore } from "@/contexts/tab-context"
-import { useAskConversations } from "@/hooks/use-ask-conversations"
+import { useLinkedConversations } from "@/hooks/use-ask-conversations"
 import { createAskConversation } from "@/lib/api"
 import { formatConversationTitle } from "@/lib/conversation-title"
 import { subscribe } from "@/lib/platform"
@@ -42,7 +42,9 @@ const LIVE_SURFACE_SOURCE = "ask-drawer"
  * The ask conversation side drawer: an ask conversation ("ask about this
  * selection"), live — transcript, composer, prompts — beside the conversation
  * it was asked from. Opened by sending a new ask from the selection bubble, or
- * from the ask list in Session Details.
+ * from the ask list in Session Details. A check conversation — the personal
+ * agent checking a message ("is this right?") — opens here the same way, from
+ * the check list in Session Details or the check's mark under the message.
  *
  * The conversation runs on the canvas's tab-less surface
  * (`CanvasConversationSurface`), not in a tab — the user stays on the
@@ -143,6 +145,7 @@ export function AskConversationDrawer() {
 
 function AskDrawerBody({ target }: { target: AskConversationDrawerTarget }) {
   const t = useTranslations("Folder.askConversations")
+  const tCheck = useTranslations("Folder.checkConversations")
   const setCreated = useAskConversationDrawerStore((s) => s.setCreated)
   const consumeInitialSend = useAskConversationDrawerStore(
     (s) => s.consumeInitialSend
@@ -150,6 +153,7 @@ function AskDrawerBody({ target }: { target: AskConversationDrawerTarget }) {
   const setCreating = useAskConversationDrawerStore((s) => s.setCreating)
   const {
     contextKey,
+    kind,
     parentConversationId,
     conversationId,
     agentType,
@@ -163,7 +167,7 @@ function AskDrawerBody({ target }: { target: AskConversationDrawerTarget }) {
   const [mountConversationId] = useState(conversationId)
   const [initialSend] = useState(target.initialSend)
 
-  const asks = useAskConversations(parentConversationId)
+  const asks = useLinkedConversations(parentConversationId, kind)
   const listed =
     conversationId != null
       ? asks?.find((row) => row.id === conversationId)
@@ -256,10 +260,12 @@ function AskDrawerBody({ target }: { target: AskConversationDrawerTarget }) {
           />
         )}
         <DrawerTitle className="min-w-0 flex-1 truncate text-sm font-semibold">
-          {title || t("untitled")}
+          {title || (kind === "check" ? tCheck("untitled") : t("untitled"))}
         </DrawerTitle>
         <DrawerDescription className="sr-only">
-          {t("drawerDescription")}
+          {kind === "check"
+            ? tCheck("drawerDescription")
+            : t("drawerDescription")}
         </DrawerDescription>
         {listed && (
           <button
@@ -283,6 +289,7 @@ function AskDrawerBody({ target }: { target: AskConversationDrawerTarget }) {
         onInitialSendConsumed={handleInitialSendConsumed}
         onCreatingChange={handleCreatingChange}
         folderPickerOverride={folderPickerOverride}
+        checksOpenInDrawer
         isActive
         className="min-h-0 flex-1"
       />

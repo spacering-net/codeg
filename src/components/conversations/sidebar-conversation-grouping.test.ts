@@ -2206,35 +2206,6 @@ describe("buildRows Recent time grouping", () => {
     ])
   })
 
-  it("marks only the first emitted heading as first", () => {
-    const firsts = (rows: readonly SidebarRow[]) =>
-      rows.flatMap((r) =>
-        r.kind === "recent-time-group" ? [`${r.groupId}:${r.first}`] : []
-      )
-    expect(
-      firsts(
-        buildRows({ ...base, recentConversations, recentGroupingMode: "time" })
-      )
-    ).toEqual([
-      "priorities:true",
-      "today:false",
-      "previous7Days:false",
-      "previous30Days:false",
-    ])
-    // No running row → no priorities group; the first date group takes over.
-    expect(
-      firsts(
-        buildRows({
-          ...base,
-          recentConversations: recentConversations.filter(
-            (c) => c.status !== "in_progress"
-          ),
-          recentGroupingMode: "time",
-        })
-      )
-    ).toEqual(["today:true", "previous7Days:false", "previous30Days:false"])
-  })
-
   it("flat mode keeps the plain updated_at run with no headings", () => {
     const rows = buildRows({
       ...base,

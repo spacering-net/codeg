@@ -93,4 +93,31 @@ describe("applyAskConversationChange", () => {
     })
     expect(rows[0].status).toBe("completed")
   })
+
+  it("keeps a check list apart from the asks", () => {
+    const check = ask({ id: 11, kind: "check" })
+    // Into the checks…
+    expect(
+      applyAskConversationChange(
+        [],
+        7,
+        { kind: "upsert", summary: check },
+        "check"
+      ).map((row) => row.id)
+    ).toEqual([11])
+    // …not the asks, and an ask is not a check.
+    const asks = [newer]
+    expect(
+      applyAskConversationChange(asks, 7, { kind: "upsert", summary: check })
+    ).toBe(asks)
+    const checks = [check]
+    expect(
+      applyAskConversationChange(
+        checks,
+        7,
+        { kind: "upsert", summary: older },
+        "check"
+      )
+    ).toBe(checks)
+  })
 })

@@ -2268,6 +2268,7 @@
       "viewOptions": "Options d'affichage",
       "listOptions": "Liste des conversations",
       "showCompleted": "Afficher les conversations terminées",
+      "showAssistant": "Afficher les conversations des assistants",
       "showWorktrees": "Afficher les branches de worktree",
       "showRecent": "Afficher le groupe Récents",
       "tabsFollowFolder": "Les onglets suivent le dossier",
@@ -2472,14 +2473,21 @@
       "title": "Conversations de questions",
       "total": "{count, plural, one {# conversation} other {# conversations}}",
       "untitled": "Nouvelle question",
-      "actions": "Plus d’actions",
-      "open": "Ouvrir",
       "convertToRegular": "Convertir en conversation normale",
+      "convertConfirmTitle": "Convertir en conversation normale ?",
+      "convertConfirmDescription": "« {title} » sera détachée de cette conversation et listée comme une conversation normale. Cette action est irréversible.",
+      "convertConfirm": "Convertir",
+      "cancel": "Annuler",
       "converted": "Convertie en conversation normale",
       "convertFailed": "Impossible de convertir la conversation",
       "drawerTitle": "Conversation de question",
       "drawerDescription": "Une conversation annexe ouverte depuis une sélection de cette conversation",
       "pendingFirstMessage": "Votre question attend que l’agent soit prêt. Recommencez pour l’abandonner."
+    },
+    "checkConversations": {
+      "title": "Conversations de vérification",
+      "untitled": "Vérification",
+      "drawerDescription": "Les vérifications de l’agent personnel sur des messages de cette conversation"
     },
     "conversationCard": {
       "untitledConversation": "Conversation sans titre",

@@ -2268,6 +2268,7 @@
       "viewOptions": "خيارات العرض",
       "listOptions": "قائمة المحادثات",
       "showCompleted": "عرض المحادثات المكتملة",
+      "showAssistant": "عرض محادثات المساعدين",
       "showWorktrees": "عرض فروع worktree",
       "showRecent": "عرض مجموعة الأحدث",
       "tabsFollowFolder": "علامات التبويب تتبع المجلد",
@@ -2472,14 +2473,21 @@
       "title": "محادثات الأسئلة",
       "total": "{count, plural, zero {لا محادثات} one {محادثة واحدة} two {محادثتان} few {# محادثات} many {# محادثة} other {# محادثة}}",
       "untitled": "سؤال جديد",
-      "actions": "إجراءات إضافية",
-      "open": "فتح",
       "convertToRegular": "تحويل إلى محادثة عادية",
+      "convertConfirmTitle": "تحويل إلى محادثة عادية؟",
+      "convertConfirmDescription": "سيُفصل «{title}» عن هذه المحادثة ويُدرج كمحادثة عادية. لا يمكن التراجع عن هذا الإجراء.",
+      "convertConfirm": "تحويل",
+      "cancel": "إلغاء",
       "converted": "تم التحويل إلى محادثة عادية",
       "convertFailed": "تعذر تحويل المحادثة",
       "drawerTitle": "محادثة سؤال",
       "drawerDescription": "محادثة جانبية فُتحت من تحديد في هذه المحادثة",
       "pendingFirstMessage": "سؤالك بانتظار جاهزية الوكيل. كرّر الإجراء لتجاهله."
+    },
+    "checkConversations": {
+      "title": "محادثات التحقق",
+      "untitled": "تحقق",
+      "drawerDescription": "عمليات تحقق الوكيل الشخصي من رسائل هذه المحادثة"
     },
     "conversationCard": {
       "untitledConversation": "محادثة بدون عنوان",

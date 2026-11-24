@@ -2268,6 +2268,7 @@
       "viewOptions": "Anzeigeoptionen",
       "listOptions": "Konversationsliste",
       "showCompleted": "Abgeschlossene Konversationen anzeigen",
+      "showAssistant": "Assistenten-Konversationen anzeigen",
       "showWorktrees": "Worktree-Branches anzeigen",
       "showRecent": "Gruppe „Zuletzt“ anzeigen",
       "tabsFollowFolder": "Tabs folgen dem Ordner",
@@ -2472,14 +2473,21 @@
       "title": "Fragen-Unterhaltungen",
       "total": "{count, plural, one {# Unterhaltung} other {# Unterhaltungen}}",
       "untitled": "Neue Frage",
-      "actions": "Weitere Aktionen",
-      "open": "Öffnen",
       "convertToRegular": "In normale Unterhaltung umwandeln",
+      "convertConfirmTitle": "In normale Unterhaltung umwandeln?",
+      "convertConfirmDescription": "„{title}“ wird von dieser Unterhaltung gelöst und als normale Unterhaltung aufgeführt. Dies kann nicht rückgängig gemacht werden.",
+      "convertConfirm": "Umwandeln",
+      "cancel": "Abbrechen",
       "converted": "In eine normale Unterhaltung umgewandelt",
       "convertFailed": "Unterhaltung konnte nicht umgewandelt werden",
       "drawerTitle": "Fragen-Unterhaltung",
       "drawerDescription": "Eine Nebenunterhaltung, gestartet aus einer Auswahl in dieser Unterhaltung",
       "pendingFirstMessage": "Deine Frage wartet darauf, dass der Agent bereit ist. Wiederhole die Aktion, um sie zu verwerfen."
+    },
+    "checkConversations": {
+      "title": "Prüfungsunterhaltungen",
+      "untitled": "Prüfung",
+      "drawerDescription": "Die Prüfungen des persönlichen Agenten zu Nachrichten dieser Unterhaltung"
     },
     "conversationCard": {
       "untitledConversation": "Unbenannte Konversation",
