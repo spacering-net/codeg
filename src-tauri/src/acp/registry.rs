@@ -3718,9 +3718,47 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // foreground bash, tools and plan options match after
             // normalization. Fresh installs of both now pull
             // `@anthropic-ai/sdk` 1.13.0 instead of 1.12.0, and both still work.
+            //
+            // 0.111.0 (2026-11-24) moves to Claude Agent SDK 0.3.331 (Claude
+            // Code 2.1.331) and ACP SDK 2.11.0; `engines.node` stays ">=22".
+            // Measured live with fresh installs of 0.110.1 and 0.111.0, the
+            // twenty-three harness scenarios (`initialize`, model and effort
+            // switches, MCP titles, MCP over stdin, foreground and background
+            // bash, tools, plan options, idle compaction, resume, cron, the
+            // picker and the slash menu) match after normalization; the CLI
+            // only retries its title request more often. CLI 2.1.331 adds an
+            // internal `progress_reminder_sent` attachment, which
+            // `parsers::claude` skips like every attachment it does not list,
+            // and no transcript record type.
+            //   * #1708 is the one change codeg sees. A managed
+            //     `disableSideloadFlags` policy makes Claude Code refuse
+            //     `--mcp-config`, which carries codeg-mcp. Before, every
+            //     `session/new`, `session/resume` and `session/load` failed
+            //     with -32603 "Claude Code process exited with code 1" and no
+            //     `startupFailureReason` (a new chat failed to connect, a
+            //     reopened one showed the `session_unavailable` banner). Now
+            //     the adapter starts the session again without its MCP
+            //     servers, and the first turn sends a warning `notice` ("MCP
+            //     server \"codeg-mcp\" failed to start", or "N MCP servers…"
+            //     with the names in the description), which codeg shows as a
+            //     toast (`session_notice`). The model simply has no codeg-mcp
+            //     tools; a call to one fails with "No such tool available" and
+            //     the turn ends normally. codeg's delegation, result-tool and
+            //     question flags still assume codeg-mcp in such a session, as
+            //     they already do whenever codeg-mcp fails to start.
+            //   * #1705 attributes MCP requests sent over ACP; codeg declares
+            //     only stdio/http/sse servers, so no `acp` server and none of
+            //     its hooks. The `toolUseOwner` refactor computes the same
+            //     `parentToolUseId` and tool-call session as before.
+            //   * #1709 drops backticks from thirteen -32602 messages, none of
+            //     which codeg matches or provokes.
+            //   * ACP SDK 2.11.0's stricter v1 schema (a stdio MCP server's
+            //     `type` must be absent or "stdio", a boolean config option
+            //     needs a boolean value) accepts what codeg sends: codeg's
+            //     stdio entry has no `type` key, and it sends booleans typed.
             distribution: AgentDistribution::Npx {
-                version: "0.110.1",
-                package: "@agentclientprotocol/claude-agent-acp@0.110.1",
+                version: "0.111.0",
+                package: "@agentclientprotocol/claude-agent-acp@0.111.0",
                 cmd: "claude-agent-acp",
                 args: &[],
                 env: &[],
@@ -5031,7 +5069,9 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `<send_user_message_question_reply>` envelope and not echoed;
             // a decline sends nothing; the turn's end sends `$/cancel_request`
             // for the form (codeg closes the card); an answer after that is
-            // dropped with a "Answer not sent" warning notice. codeg asks it on
+            // dropped with a "Answer not sent" warning notice. (From 2.11.0 the
+            // form stays open past the turn and codeg declines it at its own
+            // `TurnComplete`; see (kkk).) codeg asks it on
             // the usual question card, which gives way to the next question on
             // the connection (`register_yielding_question`), so a blocking ask
             // the model makes meanwhile is not refused unseen, and shows the
@@ -5267,9 +5307,49 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // rollout metadata (`model_search_state`, `environment_id`) that
             // the parser ignores; every `config.toml` key codeg writes keeps
             // its shape, and every codex sentence codeg matches is unchanged.
+            //
+            // 2.11.0 (2026-11-23) keeps `@openai/codex` ^0.171.0 (a fresh
+            // install still resolves 0.171.0, the same binary byte for byte;
+            // npm's 0.172.0 is outside the caret) and the inline ACP SDK
+            // ~2.9.1. The twenty-one live scenarios replay as on 2.10.0 bar
+            // `initialize`, which adds `sessionCapabilities.options`, and what
+            // (jjj)–(lll) say.
+            //
+            // (jjj) **Steering a `/compact` or `/review` turn.** 2.10.0 answered
+            // the steer with `{"outcome":"failed"}`, which codeg read as a
+            // protocol error (a "steer failed" toast); 2.11.0 answers
+            // `promptRequired`/`noRunningTurn`, which codeg reads as no active
+            // turn, so the composer queues the message and sends it as a
+            // prompt once the command's turn ends. Measured on both.
+            //
+            // (kkk) **Async questions outlive the turn** (see (ww)). 2.11.0 no
+            // longer sends `$/cancel_request` for an async form when the asking
+            // turn ends; an answer that arrives later starts a new turn that no
+            // `session/prompt` owns. codeg closes the card itself: its
+            // `TurnComplete` declines every question still parked on the
+            // connection (`cancel_questions_by_parent`), and a decline sends
+            // the model nothing (measured on both). Only an answer submitted
+            // in the moment between the adapter's turn end and codeg's could
+            // still start such a turn; its output then shows after a reload.
+            //
+            // (lll) Inert or not adopted. #797 serves `session/options` and
+            // takes initial `configOptions` on `session/new`, `session/load`
+            // and `session/resume` (applied in order, unknown ids skipped
+            // silently, a duplicate refused with -32602). It does not change
+            // what a v1 resume or load restores: plan mode and fast come back
+            // and effort and mode do not, exactly as on 2.10.0, so
+            // `apply_preferred_session_options` still sends what differs. It
+            // is not adopted, for claude's #1592 reasons (the schema crate has
+            // neither field, and a skipped initial value would bypass codeg's
+            // rejection feedback). A v1 `session/load` replay now leaves out
+            // the "Implement the approved plan." prompt (tagged `client_id:
+            // codex-acp:plan-implementation:<uuid>`); codeg reads Codex history
+            // from the rollout, where `parsers::codex` still finds it. #744's
+            // v2 work, #795's CRLF terminal output, `customAnswerFields` and
+            // the renamed background-task module do not reach a v1 client.
             distribution: AgentDistribution::Npx {
-                version: "2.10.0",
-                package: "@agentclientprotocol/codex-acp@2.10.0",
+                version: "2.11.0",
+                package: "@agentclientprotocol/codex-acp@2.11.0",
                 cmd: "codex-acp",
                 args: &[],
                 env: &[],
@@ -10227,8 +10307,8 @@ mod tests {
     fn registry_pins_current_acp_agent_versions() {
         assert_npx_version(
             AgentType::ClaudeCode,
-            "0.110.1",
-            "@agentclientprotocol/claude-agent-acp@0.110.1",
+            "0.111.0",
+            "@agentclientprotocol/claude-agent-acp@0.111.0",
             Some("22.0.0"),
         );
         assert_npx_version(
@@ -10269,8 +10349,8 @@ mod tests {
         );
         assert_npx_version(
             AgentType::Codex,
-            "2.10.0",
-            "@agentclientprotocol/codex-acp@2.10.0",
+            "2.11.0",
+            "@agentclientprotocol/codex-acp@2.11.0",
             Some("20.3.0"),
         );
         assert_npx_version(AgentType::Pi, "0.0.35", "pi-acp@0.0.35", Some("22.0.0"));
