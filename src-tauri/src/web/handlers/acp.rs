@@ -105,7 +105,7 @@ pub async fn acp_connect(
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
 
     let emitter = state.emitter.clone();
-    let connection_id = acp_commands::spawn_with_conversation_selection(
+    let outcome = acp_commands::spawn_with_conversation_selection(
         manager,
         &db.conn,
         params.agent_type,
@@ -121,7 +121,7 @@ pub async fn acp_connect(
     .await
     .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
 
-    Ok(Json(connection_id))
+    Ok(Json(outcome.connection_id))
 }
 
 #[derive(Deserialize)]

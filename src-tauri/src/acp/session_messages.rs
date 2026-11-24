@@ -603,19 +603,21 @@ async fn activate_recipient(
         .map(|model| ("model".into(), model))
         .into_iter()
         .collect();
-    let outcome = manager
-        .spawn_agent_with_outcome(
-            agent,
-            Some(folder.path),
-            recipient.external_id.clone(),
-            env,
-            "session-tools".into(),
-            emitter.clone(),
-            None,
-            preferences,
-        )
-        .await
-        .map_err(|error| error.to_string())?;
+    let outcome = crate::commands::acp::spawn_with_conversation_selection(
+        manager,
+        db,
+        agent,
+        Some(folder.path),
+        recipient.external_id.clone(),
+        env,
+        "session-tools".into(),
+        emitter.clone(),
+        Some(recipient.id),
+        None,
+        preferences,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
     let connection = outcome.connection_id;
     let ready: Result<(), String> = async {
         manager

@@ -12482,7 +12482,7 @@ pub(crate) async fn spawn_with_conversation_selection(
     conversation_id: Option<i32>,
     client_mode_id: Option<String>,
     client_config_values: BTreeMap<String, String>,
-) -> Result<String, AcpError> {
+) -> Result<crate::acp::manager::SpawnOutcome, AcpError> {
     let selection = resolve_connect_selection(
         db,
         manager,
@@ -12493,26 +12493,26 @@ pub(crate) async fn spawn_with_conversation_selection(
         client_config_values,
     )
     .await;
-    let connection_id = manager
-        .spawn_agent(
+    let outcome = manager
+        .spawn_agent_with_outcome(
             agent_type,
             working_dir,
             session_id,
             runtime_env,
             owner_window_label,
             emitter,
-            selection.mode_id.clone(),
-            selection.config_values.clone(),
+            selection.mode_id,
+            selection.config_values,
         )
         .await?;
     if let Some(row_id) = selection.row_id {
         // Before returning, so a setter right after connect finds the binding.
         // A connection that already ended is reported like a closed one.
         manager
-            .bind_selection_conversation(&connection_id, row_id, selection.composer_mode_id)
+            .bind_selection_conversation(&outcome.connection_id, row_id, selection.composer_mode_id)
             .await?;
     }
-    Ok(connection_id)
+    Ok(outcome)
 }
 
 #[cfg(test)]
@@ -12697,6 +12697,7 @@ pub async fn acp_connect(
         preferred_config_values.unwrap_or_default(),
     )
     .await
+    .map(|outcome| outcome.connection_id)
 }
 
 /// Record the composer's pending mode pick on a connection (never sent to the
