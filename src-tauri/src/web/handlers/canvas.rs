@@ -7,16 +7,84 @@ use crate::app_error::AppCommandError;
 use crate::app_state::AppState;
 use crate::commands::canvas as canvas_commands;
 use crate::commands::canvas::{
-    CanvasNodeMovePayload, CanvasNodePatchInput, CreateCanvasNode, GroupIntoRegionInput,
-    GroupIntoRegionResult,
+    CanvasBoardPatchInput, CanvasNodeMovePayload, CanvasNodePatchInput, CreateCanvasBoard,
+    CreateCanvasNode, GroupIntoRegionInput, GroupIntoRegionResult,
 };
-use crate::models::canvas::{CanvasMutation, CanvasNode, CanvasSnapshot};
+use crate::models::canvas::{
+    CanvasBoard, CanvasBoardSummary, CanvasMutation, CanvasNode, CanvasSnapshot,
+};
+
+pub async fn canvas_list_boards(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<Vec<CanvasBoardSummary>>, AppCommandError> {
+    Ok(Json(
+        canvas_commands::canvas_list_boards_core(&state.db).await?,
+    ))
+}
+
+#[derive(Deserialize)]
+pub struct CreateBoardParams {
+    pub input: CreateCanvasBoard,
+}
+
+pub async fn canvas_create_board(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<CreateBoardParams>,
+) -> Result<Json<CanvasBoard>, AppCommandError> {
+    Ok(Json(
+        canvas_commands::canvas_create_board_core(&state.emitter, &state.db, params.input).await?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateBoardParams {
+    pub board_id: i32,
+    pub patch: CanvasBoardPatchInput,
+}
+
+pub async fn canvas_update_board(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<UpdateBoardParams>,
+) -> Result<Json<CanvasBoard>, AppCommandError> {
+    Ok(Json(
+        canvas_commands::canvas_update_board_core(
+            &state.emitter,
+            &state.db,
+            params.board_id,
+            params.patch,
+        )
+        .await?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardIdParams {
+    pub board_id: i32,
+}
+
+pub async fn canvas_delete_board(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<BoardIdParams>,
+) -> Result<Json<CanvasMutation<Vec<i32>>>, AppCommandError> {
+    Ok(Json(
+        canvas_commands::canvas_delete_board_core(
+            &state.emitter,
+            &state.db,
+            &state.terminal_manager,
+            params.board_id,
+        )
+        .await?,
+    ))
+}
 
 pub async fn canvas_list_nodes(
     Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<BoardIdParams>,
 ) -> Result<Json<CanvasSnapshot>, AppCommandError> {
     Ok(Json(
-        canvas_commands::canvas_list_nodes_core(&state.db).await?,
+        canvas_commands::canvas_list_nodes_core(&state.db, params.board_id).await?,
     ))
 }
 

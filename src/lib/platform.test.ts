@@ -18,6 +18,9 @@ const mocks = vi.hoisted(() => ({
   tauriOpenUrl: vi.fn(async () => {}),
   tauriOpenPath: vi.fn(async () => {}),
   tauriReveal: vi.fn(async () => {}),
+  tauriDialogOpen: vi.fn<(options: unknown) => Promise<unknown>>(
+    async () => null
+  ),
 }))
 
 vi.mock("@/lib/transport", () => ({
@@ -32,7 +35,16 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
   revealItemInDir: mocks.tauriReveal,
 }))
 
-import { openPath, openUrl } from "@/lib/platform"
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: mocks.tauriDialogOpen,
+}))
+
+import {
+  openFileDialog,
+  openPath,
+  openUrl,
+  revealItemInDir,
+} from "@/lib/platform"
 
 const URL = "https://example.com/issues/1"
 
@@ -87,5 +99,81 @@ describe("openPath", () => {
     mocks.getActiveRemoteConnectionId.mockReturnValue(null)
     await openPath("/repo/README.md")
     expect(mocks.tauriOpenPath).toHaveBeenCalledWith("/repo/README.md")
+  })
+})
+
+describe("revealItemInDir", () => {
+  beforeEach(() => {
+    mocks.tauriReveal.mockReset()
+    mocks.tauriReveal.mockResolvedValue(undefined)
+  })
+
+  it("reveals the item itself when the shell can take it", async () => {
+    mocks.isDesktop.mockReturnValue(true)
+    await revealItemInDir("C:\\Users\\a\\Downloads\\file.zip")
+    expect(mocks.tauriReveal).toHaveBeenCalledWith(
+      "C:\\Users\\a\\Downloads\\file.zip"
+    )
+    expect(mocks.tauriOpenPath).not.toHaveBeenCalled()
+  })
+
+  // A download that landed on a share: the plugin resolves the path to the
+  // extended `\\?\UNC\…` form the Windows shell refuses, and "show in folder"
+  // was simply dead. The folder without the selection still gets the user
+  // there.
+  it("opens the containing folder when the item cannot be revealed", async () => {
+    mocks.isDesktop.mockReturnValue(true)
+    mocks.tauriReveal.mockRejectedValue(new Error("to ITEMIDLIST"))
+    await revealItemInDir("\\\\Mac\\Home\\Downloads\\file.zip")
+    expect(mocks.tauriOpenPath).toHaveBeenCalledWith("\\\\Mac\\Home\\Downloads")
+  })
+
+  // A POSIX name may contain a backslash; the folder is the one before the
+  // last slash, not the one before the backslash.
+  it("does not cut a unix path at a backslash in the file name", async () => {
+    mocks.isDesktop.mockReturnValue(true)
+    mocks.tauriReveal.mockRejectedValue(new Error("nope"))
+    await revealItemInDir("/Users/me/Downloads/report\\2026.pdf")
+    expect(mocks.tauriOpenPath).toHaveBeenCalledWith("/Users/me/Downloads")
+  })
+
+  // Windows takes either separator, and a path may mix them.
+  it("cuts a windows path at whichever separator comes last", async () => {
+    mocks.isDesktop.mockReturnValue(true)
+    mocks.tauriReveal.mockRejectedValue(new Error("nope"))
+    await revealItemInDir("C:\\Users/me\\Downloads\\file.zip")
+    expect(mocks.tauriOpenPath).toHaveBeenCalledWith("C:\\Users/me\\Downloads")
+  })
+
+  it("rethrows when there is no folder to fall back to", async () => {
+    mocks.isDesktop.mockReturnValue(true)
+    mocks.tauriReveal.mockRejectedValue(new Error("nope"))
+    await expect(revealItemInDir("\\\\Mac")).rejects.toThrow("nope")
+    expect(mocks.tauriOpenPath).not.toHaveBeenCalled()
+  })
+})
+
+describe("openFileDialog", () => {
+  beforeEach(() => {
+    mocks.tauriDialogOpen.mockReset()
+    mocks.tauriDialogOpen.mockResolvedValue(null)
+  })
+
+  // The macOS panel's "New Folder" button: a folder picker should be able to
+  // make the folder it is about to pick, without leaving for Finder.
+  it("asks the native folder picker for its New Folder button", async () => {
+    mocks.isDesktop.mockReturnValue(true)
+    await openFileDialog({ directory: true, multiple: false })
+    expect(mocks.tauriDialogOpen).toHaveBeenCalledWith({
+      directory: true,
+      multiple: false,
+      canCreateDirectories: true,
+    })
+  })
+
+  it("leaves a file picker's options as they are", async () => {
+    mocks.isDesktop.mockReturnValue(true)
+    await openFileDialog({ title: "Pick" })
+    expect(mocks.tauriDialogOpen).toHaveBeenCalledWith({ title: "Pick" })
   })
 })

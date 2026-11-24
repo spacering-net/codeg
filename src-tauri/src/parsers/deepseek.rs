@@ -15,7 +15,7 @@ use crate::parsers::{
     backfill_turn_durations, compute_session_stats, folder_name_from_path,
     infer_context_window_max_tokens, merge_context_window_stats, relocate_orphaned_tool_results,
     resolve_patch_line_numbers, structurize_read_tool_output, title_from_user_text, truncate_str,
-    AgentParser, ParseError,
+    AgentEnv, AgentParser, ParseError,
 };
 
 /// Resolve the DeepSeek Harness home the way `@deepseek-ai/dsh-home-paths`'
@@ -40,7 +40,12 @@ fn resolve_dsh_home_from(dsh_home_env: Option<OsString>, home_dir: Option<PathBu
 /// skills store, the credentials document, and (unless relocated) the session
 /// logs.
 pub(crate) fn resolve_dsh_home_dir() -> PathBuf {
-    resolve_dsh_home_from(std::env::var_os("DSH_HOME"), dirs::home_dir())
+    resolve_dsh_home_dir_for_env(&AgentEnv::inherited())
+}
+
+/// [`resolve_dsh_home_dir`] for the harness launched with `env`.
+pub(crate) fn resolve_dsh_home_dir_for_env(env: &AgentEnv) -> PathBuf {
+    resolve_dsh_home_from(env.var_os("DSH_HOME"), dirs::home_dir())
 }
 
 /// Resolve the shared cross-agent home the way `dsh-skill-filesystem` does:
@@ -65,9 +70,14 @@ fn resolve_dsh_agents_home_from(
 /// `DEEPSEEK_ACP_SESSIONS_ROOT` wins, else `$DSH_HOME/sessions`, else
 /// `~/.dsh/sessions`.
 pub(crate) fn resolve_deepseek_sessions_root() -> PathBuf {
+    resolve_deepseek_sessions_root_for_env(&AgentEnv::inherited())
+}
+
+/// [`resolve_deepseek_sessions_root`] for the harness launched with `env`.
+pub(crate) fn resolve_deepseek_sessions_root_for_env(env: &AgentEnv) -> PathBuf {
     resolve_deepseek_sessions_root_from(
-        std::env::var_os("DEEPSEEK_ACP_SESSIONS_ROOT"),
-        std::env::var_os("DSH_HOME"),
+        env.var_os("DEEPSEEK_ACP_SESSIONS_ROOT"),
+        env.var_os("DSH_HOME"),
         dirs::home_dir(),
     )
 }
@@ -90,18 +100,36 @@ fn resolve_deepseek_sessions_root_from(
 /// `DEEPSEEK_ACP_SESSIONS_ROOT` relocates the logs alone, so a deployment that
 /// uses it keeps its attachments under `$DSH_HOME` all the same.
 pub(crate) fn resolve_deepseek_attachments_root() -> PathBuf {
-    resolve_dsh_home_dir().join("attachments").join("v1")
+    resolve_deepseek_attachments_root_for_env(&AgentEnv::inherited())
+}
+
+/// [`resolve_deepseek_attachments_root`] for the harness launched with `env`.
+pub(crate) fn resolve_deepseek_attachments_root_for_env(env: &AgentEnv) -> PathBuf {
+    resolve_dsh_home_dir_for_env(env)
+        .join("attachments")
+        .join("v1")
 }
 
 /// DeepSeek Harness (driven through the `deepseek-acp` editor bridge) persists
 /// each session as an **append-only event log**:
 ///
 /// ```text
-/// $DSH_HOME/sessions/               (default ~/.dsh/sessions; whole root
-/// └── <munged cwd>/                  relocatable via DEEPSEEK_ACP_SESSIONS_ROOT)
+/// $DSH_HOME/sessions/                  (default ~/.dsh/sessions; whole root
+/// └── <munged cwd>/                     relocatable via DEEPSEEK_ACP_SESSIONS_ROOT)
 ///     └── <session uuid>/
-///         └── session.jsonl.zstd    # or session.jsonl when compression=none
+///         ├── session.jsonl.zstd       # generation 0 (deepseek-acp <= 0.8.0)
+///         ├── session.v3.jsonl.zstd    # generation 3 (deepseek-acp 0.9.0)
+///         └── session.v4.jsonl.zstd    # generation 4 (deepseek-acp >= 0.10.0)
 /// ```
+///
+/// Since 0.9.0 the log is **generation-addressed**: generation 0 keeps the
+/// original suffix-only name, every later one carries a lowercase `.vN`
+/// component, and the numerically highest canonical generation is the live
+/// one. A migration publishes its successor beside the predecessor rather than
+/// replacing it, so BOTH names can sit in one directory — see
+/// [`resolve_generation_log_path`], which is the only thing here that knows the
+/// naming. A `compression: "none"` deployment writes the same names without the
+/// `.zstd` suffix.
 ///
 /// The `.zstd` file is a sequence of complete Zstandard frames (one appended
 /// per write batch); a standard streaming decode walks them all. Each line is
@@ -110,18 +138,28 @@ pub(crate) fn resolve_deepseek_attachments_root() -> PathBuf {
 /// `delegationDepth`). Content comes from:
 ///
 /// - `user/message` — `data.source.kind` separates a real human prompt
-///   (`"user"`) from plugin-injected runtime context (`"plugin"`, skipped).
-///   Since 0.6.0 its `content[]` may hold `image` blocks alongside the text;
-///   a compaction's replacement message rides the same `"plugin"` skip
-///   (`{kind: "plugin", plugin: "compact"}`), so the summary text never shows
-///   up as something the user said.
+///   (`"user"`) from plugin-injected runtime context (`"plugin"` through v3;
+///   v4 names the producer instead — `runtime-context`, `skill-catalog`,
+///   `plan-mode`, `compact-checkpoint`, … — and every kind but `"user"` is
+///   skipped). Since 0.6.0 its `content[]` may hold `image` blocks alongside
+///   the text; a compaction's replacement message rides the same skip
+///   (`{kind: "plugin", plugin: "compact"}` in v3, `compact-checkpoint` in
+///   v4), so the summary text never shows up as something the user said.
 /// - `assistant/message` — the ASSEMBLED assistant message for one step
 ///   (`content[]` of `text` / `reasoning` / `tool-call {id, name, arguments}`
 ///   blocks) plus that step's `usage` (`inputTokens` / `outputTokens` /
-///   `cacheReadTokens` / `reasoningTokens`). The raw stream duplicates it as
-///   `assistant/chunk` / `*-chunks` rows, which are skipped.
-/// - `tool/result` — the paired result (`message.content[0]` is a
-///   `tool-result` with `toolCallId` / `content[]` / `isError`).
+///   `cacheReadTokens` / `cacheWriteTokens` / `reasoningTokens`; the last
+///   three are optional in every format generation). Through 0.8.0 the raw
+///   stream duplicated it as `assistant/chunk` / `*-chunks` ROWS; 0.9.0
+///   stopped persisting those and moved the compacted stream into this event's
+///   own `stream` field, which is read as part of the event rather than as a
+///   row.
+///   Either way only `message.content` is read — see the skip below.
+/// - `tool/result` — the paired result. Released v3 (and older) wraps it in a
+///   `tool-result` content block (`toolCallId` / `content[]` / `isError`);
+///   session-format v4 (DSH 0.2.x) lifts it to a first-class `role: "tool"`
+///   message carrying those three fields on the message itself, with no
+///   wrapper. Both shapes are read.
 /// - `turn/start` / `turn/end` — authoritative turn boundaries; `turn/end`
 ///   carries the end reason (`completed` / `aborted` / `error` / …) and its
 ///   `time` is the turn's completion clock. A turn missing its `turn/end`
@@ -131,6 +169,10 @@ pub(crate) fn resolve_deepseek_attachments_root() -> PathBuf {
 ///   (last one wins).
 /// - `compaction/start` → `compaction/summary` → `compaction/end` (0.6.0) —
 ///   one context compaction, rendered as the shared context-compaction marker.
+///
+/// Session-format v4 (DSH 0.2.x) keeps the event envelope and every other
+/// record shape this parser consumes, including the step `usage` object; the
+/// difference it does introduce is the first-class tool result handled above.
 ///
 /// Images (0.6.0): an `image` content block carries only an
 /// `ImageAttachmentRef`; the bytes live in the content-addressed store at
@@ -152,9 +194,14 @@ pub struct DeepSeekParser {
 
 impl DeepSeekParser {
     pub fn new() -> Self {
+        Self::for_env(&AgentEnv::inherited())
+    }
+
+    /// The history of the harness launched with `env`.
+    pub fn for_env(env: &AgentEnv) -> Self {
         Self {
-            base_dir: resolve_deepseek_sessions_root(),
-            attachments_root: resolve_deepseek_attachments_root(),
+            base_dir: resolve_deepseek_sessions_root_for_env(env),
+            attachments_root: resolve_deepseek_attachments_root_for_env(env),
         }
     }
 
@@ -340,13 +387,157 @@ struct SessionParse {
     content_events: u32,
 }
 
-/// Read a session's log text: the Zstandard file when present, else the
-/// plaintext `session.jsonl` written by a `compression: "none"` deployment.
+/// The physical encoding of one session log: Zstandard frames (upstream's
+/// default, and the only one `deepseek-acp` itself configures) or the plain
+/// newline-delimited text a `compression: "none"` deployment writes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LogEncoding {
+    Zstd,
+    Raw,
+}
+
+/// Read one session-directory entry name as a canonical generation log,
+/// mirroring upstream's `parseSessionFormatLogFilename` plus the compression
+/// suffix `dsh-session-persistence-jsonl` appends around it:
+///
+/// ```text
+/// /^session(?:\.v([1-9][0-9]*))?\.jsonl$/u   (+ optional ".zstd")
+/// ```
+///
+/// Generation 0 keeps the original suffix-only `session.jsonl`; every later
+/// generation carries a lowercase `.vN` component. Everything else is NOT a
+/// committed generation and must be ignored — which is what keeps the sibling
+/// `session.lock`, the `session.migration.<token>.jsonl.zstd.tmp` staging file
+/// a migration publishes through, and the deliberately non-canonical `.v0` /
+/// leading-zero / uppercase spellings out of the selection.
+fn parse_generation_log_filename(name: &str) -> Option<(u64, LogEncoding)> {
+    /// Upstream refuses a version outside JavaScript's safe-integer range
+    /// rather than saturating it, so the accepted band is exactly
+    /// `1..=Number.MAX_SAFE_INTEGER`. A narrower Rust integer would not merely
+    /// reject an absurd name: a generation it cannot hold stops being a
+    /// generation, and a RETAINED PREDECESSOR beside it would then win — the
+    /// silent-truncation bug this whole function exists to prevent.
+    const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+
+    let (stem, encoding) = match name.strip_suffix(".zstd") {
+        Some(stem) => (stem, LogEncoding::Zstd),
+        None => (name, LogEncoding::Raw),
+    };
+    let stem = stem.strip_suffix(".jsonl")?;
+    if stem == "session" {
+        return Some((0, encoding));
+    }
+    let digits = stem.strip_prefix("session.v")?;
+    // `[1-9][0-9]*`: no `.v0`, no leading zeros, no sign, decimal only.
+    let mut chars = digits.chars();
+    if !matches!(chars.next(), Some('1'..='9')) {
+        return None;
+    }
+    if !chars.all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let version = digits.parse::<u64>().ok()?;
+    if version > MAX_SAFE_INTEGER {
+        return None;
+    }
+    Some((version, encoding))
+}
+
+/// Pick the log a session directory is currently addressed by.
+///
+/// **Encoding first, generation second.** Upstream states that a root belongs
+/// to exactly one encoding and that lookup REJECTS generations carrying the
+/// other suffix, so comparing generations across encodings would let a stale
+/// file from a foreign encoding outrank the live one. A root holding both is
+/// malformed by that rule; codeg prefers the Zstandard set because
+/// `deepseek-acp` never configures `compression`, so every generation it has
+/// ever written is compressed — a raw file sharing the root is hand-placed or
+/// from a non-stock deployment. The alternative (refuse to read an ambiguous
+/// root) trades a documented guess for an empty conversation, which is the
+/// very failure this function exists to fix.
+///
+/// Within the chosen encoding the NUMERICALLY HIGHEST canonical generation
+/// wins, exactly as upstream's runtime operations select. There is deliberately
+/// no fallback to a lower generation: a write open migrates the log and
+/// publishes the successor while leaving the predecessor byte-identical on
+/// disk, so falling back would render history frozen at the migration point as
+/// if it were current — silently, with every turn appended afterwards missing.
+/// An unreadable newest generation yields nothing, and nothing is the honest
+/// answer. A listing that BREAKS PART WAY THROUGH is the same case: it cannot
+/// prove which generation is newest, so it yields nothing too rather than
+/// crowning whichever one happened to arrive first.
+fn resolve_generation_log_path(session_dir: &Path) -> Option<(PathBuf, LogEncoding)> {
+    let Ok(entries) = fs::read_dir(session_dir) else {
+        return None;
+    };
+    select_generation_log(
+        session_dir,
+        entries.map(|entry| entry.map(|entry| (entry.file_name(), entry.path()))),
+    )
+}
+
+/// The selection itself, over an already-opened listing.
+///
+/// Split out from [`resolve_generation_log_path`] only so a test can hand it a
+/// listing that FAILS PART WAY THROUGH — the one branch here no real temporary
+/// directory can be made to take.
+fn select_generation_log<I>(session_dir: &Path, entries: I) -> Option<(PathBuf, LogEncoding)>
+where
+    I: IntoIterator<Item = std::io::Result<(OsString, PathBuf)>>,
+{
+    let mut best_zstd: Option<(u64, PathBuf)> = None;
+    let mut best_raw: Option<(u64, PathBuf)> = None;
+    for entry in entries {
+        // `readdir` can fail after already yielding entries — an NFS handle
+        // going stale, a FUSE mount erroring mid-stream. Skipping the failure
+        // and keeping what arrived would silently select a retained
+        // predecessor whenever the successor is the entry that never came.
+        let Ok((name, path)) = entry else {
+            tracing::warn!(
+                "DeepSeek session {}: listing failed part way through; \
+                 refusing to pick a generation from a partial listing",
+                session_dir.display()
+            );
+            return None;
+        };
+        let Some(name) = name.to_str() else { continue };
+        let Some((version, encoding)) = parse_generation_log_filename(name) else {
+            continue;
+        };
+        // Follows symlinks, like `read_subdirs`: a directory that happens to be
+        // named like a log is not one.
+        if !path.is_file() {
+            continue;
+        }
+        let slot = match encoding {
+            LogEncoding::Zstd => &mut best_zstd,
+            LogEncoding::Raw => &mut best_raw,
+        };
+        if slot.as_ref().is_none_or(|(best, _)| version > *best) {
+            *slot = Some((version, path));
+        }
+    }
+    match (best_zstd, best_raw) {
+        (Some((_, zstd)), Some((_, raw))) => {
+            tracing::warn!(
+                "DeepSeek session {} holds both encodings; reading {} and ignoring {}",
+                session_dir.display(),
+                zstd.display(),
+                raw.display()
+            );
+            Some((zstd, LogEncoding::Zstd))
+        }
+        (Some((_, zstd)), None) => Some((zstd, LogEncoding::Zstd)),
+        (None, Some((_, raw))) => Some((raw, LogEncoding::Raw)),
+        (None, None) => None,
+    }
+}
+
+/// Read a session's log text from whichever generation currently addresses it.
 fn read_session_log_text(session_dir: &Path) -> Option<String> {
-    let zstd_path = session_dir.join("session.jsonl.zstd");
-    match fs::read(&zstd_path) {
-        Ok(bytes) => decode_zstd_frames_prefix(&bytes),
-        Err(_) => fs::read_to_string(session_dir.join("session.jsonl")).ok(),
+    match resolve_generation_log_path(session_dir)? {
+        (path, LogEncoding::Zstd) => decode_zstd_frames_prefix(&fs::read(path).ok()?),
+        (path, LogEncoding::Raw) => fs::read_to_string(path).ok(),
     }
 }
 
@@ -571,19 +762,28 @@ fn add_usage(a: TurnUsage, b: TurnUsage) -> TurnUsage {
 /// Map one step's `usage` object onto `TurnUsage`; `None` when all counters
 /// are absent or zero. `reasoningTokens` is a subset of `outputTokens` (the
 /// adapter reports both), so it is deliberately not added anywhere.
+///
+/// `cacheWriteTokens` is the prompt-cache write side and maps onto
+/// `cache_creation_input_tokens`. Upstream counts are disjoint (`inputTokens`
+/// is uncached input only), matching `TurnUsage`. The key is optional in every
+/// format generation, so it is read regardless of the header version. In
+/// practice the DeepSeek adapter only reports it from DSH 0.2.x (Messages API
+/// `cache_creation_input_tokens`); 0.1.x reported `reasoningTokens` instead,
+/// and a missing key reads as zero.
 fn usage_from_step(usage: Option<&Value>) -> Option<TurnUsage> {
     let usage = usage?;
     let field = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
     let input = field("inputTokens");
     let output = field("outputTokens");
     let cache_read = field("cacheReadTokens");
-    if input == 0 && output == 0 && cache_read == 0 {
+    let cache_write = field("cacheWriteTokens");
+    if input == 0 && output == 0 && cache_read == 0 && cache_write == 0 {
         return None;
     }
     Some(TurnUsage {
         input_tokens: input,
         output_tokens: output,
-        cache_creation_input_tokens: 0,
+        cache_creation_input_tokens: cache_write,
         cache_read_input_tokens: cache_read,
     })
 }
@@ -635,6 +835,11 @@ fn parse_session_events(text: &str, attachments: Option<&Path>) -> SessionParse 
         let event_type = value.get("type").and_then(Value::as_str).unwrap_or("");
         // Raw stream chunks duplicate `assistant/message` content (and the
         // compacted `*-chunks` rows carry `seq0`/`time0` instead of `time`).
+        //
+        // `deepseek-acp` 0.9.0 stopped writing these rows — the compacted
+        // stream rides inside `assistant/message` now. The skip STAYS: logs
+        // written before that upgrade still hold them, and they are still the
+        // same duplicate content.
         if matches!(
             event_type,
             "assistant/chunk" | "tool-call-chunks" | "reasoning-chunks" | "text-chunks"
@@ -891,30 +1096,49 @@ fn parse_session_events(text: &str, attachments: Option<&Path>) -> SessionParse 
             }
             "tool/result" => {
                 let Some(data) = data else { continue };
-                let result = data
-                    .pointer("/message/content")
+                let message = data.get("message");
+                // Two record shapes. Released v3 (and older) wraps the payload
+                // in a `tool-result` content block; session-format v4 (DSH
+                // 0.2.x) drops the wrapper and presents the result as a
+                // first-class `role: "tool"` message. Read the wrapper when it
+                // is present so v3 renders exactly as before, and fall back to
+                // the message for v4.
+                let wrapper = message
+                    .and_then(|m| m.get("content"))
                     .and_then(Value::as_array)
                     .and_then(|items| {
                         items
                             .iter()
                             .find(|i| i.get("type").and_then(Value::as_str) == Some("tool-result"))
                     });
-                let tool_use_id = result
+                let tool_use_id = wrapper
                     .and_then(|r| r.get("toolCallId"))
                     .and_then(Value::as_str)
+                    .or_else(|| {
+                        message
+                            .and_then(|m| m.get("toolCallId"))
+                            .and_then(Value::as_str)
+                    })
                     .or_else(|| {
                         data.pointer("/message/source/callId")
                             .and_then(Value::as_str)
                     })
                     .map(String::from);
-                let output = result
-                    .map(|r| collect_text_parts(r.get("content")))
-                    .unwrap_or_default();
+                let output = match wrapper {
+                    Some(result) => collect_text_parts(result.get("content")),
+                    None => collect_text_parts(message.and_then(|m| m.get("content"))),
+                };
                 // `data.error` is the tool's internal failure identity; the
-                // model-facing `isError` flag is the primary signal.
-                let is_error = result
+                // model-facing `isError` flag is the primary signal. v3 carries
+                // the flag on the wrapper block, v4 on the message itself.
+                let is_error = wrapper
                     .and_then(|r| r.get("isError"))
                     .and_then(Value::as_bool)
+                    .or_else(|| {
+                        message
+                            .and_then(|m| m.get("isError"))
+                            .and_then(Value::as_bool)
+                    })
                     .unwrap_or(false)
                     || data.get("error").is_some_and(|e| !e.is_null());
                 sp.content_events += 1;
@@ -927,6 +1151,7 @@ fn parse_session_events(text: &str, attachments: Option<&Path>) -> SessionParse 
                     is_error,
                     agent_stats: None,
                     images: Vec::new(),
+                    exit_code: None,
                 });
             }
             // ── Context compaction (0.6.0) ───────────────────────────────
@@ -1038,6 +1263,7 @@ fn parse_session_events(text: &str, attachments: Option<&Path>) -> SessionParse 
                     is_error: error.is_some(),
                     agent_stats: None,
                     images: Vec::new(),
+                    exit_code: None,
                 });
             }
             // `agent/inbox/spliced` (queue bookkeeping), `step/start`/`step/end`
@@ -1244,6 +1470,19 @@ mod tests {
             "createdAt": 1_786_708_736_990_i64,
             "cwd": cwd,
             "delegationDepth": 0
+        })
+        .to_string()
+    }
+
+    fn v4_header_line(cwd: &str) -> String {
+        json!({
+            "type": "session",
+            "version": 4,
+            "id": "0126397e-97b1-4420-a564-bffe4453915b",
+            "createdAt": 1_786_708_736_990_i64,
+            "cwd": cwd,
+            "delegationDepth": 0,
+            "agentPreset": "standard"
         })
         .to_string()
     }
@@ -1605,6 +1844,220 @@ mod tests {
         ));
     }
 
+    /// Session-format v4 (DSH 0.2.x) turns a tool result into a first-class
+    /// `role: "tool"` message: `toolCallId` / `content[]` / `isError` sit on
+    /// the message, and the released-v3 `tool-result` wrapper block is gone. A
+    /// parser that only knows the wrapper renders the call with an EMPTY
+    /// output and never flags the error.
+    #[test]
+    fn parses_v4_first_class_tool_results() {
+        let log = [
+            v4_header_line("/w"),
+            event("turn/start", 1, 1_000, json!({"turn": 1})),
+            event(
+                "tool/result",
+                2,
+                1_100,
+                json!({
+                    "turn": 1, "step": 1,
+                    "message": {
+                        "role": "tool",
+                        "source": {"kind": "tool", "callId": "call_1"},
+                        "toolCallId": "call_1",
+                        "content": [{"type": "text", "text": "<content>hello</content>"}],
+                        "isError": false,
+                        "id": "t-1"
+                    }
+                }),
+            ),
+            event(
+                "tool/result",
+                3,
+                1_200,
+                json!({
+                    "turn": 1, "step": 1,
+                    "message": {
+                        "role": "tool",
+                        "source": {"kind": "tool", "callId": "call_2"},
+                        "toolCallId": "call_2",
+                        "content": [{"type": "text", "text": "Error: MCP error -32001: Request timed out"}],
+                        "isError": true,
+                        "id": "t-2"
+                    }
+                }),
+            ),
+            event("turn/end", 4, 1_300, json!({"turn": 1})),
+        ]
+        .join("\n");
+
+        let sp = parse_session_events(&log, None);
+        assert_eq!(sp.turns.len(), 1);
+        assert!(matches!(
+            &sp.turns[0].blocks[0],
+            ContentBlock::ToolResult { tool_use_id: Some(id), output_preview: Some(out), is_error: false, .. }
+                if id == "call_1" && out.contains("hello")
+        ));
+        assert!(matches!(
+            &sp.turns[0].blocks[1],
+            ContentBlock::ToolResult { tool_use_id: Some(id), output_preview: Some(out), is_error: true, .. }
+                if id == "call_2" && out.contains("timed out")
+        ));
+    }
+
+    /// A v4 result whose message omits `toolCallId` still resolves its identity
+    /// through `message.source.callId` — the fallback the released-v3 wrapper
+    /// never exercised, because the wrapper always carried the id.
+    #[test]
+    fn parses_v4_tool_results_without_message_tool_call_id() {
+        let log = [
+            v4_header_line("/w"),
+            event("turn/start", 1, 1_000, json!({"turn": 1})),
+            event(
+                "tool/result",
+                2,
+                1_100,
+                json!({
+                    "turn": 1, "step": 1,
+                    "message": {
+                        "role": "tool",
+                        "source": {"kind": "tool", "callId": "call_from_source"},
+                        "content": [{"type": "text", "text": "out"}],
+                        "isError": false,
+                        "id": "t-1"
+                    }
+                }),
+            ),
+            event("turn/end", 3, 1_200, json!({"turn": 1})),
+        ]
+        .join("\n");
+
+        let sp = parse_session_events(&log, None);
+        assert!(matches!(
+            &sp.turns[0].blocks[0],
+            ContentBlock::ToolResult { tool_use_id: Some(id), output_preview: Some(out), .. }
+                if id == "call_from_source" && out == "out"
+        ));
+    }
+
+    /// Session-format v4 drops the v3 `{kind: "plugin", plugin}` source and
+    /// names each producer instead (`runtime-context`, `skill-catalog`,
+    /// `plan-mode`, `compact-checkpoint`, …); deepseek-acp 0.11.0 writes the
+    /// first two on every first turn, and its v3→v4 migration rewrites old
+    /// logs the same way. None of them is something the user said, and v4's
+    /// `developer/message` is model plumbing too, so only `kind: "user"`
+    /// reaches the transcript, the title and the message count.
+    #[test]
+    fn v4_named_injection_sources_stay_out_of_the_transcript() {
+        let injected = |seq: u64, source: Value, text: &str| {
+            event(
+                "user/message",
+                seq,
+                1_000 + seq as i64,
+                json!({
+                    "content": [{"type": "text", "text": text}],
+                    "source": source,
+                    "role": "user",
+                    "id": format!("u-{seq}")
+                }),
+            )
+        };
+        let log = [
+            v4_header_line("/w"),
+            event("turn/start", 1, 1_000, json!({"turn": 1})),
+            injected(2, json!({"kind": "user"}), "say hi"),
+            injected(
+                3,
+                json!({"kind": "runtime-context", "form": "snapshot", "sections": []}),
+                "<system-reminder>Current working directory</system-reminder>",
+            ),
+            injected(
+                4,
+                json!({"kind": "skill-catalog", "form": "catalog", "entries": []}),
+                "<system-reminder>A skill is a reusable set</system-reminder>",
+            ),
+            injected(5, json!({"kind": "plan-mode"}), "Plan mode is active"),
+            injected(6, json!({"kind": "compact-checkpoint"}), "Summary of earlier turns"),
+            event(
+                "developer/message",
+                7,
+                1_007,
+                json!({"message": {"role": "developer", "content": [{"type": "text", "text": "internal"}], "id": "d-1"}}),
+            ),
+            event(
+                "assistant/message",
+                8,
+                1_008,
+                json!({
+                    "turn": 1, "step": 1,
+                    "message": {"role": "assistant", "content": [{"type": "text", "text": "hi there"}], "source": {"kind": "model", "model": "deepseek-flash"}, "id": "a-1"}
+                }),
+            ),
+            event("turn/end", 9, 1_009, json!({"turn": 1, "reason": {"kind": "completed"}})),
+        ]
+        .join("\n");
+
+        let sp = parse_session_events(&log, None);
+        let user_texts: Vec<&str> = sp
+            .turns
+            .iter()
+            .filter(|t| matches!(t.role, TurnRole::User))
+            .flat_map(|t| t.blocks.iter())
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(user_texts, ["say hi"]);
+        assert_eq!(sp.first_user_text.as_deref(), Some("say hi"));
+        assert_eq!(sp.turns.len(), 2, "{:?}", sp.turns);
+    }
+
+    /// DSH 0.2.x reports prompt-cache writes as `cacheWriteTokens` (the key is
+    /// optional in v3 and v4 alike); the counter must reach the turn rather
+    /// than being dropped as an unknown key, whatever the header version.
+    #[test]
+    fn cache_write_tokens_reach_the_turn_in_any_generation() {
+        let step = |usage: Value| {
+            event(
+                "assistant/message",
+                2,
+                1_100,
+                json!({
+                    "turn": 1, "step": 1,
+                    "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}], "source": {"kind": "model", "model": "deepseek-v4"}, "id": "a-1"},
+                    "usage": usage
+                }),
+            )
+        };
+        for header in [header_line("/w"), v4_header_line("/w")] {
+            let log = [
+                header.clone(),
+                event("turn/start", 1, 1_000, json!({"turn": 1})),
+                step(json!({"inputTokens": 10, "outputTokens": 5, "cacheReadTokens": 2, "cacheWriteTokens": 7})),
+                event("turn/end", 3, 1_200, json!({"turn": 1})),
+            ]
+            .join("\n");
+            let sp = parse_session_events(&log, None);
+            let usage = sp.turns[0].usage.as_ref().expect("usage");
+            assert_eq!(usage.input_tokens, 10);
+            assert_eq!(usage.cache_creation_input_tokens, 7);
+            assert_eq!(usage.cache_read_input_tokens, 2);
+
+            // A step whose only non-zero counter is the cache write still
+            // reports usage instead of reading as "no usage".
+            let log = [
+                header,
+                event("turn/start", 1, 1_000, json!({"turn": 1})),
+                step(json!({"inputTokens": 0, "outputTokens": 0, "cacheWriteTokens": 7})),
+                event("turn/end", 3, 1_200, json!({"turn": 1})),
+            ]
+            .join("\n");
+            let sp = parse_session_events(&log, None);
+            let usage = sp.turns[0].usage.as_ref().expect("cache-write-only usage");
+            assert_eq!(usage.cache_creation_input_tokens, 7);
+        }
+    }
+
     #[test]
     fn oversized_tool_arguments_stay_valid_json() {
         let long_task = "长".repeat(DEEPSEEK_TOOL_INPUT_CAP);
@@ -1623,21 +2076,97 @@ mod tests {
         assert_eq!(deepseek_tool_input_preview(small).as_deref(), Some(small));
     }
 
-    fn write_session(dir: &Path, bucket: &str, id: &str, log: &str, compressed: bool) {
+    /// Two separately-encoded frames concatenated — the exact shape the
+    /// append-only writer produces — which must decode as one stream. The split
+    /// point is arbitrary (frames carry bytes, not lines).
+    fn zstd_frames(log: &str) -> Vec<u8> {
+        let raw = log.as_bytes();
+        let split = raw.len() / 2;
+        let mut bytes = zstd::stream::encode_all(&raw[..split], 0).expect("frame 1");
+        bytes.extend(zstd::stream::encode_all(&raw[split..], 0).expect("frame 2"));
+        bytes
+    }
+
+    /// Write EXACTLY ONE file, named exactly `filename`, into
+    /// `<dir>/<bucket>/<id>/`. One call must never leave a second generation
+    /// behind: a test that means to stage a lone v3 would otherwise be passing
+    /// on a v0 companion nobody asked for.
+    fn write_log_bytes(dir: &Path, bucket: &str, id: &str, filename: &str, bytes: &[u8]) -> PathBuf {
         let session_dir = dir.join(bucket).join(id);
         fs::create_dir_all(&session_dir).expect("mkdir");
-        if compressed {
-            // Two separately-encoded frames concatenated — the exact shape the
-            // append-only writer produces — must decode as one stream. The
-            // split point is arbitrary (frames carry bytes, not lines).
-            let raw = log.as_bytes();
-            let split = raw.len() / 2;
-            let mut bytes = zstd::stream::encode_all(&raw[..split], 0).expect("frame 1");
-            bytes.extend(zstd::stream::encode_all(&raw[split..], 0).expect("frame 2"));
-            fs::write(session_dir.join("session.jsonl.zstd"), bytes).expect("write zstd");
+        let path = session_dir.join(filename);
+        fs::write(&path, bytes).expect("write log");
+        path
+    }
+
+    /// Same, encoding chosen by the name: `.zstd` gets the two-frame shape,
+    /// anything else lands verbatim.
+    fn write_log(dir: &Path, bucket: &str, id: &str, filename: &str, log: &str) -> PathBuf {
+        if filename.ends_with(".zstd") {
+            write_log_bytes(dir, bucket, id, filename, &zstd_frames(log))
         } else {
-            fs::write(session_dir.join("session.jsonl"), log).expect("write jsonl");
+            write_log_bytes(dir, bucket, id, filename, log.as_bytes())
         }
+    }
+
+    fn write_session(dir: &Path, bucket: &str, id: &str, log: &str, compressed: bool) {
+        let filename = if compressed {
+            "session.jsonl.zstd"
+        } else {
+            "session.jsonl"
+        };
+        write_log(dir, bucket, id, filename, log);
+    }
+
+    fn scratch_dir(tag: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("deepseek-parser-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        dir
+    }
+
+    /// A minimal listable log with one user turn per entry in `texts`. Two
+    /// generations staged in one directory are told apart by which text comes
+    /// back — a turn COUNT alone would pass while reading the stale file.
+    fn tagged_log(texts: &[&str]) -> String {
+        let mut lines = vec![header_line("/w")];
+        for (index, text) in texts.iter().enumerate() {
+            let turn = index as u64 + 1;
+            let base = turn * 10;
+            lines.push(event("turn/start", base, 1_000 + base as i64, json!({"turn": turn})));
+            lines.push(event(
+                "user/message",
+                base + 1,
+                1_001 + base as i64,
+                json!({
+                    "content": [{"type": "text", "text": text}],
+                    "source": {"kind": "user"},
+                    "role": "user",
+                    "id": format!("u-{turn}")
+                }),
+            ));
+            lines.push(event(
+                "turn/end",
+                base + 2,
+                1_002 + base as i64,
+                json!({"turn": turn, "reason": {"kind": "completed"}}),
+            ));
+        }
+        lines.join("\n")
+    }
+
+    /// Every user-turn text of a parsed detail, in order.
+    fn user_texts(detail: &ConversationDetail) -> Vec<String> {
+        detail
+            .turns
+            .iter()
+            .filter(|turn| matches!(turn.role, TurnRole::User))
+            .flat_map(|turn| turn.blocks.iter())
+            .filter_map(|block| match block {
+                ContentBlock::Text { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
     }
 
     #[test]
@@ -1667,6 +2196,493 @@ mod tests {
         let total = stats.total_usage.expect("usage");
         assert_eq!(total.input_tokens, 1514 + 111);
         assert_eq!(total.output_tokens, 49 + 100);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // ── 0.9.0: generation-addressed log filenames ───────────────────────
+    //
+    // `deepseek-acp` 0.9.0 renamed the log to `session.v3.jsonl.zstd`. Reading
+    // only the generation-0 name made every session it wrote list as absent and
+    // render with zero turns, and made a MIGRATED session render frozen at the
+    // migration point, because the migration leaves its predecessor on disk.
+
+    const GEN_ID: &str = "0126397e-97b1-4420-a564-bffe4453915b";
+
+    #[test]
+    fn lists_and_loads_a_session_written_under_a_later_generation() {
+        let dir = scratch_dir("gen-v3");
+        write_log(
+            &dir,
+            "--w--",
+            GEN_ID,
+            "session.v3.jsonl.zstd",
+            &tagged_log(&["v3 only"]),
+        );
+
+        let parser = DeepSeekParser::with_base_dir(dir.clone());
+        let conversations = parser.list_conversations().expect("list");
+        assert_eq!(conversations.len(), 1);
+        assert_eq!(conversations[0].id, GEN_ID);
+
+        // Content, not just "the call returned": `build_detail` answers with an
+        // empty default when the log cannot be read, so `expect` never fires.
+        let detail = parser.get_conversation(GEN_ID).expect("detail");
+        assert_eq!(user_texts(&detail), vec!["v3 only".to_string()]);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A write open migrates the log and publishes the successor WITHOUT
+    /// deleting the source, so both names sit in one directory and the older
+    /// one is frozen at the migration point. Reading it would show a truncated
+    /// history as if it were current — silently.
+    #[test]
+    fn a_retained_predecessor_never_wins_over_the_published_successor() {
+        let dir = scratch_dir("gen-retained");
+        write_log(
+            &dir,
+            "--w--",
+            GEN_ID,
+            "session.jsonl.zstd",
+            &tagged_log(&["old"]),
+        );
+        write_log(
+            &dir,
+            "--w--",
+            GEN_ID,
+            "session.v3.jsonl.zstd",
+            &tagged_log(&["new-1", "new-2"]),
+        );
+
+        let parser = DeepSeekParser::with_base_dir(dir.clone());
+        let detail = parser.get_conversation(GEN_ID).expect("detail");
+        assert_eq!(
+            user_texts(&detail),
+            vec!["new-1".to_string(), "new-2".to_string()]
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_canonical_generation_names_are_selected() {
+        assert_eq!(
+            parse_generation_log_filename("session.jsonl"),
+            Some((0, LogEncoding::Raw))
+        );
+        assert_eq!(
+            parse_generation_log_filename("session.jsonl.zstd"),
+            Some((0, LogEncoding::Zstd))
+        );
+        assert_eq!(
+            parse_generation_log_filename("session.v3.jsonl.zstd"),
+            Some((3, LogEncoding::Zstd))
+        );
+        assert_eq!(
+            parse_generation_log_filename("session.v12.jsonl"),
+            Some((12, LogEncoding::Raw))
+        );
+        // The accepted band runs all the way to upstream's ceiling. A generation
+        // codeg's integer cannot hold would stop being a generation, and a
+        // retained predecessor beside it would win — so the width is not a
+        // cosmetic choice, and `u32` (4_294_967_295) would already be too narrow.
+        assert_eq!(
+            parse_generation_log_filename("session.v4294967296.jsonl.zstd"),
+            Some((4_294_967_296, LogEncoding::Zstd))
+        );
+        assert_eq!(
+            parse_generation_log_filename("session.v9007199254740991.jsonl.zstd"),
+            Some((9_007_199_254_740_991, LogEncoding::Zstd))
+        );
+        for name in [
+            // Upstream spells these out as NOT canonical.
+            "session.v0.jsonl.zstd",
+            "session.v03.jsonl.zstd",
+            "session.V3.jsonl.zstd",
+            "SESSION.jsonl.zstd",
+            // The staging file a migration publishes through, and the lock.
+            "session.migration.abc123.jsonl.zstd.tmp",
+            "session.lock",
+            // Neither encoding.
+            "session.v3.jsonl.gz",
+            "session.jsonl.zst",
+            "session.v.jsonl",
+            "session.v-1.jsonl",
+            "session.v3.2.jsonl",
+            // Past upstream's safe-integer ceiling, and past any integer at
+            // all — refused, not saturated.
+            "session.v9007199254740992.jsonl.zstd",
+            "session.v99999999999999999999999999.jsonl.zstd",
+        ] {
+            assert_eq!(parse_generation_log_filename(name), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn non_canonical_neighbours_do_not_displace_the_canonical_log() {
+        let dir = scratch_dir("gen-junk");
+        let session_dir = dir.join("--w--").join(GEN_ID);
+        for name in [
+            "session.v0.jsonl.zstd",
+            "session.v03.jsonl.zstd",
+            "session.V3.jsonl.zstd",
+            "session.migration.abc123.jsonl.zstd.tmp",
+        ] {
+            // Valid content under an invalid name: accepting the name would
+            // swap the answer, so this cannot pass by the file being unreadable.
+            write_log(&dir, "--w--", GEN_ID, name, &tagged_log(&["junk"]));
+        }
+        write_log_bytes(&dir, "--w--", GEN_ID, "session.lock", b"");
+        // A DIRECTORY that happens to be named like a later generation.
+        fs::create_dir_all(session_dir.join("session.v9.jsonl.zstd")).expect("mkdir");
+        write_log(
+            &dir,
+            "--w--",
+            GEN_ID,
+            "session.jsonl.zstd",
+            &tagged_log(&["canonical"]),
+        );
+
+        assert_eq!(
+            resolve_generation_log_path(&session_dir),
+            Some((session_dir.join("session.jsonl.zstd"), LogEncoding::Zstd))
+        );
+        let parser = DeepSeekParser::with_base_dir(dir.clone());
+        let detail = parser.get_conversation(GEN_ID).expect("detail");
+        assert_eq!(user_texts(&detail), vec!["canonical".to_string()]);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reads_a_later_generation_written_without_compression() {
+        let dir = scratch_dir("gen-raw-v3");
+        write_log(
+            &dir,
+            "--w--",
+            GEN_ID,
+            "session.v3.jsonl",
+            &tagged_log(&["raw-v3"]),
+        );
+
+        let parser = DeepSeekParser::with_base_dir(dir.clone());
+        assert_eq!(parser.list_conversations().expect("list").len(), 1);
+        let detail = parser.get_conversation(GEN_ID).expect("detail");
+        assert_eq!(user_texts(&detail), vec!["raw-v3".to_string()]);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The rule is "highest canonical generation", not "3".
+    #[test]
+    fn a_future_generation_outranks_the_current_one() {
+        let dir = scratch_dir("gen-v4");
+        write_log(
+            &dir,
+            "--w--",
+            GEN_ID,
+            "session.v3.jsonl.zstd",
+            &tagged_log(&["three"]),
+        );
+        write_log(
+            &dir,
+            "--w--",
+            GEN_ID,
+            "session.v4.jsonl.zstd",
+            &tagged_log(&["four"]),
+        );
+
+        let parser = DeepSeekParser::with_base_dir(dir.clone());
+        let detail = parser.get_conversation(GEN_ID).expect("detail");
+        assert_eq!(user_texts(&detail), vec!["four".to_string()]);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A v3 session that a DSH 0.2.x write open migrated to v4 keeps both
+    /// generations in one directory. The public parse path must pick the v4
+    /// successor (highest generation) and render its first-class tool result —
+    /// the exact shape a shared `$DSH_HOME/sessions` produces after a migration.
+    #[test]
+    fn reads_a_migrated_v4_generation_and_its_tool_result() {
+        let dir = scratch_dir("gen-v4-tool-result");
+        write_log(
+            &dir,
+            "--w--",
+            GEN_ID,
+            "session.v3.jsonl.zstd",
+            &tagged_log(&["three"]),
+        );
+        let v4_log = [
+            v4_header_line("/w"),
+            event("turn/start", 1, 1_000, json!({"turn": 1})),
+            event(
+                "user/message",
+                2,
+                1_010,
+                json!({
+                    "content": [{"type": "text", "text": "four"}],
+                    "source": {"kind": "user"},
+                    "role": "user",
+                    "id": "u-1"
+                }),
+            ),
+            event(
+                "assistant/message",
+                3,
+                1_050,
+                json!({
+                    "turn": 1, "step": 1,
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "tool-call", "id": "call_1", "name": "read", "arguments": "{\"file_path\": \"/tmp/t.txt\"}"}],
+                        "source": {"kind": "model", "model": "deepseek-v4"},
+                        "id": "a-1"
+                    },
+                    "usage": {"inputTokens": 10, "outputTokens": 5, "cacheReadTokens": 2, "cacheWriteTokens": 7}
+                }),
+            ),
+            event(
+                "tool/result",
+                4,
+                1_100,
+                json!({
+                    "turn": 1, "step": 1,
+                    "message": {
+                        "role": "tool",
+                        "source": {"kind": "tool", "callId": "call_1"},
+                        "toolCallId": "call_1",
+                        "content": [{"type": "text", "text": "<content>hello</content>"}],
+                        "isError": false,
+                        "id": "t-1"
+                    }
+                }),
+            ),
+            event("turn/end", 5, 1_200, json!({"turn": 1})),
+        ]
+        .join("\n");
+        write_log(&dir, "--w--", GEN_ID, "session.v4.jsonl.zstd", &v4_log);
+
+        let parser = DeepSeekParser::with_base_dir(dir.clone());
+        let detail = parser.get_conversation(GEN_ID).expect("detail");
+        // The successor, not the retained predecessor: only v4 carries "four".
+        assert_eq!(user_texts(&detail), vec!["four".to_string()]);
+        let assistant = detail
+            .turns
+            .iter()
+            .find(|turn| matches!(turn.role, TurnRole::Assistant))
+            .expect("assistant turn");
+        assert!(assistant.blocks.iter().any(|block| matches!(
+            block,
+            ContentBlock::ToolResult { tool_use_id: Some(id), output_preview: Some(out), is_error: false, .. }
+                if id == "call_1" && out.contains("hello")
+        )));
+        // The v4 cache-write counter rides the same detail path.
+        let stats = detail.session_stats.expect("stats");
+        let usage = stats.total_usage.expect("usage");
+        assert_eq!(usage.cache_creation_input_tokens, 7);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The live-append race is handled INSIDE the selected generation: the
+    /// decoded prefix of a half-written tail is the answer, never the stale
+    /// predecessor sitting beside it.
+    #[test]
+    fn a_torn_tail_yields_the_selected_generations_prefix_not_the_predecessor() {
+        let dir = scratch_dir("gen-torn");
+        write_log(
+            &dir,
+            "--w--",
+            GEN_ID,
+            "session.jsonl.zstd",
+            &tagged_log(&["old"]),
+        );
+        let mut bytes = zstd_frames(&tagged_log(&["new"]));
+        let tail = zstd::stream::encode_all(
+            format!(
+                "\n{}",
+                event("turn/start", 50, 2_000, json!({"turn": 2}))
+            )
+            .as_bytes(),
+            0,
+        )
+        .expect("tail frame");
+        bytes.extend(&tail[..tail.len() / 2]);
+        write_log_bytes(&dir, "--w--", GEN_ID, "session.v3.jsonl.zstd", &bytes);
+
+        let parser = DeepSeekParser::with_base_dir(dir.clone());
+        let detail = parser.get_conversation(GEN_ID).expect("detail");
+        assert_eq!(user_texts(&detail), vec!["new".to_string()]);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// An empty newest generation is an empty session, NOT a licence to show
+    /// the predecessor. Upstream is explicit that retained predecessors provide
+    /// no fallback, and presenting pre-migration history as current is worse
+    /// than presenting nothing.
+    #[test]
+    fn an_empty_newest_generation_does_not_fall_back_to_the_predecessor() {
+        let dir = scratch_dir("gen-empty");
+        write_log(
+            &dir,
+            "--w--",
+            GEN_ID,
+            "session.jsonl.zstd",
+            &tagged_log(&["old"]),
+        );
+        write_log_bytes(&dir, "--w--", GEN_ID, "session.v3.jsonl.zstd", b"");
+
+        let parser = DeepSeekParser::with_base_dir(dir.clone());
+        assert!(parser.list_conversations().expect("list").is_empty());
+        let detail = parser.get_conversation(GEN_ID).expect("detail");
+        assert!(user_texts(&detail).is_empty());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Same rule for a newest generation that reads fine but does not DECODE —
+    /// a separate branch from the empty file above, and the one an
+    /// implementation that only guards `fs::read` errors would get wrong.
+    #[test]
+    fn an_undecodable_newest_generation_does_not_fall_back_to_the_predecessor() {
+        let dir = scratch_dir("gen-garbage");
+        write_log(
+            &dir,
+            "--w--",
+            GEN_ID,
+            "session.jsonl.zstd",
+            &tagged_log(&["old"]),
+        );
+        write_log_bytes(
+            &dir,
+            "--w--",
+            GEN_ID,
+            "session.v3.jsonl.zstd",
+            b"not a zstd frame at all",
+        );
+
+        let parser = DeepSeekParser::with_base_dir(dir.clone());
+        assert!(parser.list_conversations().expect("list").is_empty());
+        assert!(user_texts(&parser.get_conversation(GEN_ID).expect("detail")).is_empty());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// And for one that cannot be read at all. Unix-only: Windows has no
+    /// equivalent of clearing the read bit through `fs::set_permissions`.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_newest_generation_does_not_fall_back_to_the_predecessor() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = scratch_dir("gen-unreadable");
+        write_log(
+            &dir,
+            "--w--",
+            GEN_ID,
+            "session.jsonl.zstd",
+            &tagged_log(&["old"]),
+        );
+        let newest = write_log(
+            &dir,
+            "--w--",
+            GEN_ID,
+            "session.v3.jsonl.zstd",
+            &tagged_log(&["new"]),
+        );
+        fs::set_permissions(&newest, fs::Permissions::from_mode(0o000)).expect("chmod");
+
+        let parser = DeepSeekParser::with_base_dir(dir.clone());
+        let listed = parser.list_conversations().expect("list");
+        let detail = parser.get_conversation(GEN_ID).expect("detail");
+
+        // Restore before asserting so a failure still cleans up.
+        let _ = fs::set_permissions(&newest, fs::Permissions::from_mode(0o600));
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(listed.is_empty());
+        assert!(user_texts(&detail).is_empty());
+    }
+
+    /// A root holding both encodings is malformed by upstream's own rule (a
+    /// root belongs to one encoding). Generations are therefore compared WITHIN
+    /// an encoding, and the compressed set wins — `deepseek-acp` never
+    /// configures `compression`, so every generation it writes is compressed.
+    #[test]
+    fn a_mixed_encoding_root_reads_the_compressed_set() {
+        let dir = scratch_dir("gen-mixed");
+        write_log(&dir, "--w--", GEN_ID, "session.v3.jsonl", &tagged_log(&["raw"]));
+        write_log(
+            &dir,
+            "--w--",
+            GEN_ID,
+            "session.jsonl.zstd",
+            &tagged_log(&["zstd"]),
+        );
+
+        let session_dir = dir.join("--w--").join(GEN_ID);
+        assert_eq!(
+            resolve_generation_log_path(&session_dir),
+            Some((session_dir.join("session.jsonl.zstd"), LogEncoding::Zstd))
+        );
+        let parser = DeepSeekParser::with_base_dir(dir.clone());
+        let detail = parser.get_conversation(GEN_ID).expect("detail");
+        assert_eq!(user_texts(&detail), vec!["zstd".to_string()]);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// `readdir` can fail AFTER yielding entries — a stale NFS handle, a FUSE
+    /// mount erroring mid-stream. Keeping what arrived would crown the retained
+    /// predecessor exactly when the successor is the entry that never came, so
+    /// a partial listing has to yield nothing instead — even though the
+    /// predecessor is right there and perfectly readable. No temporary
+    /// directory can be made to fail this way, hence the injected listing.
+    #[test]
+    fn a_broken_listing_does_not_fall_back_to_a_readable_predecessor() {
+        let dir = scratch_dir("gen-partial-listing");
+        let old = write_log(
+            &dir,
+            "--w--",
+            GEN_ID,
+            "session.jsonl.zstd",
+            &tagged_log(&["old"]),
+        );
+        let new = write_log(
+            &dir,
+            "--w--",
+            GEN_ID,
+            "session.v3.jsonl.zstd",
+            &tagged_log(&["new"]),
+        );
+        let session_dir = dir.join("--w--").join(GEN_ID);
+        let name = |path: &Path| OsString::from(path.file_name().expect("name"));
+
+        // Whole listing: the successor wins, as everywhere else.
+        assert_eq!(
+            select_generation_log(
+                &session_dir,
+                vec![
+                    Ok((name(&old), old.clone())),
+                    Ok((name(&new), new.clone())),
+                ],
+            ),
+            Some((new.clone(), LogEncoding::Zstd))
+        );
+        // Truncated listing: nothing, NOT the readable predecessor.
+        assert_eq!(
+            select_generation_log(
+                &session_dir,
+                vec![
+                    Ok((name(&old), old.clone())),
+                    Err(std::io::Error::other("readdir failed mid-stream")),
+                ],
+            ),
+            None
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1744,7 +2760,11 @@ mod tests {
         ]
         .join("\n");
         write_session(&dir, "--w--", "child", &child, false);
-        // A plaintext (compression: none) session IS listed.
+        // A plaintext (compression: none) session IS listed. LOAD-BEARING
+        // beyond its own name: this is the only pin for the UNVERSIONED raw
+        // `session.jsonl`, and it is a real one — `build_summary` drops any
+        // session with no content events, so breaking generation-0 raw
+        // resolution makes the count below 0, not merely the content wrong.
         write_session(&dir, "--w--", "plain", &sample_log(), false);
 
         let parser = DeepSeekParser::with_base_dir(dir.clone());
@@ -2082,5 +3102,23 @@ mod tests {
         // No `start` to measure against, and no `summary` to count.
         assert!(marker.get("durationMs").is_none());
         assert!(marker.get("preTokens").is_none());
+    }
+
+    /// #948: built with an agent's launch env, the parser reads where THAT
+    /// env puts the agent's files, not where codeg's own environment does.
+    #[test]
+    fn for_env_reads_both_roots_of_the_launch_env() {
+        let env = AgentEnv::with_overrides(&[
+            ("DEEPSEEK_ACP_SESSIONS_ROOT", "/relocated/ds-sessions"),
+            ("DSH_HOME", "/relocated/dsh"),
+        ]);
+        let parser = DeepSeekParser::for_env(&env);
+        assert_eq!(parser.base_dir, PathBuf::from("/relocated/ds-sessions"));
+        assert_eq!(
+            parser.attachments_root,
+            PathBuf::from("/relocated/dsh")
+                .join("attachments")
+                .join("v1")
+        );
     }
 }

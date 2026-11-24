@@ -9,6 +9,7 @@ import { mermaidComponents } from "./mermaid-block"
 const mocks = vi.hoisted(() => ({
   render: vi.fn(),
   getMermaid: vi.fn(),
+  renderPlantUml: vi.fn(),
   copyTextToClipboard: vi.fn(async () => true),
   saveDiagram: vi.fn(async () => "saved" as const),
   /** Flips the mocked appearance context — see the mock factory below. */
@@ -40,6 +41,11 @@ vi.mock("@/hooks/use-appearance", () => ({
 
 vi.mock("@/lib/mermaid-export", () => ({ saveDiagram: mocks.saveDiagram }))
 
+// Stand in for PlantUML's browser engine, which needs a canvas to measure text
+// (jsdom has none). The block's job is to ask it with the right source and
+// palette, and to show whatever it draws.
+vi.mock("./plantuml-engine", () => ({ renderPlantUml: mocks.renderPlantUml }))
+
 vi.mock("@/lib/utils", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/utils")>()),
   copyTextToClipboard: mocks.copyTextToClipboard,
@@ -62,6 +68,19 @@ function mermaidFence(source = SOURCE): ReactElement {
   )
 }
 
+const PLANTUML_SOURCE = "@startuml\nAlice -> Bob: hello\n@enduml"
+const PLANTUML_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 106 130" ' +
+  'width="106" height="130"><g data-testid="plantuml-body"></g></svg>'
+
+function plantUmlFence(source = PLANTUML_SOURCE, language = "plantuml") {
+  return (
+    <Pre>
+      <code className={`language-${language}`}>{source}</code>
+    </Pre>
+  )
+}
+
 function renderWithIntl(ui: ReactElement) {
   return render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
@@ -77,6 +96,7 @@ beforeEach(() => {
     initialize: vi.fn(),
     render: mocks.render,
   }))
+  mocks.renderPlantUml.mockResolvedValue(PLANTUML_SVG)
 })
 
 describe("mermaidComponents.pre", () => {
@@ -210,5 +230,106 @@ describe("MermaidBlock errors", () => {
     // Stale colours beat an empty card.
     expect(container.querySelector("svg")).not.toBeNull()
     expect(screen.queryByText("Retry")).toBeNull()
+  })
+})
+
+describe("PlantUmlBlock", () => {
+  it("renders a ```plantuml fence as a diagram block", async () => {
+    const { container } = renderWithIntl(plantUmlFence())
+
+    await waitFor(() =>
+      expect(
+        container.querySelector('[data-codeg="plantuml-block"]')
+      ).not.toBeNull()
+    )
+    expect(mocks.renderPlantUml).toHaveBeenCalledWith(PLANTUML_SOURCE, {
+      dark: false,
+      signal: expect.any(AbortSignal),
+    })
+    expect(screen.getByTestId("plantuml-body")).toBeTruthy()
+    // Neither Mermaid nor a plain code block got the fence.
+    expect(mocks.render).not.toHaveBeenCalled()
+    expect(container.querySelector("code")).toBeNull()
+  })
+
+  it("claims ```puml fences too", async () => {
+    const { container } = renderWithIntl(
+      plantUmlFence("Alice -> Bob: hi", "puml")
+    )
+
+    await waitFor(() =>
+      expect(
+        container.querySelector('[data-codeg="plantuml-block"]')
+      ).not.toBeNull()
+    )
+    expect(mocks.renderPlantUml).toHaveBeenCalledWith(
+      "Alice -> Bob: hi",
+      expect.objectContaining({ dark: false })
+    )
+  })
+
+  it("re-renders with PlantUML's dark palette when the app turns dark", async () => {
+    renderWithIntl(plantUmlFence())
+    await waitFor(() => expect(mocks.renderPlantUml).toHaveBeenCalledTimes(1))
+
+    act(() => mocks.setDarkMode(true))
+
+    await waitFor(() =>
+      expect(mocks.renderPlantUml).toHaveBeenLastCalledWith(
+        PLANTUML_SOURCE,
+        expect.objectContaining({ dark: true })
+      )
+    )
+    expect(mocks.renderPlantUml).toHaveBeenCalledTimes(2)
+  })
+
+  it("gives up on a render whose source has moved on", async () => {
+    mocks.renderPlantUml.mockReturnValueOnce(new Promise(() => {}))
+    const { rerender } = renderWithIntl(plantUmlFence("Alice -> Bo"))
+    await waitFor(() => expect(mocks.renderPlantUml).toHaveBeenCalledTimes(1))
+    const stale = mocks.renderPlantUml.mock.calls[0][1].signal as AbortSignal
+
+    rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        {plantUmlFence("Alice -> Bob")}
+      </NextIntlClientProvider>
+    )
+
+    await waitFor(() => expect(mocks.renderPlantUml).toHaveBeenCalledTimes(2))
+    expect(stale.aborted).toBe(true)
+    expect(await screen.findByTestId("plantuml-body")).toBeTruthy()
+  })
+
+  it("offers the source as a .puml file", async () => {
+    renderWithIntl(plantUmlFence())
+
+    fireEvent.keyDown(await screen.findByLabelText("Download"), {
+      key: "Enter",
+    })
+    fireEvent.click(await screen.findByText("Download source (.puml)"))
+
+    await waitFor(() =>
+      expect(mocks.saveDiagram).toHaveBeenCalledWith({
+        format: "puml",
+        svg: PLANTUML_SVG,
+        source: PLANTUML_SOURCE,
+      })
+    )
+    expect(screen.queryByText("Download source (.mmd)")).toBeNull()
+  })
+
+  it("shows the engine's failure as a PlantUML error, and retries on demand", async () => {
+    mocks.renderPlantUml.mockRejectedValueOnce(
+      new Error("Failed to load emoji.js")
+    )
+    renderWithIntl(plantUmlFence())
+
+    expect(
+      await screen.findByText(/PlantUML error: Failed to load emoji.js/)
+    ).toBeTruthy()
+
+    fireEvent.click(screen.getByText("Retry"))
+
+    expect(await screen.findByTestId("plantuml-body")).toBeTruthy()
   })
 })

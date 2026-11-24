@@ -1,0 +1,320 @@
+{
+  "_comment": "Shared Rust/TS vector for the message navigator outline. `full` is a parsed transcript; `outline` is what commands::turn_window::nav_outline_turns must make of it (checked in turn_window.rs), and what src/lib/session-files.test.ts checks indexes exactly like `full` under extractSessionFilesGrouped.",
+  "full": [
+    {
+      "id": "turn-0",
+      "role": "user",
+      "timestamp": "2026-10-01T08:00:00Z",
+      "blocks": [
+        { "type": "image", "data": "aGVsbG8=", "mime_type": "image/png" },
+        { "type": "text", "text": "" },
+        {
+          "type": "text",
+          "text": "  Make the parser stream its output, then update the docs and the changelog so both describe the new behaviour  "
+        },
+        { "type": "text", "text": "a later block is never the label" }
+      ]
+    },
+    {
+      "id": "turn-1",
+      "role": "assistant",
+      "timestamp": "2026-10-01T08:00:05Z",
+      "usage": {
+        "input_tokens": 1200,
+        "output_tokens": 300,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0
+      },
+      "duration_ms": 4200,
+      "model": "claude-test",
+      "completed_at": "2026-10-01T08:00:09Z",
+      "agent_message_id": "msg_01",
+      "blocks": [
+        { "type": "thinking", "text": "Edit the parser first, then the docs." },
+        { "type": "text", "text": "I'll start with the parser." },
+        {
+          "type": "tool_use",
+          "tool_use_id": "call-edit",
+          "tool_name": "Edit",
+          "input_preview": "{\"file_path\":\"/repo/src/parser.rs\",\"old_string\":\"fn parse() {}\\n\",\"new_string\":\"fn parse() {\\n    stream();\\n}\\n\"}"
+        },
+        {
+          "type": "tool_result",
+          "tool_use_id": "call-edit",
+          "output_preview": "The file /repo/src/parser.rs has been updated.\n@@ -10,1 +10,3 @@\n-fn parse() {}\n+fn parse() {\n+    stream();\n+}",
+          "is_error": false,
+          "agent_stats": {
+            "total_tokens": 10,
+            "total_tool_use_count": 1,
+            "total_duration_ms": 5
+          },
+          "images": [{ "data": "aGk=", "mime_type": "image/png" }]
+        },
+        {
+          "type": "tool_use",
+          "tool_use_id": "call-read",
+          "tool_name": "Read",
+          "input_preview": "{\"file_path\":\"/repo/src/lib.rs\"}"
+        },
+        {
+          "type": "tool_result",
+          "tool_use_id": "call-read",
+          "output_preview": "1\tpub mod parser;\n2\tpub mod docs;\n",
+          "is_error": false
+        },
+        {
+          "type": "tool_use",
+          "tool_use_id": "call-write",
+          "tool_name": "Write",
+          "input_preview": "{\"file_path\":\"/repo/docs/streaming.md\",\"content\":\"# Streaming\\n\\nThe parser streams.\\n\"}"
+        },
+        {
+          "type": "tool_result",
+          "tool_use_id": "call-write",
+          "output_preview": "File created successfully at: /repo/docs/streaming.md",
+          "is_error": false
+        }
+      ]
+    },
+    {
+      "id": "turn-2",
+      "role": "assistant",
+      "timestamp": "2026-10-01T08:00:12Z",
+      "blocks": [
+        {
+          "type": "tool_use",
+          "tool_use_id": "call-retry",
+          "tool_name": "Edit",
+          "input_preview": "{\"file_path\":\"/repo/CHANGELOG.md\",\"old_string\":\"## Unreleased\\n\",\"new_string\":\"## Unreleased\\n\\n- Streaming parser.\\n\"}"
+        },
+        {
+          "type": "tool_result",
+          "tool_use_id": "call-retry",
+          "output_preview": "@@ -1,1 +1,3 @@\nerror: the file changed on disk",
+          "is_error": true
+        },
+        {
+          "type": "tool_result",
+          "tool_use_id": "call-retry",
+          "output_preview": "",
+          "is_error": false
+        },
+        {
+          "type": "tool_result",
+          "tool_use_id": "call-retry",
+          "output_preview": "@@ -1,1 +1,3 @@\n ## Unreleased\n+\n+- Streaming parser.",
+          "is_error": false
+        },
+        {
+          "type": "tool_result",
+          "tool_use_id": "call-retry",
+          "output_preview": "@@ -9,1 +9,1 @@\n-never\n+read",
+          "is_error": false
+        },
+        {
+          "type": "tool_use",
+          "tool_use_id": "call-plain",
+          "tool_name": "Edit",
+          "input_preview": "{\"file_path\":\"/repo/README.md\",\"old_string\":\"old line\\n\",\"new_string\":\"new line\\n\"}"
+        },
+        {
+          "type": "tool_result",
+          "tool_use_id": "call-plain",
+          "output_preview": "Updated README.md",
+          "is_error": false
+        },
+        {
+          "type": "tool_result",
+          "tool_use_id": "call-plain",
+          "output_preview": "@@ -1,1 +1,1 @@\n-old line\n+never read",
+          "is_error": false
+        },
+        {
+          "type": "tool_use",
+          "tool_use_id": "call-patch",
+          "tool_name": "apply_patch",
+          "input_preview": "{\"patch\":\"*** Begin Patch\\n*** Update File: src/a.ts\\n@@\\n-const a = 1\\n+const a = 2\\n*** End Patch\"}"
+        },
+        {
+          "type": "tool_result",
+          "tool_use_id": "call-patch",
+          "output_preview": "Success.\r@@ -1,1 +1,1 @@",
+          "is_error": false
+        },
+        {
+          "type": "tool_result",
+          "tool_use_id": null,
+          "output_preview": "@@ -1,1 +1,1 @@\norphan result",
+          "is_error": false
+        },
+        { "type": "text", "text": "Docs and changelog are updated." }
+      ]
+    },
+    {
+      "id": "turn-3",
+      "role": "system",
+      "timestamp": "2026-10-01T08:00:13Z",
+      "blocks": [{ "type": "turn_error", "message": "API Error: 503" }]
+    },
+    {
+      "id": "turn-4",
+      "role": "user",
+      "timestamp": "2026-10-01T08:01:00Z",
+      "blocks": [
+        { "type": "image", "data": "aGVsbG8=", "mime_type": "image/png" }
+      ]
+    },
+    {
+      "id": "turn-5",
+      "role": "assistant",
+      "timestamp": "2026-10-01T08:01:04Z",
+      "blocks": [
+        {
+          "type": "tool_use",
+          "tool_use_id": "call-multi",
+          "tool_name": "MultiEdit",
+          "input_preview": "{\"file_path\":\"/repo/src/b.ts\",\"edits\":[{\"old_string\":\"x\",\"new_string\":\"y\"}]}",
+          "status": "completed",
+          "meta": { "codeg.note": "kept as-is" }
+        },
+        { "type": "image", "data": "aGVsbG8=", "mime_type": "image/png" },
+        { "type": "text", "text": "Done." }
+      ]
+    },
+    {
+      "id": "turn-6",
+      "role": "user",
+      "timestamp": "2026-10-01T08:02:00Z",
+      "blocks": [
+        { "type": "text", "text": "   " },
+        { "type": "text", "text": "the label is the blank block above" }
+      ]
+    },
+    {
+      "id": "turn-7",
+      "role": "assistant",
+      "timestamp": "2026-10-01T08:02:03Z",
+      "blocks": [{ "type": "text", "text": "Nothing to change." }]
+    }
+  ],
+  "outline": [
+    {
+      "id": "turn-0",
+      "role": "user",
+      "timestamp": "2026-10-01T08:00:00Z",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "  Make the parser stream its output, then update the docs and the changelog so both describe the new behaviour  "
+        }
+      ]
+    },
+    {
+      "id": "turn-1",
+      "role": "assistant",
+      "timestamp": "2026-10-01T08:00:05Z",
+      "blocks": [
+        {
+          "type": "tool_use",
+          "tool_use_id": "call-edit",
+          "tool_name": "Edit",
+          "input_preview": "{\"file_path\":\"/repo/src/parser.rs\",\"old_string\":\"fn parse() {}\\n\",\"new_string\":\"fn parse() {\\n    stream();\\n}\\n\"}"
+        },
+        {
+          "type": "tool_result",
+          "tool_use_id": "call-edit",
+          "output_preview": "The file /repo/src/parser.rs has been updated.\n@@ -10,1 +10,3 @@\n-fn parse() {}\n+fn parse() {\n+    stream();\n+}",
+          "is_error": false
+        },
+        {
+          "type": "tool_use",
+          "tool_use_id": "call-read",
+          "tool_name": "Read",
+          "input_preview": "{\"file_path\":\"/repo/src/lib.rs\"}"
+        },
+        {
+          "type": "tool_use",
+          "tool_use_id": "call-write",
+          "tool_name": "Write",
+          "input_preview": "{\"file_path\":\"/repo/docs/streaming.md\",\"content\":\"# Streaming\\n\\nThe parser streams.\\n\"}"
+        }
+      ]
+    },
+    {
+      "id": "turn-2",
+      "role": "assistant",
+      "timestamp": "2026-10-01T08:00:12Z",
+      "blocks": [
+        {
+          "type": "tool_use",
+          "tool_use_id": "call-retry",
+          "tool_name": "Edit",
+          "input_preview": "{\"file_path\":\"/repo/CHANGELOG.md\",\"old_string\":\"## Unreleased\\n\",\"new_string\":\"## Unreleased\\n\\n- Streaming parser.\\n\"}"
+        },
+        {
+          "type": "tool_result",
+          "tool_use_id": "call-retry",
+          "output_preview": "@@ -1,1 +1,3 @@\n ## Unreleased\n+\n+- Streaming parser.",
+          "is_error": false
+        },
+        {
+          "type": "tool_use",
+          "tool_use_id": "call-plain",
+          "tool_name": "Edit",
+          "input_preview": "{\"file_path\":\"/repo/README.md\",\"old_string\":\"old line\\n\",\"new_string\":\"new line\\n\"}"
+        },
+        {
+          "type": "tool_use",
+          "tool_use_id": "call-patch",
+          "tool_name": "apply_patch",
+          "input_preview": "{\"patch\":\"*** Begin Patch\\n*** Update File: src/a.ts\\n@@\\n-const a = 1\\n+const a = 2\\n*** End Patch\"}"
+        },
+        {
+          "type": "tool_result",
+          "tool_use_id": "call-patch",
+          "output_preview": "Success.\r@@ -1,1 +1,1 @@",
+          "is_error": false
+        }
+      ]
+    },
+    {
+      "id": "turn-3",
+      "role": "system",
+      "timestamp": "2026-10-01T08:00:13Z",
+      "blocks": []
+    },
+    {
+      "id": "turn-4",
+      "role": "user",
+      "timestamp": "2026-10-01T08:01:00Z",
+      "blocks": []
+    },
+    {
+      "id": "turn-5",
+      "role": "assistant",
+      "timestamp": "2026-10-01T08:01:04Z",
+      "blocks": [
+        {
+          "type": "tool_use",
+          "tool_use_id": "call-multi",
+          "tool_name": "MultiEdit",
+          "input_preview": "{\"file_path\":\"/repo/src/b.ts\",\"edits\":[{\"old_string\":\"x\",\"new_string\":\"y\"}]}",
+          "status": "completed",
+          "meta": { "codeg.note": "kept as-is" }
+        }
+      ]
+    },
+    {
+      "id": "turn-6",
+      "role": "user",
+      "timestamp": "2026-10-01T08:02:00Z",
+      "blocks": [{ "type": "text", "text": "   " }]
+    },
+    {
+      "id": "turn-7",
+      "role": "assistant",
+      "timestamp": "2026-10-01T08:02:03Z",
+      "blocks": []
+    }
+  ]
+}

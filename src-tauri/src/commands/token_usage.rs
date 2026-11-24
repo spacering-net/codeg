@@ -42,7 +42,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
 
@@ -104,7 +104,68 @@ const TOP_CONVERSATIONS: usize = 8;
 ///   counted via cumulative-counter deltas; Claude `Task` sub-agent transcripts
 ///   counted against the session that launched them; and facts anchored at the
 ///   turn's own timestamp instead of its last tool result.
-const FACT_SCHEMA_VERSION: &str = "2";
+/// * `3` — Qoder's cached prefix counted once instead of twice. Its transcripts
+///   carry Anthropic FIELD NAMES over OpenAI SEMANTICS, so `input_tokens` is
+///   the whole prompt and `cache_read_input_tokens` is a subset of it; summing
+///   the two (which every shared helper does, because for Claude they are
+///   disjoint) inflated input and total by the cached amount. See
+///   `parsers::qoder::qoder_turn_usage`.
+/// * `4` — Codex cache writes split out of input. Codex's `input_tokens` is
+///   the whole prompt: besides the cache read it includes
+///   `cache_write_input_tokens`, which some providers and gateways report
+///   (codeg's own bound provider among them) and OpenAI's API leaves at 0.
+///   Only the read was split out, so every write counted as fresh input and
+///   the cache-write column stayed 0. Totals are unchanged; the columns are
+///   not.
+///   See `parsers::codex::codex_usage_counters`.
+/// * `5` — Qoder sub-agent spend counted. Each delegated run writes its own
+///   transcript (`<sessionId>/subagents/agent-*.jsonl`) and nothing read it,
+///   so a session that delegated work was short by everything its
+///   sub-agents spent. Now each call is deduped by `message.id`, has its
+///   cached prefix split out, and lands on the turn current at its own
+///   timestamp — totals grow for unchanged transcripts. The same release
+///   made a Qoder session's model its LAST one instead of its first, which
+///   is what a turn naming no model falls back to. See
+///   `parsers::qoder::attribute_subagent_usage`.
+/// * `6` — Claude fork sub-agents counted from their own work on. A
+///   `subagent_type: "fork"` transcript opens with a copy of the context it
+///   inherited — the parent's launching record, or a launching subagent's
+///   whole history — with the original `message.id`s and usage, which were
+///   already counted where they were spent; reading the file whole counted
+///   them again. Forks are on by default in the terminal since CLI 2.1.232
+///   and in every Agent SDK session since 2.1.302, so unchanged transcripts
+///   read differently now. See `parsers::claude::is_fork_directive_record`.
+/// * `7` — TRAE CLI usage counted from its native `token_usage_record` rows.
+///   TRAE's ACP `usage_update` is only context occupancy, and codeg records
+///   none of the counters its prompt response carries (which leave out
+///   sub-agents anyway), so both the built-in and pre-integration custom
+///   `traecli` sessions previously wrote no facts. Rollout `thread_id` is the
+///   ACP session id, which makes the native counters an exact enrichment of
+///   codeg's ACP-projected history; each sub-agent's own rollout is read too,
+///   and its spend lands on the turn that launched it. See
+///   `parsers::trae_usage`.
+/// * `9` — the usage a turn end reports is kept when no open reply is there
+///   to carry it: a prompt that produced no text or tools, or a reply that a
+///   relayed user message closed before the turn ended. Such usage used to be
+///   dropped. It comes from ZCode's turn metrics and, for custom agents, from
+///   the official Claude adapter's prompt response. See
+///   `parsers::acp_native::project_turns`. (`8` is skipped: preview builds of
+///   an earlier proposal wrote it.)
+///
+/// Only the accounting stored in `token_usage_turn` counts: the four token
+/// counters, the duration and the timestamp. A conversation's context WINDOW is
+/// not stored here (nor anywhere else — `SessionStats` is recomputed by the
+/// parser on every read), so changing how a window is inferred needs no bump;
+/// it reaches every existing session the moment it ships.
+///
+/// Nor does a change to the DATA a transcript carries: shipping Qoder's
+/// `QODER_EXPOSE_TOKEN_USAGE` launch env only affects turns recorded after it,
+/// which are new rows either way. `3` is here because the same release also
+/// changed how an UNCHANGED transcript is read — and Qoder sessions with real
+/// counters predate it, since a custom/BYO model has always exposed them and
+/// the parser reads every session under `~/.qoder/projects`, not just the ones
+/// codeg launched.
+const FACT_SCHEMA_VERSION: &str = "9";
 
 const FACT_SCHEMA_VERSION_KEY: &str = "token_usage_fact_schema_version";
 
@@ -286,21 +347,29 @@ fn utc_from_local_naive(n: NaiveDateTime, offset_minutes: i32) -> DateTime<Utc> 
     DateTime::<Utc>::from_naive_utc_and_offset(n - Duration::minutes(offset_minutes as i64), Utc)
 }
 
-/// The first local calendar day of the bucket `date` falls in.
-fn bucket_start_date(date: NaiveDate, bucket: TokenUsageBucket) -> NaiveDate {
-    match bucket {
+/// Local start of the bucket the local instant `at` falls in. Hour buckets
+/// truncate to the hour; the calendar buckets start at a local midnight.
+fn bucket_start(at: NaiveDateTime, bucket: TokenUsageBucket) -> NaiveDateTime {
+    let date = at.date();
+    let day = match bucket {
+        TokenUsageBucket::Hour => {
+            return date.and_hms_opt(at.hour(), 0, 0).unwrap_or(at);
+        }
         TokenUsageBucket::Day => date,
         TokenUsageBucket::Week => {
             date - Duration::days(date.weekday().num_days_from_monday() as i64)
         }
         // `with_day(1)` on a valid date always yields a valid date.
         TokenUsageBucket::Month => date.with_day(1).unwrap_or(date),
-    }
+    };
+    day.and_time(NaiveTime::MIN)
 }
 
-/// The bucket immediately after the one starting at `date`.
-fn next_bucket_date(date: NaiveDate, bucket: TokenUsageBucket) -> NaiveDate {
-    match bucket {
+/// The bucket immediately after the one starting at `start`.
+fn next_bucket_start(start: NaiveDateTime, bucket: TokenUsageBucket) -> NaiveDateTime {
+    let date = start.date();
+    let next_day = match bucket {
+        TokenUsageBucket::Hour => return start + Duration::hours(1),
         TokenUsageBucket::Day => date + Duration::days(1),
         TokenUsageBucket::Week => date + Duration::days(7),
         TokenUsageBucket::Month => {
@@ -311,13 +380,15 @@ fn next_bucket_date(date: NaiveDate, bucket: TokenUsageBucket) -> NaiveDate {
             };
             NaiveDate::from_ymd_opt(y, m, 1).unwrap_or(date + Duration::days(31))
         }
-    }
+    };
+    next_day.and_time(NaiveTime::MIN)
 }
 
-fn bucket_key(date: NaiveDate, bucket: TokenUsageBucket) -> String {
+fn bucket_key(start: NaiveDateTime, bucket: TokenUsageBucket) -> String {
     match bucket {
-        TokenUsageBucket::Month => format!("{:04}-{:02}", date.year(), date.month()),
-        _ => date.format("%Y-%m-%d").to_string(),
+        TokenUsageBucket::Hour => start.format("%Y-%m-%dT%H").to_string(),
+        TokenUsageBucket::Month => format!("{:04}-{:02}", start.year(), start.month()),
+        _ => start.format("%Y-%m-%d").to_string(),
     }
 }
 
@@ -411,7 +482,7 @@ pub(crate) fn aggregate_report(
     let bucket = opts.bucket;
 
     let mut totals = Acc::default();
-    let mut by_bucket: HashMap<NaiveDate, Acc> = HashMap::new();
+    let mut by_bucket: HashMap<NaiveDateTime, Acc> = HashMap::new();
     let mut by_folder: HashMap<i32, Acc> = HashMap::new();
     let mut by_agent: HashMap<String, Acc> = HashMap::new();
     let mut by_model: HashMap<String, Acc> = HashMap::new();
@@ -427,7 +498,7 @@ pub(crate) fn aggregate_report(
 
         totals.add(row);
         by_bucket
-            .entry(bucket_start_date(date, bucket))
+            .entry(bucket_start(local, bucket))
             .or_default()
             .add(row);
         by_folder.entry(row.folder_id).or_default().add(row);
@@ -590,7 +661,7 @@ fn sort_breakdown(items: &mut [TokenUsageBreakdownItem]) {
 /// no activity, so the chart's x-axis carries real gaps instead of silently
 /// closing them up.
 fn build_series(
-    by_bucket: &HashMap<NaiveDate, Acc>,
+    by_bucket: &HashMap<NaiveDateTime, Acc>,
     opts: &AggregateOptions<'_>,
     first_activity: Option<DateTime<Utc>>,
     last_activity: Option<DateTime<Utc>>,
@@ -598,13 +669,13 @@ fn build_series(
     let tz = opts.tz_offset_minutes;
     let bucket = opts.bucket;
 
-    let point_of = |date: NaiveDate, acc: Option<&Acc>| {
-        let next = next_bucket_date(date, bucket);
+    let point_of = |start: NaiveDateTime, acc: Option<&Acc>| {
+        let next = next_bucket_start(start, bucket);
         let acc = acc.cloned().unwrap_or_default();
         TokenUsagePoint {
-            bucket_key: bucket_key(date, bucket),
-            start: utc_from_local_naive(date.and_hms_opt(0, 0, 0).unwrap_or_default(), tz),
-            end: utc_from_local_naive(next.and_hms_opt(0, 0, 0).unwrap_or_default(), tz),
+            bucket_key: bucket_key(start, bucket),
+            start: utc_from_local_naive(start, tz),
+            end: utc_from_local_naive(next, tz),
             input_tokens: acc.input,
             output_tokens: acc.output,
             cache_creation_tokens: acc.cache_create,
@@ -615,8 +686,8 @@ fn build_series(
         }
     };
 
-    let sparse = |by_bucket: &HashMap<NaiveDate, Acc>| {
-        let mut dates: Vec<NaiveDate> = by_bucket.keys().copied().collect();
+    let sparse = |by_bucket: &HashMap<NaiveDateTime, Acc>| {
+        let mut dates: Vec<NaiveDateTime> = by_bucket.keys().copied().collect();
         dates.sort_unstable();
         dates
             .into_iter()
@@ -638,8 +709,8 @@ fn build_series(
         return sparse(by_bucket);
     };
 
-    let first = bucket_start_date(local_naive(lo, tz).date(), bucket);
-    let last = bucket_start_date(local_naive(hi_inclusive, tz).date(), bucket);
+    let first = bucket_start(local_naive(lo, tz), bucket);
+    let last = bucket_start(local_naive(hi_inclusive, tz), bucket);
     if last < first {
         return sparse(by_bucket);
     }
@@ -654,7 +725,7 @@ fn build_series(
             // silently hide the tail.
             return sparse(by_bucket);
         }
-        cursor = next_bucket_date(cursor, bucket);
+        cursor = next_bucket_start(cursor, bucket);
     }
     out
 }
@@ -857,10 +928,17 @@ pub async fn token_usage_status_core(
     let counts = usage_service::sync_counts(conn)
         .await
         .map_err(AppCommandError::from)?;
+    let schema = app_metadata_service::get_value(conn, FACT_SCHEMA_VERSION_KEY)
+        .await
+        .map_err(AppCommandError::from)?;
     Ok(TokenUsageSyncStatus {
         total_conversations: counts.total_conversations,
         synced_conversations: counts.synced_conversations,
-        stale_conversations: counts.stale_conversations,
+        stale_conversations: if schema.as_deref() != Some(FACT_SCHEMA_VERSION) {
+            counts.total_conversations
+        } else {
+            counts.stale_conversations
+        },
         fact_rows: counts.fact_rows,
         last_synced_at: counts.last_synced_at,
         running: SYNC_RUNNING.load(std::sync::atomic::Ordering::Relaxed),
@@ -1179,7 +1257,7 @@ pub async fn token_usage_sync(
     db: tauri::State<'_, crate::db::AppDatabase>,
     mode: Option<TokenUsageSyncMode>,
 ) -> Result<TokenUsageSyncResult, AppCommandError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     token_usage_sync_core(&db.conn, &emitter, mode.unwrap_or_default()).await
 }
 
@@ -1338,6 +1416,10 @@ mod tests {
                 parent_tool_use_id: None,
                 delegation_call_id: None,
                 origin_cwd: None,
+                assistant_id: None,
+                source: None,
+                assistant_name: None,
+                tag_ids: Vec::new(),
             },
             turns,
             session_stats: stats,
@@ -1346,6 +1428,7 @@ mod tests {
             turns_offset: None,
             turns_total: None,
             assistant_turns_before_offset: None,
+            user_turns_before_offset: None,
             prefix_hash: None,
             uncovered_prefix_max_ts: None,
         }
@@ -1563,6 +1646,48 @@ mod tests {
             &opts(&labels, TokenUsageBucket::Week, 0, None, None),
         );
         assert_eq!(report.series[0].bucket_key, "2026-07-27");
+    }
+
+    #[test]
+    fn hour_buckets_densify_a_rolling_window_in_local_time() {
+        let labels = HashMap::new();
+        // UTC+8: 01:30Z is 09:30 local, 03:10Z is 11:10 local.
+        let rows = vec![
+            row("2026-08-01T01:30:00Z", 10),
+            row("2026-08-01T01:59:00Z", 5),
+            row("2026-08-01T03:10:00Z", 20),
+        ];
+        let report = aggregate_report(
+            &rows,
+            &[],
+            &opts(
+                &labels,
+                TokenUsageBucket::Hour,
+                480,
+                // Local 09:00 – 12:00, exclusive end on an hour boundary.
+                Some(ts("2026-08-01T01:00:00Z")),
+                Some(ts("2026-08-01T04:00:00Z")),
+            ),
+        );
+        let keys: Vec<&str> = report.series.iter().map(|p| p.bucket_key.as_str()).collect();
+        assert_eq!(keys, ["2026-08-01T09", "2026-08-01T10", "2026-08-01T11"]);
+        let tokens: Vec<u64> = report.series.iter().map(|p| p.total_tokens).collect();
+        assert_eq!(tokens, [15, 0, 20]);
+        assert_eq!(report.series[0].start, ts("2026-08-01T01:00:00Z"));
+        assert_eq!(report.series[0].end, ts("2026-08-01T02:00:00Z"));
+    }
+
+    #[test]
+    fn hour_buckets_cross_local_midnight() {
+        let labels = HashMap::new();
+        let rows = vec![row("2026-08-01T23:30:00Z", 10), row("2026-08-02T00:05:00Z", 20)];
+        let report = aggregate_report(
+            &rows,
+            &[],
+            &opts(&labels, TokenUsageBucket::Hour, 0, None, None),
+        );
+        let keys: Vec<&str> = report.series.iter().map(|p| p.bucket_key.as_str()).collect();
+        assert_eq!(keys, ["2026-08-01T23", "2026-08-02T00"]);
     }
 
     #[test]

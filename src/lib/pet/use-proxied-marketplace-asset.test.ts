@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from "@testing-library/react"
+import { act, renderHook, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 vi.mock("./api", () => ({ fetchMarketplaceAsset: vi.fn() }))
@@ -10,8 +10,8 @@ let blobSeq = 0
 const created: string[] = []
 const revoked: string[] = []
 vi.mock("./sprite-url", () => ({
-  createPetSpriteObjectUrl: vi.fn((asset: { dataBase64: string }) => {
-    const url = `blob:${asset.dataBase64}#${blobSeq++}`
+  createPetSpriteObjectUrl: vi.fn(() => {
+    const url = `blob:pet-${blobSeq++}`
     created.push(url)
     return url
   }),
@@ -31,6 +31,13 @@ const mockFetch = vi.mocked(fetchMarketplaceAsset)
 
 function asset(data: string): PetSpriteAsset {
   return { mime: "image/webp", dataBase64: data }
+}
+
+async function viewAsset(url: string): Promise<void> {
+  const hook = renderHook(() => useProxiedMarketplaceAsset(url))
+  await act(async () => {})
+  expect(hook.result.current.src).toBeTruthy()
+  hook.unmount()
 }
 
 function deferred<T>() {
@@ -118,6 +125,59 @@ describe("useProxiedMarketplaceAsset", () => {
     expect(mockFetch).toHaveBeenCalledTimes(2)
   })
 
+  it("releases least recently used posters across marketplace pages", async () => {
+    mockFetch.mockResolvedValue(asset("AAAA"))
+    const poster = (index: number) => `https://codex-pets.net/v/${index}.webp`
+
+    for (let i = 0; i < 64; i++) await viewAsset(poster(i))
+    await viewAsset(poster(0)) // Touch it before adding a 65th distinct poster.
+    await viewAsset(poster(64))
+    await viewAsset(poster(0))
+    await viewAsset(poster(1))
+
+    expect(
+      mockFetch.mock.calls.filter(([url]) => url === poster(0))
+    ).toHaveLength(1)
+    expect(
+      mockFetch.mock.calls.filter(([url]) => url === poster(1))
+    ).toHaveLength(2)
+  })
+
+  it("evicts old previews when their combined payload exceeds the cache budget", async () => {
+    const urls = ["A", "B", "C", "D", "E"].map(
+      (name) => `https://codex-pets.net/v/${name}.webp`
+    )
+    mockFetch.mockImplementation(async (url) =>
+      asset(url.slice(-6, -5).repeat(2 * 1024 * 1024))
+    )
+
+    for (const url of urls) await viewAsset(url)
+    await viewAsset(urls[4]!)
+    expect(mockFetch).toHaveBeenCalledTimes(5)
+
+    await viewAsset(urls[0]!)
+    expect(mockFetch).toHaveBeenCalledTimes(6)
+    expect(mockFetch).toHaveBeenLastCalledWith(urls[0])
+  })
+
+  it("shares an oversized preview in flight but does not retain it after use", async () => {
+    const url = "https://codex-pets.net/v/large.webp"
+    const response = deferred<PetSpriteAsset>()
+    mockFetch.mockReturnValue(response.promise)
+    const first = renderHook(() => useProxiedMarketplaceAsset(url))
+    const second = renderHook(() => useProxiedMarketplaceAsset(url))
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+    await act(async () => response.resolve(asset("A".repeat(9 * 1024 * 1024))))
+    expect(first.result.current.src).toBeTruthy()
+    expect(second.result.current.src).toBeTruthy()
+    expect(first.result.current.src).not.toBe(second.result.current.src)
+    first.unmount()
+    second.unmount()
+
+    await viewAsset(url)
+    expect(mockFetch).toHaveBeenCalledTimes(2)
+  })
+
   it("does not mint a blob when unmounted before the fetch settles", async () => {
     const d = deferred<PetSpriteAsset>()
     mockFetch.mockReturnValue(d.promise)
@@ -126,9 +186,8 @@ describe("useProxiedMarketplaceAsset", () => {
       useProxiedMarketplaceAsset("https://codex-pets.net/slow/poster.webp")
     )
     unmount() // cancel before settle
-    d.resolve(asset("LATE"))
-    await Promise.resolve()
-    await Promise.resolve()
+    // Flush the whole load chain so the late consumer callback actually runs.
+    await act(async () => d.resolve(asset("LATE")))
 
     expect(created).toHaveLength(0)
     expect(revoked).toHaveLength(0)

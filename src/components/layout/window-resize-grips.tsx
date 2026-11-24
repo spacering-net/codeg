@@ -98,6 +98,7 @@ export function WindowResizeGrips() {
 
   useEffect(() => {
     if (!isLinux || !isDesktop()) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- browser-only isDesktop() read after mount (hydration-safe)
       setEnabled(false)
       return
     }

@@ -114,6 +114,31 @@ pub const MANAGED_SECTIONS: &[ManagedSection] = &[
         live_path: |_| crate::commands::experts::central_experts_dir(),
     },
     ManagedSection {
+        // Harness plugins: every installed revision's files, which the
+        // agents' hosts load in place (`harness::plugins`), with the
+        // operations' journals. One state with the record below and with
+        // the skills-only members in the skill store above
+        // (`skills/.plugins/<plugin>/`, packed with `skills`): a restore of
+        // any of the three marks every agent of every plugin for repair
+        // (`restore::mark_plugins_restored`), never leaves them silently
+        // apart. Swapped only when the archive has it: a backup taken
+        // before any plugin was installed leaves this machine's plugins (and
+        // the hosts loading them) as they are.
+        id: "plugins",
+        kind: SectionKind::Dir,
+        policy: SectionPolicy::ReplaceIfPresent,
+        live_path: |_| crate::harness::plugins::PluginsCtx::user().root,
+    },
+    ManagedSection {
+        // The plugins record (`~/.codeg/harness/plugins.json`): which
+        // revision each plugin is at and how every agent has it. Unlike the
+        // MCP record beside it, its files travel with it (`plugins`).
+        id: "harness-plugins.json",
+        kind: SectionKind::File,
+        policy: SectionPolicy::ReplaceIfPresent,
+        live_path: |_| crate::harness::plugins::PluginsCtx::user().record,
+    },
+    ManagedSection {
         id: "tokens.json",
         kind: SectionKind::File,
         policy: SectionPolicy::ReplaceIfPresent,
@@ -165,11 +190,18 @@ pub fn normalize_section_ids(declared: &[String]) -> Vec<String> {
 /// (`uploads/.tmp/`) and any `.codeg-*` directory (restore staging / safety
 /// snapshots), which must never be archived even if a data-dir layout ever
 /// nests one inside a section root.
+///
+/// Kept: the ownership marker a skill pack writes into its central copy
+/// (`skills/ui-render/.codeg-managed`). It is data, not scaffolding — without
+/// it a restored copy reads as the user's own skill.
 pub fn is_excluded_section_entry(rel: &Path) -> bool {
-    rel.components().any(|c| match c {
+    let last = rel.components().count().saturating_sub(1);
+    rel.components().enumerate().any(|(i, c)| match c {
         std::path::Component::Normal(s) => {
             let s = s.to_string_lossy();
-            s == ".tmp" || s.starts_with(".codeg")
+            s == ".tmp"
+                || (s.starts_with(".codeg")
+                    && !(i == last && s == crate::commands::generative_ui::MARKER_FILE))
         }
         _ => false,
     })
@@ -285,6 +317,26 @@ mod tests {
         }
     }
 
+    /// The plugins' state travels as two sections beside the skill store
+    /// (which holds their skills-only members): the store, swapped only
+    /// when the archive has it, and the record.
+    #[test]
+    fn the_plugins_store_and_record_are_sections() {
+        let store = find_section("plugins").expect("the plugin store");
+        assert_eq!(store.kind, SectionKind::Dir);
+        assert_eq!(store.policy, SectionPolicy::ReplaceIfPresent);
+        let record = find_section("harness-plugins.json").expect("the plugins record");
+        assert_eq!(record.kind, SectionKind::File);
+        assert_eq!(record.policy, SectionPolicy::ReplaceIfPresent);
+        let ctx = crate::harness::plugins::PluginsCtx::user();
+        let dir = Path::new("/unused");
+        assert_eq!((store.live_path)(dir), ctx.root);
+        assert_eq!((record.live_path)(dir), ctx.record);
+        assert!(find_section("skills").is_some());
+        // The MCP record stays out (its agents' configs do not travel).
+        assert!(MANAGED_SECTIONS.iter().all(|s| s.id != "harness-mcp.json"));
+    }
+
     #[test]
     fn legacy_ids_are_all_real_sections() {
         for id in LEGACY_SECTION_IDS {
@@ -312,5 +364,19 @@ mod tests {
             "a/.codeg-restore-staging/x"
         )));
         assert!(!is_excluded_section_entry(Path::new("a/b.png")));
+    }
+
+    #[test]
+    fn keeps_a_skill_packs_ownership_marker() {
+        assert!(!is_excluded_section_entry(Path::new(
+            "ui-render/.codeg-managed"
+        )));
+        // Only as a file name: a directory of that name is still scaffolding,
+        // and so is every other `.codeg-*` entry.
+        assert!(is_excluded_section_entry(Path::new(".codeg-managed/x")));
+        assert!(is_excluded_section_entry(Path::new(
+            "json-render/.codeg-links"
+        )));
+        assert!(is_excluded_section_entry(Path::new(".tmp/.codeg-managed")));
     }
 }

@@ -26,8 +26,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { FetchedModelPicker } from "@/components/settings/provider-models"
+import { useProviderModels } from "@/hooks/use-provider-models"
 import { loadDeepSeekModelCatalog, updateDeepSeekModelCatalog } from "@/lib/api"
-import type { DeepSeekCatalogModel, DeepSeekModelCatalog } from "@/lib/types"
+import type {
+  DeepSeekCatalogModel,
+  DeepSeekModelCatalog,
+  ListedProviderModel,
+} from "@/lib/types"
 
 /** Launch default the agent starts every new session on when the raw env
  *  editor sets nothing (`readEnv` in deepseek-acp). A catalog that drops it is
@@ -35,7 +41,11 @@ import type { DeepSeekCatalogModel, DeepSeekModelCatalog } from "@/lib/types"
  *  would then open on a model missing from its own dropdown, so the editor
  *  says so. */
 const DEEPSEEK_LAUNCH_MODEL_ENV = "DEEPSEEK_ACP_MODEL"
-const DEEPSEEK_DEFAULT_LAUNCH_MODEL = "deepseek-v4-flash"
+const DEEPSEEK_DEFAULT_LAUNCH_MODEL = "deepseek-flash"
+
+/** The agent's named low-detail pixel tier, accepted wherever a pixel count is
+ *  (`z.union([z.number(), "low"])`); it resolves to 512×512. */
+const IMAGE_PIXEL_BUDGET_LOW = "low"
 
 /** JS `Number.MAX_SAFE_INTEGER` — the agent judges every numeric field with
  *  `Number.isSafeInteger`, and a section it cannot resolve is dropped whole. */
@@ -74,10 +84,45 @@ export function validateDeepSeekModels(
     if (!positive(model.contextWindow))
       return { kind: "badContextWindow", index, id }
     if (!positive(model.maxTokens)) return { kind: "badMaxTokens", index, id }
-    if (!positive(model.imagePixelBudget) || !positive(model.imageMaxBytes))
+    // The pixel budget also takes the named tier, which no numeric check can
+    // judge — only a count reaches `positive`.
+    const budget = model.imagePixelBudget
+    if (budget !== IMAGE_PIXEL_BUDGET_LOW && !positive(budget))
+      return { kind: "badImageLimit", index, id }
+    if (!positive(model.imageMaxBytes))
       return { kind: "badImageLimit", index, id }
   }
   return null
+}
+
+/** Which KIND of pixel budget an entry expresses: a count (possibly none yet,
+ *  which inherits) or the agent's named tier. Deliberately two states and not
+ *  three — an "inherit" option distinct from an empty count would have nothing
+ *  to store, so picking it and picking a blank box would be the same edit. */
+export type DeepSeekImageBudgetMode = "pixels" | "low"
+
+export function deepSeekImageBudgetMode(
+  model: DeepSeekCatalogModel
+): DeepSeekImageBudgetMode {
+  return model.imagePixelBudget === IMAGE_PIXEL_BUDGET_LOW ? "low" : "pixels"
+}
+
+/**
+ * Switch an entry between the two kinds.
+ *
+ * Moving to a count CLEARS the field rather than seeding a number: empty is
+ * "inherit the agent's default" everywhere else in this editor, and seeding
+ * would write a value the user never chose.
+ */
+export function setDeepSeekImageBudgetMode(
+  model: DeepSeekCatalogModel,
+  mode: DeepSeekImageBudgetMode
+): DeepSeekCatalogModel {
+  if (mode === "low")
+    return { ...model, imagePixelBudget: IMAGE_PIXEL_BUDGET_LOW }
+  const next = { ...model }
+  delete next.imagePixelBudget
+  return next
 }
 
 /** Whether an entry declares image input. The three image request-limit fields
@@ -102,7 +147,6 @@ export function setDeepSeekImageSupport(
   delete next.inputModalities
   delete next.imagePixelBudget
   delete next.imageMaxBytes
-  delete next.imageDetail
   return next
 }
 
@@ -120,6 +164,9 @@ export function pruneEmpty(model: DeepSeekCatalogModel): DeepSeekCatalogModel {
     "maxTokens",
     "imagePixelBudget",
     "imageMaxBytes",
+    // Not editable here, but an entry that declares it must keep it: dropping
+    // it moves that model to the other system-prompt delivery mode silently.
+    "systemPromptUpdate",
   ] as const) {
     if (next[key] === undefined) delete next[key]
   }
@@ -139,7 +186,6 @@ export function pruneEmpty(model: DeepSeekCatalogModel): DeepSeekCatalogModel {
     delete next.inputModalities
     delete next.imagePixelBudget
     delete next.imageMaxBytes
-    delete next.imageDetail
   }
   return next
 }
@@ -161,6 +207,68 @@ function parseCount(raw: string): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined
 }
 
+/** The rows for the ids picked from the endpoint's list: a row that stays
+ *  keeps every field it had, a new one takes the name and context window the
+ *  endpoint lists, and a row still being typed (no id yet) is left alone. */
+export function rowsForPicks(
+  rows: DeepSeekCatalogModel[],
+  ids: string[],
+  listed: ListedProviderModel[]
+): DeepSeekCatalogModel[] {
+  const byId = new Map<string, DeepSeekCatalogModel>()
+  for (const row of rows) {
+    const id = row.id.trim()
+    if (id && !byId.has(id)) byId.set(id, row)
+  }
+  const picked = ids.map((id) => {
+    const kept = byId.get(id)
+    if (kept) return kept
+    const info = listed.find((m) => m.id === id)
+    return {
+      id,
+      ...(info?.displayName ? { name: info.displayName } : {}),
+      ...(info?.contextWindow ? { contextWindow: info.contextWindow } : {}),
+    }
+  })
+  return [...picked, ...rows.filter((row) => !row.id.trim())]
+}
+
+/** The first deepseek-acp release that no longer reads the catalog this
+ *  editor writes. */
+const DEEPSEEK_BUILT_IN_CATALOG_SINCE: readonly [number, number, number] = [
+  0, 10, 0,
+]
+
+/**
+ * Whether the deepseek-acp `version` still takes its model list from
+ * `llm-deepseek.models` in `$DSH_HOME/settings.yaml`, i.e. whether
+ * {@link DeepSeekModelListEditor} has any effect on it.
+ *
+ * Through 0.9.0 the bridge mounted the harness's file-backed settings
+ * provider, so that section overrode the catalog it launches with. 0.10.0
+ * (DSH 0.2) drops that provider: the official route takes the catalog built
+ * into the bridge, and the bridge's own document
+ * (`$DSH_HOME/deepseek-acp/settings.yaml`) holds only `llm-pi-ai` routes. A
+ * list saved here is then still written but never read.
+ *
+ * Only a version that parses as below 0.10.0 counts. Anything else, a missing
+ * or unparseable one included, is treated as the pinned release, which is
+ * later than that.
+ */
+export function deepseekReadsHarnessCatalog(
+  version: string | null | undefined
+): boolean {
+  const match = /^v?(\d+)\.(\d+)\.(\d+)/.exec(version?.trim() ?? "")
+  if (!match) return false
+  const parts = [match[1], match[2], match[3]].map(Number)
+  for (let i = 0; i < 3; i++) {
+    if (parts[i] !== DEEPSEEK_BUILT_IN_CATALOG_SINCE[i]) {
+      return parts[i] < DEEPSEEK_BUILT_IN_CATALOG_SINCE[i]
+    }
+  }
+  return false
+}
+
 /**
  * Editor for the DeepSeek Harness **deployment** model catalog:
  * `llm-deepseek.models` in `$DSH_HOME/settings.yaml`, which the agent's
@@ -172,14 +280,31 @@ function parseCount(raw: string): number | undefined {
  * FROM, which is otherwise a hand-edited YAML file: a gateway serving different
  * model ids, an internal deployment, or a dated preview build all need an entry
  * here before they can be picked at all.
+ *
+ * Only deepseek-acp 0.9.0 and earlier read that section; for later releases
+ * the settings page offers the provider-route editor instead, because the
+ * built-in catalog itself cannot be changed there.
  */
 export function DeepSeekModelListEditor({
   launchModel,
+  endpoint,
 }: {
   /** `DEEPSEEK_ACP_MODEL` from the agent's env, when it sets one. */
   launchModel?: string
+  /** The endpoint and key the agent's env routes to, to import its models. */
+  endpoint?: { baseUrl: string; apiKey: string }
 }) {
   const t = useTranslations("DeepSeekModelEditor")
+  // The endpoint's own models (it speaks OpenAI Chat Completions).
+  const providerModels = useProviderModels(
+    endpoint
+      ? {
+          protocol: "openai",
+          baseUrl: endpoint.baseUrl,
+          apiKey: endpoint.apiKey,
+        }
+      : null
+  )
 
   const [catalog, setCatalog] = useState<DeepSeekModelCatalog | null>(null)
   const [draft, setDraft] = useState<DeepSeekCatalogModel[]>([])
@@ -202,8 +327,8 @@ export function DeepSeekModelListEditor({
   }, [])
 
   useEffect(() => {
+    // `loading` starts true, and this mount-only load is its only producer.
     let alive = true
-    setLoading(true)
     void loadDeepSeekModelCatalog()
       .then((next) => {
         if (!alive) return
@@ -513,58 +638,70 @@ export function DeepSeekModelListEditor({
                       </div>
 
                       {deepSeekAcceptsImages(model) && (
-                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                          <div className="space-y-1">
-                            <Label className="text-2xs font-medium text-muted-foreground">
-                              {t("fieldImageDetail")}
-                            </Label>
-                            <Select
-                              value={model.imageDetail ?? "auto"}
-                              disabled={saving}
-                              onValueChange={(value) =>
-                                patch(index, {
-                                  ...model,
-                                  imageDetail: value as "auto" | "low",
-                                })
-                              }
-                            >
-                              <SelectTrigger className="h-8 text-xs">
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="auto" className="text-xs">
-                                  auto
-                                </SelectItem>
-                                <SelectItem value="low" className="text-xs">
-                                  low
-                                </SelectItem>
-                              </SelectContent>
-                            </Select>
-                          </div>
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                           <div className="space-y-1">
                             <Label className="text-2xs font-medium text-muted-foreground">
                               {t("fieldImagePixelBudget")}
                             </Label>
-                            <Input
-                              type="number"
-                              min={1}
-                              value={model.imagePixelBudget ?? ""}
-                              placeholder={t("placeholderInherit")}
+                            {/* The agent takes a count OR its named tier here,
+                                so the kind is picked first and only a count
+                                needs a number. An empty count inherits, the
+                                same as every other optional field below. */}
+                            <Select
+                              value={deepSeekImageBudgetMode(model)}
                               disabled={saving}
-                              onChange={(event) =>
-                                patch(index, {
-                                  ...model,
-                                  imagePixelBudget: parseCount(
-                                    event.target.value
-                                  ),
-                                })
+                              onValueChange={(value) =>
+                                patch(
+                                  index,
+                                  setDeepSeekImageBudgetMode(
+                                    model,
+                                    value as DeepSeekImageBudgetMode
+                                  )
+                                )
                               }
-                              aria-invalid={
-                                issue?.index === index &&
-                                issue.kind === "badImageLimit"
-                              }
-                              className="h-8 text-xs"
-                            />
+                            >
+                              <SelectTrigger
+                                className="h-8 text-xs"
+                                aria-label={t("fieldImagePixelBudget")}
+                              >
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="pixels" className="text-xs">
+                                  {t("imageBudgetPixels")}
+                                </SelectItem>
+                                <SelectItem value="low" className="text-xs">
+                                  {t("imageBudgetLow")}
+                                </SelectItem>
+                              </SelectContent>
+                            </Select>
+                            {deepSeekImageBudgetMode(model) === "pixels" && (
+                              <Input
+                                type="number"
+                                min={1}
+                                value={
+                                  typeof model.imagePixelBudget === "number"
+                                    ? model.imagePixelBudget
+                                    : ""
+                                }
+                                placeholder={t("placeholderInherit")}
+                                aria-label={t("imageBudgetPixels")}
+                                disabled={saving}
+                                onChange={(event) =>
+                                  patch(index, {
+                                    ...model,
+                                    imagePixelBudget: parseCount(
+                                      event.target.value
+                                    ),
+                                  })
+                                }
+                                aria-invalid={
+                                  issue?.index === index &&
+                                  issue.kind === "badImageLimit"
+                                }
+                                className="h-8 text-xs"
+                              />
+                            )}
                           </div>
                           <div className="space-y-1">
                             <Label className="text-2xs font-medium text-muted-foreground">
@@ -598,20 +735,35 @@ export function DeepSeekModelListEditor({
             </div>
           )}
 
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-7 text-xs"
-            disabled={saving}
-            onClick={() => {
-              setDraft((prev) => [...prev, { id: "" }])
-              setExpanded(null)
-            }}
-          >
-            <Plus className="mr-1 h-3.5 w-3.5" />
-            {t("addModel")}
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs"
+              disabled={saving}
+              onClick={() => {
+                setDraft((prev) => [...prev, { id: "" }])
+                setExpanded(null)
+              }}
+            >
+              <Plus className="mr-1 h-3.5 w-3.5" />
+              {t("addModel")}
+            </Button>
+            {endpoint && (
+              <FetchedModelPicker
+                state={providerModels}
+                configured={draft.map((m) => m.id.trim()).filter(Boolean)}
+                onConfirm={(ids) => {
+                  setDraft((prev) =>
+                    rowsForPicks(prev, ids, providerModels.models)
+                  )
+                  setExpanded(null)
+                }}
+                disabled={saving}
+              />
+            )}
+          </div>
 
           {issue && (
             <p className="text-2xs text-destructive">{issueMessage(issue)}</p>

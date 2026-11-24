@@ -21,7 +21,10 @@ pub enum ConversationStatus {
 /// excluded from the sidebar list entirely (no write path yet — reserved for
 /// the loop engine); `delegate` is a delegation child nested under its
 /// parent's tool-call view. Invariant: `kind == Delegate` ⟺ `parent_id IS NOT
-/// NULL`. Written once at insert, never updated.
+/// NULL`. Written once at insert, with one exception: a chat conversation the
+/// user moves into a project becomes `regular`
+/// (`conversation_service::relocate_conversations`) — it is an ordinary project
+/// conversation from then on.
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
 #[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
 #[serde(rename_all = "snake_case")]
@@ -66,13 +69,40 @@ pub struct Model {
     /// the sidebar's "Pinned" section (sorted by this timestamp descending).
     /// Pinning never bumps `updated_at` — it is a view preference, not activity.
     pub pinned_at: Option<DateTimeUtc>,
-    /// The working directory this conversation actually ran in, when that
-    /// differs from its (current) folder's path — written when a deleted task
-    /// worktree's conversations are re-parented to the project folder. The
+    /// The working directory this conversation's session was recorded in, when
+    /// that differs from its (current) folder's path — written when a deleted
+    /// task worktree's conversations are re-parented to the project folder, or
+    /// when the user moves a conversation to another project (see
+    /// `conversation_service::effective_origin_after_move`). The
     /// Gemini/Cline/OpenClaw stale-external-id fallback matches on
-    /// `origin_cwd ?? folder.path`. Always NULL for ordinary conversations.
+    /// `origin_cwd ?? folder.path`, and the chat scratch-dir GC keeps a dir a
+    /// live row remembers. NULL for conversations that never moved.
     pub origin_cwd: Option<String>,
+    /// The assistant a delegation child ran as; `None` for every other row.
+    /// Written once with the child, never updated, and deliberately not a
+    /// foreign key — the child keeps its identity even if the assistant row
+    /// is gone. See `m20261016_000002_conversation_assistant`.
+    pub assistant_id: Option<i32>,
+    /// JSON `AssistantRunSnapshot`: the assistant's name, options and
+    /// instructions as they were when the delegation started. A resume replays
+    /// this, never the assistant's current row.
+    pub assistant_snapshot: Option<String>,
+    /// Where the conversation was started from, when not the window:
+    /// [`SOURCE_CLI`] for a `codeg-cli` run. `None` otherwise. Text, so a
+    /// value from a newer build never stops an older one decoding the row.
+    /// See `m20261017_000002_conversation_source`.
+    pub source: Option<String>,
+    /// JSON `ConversationSelection`: this conversation's own selector state
+    /// (applied mode, pending composer mode, config option values), written
+    /// by the backend from the live session and replayed alone when the
+    /// conversation reconnects. `None` for rows from before the column (a
+    /// one-time fallback, then frozen). Never bumps `updated_at`. See
+    /// `m20261123_000001_conversation_selector_state`.
+    pub selector_state: Option<String>,
 }
+
+/// [`Model::source`] of a conversation a `codeg-cli` run started.
+pub const SOURCE_CLI: &str = "cli";
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {

@@ -9,6 +9,8 @@ import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { Badge } from "@/components/ui/badge"
 import { FolderAliasLabel } from "./folder-alias-label"
 import { InfoItem, SessionIdentityChips } from "./session-details-content"
+import { ConversationTagChip } from "./conversation-tag-chip"
+import { useResolvedTags } from "@/hooks/use-conversation-tags"
 
 interface SidebarConversationHoverDetailsProps {
   conversation: DbConversationSummary
@@ -49,7 +51,7 @@ function LtrValue({
  * Deliberately request-free. The sidebar card holds only a
  * `DbConversationSummary`, and everything here comes from it or from the
  * workspace store, so the bubble paints the instant it opens. Token usage and
- * the session/extension ids are NOT shown: those need a
+ * the session id and session index are NOT shown: those need a
  * `getFolderConversation` round-trip per conversation, which is what the
  * right-click "Session Details" dialog (`SessionDetailsContent`) is for.
  *
@@ -63,6 +65,8 @@ export function SidebarConversationHoverDetails({
 }: SidebarConversationHoverDetailsProps) {
   const t = useTranslations("Folder.sessionDetails")
   const tSidebar = useTranslations("Folder.sidebar")
+  const tTags = useTranslations("ConversationTags")
+  const tags = useResolvedTags(conversation.tag_ids)
 
   const folderId = conversation.folder_id
   // `allFolders` rather than `folders`: a conversation can live in a folder the
@@ -116,6 +120,20 @@ export function SidebarConversationHoverDetails({
           agentType={conversation.agent_type}
           model={model}
         />
+        {/* Every tag, wrapping: the row itself shows at most two. */}
+        {tags.length > 0 && (
+          <div
+            className="flex flex-wrap gap-1"
+            aria-label={tTags("tags")}
+            role="list"
+          >
+            {tags.map((tag) => (
+              <span key={tag.id} role="listitem" className="min-w-0 max-w-full">
+                <ConversationTagChip tag={tag} className="max-w-full" />
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* A plain stack rather than a grid: every field here is a folder, a
@@ -153,10 +171,11 @@ export function SidebarConversationHoverDetails({
         <InfoItem label={t("folderPath")}>
           <LtrValue>{folder?.path || none}</LtrValue>
         </InfoItem>
-        {/* Re-parented out of a removed worktree: the path above is where the
-            conversation lives NOW, so surface where it originally ran. */}
+        {/* Re-parented out of a removed worktree, or moved to another project
+            by the user: the path above is where the conversation lives NOW, so
+            surface where it originally ran. */}
         {conversation.origin_cwd && (
-          <InfoItem label={tSidebar("worktreeRemovedBadge")}>
+          <InfoItem label={tSidebar("originalWorkingDir")}>
             <LtrValue>{conversation.origin_cwd}</LtrValue>
           </InfoItem>
         )}

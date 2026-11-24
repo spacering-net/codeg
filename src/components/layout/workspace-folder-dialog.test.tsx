@@ -15,6 +15,7 @@ import { WorkspaceFolderDialog } from "./workspace-folder-dialog"
 const api = vi.hoisted(() => ({
   getHomeDirectory: vi.fn(),
   listDirectoryEntries: vi.fn(),
+  createDirectory: vi.fn(),
   listFolderLinks: vi.fn(),
   previewFolderLinks: vi.fn(),
   createFolderLinks: vi.fn(),
@@ -152,6 +153,130 @@ describe("WorkspaceFolderDialog — creation flow", () => {
 
     expect(toast.error).toHaveBeenCalled()
     expect(screen.getByRole("button", { name: "Next" })).toBeInTheDocument()
+  })
+
+  it("makes a new folder and opens it as the workspace", async () => {
+    api.listDirectoryEntries.mockImplementation((path: string) =>
+      Promise.resolve(
+        path === "/home/me" ? [dir("other", "/home/me/other")] : []
+      )
+    )
+    api.createDirectory.mockResolvedValue("/home/me/fresh")
+    openFolder.mockResolvedValue(folder({ path: "/home/me/fresh" }))
+    render(<Harness />)
+    await screen.findByText("other")
+
+    fireEvent.click(screen.getByRole("button", { name: "New folder" }))
+    const name = screen.getByRole("textbox", { name: "Folder name" })
+    fireEvent.change(name, { target: { value: "fresh" } })
+    await act(async () => {
+      fireEvent.keyDown(name, { key: "Enter" })
+    })
+
+    expect(api.createDirectory).toHaveBeenCalledWith("/home/me", "fresh")
+    await screen.findByDisplayValue("/home/me/fresh")
+    // Creating is not opening: that still waits for Next.
+    expect(openFolder).not.toHaveBeenCalled()
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    })
+    expect(openFolder).toHaveBeenCalledWith("/home/me/fresh")
+    expect(await screen.findByText("/home/me/fresh")).toBeInTheDocument()
+  })
+
+  it("does not offer a new folder when picking link targets", async () => {
+    render(<Harness manage={folder()} />)
+    fireEvent.click(await screen.findByRole("button", { name: /Add folders/ }))
+    await screen.findByRole("button", { name: "Go to parent directory" })
+    expect(
+      screen.queryByRole("button", { name: "New folder" })
+    ).not.toBeInTheDocument()
+  })
+
+  // Double-clicking a row opens it and moves on to the links step, which
+  // unmounts the browser without it ever going inactive. "Change" then brings
+  // up a new one. A late answer to the first must not land in the second.
+  it("keeps a later pick when a new folder lands after the browser has gone", async () => {
+    api.listDirectoryEntries.mockImplementation((path: string) =>
+      Promise.resolve(
+        path === "/home/me"
+          ? [dir("work", "/home/me/work"), dir("other", "/home/me/other")]
+          : []
+      )
+    )
+    let finish: (path: string) => void = () => {}
+    api.createDirectory.mockImplementation(
+      () =>
+        new Promise<string>((resolve) => {
+          finish = resolve
+        })
+    )
+    render(<Harness />)
+    await screen.findByText("work")
+    fireEvent.click(screen.getByRole("button", { name: "New folder" }))
+    const name = screen.getByRole("textbox", { name: "Folder name" })
+    fireEvent.change(name, { target: { value: "fresh" } })
+    await act(async () => {
+      fireEvent.keyDown(name, { key: "Enter" })
+    })
+
+    await act(async () => {
+      fireEvent.doubleClick(screen.getByRole("button", { name: "work" }))
+    })
+    fireEvent.click(await screen.findByRole("button", { name: "Change" }))
+    fireEvent.click(await screen.findByRole("button", { name: "other" }))
+    await screen.findByDisplayValue("/home/me/other")
+
+    await act(async () => {
+      finish("/home/me/fresh")
+    })
+
+    expect(screen.getByDisplayValue("/home/me/other")).toBeInTheDocument()
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    })
+    expect(openFolder).toHaveBeenLastCalledWith("/home/me/other")
+  })
+
+  it("keeps a later pick when a listing lands after the browser has gone", async () => {
+    let finishListing: (entries: DirectoryEntry[]) => void = () => {}
+    api.listDirectoryEntries.mockImplementation((path: string) => {
+      if (path === "/srv/slow") {
+        return new Promise<DirectoryEntry[]>((resolve) => {
+          finishListing = resolve
+        })
+      }
+      return Promise.resolve(
+        path === "/home/me"
+          ? [dir("work", "/home/me/work"), dir("other", "/home/me/other")]
+          : []
+      )
+    })
+    render(<Harness />)
+    await screen.findByText("work")
+    const pathBox = screen.getByDisplayValue("/home/me")
+    fireEvent.change(pathBox, { target: { value: "/srv/slow" } })
+    await act(async () => {
+      fireEvent.keyDown(pathBox, { key: "Enter" })
+    })
+
+    await act(async () => {
+      fireEvent.doubleClick(screen.getByRole("button", { name: "work" }))
+    })
+    fireEvent.click(await screen.findByRole("button", { name: "Change" }))
+    fireEvent.click(await screen.findByRole("button", { name: "other" }))
+    await screen.findByDisplayValue("/home/me/other")
+
+    await act(async () => {
+      finishListing([])
+    })
+
+    expect(screen.getByDisplayValue("/home/me/other")).toBeInTheDocument()
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Next" }))
+    })
+    expect(openFolder).toHaveBeenLastCalledWith("/home/me/other")
   })
 })
 

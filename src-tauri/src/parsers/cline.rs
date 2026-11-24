@@ -11,11 +11,213 @@ use crate::models::{
 
 use super::{
     backfill_turn_durations, compute_session_stats, folder_name_from_path, title_from_user_text,
-    truncate_str, AgentParser, ParseError,
+    truncate_str, AgentEnv, AgentParser, ParseError,
 };
 
 // ---------------------------------------------------------------------------
-// On-disk JSON structures
+// On-disk JSON structures — cline 3.x session store
+// ---------------------------------------------------------------------------
+//
+// cline 3.x keeps one directory per session under `~/.cline/data/sessions/`:
+//
+//   sessions/<id>/<id>.json            the manifest (below)
+//   sessions/<id>/<id>.messages.json   the transcript
+//   sessions/<id>/<other>.messages.json  one per agent-team teammate
+//   sessions/<id>/<id>.compaction.json   compacted history, when one exists
+//
+// `db/sessions.db` indexes the same records and is the only place a spawned
+// SUB-agent is written — those get a row and a sibling messages file, never a
+// manifest of their own. Listing manifests therefore yields exactly the root
+// sessions, which is what the index's own `rootOnly` filter selects, without
+// codeg opening a live SQLite store owned by another process.
+//
+// The pre-3.x layout (`state/taskHistory.json` + `tasks/<id>/`) is still read
+// as a fallback so history written by an older cline does not disappear.
+
+/// `sessions/<id>/<id>.json`. Mirrors the columns of the `sessions` table;
+/// only the fields codeg surfaces are declared.
+#[derive(Debug, Default, Deserialize)]
+struct SessionManifest {
+    #[serde(default)]
+    session_id: String,
+    #[serde(default)]
+    started_at: Option<String>,
+    #[serde(default)]
+    ended_at: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    workspace_root: Option<String>,
+    #[serde(default)]
+    prompt: Option<String>,
+    #[serde(default)]
+    metadata: Option<SessionMetadata>,
+    #[serde(default)]
+    messages_path: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct SessionMetadata {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    git: Option<SessionGit>,
+    /// What closed the session, when something other than its own process
+    /// did; see [`session_summary`]. Untyped, because a value of any other
+    /// type would fail the whole manifest and hide the session.
+    #[serde(default)]
+    terminal_marker_source: Option<serde_json::Value>,
+}
+
+/// The `terminal_marker_source` cline stamps on a session it closed because the
+/// process that owned it was gone (`reconcileDeadSessions`).
+const STALE_SESSION_RECONCILER: &str = "stale_session_reconciler";
+
+#[derive(Debug, Default, Deserialize)]
+struct SessionGit {
+    #[serde(default)]
+    branch: Option<String>,
+}
+
+/// `sessions/<id>/<id>.messages.json`.
+#[derive(Debug, Default, Deserialize)]
+struct SessionMessagesFile {
+    #[serde(default)]
+    updated_at: Option<String>,
+    #[serde(default)]
+    messages: Vec<SessionMessage>,
+}
+
+/// The same file read for its shape alone — how many messages, and when it
+/// was last written. Used by the listing, which needs neither the bodies nor
+/// the allocations they cost.
+#[derive(Debug, Default, Deserialize)]
+struct SessionMessagesCount {
+    #[serde(default)]
+    updated_at: Option<String>,
+    #[serde(default)]
+    messages: Vec<serde::de::IgnoredAny>,
+}
+
+/// One entry of the transcript's `messages` array. cline stores the model
+/// conversation itself, so the content blocks are Anthropic-shaped (`text`,
+/// `thinking`, `tool_use`, `tool_result`) and tool results arrive as
+/// `role:"user"` messages.
+#[derive(Debug, Deserialize)]
+struct SessionMessage {
+    role: String,
+    #[serde(default)]
+    content: serde_json::Value,
+    #[serde(default)]
+    ts: Option<i64>,
+    #[serde(default, rename = "modelInfo")]
+    model_info: Option<SessionModelInfo>,
+    #[serde(default)]
+    metrics: Option<SessionMetrics>,
+    /// Kept untyped: only `displayOnly` and `displayRole` are read, and a shape
+    /// change in any other key must not fail the whole file —
+    /// `read_messages_as` turns a parse error into an empty transcript.
+    #[serde(default)]
+    metadata: serde_json::Value,
+}
+
+impl SessionMessage {
+    /// Whether cline keeps this message out of every transcript it shows.
+    ///
+    /// cline injects user-role messages that are meant for the model, not the
+    /// reader, and flags them `metadata.displayRole: "system"`: hook context
+    /// blocks, the compaction summary, and (since 3.0.69) the nudge "Previous
+    /// turn ended unexpectedly. Continue from where you left off." that it
+    /// sends once when the AI SDK reports a finish reason it does not
+    /// recognise. `"status"` is the other role it never shows. Its TUI
+    /// hydration skips both (`apps/cli/src/tui/utils/hydrate-messages.ts`),
+    /// reading the role trimmed and lowercased like the SDK's
+    /// `resolveMessageDisplayRole`. None of these carries a `<user_input>`
+    /// wrapper, so without this check they would surface as text the user
+    /// typed (the nudge lands between the two halves of one reply).
+    fn is_hidden_from_display(&self) -> bool {
+        self.metadata
+            .get("displayRole")
+            .and_then(serde_json::Value::as_str)
+            .map(|role| role.trim().to_lowercase())
+            .is_some_and(|role| role == "system" || role == "status")
+    }
+
+    /// cline 3.0.65+ records a FAILED run as an extra `role:"assistant"`
+    /// message whose text is the error (`"API key expired."`), flagged
+    /// `metadata: {displayOnly: true, displayRole: "error"}`. It is not part of
+    /// the model conversation — cline keeps it out of agent state, compaction
+    /// and its own ACP history replay ("do not present display-only failures as
+    /// assistant responses"), and a live ACP turn never sends it as a message.
+    /// Live, the failure usually comes back as the `session/prompt` error, but
+    /// cline only checks for one after the turn's `send()` settles, so an error
+    /// event that arrives later is missed and the turn answers `end_turn` (seen
+    /// on 3.0.71 and 3.0.72 with a hub daemon an earlier process left running);
+    /// this record is written either way. Rendering it would put the error in the
+    /// model's mouth on every reopen, the same trap as the `<synthetic>` /
+    /// `isApiErrorMessage` records `parsers::claude` and `parsers::qoder` turn
+    /// into a failure line instead — which is what [`Self::display_error`]
+    /// feeds.
+    fn is_display_only(&self) -> bool {
+        self.metadata
+            .get("displayOnly")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+    }
+
+    /// The error a display-only `displayRole: "error"` message reports.
+    fn display_error(&self) -> Option<String> {
+        if self
+            .metadata
+            .get("displayRole")
+            .and_then(serde_json::Value::as_str)
+            != Some("error")
+        {
+            return None;
+        }
+        match &self.content {
+            serde_json::Value::String(text) => Some(text.clone()),
+            serde_json::Value::Array(blocks) => Some(
+                blocks
+                    .iter()
+                    .filter(|block| block.get("type").and_then(|t| t.as_str()) == Some("text"))
+                    .filter_map(|block| block.get("text").and_then(|t| t.as_str()))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct SessionModelInfo {
+    #[serde(default)]
+    id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionMetrics {
+    #[serde(default)]
+    input_tokens: Option<u64>,
+    /// Excludes reasoning tokens since cline 3.0.66 (upstream #14426 subtracts
+    /// them so its own totals stop counting them twice), and neither session
+    /// file records the reasoning count, so a reasoning model's output reads
+    /// lower here than in older transcripts: a 50-token completion with 30 of
+    /// reasoning is stored as 50 by 3.0.65 and as 20 by 3.0.67.
+    #[serde(default)]
+    output_tokens: Option<u64>,
+    #[serde(default)]
+    cache_read_tokens: Option<u64>,
+    #[serde(default)]
+    cache_write_tokens: Option<u64>,
+}
+
+// ---------------------------------------------------------------------------
+// On-disk JSON structures — pre-3.x task store (fallback)
 // ---------------------------------------------------------------------------
 
 /// One entry in `~/.cline/data/state/taskHistory.json`.
@@ -91,15 +293,28 @@ struct ApiTokenMetrics {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn cline_data_dir() -> PathBuf {
-    if let Ok(custom) = std::env::var("CLINE_DIR") {
-        let trimmed = custom.trim();
-        if !trimmed.is_empty() {
-            return PathBuf::from(trimmed);
-        }
+    cline_data_dir_for_env(&AgentEnv::inherited())
+}
+
+/// The data dir of the Cline launched with `env`, by Cline's own rule
+/// (`resolveClineDataDir`): `CLINE_DATA_DIR`, else `<CLINE_DIR>/data`, else
+/// `~/.cline/data`, each value trimmed.
+pub(crate) fn cline_data_dir_for_env(env: &AgentEnv) -> PathBuf {
+    let set = |key: &str| {
+        env.var(key)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    };
+    if let Some(data_dir) = set("CLINE_DATA_DIR") {
+        return PathBuf::from(data_dir);
     }
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".cline")
+    set("CLINE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".cline")
+        })
         .join("data")
 }
 
@@ -119,8 +334,13 @@ impl Default for ClineParser {
 
 impl ClineParser {
     pub fn new() -> Self {
+        Self::for_env(&AgentEnv::inherited())
+    }
+
+    /// The history of the Cline launched with `env`.
+    pub fn for_env(env: &AgentEnv) -> Self {
         Self {
-            base_dir: cline_data_dir(),
+            base_dir: cline_data_dir_for_env(env),
         }
     }
 
@@ -130,10 +350,343 @@ impl ClineParser {
     pub fn with_base_dir(base_dir: PathBuf) -> Self {
         Self { base_dir }
     }
+
+    fn sessions_dir(&self) -> PathBuf {
+        self.base_dir.join("sessions")
+    }
+
+    fn read_manifest(&self, session_id: &str) -> Option<SessionManifest> {
+        let path = self
+            .sessions_dir()
+            .join(session_id)
+            .join(format!("{session_id}.json"));
+        let raw = fs::read_to_string(path).ok()?;
+        let mut manifest: SessionManifest = serde_json::from_str(&raw).ok()?;
+        // A manifest whose `session_id` is missing or disagrees with its own
+        // directory is still readable — the directory name is the id every
+        // other path is built from, and the id codeg recorded as `external_id`.
+        if manifest.session_id != session_id {
+            manifest.session_id = session_id.to_string();
+        }
+        Some(manifest)
+    }
+
+    fn read_messages(&self, manifest: &SessionManifest) -> SessionMessagesFile {
+        self.read_messages_as(manifest)
+    }
+
+    fn read_messages_as<T: Default + serde::de::DeserializeOwned>(
+        &self,
+        manifest: &SessionManifest,
+    ) -> T {
+        let id = &manifest.session_id;
+        // The conventional path wins over the manifest's own `messages_path`:
+        // that field records the ABSOLUTE path the writing process saw, which
+        // stops being true the moment the store moves — `CLINE_DIR`, a
+        // restored backup, a test fixture. The recorded path stays as the
+        // fallback, for a layout this convention does not predict.
+        let conventional = self
+            .sessions_dir()
+            .join(id)
+            .join(format!("{id}.messages.json"));
+        let candidates = [
+            Some(conventional),
+            manifest
+                .messages_path
+                .as_deref()
+                .map(|p| p.trim())
+                .filter(|p| !p.is_empty())
+                .map(PathBuf::from),
+        ];
+        for path in candidates.into_iter().flatten() {
+            let Ok(raw) = fs::read_to_string(&path) else {
+                continue;
+            };
+            if let Ok(parsed) = serde_json::from_str::<T>(&raw) {
+                return parsed;
+            }
+        }
+        T::default()
+    }
+
+    /// Every root session in the 3.x store, newest-first ordering left to the
+    /// caller. A directory without a readable manifest is skipped rather than
+    /// failing the listing — a session being written right now is the common
+    /// case, and one unreadable session must not hide the rest.
+    fn list_session_store(&self) -> Vec<ConversationSummary> {
+        let Ok(entries) = fs::read_dir(self.sessions_dir()) else {
+            return Vec::new();
+        };
+
+        let mut summaries = Vec::new();
+        for entry in entries.flatten() {
+            if !entry.file_type().is_ok_and(|t| t.is_dir()) {
+                continue;
+            }
+            let Some(session_id) = entry.file_name().to_str().map(String::from) else {
+                continue;
+            };
+            let Some(manifest) = self.read_manifest(&session_id) else {
+                continue;
+            };
+            // Counting, not rendering: `SessionMessagesCount` drops every
+            // message body on the floor, so listing a store does not
+            // materialize every transcript in it.
+            let counted = self.read_messages_as::<SessionMessagesCount>(&manifest);
+            summaries.push(session_summary(
+                &manifest,
+                counted.updated_at.as_deref(),
+                counted.messages.len() as u32,
+            ));
+        }
+        summaries
+    }
+
+    fn session_detail(&self, manifest: &SessionManifest) -> ConversationDetail {
+        let conversation_id = manifest.session_id.clone();
+        let messages = self.read_messages(manifest);
+        let manifest_model = non_empty(manifest.model.clone());
+
+        // A message without a usable `ts` inherits the previous one's instead
+        // of `now`: stamping the current time mid-transcript reorders a
+        // reopened session and makes every gap look like it happened today.
+        let mut last_ts = manifest
+            .started_at
+            .as_deref()
+            .and_then(parse_iso8601)
+            .unwrap_or_else(Utc::now);
+
+        let mut turns: Vec<MessageTurn> = Vec::new();
+        let mut turn_counter = 0u32;
+        let next_turn_id = |counter: &mut u32| {
+            *counter += 1;
+            format!("{conversation_id}-{counter}")
+        };
+
+        for msg in &messages.messages {
+            let timestamp = match msg.ts.filter(|ts| *ts > 0).map(ts_to_datetime) {
+                Some(ts) => {
+                    last_ts = ts;
+                    ts
+                }
+                None => last_ts,
+            };
+            if msg.is_display_only() {
+                // A FAILED run closes its round on the error, as the failure
+                // line rather than as the model's reply.
+                if let Some(failure) = msg
+                    .display_error()
+                    .filter(|error| !error.trim().is_empty())
+                    .and_then(|error| {
+                        super::turn_error_message(
+                            next_turn_id(&mut turn_counter),
+                            &error,
+                            timestamp,
+                        )
+                    })
+                {
+                    turns.push(MessageTurn {
+                        id: failure.id,
+                        role: TurnRole::System,
+                        blocks: failure.content,
+                        timestamp: failure.timestamp,
+                        usage: None,
+                        duration_ms: None,
+                        model: None,
+                        completed_at: failure.completed_at,
+                        agent_message_id: None,
+                    });
+                }
+                continue;
+            }
+            if msg.is_hidden_from_display() {
+                continue;
+            }
+
+            match msg.role.as_str() {
+                "assistant" => {
+                    let blocks = parse_content_blocks(&msg.content, clean_session_text);
+                    if blocks.is_empty() {
+                        continue;
+                    }
+                    let model = msg
+                        .model_info
+                        .as_ref()
+                        .and_then(|info| non_empty(info.id.clone()))
+                        .or_else(|| manifest_model.clone());
+                    turns.push(MessageTurn {
+                        id: next_turn_id(&mut turn_counter),
+                        role: TurnRole::Assistant,
+                        blocks,
+                        timestamp,
+                        usage: msg.metrics.as_ref().map(session_usage),
+                        duration_ms: None,
+                        model,
+                        completed_at: Some(timestamp),
+                        agent_message_id: None,
+                    });
+                }
+                "user" => {
+                    let parsed = parse_session_user_parts(&msg.content);
+                    if !parsed.tool_results.is_empty() {
+                        turns.push(MessageTurn {
+                            id: next_turn_id(&mut turn_counter),
+                            role: TurnRole::System,
+                            blocks: parsed.tool_results,
+                            timestamp,
+                            usage: None,
+                            duration_ms: None,
+                            model: None,
+                            completed_at: Some(timestamp),
+                            agent_message_id: None,
+                        });
+                    }
+                    if !parsed.user_blocks.is_empty() {
+                        turns.push(MessageTurn {
+                            id: next_turn_id(&mut turn_counter),
+                            role: TurnRole::User,
+                            blocks: parsed.user_blocks,
+                            timestamp,
+                            usage: None,
+                            duration_ms: None,
+                            model: None,
+                            completed_at: Some(timestamp),
+                            agent_message_id: None,
+                        });
+                    }
+                }
+                _ => continue,
+            }
+        }
+
+        backfill_turn_durations(&mut turns, &[]);
+        let session_stats = compute_session_stats(&turns);
+        let summary = session_summary(
+            manifest,
+            messages.updated_at.as_deref(),
+            super::message_turn_count(&turns),
+        );
+
+        ConversationDetail {
+            summary,
+            turns,
+            session_stats,
+            transcript_watermark: None,
+        }
+    }
+}
+
+fn non_empty(value: Option<String>) -> Option<String> {
+    value.filter(|v| !v.trim().is_empty())
+}
+
+fn parse_iso8601(raw: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(raw.trim())
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc))
+}
+
+fn session_usage(metrics: &SessionMetrics) -> TurnUsage {
+    TurnUsage {
+        input_tokens: metrics.input_tokens.unwrap_or(0),
+        output_tokens: metrics.output_tokens.unwrap_or(0),
+        cache_creation_input_tokens: metrics.cache_write_tokens.unwrap_or(0),
+        cache_read_input_tokens: metrics.cache_read_tokens.unwrap_or(0),
+    }
+}
+
+fn session_summary(
+    manifest: &SessionManifest,
+    transcript_updated_at: Option<&str>,
+    message_count: u32,
+) -> ConversationSummary {
+    let folder_path = non_empty(manifest.cwd.clone())
+        .or_else(|| non_empty(manifest.workspace_root.clone()));
+    let folder_name = folder_path.as_deref().map(folder_name_from_path);
+
+    // `metadata.title` is cline's own summary of the session; the opening
+    // prompt (still carrying its `<user_input>` wrapper on disk) is the
+    // fallback for a session too young to have been titled.
+    let title = non_empty(
+        manifest
+            .metadata
+            .as_ref()
+            .and_then(|meta| meta.title.clone()),
+    )
+    .or_else(|| {
+        non_empty(manifest.prompt.clone())
+            .map(|prompt| clean_session_text(&prompt))
+            .filter(|prompt| !prompt.is_empty())
+    })
+    .map(|title| title_from_user_text(title.trim()));
+
+    let started_at = manifest
+        .started_at
+        .as_deref()
+        .and_then(parse_iso8601)
+        .unwrap_or_else(Utc::now);
+    // A `cline --acp` session is still `idle`, with no `ended_at`, after its
+    // process exits. The next cline process to open the session store closes
+    // every such session whose owner is gone (`reconcileDeadSessions`): it
+    // stamps `status: "failed"` and `ended_at` with the moment it noticed, and
+    // leaves the transcript alone. codeg runs every Cline session in its own
+    // process, so that stamp lands on each of them at the next launch, and it
+    // says when that launch happened, not when the session was last used. The
+    // transcript's own write time does, so it wins over a stamped end.
+    let reconciled = manifest
+        .metadata
+        .as_ref()
+        .and_then(|meta| meta.terminal_marker_source.as_ref())
+        .and_then(serde_json::Value::as_str)
+        == Some(STALE_SESSION_RECONCILER);
+    let manifest_ended_at = manifest.ended_at.as_deref().and_then(parse_iso8601);
+    let transcript_ended_at = transcript_updated_at.and_then(parse_iso8601);
+    let ended_at = if reconciled {
+        transcript_ended_at.or(manifest_ended_at)
+    } else {
+        manifest_ended_at.or(transcript_ended_at)
+    };
+
+    ConversationSummary {
+        id: manifest.session_id.clone(),
+        agent_type: AgentType::Cline,
+        folder_path,
+        folder_name,
+        title,
+        started_at,
+        ended_at,
+        message_count,
+        model: non_empty(manifest.model.clone()),
+        git_branch: non_empty(
+            manifest
+                .metadata
+                .as_ref()
+                .and_then(|meta| meta.git.as_ref())
+                .and_then(|git| git.branch.clone()),
+        ),
+        parent_id: None,
+        parent_tool_use_id: None,
+        delegation_call_id: None,
+    }
 }
 
 impl AgentParser for ClineParser {
     fn list_conversations(&self) -> Result<Vec<ConversationSummary>, ParseError> {
+        let mut summaries = self.list_session_store();
+        summaries.extend(self.list_legacy_tasks()?);
+        Ok(summaries)
+    }
+
+    fn get_conversation(&self, conversation_id: &str) -> Result<ConversationDetail, ParseError> {
+        if let Some(manifest) = self.read_manifest(conversation_id) {
+            return Ok(self.session_detail(&manifest));
+        }
+        self.legacy_conversation(conversation_id)
+    }
+}
+
+impl ClineParser {
+    fn list_legacy_tasks(&self) -> Result<Vec<ConversationSummary>, ParseError> {
         let history_path = self.base_dir.join("state").join("taskHistory.json");
         if !history_path.exists() {
             return Ok(vec![]);
@@ -199,7 +752,10 @@ impl AgentParser for ClineParser {
         Ok(summaries)
     }
 
-    fn get_conversation(&self, conversation_id: &str) -> Result<ConversationDetail, ParseError> {
+    fn legacy_conversation(
+        &self,
+        conversation_id: &str,
+    ) -> Result<ConversationDetail, ParseError> {
         let tasks_dir = self.base_dir.join("tasks").join(conversation_id);
         if !tasks_dir.exists() {
             return Err(ParseError::ConversationNotFound(
@@ -272,7 +828,7 @@ impl AgentParser for ClineParser {
 
             match msg.role.as_str() {
                 "assistant" => {
-                    let blocks = parse_content_blocks(&msg.content);
+                    let blocks = parse_content_blocks(&msg.content, strip_environment_details);
                     if blocks.is_empty() {
                         continue;
                     }
@@ -396,6 +952,7 @@ fn parse_user_message_parts(content: &serde_json::Value) -> UserMessageParts {
                 is_error,
                 agent_stats: None,
                 images: Vec::new(),
+                exit_code: None,
             });
 
             // If the tool result also contains <feedback>, extract it
@@ -542,10 +1099,19 @@ fn extract_feedback(text: &str) -> Option<String> {
     }
 }
 
-fn parse_content_blocks(content: &serde_json::Value) -> Vec<ContentBlock> {
+/// Turn one message's `content` into render blocks.
+///
+/// `clean` is the store's own text cleanup — the wrappers cline puts around
+/// what the user typed differ between the 3.x session store and the pre-3.x
+/// task store, and running the wrong one over a message either leaves markup
+/// in the bubble or eats text that happens to look like a retired tag.
+fn parse_content_blocks(
+    content: &serde_json::Value,
+    clean: fn(&str) -> String,
+) -> Vec<ContentBlock> {
     match content {
         serde_json::Value::String(text) => {
-            let cleaned = strip_environment_details(text);
+            let cleaned = clean(text);
             if cleaned.is_empty() {
                 vec![]
             } else {
@@ -559,7 +1125,7 @@ fn parse_content_blocks(content: &serde_json::Value) -> Vec<ContentBlock> {
                 match block_type {
                     "text" => {
                         if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
-                            let cleaned = strip_environment_details(text);
+                            let cleaned = clean(text);
                             if !cleaned.is_empty() {
                                 blocks.push(ContentBlock::Text { text: cleaned });
                             }
@@ -593,16 +1159,15 @@ fn parse_content_blocks(content: &serde_json::Value) -> Vec<ContentBlock> {
                             .get("is_error")
                             .and_then(|v| v.as_bool())
                             .unwrap_or(false);
-                        let output_preview = item
-                            .get("content")
-                            .and_then(|v| v.as_str())
-                            .map(|s| truncate_str(s, 500));
+                        let output_preview = tool_result_output(item.get("content"))
+                            .map(|s| truncate_str(&s, 500));
                         blocks.push(ContentBlock::ToolResult {
                             tool_use_id,
                             output_preview,
                             is_error,
                             agent_stats: None,
                             images: Vec::new(),
+                            exit_code: None,
                         });
                     }
                     "thinking" => {
@@ -620,6 +1185,174 @@ fn parse_content_blocks(content: &serde_json::Value) -> Vec<ContentBlock> {
             blocks
         }
         _ => vec![],
+    }
+}
+
+/// A tool result's payload is `string | Array<block>` in cline's own message
+/// type. Anything else (an object, a number) has no text to preview.
+fn tool_result_output(content: Option<&serde_json::Value>) -> Option<String> {
+    match content? {
+        serde_json::Value::String(text) => Some(text.clone()),
+        serde_json::Value::Array(items) => {
+            let joined = items
+                .iter()
+                .filter_map(|item| item.get("text").and_then(|v| v.as_str()))
+                .collect::<Vec<_>>()
+                .join("\n");
+            (!joined.is_empty()).then_some(joined)
+        }
+        _ => None,
+    }
+}
+
+/// Wrappers cline 3.x puts around a user message. `<environment_details>`,
+/// `<task>` and the `task_progress` block below belong to the pre-3.x prompt
+/// format and are gone from 3.x entirely — these three are what replaced them.
+const USER_INPUT_TAG: &str = "user_input";
+const USER_COMMAND_TAG: &str = "user_command";
+const MODE_NOTICE_TAG: &str = "mode_notice";
+
+/// The prompt cline's interactive runtime sends by itself, wrapped in
+/// `<user_input mode="act">` like a typed one, once the user approves
+/// `switch_to_act_mode` (`ACT_MODE_CONTINUATION_PROMPT` in
+/// `apps/cli/src/runtime/interactive/mode.ts`). It carries no metadata to tell
+/// it apart, so cline's TUI hydration and its ACP `session/load` replay both
+/// drop it by exact text; so does codeg.
+const ACT_MODE_CONTINUATION_PROMPT: &str =
+    "The user approved switching to act mode. Continue with the approved plan now.";
+
+/// Replace every `<tag …>inner</tag>` with `inner` (or drop the block whole
+/// when `keep_inner` is false).
+///
+/// The closing tag is searched from AFTER the opening tag's `>`, never from
+/// the start of the string. A message that quotes `</user_input>` ahead of the
+/// real block would otherwise be rebuilt around that earlier tag, splicing the
+/// opening tag back in and making the string LONGER on every pass — the
+/// exponential hang this parser already shipped once, in
+/// `strip_environment_details`. Each pass here removes one opening and one
+/// closing tag, so the string strictly shrinks and the loop always ends.
+fn rewrite_wrapper(text: &str, tag: &str, keep_inner: bool) -> String {
+    let open = format!("<{tag}");
+    let close = format!("</{tag}>");
+    let mut result = text.to_string();
+    let mut from = 0usize;
+
+    while let Some(rel) = result[from..].find(&open) {
+        let start = from + rel;
+        let after_name = start + open.len();
+        // `<user_input` must be the whole tag name, not a prefix of
+        // `<user_inputs>`; the next character is what decides.
+        let rest = &result[after_name..];
+        let is_tag = rest
+            .chars()
+            .next()
+            .is_some_and(|c| c == '>' || c.is_whitespace());
+        if !is_tag {
+            from = after_name;
+            continue;
+        }
+        let Some(gt) = rest.find('>') else { break };
+        let inner_start = after_name + gt + 1;
+        let Some(close_rel) = result[inner_start..].find(&close) else {
+            break;
+        };
+        let inner_end = inner_start + close_rel;
+        let inner = if keep_inner {
+            result[inner_start..inner_end].to_string()
+        } else {
+            String::new()
+        };
+        let tail = result[inner_end + close.len()..].to_string();
+        result = format!("{}{}{}", &result[..start], inner, tail);
+        // Rescan from the same offset: the tag that was there is gone, and a
+        // nested wrapper that moved into its place still has to be unwrapped.
+        from = start;
+    }
+
+    result
+}
+
+/// Text cleanup for the 3.x session store.
+fn clean_session_text(text: &str) -> String {
+    let unwrapped = rewrite_wrapper(text, USER_INPUT_TAG, true);
+    let unwrapped = rewrite_wrapper(&unwrapped, USER_COMMAND_TAG, true);
+    rewrite_wrapper(&unwrapped, MODE_NOTICE_TAG, false)
+        .trim()
+        .to_string()
+}
+
+fn has_user_wrapper(text: &str) -> bool {
+    text.contains("<user_input") || text.contains("<user_command")
+}
+
+/// Split a 3.x `role:"user"` message into tool results and what the user
+/// actually typed.
+///
+/// cline wraps a real prompt in `<user_input>`/`<user_command>`; everything
+/// else arriving under this role is machinery — tool results, the synthesized
+/// "you skipped a tool result" filler, mode notices. So a wrapper is the
+/// signal, and when a message carries one, only the wrapped parts are the
+/// user's words. A message with NO wrapper and no tool results is still
+/// surfaced verbatim: that is the shape a future cline would use if it stopped
+/// wrapping, and dropping it would silently swallow the prompt.
+fn parse_session_user_parts(content: &serde_json::Value) -> UserMessageParts {
+    let mut tool_results = Vec::new();
+    let mut texts: Vec<String> = Vec::new();
+
+    match content {
+        serde_json::Value::String(text) => texts.push(text.clone()),
+        serde_json::Value::Array(items) => {
+            for item in items {
+                match item.get("type").and_then(|v| v.as_str()).unwrap_or("") {
+                    "text" => {
+                        if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+                            texts.push(text.to_string());
+                        }
+                    }
+                    "tool_result" => {
+                        tool_results.push(ContentBlock::ToolResult {
+                            tool_use_id: item
+                                .get("tool_use_id")
+                                .and_then(|v| v.as_str())
+                                .map(String::from),
+                            output_preview: tool_result_output(item.get("content"))
+                                .map(|s| truncate_str(&s, 2000)),
+                            is_error: item
+                                .get("is_error")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false),
+                            agent_stats: None,
+                            images: Vec::new(),
+                            exit_code: None,
+                        });
+                    }
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
+
+    let any_wrapped = texts.iter().any(|text| has_user_wrapper(text));
+    let user_blocks = texts
+        .into_iter()
+        .filter(|text| {
+            if any_wrapped {
+                has_user_wrapper(text)
+            } else {
+                tool_results.is_empty()
+            }
+        })
+        .filter_map(|text| {
+            let cleaned = clean_session_text(&text);
+            (!cleaned.is_empty() && cleaned != ACT_MODE_CONTINUATION_PROMPT)
+                .then_some(ContentBlock::Text { text: cleaned })
+        })
+        .collect();
+
+    UserMessageParts {
+        tool_results,
+        user_blocks,
     }
 }
 
@@ -700,6 +1433,678 @@ fn strip_environment_details(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    // -----------------------------------------------------------------------
+    // cline 3.x session store
+    // -----------------------------------------------------------------------
+
+    /// Lay down one `sessions/<id>/` directory the way cline 3.x writes it.
+    /// `manifest` and `messages` are the two files verbatim, so a test can
+    /// change one field without restating the whole shape.
+    fn write_session(
+        base: &std::path::Path,
+        session_id: &str,
+        manifest: serde_json::Value,
+        messages: serde_json::Value,
+    ) {
+        let dir = base.join("sessions").join(session_id);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join(format!("{session_id}.json")),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            dir.join(format!("{session_id}.messages.json")),
+            serde_json::to_string(&messages).unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// `ContentBlock` is not `PartialEq`, so assertions read the text out
+    /// rather than comparing block values.
+    fn texts(blocks: &[ContentBlock]) -> Vec<&str> {
+        blocks
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The manifest shape observed from cline 3.0.62, trimmed to the fields
+    /// codeg reads.
+    fn manifest(session_id: &str) -> serde_json::Value {
+        json!({
+            "version": 1,
+            "session_id": session_id,
+            "source": "cli",
+            "started_at": "2026-09-16T03:01:23.695Z",
+            "status": "idle",
+            "interactive": true,
+            "provider": "deepseek",
+            "model": "deepseek-v4-flash",
+            "cwd": "/Users/dev/my-app",
+            "workspace_root": "/Users/dev/my-app",
+            "prompt": "<user_input mode=\"act\">hi</user_input>",
+            "metadata": {
+                "title": "Fix the parser",
+                "git": {"branch": "master"}
+            },
+            "messages_path": format!(
+                "/Users/dev/.cline/data/sessions/{session_id}/{session_id}.messages.json"
+            ),
+        })
+    }
+
+    fn one_exchange() -> serde_json::Value {
+        json!({
+            "version": 1,
+            "updated_at": "2026-09-16T03:01:34.018Z",
+            "agent": "lead",
+            "messages": [
+                {
+                    "id": "msg_1",
+                    "role": "user",
+                    "content": [{"type": "text", "text": "<user_input mode=\"act\">hi</user_input>"}],
+                    "ts": 1_789_527_685_143_i64
+                },
+                {
+                    "id": "msg_2",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "Hi! How can I help?"}],
+                    "ts": 1_789_527_686_646_i64,
+                    "modelInfo": {"id": "deepseek-v4-flash", "provider": "deepseek"},
+                    "metrics": {
+                        "inputTokens": 24806,
+                        "outputTokens": 108,
+                        "cacheReadTokens": 24576,
+                        "cacheWriteTokens": 0,
+                        "cost": 0.000173
+                    }
+                }
+            ]
+        })
+    }
+
+    /// The whole point: cline 3.x moved its transcripts from
+    /// `tasks/<id>/api_conversation_history.json` to
+    /// `sessions/<id>/<id>.messages.json`, and a parser still reading the old
+    /// location returns zero turns for every session — which is what the
+    /// conversation view renders as "no messages", and what leaves a finished
+    /// reply with no model, no tokens and no timestamp under it.
+    #[test]
+    fn a_3x_session_is_read_from_the_sessions_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_session(tmp.path(), "s1", manifest("s1"), one_exchange());
+
+        let parser = ClineParser::with_base_dir(tmp.path().to_path_buf());
+        let detail = parser.get_conversation("s1").expect("detail");
+
+        assert_eq!(detail.turns.len(), 2);
+        assert!(matches!(detail.turns[0].role, TurnRole::User));
+        assert_eq!(texts(&detail.turns[0].blocks), vec!["hi"]);
+
+        let reply = &detail.turns[1];
+        assert!(matches!(reply.role, TurnRole::Assistant));
+        assert_eq!(reply.model.as_deref(), Some("deepseek-v4-flash"));
+        let usage = reply.usage.as_ref().expect("per-reply usage");
+        assert_eq!(usage.input_tokens, 24806);
+        assert_eq!(usage.output_tokens, 108);
+        assert_eq!(usage.cache_read_input_tokens, 24576);
+        assert!(reply.completed_at.is_some());
+
+        assert_eq!(detail.summary.title.as_deref(), Some("Fix the parser"));
+        assert_eq!(detail.summary.folder_path.as_deref(), Some("/Users/dev/my-app"));
+        assert_eq!(detail.summary.git_branch.as_deref(), Some("master"));
+        assert_eq!(detail.summary.model.as_deref(), Some("deepseek-v4-flash"));
+    }
+
+    /// Listing is what the folder fallback searches when the recorded
+    /// `external_id` no longer resolves, so it has to see 3.x sessions too.
+    /// One directory is one conversation: an agent-team teammate writes a
+    /// SIBLING `<other>.messages.json` into the same directory, and a spawned
+    /// sub-agent gets no manifest at all, so neither may become a second row.
+    #[test]
+    fn listing_reports_one_conversation_per_session_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_session(tmp.path(), "s1", manifest("s1"), one_exchange());
+        fs::write(
+            tmp.path()
+                .join("sessions")
+                .join("s1")
+                .join("teammate-7.messages.json"),
+            serde_json::to_string(&one_exchange()).unwrap(),
+        )
+        .unwrap();
+
+        let parser = ClineParser::with_base_dir(tmp.path().to_path_buf());
+        let summaries = parser.list_conversations().expect("list");
+
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].id, "s1");
+        assert_eq!(summaries[0].message_count, 2);
+        assert_eq!(summaries[0].folder_path.as_deref(), Some("/Users/dev/my-app"));
+    }
+
+    /// cline closes a session whose process is gone the next time any cline
+    /// process opens the store, stamping `ended_at` with that moment. The
+    /// stamp here has the shape 3.0.72 and 3.0.73 write, seen live seconds to
+    /// minutes after a session's last message. Its end must stay the
+    /// transcript's last write, or every session would jump to the top of the
+    /// history at the next Cline launch. An end cline recorded itself still
+    /// wins.
+    #[test]
+    fn a_session_closed_for_its_dead_process_ends_at_its_last_write() {
+        let last_write = parse_iso8601("2026-09-16T03:01:34.018Z");
+        let tmp = tempfile::tempdir().unwrap();
+        let mut stamped = manifest("s1");
+        stamped["status"] = json!("failed");
+        stamped["exit_code"] = json!(1);
+        stamped["ended_at"] = json!("2026-09-16T03:06:35.953Z");
+        stamped["metadata"]["terminal_marker"] = json!("failed_external_process_exit");
+        stamped["metadata"]["terminal_marker_at"] = json!("2026-09-16T03:06:35.953Z");
+        stamped["metadata"]["terminal_marker_pid"] = json!(33916);
+        stamped["metadata"]["terminal_marker_source"] = json!("stale_session_reconciler");
+        write_session(tmp.path(), "s1", stamped.clone(), one_exchange());
+
+        let mut ended = manifest("s2");
+        ended["status"] = json!("completed");
+        ended["exit_code"] = json!(0);
+        ended["ended_at"] = json!("2026-09-16T03:02:00.000Z");
+        write_session(tmp.path(), "s2", ended.clone(), one_exchange());
+
+        // A marker of some other type is not the reconciler's, and must not
+        // cost the session its place in the listing either.
+        let mut odd = ended;
+        odd["session_id"] = json!("s3");
+        odd["metadata"]["terminal_marker_source"] = json!(7);
+        write_session(tmp.path(), "s3", odd, one_exchange());
+
+        // The marker outlives the stamp: a closed session that is continued
+        // and later completes keeps it in its metadata (seen live), and its
+        // transcript still says when it was last used.
+        let mut continued = stamped.clone();
+        continued["session_id"] = json!("s4");
+        continued["status"] = json!("completed");
+        continued["exit_code"] = json!(0);
+        continued["ended_at"] = json!("2026-09-16T03:09:00.000Z");
+        write_session(tmp.path(), "s4", continued, one_exchange());
+
+        // With no transcript write time to fall back on, the stamp is still
+        // better than nothing.
+        let mut unwritten = stamped.clone();
+        unwritten["session_id"] = json!("s5");
+        let mut no_write_time = one_exchange();
+        no_write_time.as_object_mut().unwrap().remove("updated_at");
+        write_session(tmp.path(), "s5", unwritten, no_write_time);
+
+        let parser = ClineParser::with_base_dir(tmp.path().to_path_buf());
+        let mut summaries = parser.list_conversations().expect("list");
+        summaries.sort_by(|a, b| a.id.cmp(&b.id));
+        let ends: Vec<_> = summaries
+            .iter()
+            .map(|s| (s.id.as_str(), s.ended_at))
+            .collect();
+        let own_end = parse_iso8601("2026-09-16T03:02:00.000Z");
+        let stamp = parse_iso8601("2026-09-16T03:06:35.953Z");
+        let expected = [
+            ("s1", last_write),
+            ("s2", own_end),
+            ("s3", own_end),
+            ("s4", last_write),
+            ("s5", stamp),
+        ];
+        assert_eq!(ends, expected);
+
+        // The open path builds its summary the same way.
+        for (id, end) in expected {
+            let detail = parser.get_conversation(id).expect("detail");
+            assert_eq!(detail.summary.ended_at, end, "{id}");
+        }
+    }
+
+    /// `messages_path` in the manifest is the absolute path the WRITING
+    /// process saw. It stops being true the moment the store moves — a
+    /// restored backup, `CLINE_DIR`, a test fixture — so the conventional
+    /// path next to the manifest has to win, or a relocated store reads as
+    /// empty for every session in it.
+    #[test]
+    fn a_stale_recorded_messages_path_does_not_hide_the_transcript() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut manifest = manifest("s1");
+        manifest["messages_path"] =
+            json!("/nonexistent/machine/.cline/data/sessions/s1/s1.messages.json");
+        write_session(tmp.path(), "s1", manifest, one_exchange());
+
+        let parser = ClineParser::with_base_dir(tmp.path().to_path_buf());
+        let detail = parser.get_conversation("s1").expect("detail");
+
+        assert_eq!(detail.turns.len(), 2);
+    }
+
+    /// Tool results arrive as `role:"user"` messages alongside the automated
+    /// filler cline writes next to them. The result belongs on its own system
+    /// turn (that is where the renderer pairs it with the `tool_use` above);
+    /// the filler is not something the user said and must not be painted as a
+    /// prompt.
+    #[test]
+    fn a_tool_result_is_split_off_from_the_message_carrying_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let messages = json!({
+            "version": 1,
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "call_1", "name": "read_files",
+                         "input": {"files": ["src/main.rs"]}}
+                    ],
+                    "ts": 1_789_527_685_000_i64
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "call_1",
+                         "content": [{"type": "text", "text": "fn main() {}"}]},
+                        {"type": "text", "text": "Continue with the task."}
+                    ],
+                    "ts": 1_789_527_686_000_i64
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "<user_input mode=\"act\">thanks</user_input>"}],
+                    "ts": 1_789_527_687_000_i64
+                }
+            ]
+        });
+        write_session(tmp.path(), "s1", manifest("s1"), messages);
+
+        let parser = ClineParser::with_base_dir(tmp.path().to_path_buf());
+        let detail = parser.get_conversation("s1").expect("detail");
+
+        let roles: Vec<_> = detail
+            .turns
+            .iter()
+            .map(|t| format!("{:?}", t.role))
+            .collect();
+        assert_eq!(roles, vec!["Assistant", "System", "User"]);
+        match detail.turns[1].blocks.as_slice() {
+            [ContentBlock::ToolResult {
+                tool_use_id,
+                output_preview,
+                is_error,
+                ..
+            }] => {
+                assert_eq!(tool_use_id.as_deref(), Some("call_1"));
+                assert_eq!(output_preview.as_deref(), Some("fn main() {}"));
+                assert!(!is_error);
+            }
+            other => panic!("expected exactly one tool result, got {other:?}"),
+        }
+        assert_eq!(texts(&detail.turns[2].blocks), vec!["thanks"]);
+    }
+
+    /// cline 3.0.65 writes a failed run into the transcript as an assistant
+    /// message carrying the error text. The record below is verbatim from a
+    /// 3.0.65 run against an endpoint that answers 400 — codeg must not show
+    /// it as the model's reply but as the failure line closing that round, and
+    /// must not swallow the retry and the real answer that follow.
+    #[test]
+    fn a_display_only_error_is_the_failure_line_not_the_reply() {
+        let tmp = tempfile::tempdir().unwrap();
+        let messages = json!({
+            "version": 1,
+            "updated_at": "2026-09-29T00:09:24.543Z",
+            "agent": "lead",
+            "messages": [
+                {
+                    "id": "365bf00f-90b7-4c09-a8cc-be9daf5a360d",
+                    "role": "user",
+                    "content": [{"type": "text", "text": "<user_input mode=\"act\">say hi</user_input>"}],
+                    "ts": 1_790_640_564_466_i64
+                },
+                {
+                    "id": "error_29541852-24fa-4a23-aed6-1f09502a5ff2",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "probe: model does not exist"}],
+                    "ts": 1_790_640_564_541_i64,
+                    "metadata": {"displayOnly": true, "displayRole": "error"},
+                    "modelInfo": {"id": "probe-model", "provider": "openai-compatible"}
+                },
+                {
+                    "id": "msg_3",
+                    "role": "user",
+                    "content": [{"type": "text", "text": "<user_input mode=\"act\">try again</user_input>"}],
+                    "ts": 1_790_640_600_000_i64
+                },
+                {
+                    "id": "msg_4",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "Hi!"}],
+                    "ts": 1_790_640_601_000_i64,
+                    "modelInfo": {"id": "deepseek-v4-flash", "provider": "deepseek"},
+                    "metadata": {"displayOnly": false}
+                }
+            ]
+        });
+        write_session(tmp.path(), "s1", manifest("s1"), messages);
+
+        let parser = ClineParser::with_base_dir(tmp.path().to_path_buf());
+        let detail = parser.get_conversation("s1").expect("detail");
+
+        let turns: Vec<_> = detail
+            .turns
+            .iter()
+            .map(|t| (format!("{:?}", t.role), texts(&t.blocks)))
+            .collect();
+        assert_eq!(
+            turns,
+            vec![
+                ("User".to_string(), vec!["say hi"]),
+                ("System".to_string(), vec![]),
+                ("User".to_string(), vec!["try again"]),
+                ("Assistant".to_string(), vec!["Hi!"]),
+            ]
+        );
+        assert!(
+            matches!(
+                detail.turns[1].blocks.as_slice(),
+                [ContentBlock::TurnError { message }] if message == "probe: model does not exist"
+            ),
+            "{:?}",
+            detail.turns[1].blocks
+        );
+        assert_eq!(detail.summary.message_count, 3);
+    }
+
+    /// cline 3.0.69+ continues a reply once when the AI SDK reports a finish
+    /// reason it does not recognise, and records the nudge it sent as a
+    /// `role:"user"` message flagged `displayRole: "system"`. The messages
+    /// below are verbatim from a 3.0.70 run against a local endpoint that ended
+    /// its first answer with `finish_reason: "eos"`: one prompt, then the two
+    /// halves of the reply, never the nudge as a second prompt.
+    #[test]
+    fn the_continuation_nudge_is_not_a_user_prompt() {
+        let tmp = tempfile::tempdir().unwrap();
+        let messages = json!({
+            "version": 1,
+            "updated_at": "2026-10-10T11:04:16.611Z",
+            "agent": "lead",
+            "sessionId": "1791630256400_sSpWj_cli",
+            "messages": [
+                {
+                    "id": "0cecb4f6-490a-4507-8c61-cb3319b5a4e5",
+                    "role": "user",
+                    "content": [{"type": "text", "text": "<user_input mode=\"act\">say hi</user_input>"}],
+                    "ts": 1_791_630_256_581_i64
+                },
+                {
+                    "id": "msg_FT3fR_2P",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "Hello part one."}],
+                    "ts": 1_791_630_256_604_i64,
+                    "modelInfo": {"id": "gpt-4o", "provider": "openai-compatible"},
+                    "metrics": {"inputTokens": 90, "outputTokens": 4, "cacheReadTokens": 0, "cacheWriteTokens": 0}
+                },
+                {
+                    "id": "msg_2R86TEh1",
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Previous turn ended unexpectedly. Continue from where you left off."}],
+                    "ts": 1_791_630_256_605_i64,
+                    "metadata": {"displayRole": "system", "userRunSpan": 0}
+                },
+                {
+                    "id": "msg_LhhY7b2L",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "Reply number 2."}],
+                    "ts": 1_791_630_256_609_i64,
+                    "modelInfo": {"id": "gpt-4o", "provider": "openai-compatible"},
+                    "metrics": {"inputTokens": 100, "outputTokens": 7, "cacheReadTokens": 0, "cacheWriteTokens": 0}
+                }
+            ]
+        });
+        write_session(tmp.path(), "s1", manifest("s1"), messages);
+
+        let parser = ClineParser::with_base_dir(tmp.path().to_path_buf());
+        let detail = parser.get_conversation("s1").expect("detail");
+
+        let turns: Vec<_> = detail
+            .turns
+            .iter()
+            .map(|t| (format!("{:?}", t.role), texts(&t.blocks)))
+            .collect();
+        assert_eq!(
+            turns,
+            vec![
+                ("User".to_string(), vec!["say hi"]),
+                ("Assistant".to_string(), vec!["Hello part one."]),
+                ("Assistant".to_string(), vec!["Reply number 2."]),
+            ]
+        );
+    }
+
+    /// Hook context and the compaction summary are the other user-role
+    /// messages cline writes for the model alone, and `"status"` is the other
+    /// role it never shows. It reads the role trimmed and lowercased, so a
+    /// differently cased one is hidden too, and it hides by that role whatever
+    /// the message's own role is.
+    #[test]
+    fn system_and_status_display_roles_are_never_shown() {
+        let tmp = tempfile::tempdir().unwrap();
+        let messages = json!({
+            "version": 1,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "<user_input mode=\"act\">go</user_input>"}],
+                    "ts": 1_791_630_000_000_i64
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Hook context: lint passed"}],
+                    "ts": 1_791_630_000_100_i64,
+                    "metadata": {"userRunSpan": 0, "displayRole": "system"}
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Context summary:\n\nearlier work"}],
+                    "ts": 1_791_630_000_200_i64,
+                    "metadata": {
+                        "kind": "compaction_summary",
+                        "displayRole": "system",
+                        "userRunSpan": 1,
+                        "summary": "earlier work",
+                        "details": {"readFiles": [], "modifiedFiles": []},
+                        "tokensBefore": 1000,
+                        "generatedAt": 1_791_630_000_200_i64
+                    }
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "status line"}],
+                    "ts": 1_791_630_000_300_i64,
+                    "metadata": {"displayRole": " Status "}
+                },
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "assistant-role system note"}],
+                    "ts": 1_791_630_000_350_i64,
+                    "metadata": {"displayRole": "system"}
+                },
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "done"}],
+                    "ts": 1_791_630_000_400_i64
+                }
+            ]
+        });
+        write_session(tmp.path(), "s1", manifest("s1"), messages);
+
+        let parser = ClineParser::with_base_dir(tmp.path().to_path_buf());
+        let detail = parser.get_conversation("s1").expect("detail");
+
+        let turns: Vec<_> = detail
+            .turns
+            .iter()
+            .map(|t| (format!("{:?}", t.role), texts(&t.blocks)))
+            .collect();
+        assert_eq!(
+            turns,
+            vec![
+                ("User".to_string(), vec!["go"]),
+                ("Assistant".to_string(), vec!["done"]),
+            ]
+        );
+    }
+
+    /// The prompt cline sends by itself after `switch_to_act_mode` is approved
+    /// is wrapped exactly like a typed one and carries no metadata, in either
+    /// content shape. Only its exact text gives it away, so the test spells it
+    /// out rather than reusing the constant it checks.
+    #[test]
+    fn the_act_mode_continuation_prompt_is_not_a_user_prompt() {
+        let tmp = tempfile::tempdir().unwrap();
+        let wrapped = "<user_input mode=\"act\">The user approved switching to act mode. \
+                       Continue with the approved plan now.</user_input>";
+        let messages = json!({
+            "version": 1,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "<user_input mode=\"plan\">plan it</user_input>"}],
+                    "ts": 1_791_630_000_000_i64
+                },
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "Here is the plan."}],
+                    "ts": 1_791_630_000_100_i64
+                },
+                {"role": "user", "content": wrapped, "ts": 1_791_630_000_200_i64},
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": wrapped}],
+                    "ts": 1_791_630_000_300_i64
+                },
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "On it."}],
+                    "ts": 1_791_630_000_400_i64
+                }
+            ]
+        });
+        write_session(tmp.path(), "s1", manifest("s1"), messages);
+
+        let parser = ClineParser::with_base_dir(tmp.path().to_path_buf());
+        let detail = parser.get_conversation("s1").expect("detail");
+
+        let turns: Vec<_> = detail
+            .turns
+            .iter()
+            .map(|t| (format!("{:?}", t.role), texts(&t.blocks)))
+            .collect();
+        assert_eq!(
+            turns,
+            vec![
+                ("User".to_string(), vec!["plan it"]),
+                ("Assistant".to_string(), vec!["Here is the plan."]),
+                ("Assistant".to_string(), vec!["On it."]),
+            ]
+        );
+    }
+
+    /// A user message with no wrapper and no tool result is the shape a future
+    /// cline would write if it stopped wrapping prompts. Treating the wrapper
+    /// as mandatory would swallow the prompt silently, so it is a preference,
+    /// not a requirement.
+    #[test]
+    fn an_unwrapped_lone_prompt_is_still_shown() {
+        let tmp = tempfile::tempdir().unwrap();
+        let messages = json!({
+            "version": 1,
+            "messages": [{
+                "role": "user",
+                "content": [{"type": "text", "text": "plain prompt"}],
+                "ts": 1_789_527_685_000_i64
+            }]
+        });
+        write_session(tmp.path(), "s1", manifest("s1"), messages);
+
+        let parser = ClineParser::with_base_dir(tmp.path().to_path_buf());
+        let detail = parser.get_conversation("s1").expect("detail");
+
+        assert_eq!(detail.turns.len(), 1);
+        assert_eq!(texts(&detail.turns[0].blocks), vec!["plain prompt"]);
+    }
+
+    /// Same trap as the pre-3.x stripper, on the tags that replaced those. A
+    /// user quoting `</user_input>` puts a closing tag ahead of the opener it
+    /// appears to close; rebuilding the message around that earlier tag
+    /// splices the opening tag back in and makes the string LONGER every pass,
+    /// so the loop never ends and memory runs out. A regression here HANGS the
+    /// run rather than failing it, which is why both shapes are pinned.
+    #[test]
+    fn a_quoted_closing_tag_does_not_hang_the_session_cleanup() {
+        // Quoted ahead of the real block: the prompt has to survive whole.
+        assert_eq!(
+            clean_session_text(
+                "</user_input> is the tag. <user_input mode=\"act\">what does it do?</user_input>"
+            ),
+            "</user_input> is the tag. what does it do?"
+        );
+
+        // Quoted INSIDE its own wrapper is markup cline cannot express and
+        // codeg cannot recover: the first closing tag ends the block, and the
+        // rest is left as written. Asserted so the ambiguity is a recorded
+        // outcome rather than an accident — what matters is that the pass
+        // shrinks the string and terminates.
+        assert_eq!(
+            clean_session_text("<user_input mode=\"act\">why is </user_input> in my logs?"),
+            "why is  in my logs?"
+        );
+    }
+
+    #[test]
+    fn session_wrappers_are_unwrapped_and_notices_dropped() {
+        assert_eq!(
+            clean_session_text("<user_command slash=\"init\">/init</user_command>"),
+            "/init"
+        );
+        assert_eq!(
+            clean_session_text(
+                "<mode_notice>The user switched from plan mode to act mode</mode_notice>\
+                 <user_input mode=\"act\">go</user_input>"
+            ),
+            "go"
+        );
+        // A tag name must match whole — `<user_inputs>` is not `<user_input>`.
+        assert_eq!(
+            clean_session_text("<user_inputs>kept</user_inputs>"),
+            "<user_inputs>kept</user_inputs>"
+        );
+        // Every splice below is a byte offset from `str::find`; a CJK or emoji
+        // message has to survive it rather than panic on a char boundary.
+        assert_eq!(
+            clean_session_text("<user_input mode=\"act\">环境说明 🎉</user_input>"),
+            "环境说明 🎉"
+        );
+    }
+
+    /// An unclosed opener is left alone rather than eating the rest of the
+    /// message: the transcript of a session still being written ends mid-tag.
+    #[test]
+    fn an_unclosed_session_wrapper_keeps_its_text() {
+        assert_eq!(
+            clean_session_text("<user_input mode=\"act\">half a prompt"),
+            "<user_input mode=\"act\">half a prompt"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // pre-3.x task store (fallback)
+    // -----------------------------------------------------------------------
 
     /// The whole message Cline writes for one user turn: the wrapper, then the
     /// environment block it appends. Everything here reaches
@@ -848,5 +2253,25 @@ mod tests {
         );
         assert_eq!(extract_feedback("no tags here"), None);
         assert_eq!(extract_feedback("<feedback>unclosed"), None);
+    }
+
+    /// #948: built with an agent's launch env, the parser reads where THAT
+    /// env puts the agent's files, not where codeg's own environment does.
+    #[test]
+    fn for_env_reads_the_data_dir_of_the_launch_env() {
+        // Cline's own rule: `<CLINE_DIR>/data`, unless `CLINE_DATA_DIR` names it.
+        let env = AgentEnv::with_overrides(&[("CLINE_DIR", "/relocated/cline")]);
+        assert_eq!(
+            ClineParser::for_env(&env).base_dir,
+            PathBuf::from("/relocated/cline/data")
+        );
+        let env = AgentEnv::with_overrides(&[
+            ("CLINE_DIR", "/relocated/cline"),
+            ("CLINE_DATA_DIR", " /elsewhere/data "),
+        ]);
+        assert_eq!(
+            ClineParser::for_env(&env).base_dir,
+            PathBuf::from("/elsewhere/data")
+        );
     }
 }

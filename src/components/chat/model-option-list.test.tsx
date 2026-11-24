@@ -113,6 +113,39 @@ describe("ModelOptionList", () => {
     )
   })
 
+  // codex-acp 1.11.0 names a recommended value per select
+  // (`_meta.jetbrains.air.recommendedValue`). It is worth its own row marker
+  // precisely because it is NOT the selection: codeg replays a persisted
+  // per-agent preference into every new session, so the selected model is
+  // routinely one the agent no longer defaults to.
+  it("badges the recommended row, independently of the selected one", () => {
+    renderList({
+      recommendedValue: "anthropic/sonnet",
+      recommendedLabel: "Recommended",
+    })
+    const recommended = screen.getByRole("option", { name: /sonnet/ })
+    expect(recommended).toHaveTextContent("Recommended")
+    // The recommendation says nothing about what is selected, and vice versa.
+    expect(recommended).toHaveAttribute("aria-selected", "false")
+    const selected = screen.getByRole("option", { name: /opus/ })
+    expect(selected).toHaveAttribute("aria-selected", "true")
+    expect(selected).not.toHaveTextContent("Recommended")
+  })
+
+  // A recommendation that matches no option marks nothing — the backend
+  // deliberately does not validate membership against the list, so this is the
+  // guard that makes that safe. Same for a recommendation with no label.
+  it("marks nothing for an unknown recommendation or a missing label", () => {
+    renderList({
+      recommendedValue: "anthropic/retired",
+      recommendedLabel: "Recommended",
+    })
+    expect(screen.queryByText("Recommended")).toBeNull()
+    cleanup()
+    renderList({ recommendedValue: "anthropic/sonnet" })
+    expect(screen.queryByText("Recommended")).toBeNull()
+  })
+
   it("filters options as you type (matching name or value)", async () => {
     const user = userEvent.setup()
     renderList()
@@ -154,6 +187,50 @@ describe("ModelOptionList", () => {
     // Enter during CJK composition confirms the candidate — it must NOT select.
     fireEvent.keyDown(input, { key: "Enter", isComposing: true })
     expect(onSelect).not.toHaveBeenCalled()
+  })
+
+  it("opens with the cursor on the current value, not the first row", () => {
+    const { onSelect } = renderList({ currentValue: "openai/gpt-4o" })
+    const input = screen.getByRole("combobox")
+    expect(input.getAttribute("aria-activedescendant")).toBe(
+      screen.getByRole("option", { name: /gpt-4o/ }).id
+    )
+    // Enter right away keeps the current model instead of jumping to the top.
+    fireEvent.keyDown(input, { key: "Enter" })
+    expect(onSelect).toHaveBeenCalledWith("openai/gpt-4o")
+  })
+
+  it("keeps the cursor on the same option when a live update reorders the list", () => {
+    const onSelect = vi.fn()
+    const props = {
+      currentValue: "anthropic/opus",
+      onSelect,
+      searchPlaceholder: "Search models",
+      searchAriaLabel: "Search models",
+      listAriaLabel: "Models",
+      emptyLabel: "No models found",
+    }
+    const view = render(<ModelOptionList groups={GROUPS} {...props} />)
+    const input = screen.getByRole("combobox")
+    fireEvent.keyDown(input, { key: "ArrowDown" }) // opus → sonnet
+    // The agent pushes the same models in a new order (openai first).
+    view.rerender(
+      <ModelOptionList groups={[GROUPS[1], GROUPS[0]]} {...props} />
+    )
+    const active = document.getElementById(
+      input.getAttribute("aria-activedescendant") ?? ""
+    )
+    expect(active).toHaveAccessibleName(/sonnet/)
+    fireEvent.keyDown(input, { key: "Enter" })
+    expect(onSelect).toHaveBeenCalledWith("anthropic/sonnet")
+  })
+
+  it("caps the list at the requested height", () => {
+    renderList({ maxHeightRem: 4 })
+    const listbox = screen.getByRole("listbox")
+    // listbox → ScrollArea viewport/host → the sized column.
+    const sized = listbox.closest("[style]") as HTMLElement
+    expect(sized.style.height).toBe("64px")
   })
 
   it("points aria-activedescendant at the active option", async () => {

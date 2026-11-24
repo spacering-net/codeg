@@ -15,6 +15,14 @@ const IMAGE_MIMES: Record<string, string> = {
 
 export const LOCAL_IMAGE_MAX_BYTES = 8 * 1024 * 1024
 
+/** The MIME type of an image file, by its extension; null for any other file. */
+export function localImageMime(path: string): string | null {
+  const extension = path.split(".").pop()?.toLowerCase() ?? ""
+  return Object.prototype.hasOwnProperty.call(IMAGE_MIMES, extension)
+    ? IMAGE_MIMES[extension]
+    : null
+}
+
 /** Recognize file references before rehype-harden changes their destinations. */
 export function localImagePath(source: string): string | null {
   let path = source.trim()
@@ -50,24 +58,53 @@ export function localImagePath(source: string): string | null {
   return path
 }
 
-export function resolveLocalImage(source: string, rootPath: string) {
+/**
+ * The image file a Markdown destination names. `path` is relative to the root
+ * for an image inside it, and absolute for one outside it: an agent's QR code
+ * or screenshot is often in /tmp, not in the workspace. Without a root, only an
+ * absolute path names a file.
+ */
+export function resolveLocalImage(source: string, rootPath: string | null) {
   const path = localImagePath(source)
-  const root = normalizeAbsPath(rootPath)
-  if (!path || !isAbsoluteFilePath(root)) return null
-  const extension = path.split(".").pop()?.toLowerCase() ?? ""
-  if (!Object.prototype.hasOwnProperty.call(IMAGE_MIMES, extension)) return null
-  const absolute = normalizeAbsPath(
-    isAbsoluteFilePath(path) ? path : `${root}/${path}`
-  )
-  if (!isPathUnderRoot(absolute, root)) return null
-  const prefix = root.endsWith("/") ? root : `${root}/`
-  return {
-    path: absolute.slice(prefix.length),
-    name: absolute.slice(absolute.lastIndexOf("/") + 1),
-    // The extension already checked above, not a second derivation from
-    // `absolute` — those agree today, but only one of them was validated.
-    mime: IMAGE_MIMES[extension],
+  if (!path) return null
+  const mime = localImageMime(path)
+  if (!mime) return null
+  if (rootPath === null) {
+    if (!isAbsoluteFilePath(path)) return null
+    const absolute = normalizeAbsPath(path)
+    // A network share: see below.
+    if (absolute.startsWith("//")) return null
+    const name = absolute.slice(absolute.lastIndexOf("/") + 1)
+    return { path: absolute, name, mime }
   }
+  const root = normalizeAbsPath(rootPath)
+  if (!isAbsoluteFilePath(root)) return null
+  // Not `${root}/…`: under the POSIX root that reads `//…`, a network share.
+  const prefix = root.endsWith("/") ? root : `${root}/`
+  const absolute = normalizeAbsPath(
+    isAbsoluteFilePath(path) ? path : `${prefix}${path}`
+  )
+  const inRoot = isPathUnderRoot(absolute, root)
+  // A network share other than the one the workspace is on: opening it would
+  // make this machine contact the host the reply names (on Windows, signing in
+  // to it). The POSIX root `/` counts `//host/…` as inside it, so the share
+  // test is on the root itself.
+  if (absolute.startsWith("//") && !(inRoot && root.startsWith("//"))) {
+    return null
+  }
+  const name = absolute.slice(absolute.lastIndexOf("/") + 1)
+  // Both results take `mime` from the extension already checked above, not a
+  // second derivation from `absolute` — those agree today, but only one of
+  // them was validated.
+  if (inRoot) {
+    // A drive or share root matches case-insensitively, and lowercasing can
+    // change a string's length (`İ` → `i̇`): cut only where the root really
+    // ends, or the rest names another file.
+    const head = absolute.slice(0, prefix.length)
+    if (head.toLowerCase() !== prefix.toLowerCase()) return null
+    return { path: absolute.slice(prefix.length), name, mime }
+  }
+  return { path: absolute, name, mime }
 }
 
 export type LocalImageReader = (
@@ -76,9 +113,19 @@ export type LocalImageReader = (
   maxBytes: number
 ) => Promise<string>
 
+export type AbsoluteFileReader = (
+  path: string,
+  maxBytes: number
+) => Promise<string>
+
 /** Per-transcript queue: bound IO and deduplicate in-flight reads, without
- * retaining historical image bytes or serving stale screenshots after edits. */
-export function createLocalImageLoader(root: string, read: LocalImageReader) {
+ * retaining historical image bytes or serving stale screenshots after edits.
+ * A relative path is read inside the root, an absolute one where it is. */
+export function createLocalImageLoader(
+  root: string | null,
+  read: LocalImageReader,
+  readAbsolute: AbsoluteFileReader
+) {
   const pending = new Map<string, Promise<string | null>>()
   const waiting: Array<() => void> = []
   let active = 0
@@ -91,8 +138,13 @@ export function createLocalImageLoader(root: string, read: LocalImageReader) {
         await new Promise<void>((resolve) => waiting.push(resolve))
       else active += 1
       try {
-        // The backend canonicalizes the path and checks symlink confinement.
-        const data = await read(root, path, LOCAL_IMAGE_MAX_BYTES)
+        // Inside the root, the backend canonicalizes the path and checks
+        // symlink confinement. Without a root, a relative path names nothing.
+        const data = isAbsoluteFilePath(path)
+          ? await readAbsolute(path, LOCAL_IMAGE_MAX_BYTES)
+          : root === null
+            ? null
+            : await read(root, path, LOCAL_IMAGE_MAX_BYTES)
         return data && data.length <= Math.ceil(LOCAL_IMAGE_MAX_BYTES / 3) * 4
           ? data
           : null

@@ -8,6 +8,8 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 use walkdir::WalkDir;
 
+use crate::acp::agent_mentions::ROUTE_FRAME_SEPARATOR;
+use crate::acp::js_text::is_js_whitespace;
 use crate::models::{
     AgentType, ContentBlock, ConversationDetail, ConversationSummary, ImageData, MessageRole,
     MessageTurn, TurnRole, TurnUsage, UnifiedMessage,
@@ -16,7 +18,7 @@ use crate::parsers::{
     backfill_turn_durations, compute_session_stats, folder_name_from_path,
     infer_context_window_max_tokens, latest_turn_total_usage_tokens, merge_context_window_stats,
     relocate_orphaned_tool_results, resolve_patch_line_numbers, structurize_read_tool_output,
-    title_from_user_text, truncate_str, AgentParser, ParseError,
+    title_from_user_text, truncate_str, AgentEnv, AgentParser, ParseError,
 };
 
 /// Resolve the `pi` coding agent's sessions directory, honoring (highest
@@ -45,11 +47,152 @@ use crate::parsers::{
 /// `--<dashed-cwd>--/` buckets and the FLAT directory a custom `sessionDir`
 /// produces (pi uses the configured path verbatim, with no per-cwd bucket).
 pub(crate) fn resolve_pi_sessions_dir() -> PathBuf {
+    resolve_pi_sessions_dir_for_env(&AgentEnv::inherited())
+}
+
+/// [`resolve_pi_sessions_dir`] for the pi launched with `env`.
+pub(crate) fn resolve_pi_sessions_dir_for_env(env: &AgentEnv) -> PathBuf {
     resolve_pi_sessions_dir_from(
-        std::env::var_os("PI_CODING_AGENT_SESSION_DIR"),
-        std::env::var_os("PI_CODING_AGENT_DIR"),
+        env.var_os("PI_CODING_AGENT_SESSION_DIR"),
+        env.var_os("PI_CODING_AGENT_DIR"),
         dirs::home_dir(),
     )
+}
+
+/// Pi's agent directory: `PI_CODING_AGENT_DIR` (through pi's tilde rule), else
+/// `~/.pi/agent`. The same rule [`resolve_pi_sessions_dir_from`] applies before
+/// it looks for `sessions`, kept in one place so the two can't drift.
+pub(crate) fn resolve_pi_agent_dir_from(
+    agent_dir_env: Option<OsString>,
+    home_dir: Option<&Path>,
+) -> PathBuf {
+    match agent_dir_env
+        .filter(|value| !value.is_empty())
+        .and_then(|value| value.into_string().ok())
+    {
+        Some(dir) => expand_pi_tilde(&dir, home_dir),
+        None => home_dir
+            .map(Path::to_path_buf)
+            .unwrap_or_default()
+            .join(".pi")
+            .join("agent"),
+    }
+}
+
+pub(crate) fn resolve_pi_agent_dir() -> PathBuf {
+    resolve_pi_agent_dir_for_env(&AgentEnv::inherited())
+}
+
+/// [`resolve_pi_agent_dir`] for the pi launched with `env`.
+pub(crate) fn resolve_pi_agent_dir_for_env(env: &AgentEnv) -> PathBuf {
+    resolve_pi_agent_dir_from(
+        env.var_os("PI_CODING_AGENT_DIR"),
+        dirs::home_dir().as_deref(),
+    )
+}
+
+/// What pi gives a `models.json` model that declares no `contextWindow`:
+/// `provider-composer.js`'s `modelFromJson` ends with
+/// `contextWindow: definition.contextWindow ?? 128000`. The entry REPLACES any
+/// built-in model of the same id (`applyModelsJson` upserts by id and only
+/// borrows `api`/`baseUrl` from the one it replaces), so 128K is what pi runs
+/// with — not the built-in catalog's number, and not codeg's name table's.
+const PI_DEFAULT_MODEL_CONTEXT_WINDOW: u64 = 128_000;
+
+/// The context window `<agent_dir>/models.json` settles on for a model.
+///
+/// Why this is needed: `infer_context_window_max_tokens` guesses from a table of
+/// known model names — Claude / Gemini / Gemma / Kimi / Grok / OpenAI — and
+/// returns `None` for anything else. Model ids served by a self-hosted
+/// OpenAI-compatible endpoint land on `None` (no context meter at all) or, when
+/// the id merely LOOKS familiar — a proxy answering to `gpt-5.5` — on a
+/// confident number the guess cannot actually know.
+///
+/// Pi records the real window per provider, which beats guessing by name and
+/// keeps working when the model changes. Any read failure (file absent, bad
+/// JSON, model not listed) yields `None` and falls back to the existing
+/// name-based guess, so behaviour is never worse than before.
+///
+/// Takes the directory rather than resolving it, mirroring
+/// `grok::grok_catalog_context_window(home, model)`: the lookup stays a function
+/// of its inputs, so a test drives it from a fixture instead of whatever
+/// `models.json` the machine running the suite happens to have.
+pub(crate) fn pi_declared_context_window(
+    agent_dir: &Path,
+    provider: Option<&str>,
+    model: Option<&str>,
+) -> Option<u64> {
+    let model = model?.trim();
+    if model.is_empty() {
+        return None;
+    }
+    let raw = fs::read_to_string(agent_dir.join("models.json")).ok()?;
+    pi_declared_context_window_from(&raw, provider, model)
+}
+
+/// Pure over the file contents so it can be tested without touching the disk.
+///
+/// pi keys a model by `(provider, id)`, and the transcript records both, so the
+/// session's own provider decides which entry applies — a provider this file
+/// does not define is a BUILT-IN one, whose catalogue lives inside pi rather
+/// than on disk, and correctly yields `None`. Only a session that recorded no
+/// provider at all scans every provider, and then only an unambiguous answer
+/// counts: two providers disagreeing about the same id is exactly the case
+/// where picking one would be a guess wearing a declaration's clothes.
+fn pi_declared_context_window_from(raw: &str, provider: Option<&str>, model: &str) -> Option<u64> {
+    let value: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let providers = value.get("providers")?.as_object()?;
+
+    if let Some(provider) = provider.map(str::trim).filter(|p| !p.is_empty()) {
+        return provider_declared_context_window(providers.get(provider)?, model);
+    }
+
+    let mut agreed: Option<u64> = None;
+    for config in providers.values() {
+        let Some(window) = provider_declared_context_window(config, model) else {
+            continue;
+        };
+        if agreed.is_some_and(|previous| previous != window) {
+            return None;
+        }
+        agreed = Some(window);
+    }
+    agreed
+}
+
+/// One provider's answer for `model`, in pi's own layering order.
+fn provider_declared_context_window(config: &Value, model: &str) -> Option<u64> {
+    // `modelOverrides` is the topmost layer pi applies ("they apply once, after
+    // custom-model upserts, extension model replacement, and legacy OAuth
+    // projection"), and it patches rather than replaces: an override without a
+    // `contextWindow` leaves the layer below in charge.
+    let overridden = config
+        .get("modelOverrides")
+        .and_then(Value::as_object)
+        .and_then(|overrides| overrides.get(model))
+        .and_then(|entry| entry.get("contextWindow"))
+        .and_then(Value::as_u64)
+        .filter(|window| *window > 0);
+    if overridden.is_some() {
+        return overridden;
+    }
+
+    // Last declaration wins: `applyModelsJson` walks `models` in order and
+    // upserts by id (`models[existingIndex] = model`), so a repeated id ends up
+    // holding the LAST entry's fields.
+    let declared = config
+        .get("models")
+        .and_then(Value::as_array)?
+        .iter()
+        .rev()
+        .find(|entry| entry.get("id").and_then(Value::as_str) == Some(model))?;
+    match declared.get("contextWindow") {
+        // Absent is not unknown — it is pi's `?? 128000`.
+        None | Some(Value::Null) => Some(PI_DEFAULT_MODEL_CONTEXT_WINDOW),
+        // A window pi itself rejects (`invalid contextWindow` for `<= 0`), or
+        // one that is not a number at all, is not a declaration to honor.
+        Some(window) => window.as_u64().filter(|window| *window > 0),
+    }
 }
 
 fn resolve_pi_sessions_dir_from(
@@ -63,17 +206,7 @@ fn resolve_pi_sessions_dir_from(
     {
         return expand_pi_tilde(&session_dir, home_dir.as_deref());
     }
-    let agent_dir = match agent_dir_env
-        .filter(|value| !value.is_empty())
-        .and_then(|value| value.into_string().ok())
-    {
-        Some(dir) => expand_pi_tilde(&dir, home_dir.as_deref()),
-        None => home_dir
-            .clone()
-            .unwrap_or_default()
-            .join(".pi")
-            .join("agent"),
-    };
+    let agent_dir = resolve_pi_agent_dir_from(agent_dir_env, home_dir.as_deref());
     session_dir_from_settings(&agent_dir, home_dir.as_deref())
         .unwrap_or_else(|| agent_dir.join("sessions"))
 }
@@ -124,7 +257,10 @@ fn expand_pi_tilde(value: &str, home_dir: Option<&Path>) -> PathBuf {
 ///
 /// `None` for a missing / unreadable / non-object file, for an absent, empty or
 /// non-string `sessionDir`, and for any value that is not absolute after tilde
-/// expansion — so every uncertainty falls through to the default.
+/// expansion — so every uncertainty falls through to the default. "Not absolute"
+/// is the HOST's grammar, which on Windows also covers a drive-relative `\srv\x`
+/// / `/srv/x` (root, no drive prefix): that resolves against whatever drive the
+/// pi process's cwd sits on, and that cwd is again the per-session workspace.
 fn session_dir_from_settings(agent_dir: &Path, home_dir: Option<&Path>) -> Option<PathBuf> {
     let raw = fs::read_to_string(agent_dir.join("settings.json")).ok()?;
     let settings: Value = serde_json::from_str(&raw).ok()?;
@@ -174,7 +310,9 @@ fn session_dir_from_settings(agent_dir: &Path, home_dir: Option<&Path>) -> Optio
 /// - `model_change` — `{provider,modelId}`; tracks the latest model.
 /// - `session_info` — `{name}`; the session's display name (preferred title).
 ///   The LAST one wins, matching pi's own `getSessionName()`, so a `/name`
-///   rename is what shows.
+///   rename is what shows — except the name pi-acp (0.0.35+) gives a session
+///   after its first prompt, which is not a name anyone chose (see
+///   [`is_pi_acp_prompt_name`]).
 /// - `compaction` / `branch_summary` / `custom_message` — conversation artifacts
 ///   pi's own TUI renders; surfaced as a compaction divider / system messages.
 /// - `thinking_level_change` / `label` / `custom` / … — metadata that is
@@ -196,20 +334,39 @@ fn session_dir_from_settings(agent_dir: &Path, home_dir: Option<&Path>) -> Optio
 /// partially-written log is read robustly rather than panicking.
 pub struct PiParser {
     base_dir: PathBuf,
+    /// Where `models.json` lives. Resolved separately from `base_dir` because a
+    /// custom `sessionDir` moves the sessions OUT of the agent dir, so the one
+    /// cannot be derived from the other.
+    agent_dir: PathBuf,
 }
 
 impl PiParser {
     pub fn new() -> Self {
+        Self::for_env(&AgentEnv::inherited())
+    }
+
+    /// The history of the pi launched with `env`.
+    pub fn for_env(env: &AgentEnv) -> Self {
         Self {
-            base_dir: resolve_pi_sessions_dir(),
+            base_dir: resolve_pi_sessions_dir_for_env(env),
+            agent_dir: resolve_pi_agent_dir_for_env(env),
         }
     }
 
     /// Construct a parser pointed at an explicit `sessions` directory (test
-    /// fixtures).
+    /// fixtures). The agent dir is taken to be its parent — pi's default
+    /// `<agent dir>/sessions` layout — so a fixture can place `models.json`
+    /// next to the sessions folder and nothing reaches the real `~/.pi`.
     #[cfg(any(test, feature = "test-utils"))]
     pub fn with_base_dir(base_dir: PathBuf) -> Self {
-        Self { base_dir }
+        let agent_dir = base_dir
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| base_dir.clone());
+        Self {
+            base_dir,
+            agent_dir,
+        }
     }
 
     fn parse_summary(&self, path: &Path) -> Option<ConversationSummary> {
@@ -254,7 +411,15 @@ impl PiParser {
         backfill_turn_durations(&mut turns, &[]);
 
         let used_tokens = latest_turn_total_usage_tokens(&turns);
-        let max_tokens = infer_context_window_max_tokens(parsed.model.as_deref());
+        // Ask Pi what the provider declared first; only then guess by name.
+        // Self-hosted model ids are absent from the built-in table, so guessing
+        // alone drops the context meter entirely.
+        let max_tokens = pi_declared_context_window(
+            &self.agent_dir,
+            parsed.provider.as_deref(),
+            parsed.model.as_deref(),
+        )
+        .or_else(|| infer_context_window_max_tokens(parsed.model.as_deref()));
         let session_stats =
             merge_context_window_stats(compute_session_stats(&turns), used_tokens, max_tokens);
 
@@ -320,6 +485,7 @@ impl AgentParser for PiParser {
 
     fn get_conversation(&self, conversation_id: &str) -> Result<ConversationDetail, ParseError> {
         if self.base_dir.exists() {
+            let mut by_filename: Option<PathBuf> = None;
             for entry in WalkDir::new(&self.base_dir)
                 .into_iter()
                 .filter_map(|e| e.ok())
@@ -328,11 +494,23 @@ impl AgentParser for PiParser {
                 if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
                     continue;
                 }
-                // Match by the header `id` (the stable external id); fall back to
+                // Match by the header `id` (what listing reports); fall back to
                 // the filename uuid when a malformed file has no header.
                 if session_id_of(path).as_deref() == Some(conversation_id) {
                     return self.parse_detail(path, conversation_id);
                 }
+                // The filename carries the id pi reported when the session was
+                // created — pi-acp's ACP session id, which codeg stores. The
+                // header can still differ: a session loaded before its first
+                // prompt relaunches `pi --session <unwritten file>`, and pi then
+                // writes a fresh header id into that file (#1068). Accept the
+                // filename uuid, but only when no header matches.
+                if by_filename.is_none() && fallback_id(path) == conversation_id {
+                    by_filename = Some(path.to_path_buf());
+                }
+            }
+            if let Some(path) = by_filename {
+                return self.parse_detail(&path, conversation_id);
             }
         }
 
@@ -348,7 +526,8 @@ struct SessionParse {
     messages: Vec<UnifiedMessage>,
     first_ts: Option<DateTime<Utc>>,
     last_ts: Option<DateTime<Utc>>,
-    /// Header `id` (the stable external id; `None` when the header is missing).
+    /// Header `id` (the listed id; `None` when the header is missing). It can
+    /// differ from the filename uuid — see `get_conversation`.
     session_id: Option<String>,
     /// Header `cwd`.
     cwd: Option<String>,
@@ -358,6 +537,10 @@ struct SessionParse {
     first_user_text: Option<String>,
     /// Latest model from an assistant message's `model` or a `model_change`.
     model: Option<String>,
+    /// The provider named alongside that model, always written with it so the
+    /// pair can never be mixed across a switch. pi identifies a model by
+    /// `(provider, id)` — see [`pi_declared_context_window`].
+    provider: Option<String>,
     /// User + assistant turns (tool calls/results and thinking excluded), the
     /// list-view activity count.
     message_count: u32,
@@ -411,7 +594,17 @@ fn parse_session(path: &Path) -> SessionParse {
         sp.cwd = string_field(header, "cwd");
         note_ts(&mut sp, record_iso_ts(header));
     }
-    sp.session_name = session_name(&entries);
+    // An entry with no name only clears one (pi's `getSessionName`).
+    let only_session_info = entries
+        .iter()
+        .filter(|record| record.value.get("type").and_then(Value::as_str) == Some("session_info"))
+        .filter(|record| string_field(&record.value, "name").is_some())
+        .count()
+        == 1;
+    sp.session_name = session_name(&entries).filter(|name| {
+        !first_prompt_message(&entries)
+            .is_some_and(|prompt| is_pi_acp_prompt_name(name, &prompt, only_session_info))
+    });
 
     // Pass 2 — replay the active branch in file order (which IS path order:
     // every entry on the path was appended after its parent).
@@ -431,6 +624,7 @@ fn parse_session(path: &Path) -> SessionParse {
             "model_change" => {
                 if let Some(model) = string_field(value, "modelId") {
                     sp.model = Some(model);
+                    sp.provider = string_field(value, "provider");
                 }
             }
             "message" => parse_message_record(&mut sp, value, ts, idx),
@@ -469,6 +663,140 @@ fn session_name(entries: &[SessionRecord]) -> Option<String> {
         .rev()
         .find(|record| record.value.get("type").and_then(Value::as_str) == Some("session_info"))
         .and_then(|record| string_field(&record.value, "name"))
+}
+
+/// How much of a session's first prompt pi-acp names the session after:
+/// `promptToSessionTitle`'s `Array.from(…).slice(0, 80)`, in code points.
+const PI_ACP_PROMPT_TITLE_CHARS: usize = 80;
+
+/// What follows the prompt's text in the message pi records for it, each
+/// starting a line: what pi-acp's `promptToPiMessage` appends for a block that
+/// is not text (a `resource_link`, an embedded `resource`, an `audio` block),
+/// and the notes pi adds after the text for an image it converted, resized
+/// or left out (`conversionHint`, `formatDimensionNote` and the omission
+/// messages of pi's `processImage`), spelled out in full so a mention of a
+/// file named `Image…` is not taken for one.
+const PI_RECORDED_PROMPT_SUFFIXES: [&str; 6] = [
+    "\n[Context] ",
+    "\n[Embedded Context] ",
+    "\n[Audio] ",
+    "\n[Image converted from ",
+    "\n[Image: original ",
+    "\n[Image omitted: ",
+];
+
+/// pi-acp's `promptToSessionTitle` (0.0.35), the name it gives a session it
+/// created when the session's first turn starts (`maybeAutoTitle`, through
+/// pi's `set_session_name`, published as `session_info_update.title` too):
+/// the prompt's text blocks joined with a space, each run of white space
+/// made one space and the ends trimmed (JavaScript's `\s`), then the first
+/// 80 code points. `None` for a prompt with no text, which it leaves unnamed
+/// and names after the next one instead.
+pub(crate) fn pi_acp_prompt_title<'a>(texts: impl IntoIterator<Item = &'a str>) -> Option<String> {
+    let joined = texts.into_iter().collect::<Vec<_>>().join(" ");
+    let collapsed = joined
+        .split(is_js_whitespace)
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!collapsed.is_empty()).then(|| collapsed.chars().take(PI_ACP_PROMPT_TITLE_CHARS).collect())
+}
+
+/// Whether a prompt whose text is `text` starts with a slash command, which
+/// pi-acp may run itself (`/compact`, `/name`, …: no turn, so no name) or
+/// expand from a prompt file before pi records it. codeg keeps whatever name
+/// pi-acp gives the session after such a prompt — live
+/// (`acp::session_title::PiPromptTitle`) and here alike — since the message
+/// pi records then need not be the text the name was taken from.
+pub(crate) fn is_pi_slash_prompt(text: &str) -> bool {
+    text.trim_start_matches(is_js_whitespace).starts_with('/')
+}
+
+/// The prose of a message pi recorded for a pi-acp prompt: what comes before
+/// the first thing appended to it ([`PI_RECORDED_PROMPT_SUFFIXES`]) and before
+/// codeg's internal frames, which codeg sends as text blocks of their own
+/// after everything the user wrote and opens with a separator it scrubs from
+/// every prompt (`agent_mentions`).
+fn prompt_prose(message: &str) -> &str {
+    let cut = PI_RECORDED_PROMPT_SUFFIXES
+        .iter()
+        .filter_map(|suffix| message.find(suffix))
+        .chain(message.find(ROUTE_FRAME_SEPARATOR))
+        .min()
+        .unwrap_or(message.len());
+    &message[..cut]
+}
+
+/// The text of the message pi recorded for the first prompt pi-acp could name
+/// the session after: the first user message, over every physical entry as
+/// pi-acp's first turn is, with prose in it ([`pi_acp_prompt_title`] skips a
+/// prompt that has none).
+fn first_prompt_message(entries: &[SessionRecord]) -> Option<String> {
+    entries
+        .iter()
+        .filter(|record| record.value.get("type").and_then(Value::as_str) == Some("message"))
+        .filter_map(|record| record.value.get("message"))
+        .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"))
+        .map(|message| user_content_text(message.get("content")))
+        .find(|text| !prompt_prose(text).trim_matches(is_js_whitespace).is_empty())
+}
+
+/// `text` without its white space (JavaScript's `\s`).
+fn without_white_space(text: &str) -> String {
+    text.chars().filter(|c| !is_js_whitespace(*c)).collect()
+}
+
+/// Whether the session's name `name` (trimmed) is the one pi-acp 0.0.35 gave
+/// it after its first prompt, recorded by pi as `first_prompt`, and nobody has
+/// named it since.
+///
+/// That name is the prompt cut to 80 characters with its spacing collapsed,
+/// and with the markdown links codeg writes for a mentioned file left as they
+/// are (and, cut, often half a link), where codeg titles a session by the
+/// same prompt with each link folded to its label and 100 characters kept
+/// ([`title_from_user_text`]). Taken as the session's name it renamed every
+/// pi session after its first turn, the first time to that worse spelling of
+/// the title codeg had already given it. So it is read as no name at all,
+/// and the session keeps the title its first prompt gives it, as before
+/// pi-acp named sessions. A name a user or an extension gives (`/name`, pi's
+/// `setSessionName`) is a name, even one spelling the prompt again.
+///
+/// pi-acp's name is never longer than its 80-character cut, and it names a
+/// session once, and only one pi has not named, so its name is
+/// the session's only `session_info` entry with a name (`only_entry`): any
+/// other, before or after, is a name someone gave.
+///
+/// The name is taken from the prompt's text blocks joined with a space; pi
+/// records them joined with nothing, followed by what pi-acp and pi append
+/// ([`PI_RECORDED_PROMPT_SUFFIXES`]), while codeg's internal frames are text
+/// blocks after everything the user sent. So the two are compared without
+/// their white space: a name running to the 80-character cut is a start of
+/// the recorded prompt, and a shorter one is its whole prose, with the part
+/// of the name from a frame on dropped.
+fn is_pi_acp_prompt_name(name: &str, first_prompt: &str, only_entry: bool) -> bool {
+    let named = name.chars().count();
+    if !only_entry || named > PI_ACP_PROMPT_TITLE_CHARS || is_pi_slash_prompt(first_prompt) {
+        return false;
+    }
+    let recorded = without_white_space(first_prompt);
+    // Trimming can take the space the cut ended on, but nothing more: the
+    // spacing was collapsed first.
+    if (named == PI_ACP_PROMPT_TITLE_CHARS || named + 1 == PI_ACP_PROMPT_TITLE_CHARS)
+        && recorded.starts_with(&without_white_space(name))
+    {
+        return true;
+    }
+    let prose = without_white_space(name.split(ROUTE_FRAME_SEPARATOR).next().unwrap_or(name));
+    if prose.is_empty() {
+        return false;
+    }
+    recorded.strip_prefix(&prose).is_some_and(|rest| {
+        rest.is_empty()
+            || rest.starts_with(ROUTE_FRAME_SEPARATOR)
+            || PI_RECORDED_PROMPT_SUFFIXES
+                .iter()
+                .any(|suffix| rest.starts_with(&without_white_space(suffix)))
+    })
 }
 
 /// A trimmed, non-empty string field, or `None`.
@@ -625,7 +953,9 @@ fn parse_message_record(sp: &mut SessionParse, value: &Value, ts: DateTime<Utc>,
             }
             sp.content_events += 1;
             sp.message_count += 1;
-            if sp.first_user_text.is_none() && !text.trim().is_empty() {
+            // Like pi-acp's name, the title comes from the first prompt with
+            // prose: not one holding only an attachment or pi's note on an image.
+            if sp.first_user_text.is_none() && !prompt_prose(&text).trim().is_empty() {
                 sp.first_user_text = Some(title_from_user_text(text.trim()));
             }
             let mut blocks = Vec::with_capacity(1 + images.len());
@@ -650,6 +980,7 @@ fn parse_message_record(sp: &mut SessionParse, value: &Value, ts: DateTime<Utc>,
             let model = string_field(message, "model");
             if let Some(ref m) = model {
                 sp.model = Some(m.clone());
+                sp.provider = string_field(message, "provider");
             }
 
             let mut blocks = assistant_content_blocks(message.get("content"));
@@ -694,6 +1025,7 @@ fn parse_message_record(sp: &mut SessionParse, value: &Value, ts: DateTime<Utc>,
                     is_error,
                     agent_stats: None,
                     images: content_images(message.get("content")),
+                    exit_code: None,
                 }],
                 ts,
                 None,
@@ -776,6 +1108,7 @@ fn parse_compaction(sp: &mut SessionParse, value: &Value, ts: DateTime<Utc>, idx
                 is_error: false,
                 agent_stats: None,
                 images: Vec::new(),
+                exit_code: None,
             },
         ],
         ts,
@@ -900,6 +1233,7 @@ fn parse_bash_execution(sp: &mut SessionParse, value: &Value, ts: DateTime<Utc>,
             is_error,
             agent_stats: None,
             images: Vec::new(),
+            exit_code,
         }],
         ts,
         None,
@@ -1345,6 +1679,219 @@ mod tests {
     use std::io::Write;
     use tempfile::tempdir;
 
+    /// Two providers, same id, different windows — the file pi would resolve
+    /// with the session's own provider, not with a tie-break.
+    const TWO_PROVIDER_MODELS_JSON: &str = r#"{
+      "providers": {
+        "openai-compatible": { "models": [
+          { "id": "qwen-flash", "contextWindow": 262144, "maxTokens": 32768 }
+        ]},
+        "other": { "models": [
+          { "id": "qwen-flash", "contextWindow": 131072 }
+        ]}
+      }
+    }"#;
+
+    #[test]
+    fn declared_context_window_resolves_the_session_s_own_provider() {
+        let window = |provider: Option<&str>| {
+            pi_declared_context_window_from(TWO_PROVIDER_MODELS_JSON, provider, "qwen-flash")
+        };
+        // The recorded provider decides. Taking the largest instead would have
+        // told a session on `other` it had twice the room it really has.
+        assert_eq!(window(Some("openai-compatible")), Some(262_144));
+        assert_eq!(window(Some("other")), Some(131_072));
+        // A provider this file does not define is a BUILT-IN one, whose
+        // catalogue lives inside pi — nothing to read here.
+        assert_eq!(window(Some("anthropic")), None);
+        // Without a recorded provider, two disagreeing declarations are not an
+        // answer; one agreed answer still is.
+        assert_eq!(window(None), None);
+        assert_eq!(
+            pi_declared_context_window_from(
+                r#"{"providers":{"a":{"models":[{"id":"m","contextWindow":50}]},
+                                  "b":{"models":[{"id":"m","contextWindow":50}]}}}"#,
+                None,
+                "m"
+            ),
+            Some(50)
+        );
+        // An id the file does not list → None, so the name-based guess still runs.
+        assert_eq!(
+            pi_declared_context_window_from(TWO_PROVIDER_MODELS_JSON, None, "nope"),
+            None
+        );
+    }
+
+    /// pi's `modelFromJson` ends `contextWindow: definition.contextWindow ??
+    /// 128000`, and the entry REPLACES any built-in of the same id. So a listed
+    /// model that declares nothing is not unknown — it is 128K, including for
+    /// an id codeg's own name table would answer differently. This is the shape
+    /// codeg's Pi settings panel writes (`apply_pi_custom_model` records `id` +
+    /// `name` + reasoning, never a window).
+    #[test]
+    fn a_listed_model_without_a_window_takes_pi_s_own_default() {
+        assert_eq!(
+            pi_declared_context_window_from(
+                r#"{"providers":{"gs":{"baseUrl":"http://127.0.0.1:8080/v1",
+                     "models":[{"id":"gpt-5.5","name":"gpt-5.5"}]}}}"#,
+                Some("gs"),
+                "gpt-5.5"
+            ),
+            Some(128_000),
+            "the name table's 258K is what pi is NOT running with"
+        );
+    }
+
+    /// One provider listing an id twice: pi's `applyModelsJson` upserts in file
+    /// order, so the second entry overwrites the first and 100K is what pi
+    /// runs with. Reading the first instead would report 9× the room.
+    #[test]
+    fn a_repeated_model_id_resolves_to_its_last_declaration() {
+        assert_eq!(
+            pi_declared_context_window_from(
+                r#"{"providers":{"p":{"models":[
+                     {"id":"m","contextWindow":900000},
+                     {"id":"m","contextWindow":100000}
+                   ]}}}"#,
+                Some("p"),
+                "m"
+            ),
+            Some(100_000)
+        );
+    }
+
+    /// `modelOverrides` is the topmost layer in pi's composer, and it patches:
+    /// a window there wins, its absence leaves the layer below in charge.
+    #[test]
+    fn a_model_override_wins_over_the_models_entry() {
+        let raw = r#"{"providers":{"p":{
+            "models":[{"id":"m","contextWindow":100}],
+            "modelOverrides":{"m":{"contextWindow":900},"other":{"contextWindow":7}}
+        }}}"#;
+        assert_eq!(
+            pi_declared_context_window_from(raw, Some("p"), "m"),
+            Some(900)
+        );
+        assert_eq!(
+            pi_declared_context_window_from(
+                r#"{"providers":{"p":{"models":[{"id":"m","contextWindow":100}],
+                     "modelOverrides":{"m":{"name":"renamed"}}}}}"#,
+                Some("p"),
+                "m"
+            ),
+            Some(100),
+            "an override that declares no window must not erase the declaration"
+        );
+    }
+
+    #[test]
+    fn declared_context_window_declines_junk_without_panicking() {
+        // Unreadable, not JSON, missing fields or a zero window must be None, never a panic.
+        assert_eq!(
+            pi_declared_context_window_from("", None, "qwen-flash"),
+            None
+        );
+        assert_eq!(
+            pi_declared_context_window_from("not json", None, "qwen-flash"),
+            None
+        );
+        assert_eq!(
+            pi_declared_context_window_from(r#"{"providers": "wrong"}"#, None, "qwen-flash"),
+            None
+        );
+        // pi throws `invalid contextWindow` for `<= 0` rather than defaulting,
+        // so a file it would refuse to load must not be read as a declaration.
+        assert_eq!(
+            pi_declared_context_window_from(
+                r#"{"providers":{"p":{"models":[{"id":"m","contextWindow":0}]}}}"#,
+                Some("p"),
+                "m"
+            ),
+            None
+        );
+        assert_eq!(
+            pi_declared_context_window_from(
+                r#"{"providers":{"p":{"models":[{"id":"m","contextWindow":"wide"}]}}}"#,
+                Some("p"),
+                "m"
+            ),
+            None
+        );
+    }
+
+    /// The lookup only pays off if `get_conversation` actually consults it —
+    /// and only if the declaration OUTRANKS the name table, which is the whole
+    /// point (a proxy in front of a known model id serves a window the table
+    /// cannot know). `sample_records` runs `claude-sonnet-4-6`, which the table
+    /// answers with 200K, so the two readings are distinguishable.
+    #[test]
+    fn a_declared_window_outranks_the_name_table_through_get_conversation() {
+        let dir = tempdir().expect("tempdir");
+        let agent_dir = dir.path().join("agent");
+        let sessions = agent_dir.join("sessions");
+        let id = "0f3c1d2e-1111-2222-3333-444455556666";
+        write_session(
+            &sessions,
+            "--Users-demo-my-app--",
+            "2026-06-27T10-00-00_0f3c1d2e.jsonl",
+            &sample_records(id),
+        );
+
+        let window = || {
+            PiParser::with_base_dir(sessions.clone())
+                .get_conversation(id)
+                .expect("detail")
+                .session_stats
+                .expect("session stats")
+                .context_window_max_tokens
+        };
+        let declare = |json: &str| std::fs::write(agent_dir.join("models.json"), json).unwrap();
+
+        // No models.json at all: unchanged behaviour, the name table answers.
+        assert_eq!(window(), Some(200_000));
+
+        // The session runs `anthropic`/`claude-sonnet-4-6` (`model_change`
+        // carries the pair). A declaration under a DIFFERENT provider is a
+        // different model to pi, so the table keeps the answer.
+        declare(
+            r#"{"providers":{"proxy":{"baseUrl":"http://127.0.0.1:8080/v1",
+                 "models":[{"id":"claude-sonnet-4-6","contextWindow":900000}]}}}"#,
+        );
+        assert_eq!(window(), Some(200_000));
+
+        // Declared under the provider the session actually used — even though
+        // the other provider's window is larger, and even though it is SMALLER
+        // than what the name table would have guessed.
+        declare(
+            r#"{"providers":{
+                 "proxy":{"baseUrl":"http://127.0.0.1:8080/v1",
+                   "models":[{"id":"claude-sonnet-4-6","contextWindow":900000}]},
+                 "anthropic":{"baseUrl":"http://127.0.0.1:9090/v1",
+                   "models":[{"id":"claude-sonnet-4-6","contextWindow":150000}]}
+               }}"#,
+        );
+        assert_eq!(window(), Some(150_000));
+    }
+
+    /// Same fixture — and same reason — as `acp::file_system_runtime`'s tests: a
+    /// unix-shaped `/srv/x` has a root but NO drive prefix on Windows, so
+    /// `Path::is_absolute` (the gate in [`session_dir_from_settings`]) calls it
+    /// drive-relative and declines it. Hard-coding the unix shape made the
+    /// honored-path assertions quietly exercise the FALLBACK there.
+    #[cfg(windows)]
+    const ABS_PREFIX: &str = "C:";
+    #[cfg(not(windows))]
+    const ABS_PREFIX: &str = "";
+
+    /// An absolute path for the HOST platform, built from unix-style segments —
+    /// as the STRING a settings file or env var carries, which is how every
+    /// caller here needs it. Nothing opens these paths, so the synthetic drive
+    /// letter needs no counterpart on disk.
+    fn absolute_path(segments: &str) -> String {
+        format!("{ABS_PREFIX}/{segments}")
+    }
+
     #[test]
     fn resolve_sessions_dir_prefers_session_dir_env() {
         let resolved = resolve_pi_sessions_dir_from(
@@ -1682,10 +2229,13 @@ mod tests {
         assert!(has_bash_use, "bashExecution becomes a bash ToolUse");
 
         let errored = detail.turns.iter().flat_map(|t| &t.blocks).any(|b| {
-            matches!(b, ContentBlock::ToolResult { is_error, output_preview, .. }
-                if *is_error && output_preview.as_deref() == Some("boom"))
+            matches!(b, ContentBlock::ToolResult { is_error, output_preview, exit_code, .. }
+                if *is_error && output_preview.as_deref() == Some("boom") && *exit_code == Some(1))
         });
-        assert!(errored, "a non-zero exitCode marks the bash result an error");
+        assert!(
+            errored,
+            "a non-zero exitCode marks the bash result an error, and is kept"
+        );
     }
 
     #[test]
@@ -1726,6 +2276,75 @@ mod tests {
         assert_eq!(summaries[0].id, id);
         let detail = parser.get_conversation(id).expect("detail survives malformed lines");
         assert!(detail.turns.iter().any(|t| matches!(t.role, TurnRole::User)));
+    }
+
+    /// REGRESSION (#1068): a session reloaded before its first prompt is named
+    /// after the ACP session id (the one codeg stores as `external_id`) but
+    /// carries a different header `id`. pi 1.0.0 + pi-acp 0.0.34 really write
+    /// this shape: `session/new`, then `session/load`, then a prompt. Matching
+    /// the header alone left every such conversation with an empty history.
+    #[test]
+    fn filename_uuid_finds_a_session_whose_header_id_differs() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path();
+        let acp_id = "01a18bd6-7bac-773a-a4b6-cdb58ac62a44";
+        let header_id = "01a18bd6-914a-76bc-9d69-00f93c18dc57";
+        write_session(
+            base,
+            "--Users-demo-my-app--",
+            &format!("2026-10-30T08-04-11-821Z_{acp_id}.jsonl"),
+            &sample_records(header_id),
+        );
+        let parser = PiParser::with_base_dir(base.to_path_buf());
+
+        assert_eq!(parser.list_conversations().expect("list")[0].id, header_id);
+
+        let detail = parser
+            .get_conversation(acp_id)
+            .expect("found by filename uuid");
+        assert!(detail
+            .turns
+            .iter()
+            .any(|t| matches!(t.role, TurnRole::User)));
+        // The id asked for comes back unchanged, so the open path does not
+        // rewrite `external_id` away from the id pi-acp's session map knows.
+        assert_eq!(detail.summary.id, acp_id);
+
+        assert!(
+            parser.get_conversation(header_id).is_ok(),
+            "header id still works"
+        );
+    }
+
+    /// The header `id` wins over another file's filename uuid, whatever order
+    /// the directory walk visits them in.
+    #[test]
+    fn header_id_match_wins_over_a_filename_match() {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path();
+        let id = "01a18bd6-0000-7000-8000-000000000001";
+        // The decoy's filename names `id`; only the other file's header does.
+        let decoy: Vec<Value> = sample_records("01a18bd6-0000-7000-8000-000000000002")
+            .into_iter()
+            .map(|mut r| {
+                if r["type"] == "session_info" {
+                    r["name"] = json!("Filename match");
+                }
+                r
+            })
+            .collect();
+        write_session(base, "--Users-demo-a--", &format!("a_{id}.jsonl"), &decoy);
+        write_session(
+            base,
+            "--Users-demo-b--",
+            "b_other.jsonl",
+            &sample_records(id),
+        );
+
+        let detail = PiParser::with_base_dir(base.to_path_buf())
+            .get_conversation(id)
+            .expect("detail");
+        assert_eq!(detail.summary.title.as_deref(), Some("Build the app"));
     }
 
     #[test]
@@ -2037,6 +2656,344 @@ mod tests {
         );
     }
 
+    /// pi-acp's name never runs past 80 characters, and an entry with no name
+    /// before it only clears one: a longer name is a name, and the name after
+    /// a clear is still pi-acp's.
+    #[test]
+    fn pi_acp_prompt_name_bounds() {
+        let prompt = "word ".repeat(40);
+        let long_name: String = prompt.trim().chars().take(94).collect();
+        assert!(long_name.chars().count() > 80 && long_name.ends_with('d'));
+        let id = "bounds-0001";
+        let detail = parse_one(
+            &[
+                header(id),
+                user_message("u1", None, json!(prompt)),
+                session_info("s1", Some("u1"), &long_name),
+            ],
+            id,
+        );
+        assert_eq!(detail.summary.title.as_deref(), Some(long_name.as_str()));
+
+        let id = "bounds-0002";
+        let prompt = "fix [login.ts](file:///Users/demo/app/src/login.ts) flow";
+        let auto = pi_acp_prompt_title([prompt]).expect("prompt has text");
+        let detail = parse_one(
+            &[
+                header(id),
+                session_info("s0", None, ""),
+                user_message("u1", Some("s0"), json!(prompt)),
+                session_info("s1", Some("u1"), &auto),
+            ],
+            id,
+        );
+        assert_eq!(detail.summary.title.as_deref(), Some("fix login.ts flow"));
+
+        // A name longer than the cut is a name, even the whole prompt.
+        let id = "bounds-0003";
+        let prompt = format!(
+            "check [main.rs](file:///Users/demo/app/src-tauri/src/main.rs) {}",
+            "and more ".repeat(5)
+        );
+        let name = prompt.trim();
+        assert!(name.chars().count() > 80);
+        let detail = parse_one(
+            &[
+                header(id),
+                user_message("u1", None, json!(prompt)),
+                session_info("s1", Some("u1"), name),
+            ],
+            id,
+        );
+        assert_eq!(detail.summary.title.as_deref(), Some(name));
+
+        // Only pi's own image notes end the prose: a mention of a file named
+        // `Image…` on the next line is part of it.
+        let id = "bounds-0004";
+        let prompt =
+            "Fix image processing\n[ImageProcessor.ts](file:///Users/demo/app/src/ImageProcessor.ts)";
+        let detail = parse_one(
+            &[
+                header(id),
+                user_message("u1", None, json!(prompt)),
+                session_info("s1", Some("u1"), "Fix image processing"),
+            ],
+            id,
+        );
+        assert_eq!(
+            detail.summary.title.as_deref(),
+            Some("Fix image processing")
+        );
+    }
+
+    /// pi-acp 0.0.35's `promptToSessionTitle`: text blocks joined with a
+    /// space, JavaScript white space collapsed and trimmed, 80 code points.
+    #[test]
+    fn pi_acp_prompt_title_ports_prompt_to_session_title() {
+        assert_eq!(
+            pi_acp_prompt_title(["  fix\n\tthe\u{3000}bug  ", "now\u{FEFF}"]).as_deref(),
+            Some("fix the bug now"),
+            "blocks are joined with a space and every JavaScript `\\s` run collapses"
+        );
+        assert_eq!(pi_acp_prompt_title([" \n "]), None);
+        assert_eq!(pi_acp_prompt_title(Vec::<&str>::new()), None);
+        // U+0085 is not JavaScript white space, so it is kept.
+        assert_eq!(
+            pi_acp_prompt_title(["a\u{85}b"]).as_deref(),
+            Some("a\u{85}b")
+        );
+        // Code points, not bytes or UTF-16 units: 81 emoji keep 80.
+        let emoji = "😀".repeat(81);
+        assert_eq!(
+            pi_acp_prompt_title([emoji.as_str()]).map(|t| t.chars().count()),
+            Some(80)
+        );
+        // A cut can end on the space it collapsed to; pi trims what it stores.
+        let words = format!("{} tail", "x".repeat(79));
+        assert_eq!(
+            pi_acp_prompt_title([words.as_str()]),
+            Some(format!("{} ", "x".repeat(79)))
+        );
+    }
+
+    fn user_message(id: &str, parent: Option<&str>, content: Value) -> Value {
+        json!({"type":"message","id":id,"parentId":parent,"timestamp":"2026-06-27T10:00:01.000Z",
+               "message":{"role":"user","content":content}})
+    }
+
+    fn session_info(id: &str, parent: Option<&str>, name: &str) -> Value {
+        json!({"type":"session_info","id":id,"parentId":parent,
+               "timestamp":"2026-06-27T10:00:02.000Z","name":name})
+    }
+
+    /// The name pi-acp 0.0.35 stores for a session after its first prompt
+    /// (the prompt collapsed and cut to 80 characters, a mentioned file's link
+    /// left raw and cut in half) is not the session's name: the title stays
+    /// the one the first prompt gives it, the link folded to its label.
+    #[test]
+    fn pi_acp_first_prompt_name_is_not_a_name() {
+        let id = "auto-name-0001";
+        let prompt = "帮我看看为什么应用一启动就崩溃了，怀疑和配置加载有关，相关代码在 [main.rs](file:///Users/demo/app/src-tauri/src/main.rs) 里，\n顺便看看日志";
+        let auto = pi_acp_prompt_title([prompt]).expect("prompt has text");
+        assert!(
+            auto.contains("[main.rs](file:///") && !auto.contains("main.rs) "),
+            "the fixture's name really is a cut, unfolded spelling: {auto}"
+        );
+        // pi-acp names the session at turn start, so the entry can land on
+        // either side of the prompt's message.
+        for records in [
+            vec![
+                header(id),
+                user_message("u1", None, json!(prompt)),
+                session_info("s1", Some("u1"), auto.trim()),
+            ],
+            vec![
+                header(id),
+                session_info("s1", None, auto.trim()),
+                user_message("u1", Some("s1"), json!([{"type":"text","text":prompt}])),
+            ],
+        ] {
+            let detail = parse_one(&records, id);
+            assert_eq!(
+                detail.summary.title.as_deref(),
+                Some(title_from_user_text(prompt).as_str())
+            );
+        }
+    }
+
+    /// pi records the prompt with a line appended per attachment and codeg's
+    /// internal frames concatenated, while pi-acp named the session after the
+    /// text blocks joined with a space. Both still read as pi-acp's name.
+    #[test]
+    fn pi_acp_first_prompt_name_is_recognized_past_attachments_and_frames() {
+        let id = "auto-name-0002";
+        let prose = "Review the attached notes";
+        let frame = "\u{1e}{\"kind\":\"codeg_internal_assistant_brief\",\"version\":1}\nCodeg assistant profile (authoritative): be brief\u{1e}";
+        let recorded = format!(
+            "{prose}\n[Embedded Context] file:///Users/demo/notes.md (text/markdown)\n# Notes\n- a\n[Context] file:///Users/demo/b.md{frame}"
+        );
+        let auto = pi_acp_prompt_title([prose, frame]).expect("prompt has text");
+        assert!(
+            auto.starts_with("Review the attached notes \u{1e}"),
+            "{auto:?}"
+        );
+        let detail = parse_one(
+            &[
+                header(id),
+                user_message("u1", None, json!([{"type":"text","text":recorded}])),
+                session_info("s1", Some("u1"), auto.trim()),
+            ],
+            id,
+        );
+        assert_eq!(
+            detail.summary.title.as_deref(),
+            Some(title_from_user_text(&recorded).as_str()),
+            "the session keeps the title its first prompt gives it"
+        );
+
+        // A long prompt's name never reaches the attachments: the whole
+        // message gives the same 80 characters.
+        let id = "auto-name-0003";
+        let long = "please ".repeat(20);
+        let recorded = format!("{long}\n[Context] file:///Users/demo/b.md");
+        let auto = pi_acp_prompt_title([long.as_str()]).expect("prompt has text");
+        let detail = parse_one(
+            &[
+                header(id),
+                user_message("u1", None, json!(recorded)),
+                session_info("s1", Some("u1"), auto.trim()),
+            ],
+            id,
+        );
+        assert_eq!(
+            detail.summary.title.as_deref(),
+            Some(title_from_user_text(recorded.trim()).as_str())
+        );
+    }
+
+    /// pi records a prompt's text blocks joined with nothing (codeg's CLI sends
+    /// piped input as a block of its own) and adds a note after the text for
+    /// an image it resized, where pi-acp named the session after the blocks
+    /// joined with a space. Both still read as pi-acp's name.
+    #[test]
+    fn pi_acp_first_prompt_name_is_recognized_past_joins_and_image_notes() {
+        let id = "auto-name-0004";
+        let blocks = ["summarize this log", "error: disk full\nerror: retry"];
+        let recorded = blocks.concat();
+        let auto = pi_acp_prompt_title(blocks).expect("prompt has text");
+        assert_eq!(auto, "summarize this log error: disk full error: retry");
+        let detail = parse_one(
+            &[
+                header(id),
+                user_message("u1", None, json!(recorded)),
+                session_info("s1", Some("u1"), &auto),
+            ],
+            id,
+        );
+        assert_eq!(
+            detail.summary.title.as_deref(),
+            Some(title_from_user_text(&recorded).as_str())
+        );
+
+        let id = "auto-name-0005";
+        let prompt = "why does [app.tsx](file:///Users/demo/app/src/app.tsx) render blank";
+        let recorded = format!(
+            "{prompt}\n\n[Image: original 3024x1964, displayed at 2000x1299. Multiply coordinates by 1.51 to map to original image.]"
+        );
+        let auto = pi_acp_prompt_title([prompt]).expect("prompt has text");
+        let detail = parse_one(
+            &[
+                header(id),
+                user_message(
+                    "u1",
+                    None,
+                    json!([{"type":"text","text":recorded},
+                           {"type":"image","data":"aGk=","mimeType":"image/png"}]),
+                ),
+                session_info("s1", Some("u1"), &auto),
+            ],
+            id,
+        );
+        assert_eq!(
+            detail.summary.title.as_deref(),
+            Some(title_from_user_text(&recorded).as_str())
+        );
+        assert_ne!(detail.summary.title.as_deref(), Some(auto.as_str()));
+    }
+
+    /// A name someone chose stays the title: a `/name` (also when it follows
+    /// pi-acp's name), an extension's name, and the name pi-acp gives after a
+    /// prompt starting with a slash command, whose recorded message (a prompt
+    /// file pi-acp expanded) need not be what the name was taken from.
+    #[test]
+    fn chosen_and_slash_prompt_names_stay_the_title() {
+        let prompt = "fix the login flow";
+        let auto = pi_acp_prompt_title([prompt]).expect("prompt has text");
+
+        let id = "chosen-0001";
+        let detail = parse_one(
+            &[
+                header(id),
+                user_message("u1", None, json!(prompt)),
+                session_info("s1", Some("u1"), &auto),
+                session_info("s2", Some("s1"), "Login fix"),
+            ],
+            id,
+        );
+        assert_eq!(detail.summary.title.as_deref(), Some("Login fix"));
+
+        // Naming it after the prompt again, later, is a name too.
+        let id = "chosen-0005";
+        let prompt_with_link = "fix [login.ts](file:///Users/demo/app/src/login.ts) flow";
+        let auto_with_link = pi_acp_prompt_title([prompt_with_link]).expect("prompt has text");
+        let detail = parse_one(
+            &[
+                header(id),
+                user_message("u1", None, json!(prompt_with_link)),
+                session_info("s1", Some("u1"), &auto_with_link),
+                session_info("s2", Some("s1"), "Login fix"),
+                session_info("s3", Some("s2"), &auto_with_link),
+            ],
+            id,
+        );
+        assert_eq!(
+            detail.summary.title.as_deref(),
+            Some(auto_with_link.as_str())
+        );
+
+        let id = "chosen-0002";
+        let detail = parse_one(
+            &[
+                header(id),
+                session_info("s1", None, "fix the login"),
+                user_message("u1", Some("s1"), json!(prompt)),
+            ],
+            id,
+        );
+        assert_eq!(
+            detail.summary.title.as_deref(),
+            Some("fix the login"),
+            "a prefix of the prompt is a name, not pi-acp's cut"
+        );
+
+        let id = "chosen-0003";
+        let detail = parse_one(
+            &[
+                header(id),
+                user_message("u1", None, json!("/review src/app.ts")),
+                session_info("s1", Some("u1"), "/review src/app.ts"),
+            ],
+            id,
+        );
+        assert_eq!(detail.summary.title.as_deref(), Some("/review src/app.ts"));
+
+        // An image-only first prompt names nothing, even with pi's note on the
+        // image; pi-acp names the session after the next prompt, and the
+        // parser titles it by that prompt.
+        let id = "chosen-0004";
+        let auto = auto_with_link;
+        let prompt = prompt_with_link;
+        let detail = parse_one(
+            &[
+                header(id),
+                user_message(
+                    "u1",
+                    None,
+                    json!([{"type":"text","text":"\n\n[Image: original 3024x1964, displayed at 2000x1299. Multiply coordinates by 1.51 to map to original image.]"},
+                           {"type":"image","data":"aGk=","mimeType":"image/png"}]),
+                ),
+                user_message("u2", Some("u1"), json!(prompt)),
+                session_info("s1", Some("u2"), &auto),
+            ],
+            id,
+        );
+        assert_eq!(
+            detail.summary.title.as_deref(),
+            Some("fix login.ts flow"),
+            "the title folds the link the name kept"
+        );
+    }
+
     /// pi's `edit` writes a one-line receipt into `content` and the real unified
     /// diff into `details.patch`. Surfacing the receipt made an edit whose LIVE
     /// card renders a full diff collapse to a sentence once reopened.
@@ -2162,7 +3119,7 @@ mod tests {
             ],
             id,
         );
-        let (output, is_error) = detail
+        let (output, is_error, exit_code) = detail
             .turns
             .iter()
             .flat_map(|t| &t.blocks)
@@ -2170,12 +3127,18 @@ mod tests {
                 ContentBlock::ToolResult {
                     output_preview,
                     is_error,
+                    exit_code,
                     ..
-                } => Some((output_preview.clone().unwrap_or_default(), *is_error)),
+                } => Some((
+                    output_preview.clone().unwrap_or_default(),
+                    *is_error,
+                    *exit_code,
+                )),
                 _ => None,
             })
             .expect("the bash result");
         assert!(is_error, "a cancelled run is not a success");
+        assert_eq!(exit_code, None, "an interrupted run never got a code");
         assert!(output.contains("partial"), "the output is kept: {output}");
         assert!(output.contains("[cancelled]"), "got: {output}");
         assert!(output.contains("/tmp/pi-out.txt"), "got: {output}");
@@ -2316,45 +3279,47 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let agent_dir = dir.path().join("agent");
         std::fs::create_dir_all(&agent_dir).expect("agent dir");
+        let home = PathBuf::from(absolute_path("home/demo"));
+        // Serialized, never hand-written: a Windows path's `\` is not a legal
+        // JSON escape, and an unparseable file falls through to the default.
+        let write_settings = |session_dir: &str| {
+            std::fs::write(
+                agent_dir.join("settings.json"),
+                serde_json::to_string(&json!({ "sessionDir": session_dir })).expect("json"),
+            )
+            .expect("settings");
+        };
 
         // Absolute.
-        std::fs::write(
-            agent_dir.join("settings.json"),
-            r#"{"sessionDir": "/srv/pi-sessions"}"#,
-        )
-        .expect("settings");
+        write_settings(&absolute_path("srv/pi-sessions"));
         assert_eq!(
             resolve_pi_sessions_dir_from(
                 None,
                 Some(agent_dir.clone().into_os_string()),
-                Some(PathBuf::from("/home/demo")),
+                Some(home.clone()),
             ),
-            PathBuf::from("/srv/pi-sessions"),
+            PathBuf::from(absolute_path("srv/pi-sessions")),
         );
 
         // `~`-rooted.
-        std::fs::write(
-            agent_dir.join("settings.json"),
-            r#"{"sessionDir": "~/pi-sessions"}"#,
-        )
-        .expect("settings");
+        write_settings("~/pi-sessions");
         assert_eq!(
             resolve_pi_sessions_dir_from(
                 None,
                 Some(agent_dir.clone().into_os_string()),
-                Some(PathBuf::from("/home/demo")),
+                Some(home.clone()),
             ),
-            PathBuf::from("/home/demo/pi-sessions"),
+            home.join("pi-sessions"),
         );
 
         // The env var still outranks it.
         assert_eq!(
             resolve_pi_sessions_dir_from(
-                Some(OsString::from("/env/sessions")),
+                Some(OsString::from(absolute_path("env/sessions"))),
                 Some(agent_dir.clone().into_os_string()),
-                Some(PathBuf::from("/home/demo")),
+                Some(home),
             ),
-            PathBuf::from("/env/sessions"),
+            PathBuf::from(absolute_path("env/sessions")),
         );
     }
 
@@ -2389,6 +3354,38 @@ mod tests {
                 ),
                 default,
                 "relative sessionDir {relative:?} must not shadow the default"
+            );
+        }
+    }
+
+    /// A DRIVE-relative `sessionDir` falls through for the same reason a plain
+    /// relative one does: `\srv\x` (and `/srv/x`) carries a root but no drive
+    /// prefix, so Windows resolves it against whatever drive the pi process's cwd
+    /// sits on — and that cwd is the per-session workspace pi-acp passes. Widening
+    /// the gate from `is_absolute` to `has_root` would name a directory codeg
+    /// cannot know AND shadow the history in `<agent_dir>\sessions`.
+    #[test]
+    #[cfg(windows)]
+    fn drive_relative_settings_session_dir_falls_back_to_the_default() {
+        let dir = tempdir().expect("tempdir");
+        let agent_dir = dir.path().join("agent");
+        std::fs::create_dir_all(&agent_dir).expect("agent dir");
+        let default = agent_dir.join("sessions");
+
+        for rooted in [r"\srv\pi-sessions", "/srv/pi-sessions"] {
+            std::fs::write(
+                agent_dir.join("settings.json"),
+                serde_json::to_string(&json!({ "sessionDir": rooted })).expect("json"),
+            )
+            .expect("settings");
+            assert_eq!(
+                resolve_pi_sessions_dir_from(
+                    None,
+                    Some(agent_dir.clone().into_os_string()),
+                    Some(PathBuf::from(absolute_path("home/demo"))),
+                ),
+                default,
+                "drive-relative sessionDir {rooted:?} must not shadow the default"
             );
         }
     }
@@ -2448,5 +3445,18 @@ mod tests {
                 "contents: {contents}"
             );
         }
+    }
+
+    /// #948: built with an agent's launch env, the parser reads where THAT
+    /// env puts the agent's files, not where codeg's own environment does.
+    #[test]
+    fn for_env_reads_both_dirs_of_the_launch_env() {
+        let env = AgentEnv::with_overrides(&[
+            ("PI_CODING_AGENT_DIR", "/relocated/pi-agent"),
+            ("PI_CODING_AGENT_SESSION_DIR", "/relocated/pi-sessions"),
+        ]);
+        let parser = PiParser::for_env(&env);
+        assert_eq!(parser.base_dir, PathBuf::from("/relocated/pi-sessions"));
+        assert_eq!(parser.agent_dir, PathBuf::from("/relocated/pi-agent"));
     }
 }

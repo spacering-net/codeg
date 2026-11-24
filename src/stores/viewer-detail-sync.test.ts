@@ -93,6 +93,7 @@ function emptySession(conversationId: number): ConversationRuntimeSession {
     localTurns: [],
     backgroundTurns: [],
     pendingBackgroundSettlements: [],
+    pendingCancelledTurnReports: null,
     optimisticTurns: [],
     liveMessage: null,
     syncState: "idle",
@@ -106,6 +107,7 @@ function emptySession(conversationId: number): ConversationRuntimeSession {
     batchBoundaryPrefixHash: null,
     loadingOlderTurns: false,
     olderTurnsPrependEpoch: 0,
+    pendingOutOfTurnContent: false,
     pendingCleanup: false,
   }
 }
@@ -478,6 +480,88 @@ describe("syncViewerDetail — pure viewer refetch", () => {
     // Converged after the settle-commit — no further polling.
     await vi.advanceTimersByTimeAsync(5000)
     expect(mockGet).toHaveBeenCalledTimes(2)
+  })
+})
+
+// A view's own detail load (a tab's first fetch, a reload) sets
+// `detailLoading`, and only its own result clears it. A poll read issued under
+// it bumped the fetch generation, so that result was dropped as stale: if the
+// poll then never committed (every read failing), the view was left loading
+// for good. The overlap is common: the load's own read can backfill the title,
+// and the upsert that broadcasts is a nudge.
+describe("syncViewerDetail — a detail load in flight", () => {
+  it("lets the load land, then polls on from there", async () => {
+    vi.useFakeTimers()
+    seed({})
+    let landLoad: (d: DbConversationDetail) => void = () => {}
+    mockGet
+      .mockImplementationOnce(
+        () =>
+          new Promise<DbConversationDetail>((r) => {
+            landLoad = r
+          })
+      )
+      .mockResolvedValue(
+        detail([userTurn("u", "hi"), assistantTurn("a", "Hi! …")], 42)
+      )
+    useConversationRuntimeStore.getState().actions.fetchDetail(CID)
+
+    sync()
+    await vi.advanceTimersByTimeAsync(0)
+    // The poll holds its read while the load is in flight…
+    expect(mockGet).toHaveBeenCalledTimes(1)
+
+    // …the load lands, from before the reply reached disk…
+    landLoad(detail([userTurn("u", "hi")], 10))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(session()?.detailLoading).toBe(false)
+    expect(session()?.detail?.transcript_watermark).toBe(10)
+
+    // …and the poll goes on to pick the reply up.
+    await vi.advanceTimersByTimeAsync(300)
+    expect(mockGet).toHaveBeenCalledTimes(2)
+    expect((session()?.detail?.turns ?? []).map((t) => t.role)).toEqual([
+      "user",
+      "assistant",
+    ])
+  })
+
+  it("never leaves the view loading when every poll read fails", async () => {
+    vi.useFakeTimers()
+    seed({})
+    let landLoad: (d: DbConversationDetail) => void = () => {}
+    mockGet
+      .mockImplementationOnce(
+        () =>
+          new Promise<DbConversationDetail>((r) => {
+            landLoad = r
+          })
+      )
+      .mockRejectedValue(new Error("server down"))
+    useConversationRuntimeStore.getState().actions.fetchDetail(CID)
+
+    sync()
+    await vi.advanceTimersByTimeAsync(0)
+    landLoad(detail([userTurn("u", "hi"), assistantTurn("a", "Hi! …")], 42))
+    await vi.advanceTimersByTimeAsync(10_000)
+
+    expect(session()?.detailLoading).toBe(false)
+    expect(session()?.detail?.transcript_watermark).toBe(42)
+  })
+
+  it("stops waiting behind a load that never settles", async () => {
+    vi.useFakeTimers()
+    seed({})
+    mockGet.mockImplementation(
+      () => new Promise<DbConversationDetail>(() => {})
+    )
+    useConversationRuntimeStore.getState().actions.fetchDetail(CID)
+
+    sync()
+    await vi.advanceTimersByTimeAsync(60_000)
+
+    expect(mockGet).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(0)
   })
 })
 

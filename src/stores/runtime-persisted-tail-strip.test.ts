@@ -64,6 +64,7 @@ function seed(turns: MessageTurn[]) {
     localTurns: [turn("live-reply", "assistant")],
     backgroundTurns: [],
     pendingBackgroundSettlements: [],
+    pendingCancelledTurnReports: null,
     optimisticTurns: [],
     liveMessage: null,
     syncState: "idle" as const,
@@ -77,6 +78,7 @@ function seed(turns: MessageTurn[]) {
     batchBoundaryPrefixHash: null,
     loadingOlderTurns: false,
     olderTurnsPrependEpoch: 0,
+    pendingOutOfTurnContent: false,
     pendingCleanup: false,
   })
   useConversationRuntimeStore.setState({ byConversationId: next })

@@ -1,19 +1,71 @@
 "use client"
 
+import { Badge } from "@/components/ui/badge"
+
 interface DropdownRadioItemContentProps {
   label: string
   description?: string | null
+  /** Localized "recommended" chip text, or null/absent for the usual row. Set it
+   *  only on the value the AGENT recommends (ACP `recommendedValue`) — a claim
+   *  independent of what is currently selected, which is the checkmark's job, so
+   *  both can land on the same row or on different ones.
+   *
+   *  Passed in rather than translated here on purpose: every other label this
+   *  leaf renders arrives the same way, and the callers all hold a translator
+   *  already. */
+  recommendedLabel?: string | null
+  /** What goes after the label when it names a command that takes an argument
+   *  (`[reconnect]`), shown in the label's line. It gives way first when the
+   *  line is short, so a long hint never squeezes the label away. */
+  hint?: string | null
+  /** A short fact about the option, set at the end of the label's line (a
+   *  model's reasoning-effort range). It never squeezes the label: the label
+   *  truncates first. `asideTitle` is its tooltip, saying what it is. */
+  aside?: string | null
+  asideTitle?: string | null
 }
 
 export function DropdownRadioItemContent({
   label,
   description,
+  recommendedLabel,
+  hint,
+  aside,
+  asideTitle,
 }: DropdownRadioItemContentProps) {
   const normalizedDescription = description?.trim()
+  const badge = recommendedLabel?.trim()
+  const normalizedHint = hint?.trim()
+  const normalizedAside = aside?.trim()
 
   return (
-    <div className="w-full min-w-0 pr-2" title={label}>
-      <p className="truncate">{label}</p>
+    <div
+      className="w-full min-w-0 pr-2"
+      title={normalizedHint ? `${label} ${normalizedHint}` : label}
+    >
+      {/* The badge is `shrink-0` (Badge's own base class) so a long model name
+          truncates instead of squeezing the chip away. */}
+      <div className="flex min-w-0 items-center gap-1.5">
+        <p className="min-w-0 truncate">{label}</p>
+        {normalizedHint ? (
+          <span className="min-w-0 shrink-[3] truncate font-mono text-xs text-muted-foreground">
+            {normalizedHint}
+          </span>
+        ) : null}
+        {badge ? (
+          <Badge variant="outline" className="px-1 text-3xs font-normal">
+            {badge}
+          </Badge>
+        ) : null}
+        {normalizedAside ? (
+          <span
+            className="ml-auto shrink-0 pl-2 text-xs text-muted-foreground"
+            title={asideTitle?.trim() || undefined}
+          >
+            {normalizedAside}
+          </span>
+        ) : null}
+      </div>
       {normalizedDescription ? (
         <p className="text-muted-foreground mt-0.5 text-xs leading-snug whitespace-pre-wrap wrap-break-word">
           {normalizedDescription}

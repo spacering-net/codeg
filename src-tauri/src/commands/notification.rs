@@ -167,17 +167,26 @@ pub async fn send_notification(
         // it is not a reason to fail the send.
         let _identity = resolve_notification_identity(&app);
 
-        mac_notification_sys::Notification::default()
-            .title(&title)
-            .message(&body)
-            .send()
-            .map_err(|err| {
-                AppCommandError::new(
-                    AppErrorCode::ExternalCommandFailed,
-                    "Failed to post the system notification",
-                )
-                .with_detail(err.to_string())
-            })?;
+        // Since mac-notification-sys 0.6.15 `send` holds its thread until macOS
+        // confirms the delivery, for up to 2 s: a blocking-pool thread's to
+        // hold, not an async worker's.
+        tokio::task::spawn_blocking(move || {
+            mac_notification_sys::Notification::default()
+                .title(&title)
+                .message(&body)
+                .send()
+                .map(|_| ())
+                .map_err(|err| err.to_string())
+        })
+        .await
+        .map_err(|err| AppCommandError::task_execution_failed(err.to_string()))?
+        .map_err(|detail| {
+            AppCommandError::new(
+                AppErrorCode::ExternalCommandFailed,
+                "Failed to post the system notification",
+            )
+            .with_detail(detail)
+        })?;
     }
 
     #[cfg(not(target_os = "macos"))]

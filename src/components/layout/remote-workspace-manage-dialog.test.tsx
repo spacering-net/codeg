@@ -53,6 +53,28 @@ async function mount(connections: RemoteWorkspaceConnection[]) {
   await screen.findByDisplayValue(connections[0].name)
 }
 
+describe("RemoteWorkspaceManageDialog search", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("says nothing matches when the search filters out every connection", async () => {
+    await mount([connection()])
+
+    fireEvent.change(screen.getByPlaceholderText("Search remote workspaces"), {
+      target: { value: "no-such-box" },
+    })
+
+    expect(
+      await screen.findByText("No matching remote connections")
+    ).toBeInTheDocument()
+    // The search prompt belongs in the field, not in the empty list.
+    expect(
+      screen.queryByText("Search remote workspaces")
+    ).not.toBeInTheDocument()
+  })
+})
+
 describe("RemoteWorkspaceManageDialog custom headers", () => {
   beforeEach(() => {
     vi.clearAllMocks()

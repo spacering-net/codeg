@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { openSettingsWindow } from "@/lib/api"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useIsActiveChatMode } from "@/hooks/use-is-active-chat-mode"
@@ -12,6 +12,7 @@ import {
   useWorkspaceActions,
   useWorkspaceFileTabs,
   useWorkspaceView,
+  type WorkspacePane,
 } from "@/contexts/workspace-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { useSearchDialog } from "@/contexts/search-dialog-context"
@@ -26,7 +27,19 @@ import {
   numberedTabIndexFromEvent,
   pickNumberedTabId,
 } from "@/lib/keyboard-shortcuts"
+import {
+  CLOSE_SHORTCUT_EVENT,
+  closeShortcutOrigin,
+  MENU_CLOSE_CHORD,
+  tabShortcutTarget,
+  workspacePaneOf,
+  type CloseShortcutPayload,
+} from "@/lib/menu-close-shortcut"
+import { getCurrentWindowLabel } from "@/lib/browser/window-label"
+import { closeCurrentWindow } from "@/lib/platform"
+import { getShellTransport, isDesktop } from "@/lib/transport"
 import { SearchCommandDialog } from "@/components/conversations/search-command-dialog"
+import { useVisibleConversationTabs } from "@/stores/tab-store"
 import { WorkspaceFolderDialog } from "@/components/layout/workspace-folder-dialog"
 
 /**
@@ -45,15 +58,22 @@ export function WorkspaceChromeController() {
   const { toggle: toggleTerminal } = useTerminalContext()
   const { openNewConversationTab, openTab, switchTab, closeTab } =
     useTabActions()
-  const tabs = useTabStore((s) => s.tabs)
+  const tabs = useVisibleConversationTabs()
   const activeTabId = useTabStore((s) => s.activeTabId)
   // Tab-close/navigation shortcuts used to live in the visible tab strips.
   // Mobile no longer mounts those strips, so this always-mounted controller now
   // owns them too (see the keydown handler below).
-  const { mode, activePane, filesMaximized } = useWorkspaceView()
+  const { mode, activePane, filesMaximized, conversationMaximized } =
+    useWorkspaceView()
   const { activeFileTabId, fileTabs } = useWorkspaceFileTabs()
-  const { closeFileTab, closeAllFileTabs, switchFileTab, openFilePreview } =
-    useWorkspaceActions()
+  const {
+    closeFileTab,
+    closeAllFileTabs,
+    switchFileTab,
+    openFilePreview,
+    openBrowserTab,
+    setActivePane,
+  } = useWorkspaceActions()
   const { openConversations } = useWorkbenchRoute()
   const { shortcuts } = useShortcutSettings()
   // Search open-state is shared (see search-dialog-context): the trigger lives
@@ -71,6 +91,120 @@ export function WorkspaceChromeController() {
     openSettingsWindow().catch((err) => {
       console.error("[WorkspaceChromeController] failed to open settings:", err)
     })
+  }, [])
+
+  // Close the current tab of the strip that belongs to `pane`. False when
+  // there is none, which leaves ⌘W to the OS: it closes the window.
+  const closeCurrentTab = useCallback(
+    (pane: WorkspacePane): boolean => {
+      const target = tabShortcutTarget(
+        mode,
+        pane,
+        filesMaximized,
+        conversationMaximized
+      )
+      if (target.conversation) {
+        if (!activeTabId) return false
+        closeTab(activeTabId)
+        return true
+      }
+      if (target.files) {
+        if (!activeFileTabId) return false
+        closeFileTab(activeFileTabId)
+        return true
+      }
+      return false
+    },
+    [
+      activeFileTabId,
+      activeTabId,
+      closeFileTab,
+      closeTab,
+      conversationMaximized,
+      filesMaximized,
+      mode,
+    ]
+  )
+
+  // ⌘W the macOS app menu caught (see `menu-close-shortcut`): pressed where
+  // the listener below cannot hear it — inside an iframe, a browser page, an
+  // HTML document view — or heard there and let through. The first kind is
+  // routed as if it had been pressed at the element that stands for that
+  // spot; the second keeps the meaning ⌘W always had, closing the window.
+  const handleMenuClose = useCallback(
+    (payload: CloseShortcutPayload) => {
+      const closeWindow = () => {
+        closeCurrentWindow().catch((err) => {
+          console.error("[WorkspaceChromeController] ⌘W close failed:", err)
+        })
+      }
+      // Not this person's close-tab key.
+      if (!matchShortcutEvent(MENU_CLOSE_CHORD, shortcuts.close_current_tab)) {
+        closeWindow()
+        return
+      }
+      const origin = closeShortcutOrigin(payload.surfaceTabId)
+      // A surface this document does not show: nothing here is safe to close.
+      if (origin.kind === "unknown") return
+      // The listener below heard it and had no tab to close.
+      if (origin.kind === "page") {
+        closeWindow()
+        return
+      }
+      let pane = activePane
+      const pressedIn =
+        origin.kind === "element" ? workspacePaneOf(origin.element) : null
+      if (pressedIn) {
+        pane = pressedIn
+        // What a click there would have done (see the pane handlers in the
+        // workspace layout): a page gives the workspace no pointer or focus
+        // event of its own. It also routes the next ⌘W, which arrives with
+        // no view holding the keyboard once this page has closed. Never into
+        // a column the other one is maximized over.
+        const covered =
+          pressedIn === "files" ? conversationMaximized : filesMaximized
+        if (mode === "fusion" && !covered) {
+          setActivePane(pressedIn)
+        }
+      }
+      if (!closeCurrentTab(pane)) closeWindow()
+    },
+    [
+      activePane,
+      closeCurrentTab,
+      conversationMaximized,
+      filesMaximized,
+      mode,
+      setActivePane,
+      shortcuts.close_current_tab,
+    ]
+  )
+  const handleMenuCloseRef = useRef(handleMenuClose)
+  useEffect(() => {
+    handleMenuCloseRef.current = handleMenuClose
+  }, [handleMenuClose])
+  useEffect(() => {
+    if (!isDesktop()) return
+    let disposed = false
+    let unsubscribe: (() => void) | null = null
+    // This app's own backend — the menu is local even in a window whose
+    // workspace is on a remote server.
+    getShellTransport()
+      .subscribe<CloseShortcutPayload>(CLOSE_SHORTCUT_EVENT, (payload) => {
+        if (payload.window !== getCurrentWindowLabel()) return
+        handleMenuCloseRef.current(payload)
+      })
+      .then((fn) => {
+        if (disposed) fn()
+        else unsubscribe = fn
+      })
+      .catch((err) => {
+        console.error("[WorkspaceChromeController] ⌘W listener failed:", err)
+      })
+    return () => {
+      disposed = true
+      unsubscribe?.()
+    }
   }, [])
 
   useEffect(() => {
@@ -123,11 +257,13 @@ export function WorkspaceChromeController() {
       // mod+shift+tab working at every width — and, crucially, keeps
       // preventDefault firing so mod+w never falls through to closing the OS
       // window. Routing mirrors the old split: conversation pane vs files pane.
-      const conversationPaneActive =
-        mode === "conversation" ||
-        (mode === "fusion" && activePane === "conversation" && !filesMaximized)
-      const filesPaneActive =
-        mode === "fusion" && (activePane === "files" || filesMaximized)
+      const { conversation: conversationPaneActive, files: filesPaneActive } =
+        tabShortcutTarget(
+          mode,
+          activePane,
+          filesMaximized,
+          conversationMaximized
+        )
 
       const isNextTab = matchShortcutEvent(e, shortcuts.next_tab)
       const isPrevTab = matchShortcutEvent(e, shortcuts.prev_tab)
@@ -191,15 +327,7 @@ export function WorkspaceChromeController() {
       }
 
       if (matchShortcutEvent(e, shortcuts.close_current_tab)) {
-        if (conversationPaneActive) {
-          if (!activeTabId) return
-          e.preventDefault()
-          closeTab(activeTabId)
-        } else if (filesPaneActive) {
-          if (!activeFileTabId) return
-          e.preventDefault()
-          closeFileTab(activeFileTabId)
-        }
+        if (closeCurrentTab(activePane)) e.preventDefault()
         return
       }
 
@@ -215,6 +343,20 @@ export function WorkspaceChromeController() {
             void openFilePreview(closed.path, {
               folderId: closed.folderId ?? undefined,
               index: closed.index,
+            })
+            return
+          }
+          if (closed.kind === "browser") {
+            // Back at the page it was showing; a tab already on that page is
+            // activated instead (the usual one-tab-per-URL rule).
+            openBrowserTab(closed.url, {
+              folderId: closed.folderId ?? undefined,
+              index: closed.index,
+              profile: closed.profile,
+              // Said only when it was remote: otherwise the address decides,
+              // as it does when the tab comes back after a restart.
+              ...(closed.remote === true ? { remote: true } : {}),
+              ...(closed.device ? { device: closed.device } : {}),
             })
             return
           }
@@ -258,6 +400,7 @@ export function WorkspaceChromeController() {
     openNewConversationTab,
     openTab,
     openFilePreview,
+    openBrowserTab,
     setSearchOpen,
     shortcuts,
     toggle,
@@ -267,13 +410,12 @@ export function WorkspaceChromeController() {
     tabs,
     activeTabId,
     switchTab,
-    closeTab,
+    closeCurrentTab,
     mode,
     activePane,
     filesMaximized,
+    conversationMaximized,
     fileTabs,
-    activeFileTabId,
-    closeFileTab,
     closeAllFileTabs,
     switchFileTab,
   ])

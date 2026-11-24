@@ -225,9 +225,6 @@ mod tests {
     use std::fs;
     use std::time::{Duration, Instant};
 
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
-
     fn write_stub_recorder(dir: &Path, marker: &Path) -> PathBuf {
         #[cfg(windows)]
         {
@@ -242,17 +239,13 @@ mod tests {
         #[cfg(not(windows))]
         {
             let stub = dir.join("code");
-            fs::write(
+            crate::process::write_test_script(
                 &stub,
-                format!(
+                &format!(
                     "#!/bin/sh\nprintf '%s\\n' \"$1\" > \"{}\"\n",
                     marker.display()
                 ),
-            )
-            .expect("write stub");
-            let mut perms = fs::metadata(&stub).expect("stat stub").permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&stub, perms).expect("chmod stub");
+            );
             stub
         }
     }

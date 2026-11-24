@@ -51,6 +51,13 @@ vi.mock("@/lib/updater", () => ({
   waitForServerHealthy: () => waitForServerHealthy(),
 }))
 
+// The panels under test only exist inside the data & sync card, so that card
+// is what gets rendered — minus its third panel, whose own API surface has
+// nothing to do with backup and is pinned by `config-sync-settings.test.tsx`.
+vi.mock("./config-sync-settings", () => ({
+  ConfigSyncSettings: () => null,
+}))
+
 const toastError = vi.fn()
 vi.mock("sonner", () => ({
   toast: {
@@ -60,7 +67,7 @@ vi.mock("sonner", () => ({
   },
 }))
 
-import { BackupSettings } from "./backup-settings"
+import { DataSyncSettings } from "./data-sync-settings"
 import enMessages from "@/i18n/messages/en.json"
 import {
   backupActiveAgents,
@@ -72,7 +79,6 @@ import {
   rollbackToSnapshot,
   scanExternalConflicts,
   stageRestoreWeb,
-  uploadBackupWeb,
 } from "@/lib/api"
 
 const t = enMessages.BackupSettings
@@ -80,7 +86,7 @@ const t = enMessages.BackupSettings
 function renderSettings() {
   return render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
-      <BackupSettings />
+      <DataSyncSettings />
     </NextIntlClientProvider>
   )
 }
@@ -110,15 +116,25 @@ async function selectBackup(preview: Record<string, unknown>) {
   const file = new File(["x"], "b.codeg.zip")
   Object.defineProperty(input, "files", { value: [file] })
   fireEvent.change(input)
-  await waitFor(() => expect(uploadBackupWeb).toHaveBeenCalled())
+  await screen.findByText(t.restore.preview.title)
 }
 
-async function openRestoreTab() {
-  const tab = screen.getByRole("tab", { name: new RegExp(t.tabs.restore) })
+/** The card opens on configuration sync, so every test selects its own panel. */
+function activateTab(label: string) {
+  const tab = screen.getByRole("tab", { name: new RegExp(label) })
   // Radix Tabs default to automatic activation on focus; the click alone is
   // not enough under jsdom.
   fireEvent.focus(tab)
   fireEvent.click(tab)
+}
+
+async function openBackupTab() {
+  activateTab(t.tabs.backup)
+  await screen.findByRole("button", { name: t.export.button })
+}
+
+async function openRestoreTab() {
+  activateTab(t.tabs.restore)
   await screen.findByRole("button", { name: t.restore.selectFile })
 }
 
@@ -132,9 +148,37 @@ beforeEach(() => {
   vi.mocked(scanExternalConflicts).mockResolvedValue([])
 })
 
+describe("DataSyncSettings — panel wiring", () => {
+  // The panels are `forceMount`ed, so only their `hidden` attribute keeps the
+  // ones that are off screen out of reach — and only a negative assertion can
+  // tell a working strip from a tab wired to a panel that does not exist.
+  it("opens on configuration sync, with the backup and restore panels out of reach", () => {
+    renderSettings()
+    expect(
+      screen.getByRole("tab", { name: enMessages.ConfigSyncSettings.title })
+    ).toHaveAttribute("aria-selected", "true")
+    expect(screen.queryByRole("button", { name: t.export.button })).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: t.restore.selectFile })
+    ).toBeNull()
+  })
+
+  it("shows one panel at a time", async () => {
+    renderSettings()
+    await openBackupTab()
+    expect(
+      screen.queryByRole("button", { name: t.restore.selectFile })
+    ).toBeNull()
+
+    await openRestoreTab()
+    expect(screen.queryByRole("button", { name: t.export.button })).toBeNull()
+  })
+})
+
 describe("BackupSettings — export", () => {
   it("refuses to export when the passphrase confirmation does not match", async () => {
     renderSettings()
+    await openBackupTab()
     const fields = screen.getAllByPlaceholderText(
       new RegExp(t.export.passphrasePlaceholder)
     )
@@ -162,6 +206,7 @@ describe("BackupSettings — export", () => {
       ],
     } as never)
     renderSettings()
+    await openBackupTab()
     fireEvent.click(screen.getByRole("button", { name: t.export.button }))
     expect(
       await screen.findByText(new RegExp(t.export.degradedTitle))
@@ -177,6 +222,7 @@ describe("BackupSettings — export", () => {
       }) as never
     )
     renderSettings()
+    await openBackupTab()
     fireEvent.click(screen.getByRole("button", { name: t.export.button }))
     // The op id only exists once the backend emits its first frame.
     progressHandler?.({
@@ -370,6 +416,7 @@ describe("BackupSettings — safety snapshots", () => {
       },
     ])
     renderSettings()
+    await openRestoreTab()
     expect(await screen.findByText(t.snapshots.unsupported)).toBeInTheDocument()
     expect(
       screen.getAllByText(/20260101-000000-legacy/).length

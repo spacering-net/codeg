@@ -12,40 +12,50 @@ import { create } from "zustand"
  */
 interface CommandTerminalLinkState {
   /**
-   * Maps a folder command's id to the terminal it was launched into. Folder
-   * command ids are globally-unique DB primary keys, so a flat map is safe
-   * across folders.
+   * Maps a launcher command, as run in one folder (see `commandLinkKey`), to
+   * the terminal it was launched into.
    */
-  links: Record<number, string>
-  setLink: (commandId: number, terminalId: string) => void
-  clearLink: (commandId: number) => void
+  links: Record<string, string>
+  setLink: (key: string, terminalId: string) => void
+  clearLink: (key: string) => void
   /** Drop every link whose terminal id matches the predicate (exited/closed). */
   pruneTerminals: (shouldRemove: (terminalId: string) => boolean) => void
+}
+
+/**
+ * The key a command's link is stored under: the folder it runs in as well as
+ * its id. A folder command's id is a database key no other folder shares, but
+ * a global command (see `global-commands`) has the same id in every folder,
+ * and running it in one folder must not read as running — or be stopped — in
+ * another.
+ */
+export function commandLinkKey(folderId: number, commandId: number): string {
+  return `${folderId}:${commandId}`
 }
 
 export const useCommandTerminalLinkStore = create<CommandTerminalLinkState>(
   (set) => ({
     links: {},
-    setLink: (commandId, terminalId) =>
+    setLink: (key, terminalId) =>
       set((s) =>
-        s.links[commandId] === terminalId
+        s.links[key] === terminalId
           ? s
-          : { links: { ...s.links, [commandId]: terminalId } }
+          : { links: { ...s.links, [key]: terminalId } }
       ),
-    clearLink: (commandId) =>
+    clearLink: (key) =>
       set((s) => {
-        if (!(commandId in s.links)) return s
+        if (!(key in s.links)) return s
         const next = { ...s.links }
-        delete next[commandId]
+        delete next[key]
         return { links: next }
       }),
     pruneTerminals: (shouldRemove) =>
       set((s) => {
         let changed = false
-        const next: Record<number, string> = {}
-        for (const [cmdId, termId] of Object.entries(s.links)) {
+        const next: Record<string, string> = {}
+        for (const [key, termId] of Object.entries(s.links)) {
           if (shouldRemove(termId)) changed = true
-          else next[Number(cmdId)] = termId
+          else next[key] = termId
         }
         return changed ? { links: next } : s
       }),
@@ -60,10 +70,10 @@ export const useCommandTerminalLinkStore = create<CommandTerminalLinkState>(
  * Pure + exported for unit testing.
  */
 export function resolveLiveCommandTerminalId(
-  links: Record<number, string>,
-  commandId: number,
+  links: Record<string, string>,
+  key: string,
   isLive: (terminalId: string) => boolean
 ): string | undefined {
-  const terminalId = links[commandId]
+  const terminalId = links[key]
   return terminalId && isLive(terminalId) ? terminalId : undefined
 }

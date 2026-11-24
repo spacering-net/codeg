@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest"
 
 import {
   groupConsecutiveBackgroundTasks,
-  groupConsecutiveToolCalls,
   mergeAdjacentBackgroundTaskGroups,
   type AdaptedContentPart,
   type AdaptedToolCallPart,
@@ -72,14 +71,14 @@ describe("groupConsecutiveBackgroundTasks", () => {
   })
 })
 
-describe("groupConsecutiveToolCalls + background tasks", () => {
-  it("leaves background-task polls standalone (out of the tool-group)", () => {
-    const parts = groupConsecutiveToolCalls([bash("b1"), taskPoll("p1")])
-    // bash folds into a tool-group; the poll breaks out as a bare tool-call.
-    expect(parts.map((p) => p.type)).toEqual(["tool-group", "tool-call"])
-    expect(parts[1].type === "tool-call" && parts[1].toolName).toBe(
-      "TaskOutput"
-    )
+describe("groupConsecutiveBackgroundTasks + other tool calls", () => {
+  it("leaves a command next to the polls as its own call", () => {
+    const parts = groupConsecutiveBackgroundTasks([bash("b1"), taskPoll("p1")])
+    expect(parts.map((p) => p.type)).toEqual([
+      "tool-call",
+      "background-task-group",
+    ])
+    expect(parts[0].type === "tool-call" && parts[0].toolName).toBe("bash")
   })
 })
 

@@ -1,20 +1,18 @@
 "use client"
 
 import { useCallback } from "react"
-import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
+import { openTaskFromMessage } from "@/lib/task-from-message"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useTabStore } from "@/stores/tab-store"
-import { requestCreateTaskFromText } from "@/lib/task-compose-events"
 
 /**
- * "Turn this message into a work task": parks the text + source project folder
- * in the task-compose buffer and switches to the Tasks route, whose editor
- * opens pre-filled. Worktree conversations resolve to their parent project
- * folder (tasks bind to projects); chat-mode / unknown folders fall back to
- * the board's own default.
+ * "Turn this message into a work task": opens the task editor over the
+ * conversation, seeded with the text and the source project folder (see
+ * `TaskFromMessageHost`). Worktree conversations resolve to their parent
+ * project folder (tasks bind to projects); chat-mode / unknown folders leave
+ * the editor to pick one.
  */
 export function useCreateTaskFromMessage(getText: () => string) {
-  const { setRoute } = useWorkbenchRoute()
   const tabFolderId = useTabStore((s) => {
     const tab = s.rawTabs.find((t) => t.id === s.activeTabId)
     return tab?.folderId ?? null
@@ -35,7 +33,6 @@ export function useCreateTaskFromMessage(getText: () => string) {
       folder != null && folder.parent_id == null && folder.kind === "regular"
         ? folder.id
         : null
-    requestCreateTaskFromText({ text, folderId })
-    setRoute("tasks")
-  }, [getText, tabFolderId, setRoute])
+    openTaskFromMessage({ text, folderId })
+  }, [getText, tabFolderId])
 }

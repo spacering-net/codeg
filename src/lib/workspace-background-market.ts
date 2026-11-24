@@ -40,9 +40,8 @@ export type MarketWallpaperBlocker = "tooManyBytes" | "tooManyPixels"
  * Whether `download` would refuse this wallpaper, decided from the listing
  * instead of from a failed download.
  *
- * The backend caps market downloads at the same 16 MiB / 40 Mpx as a local pick,
- * and a sizeable minority of wallhaven's catalogue is past one of them — around
- * one card per page of twenty-four on the default browse view. Those cards used
+ * The backend caps market downloads at the same 64 MiB / 100 Mpx as a local pick,
+ * and part of wallhaven's catalogue is past one of them. Those cards used
  * to look identical to any other, and clicking one produced "please retry" for a
  * condition retrying cannot change.
  *
@@ -107,8 +106,13 @@ export async function downloadWorkspaceBgMarket(
   url: string,
   sourceUrl: string
 ): Promise<void> {
-  return getTransport().call("background_market_download", {
-    url,
-    sourceUrl,
-  })
+  // The backend allows a slow-but-progressing download 570 s (its
+  // `DOWNLOAD_TIMEOUT`); sit 30 s above that so its structured timeout error
+  // wins the race instead of a generic transport abort at the 60 s default.
+  // Not higher: the remote-desktop proxy clamps any request to 600 s.
+  return getTransport().call(
+    "background_market_download",
+    { url, sourceUrl },
+    { timeoutMs: 600_000 }
+  )
 }

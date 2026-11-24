@@ -13,9 +13,13 @@ vi.mock("@/lib/api", () => ({
 
 const mockList = vi.mocked(canvasListNodes)
 
+/** The board every test works on unless it says otherwise. */
+const BOARD = 1
+
 function makeNode(id: number, over: Partial<CanvasNode> = {}): CanvasNode {
   return {
     id,
+    board_id: BOARD,
     kind: "note",
     folder_id: null,
     folder_group_id: null,
@@ -39,8 +43,12 @@ function makeNode(id: number, over: Partial<CanvasNode> = {}): CanvasNode {
   }
 }
 
-function snapshot(revision: number, nodes: CanvasNode[]): CanvasSnapshot {
-  return { revision, nodes }
+function snapshot(
+  revision: number,
+  nodes: CanvasNode[],
+  boardId: number = BOARD
+): CanvasSnapshot {
+  return { board_id: boardId, revision, nodes }
 }
 
 function upsert(revision: number, node: CanvasNode): CanvasChange {
@@ -51,6 +59,7 @@ const store = () => useCanvasStore.getState()
 
 beforeEach(() => {
   useCanvasStore.getState().reset()
+  useCanvasStore.getState().openBoard(BOARD)
   mockList.mockReset()
   // Default: refetch resolves to an empty, revision-0 snapshot (individual
   // tests override). Never leave it unmocked — a gap test would reject.
@@ -220,6 +229,8 @@ describe("canvas-store revision protocol", () => {
     expect(store().nodes.size).toBe(0)
     expect(store().lastRevision).toBe(0)
     expect(store().hydrated).toBe(false)
+    // Board ids belong to the backend that handed them out.
+    expect(store().boardId).toBeNull()
   })
 
   it("refetches again when the snapshot predates a gapped event", async () => {
@@ -262,6 +273,7 @@ describe("canvas-store revision protocol", () => {
     )
     const first = store().refetch()
     store().reset()
+    store().openBoard(BOARD)
     // A refetch AFTER reset must not be deduped onto the pre-reset promise.
     mockList.mockResolvedValueOnce(snapshot(2, [makeNode(9)]))
     await store().refetch()
@@ -306,5 +318,130 @@ describe("canvas-store revision protocol", () => {
     store().handleCanvasChanged(change)
     expect([...store().nodes.keys()]).toEqual([9])
     expect(store().lastRevision).toBe(5)
+  })
+})
+
+describe("canvas-store board scoping", () => {
+  const OTHER = 2
+
+  it("an event about another board advances the revision and nothing else", () => {
+    store().acceptSnapshot(snapshot(3, [makeNode(1)]))
+    const before = store().nodes
+    store().handleCanvasChanged(upsert(4, makeNode(50, { board_id: OTHER })))
+    // Applied — skipping it would read as a gap at the next event…
+    expect(store().lastRevision).toBe(4)
+    // …but nothing of this board changed, not even the map's identity, so
+    // nothing downstream re-derives for another board's edit.
+    expect(store().nodes).toBe(before)
+    expect(store().nodes.has(50)).toBe(false)
+  })
+
+  it("keeps only this board's nodes from mixed payloads", () => {
+    const region = makeNode(1, { kind: "custom", member_ids: [7] })
+    store().acceptSnapshot(snapshot(1, [region, makeNode(2)]))
+    store().handleCanvasChanged({
+      kind: "pruned",
+      deleted_ids: [2, 60],
+      // The deletion funnel scrubs every board in one event.
+      updated: [
+        makeNode(1, { kind: "custom", member_ids: [] }),
+        makeNode(61, { kind: "custom", board_id: OTHER }),
+      ],
+      revision: 2,
+    })
+    expect([...store().nodes.keys()]).toEqual([1])
+    expect(store().nodes.get(1)?.member_ids).toEqual([])
+
+    store().handleCanvasChanged({
+      kind: "grouped",
+      node: makeNode(70, { kind: "custom", board_id: OTHER }),
+      deleted_ids: [71],
+      revision: 3,
+    })
+    expect(store().nodes.has(70)).toBe(false)
+    expect(store().lastRevision).toBe(3)
+  })
+
+  it("ignores a snapshot of another board", () => {
+    store().acceptSnapshot(
+      snapshot(5, [makeNode(9, { board_id: OTHER })], OTHER)
+    )
+    expect(store().hydrated).toBe(false)
+    expect(store().nodes.size).toBe(0)
+  })
+
+  it("switching boards strands the previous board's fetch", async () => {
+    let resolveFirst: (s: CanvasSnapshot) => void = () => {}
+    mockList.mockImplementationOnce(
+      () => new Promise((resolve) => (resolveFirst = resolve))
+    )
+    const first = store().refetch()
+    expect(mockList).toHaveBeenLastCalledWith(BOARD)
+
+    store().openBoard(OTHER)
+    mockList.mockResolvedValueOnce(
+      snapshot(4, [makeNode(20, { board_id: OTHER })], OTHER)
+    )
+    // Not deduped onto the old board's request.
+    await store().refetch()
+    expect(mockList).toHaveBeenLastCalledWith(OTHER)
+    expect([...store().nodes.keys()]).toEqual([20])
+
+    resolveFirst(snapshot(9, [makeNode(1)]))
+    await first
+    expect([...store().nodes.keys()]).toEqual([20])
+    expect(store().lastRevision).toBe(4)
+  })
+
+  it("a response to a command from the previous board cannot plant its node here", () => {
+    store().openBoard(OTHER)
+    // The switch reset `lastRevision`, so the revision guard alone would let
+    // this through.
+    store().applyResponse(5, (nodes) =>
+      nodes.set(10, makeNode(10, { title: "from the old board" }))
+    )
+    expect(store().nodes.has(10)).toBe(false)
+  })
+
+  it("re-opening the board it holds keeps the cache", () => {
+    store().acceptSnapshot(snapshot(3, [makeNode(1)]))
+    store().closeBoard()
+    store().openBoard(BOARD)
+    expect(store().hydrated).toBe(true)
+    expect(store().nodes.has(1)).toBe(true)
+    expect(store().lastRevision).toBe(3)
+  })
+
+  it("a board that is gone is flagged, not retried", async () => {
+    vi.useFakeTimers()
+    try {
+      mockList.mockRejectedValue({ code: "not_found", message: "no board" })
+      await store().refetch()
+      expect(store().boardMissing).toBe(true)
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(mockList).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("closing the board stops a pending retry", async () => {
+    vi.useFakeTimers()
+    try {
+      mockList.mockRejectedValue(new Error("offline"))
+      await store().refetch()
+      expect(mockList).toHaveBeenCalledTimes(1)
+      store().closeBoard()
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(mockList).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("fetches nothing while no board is open", async () => {
+    store().reset()
+    await store().refetch()
+    expect(mockList).not.toHaveBeenCalled()
   })
 })

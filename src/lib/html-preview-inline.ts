@@ -28,6 +28,8 @@
 export type Base64Reader = (absPath: string) => Promise<string>
 
 export interface InlineOptions {
+  /** 聊天静态片段：移除作者脚本、事件、嵌入和跳转入口，不影响文件预览默认行为。 */
+  stripActiveContent?: boolean
   /** Absolute directory of the HTML file (resolves "./" and "../" refs). */
   fileDir: string
   /** Absolute workspace root — refs resolving outside it are skipped. */
@@ -570,6 +572,7 @@ export async function inlineHtmlResources(
     readFileBase64,
     maxInlineBytes = DEFAULT_MAX_INLINE_BYTES,
     concurrency = defaultConcurrency(),
+    stripActiveContent = false,
   }: InlineOptions
 ): Promise<string> {
   const ctx: InlineContext = {
@@ -592,10 +595,42 @@ export async function inlineHtmlResources(
     return t
   }
 
+  // A link target under any name — `href`, SVG's `xlink:href` — counts: a
+  // click on it would navigate the frame itself to another page, which CSP
+  // does not govern. One into the document itself (`#id`: an SVG `<use>`, a
+  // gradient, an in-page anchor) stays; the frame's `about:srcdoc` base keeps
+  // it there.
+  const isLinkTarget = (name: string) => /(?:^|:)href$/i.test(name)
+  const isOwnFragment = (url: string) => url.trimStart().startsWith("#")
+  const stripActiveAttributes = (el: Element) => {
+    for (const attr of Array.from(el.attributes)) {
+      if (
+        /^on/i.test(attr.name) ||
+        (isLinkTarget(attr.name) && !isOwnFragment(attr.value)) ||
+        ["action", "formaction", "nonce", "srcdoc"].includes(
+          attr.name.toLowerCase()
+        )
+      ) {
+        el.removeAttributeNode(attr)
+      }
+    }
+  }
+
   // Queue every resource-rewriting job for one parsed fragment (shared ctx, so
   // the read budget/gate span all fragments).
   const queueRewrites = (root: DocumentFragment) => {
     const ownerDoc = root.ownerDocument ?? document
+
+    if (stripActiveContent) {
+      root
+        .querySelectorAll("script, iframe, object, embed, link, template")
+        .forEach((el) => el.remove())
+      // SVG animation can set a link target the attribute pass never sees.
+      root.querySelectorAll("set, animate").forEach((el) => {
+        if (isLinkTarget(el.getAttribute("attributeName") ?? "")) el.remove()
+      })
+      root.querySelectorAll("*").forEach(stripActiveAttributes)
+    }
 
     // Drop author policy/redirect elements: a CSP <meta> could relax the policy
     // we inject; a meta-refresh or <base> could redirect to an external origin.
@@ -717,6 +752,22 @@ export async function inlineHtmlResources(
   // event-handler attributes (e.g. body onload) stay inert in the default
   // no-scripts sandbox.
   const wrap = extractWrapperAttrs(html)
+  if (stripActiveContent) {
+    for (const name of ["html", "head", "body"]) {
+      const el = parseInert(`<div${wrap[name]}></div>`).content
+        .firstElementChild
+      if (!el) {
+        wrap[name] = ""
+        continue
+      }
+      stripActiveAttributes(el)
+      wrap[name] = Array.from(
+        el.attributes,
+        (attr) =>
+          ` ${attr.name}="${attr.value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}"`
+      ).join("")
+    }
+  }
   return `<!DOCTYPE html>\n<html${wrap.html}>\n<head${wrap.head}>${headTpl.innerHTML}</head>\n<body${wrap.body}>${bodyTpl.innerHTML}</body>\n</html>`
 }
 
@@ -778,12 +829,22 @@ const SANDBOX_BASE = `<base href="about:srcdoc">`
  */
 export function withSandboxCsp(
   html: string,
-  options?: { trusted?: boolean }
+  options?: { trusted?: boolean; reporterNonce?: string }
 ): string {
-  const csp = options?.trusted ? CSP_TRUSTED : CSP_STRICT
+  const nonce = options?.reporterNonce
+  const csp = options?.trusted
+    ? CSP_TRUSTED
+    : nonce && /^[a-zA-Z0-9_-]+$/.test(nonce)
+      ? CSP_STRICT.replace("script-src 'none'", `script-src 'nonce-${nonce}'`)
+      : CSP_STRICT
   // CSP meta FIRST so the policy is active when the browser parses the <base>
   // and enforces its `base-uri` check against it.
   const head = `<meta http-equiv="Content-Security-Policy" content="${csp}">${SANDBOX_BASE}`
+  return withHtmlPreviewHead(html, head)
+}
+
+/** 在真正的 head 开头插入受信内容，不匹配注释、属性或样式中的伪标签。 */
+export function withHtmlPreviewHead(html: string, head: string): string {
   const headEnd = realStartTagEnd(html, "head")
   if (headEnd != null) {
     return html.slice(0, headEnd) + head + html.slice(headEnd)

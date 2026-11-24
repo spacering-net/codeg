@@ -209,6 +209,18 @@ export function isHtmlPreviewable(path: string | null | undefined): boolean {
   return ext === "html" || ext === "htm"
 }
 
+// PDF documents, rendered in the in-app PDF.js viewer. Binary like images:
+// they load as a base64 `data:` URL and carry no etag, so callers branch on
+// this before any etag-based disk reconciliation. Preview-only — there is no
+// text editor view.
+export function isPdfFile(path: string | null | undefined): boolean {
+  if (!path) return false
+  const basename = path.toLowerCase().split(/[\\/]/).pop() ?? ""
+  const dot = basename.lastIndexOf(".")
+  if (dot === -1) return false
+  return basename.slice(dot + 1) === "pdf"
+}
+
 // Office documents (.docx/.xlsx/.pptx) we can render in the in-app preview via
 // the OfficeCLI backend. These are binary OpenXML files — there is no text
 // editor view, so a matching tab is always preview-only.

@@ -51,6 +51,7 @@ export function RemoteManageDialog({
 
   useEffect(() => {
     if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset paired with an external fetch on open
       setErrors({})
       setLoadingRemotes(true)
       gitListRemotes(folderPath)
