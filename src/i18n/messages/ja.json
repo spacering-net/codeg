@@ -1,4 +1,13 @@
 {
+  "SessionCollaboration": {
+    "progress": "セッションの進捗",
+    "title": "共同作業セッション",
+    "link": "関連付け",
+    "choose": "セッションを選択",
+    "unlink": "関連付けを解除",
+    "empty": "共同作業セッションはありません",
+    "error": "共同作業セッションを更新できませんでした。"
+  },
   "HtmlCodePreview": {
     "code": "コード",
     "preview": "プレビュー",

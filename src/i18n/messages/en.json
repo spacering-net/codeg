@@ -1,4 +1,13 @@
 {
+  "SessionCollaboration": {
+    "progress": "Session progress",
+    "title": "Collaboration sessions",
+    "link": "Link",
+    "choose": "Choose a session",
+    "unlink": "Unlink",
+    "empty": "No collaboration sessions",
+    "error": "Could not update collaboration sessions."
+  },
   "HtmlCodePreview": {
     "code": "Code",
     "preview": "Preview",

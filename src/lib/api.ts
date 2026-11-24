@@ -2376,6 +2376,26 @@ export async function listAllConversations(params?: {
   })
 }
 
+export function listConversationCollaborators(
+  conversationId: number
+): Promise<DbConversationSummary[]> {
+  return getTransport().call("list_conversation_collaborators", {
+    conversationId,
+  })
+}
+
+export function setConversationCollaborator(
+  conversationId: number,
+  targetId: number,
+  linked: boolean
+): Promise<void> {
+  return getTransport().call("set_conversation_collaborator", {
+    conversationId,
+    targetId,
+    linked,
+  })
+}
+
 export async function listChildConversations(
   parentConversationId: number
 ): Promise<DbConversationSummary[]> {

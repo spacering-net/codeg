@@ -14,6 +14,7 @@ import { SessionDetailsCard } from "@/components/conversations/session-details-c
 import { MessageNavScrollContext } from "@/components/message/message-nav-scroll-context"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useAuxPanelContext } from "@/contexts/aux-panel-context"
+import { SessionCollaborators } from "./session-collaborators"
 import { SessionDetailsInsights } from "./session-details-insights"
 
 /**
@@ -92,6 +93,14 @@ export function SessionDetailsTab() {
                 sides. */}
             <div className="min-w-0 space-y-3 p-3 text-sm">
               <SessionDetailsCard summary={summary} model={model} />
+              {active &&
+                activeConversationTab?.conversationId != null &&
+                activeConversationTab.conversationId > 0 && (
+                  <SessionCollaborators
+                    key={activeConversationTab.conversationId}
+                    conversationId={activeConversationTab.conversationId}
+                  />
+                )}
               <SessionDetailsInsights
                 conversationId={activeRuntimeId}
                 dbConversationId={activeConversationTab?.conversationId ?? null}

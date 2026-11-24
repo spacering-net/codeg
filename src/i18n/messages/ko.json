@@ -1,4 +1,13 @@
 {
+  "SessionCollaboration": {
+    "progress": "세션 진행 상황",
+    "title": "협업 세션",
+    "link": "연결",
+    "choose": "세션 선택",
+    "unlink": "연결 해제",
+    "empty": "협업 세션 없음",
+    "error": "협업 세션을 업데이트할 수 없습니다."
+  },
   "HtmlCodePreview": {
     "code": "코드",
     "preview": "미리 보기",

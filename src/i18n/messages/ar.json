@@ -1,4 +1,13 @@
 {
+  "SessionCollaboration": {
+    "progress": "تقدم الجلسة",
+    "title": "جلسات التعاون",
+    "link": "ربط",
+    "choose": "اختر جلسة",
+    "unlink": "إلغاء الربط",
+    "empty": "لا توجد جلسات تعاون",
+    "error": "تعذر تحديث جلسات التعاون."
+  },
   "HtmlCodePreview": {
     "code": "الكود",
     "preview": "معاينة",

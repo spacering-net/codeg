@@ -1,4 +1,13 @@
 {
+  "SessionCollaboration": {
+    "progress": "Progresso da sessão",
+    "title": "Sessões de colaboração",
+    "link": "Vincular",
+    "choose": "Escolher sessão",
+    "unlink": "Desvincular",
+    "empty": "Nenhuma sessão de colaboração",
+    "error": "Não foi possível atualizar as sessões de colaboração."
+  },
   "HtmlCodePreview": {
     "code": "Código",
     "preview": "Prévia",

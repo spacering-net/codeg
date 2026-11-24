@@ -1,4 +1,13 @@
 {
+  "SessionCollaboration": {
+    "progress": "工作階段進度",
+    "title": "協作工作階段",
+    "link": "關聯",
+    "choose": "選擇工作階段",
+    "unlink": "解除關聯",
+    "empty": "沒有協作工作階段",
+    "error": "無法更新協作工作階段。"
+  },
   "HtmlCodePreview": {
     "code": "程式碼",
     "preview": "預覽",

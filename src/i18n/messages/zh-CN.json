@@ -1,4 +1,13 @@
 {
+  "SessionCollaboration": {
+    "progress": "会话进度",
+    "title": "协作会话",
+    "link": "关联",
+    "choose": "选择会话",
+    "unlink": "解除关联",
+    "empty": "暂无协作会话",
+    "error": "无法更新协作会话。"
+  },
   "HtmlCodePreview": {
     "code": "代码",
     "preview": "预览",
