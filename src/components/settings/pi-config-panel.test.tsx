@@ -1,4 +1,11 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
@@ -15,6 +22,7 @@ const api = vi.hoisted(() => ({
   acpUpdatePiConfig: vi.fn(),
   acpValidatePiCommand: vi.fn(),
   acpPiListTrustEntries: vi.fn(),
+  listProviderModels: vi.fn(),
   onSaveEnv: vi.fn(),
 }))
 
@@ -24,6 +32,7 @@ vi.mock("@/lib/api", () => ({
   acpUpdatePiConfig: api.acpUpdatePiConfig,
   acpValidatePiCommand: api.acpValidatePiCommand,
   acpPiListTrustEntries: api.acpPiListTrustEntries,
+  listProviderModels: api.listProviderModels,
   acpPiSetProjectTrust: vi.fn(),
   acpInstallPiBinary: vi.fn(),
   acpUninstallPiBinary: vi.fn(),
@@ -351,6 +360,91 @@ describe("Pi default thinking level", () => {
     ).toBeInTheDocument()
     await saveConfig()
     expect(api.acpUpdatePiConfig).not.toHaveBeenCalled()
+  })
+})
+
+describe("Pi custom provider models", () => {
+  it("lists them with the key pi keeps, and saves the provider's whole list", async () => {
+    api.loadPiConfig.mockResolvedValue({
+      defaultProvider: "my-proxy",
+      defaultModel: "local-model",
+      defaultThinkingLevel: "",
+      authProviders: ["my-proxy"],
+      customProviders: [
+        {
+          id: "my-proxy",
+          baseUrl: "https://proxy.example/v1",
+          api: "anthropic-messages",
+          models: [
+            { id: "local-model", reasoning: null, thinkingLevelMap: {} },
+            { id: "old", reasoning: null, thinkingLevelMap: {} },
+          ],
+        },
+      ],
+    })
+    api.listProviderModels.mockResolvedValue({
+      url: "https://proxy.example/v1/models",
+      models: [{ id: "local-model" }, { id: "new-model" }],
+    })
+    api.acpUpdatePiConfig.mockResolvedValue(undefined)
+    const user = userEvent.setup()
+    await renderPanel({}, "local-model")
+    expect(screen.getByText("old")).toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: "Choose models…" }))
+    // No key typed: the one pi keeps for the provider, the protocol's way.
+    expect(api.listProviderModels).toHaveBeenCalledWith({
+      protocol: "anthropic",
+      baseUrl: "https://proxy.example/v1",
+      keySource: { kind: "piAuth", provider: "my-proxy" },
+      keyHeader: null,
+    })
+    const dialog = await screen.findByRole("dialog")
+    for (const id of ["new-model", "old"]) {
+      const row = (await within(dialog).findByText(id)).closest("label")!
+      await user.click(within(row).getByRole("checkbox"))
+    }
+    await user.click(
+      within(dialog).getByRole("button", { name: "Use 2 models" })
+    )
+    await saveConfig()
+    await waitFor(() =>
+      expect(api.acpUpdatePiConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "my-proxy",
+          model: "local-model",
+          customModels: ["local-model", "new-model"],
+        })
+      )
+    )
+  })
+
+  it("leaves the list on disk alone until it is edited", async () => {
+    api.loadPiConfig.mockResolvedValue({
+      defaultProvider: "my-proxy",
+      defaultModel: "local-model",
+      defaultThinkingLevel: "",
+      authProviders: [],
+      customProviders: [
+        {
+          id: "my-proxy",
+          baseUrl: "https://proxy.example/v1",
+          api: "openai-completions",
+          models: [
+            { id: "local-model", reasoning: null, thinkingLevelMap: {} },
+          ],
+        },
+      ],
+    })
+    api.acpUpdatePiConfig.mockResolvedValue(undefined)
+    await renderPanel({}, "local-model")
+    // No key typed and none kept: nothing to list with.
+    expect(
+      screen.getByRole("button", { name: "Choose models…" })
+    ).toBeDisabled()
+    await saveConfig()
+    await waitFor(() => expect(api.acpUpdatePiConfig).toHaveBeenCalled())
+    expect(api.acpUpdatePiConfig.mock.calls[0][0].customModels).toBeUndefined()
   })
 })
 

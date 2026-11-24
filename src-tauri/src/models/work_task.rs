@@ -67,6 +67,10 @@ pub struct WorkTaskInfo {
     /// Planned start of a to-do task (`None` = no plan). Cleared the moment the
     /// task is claimed, by the scheduler or by hand.
     pub scheduled_at: Option<DateTime<Utc>>,
+    /// The user put this settled (review / failed) task aside to handle later:
+    /// the board files it under Done until they pick it back up. `None` = not
+    /// put aside. Cleared by every transition out of review / failed.
+    pub deferred_at: Option<DateTime<Utc>>,
     /// Forge provenance ('forge_issue' | 'forge_pr'); `None` = not forge-sourced.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_kind: Option<String>,
@@ -76,6 +80,17 @@ pub struct WorkTaskInfo {
     /// Source snapshot (URL, title, account id …), parsed from the row's JSON.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_meta: Option<serde_json::Value>,
+    /// Where a task WITHOUT forge provenance delivered its work, and the pull
+    /// request it opened (`forge::WorkTaskDelivery`), parsed from the row's
+    /// JSON. `None` until such a task is first delivered, and always on a
+    /// forge-sourced task — that one's pull request is `source_meta.result_pr`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<serde_json::Value>,
+    /// The reply drafted for each thread of a forge-sourced task, keyed by
+    /// item number — what the write-back posts once the task is accepted.
+    /// `None` = no draft (the comment is then the outcome line alone).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub writeback_drafts: Option<std::collections::BTreeMap<i64, String>>,
     /// Latest `agent_progress` milestone OF THIS GENERATION (filled by `list`
     /// for live tasks only — the card's realtime progress line). Scoped by
     /// `run_seq`: a retry, a follow-up and a merge each start a new one, and
@@ -88,11 +103,37 @@ pub struct WorkTaskInfo {
     /// explains a card sitting in `preparing`/`merging` for minutes.
     #[serde(default)]
     pub compacting: bool,
+    /// This generation's turn has ended, but the agent still has background
+    /// work going (a background shell, a monitor, the turn Claude Code starts
+    /// on its own to read their results, a delegation), so the engine is
+    /// holding the run open instead of settling it — settling would end the
+    /// connection, and the work with it. Filled by `list` alongside
+    /// `latest_progress`, from the generation's open `background_wait` event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_wait: Option<WorkTaskBackgroundWait>,
+    /// The bound conversation's own model / options, as the next rerun will
+    /// run them (codeg#1179) — stamped only on a single-task fetch
+    /// (`work_task_get`), absent on lists and on a task with no conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_selection: Option<WorkTaskConversationSelection>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
     pub settled_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
+}
+
+/// What a run held open past its turn's end is waiting for (see
+/// [`WorkTaskInfo::background_wait`]).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkTaskBackgroundWait {
+    /// When the turn ended and the wait began.
+    pub since: DateTime<Utc>,
+    /// The work still running at that moment, one short description each (a
+    /// snapshot — the card names what the agent left running, not a live
+    /// list).
+    #[serde(default)]
+    pub tasks: Vec<String>,
 }
 
 /// One timeline entry of a task (append-only; see `work_task_event`).
@@ -127,10 +168,24 @@ pub struct WorkTaskDraft {
 pub struct WorkTaskSource {
     /// 'forge_issue' | 'forge_pr'
     pub kind: String,
-    /// Canonical key from `forge::source_key` — recomputed server-side.
+    /// Canonical key from `forge::source_key` — recomputed server-side. The
+    /// task's lead item: its only one, unless `extra_keys` names more.
     pub key: String,
+    /// The other items a task made from several related issues handles, in
+    /// the task's own order after the lead. Empty for a task triggered from
+    /// one item. Same derivation as `key`.
+    #[serde(default)]
+    pub extra_keys: Vec<String>,
     /// `ForgeSourceMeta` as JSON (URL, title, account id, PR head/base …).
     pub meta: serde_json::Value,
+}
+
+impl WorkTaskSource {
+    /// Every item the task handles, lead first — what its
+    /// `work_task_source_key` rows record.
+    pub fn keys(&self) -> impl Iterator<Item = &String> {
+        std::iter::once(&self.key).chain(self.extra_keys.iter())
+    }
 }
 
 /// Wire DTO for a saved task template: a display name plus the title seed and
@@ -194,6 +249,33 @@ pub struct WorkTaskConfig {
     /// editing this afterwards cannot re-base a task that already ran.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_branch: Option<String>,
+    /// `true` = the selector tuple above (`agent_type` / `mode_id` /
+    /// `config_values` / `label_snapshot`) is the task's own, fixed when it
+    /// was created or explicitly edited, and is never re-resolved from the
+    /// folder's task settings. `false` for every task from before this
+    /// existed: it is resolved once at its next launch and stamped frozen.
+    /// Server-owned — `work_task_service::update` derives it and never takes
+    /// it from a client payload.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub agent_config_frozen: bool,
+}
+
+/// What [`WorkTaskInfo::conversation_selection`] reports.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkTaskConversationSelection {
+    pub conversation_id: i32,
+    /// The conversation's folder (the task's worktree), for opening it.
+    pub folder_id: i32,
+    /// The conversation's agent (a task with a conversation keeps it).
+    pub agent_type: String,
+    /// Config option values (model, effort, …) by option id.
+    pub config_values: std::collections::BTreeMap<String, String>,
+    /// The conversation predates stored selections: these are what its next
+    /// connect would replay once and then keep.
+    pub legacy: bool,
+    /// A legacy task whose agent was changed while bound: its next run starts
+    /// a new conversation with the task's own tuple instead.
+    pub replaces_conversation: bool,
 }
 
 /// The one recognized [`WorkTaskConfig::deliverable`] value.
@@ -416,8 +498,10 @@ pub struct WorkTaskMergeState {
     /// Land only: "squash" | "merge"
     #[serde(default)]
     pub strategy: String,
-    /// Whether the user asked to delete the worktree after landing — persisted
-    /// so crash recovery can honor the choice when it back-fills `done`.
+    /// Whether the user asked to delete the worktree after landing — or, on a
+    /// delivery, after it settles `done` — persisted so crash recovery can
+    /// honor the choice when it back-fills `done`. Never set together with
+    /// `keep_in_review`: a task that stays in review keeps its checkout.
     #[serde(default)]
     pub delete_worktree: bool,
     /// The agent writes the commit message itself (`message` is empty then).
@@ -443,6 +527,25 @@ pub struct WorkTaskMergeState {
     /// Delivery only: open the pull request as a draft.
     #[serde(default)]
     pub draft: bool,
+    /// Delivery only: the user chose NOT to finish the task with this
+    /// delivery, so it settles back to review — the pull request recorded on
+    /// the row, the worktree kept — instead of to `done`, and its next
+    /// delivery pushes into that same pull request. `false` on every row
+    /// written before the choice existed, which is what they all did.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keep_in_review: bool,
+    /// Delivery only, and only for a task without forge provenance: the
+    /// repository and account this delivery pushes with. Persisted because
+    /// such a task has nothing else naming them until its first delivery
+    /// settles — crash recovery must ask the same forge, as the same account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<crate::forge::DeliveryTarget>,
+    /// Delivery only: the pull request this delivery pushes INTO — the one an
+    /// earlier delivery opened and the task stayed in review after. Absent
+    /// when it opens (or adopts by branch) a pull request instead, and on a
+    /// pull-request task, whose number is part of its own identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_number: Option<i64>,
 }
 
 /// A merge the user asked for while the folder's one merge slot was busy,
@@ -480,6 +583,13 @@ pub struct WorkTaskPreflight {
     /// Trailing combined output (capped) — shown when the light is red.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_tail: Option<String>,
+    /// Which run of the command this light belongs to — minted when the run
+    /// writes its `running` light. The run's verdict is only written while the
+    /// row still holds that exact light, so a run whose light was cleared
+    /// (the task's content changed under it) or replaced by a newer run cannot
+    /// put a stale verdict back. `None` on lights written before this existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
 }
 
 /// Changed file of a task worktree vs. its recorded base (`git diff --numstat`).
@@ -488,6 +598,15 @@ pub struct WorkTaskChangedFile {
     pub file: String,
     pub additions: i32,
     pub deletions: i32,
+}
+
+/// A file a task worktree holds uncommitted (`git status`): what committing
+/// the leftovers before a delivery would add. `status` is one letter — `A`
+/// added or untracked, `M` modified, `D` deleted, `R` renamed or copied.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkTaskUncommittedFile {
+    pub file: String,
+    pub status: String,
 }
 
 #[cfg(test)]

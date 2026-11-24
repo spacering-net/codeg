@@ -581,7 +581,7 @@ impl ComputerService {
             #[cfg(feature = "tauri-runtime")]
             ComputerHost::Desktop(app) => (
                 ComputerEvents::Desktop(app.clone()),
-                EventEmitter::Tauri(app.clone()),
+                EventEmitter::from_app(app),
             ),
             ComputerHost::Server {
                 broadcaster,
@@ -2996,6 +2996,34 @@ mod tests {
             value: "x".into(),
         };
         assert_eq!(on_linux(&set, Some(Foreground), &off), Ok(Background));
+    }
+
+    /// A menu command can bring its application, or a window of it, to the
+    /// front — on Linux always, on macOS where the application is the one in
+    /// front — so on both it goes only where the person allows the front,
+    /// whatever was asked, and is refused where they do not.
+    #[test]
+    fn a_menu_command_goes_only_where_the_front_is_allowed() {
+        use crate::computer::keys::Platform;
+        use crate::computer::types::ActDelivery::{Background, Foreground};
+        let menu = ComputerActRequest::InvokeMenu {
+            path: vec!["File".into(), "Export".into()],
+        };
+        let allowed = ComputerToolsConfig::default();
+        let off = ComputerToolsConfig {
+            allow_foreground: false,
+            ..Default::default()
+        };
+        for platform in [Platform::Mac, Platform::Linux] {
+            assert_eq!(
+                delivery_on(&menu, Some(Background), &allowed, platform).map_err(|r| r.slug),
+                Ok(Foreground),
+                "{platform:?}"
+            );
+            let refused = delivery_on(&menu, None, &off, platform).unwrap_err();
+            assert_eq!(refused.slug, ERROR_FOREGROUND_NOT_ALLOWED);
+            assert_eq!(refused.note, MENU_NEEDS_FRONT_NOTE);
+        }
     }
 
     /// Only a refusal from the background is ended with what the settings

@@ -46,6 +46,7 @@ export function PetEditor({ open, target, onClose, onSaved }: PetEditorProps) {
 
   useEffect(() => {
     if (!open) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- form seeding when the parent opens the editor (also resets the idTouched ref)
     setError(null)
     setSpritesheet(null)
     if (target) {

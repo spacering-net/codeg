@@ -75,7 +75,6 @@ function agent(overrides: Partial<AcpAgentInfo>): AcpAgentInfo {
     env: {},
     config_json: null,
     config_file_path: null,
-    opencode_auth_json: null,
     codex_auth_json: null,
     cline_secrets_json: null,
     codex_config_toml: null,
@@ -146,7 +145,10 @@ async function renderPanel(agents: AcpAgentInfo[]) {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks()
+  // Reset, not just clear: a test's mockResolvedValue/mockImplementation must
+  // not reach the next one, and restoreAllMocks only takes down spyOn spies —
+  // resetting puts every stubbed api function back on its never-settling stub.
+  vi.resetAllMocks()
   vi.spyOn(console, "warn").mockImplementation(() => {})
 })
 

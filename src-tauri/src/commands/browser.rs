@@ -34,12 +34,12 @@ use crate::browser::{events, hooks, listener, policy, profile, services, tab_lab
 
 #[cfg(all(
     feature = "browser-child",
-    any(target_os = "macos", target_os = "windows")
+    any(target_os = "macos", target_os = "windows", target_os = "linux")
 ))]
 const CHILD_SURFACE_COMPILED: bool = true;
 #[cfg(not(all(
     feature = "browser-child",
-    any(target_os = "macos", target_os = "windows")
+    any(target_os = "macos", target_os = "windows", target_os = "linux")
 )))]
 const CHILD_SURFACE_COMPILED: bool = false;
 
@@ -69,18 +69,13 @@ pub fn capabilities(policy: &BrowserPolicy) -> BrowserCapabilities {
     let surface = if CHILD_SURFACE_COMPILED {
         SurfaceKind::Child
     } else {
-        reasons.push(if cfg!(target_os = "linux") {
-            "linux: child webviews cannot be positioned; using owned windows".to_string()
-        } else {
-            "child surface not compiled; using owned windows".to_string()
-        });
+        reasons.push("child surface not compiled; using owned windows".to_string());
         SurfaceKind::Window
     };
     // The installer ships with the embedded surface. On macOS before 11 it
     // falls back to the page world, which only the live controller can tell,
     // so a tab there answers `legacy` while this still says `native`. Linux
-    // has no embedded surface and a channel all the same: its owned window
-    // carries the script world itself.
+    // carries the isolated script world on both embedded and owned surfaces.
     let channel = if CHILD_SURFACE_COMPILED || crate::browser::surface_window::HAS_CHANNEL {
         ChannelKind::Native
     } else {
@@ -329,7 +324,7 @@ pub fn open_tab_core(
     let surface = match pick_surface(choice) {
         #[cfg(all(
             feature = "browser-child",
-            any(target_os = "macos", target_os = "windows")
+            any(target_os = "macos", target_os = "windows", target_os = "linux")
         ))]
         SurfaceKind::Child => BrowserSurface::Child(
             crate::browser::surface_child::create(
@@ -836,6 +831,9 @@ pub async fn remove_profile_core(
         #[cfg(all(feature = "browser-child", target_os = "windows"))]
         crate::browser::surface_child::forget_profile_context(app, profile_id)
             .map_err(|e| window_err("Failed to delete the browser profile", e))?;
+        #[cfg(target_os = "linux")]
+        crate::browser::surface_window::forget_profile_context(app, profile_id)
+            .map_err(|e| window_err("Failed to delete the browser profile", e))?;
         let _ = app;
         let result = profile::remove_directory(profile_id)
             .map_err(|e| window_err("Failed to delete the browser profile", e));
@@ -1165,6 +1163,12 @@ pub async fn set_visible_core(
         // overlay that caused the hide would never receive Esc / Tab.
         if handoff_focus {
             let _ = owner.set_focus();
+            // GTK: raising the window leaves its keyboard focus where it was,
+            // and hiding the page that holds it would leave the window none.
+            #[cfg(all(feature = "browser-child", target_os = "linux"))]
+            if let BrowserSurface::Child(child) = &surface {
+                let _ = child.release_focus();
+            }
         }
         surface
             .hide()
@@ -4615,6 +4619,16 @@ mod tests {
         assert!(!caps.platform.is_empty());
         assert!(caps.policy.enabled);
         assert_eq!(caps.doc_guest, doc_guest::supported());
+    }
+
+    /// Linux tabs stay in the workspace unless a standalone window was requested.
+    #[cfg(all(target_os = "linux", feature = "browser-child"))]
+    #[test]
+    fn linux_browser_tabs_embed_by_default() {
+        assert_eq!(pick_surface(SurfaceChoice::Auto), SurfaceKind::Child);
+        assert_eq!(pick_surface(SurfaceChoice::Child), SurfaceKind::Child);
+        assert_eq!(pick_surface(SurfaceChoice::Window), SurfaceKind::Window);
+        assert_eq!(capabilities(&BrowserPolicy::default()).surface, Some(SurfaceKind::Child));
     }
 
     /// The page channel travels with whatever surface can carry one — the

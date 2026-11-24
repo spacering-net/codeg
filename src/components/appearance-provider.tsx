@@ -29,8 +29,15 @@ import {
   type FontSize,
 } from "@/lib/font-presets"
 import {
+  applyChatContentWidth,
+  commitChatContentWidth,
+  readChatContentWidth,
+} from "@/lib/chat-content-width"
+import {
   STORAGE_KEY_THEME_COLOR,
   STORAGE_KEY_ZOOM_LEVEL,
+  STORAGE_KEY_CHAT_ANIMATIONS,
+  STORAGE_KEY_CHAT_CONTENT_WIDTH,
   STORAGE_KEY_WELCOME_QUICK_ACTIONS,
   STORAGE_KEY_KEEP_OPENED_CONVERSATIONS,
   STORAGE_KEY_UI_FONT,
@@ -67,6 +74,7 @@ import {
   type CustomTheme,
   type CustomThemeToken,
 } from "@/lib/custom-style"
+import { readableAccent } from "@/lib/readable-accent"
 import { useShortcutSettings } from "@/hooks/use-shortcut-settings"
 import {
   isShortcutRecorderArmed,
@@ -91,6 +99,11 @@ import {
   type WorkspaceBgFillMode,
 } from "@/lib/workspace-background"
 import { downloadWorkspaceBgMarket } from "@/lib/workspace-background-market"
+import {
+  isSyncedAppearanceKey,
+  mirrorAppearanceOnLaunch,
+  scheduleAppearanceMirror,
+} from "@/lib/appearance-sync"
 
 function syncTrafficLightPosition(zoom: number) {
   if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window))
@@ -118,6 +131,22 @@ type AppearanceContextValue = {
   /** 新会话欢迎页是否显示「模式选择区域」（QuickActions 快捷卡片），默认开启 */
   showWelcomeQuickActions: boolean
   setShowWelcomeQuickActions: (on: boolean) => void
+  /** 聊天区域动画总开关，默认开启；关闭时 <html> 带 data-chat-animations="off" */
+  chatAnimations: boolean
+  setChatAnimations: (on: boolean) => void
+  /**
+   * 聊天内容宽度（100% 缩放下的 px，落到 CSS 时换成 rem，随缩放变化），
+   * null = 内置默认（48rem）。拖拽手柄与外观设置页共用；set 会持久化并落到
+   * <html>，preview 只改 DOM（拖拽过程中逐帧用，不触发重渲染）。
+   */
+  chatContentWidth: number | null
+  setChatContentWidth: (px: number | null) => void
+  previewChatContentWidth: (px: number | null) => void
+  /**
+   * 同一个值，但在变化的那一刻就是新的（state 要等 React 提交才更新）。拖拽没存
+   * 宽度就结束时，手柄用它把已存的宽度放回 <html>。
+   */
+  getChatContentWidth: () => number | null
   /** 打开的会话是否各占一个标签页（关闭预览标签页的「就地替换」），默认关闭 */
   keepOpenedConversations: boolean
   setKeepOpenedConversations: (on: boolean) => void
@@ -195,11 +224,39 @@ export const AppearanceContext = createContext<AppearanceContextValue | null>(
   null
 )
 
+/**
+ * The chat-animations flag on its own, for the transcript's JS-driven motion
+ * (`useChatAnimationsEnabled`). `AppearanceContext`'s value is rebuilt on every
+ * provider render — a theme change, every tick of a settings slider relayed
+ * from the settings window — and the readers of this flag sit on the hot path
+ * (`MessageListView`, every `Shimmer`, each reply's stats row), mostly behind
+ * `memo` boundaries the big context would cut through. A bare boolean only
+ * re-renders them when the flag itself flips. Defaults to on, which is also
+ * what a tree with no provider gets.
+ */
+export const ChatAnimationsContext = createContext<boolean>(true)
+
 function persist(key: string, value: string) {
   try {
     localStorage.setItem(key, value)
   } catch {
     // 隐私模式 / 禁用 storage 时静默忽略，本次会话内仍然生效
+    return
+  }
+  // 配置同步：外观偏好随配置快照走，用户改动时镜像到后端（见 lib/appearance-sync）。
+  if (isSyncedAppearanceKey(key)) scheduleAppearanceMirror()
+}
+
+/**
+ * 只写本地、不镜像：启动时的缓存修正不是用户的改动。浏览器（服务器模式）只在
+ * 用户改动时镜像，若这里也镜像，一个全新浏览器打开即会用它几乎为空的外观整份
+ * 替换后端镜像，把别处设好的主题、CSS 等从下一次快照里抹掉。
+ */
+function persistLocalOnly(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value)
+  } catch {
+    // 同 persist
   }
 }
 
@@ -374,6 +431,28 @@ export function AppearanceProvider({
   const [showWelcomeQuickActions, setShowWelcomeQuickActionsState] =
     useState<boolean>(() => readBool(STORAGE_KEY_WELCOME_QUICK_ACTIONS, true))
 
+  // 聊天区域动画开关：默认开启，键缺失即回退为 true。DOM 属性由 inline 脚本预置，
+  // 这里的 effect 只负责让后续切换/跨窗口同步落到 <html>。
+  const [chatAnimations, setChatAnimationsState] = useState<boolean>(() =>
+    readBool(STORAGE_KEY_CHAT_ANIMATIONS, true)
+  )
+  useEffect(() => {
+    if (chatAnimations) {
+      document.documentElement.removeAttribute("data-chat-animations")
+    } else {
+      document.documentElement.setAttribute("data-chat-animations", "off")
+    }
+  }, [chatAnimations])
+
+  // 聊天内容宽度：DOM 变量由 inline 脚本预置，这里持有状态供设置页回显。
+  const [chatContentWidth, setChatContentWidthState] = useState<number | null>(
+    () => readChatContentWidth()
+  )
+  // 与 state 同值，但写入即生效：别的窗口改了宽度、本窗口的 state 还没提交时，
+  // 取消拖拽若按渲染时的旧值复原，会把新宽度盖掉，且之后 state 提交时没有任何
+  // 地方再把新值写回 <html>。
+  const chatContentWidthRef = useRef(chatContentWidth)
+  const getChatContentWidth = useCallback(() => chatContentWidthRef.current, [])
   // 打开的会话是否保留各自的标签页：默认关闭，键缺失即回退为预览标签页的历史行为。
   // 真正消费它的是 tab store（在 openTab 里直接读同一个键），这里只是设置面板的回显态。
   const [keepOpenedConversations, setKeepOpenedConversationsState] =
@@ -528,6 +607,19 @@ export function AppearanceProvider({
   const setShowWelcomeQuickActions = useCallback((on: boolean) => {
     setShowWelcomeQuickActionsState(on)
     persist(STORAGE_KEY_WELCOME_QUICK_ACTIONS, on ? "1" : "0")
+  }, [])
+
+  const setChatAnimations = useCallback((on: boolean) => {
+    setChatAnimationsState(on)
+    persist(STORAGE_KEY_CHAT_ANIMATIONS, on ? "1" : "0")
+  }, [])
+
+  const setChatContentWidth = useCallback((px: number | null) => {
+    chatContentWidthRef.current = px
+    setChatContentWidthState(px)
+    commitChatContentWidth(px)
+    // commitChatContentWidth 直接写 localStorage、不经 persist，这里补上镜像。
+    scheduleAppearanceMirror()
   }, [])
 
   const setKeepOpenedConversations = useCallback((on: boolean) => {
@@ -754,6 +846,9 @@ export function AppearanceProvider({
     } catch {
       // localStorage unavailable
     }
+    // 本机桌面窗口的 localStorage 就是这台机器的外观：启动时镜像一次，让配置
+    // 快照从第一次上传起就带上它（浏览器不在启动时镜像，见 lib/appearance-sync）。
+    mirrorAppearanceOnLaunch()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -765,7 +860,7 @@ export function AppearanceProvider({
     const sans = resolveFontStack(uiFont.id, uiFont.custom, "sans")
     if (readStored(STORAGE_KEY_UI_FONT_STACK) !== sans) {
       document.documentElement.style.setProperty("--font-sans", sans)
-      persist(STORAGE_KEY_UI_FONT_STACK, sans)
+      persistLocalOnly(STORAGE_KEY_UI_FONT_STACK, sans)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -791,6 +886,7 @@ export function AppearanceProvider({
   // reload helper。
   useEffect(() => {
     if (!workspaceBgEnabled) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- async load from disk (external system)
     void reloadWorkspaceBackgroundImage()
   }, [workspaceBgEnabled, reloadWorkspaceBackgroundImage])
 
@@ -819,6 +915,16 @@ export function AppearanceProvider({
           ? customTheme.dark
           : customTheme.light
     applyTokenOverrides(document.documentElement, active)
+    // The timeline's accent follows a primary set here, held to a readable
+    // lightness like each preset's (globals.css); without one, the preset's.
+    const accent = active.primary
+      ? readableAccent(active.primary, isDarkMode)
+      : null
+    if (accent) {
+      document.documentElement.style.setProperty("--activity-accent", accent)
+    } else {
+      document.documentElement.style.removeProperty("--activity-accent")
+    }
   }, [customStyleSuppressed, customThemeEnabled, customTheme, isDarkMode])
 
   useEffect(() => {
@@ -971,6 +1077,15 @@ export function AppearanceProvider({
           readBool(STORAGE_KEY_WELCOME_QUICK_ACTIONS, true)
         )
       }
+      if (e.key === STORAGE_KEY_CHAT_CONTENT_WIDTH) {
+        const next = readChatContentWidth()
+        chatContentWidthRef.current = next
+        setChatContentWidthState(next)
+        applyChatContentWidth(next)
+      }
+      if (e.key === STORAGE_KEY_CHAT_ANIMATIONS) {
+        setChatAnimationsState(readBool(STORAGE_KEY_CHAT_ANIMATIONS, true))
+      }
       if (e.key === STORAGE_KEY_KEEP_OPENED_CONVERSATIONS) {
         setKeepOpenedConversationsState(
           readBool(STORAGE_KEY_KEEP_OPENED_CONVERSATIONS, false)
@@ -1080,6 +1195,12 @@ export function AppearanceProvider({
         setZoomLevel,
         showWelcomeQuickActions,
         setShowWelcomeQuickActions,
+        chatAnimations,
+        setChatAnimations,
+        chatContentWidth,
+        setChatContentWidth,
+        previewChatContentWidth: applyChatContentWidth,
+        getChatContentWidth,
         keepOpenedConversations,
         setKeepOpenedConversations,
         uiFont,
@@ -1128,7 +1249,9 @@ export function AppearanceProvider({
         safeStyleRequested,
       }}
     >
-      {children}
+      <ChatAnimationsContext.Provider value={chatAnimations}>
+        {children}
+      </ChatAnimationsContext.Provider>
     </AppearanceContext.Provider>
   )
 }

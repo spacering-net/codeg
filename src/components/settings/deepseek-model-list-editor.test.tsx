@@ -4,24 +4,33 @@ import {
   screen,
   waitFor,
   waitForElementToBeRemoved,
+  within,
 } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import {
   DeepSeekModelListEditor,
   deepSeekAcceptsImages,
+  deepseekReadsHarnessCatalog,
   deepSeekImageBudgetMode,
   pruneEmpty,
+  rowsForPicks,
   setDeepSeekImageBudgetMode,
   setDeepSeekImageSupport,
   validateDeepSeekModels,
 } from "./deepseek-model-list-editor"
-import { loadDeepSeekModelCatalog, updateDeepSeekModelCatalog } from "@/lib/api"
+import {
+  listProviderModels,
+  loadDeepSeekModelCatalog,
+  updateDeepSeekModelCatalog,
+} from "@/lib/api"
 import enMessages from "@/i18n/messages/en.json"
 import type { DeepSeekCatalogModel, DeepSeekModelCatalog } from "@/lib/types"
 
 vi.mock("@/lib/api", () => ({
+  listProviderModels: vi.fn(),
   loadDeepSeekModelCatalog: vi.fn(),
   updateDeepSeekModelCatalog: vi.fn(),
 }))
@@ -61,11 +70,15 @@ function catalog(
   }
 }
 
-async function renderEditor(next: DeepSeekModelCatalog, launchModel?: string) {
+async function renderEditor(
+  next: DeepSeekModelCatalog,
+  launchModel?: string,
+  endpoint?: { baseUrl: string; apiKey: string }
+) {
   vi.mocked(loadDeepSeekModelCatalog).mockResolvedValue(next)
   render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
-      <DeepSeekModelListEditor launchModel={launchModel} />
+      <DeepSeekModelListEditor launchModel={launchModel} endpoint={endpoint} />
     </NextIntlClientProvider>
   )
   // Settles on both branches: an unreadable document renders no editor at all.
@@ -76,6 +89,24 @@ async function renderEditor(next: DeepSeekModelCatalog, launchModel?: string) {
 
 const idField = (index: number) =>
   screen.getAllByLabelText("Model id")[index] as HTMLInputElement
+
+describe("deepseekReadsHarnessCatalog", () => {
+  it("is true only for releases before 0.10.0", () => {
+    expect(deepseekReadsHarnessCatalog("0.9.0")).toBe(true)
+    expect(deepseekReadsHarnessCatalog(" v0.9.0 ")).toBe(true)
+    expect(deepseekReadsHarnessCatalog("0.6.3")).toBe(true)
+    expect(deepseekReadsHarnessCatalog("0.10.0")).toBe(false)
+    expect(deepseekReadsHarnessCatalog("0.11.0")).toBe(false)
+    expect(deepseekReadsHarnessCatalog("1.0.0")).toBe(false)
+  })
+
+  it("treats a missing or unparseable version as the pinned release", () => {
+    expect(deepseekReadsHarnessCatalog(null)).toBe(false)
+    expect(deepseekReadsHarnessCatalog(undefined)).toBe(false)
+    expect(deepseekReadsHarnessCatalog("")).toBe(false)
+    expect(deepseekReadsHarnessCatalog("local")).toBe(false)
+  })
+})
 
 describe("validateDeepSeekModels", () => {
   it("accepts what the agent accepts", () => {
@@ -435,5 +466,55 @@ describe("pruneEmpty", () => {
       imagePixelBudget: "low",
       systemPromptUpdate: "in-history",
     })
+  })
+})
+
+describe("importing the endpoint's models", () => {
+  it("keeps a row that stays, fills a new one from the list, and leaves a half-typed row", () => {
+    const rows: DeepSeekCatalogModel[] = [
+      { id: "kept", name: "Kept", contextWindow: 64_000 },
+      { id: "dropped" },
+      { id: "" },
+    ]
+    expect(
+      rowsForPicks(
+        rows,
+        ["kept", "fresh"],
+        [{ id: "fresh", displayName: "Fresh", contextWindow: 256_000 }]
+      )
+    ).toEqual([
+      { id: "kept", name: "Kept", contextWindow: 64_000 },
+      { id: "fresh", name: "Fresh", contextWindow: 256_000 },
+      { id: "" },
+    ])
+  })
+
+  it("asks the endpoint the agent routes to, and adds the picks as rows", async () => {
+    vi.mocked(listProviderModels).mockResolvedValue({
+      url: "https://gw.test/v1/models",
+      models: [
+        { id: "deepseek-flash" },
+        { id: "gw-new", contextWindow: 32_000 },
+      ],
+    })
+    const user = userEvent.setup()
+    await renderEditor(catalog(), undefined, {
+      baseUrl: "https://gw.test/v1",
+      apiKey: "sk-gw",
+    })
+    await user.click(screen.getByRole("button", { name: "Choose models…" }))
+    expect(listProviderModels).toHaveBeenCalledWith({
+      protocol: "openai",
+      baseUrl: "https://gw.test/v1",
+      keySource: { kind: "inline", apiKey: "sk-gw" },
+      keyHeader: null,
+    })
+    const dialog = await screen.findByRole("dialog")
+    const row = (await within(dialog).findByText("gw-new")).closest("label")!
+    await user.click(within(row).getByRole("checkbox"))
+    await user.click(
+      within(dialog).getByRole("button", { name: "Use 4 models" })
+    )
+    await waitFor(() => expect(idField(3).value).toBe("gw-new"))
   })
 })

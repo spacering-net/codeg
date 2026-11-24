@@ -1,9 +1,17 @@
 import { act, fireEvent, render, screen } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest"
 
 const mocks = vi.hoisted(() => ({
-  actions: null as null | { openBrowserTab: ReturnType<typeof vi.fn> },
+  actions: null as null | { openBrowserTab: Mock },
   openUrl: vi.fn(),
   revealItemInDir: vi.fn(),
   openWithOsHandler: vi.fn(),

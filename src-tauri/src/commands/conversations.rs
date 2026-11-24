@@ -3,20 +3,24 @@ use std::collections::{HashMap, HashSet};
 #[cfg(feature = "tauri-runtime")]
 use tauri::Manager;
 
+use crate::acp::types::ToolApprovalInfo;
 use crate::app_error::AppCommandError;
 use crate::db::entities::conversation;
 use crate::db::entities::folder::FolderKind;
-use crate::db::service::{conversation_service, folder_service, import_service, tab_service};
+use crate::db::service::{
+    agent_setting_service, conversation_service, folder_service, import_service, tab_service,
+    tool_approval_service,
+};
 #[cfg(feature = "tauri-runtime")]
 use crate::db::AppDatabase;
 use crate::models::*;
 // Concrete parser type only for `load_thread_name_index`, which is codex's own
 // index reader and not part of the `AgentParser` trait. Every history read goes
 // through `build_agent_parser`.
-use crate::parsers::codex::CodexParser;
+use crate::parsers::codex::{CodexParser, CodexText};
 use crate::parsers::{
     build_agent_parser, folder_name_from_path, normalize_path_for_matching, path_eq_for_matching,
-    AgentParser, ParseError,
+    AgentEnvs, AgentParser, ParseError,
 };
 use crate::web::event_bridge::{
     emit_event, ConversationChange, ConversationsBulkChanged, EventEmitter, ImportScanProgress,
@@ -40,8 +44,9 @@ pub(crate) async fn list_all_conversations_core(
     chat_channel_manager: &crate::chat_channel::manager::ChatChannelManager,
     options: ListAllConversationsOptions,
 ) -> Result<Vec<DbConversationSummary>, AppCommandError> {
-    let codex_titles = match tokio::task::spawn_blocking(|| {
-        CodexParser::new().load_thread_name_index()
+    let codex_env = agent_setting_service::load_agent_env(conn, AgentType::Codex).await;
+    let codex_titles = match tokio::task::spawn_blocking(move || {
+        CodexParser::for_env(&codex_env).load_thread_name_index()
     })
     .await
     {
@@ -111,7 +116,7 @@ pub async fn list_all_conversations(
     status: Option<String>,
     include_children: Option<bool>,
 ) -> Result<Vec<DbConversationSummary>, AppCommandError> {
-    let emitter = EventEmitter::Tauri(app.clone());
+    let emitter = EventEmitter::from_app(&app);
     let db = app.state::<AppDatabase>();
     let chat_channel_manager =
         app.state::<crate::chat_channel::manager::ChatChannelManager>();
@@ -206,7 +211,7 @@ pub async fn save_opened_tabs(
 ) -> Result<SaveTabsOutcome, AppCommandError> {
     save_opened_tabs_core(
         &db.conn,
-        &EventEmitter::Tauri(app),
+        &EventEmitter::from_app(&app),
         items,
         expected_version,
         origin,
@@ -216,6 +221,7 @@ pub async fn save_opened_tabs(
 
 /// Synchronous implementation shared by list_conversations, list_folders, and get_stats.
 fn list_conversations_sync(
+    envs: &AgentEnvs,
     agent_type: Option<AgentType>,
     search: Option<String>,
     sort_by: Option<String>,
@@ -230,14 +236,17 @@ fn list_conversations_sync(
     let mut parsers: Vec<(AgentType, Box<dyn AgentParser>)> =
         crate::models::agent::BUILTIN_AGENT_TYPES
             .iter()
-            .map(|&at| (at, build_agent_parser(at)))
+            .map(|&at| (at, build_agent_parser(at, &envs.get(at))))
             .collect();
     // Registered custom agents read back from codeg's own ACP transcripts, so
     // their sessions participate in folder grouping and stats like any other.
     for custom in crate::acp::custom_registry::all() {
-        parsers.push((custom, build_agent_parser(custom)));
+        parsers.push((custom, build_agent_parser(custom, &envs.get(custom))));
     }
 
+    // The sessions codeg ran itself to generate text (`acp::one_shot`) were
+    // never conversations: left out, recognised by where they ran.
+    let generated = crate::acp::one_shot::GenerationPaths::current();
     for (at, parser) in &parsers {
         if let Some(ref filter) = agent_type {
             if filter != at {
@@ -248,6 +257,13 @@ fn list_conversations_sync(
             Ok(conversations) => {
                 // Deduplicate conversations based on (agent_type, id) combination
                 for conversation in conversations {
+                    if conversation
+                        .folder_path
+                        .as_deref()
+                        .is_some_and(|p| generated.contains(p))
+                    {
+                        continue;
+                    }
                     let key = format!("{:?}-{}", conversation.agent_type, conversation.id);
                     if seen_keys.insert(key) {
                         all_conversations.push(conversation);
@@ -309,15 +325,16 @@ fn list_conversations_sync(
     all_conversations
 }
 
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn list_conversations(
+pub async fn list_conversations_core(
+    conn: &sea_orm::DatabaseConnection,
     agent_type: Option<AgentType>,
     search: Option<String>,
     sort_by: Option<String>,
     folder_path: Option<String>,
 ) -> Result<Vec<ConversationSummary>, AppCommandError> {
+    let envs = agent_setting_service::load_agent_envs(conn).await;
     tokio::task::spawn_blocking(move || {
-        list_conversations_sync(agent_type, search, sort_by, folder_path)
+        list_conversations_sync(&envs, agent_type, search, sort_by, folder_path)
     })
     .await
     .map_err(|e| {
@@ -326,13 +343,28 @@ pub async fn list_conversations(
     })
 }
 
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn get_conversation(
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn list_conversations(
+    db: tauri::State<'_, AppDatabase>,
+    agent_type: Option<AgentType>,
+    search: Option<String>,
+    sort_by: Option<String>,
+    folder_path: Option<String>,
+) -> Result<Vec<ConversationSummary>, AppCommandError> {
+    list_conversations_core(&db.conn, agent_type, search, sort_by, folder_path).await
+}
+
+/// One agent session read straight from the agent's own store by its session
+/// id — the sub-agent transcript viewer's source.
+pub async fn get_conversation_core(
+    conn: &sea_orm::DatabaseConnection,
     agent_type: AgentType,
     conversation_id: String,
 ) -> Result<ConversationDetail, AppCommandError> {
+    let env = agent_setting_service::load_agent_env(conn, agent_type).await;
     tokio::task::spawn_blocking(move || -> Result<ConversationDetail, AppCommandError> {
-        build_agent_parser(agent_type)
+        build_agent_parser(agent_type, &env)
             .get_conversation(&conversation_id)
             .map_err(parse_error_to_app_error)
     })
@@ -343,44 +375,74 @@ pub async fn get_conversation(
     })?
 }
 
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn list_folders() -> Result<Vec<FolderInfo>, AppCommandError> {
-    tokio::task::spawn_blocking(move || -> Result<Vec<FolderInfo>, AppCommandError> {
-        let all_conversations = list_conversations_sync(None, None, None, None);
-        Ok(compute_folders(&all_conversations))
-    })
-    .await
-    .map_err(|e| {
-        AppCommandError::task_execution_failed("Failed to list folders").with_detail(e.to_string())
-    })?
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn get_conversation(
+    db: tauri::State<'_, AppDatabase>,
+    agent_type: AgentType,
+    conversation_id: String,
+) -> Result<ConversationDetail, AppCommandError> {
+    get_conversation_core(&db.conn, agent_type, conversation_id).await
 }
 
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn get_stats() -> Result<AgentStats, AppCommandError> {
-    tokio::task::spawn_blocking(move || -> Result<AgentStats, AppCommandError> {
-        let all_conversations = list_conversations_sync(None, None, None, None);
-        Ok(compute_stats(&all_conversations))
-    })
-    .await
-    .map_err(|e| {
-        AppCommandError::task_execution_failed("Failed to compute conversation stats")
-            .with_detail(e.to_string())
-    })?
+/// Every parsable session on this machine, read in one blocking pass with
+/// each agent's launch environment — shared by the folder/stats/sidebar
+/// aggregates below.
+async fn list_all_local_conversations(
+    conn: &sea_orm::DatabaseConnection,
+    what: &'static str,
+) -> Result<Vec<ConversationSummary>, AppCommandError> {
+    let envs = agent_setting_service::load_agent_envs(conn).await;
+    tokio::task::spawn_blocking(move || list_conversations_sync(&envs, None, None, None, None))
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(what).with_detail(e.to_string()))
 }
 
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn get_sidebar_data() -> Result<SidebarData, AppCommandError> {
-    tokio::task::spawn_blocking(move || -> Result<SidebarData, AppCommandError> {
-        let all_conversations = list_conversations_sync(None, None, None, None);
-        let folders = compute_folders(&all_conversations);
-        let stats = compute_stats(&all_conversations);
-        Ok(SidebarData { folders, stats })
-    })
-    .await
-    .map_err(|e| {
-        AppCommandError::task_execution_failed("Failed to build sidebar data")
-            .with_detail(e.to_string())
-    })?
+pub async fn list_folders_core(
+    conn: &sea_orm::DatabaseConnection,
+) -> Result<Vec<FolderInfo>, AppCommandError> {
+    let all_conversations = list_all_local_conversations(conn, "Failed to list folders").await?;
+    Ok(compute_folders(&all_conversations))
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn list_folders(
+    db: tauri::State<'_, AppDatabase>,
+) -> Result<Vec<FolderInfo>, AppCommandError> {
+    list_folders_core(&db.conn).await
+}
+
+pub async fn get_stats_core(
+    conn: &sea_orm::DatabaseConnection,
+) -> Result<AgentStats, AppCommandError> {
+    let all_conversations =
+        list_all_local_conversations(conn, "Failed to compute conversation stats").await?;
+    Ok(compute_stats(&all_conversations))
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn get_stats(db: tauri::State<'_, AppDatabase>) -> Result<AgentStats, AppCommandError> {
+    get_stats_core(&db.conn).await
+}
+
+pub async fn get_sidebar_data_core(
+    conn: &sea_orm::DatabaseConnection,
+) -> Result<SidebarData, AppCommandError> {
+    let all_conversations =
+        list_all_local_conversations(conn, "Failed to build sidebar data").await?;
+    let folders = compute_folders(&all_conversations);
+    let stats = compute_stats(&all_conversations);
+    Ok(SidebarData { folders, stats })
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn get_sidebar_data(
+    db: tauri::State<'_, AppDatabase>,
+) -> Result<SidebarData, AppCommandError> {
+    get_sidebar_data_core(&db.conn).await
 }
 
 fn compute_folders(all_conversations: &[ConversationSummary]) -> Vec<FolderInfo> {
@@ -466,7 +528,7 @@ pub async fn import_local_conversations(
 ) -> Result<ImportResult, AppCommandError> {
     import_local_conversations_core(
         &db.conn,
-        &EventEmitter::Tauri(app),
+        &EventEmitter::from_app(&app),
         &chat_channel_manager,
         folder_id,
     )
@@ -705,8 +767,10 @@ pub async fn scan_importable_sessions_core(
     chat_channel_manager: &crate::chat_channel::manager::ChatChannelManager,
 ) -> Result<ScanResult, AppCommandError> {
     let progress_emitter = emitter.clone();
-    let summaries =
-        import_service::collect_local_summaries(move |agent_type, done, total, session_count| {
+    let envs = agent_setting_service::load_agent_envs(conn).await;
+    let summaries = import_service::collect_local_summaries(
+        &envs,
+        move |agent_type, done, total, session_count| {
             emit_event(
                 &progress_emitter,
                 IMPORT_SCAN_PROGRESS_EVENT,
@@ -717,20 +781,30 @@ pub async fn scan_importable_sessions_core(
                     session_count,
                 },
             );
-        })
-        .await;
+        },
+    )
+    .await;
 
-    scan_importable_sessions_from_summaries(conn, emitter, chat_channel_manager, summaries).await
+    scan_importable_sessions_from_summaries(
+        conn,
+        emitter,
+        chat_channel_manager,
+        summaries,
+        &crate::paths::codeg_acp_transcripts_root(),
+    )
+    .await
 }
 
 /// Reconcile summaries already collected by the filesystem scan. Keeping this
 /// boundary separate makes the DB refresh and notification behavior testable
-/// without reading the developer's real agent session directories.
+/// without reading the developer's real agent session directories — or codeg's
+/// own ACP transcripts, read from `transcripts_root`.
 async fn scan_importable_sessions_from_summaries(
     conn: &sea_orm::DatabaseConnection,
     emitter: &EventEmitter,
     chat_channel_manager: &crate::chat_channel::manager::ChatChannelManager,
     summaries: Vec<(AgentType, ConversationSummary)>,
+    transcripts_root: &std::path::Path,
 ) -> Result<ScanResult, AppCommandError> {
     use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
@@ -750,6 +824,13 @@ async fn scan_importable_sessions_from_summaries(
             .entry((row.agent_type.clone(), external_id))
             .or_insert(live);
         *entry = *entry || live;
+    }
+    // The Claude Code sessions other conversations already count are in codeg
+    // already, and the import skips them (see
+    // `import_service::claude_sessions_counted_in`).
+    let claude = agent_type_db_str(&AgentType::ClaudeCode);
+    for session in import_service::claude_sessions_counted_in(&conv_rows, transcripts_root) {
+        imported_index.insert((claude.clone(), session), true);
     }
 
     // Refresh the already-imported rows in place before answering, then
@@ -776,17 +857,19 @@ pub async fn scan_importable_sessions(
     db: tauri::State<'_, AppDatabase>,
     chat_channel_manager: tauri::State<'_, crate::chat_channel::manager::ChatChannelManager>,
 ) -> Result<ScanResult, AppCommandError> {
-    scan_importable_sessions_core(&db.conn, &EventEmitter::Tauri(app), &chat_channel_manager).await
+    scan_importable_sessions_core(&db.conn, &EventEmitter::from_app(&app), &chat_channel_manager).await
 }
 
 /// Batch-import the selected sessions, creating (or reopening) each target
 /// folder as needed. Test seam for [`import_selected_sessions_core`]: takes the
-/// scanned summaries as input instead of walking the filesystem.
+/// scanned summaries as input instead of walking the filesystem, and reads
+/// codeg's own ACP transcripts from `transcripts_root`.
 pub(crate) async fn import_selected_from_summaries(
     conn: &sea_orm::DatabaseConnection,
     emitter: &EventEmitter,
     summaries: Vec<(AgentType, ConversationSummary)>,
     selections: Vec<SelectedSessionKey>,
+    transcripts_root: &std::path::Path,
 ) -> Result<ImportSelectedResult, AppCommandError> {
     const MAX_ERRORS: usize = 10;
 
@@ -829,6 +912,10 @@ pub(crate) async fn import_selected_from_summaries(
 
     let folder_rows = load_folder_rows(conn).await?;
     let folder_index = index_folder_rows(&folder_rows);
+    let counted_elsewhere =
+        import_service::claude_sessions_counted_elsewhere(conn, transcripts_root)
+            .await
+            .map_err(AppCommandError::from)?;
 
     let mut result = ImportSelectedResult {
         imported: 0,
@@ -1005,6 +1092,7 @@ pub(crate) async fn import_selected_from_summaries(
                         folder_id,
                         &items,
                         import_service::DeletedPolicy::Restore,
+                        &counted_elsewhere,
                     )
                     .await;
                 result.imported += tally.imported;
@@ -1086,8 +1174,16 @@ pub async fn import_selected_sessions_core(
         .try_lock()
         .map_err(|_| AppCommandError::invalid_input("An import is already in progress"))?;
 
-    let summaries = import_service::collect_local_summaries(|_, _, _, _| {}).await;
-    import_selected_from_summaries(conn, emitter, summaries, selections).await
+    let envs = agent_setting_service::load_agent_envs(conn).await;
+    let summaries = import_service::collect_local_summaries(&envs, |_, _, _, _| {}).await;
+    import_selected_from_summaries(
+        conn,
+        emitter,
+        summaries,
+        selections,
+        &crate::paths::codeg_acp_transcripts_root(),
+    )
+    .await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1097,7 +1193,7 @@ pub async fn import_selected_sessions(
     db: tauri::State<'_, AppDatabase>,
     selections: Vec<SelectedSessionKey>,
 ) -> Result<ImportSelectedResult, AppCommandError> {
-    import_selected_sessions_core(&db.conn, &EventEmitter::Tauri(app), selections).await
+    import_selected_sessions_core(&db.conn, &EventEmitter::from_app(&app), selections).await
 }
 
 /// Build the `meta["codeg.delegation"]` value for a delegation child loaded
@@ -1157,6 +1253,20 @@ fn build_historical_delegation_meta(child: &DbConversationSummary) -> serde_json
             "task_preview".into(),
             serde_json::Value::String(title.into()),
         );
+    }
+    // The assistant the child ran as, off its row: the reloaded card draws it
+    // even when no live binding or tool result remains.
+    if let Some(assistant_id) = child.assistant_id {
+        obj.insert(
+            "assistant_id".into(),
+            serde_json::Value::Number(assistant_id.into()),
+        );
+        if let Some(name) = child.assistant_name.as_deref() {
+            obj.insert(
+                "assistant_name".into(),
+                serde_json::Value::String(name.into()),
+            );
+        }
     }
     serde_json::Value::Object(obj)
 }
@@ -1269,6 +1379,13 @@ fn parse_resume_task_id(input: &str) -> Option<String> {
 /// an earlier turn). Without this the resumed card would be frozen at the
 /// `running` its ack reported, forever — the child's real outcome landed on the
 /// DB row, not on the resume result.
+///
+/// Any OTHER tool block whose title+args pass [`crate::acp::lifecycle::is_delegation_invocation`]
+/// binds by `tool_use_id` exactly like `delegate_to_agent`. This is what covers
+/// opencode 2.x code mode: the host wraps the MCP call in its `execute` tool, so
+/// the persisted block's title is `execute` and the real invocation lives inside
+/// a JS `code` string. The live path registers those calls through the same
+/// predicate, so replay recognition cannot drift from it.
 fn inject_delegation_meta(turns: &mut [MessageTurn], children: &[DbConversationSummary]) {
     if children.is_empty() {
         return;
@@ -1334,6 +1451,20 @@ fn inject_delegation_meta(turns: &mut [MessageTurn], children: &[DbConversationS
                         .as_deref()
                         .and_then(parse_resume_task_id)
                         .and_then(|task_id| by_task_id.get(task_id.as_str()).copied())
+                } else if crate::acp::lifecycle::is_delegation_invocation(
+                    tool_name,
+                    input_preview.as_deref(),
+                ) {
+                    tool_use_id.as_deref().and_then(|tu| {
+                        by_parent_tool_use_id
+                            .get(tu)
+                            .or_else(|| {
+                                task_id_by_call
+                                    .get(tu)
+                                    .and_then(|task_id| by_task_id.get(task_id.as_str()))
+                            })
+                            .copied()
+                    })
                 } else {
                     continue;
                 };
@@ -1341,6 +1472,58 @@ fn inject_delegation_meta(turns: &mut [MessageTurn], children: &[DbConversationS
                 *meta = Some(serde_json::json!({
                     "codeg.delegation": build_historical_delegation_meta(child),
                 }));
+            }
+        }
+    }
+}
+
+/// Where a tool call's approval record rides on its `ToolUse` block, beside
+/// whatever metadata the agent or [`inject_delegation_meta`] put there.
+const APPROVAL_META_KEY: &str = "codeg.approval";
+
+/// Stamp each kept approval onto the tool call it was about, as
+/// `meta["codeg.approval"]`. Transcripts record the call but never how its
+/// permission request was answered, so this is what lets a reopened
+/// conversation draw the same "approved" chip the live one did. Merges into an
+/// existing meta object; a non-object meta (no parser writes one) is left
+/// alone rather than replaced. Records whose call is not in these turns — an id
+/// the transcript spells differently, a call in a sub-agent's own transcript —
+/// simply match nothing.
+fn inject_tool_approvals(turns: &mut [MessageTurn], approvals: &[ToolApprovalInfo]) {
+    if approvals.is_empty() {
+        return;
+    }
+    let by_call: HashMap<&str, &ToolApprovalInfo> = approvals
+        .iter()
+        .map(|a| (a.tool_call_id.as_str(), a))
+        .collect();
+    for turn in turns.iter_mut() {
+        for block in turn.blocks.iter_mut() {
+            let ContentBlock::ToolUse {
+                tool_use_id: Some(tool_use_id),
+                meta,
+                ..
+            } = block
+            else {
+                continue;
+            };
+            let Some(approval) = by_call.get(tool_use_id.as_str()) else {
+                continue;
+            };
+            let stamp = serde_json::json!({
+                "option_kind": approval.option_kind,
+                "option_name": approval.option_name,
+                "origin": approval.origin,
+                "decided_at": approval.decided_at,
+            });
+            match meta {
+                None => {
+                    *meta = Some(serde_json::json!({ APPROVAL_META_KEY: stamp }));
+                }
+                Some(serde_json::Value::Object(map)) => {
+                    map.insert(APPROVAL_META_KEY.to_string(), stamp);
+                }
+                Some(_) => {}
             }
         }
     }
@@ -1357,6 +1540,14 @@ pub async fn get_folder_conversation_core(
     conn: &sea_orm::DatabaseConnection,
     conversation_id: i32,
 ) -> Result<(DbConversationDetail, Option<String>), AppCommandError> {
+    get_folder_conversation_with_text(conn, conversation_id, CodexText::Display).await
+}
+
+pub(crate) async fn get_folder_conversation_with_text(
+    conn: &sea_orm::DatabaseConnection,
+    conversation_id: i32,
+    text: CodexText,
+) -> Result<(DbConversationDetail, Option<String>), AppCommandError> {
     let summary = conversation_service::get_by_id(conn, conversation_id)
         .await
         .map_err(AppCommandError::from)?;
@@ -1367,7 +1558,8 @@ pub async fn get_folder_conversation_core(
         let eid = ext_id.clone();
         let db_created_at = summary.created_at;
         // Prefer the recorded origin cwd (set when a removed task worktree's
-        // conversations were re-parented) over the current folder's path — the
+        // conversations were re-parented, or the user moved the conversation to
+        // another project) over the current folder's path — the
         // session file still carries the ORIGINAL cwd, so matching on the new
         // parent folder would never find it.
         let folder_path_for_fallback = match summary.origin_cwd.clone() {
@@ -1378,8 +1570,12 @@ pub async fn get_folder_conversation_core(
                 .flatten()
                 .map(|f| f.path),
         };
+        // The session file is wherever the agent's launch environment put it:
+        // a `CLAUDE_CONFIG_DIR`/`CODEX_HOME`/… in its settings moves it out of
+        // the default directory codeg's own environment names.
+        let agent_env = agent_setting_service::load_agent_env(conn, at).await;
         tokio::task::spawn_blocking(move || -> Result<_, AppCommandError> {
-            let parser = build_agent_parser(at);
+            let parser = crate::parsers::build_agent_parser_with_text(at, &agent_env, text);
             match parser.get_conversation(&eid) {
                 Ok(d) => {
                     // Claude `/clear` (and similar on-disk id changes) make
@@ -1506,7 +1702,7 @@ pub async fn get_folder_conversation_core(
             summary.external_id = Some(new_ext_id);
         }
     }
-    summary.message_count = turns.len() as u32;
+    summary.message_count = crate::parsers::message_turn_count(&turns);
     // The transcript is the richer source for the session's model. Codex is
     // the concrete case: an ACP-driven row is created before any
     // `turn_context` names a model, so the DB column can stay NULL forever
@@ -1533,6 +1729,12 @@ pub async fn get_folder_conversation_core(
         .await
         .unwrap_or_default();
     inject_delegation_meta(&mut turns, &children);
+    // Same best-effort contract: a failed read costs the approval chips, never
+    // the detail load.
+    let approvals = tool_approval_service::list_by_conversation(conn, conversation_id)
+        .await
+        .unwrap_or_default();
+    inject_tool_approvals(&mut turns, &approvals);
 
     Ok((
         DbConversationDetail {
@@ -1544,6 +1746,7 @@ pub async fn get_folder_conversation_core(
             turns_offset: None,
             turns_total: None,
             assistant_turns_before_offset: None,
+            user_turns_before_offset: None,
             prefix_hash: None,
             uncovered_prefix_max_ts: None,
         },
@@ -1842,6 +2045,7 @@ fn apply_turn_window(
     detail.turns_offset = Some(meta.offset);
     detail.turns_total = Some(meta.total);
     detail.assistant_turns_before_offset = Some(meta.assistant_before);
+    detail.user_turns_before_offset = Some(meta.user_before);
     detail.prefix_hash = Some(meta.prefix_hash);
     detail.uncovered_prefix_max_ts = meta.uncovered_prefix_max_ts;
 }
@@ -1957,9 +2161,32 @@ pub async fn get_folder_conversation_turns_core(
         turns_offset: meta.offset,
         turns_total: meta.total,
         assistant_turns_before_offset: meta.assistant_before,
+        user_turns_before_offset: meta.user_before,
         prefix_hash: meta.prefix_hash,
         prefix_hash_before_index: seam.prefix_hash,
         uncovered_prefix_max_ts: meta.uncovered_prefix_max_ts,
+    })
+}
+
+/// The message navigator's outline of the history above a loaded window:
+/// `full[0..min(before_index, total))`, each turn reduced by
+/// [`turn_window::nav_outline_turns`](crate::commands::turn_window::nav_outline_turns)
+/// to what the navigator reads. Same light path as the history page (full
+/// parse + delegation meta, no live correlation or sidebar events), so its
+/// turn ids are the ones a page of the same history carries.
+pub async fn get_folder_conversation_outline_core(
+    conn: &sea_orm::DatabaseConnection,
+    conversation_id: i32,
+    before_index: usize,
+) -> Result<ConversationOutline, AppCommandError> {
+    use crate::commands::turn_window;
+    let (detail, _parsed_title) = get_folder_conversation_core(conn, conversation_id).await?;
+    let turns = detail.turns;
+    let end = before_index.min(turns.len());
+    Ok(ConversationOutline {
+        turns: turn_window::nav_outline_turns(&turns[..end]),
+        turns_total: turns.len(),
+        prefix_hash: turn_window::prefix_fingerprint(&turns[..end]),
     })
 }
 
@@ -1979,7 +2206,7 @@ pub async fn get_folder_conversation(
         &db.conn,
         &manager,
         &chat_channel_manager,
-        &EventEmitter::Tauri(app),
+        &EventEmitter::from_app(&app),
         conversation_id,
         window,
     )
@@ -1995,6 +2222,16 @@ pub async fn get_folder_conversation_turns(
     limit: usize,
 ) -> Result<ConversationTurnsPage, AppCommandError> {
     get_folder_conversation_turns_core(&db.conn, conversation_id, before_index, limit).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn get_folder_conversation_outline(
+    db: tauri::State<'_, AppDatabase>,
+    conversation_id: i32,
+    before_index: usize,
+) -> Result<ConversationOutline, AppCommandError> {
+    get_folder_conversation_outline_core(&db.conn, conversation_id, before_index).await
 }
 
 /// Emit a `conversation://changed` Upsert for `conversation_id` so every
@@ -2266,7 +2503,7 @@ pub async fn create_conversation(
     title: Option<String>,
 ) -> Result<i32, AppCommandError> {
     let id = create_conversation_core(&db.conn, folder_id, agent_type, title).await?;
-    emit_conversation_upsert(&EventEmitter::Tauri(app), &db.conn, id).await;
+    emit_conversation_upsert(&EventEmitter::from_app(&app), &db.conn, id).await;
     Ok(id)
 }
 
@@ -2333,7 +2570,8 @@ fn chat_dir_key(path: &std::path::Path) -> Option<(String, String)> {
 /// deleting a chat conversation, which intentionally leaves the dir on disk —
 /// orphans it forever. This startup sweep removes the leak.
 ///
-/// A `<uuid>` dir is reclaimed iff it is NOT bound to a live chat folder AND it
+/// A `<uuid>` dir is reclaimed iff it is NOT bound to a live chat folder, is NOT
+/// the `origin_cwd` of a live conversation (a chat moved into a project), AND it
 /// is older than [`CHAT_SCRATCH_STALE`]. "Live" excludes both pre-send drafts
 /// (no row) and post-delete dirs (soft-deleted row), so both are reclaimed while
 /// bound chats are spared. Returns the number of `<uuid>` dirs removed. Never
@@ -2367,12 +2605,26 @@ pub(crate) async fn gc_orphan_chat_dirs_core_with_threshold(
     // orphan and deleting it. We deliberately do NOT canonicalize (it fails on
     // missing paths and could itself alias two distinct dirs); keying by the tail
     // makes the worst case a missed deletion (a leak), never data loss.
-    let live: HashSet<(String, String)> = folder_service::list_live_chat_folder_paths(conn)
+    //
+    // Also kept: every dir a live conversation remembers as its `origin_cwd`. A
+    // chat conversation moved into a project leaves its hidden folder behind
+    // (retired), but its session — and whatever the agent wrote while it was a
+    // chat — is still in that scratch dir; it goes when the conversation does.
+    // Same tail matching, so an unrelated `origin_cwd` (a removed worktree) can
+    // only ever cause a missed deletion.
+    let mut live: HashSet<(String, String)> = folder_service::list_live_chat_folder_paths(conn)
         .await
         .map_err(AppCommandError::from)?
         .iter()
         .filter_map(|p| chat_dir_key(std::path::Path::new(p)))
         .collect();
+    live.extend(
+        conversation_service::list_live_origin_cwds(conn)
+            .await
+            .map_err(AppCommandError::from)?
+            .iter()
+            .filter_map(|p| chat_dir_key(std::path::Path::new(p))),
+    );
 
     let now = std::time::SystemTime::now();
     let mut removed = 0usize;
@@ -2531,7 +2783,7 @@ pub async fn create_chat_conversation(
         existing_dir.as_deref(),
     )
     .await?;
-    emit_conversation_upsert(&EventEmitter::Tauri(app), &db.conn, result.conversation_id).await;
+    emit_conversation_upsert(&EventEmitter::from_app(&app), &db.conn, result.conversation_id).await;
     Ok(result)
 }
 
@@ -2594,7 +2846,7 @@ pub async fn update_conversation_status(
     status: String,
 ) -> Result<(), AppCommandError> {
     update_conversation_status_core(&db.conn, conversation_id, status).await?;
-    emit_conversation_upsert(&EventEmitter::Tauri(app), &db.conn, conversation_id).await;
+    emit_conversation_upsert(&EventEmitter::from_app(&app), &db.conn, conversation_id).await;
     Ok(())
 }
 
@@ -2636,7 +2888,7 @@ pub async fn update_conversation_title(
     title: String,
 ) -> Result<(), AppCommandError> {
     update_conversation_title_core(&db.conn, conversation_id, title).await?;
-    emit_conversation_upsert(&EventEmitter::Tauri(app), &db.conn, conversation_id).await;
+    emit_conversation_upsert(&EventEmitter::from_app(&app), &db.conn, conversation_id).await;
     sync_conversation_title_to_channels_core(&db.conn, &chat_channel_manager, conversation_id).await;
     Ok(())
 }
@@ -2660,7 +2912,7 @@ pub async fn update_conversation_pinned(
     pinned: bool,
 ) -> Result<(), AppCommandError> {
     update_conversation_pinned_core(&db.conn, conversation_id, pinned).await?;
-    emit_conversation_upsert(&EventEmitter::Tauri(app), &db.conn, conversation_id).await;
+    emit_conversation_upsert(&EventEmitter::from_app(&app), &db.conn, conversation_id).await;
     Ok(())
 }
 
@@ -2673,17 +2925,17 @@ pub async fn delete_conversation_core(
         .map_err(AppCommandError::from)
 }
 
-/// When the deleted conversation was backed by a dedicated hidden chat folder,
-/// soft-delete that folder too so it stops counting toward `list_all`'s active
-/// folder scope. The per-conversation scratch dir on disk is intentionally left
-/// in place (symmetric with conversation soft-delete keeping session files; a
-/// future GC can prune dirs whose folder is soft-deleted). Best effort —
-/// failures are logged, never propagated. `folder_id` must be captured BEFORE
-/// the conversation soft-delete.
-pub async fn cleanup_chat_folder_for_deleted_conversation(
-    conn: &sea_orm::DatabaseConnection,
-    folder_id: i32,
-) {
+/// Retire a hidden chat folder that no live conversation uses any more: when a
+/// chat conversation is deleted, or moved into a project, its dedicated folder
+/// is soft-deleted too so it stops counting toward `list_all`'s active folder
+/// scope. Only once it backs no remaining conversation — a fork of the chat
+/// leaves a sibling in the same folder. Folders that are not chat folders are
+/// left alone. The per-conversation scratch dir on disk is intentionally left
+/// in place (symmetric with conversation soft-delete keeping session files);
+/// the startup GC reclaims it once nothing references it — see
+/// [`gc_orphan_chat_dirs_core`]. Best effort: failures are logged, never
+/// propagated. `folder_id` must be captured BEFORE the conversation leaves it.
+pub async fn retire_chat_folder_if_unused(conn: &sea_orm::DatabaseConnection, folder_id: i32) {
     match folder_service::get_folder_by_id(conn, folder_id).await {
         Ok(Some(folder)) if folder.kind == FolderKind::Chat => {
             // Only retire the hidden folder once it backs no remaining
@@ -2715,12 +2967,14 @@ pub async fn cleanup_chat_folder_for_deleted_conversation(
 
 /// Full conversation-delete orchestration shared by the Tauri command and the web
 /// handler: capture the backing folder BEFORE the soft-delete (so a hidden chat
-/// folder can be retired afterward), soft-delete, broadcast the deletion, then run
-/// the tab + chat-folder cleanups. The thin `delete_conversation_core` primitive
-/// stays event-free for internal/test callers, so the orchestration lives here.
+/// folder can be retired afterward), soft-delete, end the agent working on the
+/// conversation, broadcast the deletion, then run the tab + chat-folder cleanups.
+/// The thin `delete_conversation_core` primitive stays event-free for
+/// internal/test callers, so the orchestration lives here.
 pub async fn delete_conversation_with_cleanup_core(
     emitter: &EventEmitter,
     conn: &sea_orm::DatabaseConnection,
+    manager: &crate::acp::manager::ConnectionManager,
     conversation_id: i32,
 ) -> Result<(), AppCommandError> {
     // Capture the backing folder AND parent before the soft-delete: a hidden
@@ -2733,6 +2987,11 @@ pub async fn delete_conversation_with_cleanup_core(
     let folder_id = pre.as_ref().map(|c| c.folder_id);
     let parent_id = pre.as_ref().and_then(|c| c.parent_id);
     delete_conversation_core(conn, conversation_id).await?;
+    // Deleting is the explicit stop. Closing the conversation's tabs (the
+    // cleanups below, and every client's own close) does not stop anything
+    // that still has work in flight, so without this a background task or a
+    // Remote Control session would run on for a conversation nobody can open.
+    manager.disconnect_by_conversation_id(conversation_id).await;
     emit_conversation_deleted(emitter, conversation_id);
     // A removed delegation child drops its parent's child_count (→ 0 hides the
     // chevron). Re-emit the parent from the authoritative aggregate so every
@@ -2744,10 +3003,14 @@ pub async fn delete_conversation_with_cleanup_core(
     // Canvas references (pinned cards, custom-region memberships) survive the
     // soft delete for the same reason tabs do — no FK cascade ever fires — so
     // they get the same explicit scrub, at the same funnel.
-    crate::commands::canvas::cleanup_canvas_for_deleted_conversation(emitter, conn, conversation_id)
-        .await;
+    crate::commands::canvas::cleanup_canvas_for_deleted_conversation(
+        emitter,
+        conn,
+        conversation_id,
+    )
+    .await;
     if let Some(folder_id) = folder_id {
-        cleanup_chat_folder_for_deleted_conversation(conn, folder_id).await;
+        retire_chat_folder_if_unused(conn, folder_id).await;
     }
     Ok(())
 }
@@ -2757,10 +3020,261 @@ pub async fn delete_conversation_with_cleanup_core(
 pub async fn delete_conversation(
     app: tauri::AppHandle,
     db: tauri::State<'_, AppDatabase>,
+    manager: tauri::State<'_, crate::acp::manager::ConnectionManager>,
     conversation_id: i32,
 ) -> Result<(), AppCommandError> {
-    let emitter = EventEmitter::Tauri(app);
-    delete_conversation_with_cleanup_core(&emitter, &db.conn, conversation_id).await
+    let emitter = EventEmitter::from_app(&app);
+    delete_conversation_with_cleanup_core(&emitter, &db.conn, &manager, conversation_id).await
+}
+
+/// Why [`move_conversations_core`] left a conversation where it was.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MoveSkipReason {
+    /// No such conversation, or it is deleted.
+    NotFound,
+    /// Not a root regular/chat conversation (a delegation child moves with its
+    /// root; loop rows never move).
+    NotMovable,
+    /// Already in the target folder.
+    AlreadyThere,
+    /// A to-do task owns it (in any status, finished included).
+    TaskOwned,
+    /// An agent is working on it right now (a turn, a permission prompt,
+    /// background work, Remote Control, a running delegation, an open goal).
+    Busy,
+    /// It changed folder, or was deleted, while being moved.
+    Conflict,
+    /// The target project was closed or removed while the move ran.
+    TargetUnavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveConversationSkip {
+    pub conversation_id: i32,
+    pub reason: MoveSkipReason,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveConversationsResult {
+    /// Root conversations moved (their delegation children moved with them).
+    pub moved: Vec<i32>,
+    pub skipped: Vec<MoveConversationSkip>,
+}
+
+/// Move conversations to another project folder ("Move to project…").
+///
+/// A move changes which folder a conversation belongs to and therefore where
+/// the agent works from the next connection on; its history is not touched
+/// (the agent's own session files, `external_id`, title, status, tags, usage).
+/// `origin_cwd` remembers where the session was recorded, a chat conversation
+/// becomes a regular one, and a root's delegation children that live in its
+/// folder move with it. Each conversation is judged on its own — the call
+/// fails only for an invalid target (missing, deleted, or not a regular
+/// project folder); everything else is a per-conversation skip.
+///
+/// Per root, under the prompt locks of every connection working on the tree:
+/// refuse if any is busy, move the rows, mark them relocated (the fence that
+/// keeps an old-folder connection from running another turn), end the idle
+/// connections, release. Then: retire emptied chat folders, broadcast each
+/// moved row, re-point persisted tabs at the rows' current folders.
+pub async fn move_conversations_core(
+    emitter: &EventEmitter,
+    conn: &sea_orm::DatabaseConnection,
+    manager: &crate::acp::manager::ConnectionManager,
+    conversation_ids: Vec<i32>,
+    target_folder_id: i32,
+) -> Result<MoveConversationsResult, AppCommandError> {
+    use conversation_service::{RelocateOptions, RelocateOutcome, RelocateSelection, RelocateSkip};
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
+    // Only an OPEN project is a destination (the picker offers no other); a
+    // stale client naming a closed one is refused, not obeyed. Re-checked per
+    // root inside the relocation transaction.
+    let target = crate::db::entities::folder::Entity::find_by_id(target_folder_id)
+        .filter(crate::db::entities::folder::Column::DeletedAt.is_null())
+        .one(conn)
+        .await
+        .map_err(|e| AppCommandError::from(crate::db::error::DbError::from(e)))?
+        .ok_or_else(|| {
+            AppCommandError::invalid_input(format!("folder {target_folder_id} not found"))
+        })?;
+    if target.kind != FolderKind::Regular || !target.is_open {
+        return Err(AppCommandError::invalid_input(format!(
+            "folder {target_folder_id} is not an open project folder"
+        )));
+    }
+
+    let mut ids = Vec::with_capacity(conversation_ids.len());
+    for id in conversation_ids {
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    let task_owned =
+        crate::db::service::work_task_service::conversations_bound_to_tasks(conn, &ids)
+            .await
+            .map_err(AppCommandError::from)?;
+
+    let mut result = MoveConversationsResult::default();
+    let mut moved_rows = Vec::new();
+    let mut left_folders: Vec<i32> = Vec::new();
+    for id in ids {
+        if task_owned.contains(&id) {
+            result.skipped.push(MoveConversationSkip {
+                conversation_id: id,
+                reason: MoveSkipReason::TaskOwned,
+            });
+            continue;
+        }
+        // Who works on this tree right now. Read before locking; the rows are
+        // re-validated under the transaction's CAS, and a connection that
+        // appears after the lock is the fence's job.
+        let Ok(Some(root)) = conversation::Entity::find_by_id(id)
+            .filter(conversation::Column::DeletedAt.is_null())
+            .one(conn)
+            .await
+        else {
+            result.skipped.push(MoveConversationSkip {
+                conversation_id: id,
+                reason: MoveSkipReason::NotFound,
+            });
+            continue;
+        };
+        let tree = conversation_tree_keys(conn, &root).await;
+        let lock = manager.lock_conversation_connections(&tree).await;
+        if manager.busy_reason(&lock).await.is_some() {
+            drop(lock);
+            result.skipped.push(MoveConversationSkip {
+                conversation_id: id,
+                reason: MoveSkipReason::Busy,
+            });
+            continue;
+        }
+        let outcome = conversation_service::relocate_conversations(
+            conn,
+            RelocateSelection::Tree { root_id: id },
+            target.id,
+            &target.path,
+            RelocateOptions {
+                touch_updated_at: false,
+            },
+        )
+        .await
+        .map_err(AppCommandError::from);
+        let rows = match outcome {
+            Ok(RelocateOutcome::Moved(rows)) => rows,
+            Ok(RelocateOutcome::Skipped(skip)) => {
+                drop(lock);
+                result.skipped.push(MoveConversationSkip {
+                    conversation_id: id,
+                    reason: match skip {
+                        RelocateSkip::NotFound => MoveSkipReason::NotFound,
+                        RelocateSkip::NotMovable => MoveSkipReason::NotMovable,
+                        RelocateSkip::AlreadyThere => MoveSkipReason::AlreadyThere,
+                        RelocateSkip::Conflict => MoveSkipReason::Conflict,
+                        RelocateSkip::TargetUnavailable => MoveSkipReason::TargetUnavailable,
+                    },
+                });
+                continue;
+            }
+            Err(e) => {
+                drop(lock);
+                tracing::warn!("[conversations] move of conversation {id} failed: {e}");
+                result.skipped.push(MoveConversationSkip {
+                    conversation_id: id,
+                    reason: MoveSkipReason::Conflict,
+                });
+                continue;
+            }
+        };
+        let moved_ids: Vec<i32> = rows.iter().map(|r| r.id).collect();
+        manager.mark_relocated(&moved_ids);
+        manager.disconnect_locked(lock).await;
+        for row in &rows {
+            if !left_folders.contains(&row.from_folder_id) {
+                left_folders.push(row.from_folder_id);
+            }
+        }
+        result.moved.push(id);
+        moved_rows.extend(moved_ids);
+    }
+
+    for folder_id in left_folders {
+        retire_chat_folder_if_unused(conn, folder_id).await;
+    }
+    for id in &moved_rows {
+        emit_conversation_upsert(emitter, conn, *id).await;
+    }
+    if !moved_rows.is_empty() {
+        match tab_service::retarget_conversation_tabs_and_bump(conn, &moved_rows).await {
+            Ok(inv) => {
+                if let Some(tabs) = inv.emit {
+                    emit_tabs_changed(emitter, inv.version, tabs, "server".to_string());
+                }
+            }
+            Err(e) => tracing::error!("[conversations] tab retarget after move failed: {e}"),
+        }
+    }
+    Ok(result)
+}
+
+/// The connection keys of `root` and its same-folder delegation subtree — what
+/// [`crate::acp::manager::ConnectionManager::lock_conversation_connections`]
+/// needs to find every connection working on the tree.
+async fn conversation_tree_keys(
+    conn: &sea_orm::DatabaseConnection,
+    root: &conversation::Model,
+) -> Vec<crate::acp::manager::RelocatingConversation> {
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
+    let key = |row: &conversation::Model| crate::acp::manager::RelocatingConversation {
+        id: row.id,
+        agent_type: conversation_service::parse_agent_type(&row.agent_type),
+        external_id: row.external_id.clone(),
+    };
+    let mut out = vec![key(root)];
+    let mut frontier = vec![root.id];
+    while !frontier.is_empty() {
+        let children = conversation::Entity::find()
+            .filter(conversation::Column::ParentId.is_in(frontier.clone()))
+            .filter(conversation::Column::FolderId.eq(root.folder_id))
+            .filter(conversation::Column::DeletedAt.is_null())
+            .all(conn)
+            .await
+            .unwrap_or_default();
+        frontier.clear();
+        for child in children {
+            if out.iter().any(|k| k.id == child.id) {
+                continue;
+            }
+            frontier.push(child.id);
+            out.push(key(&child));
+        }
+    }
+    out
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn move_conversations(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, AppDatabase>,
+    manager: tauri::State<'_, crate::acp::manager::ConnectionManager>,
+    conversation_ids: Vec<i32>,
+    target_folder_id: i32,
+) -> Result<MoveConversationsResult, AppCommandError> {
+    let emitter = EventEmitter::from_app(&app);
+    move_conversations_core(
+        &emitter,
+        &db.conn,
+        &manager,
+        conversation_ids,
+        target_folder_id,
+    )
+    .await
 }
 
 fn compute_stats(all_conversations: &[ConversationSummary]) -> AgentStats {
@@ -2853,6 +3367,9 @@ mod tests {
             parent_tool_use_id: Some(parent_tool_use_id.into()),
             delegation_call_id: Some("call-1".into()),
             origin_cwd: None,
+            assistant_id: None,
+            source: None,
+            assistant_name: None,
             tag_ids: Vec::new(),
         }
     }
@@ -3326,6 +3843,53 @@ mod tests {
         assert_eq!(turns.len(), 2, "the prior completed reply is preserved");
     }
 
+    fn approval_record(tool_call_id: &str, option_kind: &str) -> ToolApprovalInfo {
+        ToolApprovalInfo {
+            tool_call_id: tool_call_id.into(),
+            option_kind: option_kind.into(),
+            option_name: "Always Allow".into(),
+            origin: "chat_channel".into(),
+            decided_at: chrono::DateTime::parse_from_rfc3339("2026-10-22T09:41:12Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        }
+    }
+
+    #[test]
+    fn inject_tool_approvals_stamps_the_matching_call() {
+        let mut turns = vec![
+            tool_use_turn(Some("tu-1"), "Bash"),
+            tool_use_turn(Some("tu-2"), "Bash"),
+            tool_use_turn(None, "Bash"),
+        ];
+        inject_tool_approvals(&mut turns, &[approval_record("tu-1", "allow_always")]);
+        let meta = first_block_meta(&turns[0]).expect("stamped");
+        assert_eq!(
+            meta[APPROVAL_META_KEY],
+            serde_json::json!({
+                "option_kind": "allow_always",
+                "option_name": "Always Allow",
+                "origin": "chat_channel",
+                "decided_at": "2026-10-22T09:41:12Z",
+            })
+        );
+        assert!(first_block_meta(&turns[1]).is_none(), "no record, no stamp");
+        assert!(first_block_meta(&turns[2]).is_none());
+    }
+
+    #[test]
+    fn inject_tool_approvals_merges_into_existing_meta() {
+        let mut turns = vec![tool_use_turn(
+            Some("tu-1"),
+            "mcp__codeg-mcp__delegate_to_agent",
+        )];
+        inject_delegation_meta(&mut turns, &[summary_child(42, "tu-1", "completed")]);
+        inject_tool_approvals(&mut turns, &[approval_record("tu-1", "allow_once")]);
+        let meta = first_block_meta(&turns[0]).expect("meta");
+        assert_eq!(meta["codeg.delegation"]["child_conversation_id"], 42);
+        assert_eq!(meta[APPROVAL_META_KEY]["option_kind"], "allow_once");
+    }
+
     #[test]
     fn inject_delegation_meta_populates_completed_child() {
         let mut turns = vec![tool_use_turn(
@@ -3344,6 +3908,118 @@ mod tests {
         );
     }
 
+    /// opencode 2.x wraps the MCP call in its `execute` tool — the persisted
+    /// block's title is `execute` and the real invocation lives in a JS `code`
+    /// string. Replay binds it by the same predicate the live path registers
+    /// with, so a refreshed card keeps its status mapping and 查看会话.
+    #[test]
+    fn inject_delegation_meta_binds_an_opencode_execute_call() {
+        let code = r#"await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: `t` })"#;
+        let mut turns = vec![tool_use_turn_with_input(
+            Some("tu-exec-1"),
+            "execute",
+            Some(&serde_json::json!({ "code": code }).to_string()),
+        )];
+        inject_delegation_meta(&mut turns, &[summary_child(42, "tu-exec-1", "completed")]);
+        let inner = first_block_meta(&turns[0])
+            .and_then(|m| m.get("codeg.delegation").cloned())
+            .expect("execute card should be bound");
+        assert_eq!(inner["status"], "completed");
+        assert_eq!(inner["child_conversation_id"], 42);
+        assert_eq!(inner["agent_type"], "codex");
+    }
+
+    /// The binding fallback is the shared closure, not the tool-name branch:
+    /// an `execute` block whose tool_use_id never meets the child row still
+    /// binds through the task id echoed on its own result.
+    #[test]
+    fn inject_delegation_meta_binds_an_execute_call_by_its_task_id() {
+        let code = r#"tools["codeg-mcp"].delegate_to_agent({ agent_type: "zcode", task: `t` })"#;
+        let mut turns = vec![
+            tool_use_turn_with_input(
+                Some("call_exec_2"),
+                "execute",
+                Some(&serde_json::json!({ "code": code }).to_string()),
+            ),
+            tool_result_turn(
+                "call_exec_2",
+                "Delegation successful. task_id=8ff4c14c-740c-4482-b758-8f2091f97063.",
+            ),
+        ];
+        let mut child = summary_child(7, "exec-unmatched-id", "completed");
+        child.delegation_call_id = Some("8ff4c14c-740c-4482-b758-8f2091f97063".into());
+
+        inject_delegation_meta(&mut turns, &[child]);
+
+        let inner = first_block_meta(&turns[0])
+            .and_then(|m| m.get("codeg.delegation").cloned())
+            .expect("execute card should bind via task id");
+        assert_eq!(inner["child_conversation_id"], 7);
+    }
+
+    /// The code-mode shape counts only on opencode's `execute` tool: another
+    /// tool's `code` argument shaped like the call stays unbound, as it never
+    /// registered live.
+    #[test]
+    fn inject_delegation_meta_does_not_bind_another_tools_code_argument() {
+        let code = r#"await tools["codeg-mcp"].delegate_to_agent({ agent_type: "codex", task: `t` })"#;
+        let mut turns = vec![tool_use_turn_with_input(
+            Some("browser-1"),
+            "mcp__playwright__browser_run_code",
+            Some(&serde_json::json!({ "code": code }).to_string()),
+        )];
+        inject_delegation_meta(&mut turns, &[summary_child(42, "browser-1", "completed")]);
+        assert!(first_block_meta(&turns[0]).is_none());
+    }
+
+    /// The shape gate cuts both ways: an `execute` block whose code is not a
+    /// delegation must stay unbound.
+    #[test]
+    fn inject_delegation_meta_does_not_bind_an_unrelated_execute_call() {
+        let mut turns = vec![tool_use_turn_with_input(
+            Some("tu-exec-3"),
+            "execute",
+            Some(r#"{"code":"const x = 1"}"#),
+        )];
+        inject_delegation_meta(&mut turns, &[summary_child(42, "tu-exec-3", "completed")]);
+        assert!(
+            first_block_meta(&turns[0]).is_none(),
+            "a non-delegation execute call must not be bound"
+        );
+    }
+
+    /// A reloaded card of an assistant delegation draws the assistant from the
+    /// child row: its id, and its name as the task started.
+    #[test]
+    fn inject_delegation_meta_carries_the_assistant_off_the_child_row() {
+        let mut turns = vec![tool_use_turn(
+            Some("tu-a"),
+            "mcp__codeg-mcp__delegate_to_agent",
+        )];
+        let mut child = summary_child(43, "tu-a", "completed");
+        child.assistant_id = Some(3);
+        child.assistant_name = Some("Reviewer".into());
+        inject_delegation_meta(&mut turns, &[child]);
+        let inner = first_block_meta(&turns[0])
+            .and_then(|m| m.get("codeg.delegation").cloned())
+            .expect("meta should be set");
+        assert_eq!(inner["assistant_id"], 3);
+        assert_eq!(inner["assistant_name"], "Reviewer");
+        assert_eq!(inner["agent_type"], "codex");
+
+        // An agent delegation's meta carries no assistant keys at all.
+        let mut turns = vec![tool_use_turn(
+            Some("tu-b"),
+            "mcp__codeg-mcp__delegate_to_agent",
+        )];
+        inject_delegation_meta(&mut turns, &[summary_child(44, "tu-b", "completed")]);
+        let inner = first_block_meta(&turns[0])
+            .and_then(|m| m.get("codeg.delegation").cloned())
+            .unwrap();
+        assert!(inner.get("assistant_id").is_none());
+        assert!(inner.get("assistant_name").is_none());
+    }
+
     fn tool_result_turn(tool_use_id: &str, output: &str) -> MessageTurn {
         MessageTurn {
             id: "t2".into(),
@@ -3355,6 +4031,7 @@ mod tests {
                 is_error: false,
                 agent_stats: None,
                 images: Vec::new(),
+                exit_code: None,
             }],
             timestamp: chrono::Utc::now(),
             usage: None,
@@ -3671,6 +4348,7 @@ mod tests {
             parent_conversation_id: parent_id,
             parent_tool_use_id: "tu-historical".into(),
             delegation_call_id: "call-historical".into(),
+            assistant: None,
         };
         conversation_service::create_with_delegation(
             &db.conn,
@@ -3866,6 +4544,55 @@ mod tests {
         assert_eq!(count, 1, "no duplicate scratch dir created");
     }
 
+    /// Deleting a conversation ends the agent working on it. A view's teardown
+    /// no longer does that for it: closing a tab spares a connection that still
+    /// has work in flight (a background task, Remote Control), and a deleted
+    /// conversation can never be opened again to stop that work.
+    #[tokio::test]
+    async fn deleting_a_conversation_ends_the_connections_bound_to_it() {
+        use crate::acp::manager::ConnectionManager;
+
+        let db = fresh_in_memory_db().await;
+        let data_dir = tempfile::tempdir().expect("tempdir");
+        let res =
+            create_chat_conversation_core(&db.conn, data_dir.path(), AgentType::Codex, None, None)
+                .await
+                .expect("create");
+        let manager = ConnectionManager::new();
+        for (id, conversation_id) in [
+            ("bound", Some(res.conversation_id)),
+            ("another-conversation", Some(res.conversation_id + 1)),
+            ("unbound", None),
+        ] {
+            manager
+                .insert_test_connection(id, AgentType::Codex, None, EventEmitter::Noop)
+                .await;
+            manager
+                .get_state(id)
+                .await
+                .expect("inserted")
+                .write()
+                .await
+                .conversation_id = conversation_id;
+        }
+
+        delete_conversation_with_cleanup_core(
+            &EventEmitter::Noop,
+            &db.conn,
+            &manager,
+            res.conversation_id,
+        )
+        .await
+        .expect("delete");
+
+        assert!(
+            manager.get_state("bound").await.is_none(),
+            "the deleted conversation's agent is torn down"
+        );
+        assert!(manager.get_state("another-conversation").await.is_some());
+        assert!(manager.get_state("unbound").await.is_some());
+    }
+
     #[tokio::test]
     async fn cleanup_chat_folder_soft_deletes_hidden_folder() {
         let db = fresh_in_memory_db().await;
@@ -3884,7 +4611,7 @@ mod tests {
         delete_conversation_core(&db.conn, res.conversation_id)
             .await
             .expect("delete conversation");
-        cleanup_chat_folder_for_deleted_conversation(&db.conn, res.folder_id).await;
+        retire_chat_folder_if_unused(&db.conn, res.folder_id).await;
 
         // After cleanup the hidden folder is soft-deleted (no longer returned),
         // so it stops counting toward the active-folder scope. The on-disk dir is
@@ -3965,7 +4692,7 @@ mod tests {
         delete_conversation_core(&db.conn, res.conversation_id)
             .await
             .expect("delete conversation");
-        cleanup_chat_folder_for_deleted_conversation(&db.conn, res.folder_id).await;
+        retire_chat_folder_if_unused(&db.conn, res.folder_id).await;
         // Cleanup soft-deletes the folder row but intentionally leaves the dir.
         assert!(std::path::Path::new(&res.folder.path).is_dir());
 
@@ -4115,7 +4842,7 @@ mod tests {
         delete_conversation_core(&db.conn, res.conversation_id)
             .await
             .expect("delete first");
-        cleanup_chat_folder_for_deleted_conversation(&db.conn, res.folder_id).await;
+        retire_chat_folder_if_unused(&db.conn, res.folder_id).await;
         assert!(
             folder_service::get_folder_by_id(&db.conn, res.folder_id)
                 .await
@@ -4128,7 +4855,7 @@ mod tests {
         delete_conversation_core(&db.conn, second.id)
             .await
             .expect("delete second");
-        cleanup_chat_folder_for_deleted_conversation(&db.conn, res.folder_id).await;
+        retire_chat_folder_if_unused(&db.conn, res.folder_id).await;
         assert!(
             folder_service::get_folder_by_id(&db.conn, res.folder_id)
                 .await
@@ -4169,6 +4896,154 @@ mod tests {
         assert!(all
             .iter()
             .any(|f| f.id == chat_id && f.kind == FolderKind::Chat));
+    }
+
+    /// Save `env_json` for `agent_type` the way the settings page does.
+    async fn save_agent_env_json(
+        db: &crate::db::AppDatabase,
+        agent_type: AgentType,
+        env_json: &str,
+    ) {
+        agent_setting_service::ensure_defaults(
+            &db.conn,
+            &[agent_setting_service::AgentDefaultInput {
+                agent_type,
+                registry_id: agent_type.to_string(),
+                default_sort_order: 0,
+            }],
+        )
+        .await
+        .expect("seed agent setting");
+        agent_setting_service::update(
+            &db.conn,
+            agent_type,
+            agent_setting_service::AgentSettingsUpdate {
+                enabled: true,
+                env_json: Some(env_json.to_string()),
+                model_provider_id: None,
+            },
+        )
+        .await
+        .expect("save env_json");
+    }
+
+    /// #948: `CLAUDE_CONFIG_DIR` set only in the agent's settings moves the
+    /// transcript out of the directory codeg's own environment names. Opening
+    /// the conversation must read it from where the agent wrote it, not come
+    /// back empty ("no messages"). Hermetic: the relocated dir is a tempdir,
+    /// so nothing here reads the real `~/.claude`.
+    #[tokio::test]
+    async fn a_conversation_is_read_from_the_config_dir_its_agent_settings_name() {
+        let config_dir = tempfile::tempdir().expect("tempdir");
+        let project = config_dir.path().join("projects").join("-relocated-proj");
+        std::fs::create_dir_all(&project).expect("project dir");
+        let session_id = "0e5f6a10-9b1c-4c2d-8e3f-4a5b6c7d8e9f";
+        std::fs::write(
+            project.join(format!("{session_id}.jsonl")),
+            [
+                r#"{"type":"user","timestamp":"2026-10-14T01:00:00.000Z","uuid":"u1","cwd":"/tmp/codeg-948-proj","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}"#,
+                r#"{"type":"assistant","timestamp":"2026-10-14T01:00:05.000Z","uuid":"a1","parentUuid":"u1","message":{"id":"msg_01","role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"hi"}]}}"#,
+            ]
+            .join("\n"),
+        )
+        .expect("write transcript");
+
+        let db = fresh_in_memory_db().await;
+        save_agent_env_json(
+            &db,
+            AgentType::ClaudeCode,
+            &serde_json::json!({ "CLAUDE_CONFIG_DIR": config_dir.path() }).to_string(),
+        )
+        .await;
+        let folder_id = seed_folder(&db, "/tmp/codeg-948-proj").await;
+        let conversation_id = create_conversation_core(
+            &db.conn,
+            folder_id,
+            AgentType::ClaudeCode,
+            Some("relocated".into()),
+        )
+        .await
+        .expect("create conversation");
+        conversation_service::bind_external_id(&db.conn, conversation_id, session_id, &[])
+            .await
+            .expect("bind session");
+
+        let (detail, _) = get_folder_conversation_core(&db.conn, conversation_id)
+            .await
+            .expect("open conversation");
+        assert_eq!(detail.turns.len(), 2, "turns: {:?}", detail.turns);
+
+        // The sub-agent transcript viewer reads by session id the same way.
+        let by_id = get_conversation_core(&db.conn, AgentType::ClaudeCode, session_id.to_string())
+            .await
+            .expect("read by session id");
+        assert_eq!(by_id.turns.len(), 2);
+    }
+
+    /// A reopened conversation gets back the approvals its live run showed:
+    /// the kept record is stamped onto the transcript's tool call.
+    #[tokio::test]
+    async fn a_reopened_conversation_carries_its_tool_approvals() {
+        let config_dir = tempfile::tempdir().expect("tempdir");
+        let project = config_dir.path().join("projects").join("-approvals-proj");
+        std::fs::create_dir_all(&project).expect("project dir");
+        let session_id = "6b1e2f30-4c5d-4e6f-8a7b-9c0d1e2f3a4b";
+        std::fs::write(
+            project.join(format!("{session_id}.jsonl")),
+            [
+                r#"{"type":"user","timestamp":"2026-10-22T09:40:00.000Z","uuid":"u1","cwd":"/tmp/codeg-approvals-proj","message":{"role":"user","content":[{"type":"text","text":"commit it"}]}}"#,
+                r#"{"type":"assistant","timestamp":"2026-10-22T09:40:05.000Z","uuid":"a1","parentUuid":"u1","message":{"id":"msg_01","role":"assistant","model":"claude-opus-5","content":[{"type":"tool_use","id":"toolu_commit","name":"Bash","input":{"command":"git commit -am wip"}}]}}"#,
+                r#"{"type":"user","timestamp":"2026-10-22T09:41:20.000Z","uuid":"u2","parentUuid":"a1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_commit","content":"[main 1a2b3c4] wip"}]}}"#,
+            ]
+            .join("\n"),
+        )
+        .expect("write transcript");
+
+        let db = fresh_in_memory_db().await;
+        save_agent_env_json(
+            &db,
+            AgentType::ClaudeCode,
+            &serde_json::json!({ "CLAUDE_CONFIG_DIR": config_dir.path() }).to_string(),
+        )
+        .await;
+        let folder_id = seed_folder(&db, "/tmp/codeg-approvals-proj").await;
+        let conversation_id = create_conversation_core(
+            &db.conn,
+            folder_id,
+            AgentType::ClaudeCode,
+            Some("approvals".into()),
+        )
+        .await
+        .expect("create conversation");
+        conversation_service::bind_external_id(&db.conn, conversation_id, session_id, &[])
+            .await
+            .expect("bind session");
+        tool_approval_service::record(
+            &db.conn,
+            conversation_id,
+            &approval_record("toolu_commit", "allow_always"),
+        )
+        .await
+        .expect("record approval");
+
+        let (detail, _) = get_folder_conversation_core(&db.conn, conversation_id)
+            .await
+            .expect("open conversation");
+        let stamp = detail
+            .turns
+            .iter()
+            .flat_map(|t| t.blocks.iter())
+            .find_map(|b| match b {
+                ContentBlock::ToolUse {
+                    tool_use_id: Some(id),
+                    meta: Some(meta),
+                    ..
+                } if id == "toolu_commit" => meta.get(APPROVAL_META_KEY).cloned(),
+                _ => None,
+            })
+            .expect("the commit carries its approval");
+        assert_eq!(stamp["option_kind"], "allow_always");
+        assert_eq!(stamp["origin"], "chat_channel");
     }
 
     #[tokio::test]
@@ -4448,6 +5323,7 @@ mod tests {
             &emitter,
             &chat_channel_manager,
             vec![summary],
+            no_transcripts(),
         )
         .await
         .expect("scan summaries");
@@ -4474,6 +5350,115 @@ mod tests {
             [format!("#{} Codex index title", row.id)],
             "scan-discovered titles must propagate to a bound chat thread"
         );
+    }
+
+    /// A custom agent on `package`, saved the way the add form saves one.
+    fn npx_agent_def(id: &str, package: &str) -> crate::acp::custom_registry::CustomAgentDef {
+        use crate::acp::custom_registry::{
+            CustomAgentDef, CustomAgentSpec, CustomDistributionKind, NpxSpec,
+        };
+        CustomAgentDef {
+            registry_id: id.into(),
+            name: id.into(),
+            description: String::new(),
+            version: String::new(),
+            distribution_kind: CustomDistributionKind::Npx,
+            spec: CustomAgentSpec {
+                npx: Some(NpxSpec {
+                    package: package.into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            icon_url: None,
+            skills_shared_store: false,
+            skills_dir: None,
+            source: Default::default(),
+            version_probe: None,
+            supports_mcp: true,
+        }
+    }
+
+    /// The import skips a Claude Code session whose usage a custom agent's
+    /// conversation counts, so the picker must not offer it as new.
+    #[tokio::test]
+    // `hydrate` replaces a process-global map; the lock is held throughout.
+    #[allow(clippy::await_holding_lock)]
+    async fn scan_shows_a_claude_session_a_custom_agent_counts_as_imported() {
+        use crate::acp::custom_registry::{hydrate, hydrate_test_guard};
+        let _guard = hydrate_test_guard();
+        hydrate(&[
+            npx_agent_def(
+                "scan-claude-adapter",
+                "@agentclientprotocol/claude-agent-acp",
+            ),
+            npx_agent_def("scan-other-adapter", "@zed-industries/claude-code-acp"),
+        ]);
+        let db = fresh_in_memory_db().await;
+        let cwd = "/tmp/codeg-scan-counted-elsewhere";
+        let folder_id = seed_folder(&db, cwd).await;
+        for (agent, session) in [
+            ("scan-claude-adapter", "counted"),
+            ("scan-other-adapter", "uncounted"),
+            ("scan-claude-adapter", "deleted"),
+            ("scan-claude-adapter", "carried-on"),
+        ] {
+            let agent = AgentType::custom(agent).unwrap();
+            let row = conversation_service::create(&db.conn, folder_id, agent, None, None)
+                .await
+                .expect("create");
+            conversation_service::bind_external_id(&db.conn, row.id, session, &[])
+                .await
+                .expect("bind");
+            if session == "deleted" {
+                conversation_service::soft_delete(&db.conn, row.id)
+                    .await
+                    .expect("soft delete");
+            }
+        }
+        // The adapter could not load `carried-from` again, so its conversation
+        // went on in `carried-on`, whose transcript continues the first one.
+        let transcripts = tempfile::tempdir().expect("transcripts root");
+        let carried = AgentType::custom("scan-claude-adapter").unwrap();
+        let header =
+            crate::acp_transcript::TranscriptHeader::new(&carried.as_wire(), "carried-on", cwd, 0)
+                .continuing("carried-from");
+        crate::acp_transcript::record_header_in(
+            transcripts.path(),
+            crate::acp::registry::registry_id_for(carried),
+            &header,
+        )
+        .await
+        .expect("record header");
+        let (_broadcaster, emitter) = sync_test_emitter();
+
+        let result = scan_importable_sessions_from_summaries(
+            &db.conn,
+            &emitter,
+            &crate::chat_channel::manager::ChatChannelManager::new(),
+            vec![
+                scan_summary("counted", AgentType::ClaudeCode, Some(cwd), at(0)),
+                scan_summary("uncounted", AgentType::ClaudeCode, Some(cwd), at(1)),
+                scan_summary("deleted", AgentType::ClaudeCode, Some(cwd), at(2)),
+                scan_summary("carried-from", AgentType::ClaudeCode, Some(cwd), at(3)),
+            ],
+            transcripts.path(),
+        )
+        .await
+        .expect("scan summaries");
+        hydrate(&[]);
+
+        let by_id: HashMap<&str, ScanSessionStatus> = result.folders[0]
+            .sessions
+            .iter()
+            .map(|s| (s.external_id.as_str(), s.status))
+            .collect();
+        assert_eq!(by_id["counted"], ScanSessionStatus::Imported);
+        assert_eq!(by_id["carried-from"], ScanSessionStatus::Imported);
+        assert_eq!(by_id["uncounted"], ScanSessionStatus::New);
+        // A deleted conversation counts nothing, so the session imports.
+        assert_eq!(by_id["deleted"], ScanSessionStatus::New);
+        assert_eq!(result.importable_count, 2);
     }
 
     /// The channel half of a title notification must not be on the caller's
@@ -5120,6 +6105,7 @@ mod tests {
                 parent_conversation_id: parent_id,
                 parent_tool_use_id: (*tool_use).into(),
                 delegation_call_id: format!("call-{i}"),
+                assistant: None,
             };
             let child = conversation_service::create_with_delegation(
                 &db.conn,
@@ -5159,6 +6145,13 @@ mod tests {
     // sync regardless of which transport made the change. Drive the helpers
     // directly against a test broadcaster and assert the emitted JSON.
     // ──────────────────────────────────────────────────────────────────────
+
+    /// The ACP transcripts root for import tests with no transcript to read:
+    /// one is read only for a conversation of a custom agent on the official
+    /// Claude adapter.
+    fn no_transcripts() -> &'static std::path::Path {
+        std::path::Path::new("/nonexistent/codeg-test-acp-transcripts")
+    }
 
     fn sync_test_emitter() -> (
         std::sync::Arc<crate::web::event_bridge::WebEventBroadcaster>,
@@ -5478,6 +6471,7 @@ mod tests {
                 parent_conversation_id: parent_id,
                 parent_tool_use_id: "tu-1".into(),
                 delegation_call_id: "call-1".into(),
+                assistant: None,
             }),
         )
         .await
@@ -5522,13 +6516,15 @@ mod tests {
                 parent_conversation_id: parent_id,
                 parent_tool_use_id: "tu-1".into(),
                 delegation_call_id: "call-1".into(),
+                assistant: None,
             }),
         )
         .await
         .expect("child");
         let (broadcaster, emitter) = sync_test_emitter();
         let mut rx = broadcaster.subscribe();
-        delete_conversation_with_cleanup_core(&emitter, &db.conn, child.id)
+        let manager = crate::acp::manager::ConnectionManager::new();
+        delete_conversation_with_cleanup_core(&emitter, &db.conn, &manager, child.id)
             .await
             .expect("delete child");
         let mut saw_deleted = false;
@@ -5753,6 +6749,7 @@ mod tests {
                 key_of(AgentType::ClaudeCode, "s1"),
                 key_of(AgentType::Codex, "s2"),
             ],
+            no_transcripts(),
         )
         .await
         .expect("batch import");
@@ -5774,6 +6771,57 @@ mod tests {
         let convs = conversation::Entity::find().all(&db.conn).await.unwrap();
         assert_eq!(convs.len(), 2);
         assert!(convs.iter().all(|c| c.folder_id == folder_rows[0].id));
+    }
+
+    /// A Claude Code session whose usage a custom agent's conversation already
+    /// counts stays out even when a request names it.
+    #[tokio::test]
+    // `hydrate` replaces a process-global map; the lock is held throughout.
+    #[allow(clippy::await_holding_lock)]
+    async fn batch_import_skips_a_claude_session_a_custom_agent_counts() {
+        use crate::acp::custom_registry::{hydrate, hydrate_test_guard};
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+        let _guard = hydrate_test_guard();
+        hydrate(&[npx_agent_def(
+            "batch-claude-adapter",
+            "@agentclientprotocol/claude-agent-acp",
+        )]);
+        let db = fresh_in_memory_db().await;
+        let cwd = "/tmp/proj-counted";
+        let folder_id = seed_folder(&db, cwd).await;
+        let agent = AgentType::custom("batch-claude-adapter").unwrap();
+        let row = conversation_service::create(&db.conn, folder_id, agent, None, None)
+            .await
+            .expect("create");
+        conversation_service::bind_external_id(&db.conn, row.id, "counted", &[])
+            .await
+            .expect("bind");
+
+        let result = import_selected_from_summaries(
+            &db.conn,
+            &EventEmitter::Noop,
+            vec![
+                scan_summary("counted", AgentType::ClaudeCode, Some(cwd), at(0)),
+                scan_summary("fresh", AgentType::ClaudeCode, Some(cwd), at(1)),
+            ],
+            vec![
+                key_of(AgentType::ClaudeCode, "counted"),
+                key_of(AgentType::ClaudeCode, "fresh"),
+            ],
+            no_transcripts(),
+        )
+        .await
+        .expect("batch import");
+        hydrate(&[]);
+
+        assert_eq!((result.imported, result.skipped), (1, 1));
+        let claude_rows = conversation::Entity::find()
+            .filter(conversation::Column::AgentType.eq("claude_code"))
+            .all(&db.conn)
+            .await
+            .unwrap();
+        assert_eq!(claude_rows.len(), 1);
+        assert_eq!(claude_rows[0].external_id.as_deref(), Some("fresh"));
     }
 
     // A session whose cwd is a linked git worktree of an open repo belongs
@@ -5800,6 +6848,7 @@ mod tests {
             &EventEmitter::Noop,
             summaries,
             vec![key_of(AgentType::Codex, "s1")],
+            no_transcripts(),
         )
         .await
         .expect("batch import");
@@ -5849,6 +6898,7 @@ mod tests {
                 key_of(AgentType::Codex, "s0"),
                 key_of(AgentType::Codex, "s1"),
             ],
+            no_transcripts(),
         )
         .await
         .expect("batch import");
@@ -5907,6 +6957,7 @@ mod tests {
             &EventEmitter::Noop,
             summaries,
             vec![key_of(AgentType::Codex, "s1")],
+            no_transcripts(),
         )
         .await
         .expect("batch import");
@@ -5956,6 +7007,7 @@ mod tests {
             &EventEmitter::Noop,
             summaries,
             vec![key_of(AgentType::Codex, "s1")],
+            no_transcripts(),
         )
         .await
         .expect("batch import");
@@ -6015,6 +7067,7 @@ mod tests {
             &EventEmitter::Noop,
             summaries,
             vec![key_of(AgentType::Codex, "s1")],
+            no_transcripts(),
         )
         .await
         .expect("batch import");
@@ -6072,6 +7125,7 @@ mod tests {
             &EventEmitter::Noop,
             summaries,
             vec![key_of(AgentType::Codex, "s1")],
+            no_transcripts(),
         )
         .await
         .expect("batch import");
@@ -6117,6 +7171,7 @@ mod tests {
             &EventEmitter::Noop,
             summaries,
             vec![key_of(AgentType::Codex, "s1")],
+            no_transcripts(),
         )
         .await
         .expect("batch import");
@@ -6161,6 +7216,7 @@ mod tests {
             &EventEmitter::Noop,
             summaries,
             vec![key_of(AgentType::Codex, "s1")],
+            no_transcripts(),
         )
         .await
         .expect("batch import");
@@ -6199,6 +7255,7 @@ mod tests {
             &EventEmitter::Noop,
             summaries,
             vec![key_of(AgentType::Codex, "s1")],
+            no_transcripts(),
         )
         .await
         .expect("batch import");
@@ -6231,6 +7288,7 @@ mod tests {
             &EventEmitter::Noop,
             summaries,
             vec![key_of(AgentType::ClaudeCode, "s1")],
+            no_transcripts(),
         )
         .await
         .expect("batch import");
@@ -6278,6 +7336,7 @@ mod tests {
             &EventEmitter::Noop,
             summaries,
             vec![key_of(AgentType::ClaudeCode, "s1")],
+            no_transcripts(),
         )
         .await
         .expect("batch import");
@@ -6314,6 +7373,7 @@ mod tests {
             &EventEmitter::Noop,
             make(),
             vec![key_of(AgentType::ClaudeCode, "s1")],
+            no_transcripts(),
         )
         .await
         .unwrap();
@@ -6327,6 +7387,7 @@ mod tests {
                 key_of(AgentType::ClaudeCode, "s1"),
                 key_of(AgentType::Codex, "does-not-exist"),
             ],
+            no_transcripts(),
         )
         .await
         .unwrap();
@@ -6354,6 +7415,7 @@ mod tests {
             &EventEmitter::Noop,
             make(),
             vec![key_of(AgentType::ClaudeCode, "s1")],
+            no_transcripts(),
         )
         .await
         .unwrap();
@@ -6378,6 +7440,7 @@ mod tests {
             &EventEmitter::Noop,
             make(),
             vec![key_of(AgentType::ClaudeCode, "s1")],
+            no_transcripts(),
         )
         .await
         .unwrap();
@@ -6410,6 +7473,7 @@ mod tests {
             folder_id,
             &items,
             import_service::DeletedPolicy::Skip,
+            &HashSet::new(),
         )
         .await
         .unwrap();
@@ -6431,6 +7495,7 @@ mod tests {
             folder_id,
             &items,
             import_service::DeletedPolicy::Skip,
+            &HashSet::new(),
         )
         .await
         .unwrap();
@@ -6454,6 +7519,7 @@ mod tests {
             &EventEmitter::Noop,
             vec![(agent, child)],
             vec![key_of(AgentType::Hermes, "child")],
+            no_transcripts(),
         )
         .await
         .unwrap();
@@ -6489,6 +7555,7 @@ mod tests {
                 key_of(AgentType::ClaudeCode, "s1"),
                 key_of(AgentType::Codex, "s2"),
             ],
+            no_transcripts(),
         )
         .await
         .unwrap();
@@ -6581,6 +7648,7 @@ mod tests {
                 999_999,
                 &items,
                 import_service::DeletedPolicy::Skip,
+                &HashSet::new(),
             )
             .await;
         assert_eq!(failed, 2, "both rows fail the folder FK and are counted");
@@ -6597,6 +7665,7 @@ mod tests {
                 folder_id,
                 &items,
                 import_service::DeletedPolicy::Skip,
+                &HashSet::new(),
             )
             .await;
         assert_eq!(failed2, 0);
@@ -6621,7 +7690,8 @@ mod tests {
                 &db.conn,
                 999_999,
                 &items,
-                import_service::DeletedPolicy::Skip
+                import_service::DeletedPolicy::Skip,
+                &HashSet::new()
             )
             .await
             .is_err(),
@@ -6655,6 +7725,9 @@ mod tests {
                 parent_tool_use_id: None,
                 delegation_call_id: None,
                 origin_cwd: None,
+                assistant_id: None,
+                source: None,
+                assistant_name: None,
                 tag_ids: Vec::new(),
             },
             turns,
@@ -6664,6 +7737,7 @@ mod tests {
             turns_offset: None,
             turns_total: None,
             assistant_turns_before_offset: None,
+            user_turns_before_offset: None,
             prefix_hash: None,
             uncovered_prefix_max_ts: None,
         }
@@ -6699,6 +7773,7 @@ mod tests {
         assert_eq!(detail.turns_offset, Some(2));
         assert_eq!(detail.turns_total, Some(4));
         assert_eq!(detail.assistant_turns_before_offset, Some(1));
+        assert_eq!(detail.user_turns_before_offset, Some(1));
         assert_eq!(
             detail.turns.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
             vec!["turn-2", "turn-3"]
@@ -6774,6 +7849,7 @@ mod tests {
             page.prefix_hash, page.prefix_hash_before_index,
             "empty transcript: both fingerprints are the seed"
         );
+        assert_eq!(page.user_turns_before_offset, 0);
 
         // Seam-proof shape on a synthetic list: the page [start..before) must
         // report H(0..start) as its own fingerprint and H(0..before) as the
@@ -6789,5 +7865,583 @@ mod tests {
             seam.prefix_hash,
             crate::commands::turn_window::prefix_fingerprint(&turns[..2])
         );
+    }
+
+    #[tokio::test]
+    async fn outline_core_cuts_the_prefix_at_before_index() {
+        // A conversation without an external_id parses to zero turns: the
+        // outline is empty, `before_index` clamps to the total, and the
+        // fingerprint is the seed — the same value a windowed detail of this
+        // transcript reports as its prefix hash.
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/outline").await;
+        let conv_id = create_conversation_core(&db.conn, folder_id, AgentType::ClaudeCode, None)
+            .await
+            .expect("create conversation");
+        let outline = get_folder_conversation_outline_core(&db.conn, conv_id, 10)
+            .await
+            .expect("outline fetch");
+        assert!(outline.turns.is_empty());
+        assert_eq!(outline.turns_total, 0);
+        assert_eq!(
+            outline.prefix_hash,
+            crate::commands::turn_window::prefix_fingerprint(&[])
+        );
+    }
+
+    // ── Move to project ───────────────────────────────────────────────────────
+
+    use crate::acp::manager::ConnectionManager;
+    use crate::db::AppDatabase;
+
+    async fn seed_task_on(db: &AppDatabase, folder_id: i32, conversation_id: i32) {
+        use crate::db::entities::work_task;
+        use sea_orm::sea_query::Expr;
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+        let task = crate::db::service::work_task_service::create(
+            &db.conn,
+            crate::models::WorkTaskDraft {
+                folder_id,
+                title: "t".into(),
+                config: serde_json::json!({
+                    "display_text": "t",
+                    "prompt_blocks": [{ "type": "text", "text": "t" }],
+                }),
+            },
+        )
+        .await
+        .expect("task");
+        // Finished: a done task still owns its conversation.
+        work_task::Entity::update_many()
+            .col_expr(
+                work_task::Column::ConversationId,
+                Expr::value(Some(conversation_id)),
+            )
+            .col_expr(work_task::Column::Status, Expr::value("done"))
+            .filter(work_task::Column::Id.eq(task.id))
+            .exec(&db.conn)
+            .await
+            .expect("bind task");
+    }
+
+    async fn bound_test_connection(
+        mgr: &ConnectionManager,
+        id: &str,
+        dir: &str,
+        conversation_id: Option<i32>,
+        external_id: Option<&str>,
+    ) {
+        mgr.insert_test_connection(
+            id,
+            AgentType::ClaudeCode,
+            Some(std::path::PathBuf::from(dir)),
+            EventEmitter::Noop,
+        )
+        .await;
+        let state = mgr.get_state(id).await.expect("state");
+        let mut s = state.write().await;
+        s.conversation_id = conversation_id;
+        s.external_id = external_id.map(str::to_string);
+    }
+
+    #[tokio::test]
+    async fn move_rejects_a_target_that_is_not_a_project_folder() {
+        let db = fresh_in_memory_db().await;
+        let mgr = ConnectionManager::new();
+        let data_dir = tempfile::tempdir().expect("tempdir");
+        let from = seed_folder(&db, "/tmp/codeg-mv-bad-from").await;
+        let id = create_conversation_core(&db.conn, from, AgentType::ClaudeCode, None)
+            .await
+            .unwrap();
+        let chat =
+            create_chat_conversation_core(&db.conn, data_dir.path(), AgentType::Codex, None, None)
+                .await
+                .unwrap();
+
+        // Closed: still a project, but not one the picker offers.
+        let closed = seed_folder(&db, "/tmp/codeg-mv-bad-closed").await;
+        folder_service::set_folder_open(&db.conn, closed, false)
+            .await
+            .unwrap();
+
+        for target in [9999, chat.folder_id, closed] {
+            let err =
+                move_conversations_core(&EventEmitter::Noop, &db.conn, &mgr, vec![id], target)
+                    .await
+                    .expect_err("not a project folder");
+            assert!(matches!(
+                err.code,
+                crate::app_error::AppErrorCode::InvalidInput
+            ));
+        }
+        assert_eq!(
+            conversation_service::get_by_id(&db.conn, id)
+                .await
+                .unwrap()
+                .folder_id,
+            from
+        );
+    }
+
+    #[tokio::test]
+    async fn move_judges_each_conversation_on_its_own() {
+        let db = fresh_in_memory_db().await;
+        let mgr = ConnectionManager::new();
+        let from = seed_folder(&db, "/tmp/codeg-mv-each-from").await;
+        let to = seed_folder(&db, "/tmp/codeg-mv-each-to").await;
+        let free = create_conversation_core(&db.conn, from, AgentType::ClaudeCode, None)
+            .await
+            .unwrap();
+        let tasked = create_conversation_core(&db.conn, from, AgentType::ClaudeCode, None)
+            .await
+            .unwrap();
+        seed_task_on(&db, from, tasked).await;
+        let home = create_conversation_core(&db.conn, to, AgentType::ClaudeCode, None)
+            .await
+            .unwrap();
+
+        let result = move_conversations_core(
+            &EventEmitter::Noop,
+            &db.conn,
+            &mgr,
+            vec![free, tasked, home, 9999, free],
+            to,
+        )
+        .await
+        .expect("move");
+
+        assert_eq!(result.moved, vec![free]);
+        assert_eq!(
+            result.skipped,
+            vec![
+                MoveConversationSkip {
+                    conversation_id: tasked,
+                    reason: MoveSkipReason::TaskOwned,
+                },
+                MoveConversationSkip {
+                    conversation_id: home,
+                    reason: MoveSkipReason::AlreadyThere,
+                },
+                MoveConversationSkip {
+                    conversation_id: 9999,
+                    reason: MoveSkipReason::NotFound,
+                },
+            ]
+        );
+        let moved = conversation_service::get_by_id(&db.conn, free)
+            .await
+            .unwrap();
+        assert_eq!(moved.folder_id, to);
+        assert_eq!(moved.origin_cwd.as_deref(), Some("/tmp/codeg-mv-each-from"));
+        assert_eq!(
+            conversation_service::get_by_id(&db.conn, tasked)
+                .await
+                .unwrap()
+                .folder_id,
+            from
+        );
+    }
+
+    /// A chat conversation moved into a project leaves the Chat section (its
+    /// kind), retires its hidden folder, and keeps its scratch dir — where its
+    /// session and the files the agent wrote are — until the conversation is
+    /// deleted.
+    #[tokio::test]
+    async fn move_chat_into_project_keeps_its_scratch_dir_until_deleted() {
+        let db = fresh_in_memory_db().await;
+        let mgr = ConnectionManager::new();
+        let data_dir = tempfile::tempdir().expect("tempdir");
+        let to = seed_folder(&db, "/tmp/codeg-mv-chat-to").await;
+        let chat =
+            create_chat_conversation_core(&db.conn, data_dir.path(), AgentType::Codex, None, None)
+                .await
+                .unwrap();
+        let (broadcaster, emitter) = sync_test_emitter();
+        let mut rx = broadcaster.subscribe();
+
+        let result =
+            move_conversations_core(&emitter, &db.conn, &mgr, vec![chat.conversation_id], to)
+                .await
+                .expect("move");
+        assert_eq!(result.moved, vec![chat.conversation_id]);
+
+        let row = conversation_service::get_by_id(&db.conn, chat.conversation_id)
+            .await
+            .unwrap();
+        assert_eq!(row.folder_id, to);
+        assert_eq!(row.kind, conversation::ConversationKind::Regular);
+        assert_eq!(row.origin_cwd.as_deref(), Some(chat.folder.path.as_str()));
+        assert!(
+            folder_service::get_folder_by_id(&db.conn, chat.folder_id)
+                .await
+                .unwrap()
+                .is_none(),
+            "the emptied hidden chat folder is retired"
+        );
+        let upsert = rx.try_recv().expect("upsert broadcast");
+        assert_eq!(upsert.channel, CONVERSATION_CHANGED_EVENT);
+        assert_eq!(upsert.payload["summary"]["kind"], "regular");
+        assert_eq!(upsert.payload["summary"]["folder_id"], to);
+
+        let gc = |db: &AppDatabase| {
+            let conn = db.conn.clone();
+            let dir = data_dir.path().to_path_buf();
+            async move {
+                gc_orphan_chat_dirs_core_with_threshold(&conn, &dir, std::time::Duration::ZERO)
+                    .await
+                    .expect("gc")
+            }
+        };
+        assert_eq!(gc(&db).await, 0, "a moved chat's scratch dir is kept");
+        assert!(std::path::Path::new(&chat.folder.path).is_dir());
+
+        delete_conversation_core(&db.conn, chat.conversation_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            gc(&db).await,
+            1,
+            "and reclaimed once the conversation is gone"
+        );
+        assert!(!std::path::Path::new(&chat.folder.path).exists());
+    }
+
+    /// The hidden chat folder is only retired once nothing uses it: a fork of
+    /// the chat left a sibling there.
+    #[tokio::test]
+    async fn move_chat_keeps_a_chat_folder_a_sibling_still_uses() {
+        let db = fresh_in_memory_db().await;
+        let mgr = ConnectionManager::new();
+        let data_dir = tempfile::tempdir().expect("tempdir");
+        let to = seed_folder(&db, "/tmp/codeg-mv-chat-sib-to").await;
+        let chat =
+            create_chat_conversation_core(&db.conn, data_dir.path(), AgentType::Codex, None, None)
+                .await
+                .unwrap();
+        let sibling = conversation_service::create_chat(
+            &db.conn,
+            chat.folder_id,
+            AgentType::Codex,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        move_conversations_core(
+            &EventEmitter::Noop,
+            &db.conn,
+            &mgr,
+            vec![chat.conversation_id],
+            to,
+        )
+        .await
+        .expect("move");
+
+        assert!(folder_service::get_folder_by_id(&db.conn, chat.folder_id)
+            .await
+            .unwrap()
+            .is_some());
+        let sib = conversation_service::get_by_id(&db.conn, sibling.id)
+            .await
+            .unwrap();
+        assert_eq!(sib.kind, conversation::ConversationKind::Chat);
+        assert_eq!(sib.folder_id, chat.folder_id);
+    }
+
+    /// Persisted tabs follow the row (their id embeds the folder) and every
+    /// client hears about it; a delegation child moves with its root.
+    #[tokio::test]
+    async fn move_re_points_tabs_and_broadcasts_every_moved_row() {
+        let db = fresh_in_memory_db().await;
+        let mgr = ConnectionManager::new();
+        let from = seed_folder(&db, "/tmp/codeg-mv-tabs-from").await;
+        let to = seed_folder(&db, "/tmp/codeg-mv-tabs-to").await;
+        let root = create_conversation_core(&db.conn, from, AgentType::ClaudeCode, None)
+            .await
+            .unwrap();
+        let child = conversation_service::create_with_delegation(
+            &db.conn,
+            from,
+            AgentType::Codex,
+            None,
+            None,
+            Some(crate::acp::delegation::spawner::DelegationLink {
+                parent_conversation_id: root,
+                parent_tool_use_id: "tu".into(),
+                delegation_call_id: "call".into(),
+                assistant: None,
+            }),
+        )
+        .await
+        .unwrap()
+        .id;
+        let other = create_conversation_core(&db.conn, from, AgentType::ClaudeCode, None)
+            .await
+            .unwrap();
+        let tab = |conversation_id: i32, position: i32| OpenedTab {
+            id: 0,
+            folder_id: from,
+            conversation_id: Some(conversation_id),
+            agent_type: AgentType::ClaudeCode,
+            position,
+            is_active: position == 0,
+            is_pinned: false,
+        };
+        let saved = tab_service::save_all_tabs_cas(&db.conn, vec![tab(root, 0), tab(other, 1)], 0)
+            .await
+            .unwrap();
+        assert!(saved.accepted);
+        let (broadcaster, emitter) = sync_test_emitter();
+        let mut rx = broadcaster.subscribe();
+
+        move_conversations_core(&emitter, &db.conn, &mgr, vec![root], to)
+            .await
+            .expect("move");
+
+        assert_eq!(
+            conversation_service::get_by_id(&db.conn, child)
+                .await
+                .unwrap()
+                .folder_id,
+            to
+        );
+        let mut upserts = Vec::new();
+        let tabs_event = loop {
+            let ev = rx.try_recv().expect("event");
+            if ev.channel == CONVERSATION_CHANGED_EVENT {
+                upserts.push(ev.payload["summary"]["id"].as_i64().unwrap() as i32);
+            } else {
+                break ev;
+            }
+        };
+        upserts.sort_unstable();
+        let mut expected = vec![root, child];
+        expected.sort_unstable();
+        assert_eq!(upserts, expected);
+        assert_eq!(tabs_event.channel, TABS_CHANGED_EVENT);
+        assert_eq!(tabs_event.payload["origin"], "server");
+        assert_eq!(tabs_event.payload["version"], saved.version + 1);
+
+        let (tabs, version) = tab_service::snapshot_tabs(&db.conn).await.unwrap();
+        assert_eq!(version, saved.version + 1);
+        let folder_of = |cid: i32| {
+            tabs.iter()
+                .find(|t| t.conversation_id == Some(cid))
+                .map(|t| t.folder_id)
+        };
+        assert_eq!(folder_of(root), Some(to));
+        assert_eq!(folder_of(other), Some(from), "other tabs are untouched");
+        assert_eq!(tabs.iter().filter(|t| t.is_active).count(), 1);
+    }
+
+    /// An agent at work keeps its conversation where it is; idle connections
+    /// — bound, or not yet bound but holding the conversation's session — are
+    /// ended so the next one starts in the new folder.
+    #[tokio::test]
+    async fn move_skips_busy_conversations_and_ends_idle_connections() {
+        let db = fresh_in_memory_db().await;
+        let mgr = ConnectionManager::new();
+        let from = seed_folder(&db, "/tmp/codeg-mv-busy-from").await;
+        let to = seed_folder(&db, "/tmp/codeg-mv-busy-to").await;
+        let mk = || async {
+            create_conversation_core(&db.conn, from, AgentType::ClaudeCode, None)
+                .await
+                .unwrap()
+        };
+        let turning = mk().await;
+        let goal = mk().await;
+        let idle = mk().await;
+        let unbound = mk().await;
+        conversation_service::bind_external_id(&db.conn, unbound, "sess-unbound", &[])
+            .await
+            .unwrap();
+        let dir = "/tmp/codeg-mv-busy-from";
+        bound_test_connection(&mgr, "c-turn", dir, Some(turning), None).await;
+        mgr.get_state("c-turn")
+            .await
+            .unwrap()
+            .write()
+            .await
+            .turn_in_flight = true;
+        bound_test_connection(&mgr, "c-goal", dir, Some(goal), None).await;
+        mgr.get_state("c-goal")
+            .await
+            .unwrap()
+            .write()
+            .await
+            .goal_active = true;
+        bound_test_connection(&mgr, "c-idle", dir, Some(idle), None).await;
+        bound_test_connection(&mgr, "c-unbound", dir, None, Some("sess-unbound")).await;
+        // Same session id, other agent: not this conversation's connection.
+        mgr.insert_test_connection(
+            "c-codex",
+            AgentType::Codex,
+            Some(std::path::PathBuf::from(dir)),
+            EventEmitter::Noop,
+        )
+        .await;
+        mgr.get_state("c-codex")
+            .await
+            .unwrap()
+            .write()
+            .await
+            .external_id = Some("sess-unbound".into());
+
+        let result = move_conversations_core(
+            &EventEmitter::Noop,
+            &db.conn,
+            &mgr,
+            vec![turning, goal, idle, unbound],
+            to,
+        )
+        .await
+        .expect("move");
+
+        assert_eq!(result.moved, vec![idle, unbound]);
+        assert_eq!(
+            result.skipped,
+            vec![
+                MoveConversationSkip {
+                    conversation_id: turning,
+                    reason: MoveSkipReason::Busy,
+                },
+                MoveConversationSkip {
+                    conversation_id: goal,
+                    reason: MoveSkipReason::Busy,
+                },
+            ]
+        );
+        assert!(mgr.get_state("c-turn").await.is_some());
+        assert!(mgr.get_state("c-goal").await.is_some());
+        assert!(
+            mgr.get_state("c-idle").await.is_none(),
+            "idle connection ended"
+        );
+        assert!(
+            mgr.get_state("c-unbound").await.is_none(),
+            "unbound one too"
+        );
+        assert!(mgr.get_state("c-codex").await.is_some());
+        assert_eq!(
+            conversation_service::get_by_id(&db.conn, turning)
+                .await
+                .unwrap()
+                .folder_id,
+            from
+        );
+    }
+
+    /// After a move, a connection still running in the folder the conversation
+    /// left — a client that missed the move — can neither run a turn nor be
+    /// discovered; one started in the new folder can. Conversations that never
+    /// moved are not fenced at all.
+    #[tokio::test]
+    async fn moved_conversation_only_runs_in_its_new_folder() {
+        let db = fresh_in_memory_db().await;
+        let mgr = ConnectionManager::new();
+        let old_dir = "/tmp/codeg-mv-fence-old";
+        let new_dir = "/tmp/codeg-mv-fence-new";
+        let from = seed_folder(&db, old_dir).await;
+        let to = seed_folder(&db, new_dir).await;
+        let moved = create_conversation_core(&db.conn, from, AgentType::ClaudeCode, None)
+            .await
+            .unwrap();
+        let stayed = create_conversation_core(&db.conn, from, AgentType::ClaudeCode, None)
+            .await
+            .unwrap();
+        move_conversations_core(&EventEmitter::Noop, &db.conn, &mgr, vec![moved], to)
+            .await
+            .expect("move");
+        let status_before = conversation_service::get_by_id(&db.conn, moved)
+            .await
+            .unwrap()
+            .status;
+        let prompt = || vec![crate::acp::types::PromptInputBlock::Text { text: "hi".into() }];
+
+        // Already-linked fast path, old folder.
+        bound_test_connection(&mgr, "c-old-linked", old_dir, Some(moved), None).await;
+        let err = mgr
+            .send_prompt_linked(&db, "c-old-linked", prompt(), Some(from), Some(moved), None)
+            .await
+            .expect_err("old folder refused");
+        assert!(
+            matches!(err, crate::acp::error::AcpError::ConversationMoved { folder_id, .. } if folder_id == to),
+            "{err:?}"
+        );
+        // Adopting the row (Branch A) with the stale folder id, old folder.
+        bound_test_connection(&mgr, "c-old-fresh", old_dir, None, None).await;
+        let err = mgr
+            .send_prompt_linked(&db, "c-old-fresh", prompt(), Some(from), Some(moved), None)
+            .await
+            .expect_err("old folder refused");
+        assert!(
+            matches!(err, crate::acp::error::AcpError::ConversationMoved { .. }),
+            "{err:?}"
+        );
+        assert!(
+            mgr.get_state("c-old-fresh")
+                .await
+                .unwrap()
+                .read()
+                .await
+                .conversation_id
+                .is_none(),
+            "a refusal links nothing"
+        );
+        let row = conversation_service::get_by_id(&db.conn, moved)
+            .await
+            .unwrap();
+        assert_eq!(row.status, status_before, "a refusal changes no row");
+
+        // Discovery skips the old-folder connection.
+        assert!(acp_commands_find(&mgr, &db, moved).await.is_none());
+        // A connection in the new folder is admitted (the fake channel then
+        // fails the send itself) and discovered.
+        bound_test_connection(&mgr, "c-new", new_dir, None, None).await;
+        let err = mgr
+            .send_prompt_linked(&db, "c-new", prompt(), Some(to), Some(moved), None)
+            .await
+            .expect_err("test connection has no loop");
+        assert!(
+            !matches!(err, crate::acp::error::AcpError::ConversationMoved { .. }),
+            "{err:?}"
+        );
+        assert_eq!(
+            acp_commands_find(&mgr, &db, moved).await.as_deref(),
+            Some("c-new")
+        );
+
+        // A conversation that never moved is not fenced in any folder.
+        bound_test_connection(&mgr, "c-stayed", new_dir, Some(stayed), None).await;
+        let err = mgr
+            .send_prompt_linked(&db, "c-stayed", prompt(), Some(from), Some(stayed), None)
+            .await
+            .expect_err("test connection has no loop");
+        assert!(
+            !matches!(err, crate::acp::error::AcpError::ConversationMoved { .. }),
+            "{err:?}"
+        );
+        assert_eq!(
+            acp_commands_find(&mgr, &db, stayed).await.as_deref(),
+            Some("c-stayed")
+        );
+    }
+
+    async fn acp_commands_find(
+        mgr: &ConnectionManager,
+        db: &AppDatabase,
+        conversation_id: i32,
+    ) -> Option<String> {
+        crate::commands::acp::acp_find_connection_for_conversation_core(
+            mgr,
+            &db.conn,
+            conversation_id,
+            None,
+            AgentType::ClaudeCode,
+        )
+        .await
+        .expect("find")
+        .map(|info| info.connection_id)
     }
 }

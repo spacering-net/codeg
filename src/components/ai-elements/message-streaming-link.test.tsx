@@ -44,7 +44,7 @@ vi.mock("@/contexts/workspace-context", () => ({
 }))
 
 import { MessageResponse } from "./message"
-import { Reasoning, ReasoningContent } from "./reasoning"
+import { ReasoningMarkdown } from "./reasoning"
 
 // The two live surfaces, each rendering `text` as a turn in progress does.
 const SURFACES: Array<[string, (text: string) => ReactElement]> = [
@@ -58,11 +58,7 @@ const SURFACES: Array<[string, (text: string) => ReactElement]> = [
   ],
   [
     "reasoning",
-    (text) => (
-      <Reasoning isStreaming defaultOpen>
-        <ReasoningContent>{text}</ReasoningContent>
-      </Reasoning>
-    ),
+    (text) => <ReasoningMarkdown isStreaming>{text}</ReasoningMarkdown>,
   ],
 ]
 

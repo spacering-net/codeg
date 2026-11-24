@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SurfaceKind {
-    /// wry child webview embedded in the owner window (macOS / Windows).
+    /// Wry webview embedded in the owner window (GTK overlay on Linux).
     Child,
     /// Owned top-level window (`WebviewWindowBuilder::parent`).
     Window,
@@ -176,9 +176,9 @@ pub struct BrowserCapabilities {
     /// or the owned window's navigation decision on Linux).
     pub sign_in_user_agent: bool,
     /// A tab shown in an owned window still answers find, history, stop and
-    /// snapshots, and its page still talks to the host. True where the owned
-    /// window is the surface the platform shim is written for (Linux); false
-    /// where it is the fallback and the host does not hold its webview.
+    /// snapshots, and its page still talks to the host. True where the
+    /// platform shim drives the owned-window fallback too (Linux); false where
+    /// the host does not hold that window's webview.
     pub owned_window_controls: bool,
     /// A remote-workspace window's tabs can reach the remote host through
     /// its codeg-server (`browser::remote`): a profile of their own to proxy

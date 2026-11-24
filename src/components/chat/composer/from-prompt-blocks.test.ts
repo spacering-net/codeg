@@ -111,6 +111,28 @@ describe("blocksToRestoredDraft", () => {
     })
   })
 
+  it("restores a codeg assistant link as an assistant reference", () => {
+    const { segments } = blocksToRestoredDraft(
+      [
+        {
+          type: "resource_link",
+          uri: "codeg://assistant/3",
+          name: "@Reviewer",
+          mime_type: null,
+          description: null,
+        },
+      ],
+      counter()
+    )
+    expect(refSegments(segments)[0]).toMatchObject({
+      refType: "assistant",
+      id: "3",
+      label: "Reviewer",
+      uri: "codeg://assistant/3",
+      meta: { assistantId: 3 },
+    })
+  })
+
   it("recovers the agent type from a new-format session link", () => {
     const { segments } = blocksToRestoredDraft(
       [

@@ -67,6 +67,22 @@ describe("SearchResultsOutput", () => {
     expect(screen.getByText("const y = 2")).toBeInTheDocument()
   })
 
+  // It is drawn inside a row's panel, which caps the height and scrolls: a
+  // scroll box of its own would nest a second scrollbar inside that one.
+  it("scrolls in its panel, with no scroll box of its own", () => {
+    const { container } = renderOutput(
+      <SearchResultsOutput
+        text={Array.from({ length: 40 }, (_, i) => `src/f${i}.ts`).join("\n")}
+      />
+    )
+    expect(screen.getByText("40 files")).toBeInTheDocument()
+    for (const node of container.querySelectorAll("*")) {
+      expect(node.getAttribute("class") ?? "").not.toMatch(
+        /overflow-(auto|scroll|y-auto)|max-h-/
+      )
+    }
+  })
+
   it("highlights literal occurrences of the query", () => {
     const { container } = renderOutput(
       <SearchResultsOutput

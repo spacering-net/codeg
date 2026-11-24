@@ -45,7 +45,7 @@ vi.mock("@/contexts/workspace-context", () => ({
 }))
 
 import { MessageResponse } from "./message"
-import { Reasoning, ReasoningContent } from "./reasoning"
+import { ReasoningMarkdown } from "./reasoning"
 
 function fileBadgeButton(container: HTMLElement): HTMLButtonElement {
   const button = container.querySelector<HTMLButtonElement>(
@@ -239,11 +239,11 @@ describe("MessageResponse — relative local file links (real Streamdown)", () =
     expect(mocks.openFilePreview).toHaveBeenCalledTimes(1)
   })
 
-  it("restores relative links in the reasoning panel too", async () => {
+  it("restores relative links in a thought too", async () => {
     const { container } = render(
-      <Reasoning isStreaming={false} defaultOpen>
-        <ReasoningContent>{"已创建 [index.html](index.html)"}</ReasoningContent>
-      </Reasoning>
+      <ReasoningMarkdown isStreaming={false}>
+        {"已创建 [index.html](index.html)"}
+      </ReasoningMarkdown>
     )
     await waitFor(() => {
       expect(fileBadgeButton(container)).toBeTruthy()

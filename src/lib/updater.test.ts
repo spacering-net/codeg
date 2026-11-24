@@ -23,16 +23,39 @@ vi.mock("@tauri-apps/plugin-updater", () => ({
 
 import {
   appUpdateErrorMessageKey,
+  beginOwnServerRestart,
   checkAppUpdateInfo,
   confirmRollbackVersion,
   describeAppUpdateError,
   getCurrentAppVersion,
   getRunningServerVersion,
   getServerUpdateStatus,
+  isOwnServerRestartRunning,
   normalizeAppUpdateError,
   readServerVersionStrict,
+  subscribeOwnServerRestart,
   waitForServerHealthy,
 } from "@/lib/updater"
+
+describe("beginOwnServerRestart", () => {
+  it("marks the page's own restart until every one of them has ended", () => {
+    const listener = vi.fn()
+    const unsubscribe = subscribeOwnServerRestart(listener)
+    const endUpgrade = beginOwnServerRestart()
+    const endRollback = beginOwnServerRestart()
+    expect(isOwnServerRestartRunning()).toBe(true)
+    endUpgrade()
+    // Ending twice must not end the other one too.
+    endUpgrade()
+    expect(isOwnServerRestartRunning()).toBe(true)
+    endRollback()
+    expect(isOwnServerRestartRunning()).toBe(false)
+    expect(listener).toHaveBeenCalledTimes(4)
+    unsubscribe()
+    beginOwnServerRestart()()
+    expect(listener).toHaveBeenCalledTimes(4)
+  })
+})
 
 describe("readServerVersionStrict", () => {
   beforeEach(() => {

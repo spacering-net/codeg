@@ -16,10 +16,8 @@ import { useTabStore } from "@/contexts/tab-context"
 import { emitAttachFileToSession } from "@/lib/session-attachment-events"
 import { formatFileRangeLabel } from "@/lib/reference-link"
 import { findOwningFolder, splitAbsPath } from "@/lib/file-open-target"
-import {
-  buildMonacoModelPath,
-  collectLiveModelPaths,
-} from "@/lib/monaco-model-path"
+import { buildMonacoModelPath } from "@/lib/monaco-model-path"
+import { useTrackMonacoModel } from "@/contexts/monaco-model-context"
 import { parseFileTabId } from "@/lib/file-tab-id"
 import {
   useWorkspaceActions,
@@ -30,8 +28,12 @@ import { BrowserTabView } from "@/components/browser/browser-tab-view"
 import { ImagePreview } from "@/components/files/image-preview"
 import { HtmlPreview } from "@/components/files/html-preview"
 import { MarkdownDocumentPreview } from "@/components/files/markdown-document-preview"
-import { OfficePreview } from "@/components/files/office-preview"
-import { isHtmlPreviewable, isOfficePreviewable } from "@/lib/language-detect"
+import {
+  KeptOfficePreviews,
+  isOfficeFileTab,
+} from "@/components/files/kept-office-previews"
+import { PdfPreview } from "@/components/files/pdf-preview"
+import { isHtmlPreviewable } from "@/lib/language-detect"
 import { DiffViewer } from "@/components/diff/diff-viewer"
 import { ImageDiffView } from "@/components/diff/image-diff-view"
 import { UnifiedDiffPreview } from "@/components/diff/unified-diff-preview"
@@ -760,9 +762,23 @@ function DiffFileList({
   )
 }
 
+/**
+ * The file column's content: the active tab's view (the body below), plus the
+ * office previews `KeptOfficePreviews` keeps mounted over the same box so that
+ * switching tabs never restarts one.
+ */
 export function FileWorkspacePanel() {
+  return (
+    <div className="relative h-full min-h-0">
+      <FileWorkspacePanelBody />
+      <KeptOfficePreviews />
+    </div>
+  )
+}
+
+function FileWorkspacePanelBody() {
   const t = useTranslations("Folder.fileWorkspacePanel")
-  const { activeFileTab, fileTabs, pendingFileReveal, previewFileTabIds } =
+  const { activeFileTab, pendingFileReveal, previewFileTabIds } =
     useWorkspaceFileTabs()
   const {
     consumePendingFileReveal,
@@ -829,52 +845,17 @@ export function FileWorkspacePanel() {
   const tRef = useRef(t)
   const monacoRef = useRef<Monaco | null>(null)
   // The loaded monaco instance, captured at editor mount. Passing it to the
-  // theme hook (instead of the hook calling useMonaco()) keeps Monaco lazy: this
-  // panel is always mounted, incl. the file-less empty state, so an internal
-  // useMonaco() would eagerly load Monaco even with no editor shown.
+  // theme hook (instead of the hook calling useMonaco()) keeps Monaco lazy:
+  // the file-less empty state should not load Monaco before an editor opens.
   const [editorMonaco, setEditorMonaco] = useState<Monaco | null>(null)
   const editorTheme = useMonacoWorkspaceTheme(editorMonaco)
-  // @monaco-editor/react creates a model per unseen `path` and never disposes
-  // it — not on path change (it setModel()s away) and, on unmount, only the
-  // currently attached one. Left alone, every file opened during a session
-  // keeps its model (full text + tokenization + undo stack) alive after its
-  // tab closes. Reconcile instead: remember each URI this panel has routed
-  // through `path`, and dispose the ones whose tab is gone. Only URIs
-  // recorded here are ever touched — models owned by others (diff editors'
-  // anonymous pairs) are invisible to this cleanup.
-  const createdModelUrisRef = useRef<Set<string>>(new Set())
+  // Keep models from the first mount: the wrapper captures this option in
+  // its mount-only cleanup. The workspace owns disposal even when mobile
+  // navigation unmounts this whole panel; hidden open buffers keep undo state.
+  const trackMonacoModel = useTrackMonacoModel()
   useEffect(() => {
-    createdModelUrisRef.current.add(editorModelPath)
-  }, [editorModelPath])
-  // Joined into one string so the disposal effect fires only when tab
-  // membership changes — fileTabs itself churns per keystroke. URI segments
-  // are %-encoded, so "\n" cannot occur inside an entry.
-  const liveModelUrisKey = useMemo(
-    () => collectLiveModelPaths(fileTabs).join("\n"),
-    [fileTabs]
-  )
-  useEffect(() => {
-    const monaco = editorMonaco
-    if (!monaco) return
-    const keep = new Set(liveModelUrisKey ? liveModelUrisKey.split("\n") : [])
-    const tracked = createdModelUrisRef.current
-    for (const uri of [...tracked]) {
-      if (keep.has(uri)) continue
-      const model = monaco.editor.getModel(monaco.Uri.parse(uri))
-      if (!model) {
-        // Never materialized, or already disposed by the library's unmount
-        // path — either way no longer ours to manage.
-        tracked.delete(uri)
-        continue
-      }
-      // The editor's own effect runs first and has normally swapped off the
-      // model by now; if it is somehow still attached, keep it and retry on
-      // the next membership change instead of disposing an in-use model.
-      if (model.isAttachedToEditor()) continue
-      model.dispose()
-      tracked.delete(uri)
-    }
-  }, [editorMonaco, liveModelUrisKey])
+    if (editorMonaco) trackMonacoModel(editorModelPath, editorMonaco)
+  }, [editorModelPath, editorMonaco, trackMonacoModel])
   const { zoomLevel } = useZoomLevel()
   const {
     editorFontStack,
@@ -1905,17 +1886,19 @@ export function FileWorkspacePanel() {
     return <ImagePreview key={activeFileTab.id} tab={activeFileTab} />
   }
 
-  // Office preview (.docx/.xlsx/.pptx → OfficeCLI HTML → sandboxed iframe).
+  // PDF preview (PDF.js). Preview-only like an image: the bytes are binary,
+  // there is no source view to toggle to.
+  if (isFileTab && activeFileTab && activeFileTab.language === "pdf") {
+    return <PdfPreview key={activeFileTab.id} tab={activeFileTab} />
+  }
+
+  // Office preview (.docx/.xlsx/.pptx → OfficeCLI watch → sandboxed iframe).
   // Preview-only: these are binary OpenXML files with no text editor view, so
-  // it renders unconditionally (not gated on the editor/preview toggle).
-  if (isFileTab && activeFileTab && isOfficePreviewable(activeFileTab.path)) {
-    return (
-      <OfficePreview
-        key={activeFileTab.id}
-        rootPath={activeIo?.rootPath ?? null}
-        relPath={activeIo?.ioPath ?? null}
-      />
-    )
+  // it renders unconditionally (not gated on the editor/preview toggle). It is
+  // not rendered here: `KeptOfficePreviews`, beside this body, shows it and
+  // keeps it mounted while other tabs are in front.
+  if (isOfficeFileTab(activeFileTab)) {
+    return null
   }
 
   // HTML preview (sandboxed iframe)
@@ -2116,6 +2099,7 @@ export function FileWorkspacePanel() {
         <div className="flex-1 min-h-0">
           {hasTabContent(activeFileTab) || !activeFileTab.loading ? (
             <MonacoEditor
+              keepCurrentModel={true}
               beforeMount={defineMonacoThemes}
               onMount={handleEditorMount}
               path={editorModelPath}

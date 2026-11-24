@@ -415,7 +415,9 @@ describe("BrowserEventsBridge", () => {
       kind: "page",
     })
     expect(getBrowserTabState("browser:abc-p1")).toBeNull()
-    expect(mocks.closeFileTab).toHaveBeenCalledWith("browser:abc-p1")
+    expect(mocks.closeFileTab).toHaveBeenCalledWith("browser:abc-p1", {
+      allScopes: true,
+    })
 
     // Every inspector close asks that tab's surface for its bounds again, and
     // only that tab's: an inspector docked into the window left the page
@@ -457,7 +459,9 @@ describe("BrowserEventsBridge", () => {
       ownerWindow: "main",
       requestId: null,
     })
-    expect(mocks.closeFileTab).toHaveBeenCalledWith("browser:abc-s2")
+    expect(mocks.closeFileTab).toHaveBeenCalledWith("browser:abc-s2", {
+      allScopes: true,
+    })
 
     unmount()
     expect(mocks.unsubscribed.sort()).toEqual([

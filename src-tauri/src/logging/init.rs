@@ -600,6 +600,11 @@ fn init_with_file(prefix: &str) -> LogGuard {
     let dir = crate::paths::codeg_logs_root();
     let (reload, guard) = build_subscriber(LogLevel::default(), Some(&dir), prefix);
     LogHub::install(reload);
+    // Under the `paths` target: the logging stack's own target is switched
+    // off (`TARGET_BACKSTOPS`), and this is about where the files are.
+    if let Some(dir) = crate::logging::panic_hook::log_file_dir() {
+        tracing::info!(target: "codeg_lib::paths", "[paths] logs go to {}", dir.display());
+    }
     LogGuard { _guard: guard }
 }
 

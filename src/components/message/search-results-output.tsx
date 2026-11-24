@@ -9,6 +9,7 @@
  * raw JSON. Here the unwrapped stdout is grouped per file with clickable paths
  * and line numbers; anything the parser can't confidently recognise falls back
  * to the plain code block the generic `<ToolOutput>` would have rendered.
+ * Drawn inside an activity row's panel, edge to edge: the panel scrolls.
  */
 
 import { useMemo, type ReactNode } from "react"
@@ -77,7 +78,7 @@ export function SearchResultsOutput({ text, query }: Props) {
   // raw envelope rendered as `{"exit_code":1,"formatted_output":""}`.
   if (!text.trim()) {
     return (
-      <div className="flex items-center gap-2 rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+      <div className="mx-3 flex items-center gap-2 rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
         <SearchXIcon className="size-3.5 shrink-0" />
         {t("search.noMatches")}
       </div>
@@ -86,7 +87,7 @@ export function SearchResultsOutput({ text, query }: Props) {
 
   if (!parsed) {
     return (
-      <div className="overflow-x-auto rounded-md bg-muted/50 text-xs">
+      <div className="mx-3 overflow-hidden rounded-md bg-muted/50 text-xs">
         <CodeBlock code={text} language="log" />
       </div>
     )
@@ -102,11 +103,11 @@ export function SearchResultsOutput({ text, query }: Props) {
 
   return (
     <div className="space-y-2">
-      <div className="text-2xs text-muted-foreground">{summary}</div>
-      {/* Same height cap as the file-read viewer: a broad search can match
-          hundreds of lines, and an unbounded card pushes the rest of the
-          transcript off screen. */}
-      <div className="max-h-[26.25rem] divide-y divide-border/60 overflow-auto rounded-md border border-border/60">
+      <div className="px-3 text-2xs text-muted-foreground">{summary}</div>
+      {/* Straight in the row's panel, edge to edge: the panel caps the height
+          and scrolls, and a box of its own inside it would nest a second
+          scrollbar. */}
+      <div className="divide-y divide-border/60 border-y border-border/60">
         {parsed.groups.map((group) => (
           <div key={group.path}>
             <div className="flex items-center gap-1.5 bg-muted/40 px-2.5 py-1.5">
@@ -134,7 +135,7 @@ export function SearchResultsOutput({ text, query }: Props) {
                     <FilePathLink
                       filePath={group.path}
                       line={entry.line}
-                      className="w-10 shrink-0 text-right tabular-nums text-muted-foreground/60"
+                      className="w-10 shrink-0 text-right tabular-nums text-muted-foreground"
                     >
                       {entry.line}
                     </FilePathLink>
@@ -149,12 +150,12 @@ export function SearchResultsOutput({ text, query }: Props) {
         ))}
       </div>
       {parsed.hiddenCount > 0 && (
-        <div className="text-2xs text-muted-foreground">
+        <div className="px-3 text-2xs text-muted-foreground">
           {t("search.moreResults", { count: parsed.hiddenCount })}
         </div>
       )}
       {parsed.notes.length > 0 && (
-        <div className="space-y-0.5 rounded-md bg-muted/40 px-2.5 py-1.5 font-mono text-2xs text-muted-foreground">
+        <div className="mx-3 space-y-0.5 rounded-md bg-muted/40 px-2.5 py-1.5 font-mono text-2xs text-muted-foreground">
           {parsed.notes.map((note, i) => (
             <div key={i} className="break-all">
               {note}

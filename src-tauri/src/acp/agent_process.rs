@@ -26,9 +26,20 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use agent_client_protocol::schema::v1::{EnvVariable, McpServer, McpServerStdio};
-use agent_client_protocol::{Client, Conductor, ConnectTo, LineDirection, Lines, Role};
+use agent_client_protocol::{Client, Conductor, ConnectTo, Lines, Role};
 use tokio::process::Child;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+
+/// Which of the agent's stdio streams a line crossed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineDirection {
+    /// Sent to the agent.
+    Stdin,
+    /// Received from the agent.
+    Stdout,
+    /// Written by the agent to stderr.
+    Stderr,
+}
 
 /// Observer for every line crossing the agent's stdio, and which way it went.
 type DebugCallback = Arc<dyn Fn(&str, LineDirection) + Send + Sync + 'static>;
@@ -403,6 +414,10 @@ impl AcpAgent {
                         cmd.env(&env_var.name, &env_var.value);
                     }
                 }
+                // The session's environment, not the one an AppImage's
+                // launcher set up for codeg itself. After the launch env,
+                // whose PATH is built from codeg's own.
+                crate::appimage_env::restore_tokio(&mut cmd);
                 if let Some(dir) = &self.current_dir {
                     // The `pushd` detour already owns the cwd for this launch,
                     // and handing the same UNC path to `CreateProcess` is the
@@ -542,6 +557,85 @@ fn append_limited_utf8(output: &mut String, chunk: &str, limit: usize) -> bool {
 
     output.drain(..start);
     true
+}
+
+/// `line` from the agent, without the `"data": null` of an error response.
+///
+/// agent-client-protocol 3 keeps an explicit `null` there as data
+/// (`Some(Value::Null)`; 2.x read it as absent), and the error's `Display`
+/// then ends in ": null", so every message codeg shows from such an error
+/// would read "Authentication required: null". The Python ACP SDK writes the
+/// key into every error it sends (`RequestError.to_error_obj`). A null carries
+/// nothing to act on, so dropping the key loses nothing.
+///
+/// Only an error response's own `error.data` goes, alone or in a batch: a
+/// message with a `method` keeps whatever it carries. JSON has one spelling of
+/// `null`, so a line without it is passed on without being read. The rest are
+/// first read without being built ([`has_null_error_data`]), and a line is
+/// re-serialized only when a key actually went.
+fn omit_null_error_data(line: String) -> String {
+    if !line.contains("null") || has_null_error_data(&line) == Some(false) {
+        return line;
+    }
+    let Ok(mut message) = serde_json::from_str::<serde_json::Value>(&line) else {
+        return line;
+    };
+    let omit = |message: &mut serde_json::Value| {
+        message.get("method").is_none()
+            && message
+                .get_mut("error")
+                .and_then(serde_json::Value::as_object_mut)
+                .filter(|error| error.get("data").is_some_and(serde_json::Value::is_null))
+                .and_then(|error| error.remove("data"))
+                .is_some()
+    };
+    let omitted = match &mut message {
+        serde_json::Value::Array(batch) => batch
+            .iter_mut()
+            .fold(false, |any, message| omit(message) | any),
+        message => omit(message),
+    };
+    if !omitted {
+        return line;
+    }
+    serde_json::to_string(&message).unwrap_or(line)
+}
+
+/// Whether `line` is an error response whose `error.data` is null, or a batch
+/// that holds one. Every value is skipped rather than built, and keys are
+/// matched as JSON decodes them, escapes included. `None` when the line does
+/// not read this way: a repeated key does that, and since the runtime takes the
+/// last one, such a line is left to the full parse.
+fn has_null_error_data(line: &str) -> Option<bool> {
+    #[derive(serde::Deserialize)]
+    struct Message {
+        method: Option<serde::de::IgnoredAny>,
+        error: Option<ErrorObject>,
+    }
+    #[derive(serde::Deserialize)]
+    struct ErrorObject {
+        #[serde(default, rename = "data", deserialize_with = "is_null")]
+        data_is_null: bool,
+    }
+    fn is_null<'de, D: serde::Deserializer<'de>>(data: D) -> Result<bool, D::Error> {
+        Ok(<Option<serde::de::IgnoredAny> as serde::Deserialize>::deserialize(data)?.is_none())
+    }
+    let holds = |message: &Message| {
+        message.method.is_none()
+            && message
+                .error
+                .as_ref()
+                .is_some_and(|error| error.data_is_null)
+    };
+    if line.trim_start().starts_with('[') {
+        serde_json::from_str::<Vec<Message>>(line)
+            .ok()
+            .map(|batch| batch.iter().any(holds))
+    } else {
+        serde_json::from_str::<Message>(line)
+            .ok()
+            .map(|message| holds(&message))
+    }
 }
 
 /// Waits for a child process and returns an error if it exits with non-zero status.
@@ -692,6 +786,7 @@ impl<Counterpart: AcpAgentCounterpartRole> ConnectTo<Counterpart> for AcpAgent {
         } else {
             Box::pin(BufReader::new(child_stdout.compat()).lines())
         };
+        let incoming_lines = incoming_lines.map(|line| line.map(omit_null_error_data));
 
         // Create a sink that writes lines (with newlines) to stdin with optional debug logging
         let outgoing_sink = if let Some(callback) = self.debug_callback.clone() {
@@ -1245,5 +1340,97 @@ mod tests {
         });
         // The child ran `pwd -P` from `dir`, so it must print exactly `dir`.
         assert_eq!(out.trim(), dir.to_string_lossy());
+    }
+
+    #[test]
+    fn an_error_responses_null_data_is_dropped() {
+        // As the Python ACP SDK writes it, spaces included.
+        assert_eq!(
+            omit_null_error_data(
+                r#"{"jsonrpc": "2.0", "id": 3, "error": {"code": -32000, "message": "Authentication required", "data": null}}"#
+                    .to_string()
+            ),
+            r#"{"jsonrpc":"2.0","id":3,"error":{"code":-32000,"message":"Authentication required"}}"#
+        );
+        // Wherever the words "method" or "error" appear, and however a key is
+        // spelled, only the response's own decoded `error.data` decides.
+        for (line, without) in [
+            (
+                r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"method","data":null}}"#,
+                r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"method"}}"#,
+            ),
+            (
+                r#"{"jsonrpc":"2.0","id":1,"\u0065rror":{"code":1,"message":"x","\u0064ata":null}}"#,
+                r#"{"jsonrpc":"2.0","id":1,"error":{"code":1,"message":"x"}}"#,
+            ),
+            (
+                r#"[{"jsonrpc":"2.0","id":1,"result":{}},{"jsonrpc":"2.0","id":2,"error":{"code":1,"message":"x","data":null}}]"#,
+                r#"[{"jsonrpc":"2.0","id":1,"result":{}},{"jsonrpc":"2.0","id":2,"error":{"code":1,"message":"x"}}]"#,
+            ),
+            (
+                r#"[{"jsonrpc":"2.0","method":"session/update","params":{"error":{"data":null}}},{"jsonrpc":"2.0","id":2,"error":{"code":1,"message":"x","data":null}}]"#,
+                r#"[{"jsonrpc":"2.0","method":"session/update","params":{"error":{"data":null}}},{"jsonrpc":"2.0","id":2,"error":{"code":1,"message":"x"}}]"#,
+            ),
+            // A repeated key reads as its last value, as the runtime reads it.
+            (
+                r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"boom","data":0,"data":null}}"#,
+                r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"boom"}}"#,
+            ),
+            (
+                r#"{"jsonrpc":"2.0","id":1,"error":{"code":1,"message":"a"},"error":{"code":2,"message":"b","data":null}}"#,
+                r#"{"jsonrpc":"2.0","id":1,"error":{"code":2,"message":"b"}}"#,
+            ),
+        ] {
+            assert_eq!(omit_null_error_data(line.to_string()), without, "{line}");
+        }
+    }
+
+    #[test]
+    fn a_line_without_an_errors_null_data_passes_unchanged() {
+        for line in [
+            r#"{"jsonrpc": "2.0", "id": 3, "error": {"code": -32603, "message": "boom", "data": {"details": null}}}"#,
+            r#"{"jsonrpc": "2.0", "id": 3, "error": {"code": -32603, "message": "boom"}}"#,
+            r#"{"jsonrpc": "2.0", "id": 3, "result": {"error": {"data": null}}}"#,
+            r#"{"jsonrpc": "2.0", "method": "session/update", "params": {"error": {"data": null}}}"#,
+            r#"{"jsonrpc": "2.0", "method": "x/y", "error": {"data": null}}"#,
+            r#"{"jsonrpc": "2.0", "id": 1, "method": null, "error": {"data": null}}"#,
+            r#"{"jsonrpc": "2.0", "id": 1, "error": {"data": 0, "data": 1}, "x": null}"#,
+            r#"[{"jsonrpc": "2.0", "id": 1, "result": null}, {"jsonrpc": "2.0", "method": "x/y", "params": null}]"#,
+            r#"not json, "error": null"#,
+        ] {
+            assert_eq!(omit_null_error_data(line.to_string()), line);
+        }
+    }
+
+    /// The agent answers `initialize` with the Python ACP SDK's error, whose
+    /// `data` is null: the client sees no data, and the message alone.
+    #[cfg(unix)]
+    #[test]
+    fn a_null_error_data_from_the_agent_reaches_the_client_as_none() {
+        use agent_client_protocol::schema::v1::InitializeRequest;
+        use agent_client_protocol::schema::ProtocolVersion;
+        use agent_client_protocol::{Agent, ConnectionTo};
+
+        let script = r#"read -r line
+id=$(printf '%s' "$line" | sed -E 's/.*"id":"([^"]*)".*/\1/')
+printf '{"jsonrpc": "2.0", "id": "%s", "error": {"code": -32000, "message": "Authentication required", "data": null}}\n' "$id"
+read -r _"#;
+        let agent = AcpAgent::from_args(["/bin/sh", "-c", script]).unwrap();
+        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let error = rt
+            .block_on(
+                Client
+                    .builder()
+                    .connect_with(agent, async |cx: ConnectionTo<Agent>| {
+                        Ok(cx
+                            .send_request(InitializeRequest::new(ProtocolVersion::V1))
+                            .block_task()
+                            .await)
+                    }),
+            )
+            .expect("connection")
+            .expect_err("the agent refused initialize");
+        assert_eq!(error.data, None);
+        assert_eq!(error.to_string(), "Authentication required");
     }
 }

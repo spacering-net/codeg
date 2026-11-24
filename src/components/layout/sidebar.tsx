@@ -9,8 +9,10 @@ import {
   type ReactNode,
 } from "react"
 import {
+  DraftingCompass,
   Crosshair,
   Eye,
+  FolderSync,
   ListChevronsDownUp,
   ListChevronsUpDown,
   LayoutTemplate,
@@ -27,12 +29,16 @@ import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useSidebarContext } from "@/contexts/sidebar-context"
 import { useTabActions } from "@/contexts/tab-context"
 import { useAutomationsView } from "@/contexts/automations-view-context"
+import { useHarnessView } from "@/contexts/harness-view-context"
 import { useTasksView } from "@/contexts/tasks-view-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
+import { useFolderTabsStore } from "@/stores/folder-tabs-store"
 import {
   SidebarConversationList,
   type SidebarConversationListHandle,
 } from "@/components/conversations/sidebar-conversation-list"
+import { HarnessUpdatesBadge } from "@/components/harness/harness-updates-badge"
+import { LabelWithHint } from "@/components/layout/label-with-hint"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -89,7 +95,7 @@ import {
 } from "@/lib/conversation-tags"
 import {
   SidebarTagFilterBar,
-  SidebarTagFilterButton,
+  SidebarTagFilterSubmenu,
 } from "@/components/conversations/sidebar-tag-filter"
 import { SidebarSectionOrderControl } from "./sidebar-section-order-control"
 import { cn } from "@/lib/utils"
@@ -118,12 +124,13 @@ const RECENT_HIDDEN: ReadonlySet<SidebarSectionId> = new Set(["recent"])
 
 // Icon per optional nav row. The visibility checkboxes in the view-options menu
 // carry the same glyph as the row they switch, so that group reads as a mirror
-// of the nav block rather than three bare labels.
+// of the nav block rather than a column of bare labels.
 const NAV_ITEM_ICONS: Record<SidebarNavItemId, LucideIcon> = {
   automations: Zap,
   tasks: ListTodo,
   forge: LayoutTemplate,
   canvas: MapIcon,
+  harness: DraftingCompass,
 }
 
 /**
@@ -138,12 +145,15 @@ function SidebarNavButton({
   label,
   onClick,
   active,
+  hint,
   trailing,
 }: {
   icon: LucideIcon
   label: string
   onClick: () => void
   active?: boolean
+  /** Small text after the label: what the page holds. */
+  hint?: string
   trailing?: ReactNode
 }) {
   return (
@@ -161,7 +171,11 @@ function SidebarNavButton({
       )}
     >
       <Icon className="h-[0.875rem] w-[0.875rem] shrink-0 text-muted-foreground" />
-      <span className="truncate">{label}</span>
+      {hint ? (
+        <LabelWithHint label={label} hint={hint} />
+      ) : (
+        <span className="truncate">{label}</span>
+      )}
       {trailing}
     </button>
   )
@@ -174,6 +188,7 @@ export function Sidebar() {
   const { openNewConversationTab, openChatModeTab } = useTabActions()
   const { unseenFailures } = useAutomationsView()
   const { attentionCount } = useTasksView()
+  const { updatesCount: harnessUpdates } = useHarnessView()
   const { routeId, setRoute, openConversations } = useWorkbenchRoute()
   const isMac = useIsMac()
   const { isMac: platformIsMac } = usePlatform()
@@ -202,6 +217,15 @@ export function Sidebar() {
     DEFAULT_SECTION_ORDER
   )
   const [allExpanded, setAllExpanded] = useState(true)
+  // Not a list preference like the rows above: it decides which conversation
+  // and file tabs the window shows. Its store owns the stored value (hydrated
+  // with the tab set, see `TabProvider`), so this reads it live.
+  const tabsFollowFolder = useFolderTabsStore((s) => s.enabled)
+  const setTabsFollowFolder = useFolderTabsStore((s) => s.setEnabled)
+  // Controlled only so the tag filter's "Manage tags…" can close the menu on
+  // its way to the dialog: that entry is a plain button in a panel, not a menu
+  // item, so it does not close the menu by itself.
+  const [viewOptionsOpen, setViewOptionsOpen] = useState(false)
   // What the user picked, persisted as picked. The list gets it PRUNED to tags
   // that still exist (below) — but only once the tag list has loaded: matching
   // needs nothing but ids, so a persisted filter applies from the first paint
@@ -218,9 +242,9 @@ export function Sidebar() {
     shortcuts.new_conversation,
     isMac
   )
-  // General umbrella name for the eye menu (list toggles + nav rows + sort +
-  // section order). Kept generic so the accessible name / tooltip stays
-  // accurate as the menu gains options.
+  // General umbrella name for the eye menu (tag filter + list toggles + nav
+  // rows + sort + section order). Kept generic so the accessible name / tooltip
+  // stays accurate as the menu gains options.
   const viewOptionsLabel = t("viewOptions")
   const toggleExpandLabel = allExpanded
     ? t("collapseAllGroups")
@@ -243,6 +267,8 @@ export function Sidebar() {
     setRawTagFilter(next)
     saveTagFilter(next)
   }, [])
+
+  const closeViewOptions = useCallback(() => setViewOptionsOpen(false), [])
 
   const handleSetShowCompleted = useCallback((value: boolean) => {
     setShowCompleted(value)
@@ -365,12 +391,6 @@ export function Sidebar() {
             window's top edge, so its empty space must move the window. */}
         <div data-tauri-drag-region className="h-full min-w-0 flex-1" />
         <div className="flex items-center gap-0.5">
-          {/* Narrow the list to conversations carrying chosen tags. A funnel,
-              unlike the view-options eye: this one filters. */}
-          <SidebarTagFilterButton
-            filter={tagFilter}
-            onChange={handleSetTagFilter}
-          />
           {/* Locate the active conversation in the list below (moved here from
               the conversation detail header). Always shown, leading the header
               cluster. The sidebar is unmounted while collapsed, so `listRef` is
@@ -405,7 +425,10 @@ export function Sidebar() {
               <ListChevronsUpDown aria-hidden="true" className="h-3.5 w-3.5" />
             )}
           </Button>
-          <DropdownMenu>
+          <DropdownMenu
+            open={viewOptionsOpen}
+            onOpenChange={setViewOptionsOpen}
+          >
             <DropdownMenuTrigger asChild>
               <Button
                 variant="ghost"
@@ -414,9 +437,10 @@ export function Sidebar() {
                 title={viewOptionsLabel}
                 aria-label={viewOptionsLabel}
               >
-                {/* An eye, not a funnel: nothing in this menu filters the list
-                    down to matches — every option decides what is shown and in
-                    what order. */}
+                {/* An eye, not a funnel: the menu as a whole decides what the
+                    list shows and in what order. Its one filter, by tags, wears
+                    the funnel on its own row, and a filter that is on announces
+                    itself in the strip above the list. */}
                 <Eye aria-hidden="true" className="h-3.5 w-3.5" />
               </Button>
             </DropdownMenuTrigger>
@@ -425,20 +449,32 @@ export function Sidebar() {
                 clips overflow-x — 48 would start truncating longer localized
                 section names. */}
             <DropdownMenuContent align="end" className="min-w-56">
-              {/* Four groups: what the list shows → which nav rows exist → how
-                  the list is sorted → how its sections are stacked. The first
-                  two are hover-opened submenus rather than inline blocks: they
-                  are set-and-forget on/off inventories, six checkboxes between
-                  them, and inlining all six left a fifteen-row menu with Sort
-                  by / Section order — the two settings people actually come
-                  back for — stranded at the bottom of it. Those two stay
-                  inline: a pair of radios and a ranked list read wrong behind
-                  another hop, and the order rows need this menu's width.
+              {/* Five groups: what the list shows → which nav rows exist →
+                  which tabs the window shows → how the list is sorted → how its
+                  sections are stacked. The first group is the tag filter plus
+                  the list toggles, and those and the nav rows are hover-opened
+                  submenus rather than inline blocks. The two inventories are
+                  set-and-forget on/off sets, six checkboxes between them, and
+                  inlining all six left a fifteen-row menu with Sort by /
+                  Section order — the two settings people actually come back for
+                  — stranded at the bottom of it. The tag filter, which people
+                  come back for too, leads the menu instead: it is a whole panel
+                  (search, match mode, tag list) that only a submenu has room
+                  for. Sort by and Section order stay inline: a pair of radios
+                  and a ranked list read wrong behind another hop, and the order
+                  rows need this menu's width. Tabs-follow-folder is one inline
+                  checkbox: a single switch, and the sidebar is where it is used
+                  (clicking a folder header then selects that folder's tabs).
                   Every option keeps the menu open on select (the default is to
                   close): this menu is a settings panel, not a command list, and
                   flipping two of them used to cost two round trips through the
                   trigger. The one action it used to carry — expand/collapse
                   all — is now a header button of its own. */}
+              <SidebarTagFilterSubmenu
+                filter={tagFilter}
+                onChange={handleSetTagFilter}
+                onCloseMenu={closeViewOptions}
+              />
               <DropdownMenuSub>
                 <DropdownMenuSubTrigger>
                   <MessagesSquare className="text-muted-foreground" />
@@ -500,6 +536,16 @@ export function Sidebar() {
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
               <DropdownMenuSeparator />
+              <DropdownMenuCheckboxItem
+                checked={tabsFollowFolder}
+                onCheckedChange={setTabsFollowFolder}
+                onSelect={(event) => event.preventDefault()}
+                title={t("tabsFollowFolderHint")}
+              >
+                <FolderSync className="text-muted-foreground" />
+                {t("tabsFollowFolder")}
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuSeparator />
               <DropdownMenuLabel>{t("sortBy")}</DropdownMenuLabel>
               <DropdownMenuRadioGroup
                 value={sortMode}
@@ -559,7 +605,7 @@ export function Sidebar() {
             "Navigation items" group — for a workspace that never uses one of
             them, this block is pure noise above the list. The routes stay
             reachable from the status bar's quick-actions menu either way.
-            All three close the mobile Drawer on the way out, like tapping a
+            They all close the mobile Drawer on the way out, like tapping a
             conversation card (handled by the list wrapper below) — otherwise the
             page they just opened stays hidden behind the sidebar. */}
         {isNavItemVisible(navItems, "automations") && (
@@ -626,6 +672,30 @@ export function Sidebar() {
               }
               setRoute("canvas")
             }}
+          />
+        )}
+        {isNavItemVisible(navItems, "harness") && (
+          <SidebarNavButton
+            icon={DraftingCompass}
+            label={t("harness")}
+            hint={t("harnessHint")}
+            active={routeId === "harness"}
+            onClick={() => {
+              if (isMobile) toggle()
+              // Opens on the section the page was last on: which one that is
+              // lives in HarnessViewProvider, not in the route.
+              setRoute("harness")
+            }}
+            trailing={
+              harnessUpdates > 0 ? (
+                // Updates waiting (not a failure): the To-dos chip's primary
+                // tint.
+                <HarnessUpdatesBadge
+                  count={harnessUpdates}
+                  className="ml-auto"
+                />
+              ) : null
+            }
           />
         )}
       </div>

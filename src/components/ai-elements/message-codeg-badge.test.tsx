@@ -23,7 +23,7 @@ vi.mock("@/components/ai-elements/link-safety", () => ({
 }))
 
 import { MessageResponse } from "./message"
-import { Reasoning, ReasoningContent } from "./reasoning"
+import { ReasoningMarkdown } from "./reasoning"
 
 describe("MessageResponse — codeg references survive sanitization (real Streamdown)", () => {
   it("renders an agent reference inline as a badge, not as '[blocked]'", async () => {
@@ -90,16 +90,14 @@ describe("MessageResponse — codeg references survive sanitization (real Stream
   })
 })
 
-describe("ReasoningContent — codeg references survive sanitization (real Streamdown)", () => {
-  // The reasoning panel runs its own Streamdown, so it needs the same sanitize
+describe("ReasoningMarkdown — codeg references survive sanitization (real Streamdown)", () => {
+  // A thought's body runs its own Streamdown, so it needs the same sanitize
   // allowance as MessageResponse or a reference there still reads "[blocked]".
   it("renders an agent reference inline as a badge, not as '[blocked]'", async () => {
     const { container } = render(
-      <Reasoning isStreaming={false} defaultOpen>
-        <ReasoningContent>
-          {"[@Codex CLI](codeg://agent/codex) hi"}
-        </ReasoningContent>
-      </Reasoning>
+      <ReasoningMarkdown isStreaming={false}>
+        {"[@Codex CLI](codeg://agent/codex) hi"}
+      </ReasoningMarkdown>
     )
     await waitFor(() => {
       expect(

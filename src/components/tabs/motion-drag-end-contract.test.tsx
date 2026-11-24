@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest"
+import { describe, expect, it, vi, type Mock } from "vitest"
 import { act, render, waitFor } from "@testing-library/react"
 import { Reorder } from "motion/react"
 
@@ -65,8 +65,8 @@ const DRAG_DISTANCE_PX = 40
  */
 async function dragAndRelease(
   releaseType: "pointerup" | "pointercancel",
-  onDragStart: ReturnType<typeof vi.fn>,
-  onDragEnd: ReturnType<typeof vi.fn>
+  onDragStart: Mock,
+  onDragEnd: Mock
 ) {
   const { getByTestId } = render(
     <Reorder.Group as="div" axis="x" values={["a"]} onReorder={() => {}}>

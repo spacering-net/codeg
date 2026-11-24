@@ -253,7 +253,7 @@ export function BrowserEventsBridge() {
             // the window it lived in went away. Its sites are nobody's
             // answers now.
             forgetDefaultAgentGrant(closed.tabId)
-            closeFileTab(tabId)
+            closeFileTab(tabId, { allScopes: true })
           }
         ),
         // A tab's web inspector has gone. Put the page back where the host

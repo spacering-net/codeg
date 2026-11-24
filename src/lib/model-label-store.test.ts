@@ -99,8 +99,9 @@ describe("rememberModelLabels", () => {
   })
 
   it("ignores a reasoning-effort selector riding the model category", async () => {
-    // qoder publishes `reasoning_effort` with `category: "model"`, which the
-    // composer's `isModelConfigOption` matches — its values are not model ids.
+    // qoder published `reasoning_effort` with `category: "model"` through
+    // 1.1.66 (1.1.67 moved it to `thought_level`), which the composer's
+    // `isModelConfigOption` matches — its values are not model ids.
     const store = await load()
     store.rememberModelLabels("qoder", [
       select([opt("low", "Low"), opt("high", "High")], {

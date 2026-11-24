@@ -105,6 +105,7 @@ function seed(
     localTurns: overrides.localTurns ?? [],
     backgroundTurns: [],
     pendingBackgroundSettlements: [],
+    pendingCancelledTurnReports: null,
     optimisticTurns: [],
     liveMessage: overrides.liveMessage ?? null,
     syncState: "idle" as const,

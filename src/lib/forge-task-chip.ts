@@ -24,3 +24,16 @@ export function chipStateForLink(
   if (link == null) return "none"
   return ACTIVE_STATUSES.has(link.status) ? "active" : "terminal"
 }
+
+/**
+ * Whether the linked task was put aside to handle later — the board's
+ * `isDeferred`, for a lookup row. The chip then says so instead of naming the
+ * review or failure underneath, so the workbench and the board agree on what
+ * the task is waiting for.
+ */
+export function isDeferredLink(link: ForgeTaskLink): boolean {
+  return (
+    link.deferred === true &&
+    (link.status === "review" || link.status === "failed")
+  )
+}

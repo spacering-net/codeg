@@ -31,7 +31,7 @@
 
 <table>
   <tr>
-    <td width="50%" valign="top">🧩 <strong>واجهة واحدة لكل الوكلاء</strong><br/>خمسة عشر وكيلاً مدمجًا، ويمكن لأي وكيل متوافق مع ACP الانضمام — ويُعرض عملهم جميعًا كمحادثة منظَّمة موحّدة، لا كطرفية.</td>
+    <td width="50%" valign="top">🧩 <strong>واجهة واحدة لكل الوكلاء</strong><br/>عشرون وكيلاً مدمجًا، ويمكن لأي وكيل متوافق مع ACP الانضمام — ويُعرض عملهم جميعًا كمحادثة منظَّمة موحّدة، لا كطرفية.</td>
     <td width="50%" valign="top">🔎 <strong>جلسات تنتقل معك</strong><br/>استورد السجل الذي يحفظه كل وكيل على القرص، وابحث فيه، واستأنفه، ثم سلّمه إلى وكيل آخر.</td>
   </tr>
   <tr>
@@ -39,66 +39,6 @@
     <td width="50%" valign="top">🌍 <strong>أينما تعمل</strong><br/>تطبيق سطح المكتب، وخادم مستضاف ذاتيًا أو Docker، وiPhone وiPad وAndroid — وكذلك Telegram أو Lark أو WeChat.</td>
   </tr>
 </table>
-
-## 💖 الرعاة
-
-<table>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://www.compshare.cn/?ytag=GPU_YY_git_codeg" target="_blank"><img src="../images/compshare.png" alt="Compshare" width="160" /></a><br/>
-      <strong><a href="https://www.compshare.cn/?ytag=GPU_YY_git_codeg">Compshare (UCloud)</a></strong>
-    </td>
-    <td>شكراً لـ Compshare على رعاية هذا المشروع! Compshare هي منصة الذكاء الاصطناعي السحابية التابعة لشركة UCloud، وتقدّم باقات Plan للوكلاء بنماذج محلية بأسعار اقتصادية شهرياً أو حسب الاستخدام، بدءاً من 49 يوان/شهر. كما توفّر وصولاً مستقراً إلى النماذج الأجنبية عبر وكيل رسمي. تدعم التكامل مع Claude Code وCodex واستدعاءات API. جاهزة للمؤسسات: تزامن عالٍ، ودعم فني على مدار الساعة طوال أيام الأسبوع، وإصدار الفواتير ذاتياً. المستخدمون الذين يسجّلون عبر <a href="https://www.compshare.cn/?ytag=GPU_YY_git_codeg">هذا الرابط</a> يحصلون على رصيد تجريبي مجاني بقيمة 5 يوان على المنصة!</td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://hezu.ink/sign-up?aff=0wVz" target="_blank"><img src="../images/hezu-ink.jpg" alt="合租巴士" width="200" /></a><br/>
-      <strong><a href="https://hezu.ink/sign-up?aff=0wVz">合租巴士</a></strong>
-    </td>
-    <td>شكراً لـ 合租巴士 على رعاية هذا المشروع! 合租巴士 هي منصة موثوقة وفعّالة لخدمات ترحيل الذكاء الاصطناعي، توفّر ترحيلاً عالي الاستقرار للنماذج الرئيسية مثل Codex وClaude Code. نسبة الشحن شفافة (1:1)، مع دعم لمعدّل Codex يبدأ من 0.08 فقط. <a href="https://hezu.ink/sign-up?aff=0wVz">انضم إلى المجموعة عبر الموقع الرسمي للحصول على رصيد تجريبي بقيمة 5 دولارات</a>.</td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://console.lqapi.xyz/sign-up?aff=KPy9" target="_blank"><img src="../images/lq-router.png" alt="LQ router" width="160" /></a><br/>
-      <strong><a href="https://console.lqapi.xyz/sign-up?aff=KPy9">LQ router</a></strong>
-    </td>
-    <td>شكراً لخدمة الترحيل LQ router على رعاية هذا المشروع! LQ router هي خدمة ترحيل احترافية للذكاء الاصطناعي بمستوى المؤسسات، توفّر للشركات والمطورين الأفراد وصولاً مستقراً وفعّالاً ومنخفض التكلفة إلى واجهات API لنماذج الذكاء الاصطناعي. تدعم المنصة النماذج الرائدة مثل GPT وClaude وGrok وGemini، بمعامل تسعير لـ GPT Pro يبدأ من 0.1 فقط. <a href="https://console.lqapi.xyz/sign-up?aff=KPy9">انضم إلى المجموعة عبر الموقع الرسمي واحصل على رصيد تجريبي بقيمة دولار واحد</a>.</td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://go.apimart.ai/gh-codeg" target="_blank"><img src="../images/apimart-ai.png" alt="APIMart" width="200" /></a><br/>
-      <strong><a href="https://go.apimart.ai/gh-codeg">APIMart</a></strong>
-    </td>
-    <td>شكراً لـ APIMart على رعاية هذا المشروع! APIMart منصة API منخفضة التكلفة متخصصة في توليد الصور والفيديو بالذكاء الاصطناعي — GPT-Image-2 ابتداءً من 0.006 دولار للصورة، أي أكثر من 160 صورة بالدولار الواحد. واجهة API واحدة غير متزامنة تغطي الصور والفيديو معاً: أرسل المهمة، واحصل على معرّف، ثم استرجع النتائج عبر الاستطلاع أو عبر رد النداء. عالج عشرات الآلاف من الصور دفعةً واحدة دون انتهاء المهلة، وبدّل النماذج دون تغيير الشيفرة. الدفع حسب الاستخدام دون رسوم شهرية — <a href="https://go.apimart.ai/gh-codeg">سجّل من هنا</a> للبدء.</td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://www.ucloud.cn/site/active/astraflow?ytag=geo_waituo_codeg" target="_blank"><img src="../images/astraflow.png" alt="UCloud ·星图AstraFlow" width="120" /></a><br/>
-      <strong><a href="https://www.ucloud.cn/site/active/astraflow?ytag=geo_waituo_codeg">UCloud ·星图AstraFlow</a></strong>
-    </td>
-    <td>
-      <a href="https://www.ucloud.cn/site/active/astraflow?ytag=geo_waituo_codeg">UCloud ·星图AstraFlow</a><br/>
-      منصة النماذج الكبيرة AstraFlow من UCloud تتيح استدعاء أكثر من 200 نموذج بنقرة واحدة: تتضمّن نماذج مفتوحة المصدر رائدة عالمياً مثل Kimi K3 وDeepSeek V4/V3 وQwen 3 وGLM5.2 وhappyhorse، دون الحاجة إلى تدريب خاص بك، وجاهزة للاستخدام مباشرة.<br/>
-      سجّل عبر الرابط أعلاه باستخدام <strong>البريد الإلكتروني</strong>، وأكمل التحقق من الهوية، ثم <a href="https://f.howxm.com/xs/u/HVFW5X8EIYV1">احصل على 50 يواناً من رصيد الحوسبة</a>.
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://fluxionai.space/register?source=github&campaign=github-codeg-202609&promo=CODEG" target="_blank"><img src="../images/fluxion-ai.png" alt="Fluxion AI" width="160" /></a><br/>
-      <strong><a href="https://fluxionai.space/register?source=github&campaign=github-codeg-202609&promo=CODEG">Fluxion AI</a></strong>
-    </td>
-    <td>شكراً لـ Fluxion AI على رعاية هذا المشروع! توفّر Fluxion AI وصولاً سريعاً وموثوقاً ومنخفض التكلفة عبر واجهة API موحّدة واحدة إلى GPT وClaude وGemini وغيرها من نماذج الذكاء الاصطناعي الرائدة. يمكن للمستخدمين الجدد الحصول على رصيد API بقيمة 3 دولارات عبر <a href="https://fluxionai.space/register?source=github&campaign=github-codeg-202609&promo=CODEG">رابطنا المخصّص</a>.</td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://beeapi.ai/signup?aff=HIAB5JCVRNNA" target="_blank"><img src="../images/beeapi.jpg" alt="BeeAPI" width="200" /></a><br/>
-      <strong><a href="https://beeapi.ai/signup?aff=HIAB5JCVRNNA">BeeAPI</a></strong>
-    </td>
-    <td>شكراً لـ <a href="https://beeapi.ai/signup?aff=HIAB5JCVRNNA">BeeAPI</a> على رعاية هذا المشروع! BeeAPI هي منصة احترافية لتمرير وتجميع واجهات API لنماذج ذكاء اصطناعي متعددة، تجمع العديد من المزوّدين ومجموعة واسعة من نماذج الذكاء الاصطناعي الرائدة. وهي تدعم مقارنة الأسعار بين المزوّدين، والتوجيه الذكي عبر مجموعات متعددة، والوصول الموحّد عبر API مع فوترة موحّدة، مما يساعدك على استخدام خدمات الذكاء الاصطناعي بمرونة واستقرار وتكلفة أقل.</td>
-  </tr>
-</table>
-
-> هل ترغب في أن تصبح راعياً لـ Codeg؟ [راسلنا عبر البريد الإلكتروني.](mailto:itpkcn@gmail.com)
 
 ## ✨ المزايا
 
@@ -108,9 +48,9 @@
 
 ### واجهة واحدة لكل الوكلاء
 
-يضم Codeg خمسة عشر وكيلاً مدمجًا، ويمكن لأي وكيل آخر متوافق مع ACP الانضمام من السجل العام أو عبر ملف distribution JSON الخاص به. ويتواصل Codeg مع كلٍّ منهم عبر Agent Client Protocol، فيحصلون جميعًا على المحادثة الغنية نفسها — بطاقات الأدوات، والفروقات الحيّة، والخطط، وطلبات الأذونات — بدلاً من طرفية تُضطر إلى التحديق فيها.
+20 وكيلًا مدمجًا وأي وكيل ACP، في محادثة واحدة مع بطاقات أدوات وفروق مباشرة وردود تفاعلية.
 
-[التوثيق ←](https://docs.codeg.app/guide/supported-agents) · [الوكلاء المخصّصون ←](https://docs.codeg.app/guide/custom-agents)
+[التوثيق ←](https://docs.codeg.app/guide/supported-agents) · [الوكلاء المخصّصون ←](https://docs.codeg.app/guide/custom-agents) · [عرض الواجهة ←](https://docs.codeg.app/guide/skills#cards-tables-and-charts-in-replies)
 
 </td>
 <td width="50%">
@@ -125,9 +65,9 @@
 
 ### كل جلسة قابلة للبحث
 
-يقرأ Codeg السجل الذي تحفظه واجهة CLI لكل وكيل على القرص: استورده بنقرة واحدة، وابحث فيه كله، واستأنف أي جلسة من حيث توقفت. اذكر جلسة قديمة بـ `@`، فيستطيع الوكيل الذي تحادثه قراءتها — حتى لو كتبها وكيل آخر.
+استورد الجلسات وابحث فيها واستأنفها. شاركها مع الوكلاء عبر `@` ونظّمها بالوسوم.
 
-[التوثيق ←](https://docs.codeg.app/guide/aggregation)
+[التوثيق ←](https://docs.codeg.app/guide/aggregation) · [الوسوم ←](https://docs.codeg.app/guide/workspace#tag-conversations)
 
 </td>
 <td width="50%">
@@ -142,7 +82,7 @@
 
 ### التعاون متعدد الوكلاء
 
-اكتب `@`، اختر وكيلاً، ثم أرسل. يعمل كل وكيل تذكره في جلسة مستقلة خاصة به، جنبًا إلى جنب، ويتدفق عمله عائدًا إلى محادثتك — Claude Code يكتب المسودة بينما يراجع Codex — ويظهر الوكلاء الفرعيون كبطاقات تمتلئ أثناء عملهم.
+فوّض المهام عبر `@`. يعمل الوكلاء بالتوازي ويعرضون تقدّمهم مباشرة في محادثتك.
 
 [التوثيق ←](https://docs.codeg.app/guide/multi-agent)
 
@@ -159,9 +99,9 @@
 
 ### مهامّ قيد الانتظار تعمل دون إشراف
 
-دوّن ما تريد إنجازه وانصرف إلى شأنك. تحصل كل مهمة على شجرة عمل git وفرعٍ خاصّين بها، وتبدأ فورًا أو وفق جدول زمني، ثم تنتظر في «مراجعة»؛ اقبل الفروقات فيتولّى الوكيل دمجها، ويتحقق Codeg من git قبل أن يعدّها منجزة.
+شغّل المهام فورًا أو بجدول زمني في أشجار عمل مستقلة. الوكلاء يعملون وأنت تراجع التغييرات وتوافق عليها.
 
-[التوثيق ←](https://docs.codeg.app/guide/tasks)
+[التوثيق ←](https://docs.codeg.app/guide/tasks) · [المعالجة التلقائية ←](https://docs.codeg.app/guide/repository#let-it-pick-items-up-by-itself)
 
 </td>
 <td width="50%">
@@ -176,7 +116,7 @@
 
 ### لوحة لا نهائية
 
-انشر عملك على مساحة مفتوحة: تصبح المحادثات والملفات والطرفيات والملاحظات بطاقاتٍ على لوحة، مجمّعةً حسب المجلد والوكيل، فيمكن لعدة وكلاء أن يعملوا جنبًا إلى جنب على مرأى منك.
+رتّب المحادثات والملفات والطرفيات والملاحظات على لوحة لا نهائية. كل الوكلاء أمامك.
 
 [التوثيق ←](https://docs.codeg.app/guide/canvas)
 
@@ -193,9 +133,9 @@
 
 ### سطح المكتب والخادم والأجهزة المحمولة وقنوات المحادثة
 
-شغّل Codeg كتطبيق سطح مكتب، أو كخادم مستضاف ذاتيًا تفتحه من أي متصفح، أو كحاوية Docker واحدة. وتُبقي تطبيقات iPhone وiPad وAndroid الأصلية — إضافةً إلى قنوات Telegram وLark وWeChat — وكلاءك في متناول يدك، بينما تبقى ملفاتك وجلساتك على جهازك أنت.
+سطح المكتب أو الخادم أو Docker أو الهاتف. تواصل مع وكلائك أيضًا عبر Telegram وLark وWeChat.
 
-[التوثيق ←](https://docs.codeg.app/getting-started/deployment) · [التطبيقات المحمولة ←](https://docs.codeg.app/getting-started/installation#mobile-apps) · [قنوات المحادثة ←](https://docs.codeg.app/guide/chat-channels)
+[التوثيق ←](https://docs.codeg.app/getting-started/deployment) · [مساحات العمل البعيدة ←](https://docs.codeg.app/guide/workspace#desktop-and-browser) · [التطبيقات المحمولة ←](https://docs.codeg.app/getting-started/installation#mobile-apps) · [قنوات المحادثة ←](https://docs.codeg.app/guide/chat-channels)
 
 </td>
 <td width="50%">
@@ -210,7 +150,7 @@
 
 ### مستندات Office والبحث العلمي
 
-اطلب عرضًا تقديميًا أو تقريرًا أو جدول بيانات، وشاهد ملف `.pptx` أو `.docx` أو `.xlsx` الحقيقي يُعرض مباشرةً بجوار المحادثة. أما مهارات البحث المضمَّنة — الفرضيات، وتصميم التجارب، والإحصاء، والبحث في الأدبيات — فتعمل مع أي وكيل.
+أنشئ ملفات Office بمعاينة مباشرة وافتح ملفات PDF. مهارات البحث متاحة لكل وكيل.
 
 [التوثيق ←](https://docs.codeg.app/guide/office) · [البحث العلمي ←](https://docs.codeg.app/guide/research)
 
@@ -227,7 +167,7 @@
 
 ### استخدام المتصفح والحاسوب
 
-في تطبيق سطح المكتب، تُفتح الروابط في متصفح مدمج بجوار ملفاتك: سلّم الوكيل صفحةً أو عنصرًا أو لقطة شاشة أو خطأً من وحدة التحكم، أو دعه يقود صفحةً تشاركها. ومع «استخدام الحاسوب»، المتاح حاليًا كمعاينة، يستطيع الوكلاء أيضًا رؤية النوافذ التي تشاركها والتحكم فيها — و«إيقاف» على بُعد نقرة واحدة.
+شارك الصفحات والأخطاء من متصفح سطح المكتب. استخدام الحاسوب (معاينة) يتحكم بالنوافذ المشتركة.
 
 [التوثيق ←](https://docs.codeg.app/guide/browser) · [استخدام الحاسوب ←](https://docs.codeg.app/guide/computer-use)
 
@@ -242,38 +182,45 @@
 <tr>
 <td width="50%" valign="middle">
 
-### الحلقة الهندسية الكاملة
+### سطر الأوامر وCI
 
-محرّر، وفروقات حيّة وأخرى بالعرض جنبًا إلى جنب، وعميل git كامل مع محرّر دمج بثلاث لوحات، وأشجار عمل بنقرة واحدة، وطرفية مدمجة، وعروض مقسّمة — كلها بجوار الوكيل، وعلى الملفات الحقيقية في مستودعك.
+اربط السكربتات وCI بـ Codeg قيد التشغيل عبر `codeg-cli`، واحصل على الردود أو أحداث JSON.
 
-[التوثيق ←](https://docs.codeg.app/guide/workspace) · [Git وأشجار العمل ←](https://docs.codeg.app/guide/git)
+[التوثيق ←](https://docs.codeg.app/guide/command-line)
 
 </td>
-<td width="50%">
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../images/features/workspace-dark.gif" />
-  <img src="../images/features/workspace-light.gif" alt="الحلقة الهندسية الكاملة" width="100%" />
-</picture>
+<td width="50%" valign="middle">
+
+```bash
+codeg-cli -a codex \
+  -p "Review the latest commit"
+
+git diff | codeg-cli -a codex \
+  -p "Review this diff"
+```
+
 </td>
 </tr>
 </table>
 
 **ويتضمن أيضًا:**
 
+- **[الحلقة الهندسية الكاملة](https://docs.codeg.app/guide/workspace)** — محرر شيفرة وفروق مباشرة و[Git وأشجار العمل](https://docs.codeg.app/guide/git) ومحرر دمج بثلاث لوحات وطرفيات وعروض مقسّمة
 - **[لوحة المستودع](https://docs.codeg.app/guide/repository)** — المشكلات وطلبات السحب والفحوصات وعمليات الدمج لـ GitHub وGitLab وGitea وForgejo؛ ويمكن لأي مشكلة أو طلب سحب أن يتحول إلى مهمة قيد الانتظار
 - **[الأتمتة](https://docs.codeg.app/guide/automations)** — احفظ مربع الإدخال بإعداداته وشغّله بلا واجهة، وفق جدول cron أو عند الطلب
-- **[استخدام الرموز](https://docs.codeg.app/guide/token-usage)** — الاتجاهات، ونسبة إصابة التخزين المؤقت، وخريطة حرارية للنشاط، والاستخدام حسب المجلد والوكيل والنموذج والجلسة
+- **[استخدام الرموز](https://docs.codeg.app/guide/token-usage)** — الاتجاهات، ونسبة إصابة التخزين المؤقت، وخريطة حرارية للنشاط، والاستخدام حسب المجلد والوكيل والنموذج والجلسة، وما سيكلّفه ذلك بأسعار API المعلنة
 - **[التفريع والتوجيه](https://docs.codeg.app/guide/workspace#follow-along-%E2%80%94-the-conversation)** — مع الوكلاء الذين يدعمون ذلك، فرّع محادثة من رد مكتمل، أو أرسل رسالة إلى دورٍ لا يزال قيد التنفيذ
 - **[المهارات](https://docs.codeg.app/guide/skills) و[MCP](https://docs.codeg.app/guide/mcp)** — حزم مهارات لكل وكيل، وفحص MCP المحلي، والبحث في السجل والتثبيت منه
 - **[مُنشئ المشروع](https://docs.codeg.app/guide/project-boot)** — أنشئ مشروعًا جديدًا بصريًا، مع معاينة حية
-- **[اجعله على ذوقك](https://docs.codeg.app/reference/settings/appearance)** — اثنتا عشرة سمة يمكنك إعادة تلوينها رمزًا لونيًا تلو الآخر، وخلفيات، واستدارة الزوايا، وCSS مخصّص — بأيٍّ من لغات الواجهة العشر
+- **[الإشعارات](https://docs.codeg.app/reference/settings/general#desktop-notifications)** — إشعارات سطح المكتب، وأصوات التنبيه، وزر شريط مهام يومض أو أيقونة Dock تقفز عندما ينتهي دورٌ أو يحتاجك وكيل
+- **[اجعله على ذوقك](https://docs.codeg.app/reference/settings/appearance)** — اثنتا عشرة سمة يمكنك إعادة تلوينها رمزًا لونيًا تلو الآخر، وخلفيات، واستدارة الزوايا، وعرض المحادثة، وCSS مخصّص، وحيوان أليف على سطح المكتب — بأيٍّ من لغات الواجهة العشر
 - **[النسخ الاحتياطي والمزامنة](https://docs.codeg.app/reference/settings/system#backup-restore)** — نسخ احتياطية مشفّرة، ومزامنة الإعدادات بين الأجهزة عبر ملف أو خادم WebDAV الخاص بك
 - **[مخطط URL](../../docs/url-scheme.md)** — يفتح `codeg://session/<id>` محادثةً من تطبيق آخر (سطح المكتب)
 - **والمزيد** — يضيف كل إصدار تقريبًا شيئًا جديدًا؛ و[ملاحظات الإصدار](https://github.com/spacering-net/codeg/releases) هي القائمة الكاملة
 
 ## 🤖 الوكلاء المدعومون
 
-يتواصل Codeg مع كل وكيل عبر [Agent Client Protocol](https://agentclientprotocol.com)، فيحصل كلٌّ منهم على الواجهة المنظَّمة نفسها. ويأتي بخمسة عشر وكيلاً مدمجًا، يتولّى تثبيت معظمهم وتثبيت إصداراتهم وتحديثهم نيابةً عنك:
+يتواصل Codeg مع كل وكيل عبر [Agent Client Protocol](https://agentclientprotocol.com)، فيحصل كلٌّ منهم على الواجهة المنظَّمة نفسها. ويأتي بعشرين وكيلاً مدمجًا، يتولّى تثبيت معظمهم وتثبيت إصداراتهم وتحديثهم نيابةً عنك:
 
 <p>
   <a href="https://www.anthropic.com/claude-code"><kbd><img src="../images/agents/claude-code.svg" alt="" width="16" valign="middle" /> Claude Code</kbd></a> &nbsp;
@@ -285,12 +232,17 @@
   <a href="https://hermes-agent.nousresearch.com"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/hermes-agent-dark.svg" /><img src="../images/agents/hermes-agent.svg" alt="" width="16" valign="middle" /></picture> Hermes Agent</kbd></a> &nbsp;
   <a href="https://www.codebuddy.ai"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/codebuddy-dark.svg" /><img src="../images/agents/codebuddy.svg" alt="" width="16" valign="middle" /></picture> CodeBuddy</kbd></a> &nbsp;
   <a href="https://www.kimi.com/code"><kbd><img src="../images/agents/kimi-code.svg" alt="" width="16" valign="middle" /> Kimi Code</kbd></a> &nbsp;
+  <a href="../agents/minimax-code.md"><kbd><img src="../images/agents/minimax-code.svg" alt="" width="16" valign="middle" /> MiniMax Code</kbd></a> &nbsp;
   <a href="https://pi.dev"><kbd><img src="../images/agents/pi.svg" alt="" width="16" valign="middle" /> Pi</kbd></a> &nbsp;
   <a href="https://x.ai/cli"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/grok-dark.svg" /><img src="../images/agents/grok.svg" alt="" width="16" valign="middle" /></picture> Grok</kbd></a> &nbsp;
   <a href="https://cursor.com/cli"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/cursor-dark.svg" /><img src="../images/agents/cursor.svg" alt="" width="16" valign="middle" /></picture> Cursor</kbd></a> &nbsp;
   <a href="https://deepseek-harness.github.io/deepseek-harness/"><kbd><img src="../images/agents/deepseek-harness.svg" alt="" width="16" valign="middle" /> DeepSeek Harness</kbd></a> &nbsp;
   <a href="https://qoder.com"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/qoder-dark.svg" /><img src="../images/agents/qoder.svg" alt="" width="16" valign="middle" /></picture> Qoder</kbd></a> &nbsp;
   <a href="https://antigravity.google"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/google-antigravity-dark.svg" /><img src="../images/agents/google-antigravity.svg" alt="" width="16" valign="middle" /></picture> Google Antigravity</kbd></a> &nbsp;
+  <a href="https://kiro.dev/cli/"><kbd><img src="../images/agents/kiro.svg" alt="" width="16" valign="middle" /> Kiro CLI</kbd></a> &nbsp;
+  <a href="../agents/zcode.md"><kbd><img src="../images/agents/zcode.svg" alt="" width="16" valign="middle" /> ZCode</kbd></a> &nbsp;
+  <a href="https://docs.trae.cn/cli_about-trae-code-cli-2"><kbd><img src="../images/agents/trae.svg" alt="" width="16" valign="middle" /> TRAE CLI</kbd></a> &nbsp;
+  <a href="https://commandcode.ai"><kbd><img src="../images/agents/command-code.svg" alt="" width="16" valign="middle" /> Command Code</kbd></a> &nbsp;
   <a href="https://docs.codeg.app/guide/custom-agents"><kbd>+ أي وكيل ACP</kbd></a>
 </p>
 
@@ -317,8 +269,10 @@ $env:CODEG_STATIC_DIR="$env:LOCALAPPDATA\codeg-server\web"; codeg-server
 **Docker** — الخادم نفسه، داخل حاوية واحدة:
 
 ```bash
-docker run -d -p 3080:3080 -v codeg-data:/data ghcr.io/xintaofei/codeg:latest
+docker run -d -p 3080:3080 -v codeg-data:/data ghcr.io/spacering-net/codeg:latest
 ```
+
+في الحالتين، افتح `http://<host>:3080` في المتصفح وأدخل رمز الوصول الذي يطبعه الخادم عند بدء تشغيله (وفي الحاوية يعرضه `docker logs`)، أو عيّن `CODEG_TOKEN` لتختار رمزك بنفسك.
 
 **الهاتف واللوحي** — ثبّت [تطبيق iOS](https://apps.apple.com/app/codeg-client/id6785199071) أو [حزمة Android APK](https://github.com/xintaofei/codeg-android/releases/latest)، ثم وجّهه إلى **خدمة الويب** في تطبيق سطح المكتب أو إلى خادم `codeg-server` الخاص بك: العنوان والرمز، وانتهى الأمر. خطوات الاقتران في [التطبيقات المحمولة](https://docs.codeg.app/getting-started/installation#mobile-apps).
 
@@ -362,6 +316,8 @@ docker run -d -p 3080:3080 -v codeg-data:/data ghcr.io/xintaofei/codeg:latest
 - [Superpowers](https://github.com/obra/superpowers) — يُشغِّل وحدة مهارات الخبراء في Codeg
 - [OfficeCLI](https://github.com/iOfficeAI/OfficeCLI) — يُشغِّل سير عمل مستندات Office في Codeg
 - [scientific-agent-skills](https://github.com/K-Dense-AI/scientific-agent-skills) — يُشغِّل مهارات البحث العلمي في Codeg (مجموعة فرعية مرخّصة بموجب MIT)
+- [json-render](https://github.com/vercel-labs/json-render) — يُشغِّل بطاقات «عرض الواجهة» وجداولها ورسومها البيانية في Codeg
+- [cua-driver](https://github.com/trycua/cua) — يُشغِّل «استخدام الحاسوب» في Codeg
 
 ## 📜 الترخيص
 

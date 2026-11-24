@@ -7,8 +7,13 @@ import { useTaskContext } from "@/contexts/task-context"
 import { useConnection, type UseConnectionReturn } from "@/hooks/use-connection"
 import { extractAppCommandError } from "@/lib/app-error"
 import { notify } from "@/lib/notify"
-import { isConnectionBusy } from "@/lib/connection-teardown"
+import {
+  isConnectionBusy,
+  type ConnectionWork,
+} from "@/lib/connection-teardown"
 import { TurnBusyError } from "@/lib/turn-busy"
+import { ConversationMovedError } from "@/lib/conversation-moved"
+import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { type AgentType, type PromptDraft } from "@/lib/types"
 import { getAgentLabel } from "@/lib/custom-agents"
 
@@ -83,34 +88,42 @@ export interface UseConnectionLifecycleReturn {
        */
       onSendFailed?: (error: unknown) => void
     }
+  ) => Promise<void>
+  /** `saveAsDefault`: the pick also becomes the new-conversation default —
+   *  only for an explicit pick in a draft (codeg#1179). */
+  handleSetConfigOption: (
+    configId: string,
+    valueId: string,
+    opts?: { saveAsDefault?: boolean }
   ) => void
-  handleSetConfigOption: (configId: string, valueId: string) => void
   handleCancel: () => void
   handleRespondPermission: (requestId: string, optionId: string) => void
 }
 
 /**
  * Unmount-cleanup decision: disconnect unless this client OWNS a connection
- * that still has work in flight — a prompting turn, or launched-but-unresolved
- * background tasks (async sub-agents / background shells). Disconnecting an
- * owner kills the agent CLI, and the background work with it; busy owners are
- * left to the idle sweeps, which exempt them until the work settles (or the
- * backend max-age valve expires it). Viewers always tear down: their
- * disconnect only detaches (never kills the owner's agent), and the sweep
- * skips viewers so leaving one attached would leak its subscription.
+ * that still has work in flight — a prompting turn, launched-but-unresolved
+ * background tasks (async sub-agents / background shells, on either the
+ * watcher's count or the AIR task table), Remote Control, or a codeg
+ * delegation whose sub-agent is still running. Disconnecting an
+ * owner kills the agent CLI, and that work with it; busy owners are left to
+ * the idle sweeps, which exempt them until the work settles (or the backend
+ * max-age valve expires it). Viewers always tear down: their disconnect only
+ * detaches (never kills the owner's agent), and the sweep skips viewers so
+ * leaving one attached would leak its subscription.
  * EXCEPT on a transient unmount (tab reparented across split groups, not
  * closed): the remounted view re-attaches to the same connection, so neither
  * owners nor viewers tear down.
  * Shares `isConnectionBusy` with the preview-replacement release
- * (`disconnectIfIdle`) so the two teardown paths can't drift apart.
+ * (`disconnectIfIdle`) and the sweeps so the teardown paths can't drift apart.
  * Exported for tests.
  */
-export function shouldDisconnectOnUnmount(args: {
-  status: string | null
-  isViewer: boolean
-  backgroundOutstanding: number
-  transientUnmount?: boolean
-}): boolean {
+export function shouldDisconnectOnUnmount(
+  args: ConnectionWork & {
+    isViewer: boolean
+    transientUnmount?: boolean
+  }
+): boolean {
   if (args.transientUnmount) return false
   if (args.isViewer) return true
   return !isConnectionBusy(args)
@@ -137,7 +150,7 @@ export function useConnectionLifecycle({
   isTransientUnmount,
 }: UseConnectionLifecycleOptions): UseConnectionLifecycleReturn {
   const t = useTranslations("Folder.chat.connectionLifecycle")
-  const { setActiveKey, touchActivity } = useAcpActions()
+  const { setActiveKey, releaseActiveKey, touchActivity } = useAcpActions()
   const { addTask, updateTask, removeTask } = useTaskContext()
   const conn = useConnection(contextKey)
 
@@ -195,10 +208,28 @@ export function useConnectionLifecycle({
   useEffect(() => {
     isViewerRef.current = conn.isViewer
   }, [conn.isViewer])
-  const backgroundOutstandingRef = useRef(conn.backgroundOutstanding)
+  // The rest of what the unmount teardown gate weighs, kept whole: the gate's
+  // type names every kind of work, so one can't be dropped on the way here.
+  const {
+    backgroundOutstanding,
+    asyncTasks,
+    remoteControl,
+    delegatedChildren,
+  } = conn
+  const liveWorkRef = useRef({
+    backgroundOutstanding,
+    asyncTasks,
+    remoteControl,
+    delegatedChildren,
+  })
   useEffect(() => {
-    backgroundOutstandingRef.current = conn.backgroundOutstanding
-  }, [conn.backgroundOutstanding])
+    liveWorkRef.current = {
+      backgroundOutstanding,
+      asyncTasks,
+      remoteControl,
+      delegatedChildren,
+    }
+  }, [backgroundOutstanding, asyncTasks, remoteControl, delegatedChildren])
   const contextKeyRef = useRef(contextKey)
   useEffect(() => {
     contextKeyRef.current = contextKey
@@ -273,15 +304,23 @@ export function useConnectionLifecycle({
   //   "connecting" — `connect()` is in flight: agent spawn, ACP `initialize`,
   //                  then `session/resume|load|new`
   // (The third leg, session init after `connected`, has its own task below.)
-  // A task's label is fixed when it is added, so a leg change retires the old
-  // row and mints a new one rather than leaving stale wording on screen.
+  // A task's label is fixed when it is added, so a change to what it names
+  // retires the old row and mints a new one rather than leaving stale wording
+  // on screen. That is the leg, and also the agent: a draft can switch agents
+  // while it connects, and the status reads `connecting` straight through it.
+  // The agent named is the one actually coming up — the entry's own while one
+  // is there (the switch has yet to tear it down, or a failed preflight left
+  // it running), else the one asked for.
+  const connAgentType = conn.agentType
   const taskIdRef = useRef<string | null>(null)
-  const taskPhaseRef = useRef<"preparing" | "connecting" | null>(null)
+  const taskLabelKeyRef = useRef<string | null>(null)
   useEffect(() => {
     const phase =
       status === "connecting" ? "connecting" : preparing ? "preparing" : null
-    if (phase !== null && phase === taskPhaseRef.current) return
-    taskPhaseRef.current = phase
+    const taskAgentType = connAgentType ?? agentType
+    const labelKey = phase === null ? null : `${phase}:${taskAgentType}`
+    if (labelKey !== null && labelKey === taskLabelKeyRef.current) return
+    taskLabelKeyRef.current = labelKey
     if (taskIdRef.current) {
       const finished = taskIdRef.current
       taskIdRef.current = null
@@ -300,9 +339,11 @@ export function useConnectionLifecycle({
       }
     }
     if (phase === null) return
-    const id = `acp-${phase}-${Date.now()}`
+    // The agent is in the id too: a switch can retire a row and mint its
+    // replacement within the same millisecond.
+    const id = `acp-${phase}-${taskAgentType}-${Date.now()}`
     taskIdRef.current = id
-    const agent = getAgentLabel(agentType)
+    const agent = getAgentLabel(taskAgentType)
     addTask(
       id,
       phase === "connecting"
@@ -313,7 +354,16 @@ export function useConnectionLifecycle({
         : t("tasks.preparingDescription")
     )
     updateTask(id, { status: "running" })
-  }, [status, preparing, addTask, updateTask, removeTask, agentType, t])
+  }, [
+    status,
+    preparing,
+    addTask,
+    updateTask,
+    removeTask,
+    agentType,
+    connAgentType,
+    t,
+  ])
 
   const clearSelectorTask = useCallback(() => {
     if (selectorTaskIdRef.current) {
@@ -361,6 +411,10 @@ export function useConnectionLifecycle({
   useEffect(() => {
     connDisconnectRef.current = connDisconnect
   }, [connDisconnect])
+  const releaseActiveKeyRef = useRef(releaseActiveKey)
+  useEffect(() => {
+    releaseActiveKeyRef.current = releaseActiveKey
+  }, [releaseActiveKey])
   const isTransientUnmountRef = useRef(isTransientUnmount)
   useEffect(() => {
     isTransientUnmountRef.current = isTransientUnmount
@@ -373,13 +427,15 @@ export function useConnectionLifecycle({
   // will clean it up once it transitions back to "connected".
   useEffect(() => {
     return () => {
+      const transientUnmount = isTransientUnmountRef.current?.() === true
       // Owners keep a prompting agent alive in the background to finish the
       // turn (the idle sweep reclaims it once it returns to "connected"), and
-      // likewise while background work is still outstanding (async sub-agents
-      // / background shells) — disconnecting kills the agent CLI and the
-      // background work with it. Both sweeps already exempt such connections;
-      // once the work settles (or the max-age valve expires it) outstanding
-      // drops to 0 and the normal idle sweep reclaims the connection.
+      // likewise while background work is still live (async sub-agents /
+      // background shells / monitors, Remote Control, delegated codeg
+      // sub-agents) — disconnecting kills the agent CLI and that work with
+      // it. Both sweeps already exempt such connections; once the work
+      // settles (or the max-age valve expires it) the normal idle sweep
+      // reclaims the connection.
       // Viewers are different: disconnect() only DETACHES them (it never
       // acpDisconnects — that belongs to the owner), so tearing a viewer down
       // mid-turn is safe and leaves the owner's agent untouched. And it's
@@ -387,14 +443,20 @@ export function useConnectionLifecycle({
       // here would leak its WS subscription until the whole provider unmounts.
       if (
         shouldDisconnectOnUnmount({
+          ...liveWorkRef.current,
           status: statusRef.current,
           isViewer: isViewerRef.current,
-          backgroundOutstanding: backgroundOutstandingRef.current,
-          transientUnmount: isTransientUnmountRef.current?.() === true,
+          transientUnmount,
         })
       ) {
-        connDisconnectRef.current().catch(() => {})
+        connDisconnectRef.current(true).catch(() => {})
       }
+      // The active key names the view on screen, and this one is gone. Left
+      // claimed, it would hold the busy owner kept running above out of both
+      // sweeps for good: the keepalive touches the active key and the idle
+      // sweep skips it. Not on a transient unmount — the remounted view claims
+      // the same key, and a release that landed after its claim would undo it.
+      if (!transientUnmount) releaseActiveKeyRef.current(contextKeyRef.current)
       // Task cleanup stays unconditional even on transient unmounts — the
       // remounted instance mints fresh task ids, so stale ones would orphan.
       if (taskIdRef.current) {
@@ -432,13 +494,24 @@ export function useConnectionLifecycle({
     touchActivity,
   ])
 
+  // Why connecting failed, for the composer's inline banner. The auto-connect's
+  // own rejection says it first; a request parked behind another in-flight
+  // connect never rejects to it (its promise resolves at once, and the run
+  // that fails comes later), so fall back to what the provider published for
+  // this key — the record the toast and the status chip show — as long as it
+  // names the agent this surface wants. `detail ?? title` is the text that
+  // request would have rejected with.
+  const publishedConnectError =
+    conn.connectError?.agentType === agentType ? conn.connectError : null
   const autoConnectError =
     status === "connected" || status === "prompting"
       ? null
       : lastAutoConnectError?.contextKey === contextKey &&
           lastAutoConnectError.agentType === agentType
         ? lastAutoConnectError.message
-        : null
+        : publishedConnectError
+          ? (publishedConnectError.detail ?? publishedConnectError.title)
+          : null
 
   // sendPrompt, connCancel, connRespondPermission are stable (depend
   // only on actions + contextKey), so these callbacks are effectively stable.
@@ -457,7 +530,9 @@ export function useConnectionLifecycle({
       touchActivity(contextKey)
       const onTurnInProgress = opts?.onTurnInProgress
       const onSendFailed = opts?.onSendFailed
-      void (async () => {
+      // Returned (handled: it never rejects) so a draft's first send can hold
+      // its selector lock until the prompt was acknowledged or failed.
+      return (async () => {
         const currentModeId = modeIdRef.current
         if (modeId && modeId !== currentModeId) {
           await connSetMode(modeId)
@@ -473,6 +548,27 @@ export function useConnectionLifecycle({
           // observed yet). Not an error — the draft is re-queued by the caller
           // so it auto-sends when the current turn finishes.
           onTurnInProgress?.()
+          return
+        }
+        if (e instanceof ConversationMovedError) {
+          // The conversation was moved to another project and this connection
+          // still runs in the folder it left. Say where it went and pull the
+          // rows: the tab follows its row to the new folder, which reconnects
+          // the agent there. The message is not resent on its own — the user
+          // sends it again from the new folder.
+          const folder =
+            e.folderId != null
+              ? useAppWorkspaceStore.getState().getFolder(e.folderId)
+              : undefined
+          notify({
+            level: "warning",
+            key: `conversation-moved:${contextKey}`,
+            title: t("errors.conversationMoved", {
+              folder: folder?.alias || folder?.name || "",
+            }),
+          })
+          void useAppWorkspaceStore.getState().refreshConversations()
+          onSendFailed?.(e)
           return
         }
         console.error("[ConnLifecycle] sendPrompt:", e)
@@ -507,13 +603,20 @@ export function useConnectionLifecycle({
   }, [connCancel])
 
   const handleSetConfigOption = useCallback(
-    (configId: string, valueId: string) => {
+    (configId: string, valueId: string, opts?: { saveAsDefault?: boolean }) => {
+      // The connection here still belongs to another agent (a draft mid-switch,
+      // or one whose new pick could not connect), so the options on screen are
+      // the selected agent's cached ones. Applying the edit would hand the
+      // other agent a value from a list that isn't its own, and file it under
+      // that agent's saved preferences. Dropped, as an edit is when there is
+      // no connection here at all.
+      if (connAgentType != null && connAgentType !== agentType) return
       touchActivity(contextKey)
-      connSetConfigOption(configId, valueId).catch((e: unknown) =>
+      connSetConfigOption(configId, valueId, opts).catch((e: unknown) =>
         console.error("[ConnLifecycle] setConfigOption:", e)
       )
     },
-    [connSetConfigOption, contextKey, touchActivity]
+    [agentType, connAgentType, connSetConfigOption, contextKey, touchActivity]
   )
 
   const handleRespondPermission = useCallback(

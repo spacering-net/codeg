@@ -1,5 +1,18 @@
+import { act, renderHook } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { ConversationBranchTag, ConversationTagDetail } from "@/lib/types"
+
+/** `subscribe` resolves when the test says the subscription is live. */
+const platform = vi.hoisted(() => ({
+  live: null as (() => void) | null,
+}))
+vi.mock("@/lib/platform", () => ({
+  subscribe: () =>
+    new Promise<() => void>((resolve) => {
+      platform.live = () => resolve(() => {})
+    }),
+  onTransportReconnect: () => () => {},
+}))
 
 vi.mock("@/lib/api", () => ({
   listConversationTags: vi.fn(async () => []),
@@ -12,8 +25,11 @@ vi.mock("@/lib/api", () => ({
 }))
 
 const api = await import("@/lib/api")
-const { resetConversationTagsStore, useConversationTagsStore } =
-  await import("./conversation-tags-store")
+const {
+  resetConversationTagsStore,
+  useConversationTagsStore,
+  useConversationTagsSync,
+} = await import("./conversation-tags-store")
 
 function tag(
   id: number,
@@ -188,6 +204,56 @@ describe("conversation tags store — reorderScope", () => {
       useConversationTagsStore.getState().reorderScope([2, 1])
     ).rejects.toThrow("nope")
     await vi.waitFor(() => expect(ids()).toEqual([1, 2]))
+  })
+
+  it("sends reorders one at a time, so a later move cannot be lost", async () => {
+    const store = useConversationTagsStore.getState()
+    for (const id of [1, 2, 3]) {
+      store.applyChange({ kind: "upsert", tag: tag(id, { sort_order: id }) })
+    }
+    const first = deferred<void>()
+    const second = deferred<void>()
+    vi.mocked(api.reorderConversationTags)
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+
+    const one = useConversationTagsStore.getState().reorderScope([2, 1, 3])
+    await Promise.resolve()
+    const two = useConversationTagsStore.getState().reorderScope([2, 3, 1])
+    await Promise.resolve()
+    // The second waits for the first, so the backend sees them in order.
+    expect(api.reorderConversationTags).toHaveBeenCalledTimes(1)
+    expect(ids()).toEqual([2, 3, 1])
+
+    first.resolve()
+    await one
+    await vi.waitFor(() =>
+      expect(api.reorderConversationTags).toHaveBeenCalledTimes(2)
+    )
+    expect(api.reorderConversationTags).toHaveBeenLastCalledWith([2, 3, 1])
+    second.resolve()
+    await two
+  })
+})
+
+describe("conversation tags store — sync", () => {
+  it("reads only once broadcasts reach the window", async () => {
+    vi.mocked(api.getConversationBranchTag).mockResolvedValue(OFF)
+    const { unmount } = renderHook(() => useConversationTagsSync())
+    await act(async () => {
+      await Promise.resolve()
+    })
+    // A read now could miss a write that lands before the subscription.
+    expect(api.listConversationTags).not.toHaveBeenCalled()
+    expect(api.getConversationBranchTag).not.toHaveBeenCalled()
+    await act(async () => {
+      platform.live?.()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(api.listConversationTags).toHaveBeenCalledTimes(1)
+    expect(api.getConversationBranchTag).toHaveBeenCalledTimes(1)
+    unmount()
   })
 })
 

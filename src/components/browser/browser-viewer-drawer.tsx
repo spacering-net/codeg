@@ -16,6 +16,7 @@ import {
   useWorkspaceActions,
   useWorkspaceFileTabs,
 } from "@/contexts/workspace-context"
+import { useHistoryBackDismiss } from "@/hooks/use-history-back-dismiss"
 import { normalizeUrlForDedupe } from "@/lib/browser/browser-url"
 import {
   DEFAULT_BROWSER_PROFILE_ID,
@@ -75,6 +76,9 @@ export function BrowserViewerDrawer({
   onOpenChange: (open: boolean) => void
 }) {
   const t = useTranslations("Browser.drawer")
+  // The drawer is a state toggle, not a route: without a history entry behind
+  // it, the back gesture unloads the whole page instead of closing the panel.
+  useHistoryBackDismiss(open, () => onOpenChange(false))
   return (
     <Drawer open={open} onOpenChange={onOpenChange} swipeDirection="right">
       <DrawerContent
@@ -113,7 +117,8 @@ function BrowserViewerBody({
 }) {
   const t = useTranslations("Browser.drawer")
   const { openBrowserTab, switchFileTab } = useWorkspaceActions()
-  const { fileTabs } = useWorkspaceFileTabs()
+  const { fileTabs: visibleFileTabs, allFileTabs } = useWorkspaceFileTabs()
+  const fileTabs = allFileTabs ?? visibleFileTabs
   const route = useOptionalWorkbenchRoute()
 
   // Open (or re-use) the workspace tab without activating the file column,

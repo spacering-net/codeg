@@ -40,8 +40,8 @@ export const CollapsibleSystemMessage = memo(function CollapsibleSystemMessage({
   const clipped = !expanded
 
   return (
-    <div className="w-full overflow-hidden rounded-md border border-yellow-500/30 bg-yellow-500/5 text-sm">
-      <div className="flex items-center gap-1.5 border-b border-yellow-500/20 bg-yellow-500/10 px-3 py-2 text-xs font-medium text-yellow-700 dark:text-yellow-400">
+    <div className="w-full overflow-hidden rounded-md border border-tone-warning/30 bg-tone-warning/5 text-sm">
+      <div className="flex items-center gap-1.5 border-b border-tone-warning/20 bg-tone-warning/10 px-3 py-2 text-xs font-medium text-tone-warning">
         <Info className="size-3.5 shrink-0" />
         {t("systemMessage")}
       </div>
@@ -64,7 +64,7 @@ export const CollapsibleSystemMessage = memo(function CollapsibleSystemMessage({
           onClick={toggle}
           aria-expanded={expanded}
           aria-controls={contentId}
-          className="flex w-full items-center justify-center gap-1 border-t border-yellow-500/20 px-3 py-1.5 text-xs font-medium text-yellow-700/90 transition-colors hover:bg-yellow-500/10 dark:text-yellow-400/90"
+          className="flex w-full items-center justify-center gap-1 border-t border-tone-warning/20 px-3 py-1.5 text-xs font-medium text-tone-warning/90 transition-colors hover:bg-tone-warning/10"
         >
           {expanded ? t("showLess") : t("showMore")}
           {expanded ? (

@@ -48,14 +48,19 @@ export function ConflictDialog({
   const open = conflictInfo !== null
   const operation = conflictInfo?.operation ?? "merge"
 
-  // Initialize conflict files from conflictInfo
-  useEffect(() => {
+  // Initialize conflict files from conflictInfo. Adjusted during render
+  // (React's "reset state on prop change" pattern); `prevConflictInfo` starts
+  // null so a dialog mounted already open initializes on its first render.
+  const [prevConflictInfo, setPrevConflictInfo] =
+    useState<GitConflictInfo | null>(null)
+  if (conflictInfo !== prevConflictInfo) {
+    setPrevConflictInfo(conflictInfo)
     if (conflictInfo) {
       setConflictedFiles(conflictInfo.conflicted_files)
       setResolvedFiles(new Set())
       setDone(false)
     }
-  }, [conflictInfo])
+  }
 
   // Refresh conflict list to detect resolved files
   const refreshConflicts = useCallback(async () => {

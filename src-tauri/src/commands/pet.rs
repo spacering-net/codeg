@@ -242,6 +242,7 @@ pub async fn pet_list_active_sessions_core(
                 }
             }
             entry.title = summary.title.unwrap_or_default();
+            entry.assistant_name = summary.assistant_name;
         }
         entries.push(entry);
     }
@@ -258,6 +259,15 @@ pub async fn pet_save_window_state_core(
     }
     if let Some(y) = patch.y {
         config.y = Some(y);
+    }
+    // The scale factor only means something next to the `(x, y)` it was
+    // captured with: any patch that moves the origin replaces it, so an origin
+    // written without one (or with an invalid one) never inherits a stale
+    // factor from an earlier position and is restored via the legacy path.
+    if patch.x.is_some() || patch.y.is_some() {
+        config.position_scale_factor = patch
+            .position_scale_factor
+            .filter(|sf| sf.is_finite() && *sf > 0.0);
     }
     if let Some(scale) = patch.scale {
         config.scale = scale.clamp(0.5, 3.0);
@@ -479,7 +489,7 @@ pub async fn pet_set_active(
     db: tauri::State<'_, AppDatabase>,
     pet_id: Option<String>,
 ) -> Result<PetWindowConfig, AppCommandError> {
-    pet_set_active_core(&db.conn, &EventEmitter::Tauri(app), pet_id).await
+    pet_set_active_core(&db.conn, &EventEmitter::from_app(&app), pet_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -488,7 +498,7 @@ pub async fn pet_celebrate(
     app: tauri::AppHandle,
     kind: PetCelebrationKind,
 ) -> Result<(), AppCommandError> {
-    pet_celebrate_core(&EventEmitter::Tauri(app), kind);
+    pet_celebrate_core(&EventEmitter::from_app(&app), kind);
     Ok(())
 }
 
@@ -526,6 +536,7 @@ pub async fn pet_save_window_state(
         PetWindowStatePatch {
             x,
             y,
+            position_scale_factor: None,
             scale,
             always_on_top,
             enabled,
@@ -538,9 +549,14 @@ pub async fn pet_save_window_state(
     // inside an unchanged transparent window — a 0.5x sprite floating in a
     // 1x window's worth of dead pixels that still capture clicks.
     if scale_changed {
-        if let Some(window) = tauri::Manager::get_webview_window(&app, "pet") {
+        if let Some(window) =
+            tauri::Manager::get_webview_window(&app, crate::commands::windows::PET_WINDOW_LABEL)
+        {
             let s = new_config.scale;
-            let _ = window.set_size(tauri::LogicalSize::new(192.0_f64 * s, 208.0_f64 * s));
+            let _ = window.set_size(tauri::LogicalSize::new(
+                crate::commands::windows::PET_BASE_WIDTH * s,
+                crate::commands::windows::PET_BASE_HEIGHT * s,
+            ));
         }
     }
 
@@ -569,7 +585,7 @@ mod tests {
             y: Some(99.0),
             scale: Some(1.5),
             always_on_top: Some(true),
-            enabled: None,
+            ..Default::default()
         };
         let cfg = pet_save_window_state_core(&db.conn, patch)
             .await
@@ -581,11 +597,8 @@ mod tests {
 
         // Subsequent partial patch leaves untouched fields alone.
         let patch2 = PetWindowStatePatch {
-            x: None,
-            y: None,
             scale: Some(2.0),
-            always_on_top: None,
-            enabled: None,
+            ..Default::default()
         };
         let cfg2 = pet_save_window_state_core(&db.conn, patch2)
             .await
@@ -598,11 +611,8 @@ mod tests {
     async fn pet_save_window_state_clamps_scale_to_valid_range() {
         let db = fresh_in_memory_db().await;
         let patch_too_large = PetWindowStatePatch {
-            x: None,
-            y: None,
             scale: Some(10.0),
-            always_on_top: None,
-            enabled: None,
+            ..Default::default()
         };
         let cfg = pet_save_window_state_core(&db.conn, patch_too_large)
             .await
@@ -610,16 +620,70 @@ mod tests {
         assert_eq!(cfg.scale, 3.0, "scale clamped to upper bound");
 
         let patch_too_small = PetWindowStatePatch {
-            x: None,
-            y: None,
             scale: Some(0.1),
-            always_on_top: None,
-            enabled: None,
+            ..Default::default()
         };
         let cfg2 = pet_save_window_state_core(&db.conn, patch_too_small)
             .await
             .expect("save 2");
         assert_eq!(cfg2.scale, 0.5, "scale clamped to lower bound");
+    }
+
+    #[tokio::test]
+    async fn pet_save_window_state_keeps_scale_factor_paired_with_origin() {
+        let db = fresh_in_memory_db().await;
+        let cfg = pet_save_window_state_core(
+            &db.conn,
+            PetWindowStatePatch {
+                x: Some(1800.0),
+                y: Some(500.0),
+                position_scale_factor: Some(1.0),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("save");
+        assert_eq!(cfg.position_scale_factor, Some(1.0));
+
+        // A patch that leaves the origin alone keeps its factor.
+        let cfg = pet_save_window_state_core(
+            &db.conn,
+            PetWindowStatePatch {
+                scale: Some(1.0),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("save 2");
+        assert_eq!(cfg.position_scale_factor, Some(1.0));
+
+        // A new origin without a factor must not inherit the old one.
+        let cfg = pet_save_window_state_core(
+            &db.conn,
+            PetWindowStatePatch {
+                x: Some(100.0),
+                y: Some(100.0),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("save 3");
+        assert_eq!(cfg.x, Some(100.0));
+        assert_eq!(cfg.position_scale_factor, None);
+
+        // An invalid factor is dropped rather than stored.
+        let cfg = pet_save_window_state_core(
+            &db.conn,
+            PetWindowStatePatch {
+                x: Some(200.0),
+                y: Some(200.0),
+                position_scale_factor: Some(f64::NAN),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("save 4");
+        assert_eq!(cfg.position_scale_factor, None);
     }
 
     /// A parent conversation + a delegated child of it, each on its own live
@@ -662,6 +726,7 @@ mod tests {
                 parent_conversation_id: parent.id,
                 parent_tool_use_id: "tu-1".into(),
                 delegation_call_id: "call-1".into(),
+                assistant: None,
             }),
         )
         .await

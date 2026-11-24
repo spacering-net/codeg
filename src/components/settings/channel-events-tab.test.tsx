@@ -7,6 +7,8 @@ vi.mock("@/lib/api", () => ({
   setChatEventFilter: vi.fn(),
   getChatEventWebhooks: vi.fn(),
   setChatEventWebhooks: vi.fn(),
+  getChatEventTopLevelOnly: vi.fn(),
+  setChatEventTopLevelOnly: vi.fn(),
 }))
 
 vi.mock("sonner", () => ({
@@ -20,8 +22,10 @@ import { ChannelEventsTab, isValidWebhookUrl } from "./channel-events-tab"
 import enMessages from "@/i18n/messages/en.json"
 import {
   getChatEventFilter,
+  getChatEventTopLevelOnly,
   getChatEventWebhooks,
   setChatEventFilter,
+  setChatEventTopLevelOnly,
   setChatEventWebhooks,
 } from "@/lib/api"
 import { toast } from "sonner"
@@ -31,6 +35,8 @@ const mockGetFilter = vi.mocked(getChatEventFilter)
 const mockSetFilter = vi.mocked(setChatEventFilter)
 const mockGetWebhooks = vi.mocked(getChatEventWebhooks)
 const mockSetWebhooks = vi.mocked(setChatEventWebhooks)
+const mockGetTopLevelOnly = vi.mocked(getChatEventTopLevelOnly)
+const mockSetTopLevelOnly = vi.mocked(setChatEventTopLevelOnly)
 
 function renderTab() {
   return render(
@@ -50,6 +56,8 @@ beforeEach(() => {
   mockSetFilter.mockResolvedValue(undefined)
   mockGetWebhooks.mockResolvedValue([])
   mockSetWebhooks.mockResolvedValue(undefined)
+  mockGetTopLevelOnly.mockResolvedValue(false)
+  mockSetTopLevelOnly.mockResolvedValue(undefined)
 })
 
 describe("ChannelEventsTab event filter (opt-in user_prompt_sent)", () => {
@@ -107,6 +115,37 @@ describe("ChannelEventsTab event filter (opt-in user_prompt_sent)", () => {
     fireEvent.click(screen.getByRole("switch", { name: "User Message" }))
 
     await waitFor(() => expect(mockSetFilter).toHaveBeenCalledWith(null))
+  })
+})
+
+describe("ChannelEventsTab top-level sessions only", () => {
+  it("reflects the stored setting and persists a toggle", async () => {
+    mockGetTopLevelOnly.mockResolvedValue(true)
+    renderTab()
+    const toggle = await screen.findByRole("switch", {
+      name: "Top-level sessions only",
+    })
+    expect(toggle).toBeChecked()
+
+    fireEvent.click(toggle)
+
+    await waitFor(() => expect(mockSetTopLevelOnly).toHaveBeenCalledWith(false))
+    await waitFor(() => expect(toggle).not.toBeChecked())
+    // It is its own setting: the event filter is not rewritten.
+    expect(mockSetFilter).not.toHaveBeenCalled()
+  })
+
+  it("keeps the switch unchanged when the save fails", async () => {
+    mockSetTopLevelOnly.mockRejectedValue(new Error("boom"))
+    renderTab()
+    const toggle = await screen.findByRole("switch", {
+      name: "Top-level sessions only",
+    })
+
+    fireEvent.click(toggle)
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled())
+    expect(toggle).not.toBeChecked()
   })
 })
 

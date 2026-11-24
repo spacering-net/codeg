@@ -8,7 +8,7 @@
  * profile chip, the overflow menu.
  *
  * Circular, like the tab strip's buttons directly above this row
- * (`STRIP_ICON_BTN` in `file-workspace-tab-bar.tsx`). The toolbar is the file
+ * (`STRIP_ICON_BTN` in `tabs/strip-icon-button.ts`). The toolbar is the file
  * column's top row, so the two are stacked with nothing between them, and a
  * row of 4px-cornered squares under a row of circles reads as two unrelated
  * toolbars. The width override on the profile chip turns the same class into a

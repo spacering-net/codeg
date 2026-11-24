@@ -125,11 +125,12 @@ function persist(all: Map<string, Map<string, string>>) {
  * The agent's model selector, as a flat option list.
  *
  * The exact id wins over [`isModelConfigOption`] on purpose: that helper also
- * matches `category === "model"`, which qoder hangs its `reasoning_effort`
- * selector off — and `low` / `high` / `max` are not model ids, so folding them
- * into a map keyed by one is just wrong. The category signal stays as the
- * fallback for an agent that names its model option something else, which is
- * the same pair the backend matches on (`connection.rs::is_model_config_option`).
+ * matches `category === "model"`, which qoder hung its `reasoning_effort`
+ * selector off through 1.1.66 (1.1.67 moved it to `thought_level`) — and
+ * `low` / `high` / `max` are not model ids, so folding them into a map keyed
+ * by one is just wrong. The category signal stays as the fallback for an agent
+ * that names its model option something else, which is the same pair the
+ * backend matches on (`connection.rs::is_model_config_option`).
  *
  * Grouped selectors need no special case: the backend flattens every group into
  * `kind.options` and repeats the grouping in `kind.groups`.

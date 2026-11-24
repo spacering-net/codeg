@@ -19,6 +19,7 @@ import {
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
+import { ProviderModelsRefreshButton } from "@/components/settings/provider-models"
 import {
   Combobox,
   ComboboxContent,
@@ -431,6 +432,7 @@ export function CursorConfigPanel({
   // Probe on mount and whenever the method changes (the ref above is updated
   // first, so the probe sees the right credential for the new mode).
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- auth probe against the CLI; the loader flips its loading flag first
     void refreshAuth()
   }, [refreshAuth, mode])
 
@@ -472,12 +474,16 @@ export function CursorConfigPanel({
   useEffect(() => {
     if (authState !== "ok") return
     if (modelsLoaded || modelsLoading) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- model list fetch; the loader flips its loading flag first
     void loadModels()
   }, [authState, loadModels, modelsLoaded, modelsLoading])
 
   // Reset the "loaded" latch when the method changes so the effect above
-  // re-probes the model list for the newly-selected credential.
+  // re-probes the model list for the newly-selected credential. Kept as an
+  // effect: it must run after the auth probe above has flipped `authLoading`,
+  // or the model fetch would fire against the previous method's auth state.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- ordered after the auth-probe effect, see above
     setModelsLoaded(false)
     setModels([])
     setModelsError(null)
@@ -842,21 +848,11 @@ export function CursorConfigPanel({
             <span className="text-2xs font-medium">
               {t("cursor.modelTitle")}
             </span>
-            <Button
-              className="h-6 gap-1 px-2 text-2xs"
-              disabled={modelsLoading}
-              onClick={() => void loadModels()}
-              size="sm"
-              type="button"
-              variant="ghost"
-            >
-              {modelsLoading ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
-              ) : (
-                <RefreshCw className="h-3 w-3" />
-              )}
-              {t("cursor.loadModels")}
-            </Button>
+            <ProviderModelsRefreshButton
+              fetching={modelsLoading}
+              onRefresh={() => void loadModels()}
+              label={t("cursor.loadModels")}
+            />
           </div>
           <Combobox
             key={currentBase || UNSET}

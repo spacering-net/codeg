@@ -53,7 +53,8 @@ export function resetBrowserTabsPersistenceForTests(): void {
  */
 export function BrowserTabsPersistence() {
   const { restoreBrowserTabs } = useWorkspaceActions()
-  const { fileTabs } = useWorkspaceFileTabs()
+  const { fileTabs: visibleFileTabs, allFileTabs } = useWorkspaceFileTabs()
+  const fileTabs = allFileTabs ?? visibleFileTabs
   const [ready, setReady] = useState(false)
   // Latest-state mirror for the timers below (synced post-commit, like the
   // workspace provider does for its own action callbacks).

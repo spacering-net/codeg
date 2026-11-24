@@ -57,6 +57,16 @@ export interface ParsedPermissionToolCall {
    * must never read as "this ask is dangerous".
    */
   defaultToNo: boolean
+  /**
+   * The host a Claude Code sandbox asks to let a command reach —
+   * claude-agent-acp's `SandboxNetworkAccess {host}` request, the CLI's
+   * "Network request outside of sandbox". Read only when the request names
+   * that tool in `_meta.claudeCode.toolName`, which the adapter leaves off a
+   * request and the connection store copies over from the live call it is
+   * about (`mergePermissionToolCallWithLiveInfo`); an input that merely has a
+   * `host` is someone else's. Null for every other request.
+   */
+  networkHost: string | null
   normalizedKind: string
   command: string | null
   cwd: string | null
@@ -75,6 +85,9 @@ export interface ParsedPermissionToolCall {
   contentText: string | null
   jsonPreview: string
 }
+
+/** Claude Code's name for a sandbox's network request (see `networkHost`). */
+const SANDBOX_NETWORK_TOOL = "SandboxNetworkAccess"
 
 function asObject(value: unknown): ObjectLike | null {
   if (!value) return null
@@ -920,11 +933,18 @@ export function parsePermissionToolCall(
     "defaultToNo"
   )
 
+  const networkHost =
+    pickString(asObject(pickValue(metaObj, ["claudeCode"])), ["toolName"]) ===
+    SANDBOX_NETWORK_TOOL
+      ? pickString(rawInputObj, ["host"])
+      : null
+
   return {
     title,
     description,
     reason,
     defaultToNo,
+    networkHost,
     normalizedKind,
     command,
     cwd,

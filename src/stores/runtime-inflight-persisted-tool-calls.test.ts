@@ -110,6 +110,7 @@ function seedSession(
     localTurns,
     backgroundTurns: [],
     pendingBackgroundSettlements: [],
+    pendingCancelledTurnReports: null,
     optimisticTurns: [],
     liveMessage: liveMessage ?? null,
     syncState: "idle" as const,

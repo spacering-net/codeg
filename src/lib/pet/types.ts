@@ -163,6 +163,9 @@ export interface PetSessionEntry {
   pending?: PetPermissionSummary
   /** Present iff this row is a delegation sub-agent (see `PetParentRef`). */
   parent?: PetParentRef
+  /** The assistant a delegation sub-agent runs as, by the name it started
+   *  with. Mirrors Rust `PetSessionEntry.assistant_name`. */
+  assistantName?: string
 }
 
 /** Aggregate payload for the `pet://sessions` event + `pet_list_active_sessions`

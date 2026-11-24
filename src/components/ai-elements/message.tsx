@@ -29,14 +29,19 @@ import {
   defaultRemarkPlugins,
 } from "streamdown"
 import { markdownLinkComponents } from "./markdown-link"
+import { messageBlockComponents, useAssistantReply } from "./json-render-pre"
+import { useChatHtmlEnabled } from "@/lib/chat-html-prefs"
+import { createChatHtmlProcessor } from "@/lib/chat-html-markdown"
+import { scrollportComponents } from "./markdown-scrollport"
 import { maskLiteralSpans } from "./markdown-mask"
-import { mermaidComponents } from "./mermaid-block"
+import { normalizeInlineDollarMath } from "./inline-dollar-math"
 import { rehypePluginsAllowingCodeg } from "./rehype-allow-codeg"
 import { remarkTrimCjkAutolinkTail } from "./remark-cjk-autolink-tail"
 import { withRelativeFileLinks } from "./rehype-relative-file-links"
 import { remarkRewriteFileUriLinks } from "./remark-file-uri-links"
 import { remarkRestoreWindowsPaths } from "./remark-windows-paths"
 import { remarkLocalImages } from "./remark-local-images"
+import { rehypeListDirection } from "./rehype-list-direction"
 import { markdownLocalImageComponents } from "./markdown-local-image"
 import { MATH_FENCE_PAD, useStreamdownPlugins } from "./streamdown-plugins"
 
@@ -76,8 +81,11 @@ export const MessageContent = ({
       // with a hairline ring (fixed `--ws-msg-alpha` + backdrop blur — see
       // globals.css, scoped to `.is-user`) so it stays legible over a busy
       // background. Off / assistant messages: inert (no base rule, no `.is-user`
-      // ancestor).
-      "group-[.is-user]:ml-auto group-[.is-user]:w-fit group-[.is-user]:max-w-full group-[.is-user]:rounded-lg group-[.is-user]:bg-secondary group-[.is-user]:px-4 group-[.is-user]:py-3 group-[.is-user]:text-foreground ws-msg-secondary",
+      // ancestor). Its radius is half a one-line bubble's height at the
+      // default `--radius` (2.2 × 0.625rem against 0.75rem + 1.25rem +
+      // 0.75rem), so a line is a capsule and a longer message keeps the same
+      // round corners.
+      "group-[.is-user]:ml-auto group-[.is-user]:w-fit group-[.is-user]:max-w-full group-[.is-user]:rounded-3xl group-[.is-user]:bg-secondary group-[.is-user]:px-4 group-[.is-user]:py-3 group-[.is-user]:text-foreground ws-msg-secondary",
       "group-[.is-assistant]:w-full group-[.is-assistant]:text-foreground",
       className
     )}
@@ -348,11 +356,15 @@ export const MessageBranchPage = ({
 // use it — they render as plain text + reference badges via PlainTextWithBadges
 // (see message/plain-text-with-badges.tsx) — so the former user-only `softBreaks`
 // / `/slash`-badging hooks were removed.
-export type MessageResponseProps = ComponentProps<typeof Streamdown>
+export type MessageResponseProps = ComponentProps<typeof Streamdown> & {
+  /** Extend parsing while retaining the shared Markdown pipeline. */
+  additionalRemarkPlugins?: ComponentProps<typeof Streamdown>["remarkPlugins"]
+}
 
 // remark-math uses dollar delimiters. `\[...\]` / `\(...\)` are rewritten
 // to `$$...$$`. Single-dollar `$...$` is disabled (`singleDollarTextMath:
 // false`) so currency (`$9.99`) and shell vars (`$HOME`, `$1`) stay prose.
+// Only tightly delimited single-dollar formulas are normalized explicitly.
 //
 // A single-line `$$x$$` inside a paragraph stays *inline* math (mdast tags
 // every math-text node `math-inline` regardless of dollar count). The one
@@ -396,7 +408,7 @@ export function normalizeMathDelimiters(text: string): string {
       const open = atContentStart ? MATH_FENCE_PAD : ""
       return `${open}$$${inner}${MATH_FENCE_PAD}$$`
     })
-  return restore(normalized)
+  return normalizeInlineDollarMath(restore(normalized))
 }
 
 function isSpaceOrTab(code: number): boolean {
@@ -481,9 +493,10 @@ const remarkPlugins = [
 // …and relative local links (`./a.md`, `src/a.md`, `~/a.md`) keep their href
 // through harden, which would otherwise flatten them to a root path or block
 // them. See rehype-relative-file-links.
-const rehypePlugins = rehypePluginsAllowingCodeg(
-  withRelativeFileLinks(defaultRehypePlugins)
-)
+const rehypePlugins = [
+  ...rehypePluginsAllowingCodeg(withRelativeFileLinks(defaultRehypePlugins)),
+  rehypeListDirection,
+]
 
 /**
  * How finished Markdown renders. Streamdown defaults to `mode="streaming"` +
@@ -541,23 +554,44 @@ function MessageResponseImpl({
   mode = FINISHED_MODE,
   parseIncompleteMarkdown = FINISHED_PARSE_INCOMPLETE_MARKDOWN,
   remend,
+  additionalRemarkPlugins,
   ...props
 }: MessageResponseProps) {
+  const inReply = useAssistantReply()
+  const htmlEnabled = useChatHtmlEnabled() && inReply
+  const processHtml = useMemo(() => createChatHtmlProcessor(), [])
   const normalized = useMemo(
     () =>
       typeof children === "string"
-        ? normalizeMathDelimiters(children)
+        ? htmlEnabled
+          ? processHtml(children, mode === "streaming", normalizeMathDelimiters)
+          : normalizeMathDelimiters(children)
         : children,
-    [children]
+    [children, htmlEnabled, mode, processHtml]
   )
   const plugins = useStreamdownPlugins(
     typeof normalized === "string" ? normalized : undefined
+  )
+  const combinedRemarkPlugins = useMemo(
+    () =>
+      additionalRemarkPlugins?.length
+        ? [...remarkPlugins, ...additionalRemarkPlugins]
+        : remarkPlugins,
+    [additionalRemarkPlugins]
   )
 
   return (
     <Streamdown
       className={cn(
-        "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:pl-3 [&_ol]:pl-3",
+        // `chat-markdown`: while it streams, its blocks keep the spacing they
+        // settle with (globals.css).
+        "chat-markdown size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:ps-2 [&_ol]:ps-2",
+        // Each block takes the direction of its own text (`dir="auto"`
+        // below), so indents and rules go on the logical start side. An item
+        // re-states `text-align: start`: the UA gives <li>
+        // `-webkit-match-parent`, which would align an English item in an
+        // Arabic list (or the reverse) by the list's side, not its own.
+        "[&_li]:text-start",
         // Streamdown gives `blockquote` its own `border-l-4
         // border-muted-foreground/30 … italic`, but those class names live in
         // node_modules, which Tailwind v4 does not scan — so the two border
@@ -565,28 +599,36 @@ function MessageResponseImpl({
         // with no rule (the `pl-4`/`my-4`/`text-muted-foreground` on the same
         // element only survive because they happen to be used elsewhere in src).
         // Re-declare the rule here, where it IS scanned; the descendant selector
-        // also outranks Streamdown's plain utility class. No `pl-*` — its `pl-4`
-        // already works and a same-specificity duplicate would be a coin flip.
+        // also outranks Streamdown's plain utility class. Rule and indent sit
+        // on the quote's start side, which follows its text: in a left-to-right
+        // quote `ps-4` is Streamdown's own `pl-4`; in a right-to-left one `pe-0`
+        // drops that left padding.
         // Upright, not italic: CJK has no true italic, so a browser fakes it by
         // skewing, which looks broken.
-        "[&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:not-italic",
+        "[&_blockquote]:border-s-2 [&_blockquote]:border-border [&_blockquote]:ps-4 [&_blockquote]:pe-0 [&_blockquote]:not-italic",
         className
       )}
       plugins={plugins}
-      remarkPlugins={remarkPlugins}
+      remarkPlugins={combinedRemarkPlugins}
       rehypePlugins={rehypePlugins}
       mode={mode}
       parseIncompleteMarkdown={parseIncompleteMarkdown}
       remend={remend ? { ...remend, ...LIVE_REMEND } : LIVE_REMEND}
+      // Every paragraph, heading, list item, quote and cell takes the
+      // direction of its own text (code stays left-to-right): an English reply
+      // in the Arabic interface reads left-to-right with its full stop at the
+      // end, and an Arabic one in an English interface the other way.
+      dir="auto"
       {...props}
       // Merge after spreading props so a caller can still override other
-      // elements, but the link icon + safety routing on `a` — and the diagram
-      // block on `pre` — always win.
+      // elements, but the link icon + safety routing on `a`, the diagram and
+      // json-render blocks on `pre` and the table's scrollbars always win.
       components={{
+        ...markdownLocalImageComponents,
         ...props.components,
         ...markdownLinkComponents,
-        ...markdownLocalImageComponents,
-        ...mermaidComponents,
+        ...messageBlockComponents,
+        ...scrollportComponents,
       }}
     >
       {normalized}
@@ -601,7 +643,16 @@ export const MessageResponse = memo(
     (prevProps.mode ?? FINISHED_MODE) === (nextProps.mode ?? FINISHED_MODE) &&
     (prevProps.parseIncompleteMarkdown ??
       FINISHED_PARSE_INCOMPLETE_MARKDOWN) ===
-      (nextProps.parseIncompleteMarkdown ?? FINISHED_PARSE_INCOMPLETE_MARKDOWN)
+      (nextProps.parseIncompleteMarkdown ??
+        FINISHED_PARSE_INCOMPLETE_MARKDOWN) &&
+    // The prose being written wraps its new characters to fade them in
+    // (`animated` + `isAnimating`); done, it drops the wrapping.
+    (prevProps.isAnimating ?? false) === (nextProps.isAnimating ?? false) &&
+    prevProps.animated === nextProps.animated &&
+    prevProps.additionalRemarkPlugins === nextProps.additionalRemarkPlugins &&
+    prevProps.remarkPlugins === nextProps.remarkPlugins &&
+    prevProps.rehypePlugins === nextProps.rehypePlugins &&
+    prevProps.components === nextProps.components
 )
 
 MessageResponse.displayName = "MessageResponse"

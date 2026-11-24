@@ -129,17 +129,25 @@ export const WORKSPACE_BG_MASK_OPACITY_RANGE = { min: 0, max: 0.99, step: 0.01 }
 export const WORKSPACE_BG_IMAGE_BLUR_RANGE = { min: 0, max: 24, step: 1 }
 export const WORKSPACE_BG_PANEL_OPACITY_RANGE = { min: 0, max: 1, step: 0.01 }
 
-/** Client-side upload ceiling; matches the backend `MAX_BG_BYTES` (16 MiB). */
-export const MAX_WORKSPACE_BG_BYTES = 16 * 1024 * 1024
+/** Client-side upload ceiling; matches the backend `MAX_BG_BYTES` (64 MiB). */
+export const MAX_WORKSPACE_BG_BYTES = 64 * 1024 * 1024
 
 /**
- * Decoded-pixel ceiling; matches the backend `MAX_BG_PIXELS` (40 Mpx ≈ an 8K
- * image). A local pick can't know this before the round trip — the picker never
+ * Transport timeout for moving the whole image. A 64 MiB file is ~85 MiB of
+ * base64 each way, which the default 60 s web-call timeout (30 s through the
+ * remote-desktop proxy) would cut off on an ordinary uplink. 10 minutes is the
+ * remote-desktop proxy's per-request ceiling.
+ */
+const WORKSPACE_BG_TRANSFER_TIMEOUT_MS = 600_000
+
+/**
+ * Decoded-pixel ceiling; matches the backend `MAX_BG_PIXELS` (100 Mpx, room
+ * for 10K-class wallpapers). A local pick can't know this before the round trip — the picker never
  * decodes the file — but the wallpaper market gets both dimensions in the
  * listing, so it can tell which wallpapers would be refused before offering
  * them as something to click.
  */
-export const MAX_WORKSPACE_BG_PIXELS = 40_000_000
+export const MAX_WORKSPACE_BG_PIXELS = 100_000_000
 
 // ─── Validation / clamp ───
 
@@ -214,13 +222,19 @@ export function revokeBackgroundObjectUrl(
 
 /** Returns the stored background asset, or `null` when none is set. */
 export async function readWorkspaceBackground(): Promise<BackgroundAsset | null> {
-  return getTransport().call("background_read")
+  return getTransport().call("background_read", undefined, {
+    timeoutMs: WORKSPACE_BG_TRANSFER_TIMEOUT_MS,
+  })
 }
 
 export async function setWorkspaceBackground(
   imageBase64: string
 ): Promise<void> {
-  return getTransport().call("background_set", { imageBase64 })
+  return getTransport().call(
+    "background_set",
+    { imageBase64 },
+    { timeoutMs: WORKSPACE_BG_TRANSFER_TIMEOUT_MS }
+  )
 }
 
 export async function clearWorkspaceBackground(): Promise<void> {

@@ -496,8 +496,8 @@ export function NativeSurfaceHost({
     }
   }, [backendId, sync])
 
-  // Layout-driven visibility flips (pane / mode / route) and moves re-sync at
-  // once instead of waiting for the poll.
+  // Layout-driven visibility flips (pane / mode / maximize / route) and moves
+  // re-sync at once instead of waiting for the poll.
   useEffect(() => {
     sync()
   }, [
@@ -506,6 +506,7 @@ export function NativeSurfaceHost({
     view.mode,
     view.activePane,
     view.filesMaximized,
+    view.conversationMaximized,
     routeVisible,
   ])
 

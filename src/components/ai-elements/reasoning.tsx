@@ -1,210 +1,37 @@
 "use client"
 
-import type { ComponentProps, ReactNode } from "react"
-
-import { useControllableState } from "@radix-ui/react-use-controllable-state"
-import { useTranslations } from "next-intl"
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/instant-collapsible"
-import { cn } from "@/lib/utils"
-import { BrainIcon, ChevronRightIcon } from "lucide-react"
-import {
-  createContext,
-  memo,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-} from "react"
+import { memo, useMemo } from "react"
+import remarkBreaks from "remark-breaks"
 import {
   Streamdown,
   defaultRehypePlugins,
   defaultRemarkPlugins,
 } from "streamdown"
 
-import { Shimmer } from "./shimmer"
 import { markdownLinkComponents } from "./markdown-link"
+import { scrollportComponents } from "./markdown-scrollport"
 import { mermaidComponents } from "./mermaid-block"
 import { LIVE_REMEND, normalizeMathDelimiters } from "./message"
 import { rehypePluginsAllowingCodeg } from "./rehype-allow-codeg"
+import { rehypeListDirection } from "./rehype-list-direction"
 import { remarkTrimCjkAutolinkTail } from "./remark-cjk-autolink-tail"
 import { withRelativeFileLinks } from "./rehype-relative-file-links"
 import { remarkRewriteFileUriLinks } from "./remark-file-uri-links"
 import { remarkRestoreWindowsPaths } from "./remark-windows-paths"
 import { useStreamdownPlugins } from "./streamdown-plugins"
 
-interface ReasoningContextValue {
-  isStreaming: boolean
-  isOpen: boolean
-  setIsOpen: (open: boolean) => void
-  duration: number | undefined
-  expandable: boolean
-}
-
-const ReasoningContext = createContext<ReasoningContextValue | null>(null)
-
-export const useReasoning = () => {
-  const context = useContext(ReasoningContext)
-  if (!context) {
-    throw new Error("Reasoning components must be used within Reasoning")
-  }
-  return context
-}
-
-export type ReasoningProps = ComponentProps<typeof Collapsible> & {
-  isStreaming?: boolean
-  open?: boolean
-  defaultOpen?: boolean
-  onOpenChange?: (open: boolean) => void
-  duration?: number
-  expandable?: boolean
-}
-
-const MS_IN_S = 1000
-
-export const Reasoning = memo(
-  ({
-    className,
-    isStreaming = false,
-    open,
-    defaultOpen = false,
-    onOpenChange,
-    duration: durationProp,
-    expandable = true,
-    children,
-    ...props
-  }: ReasoningProps) => {
-    // Thinking stays folded until the reader asks for it. Upstream opened the
-    // panel the moment a delta arrived and closed it a second after the block
-    // ended: that shoves the reply down the viewport mid-turn, and the close
-    // then pulls the text out from under anyone still reading it. Only an
-    // explicit `defaultOpen`/`open` opens this now, and once opened it stays
-    // open until the reader folds it back.
-    const [isOpen, setIsOpen] = useControllableState<boolean>({
-      defaultProp: expandable && defaultOpen,
-      onChange: onOpenChange,
-      prop: expandable ? open : false,
-    })
-    const [duration, setDuration] = useControllableState<number | undefined>({
-      defaultProp: undefined,
-      prop: durationProp,
-    })
-
-    const startTimeRef = useRef<number | null>(null)
-
-    // Track when streaming starts and compute duration
-    useEffect(() => {
-      if (isStreaming) {
-        if (startTimeRef.current === null) {
-          startTimeRef.current = Date.now()
-        }
-      } else if (startTimeRef.current !== null) {
-        setDuration(Math.ceil((Date.now() - startTimeRef.current) / MS_IN_S))
-        startTimeRef.current = null
-      }
-    }, [isStreaming, setDuration])
-
-    const handleOpenChange = useCallback(
-      (newOpen: boolean) => {
-        setIsOpen(newOpen)
-      },
-      [setIsOpen]
-    )
-
-    const contextValue = useMemo(
-      () => ({ duration, isOpen, isStreaming, setIsOpen, expandable }),
-      [duration, isOpen, isStreaming, setIsOpen, expandable]
-    )
-
-    return (
-      <ReasoningContext.Provider value={contextValue}>
-        <Collapsible
-          className={cn("not-prose", className)}
-          onOpenChange={handleOpenChange}
-          open={isOpen}
-          {...props}
-        >
-          {children}
-        </Collapsible>
-      </ReasoningContext.Provider>
-    )
-  }
+// Reasoning is written line by line — steps, checks, half-sentences — not as
+// wrapped paragraphs, so a line break stays one instead of folding into a
+// space. Named on purpose: Streamdown caches a processor per plugin list,
+// keyed by the plugins' function names, which a minified build cuts to a
+// letter or two — so this list, as long as the reply's, was served the
+// reply's processor and its breaks were lost. A name of its own keeps the two
+// keys apart.
+const remarkReasoningBreaks = Object.defineProperty(
+  () => remarkBreaks(),
+  "name",
+  { value: "remarkReasoningBreaks" }
 )
-
-export type ReasoningTriggerProps = ComponentProps<
-  typeof CollapsibleTrigger
-> & {
-  getThinkingMessage?: (isStreaming: boolean, duration?: number) => ReactNode
-}
-
-export const ReasoningTrigger = memo(
-  ({
-    className,
-    children,
-    getThinkingMessage,
-    ...props
-  }: ReasoningTriggerProps) => {
-    const t = useTranslations("Folder.chat.reasoning")
-    const { isStreaming, isOpen, duration, expandable } = useReasoning()
-    const defaultGetThinkingMessage = useCallback(
-      (nextIsStreaming: boolean, nextDuration?: number) => {
-        if (nextIsStreaming || nextDuration === 0) {
-          return (
-            <Shimmer duration={1} shineColor="var(--primary)">
-              {t("thinking")}
-            </Shimmer>
-          )
-        }
-        if (nextDuration === undefined) {
-          return <p>{t("thoughtForFewSeconds")}</p>
-        }
-        return <p>{t("thoughtForSeconds", { duration: nextDuration })}</p>
-      },
-      [t]
-    )
-    const thinkingMessageBuilder =
-      getThinkingMessage ?? defaultGetThinkingMessage
-
-    return (
-      <CollapsibleTrigger
-        className={cn(
-          "flex w-full items-center gap-2 text-muted-foreground text-sm transition-colors",
-          expandable
-            ? "hover:text-foreground"
-            : "cursor-default hover:text-muted-foreground",
-          className
-        )}
-        disabled={!expandable}
-        {...props}
-      >
-        {children ?? (
-          <>
-            <BrainIcon className="size-4" />
-            {thinkingMessageBuilder(isStreaming, duration)}
-            {expandable && (
-              <ChevronRightIcon
-                className={cn(
-                  "size-4 transition-transform",
-                  isOpen ? "rotate-90" : "rotate-0"
-                )}
-              />
-            )}
-          </>
-        )}
-      </CollapsibleTrigger>
-    )
-  }
-)
-
-export type ReasoningContentProps = ComponentProps<
-  typeof CollapsibleContent
-> & {
-  children: string
-}
 
 const remarkPlugins = [
   ...Object.values(defaultRemarkPlugins),
@@ -212,65 +39,73 @@ const remarkPlugins = [
   remarkRestoreWindowsPaths,
   remarkRewriteFileUriLinks,
   remarkTrimCjkAutolinkTail,
+  remarkReasoningBreaks,
 ]
 
 // The same links survive as in MessageResponse: `codeg://` references keep
 // their href through sanitize (rehype-allow-codeg), which would otherwise leave
 // "@Codex [blocked]", and relative local links keep theirs through harden —
 // without that `./a.md` would leave harden as `/a.md` and a bare `a.md` would
-// be blocked (rehype-relative-file-links).
-const rehypePlugins = rehypePluginsAllowingCodeg(
-  withRelativeFileLinks(defaultRehypePlugins)
-)
+// be blocked (rehype-relative-file-links). Lists take their text's direction,
+// as every block does here (rehype-list-direction).
+const rehypePlugins = [
+  ...rehypePluginsAllowingCodeg(withRelativeFileLinks(defaultRehypePlugins)),
+  rehypeListDirection,
+]
 
-const reasoningComponents = { ...markdownLinkComponents, ...mermaidComponents }
+const reasoningComponents = {
+  ...markdownLinkComponents,
+  ...mermaidComponents,
+  ...scrollportComponents,
+}
 
-export const ReasoningContent = memo(
-  ({ className, children, ...props }: ReasoningContentProps) => {
-    // Reasoning is a LIVE surface — a reader who opens this panel mid-turn
-    // keeps it mounted across every delta of a block that routinely runs into
-    // the thousands of tokens. `mode="static"` re-parses the whole text each
-    // time (streaming splits it into blocks and re-parses only the tail),
-    // which measured ~2.9x slower over a 120-delta stream and gets worse the
-    // longer the block runs. So track the turn, exactly like the reply prose
-    // does: remend while the text is still growing, static — and therefore
-    // free of remend's leftover `*` / `_` — once it has settled.
-    const { isStreaming } = useReasoning()
-    const normalized = useMemo(
-      () => normalizeMathDelimiters(children),
-      [children]
-    )
-    const plugins = useStreamdownPlugins(normalized)
+/**
+ * The reasoning text itself, rendered as Markdown — the activity timeline's
+ * thought row draws a thought's body with it.
+ *
+ * Reasoning is a LIVE surface — a reader who opens it mid-turn keeps it
+ * mounted across every delta of a block that routinely runs into the thousands
+ * of tokens. `mode="static"` re-parses the whole text each time (streaming
+ * splits it into blocks and re-parses only the tail), which measured ~2.9x
+ * slower over a 120-delta stream and gets worse the longer the block runs. So
+ * track the turn, exactly like the reply prose does: remend while the text is
+ * still growing, static — and therefore free of remend's leftover `*` / `_` —
+ * once it has settled.
+ */
+export const ReasoningMarkdown = memo(function ReasoningMarkdown({
+  children,
+  isStreaming,
+}: {
+  children: string
+  isStreaming: boolean
+}) {
+  const normalized = useMemo(
+    () => normalizeMathDelimiters(children),
+    [children]
+  )
+  const plugins = useStreamdownPlugins(normalized)
 
-    return (
-      <CollapsibleContent
-        className={cn(
-          "mt-4 text-sm",
-          "data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 text-muted-foreground outline-none data-[state=closed]:animate-out data-[state=open]:animate-in",
-          className
-        )}
-        {...props}
-      >
-        <Streamdown
-          plugins={plugins}
-          remarkPlugins={remarkPlugins}
-          rehypePlugins={rehypePlugins}
-          {...props}
-          mode={isStreaming ? "streaming" : "static"}
-          parseIncompleteMarkdown={isStreaming}
-          // An unclosed link shows as text, as in MessageResponse — see
-          // LIVE_REMEND for why the default placeholder cannot be used.
-          remend={LIVE_REMEND}
-          // Enforce the link icon + safety override after spreading props.
-          components={reasoningComponents}
-        >
-          {normalized}
-        </Streamdown>
-      </CollapsibleContent>
-    )
-  }
-)
-
-Reasoning.displayName = "Reasoning"
-ReasoningTrigger.displayName = "ReasoningTrigger"
-ReasoningContent.displayName = "ReasoningContent"
+  return (
+    <Streamdown
+      plugins={plugins}
+      remarkPlugins={remarkPlugins}
+      rehypePlugins={rehypePlugins}
+      mode={isStreaming ? "streaming" : "static"}
+      parseIncompleteMarkdown={isStreaming}
+      // An unclosed link shows as text, as in MessageResponse — see
+      // LIVE_REMEND for why the default placeholder cannot be used.
+      remend={LIVE_REMEND}
+      // Each block reads in the direction of its own text, as in
+      // MessageResponse; an item keeps its own side against the UA's
+      // `-webkit-match-parent`. Lists draw as a reply's do: numbered or
+      // bulleted, the marker inside the text column — outside it, a bullet
+      // would sit on the timeline's rail beside a thought.
+      dir="auto"
+      className="[&_ul]:list-inside [&_ol]:list-inside [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:ps-2 [&_ol]:ps-2 [&_li]:text-start"
+      // The link icon + safety override, and the diagram blocks.
+      components={reasoningComponents}
+    >
+      {normalized}
+    </Streamdown>
+  )
+})

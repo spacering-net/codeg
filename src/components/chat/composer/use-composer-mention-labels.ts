@@ -30,6 +30,7 @@ export function useComposerMentionLabels(): ComposerMentionLabels {
     () => ({
       file: t("mentionGroupFile"),
       agent: t("mentionGroupAgent"),
+      assistant: t("mentionGroupAssistant"),
       session: t("mentionGroupSession"),
       commit: t("mentionGroupCommit"),
       skill: t("mentionGroupSkill"),

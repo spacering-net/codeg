@@ -99,6 +99,20 @@ function renderWithIntl() {
   )
 }
 
+/**
+ * Waits for the initial load to land. The switches are on screen from the
+ * first render, showing the defaults and locked, so finding one says nothing
+ * about the load, and a click on a locked one is dropped. Whether the load's
+ * render beats a `findBy*` is down to event-loop timing, which a busy CI
+ * runner loses now and then. The feedback switch hangs off no other switch,
+ * so only the load or a save locks it.
+ */
+function loaded() {
+  return waitFor(() =>
+    expect(screen.getByLabelText(LABELS.feedback)).toBeEnabled()
+  )
+}
+
 /** Every endpoint resolves; each `set*` echoes what it was handed. */
 function primeBackend(
   overrides: {
@@ -175,8 +189,9 @@ describe("AgentToolsSettingsSection", () => {
     primeBackend({ feedback: true, sessionInfo: false, workTasks: true })
 
     renderWithIntl()
+    await loaded()
 
-    expect(await screen.findByLabelText(LABELS.feedback)).toHaveAttribute(
+    expect(screen.getByLabelText(LABELS.feedback)).toHaveAttribute(
       "data-state",
       "checked"
     )
@@ -202,8 +217,9 @@ describe("AgentToolsSettingsSection", () => {
     primeBackend()
 
     renderWithIntl()
+    await loaded()
 
-    fireEvent.click(await screen.findByLabelText(LABELS.question))
+    fireEvent.click(screen.getByLabelText(LABELS.question))
     fireEvent.click(screen.getByRole("button", { name: "Save" }))
 
     await waitFor(() => {
@@ -223,8 +239,9 @@ describe("AgentToolsSettingsSection", () => {
     primeBackend({ browserTools: true })
 
     renderWithIntl()
+    await loaded()
 
-    expect(await screen.findByLabelText(LABELS.browserTools)).toHaveAttribute(
+    expect(screen.getByLabelText(LABELS.browserTools)).toHaveAttribute(
       "data-state",
       "checked"
     )
@@ -249,8 +266,9 @@ describe("AgentToolsSettingsSection", () => {
     primeBackend()
 
     renderWithIntl()
+    await loaded()
 
-    const evalSwitch = await screen.findByLabelText(LABELS.browserEval)
+    const evalSwitch = screen.getByLabelText(LABELS.browserEval)
     expect(evalSwitch).toBeDisabled()
     expect(evalSwitch).toHaveAttribute("data-state", "unchecked")
 
@@ -274,8 +292,9 @@ describe("AgentToolsSettingsSection", () => {
     primeBackend({ browserTools: true, browserEval: true })
 
     renderWithIntl()
+    await loaded()
 
-    expect(await screen.findByLabelText(LABELS.browserEval)).toHaveAttribute(
+    expect(screen.getByLabelText(LABELS.browserEval)).toHaveAttribute(
       "data-state",
       "checked"
     )
@@ -298,8 +317,9 @@ describe("AgentToolsSettingsSection", () => {
     primeBackend()
 
     renderWithIntl()
+    await loaded()
 
-    fireEvent.click(await screen.findByLabelText(LABELS.feedback))
+    fireEvent.click(screen.getByLabelText(LABELS.feedback))
     fireEvent.click(screen.getByLabelText(LABELS.automations))
     fireEvent.click(screen.getByRole("button", { name: "Save" }))
 
@@ -463,8 +483,9 @@ describe("AgentToolsSettingsSection", () => {
     primeBackend()
 
     renderWithIntl()
+    await loaded()
 
-    const save = await screen.findByRole("button", { name: "Save" })
+    const save = screen.getByRole("button", { name: "Save" })
     expect(save).toBeDisabled()
 
     fireEvent.click(screen.getByLabelText(LABELS.sessionInfo))
@@ -501,8 +522,9 @@ describe("AgentToolsSettingsSection", () => {
     primeBackend({ computer: false })
 
     renderWithIntl()
+    await loaded()
 
-    const row = await screen.findByLabelText(LABELS.computer)
+    const row = screen.getByLabelText(LABELS.computer)
     expect(row).toHaveAttribute("data-state", "unchecked")
     fireEvent.click(row)
     fireEvent.click(screen.getByRole("button", { name: "Save" }))
@@ -518,8 +540,9 @@ describe("AgentToolsSettingsSection", () => {
     primeBackend({ computer: false })
 
     renderWithIntl()
+    await loaded()
 
-    const row = await screen.findByLabelText(LABELS.computer)
+    const row = screen.getByLabelText(LABELS.computer)
     await waitFor(() => expect(computerToolsHandler()).toBeDefined())
     act(() => {
       computerToolsHandler()!({
@@ -595,7 +618,8 @@ describe("AgentToolsSettingsSection", () => {
     )
 
     renderWithIntl()
-    const row = await screen.findByLabelText(LABELS.computer)
+    await loaded()
+    const row = screen.getByLabelText(LABELS.computer)
     fireEvent.click(row)
     fireEvent.click(screen.getByRole("button", { name: "Save" }))
     await waitFor(() => expect(row).toBeDisabled())

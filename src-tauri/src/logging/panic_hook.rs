@@ -183,6 +183,14 @@ pub(crate) fn set_log_file(dir: &Path, prefix: &str, suffix: &'static str) {
     });
 }
 
+/// The directory the rolling file sink writes to, or `None` when no file sink
+/// was built (the stderr-only modes, a failed init, and tests, which never
+/// build one). The Settings page lists and opens this directory, so it shows
+/// the files actually being written whatever the environment says later.
+pub(crate) fn log_file_dir() -> Option<&'static Path> {
+    FILE_SINK.get().map(|sink| sink.dir.as_path())
+}
+
 /// Install the hook, chaining to whatever was installed before.
 ///
 /// Idempotent: the first call wins, so the repeated subscriber init in

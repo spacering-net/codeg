@@ -67,6 +67,8 @@ describe("ContextCompactionCard", () => {
     // it to `automatic`. Both mean the same thing to the reader.
     ["auto", "Automatically triggered"],
     ["manual", "Manually triggered"],
+    // claude-agent-acp 0.101.0's own `/compact` for a large idle session.
+    ["idle", "Triggered while idle, before the prompt cache expired"],
   ])("translates the %s trigger in the tooltip", (trigger, expected) => {
     renderCard({
       state: "output-available",
@@ -161,6 +163,27 @@ describe("ContextCompactionCard", () => {
     expect(
       screen.queryByTestId("context-compaction-summary")
     ).not.toBeInTheDocument()
+  })
+
+  it("draws its hairlines as the messages around it do", () => {
+    // Over a workspace background image a message's hairlines darken
+    // (`ws-msg-scope`, globals.css); the divider and the summary's panel sit
+    // between messages, so they carry the scope themselves.
+    const { container, unmount } = renderCard({
+      state: "output-available",
+      meta: { contextCompaction: { version: 1 } },
+    })
+    expect(container.firstElementChild).toHaveClass("ws-msg-scope")
+    unmount()
+    renderCard({
+      state: "output-available",
+      meta: { contextCompaction: { version: 1 } },
+      summary: "We refactored **the parser**.",
+    })
+    fireEvent.click(screen.getByRole("button", { name: /Summary/ }))
+    expect(
+      screen.getByTestId("context-compaction-summary").closest(".ws-msg-scope")
+    ).not.toBeNull()
   })
 
   // An unterminated `**` is the tell: streaming mode completes it into bold,

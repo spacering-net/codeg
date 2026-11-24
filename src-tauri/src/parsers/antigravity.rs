@@ -41,6 +41,8 @@
 //! arm is self-describing, while the enum has 118 values whose numbering is
 //! upstream's to change.
 
+pub(crate) mod background;
+
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, TimeZone, Utc};
@@ -55,7 +57,8 @@ use crate::parsers::expand_home_prefix;
 use crate::parsers::{
     backfill_turn_durations, compute_session_stats, folder_name_from_path,
     infer_context_window_max_tokens, merge_context_window_stats, relocate_orphaned_tool_results,
-    structurize_read_tool_output, title_from_user_text, truncate_str, AgentParser, ParseError,
+    structurize_read_tool_output, title_from_user_text, truncate_str, AgentEnv, AgentParser,
+    ParseError,
 };
 
 /// Bound a single tool output / input preview so one enormous step cannot blow
@@ -81,7 +84,12 @@ const METADATA_FILE_SUFFIX: &str = "meta";
 /// Empty counts as unset — Python treats `""` as falsy at that branch — so a
 /// blank override never resolves the home to the process's cwd.
 pub(crate) fn resolve_gemini_home() -> PathBuf {
-    resolve_gemini_home_from(std::env::var_os("GEMINI_HOME"), dirs::home_dir())
+    resolve_gemini_home_for_env(&AgentEnv::inherited())
+}
+
+/// [`resolve_gemini_home`] for the server launched with `env`.
+pub(crate) fn resolve_gemini_home_for_env(env: &AgentEnv) -> PathBuf {
+    resolve_gemini_home_from(env.var_os("GEMINI_HOME"), dirs::home_dir())
 }
 
 /// The same resolution for an EXPLICIT `GEMINI_HOME`, so a caller holding a
@@ -128,7 +136,14 @@ pub(crate) fn resolve_antigravity_acp_dir() -> PathBuf {
 
 /// `<home>/antigravity-acp/conversations` — the session trajectories.
 pub(crate) fn resolve_antigravity_sessions_dir() -> PathBuf {
-    resolve_antigravity_acp_dir().join(SESSIONS_DIR_NAME)
+    resolve_antigravity_sessions_dir_for_env(&AgentEnv::inherited())
+}
+
+/// [`resolve_antigravity_sessions_dir`] for the server launched with `env`.
+pub(crate) fn resolve_antigravity_sessions_dir_for_env(env: &AgentEnv) -> PathBuf {
+    resolve_gemini_home_for_env(env)
+        .join(ACP_SUBDIR)
+        .join(SESSIONS_DIR_NAME)
 }
 
 /// `<home>/config` — the config shared with every other Gemini/Antigravity
@@ -407,12 +422,122 @@ struct ErrorDetails {
     full_error: String,
 }
 
+/// `exa.cortex_pb.AskQuestionOption`.
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct AntigravityAskOption {
+    #[prost(string, tag = "1")]
+    id: String,
+    #[prost(string, tag = "2")]
+    text: String,
+}
+
+/// `exa.cortex_pb.AskQuestionEntry`: one question of an `ask_question` step and
+/// the user's answer to it. Checked against the 1.4.1, 1.4.3, 1.4.4, 1.4.5,
+/// 1.5.0 and 1.5.2 descriptors and live runs: options are numbered `"1"`, `"2"`, …; a
+/// question the user dismissed (or never reached, once an earlier one was dismissed) is
+/// `skipped` with nothing chosen; a multi-select question is still answered
+/// with one option, because the ACP server asks it as a single-choice
+/// permission request. From 1.5.2 a dismissed question ends the turn, and the
+/// step is stored `CORTEX_STEP_STATUS_CANCELED` with nothing chosen and no
+/// `skipped` (a Stop while the question waits stores the same; 1.5.0 stored no
+/// step for that).
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct AntigravityAskItem {
+    #[prost(string, tag = "1")]
+    question: String,
+    #[prost(message, repeated, tag = "2")]
+    options: Vec<AntigravityAskOption>,
+    #[prost(bool, tag = "3")]
+    is_multi_select: bool,
+    /// `selected_option_ids`.
+    #[prost(string, repeated, tag = "4")]
+    chosen_ids: Vec<String>,
+    #[prost(string, tag = "5")]
+    write_in_response: String,
+    #[prost(bool, tag = "6")]
+    skipped: bool,
+}
+
+/// `exa.cortex_pb.CortexStepAskQuestion`, carried on `Step` field 154.
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct AntigravityAskQuestions {
+    #[prost(message, repeated, tag = "1")]
+    items: Vec<AntigravityAskItem>,
+}
+
 #[derive(Clone, PartialEq, ::prost::Message)]
 struct ErrorMessageStep {
     #[prost(message, optional, tag = "3")]
     error: Option<ErrorDetails>,
     #[prost(bool, tag = "5")]
     should_show_user: bool,
+}
+
+// Native notifications include the original typed message. The sender id is
+// independent of the human-readable (and possibly truncated) result text.
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct SystemMessage {
+    #[prost(string, tag = "3")]
+    kind: String,
+    #[prost(message, optional, tag = "4")]
+    message: Option<TaskMessage>,
+}
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct TaskMessage {
+    #[prost(string, tag = "1")]
+    id: String,
+    #[prost(string, tag = "2")]
+    recipient: String,
+    #[prost(string, tag = "3")]
+    sender: String,
+    #[prost(int32, tag = "5")]
+    priority: i32,
+}
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct NativeTask {
+    #[prost(string, tag = "1")]
+    id: String,
+    #[prost(string, tag = "7")]
+    title: String,
+    #[prost(message, optional, tag = "8")]
+    moved_to_background_at: Option<Timestamp>,
+}
+
+// Antigravity 1.5.13 executes shell and file tools through this generic arm.
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct GenericTool {
+    #[prost(message, optional, tag = "2")]
+    result: Option<GenericResult>,
+}
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct GenericResult {
+    #[prost(string, tag = "1")]
+    text: String,
+    #[prost(message, optional, tag = "3")]
+    render: Option<GenericRender>,
+}
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct GenericRender {
+    #[prost(message, optional, tag = "10")]
+    details: Option<GenericRenderDetails>,
+}
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct GenericRenderDetails {
+    #[prost(message, optional, tag = "3")]
+    command: Option<CommandResult>,
+}
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct CommandResult {
+    #[prost(int32, optional, tag = "3")]
+    exit_code: Option<i32>,
+    #[prost(string, tag = "4")]
+    output: String,
 }
 
 /// `gemini_coder.Step`. Every field is one arm of the real `oneof step` (plus
@@ -451,13 +576,61 @@ struct Step {
     mcp_tool: Option<McpTool>,
     #[prost(message, optional, tag = "98")]
     file_change: Option<FileChange>,
+    #[prost(message, optional, tag = "114")]
+    system_message: Option<SystemMessage>,
+    #[prost(message, optional, tag = "140")]
+    generic_tool: Option<GenericTool>,
+    #[prost(message, optional, tag = "148")]
+    task: Option<NativeTask>,
     #[prost(message, optional, tag = "116")]
     agency_tool_call: Option<AgencyToolCall>,
+    #[prost(message, optional, tag = "154")]
+    ask_question: Option<AntigravityAskQuestions>,
 }
 
-/// `CortexStepStatus.CORTEX_STEP_STATUS_ERROR`. The other eleven values are not
-/// needed: everything else reads as "not an error" for tool-result purposes.
+const STEP_STATUS_DONE: i32 = 3;
+/// `CORTEX_STEP_STATUS_CANCELED`.
+const STEP_STATUS_CANCELED: i32 = 6;
 const STEP_STATUS_ERROR: i32 = 7;
+
+impl Step {
+    fn terminal(&self) -> bool {
+        matches!(self.status, 3..=7 | 12)
+    }
+
+    fn task_message(&self) -> Option<&TaskMessage> {
+        let notification = self.system_message.as_ref()?;
+        (notification.kind == "task_notification").then_some(notification.message.as_ref()?)
+    }
+
+    fn final_answer(&self) -> bool {
+        self.status == STEP_STATUS_DONE
+            && self.planner_response.as_ref().is_some_and(|planner| {
+                planner.tool_calls.is_empty() && !planner.response.trim().is_empty()
+            })
+    }
+
+    fn generic_result(&self) -> Option<&GenericResult> {
+        self.generic_tool.as_ref()?.result.as_ref()
+    }
+
+    fn command_result(&self) -> Option<&CommandResult> {
+        self.generic_result()?
+            .render
+            .as_ref()?
+            .details
+            .as_ref()?
+            .command
+            .as_ref()
+    }
+
+    fn exit_code(&self) -> Option<i64> {
+        self.command_result()
+            .and_then(|r| r.exit_code)
+            .or_else(|| self.run_command.as_ref().map(|r| r.exit_code))
+            .map(i64::from)
+    }
+}
 
 impl Timestamp {
     fn to_utc(&self) -> Option<DateTime<Utc>> {
@@ -484,14 +657,45 @@ impl ErrorDetails {
 // Parser
 // ---------------------------------------------------------------------------
 
+/// With the relative `--app-data-dir antigravity-acp`, agy 1.5.13
+/// can write beneath the OS home even with GEMINI_HOME in its environment.
+/// Resolve only the requested session; a different configured profile must
+/// not be merged wholesale with the default profile.
+fn default_trajectory_dir() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| {
+        home.join(".gemini")
+            .join(ACP_SUBDIR)
+            .join(SESSIONS_DIR_NAME)
+    })
+}
+
+fn session_db_path(directory: &Path, fallback: Option<&Path>, id: &str) -> PathBuf {
+    let name = format!("{id}.db");
+    let configured = directory.join(&name);
+    if configured.is_file() {
+        return configured;
+    }
+    fallback
+        .map(|dir| dir.join(name))
+        .filter(|path| path.is_file())
+        .unwrap_or(configured)
+}
+
 pub struct AntigravityParser {
     base_dir: PathBuf,
+    fallback: Option<PathBuf>,
 }
 
 impl AntigravityParser {
     pub fn new() -> Self {
+        Self::for_env(&AgentEnv::inherited())
+    }
+
+    /// The history of the Antigravity server launched with `env`.
+    pub fn for_env(env: &AgentEnv) -> Self {
         Self {
-            base_dir: resolve_antigravity_sessions_dir(),
+            base_dir: resolve_antigravity_sessions_dir_for_env(env),
+            fallback: default_trajectory_dir(),
         }
     }
 
@@ -499,21 +703,25 @@ impl AntigravityParser {
     /// (test fixtures).
     #[cfg(any(test, feature = "test-utils"))]
     pub fn with_base_dir(base_dir: PathBuf) -> Self {
-        Self { base_dir }
+        Self {
+            base_dir,
+            fallback: None,
+        }
     }
 
     fn db_path(&self, conversation_id: &str) -> PathBuf {
-        self.base_dir.join(format!("{conversation_id}.db"))
+        session_db_path(&self.base_dir, self.fallback.as_deref(), conversation_id)
     }
 
     fn meta_path(&self, conversation_id: &str) -> PathBuf {
-        self.base_dir
-            .join(format!("{conversation_id}.{METADATA_FILE_SUFFIX}"))
+        self.db_path(conversation_id)
+            .with_extension(METADATA_FILE_SUFFIX)
     }
 
     fn build(&self, conversation_id: &str) -> SessionParse {
-        let steps = read_steps(&self.db_path(conversation_id));
+        let (steps, watermark) = read_trajectory(&self.db_path(conversation_id));
         let mut parsed = project_steps(&steps);
+        parsed.watermark = watermark;
         parsed.cwd = read_sidecar_cwd(&self.meta_path(conversation_id));
         parsed
     }
@@ -546,6 +754,8 @@ impl Default for AntigravityParser {
 impl AgentParser for AntigravityParser {
     fn list_conversations(&self) -> Result<Vec<ConversationSummary>, ParseError> {
         let mut conversations = Vec::new();
+        // Discovery belongs to the configured profile. The fallback is only
+        // used when loading a session that the caller already identified.
         let Ok(entries) = std::fs::read_dir(&self.base_dir) else {
             return Ok(conversations);
         };
@@ -574,7 +784,9 @@ impl AgentParser for AntigravityParser {
     }
 
     fn get_conversation(&self, conversation_id: &str) -> Result<ConversationDetail, ParseError> {
-        if !self.db_path(conversation_id).is_file() {
+        if !crate::parsers::is_safe_subagent_id(conversation_id)
+            || !self.db_path(conversation_id).is_file()
+        {
             return Err(ParseError::ConversationNotFound(
                 conversation_id.to_string(),
             ));
@@ -602,7 +814,7 @@ impl AgentParser for AntigravityParser {
             summary: self.summary_from(conversation_id, &parsed),
             turns,
             session_stats,
-            transcript_watermark: None,
+            transcript_watermark: parsed.watermark,
         })
     }
 }
@@ -615,21 +827,36 @@ impl AgentParser for AntigravityParser {
 /// error — for the states that are normal rather than broken: the 0-byte DB a
 /// brand-new session starts as (no `steps` table yet), a file the ACP server
 /// currently holds, or a payload that fails to decode.
-fn read_steps(db_path: &Path) -> Vec<Step> {
+fn read_trajectory(db_path: &Path) -> (Vec<Step>, Option<u64>) {
     let Some(conn) = open_trajectory(db_path) else {
-        return Vec::new();
+        return (Vec::new(), None);
     };
-    let Ok(mut stmt) = conn.prepare("SELECT step_payload FROM steps ORDER BY idx") else {
-        return Vec::new();
+    let Ok(mut stmt) = conn.prepare("SELECT idx, step_payload FROM steps ORDER BY idx") else {
+        return (Vec::new(), None);
     };
-    let Ok(rows) = stmt.query_map([], |row| row.get::<_, Vec<u8>>(0)) else {
-        return Vec::new();
+    let Ok(rows) = stmt.query_map([], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?))
+    }) else {
+        return (Vec::new(), None);
     };
 
     let mut steps = Vec::new();
-    for payload in rows.flatten() {
+    let mut watermark = None;
+    for (idx, payload) in rows.flatten() {
         match Step::decode(payload.as_slice()) {
-            Ok(step) => steps.push(step),
+            Ok(step) => {
+                // An in-progress planner row is rewritten at the same index.
+                // Only its final content covers a published background reply.
+                if step.final_answer()
+                    || step
+                        .error_message
+                        .as_ref()
+                        .is_some_and(|e| e.should_show_user)
+                {
+                    watermark = Some((idx + 1) as u64);
+                }
+                steps.push(step);
+            }
             // One unreadable step must not sink the conversation; the rest of
             // the trajectory still renders.
             Err(err) => {
@@ -640,7 +867,7 @@ fn read_steps(db_path: &Path) -> Vec<Step> {
             }
         }
     }
-    steps
+    (steps, watermark)
 }
 
 fn open_trajectory(db_path: &Path) -> Option<Connection> {
@@ -699,6 +926,7 @@ fn read_sidecar_cwd(meta_path: &Path) -> Option<String> {
 
 #[derive(Default, Clone)]
 struct SessionParse {
+    watermark: Option<u64>,
     turns: Vec<MessageTurn>,
     cwd: Option<String>,
     /// First user prompt, already truncated for use as the title.
@@ -805,6 +1033,8 @@ fn project_steps(steps: &[Step]) -> SessionParse {
     // — and, when their statuses differ, answered both ways.
     let mut settled: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut turn_index = 0_usize;
+    let mut background_id = None;
+    let mut yielded = false;
 
     for (idx, step) in steps.iter().enumerate() {
         let ts = step
@@ -822,14 +1052,23 @@ fn project_steps(steps: &[Step]) -> SessionParse {
         // next prompt's timestamp into it would set `completed_at` to whenever
         // the user came back, and `backfill_turn_durations` would then report
         // the idle gap — possibly hours — as the response's duration.
-        if let Some(user_input) = step.user_input.as_ref() {
+        let wake = step
+            .task_message()
+            .filter(|msg| msg.priority == 3 && yielded && !msg.id.is_empty());
+        if step.user_input.is_some() || wake.is_some() {
             if !pending.is_empty() {
                 let fallback = pending.last_ts.or(ts).unwrap_or_else(Utc::now);
-                let turn = pending.finish(format!("agy-{turn_index}"), fallback);
-                parsed.turns.push(turn);
+                let id = background_id
+                    .take()
+                    .unwrap_or_else(|| format!("agy-{turn_index}"));
+                parsed.turns.push(pending.finish(id, fallback));
                 turn_index += 1;
             }
             pending = PendingAssistant::default();
+            background_id = wake.map(|msg| format!("agy-bg-{}", msg.id));
+            yielded = false;
+        }
+        if let Some(user_input) = step.user_input.as_ref() {
             let Some(text) = user_input_text(user_input) else {
                 continue;
             };
@@ -911,6 +1150,7 @@ fn project_steps(steps: &[Step]) -> SessionParse {
         }
 
         if let Some(planner) = step.planner_response.as_ref() {
+            yielded = step.final_answer();
             if !planner.thinking.trim().is_empty() {
                 pending.blocks.push(ContentBlock::Thinking {
                     text: truncate_str(&planner.thinking, TEXT_CAP),
@@ -959,6 +1199,7 @@ fn project_steps(steps: &[Step]) -> SessionParse {
                     is_error: failed_unresolved.contains(call.id.as_str()),
                     agent_stats: None,
                     images: Vec::new(),
+                    exit_code: None,
                 });
             }
             continue;
@@ -975,12 +1216,18 @@ fn project_steps(steps: &[Step]) -> SessionParse {
             is_error: outcome.is_error,
             agent_stats: None,
             images: Vec::new(),
+            // A proto3 int: a run that exited 0 leaves it off the wire, which
+            // decodes to the same 0.
+            exit_code: step.exit_code(),
         });
     }
 
     if !pending.is_empty() {
         let fallback = parsed.last_ts.unwrap_or_else(Utc::now);
-        let turn = pending.finish(format!("agy-{turn_index}"), fallback);
+        let turn = pending.finish(
+            background_id.unwrap_or_else(|| format!("agy-{turn_index}")),
+            fallback,
+        );
         parsed.turns.push(turn);
     }
 
@@ -1147,6 +1394,22 @@ fn step_outcome(step: &Step) -> Option<StepOutcome> {
     let status_error = step.status == STEP_STATUS_ERROR;
     let step_error = step.error.as_ref().and_then(ErrorDetails::best_message);
 
+    if let Some(result) = step.generic_result() {
+        let command = step.command_result();
+        let text = command
+            .map(|run| run.output.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or(&result.text);
+        if !text.is_empty() || command.is_some() {
+            return Some(StepOutcome {
+                output: non_empty_capped(text.to_owned()),
+                is_error: status_error
+                    || matches!(step.status, 4..=6 | 12)
+                    || step.exit_code().is_some_and(|code| code != 0),
+            });
+        }
+    }
+
     if let Some(run) = step.run_command.as_ref() {
         let command = first_non_empty([run.command_line.as_str(), run.command.as_str()]);
         let output = run
@@ -1288,6 +1551,60 @@ fn step_outcome(step: &Step) -> Option<StepOutcome> {
             .map(|json| harness_response_text(&json));
         return Some(StepOutcome {
             output: body.and_then(non_empty_capped),
+            is_error: status_error,
+        });
+    }
+
+    if let Some(ask) = step.ask_question.as_ref() {
+        // The `{answers, declined}` envelope the question card reads, keyed by
+        // question text (the model's `ask_question` arguments carry no header).
+        // Selections are the options' text, trimmed the way the card trims the
+        // option strings it reads from those arguments; a written-in answer
+        // rides along as one more selection, which the card shows as "Other".
+        let answers: Vec<serde_json::Value> = ask
+            .items
+            .iter()
+            .map(|item| {
+                let mut selected: Vec<String> = item
+                    .chosen_ids
+                    .iter()
+                    .map(|id| {
+                        item.options
+                            .iter()
+                            .find(|opt| &opt.id == id)
+                            .map(|opt| opt.text.trim().to_string())
+                            .unwrap_or_else(|| id.clone())
+                    })
+                    .collect();
+                let write_in = item.write_in_response.trim();
+                if !write_in.is_empty() {
+                    selected.push(write_in.to_string());
+                }
+                serde_json::json!({
+                    "header": "",
+                    "question": item.question,
+                    "multi_select": item.is_multi_select,
+                    "selected": selected,
+                })
+            })
+            .collect();
+        // Dismissing the card skips every question with nothing chosen (from
+        // 1.5.2: cancels the step with nothing chosen); record that as the live
+        // bridge does (a decline), not as "no selection".
+        let cancelled = step.status == STEP_STATUS_CANCELED;
+        let declined = !ask.items.is_empty()
+            && ask.items.iter().all(|item| {
+                (item.skipped || cancelled)
+                    && item.chosen_ids.is_empty()
+                    && item.write_in_response.trim().is_empty()
+            });
+        let payload = if declined {
+            serde_json::json!({ "answers": [], "declined": true })
+        } else {
+            serde_json::json!({ "answers": answers, "declined": false })
+        };
+        return Some(StepOutcome {
+            output: serde_json::to_string(&payload).ok().and_then(non_empty_capped),
             is_error: status_error,
         });
     }
@@ -1717,14 +2034,21 @@ mod tests {
                 ContentBlock::ToolResult {
                     output_preview,
                     is_error: true,
+                    exit_code,
                     ..
-                } => output_preview.clone(),
+                } => Some((output_preview.clone(), *exit_code)),
                 _ => None,
             })
             .collect();
         assert_eq!(errors.len(), 2, "{errors:?}");
-        assert!(errors[0].contains("boom"));
-        assert!(errors[1].contains("quota exhausted"));
+        assert!(errors[0].0.as_deref().unwrap_or_default().contains("boom"));
+        assert_eq!(errors[0].1, Some(2), "the run's exit code is kept");
+        assert!(errors[1]
+            .0
+            .as_deref()
+            .unwrap_or_default()
+            .contains("quota exhausted"));
+        assert_eq!(errors[1].1, None, "an error step ran no process");
     }
 
     // The decoder declares a strict SUBSET of the real `Step`. Every field it
@@ -1733,7 +2057,7 @@ mod tests {
     #[test]
     fn unknown_fields_and_unmodelled_oneof_arms_are_skipped() {
         // A `Step` carrying tag 155 (`attachments`, a repeated Any we never
-        // model), tag 148 (`task_details`, a message) and tag 1 (`type`, a
+        // model), tag 1 (`type`, a
         // varint enum) alongside the one arm we do model.
         #[derive(Clone, PartialEq, ::prost::Message)]
         struct WiderStep {
@@ -1745,8 +2069,6 @@ mod tests {
             user_input: Option<UserInput>,
             #[prost(bytes = "vec", repeated, tag = "155")]
             attachments: Vec<Vec<u8>>,
-            #[prost(string, tag = "148")]
-            task_details: String,
             // An arm the parser deliberately does not model.
             #[prost(string, tag = "111")]
             conversation_history: String,
@@ -1763,7 +2085,6 @@ mod tests {
                 ..Default::default()
             }),
             attachments: vec![vec![1, 2, 3], vec![4]],
-            task_details: "ignored".into(),
             conversation_history: "ignored too".into(),
         };
         let decoded = Step::decode(wide.encode_to_vec().as_slice()).expect("decode subset");
@@ -2061,5 +2382,211 @@ mod tests {
             &blocks[1],
             ContentBlock::ToolResult { output_preview: Some(out), .. } if out.contains("a.txt")
         ));
+    }
+
+    /// #948: built with an agent's launch env, the parser reads where THAT
+    /// env puts the agent's files, not where codeg's own environment does.
+    #[test]
+    fn for_env_reads_the_home_of_the_launch_env() {
+        let env = AgentEnv::with_overrides(&[("GEMINI_HOME", "/relocated/agy")]);
+        assert_eq!(
+            AntigravityParser::for_env(&env).base_dir,
+            PathBuf::from("/relocated/agy")
+                .join("antigravity-acp")
+                .join("conversations")
+        );
+    }
+
+    /// One question of an `ask_question` step, options numbered from `"1"` the
+    /// way antigravity-acp 1.4.1 records them.
+    fn ask_item(question: &str, options: &[&str], chosen: &[&str]) -> AntigravityAskItem {
+        AntigravityAskItem {
+            question: question.into(),
+            options: options
+                .iter()
+                .enumerate()
+                .map(|(i, text)| AntigravityAskOption {
+                    id: (i + 1).to_string(),
+                    text: (*text).into(),
+                })
+                .collect(),
+            chosen_ids: chosen.iter().map(|id| (*id).into()).collect(),
+            ..Default::default()
+        }
+    }
+
+    /// Round-trip one `ask_question` step (`Step` field 154) through the store
+    /// and return the tool call's name and its result envelope.
+    fn ask_step_outcome(items: Vec<AntigravityAskItem>) -> (String, serde_json::Value) {
+        ask_step_outcome_with_status(STEP_STATUS_DONE, items)
+    }
+
+    fn ask_step_outcome_with_status(
+        status: i32,
+        items: Vec<AntigravityAskItem>,
+    ) -> (String, serde_json::Value) {
+        let dir = tempfile::tempdir().unwrap();
+        let step = Step {
+            status,
+            metadata: Some(StepMetadata {
+                created_at: ts(1_700_000_000),
+                tool_call: Some(ChatToolCall {
+                    id: "call_1".into(),
+                    name: "ask_question".into(),
+                    arguments_json: "{}".into(),
+                }),
+                ..Default::default()
+            }),
+            ask_question: Some(AntigravityAskQuestions { items }),
+            ..Default::default()
+        };
+        write_steps(dir.path(), "test-session", &[step]);
+        let parsed = project_steps(&read_trajectory(&dir.path().join("test-session.db")).0);
+        let blocks: Vec<&ContentBlock> = parsed.turns.iter().flat_map(|t| &t.blocks).collect();
+        let name = blocks
+            .iter()
+            .find_map(|block| match block {
+                ContentBlock::ToolUse { tool_name, .. } => Some(tool_name.clone()),
+                _ => None,
+            })
+            .expect("the ask_question call");
+        let outputs: Vec<&String> = blocks
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::ToolResult {
+                    output_preview: Some(out),
+                    ..
+                } => Some(out),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(outputs.len(), 1, "one result for the ask");
+        (
+            name,
+            serde_json::from_str(outputs[0]).expect("JSON envelope"),
+        )
+    }
+
+    #[test]
+    fn antigravity_ask_question_step_outcome_generates_json_envelope() {
+        let (name, val) = ask_step_outcome(vec![
+            ask_item(
+                "您希望接下来优先开展哪一类开发任务？",
+                &[
+                    "(Recommended) 核心业务功能的新增与实现",
+                    "现有功能的优化与缺陷修复",
+                ],
+                &["1"],
+            ),
+            ask_item(
+                "在开发交付与流程配合上，您倾向于哪种模式？",
+                &[
+                    "(Recommended) 快速迭代交付，先实现最小可行版本（MVP）供确认",
+                    "阶段性里程碑交付，按完整模块验收",
+                ],
+                &["2"],
+            ),
+        ]);
+        // The card is keyed to this name (`ask_question` → "question" in the
+        // frontend's tool-name aliases).
+        assert_eq!(name, "ask_question");
+        assert_eq!(
+            val,
+            serde_json::json!({
+                "answers": [
+                    {
+                        "header": "",
+                        "question": "您希望接下来优先开展哪一类开发任务？",
+                        "multi_select": false,
+                        "selected": ["(Recommended) 核心业务功能的新增与实现"],
+                    },
+                    {
+                        "header": "",
+                        "question": "在开发交付与流程配合上，您倾向于哪种模式？",
+                        "multi_select": false,
+                        "selected": ["阶段性里程碑交付，按完整模块验收"],
+                    },
+                ],
+                "declined": false,
+            })
+        );
+    }
+
+    /// A multi-select question keeps its kind even though the ACP server could
+    /// only take one pick for it; a written-in answer and padded option text
+    /// come out the way the card reads them.
+    #[test]
+    fn antigravity_ask_question_outcome_keeps_multi_select_and_write_in() {
+        let mut multi = ask_item("Pick tags", &["Alpha", "Beta", " Gamma "], &["3"]);
+        multi.is_multi_select = true;
+        let mut write_in = ask_item("Anything else?", &["No", "Later"], &[]);
+        write_in.write_in_response = " Ship it on Friday ".into();
+        let (_, val) = ask_step_outcome(vec![multi, write_in]);
+        assert_eq!(val["declined"], false);
+        assert_eq!(val["answers"][0]["multi_select"], true);
+        assert_eq!(val["answers"][0]["selected"], serde_json::json!(["Gamma"]));
+        assert_eq!(val["answers"][1]["multi_select"], false);
+        assert_eq!(
+            val["answers"][1]["selected"],
+            serde_json::json!(["Ship it on Friday"])
+        );
+    }
+
+    /// Dismissing the card leaves every question skipped with nothing chosen:
+    /// that reads as a decline, as the live bridge records it. Dismissing a
+    /// later question keeps the earlier answer.
+    #[test]
+    fn antigravity_ask_question_outcome_reads_a_dismissed_card_as_declined() {
+        let skipped = |mut item: AntigravityAskItem| {
+            item.skipped = true;
+            item
+        };
+        let (_, all_skipped) = ask_step_outcome(vec![
+            skipped(ask_item("Which area first?", &["Backend", "Frontend"], &[])),
+            skipped(ask_item("Pick tags", &["Alpha", "Beta"], &[])),
+        ]);
+        assert_eq!(
+            all_skipped,
+            serde_json::json!({ "answers": [], "declined": true })
+        );
+
+        let (_, partly) = ask_step_outcome(vec![
+            ask_item("Which area first?", &["Backend", "Frontend"], &["2"]),
+            skipped(ask_item("Pick tags", &["Alpha", "Beta"], &[])),
+        ]);
+        assert_eq!(partly["declined"], false);
+        assert_eq!(
+            partly["answers"][0]["selected"],
+            serde_json::json!(["Frontend"])
+        );
+        assert_eq!(partly["answers"][1]["selected"], serde_json::json!([]));
+    }
+
+    /// 1.5.2 stores a dismissed (or stopped) question as a cancelled step with
+    /// nothing chosen and no `skipped`: still a decline, not "no selection". A
+    /// cancelled step that kept an earlier answer keeps it.
+    #[test]
+    fn antigravity_ask_question_outcome_reads_a_cancelled_step_as_declined() {
+        let (_, cancelled) = ask_step_outcome_with_status(
+            STEP_STATUS_CANCELED,
+            vec![ask_item("Which area first?", &["Backend", "Frontend"], &[])],
+        );
+        assert_eq!(
+            cancelled,
+            serde_json::json!({ "answers": [], "declined": true })
+        );
+
+        let (_, partly) = ask_step_outcome_with_status(
+            STEP_STATUS_CANCELED,
+            vec![
+                ask_item("Which area first?", &["Backend", "Frontend"], &["2"]),
+                ask_item("Pick tags", &["Alpha", "Beta"], &[]),
+            ],
+        );
+        assert_eq!(partly["declined"], false);
+        assert_eq!(
+            partly["answers"][0]["selected"],
+            serde_json::json!(["Frontend"])
+        );
     }
 }

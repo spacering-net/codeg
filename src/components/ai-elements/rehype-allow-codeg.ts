@@ -64,6 +64,12 @@ export function rehypePluginsAllowingCodeg(
           "dataCodegImageLinked",
           "data-codeg-local-image",
           "data-codeg-image-linked",
+          "dataCodegForgeImage",
+          "dataCodegImageWidth",
+          "dataCodegImageHeight",
+          "data-codeg-forge-image",
+          "data-codeg-image-width",
+          "data-codeg-image-height",
         ],
       },
       protocols: {

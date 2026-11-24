@@ -191,6 +191,25 @@ describe("parseBackgroundLaunch", () => {
       )
     ).toEqual({ taskId: "bz81ab3cd" })
   })
+  it("finds the timed-out acknowledgement after the output so far", () => {
+    // Claude Code 2.1.312 (claude-agent-acp 0.99.0) puts what a command that
+    // outlived its timeout printed before the sentence; the transcript keeps
+    // it bare and the adapter fences it on the wire. Captured live.
+    const timedOut =
+      "tick-1\ntick-2\nCommand did not complete within its 2s timeout and was moved to the background (ID: bekp4cb00). Output is being written to: /private/tmp/claude-501/w/56c31d82/tasks/bekp4cb00.output. You will be notified when it completes. If it is still running after 30m in the background, it will be stopped and you will be notified. It is running now: do not start a second copy while it runs. If it is no longer needed, stop it with TaskStop. To check interim output, use Read on that file path."
+    expect(parseBackgroundLaunch(timedOut)).toEqual({ taskId: "bekp4cb00" })
+    expect(parseBackgroundLaunch("```console\n" + timedOut + "\n```")).toEqual({
+      taskId: "bekp4cb00",
+    })
+  })
+  it("recognizes OpenCode 2's background shell acknowledgement", () => {
+    // packages/core/src/tool/plugin/shell.ts `backgroundResult`, 2.2.0 capture.
+    expect(
+      parseBackgroundLaunch(
+        "Command moved to the background (shell ID: sh_17d9d0e2d001XnyG98WPjd9Z7G).\nOutput is streaming to: /w/xdg/data/opencode/shell/sh_17d9d0e2d001XnyG98WPjd9Z7G.log"
+      )
+    ).toEqual({ taskId: "sh_17d9d0e2d001XnyG98WPjd9Z7G" })
+  })
   it("leaves an MCP tool that was moved to the background alone", () => {
     // Not a command acknowledgement: the MCP card has no launch body to swap.
     expect(

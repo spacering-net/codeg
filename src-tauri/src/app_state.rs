@@ -96,6 +96,12 @@ pub struct AppState {
     /// The upgrade UI subscribes to it and re-syncs from a snapshot on mount,
     /// so download progress survives settings-page navigation and reloads.
     pub update_state: crate::update::AppUpdateStateHandle,
+    /// Headless `codeg-cli` runs. Built in both runtimes at startup; its
+    /// routes are served under `/api` and on the loopback listener.
+    pub cli_runs: Arc<crate::cli_run::CliRunService>,
+    /// The loopback listener and discovery file the CLIs of this machine
+    /// come in by, and the setting that turns them on and off.
+    pub cli_access: Arc<crate::cli_run::CliAccess>,
 }
 
 pub fn default_system_op_lock() -> Arc<tokio::sync::Mutex<()>> {
@@ -170,6 +176,9 @@ pub fn build_delegation_stack(
         db: db_arc.clone(),
     })
         as Arc<dyn crate::acp::connection::AgentAvailabilityLookup>;
+    let assistants = Arc::new(crate::acp::delegation::assistants::DbAssistantLookup {
+        db: db_arc.clone(),
+    }) as Arc<dyn crate::acp::delegation::assistants::AssistantLookup>;
     let status_lookup = Arc::new(DbChildStatusLookup { db: db_arc }) as Arc<dyn ChildStatusLookup>;
     let meta_writer = Arc::new(ConnectionManagerMetaWriter {
         manager: cm_arc.clone(),
@@ -182,7 +191,8 @@ pub fn build_delegation_stack(
     let broker = Arc::new(
         DelegationBroker::with_writers(spawner, depth_lookup, meta_writer, event_emitter)
             .with_status_lookup(status_lookup)
-            .with_live_reply_lookup(live_reply_lookup),
+            .with_live_reply_lookup(live_reply_lookup)
+            .with_assistants(assistants),
     );
     let tokens = Arc::new(TokenRegistry::default());
     let socket_path = default_socket_path(&std::env::temp_dir());
@@ -241,6 +251,15 @@ impl AppState {
         let emitter = EventEmitter::web_only(broadcaster.clone(), acp_event_bus.clone());
 
         let connection_manager = default_connection_manager();
+        let cli_runs = crate::cli_run::CliRunService::new(
+            &db,
+            &connection_manager,
+            emitter.clone(),
+            acp_event_bus.clone(),
+            data_dir.clone(),
+            crate::cli_run::wire::RuntimeKind::Server,
+        );
+        let cli_access = crate::cli_run::CliAccess::new(cli_runs.clone(), data_dir.clone());
         let (
             delegation_broker,
             delegation_tokens,
@@ -281,6 +300,8 @@ impl AppState {
             computer_service: std::sync::OnceLock::new(),
             system_op_lock: default_system_op_lock(),
             update_state: default_update_state(),
+            cli_runs,
+            cli_access,
         }
     }
 }

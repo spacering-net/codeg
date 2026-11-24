@@ -11,14 +11,18 @@ import {
   buildAcpAdapterCheck,
   buildVersionCheck,
   canCheckLatestRelease,
+  claudeThinkingSummariesEnabled,
   compareReleaseVersion,
   configTextForClaudeSave,
   extractCodexImportantValues,
   getAgentChecks,
+  GROK_REASONING_EFFORT_LEVELS,
+  grokReasoningEffortChoices,
   hostToolsAgentModeEnabled,
   importantEnvKeysByAgent,
   importantFieldsFor,
   inferGrokMode,
+  isOpenCodeV1Release,
   latestReleaseOffer,
   materializeClaudeHardeningFlags,
   patchCodexConfigTomlText,
@@ -28,8 +32,10 @@ import {
   codexSandboxSeedsAcpPreset,
   rebaseDeepSeekDraft,
   setClaudeEnvFlagInConfigText,
+  setClaudeThinkingSummaries,
   setHostToolsAgentMode,
   showsCodexReadOnlyAcpWarning,
+  toggleGrokReasoningEffort,
 } from "./acp-agent-settings"
 import { parse as parseTomlDocument } from "smol-toml"
 import type {
@@ -60,7 +66,6 @@ function makeAgent(overrides: Partial<AcpAgentInfo>): AcpAgentInfo {
     env: {},
     config_json: null,
     config_file_path: null,
-    opencode_auth_json: null,
     codex_auth_json: null,
     cline_secrets_json: null,
     codex_config_toml: null,
@@ -104,6 +109,8 @@ const grokDraft = (
   grokCustomApiKey: "",
   grokCustomApiBackend: "responses",
   grokCustomContextWindow: "",
+  grokCustomReasoningEfforts: [],
+  grokCustomReasoningEffortsBaseline: [],
   grokAutoCompactThreshold: "",
   ...overrides,
 })
@@ -114,6 +121,7 @@ const emptyCustoms = {
   customApiKey: null,
   customApiBackend: null,
   customContextWindow: null,
+  customReasoningEfforts: null,
   autoCompactThresholdPercent: null,
 }
 
@@ -437,6 +445,7 @@ describe("buildGrokStructuredConfig — Grok panel save payload", () => {
       customApiKey: "xai-123",
       customApiBackend: "chat_completions",
       customContextWindow: 131072,
+      customReasoningEfforts: null,
       autoCompactThresholdPercent: 80,
     })
   })
@@ -480,6 +489,7 @@ describe("buildGrokStructuredConfig — Grok panel save payload", () => {
       customApiKey: null,
       customApiBackend: "responses",
       customContextWindow: null,
+      customReasoningEfforts: null,
       autoCompactThresholdPercent: 100,
     })
   })
@@ -511,6 +521,123 @@ describe("buildGrokStructuredConfig — Grok panel save payload", () => {
         ...emptyCustoms,
       })
     }
+  })
+})
+
+describe("Grok custom model reasoning-effort levels", () => {
+  // Levels ride with an active model only once the chips moved off the list
+  // they were read as — an emptied list too, which removes the key. Untouched
+  // chips, or no active model, send null ("leave it as it is").
+  it("sends the levels only once the chips moved", () => {
+    const levels = ["low", "medium", "high", "xhigh"]
+    const custom = { grokCustomModelId: "grok-4.7" }
+    expect(
+      buildGrokStructuredConfig(
+        grokDraft({ ...custom, grokCustomReasoningEfforts: levels })
+      ).customReasoningEfforts
+    ).toEqual(levels)
+    expect(
+      buildGrokStructuredConfig(
+        grokDraft({
+          ...custom,
+          grokCustomReasoningEfforts: [],
+          grokCustomReasoningEffortsBaseline: ["high"],
+        })
+      ).customReasoningEfforts
+    ).toEqual([])
+    // Untouched, or toggled back to what was read: nothing to send.
+    for (const read of [[], ["xhigh", "high"]]) {
+      expect(
+        buildGrokStructuredConfig(
+          grokDraft({
+            ...custom,
+            grokCustomReasoningEfforts: [...read],
+            grokCustomReasoningEffortsBaseline: read,
+          })
+        ).customReasoningEfforts
+      ).toBeNull()
+    }
+    // Reordering is a move: the first level is where Grok starts a session.
+    expect(
+      buildGrokStructuredConfig(
+        grokDraft({
+          ...custom,
+          grokCustomReasoningEfforts: ["high", "xhigh"],
+          grokCustomReasoningEffortsBaseline: ["xhigh", "high"],
+        })
+      ).customReasoningEfforts
+    ).toEqual(["high", "xhigh"])
+    // No active custom model: null like the rest of the group.
+    expect(
+      buildGrokStructuredConfig(
+        grokDraft({ grokCustomReasoningEfforts: levels })
+      ).customReasoningEfforts
+    ).toBeNull()
+    expect(
+      buildGrokStructuredConfig(
+        grokDraft({
+          ...custom,
+          grokAuthMode: "api_key",
+          grokCustomReasoningEfforts: levels,
+        })
+      ).customReasoningEfforts
+    ).toBeNull()
+  })
+
+  // The raw editor's text is the merge base and the structured values land on
+  // top: re-sending the levels that were read would revert ones typed there.
+  it("keeps levels typed into the raw config.toml editor", () => {
+    const onDisk = '[models]\ndefault = "grok-4.7"\n\n[model."grok-4.7"]\n'
+    const edited = `${onDisk}reasoning_efforts = ["low", "high"]\n`
+    const opts = buildGrokSaveOptions(
+      {
+        ...grokDraft({ grokCustomModelId: "grok-4.7" }),
+        grokConfigTomlText: edited,
+      },
+      onDisk
+    )
+    expect(opts.grokConfigTomlText).toBe(edited)
+    expect(opts.grokStructured.customModelId).toBe("grok-4.7")
+    expect(opts.grokStructured.customReasoningEfforts).toBeNull()
+  })
+
+  // Only Grok's canonical levels are offered (an unknown one would make Grok
+  // drop the whole list); `none` is left out of the chips.
+  it("offers Grok's canonical levels, plus any other level already saved", () => {
+    expect(GROK_REASONING_EFFORT_LEVELS).toEqual([
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ])
+    expect(grokReasoningEffortChoices([])).toEqual(GROK_REASONING_EFFORT_LEVELS)
+    // A hand-written level stays visible (once) so it can be turned off.
+    expect(grokReasoningEffortChoices(["none", "high", "none"])).toEqual([
+      ...GROK_REASONING_EFFORT_LEVELS,
+      "none",
+    ])
+  })
+
+  it("adds a level in chip order and drops every copy when turned off", () => {
+    expect(toggleGrokReasoningEffort([], "high")).toEqual(["high"])
+    expect(toggleGrokReasoningEffort(["high"], "low")).toEqual(["low", "high"])
+    expect(toggleGrokReasoningEffort(["low", "high"], "xhigh")).toEqual([
+      "low",
+      "high",
+      "xhigh",
+    ])
+    // Extras stay, after the canonical levels.
+    expect(toggleGrokReasoningEffort(["none", "high"], "low")).toEqual([
+      "low",
+      "high",
+      "none",
+    ])
+    expect(toggleGrokReasoningEffort(["low", "high", "low"], "low")).toEqual([
+      "high",
+    ])
+    expect(toggleGrokReasoningEffort(["none"], "none")).toEqual([])
   })
 })
 
@@ -794,6 +921,64 @@ describe("buildVersionCheck", () => {
     expect(check?.fixes.some((fix) => fix.kind === "upgrade_npx")).toBe(true)
   })
 
+  // codeg refuses OpenCode 1.x at launch, so an installed 1.x is a failure
+  // that names the upgrade, not an optional "upgrade available".
+  it("fails an installed OpenCode 1.x and offers the upgrade", () => {
+    const check = buildVersionCheck(
+      makeAgent({
+        agent_type: "open_code" as AgentType,
+        registry_id: "opencode",
+        distribution_type: "binary",
+        registry_version: "2.2.0",
+        installed_version: "1.19.3",
+      })
+    )
+    expect(check?.status).toBe("fail")
+    expect(check?.message).toContain("OpenCode 1.x is no longer supported")
+    expect(check?.fixes.map((fix) => fix.kind)).toEqual([
+      "upgrade_binary",
+      "uninstall_binary",
+    ])
+  })
+
+  it("keeps the usual comparison for OpenCode 2 and preview builds", () => {
+    const behind = buildVersionCheck(
+      makeAgent({
+        agent_type: "open_code" as AgentType,
+        registry_id: "opencode",
+        distribution_type: "binary",
+        registry_version: "2.2.0",
+        installed_version: "2.1.4",
+      })
+    )
+    expect(behind?.status).toBe("warn")
+    expect(behind?.message).toContain("Upgrade available")
+
+    const current = buildVersionCheck(
+      makeAgent({
+        agent_type: "open_code" as AgentType,
+        registry_id: "opencode",
+        distribution_type: "binary",
+        registry_version: "2.2.0",
+        installed_version: "2.2.0",
+      })
+    )
+    expect(current?.status).toBe("pass")
+  })
+
+  it("judges only OpenCode releases as 1.x", () => {
+    expect(isOpenCodeV1Release("1.19.3")).toBe(true)
+    expect(isOpenCodeV1Release(" 1.18.33 ")).toBe(true)
+    expect(isOpenCodeV1Release("0.15.31")).toBe(true)
+    expect(isOpenCodeV1Release("1.19.5-beta.1")).toBe(true)
+    expect(isOpenCodeV1Release("2.0.0")).toBe(false)
+    expect(isOpenCodeV1Release("2.2.0")).toBe(false)
+    // Preview channels publish as 0.0.0-<tag> whatever the build's age.
+    expect(isOpenCodeV1Release("0.0.0-dev-202609282300")).toBe(false)
+    expect(isOpenCodeV1Release("1.19")).toBe(false)
+    expect(isOpenCodeV1Release("local")).toBe(false)
+  })
+
   // uv runtime not ready: a uvx agent (Hermes) must surface a blocked
   // version-status with the agent-install action DISABLED — the actual install
   // happens via the separate "Install uv" preflight action, not here.
@@ -895,6 +1080,60 @@ describe("buildVersionCheck", () => {
     expect(check?.status).toBe("pass")
     expect(check?.message).toContain("Already latest")
     expect(check?.fixes.some((fix) => fix.kind === "upgrade_npx")).toBe(false)
+  })
+
+  // Cursor publishes several builds a day under one date. A pin that moves to
+  // a later build of the same day must still reach installs of the earlier
+  // one: connect launches whatever build is cached and never downloads, so
+  // Upgrade here is the only way the pinned build arrives.
+  const cursor = (installed: string) =>
+    makeAgent({
+      agent_type: "cursor" as AgentType,
+      distribution_type: "binary",
+      registry_version: "2026.10.14-941492e",
+      installed_version: installed,
+    })
+
+  it("offers the pinned build to an install of another build of that day", () => {
+    const check = buildVersionCheck(cursor("2026.10.14-0f9edde"))
+    expect(check?.status).toBe("warn")
+    expect(check?.message).toContain("Upgrade available")
+    expect(check?.fixes.some((fix) => fix.kind === "upgrade_binary")).toBe(true)
+  })
+
+  it("reads Already latest for the pinned build itself", () => {
+    for (const installed of [
+      "2026.10.14-941492e",
+      // The raw first line of a system install's `--version`.
+      "cursor-agent 2026.10.14-941492e",
+    ]) {
+      const check = buildVersionCheck(cursor(installed))
+      expect(check?.status).toBe("pass")
+      expect(check?.message).toContain("Already latest")
+    }
+  })
+
+  it("keeps ordering builds of different days by date", () => {
+    const behind = buildVersionCheck(cursor("2026.10.01-14929f9"))
+    expect(behind?.message).toContain("Upgrade available")
+    const ahead = buildVersionCheck(cursor("2026.10.15-1234567"))
+    expect(ahead?.status).toBe("pass")
+    expect(ahead?.message).toContain("Already latest")
+  })
+
+  // Only a suffix on both sides names two builds: a probe that reports build
+  // metadata the pin does not carry is not evidence of a different build.
+  it("does not read a suffix on one side alone as another build", () => {
+    const check = buildVersionCheck(
+      makeAgent({
+        agent_type: "gemini" as AgentType,
+        distribution_type: "npx",
+        registry_version: "0.57.0",
+        installed_version: "0.57.0+e5f1a2c",
+      })
+    )
+    expect(check?.status).toBe("pass")
+    expect(check?.message).toContain("Already latest")
   })
 })
 
@@ -1159,6 +1398,118 @@ describe("unreviewed latest release in Version Status", () => {
     expect(versionCard()?.footerFixes?.map((fix) => fix.kind)).toEqual([
       "custom_install",
     ])
+  })
+
+  // A system agent (Kiro CLI) is installed and updated by its own installer:
+  // the card reports what was found and never offers install/upgrade/
+  // uninstall, which the backend would refuse.
+  it("reports a found system agent without any install action", () => {
+    const check = buildVersionCheck(
+      makeAgent({
+        agent_type: "kiro" as AgentType,
+        distribution_type: "system",
+        registry_version: null,
+        installed_version: "2.24.1",
+        install_url: "https://kiro.dev/docs/getting-started/installation/",
+      })
+    )
+    expect(check?.status).toBe("pass")
+    expect(check?.message).toContain("own installer")
+    expect(check?.fixes).toEqual([])
+  })
+
+  // With a vendor updater, the found install gets an Upgrade that runs it —
+  // still no install, uninstall or custom version.
+  it("offers the vendor updater as Upgrade when the agent has one", () => {
+    const check = buildVersionCheck(
+      makeAgent({
+        agent_type: "kiro" as AgentType,
+        distribution_type: "system",
+        registry_version: null,
+        installed_version: "2.24.1",
+        supports_self_update: true,
+      })
+    )
+    expect(check?.status).toBe("pass")
+    expect(check?.message).toContain("its own updater")
+    expect(check?.fixes.map((fix) => fix.kind)).toEqual(["upgrade_system"])
+  })
+
+  it("points a missing system agent at its install guide", () => {
+    const url = "https://kiro.dev/docs/getting-started/installation/"
+    const check = buildVersionCheck(
+      makeAgent({
+        agent_type: "kiro" as AgentType,
+        distribution_type: "system",
+        registry_version: null,
+        installed_version: null,
+        install_url: url,
+      })
+    )
+    expect(check?.status).toBe("fail")
+    expect(check?.fixes).toHaveLength(1)
+    expect(check?.fixes[0]).toMatchObject({ kind: "open_url", payload: url })
+  })
+})
+
+describe("getAgentChecks for a system agent", () => {
+  const url = "https://kiro.dev/docs/getting-started/installation/"
+  const kiro = (installed_version: string | null) =>
+    makeAgent({
+      agent_type: "kiro" as AgentType,
+      distribution_type: "system",
+      registry_version: null,
+      installed_version,
+      install_url: url,
+      supports_self_update: true,
+    })
+  const preflight = (status: "pass" | "fail"): { result: PreflightResult } => ({
+    result: {
+      agent_type: "kiro" as AgentType,
+      agent_name: "Kiro CLI",
+      passed: status === "pass",
+      checks: [
+        {
+          check_id: "system_cli",
+          label: "kiro-cli",
+          status,
+          message: "",
+          fixes: [],
+        },
+      ],
+      adapter: null,
+    },
+  })
+  const versionCard = (checks: ReturnType<typeof getAgentChecks>) =>
+    checks.find((c) => c.check_id === "version_status")
+
+  // The preflight resolves the binary a launch runs; `--version` coming back
+  // empty (a probe that timed out right after an update) does not make the
+  // CLI missing, and Upgrade stays on offer.
+  it("keeps a found CLI installed when its version could not be read", () => {
+    const card = versionCard(getAgentChecks(kiro(null), preflight("pass")))
+    expect(card?.status).toBe("pass")
+    expect(card?.message).toContain("its own updater")
+    expect(card?.fixes.map((fix) => fix.kind)).toEqual(["upgrade_system"])
+  })
+
+  // A version left over from before the CLI was removed must not offer an
+  // Upgrade the backend can only refuse.
+  it("reports a CLI the preflight could not find as missing", () => {
+    const card = versionCard(getAgentChecks(kiro("2.24.1"), preflight("fail")))
+    expect(card?.status).toBe("fail")
+    expect(card?.fixes).toEqual([
+      expect.objectContaining({ kind: "open_url", payload: url }),
+    ])
+  })
+
+  it("goes by the version until the preflight has answered", () => {
+    expect(versionCard(getAgentChecks(kiro("2.24.1"), undefined))?.status).toBe(
+      "pass"
+    )
+    expect(versionCard(getAgentChecks(kiro(null), undefined))?.status).toBe(
+      "fail"
+    )
   })
 })
 
@@ -1775,9 +2126,7 @@ describe("codex model_reasoning_effort is not managed by the panel", () => {
       { model: "gpt-5" },
       { apiBaseUrl: "https://api.example/v1" },
       { supportsWebsockets: true },
-      { skills: true },
       { defaultModeRequestUserInput: true },
-      { serviceTierFast: true },
     ]) {
       expect(patchCodexConfigTomlText("", patch)).not.toContain(KEY)
     }
@@ -1890,18 +2239,15 @@ describe("codex [features].default_mode_request_user_input toggle", () => {
   describe("headers carrying a trailing comment are still headers", () => {
     it("reuses a commented [features] instead of duplicating it", () => {
       const src = `model = "gpt-5"\n\n[features] # flags\nskills = true\n`
-      for (const patch of [
-        { defaultModeRequestUserInput: true },
-        { skills: true },
-      ]) {
-        const out = patchCodexConfigTomlText(src, patch)
-        expect(() => parseTomlDocument(out)).not.toThrow()
-        // Exactly one header line, and it is still the user's commented one.
-        const headers = out
-          .split("\n")
-          .filter((line) => /^\s*\[features\]/.test(line))
-        expect(headers).toEqual(["[features] # flags"])
-      }
+      const out = patchCodexConfigTomlText(src, {
+        defaultModeRequestUserInput: true,
+      })
+      expect(() => parseTomlDocument(out)).not.toThrow()
+      // Exactly one header line, and it is still the user's commented one.
+      const headers = out
+        .split("\n")
+        .filter((line) => /^\s*\[features\]/.test(line))
+      expect(headers).toEqual(["[features] # flags"])
     })
 
     it("does not reach past one into another table's keys", () => {
@@ -1931,8 +2277,8 @@ describe("codex [features].default_mode_request_user_input toggle", () => {
     expect(readsBackAs(off)).toBe(false)
   })
 
-  it("shares [features] with skills without disturbing it", () => {
-    const withSkills = patchCodexConfigTomlText("", { skills: true })
+  it("shares [features] with another key without disturbing it", () => {
+    const withSkills = "[features]\nskills = true\n"
     const both = patchCodexConfigTomlText(withSkills, {
       defaultModeRequestUserInput: true,
     })
@@ -1951,11 +2297,11 @@ describe("codex [features].default_mode_request_user_input toggle", () => {
     ).toEqual({ skills: true })
   })
 
-  // The flag lives in the same `[features]` table the WebSocket toggle writes
-  // `responses_websockets_v2` into, and that key is rewritten on EVERY patch
-  // from the active provider's `supports_websockets`. A user who turns on
-  // questions must not lose their WebSocket setting as a side effect.
-  it("survives — and preserves — the websocket feature key", () => {
+  // `[features].responses_websockets_v2` shares this table, but codex retired
+  // it in 0.116.0 and the panel no longer manages it: turning on questions
+  // must neither conjure it from the provider's `supports_websockets` (as the
+  // writer once did on every patch) nor drop one the user still has.
+  it("neither adds nor drops the retired websocket feature key", () => {
     const toml = [
       'model_provider = "codeg"',
       "",
@@ -1966,90 +2312,202 @@ describe("codex [features].default_mode_request_user_input toggle", () => {
     const result = patchCodexConfigTomlText(toml, {
       defaultModeRequestUserInput: true,
     })
-    const features = (
-      parseTomlDocument(result) as { features?: Record<string, unknown> }
-    ).features
-    expect(features).toMatchObject({
-      responses_websockets_v2: true,
-      [KEY]: true,
-    })
+    expect(
+      (parseTomlDocument(result) as { features?: Record<string, unknown> })
+        .features
+    ).toEqual({ [KEY]: true })
     expect(readsBackAs(result)).toBe(true)
+
+    const handWritten = `${toml}\n\n[features]\nresponses_websockets_v2 = true\n`
+    const kept = patchCodexConfigTomlText(handWritten, {
+      defaultModeRequestUserInput: true,
+    })
+    expect(
+      (parseTomlDocument(kept) as { features?: Record<string, unknown> })
+        .features
+    ).toEqual({ responses_websockets_v2: true, [KEY]: true })
   })
 })
 
-// `responses_websockets_v2` is rewritten on EVERY patch from the resolved
-// WebSocket state, so any control — this one, skills, service tier, the model
-// field — can destroy it if the writer resolves it differently from the reader.
-describe("codex WebSocket feature key survives unrelated toggles", () => {
-  const KEY = "default_mode_request_user_input"
-
+// Since codex 0.116.0 the WebSocket transport follows the active provider's
+// `supports_websockets` alone; `[features].responses_websockets_v2` is a
+// `Stage::Removed` no-op. The switch must read and write exactly that key.
+describe("codex WebSocket switch follows supports_websockets alone", () => {
   function websocketsOf(configTomlText: string): boolean {
     return extractCodexImportantValues("", configTomlText).supportsWebsockets
   }
 
-  // A config that declares WebSockets ONLY through the feature key: the reader
-  // falls back to it for the codeg provider, so the panel shows the switch on.
-  const FEATURE_ONLY = [
-    'model = "gpt-5"',
+  const BOUND = [
+    'model_provider = "codeg"',
     "",
-    "[features]",
-    "responses_websockets_v2 = true",
+    "[model_providers.codeg]",
+    'base_url = "https://example.test/v1"',
   ].join("\n")
 
-  it("is shown as enabled when only the feature key declares it", () => {
-    expect(websocketsOf(FEATURE_ONLY)).toBe(true)
+  // The panel used to fall back to the feature key and show the switch on,
+  // while codex — which ignores that key — kept talking HTTPS.
+  it("reads off when only the retired feature key is set", () => {
+    expect(
+      websocketsOf(`${BOUND}\n\n[features]\nresponses_websockets_v2 = true\n`)
+    ).toBe(false)
+    expect(
+      websocketsOf(
+        'model = "gpt-5"\n\n[features]\nresponses_websockets_v2 = true\n'
+      )
+    ).toBe(false)
+  })
+
+  it("reads the active provider's key", () => {
+    expect(websocketsOf(`${BOUND}\nsupports_websockets = true\n`)).toBe(true)
+    expect(websocketsOf(`${BOUND}\nsupports_websockets = false\n`)).toBe(false)
+    // Another provider's key is not the active one's.
+    expect(
+      websocketsOf(
+        `${BOUND}\n\n[model_providers.other]\nsupports_websockets = true\n`
+      )
+    ).toBe(false)
+  })
+
+  it("writes only the provider key when switched on", () => {
+    const on = patchCodexConfigTomlText(BOUND, {
+      modelProvider: "codeg",
+      supportsWebsockets: true,
+    })
+    expect(websocketsOf(on)).toBe(true)
+    const parsed = parseTomlDocument(on) as {
+      features?: unknown
+      model_providers?: Record<string, Record<string, unknown>>
+    }
+    expect(parsed.model_providers?.codeg?.supports_websockets).toBe(true)
+    expect(parsed.features).toBeUndefined()
+  })
+
+  // Absent is codex's default (`serde(default)` false), so "off" removes the
+  // key like the other switches instead of pinning `= false`.
+  it("removes the provider key when switched off", () => {
+    const on = `${BOUND}\nsupports_websockets = true\n`
+    const off = patchCodexConfigTomlText(on, {
+      modelProvider: "codeg",
+      supportsWebsockets: false,
+    })
+    expect(websocketsOf(off)).toBe(false)
+    expect(off).not.toContain("supports_websockets")
+  })
+
+  // Cleaning the retired key is the obsolete-keys notice's job, not a side
+  // effect of the switch.
+  it("leaves a hand-written feature key alone in either direction", () => {
+    const src = `${BOUND}\n\n[features]\nresponses_websockets_v2 = true\n`
+    for (const supportsWebsockets of [true, false]) {
+      const out = patchCodexConfigTomlText(src, {
+        modelProvider: "codeg",
+        supportsWebsockets,
+      })
+      expect(out).toContain("responses_websockets_v2 = true")
+    }
   })
 
   for (const [label, patch] of [
     ["the questions toggle", { defaultModeRequestUserInput: true }],
-    ["the skills toggle", { skills: true }],
-    ["the fast service tier", { serviceTierFast: true }],
+    ["the model field", { model: "gpt-5.5" }],
+    ["the base URL field", { apiBaseUrl: "https://other.test/v1" }],
   ] as const) {
-    it(`is not silently cleared by ${label}`, () => {
-      const after = patchCodexConfigTomlText(FEATURE_ONLY, patch)
+    it(`is not touched by ${label}`, () => {
+      const src = `${BOUND}\nsupports_websockets = true\n`
+      const after = patchCodexConfigTomlText(src, patch)
       expect(websocketsOf(after)).toBe(true)
-      expect(after).toContain("responses_websockets_v2 = true")
+      expect(after).not.toContain("responses_websockets_v2")
     })
   }
 
-  // The fallback reads the feature key, so a nested `features.…` line — which
-  // is really `model_providers.codeg.features.…` and means nothing to codex —
-  // must not reach it. Otherwise any unrelated toggle would quietly promote a
-  // provider-local key into a global WebSocket flag.
-  it("is not conjured out of a nested dotted key", () => {
-    const nested = [
+  // A header may carry a trailing comment. The provider writers matched
+  // headers exactly, so they missed a commented provider header (and appended
+  // a second `[model_providers.codeg]`, which TOML rejects) and a commented
+  // NEXT header (and wrote the key into that other table).
+  it("finds a provider header that carries a comment", () => {
+    const src = [
       'model_provider = "codeg"',
       "",
-      "[model_providers.codeg]",
+      "[model_providers.codeg] # my gateway",
       'base_url = "https://example.test/v1"',
-      "features.responses_websockets_v2 = true",
     ].join("\n")
-    expect(websocketsOf(nested)).toBe(false)
-    const after = patchCodexConfigTomlText(nested, {
-      defaultModeRequestUserInput: true,
+    const on = patchCodexConfigTomlText(src, {
+      modelProvider: "codeg",
+      supportsWebsockets: true,
     })
-    const features = (
-      parseTomlDocument(after) as { features?: Record<string, unknown> }
-    ).features
-    expect(features).toEqual({ [KEY]: true })
+    expect(() => parseTomlDocument(on)).not.toThrow()
+    expect(on.match(/\[model_providers\.codeg\]/g)).toHaveLength(1)
+    expect(websocketsOf(on)).toBe(true)
   })
 
-  // The fallback must not outrank an explicit provider `false`, or the
-  // WebSocket switch itself could never be turned off.
-  it("still lets the WebSocket switch turn itself off", () => {
-    const bound = [
+  it("stops at a following header that carries a comment", () => {
+    const src = [
       'model_provider = "codeg"',
       "",
       "[model_providers.codeg]",
       'base_url = "https://example.test/v1"',
-      "supports_websockets = true",
       "",
-      "[features]",
-      "responses_websockets_v2 = true",
+      "[features] # flags",
+      "default_mode_request_user_input = true",
     ].join("\n")
-    const off = patchCodexConfigTomlText(bound, { supportsWebsockets: false })
-    expect(websocketsOf(off)).toBe(false)
-    expect(off).not.toContain("responses_websockets_v2")
+    const on = patchCodexConfigTomlText(src, {
+      modelProvider: "codeg",
+      supportsWebsockets: true,
+    })
+    const parsed = parseTomlDocument(on) as {
+      features?: Record<string, unknown>
+      model_providers?: Record<string, Record<string, unknown>>
+    }
+    expect(parsed.model_providers?.codeg?.supports_websockets).toBe(true)
+    expect(parsed.features).toEqual({ default_mode_request_user_input: true })
+
+    const moved = patchCodexConfigTomlText(src, {
+      modelProvider: "codeg",
+      apiBaseUrl: "https://moved.test/v1",
+    })
+    const movedParsed = parseTomlDocument(moved) as {
+      features?: Record<string, unknown>
+      model_providers?: Record<string, Record<string, unknown>>
+    }
+    expect(movedParsed.model_providers?.codeg?.base_url).toBe(
+      "https://moved.test/v1"
+    )
+    expect(movedParsed.features).toEqual({
+      default_mode_request_user_input: true,
+    })
+  })
+})
+
+describe("Claude thinking summaries — CLAUDE_CODE_THINKING_DISPLAY in the adapter's env", () => {
+  const KEY = "CLAUDE_CODE_THINKING_DISPLAY"
+
+  it("is on only for the exact value claude-agent-acp reads", () => {
+    expect(claudeThinkingSummariesEnabled("")).toBe(false)
+    expect(claudeThinkingSummariesEnabled("ANTHROPIC_MODEL=opus")).toBe(false)
+    // The adapter takes `summarized` or `omitted` verbatim and ignores
+    // anything else, which leaves Claude Code's own default in place.
+    expect(claudeThinkingSummariesEnabled(`${KEY}=omitted`)).toBe(false)
+    expect(claudeThinkingSummariesEnabled(`${KEY}=Summarized`)).toBe(false)
+    // Trimmed, as the saved env is.
+    expect(claudeThinkingSummariesEnabled(`${KEY} = summarized `)).toBe(true)
+  })
+
+  it("round-trips on and off, keeping the other variables", () => {
+    const on = setClaudeThinkingSummaries("ANTHROPIC_MODEL=opus", true)
+    expect(on).toBe(`ANTHROPIC_MODEL=opus\n${KEY}=summarized`)
+    expect(claudeThinkingSummariesEnabled(on)).toBe(true)
+
+    // Off removes the key, so Claude Code's default display applies again:
+    // `omitted` would hide the notes it writes between tool calls as well.
+    const off = setClaudeThinkingSummaries(on, false)
+    expect(off).toBe("ANTHROPIC_MODEL=opus")
+    expect(claudeThinkingSummariesEnabled(off)).toBe(false)
+  })
+
+  it("replaces a value typed by hand when turned on", () => {
+    expect(setClaudeThinkingSummaries(`${KEY}=omitted\nX=1`, true)).toBe(
+      `${KEY}=summarized\nX=1`
+    )
   })
 })
 
@@ -2323,6 +2781,69 @@ describe("important env keys", () => {
   })
 })
 
+describe("Kiro env keys", () => {
+  // KIRO_API_KEY is the only env Kiro CLI reads for sign-in; there is no
+  // endpoint or model variable, so only the key field is offered.
+  it("offers only the API key, under the name Kiro reads", () => {
+    expect(importantEnvKeysByAgent("kiro" as AgentType)).toEqual({
+      apiBaseUrl: [],
+      apiKey: ["KIRO_API_KEY"],
+      model: [],
+    })
+    expect(importantFieldsFor("kiro" as AgentType)).toEqual({
+      apiBaseUrl: false,
+      apiKey: true,
+      model: false,
+    })
+    expect(
+      patchEnvByImportantKey("kiro" as AgentType, "", "apiKey", "ksk_1")
+    ).toBe("KIRO_API_KEY=ksk_1")
+  })
+})
+
+describe("TRAE CLI env keys", () => {
+  // TRAE CLI's sign-in for a browser-less machine is its personal access
+  // token, and `TRAECLI_HOST` points it at an enterprise's own deployment;
+  // the model is chosen over ACP, so there is no model variable.
+  it("offers the token and the API URL under the names TRAE CLI reads", () => {
+    expect(importantEnvKeysByAgent("trae" as AgentType)).toEqual({
+      apiBaseUrl: ["TRAECLI_HOST"],
+      apiKey: ["TRAECLI_PERSONAL_ACCESS_TOKEN"],
+      model: [],
+    })
+    expect(importantFieldsFor("trae" as AgentType)).toEqual({
+      apiBaseUrl: true,
+      apiKey: true,
+      model: false,
+    })
+    expect(
+      patchEnvByImportantKey("trae" as AgentType, "", "apiKey", "pat_1")
+    ).toBe("TRAECLI_PERSONAL_ACCESS_TOKEN=pat_1")
+  })
+})
+
+describe("Command Code env keys", () => {
+  // Command Code's sign-in for a browser-less machine is the API key it reads
+  // ahead of its stored login; providers of the user's own (BYOK) are
+  // connected inside Command Code (`/connect`) and the model is chosen over
+  // ACP, so there is no endpoint or model variable.
+  it("offers only the API key, under the name Command Code reads", () => {
+    expect(importantEnvKeysByAgent("command_code" as AgentType)).toEqual({
+      apiBaseUrl: [],
+      apiKey: ["COMMAND_CODE_API_KEY"],
+      model: [],
+    })
+    expect(importantFieldsFor("command_code" as AgentType)).toEqual({
+      apiBaseUrl: false,
+      apiKey: true,
+      model: false,
+    })
+    expect(
+      patchEnvByImportantKey("command_code" as AgentType, "", "apiKey", "k_1")
+    ).toBe("COMMAND_CODE_API_KEY=k_1")
+  })
+})
+
 describe("codex ACP preset disclosures", () => {
   // Every claim the panel makes about the seeded approval preset is only true
   // when a preset is actually seeded. `default_permissions` shadowing means
@@ -2348,5 +2869,58 @@ describe("codex ACP preset disclosures", () => {
       expect(showsCodexReadOnlyAcpWarning(mode, false)).toBe(false)
       expect(showsCodexReadOnlyAcpWarning(mode, true)).toBe(false)
     }
+  })
+})
+
+describe("ZCode runtime configuration", () => {
+  it("keeps provider credentials in the official runtime", () => {
+    expect(importantFieldsFor("zcode")).toEqual({
+      apiBaseUrl: false,
+      apiKey: false,
+      model: false,
+    })
+    const env =
+      "ZCODE_BIN=C:/My ZCode/zcode.cjs\nZCODE_NODE=C:/My Node/node.exe"
+    expect(patchEnvByImportantKey("zcode", env, "apiKey", "unused")).toBe(env)
+  })
+
+  it("explains that the official CLI is required even when the adapter is installed", () => {
+    const adapter: AdapterInfo = {
+      adapter_package: "zcode-acp-server@0.69.2",
+      adapter_cmd: "zcode-acp-server",
+      adapter_installed: true,
+      native_cmd: "zcode",
+      native_label: "ZCode CLI",
+      native_path: null,
+      native_required: true,
+      shared_config_dir: "~/.zcode",
+      docs_url: "https://github.com/william0wang/zcode-acp",
+    }
+    const check = buildAcpAdapterCheck(adapter)
+    expect(check?.status).toBe("warn")
+    expect(check?.message).toContain("Install and sign in")
+    expect(check?.message).not.toContain("not required")
+    expect(
+      buildAcpAdapterCheck({ ...adapter, native_path: "C:/ZCode/zcode.cjs" })
+        ?.status
+    ).toBe("pass")
+  })
+})
+
+describe("MiniMax Code native configuration", () => {
+  it("does not offer generic API fields or write keys to codeg settings", () => {
+    expect(importantEnvKeysByAgent("minimax_code")).toEqual({
+      apiBaseUrl: [],
+      apiKey: [],
+      model: [],
+    })
+    expect(importantFieldsFor("minimax_code")).toEqual({
+      apiBaseUrl: false,
+      apiKey: false,
+      model: false,
+    })
+    expect(
+      patchEnvByImportantKey("minimax_code", "KEEP=value", "apiKey", "secret")
+    ).toBe("KEEP=value")
   })
 })

@@ -1,0 +1,110 @@
+{
+  "items": [
+    {
+      "id": "01a1f230-a5b2-7bca-9cee-bd63eb5aee5c",
+      "status": "listed",
+      "ref": "obra/superpowers",
+      "kind": "plugin",
+      "latest": {
+        "revision": 1,
+        "version": "7.0.2",
+        "publishedAt": "2026-11-03T22:17:07Z"
+      },
+      "advisories": [],
+      "installed": {
+        "revision": 1,
+        "status": "ok",
+        "risk": "low",
+        "reviewed": false,
+        "permissions": {
+          "declared": {},
+          "detected": {
+            "runsCode": [
+              "cmd",
+              "executable",
+              "node",
+              "python",
+              "shell"
+            ],
+            "installs": [
+              "brew",
+              "bun",
+              "npm",
+              "npx",
+              "pip",
+              "system packages"
+            ],
+            "installScripts": [],
+            "network": [
+              "agentskills.io",
+              "api.github.com",
+              "blog.fsck.com",
+              "claude.com",
+              "code.claude.com",
+              "discord.gg",
+              "docs.github.com",
+              "github.com",
+              "mintcdn.com",
+              "opencode.ai",
+              "platform.claude.com",
+              "primeradiant.com",
+              "raw.githubusercontent.com",
+              "registry.npmjs.org",
+              "www.contributor-covenant.org"
+            ],
+            "secrets": [
+              "BRAINSTORM_TOKEN",
+              "SERVER_KEY"
+            ],
+            "paths": [
+              "~/...",
+              "~/.agents",
+              "~/.bashrc",
+              "~/.claude",
+              "~/.codex",
+              "~/.config",
+              "~/.gemini",
+              "~/.hermes",
+              "~/.local",
+              "~/.superpowers",
+              "~/2026-06-09-code-quality-reviewer-scope-budget-issue.md",
+              "~/home",
+              "~/project",
+              "~/superpowers-skills-backup",
+              "~/threads"
+            ],
+            "tools": [],
+            "hooks": [
+              "claude · SessionStart · \"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd\" session-start",
+              "cursor · sessionStart · ./hooks/run-hook.cmd session-start"
+            ],
+            "code": [
+              ".opencode/plugins/superpowers.js",
+              "index.js",
+              ".pi/extensions/superpowers.ts",
+              ".hermes-plugin/__init__.py"
+            ]
+          }
+        },
+        "checks": {
+          "findings": {
+            "low": 84,
+            "medium": 0,
+            "high": 0
+          },
+          "secrets": 0,
+          "review": "off"
+        },
+        "packages": [],
+        "plugin": {
+          "approved": false,
+          "full": null,
+          "execSha256": "ccbd9abbf16e194fa11be1281cc7551473a2e944b27e4a634c8591ebd86bb2a0",
+          "somethingNew": true
+        },
+        "stateSha256": "9966de64b565116dc7a0e6733bb64a2e88e79bb3c8eb86ffad3fe5785918e8ab"
+      },
+      "somethingNew": true
+    }
+  ]
+}

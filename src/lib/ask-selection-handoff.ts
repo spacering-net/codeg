@@ -13,7 +13,7 @@ import type { AgentType } from "@/lib/types"
  *    already (inactive tabs stay mounted, hidden) — hence the event as the
  *    already-mounted fast path.
  * Keying by tab id is what keeps a second group's draft panel from swallowing a
- * prompt meant for the first. Mirrors the `task-compose-events` idiom.
+ * prompt meant for the first.
  */
 
 export const ASK_SELECTION_PARKED_EVENT = "codeg:ask-selection-parked"

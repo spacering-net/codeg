@@ -164,6 +164,8 @@ mod tests {
             },
             AcpEvent::PermissionResolved {
                 request_id: "r1".into(),
+                option_id: None,
+                origin: None,
             },
             AcpEvent::TurnComplete {
                 session_id: "s".into(),

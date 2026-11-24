@@ -10,7 +10,7 @@
 //!   and `release-manifest.json` next to the archives, and since 0.32.0 a
 //!   Sigstore bundle for each, signed by trycua's release workflow — what
 //!   upstream says, which the helper does not take at runtime. The archive
-//!   and executable digests below were computed from the v0.32.0 release
+//!   and executable digests below were computed from the v0.36.0 release
 //!   assets, once their bundles checked out against that workflow
 //!   (`cd-rust-cua-driver.yml` at the release's tag), and are reviewed and
 //!   signed with codeg's own code.
@@ -32,7 +32,7 @@
 use crate::acp::error::AcpError;
 
 /// The pinned release.
-pub const DRIVER_VERSION: &str = "0.32.0";
+pub const DRIVER_VERSION: &str = "0.36.0";
 
 /// The file name of the executable inside every archive, without `.exe`.
 pub const DRIVER_COMMAND: &str = "cua-driver";
@@ -61,39 +61,39 @@ pub struct DriverArtifact {
 pub const DRIVER_ARTIFACTS: &[DriverArtifact] = &[
     DriverArtifact {
         platform: "darwin-aarch64",
-        url: "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.32.0/cua-driver-rs-0.32.0-darwin-universal-binary.tar.gz",
-        archive_sha256: "89b4b093db2f1c88264782f21f22f6813b7cad779c0e764ad20b5480a3f8b545",
-        executable_sha256: "d5762050791535fa85a9eae2f067167287cf4a4883b2051fe2dba33204c6e8b5",
+        url: "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.36.0/cua-driver-rs-0.36.0-darwin-universal-binary.tar.gz",
+        archive_sha256: "584e44435a26f5aa90c2f0097242307efbd63e843fc3f61072147c1963b0e592",
+        executable_sha256: "87c7e782e69703d95524e4ceb7ceba03c8a159caabf1f1ce2c118eade7d2a5ec",
     },
     DriverArtifact {
         platform: "darwin-x86_64",
-        url: "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.32.0/cua-driver-rs-0.32.0-darwin-universal-binary.tar.gz",
-        archive_sha256: "89b4b093db2f1c88264782f21f22f6813b7cad779c0e764ad20b5480a3f8b545",
-        executable_sha256: "d5762050791535fa85a9eae2f067167287cf4a4883b2051fe2dba33204c6e8b5",
+        url: "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.36.0/cua-driver-rs-0.36.0-darwin-universal-binary.tar.gz",
+        archive_sha256: "584e44435a26f5aa90c2f0097242307efbd63e843fc3f61072147c1963b0e592",
+        executable_sha256: "87c7e782e69703d95524e4ceb7ceba03c8a159caabf1f1ce2c118eade7d2a5ec",
     },
     DriverArtifact {
         platform: "linux-aarch64",
-        url: "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.32.0/cua-driver-rs-0.32.0-linux-arm64-binary.tar.gz",
-        archive_sha256: "603bf2d70e9fca06f59a74528cb1c26d47cd3eb1dceeb0827e04b6b8618e0e75",
-        executable_sha256: "03167f9045602ae79b679dfc9fa749ef20bfaafcd783106a10f96aac55068057",
+        url: "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.36.0/cua-driver-rs-0.36.0-linux-arm64-binary.tar.gz",
+        archive_sha256: "f64a33889605944a4e5af0e6036496137a25d6375f041d7c56e65c3be456aab2",
+        executable_sha256: "ae3fe9bac780abf09a7728c7d9e53ad84c10353309cc160f178538a6fe9e2b6f",
     },
     DriverArtifact {
         platform: "linux-x86_64",
-        url: "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.32.0/cua-driver-rs-0.32.0-linux-x86_64-binary.tar.gz",
-        archive_sha256: "bb006010864e9a93b9f67035e345c3a076f0908d42fbe493bb21ede5f82f39a6",
-        executable_sha256: "2c56cc4c260f07c957a0f8ee905c2477ec8f2a9b548024999f3698c9864c20e0",
+        url: "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.36.0/cua-driver-rs-0.36.0-linux-x86_64-binary.tar.gz",
+        archive_sha256: "05dae2160c86bdf4855c279d30898213d7a150edb1992b7470afdd69f0df4064",
+        executable_sha256: "d09deb163d5c505493c865c0882ccf261d460c515afe9df1ad1e5d4173f2a4f9",
     },
     DriverArtifact {
         platform: "windows-aarch64",
-        url: "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.32.0/cua-driver-rs-0.32.0-windows-arm64-binary.zip",
-        archive_sha256: "b5f2c3754423f24f283d18deadf8a9fff84bf564e15babbf9690fccb815ddf2e",
-        executable_sha256: "f4b192c8f13edcc594cdb6b0f535fb62dd77dfcbe99bbb3e7ee1b1f7426a3744",
+        url: "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.36.0/cua-driver-rs-0.36.0-windows-arm64-binary.zip",
+        archive_sha256: "520ea584cf11c074bccc4fd2328e8f2b34ec43de9328d97afb7fd03f761b55ee",
+        executable_sha256: "daa9dc9040af442147330eb66d62fa075ff821a67554046905c0ae22f3208654",
     },
     DriverArtifact {
         platform: "windows-x86_64",
-        url: "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.32.0/cua-driver-rs-0.32.0-windows-x86_64-binary.zip",
-        archive_sha256: "16aa3666f4ab4faba2fa6261ecb9349d2e9a0c97eca2a0b0960db5a311c2b1e1",
-        executable_sha256: "d2477595e8b5ae850d119b48c8bbe5c16a1f229f3e99e706bd84622c2d7d98ae",
+        url: "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.36.0/cua-driver-rs-0.36.0-windows-x86_64-binary.zip",
+        archive_sha256: "f8c47024b626f4e0e70f8428d2998df39e4879110c5722a29d5fd03e367353ad",
+        executable_sha256: "99291d8d6a4851d9df96da5813a1ef2761f2c9d3a59d2a7036c0bf4d09652f4f",
     },
 ];
 
@@ -113,9 +113,9 @@ pub const DRIVER_DESIGNATED_REQUIREMENT: &str = "identifier \"cua-driver\" and a
 /// one of these.
 pub const DRIVER_CDHASHES: &[&str] = &[
     // arm64
-    "85762daaf280608d0bbd29236fe929d58342f91a",
+    "9b58dbca984a8acacb84f541a78e7231ca7af6c5",
     // x86_64
-    "cca5c9457e7d3ac5bf82059b222499807fddc799",
+    "34a6b2ee034a5e4707891a0ed29e3fa67ab6dadb",
 ];
 
 /// Exactly the entitlements the pinned build carries, and must carry: Apple

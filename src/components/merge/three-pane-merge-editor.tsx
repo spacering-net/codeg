@@ -707,6 +707,11 @@ function ArrowGutter({
 }: ArrowGutterProps) {
   const editor = editorRef.current
 
+  // Arrow positions come from the imperative Monaco editor's current scroll
+  // state, read during render on purpose: the parent bumps `scrollTick` after
+  // mount and on every scroll, which re-renders this gutter so the read is
+  // never stale for more than the frame that caused it.
+  /* eslint-disable react-hooks/refs -- positions are read from the editor instance; `scrollTick` drives re-renders */
   const positioned = useMemo(() => {
     if (!editor) return []
     return items
@@ -721,6 +726,7 @@ function ArrowGutter({
     // scrollTick is included to recompute on scroll
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editor, items, scrollTick])
+  /* eslint-enable react-hooks/refs */
 
   return (
     <div className="merge-gutter-column">

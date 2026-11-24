@@ -17,7 +17,7 @@ use crate::parsers::{
     backfill_turn_durations, compute_session_stats, folder_name_from_path,
     infer_context_window_max_tokens, is_safe_subagent_id, merge_context_window_stats,
     relocate_orphaned_tool_results, structurize_read_tool_output, title_from_user_text,
-    truncate_str, AgentParser, ParseError,
+    truncate_str, AgentEnv, AgentParser, ParseError,
 };
 
 /// Cap for a single tool result / tool input preview stored on a turn. Grok's
@@ -65,7 +65,12 @@ const GROK_SUBAGENT_PREVIEW_CAP: usize = 500;
 /// CLI's own `GROK_HOME` override). The transcript store lives under the
 /// `sessions/` subdirectory of this path.
 pub(crate) fn resolve_grok_home_dir() -> PathBuf {
-    resolve_grok_home_from(std::env::var_os("GROK_HOME"), dirs::home_dir())
+    resolve_grok_home_dir_for_env(&AgentEnv::inherited())
+}
+
+/// The data home of the Grok launched with `env`.
+pub(crate) fn resolve_grok_home_dir_for_env(env: &AgentEnv) -> PathBuf {
+    resolve_grok_home_from(env.var_os("GROK_HOME"), dirs::home_dir())
 }
 
 fn resolve_grok_home_from(grok_home_env: Option<OsString>, home_dir: Option<PathBuf>) -> PathBuf {
@@ -119,18 +124,46 @@ fn grok_context_window_from_models_cache(raw: &str, model: &str) -> Option<u64> 
 
 /// `[model.<id>].context_window` from Grok's `config.toml` — a BYO endpoint's
 /// declared window. Mirrors the read `commands::acp::parse_grok_settings` does
-/// for the settings panel. Non-positive / missing / malformed → `None`.
+/// for the settings panel.
+///
+/// Since Grok 1.0.64 a table without a window takes the window of another
+/// table that sends the same model, where it used to fall back to 200,000. A
+/// table sends its `model`, or its own id when it names none, and when several
+/// tables send that model with a window, the one declared last in the file is
+/// the one Grok uses. So the file is read in its own order, which `toml::Table`
+/// does not keep. Grok counts a window only when it is a non-negative integer:
+/// a negative, fractional or non-numeric one is no window at all, so its table
+/// inherits and other tables pass over it. A 0 is a window, though, and the
+/// table it settles on gets Grok's 200,000 default instead, whether the 0 is
+/// its own or the last match's. All of this was seen live on 1.0.70, which
+/// reports the window on the wire. That default is not a window Grok
+/// assigned, so it reads as `None` here, as do an unknown model and malformed
+/// TOML.
 fn grok_context_window_from_config_toml(raw: &str, model: &str) -> Option<u64> {
-    raw.parse::<toml::Table>()
-        .ok()?
-        .get("model")?
-        .as_table()?
-        .get(model)?
-        .as_table()?
-        .get("context_window")?
-        .as_integer()
-        .filter(|window| *window > 0)
-        .map(|window| window as u64)
+    let doc = raw.parse::<toml_edit::Document>().ok()?;
+    let tables = doc.get("model")?.as_table_like()?;
+    // A window Grok counts, 0 included.
+    let declared = |table: &toml_edit::Item| {
+        let window = table.get("context_window")?.as_integer()?;
+        u64::try_from(window).ok()
+    };
+    let sends = |id: &str, table: &toml_edit::Item| {
+        table
+            .get("model")
+            .and_then(toml_edit::Item::as_str)
+            .unwrap_or(id)
+            .to_string()
+    };
+    let own = tables.get(model)?;
+    let window = declared(own).or_else(|| {
+        let sent = sends(model, own);
+        tables
+            .iter()
+            .filter(|(id, table)| *id != model && sends(id, table) == sent)
+            .filter_map(|(_, table)| declared(table))
+            .last()
+    })?;
+    (window > 0).then_some(window)
 }
 
 /// Grok Build (xAI) stores each conversation as a **directory-per-session**,
@@ -196,8 +229,14 @@ pub struct GrokParser {
 
 impl GrokParser {
     pub fn new() -> Self {
+        Self::for_env(&AgentEnv::inherited())
+    }
+
+    /// The history of the Grok launched with `env`. Its model catalog
+    /// (`models_cache.json`, `config.toml`) is read from the same home.
+    pub fn for_env(env: &AgentEnv) -> Self {
         Self {
-            base_dir: resolve_grok_home_dir().join("sessions"),
+            base_dir: resolve_grok_home_dir_for_env(env).join("sessions"),
         }
     }
 
@@ -286,12 +325,17 @@ impl GrokParser {
         // launch's ack text into the structured background-task marker.
         self.attach_subagent_stats(session_dir, &mut parsed);
 
-        // Grok resolves its native `ask_user_question` over the `_x.ai/ask_user_question`
-        // ext round-trip and never writes the answer into `updates.jsonl`, so the
-        // parsed ToolResult is empty and the `AskQuestionResultCard` shows "未选择".
+        // Grok's native `ask_user_question` leaves no picks the
+        // `AskQuestionResultCard` can read in `updates.jsonl`: the call's completed
+        // `tool_call_update` carries only the sentence the model gets ("User has
+        // answered your questions: "Q"="A". …", seen on 1.0.62, 1.0.70 and 1.0.77;
+        // from 1.0.70 it also adds a structured `rawOutput.UserAnswered.answers`
+        // list beside it),
+        // not the card's `{answers, declined}` envelope, so the card shows "未选择".
         // Recover the user's picks from `chat_history.jsonl` (the model-facing
-        // transcript, which DOES record the answer as a `tool_result`) and inject
-        // them as the tool output. No-op when the file is absent or there's no ask.
+        // transcript, whose `tool_result` carries the same sentence), parse them
+        // into the envelope and inject that as the tool output. No-op when the
+        // file is absent or there's no ask.
         inject_grok_ask_answers(&mut parsed.turns, &session_dir.join("chat_history.jsonl"));
 
         // Fill assistant turns that carried no in-stream `modelId` with the
@@ -475,6 +519,8 @@ impl GrokParser {
             lines_removed: None,
             other_tool_count: None,
             tool_calls,
+            timeline: Vec::new(),
+            recovered_result: None,
             // Grok runs every sub-agent as a full session of its own, so the
             // card can offer to open the child's transcript. Only hand over an
             // id that passed the path-traversal guard — it is used to look up a
@@ -843,6 +889,7 @@ fn parse_updates(path: &Path) -> ParsedUpdates {
                     is_error: false,
                     agent_stats: None,
                     images: Vec::new(),
+                    exit_code: None,
                 });
                 if !id.is_empty() {
                     tool_result_idx.insert(id, turn.blocks.len() - 1);
@@ -913,6 +960,7 @@ fn parse_updates(path: &Path) -> ParsedUpdates {
                     is_error: false,
                     agent_stats: None,
                     images: Vec::new(),
+                    exit_code: None,
                 });
             }
             // A failed auto-compaction: the same card in its failed state, as the
@@ -940,6 +988,7 @@ fn parse_updates(path: &Path) -> ParsedUpdates {
                     is_error: true,
                     agent_stats: None,
                     images: Vec::new(),
+                    exit_code: None,
                 });
             }
             // Sub-agent lifecycle (namespaced `_x.ai/session/update` method).
@@ -2556,6 +2605,130 @@ mod tests {
         );
     }
 
+    /// Grok 1.0.64+ gives a `[model.<id>]` table without a window the window of
+    /// another table that sends the same model. Each case is a config whose
+    /// windows Grok 1.0.70 reported live in `session/new`.
+    #[test]
+    fn a_windowless_model_table_takes_the_window_of_one_sending_the_same_model() {
+        let ep = "base_url = \"http://127.0.0.1:9/v1\"\napi_key = \"x\"\n";
+        // The holder names no `model`, so it sends its own id: 500000.
+        let named_by_id = format!(
+            "[model.big]\n{ep}context_window = 500000\n\n[model.alias]\nmodel = \"big\"\n{ep}"
+        );
+        assert_eq!(
+            grok_context_window_from_config_toml(&named_by_id, "alias"),
+            Some(500_000)
+        );
+        // The alias names no `model` either way round: it sends `alias`.
+        let alias_by_id = format!(
+            "[model.big]\nmodel = \"alias\"\n{ep}context_window = 500000\n\n[model.alias]\n{ep}"
+        );
+        assert_eq!(
+            grok_context_window_from_config_toml(&alias_by_id, "alias"),
+            Some(500_000)
+        );
+        // Several holders: the one declared last wins, whatever the windows
+        // and whatever the key order (live: 400000, 300000, 400000).
+        let holders = |first: (&str, u64), second: (&str, u64)| {
+            format!(
+                "[model.{}]\nmodel = \"m\"\n{ep}context_window = {}\n\n\
+                 [model.{}]\nmodel = \"m\"\n{ep}context_window = {}\n\n\
+                 [model.alias]\nmodel = \"m\"\n{ep}",
+                first.0, first.1, second.0, second.1
+            )
+        };
+        for (config, expected) in [
+            (holders(("w1", 300_000), ("w2", 400_000)), 400_000),
+            (holders(("w1", 400_000), ("w2", 300_000)), 300_000),
+            (holders(("z1", 300_000), ("a2", 400_000)), 400_000),
+        ] {
+            assert_eq!(
+                grok_context_window_from_config_toml(&config, "alias"),
+                Some(expected),
+                "{config}"
+            );
+        }
+        // Nobody else sends the alias's model: Grok falls back to 200000,
+        // which is not a window Grok assigned, so no opinion here.
+        let unmatched = format!("[model.alias]\nmodel = \"nobody\"\n{ep}");
+        assert_eq!(
+            grok_context_window_from_config_toml(&unmatched, "alias"),
+            None
+        );
+        // A table's own window still comes first.
+        let own = format!(
+            "[model.big]\n{ep}context_window = 500000\n\n\
+             [model.alias]\nmodel = \"big\"\n{ep}context_window = 64000\n"
+        );
+        assert_eq!(
+            grok_context_window_from_config_toml(&own, "alias"),
+            Some(64_000)
+        );
+    }
+
+    /// Grok counts a window only when it is a non-negative integer, and a 0
+    /// leaves the table on Grok's 200000 default. Each case is a config whose
+    /// windows Grok 1.0.70 reported live in `session/new`.
+    #[test]
+    fn grok_counts_a_zero_window_and_passes_over_an_invalid_one() {
+        let ep = "base_url = \"http://127.0.0.1:9/v1\"\napi_key = \"x\"\n";
+        // The alias's own window, next to a holder of 500000.
+        let own = |window: &str| {
+            format!(
+                "[model.big]\n{ep}context_window = 500000\n\n\
+                 [model.alias]\nmodel = \"big\"\n{ep}context_window = {window}\n"
+            )
+        };
+        // Live: 200000, the default, so no opinion.
+        assert_eq!(
+            grok_context_window_from_config_toml(&own("0"), "alias"),
+            None
+        );
+        // Live: 500000 for each, the holder's window.
+        for window in ["-5", "\"abc\"", "150000.5"] {
+            assert_eq!(
+                grok_context_window_from_config_toml(&own(window), "alias"),
+                Some(500_000),
+                "{window}"
+            );
+        }
+        // Two holders of the alias's model, the later one with `window`.
+        let later = |window: &str| {
+            format!(
+                "[model.w1]\nmodel = \"m\"\n{ep}context_window = 300000\n\n\
+                 [model.w2]\nmodel = \"m\"\n{ep}context_window = {window}\n\n\
+                 [model.alias]\nmodel = \"m\"\n{ep}"
+            )
+        };
+        // Live: 200000 for w2 and the alias.
+        assert_eq!(
+            grok_context_window_from_config_toml(&later("0"), "alias"),
+            None
+        );
+        assert_eq!(
+            grok_context_window_from_config_toml(&later("0"), "w2"),
+            None
+        );
+        // Live: 300000 for both, w1's window.
+        assert_eq!(
+            grok_context_window_from_config_toml(&later("-5"), "alias"),
+            Some(300_000)
+        );
+        assert_eq!(
+            grok_context_window_from_config_toml(&later("-5"), "w2"),
+            Some(300_000)
+        );
+        // The only holder declares 0. Live: 200000 for both.
+        let zero_only = format!(
+            "[model.w1]\nmodel = \"m\"\n{ep}context_window = 0\n\n\
+             [model.alias]\nmodel = \"m\"\n{ep}"
+        );
+        assert_eq!(
+            grok_context_window_from_config_toml(&zero_only, "alias"),
+            None
+        );
+    }
+
     #[test]
     fn assistant_turn_model_falls_back_to_summary() {
         // No in-stream modelId anywhere → the assistant turn's model is filled
@@ -3251,5 +3424,17 @@ mod tests {
         assert_eq!(status_of(&detail, "c-empty"), Some("completed"));
         // Absent everywhere stays absent — unknown, never a guess.
         assert_eq!(status_of(&detail, "c-silent"), None);
+    }
+
+    /// #948: built with an agent's launch env, the parser reads where THAT
+    /// env puts the agent's files, not where codeg's own environment does.
+    #[test]
+    fn for_env_reads_the_home_of_the_launch_env() {
+        let env = AgentEnv::with_overrides(&[("GROK_HOME", "/relocated/grok")]);
+        // The model catalog is read from the sessions dir's parent.
+        assert_eq!(
+            GrokParser::for_env(&env).base_dir,
+            PathBuf::from("/relocated/grok").join("sessions")
+        );
     }
 }

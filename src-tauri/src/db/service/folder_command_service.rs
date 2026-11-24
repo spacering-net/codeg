@@ -16,6 +16,7 @@ fn to_info(m: folder_command::Model) -> FolderCommandInfo {
         name: m.name,
         command: m.command,
         sort_order: m.sort_order,
+        run_local: m.run_local,
         created_at: m.created_at,
         updated_at: m.updated_at,
     }
@@ -39,6 +40,7 @@ pub async fn create(
     folder_id: i32,
     name: &str,
     command: &str,
+    run_local: bool,
 ) -> Result<FolderCommandInfo, DbError> {
     let now = Utc::now();
 
@@ -57,6 +59,7 @@ pub async fn create(
         name: Set(name.to_string()),
         command: Set(command.to_string()),
         sort_order: Set(max_order + 1),
+        run_local: Set(run_local),
         created_at: Set(now),
         updated_at: Set(now),
     };
@@ -93,6 +96,7 @@ pub async fn create_many(
             name: Set(name.clone()),
             command: Set(command.clone()),
             sort_order: Set(max_order + idx as i32 + 1),
+            run_local: Set(false),
             created_at: Set(now),
             updated_at: Set(now),
         })
@@ -105,12 +109,22 @@ pub async fn create_many(
     Ok(())
 }
 
+/// Whether command `id` runs on the desktop's own machine; false when there is
+/// no such command.
+pub async fn is_run_local(conn: &DatabaseConnection, id: i32) -> Result<bool, DbError> {
+    Ok(folder_command::Entity::find_by_id(id)
+        .one(conn)
+        .await?
+        .is_some_and(|m| m.run_local))
+}
+
 pub async fn update(
     conn: &DatabaseConnection,
     id: i32,
     name: Option<String>,
     command: Option<String>,
     sort_order: Option<i32>,
+    run_local: Option<bool>,
 ) -> Result<FolderCommandInfo, DbError> {
     let row = folder_command::Entity::find_by_id(id)
         .one(conn)
@@ -126,6 +140,9 @@ pub async fn update(
     }
     if let Some(s) = sort_order {
         active.sort_order = Set(s);
+    }
+    if let Some(r) = run_local {
+        active.run_local = Set(r);
     }
     active.updated_at = Set(Utc::now());
 
@@ -168,4 +185,60 @@ pub async fn reorder(
         .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test_helpers::{fresh_in_memory_db, seed_folder};
+
+    #[tokio::test]
+    async fn keeps_where_a_command_runs() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/repo").await;
+
+        let local = create(&db.conn, folder_id, "zed", "zed .", true)
+            .await
+            .unwrap();
+        let terminal = create(&db.conn, folder_id, "dev", "pnpm dev", false)
+            .await
+            .unwrap();
+        assert!(local.run_local);
+        assert!(!terminal.run_local);
+
+        // An update that doesn't mention it leaves it as it was.
+        let renamed = update(&db.conn, local.id, Some("editor".into()), None, None, None)
+            .await
+            .unwrap();
+        assert!(renamed.run_local);
+        let listed = list_by_folder(&db.conn, folder_id).await.unwrap();
+        assert_eq!(
+            listed
+                .iter()
+                .map(|c| (c.name.as_str(), c.run_local))
+                .collect::<Vec<_>>(),
+            [("editor", true), ("dev", false)]
+        );
+
+        let in_a_terminal = update(&db.conn, local.id, None, None, None, Some(false))
+            .await
+            .unwrap();
+        assert!(!in_a_terminal.run_local);
+    }
+
+    #[tokio::test]
+    async fn package_scripts_run_in_a_terminal() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/repo").await;
+        create_many(
+            &db.conn,
+            folder_id,
+            &[("dev".to_string(), "pnpm run dev".to_string())],
+        )
+        .await
+        .unwrap();
+        let listed = list_by_folder(&db.conn, folder_id).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert!(!listed[0].run_local);
+    }
 }

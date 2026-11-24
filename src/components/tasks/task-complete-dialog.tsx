@@ -17,12 +17,20 @@ import {
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { isWorktreeGone } from "./task-acceptance"
+import { ThreadCommentSection, useThreadComment } from "./task-thread-comment"
 import type { WorkTask } from "@/lib/types"
 
 interface TaskCompleteDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   task: WorkTask | null
+  /**
+   * Whether the task still has nothing to merge, judged from its LIVE row
+   * (`task` is the copy captured when the dialog opened). When it flips to
+   * false — the task turned out to hold changes after all — the dialog closes:
+   * completing would only be refused, and the card now offers the merge.
+   */
+  stillApplies?: boolean
 }
 
 /**
@@ -39,12 +47,14 @@ export function TaskCompleteDialog({
   open,
   onOpenChange,
   task,
+  stillApplies = true,
 }: TaskCompleteDialogProps) {
   const t = useTranslations("Tasks")
   const [deleteWorktree, setDeleteWorktree] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const worktreeGone = task != null && isWorktreeGone(task)
   const hasWorktree = task?.worktree_folder_id != null && !worktreeGone
+  const comment = useThreadComment(task, open)
 
   useEffect(() => {
     if (!open || !task) return
@@ -67,10 +77,16 @@ export function TaskCompleteDialog({
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [open, task])
 
+  useEffect(() => {
+    if (open && !stillApplies) onOpenChange(false)
+  }, [open, stillApplies, onOpenChange])
+
   const submit = async () => {
     if (!task) return
     setSubmitting(true)
     try {
+      // The comment's answer first: completing is what posts it.
+      await comment.persist()
       await workTaskComplete(task.id, hasWorktree && deleteWorktree)
       onOpenChange(false)
     } catch (e) {
@@ -81,7 +97,9 @@ export function TaskCompleteDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[28rem]">
+      <DialogContent
+        className={comment.applies ? "sm:max-w-[34rem]" : "sm:max-w-[28rem]"}
+      >
         <DialogHeader>
           <DialogTitle>{t("completeTitle")}</DialogTitle>
           <DialogDescription>
@@ -100,6 +118,8 @@ export function TaskCompleteDialog({
             {t("completeDeleteWorktree")}
           </Label>
         ) : null}
+
+        <ThreadCommentSection comment={comment} disabled={submitting} />
 
         <DialogFooter>
           <Button

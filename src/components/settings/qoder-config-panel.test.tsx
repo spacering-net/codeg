@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest"
 
 import {
   buildQoderEnv,
@@ -72,9 +72,9 @@ describe("QoderConfigPanel", () => {
   type PanelOverrides = {
     env?: Record<string, string>
     configJson?: string
-    onSaveEnv?: ReturnType<typeof vi.fn>
-    onSaved?: ReturnType<typeof vi.fn>
-    onAffectedSessions?: ReturnType<typeof vi.fn>
+    onSaveEnv?: Mock
+    onSaved?: Mock
+    onAffectedSessions?: Mock
   }
 
   function agentOf(overrides?: PanelOverrides): AcpAgentInfo {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 
+import { parseMcpToolName } from "./activity/mcp"
 import {
   aliasToolInputKeys,
   claudeCodeMarksSubagent,
@@ -8,6 +9,7 @@ import {
   extractClaudeCodeSkillName,
   inferLiveToolName,
   normalizeToolName,
+  PARENT_TOOL_CALL_META_KEY,
   toolCallMovedToBackground,
 } from "./tool-call-normalization"
 
@@ -65,6 +67,93 @@ describe("aliasToolInputKeys", () => {
   })
 })
 
+describe("inferLiveToolName on OpenCode's code-mode execute frames", () => {
+  // A `session/load` replay opens a call with its input already present, so
+  // the frame carries no stamped OpenCode name — only its `execute` title.
+  const replay = (code: string) =>
+    inferLiveToolName({
+      title: "execute",
+      kind: "other",
+      rawInput: JSON.stringify({ code }),
+      meta: null,
+    })
+
+  it("keeps the execute identity when the script quotes a patch", () => {
+    // The delegated task is text; the patch marker in it is no patch call.
+    expect(
+      replay(
+        "await tools['codeg-mcp'].delegate_to_agent({agent_type:'codex',task:`Apply this patch:\n*** Begin Patch\n*** Add File: hello.txt\n+hello\n*** End Patch`})"
+      )
+    ).toBe("bash")
+    expect(replay("return 1 + 1")).toBe("bash")
+  })
+
+  it("leaves other tools to the input heuristics", () => {
+    expect(
+      inferLiveToolName({
+        title: "apply_patch",
+        rawInput: JSON.stringify({ input: "*** Begin Patch\n*** End Patch" }),
+        meta: null,
+      })
+    ).toBe("apply_patch")
+    // A script under another title is not OpenCode's code-mode tool.
+    expect(
+      inferLiveToolName({
+        title: "browser_run_code",
+        rawInput: JSON.stringify({ code: "*** Begin Patch" }),
+        meta: null,
+      })
+    ).toBe("apply_patch")
+    // Nor is an `execute` whose `code` is no script.
+    expect(
+      inferLiveToolName({
+        title: "execute",
+        rawInput: JSON.stringify({ code: 42, input: "*** Begin Patch" }),
+        meta: null,
+      })
+    ).toBe("apply_patch")
+  })
+})
+
+describe("OpenCode 2 tool names", () => {
+  // OpenCode 2.2.0's opening frames state the tool as the ACP `name`, which the
+  // backend stamps as `_meta.opencode.toolName` (live capture).
+  const opening = (name: string) =>
+    inferLiveToolName({
+      title: name,
+      kind: "other",
+      rawInput: "{}",
+      meta: { opencode: { toolName: name } },
+    })
+
+  it("maps the renamed tools to their cards", () => {
+    expect(normalizeToolName("patch")).toBe("apply_patch")
+    expect(normalizeToolName("subagent")).toBe("agent")
+    expect(normalizeToolName("shell")).toBe("bash")
+    expect(opening("patch")).toBe("apply_patch")
+    expect(opening("subagent")).toBe("agent")
+    expect(opening("shell")).toBe("bash")
+  })
+
+  it("names a sub-agent's call from the stamp, not its prefixed title", () => {
+    expect(
+      inferLiveToolName({
+        title: "read",
+        kind: "read",
+        rawInput: JSON.stringify({ path: "hello.txt" }),
+        meta: {
+          "opencode/child-session": {
+            id: "ses_child",
+            title: "Probe child task",
+          },
+          opencode: { toolName: "read" },
+          [PARENT_TOOL_CALL_META_KEY]: "call_main_9_11",
+        },
+      })
+    ).toBe("read")
+  })
+})
+
 describe("inferLiveToolName meta.claudeCode.toolName override", () => {
   it("returns memory_recall for synthesized recall events without rawInput", () => {
     // Mirrors what claude-agent-acp >=0.37 emits for memory recall:
@@ -87,6 +176,39 @@ describe("inferLiveToolName meta.claudeCode.toolName override", () => {
         meta: { claudeCode: { toolName: "memory_recall" } },
       })
     ).toBe("memory_recall")
+  })
+
+  it("names EnterPlanMode by its meta name whatever kind the adapter gives it", () => {
+    // claude-agent-acp 0.99.0 (#1467) reports EnterPlanMode with the
+    // `switch_mode` kind ExitPlanMode has, where 0.98.0 said `other`. The
+    // frames are otherwise the same (measured): the opening tool_call has no
+    // input, the update after it an empty one.
+    const meta = { claudeCode: { toolName: "EnterPlanMode" } }
+    for (const kind of ["switch_mode", "other"]) {
+      for (const rawInput of [null, "{}"]) {
+        const name = inferLiveToolName({
+          title: "EnterPlanMode",
+          kind,
+          rawInput,
+          meta,
+        })
+        expect(name, `${kind} ${rawInput}`).toBe("enterplanmode")
+        expect(normalizeToolName(name)).toBe("enterplanmode")
+      }
+    }
+    // The meta name decides, not the kind: with no title to go by, a
+    // `switch_mode` call is still EnterPlanMode rather than a generic switch.
+    expect(
+      inferLiveToolName({
+        title: null,
+        kind: "switch_mode",
+        rawInput: null,
+        meta,
+      })
+    ).toBe("enterplanmode")
+    expect(
+      inferLiveToolName({ title: null, kind: "switch_mode", rawInput: null })
+    ).toBe("switch_mode")
   })
 
   it("falls back to title-based inference when no meta is provided", () => {
@@ -300,6 +422,82 @@ describe("inferLiveToolName meta.claudeCode.toolName override", () => {
         },
       })
     ).toBe("delegate_to_agent")
+  })
+
+  it("names a live Monitor a monitor, not the shell command its input looks like", () => {
+    // claude-agent-acp 0.98.0's live frame, recorded: the `command` key made
+    // the input-shape rule call it "bash" while it ran, and the transcript's
+    // raw name made it a generic "Monitor" on reload.
+    const live = inferLiveToolName({
+      title: "Monitor",
+      kind: "other",
+      rawInput: JSON.stringify({
+        command: "for i in 1 2 3; do echo event-$i; sleep 2; done",
+        description: "probe monitor",
+      }),
+      meta: { claudeCode: { toolName: "Monitor" } },
+    })
+    expect(live).toBe("monitor")
+    expect(normalizeToolName("Monitor")).toBe(live)
+    // A WebSocket monitor has no command at all.
+    expect(
+      inferLiveToolName({
+        title: "Monitor",
+        kind: "other",
+        rawInput: JSON.stringify({
+          ws: { url: "wss://ci.example.com/events" },
+          description: "CI events",
+        }),
+        meta: { claudeCode: { toolName: "Monitor" } },
+      })
+    ).toBe("monitor")
+    // Without the meta name, a command-shaped input is still a command.
+    expect(
+      inferLiveToolName({
+        title: "Monitor",
+        kind: "other",
+        rawInput: JSON.stringify({ command: "tail -f log" }),
+        meta: null,
+      })
+    ).toBe("bash")
+  })
+
+  it("gives a sandbox network request one name in either spelling", () => {
+    const live = inferLiveToolName({
+      title: "SandboxNetworkAccess",
+      kind: "other",
+      rawInput: JSON.stringify({ host: "example.com" }),
+      meta: { claudeCode: { toolName: "SandboxNetworkAccess" } },
+    })
+    expect(live).toBe("sandboxnetworkaccess")
+    expect(normalizeToolName("SandboxNetworkAccess")).toBe(live)
+    expect(normalizeToolName("sandboxnetworkaccess")).toBe(live)
+  })
+
+  it("keeps a sandbox network request by its meta name, whatever its input carries", () => {
+    // `{host}` matches no input shape today; the meta name is what keeps the
+    // call from being read as another tool once its input does (a `url`
+    // reads as a web fetch). The title is the host, as the request has it.
+    const rawInput = JSON.stringify({
+      host: "example.com",
+      url: "https://example.com/",
+    })
+    expect(
+      inferLiveToolName({
+        title: "example.com",
+        kind: "other",
+        rawInput,
+        meta: { claudeCode: { toolName: "SandboxNetworkAccess" } },
+      })
+    ).toBe("sandboxnetworkaccess")
+    expect(
+      inferLiveToolName({
+        title: "example.com",
+        kind: "other",
+        rawInput,
+        meta: null,
+      })
+    ).toBe("webfetch")
   })
 
   it("still classifies a {task_id} tool as task when no Claude Code meta is present", () => {
@@ -518,6 +716,23 @@ describe("normalizeToolName collapses delegate_to_agent across hosts", () => {
   })
 })
 
+describe("codex view_image", () => {
+  // codex-acp streams it as `kind: "read"` titled `View Image <path>` with
+  // `{path}` as its input; the rollout records the raw function name. Both
+  // must land on the same Read card, which shows the picture.
+  it("is a read live and on reload", () => {
+    const path = "/tmp/nanguang-login/login-qr-new.png"
+    expect(
+      inferLiveToolName({
+        title: `View Image ${path}`,
+        kind: "read",
+        rawInput: JSON.stringify({ path }),
+      })
+    ).toBe("read")
+    expect(normalizeToolName("view_image")).toBe("read")
+  })
+})
+
 describe("normalizeToolName collapses delegation companion tools across hosts", () => {
   it.each([
     "get_delegation_status",
@@ -570,6 +785,23 @@ describe("normalizeToolName collapses ask_user_question across hosts", () => {
 
   it("does not match a suffix without a separator", () => {
     expect(normalizeToolName("xask_user_question")).not.toBe("question")
+  })
+})
+
+describe("normalizeToolName maps Antigravity's native ask_question", () => {
+  it("collapses the bare name its history parser keeps", () => {
+    expect(normalizeToolName("ask_question")).toBe("question")
+  })
+
+  // A host-prefixed `ask_question` is a third-party MCP tool — DeepWiki's takes
+  // `{repoName, question}` — which the question card cannot render.
+  it.each([
+    "mcp__deepwiki__ask_question",
+    "deepwiki/ask_question",
+    "deepwiki_ask_question",
+    "deepwiki: ask_question",
+  ])("leaves %s to its own card", (input) => {
+    expect(normalizeToolName(input)).not.toBe("question")
   })
 })
 
@@ -898,8 +1130,8 @@ describe("inferLiveToolName Grok plan-mode via x.ai/tool.kind", () => {
     // Grok's live tool_call title drifts `enter_plan_mode` → "Plan: Enter" →
     // "Plan mode entered" while `_meta["x.ai/tool"].kind` stays `enter_plan`.
     // The completed frame (worst case) must still resolve to the canonical name
-    // — which normalizes to "enterplanmode" so it hits <PlanModeCard> + the
-    // tool-group run-break, matching the historical path.
+    // — which normalizes to "enterplanmode" so it draws as the plan-mode row,
+    // matching the historical path.
     const name = inferLiveToolName({
       title: "Plan mode entered",
       kind: "other",
@@ -1042,7 +1274,7 @@ describe("normalizeToolName codex command-action titles", () => {
   it("resolves search command actions to grep", () => {
     // codex-acp announces a search-classified shell command with NO rawInput and
     // no tool name — only the title. Without this the whole title became the
-    // "tool name": no search icon, an "other" tool-group tally, and a body that
+    // "tool name": no search icon, an "other" tool tally, and a body that
     // dumped the raw {formatted_output, exit_code} envelope.
     for (const title of [
       "Search for 'Tests run:' in com.forwayaudio.app",
@@ -1467,5 +1699,174 @@ describe("inferLiveToolName meta.opencode.toolName override", () => {
     expect(inferLiveToolName({ ...shape, meta: { opencode: "glob" } })).toBe(
       "read"
     )
+  })
+})
+
+describe("inferLiveToolName meta.kiro.canonicalToolName override", () => {
+  // Opening frames captured from kiro-cli 2.24.1 over real ACP, after the
+  // backend's rewrite: `rawInput` is the canonical shape and
+  // `_meta.kiro.canonicalToolName` sits beside Kiro's own `toolName`
+  // (`stamp_kiro_tool_name`).
+  const call = (
+    kiro: Record<string, string>,
+    title: string,
+    kind: string | null,
+    rawInput: unknown
+  ) =>
+    inferLiveToolName({
+      title,
+      kind,
+      rawInput: JSON.stringify(rawInput),
+      meta: { kiro },
+    })
+
+  it("names the calls the input shape gets wrong", () => {
+    // {pattern, path} alone reads as grep, {path} alone as a file read.
+    expect(
+      call(
+        { toolName: "glob", canonicalToolName: "glob" },
+        "Finding *.txt in ws",
+        "search",
+        { pattern: "*.txt", path: "/w" }
+      )
+    ).toBe("glob")
+    expect(
+      call(
+        { toolName: "read", canonicalToolName: "ls" },
+        "Reading listing ws",
+        "read",
+        { path: "/w" }
+      )
+    ).toBe("ls")
+    // {query} is only a web search when the title or kind says so; Kiro's
+    // kind is the generic "search".
+    expect(
+      call(
+        { toolName: "web_search", canonicalToolName: "websearch" },
+        "Searching the web",
+        "search",
+        { query: "agent client protocol" }
+      )
+    ).toBe("websearch")
+  })
+
+  it("keeps the edit/write split the canonical input encodes", () => {
+    expect(
+      call(
+        { toolName: "write", canonicalToolName: "edit" },
+        "Editing a.txt",
+        "edit",
+        { file_path: "/w/a.txt", old_string: "two", new_string: "2" }
+      )
+    ).toBe("edit")
+    expect(
+      call(
+        { toolName: "write", canonicalToolName: "write" },
+        "Creating b.txt",
+        "edit",
+        { file_path: "/w/b.txt", content: "hello" }
+      )
+    ).toBe("write")
+    expect(
+      call(
+        { toolName: "shell", canonicalToolName: "bash" },
+        "Running: ls /w",
+        "execute",
+        { command: "ls /w", description: "List it" }
+      )
+    ).toBe("bash")
+  })
+
+  it("resolves an MCP call to its companion tool", () => {
+    // Title `Running: @<server>/<tool>`, no kind: nothing else names it.
+    expect(
+      call(
+        {
+          toolName: "get_session_info",
+          mcpServerName: "codeg-mcp",
+          canonicalToolName: "mcp__codeg-mcp__get_session_info",
+        },
+        "Running: @codeg-mcp/get_session_info",
+        null,
+        { __tool_use_purpose: "Look it up", session_id: 7 }
+      )
+    ).toBe("get_session_info")
+  })
+
+  it("ignores Kiro's own toolName without the backend's stamp", () => {
+    // Kiro's bare `write` is not a canonical name — without the stamp the
+    // input shape decides, as before.
+    expect(
+      call({ toolName: "write" }, "Editing a.txt", "edit", {
+        file_path: "/w/a.txt",
+        old_string: "a",
+        new_string: "b",
+      })
+    ).toBe("edit")
+  })
+})
+
+describe("inferLiveToolName on claude-agent-acp's readable MCP titles", () => {
+  // claude-agent-acp 0.109.1 (#1674) titles an MCP tool call `<server>: <tool>`
+  // where it sent the raw `mcp__<server>__<tool>`, and keeps the raw name in
+  // `_meta.claudeCode.toolName` — the frames below are the adapter's own (live,
+  // 0.110.0). Both titles must name the call alike, so a live card matches the
+  // one a reload draws from the transcript's raw name.
+  const frame = (server: string, tool: string, title: string) => ({
+    title,
+    kind: "other",
+    meta: {
+      claudeCode: { toolName: `mcp__${server}__${tool}` },
+      jetbrains: { air: { version: 1, mcp: { server, tool } } },
+      is_mcp_tool_call: true,
+    },
+  })
+  const cases: [string, string, string | null, string][] = [
+    [
+      "codeg-mcp",
+      "task_progress",
+      '{"message":"halfway"}',
+      "mcp__codeg-mcp__task_progress",
+    ],
+    ["codeg-mcp", "ask_user_question", '{"questions":[]}', "question"],
+    [
+      "codeg-mcp",
+      "delegate_to_agent",
+      '{"agent_type":"codex","task":"hi"}',
+      "delegate_to_agent",
+    ],
+    [
+      "codeg-mcp",
+      "get_delegation_status",
+      '{"task_ids":["t1"]}',
+      "get_delegation_status",
+    ],
+    ["codeg-mcp", "cancel_delegation", '{"task_id":"t1"}', "cancel_delegation"],
+    ["github", "create_issue", '{"title":"x"}', "mcp__github__create_issue"],
+    // The readable title reads as the built-in web search to the title rules;
+    // the raw name keeps it this server's MCP call.
+    ["web-search", "search", '{"query":"codeg"}', "mcp__web-search__search"],
+  ]
+
+  it.each(cases)("%s: %s", (server, tool, rawInput, expected) => {
+    const name = (title: string, input: string | null) =>
+      inferLiveToolName({ ...frame(server, tool, title), rawInput: input })
+    for (const input of [null, rawInput]) {
+      expect(name(`${server}: ${tool}`, input)).toBe(
+        name(`mcp__${server}__${tool}`, input)
+      )
+    }
+    expect(name(`${server}: ${tool}`, rawInput)).toBe(expected)
+  })
+
+  it("keeps a third-party tool's server for its MCP row", () => {
+    const name = inferLiveToolName({
+      ...frame("github", "create_issue", "github: create_issue"),
+      rawInput: null,
+    })
+    expect(parseMcpToolName(name)).toEqual({
+      server: "github",
+      tool: "create_issue",
+    })
   })
 })

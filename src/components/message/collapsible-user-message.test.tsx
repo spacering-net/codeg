@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest"
 
 import { CollapsibleUserMessage } from "./collapsible-user-message"
 import enMessages from "@/i18n/messages/en.json"
+import { mockClampLayout } from "@/test-layout"
 import type { AdaptedContentPart } from "@/lib/adapters/ai-elements-adapter"
 
 function renderWithIntl(ui: ReactElement) {
@@ -16,48 +17,6 @@ function renderWithIntl(ui: ReactElement) {
 }
 
 const TEXT_PART: AdaptedContentPart[] = [{ type: "text", text: "hello world" }]
-
-// jsdom does no layout: scrollHeight/clientHeight (defined on Element, per
-// Element-impl.js) both default to 0, which already reads as "not
-// overflowing" for the short-content case below. The overflow cases patch
-// both onto Element.prototype *before* rendering, so the component's
-// synchronous mount-time measurement — it doesn't wait on a ResizeObserver
-// callback, since the global jsdom stub in test-setup.ts never invokes one —
-// picks up the mocked heights on its first read.
-function mockScrollMetrics(scrollHeight: number, clientHeight: number) {
-  const scrollHeightDescriptor = Object.getOwnPropertyDescriptor(
-    Element.prototype,
-    "scrollHeight"
-  )
-  const clientHeightDescriptor = Object.getOwnPropertyDescriptor(
-    Element.prototype,
-    "clientHeight"
-  )
-  Object.defineProperty(Element.prototype, "scrollHeight", {
-    configurable: true,
-    get: () => scrollHeight,
-  })
-  Object.defineProperty(Element.prototype, "clientHeight", {
-    configurable: true,
-    get: () => clientHeight,
-  })
-  return () => {
-    if (scrollHeightDescriptor) {
-      Object.defineProperty(
-        Element.prototype,
-        "scrollHeight",
-        scrollHeightDescriptor
-      )
-    }
-    if (clientHeightDescriptor) {
-      Object.defineProperty(
-        Element.prototype,
-        "clientHeight",
-        clientHeightDescriptor
-      )
-    }
-  }
-}
 
 describe("CollapsibleUserMessage", () => {
   let restoreMetrics: (() => void) | null = null
@@ -80,7 +39,7 @@ describe("CollapsibleUserMessage", () => {
   })
 
   it("shows a Show more toggle when content overflows the collapsed height", () => {
-    restoreMetrics = mockScrollMetrics(600, 240)
+    restoreMetrics = mockClampLayout(600, 240)
 
     renderWithIntl(<CollapsibleUserMessage parts={TEXT_PART} />)
 
@@ -92,8 +51,37 @@ describe("CollapsibleUserMessage", () => {
     expect(content).toHaveClass("max-h-60", "collapsed-content-fade")
   })
 
+  it("comes back with its toggle when it mounts again", () => {
+    // The thread is virtualized: scrolled away and back, a message mounts
+    // again, and drawing it without its toggle until it is measured would
+    // change its height under the list.
+    const parts: AdaptedContentPart[] = [{ type: "text", text: "a long ask" }]
+    restoreMetrics = mockClampLayout(600, 240)
+    const first = renderWithIntl(<CollapsibleUserMessage parts={parts} />)
+    expect(screen.getByTestId("collapsible-user-message-toggle")).toBeTruthy()
+    first.unmount()
+    restoreMetrics()
+    // No layout this time (the observer has not reported yet).
+    restoreMetrics = null
+
+    renderWithIntl(<CollapsibleUserMessage parts={parts} />)
+    expect(screen.getByTestId("collapsible-user-message-toggle")).toBeTruthy()
+    expect(screen.getByTestId("collapsible-user-message-content")).toHaveClass(
+      "collapsed-content-fade"
+    )
+  })
+
+  it("starts other content unmeasured", () => {
+    renderWithIntl(
+      <CollapsibleUserMessage parts={[{ type: "text", text: "another" }]} />
+    )
+    expect(
+      screen.queryByTestId("collapsible-user-message-toggle")
+    ).not.toBeInTheDocument()
+  })
+
   it("expands to Show less on click and removes the clamp", () => {
-    restoreMetrics = mockScrollMetrics(600, 240)
+    restoreMetrics = mockClampLayout(600, 240)
 
     renderWithIntl(<CollapsibleUserMessage parts={TEXT_PART} />)
 

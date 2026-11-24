@@ -875,13 +875,11 @@ async fn handle_op(
                 return Err(ops::out_of_sight_capture(why));
             }
             let driver = state.driver(stop).await?;
-            let captured = ops::capture(&driver, pid, window_id, max_dimension).await;
-            // Where a capture replaces the window's snapshot, the refs from
-            // the one before name nothing any more — whether or not this
-            // capture is handed on.
-            if ops::capture_replaces_snapshot() {
-                state.snapshots().record(pid, window_id, None);
-            }
+            let (mark, captured) = ops::capture(&driver, pid, window_id, max_dimension).await;
+            // Where the capture took the place of the window's snapshot, the
+            // refs from the one before name nothing any more — whether or not
+            // this capture is handed on.
+            state.snapshots().captured(pid, window_id, &mark);
             value(captured?)
         }
         HelperOp::Snapshot {
@@ -951,12 +949,15 @@ async fn handle_op(
             if !paste_ok && act::pastes(&action) {
                 return Err(act::paste_refused());
             }
-            let element_frame = {
+            let (element_frame, web) = {
                 let book = state.snapshots();
                 book.check(pid, window_id, &action, app_key.as_deref(), paste_ok)?;
-                action
-                    .element()
-                    .and_then(|element| book.frame(pid, window_id, element))
+                action.element().map_or((None, false), |element| {
+                    (
+                        book.frame(pid, window_id, element),
+                        book.in_web_content(pid, window_id, element),
+                    )
+                })
             };
             let mut window_frame =
                 act::check_points(&driver, pid, window_id, &action.points()).await?;
@@ -965,22 +966,27 @@ async fn handle_op(
             } else {
                 None
             };
-            let first = act::act(&driver, pid, window_id, &action, mode, &delivery, paste_ok).await;
+            let first = act::act(
+                &driver, pid, window_id, &action, mode, &delivery, paste_ok, web,
+            )
+            .await;
             let done = match first {
                 // The driver aims a point only by its snapshot's capture of
                 // the window, and holds none just now — no snapshot taken
                 // since it started, or one it let go. Nothing went out: it is
                 // given a capture, the window is measured again (it may have
-                // changed size meanwhile), and the action goes once more. The
-                // capture becomes the window's snapshot, so the refs from the
-                // one before name nothing any more.
+                // changed size meanwhile), and the action goes once more.
+                // Where the capture took the place of the window's snapshot,
+                // the refs from the one before name nothing any more.
                 Err(e) if act::needs_capture(&e) => {
-                    if ops::publish_capture(&driver, pid, window_id).await? {
-                        state.snapshots().record(pid, window_id, None);
-                    }
+                    let mark = ops::publish_capture(&driver, pid, window_id).await?;
+                    state.snapshots().captured(pid, window_id, &mark);
                     window_frame =
                         act::check_points(&driver, pid, window_id, &action.points()).await?;
-                    act::act(&driver, pid, window_id, &action, mode, &delivery, paste_ok).await?
+                    act::act(
+                        &driver, pid, window_id, &action, mode, &delivery, paste_ok, web,
+                    )
+                    .await?
                 }
                 done => done?,
             };

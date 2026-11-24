@@ -37,6 +37,7 @@ pub const PORTABLE_PREFERENCE_KEYS: &[&str] = &[
     "chat_command_prefix",
     "chat_message_language",
     "chat_event_filter",
+    "chat_event_top_level_only",
 ];
 
 /// Keys whose presence in a snapshot would leak a credential or clobber
@@ -57,6 +58,7 @@ pub const FORBIDDEN_PREFERENCE_KEYS: &[&str] = &[
     "web_service_port",
     "web_service_token",
     "web_service_auto_start",
+    "web_service_host",
     "github_accounts",
     "chat_event_webhooks",
     "git_settings",

@@ -20,10 +20,9 @@
  * boolean. Because recognition is by `_meta` key and NOT by agent, an adapter
  * that adopts the convention lights the card up with no wiring — which is
  * exactly what claude 0.75.0 did. Matching renders through the dedicated
- * `<ContextCompactionCard>` (a subtle status row, not the generic tool shell)
- * and must NOT fold into a "调用 N 个工具" tool-group.
+ * `<ContextCompactionCard>` (a subtle status row, not the generic tool shell).
  *
- * Kept in a dependency-free module so both the grouping pass
+ * Kept in a dependency-free module so the adapter's passes
  * (`ai-elements-adapter.ts`) and the card/renderer can share it without an
  * import cycle (the card re-exports `ToolCallState` from the adapter).
  */

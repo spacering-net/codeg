@@ -21,8 +21,15 @@ const inheritance = vi.hoisted(() => ({
   folderDefault: null as string | null,
 }))
 const templateSave = vi.hoisted(() => vi.fn())
+// The config selections each probe host passed on its latest render: the
+// editor's own options hook, and the brief's composer.
+const probeSelections = vi.hoisted(() => ({
+  bar: [] as unknown[],
+  composer: [] as unknown[],
+}))
 
 vi.mock("@/lib/api", () => ({
+  workTaskGet: vi.fn().mockRejectedValue(new Error("not in this test")),
   gitListAllBranches: () =>
     Promise.resolve({
       local: ["main"],
@@ -62,16 +69,25 @@ vi.mock("@/components/automations/agent-config-section", () => ({
     configValues: Record<string, string>
   ) => ({ mode_id: modeId, config_values: configValues }),
   snapshotLabels: () => ({}),
+  useBooleanOptionLabels: () => ({ on: "On", off: "Off" }),
 }))
 vi.mock("@/components/automations/use-agent-options", () => ({
-  useAgentOptions: (agentType: string) => ({
-    snapshot: null,
-    snapshotAgentType: agentType,
-    loading: false,
-    error: null,
-    reload: vi.fn(),
-    ensure: () => Promise.resolve(null),
-  }),
+  useAgentOptions: (
+    agentType: string,
+    _folderPath: string | null,
+    _enabled: boolean,
+    configValues: unknown
+  ) => {
+    probeSelections.bar.push(configValues)
+    return {
+      snapshot: null,
+      snapshotAgentType: agentType,
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+      ensure: () => Promise.resolve(null),
+    }
+  },
 }))
 
 // The real composer is a Tiptap editor; the editor dialog only reads text and
@@ -82,12 +98,14 @@ vi.mock("./task-message-composer", async () => {
     defaultText?: string
     ariaLabel?: string
     onChange?: (text: string) => void
+    probeConfigValues?: Record<string, string> | null
   }
   return {
     TaskMessageComposer: forwardRef(function Stub(
       props: StubProps,
       ref: React.Ref<unknown>
     ) {
+      probeSelections.composer.push(props.probeConfigValues)
       const [text, setText] = useState(props.defaultText ?? "")
       useImperativeHandle(
         ref,
@@ -164,7 +182,6 @@ function agent(
     env: {},
     config_json: null,
     config_file_path: null,
-    opencode_auth_json: null,
     codex_auth_json: null,
     codex_config_toml: null,
     codex_model_catalog: null,
@@ -279,9 +296,29 @@ beforeEach(() => {
   inheritance.settingsConfig = {}
   inheritance.folderDefault = null
   templateSave.mockReset().mockResolvedValue(undefined)
+  probeSelections.bar = []
+  probeSelections.composer = []
 })
 
 describe("TaskEditorDialog agent", () => {
+  it("the brief's composer probes with the bar's selections, so they share one probe", async () => {
+    // Probes are keyed by the selected model: the composer has to pass the
+    // same selections as the mode/model bar, or opening the editor on a saved
+    // model would spawn the agent twice.
+    inheritance.settingsAgent = "claude_code"
+    inheritance.settingsConfig = { model: "opus", effort: "high" }
+    registry(agent("claude_code"))
+    renderEditor()
+    const latest = (renders: unknown[]) => renders[renders.length - 1]
+    await waitFor(() =>
+      expect(latest(probeSelections.bar)).toEqual({
+        model: "opus",
+        effort: "high",
+      })
+    )
+    expect(latest(probeSelections.composer)).toBe(latest(probeSelections.bar))
+  })
+
   it("nothing to inherit: saves the agent the selector substituted and shows", async () => {
     // #864: no task settings, no folder default, and the placeholder agent is
     // disabled — so the selector highlights the first usable one on its own.
@@ -350,7 +387,7 @@ describe("TaskEditorDialog agent", () => {
     expect(config.config_values).toEqual({})
   })
 
-  it("keeps inheriting the task settings' agent while the pill shows it", async () => {
+  it("saves the task settings' agent it shows with the task (#1179)", async () => {
     inheritance.settingsAgent = "codex"
     inheritance.settingsModeId = "auto"
     registry(agent("claude_code"), agent("codex"))
@@ -360,13 +397,12 @@ describe("TaskEditorDialog agent", () => {
     expect(await screen.findByText(INHERITED_HINT)).toBeInTheDocument()
 
     const config = await saveBrief(user, onSubmit)
-    // Nothing frozen: the task follows the settings live.
-    expect(config.agent_type).toBeNull()
-    expect(config.mode_id).toBeNull()
-    expect(config.config_values).toEqual({})
+    // Frozen with what the selectors show: a later settings change never
+    // moves this task.
+    expect(config.agent_type).toBe("codex")
   })
 
-  it("keeps inheriting the task settings' agent even when the placeholder is disabled", async () => {
+  it("saves the task settings' agent even when the placeholder is disabled", async () => {
     // The placeholder is substituted before the settings answer; the settings'
     // own agent then takes over and is inherited as usual.
     inheritance.settingsAgent = "open_code"
@@ -381,10 +417,10 @@ describe("TaskEditorDialog agent", () => {
     expect(await screen.findByText(INHERITED_HINT)).toBeInTheDocument()
 
     const config = await saveBrief(user, onSubmit)
-    expect(config.agent_type).toBeNull()
+    expect(config.agent_type).toBe("open_code")
   })
 
-  it("keeps inheriting the folder's default agent while the pill shows it", async () => {
+  it("saves the folder's default agent it shows with the task", async () => {
     inheritance.folderDefault = "codex"
     registry(agent("claude_code"), agent("codex"))
     const user = userEvent.setup()
@@ -393,7 +429,7 @@ describe("TaskEditorDialog agent", () => {
     expect(await screen.findByText(INHERITED_HINT)).toBeInTheDocument()
 
     const config = await saveBrief(user, onSubmit)
-    expect(config.agent_type).toBeNull()
+    expect(config.agent_type).toBe("codex")
   })
 
   it("an explicit pick is saved as the task's own agent", async () => {

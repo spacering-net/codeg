@@ -585,6 +585,37 @@ fn complete_dir_tree_install(
         .then_some(path)
 }
 
+/// The on-disk file name of the executable an agent's (or tool's) `cmd` names.
+///
+/// `cmd` comes in two spellings. Built-in definitions use the bare command
+/// (`opencode`, `cursor-agent`), so Windows has to add `.exe`. A custom agent
+/// added from the ACP registry keeps the archive entry's real file name
+/// (`custom_registry::build_binary_distribution`), and a Windows build's
+/// already ends in `.exe` (`kilo.exe` from `./kilo.exe`). Appending again
+/// looked for `kilo.exe.exe`, a file no archive holds, so every single-file
+/// install from the registry failed on Windows (issue #905).
+///
+/// Only `.exe` counts as already there. The single-file cache accepts nothing
+/// but a native PE image (see [`is_binary_file_compatible`]), and the `.cmd`
+/// shims the registry publishes all sit inside dir-tree archives, which
+/// resolve through `dir_entry` rather than through this name.
+pub(crate) fn executable_file_name(cmd: &str) -> String {
+    executable_file_name_for(cmd, cfg!(windows))
+}
+
+/// [`executable_file_name`] with the platform handed in, so both answers are
+/// testable on any host.
+pub(crate) fn executable_file_name_for(cmd: &str, windows: bool) -> String {
+    let has_exe = Path::new(cmd)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"));
+    if windows && !has_exe {
+        format!("{cmd}.exe")
+    } else {
+        cmd.to_string()
+    }
+}
+
 /// Read-through across the two roots: current first, then a legacy root that
 /// has not finished migrating.
 ///
@@ -620,12 +651,7 @@ fn installed_binary_path_in(
         return complete_dir_tree_install(&platform_dir, entry);
     }
 
-    let bin_name = if cfg!(target_os = "windows") {
-        format!("{cmd_name}.exe")
-    } else {
-        cmd_name.to_string()
-    };
-    let path = platform_dir.join(bin_name);
+    let path = platform_dir.join(executable_file_name(cmd_name));
 
     if !path.exists() {
         return None;
@@ -926,11 +952,9 @@ async fn ensure_binary_with_progress(
     }
 
     let dir = binary_dir(agent_id, version)?;
-    let bin_name = if cfg!(target_os = "windows") {
-        format!("{cmd_name}.exe")
-    } else {
-        cmd_name.to_string()
-    };
+    // The same name `installed_binary_path_in` looks up, so what this install
+    // writes is what the cache check, connect and preflight then find.
+    let bin_name = executable_file_name(cmd_name);
 
     // Download and extract
     std::fs::create_dir_all(&dir)
@@ -959,18 +983,13 @@ async fn ensure_binary_with_progress(
         std::fs::create_dir_all(&extract_dir)
             .map_err(|e| AcpError::DownloadFailed(format!("failed to create extract dir: {e}")))?;
 
-        on_progress("Extracting archive...");
-        if archive_url.ends_with(".tar.gz") || archive_url.ends_with(".tgz") {
-            extract_tar_gz(&archive_path, &extract_dir)?;
-        } else if archive_url.ends_with(".tar.bz2") || archive_url.ends_with(".tbz2") {
-            extract_tar_bz2(&archive_path, &extract_dir)?;
-        } else if archive_url.ends_with(".zip") {
-            extract_zip(&archive_path, &extract_dir)?;
-        } else {
-            return Err(AcpError::DownloadFailed(format!(
-                "unsupported archive format: {archive_url}"
-            )));
-        }
+        unpack_download(
+            archive_url,
+            &archive_path,
+            &extract_dir,
+            &bin_name,
+            &on_progress,
+        )?;
 
         if let Some(entry) = dir_entry_for_agent_id(agent_id) {
             return install_extracted_tree(&extract_dir, &dir, entry, &on_progress);
@@ -1201,6 +1220,41 @@ async fn download_file_with_progress(
     }
 
     Ok(())
+}
+
+/// Unpack a verified download into `extract_dir`.
+///
+/// A URL naming an archive format is extracted. The ACP registry also allows
+/// a raw executable in place of an archive, which is how sigit publishes its
+/// Linux and Windows builds. A download whose URL names no archive format but
+/// which is a native executable for this platform is therefore staged under
+/// `bin_name`, where a one-file archive would have unpacked it, so the locate,
+/// format and permission steps that follow apply unchanged. Anything that is
+/// not a native executable is refused: other archive formats, the `.dmg`,
+/// `.pkg`, `.deb`, `.rpm` and `.msi` installers, builds for another platform.
+fn unpack_download(
+    archive_url: &str,
+    archive_path: &PathBuf,
+    extract_dir: &PathBuf,
+    bin_name: &str,
+    on_progress: &impl Fn(&str),
+) -> Result<(), AcpError> {
+    let extract = if archive_url.ends_with(".tar.gz") || archive_url.ends_with(".tgz") {
+        extract_tar_gz
+    } else if archive_url.ends_with(".tar.bz2") || archive_url.ends_with(".tbz2") {
+        extract_tar_bz2
+    } else if archive_url.ends_with(".zip") {
+        extract_zip
+    } else if is_binary_file_compatible(archive_path) {
+        return std::fs::rename(archive_path, extract_dir.join(bin_name))
+            .map_err(|e| AcpError::DownloadFailed(format!("failed to stage binary: {e}")));
+    } else {
+        return Err(AcpError::DownloadFailed(format!(
+            "unsupported archive format: {archive_url}"
+        )));
+    };
+    on_progress("Extracting archive...");
+    extract(archive_path, extract_dir)
 }
 
 fn extract_tar_gz(archive: &PathBuf, dest: &PathBuf) -> Result<(), AcpError> {
@@ -1745,5 +1799,157 @@ mod tests {
 
         let err = verify_archive_sha256(&archive, Some("deadbeef")).unwrap_err();
         assert!(err.to_string().contains("checksum mismatch"), "{err}");
+    }
+
+    /// The `cmd` of every single-file `windows-x86_64` entry the public ACP
+    /// registry published when issue #905 was filed, as `custom_registry`
+    /// keeps it (leading `./` stripped): the archive member's real file name.
+    const REGISTRY_WINDOWS_SINGLE_FILE_CMDS: &[&str] = &[
+        "amp-acp.exe",
+        "agy_acp_server.exe",
+        "corust-agent-acp.exe",
+        "crow-cli.exe",
+        "harn.exe",
+        "kilo.exe",
+        "kimi.exe",
+        "vibe-acp.exe",
+        "opencode.exe",
+        "pool-windows-amd64.exe",
+        "sigit-win-amd64.exe",
+        "stakpak.exe",
+        "vtcode.exe",
+    ];
+
+    // Issue #905: a custom agent added from the ACP registry carries the
+    // archive entry's real file name, which on Windows already ends in `.exe`.
+    // Appending another looked for `kilo.exe.exe`, so every single-file install
+    // failed at "Locating binary...".
+    #[test]
+    fn a_windows_cmd_that_already_names_its_exe_is_not_suffixed_again() {
+        for cmd in REGISTRY_WINDOWS_SINGLE_FILE_CMDS {
+            assert_eq!(executable_file_name_for(cmd, true), *cmd);
+        }
+        // Windows matches the extension case-insensitively, and so does this.
+        assert_eq!(executable_file_name_for("amp-acp.EXE", true), "amp-acp.EXE");
+        // Built-in definitions spell the bare command; those still need it.
+        for bare in [
+            "opencode",
+            "cursor-agent",
+            "agy_acp_server",
+            "agent",
+            "qoder",
+            "cua-driver",
+        ] {
+            assert_eq!(executable_file_name_for(bare, true), format!("{bare}.exe"));
+        }
+        // A dot inside a bare name is not an extension.
+        assert_eq!(executable_file_name_for("agent.v2", true), "agent.v2.exe");
+        // Nothing is ever appended off Windows.
+        for cmd in ["kilo", "kilo.exe", "opencode"] {
+            assert_eq!(executable_file_name_for(cmd, false), cmd);
+        }
+    }
+
+    /// Leading bytes `is_binary_file_compatible` accepts on this host.
+    fn host_executable_header() -> &'static [u8] {
+        if cfg!(target_os = "macos") {
+            &[0xCF, 0xFA, 0xED, 0xFE]
+        } else if cfg!(target_os = "linux") {
+            &[0x7F, b'E', b'L', b'F']
+        } else {
+            b"MZ\0\0"
+        }
+    }
+
+    // The read side of #905. A single-file install is cached under the name
+    // its archive held, and the lookup that connect, preflight and the
+    // installed-version scan all go through has to find it there: under the
+    // registry's `kilo.exe` spelling and the built-ins' bare `opencode` alike.
+    #[test]
+    fn the_cache_lookup_finds_a_single_file_install_under_its_archive_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        // An id nothing registers, so the lookup takes the single-file path.
+        let agent_id = "issue905-single-file";
+        let platform_dir = root
+            .join(agent_id)
+            .join("7.8.8")
+            .join(registry::current_platform());
+        std::fs::create_dir_all(&platform_dir).unwrap();
+
+        std::fs::write(platform_dir.join("kilo.exe"), host_executable_header()).unwrap();
+        assert_eq!(
+            installed_binary_path_in(root, agent_id, "7.8.8", "kilo.exe"),
+            Some(platform_dir.join("kilo.exe"))
+        );
+
+        let bare_file = if cfg!(windows) {
+            "opencode.exe"
+        } else {
+            "opencode"
+        };
+        std::fs::write(platform_dir.join(bare_file), host_executable_header()).unwrap();
+        assert_eq!(
+            installed_binary_path_in(root, agent_id, "7.8.8", "opencode"),
+            Some(platform_dir.join(bare_file))
+        );
+    }
+
+    // The ACP registry allows a raw executable in place of an archive, and
+    // sigit's Linux and Windows builds are published that way. They used to be
+    // refused as an unsupported archive format on every platform.
+    #[test]
+    fn a_raw_binary_download_is_staged_like_a_one_file_archive() {
+        let tmp = tempfile::tempdir().unwrap();
+        let extract_dir = tmp.path().join("extracted");
+        std::fs::create_dir_all(&extract_dir).unwrap();
+        let download = tmp.path().join("archive");
+
+        for (url, bin_name) in [
+            (
+                "https://example.com/v1.6.5/sigit-win-amd64.exe",
+                "sigit-win-amd64.exe",
+            ),
+            (
+                "https://example.com/v1.6.5/sigit-linux-amd64",
+                "sigit-linux-amd64",
+            ),
+        ] {
+            std::fs::write(&download, host_executable_header()).unwrap();
+            unpack_download(url, &download, &extract_dir, bin_name, &|_| {}).unwrap();
+            assert_eq!(
+                find_binary_recursive(&extract_dir, bin_name),
+                Some(extract_dir.join(bin_name)),
+                "{url}"
+            );
+        }
+
+        // Not an executable for this platform: still refused.
+        std::fs::write(&download, b"\xFD7zXZ\0 not an executable").unwrap();
+        let err = unpack_download(
+            "https://example.com/agent.tar.xz",
+            &download,
+            &extract_dir,
+            "agent",
+            &|_| {},
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("unsupported archive format"),
+            "{err}"
+        );
+
+        // A URL naming an archive format is extracted, never sniffed.
+        std::fs::write(&download, host_executable_header()).unwrap();
+        let err = unpack_download(
+            "https://example.com/agent.zip",
+            &download,
+            &extract_dir,
+            "agent",
+            &|_| {},
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("zip"), "{err}");
+        assert!(!extract_dir.join("agent").exists());
     }
 }

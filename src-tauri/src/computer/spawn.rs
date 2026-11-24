@@ -232,7 +232,7 @@ impl ExitWatch {
             if kq < 0 {
                 return Err(std::io::Error::last_os_error());
             }
-            let watch = Self { kq, exited: false };
+            let mut watch = Self { kq, exited: false };
             let change = libc::kevent {
                 ident: pid as libc::uintptr_t,
                 filter: libc::EVFILT_PROC,
@@ -246,10 +246,12 @@ impl ExitWatch {
             }
             let err = std::io::Error::last_os_error();
             if err.raw_os_error() == Some(libc::ESRCH) {
-                return Ok(Self {
-                    exited: true,
-                    ..watch
-                });
+                // The same value, not a copy built with `..watch`: `kq` is
+                // `Copy`, so that would leave `watch` to be dropped here and
+                // close the descriptor the returned copy closes again later —
+                // by then another thread's file, socket or kqueue.
+                watch.exited = true;
+                return Ok(watch);
             }
             Err(err)
         }
@@ -418,6 +420,26 @@ mod tests {
 
     fn env() -> Vec<(String, String)> {
         vec![("PATH".into(), "/usr/bin:/bin".into())]
+    }
+
+    /// A child that is already gone when its exit is watched (`ESRCH`) still
+    /// gets a watch that owns its kqueue: the descriptor is open until that
+    /// watch drops. (Not checked after the drop: another test's thread may
+    /// have reused the number by then.)
+    #[test]
+    fn a_watch_for_a_child_already_gone_owns_its_descriptor() {
+        let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+        let pid = child.id() as libc::pid_t;
+        child.wait().unwrap();
+
+        let watch = ExitWatch::register(pid).unwrap();
+        assert!(watch.exited, "a reaped child cannot be watched");
+        // SAFETY: `F_GETFD` only reads the descriptor's flags.
+        assert_ne!(
+            unsafe { libc::fcntl(watch.kq, libc::F_GETFD) },
+            -1,
+            "closed while the watch still owns it"
+        );
     }
 
     /// A suspended child does not run until resumed, then runs with exactly
