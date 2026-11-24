@@ -24,21 +24,6 @@ pub struct MessageProvenance {
     pub hop: i32,
 }
 
-pub async fn delegation_result(
-    db: &DatabaseConnection,
-    child_conversation_id: i32,
-) -> Result<Option<conversation_turn::Model>, DbErr> {
-    let Some(delivery) = delegation_delivery::Entity::find_by_id(child_conversation_id)
-        .one(db)
-        .await?
-    else {
-        return Ok(None);
-    };
-    conversation_turn::Entity::find_by_id(delivery.first_turn_id)
-        .one(db)
-        .await
-}
-
 /// Called under the connection's prompt admission lock, before sending to the CLI.
 pub async fn begin(
     db: &DatabaseConnection,

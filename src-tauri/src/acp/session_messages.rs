@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, TransactionTrait};
-use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 
 use super::connection::SteerOutcome;
