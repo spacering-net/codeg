@@ -928,6 +928,10 @@ fn extract_args_match_key(raw_input: Option<&str>) -> Option<DelegationMatchKey>
     let target = crate::acp::delegation::types::delegation_target_from_args(&args).ok()?;
     Some(DelegationMatchKey {
         target,
+        agent_account_id: args
+            .get("agent_account_id")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned),
         task,
         working_dir,
     })
@@ -1467,6 +1471,12 @@ fn extract_code_mode_match_key(raw_input: Option<&str>) -> Option<DelegationMatc
         Some(at) => Some(object_string_value(code, at)?),
         None => None,
     };
+    // Match the MCP side's raw account argument. A dynamic value must stay
+    // unkeyed; treating it as absent could attach the wrong account's child.
+    let agent_account_id = match code_mode_find_key(code, region, b"agent_account_id") {
+        Some(at) => Some(object_string_value(code, at)?),
+        None => None,
+    };
     let task_at = code_mode_find_key(code, region, b"task")?;
     let task = object_task_value(code, task_at)?;
     let args = match bot {
@@ -1478,6 +1488,7 @@ fn extract_code_mode_match_key(raw_input: Option<&str>) -> Option<DelegationMatc
     let target = crate::acp::delegation::types::delegation_target_from_args(&args).ok()?;
     Some(DelegationMatchKey {
         target,
+        agent_account_id,
         task,
         working_dir,
     })
@@ -2052,6 +2063,18 @@ mod delegation_title_tests {
     }
 
     #[test]
+    fn extract_match_key_keeps_explicit_accounts_and_default_distinct() {
+        let omitted = extract_delegation_match_key(Some(r#"{"agent_type":"claude_code","task":"review"}"#)).unwrap();
+        assert_eq!(omitted.agent_account_id, None);
+        for id in ["default", "work-account"] {
+            let raw = serde_json::json!({"arguments":{"agent_type":"claude_code", "task":"review", "agent_account_id":id}}).to_string();
+            let key = extract_delegation_match_key(Some(&raw)).unwrap();
+            assert_eq!(key.agent_account_id.as_deref(), Some(id));
+            assert_ne!(key, omitted);
+        }
+    }
+
+    #[test]
     fn extract_match_key_none_when_field_missing_or_unparseable() {
         // Missing task.
         assert!(extract_delegation_match_key(Some(r#"{"agent_type":"codex"}"#)).is_none());
@@ -2315,6 +2338,7 @@ mod delegation_title_tests {
         });
         let request_key = DelegationMatchKey {
             target: delegation_target_from_args(&mcp_args).unwrap(),
+            agent_account_id: None,
             task: task.to_string(),
             working_dir: Some(working_dir.to_string()),
         };
@@ -2329,6 +2353,7 @@ mod delegation_title_tests {
         let mcp_args = serde_json::json!({ "agent_type": "codex", "task": task_ls });
         let request_key = DelegationMatchKey {
             target: delegation_target_from_args(&mcp_args).unwrap(),
+            agent_account_id: None,
             task: task_ls.to_string(),
             working_dir: None,
         };
@@ -2358,6 +2383,28 @@ mod delegation_title_tests {
         let code = r#"await tools["codeg-mcp"].delegate_to_agent({ assistant_id: 3, agent_type: "codex", task: "t" })"#;
         let raw = serde_json::json!({ "code": code }).to_string();
         assert!(extract_delegation_match_key(Some(&raw)).is_none());
+    }
+
+    #[test]
+    fn code_mode_keeps_named_and_explicit_default_accounts_in_the_match_key() {
+        for account in ["work-account", "default", ""] {
+            let args = serde_json::json!({"agent_type":"claude_code", "task":"review", "agent_account_id":account});
+            let expected = extract_delegation_match_key(Some(&args.to_string())).unwrap();
+            let code = format!("tools[\"codeg-mcp\"].delegate_to_agent({{agent_type: \"claude_code\", task: \"review\", agent_account_id: {}}})", serde_json::to_string(account).unwrap());
+            let raw = serde_json::json!({"code":code}).to_string();
+            let actual = extract_delegation_match_key(Some(&raw)).unwrap();
+            assert_eq!(actual, expected);
+            assert_eq!(actual.agent_account_id.as_deref(), Some(account));
+        }
+    }
+
+    #[test]
+    fn code_mode_never_guesses_an_unreadable_account_as_default() {
+        for account in ["chosenAccount", "null", "`work-${n}`", "\"work\" + suffix"] {
+            let code = format!("tools[\"codeg-mcp\"].delegate_to_agent({{agent_type: \"claude_code\", task: \"review\", agent_account_id: {account}}})");
+            let raw = serde_json::json!({"code":code}).to_string();
+            assert!(extract_delegation_match_key(Some(&raw)).is_none(), "{account}");
+        }
     }
 
     #[test]
@@ -2806,6 +2853,7 @@ mod delegation_registration_tests {
     fn codex_key(task: &str) -> DelegationMatchKey {
         DelegationMatchKey {
             target: crate::acp::delegation::types::DelegationTarget::Agent(AgentType::Codex),
+            agent_account_id: None,
             task: task.to_string(),
             working_dir: None,
         }
@@ -5242,6 +5290,7 @@ mod tests {
             parent_conversation_id: 1,
             parent_tool_use_id: format!("tu-{child_conn_id}"),
             agent_type: AgentType::ClaudeCode,
+            agent_account_id: None,
             task: "do x".into(),
             working_dir: None,
             requested_working_dir: None,

@@ -159,8 +159,10 @@ pub(crate) async fn launch_envs(
 ) -> BTreeMap<AgentType, HostEnv> {
     let mut envs = BTreeMap::new();
     for agent in agents {
-        match crate::commands::acp::build_runtime_env_for_agent(db, *agent, None, data_dir, true)
-            .await
+        match crate::commands::acp::build_runtime_env_for_agent(
+            db, *agent, None, data_dir, true, None,
+        )
+        .await
         {
             Ok(overrides) => {
                 envs.insert(*agent, HostEnv::agent(overrides));

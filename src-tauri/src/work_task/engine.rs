@@ -34,9 +34,9 @@ use crate::acp::types::{
 };
 use crate::acp::work_task_tools::{TaskReportAck, WorkTaskToolAccess};
 use crate::acp::InternalEventBus;
-use crate::commands::acp::{build_session_runtime_env, verify_agent_installed};
+use crate::commands::acp::{build_account_session_runtime_env, verify_agent_installed};
 use crate::commands::conversations::{
-    create_conversation_core, emit_conversation_upsert, get_folder_conversation_core,
+    create_conversation_for_account_core, emit_conversation_upsert, get_folder_conversation_core,
 };
 use crate::commands::folders::{
     emit_folder_deleted, emit_folder_upsert, get_folder_core, git_worktree_add,
@@ -1534,6 +1534,10 @@ impl TaskEngine {
                 }
             }
         }
+        let resume_account_id = previous_conversation
+            .as_ref()
+            .filter(|_| agent_matches_previous)
+            .and_then(|c| c.agent_account_id.clone());
         let resume_session_id = previous_conversation
             .as_ref()
             .filter(|_| agent_matches_previous)
@@ -1544,12 +1548,13 @@ impl TaskEngine {
         // reused live connection already runs it and is left as is.
         let resume_selection = match previous_conversation.as_ref().filter(|_| agent_matches_previous) {
             Some(prev) => Some(
-                crate::commands::acp::resolve_connect_selection(
+                crate::commands::acp::resolve_connect_selection_for_account(
                     &self.db.conn,
                     &self.manager,
                     agent_type,
                     Some(prev.id),
                     resume_session_id.as_deref(),
+                    resume_account_id.as_deref(),
                     mode_id.clone(),
                     config_values.clone(),
                 )
@@ -1562,10 +1567,15 @@ impl TaskEngine {
             None => (mode_id.clone(), config_values.clone()),
         };
 
-        let runtime_env =
-            build_session_runtime_env(&self.db, agent_type, resume_session_id.as_deref(), &self.data_dir)
-                .await
-                .map_err(|e| e.to_string())?;
+        let runtime_env = build_account_session_runtime_env(
+            &self.db,
+            agent_type,
+            resume_session_id.as_deref(),
+            &self.data_dir,
+            resume_account_id.as_deref(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
         verify_agent_installed(agent_type)
             .await
             .map_err(|e| e.to_string())?;
@@ -1644,11 +1654,12 @@ impl TaskEngine {
             cid
         } else {
             let title = conversation_title_for_task(&task.title);
-            let id = match create_conversation_core(
+            let id = match create_conversation_for_account_core(
                 &self.db.conn,
                 wt.folder_id,
                 agent_type,
                 Some(title),
+                resume_account_id.clone(),
             )
             .await
             {

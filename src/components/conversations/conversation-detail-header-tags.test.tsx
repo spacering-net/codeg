@@ -5,6 +5,8 @@ import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
+
+vi.mock("./session-quota-chip", () => ({ SessionQuotaChip: () => null }))
 import type {
   ConversationTagDetail,
   DbConversationSummary,
@@ -51,6 +53,9 @@ vi.mock("@/stores/app-workspace-store", () => {
 })
 vi.mock("@/stores/conversation-runtime-store", () => ({
   getRuntimeSession: () => null,
+  useConversationRuntimeStore: (
+    selector: (s: { byConversationId: Map<number, never> }) => unknown
+  ) => selector({ byConversationId: new Map<number, never>() }),
 }))
 vi.mock("./session-details-dialog", () => ({
   SessionDetailsDialog: () => null,
@@ -88,6 +93,7 @@ const tag = (
 function header(conversationId: number | null, folderId = 1) {
   return withIntl(
     <ConversationDetailHeader
+      agentType="claude_code"
       tabId="tab-1"
       conversationId={conversationId}
       runtimeConversationId={null}

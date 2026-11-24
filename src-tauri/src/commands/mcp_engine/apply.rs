@@ -71,8 +71,23 @@ pub(crate) enum CodexAccess<'a> {
     /// Without its lock: a preflight, or a run Codex takes no part in.
     Unlocked,
     Locked(&'a dyn CodexGate),
+    Homes(BTreeMap<PathBuf, &'a dyn CodexGate>),
     /// The lock could not be taken; Codex's operations cannot go ahead.
     Failed(McpOpIssue),
+}
+
+impl<'a> CodexAccess<'a> {
+    fn for_file(&self, path: &std::path::Path) -> Self {
+        match self {
+            Self::Homes(gates) => match gates.get(path) {
+                Some(gate) => Self::Locked(*gate),
+                None => Self::Failed(McpOpIssue::new(codes::CODEX_LOCK_BUSY)),
+            },
+            Self::Locked(gate) => Self::Locked(*gate),
+            Self::Failed(problem) => Self::Failed(problem.clone()),
+            Self::Unlocked => Self::Unlocked,
+        }
+    }
 }
 
 /// One file an agent's operations change.
@@ -92,6 +107,7 @@ struct Work {
     /// Set once something stops this agent's operations.
     blocked: Option<McpAgentStatus>,
     basis: Option<String>,
+    written_basis: Option<String>,
     issues: Vec<McpOpIssue>,
     warnings: Vec<McpOpIssue>,
     op_results: Vec<McpOpResult>,
@@ -99,6 +115,15 @@ struct Work {
 }
 
 impl Work {
+    /// The server file's exact planned bytes, including an unchanged file's input basis.
+    fn planned_servers_basis(&self) -> Option<String> {
+        self.files
+            .iter()
+            .find(|file| file.path == self.path)
+            .map(|file| fsio::basis_of(Some(&file.planned)))
+            .or_else(|| self.basis.clone())
+    }
+
     fn block(&mut self, status: McpAgentStatus, issue: McpOpIssue) {
         // The first reason decides the status; later ones are still listed.
         self.blocked.get_or_insert(status);
@@ -417,24 +442,20 @@ fn run_ops(
 
 /// Read one agent's file, check it against the basis, and apply the agent's
 /// operations to it in memory.
-fn prepare(
-    ctx: &EngineCtx,
+fn prepare_file(
     app: McpAppType,
+    paths: Option<&super::agents::AgentPaths>,
     ops: &[(usize, &McpOp)],
-    request: &McpApplyRequest,
     codex: &CodexAccess<'_>,
 ) -> Work {
     let spec = spec(app);
-    let paths = ctx.paths_of(app).cloned();
-    let path = paths
-        .as_ref()
-        .map(|paths| paths.servers.clone())
-        .unwrap_or_default();
+    let path = paths.map(|paths| paths.servers.clone()).unwrap_or_default();
     let mut work = Work {
         app,
         path: path.clone(),
         blocked: None,
         basis: None,
+        written_basis: None,
         issues: Vec::new(),
         warnings: Vec::new(),
         op_results: Vec::new(),
@@ -451,7 +472,8 @@ fn prepare(
     // The file as it is now. Codex's is read under its lock when this run
     // holds it.
     let is_codex = app == McpAppType::Codex;
-    let read = match (is_codex, codex) {
+    let access = codex.for_file(&path);
+    let read = match (is_codex, &access) {
         (true, CodexAccess::Locked(gate)) => gate.read(),
         (true, CodexAccess::Failed(problem)) => {
             work.basis = fsio::read_bytes(&path)
@@ -469,8 +491,7 @@ fn prepare(
             return work;
         }
     };
-    let basis = fsio::basis_of(original.as_deref());
-    work.basis = Some(basis.clone());
+    work.basis = Some(fsio::basis_of(original.as_deref()));
 
     if spec.scan_only {
         work.block(
@@ -478,24 +499,6 @@ fn prepare(
             McpOpIssue::new(codes::AGENT_READ_ONLY),
         );
         return work;
-    }
-    match request.basis.get(&app) {
-        Some(seen) if *seen != basis => {
-            work.block(
-                McpAgentStatus::ChangedElsewhere,
-                McpOpIssue::new(codes::BASIS_MISMATCH),
-            );
-            return work;
-        }
-        Some(_) => {}
-        None if request.preflight => {}
-        None => {
-            work.block(
-                McpAgentStatus::Invalid,
-                McpOpIssue::new(codes::BASIS_REQUIRED),
-            );
-            return work;
-        }
     }
     if original.is_some() && fsio::is_write_protected(&path) {
         work.block(
@@ -565,9 +568,13 @@ fn prepare(
     }
 
     // The settings file whose `enabledPlugins` follows the servers.
-    if let Some(gate_path) = paths.plugin_gate.filter(|_| !gate_changes.is_empty()) {
+    if let Some(gate_path) = paths
+        .plugin_gate
+        .as_ref()
+        .filter(|_| !gate_changes.is_empty())
+    {
         let about = gate_path.display().to_string();
-        let planned = fsio::read_bytes(&gate_path)
+        let planned = fsio::read_bytes(gate_path)
             .map_err(|e| {
                 let issue = read_issue(&e);
                 McpIssue {
@@ -614,6 +621,125 @@ fn prepare(
     work
 }
 
+fn prepare_manifest(path: &std::path::Path, ops: &[(usize, &McpOp)], work: &mut Work) {
+    if work.blocked.is_some() {
+        return;
+    }
+    let original = match fsio::read_bytes(path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            work.block(McpAgentStatus::Unreadable, read_issue(&error));
+            return;
+        }
+    };
+    let before = match super::accounts::managed(original.as_deref()) {
+        Ok(names) => names,
+        Err(error) => {
+            work.block(
+                McpAgentStatus::Unreadable,
+                McpOpIssue::new(codes::INVALID_JSON).detail(error.to_string()),
+            );
+            return;
+        }
+    };
+    let mut after = before.clone();
+    for (_, op) in ops {
+        match &op.action {
+            McpOpAction::Remove => {
+                after.remove(&op.key);
+            }
+            McpOpAction::Rename { new_key } => {
+                after.remove(&op.key);
+                after.insert(new_key.clone());
+            }
+            _ => {
+                after.insert(op.key.clone());
+            }
+        }
+    }
+    if after != before {
+        work.files.push(FilePlan {
+            path: path.to_path_buf(),
+            role: "account_manifest",
+            original,
+            codex: false,
+            planned: serde_json::to_vec(&after).expect("string set serializes"),
+        });
+    }
+}
+
+fn prepare(
+    ctx: &EngineCtx,
+    app: McpAppType,
+    ops: &[(usize, &McpOp)],
+    request: &McpApplyRequest,
+    codex: &CodexAccess<'_>,
+) -> Work {
+    let mut work = prepare_file(app, ctx.paths_of(app), ops, codex);
+    let primary_written = work.planned_servers_basis();
+    let mut mirrors = Vec::new();
+    if let Some(manifest) = ctx.manifests.get(&work.path) {
+        for file in &mut work.files {
+            file.role = if file.role == "servers" {
+                "account_servers"
+            } else {
+                "account_plugin_gate"
+            };
+        }
+        prepare_manifest(manifest, ops, &mut work);
+    }
+    let mut written = Vec::new();
+    for paths in ctx.family_paths.get(&app).into_iter().flatten() {
+        let mut account = prepare_file(app, Some(paths), ops, codex);
+        if let Some(manifest) = ctx.manifests.get(&account.path) {
+            prepare_manifest(manifest, ops, &mut account);
+        }
+        let path = account.path.display().to_string();
+        written.push((path.clone(), account.planned_servers_basis()));
+        mirrors.push((path, account.basis.take()));
+        if let Some(status) = account.blocked {
+            work.blocked.get_or_insert(status);
+            for problem in &mut account.issues {
+                problem.detail = Some(match problem.detail.take() {
+                    Some(detail) => format!("{}: {detail}", account.path.display()),
+                    None => account.path.display().to_string(),
+                });
+            }
+        }
+        work.issues.extend(account.issues);
+        work.warnings.extend(account.warnings);
+        for mut file in account.files {
+            file.role = match file.role {
+                "servers" => "account_servers",
+                "plugin_gate" => "account_plugin_gate",
+                role => role,
+            };
+            work.files.push(file);
+        }
+    }
+    work.basis = fsio::family_basis(work.basis.take(), &mirrors);
+    work.written_basis = fsio::family_basis(primary_written, &written);
+    match request.basis.get(&app) {
+        Some(seen) if work.basis.as_ref().is_some_and(|current| seen != current) => {
+            work.block(
+                McpAgentStatus::ChangedElsewhere,
+                McpOpIssue::new(codes::BASIS_MISMATCH),
+            );
+            return work;
+        }
+        Some(_) => {}
+        None if request.preflight => {}
+        None => {
+            work.block(
+                McpAgentStatus::Invalid,
+                McpOpIssue::new(codes::BASIS_REQUIRED),
+            );
+            return work;
+        }
+    }
+    work
+}
+
 /// A file this run wrote, and what it needs to be put back.
 struct Written {
     work: usize,
@@ -640,7 +766,8 @@ fn write_file(
     file: &FilePlan,
     codex: &CodexAccess<'_>,
 ) -> Result<Option<PathBuf>, McpOpIssue> {
-    let gate = match (file.codex, codex) {
+    let access = codex.for_file(&file.path);
+    let gate = match (file.codex, &access) {
         (true, CodexAccess::Locked(gate)) => Some(*gate),
         (true, _) => {
             // Never written without its lock.
@@ -660,8 +787,17 @@ fn write_file(
     }
     let backup = match &file.original {
         Some(original) => Some(
-            fsio::backup(&ctx.backup_dir(app), &file.path, original)
-                .map_err(|e| io_issue(codes::BACKUP_FAILED, &e))?,
+            fsio::backup(
+                &if file.role.starts_with("account_") {
+                    ctx.backup_dir(app)
+                        .join(fsio::sha256_hex(file.path.to_string_lossy().as_bytes()))
+                } else {
+                    ctx.backup_dir(app)
+                },
+                &file.path,
+                original,
+            )
+            .map_err(|e| io_issue(codes::BACKUP_FAILED, &e))?,
         ),
         None => None,
     };
@@ -691,7 +827,8 @@ enum Undone {
 
 /// Put a written file back as it was — if it still is what codeg wrote.
 fn restore_file(written: &Written, codex: &CodexAccess<'_>) -> Undone {
-    let gate = match (written.codex, codex) {
+    let access = codex.for_file(&written.path);
+    let gate = match (written.codex, &access) {
         (true, CodexAccess::Locked(gate)) => Some(*gate),
         (true, _) => return Undone::Failed("Codex's lock is not held".to_string()),
         (false, _) => None,
@@ -859,10 +996,9 @@ pub(crate) fn apply_locked(
                 let status = if work.files.is_empty() {
                     McpAgentStatus::Unchanged
                 } else {
-                    // The basis of what is on disk now.
-                    if let Some(servers) = work.files.iter().find(|file| file.role == "servers") {
-                        work.basis = Some(fsio::basis_of(Some(&servers.planned)));
-                    }
+                    // A writer outside Codeg may already have changed a file.
+                    // Report the bytes committed by this request.
+                    work.basis = work.written_basis.take();
                     McpAgentStatus::Written
                 };
                 work.result(status, backups_of(index))
@@ -919,9 +1055,8 @@ pub(crate) fn apply_locked(
                 }
             }
             // Whatever is on disk now is what the next attempt starts from.
-            if let Ok(bytes) = fsio::read_bytes(&work.path) {
-                work.basis = Some(fsio::basis_of(bytes.as_deref()));
-            }
+            let (config, _) = super::inventory::read_family(ctx, work.app);
+            work.basis = config.basis;
             work.result(status, backups_of(index))
         })
         .collect();

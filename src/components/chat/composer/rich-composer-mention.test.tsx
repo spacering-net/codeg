@@ -10,6 +10,8 @@ import {
 
 import { RichComposer, type RichComposerHandle } from "./rich-composer"
 import type { ReferenceSearch } from "./suggestion/types"
+import { agentToSuggestion } from "./suggestion/adapters"
+import type { AcpAgentInfo } from "@/lib/types"
 
 const search: ReferenceSearch = () => [
   {
@@ -39,10 +41,14 @@ function findReference(doc: JSONContent): JSONContent | undefined {
   return undefined
 }
 
-async function mount(onSubmit?: () => void) {
+async function mount(onSubmit?: () => void, referenceSearch = search) {
   const ref = createRef<RichComposerHandle>()
   render(
-    <RichComposer ref={ref} referenceSearch={search} onSubmit={onSubmit} />
+    <RichComposer
+      ref={ref}
+      referenceSearch={referenceSearch}
+      onSubmit={onSubmit}
+    />
   )
   await waitFor(() => expect(ref.current?.getEditor()).not.toBeNull(), {
     timeout: 5000,
@@ -53,6 +59,38 @@ async function mount(onSubmit?: () => void) {
 }
 
 describe("RichComposer @ mention integration", () => {
+  it("inserts a specific native account and retains it through draft restore", async () => {
+    const account = agentToSuggestion(
+      {
+        agent_type: "claude_code",
+        name: "Claude Code",
+        available: true,
+      } as AcpAgentInfo,
+      { id: "work-account", name: "Work" }
+    )
+    const { ref, editor } = await mount(undefined, () => [
+      { kind: "agent", label: "Agents", items: [account] },
+    ])
+    act(() => {
+      editor.commands.insertContent("@Work")
+    })
+    const row = await screen.findByText("Claude Code · Work")
+    act(() => {
+      row.dispatchEvent(
+        new MouseEvent("mousedown", { bubbles: true, cancelable: true })
+      )
+    })
+    const serialized =
+      "[@Claude Code · Work](codeg://agent/claude_code?account=work-account)"
+    await waitFor(() => expect(ref.current?.getText().trim()).toBe(serialized))
+    act(() => {
+      ref.current?.setText(serialized)
+    })
+    expect(findReference(editor.getJSON())?.attrs?.meta).toMatchObject({
+      agentType: "claude_code",
+      agentAccountId: "work-account",
+    })
+  })
   it("opens the panel on @ and inserts the chosen reference", async () => {
     const { editor } = await mount()
     act(() => {

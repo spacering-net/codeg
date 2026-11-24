@@ -305,7 +305,8 @@ pub struct McpConfigFile {
     /// Why, for `unreadable` and `read_only`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<McpIssue>,
-    /// SHA-256 of the file's bytes (lowercase hex), `"missing"` for a file
+    /// File revision. When the family has isolated accounts it covers their configurations too.
+    /// For a single file, SHA-256 of its bytes (lowercase hex), `"missing"` for a file
     /// that is not there, `null` when it could not be read. Hand it back to
     /// `mcp_apply`.
     pub basis: Option<String>,
