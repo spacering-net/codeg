@@ -201,6 +201,11 @@ interface PersonalAgentUiState {
   /** What waits on the owner, brought into view (the primary's pill, C6):
    *  the panel open on its activity, at `first` (a row's key) when given. */
   showWaiting: (first: string | null) => void
+  /** The "N items need you" pill closed, by the conversation (`"primary"`
+   *  or an assistant's id): what needed the owner then. It shows again once
+   *  something not among them does (`attentionShown`). */
+  attentionDismissed: Record<string, readonly string[]>
+  dismissAttention: (conversation: string, keys: readonly string[]) => void
   /** The time machine's search is open (8.2). */
   searchOpen: boolean
   setSearchOpen: (open: boolean) => void
@@ -281,6 +286,11 @@ export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
       routineEditor: { ...req, key: (s.routineEditor?.key ?? 0) + 1 },
     })),
   closeRoutineEditor: () => set({ routineEditor: null }),
+  attentionDismissed: {},
+  dismissAttention: (conversation, keys) =>
+    set((s) => ({
+      attentionDismissed: { ...s.attentionDismissed, [conversation]: keys },
+    })),
   activityOpen: {},
   setActivityOpen: (thing, open) =>
     set((s) => ({ activityOpen: { ...s.activityOpen, [thing]: open } })),

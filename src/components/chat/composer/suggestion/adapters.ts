@@ -36,6 +36,27 @@ export function fileToSuggestion(
 }
 
 /**
+ * A whole folder (a workspace's project) → a folder reference by its absolute
+ * path: sent as a `file://` link, as a directory picked from the file tree is.
+ */
+export function folderToSuggestion(folder: {
+  name: string
+  path: string
+}): SuggestionItem {
+  return {
+    reference: {
+      refType: "file",
+      id: folder.path,
+      label: folder.name,
+      uri: buildFileUri(folder.path),
+      meta: { fileKind: "dir" },
+    },
+    detail: folder.path,
+    keywords: folder.path,
+  }
+}
+
+/**
  * ACP agent → agent reference. Carries a `codeg://agent/<agent_type>` uri as a
  * routing anchor: it serializes inline as `[@label](codeg://agent/…)` and
  * renders as a badge in the transcript. The readable link IS the routing

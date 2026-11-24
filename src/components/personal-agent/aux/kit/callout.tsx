@@ -33,7 +33,7 @@ export function Callout({
       data-pa-callout={tone}
       title={typeof children === "string" ? children : undefined}
       className={cn(
-        "min-w-0 rounded-xl px-3 py-2.5 text-[0.8125rem] leading-5 break-words whitespace-pre-line",
+        "min-w-0 rounded-lg px-3 py-2 text-xs leading-5 break-words whitespace-pre-line",
         TONE[tone],
         mono && "font-mono text-xs leading-5",
         className

@@ -332,7 +332,7 @@ describe("the default face", () => {
     // FNV-1a("abc") = 0x1a47e90b: colour 1 of 10, shape 1 of 12.
     expect(defaultBotFace("abc")).toEqual({
       kind: "face",
-      shape: "donut",
+      shape: "braces",
       color: "red",
     })
   })

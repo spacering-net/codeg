@@ -9,38 +9,52 @@ use super::assistant::AssistantAvatar;
 use crate::db::entities::personal_agent_dispatch::{DispatchMode, DispatchState};
 
 /// The thirteen things codeg draws an assistant as (`bot-shapes.ts`): the
-/// ring — the SpaceRing mark, the primary's — and twelve with a ring or a
-/// hole in them.
+/// ring — the SpaceRing mark, the primary's — and twelve things a coder
+/// works with.
 pub const BOT_SHAPES: [&str; 13] = [
     "ring",
-    "stand",
-    "donut",
-    "gummy",
-    "tape",
+    "terminal",
+    "braces",
+    "shield",
+    "chip",
+    "bug",
+    "cursor",
     "gear",
-    "nut",
+    "file",
+    "magnifier",
+    "package",
+    "rocket",
     "mug",
-    "magnet",
-    "set_square",
-    "cookie",
-    "frame",
-    "watch",
 ];
 /// The shapes a new assistant is given by default: all but the ring, which
 /// is the primary's.
 pub const DEFAULT_SHAPES: [&str; 12] = [
-    "stand",
-    "donut",
-    "gummy",
-    "tape",
+    "terminal",
+    "braces",
+    "shield",
+    "chip",
+    "bug",
+    "cursor",
     "gear",
-    "nut",
+    "file",
+    "magnifier",
+    "package",
+    "rocket",
     "mug",
-    "magnet",
-    "set_square",
-    "cookie",
-    "frame",
-    "watch",
+];
+/// The shapes the assistants had before these, each to the one it is read
+/// as now (as `bot-shapes.ts`' `RENAMED`).
+const RENAMED_SHAPES: [(&str, &str); 10] = [
+    ("stand", "terminal"),
+    ("donut", "braces"),
+    ("gummy", "shield"),
+    ("tape", "chip"),
+    ("nut", "bug"),
+    ("magnet", "cursor"),
+    ("set_square", "file"),
+    ("cookie", "magnifier"),
+    ("frame", "package"),
+    ("watch", "rocket"),
 ];
 /// The eleven colours.
 pub const BOT_COLORS: [&str; 11] = [
@@ -78,11 +92,21 @@ impl BotAvatar {
         }
     }
 
-    /// Read a stored avatar; anything unreadable is a monogram.
+    /// Read a stored avatar; anything unreadable is a monogram. A face of
+    /// a shape since renamed reads as the shape it became.
     pub fn parse(raw: &str) -> Self {
-        serde_json::from_str(raw).unwrap_or(BotAvatar::Monogram {
+        let mut avatar = serde_json::from_str(raw).unwrap_or(BotAvatar::Monogram {
             color: "violet".into(),
-        })
+        });
+        if let BotAvatar::Face { shape, .. } = &mut avatar {
+            if let Some((_, now)) = RENAMED_SHAPES
+                .iter()
+                .find(|(was, _)| *was == shape.as_str())
+            {
+                *shape = (*now).to_string();
+            }
+        }
+        avatar
     }
 
     /// Whether a face names a shape and a colour codeg draws; the other
@@ -301,7 +325,7 @@ mod tests {
         assert_eq!(
             BotAvatar::default_for("abc"),
             BotAvatar::Face {
-                shape: "donut".into(),
+                shape: "braces".into(),
                 color: "red".into()
             }
         );
@@ -323,10 +347,19 @@ mod tests {
             }
         );
         let face = BotAvatar::Face {
-            shape: "nut".into(),
+            shape: "bug".into(),
             color: "teal".into(),
         };
         assert!(face.validate().is_ok());
+        // A shape since renamed reads as the one it became.
+        assert_eq!(
+            BotAvatar::parse(r#"{"kind":"face","shape":"nut","color":"teal"}"#),
+            face
+        );
+        for (was, now) in RENAMED_SHAPES {
+            assert!(!BOT_SHAPES.contains(&was), "{was} is still drawn");
+            assert!(BOT_SHAPES.contains(&now), "{now} is not drawn");
+        }
         // A shape codeg drew before is not one it draws now.
         assert!(BotAvatar::Face {
             shape: "hexagon".into(),

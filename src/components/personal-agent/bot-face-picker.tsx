@@ -5,9 +5,9 @@
  * avatar" over it under the pointer — it opens under it with three pages
  * and [Reset] at the end of their row:
  *
- * - "Bot": one of the twelve shapes, in one of the eleven colours, each
+ * - "Bot": one of the thirteen shapes, in one of the eleven colours, each
  *   taken at once;
- * - "Generate": a face made of a character — its name's first, or an emoji
+ * - "Text": a face made of a character — its name's first, or an emoji
  *   picked or typed — on one of the ten colours;
  * - "Upload": a picture dropped, pasted (anywhere in the bubble) or picked,
  *   framed in a round window — moved and zoomed — and [Set as avatar].
@@ -45,6 +45,7 @@ import {
 import { cn } from "@/lib/utils"
 
 import { BOT_COLORS, BOT_SHAPES, BotAvatar } from "./bot-avatar"
+import { shapeOf } from "./bot-shapes"
 import {
   FaceUpload,
   pastedImage,
@@ -67,7 +68,7 @@ const SWATCH: Record<BotColor, string> = {
   gray: "bg-slate-400 dark:bg-slate-500",
 }
 
-/** A face's colour, on the "Generate" page: the nearest of its ten. */
+/** A face's colour, on the "Text" page: the nearest of its ten. */
 const NEAREST: Record<BotColor, AssistantAvatarColor> = {
   black: "slate",
   brown: "amber",
@@ -82,7 +83,7 @@ const NEAREST: Record<BotColor, AssistantAvatarColor> = {
   gray: "slate",
 }
 
-/** The emoji the "Generate" page offers beside the name's first
+/** The emoji the "Text" page offers beside the name's first
  *  character; any other can be typed. */
 /** The emoji offered as faces; anything else can be typed or pasted. */
 const EMOJI_OFFERED = [
@@ -256,7 +257,7 @@ function BotPage({ value, name, onChange, disabled }: FacePickerProps) {
         className="flex flex-wrap justify-center gap-x-[calc((100%-15rem-1px)/4)] gap-y-3"
       >
         {BOT_SHAPES.map((s) => {
-          const on = value.kind === "face" && value.shape === s
+          const on = value.kind === "face" && shapeOf(value.shape) === s
           return (
             <button
               key={s}
@@ -300,7 +301,8 @@ function BotPage({ value, name, onChange, disabled }: FacePickerProps) {
               onClick={() =>
                 onChange({
                   kind: "face",
-                  shape: value.kind === "face" ? value.shape : "donut",
+                  shape:
+                    value.kind === "face" ? shapeOf(value.shape) : "terminal",
                   color: c,
                 })
               }

@@ -10,12 +10,15 @@ import { useState, type ReactNode } from "react"
 import { useLocale, useTranslations } from "next-intl"
 import {
   Bell,
+  Check,
   ChevronDown,
+  Clock,
   Ear,
   Forward,
   ListTodo,
   MessageCircleQuestionMark,
   MessagesSquare,
+  X,
   type LucideIcon,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -58,7 +61,7 @@ import {
 import { useActivityTranslate } from "../../activity-text"
 import { dueWhen, repeatText } from "../../due-text"
 import { AnsweredForYou } from "../../event-card"
-import { LadderChip, TaskStrip } from "../../task-strip"
+import { LadderChip, TaskStopButton, TaskStrip } from "../../task-strip"
 import { useTodayRowProps, type Opener } from "../../today-section"
 import { MOVING } from "../use-work"
 
@@ -73,6 +76,38 @@ const KIND_ICON: Record<Exclude<ItemKind, "dispatch">, LucideIcon> = {
   question: MessageCircleQuestionMark,
   message: MessagesSquare,
   when_mentioned: Ear,
+}
+
+/** codeg's own words for the matters of a message between assistants
+ *  (`messages.rs`): its sender's, and its receiver's. */
+const WAITING_ANSWER = /^Waiting for (.+?)'s answer: ([\s\S]*)$/
+const WROTE_TO_YOU = /^(.+?) wrote to you: ([\s\S]*)$/
+
+/** A message's matter written by codeg, in the page's language: what it
+ *  says with its sender or receiver named; `null` for words of anyone
+ *  else's (an assistant's own summary), shown as written. */
+export function messageMatterWords(
+  summary: string
+): { key: "waitingAnswer" | "wroteToYou"; name: string; text: string } | null {
+  const waiting = WAITING_ANSWER.exec(summary)
+  if (waiting)
+    return { key: "waitingAnswer", name: waiting[1]!, text: waiting[2]! }
+  const wrote = WROTE_TO_YOU.exec(summary)
+  if (wrote) return { key: "wroteToYou", name: wrote[1]!, text: wrote[2]! }
+  return null
+}
+
+/** A matter's title: its summary — codeg's words for a message's matter in
+ *  the page's language. */
+function useMatterTitle(): (item: ItemInfo) => string {
+  const t = useTranslations("PersonalAgent.items")
+  return (item) => {
+    const words =
+      item.kind === "message" ? messageMatterWords(item.summary) : null
+    return words
+      ? t(words.key, { name: words.name, text: words.text })
+      : item.summary
+  }
 }
 
 /** Where the rows open, and what they are drawn with: the page around the
@@ -143,6 +178,13 @@ const SNOOZE_CHOICES = [
   { until: "tomorrow", label: "tomorrow" },
 ] as const
 
+/** Whether a matter has a way to settle it on its row (`ItemActions`):
+ *  handed-out work still moving settles itself. */
+function hasItemActions(item: ItemInfo, dispatch: DispatchInfo | null) {
+  const state = dispatch?.state ?? item.dispatch_state
+  return !(item.kind === "dispatch" && state != null && MOVING.has(state))
+}
+
 /** The way to settle a matter on its row (C1): done, dropped — and one that
  *  is not handed-out work later: in 15 minutes, in an hour, tomorrow
  *  morning, or with no set time. Handed-out work settles itself as it
@@ -174,21 +216,22 @@ function ItemActions({
       .finally(() => setActing(false))
   }
   const work = item.kind === "dispatch"
-  const state = dispatch?.state ?? item.dispatch_state
-  if (work && state != null && MOVING.has(state)) return null
+  if (!hasItemActions(item, dispatch)) return null
   const later =
     !work &&
     item.kind !== "when_mentioned" &&
     (item.waits_for !== "time" || item.due_at != null)
+  // One set, each its icon before its word: done the main one, later (its
+  // menu of when) outlined, dropped in the destructive tone.
   return (
     <>
       <Button
         size="sm"
-        variant="outline"
         disabled={acting}
         onClick={() => settle("done")}
         data-pa-item-act="done"
       >
+        <Check aria-hidden />
         {td("done")}
       </Button>
       {later ? (
@@ -196,12 +239,13 @@ function ItemActions({
           <DropdownMenuTrigger asChild>
             <Button
               size="sm"
-              variant="ghost"
+              variant="outline"
               disabled={acting}
               data-pa-item-act="later-menu"
             >
+              <Clock aria-hidden />
               {td("later")}
-              <ChevronDown className="size-3" aria-hidden />
+              <ChevronDown aria-hidden className="-ms-0.5 opacity-60" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start">
@@ -225,12 +269,12 @@ function ItemActions({
       ) : null}
       <Button
         size="sm"
-        variant="ghost"
+        variant="destructive"
         disabled={acting}
-        className="text-muted-foreground"
         onClick={() => settle("drop")}
         data-pa-item-act="drop"
       >
+        <X aria-hidden />
         {td("drop")}
       </Button>
     </>
@@ -446,8 +490,9 @@ function ThingRow({
       ? (scope.dispatches.find((d) => d.id === dispatchId) ?? null)
       : null
   const details = useDetails({ row, today, item, dispatch, scope })
+  // Only when it has any: a card with no buttons has no row of them.
   const actions =
-    item && !scope.readOnly ? (
+    item && !scope.readOnly && hasItemActions(item, dispatch) ? (
       <ItemActions item={item} bot={row.bot_id} dispatch={dispatch} />
     ) : undefined
   const unfold = details ? (
@@ -467,8 +512,10 @@ function ThingRow({
   return null
 }
 
-/** What every row adds to its own: the › at its end (after a button of
- *  its own), its task's strip, what it unfolds to, its key and its mark. */
+/** What every row adds to its own: the › at its head's end, its task's
+ *  strip, what it unfolds to at its foot, its key and its mark. Its work's
+ *  [Stop] goes with its other buttons when it has any, at the end of its
+ *  strip's line when not. */
 function finish(
   props: PanelItemProps,
   {
@@ -477,36 +524,35 @@ function finish(
     details,
     unfold,
     flash,
-    strip,
+    dispatch,
   }: {
     row: ActivityRow
     open: boolean
     details: ReactNode
     unfold: ReactNode
     flash: boolean
-    strip?: ReactNode
+    dispatch: DispatchInfo | null
   }
 ): PanelItemProps {
-  const action =
-    props.action && unfold ? (
-      <span className="flex items-center gap-1">
-        {props.action}
-        {unfold}
-      </span>
+  const buttons = props.actions != null
+  const strip = dispatch?.task ? (
+    <TaskStrip d={dispatch} compact bot={row.bot_id} stop={!buttons} />
+  ) : null
+  const actions =
+    buttons && dispatch?.task ? (
+      <>
+        {props.actions}
+        <TaskStopButton d={dispatch} bot={row.bot_id} className="ms-auto" />
+      </>
     ) : (
-      (props.action ?? unfold)
+      props.actions
     )
-  const extra =
-    strip || open ? (
-      <div className="flex min-w-0 flex-col gap-2">
-        {strip}
-        {open ? details : null}
-      </div>
-    ) : undefined
   return {
     ...props,
-    action,
-    extra,
+    actions,
+    unfold: unfold ?? undefined,
+    details: open ? details : undefined,
+    extra: strip ?? undefined,
     className: cn(
       "scroll-mt-12 transition-colors",
       flash && "bg-primary/10",
@@ -535,11 +581,13 @@ function TodayRowShell({
   ...p
 }: ShellProps & { today: TodayRow; group: ActivityGroup }) {
   const dueNotes = useDueNotes()
+  const matterTitle = useMatterTitle()
   const jumpTo = useJumpTo(p.scope.inDrawer)
   const item = p.row.item
   const bot = p.row.bot_id
   const origin =
     item && item.kind !== "dispatch" ? item.origin_timeline_id : null
+  const ladder = p.dispatch?.ladder ?? null
   const props = useTodayRowProps({
     row: today,
     waiting: group === "needs",
@@ -550,20 +598,24 @@ function TodayRowShell({
         : p.scope.opener(today),
     readOnly: p.scope.readOnly,
     actions: p.actions,
+    // Its work's rung says where it stands: the row's own word for it
+    // would say it again, or otherwise.
+    chipSaysState: ladder != null,
   })
   const notes =
     item && item.kind !== "dispatch"
       ? [...(props.notes ?? []), ...dueNotes(item, p.scope.now)]
       : props.notes
-  const strip = p.dispatch?.task ? (
-    <TaskStrip d={p.dispatch} compact bot={p.row.bot_id} />
-  ) : null
+  // Its matter's words as its title: codeg's in the page's language.
+  const title =
+    item && today.title.trim() === item.summary.trim()
+      ? matterTitle(item)
+      : props.title
   // Where its work stands on the ladder, as its card said it (a pull
   // request stuck on a conflict, not just "finished").
   const chip =
-    props.chip ??
-    (p.dispatch?.ladder ? <LadderChip ladder={p.dispatch.ladder} /> : undefined)
-  return <PanelItem {...finish({ ...props, notes, chip }, { ...p, strip })} />
+    props.chip ?? (ladder ? <LadderChip ladder={ladder} /> : undefined)
+  return <PanelItem {...finish({ ...props, title, notes, chip }, p)} />
 }
 
 /** A matter's line under its title: its kind (or nothing, for work), whose
@@ -614,8 +666,7 @@ function DispatchRowShell({ item, ...p }: ShellProps & { item: ItemInfo }) {
     openLabel: canOpen ? t("timeline.viewSession") : undefined,
     actions: p.actions,
   }
-  const strip = d.task ? <TaskStrip d={d} compact bot={p.row.bot_id} /> : null
-  return <PanelItem {...finish(props, { ...p, strip })} />
+  return <PanelItem {...finish(props, p)} />
 }
 
 /** A reminder, a follow-up, a question: its kind's icon, when it is due,
@@ -626,13 +677,14 @@ function ItemRowShell({ item, ...p }: ShellProps & { item: ItemInfo }) {
   const dueNotes = useDueNotes()
   const matterMeta = useMatterMeta()
   const jumpTo = useJumpTo(p.scope.inDrawer)
+  const matterTitle = useMatterTitle()
   const Icon =
     item.kind === "dispatch" ? ListTodo : (KIND_ICON[item.kind] ?? ListTodo)
   const origin = item.origin_timeline_id
   const bot = p.row.bot_id
   const props: PanelItemProps = {
     media: <PanelIcon icon={Icon} />,
-    title: item.summary,
+    title: matterTitle(item),
     chip:
       item.at_due === "act" && item.due_at ? (
         <span

@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest"
 
 import type { BotColor } from "@/lib/types"
 
-import { FACE_BODY, FACE_EYES, FACE_VARS } from "./bot-avatar"
+import { FACE_BODY, FACE_EYES } from "./bot-avatar"
 
 /** The owner's bubbles are the assistant's face — its body's colour, the
  *  words in its eyes' — so the CSS that paints them has to name the very
@@ -53,33 +53,6 @@ describe("the owner's bubble in an assistant's face", () => {
     expect(own["--pa-own"]).toBe("var(--pa-body, var(--primary))")
     expect(own["--pa-own-ink"]).toBe(
       "var(--pa-eyes, var(--primary-foreground))"
-    )
-  })
-})
-
-/** `[--pa-b:var(--color-red-500)] dark:[--pa-b:…]` → the steps a variable
- *  is set to, light and dark. */
-function varSteps(classes: string, name: string) {
-  let light: string | null = null
-  let dark: string | null = null
-  for (const c of classes.split(/\s+/)) {
-    const m = c.match(/^(dark:)?\[--([\w-]+):var\(--color-([\w-]+)\)\]$/)
-    if (!m || m[2] !== name) continue
-    if (m[1]) dark = m[3]!
-    else light = m[3]!
-  }
-  return { light, dark }
-}
-
-describe("a face's drawing", () => {
-  const colors = Object.keys(FACE_BODY) as BotColor[]
-
-  it.each(colors)("paints %s with its body's and its eyes' steps", (color) => {
-    expect(varSteps(FACE_VARS[color], "pa-b")).toEqual(
-      steps(FACE_BODY[color], "fill-")
-    )
-    expect(varSteps(FACE_VARS[color], "pa-c")).toEqual(
-      steps(FACE_EYES[color], "text-")
     )
   })
 })

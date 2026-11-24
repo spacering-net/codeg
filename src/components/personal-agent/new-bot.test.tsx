@@ -225,14 +225,14 @@ describe("a new work assistant", () => {
         ) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()
     fireEvent.click(head.querySelector("[data-pa-face-picker]")!)
-    fireEvent.click(await screen.findByRole("button", { name: "Hex nut" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Bug" }))
     fireEvent.click(screen.getByRole("button", { name: "Purple" }))
     expect(head.getAttribute("data-pa-face")).toBe("purple")
     fireEvent.click(screen.getByRole("button", { name: "Create" }))
     await waitFor(() =>
       expect(api.personalAgentBotCreate.mock.calls[0][0].avatar).toEqual({
         kind: "face",
-        shape: "nut",
+        shape: "bug",
         color: "purple",
       })
     )

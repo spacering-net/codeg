@@ -30,6 +30,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react"
@@ -53,6 +54,7 @@ import { ServerFileBrowserDialog } from "@/components/shared/server-file-browser
 import { useReducedMotion } from "@/hooks/use-chat-motion"
 import { useShortcutSettings } from "@/hooks/use-shortcut-settings"
 import { useBotId } from "@/contexts/personal-agent-context"
+import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { personalAgentSend } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import type {
@@ -134,13 +136,23 @@ export function PersonalAgentComposer({
     useComposerMentionLabels()
   // The other assistants are named with `@` (D8): the brain reads each as
   // its name and number, and hands work over itself if it should.
+  // The workspace's folders, offered whole ahead of the assistant's own
+  // files: "@my-app" names the project — not its task worktrees.
+  const openFolders = useAppWorkspaceStore((s) => s.folders)
+  const mentionFolders = useMemo(
+    () =>
+      openFolders
+        .filter((f) => f.parent_id == null)
+        .map((f) => ({ name: f.alias?.trim() || f.name, path: f.path })),
+    [openFolders]
+  )
   const referenceSearch = useReferenceSearch({
     defaultPath: agent.workdir,
     enabled: true,
     labels: groupLabels,
     excludeAssistantUid: agent.uid,
-
     primaryAssistantName,
+    folders: mentionFolders,
   })
   const attach = useComposerAttachments({
     editorRef,
@@ -443,8 +455,12 @@ export function PersonalAgentComposer({
                   onDropFiles={attach.handleEditorDrop}
                   // The text's size and line: `.pa-composer` in globals.css.
                   // No end padding: the strip kept for the scroll bar (10px,
-                  // globals.css) is the room before the send button.
-                  className="max-h-[40vh] [&_.codeg-composer-scroll]:py-1 [&_.codeg-composer-scroll]:ps-2 [&_.codeg-composer-scroll]:pe-0"
+                  // globals.css) is the room before the send button. Half a
+                  // pixel more under the text than over it, the 0.5rem the
+                  // same: the glyphs sit a little low in their line (the
+                  // Chinese ones by up to 0.75px, a lowercase line more), so
+                  // on one line the text is centred on the buttons to the eye.
+                  className="max-h-[40vh] [&_.codeg-composer-scroll]:ps-2 [&_.codeg-composer-scroll]:pe-0 [&_.codeg-composer-scroll]:pt-[0.21875rem] [&_.codeg-composer-scroll]:pb-[0.28125rem]"
                 />
               </div>
               <div className="flex" style={{ gridArea: "send" }}>

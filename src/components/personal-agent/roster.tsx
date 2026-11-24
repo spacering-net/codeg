@@ -1180,7 +1180,7 @@ export function PersonalAgentRoster({
         {...warmOn(b)}
         data-pa-roster-hidden={hidden || undefined}
         className={cn(
-          "relative flex w-full items-center gap-2.5 rounded-xl px-2 py-1.5 text-start transition-colors",
+          "relative flex w-full items-center gap-2.5 rounded-full px-2 py-1.5 text-start transition-colors",
           isCurrent
             ? "bg-accent text-accent-foreground"
             : "text-foreground/85 hover:bg-muted",
@@ -1328,7 +1328,7 @@ export function PersonalAgentRoster({
       }}
       data-pa-roster-setup
       className={cn(
-        "group/add flex w-full items-center gap-2.5 rounded-xl px-2 py-1.5 text-start text-sm transition-colors",
+        "group/add flex w-full items-center gap-2.5 rounded-full px-2 py-1.5 text-start text-sm transition-colors",
         active && viewBot == null
           ? "bg-accent text-accent-foreground"
           : "text-foreground/80 hover:bg-muted hover:text-foreground"
@@ -1416,10 +1416,10 @@ export function PersonalAgentRoster({
             ) : null}
           </div>
         </div>
-        {/* At its foot: a new one. */}
+        {/* At its foot: a new one, the width of the list. */}
         <div
           data-pa-roster-foot
-          className="flex items-center justify-end gap-2 border-t border-border/60 p-1.5"
+          className="flex items-center border-t border-border/60 p-1.5"
         >
           <Button
             variant="ghost"
@@ -1427,7 +1427,7 @@ export function PersonalAgentRoster({
             // A new one's brain is the primary's: none before it is set up.
             disabled={readOnly || !groups.primary}
             onClick={() => dialogs.add()}
-            className="min-w-0 shrink text-foreground/80 hover:text-foreground"
+            className="w-full min-w-0 justify-center rounded-full text-foreground/80 hover:text-foreground"
             data-pa-roster-add
           >
             <Plus aria-hidden />
@@ -1583,26 +1583,34 @@ function hoverOnly(e: { preventDefault: () => void }) {
   e.preventDefault()
 }
 
-/** A group's name, over its rows: on the rows' faces' edge. */
+/** A group's name, over its rows: on the rows' faces' edge. Its row is
+ *  what the pointer comes over to show a folding one's chevron. */
 const HEAD_CLASS =
-  "flex h-7 min-w-0 items-center gap-1 px-2 text-[0.6875rem] font-medium tracking-wide text-muted-foreground uppercase"
+  "group/fold flex h-7 min-w-0 items-center gap-1 px-2 text-[0.6875rem] font-medium tracking-wide text-muted-foreground uppercase"
 
-/** A folding head's button: its name and chevron alone, the patch it
- *  takes under the pointer as wide as they are — the name still on the
- *  faces' edge. */
+/** A folding head's button: its name and chevron alone — the name still
+ *  on the faces' edge (the padding is the keyboard ring's room). Under the
+ *  pointer only its words darken, no patch behind them, as the sidebar's
+ *  section heads do. */
 const FOLD_CLASS =
-  "-mx-1.5 flex min-w-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-start tracking-wide uppercase transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+  "-mx-1.5 flex min-w-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-start tracking-wide uppercase transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
 
-/** After a folding group's name: down while it is open, toward the end of
- *  the line while it is folded. */
+/** After a folding group's name, as the sidebar's section heads have it:
+ *  open, it points down and shows only while its head is under the pointer
+ *  or its button has the keyboard (always on a touch screen, which has no
+ *  pointer over it); folded, it points toward the end of the line and
+ *  always shows — the one sign the group opens again. */
 function FoldChevron({ open }: { open: boolean }) {
   return (
     <ChevronDown
       className={cn(
-        "size-3 shrink-0 transition-transform",
-        !open && "-rotate-90 rtl:rotate-90"
+        "size-3 shrink-0 transition-[transform,opacity]",
+        open
+          ? "opacity-0 group-hover/fold:opacity-100 group-has-[:focus-visible]/fold:opacity-100 [@media(hover:none)]:opacity-100"
+          : "-rotate-90 rtl:rotate-90"
       )}
       aria-hidden
+      data-pa-fold-chevron
     />
   )
 }

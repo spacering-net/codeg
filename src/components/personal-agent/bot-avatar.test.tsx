@@ -10,6 +10,10 @@ import { syncedDelay } from "@/lib/motion/synced-spin"
 import type { BotAvatar as BotAvatarValue } from "@/lib/types"
 
 import { BotAvatar } from "./bot-avatar"
+import {
+  __activeFacesForTests,
+  __resetFaceMotionForTests,
+} from "./bot-face-motion"
 
 const face: BotAvatarValue = { kind: "face", shape: "ring", color: "teal" }
 
@@ -17,9 +21,15 @@ function root(container: HTMLElement): HTMLElement {
   return container.querySelector("[data-slot='bot-avatar']") as HTMLElement
 }
 
+/** The group its drawing is in. */
+function art(el: Element): SVGGElement {
+  return el.querySelector(".pa-face-art") as SVGGElement
+}
+
 beforeEach(() => {
   motion.reduced = false
   vi.useFakeTimers()
+  __resetFaceMotionForTests()
 })
 
 afterEach(() => {
@@ -88,12 +98,17 @@ describe("an assistant's face", () => {
     expect(el.hasAttribute("data-blink")).toBe(true)
     act(() => vi.advanceTimersByTime(120))
     expect(el.hasAttribute("data-blink")).toBe(false)
+    const still = art(el).innerHTML
     act(() => vi.advanceTimersByTime(2800))
-    const gaze = el.querySelector(".pa-face-gaze") as SVGGElement
-    // A tenth of the face: seen on a roster row's face too.
-    expect(gaze.style.transform).toBe("translate(-10px, 0px)")
-    act(() => vi.advanceTimersByTime(500))
-    expect(gaze.style.transform).toBe("")
+    expect(el.getAttribute("data-glance")).toBe("left")
+    // Its eyes moved, over its drawing at rest.
+    act(() => vi.advanceTimersByTime(300))
+    expect(art(el).innerHTML).not.toBe(still)
+    expect(art(el).innerHTML.startsWith("<use ")).toBe(true)
+    act(() => vi.advanceTimersByTime(200))
+    expect(el.hasAttribute("data-glance")).toBe(false)
+    act(() => vi.advanceTimersByTime(1000))
+    expect(art(el).innerHTML).toBe(still)
   })
 
   it("stays still when given no look, and under reduced motion", () => {
@@ -154,7 +169,7 @@ describe("an assistant's face", () => {
         <BotAvatar avatar={face} name="Dev" size={28} look={look} />
       )
       const lids = container.querySelector(".pa-face-lids") as SVGGElement
-      expect(lids.firstElementChild!.children.length, look).toBe(2)
+      expect(lids.children.length, look).toBe(2)
       unmount()
     }
   })
@@ -196,58 +211,59 @@ function pointer(
   })
 }
 
-/** The next frame (the eyes follow the pointer once a frame). */
-function frame() {
-  act(() => vi.advanceTimersByTime(20))
+/** `n` frames go by. */
+function frames(n: number) {
+  for (let i = 0; i < n; i++) act(() => vi.advanceTimersByTime(17))
 }
 
 describe("the pointer over a face", () => {
-  it("perks it up each time it comes, its eyes following it while it stays", () => {
+  it("perks it up each time it comes, turning it toward it while it stays", () => {
     const { container } = render(
       <BotAvatar avatar={face} name="Dev" size={28} look="idle" />
     )
     const el = root(container)
-    const gaze = el.querySelector(".pa-face-gaze") as SVGGElement
+    const still = art(el).innerHTML
     boxed(el)
     expect(el.hasAttribute("data-perk")).toBe(false)
-    // In over its right edge: a perk, the eyes all the way right.
+    // In over its right edge: a perk, and it turns that way — drawn whole.
     pointer("pointerenter", el, 128, 114)
-    frame()
+    frames(10)
     expect(el.getAttribute("data-perk")).toBe("a")
     expect(el.hasAttribute("data-hover")).toBe(true)
-    expect(gaze.style.transform).toBe("translate(11px, 0px)")
-    // Off to the top left: as far as the eyes go that way.
+    const right = art(el).innerHTML
+    expect(right.startsWith("<use ")).toBe(false)
+    // Off to the top left: it turns again.
     pointer("pointermove", el, 0, 0)
-    frame()
-    expect(gaze.style.transform).toBe("translate(-8px, -6px)")
-    // Gone: the eyes settle back.
+    frames(10)
+    expect(art(el).innerHTML).not.toBe(right)
+    // Gone: it settles back to its rest, the page's drawing again.
     pointer("pointerleave", el)
     expect(el.hasAttribute("data-hover")).toBe(false)
-    expect(gaze.style.transform).toBe("")
+    frames(120)
+    expect(art(el).innerHTML).toBe(still)
+    expect(__activeFacesForTests()).toBe(0)
     // Back again: the perk again, under its other name so it plays.
     pointer("pointerenter", el, 114, 128)
-    frame()
+    frames(2)
     expect(el.getAttribute("data-perk")).toBe("b")
-    expect(gaze.style.transform).toBe("translate(0px, 8px)")
   })
 
   it("notices it over the row it is the face of", () => {
     const { container } = render(
       <button type="button" data-pa-face-host>
-        <BotAvatar avatar={face} name="Dev" size={28} look="working" />
+        <BotAvatar avatar={face} name="Dev" size={28} look="idle" />
         Dev
       </button>
     )
     const row = container.querySelector("button")!
     const el = root(container)
+    const still = art(el).innerHTML
     boxed(el)
-    // At the row's far end: it looks that way.
+    // At the row's far end: it turns that way.
     pointer("pointerenter", row, 300, 114)
-    frame()
+    frames(10)
     expect(el.getAttribute("data-perk")).toBe("a")
-    expect(
-      (el.querySelector(".pa-face-gaze") as SVGGElement).style.transform
-    ).toBe("translate(11px, 0px)")
+    expect(art(el).innerHTML).not.toBe(still)
     pointer("pointerleave", row)
     expect(el.hasAttribute("data-hover")).toBe(false)
   })
@@ -259,16 +275,13 @@ describe("the pointer over a face", () => {
     const el = root(container)
     boxed(el)
     pointer("pointerenter", el, 128, 114)
-    // Its eyes open through a blink, then follow the pointer.
+    // Its eyes open through a blink, then it turns to the pointer.
     expect(el.hasAttribute("data-blink")).toBe(true)
     act(() => vi.advanceTimersByTime(90))
     expect(el.getAttribute("data-bot-look")).toBe("idle")
     expect(el.querySelectorAll(".pa-face-z")).toHaveLength(0)
-    frame()
-    act(() => vi.advanceTimersByTime(200))
-    expect(
-      (el.querySelector(".pa-face-gaze") as SVGGElement).style.transform
-    ).toBe("translate(11px, 0px)")
+    frames(10)
+    expect(el.hasAttribute("data-hover")).toBe(true)
     pointer("pointerleave", el)
     act(() => vi.advanceTimersByTime(90))
     expect(el.getAttribute("data-bot-look")).toBe("sleeping")
@@ -281,63 +294,115 @@ describe("the pointer over a face", () => {
     )
     boxed(root(container))
     pointer("pointerenter", root(container), 128, 114)
-    frame()
+    frames(2)
     expect(root(container).hasAttribute("data-perk")).toBe(false)
     expect(root(container).hasAttribute("data-hover")).toBe(false)
     // A touch.
     rerender(<BotAvatar avatar={face} name="Dev" size={28} look="idle" />)
     pointer("pointerenter", root(container), 128, 114, "touch")
-    frame()
+    frames(2)
     expect(root(container).hasAttribute("data-perk")).toBe(false)
     // Reduced motion.
     motion.reduced = true
     rerender(<BotAvatar avatar={face} name="Dev" size={28} look="waiting" />)
     pointer("pointerenter", root(container), 128, 114)
-    frame()
+    frames(2)
     expect(root(container).hasAttribute("data-perk")).toBe(false)
     expect(root(container).hasAttribute("data-hover")).toBe(false)
   })
 
-  it("keeps its eyes where they are seen: clipped to its hole, each face its own", () => {
+  it("keeps its eyes in the ring's hole: at rest the page's, turned its own", () => {
     const { container } = render(
       <>
-        <BotAvatar avatar={face} name="Dev" size={28} look="idle" />
-        <BotAvatar avatar={face} name="Ops" size={28} look="idle" />
+        <BotAvatar avatar={face} name="Dev" size={48} look="idle" />
+        <BotAvatar avatar={face} name="Ops" size={48} look="idle" />
       </>
     )
-    const faces = [...container.querySelectorAll("[data-slot='bot-avatar']")]
-    const ids = faces.map((f) => {
-      const clip = f.querySelector("clipPath")!
+    const faces = [
+      ...container.querySelectorAll<HTMLElement>("[data-slot='bot-avatar']"),
+    ]
+    // At rest: both use the page's drawing, their eyes seen through its hole.
+    const def = "pa-face-def-ring-idle-f"
+    for (const f of faces) {
+      expect(f.querySelector("use")!.getAttribute("href")).toBe(`#${def}`)
       const eyes = f.querySelector(".pa-face-lids")!
-      // The group that clips them holds the eyes.
-      const clipped = eyes.closest("[clip-path]")!
-      expect(clipped.getAttribute("clip-path")).toBe(`url(#${clip.id})`)
-      // The ring's: the opening of its band, in the drawing's 512 box.
-      expect(clip.getAttribute("transform")).toBe(`scale(${100 / 512})`)
-      expect(clip.querySelector("path")!.getAttribute("d")).toMatch(
-        /^M416\.77 323\.09A172\.89/
+      expect(eyes.closest("[clip-path]")!.getAttribute("clip-path")).toBe(
+        `url(#${def}-h)`
       )
-      return clip.id
+    }
+    expect(document.getElementById(def)).not.toBeNull()
+    expect(document.getElementById(`${def}-h`)!.tagName).toBe("clipPath")
+    // Turned: each its own drawing, its own clips.
+    const ids = faces.map((f) => {
+      boxed(f)
+      pointer("pointerenter", f, 300, 100)
+      frames(6)
+      const hole = [...f.querySelectorAll("clipPath")].find((c) =>
+        c.id.endsWith("-h")
+      )!
+      const eyes = f.querySelector(".pa-face-lids")!
+      expect(eyes.closest("[clip-path]")!.getAttribute("clip-path")).toBe(
+        `url(#${hole.id})`
+      )
+      return hole.id
     })
     expect(new Set(ids).size).toBe(2)
-    for (const id of ids) expect(id).toMatch(/^pa-face-[\w-]+-clip$/)
+    for (const id of ids) expect(id).toMatch(/^pa-face-[\w-]+-h$/)
+    expect(ids).not.toContain(`${def}-h`)
+  })
+})
+
+describe("what moves a face", () => {
+  it("draws it only while its pose changes", () => {
+    const { container, rerender, unmount } = render(
+      <BotAvatar avatar={face} name="Dev" size={28} look="idle" />
+    )
+    const el = root(container)
+    frames(3)
+    // At rest: nothing to draw.
+    expect(__activeFacesForTests()).toBe(0)
+    const still = art(el).innerHTML
+    // Working: it nods over its work.
+    rerender(<BotAvatar avatar={face} name="Dev" size={28} look="working" />)
+    act(() => vi.advanceTimersByTime(90))
+    frames(10)
+    expect(__activeFacesForTests()).toBe(1)
+    expect(art(el).innerHTML).not.toBe(still)
+    const a = art(el).innerHTML
+    frames(10)
+    expect(art(el).innerHTML).not.toBe(a)
+    // Gone: out of the loop.
+    unmount()
+    frames(2)
+    expect(__activeFacesForTests()).toBe(0)
   })
 
-  it("gives each face its own masks", () => {
-    const donut: BotAvatarValue = { kind: "face", shape: "donut", color: "red" }
-    const { container } = render(
-      <>
-        <BotAvatar avatar={donut} name="Dev" size={48} />
-        <BotAvatar avatar={donut} name="Ops" size={48} />
-      </>
+  it("puts a turned face back at rest once it no longer moves", () => {
+    const { container, rerender } = render(
+      <BotAvatar avatar={face} name="Dev" size={28} look="idle" />
     )
-    const ids = [...container.querySelectorAll("mask")].map((m) => m.id)
-    expect(ids.length).toBe(4)
-    expect(new Set(ids).size).toBe(4)
-    for (const g of container.querySelectorAll("[mask]")) {
-      const ref = g.getAttribute("mask")!.slice(5, -1)
-      expect(ids).toContain(ref)
-    }
+    const el = root(container)
+    boxed(el)
+    pointer("pointerenter", el, 300, 114)
+    frames(6)
+    expect(art(el).innerHTML.startsWith("<use ")).toBe(false)
+    motion.reduced = true
+    rerender(<BotAvatar avatar={face} name="Dev" size={28} look="idle" />)
+    expect(art(el).innerHTML.startsWith("<use ")).toBe(true)
+  })
+
+  it("turns a done face round once, then rests", () => {
+    const { container, rerender } = render(
+      <BotAvatar avatar={face} name="Dev" size={28} look="idle" />
+    )
+    const el = root(container)
+    rerender(<BotAvatar avatar={face} name="Dev" size={28} look="done" />)
+    act(() => vi.advanceTimersByTime(90))
+    frames(20)
+    expect(__activeFacesForTests()).toBe(1)
+    frames(120)
+    expect(__activeFacesForTests()).toBe(0)
+    expect(art(el).innerHTML.startsWith("<use ")).toBe(true)
   })
 })
 
@@ -349,75 +414,55 @@ describe("what a face is drawn as", () => {
     return root(container)
   }
 
-  it("paints with its colour's two variables, in either theme", () => {
+  /** The page's drawing a face at rest uses. */
+  function body(f: HTMLElement): Element {
+    const href = f.querySelector("use")!.getAttribute("href")!.slice(1)
+    return document.getElementById(href)!
+  }
+
+  it("paints with its colour's tones, in either theme", () => {
     const f = drawn({ kind: "face", shape: "mug", color: "gray" })
-    const svg = f.querySelector("svg")!
-    expect(svg.getAttribute("class")).toContain(
-      "[--pa-b:var(--color-slate-400)]"
-    )
-    expect(svg.getAttribute("class")).toContain(
-      "dark:[--pa-c:var(--color-white)]"
-    )
-    const painted = [...f.querySelectorAll<SVGElement>(".pa-face-art *")]
-      .map((el) => el.style.fill || el.style.stroke)
-      .filter(Boolean)
-    expect(painted).toContain("var(--pa-b)")
-    expect(painted).toContain("var(--pa-c)")
+    expect(f.querySelector("svg")!.getAttribute("data-pa-tone")).toBe("gray")
+    const css = document.getElementById("pa-face-tones")!.textContent!
+    expect(css).toContain('[data-pa-tone="gray"]{--pa-k-body:')
+    expect(css).toContain('.dark [data-pa-tone="gray"]{--pa-k-body:')
+    expect(body(f).querySelector(".pa-f-body")).not.toBeNull()
   })
 
-  it("puts its eyes in the colour that reads where they are", () => {
-    // On the mug's body: the colour that reads on it.
-    const mug = drawn({ kind: "face", shape: "mug", color: "teal" })
-    expect(mug.querySelector<SVGGElement>(".pa-face-lids")!.style.color).toBe(
-      "var(--pa-c)"
-    )
-    // In the donut's hole: its own colour, seen through.
-    cleanup()
-    const donut = drawn({ kind: "face", shape: "donut", color: "teal" })
-    expect(donut.querySelector<SVGGElement>(".pa-face-lids")!.style.color).toBe(
-      "var(--pa-b)"
-    )
-    // On the watch's screen, painted in the colour that reads on it: its
-    // own colour, as a display shows them.
-    cleanup()
-    const watch = drawn({ kind: "face", shape: "watch", color: "teal" })
-    expect(watch.querySelector<SVGGElement>(".pa-face-lids")!.style.color).toBe(
-      "var(--pa-b)"
-    )
+  it("puts its eyes in the paint that reads where they are", () => {
+    const eyes = (shape: string) => {
+      cleanup()
+      return drawn({ kind: "face", shape: shape as never, color: "teal" })
+        .querySelector(".pa-face-lids path")!
+        .getAttribute("class")
+    }
+    expect(eyes("mug")).toBe("pa-f-eye-body")
+    expect(eyes("terminal")).toBe("pa-f-eye-screen")
+    expect(eyes("ring")).toBe("pa-f-eye-hole")
+    expect(eyes("braces")).toBe("pa-f-eye-float")
   })
 
-  it("is drawn small under 32px: its textures gone", () => {
-    const big = drawn({ kind: "face", shape: "donut", color: "red" }, 32)
+  it("is drawn small under 32px: no edges", () => {
+    const big = drawn({ kind: "face", shape: "gear", color: "red" }, 32)
     expect(big.hasAttribute("data-bot-small")).toBe(false)
-    const sprinkles = big.querySelectorAll(".pa-face-roll rect").length
-    expect(sprinkles).toBeGreaterThan(0)
+    expect(body(big).querySelector(".pa-s-edge")).not.toBeNull()
     cleanup()
-    const small = drawn({ kind: "face", shape: "donut", color: "red" }, 28)
+    const small = drawn({ kind: "face", shape: "gear", color: "red" }, 28)
     expect(small.hasAttribute("data-bot-small")).toBe(true)
-    expect(small.querySelectorAll(".pa-face-roll rect")).toHaveLength(0)
+    expect(body(small).querySelector(".pa-s-edge")).toBeNull()
   })
 
-  it("draws a shape no longer drawn as the donut", () => {
-    const old = drawn({
-      kind: "face",
-      shape: "pebble" as never,
-      color: "red",
-    })
-    expect(old.querySelector(".pa-face-roll")).not.toBeNull()
-  })
-
-  it("carries the parts that move as it works", () => {
-    expect(
-      drawn({ kind: "face", shape: "gear", color: "blue" }).querySelector(
-        ".pa-face-spin"
-      )
-    ).not.toBeNull()
-    cleanup()
-    expect(
-      drawn({ kind: "face", shape: "watch", color: "blue" }).querySelector(
-        ".pa-face-progress"
-      )
-    ).not.toBeNull()
+  it("draws a shape since renamed as the one it became, one never drawn as the terminal", () => {
+    const shapeOf = (name: string) => {
+      cleanup()
+      return drawn({
+        kind: "face",
+        shape: name as never,
+        color: "red",
+      }).getAttribute("data-bot-shape")
+    }
+    expect(shapeOf("donut")).toBe("braces")
+    expect(shapeOf("pebble")).toBe("terminal")
   })
 })
 

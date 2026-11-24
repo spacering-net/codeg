@@ -18,7 +18,7 @@
 
 import { useState } from "react"
 import { useFormatter, useTranslations } from "next-intl"
-import { GitBranch } from "lucide-react"
+import { GitBranch, Square } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -27,6 +27,7 @@ import { personalAgentDispatchStop } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import { openInSystemBrowser } from "@/lib/link-open"
 import type { DispatchInfo, Ladder, PrFacts } from "@/lib/types"
+import { cn } from "@/lib/utils"
 
 import { BranchChip } from "./aux/kit/branch-chip"
 import { StatusPill, type PillTone } from "./aux/kit/status-pill"
@@ -197,31 +198,29 @@ function PrLine({ d }: { d: DispatchInfo }) {
  *  where the row above says it already. `compact`,
  *  on the side panel's cards: the branch a chip and what it changed after
  *  it on one line, without the project (the card's line says it) or [Open
- *  session] (the card itself opens it); its buttons a size up, [Stop] red
- *  at the row's end. */
+ *  session] (the card itself opens it); its buttons a size up, [Stop]
+ *  (`TaskStopButton`) at the row's end. */
 export function TaskStrip({
   d,
   chip = false,
   compact = false,
+  stop: withStop = true,
   bot,
 }: {
   d: DispatchInfo
   chip?: boolean
   compact?: boolean
+  /** [Stop] on it (`compact`): not where the card has a row of buttons
+   *  it goes on instead (`TaskStopButton`). */
+  stop?: boolean
   /** The assistant the work is of, when it is not the page's (another's
    *  row on the primary's activity): what stopping it goes to. */
   bot?: number | null
 }) {
   const t = useTranslations("PersonalAgent.taskCard")
-  const pageBot = useBotId()
-  const botId = bot !== undefined ? bot : pageBot
-  const { readOnly } = usePageScope()
-  const [stopping, setStopping] = useState(false)
+  const stoppable = useTaskStoppable(d)
   const task = d.task
   if (!task) return null
-  // A task the board finished — its pull request ready to merge, say — is
-  // past stopping.
-  const live = LIVE_LADDERS.has(d.ladder) && d.state !== "completed"
   const diffTags = {
     add: (chunks: React.ReactNode) => (
       <span className="text-emerald-700 dark:text-emerald-400">{chunks}</span>
@@ -245,15 +244,6 @@ export function TaskStrip({
             ...diffTags,
           })
       : null
-  const stop = () => {
-    setStopping(true)
-    personalAgentDispatchStop(botId, d.id)
-      .then((stopped) => {
-        if (!stopped) toast.message(t("pastStopping"))
-      })
-      .catch((e) => toast.error(toErrorMessage(e)))
-      .finally(() => setStopping(false))
-  }
   const prButton = task.pr_url ? (
     <Button
       size="sm"
@@ -270,20 +260,11 @@ export function TaskStrip({
   ) : null
   if (compact) {
     // The side panel's: the branch a chip and what it changed after it on
-    // one line, [Stop] — red — at its end; with a pull request, [View PR]
-    // and [Stop] a line of their own under it.
+    // one line, [Stop] at its end; with a pull request, [View PR] and
+    // [Stop] a line of their own under it.
     const stopButton =
-      live && !readOnly ? (
-        <Button
-          size="sm"
-          variant="destructive"
-          data-pa-task-act="stop"
-          disabled={stopping}
-          className="ms-auto"
-          onClick={stop}
-        >
-          {t("stop")}
-        </Button>
+      withStop && stoppable ? (
+        <TaskStopButton d={d} bot={bot} className="ms-auto" />
       ) : null
     return (
       <div
@@ -294,10 +275,7 @@ export function TaskStrip({
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
             {task.branch ? <BranchChip branch={task.branch} /> : null}
             {diff ? (
-              <span
-                data-pa-task-diff
-                className="shrink-0 font-mono tabular-nums"
-              >
+              <span data-pa-task-diff className="shrink-0 tabular-nums">
                 {diff}
               </span>
             ) : null}
@@ -346,6 +324,65 @@ export function TaskStrip({
       ) : null}
       <PrLine d={d} />
     </div>
+  )
+}
+
+/** Whether a task's work can be stopped from here: still moving or
+ *  waiting — one the board finished (its pull request ready to merge, say)
+ *  is past stopping — on a page that runs here. */
+export function useTaskStoppable(d: DispatchInfo | null): boolean {
+  const { readOnly } = usePageScope()
+  return (
+    d?.task != null &&
+    !readOnly &&
+    LIVE_LADDERS.has(d.ladder) &&
+    d.state !== "completed"
+  )
+}
+
+/** [Stop] on a side panel's card: red words on an outlined button, as
+ *  quiet as the buttons next to it until hovered. Nothing when the work
+ *  cannot be stopped (`useTaskStoppable`). */
+export function TaskStopButton({
+  d,
+  bot,
+  className,
+}: {
+  d: DispatchInfo
+  /** The assistant the work is of, when it is not the page's. */
+  bot?: number | null
+  className?: string
+}) {
+  const t = useTranslations("PersonalAgent.taskCard")
+  const pageBot = useBotId()
+  const botId = bot !== undefined ? bot : pageBot
+  const stoppable = useTaskStoppable(d)
+  const [stopping, setStopping] = useState(false)
+  if (!stoppable) return null
+  const stop = () => {
+    setStopping(true)
+    personalAgentDispatchStop(botId, d.id)
+      .then((stopped) => {
+        if (!stopped) toast.message(t("pastStopping"))
+      })
+      .catch((e) => toast.error(toErrorMessage(e)))
+      .finally(() => setStopping(false))
+  }
+  return (
+    <Button
+      size="sm"
+      variant="outline"
+      data-pa-task-act="stop"
+      disabled={stopping}
+      className={cn(
+        "text-red-600 hover:bg-red-500/10 hover:text-red-700 dark:text-red-400 dark:hover:bg-red-400/10 dark:hover:text-red-300",
+        className
+      )}
+      onClick={stop}
+    >
+      <Square aria-hidden className="size-2.5 fill-current" />
+      {t("stop")}
+    </Button>
   )
 }
 

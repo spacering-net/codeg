@@ -28,7 +28,6 @@ import {
 } from "lucide-react"
 
 import { SyncedSpinner } from "@/components/ui/synced-spinner"
-import { SettingNote } from "@/components/shared/setting-card"
 import { useBotId } from "@/contexts/personal-agent-context"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -533,7 +532,6 @@ export function PersonaFiles({
           </div>
         </div>
       </div>
-      <SettingNote icon={FileText}>{t("filesNote")}</SettingNote>
     </div>
   )
 }

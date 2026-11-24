@@ -159,6 +159,35 @@ describe("buildReferenceGroups", () => {
     ).toEqual(["custom:claude-code-3"])
   })
 
+  it("offers whole folders ahead of the files, each by its absolute path", () => {
+    const sources = emptySources({
+      folders: [
+        { name: "my-app", path: "/work/my-app" },
+        { name: "docs", path: "/work/docs" },
+      ],
+      files: [makeFile("MEMORY.md")],
+      workspaceRoot: "/data/pa",
+    })
+    const all = itemsOf(buildReferenceGroups("", sources), "file")
+    expect(all.map((i) => i.reference.id)).toEqual([
+      "/work/my-app",
+      "/work/docs",
+      "MEMORY.md",
+    ])
+    expect(all[0].reference).toEqual({
+      refType: "file",
+      id: "/work/my-app",
+      label: "my-app",
+      uri: "file:///work/my-app",
+      meta: { fileKind: "dir" },
+    })
+    expect(
+      itemsOf(buildReferenceGroups("app", sources), "file").map(
+        (i) => i.reference.label
+      )
+    ).toEqual(["my-app"])
+  })
+
   it("returns the five groups in a fixed order (no skill group)", () => {
     const groups = buildReferenceGroups("", emptySources())
     expect(groups.map((g) => g.kind)).toEqual([

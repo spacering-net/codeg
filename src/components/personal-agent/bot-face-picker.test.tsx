@@ -28,7 +28,7 @@ import { BotFacePicker, FaceEditor } from "./bot-face-picker"
 import { usePicture } from "./face-upload"
 
 const BLOB: BotAvatar = { kind: "face", shape: "ring", color: "teal" }
-const DEFAULT: BotAvatar = { kind: "face", shape: "tape", color: "blue" }
+const DEFAULT: BotAvatar = { kind: "face", shape: "chip", color: "blue" }
 
 function wrap(ui: React.ReactNode) {
   return render(
@@ -85,7 +85,7 @@ describe("the face editor's bubble", () => {
     editor(BLOB)
     expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
       "Bot",
-      "Generate",
+      "Text",
       "Upload",
     ])
     expect(
@@ -94,9 +94,7 @@ describe("the face editor's bubble", () => {
     cleanup()
     editor({ kind: "monogram", color: "red" })
     expect(
-      screen
-        .getByRole("tab", { name: "Generate" })
-        .getAttribute("aria-selected")
+      screen.getByRole("tab", { name: "Text" }).getAttribute("aria-selected")
     ).toBe("true")
     cleanup()
     editor({ kind: "image", data_url: "data:image/png;base64,AA" })
@@ -111,10 +109,10 @@ describe("the face editor's bubble", () => {
     expect(
       screen.getByRole("button", { name: "Ring" }).getAttribute("aria-pressed")
     ).toBe("true")
-    fireEvent.click(screen.getByRole("button", { name: "Hex nut" }))
+    fireEvent.click(screen.getByRole("button", { name: "Bug" }))
     expect(onChange).toHaveBeenLastCalledWith({
       kind: "face",
-      shape: "nut",
+      shape: "bug",
       color: "teal",
     })
     fireEvent.click(screen.getByRole("button", { name: "Orange" }))
@@ -139,7 +137,7 @@ describe("the face editor's bubble", () => {
 
   it("makes a face of its name's first character or an emoji, on one of the ten colours", () => {
     const { onChange } = editor(BLOB)
-    openPage("Generate")
+    openPage("Text")
     // The colour carried over from the face: the nearest of the ten.
     fireEvent.click(screen.getByRole("button", { name: "Name's first letter" }))
     expect(onChange).toHaveBeenLastCalledWith({
@@ -176,7 +174,7 @@ describe("the face editor's bubble", () => {
         <FaceEditor value={BLOB} name="Nova" onChange={onChange} />
       </form>
     )
-    openPage("Generate")
+    openPage("Text")
     const typed = screen.getByRole("textbox", {
       name: "Type a character or emoji",
     })

@@ -2,24 +2,35 @@ import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 
+import type { BotLook } from "@/lib/types"
+
 import {
   BOT_SHAPES,
   DEFAULT_SHAPES,
-  eyeNodes,
-  faceArt,
-  nodeMarkup,
-  type SvgNode,
+  FACE_COLORS,
+  TONE_ROLES,
+  contrast,
+  faceMarkup,
+  faceToneCss,
+  faceTones,
+  isMoving,
+  poseAt,
+  poseKey,
+  isRestBody,
+  restBody,
+  restFace,
+  restPose,
+  shapeOf,
 } from "./bot-shapes"
 
 const rust = readFileSync(
   join(process.cwd(), "src-tauri/src/models/personal_agent_bots.rs"),
   "utf8"
 )
-const css = readFileSync(join(process.cwd(), "src/app/globals.css"), "utf8")
 
 /** A `pub const NAME: [&str; n] = [...]` of the backend, as a list. */
 function rustList(name: string): string[] {
-  const at = rust.indexOf(`pub const ${name}:`)
+  const at = rust.indexOf(`const ${name}:`)
   const body = rust.slice(
     rust.indexOf("[", rust.indexOf("=", at)),
     rust.indexOf("];", at)
@@ -27,14 +38,31 @@ function rustList(name: string): string[] {
   return [...body.matchAll(/"([^"]+)"/g)].map((m) => m[1]!)
 }
 
-function walk(nodes: SvgNode[], visit: (n: SvgNode) => void) {
-  for (const n of nodes) {
-    visit(n)
-    walk(n.c ?? [], visit)
-  }
+const LOOKS: BotLook[] = [
+  "idle",
+  "thinking",
+  "working",
+  "waiting",
+  "stuck",
+  "done",
+  "failed",
+  "sleeping",
+]
+
+/** A shape's whole drawing at rest, as one face of its own draws it. */
+function rest(shape: string, small: boolean, id = "x"): string {
+  return faceMarkup(shape, "idle", restPose(shape, "idle"), small, id)
 }
 
-const PAINT = { $b: "#3b82f6", $c: "#ffffff", $w: "#ffffff" } as const
+/** A drawing as a document, to look into. */
+function parse(markup: string): SVGSVGElement {
+  const doc = new DOMParser().parseFromString(
+    `<svg xmlns="http://www.w3.org/2000/svg">${markup}</svg>`,
+    "image/svg+xml"
+  )
+  expect(doc.querySelector("parsererror")).toBeNull()
+  return doc.documentElement as unknown as SVGSVGElement
+}
 
 describe("the shapes an assistant is drawn as", () => {
   it("are the backend's, the primary's ring kept out of the defaults", () => {
@@ -44,118 +72,205 @@ describe("the shapes an assistant is drawn as", () => {
     expect(BOT_SHAPES).toHaveLength(13)
   })
 
+  it("reads a shape since renamed as the backend does, any other as the terminal", () => {
+    const renamed = [
+      ...rust
+        .slice(rust.indexOf("const RENAMED_SHAPES"))
+        .matchAll(/\("(\w+)", "(\w+)"\)/g),
+    ]
+    expect(renamed).toHaveLength(10)
+    for (const [, was, now] of renamed) expect(shapeOf(was!), was).toBe(now)
+    for (const s of BOT_SHAPES) expect(shapeOf(s)).toBe(s)
+    for (const name of ["pebble", "constructor", "toString", "__proto__"]) {
+      expect(shapeOf(name), name).toBe("terminal")
+    }
+  })
+})
+
+describe("a drawing", () => {
   it.each(BOT_SHAPES)(
-    "draws %s full and small, its paints all named",
+    "of %s is whole in every look, full and small",
     (shape) => {
       for (const small of [false, true]) {
-        const art = faceArt(shape, small, (n) => `t-${n}`)
-        expect(art.body.length).toBeGreaterThan(0)
-        expect(art.eyes.window.length).toBeGreaterThan(0)
-        // A clip path holds shapes only.
-        for (const w of art.eyes.window) expect(w.t).not.toBe("g")
-        const markup = art.body.map((n) => nodeMarkup(n, PAINT)).join("")
-        expect(markup).not.toMatch(/"\$[bcw]"/)
-        // Each mask it names, it defines.
-        const ids = [...markup.matchAll(/<mask id="([^"]+)"/g)].map((m) => m[1])
-        for (const ref of markup.matchAll(/url\(#([^)]+)\)/g)) {
-          expect(ids).toContain(ref[1])
+        for (const look of LOOKS) {
+          const svg = parse(
+            faceMarkup(shape, look, restPose(shape, look), small, "x")
+          )
+          // Its two eyes, in a group of their own.
+          const lids = svg.querySelectorAll(".pa-face-lids")
+          expect(lids, `${look}`).toHaveLength(1)
+          expect(lids[0]!.children, `${look}`).toHaveLength(2)
+          // Painted by its tones only.
+          for (const el of svg.querySelectorAll("[class]")) {
+            for (const c of el.getAttribute("class")!.split(/\s+/)) {
+              expect(c).toMatch(/^(pa-[fs]-[a-z0-9-]+|pa-face-lids)$/)
+            }
+          }
+          // Every clip it uses, it defines, under its own id.
+          const ids = [...svg.querySelectorAll("[id]")].map((e) => e.id)
+          for (const id of ids) expect(id.startsWith("x-")).toBe(true)
+          expect(new Set(ids).size).toBe(ids.length)
+          for (const el of svg.querySelectorAll("[clip-path]")) {
+            const ref = el.getAttribute("clip-path")!.slice(5, -1)
+            expect(ids).toContain(ref)
+          }
         }
-        expect(new Set(ids).size).toBe(ids.length)
       }
     }
   )
 
-  it("draws the small one plainer: fewer parts, larger eyes", () => {
+  it("is some tens of elements, fewer small, so a face that moves draws cheaply", () => {
     for (const shape of BOT_SHAPES) {
-      let full = 0
-      let small = 0
-      walk(faceArt(shape, false, (n) => n).body, () => full++)
-      walk(faceArt(shape, true, (n) => n).body, () => small++)
-      expect(small, shape).toBeLessThanOrEqual(full)
-      const a = faceArt(shape, false, (n) => n).eyes
-      const b = faceArt(shape, true, (n) => n).eyes
-      expect(b.ry, shape).toBeGreaterThanOrEqual(a.ry)
+      const full = parse(rest(shape, false))
+      const small = parse(rest(shape, true))
+      const count = (s: SVGSVGElement) => s.querySelectorAll("*").length
+      expect(count(full), shape).toBeLessThan(70)
+      expect(count(small), shape).toBeLessThanOrEqual(count(full))
+      // Small: no edges, no thin lines.
+      expect(small.querySelector("[class*='pa-s-edge'], .pa-s-rim")).toBeNull()
+      expect(
+        full.querySelector("[class*='pa-s-edge'], .pa-s-rim"),
+        shape
+      ).not.toBeNull()
     }
   })
 
-  it("has a rule in globals.css for every part that moves as it works", () => {
-    const classes = new Set<string>()
-    for (const shape of BOT_SHAPES) {
-      for (const small of [false, true]) {
-        walk(faceArt(shape, small, (n) => n).body, (n) => {
-          for (const c of String(n.a.class ?? "").split(/\s+/)) {
-            if (c) classes.add(c)
-          }
-        })
-      }
-    }
-    expect(classes.size).toBeGreaterThan(5)
-    for (const c of classes) {
-      expect(css, c).toContain(`.pa-face[data-bot-look="working"] .${c} {`)
-    }
+  it("keeps the ring's eyes in its hole, its star on its band", () => {
+    const svg = parse(rest("ring", false, "r"))
+    const lids = svg.querySelector(".pa-face-lids")!
+    expect(lids.parentElement!.getAttribute("clip-path")).toBe("url(#r-h)")
+    expect(svg.querySelectorAll(".pa-f-star")).toHaveLength(1)
+    // Drawn small, no star.
+    const small = parse(rest("ring", true, "r"))
+    expect(small.querySelector(".pa-f-star")).toBeNull()
   })
 
-  it("moves at every size while it works: a still body has a part that moves", () => {
-    // The shapes whose bounce is turned off at every size.
-    const at = css.indexOf('.pa-face[data-bot-look="working"]:is(')
-    const list = css.slice(at, css.indexOf(".pa-face-body", at))
-    const still = [...list.matchAll(/data-bot-shape="([\w-]+)"/g)].map(
-      (m) => m[1]!
-    )
-    expect(still.length).toBeGreaterThan(0)
-    for (const shape of still) {
-      let parts = 0
-      walk(faceArt(shape, true, (n) => n).body, (n) => {
-        if (String(n.a.class ?? "").includes("pa-face-")) parts++
-      })
-      expect(parts, shape).toBeGreaterThan(0)
-    }
-    // The mug's steam is its full drawing's: drawn small, it keeps its bounce.
-    expect(still).not.toContain("mug")
-    expect(css).toContain(
-      '.pa-face[data-bot-look="working"][data-bot-shape="mug"]:not([data-bot-small])'
-    )
+  it("paints each shape's eyes in the paint that reads where they are", () => {
+    const eyesOf = (shape: string) =>
+      parse(rest(shape, false))
+        .querySelector(".pa-face-lids path")!
+        .getAttribute("class")
+    expect(eyesOf("mug")).toBe("pa-f-eye-body")
+    expect(eyesOf("terminal")).toBe("pa-f-eye-screen")
+    expect(eyesOf("ring")).toBe("pa-f-eye-hole")
+    expect(eyesOf("braces")).toBe("pa-f-eye-float")
   })
 
-  it("draws any name it does not know as the donut", () => {
-    for (const name of ["pebble", "constructor", "toString", "__proto__"]) {
-      const art = faceArt(name, false, (n) => n)
-      expect(art.body, name).toEqual(faceArt("donut", false, (n) => n).body)
-    }
-  })
-
-  it("leaves out of a still picture what shows only while it works", () => {
-    const markup = faceArt("watch", false, (n) => n)
-      .body.map((n) => nodeMarkup(n, PAINT))
-      .join("")
-    expect(markup).not.toContain("pa-face-progress")
-  })
-
-  it("draws each look's two eyes, leaned as the shape leans them", () => {
-    const eyes = faceArt("mug", false, (n) => n).eyes
-    for (const look of [
+  it("draws a picture in a theme's hex, the same drawing", () => {
+    const tones = faceTones("teal", "light")
+    const css = faceMarkup("mug", "idle", restPose("mug", "idle"), false, "x")
+    const hex = faceMarkup(
+      "mug",
       "idle",
-      "thinking",
-      "working",
-      "waiting",
-      "stuck",
-      "done",
-      "failed",
-      "sleeping",
-    ] as const) {
-      const node = eyeNodes(eyes, look)
-      expect(node.c, look).toHaveLength(2)
-      expect(node.a.transform, look).toBe("rotate(-6 238 312)")
-    }
-    // A blink shuts them to a tenth.
-    const open = eyeNodes(eyes, "idle").c![0]!.a.height
-    const shut = eyeNodes(eyes, "idle", 0.1).c![0]!.a.height
-    expect(shut).toBeCloseTo(Number(open) / 10, 0)
+      restPose("mug", "idle"),
+      false,
+      "x",
+      tones
+    )
+    expect(hex).not.toMatch(/class="pa-[fs]-/)
+    expect(hex).toContain(`fill="${tones.body}"`)
+    expect(css.match(/<path/g)!.length).toBe(hex.match(/<path/g)!.length)
   })
 
-  it("escapes what it writes into an attribute", () => {
-    expect(
-      nodeMarkup({ t: "text", a: { "aria-label": 'a "b" & <c>' } }, PAINT)
-    ).toBe('<text aria-label="a &quot;b&quot; &amp; &lt;c>"/>')
+  it("at rest is the page's drawing, each face its own eyes over it", () => {
+    const id = "pa-face-def-ring-idle-f"
+    const face = restFace("ring", "idle", false)
+    expect(face.startsWith(`<use href="#${id}"/>`)).toBe(true)
+    // The eyes seen through the hole the page's drawing defines.
+    expect(face).toContain(`clip-path="url(#${id}-h)"`)
+    expect(restBody("ring", "idle", false)).toContain(`id="${id}-h"`)
+    expect(restBody("ring", "idle", false)).not.toContain("pa-face-lids")
+    // Once per shape, look and size.
+    expect(restBody("ring", "idle", false)).toBe(
+      restBody("ring", "idle", false)
+    )
+    expect(restFace("gear", "idle", true)).toContain(
+      '<use href="#pa-face-def-gear-idle-s"/>'
+    )
+    // A glance moves its eyes only; the pointer turns it.
+    const glance = poseAt("gear", "idle", 0, null, [14, 0])
+    expect(isRestBody("gear", "idle", glance)).toBe(true)
+    expect(restFace("gear", "idle", false, glance)).not.toBe(
+      restFace("gear", "idle", false)
+    )
+    expect(isRestBody("gear", "idle", poseAt("gear", "idle", 0, [2, 0]))).toBe(
+      false
+    )
+  })
+})
+
+describe("a face's colours", () => {
+  /** The page behind a face, light and dark. */
+  const PAGE = { light: "#ffffff", dark: "#0a0a0a" } as const
+
+  it.each(FACE_COLORS)("let its eyes be seen on %s, in either theme", (c) => {
+    for (const theme of ["light", "dark"] as const) {
+      const t = faceTones(c, theme)
+      expect(contrast(t.eyeBody, t.body), theme).toBeGreaterThanOrEqual(3)
+      expect(contrast(t.eyeScreen, t.screen), theme).toBeGreaterThanOrEqual(3)
+      expect(contrast(t.eyeHole, PAGE[theme]), theme).toBeGreaterThanOrEqual(3)
+      expect(contrast(t.eyeFloat, PAGE[theme]), theme).toBeGreaterThanOrEqual(3)
+      // Its side shows against its face.
+      expect(t.side).not.toBe(t.body)
+    }
+  })
+
+  it("are the page's variables, each tone a class", () => {
+    const css = faceToneCss()
+    for (const c of FACE_COLORS) {
+      const light = faceTones(c, "light")
+      const dark = faceTones(c, "dark")
+      expect(css).toContain(`[data-pa-tone="${c}"]{--pa-k-body:${light.body};`)
+      expect(css).toContain(
+        `.dark [data-pa-tone="${c}"]{--pa-k-body:${dark.body};`
+      )
+    }
+    for (const r of TONE_ROLES) {
+      const k = r.replace(/[A-Z0-9]/g, (ch) => `-${ch}`).toLowerCase()
+      expect(css).toContain(`.pa-f-${k}{fill:var(--pa-k-${k})}`)
+      expect(css).toContain(`.pa-s-${k}{stroke:var(--pa-k-${k})}`)
+    }
+  })
+})
+
+describe("a face's pose", () => {
+  it("turns toward the pointer, its eyes ahead — not asleep", () => {
+    const rest = restPose("gear", "idle")
+    const right = poseAt("gear", "idle", 0, [2, 0])
+    expect(right.n[0]).toBeGreaterThan(rest.n[0])
+    expect(right.gx).toBeGreaterThan(rest.gx)
+    const up = poseAt("gear", "idle", 0, [0, -2])
+    expect(up.n[1]).toBeLessThan(rest.n[1])
+    expect(up.gy).toBeGreaterThan(rest.gy)
+    expect(poseAt("gear", "sleeping", 0, [2, 0])).toEqual(
+      restPose("gear", "sleeping")
+    )
+  })
+
+  it("moves only in a look that moves, a turn and a shake once", () => {
+    expect(isMoving("idle", 5)).toBe(false)
+    expect(isMoving("sleeping", 5)).toBe(false)
+    expect(isMoving("working", 5)).toBe(true)
+    expect(isMoving("thinking", 5)).toBe(true)
+    expect(isMoving("done", 0.4)).toBe(true)
+    expect(isMoving("done", 2)).toBe(false)
+    expect(isMoving("failed", 0.5)).toBe(true)
+    expect(isMoving("failed", 2)).toBe(false)
+    // At rest once still: as its still pose.
+    expect(poseKey(poseAt("ring", "done", 2))).toBe(
+      poseKey(restPose("ring", "done"))
+    )
+    // The ring's star runs round its band while it works.
+    expect(poseAt("ring", "working", 1).star).not.toBe(
+      restPose("ring", "working").star
+    )
+  })
+
+  it("turns the done face right round", () => {
+    const half = poseAt("terminal", "done", 0.4)
+    expect(half.n[2]).toBeLessThan(0)
+    // Seen from behind: no eyes on it.
+    const svg = parse(faceMarkup("terminal", "done", half, false, "x"))
+    expect(svg.querySelector(".pa-face-lids")!.children).toHaveLength(0)
   })
 })

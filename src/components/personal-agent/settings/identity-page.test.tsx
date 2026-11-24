@@ -159,39 +159,74 @@ describe("the identity tab", () => {
     )
   })
 
-  it("picks its brain's agent from tiles, as the first setup does — from the list for one not among them", () => {
+  it("shows its brain and its work alike: the agent picked, its model and options under it — the brain's shown, the work's folded until asked for", () => {
+    brain.ready = true
     acp.agents = [CLAUDE, CODEX]
     render(page(agent("Nova")))
-    const brainCard = document.querySelector("[data-pa-identity-brain]")!
-    const tile = brainCard.querySelector(
-      '[data-pa-setup-agent-tile="claude_code"]'
-    )!
-    expect(tile.getAttribute("aria-checked")).toBe("true")
+    for (const [which, open] of [
+      ["brain", true],
+      ["work", false],
+    ] as const) {
+      const card = document.querySelector(`[data-pa-identity-${which}]`)!
+      // The agent from the list — no tiles of every agent.
+      expect(card.querySelector('[data-testid="agent-select"]')).not.toBeNull()
+      expect(card.querySelector("[data-pa-setup-agent-tile]")).toBeNull()
+      const toggle = card.querySelector<HTMLButtonElement>(
+        "[data-pa-agent-options-toggle]"
+      )!
+      expect(toggle.textContent).toBe("Model and options")
+      const shown = () => card.querySelector("[data-pa-agent-options]")
+      expect(toggle.getAttribute("aria-expanded")).toBe(String(open))
+      expect(shown() !== null).toBe(open)
+      fireEvent.click(toggle)
+      expect(toggle.getAttribute("aria-expanded")).toBe(String(!open))
+      expect(shown() !== null).toBe(!open)
+      fireEvent.click(toggle)
+      expect(shown() !== null).toBe(open)
+      if (open) {
+        expect(shown()!.id).toBe(toggle.getAttribute("aria-controls"))
+      }
+    }
+    // Neither says what the other is for.
     expect(
-      brainCard
-        .querySelector('[data-pa-setup-agent-tile="codex"]')!
-        .getAttribute("aria-checked")
-    ).toBe("false")
-    const brainSelect = () =>
-      document.querySelector(
-        '[data-pa-identity-brain] [data-testid="agent-select"]'
-      )
-    expect(brainSelect()).toBeNull()
-    cleanup()
-    // Its agent gone from the list (or the list not read yet): the list,
-    // which names the one saved.
-    acp.agents = [CODEX]
+      document.querySelector("[data-pa-identity-work]")!.textContent
+    ).not.toMatch(/brain/i)
+  })
+
+  it("unfolds its options on its own while they want a look: some still to pick, or another agent picked", () => {
+    brain.missing = true
     render(page(agent("Nova")))
-    expect(brainSelect()).not.toBeNull()
-    expect(
-      document.querySelector(
-        "[data-pa-identity-brain] [data-pa-setup-agent-tile]"
-      )
-    ).toBeNull()
+    for (const which of ["brain", "work"]) {
+      const card = document.querySelector(`[data-pa-identity-${which}]`)!
+      const toggle = card.querySelector<HTMLButtonElement>(
+        "[data-pa-agent-options-toggle]"
+      )!
+      expect(toggle.getAttribute("aria-expanded")).toBe("true")
+      expect(toggle.disabled).toBe(true)
+      expect(card.querySelector("[data-pa-agent-options]")).not.toBeNull()
+    }
     cleanup()
-    acp.agents = []
-    render(page(agent("Nova")))
-    expect(brainSelect()).not.toBeNull()
+    brain.missing = false
+    brain.ready = true
+    acp.agents = [CLAUDE, CODEX]
+    // Its work on Codex; the list picks Claude Code for it.
+    render(
+      page(
+        agent("Nova", {
+          work: {
+            agent_type: "codex",
+            agent_options: { config_values: {} },
+            label_snapshot: { agent: "Codex", mode: null, options: [] },
+          },
+        })
+      )
+    )
+    const work = document.querySelector("[data-pa-identity-work]")!
+    expect(work.querySelector("[data-pa-agent-options]")).toBeNull()
+    fireEvent.click(
+      work.querySelector<HTMLElement>('[data-testid="agent-select"]')!
+    )
+    expect(work.querySelector("[data-pa-agent-options]")).not.toBeNull()
   })
 
   it("says when the agent its work runs on can't be used", () => {

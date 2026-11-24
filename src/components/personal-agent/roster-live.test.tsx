@@ -445,9 +445,25 @@ describe("the roster", () => {
     expect(api.personalAgentRosterAct).toHaveBeenLastCalledWith(3, {
       act: "mark_unread",
     })
-    // Folding a group.
-    fireEvent.click(screen.getByRole("button", { name: "Fold codeg" }))
+    // Folding a group. Its name only darkens under the pointer, no patch
+    // behind it; open, its chevron shows only then (or with the keyboard
+    // on it), folded always — as the sidebar's section heads have it.
+    const chevron = () =>
+      document.querySelector<SVGElement>(
+        "[data-pa-roster-section] [data-pa-fold-chevron]"
+      )!
+    const head = screen.getByRole("button", { name: "Fold codeg" })
+    expect(head.className).not.toMatch(/hover:bg-/)
+    expect(head.className).toContain("hover:text-foreground")
+    expect(head.parentElement!.className).toContain("group/fold")
+    expect(chevron().getAttribute("class")).toContain("opacity-0")
+    expect(chevron().getAttribute("class")).toContain(
+      "group-hover/fold:opacity-100"
+    )
+    fireEvent.click(head)
     expect(screen.queryByText("Ops")).toBeNull()
+    expect(chevron().getAttribute("class")).not.toContain("opacity-0")
+    expect(chevron().getAttribute("class")).toContain("-rotate-90")
     fireEvent.click(screen.getByRole("button", { name: "Unfold codeg" }))
     expect(screen.getByText("Ops")).toBeTruthy()
   })
@@ -474,7 +490,7 @@ describe("the roster", () => {
     expect(nav.querySelector(".size-24")).toBeNull()
     const primary = nav.querySelector<HTMLElement>("[data-pa-roster-bot='1']")!
     const row = nav.querySelector<HTMLElement>("[data-pa-roster-bot='2']")!
-    for (const cls of ["w-full", "gap-2.5", "px-2", "py-1.5", "rounded-xl"]) {
+    for (const cls of ["w-full", "gap-2.5", "px-2", "py-1.5", "rounded-full"]) {
       expect(primary.className).toContain(cls)
       expect(row.className).toContain(cls)
     }

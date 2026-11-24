@@ -51,6 +51,10 @@ export interface AgentConfigEditor {
   options: ReactNode
   /** "2 options to pick" while some are. */
   missingHint: string | null
+  /** Its options want a look: some still to pick (an agent just picked, or
+   *  one its agent added), its model to pick again or not switched to, or
+   *  one no longer as saved. A place that folds them away shows them. */
+  needsLook: boolean
   /** The config to save — focusing the first option still to pick when
    *  one is. */
   toSave: () => AgentConfigToSave
@@ -237,6 +241,12 @@ export function useAgentConfig({
     saved,
     options,
     missingHint: missing.length > 0 ? missingText(missing.length) : null,
+    needsLook:
+      (touched && saved === null) ||
+      missing.length > 0 ||
+      driftCount > 0 ||
+      gate.kind === "pick-model" ||
+      gate.kind === "not-switched",
     toSave,
     settle: () => setTouched(false),
   }

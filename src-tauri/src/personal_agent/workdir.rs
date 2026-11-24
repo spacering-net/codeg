@@ -3770,6 +3770,10 @@ turn ends only the LAST thing you wrote stays as your reply.
   open matters before you write the answer, not after).
 - Anything you write before a tool call is a progress note: one sentence. Never
   draft for yourself in the reply.
+- This skill, your tools and how codeg works are yours, not the owner's: never
+  name them in what you write — no "I'll use the codeg personal agent skill",
+  no "let me call `item_list`". Say what you are doing for the owner in their
+  terms ("Checking what is still open"), or just do it.
 - The owner's messages and the events reach you numbered, `[#58]`. When your
   answer is about one that is not the newest — an earlier message, one of
   several sent in a row, an event — write `[[quote:#58]]` anywhere in it: the
@@ -4634,6 +4638,11 @@ mod tests {
         assert!(list_entries(&dir).is_empty());
         assert!(SKILL_MD.contains("type: lesson | fact | reference"));
         assert!(!SKILL_MD.contains("LESSONS.md"));
+    }
+
+    #[test]
+    fn the_skill_tells_the_agent_not_to_name_itself_to_the_owner() {
+        assert!(SKILL_MD.contains("never\n  name them in what you write"));
     }
 
     #[test]

@@ -181,14 +181,20 @@ describe("PersonalAgentComposer", () => {
     const grid = plus.closest(".grid")!
     expect(grid.className).toContain("p-2")
     // No gap between the columns: on one line, the editor's own 0.5rem
-    // start padding is the room after the plus; its 0.25rem above and
-    // below make its 1.375rem line as tall as the buttons.
+    // start padding is the room after the plus; its 0.5rem over and under
+    // (half a pixel more under: the text centred to the eye) make its
+    // 1.375rem line as tall as the buttons.
     expect(grid.className).not.toMatch(/(^| )gap-x-/)
     const editor = screen.getByRole("textbox", {
       name: "Message to your personal agent",
     })
     expect(editor.dataset.class).toContain("[&_.codeg-composer-scroll]:ps-2")
-    expect(editor.dataset.class).toContain("[&_.codeg-composer-scroll]:py-1")
+    expect(editor.dataset.class).toContain(
+      "[&_.codeg-composer-scroll]:pt-[0.21875rem]"
+    )
+    expect(editor.dataset.class).toContain(
+      "[&_.codeg-composer-scroll]:pb-[0.28125rem]"
+    )
   })
 
   /** The page's box, one per assistant (keyed by them), as the page

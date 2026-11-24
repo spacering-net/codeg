@@ -3,9 +3,10 @@
 /**
  * "Identity & brain", the first tab of an assistant's own page: the agent
  * it thinks and talks on with every option picked (the assistant editor's
- * flow and validation) — picked from tiles, as the first setup has it —
- * and under it the agent its work runs on, with its options, and the
- * standing instructions its work sessions get. The two agents are its own
+ * flow and validation), and under it the agent its work runs on, with its
+ * options — two cards alike, each the agent picked with its model and
+ * options under it (the brain's shown, the work's folded) — and the standing instructions its work
+ * sessions get. The two agents are its own
  * apart (D1): one copied from the other when it was made, each changed on
  * its own since — changing the brain never changes its work. The mode and
  * permissions are chosen here, and codeg runs them as picked. Saved with
@@ -22,17 +23,19 @@
  * up, so there is none to pick here — only its work.
  */
 
-import { useState } from "react"
+import { useId, useState, type ReactNode } from "react"
 import { useLocale, useTranslations } from "next-intl"
 import {
   AlertTriangle,
   ArrowRight,
   Brain,
+  ChevronDown,
   Loader2,
   MessageCircle,
   ScrollText,
   Sparkles,
   Workflow,
+  type LucideIcon,
 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -65,12 +68,82 @@ import { SetupAgentTiles } from "./setup-agent-tiles"
 import { SetupFrame } from "./setup-frame"
 import { PRIMARY_FACE } from "../bot-avatar"
 import { SetupIdentity } from "./setup-identity"
-import { useAgentConfig } from "./use-agent-config"
+import { useAgentConfig, type AgentConfigEditor } from "./use-agent-config"
 
 /** The first setup's line under [Chat]: hung below it, taking no room —
  *  the frame's padding under it is its room — so nothing moves for it. */
 const UNDER_START =
   "absolute inset-x-0 top-full mt-3 text-center text-xs leading-5"
+
+/** One of its agents on the identity tab — its brain's or its work's: the
+ *  agent picked, and under it its model and every option — folded at
+ *  first unless `defaultOpen` (the brain's). They unfold when asked for,
+ *  and on their own while they want a look (some still to pick, say) — and
+ *  stay so until they no longer do. */
+function AgentCard({
+  icon,
+  title,
+  description,
+  pick,
+  editor,
+  defaultOpen = false,
+  ...props
+}: {
+  icon: LucideIcon
+  title: ReactNode
+  description: ReactNode
+  /** The agent's picker. */
+  pick: ReactNode
+  editor: AgentConfigEditor
+  defaultOpen?: boolean
+} & React.ComponentProps<"div">) {
+  const t = useTranslations("PersonalAgent.settings")
+  const [open, setOpen] = useState(defaultOpen)
+  const optionsId = useId()
+  const held = editor.needsLook
+  const shown = open || held
+  return (
+    <SettingCard {...props}>
+      <SettingRow
+        icon={icon}
+        title={title}
+        description={description}
+        control={pick}
+      />
+      {editor.agentType !== null ? (
+        <>
+          <button
+            type="button"
+            className="flex w-full items-center justify-between gap-2 px-3 py-2 text-start text-xs font-medium text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:bg-muted disabled:pointer-events-none"
+            aria-expanded={shown}
+            aria-controls={optionsId}
+            disabled={held}
+            onClick={() => setOpen(!open)}
+            data-pa-agent-options-toggle
+          >
+            {t("agentOptions")}
+            <ChevronDown
+              aria-hidden
+              className={cn(
+                "size-3.5 shrink-0 transition-transform",
+                shown && "rotate-180"
+              )}
+            />
+          </button>
+          {shown ? (
+            <div
+              id={optionsId}
+              className="divide-y divide-border/60"
+              data-pa-agent-options
+            >
+              {editor.options}
+            </div>
+          ) : null}
+        </>
+      ) : null}
+    </SettingCard>
+  )
+}
 
 /** How the agent a new assistant's work runs on is had (D1). */
 type WorkMode = "same" | "other"
@@ -245,12 +318,7 @@ export function IdentityPage({
   // The agents to pick from: the ones turned on, and the one it is on.
   const offered = (current: AgentType | null) =>
     agents.filter((a) => a.enabled || a.agent_type === current)
-  const brainOffered = offered(brain.agentType)
   const workOffered = offered(work.agentType)
-  const brainAsTiles =
-    brainOffered.length > 0 &&
-    (brain.agentType === null ||
-      brainOffered.some((a) => a.agent_type === brain.agentType))
   const workPick = (
     <AgentSelect
       value={work.agentType}
@@ -406,80 +474,57 @@ export function IdentityPage({
       {noBrain ? (
         <SettingNote icon={Brain}>{t("noBrainYet")}</SettingNote>
       ) : (
-        <SettingCard data-pa-identity-brain>
-          {/* Its brain: the tiles, as the first setup has them — or, for
-              one not among them (gone, or the list still on its way),
-              the list to pick from. */}
-          <div className="flex flex-col gap-2.5 p-3">
-            <div className="flex flex-col gap-0.5 px-0.5">
-              <p className="flex items-center gap-1.5 text-sm font-medium">
-                <Brain className="size-4 text-muted-foreground" aria-hidden />
-                {t("setupBrainAgent")}
-              </p>
-              <p className="text-xs leading-5 text-muted-foreground">
-                {brain.agentType === null
-                  ? ta("pickAgentFirst")
-                  : t("agentHint")}
-              </p>
-            </div>
-            {brainAsTiles ? (
-              <SetupAgentTiles
-                value={brain.agentType}
-                onChange={brain.pickAgent}
-                agents={brainOffered}
-                disabled={busy}
-              />
-            ) : (
-              <div className="flex">
-                <AgentSelect
-                  value={brain.agentType}
-                  onChange={brain.pickAgent}
-                  agents={brainOffered}
-                  fallbackLabel={brain.saved?.label_snapshot.agent}
-                  disabled={busy}
-                />
-              </div>
-            )}
-          </div>
-          {brain.options}
-        </SettingCard>
+        <AgentCard
+          icon={Brain}
+          title={t("setupBrainAgent")}
+          description={
+            brain.agentType === null ? ta("pickAgentFirst") : t("agentHint")
+          }
+          pick={
+            <AgentSelect
+              value={brain.agentType}
+              onChange={brain.pickAgent}
+              agents={offered(brain.agentType)}
+              fallbackLabel={brain.saved?.label_snapshot.agent}
+              disabled={busy}
+            />
+          }
+          editor={brain}
+          defaultOpen
+          data-pa-identity-brain
+        />
       )}
       {brain.agentType !== null &&
       agent.agent_type !== null &&
       brain.agentType !== agent.agent_type ? (
         <SettingNote icon={Sparkles}>{t("switchNote")}</SettingNote>
       ) : null}
-      <SettingCard data-pa-identity-work>
-        <SettingRow
-          icon={Workflow}
-          title={t("workTitle")}
-          htmlFor="pa-work-agent"
-          description={
-            workOff ? (
-              <span
-                className="flex items-start gap-1.5 text-amber-700 dark:text-amber-400"
-                data-pa-work-off
-              >
-                <AlertTriangle
-                  className="mt-0.5 size-3.5 shrink-0"
-                  aria-hidden
-                />
-                <span>
-                  {t("workUnavailable", {
-                    agent:
-                      agent.work?.label_snapshot.agent ??
-                      workLabel(work.agentType),
-                  })}
-                </span>
+      <AgentCard
+        icon={Workflow}
+        title={t("workTitle")}
+        description={
+          workOff ? (
+            <span
+              className="flex items-start gap-1.5 text-amber-700 dark:text-amber-400"
+              data-pa-work-off
+            >
+              <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+              <span>
+                {t("workUnavailable", {
+                  agent:
+                    agent.work?.label_snapshot.agent ??
+                    workLabel(work.agentType),
+                })}
               </span>
-            ) : (
-              t("workHint")
-            )
-          }
-          control={workPick}
-        />
-        {work.options}
-      </SettingCard>
+            </span>
+          ) : (
+            t("workHint")
+          )
+        }
+        pick={workPick}
+        editor={work}
+        data-pa-identity-work
+      />
       <SettingCard data-pa-identity-instructions>
         <SettingRow
           icon={ScrollText}

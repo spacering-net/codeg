@@ -53,7 +53,7 @@ import {
   useState,
 } from "react"
 import { useTranslations } from "next-intl"
-import { ArrowDown, BellRing } from "lucide-react"
+import { ArrowDown, BellRing, X } from "lucide-react"
 import { toast } from "sonner"
 import {
   Virtualizer,
@@ -292,11 +292,6 @@ function rowIdOf(item: MessageItem): number | null {
   return item.row.id
 }
 
-/** A card waiting for the owner: a question or permission request still
- *  pending, a native card still open that asks them (a confirmation, a step
- *  not known to have happened, a loop stopped, the opening choice, a change
- *  shown first, a reminder that came due — not a suggestion), an
- *  executor's question forwarded to them. */
 /** The "N items need you" pill: on the primary, what waits on the owner
  *  anywhere ("today"'s, `todayNeeds`, from the activity's read), opening
  *  the activity at the first of it (C6); otherwise — or with nothing there
@@ -310,6 +305,37 @@ export function attentionPill(
   if (waits > 0) return { count: waits, today: false }
   return null
 }
+
+/** What the pill stands for, each by a key of its own: "today"'s rows, or
+ *  the cards here. */
+export function attentionKeys(
+  pill: { count: number; today: boolean } | null,
+  todayKeys: readonly string[],
+  waits: readonly number[]
+): string[] {
+  if (pill == null) return []
+  if (!pill.today) return waits.map((id) => `row:${id}`)
+  // A count with no rows read for it yet: the count stands for them.
+  return todayKeys.length > 0 ? [...todayKeys] : [`count:${pill.count}`]
+}
+
+/** Whether the pill shows: not when the owner closed it while all it now
+ *  stands for already needed them — again once one more does. */
+export function attentionShown(
+  keys: readonly string[],
+  dismissed: readonly string[] | undefined
+): boolean {
+  if (keys.length === 0) return false
+  if (dismissed == null) return true
+  const seen = new Set(dismissed)
+  return keys.some((k) => !seen.has(k))
+}
+
+/** A card waiting for the owner: a question or permission request still
+ *  pending, a native card still open that asks them (a confirmation, a step
+ *  not known to have happened, a loop stopped, the opening choice, a change
+ *  shown first, a reminder that came due — not a suggestion), an
+ *  executor's question forwarded to them. */
 
 export function waitsForOwner(row: TimelineRow): boolean {
   const data = row.data
@@ -405,6 +431,8 @@ function Pill({
   className,
   label,
   onClick,
+  onDismiss,
+  dismissLabel,
   children,
   ...rest
 }: {
@@ -413,25 +441,68 @@ function Pill({
   /** Its name, for a pill of an icon alone. */
   label?: string
   onClick: () => void
+  /** An × at its end that closes it: two buttons on one pill. */
+  onDismiss?: () => void
+  dismissLabel?: string
   children: React.ReactNode
 } & Record<`data-${string}`, string | boolean>) {
+  const look =
+    "motion-pill pointer-events-auto absolute start-1/2 z-10 flex -translate-x-1/2 items-center rounded-full border border-border bg-background/95 text-xs shadow-md backdrop-blur rtl:translate-x-1/2"
+  const state = {
+    "data-state": shown ? "open" : "closed",
+    "aria-hidden": !shown || undefined,
+  }
+  const tabIndex = shown ? 0 : -1
+  if (!onDismiss) {
+    return (
+      <button
+        type="button"
+        {...rest}
+        {...state}
+        aria-label={label}
+        title={label}
+        tabIndex={tabIndex}
+        onClick={onClick}
+        className={cn(
+          look,
+          "gap-1.5 px-3 py-1 transition-colors hover:bg-muted",
+          className
+        )}
+      >
+        {children}
+      </button>
+    )
+  }
   return (
-    <button
-      type="button"
+    <div
       {...rest}
-      aria-label={label}
-      title={label}
-      data-state={shown ? "open" : "closed"}
-      aria-hidden={!shown || undefined}
-      tabIndex={shown ? 0 : -1}
-      onClick={onClick}
-      className={cn(
-        "motion-pill pointer-events-auto absolute start-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border bg-background/95 px-3 py-1 text-xs shadow-md backdrop-blur transition-colors hover:bg-muted rtl:translate-x-1/2",
-        className
-      )}
+      {...state}
+      className={cn(look, "overflow-hidden", className)}
     >
-      {children}
-    </button>
+      <button
+        type="button"
+        aria-label={label}
+        title={label}
+        tabIndex={tabIndex}
+        onClick={onClick}
+        className="flex items-center gap-1.5 py-1 ps-3 pe-2 transition-colors outline-none hover:bg-muted focus-visible:bg-muted"
+        data-pa-pill-open
+      >
+        {children}
+      </button>
+      <span aria-hidden className="h-3.5 w-px shrink-0 bg-border" />
+      <button
+        type="button"
+        aria-label={dismissLabel}
+        title={dismissLabel}
+        tabIndex={tabIndex}
+        onClick={onDismiss}
+        className="flex items-center self-stretch ps-1.5 pe-2 text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:bg-muted"
+        data-pa-pill-dismiss
+      >
+        <X className="size-3.5" aria-hidden />
+      </button>
+    </div>
   )
 }
 
@@ -602,7 +673,16 @@ function ListContainer({
   ref,
 }: CustomContainerComponentProps) {
   return (
-    <div ref={ref} style={{ ...style, pointerEvents: undefined }}>
+    <div
+      ref={ref}
+      style={{ ...style, pointerEvents: undefined }}
+      // Each row virtua draws is a layer of its own (`contain: layout`),
+      // the next one over the one before: the row under the pointer, or
+      // with the focus in it, goes over the rest — the actions a message
+      // floats over the row below it are under the pointer then, not that
+      // row.
+      className="[&>*:focus-within]:z-10 [&>*:hover]:z-10"
+    >
       {children}
     </div>
   )
@@ -1008,6 +1088,18 @@ export function MessageList({
     waits.length
   )
   const showWaiting = usePersonalAgentUi((s) => s.showWaiting)
+  // Closed by the owner: hidden until something new needs them.
+  const conversation = botId == null ? "primary" : String(botId)
+  const pillKeys = attentionKeys(
+    pill,
+    (activity?.needs ?? []).map((r) => r.key),
+    waits
+  )
+  const dismissed = usePersonalAgentUi(
+    (s) => s.attentionDismissed[conversation]
+  )
+  const dismissAttention = usePersonalAgentUi((s) => s.dismissAttention)
+  const pillShown = attentionShown(pillKeys, dismissed)
   // The message right above the "new messages" line is the last before a
   // line, as one above a time line is: it closes its run with a round
   // corner, and shows its actions on hover.
@@ -1311,7 +1403,7 @@ export function MessageList({
     <>
       <div ref={frameRef} className="relative flex min-h-0 flex-1 flex-col">
         <Pill
-          shown={pill != null && shown}
+          shown={pillShown && shown}
           className="top-2"
           onClick={() => {
             if (pill?.today) {
@@ -1321,6 +1413,8 @@ export function MessageList({
             const first = waits[0]
             if (first != null) jumpTo(first)
           }}
+          onDismiss={() => dismissAttention(conversation, pillKeys)}
+          dismissLabel={tp("dismissAttention")}
           data-pa-pill="attention"
         >
           <BellRing className="size-3.5 text-orange-500" aria-hidden />

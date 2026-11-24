@@ -2,13 +2,13 @@
 
 /**
  * An assistant's avatar as a PNG, for the icon of its notifications (1.13,
- * 10.10): the face in its idle pose, drawn standalone with the light
- * theme's colours (the classes `bot-avatar.tsx` uses), or the picture it
- * was given. An emoji or a monogram has no icon.
+ * 10.10): the face in its idle pose, drawn standalone in the light theme's
+ * colours (`bot-shapes`' own drawing, as the page has it), or the picture
+ * it was given. An emoji or a monogram has no icon.
  *
  * And the frames the desktop's menu bar shows while it works (10.10, 2.9):
  * a strip of squares side by side — the idle face open-eyed, blinking,
- * glancing left, right and up — which the backend steps through as an idle
+ * glancing left, right and up, in its small drawing — which the backend steps through as an idle
  * face blinks and glances (10.6). A picture, an emoji or a monogram is one
  * frame, as it is; with less motion asked for, so is a face.
  *
@@ -20,10 +20,9 @@
 
 import {
   ART_BOX,
-  eyeNodes,
-  faceArt,
-  nodeMarkup,
-  type Paint,
+  faceMarkup,
+  faceTones,
+  restPose,
 } from "@/components/personal-agent/bot-shapes"
 import { personalAgentAvatarPng } from "@/lib/api"
 import { monogramFor } from "@/lib/assistant-avatar"
@@ -40,68 +39,22 @@ export const AVATAR_PNG_SIZE = 128
 /** The most the backend takes, as base64. */
 const MAX_BASE64 = 256 * 1024
 
-/** The body colours: tailwind's, as `BODY` picks them on a light theme. */
-const BODY_HEX: Record<BotColor, string> = {
-  black: "#171717",
-  brown: "#92400e",
-  red: "#ef4444",
-  orange: "#f97316",
-  yellow: "#facc15",
-  green: "#22c55e",
-  teal: "#14b8a6",
-  blue: "#3b82f6",
-  purple: "#8b5cf6",
-  magenta: "#d946ef",
-  gray: "#94a3b8",
-}
-
-/** The eyes: light on the darker bodies, dark on the light ones (`EYES`). */
-const EYES_HEX: Record<BotColor, string> = {
-  black: "#ffffff",
-  brown: "#ffffff",
-  red: "#ffffff",
-  orange: "#171717",
-  yellow: "#171717",
-  green: "#ffffff",
-  teal: "#ffffff",
-  blue: "#ffffff",
-  purple: "#ffffff",
-  magenta: "#ffffff",
-  gray: "#171717",
-}
-
-function paints(color: BotColor): Record<Paint, string> {
-  return {
-    $b: BODY_HEX[color] ?? BODY_HEX.blue,
-    $c: EYES_HEX[color] ?? "#ffffff",
-    $w: "#ffffff",
-  }
-}
-
-/** A face's drawing, its eyes open and moved by (`dx`, `dy`) of the face's
- *  100 (as far as its window lets them, `bot-avatar.tsx`) — or shut to a
- *  tenth: `bot-shapes`' own, in the light theme's colours. */
-function faceMarkup(
+/** A face's idle drawing in the light theme's colours: its eyes moved by
+ *  (`gx`, `gy`) on its face (up is +), or shut to a tenth. */
+function faceMarkupStill(
   shape: BotShape,
   color: BotColor,
   small: boolean,
-  { dx = 0, dy = 0, blink = false } = {}
+  { gx = 0, gy = 0, blink = false } = {}
 ): string {
-  const paint = paints(color)
-  const art = faceArt(shape, small, (n) => `f-${n}`)
-  const { eyes } = art
-  const k = (ART_BOX / 100) * eyes.move
-  const eyeColor = eyes.on === "body" ? paint.$c : paint.$b
-  const shift = dx || dy ? ` transform="translate(${dx * k} ${dy * k})"` : ""
-  // Seen only through their window, as on the page.
-  return (
-    art.body.map((n) => nodeMarkup(n, paint)).join("") +
-    `<clipPath id="f-eyes">` +
-    eyes.window.map((n) => nodeMarkup(n, paint)).join("") +
-    `</clipPath><g clip-path="url(#f-eyes)"><g color="${eyeColor}"${shift}>` +
-    nodeMarkup(eyeNodes(eyes, "idle", blink ? 0.1 : 1), paint) +
-    `</g></g>`
-  )
+  const rest = restPose(shape, "idle")
+  const pose = {
+    ...rest,
+    gx: rest.gx + gx,
+    gy: rest.gy + gy,
+    open: blink ? 0.1 : 1,
+  }
+  return faceMarkup(shape, "idle", pose, small, "f", faceTones(color, "light"))
 }
 
 /** The idle face as a standalone SVG document. */
@@ -109,7 +62,7 @@ export function faceSvg(shape: BotShape, color: BotColor): string {
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${ART_BOX} ${ART_BOX}" ` +
     `width="${AVATAR_PNG_SIZE}" height="${AVATAR_PNG_SIZE}">` +
-    `${faceMarkup(shape, color, false)}</svg>`
+    `${faceMarkupStill(shape, color, false)}</svg>`
   )
 }
 
@@ -123,20 +76,20 @@ export type TrayLook = (typeof TRAY_LOOKS)[number]
 
 /** One look of the idle face as a standalone SVG — its small drawing, a
  *  little inset as the menu bar's icons are: the lids down to a tenth to
- *  blink, the eyes moved 4 of the face's 100 to glance (`bot-avatar.tsx`). */
+ *  blink, the eyes moved as a glance at rest moves them (`bot-avatar.tsx`). */
 export function trayFaceSvg(
   shape: BotShape,
   color: BotColor,
   look: TrayLook
 ): string {
-  const dx = look === "left" ? -4 : look === "right" ? 4 : 0
-  const dy = look === "up" ? -4 : 0
+  const gx = look === "left" ? -14 : look === "right" ? 14 : 0
+  const gy = look === "up" ? 12 : 0
   const inset = ART_BOX * 0.04
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" ` +
     `viewBox="${-inset} ${-inset} ${ART_BOX + 2 * inset} ${ART_BOX + 2 * inset}" ` +
     `width="${TRAY_FRAME_SIZE}" height="${TRAY_FRAME_SIZE}">` +
-    `${faceMarkup(shape, color, true, { dx, dy, blink: look === "blink" })}</svg>`
+    `${faceMarkupStill(shape, color, true, { gx, gy, blink: look === "blink" })}</svg>`
   )
 }
 

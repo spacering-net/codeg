@@ -578,23 +578,21 @@ describe("the panel", () => {
       within(bubble)
         .getAllByRole("tab")
         .map((tab) => tab.textContent)
-    ).toEqual(["Bot", "Generate", "Upload"])
-    // Open on the page its face is from: an emoji's, "Generate".
+    ).toEqual(["Bot", "Text", "Upload"])
+    // Open on the page its face is from: an emoji's, "Text".
     expect(
       within(bubble)
-        .getByRole("tab", { name: "Generate" })
+        .getByRole("tab", { name: "Text" })
         .getAttribute("aria-selected")
     ).toBe("true")
     fireEvent.mouseDown(within(bubble).getByRole("tab", { name: "Bot" }), {
       button: 0,
     })
-    fireEvent.click(
-      await within(bubble).findByRole("button", { name: "Hex nut" })
-    )
+    fireEvent.click(await within(bubble).findByRole("button", { name: "Bug" }))
     await waitFor(() =>
       expect(api.personalAgentSave).toHaveBeenCalledWith(
         expect.objectContaining({
-          avatar: expect.objectContaining({ kind: "face", shape: "nut" }),
+          avatar: expect.objectContaining({ kind: "face", shape: "bug" }),
         }),
         null
       )
@@ -1053,6 +1051,102 @@ describe("the activity", () => {
     })
     expect(screen.queryByRole("switch")).toBeNull()
     expect(screen.queryByRole("button", { name: "Settings" })).toBeNull()
+  })
+})
+
+describe("an activity card of a task", () => {
+  it("says where it stands once, its › in its head, [Stop] with its buttons, its details at its foot", async () => {
+    const task = {
+      task_id: 14,
+      status: "review" as const,
+      folder_id: 2,
+      branch: "task/14",
+      base_branch: "main",
+      files_changed: 1,
+      additions: 1,
+      deletions: 1,
+      pr_url: null,
+      pr_number: null,
+      completion_kind: null,
+      conversation_id: 30,
+      connection_id: null,
+      started_at: "2026-11-04T09:00:00Z",
+      finished_at: null,
+      pr: null,
+    }
+    show({
+      needs: [
+        {
+          key: "t:1",
+          bot_id: 1,
+          thing: "t:1",
+          today: {
+            key: "t:1",
+            kind: "task",
+            bot_id: 1,
+            project: { id: 2, name: "my-app" },
+            title: "Retitle the test page",
+            text: null,
+            at: "2026-11-04T09:59:00Z",
+            state: "review",
+            row_id: null,
+            dispatch_id: 1,
+            task_id: 14,
+            conversation_id: 30,
+            item_id: null,
+            notice_id: null,
+            agent_type: "codex",
+            undo: false,
+            reason: "merge_ready",
+          },
+          item: null,
+          routine: null,
+          card_row_id: null,
+        },
+      ],
+      dispatches: [
+        dispatch({
+          id: 1,
+          title: "Retitle the test page",
+          state: "review",
+          ladder: "mergeable",
+          task,
+          done_when: "The tab says Test",
+        }),
+      ],
+    })
+    draw()
+    await screen.findByText("Retitle the test page")
+    const card = screen
+      .getByText("Retitle the test page")
+      .closest<HTMLElement>("[data-pa-activity-row]")!
+    // The rung on its chip, the line under the title not saying a state of
+    // its own beside it.
+    expect(card.querySelector("[data-pa-ladder]")?.textContent).toBe(
+      "Ready to merge"
+    )
+    const line =
+      card.querySelector("[data-pa-ladder]")!.parentElement!.parentElement!
+        .textContent
+    expect(line).not.toContain("Ready for review")
+    expect(line).toContain("Nova")
+    // [Stop] next to the way to merge it, not on the strip's line.
+    const merge = within(card).getByRole("button", { name: /merge/i })
+    const stop = within(card).getByRole("button", { name: "Stop" })
+    expect(stop.parentElement).toBe(merge.parentElement)
+    expect(
+      card.querySelector("[data-pa-task-strip] [data-pa-task-act=stop]")
+    ).toBeNull()
+    // Its › before its buttons; unfolded, its details after them.
+    const unfold = within(card).getByRole("button", { name: "Show details" })
+    expect(
+      unfold.compareDocumentPosition(merge) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    fireEvent.click(unfold)
+    const details = card.querySelector("[data-pa-row-details]")!
+    expect(
+      merge.compareDocumentPosition(details) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
   })
 })
 

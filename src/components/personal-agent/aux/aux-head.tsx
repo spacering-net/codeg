@@ -50,8 +50,11 @@ export function AuxHead({
   const name = agent?.name?.trim() || t("title")
   const look = useBotLook(agent?.id ?? null)
   return (
+    // The whole head is where its face follows the pointer: over its name,
+    // its buttons and its tabs too, not only over the face.
     <header
       data-pa-aux-head
+      data-pa-face-host
       className="relative flex shrink-0 flex-col items-center gap-3 px-4 pt-7 pb-3"
     >
       {agent ? (

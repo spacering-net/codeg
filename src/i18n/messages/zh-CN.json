@@ -10308,6 +10308,8 @@
       "state": "状态"
     },
     "items": {
+      "waitingAnswer": "等 {name} 回复：{text}",
+      "wroteToYou": "{name} 发来消息：{text}",
       "waits": {
         "owner": "等你",
         "agent": "等助手",
@@ -10374,7 +10376,8 @@
       "name": "名称",
       "nameHint": "它在页面和消息里显示的名字和头像；助手也知道自己叫这个名字。名字留空则用默认名称。",
       "namePlaceholder": "个人助手",
-      "agentHint": "它想事情、和你说话用的智能体，以及全部选项。",
+      "agentHint": "和你聊天、帮你想事情时用的智能体。",
+      "agentOptions": "模型和配置",
       "switchNote": "换成另一个 agent 后，下一条消息会新起一个会话。不会续接旧会话，codeg 把时间线交接给新会话。",
       "autoCompact": "自动压缩阈值",
       "autoCompactHint": "上下文占用达到这个比例时，codeg 在下一条消息前先发压缩命令。0 表示关闭。应低于 agent 自己的自动压缩触发点。",
@@ -10387,7 +10390,6 @@
       "handoffBudgetHint": "新会话交接卡最多用多少字；裁掉的部分助手可以用工具翻阅。",
       "skill": "内置技能",
       "skillHint": "通过工作目录里的技能，教助手它的约定（派活方式、在途事项、记忆文件）。",
-      "filesNote": "这些文件在助手的工作目录里，每个回合结束后提交到 git。名字、人设与规则的改动会随你的下一条消息补给助手。",
       "saveFile": "保存文件",
       "fileSaved": "已保存 {name}。",
       "cancel": "取消",
@@ -10423,7 +10425,6 @@
       "readOnly": "助手在另一个 codeg 进程里运行，这里的设置只读。",
       "setUpFirst": "请先设置主助手。",
       "nav": {
-        "prefs": "偏好",
         "identity": "身份与大脑",
         "persona": "人设与记忆",
         "notify": "通知",
@@ -11123,8 +11124,7 @@
         "muted": "静音",
         "mutedHint": "不弹它的系统通知；它说的照样算未读。",
         "hidden": "隐藏",
-        "hiddenHint": "照常运行，但不通知你、不在名册里显示、不计入角标；名册底部「已隐藏 N 个」点开能看。",
-        "note": "无论这里怎么设，你设的提醒照常送到。级别和安静时段在「偏好 → 主动与通知」。"
+        "hiddenHint": "照常运行，但不通知你、不在名册里显示、不计入角标；名册底部「已隐藏 N 个」点开能看。"
       },
       "grade": {
         "firstPass": "一次过 {rate}%（{pass}/{settled}）",
@@ -11145,7 +11145,6 @@
       "deleteSkill": "删除技能",
       "confirmDeleteSkillHint": "删除这个流程技能？它的文件夹会从工作目录里删掉。",
       "skillDeleted": "已删除 {name}",
-      "viewSubtitle": "所有助手共用",
       "personaUnwritten": "还没写人设。它会在自我介绍、你交代工作、每晚整理时自己补，你也可以直接写。",
       "projects": {
         "about": "助手会在这些项目里替你留意等你评审的 PR，第一次见面时也从这里找能帮你做的事。",
@@ -11164,7 +11163,7 @@
         "note": "关闭的项目不会被盯，重新打开后自动回来。"
       },
       "workTitle": "干活用的智能体",
-      "workHint": "大脑负责想、和你说话；干活用的智能体负责写代码、跑命令。改大脑不会改这里。",
+      "workHint": "派给它的活——写代码、跑命令——都在这个智能体上做。",
       "workSame": "和大脑一样",
       "workOther": "另选",
       "workSameHint": "照抄大脑的智能体和全部选项；之后两边各自独立。",
@@ -11504,18 +11503,18 @@
         "unreadable": "这个文件读不成图片。",
         "shapes": {
           "ring": "戒指",
-          "stand": "立环",
-          "donut": "甜甜圈",
-          "gummy": "软糖圈",
-          "tape": "胶带卷",
+          "terminal": "终端",
+          "braces": "花括号",
+          "shield": "盾牌",
+          "chip": "芯片",
+          "bug": "小虫",
+          "cursor": "鼠标指针",
           "gear": "齿轮",
-          "nut": "六角螺母",
-          "mug": "马克杯",
-          "magnet": "U 形磁铁",
-          "set_square": "三角尺",
-          "cookie": "星形饼干",
-          "frame": "相框",
-          "watch": "手表"
+          "file": "代码文件",
+          "magnifier": "放大镜",
+          "package": "包裹",
+          "rocket": "火箭",
+          "mug": "咖啡杯"
         },
         "colors": {
           "black": "黑",
@@ -11534,7 +11533,7 @@
         "reset": "重置",
         "pages": {
           "bot": "Bot",
-          "make": "生成",
+          "make": "文本",
           "upload": "上传"
         },
         "dropHint": "拖拽或粘贴图片",
@@ -11783,6 +11782,7 @@
     },
     "pills": {
       "attention": "{count} 项需要你关注",
+      "dismissAttention": "先不提示，有新的需要关注时再显示",
       "newMessages": "新消息",
       "toBottom": "回到最新"
     },

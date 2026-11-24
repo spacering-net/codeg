@@ -218,22 +218,15 @@ describe("the settings view", () => {
     expect(within(nav).getByRole("heading").textContent).toBe(
       "Assistant preferences"
     )
-    expect(within(nav).getByText("Shared by every assistant")).toBeTruthy()
-    const groups = within(nav).getAllByRole("group")
-    expect(groups.map((g) => g.getAttribute("aria-label"))).toEqual([
-      "Preferences",
-    ])
-    const pages = (g: HTMLElement) =>
-      [...g.querySelectorAll("[data-pa-nav]")].map((b) =>
+    // No line under the title, no group's name of its own: the title is it.
+    expect(within(nav).queryByText("Shared by every assistant")).toBeNull()
+    expect(within(nav).queryByText("Preferences")).toBeNull()
+    expect(within(nav).queryAllByRole("group")).toHaveLength(0)
+    expect(
+      [...nav.querySelectorAll("[data-pa-nav]")].map((b) =>
         b.getAttribute("data-pa-nav")
       )
-    expect(pages(groups[0])).toEqual([
-      "communication",
-      "projects",
-      "proactive",
-      "automation",
-      "about",
-    ])
+    ).toEqual(["communication", "projects", "proactive", "automation", "about"])
     // Each with its icon.
     for (const b of nav.querySelectorAll("[data-pa-nav]")) {
       expect(b.querySelector("svg")).not.toBeNull()
@@ -678,10 +671,16 @@ describe("the settings view", () => {
   it("goes back to the conversation from the pill over its title", () => {
     draw()
     const back = document.querySelector<HTMLElement>("[data-pa-settings-back]")!
-    // It says where it goes, in words; the title is under it.
+    // It says where it goes, in words; the title is under it — small, as
+    // a group's name over its pages, and nothing under it but the pages.
     expect(back.textContent).toBe("Back to the conversation")
-    const title = back.parentElement!.querySelector("[data-pa-settings-title]")!
-    expect(title.querySelector("h1")?.textContent).toBe("Assistant preferences")
+    const title = document.querySelector("[data-pa-settings-title]")!
+    expect(title.tagName).toBe("H1")
+    expect(title.textContent).toBe("Assistant preferences")
+    expect(title.className).toContain("text-xs")
+    expect(
+      title.nextElementSibling?.querySelector("[data-pa-nav]")
+    ).toBeTruthy()
     expect(
       back.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()

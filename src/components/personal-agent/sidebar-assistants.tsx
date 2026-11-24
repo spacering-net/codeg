@@ -133,8 +133,10 @@ export function AssistantsSectionActions({
             <ListFilter className="h-[0.875rem] w-[0.875rem]" />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="min-w-48">
+        {/* As wide as its words, on one line in every language. */}
+        <DropdownMenuContent align="end" className="w-max min-w-48">
           <DropdownMenuCheckboxItem
+            className="whitespace-nowrap"
             checked={showHidden}
             // Nothing hidden: nothing to show (one shown can still be
             // switched off).

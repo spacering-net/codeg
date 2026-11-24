@@ -11,13 +11,9 @@
 
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
-import { Bell, BellOff, EyeOff, Info } from "lucide-react"
+import { Bell, BellOff, EyeOff } from "lucide-react"
 
-import {
-  SettingCard,
-  SettingNote,
-  SettingRow,
-} from "@/components/shared/setting-card"
+import { SettingCard, SettingRow } from "@/components/shared/setting-card"
 import { Switch } from "@/components/ui/switch"
 import { personalAgentRosterAct } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
@@ -98,7 +94,6 @@ export function NotifyPage({
           />
         ) : null}
       </SettingCard>
-      <SettingNote icon={Info}>{tn("note")}</SettingNote>
     </div>
   )
 }

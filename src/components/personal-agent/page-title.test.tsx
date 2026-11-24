@@ -66,7 +66,7 @@ const entry = (id: number, kind: "primary" | "worker", name: string) =>
     kind,
     uid: `u${id}`,
     name,
-    avatar: { kind: "face", shape: "donut", color: "teal" },
+    avatar: { kind: "face", shape: "braces", color: "teal" },
     persona: "",
     persona_unwritten: false,
     hidden: false,

@@ -315,6 +315,7 @@ export function useTodayRowProps({
   onOpen,
   readOnly,
   actions: given,
+  chipSaysState = false,
 }: {
   row: TodayRow
   waiting: boolean
@@ -322,6 +323,12 @@ export function useTodayRowProps({
   onOpen: (() => void) | null
   readOnly: boolean
   actions?: ReactNode
+  /** Where it stands is on a chip of its own (its work's rung): the quiet
+   *  line does not say it again — in other words, which could read as
+   *  another state ("waiting for acceptance" by "ready to merge"). What
+   *  the chip cannot say (a check's round, a reminder handed over) it
+   *  still does. */
+  chipSaysState?: boolean
 }): PanelItemProps {
   const t = useTranslations("PersonalAgent.today")
   const ta = useTranslations("PersonalAgent.feed")
@@ -336,28 +343,34 @@ export function useTodayRowProps({
       : (row.project?.name ?? t("yours"))
   // A reminder handed to its assistant says so; a task being checked, its
   // round (C1).
-  const what =
-    row.kind === "reminder" && row.state === "handed"
-      ? ta("handed", { name: who })
-      : row.kind === "task" && row.check_dispatch_id != null
-        ? ta("checking", { round: row.round ?? 1 })
-        : words(row)
+  const handed = row.kind === "reminder" && row.state === "handed"
+  const checking = row.kind === "task" && row.check_dispatch_id != null
+  const what = handed
+    ? ta("handed", { name: who })
+    : checking
+      ? ta("checking", { round: row.round ?? 1 })
+      : words(row)
   const when = row.kind === "item" ? null : formatRelative(row.at, now)
   // What it is first — red when it failed, the word to look for — then
   // whose; a merge queued meanwhile; when, at the title's end.
-  const meta = (
-    <>
+  const parts = [
+    chipSaysState && !handed && !checking ? null : (
       <span
+        key="what"
         className={
           row.kind === "failed" ? "text-red-600 dark:text-red-400" : undefined
         }
       >
         {what}
       </span>
-      {row.queued ? ` · ${ta("queued")}` : null}
-      {who ? ` · ${who}` : null}
-    </>
-  )
+    ),
+    row.queued ? ta("queued") : null,
+    who || null,
+  ].filter((p) => p != null)
+  const meta =
+    parts.length > 0 ? (
+      <>{parts.flatMap((p, i) => (i === 0 ? [p] : [" · ", p]))}</>
+    ) : undefined
   // A setting changed: worded as its card words it, not by its key.
   const title = row.changes ? (
     <ChangesText changes={row.changes.changes} names={row.changes.names} />

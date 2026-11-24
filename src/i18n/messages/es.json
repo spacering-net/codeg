@@ -10308,6 +10308,8 @@
       "state": "Estado"
     },
     "items": {
+      "waitingAnswer": "Esperando la respuesta de {name}: {text}",
+      "wroteToYou": "{name} escribió: {text}",
       "waits": {
         "owner": "Esperándote",
         "agent": "Para el agente",
@@ -10375,7 +10377,8 @@
       "name": "Nombre",
       "nameHint": "El nombre y la imagen con los que aparece en su página y en sus mensajes; el agente también conoce su nombre. Si dejas el nombre vacío, se usa el predeterminado.",
       "namePlaceholder": "Agente personal",
-      "agentHint": "El agente con el que piensa y habla contigo, con todas sus opciones.",
+      "agentHint": "El agente con el que habla contigo y piensa las cosas.",
+      "agentOptions": "Modelo y opciones",
       "switchNote": "Cambiar a otro agente inicia una sesión nueva con tu próximo mensaje. No reanuda una anterior; en su lugar, codeg le pasa la línea de tiempo a la sesión nueva.",
       "autoCompact": "Umbral de compactación automática",
       "autoCompactHint": "Cuando el contexto está al menos así de lleno, codeg envía el comando de compactación antes del próximo mensaje. 0 la desactiva. Mantenlo por debajo del umbral propio del agente.",
@@ -10388,7 +10391,6 @@
       "handoffBudgetHint": "Caracteres que puede usar la tarjeta de traspaso de una sesión nueva; lo recortado se puede volver a leer con las herramientas del agente.",
       "skill": "Habilidad integrada",
       "skillHint": "Enseña al agente sus convenciones (modos de asignación, asuntos pendientes, archivos de memoria) mediante una habilidad en su directorio de trabajo.",
-      "filesNote": "Estos archivos están en el directorio de trabajo del agente y se confirman en git después de cada turno. Los cambios en su nombre, personalidad y reglas llegan al agente con tu próximo mensaje.",
       "saveFile": "Guardar archivo",
       "fileSaved": "{name} guardado.",
       "cancel": "Cancelar",
@@ -10424,7 +10426,6 @@
       "readOnly": "Los asistentes se ejecutan en otro proceso de codeg, así que aquí sus ajustes son de solo lectura.",
       "setUpFirst": "Primero configura el asistente principal.",
       "nav": {
-        "prefs": "Preferencias",
         "identity": "Identidad y cerebro",
         "persona": "Personalidad y memoria",
         "notify": "Avisos",
@@ -11123,8 +11124,7 @@
         "muted": "Silenciar",
         "mutedHint": "Sin notificaciones del sistema; lo que dice sigue contando como no leído.",
         "hidden": "Ocultar",
-        "hiddenHint": "Sigue funcionando, pero nunca te avisa, no aparece en la lista ni cuenta en la insignia; «N ocultos» al pie de la lista lo muestra.",
-        "note": "Tus recordatorios llegan sea lo que sea que pongas aquí. Los niveles y las horas de silencio están en Preferencias → Proactividad y avisos."
+        "hiddenHint": "Sigue funcionando, pero nunca te avisa, no aparece en la lista ni cuenta en la insignia; «N ocultos» al pie de la lista lo muestra."
       },
       "grade": {
         "firstPass": "a la primera {rate}% ({pass}/{settled})",
@@ -11145,7 +11145,6 @@
       "deleteSkill": "Eliminar habilidad",
       "confirmDeleteSkillHint": "¿Eliminar esta habilidad de proceso? Su carpeta se quita del directorio de trabajo.",
       "skillDeleted": "{name} eliminada",
-      "viewSubtitle": "Comunes a todos los asistentes",
       "personaUnwritten": "Aún no tiene personalidad escrita. La completa por sí mismo —al presentarse, cuando le das trabajo y en el repaso de cada noche—, o puedes escribirla aquí.",
       "projects": {
         "about": "Los asistentes vigilan estos proyectos por si un PR espera tu revisión, y buscan en ellos lo primero en que pueden ayudarte.",
@@ -11164,7 +11163,7 @@
         "note": "Un proyecto cerrado no se vigila; vuelve cuando lo abras otra vez."
       },
       "workTitle": "Agente para su trabajo",
-      "workHint": "El cerebro piensa y habla contigo; este agente escribe código y ejecuta comandos. Cambiar el cerebro no cambia esto.",
+      "workHint": "El trabajo que le encargas (escribir código, ejecutar comandos) se hace con este agente.",
       "workSame": "Igual que el cerebro",
       "workOther": "Elegir otro",
       "workSameHint": "Una copia del agente del cerebro y de todas sus opciones. Después, cada uno va por su lado.",
@@ -11504,18 +11503,18 @@
         "unreadable": "No se pudo leer el archivo como imagen.",
         "shapes": {
           "ring": "Anillo",
-          "stand": "Anillo de pie",
-          "donut": "Dónut",
-          "gummy": "Aro de gominola",
-          "tape": "Rollo de cinta",
+          "terminal": "Terminal",
+          "braces": "Llaves",
+          "shield": "Escudo",
+          "chip": "Chip",
+          "bug": "Bicho",
+          "cursor": "Puntero",
           "gear": "Engranaje",
-          "nut": "Tuerca",
-          "mug": "Taza",
-          "magnet": "Imán",
-          "set_square": "Escuadra",
-          "cookie": "Galleta de estrella",
-          "frame": "Marco",
-          "watch": "Reloj"
+          "file": "Archivo de código",
+          "magnifier": "Lupa",
+          "package": "Paquete",
+          "rocket": "Cohete",
+          "mug": "Taza"
         },
         "colors": {
           "black": "Negro",
@@ -11534,7 +11533,7 @@
         "reset": "Restablecer",
         "pages": {
           "bot": "Bot",
-          "make": "Generar",
+          "make": "Texto",
           "upload": "Subir"
         },
         "dropHint": "Arrastra o pega una imagen",
@@ -11783,6 +11782,7 @@
     },
     "pills": {
       "attention": "{count, plural, one {# cosa te necesita} other {# cosas te necesitan}}",
+      "dismissAttention": "Ocultar hasta que algo nuevo te necesite",
       "newMessages": "Mensajes nuevos",
       "toBottom": "Ir a lo más reciente"
     },

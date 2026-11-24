@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "vitest"
 
-import { attentionPill } from "./message-list"
+import { attentionKeys, attentionPill, attentionShown } from "./message-list"
 
 describe("the attention pill", () => {
   it("counts Today's first group and opens it when anything waits there", () => {
@@ -19,5 +19,27 @@ describe("the attention pill", () => {
 
   it("is not shown when nothing waits", () => {
     expect(attentionPill(0, 0)).toBeNull()
+  })
+})
+
+describe("closing the attention pill", () => {
+  const today = { count: 2, today: true }
+  const here = { count: 2, today: false }
+
+  it("stands for Today's rows, or for the cards here", () => {
+    expect(attentionKeys(today, ["a", "b"], [7])).toEqual(["a", "b"])
+    expect(attentionKeys(here, [], [7, 9])).toEqual(["row:7", "row:9"])
+    expect(attentionKeys(today, [], [])).toEqual(["count:2"])
+    expect(attentionKeys(null, ["a"], [7])).toEqual([])
+  })
+
+  it("stays closed while nothing new needs the owner", () => {
+    expect(attentionShown(["a", "b"], undefined)).toBe(true)
+    expect(attentionShown(["a", "b"], ["a", "b"])).toBe(false)
+    // One of them settled: still closed.
+    expect(attentionShown(["b"], ["a", "b"])).toBe(false)
+    // Something new: open again.
+    expect(attentionShown(["b", "c"], ["a", "b"])).toBe(true)
+    expect(attentionShown([], undefined)).toBe(false)
   })
 })

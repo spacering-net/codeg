@@ -10308,6 +10308,8 @@
       "state": "Status"
     },
     "items": {
+      "waitingAnswer": "Wartet auf die Antwort von {name}: {text}",
+      "wroteToYou": "{name} schrieb: {text}",
       "waits": {
         "owner": "Wartet auf dich",
         "agent": "Für den Agenten",
@@ -10375,7 +10377,8 @@
       "name": "Name",
       "nameHint": "Name und Bild, mit denen er auf seiner Seite und in seinen Nachrichten erscheint; der Agent kennt seinen Namen auch. Ohne Namen gilt der Standardname.",
       "namePlaceholder": "Persönlicher Agent",
-      "agentHint": "Der Agent, mit dem er denkt und mit dir spricht, mit all seinen Optionen.",
+      "agentHint": "Der Agent, mit dem er mit dir spricht und Dinge durchdenkt.",
+      "agentOptions": "Modell und Optionen",
       "switchNote": "Der Wechsel zu einem anderen Agenten startet mit deiner nächsten Nachricht eine neue Sitzung. Eine alte wird nicht fortgesetzt; stattdessen übergibt codeg der neuen Sitzung die Zeitleiste.",
       "autoCompact": "Schwellenwert für automatische Verdichtung",
       "autoCompactHint": "Ist der Kontext mindestens so voll, sendet codeg vor der nächsten Nachricht den Verdichtungsbefehl. 0 schaltet sie aus. Halte den Wert unter dem eigenen Auslöser des Agenten.",
@@ -10388,7 +10391,6 @@
       "handoffBudgetHint": "Zeichen, die die Übergabekarte einer neuen Sitzung nutzen darf; Gekürztes kann der Agent mit seinen Werkzeugen nachlesen.",
       "skill": "Integrierter Skill",
       "skillHint": "Bring dem Agenten seine Konventionen (Zuweisungsarten, offene Punkte, Gedächtnisdateien) über einen Skill in seinem Arbeitsverzeichnis bei.",
-      "filesNote": "Diese Dateien liegen im Arbeitsverzeichnis des Agenten und werden nach jeder Runde committet. Änderungen an Name, Persona und Regeln erreichen den Agenten mit deiner nächsten Nachricht.",
       "saveFile": "Datei speichern",
       "fileSaved": "{name} gespeichert.",
       "cancel": "Abbrechen",
@@ -10424,7 +10426,6 @@
       "readOnly": "Die Assistenten laufen in einem anderen codeg-Prozess, daher sind ihre Einstellungen hier schreibgeschützt.",
       "setUpFirst": "Richte zuerst den Hauptassistenten ein.",
       "nav": {
-        "prefs": "Präferenzen",
         "identity": "Identität & Gehirn",
         "persona": "Persona & Gedächtnis",
         "notify": "Benachrichtigungen",
@@ -11123,8 +11124,7 @@
         "muted": "Stummschalten",
         "mutedHint": "Keine Systembenachrichtigungen von ihm; was er sagt, zählt trotzdem als ungelesen.",
         "hidden": "Ausblenden",
-        "hiddenHint": "Er läuft weiter, benachrichtigt dich aber nie, steht nicht in der Liste und zählt nicht im Badge; „N ausgeblendet“ unten in der Liste zeigt ihn.",
-        "note": "Deine Erinnerungen kommen, egal was hier eingestellt ist. Stufen und Ruhezeiten findest du unter Präferenzen → Proaktiv & Benachrichtigungen."
+        "hiddenHint": "Er läuft weiter, benachrichtigt dich aber nie, steht nicht in der Liste und zählt nicht im Badge; „N ausgeblendet“ unten in der Liste zeigt ihn."
       },
       "grade": {
         "firstPass": "beim ersten Mal {rate} % ({pass}/{settled})",
@@ -11145,7 +11145,6 @@
       "deleteSkill": "Skill löschen",
       "confirmDeleteSkillHint": "Diesen Ablauf-Skill löschen? Sein Ordner wird aus dem Arbeitsverzeichnis entfernt.",
       "skillDeleted": "{name} gelöscht",
-      "viewSubtitle": "Gilt für alle Assistenten",
       "personaUnwritten": "Noch keine Persona geschrieben. Es ergänzt sie selbst – wenn es sich vorstellt, wenn du ihm Arbeit gibst, und beim nächtlichen Aufräumen – oder du schreibst sie hier.",
       "projects": {
         "about": "Die Assistenten behalten diese Projekte auf PRs im Blick, die auf dein Review warten, und suchen darin das Erste, bei dem sie helfen können.",
@@ -11164,7 +11163,7 @@
         "note": "Ein geschlossenes Projekt wird nicht beobachtet; öffnest du es wieder, ist es zurück."
       },
       "workTitle": "Agent für seine Arbeit",
-      "workHint": "Das Gehirn denkt und spricht mit dir; dieser Agent schreibt Code und führt Befehle aus. Das Gehirn zu ändern ändert dies nicht.",
+      "workHint": "Arbeit, die du ihm gibst – Code schreiben, Befehle ausführen –, läuft auf diesem Agenten.",
       "workSame": "Wie das Gehirn",
       "workOther": "Anderen wählen",
       "workSameHint": "Eine Kopie des Agenten des Gehirns mit allen Optionen. Danach sind beide unabhängig.",
@@ -11504,18 +11503,18 @@
         "unreadable": "Die Datei konnte nicht als Bild gelesen werden.",
         "shapes": {
           "ring": "Ring",
-          "stand": "Stehender Ring",
-          "donut": "Donut",
-          "gummy": "Fruchtgummiring",
-          "tape": "Klebebandrolle",
+          "terminal": "Terminal",
+          "braces": "Geschweifte Klammern",
+          "shield": "Schild",
+          "chip": "Chip",
+          "bug": "Käfer",
+          "cursor": "Mauszeiger",
           "gear": "Zahnrad",
-          "nut": "Sechskantmutter",
-          "mug": "Tasse",
-          "magnet": "Hufeisenmagnet",
-          "set_square": "Geodreieck",
-          "cookie": "Sternkeks",
-          "frame": "Bilderrahmen",
-          "watch": "Uhr"
+          "file": "Codedatei",
+          "magnifier": "Lupe",
+          "package": "Paket",
+          "rocket": "Rakete",
+          "mug": "Tasse"
         },
         "colors": {
           "black": "Schwarz",
@@ -11534,7 +11533,7 @@
         "reset": "Zurücksetzen",
         "pages": {
           "bot": "Bot",
-          "make": "Erzeugen",
+          "make": "Text",
           "upload": "Hochladen"
         },
         "dropHint": "Bild hierher ziehen oder einfügen",
@@ -11783,6 +11782,7 @@
     },
     "pills": {
       "attention": "{count, plural, one {# Sache braucht dich} other {# Sachen brauchen dich}}",
+      "dismissAttention": "Ausblenden, bis etwas Neues dich braucht",
       "newMessages": "Neue Nachrichten",
       "toBottom": "Zum Neuesten springen"
     },

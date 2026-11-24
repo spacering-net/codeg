@@ -26,7 +26,8 @@
  *   grouped list): the morning brief's rows.
  * - `PanelItem`: one thing (shadcn's `Item`): what leads it, its title and
  *   when, where it stands and a quiet line under it, a box, notes, its
- *   buttons; the whole of it opens what it is about when it opens anything.
+ *   buttons, and a › at its head's end that unfolds the rest of it at its
+ *   foot; the whole of it opens what it is about when it opens anything.
  *   In a stack a card or a row, in a list a row; outside both — the
  *   morning brief's rows in its bubble — a soft card of its own.
  * - `PanelEmpty`: a list with nothing in it, a dashed line saying so.
@@ -490,7 +491,7 @@ export interface PanelItemProps extends Omit<ComponentProps<"div">, "title"> {
   time?: ReactNode
   /** Its own controls at the title's end (a switch, a menu). */
   aside?: ReactNode
-  /** Where it stands: leading the quiet line — at a card's top end. */
+  /** Where it stands: leading the quiet line. */
   chip?: ReactNode
   /** A quiet line under the title. */
   meta?: ReactNode
@@ -508,6 +509,12 @@ export interface PanelItemProps extends Omit<ComponentProps<"div">, "title"> {
   actions?: ReactNode
   /** One button at its end: a row keeps it there. */
   action?: ReactNode
+  /** At its head's end, after everything there: the › that unfolds
+   *  `details`. */
+  unfold?: ReactNode
+  /** What it unfolds to, at its foot — under its buttons, so nothing above
+   *  it moves as it opens. */
+  details?: ReactNode
 }
 
 export function PanelItem(props: PanelItemProps) {
@@ -573,11 +580,14 @@ function StackItem({
   extra,
   actions,
   action,
+  unfold,
+  details,
   flush,
   className,
   ...props
 }: PanelItemProps & { flush: boolean }) {
-  const card = actions != null || extra != null || callout != null
+  const card =
+    actions != null || extra != null || callout != null || details != null
   // Its quiet line: what it is, then when.
   const line =
     meta != null || time != null ? (
@@ -640,17 +650,22 @@ function StackItem({
                 !flush && "focus-visible:after:rounded-2xl"
               )}
             />
-            {/* Where it stands: at a card's top end. */}
-            {card ? chipEl : null}
             {aside ? (
               <span className="relative z-10 -my-0.5 -me-1 flex shrink-0 items-center">
                 {aside}
               </span>
             ) : null}
+            {unfold ? (
+              <span className="relative z-10 -my-0.5 -me-1.5 flex shrink-0 items-center">
+                {unfold}
+              </span>
+            ) : null}
           </div>
-          {(!card && chipEl) || line ? (
+          {/* Where it stands leads its quiet line: the title keeps the
+              width of the card. */}
+          {chipEl || line ? (
             <div className="flex min-w-0 items-center gap-1.5">
-              {card ? null : chipEl}
+              {chipEl}
               {line ? (
                 <ItemDescription
                   className={cn(
@@ -686,6 +701,11 @@ function StackItem({
           {action}
         </div>
       ) : null}
+      {details ? (
+        <div className="relative z-10 min-w-0 border-t border-border/50 pt-3">
+          {details}
+        </div>
+      ) : null}
     </Item>
   )
 }
@@ -706,6 +726,8 @@ function ListItem({
   extra,
   actions,
   action,
+  unfold,
+  details,
   inList,
   className,
   ...props
@@ -768,6 +790,11 @@ function ListItem({
               {aside}
             </span>
           ) : null}
+          {unfold ? (
+            <span className="relative z-10 -my-0.5 -me-1 flex shrink-0 items-center">
+              {unfold}
+            </span>
+          ) : null}
         </div>
         {chip || meta ? (
           <div className="flex min-w-0 items-center gap-1.5">
@@ -797,6 +824,9 @@ function ListItem({
             {actions}
             {action}
           </div>
+        ) : null}
+        {details ? (
+          <div className="relative z-10 mt-2 min-w-0">{details}</div>
         ) : null}
       </ItemContent>
     </Item>

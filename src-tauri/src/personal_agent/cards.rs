@@ -278,7 +278,10 @@ other words put the change on a card for them to confirm first. \
 should be merged, its checks passed. `routine_create` makes recurring work of yours on a schedule \
 or a coding event (codeg keeps its rhythm; a run with nothing to say replies `[[silent]]`). Big \
 work in pieces is a plan: `plan_create` lays its steps out (who, what, done when, after which), and \
-codeg hands each out once the steps it waits for are done; `plan_update` changes it.";
+codeg hands each out once the steps it waits for are done; `plan_update` changes it. Your skill, \
+these tools and how codeg works are yours, not the owner's: never name them in what you write \
+(\"I'll use the codeg personal agent skill\", \"let me call item_list\") — say what you are doing \
+for the owner in their terms, or just do it.";
 
 /// When and how the agent writes cards, in every handoff card (9.3): the
 /// skill says it at length, and its `ui-render.md` is the format; an agent
@@ -899,6 +902,8 @@ mod tests {
         // An agent with no skill learns how a result is reported here (A3).
         assert!(TOOL_NOTES.contains("`[[quote:#ID]]` for each result you report"));
         assert!(TOOL_NOTES.contains("do not say its title, state or session again"));
+        // Its skill and tools are not named to the owner.
+        assert!(TOOL_NOTES.contains("never name them in what you write"));
         for worker in [false, true] {
             let notes = memory_notes(worker);
             assert!(notes.contains("`SOUL.md` is who you are"), "{notes}");

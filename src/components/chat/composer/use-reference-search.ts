@@ -19,6 +19,7 @@ import {
   assistantToSuggestion,
   commitToSuggestion,
   fileToSuggestion,
+  folderToSuggestion,
   sessionToSuggestion,
 } from "./suggestion/adapters"
 import type {
@@ -71,6 +72,9 @@ export interface ReferenceSearchSources {
   files: FlatFileEntry[]
   /** Workspace root the `files` were loaded under; null disables the group. */
   workspaceRoot: string | null
+  /** Whole folders to offer ahead of the files (the workspace's folders, for
+   *  a personal assistant): each a folder reference by its absolute path. */
+  folders?: readonly MentionFolder[]
   agents: AcpAgentInfo[]
   /** The owner's personal assistants (the roster, `useRoster`). */
   assistants: RosterEntry[]
@@ -87,6 +91,12 @@ export interface ReferenceSearchSources {
   commits: GitLogEntry[]
   /** Repo identity for commit URIs; null disables the commit group. */
   repoKey: string | null
+}
+
+/** A folder offered whole in the `@` panel: what it is called, where. */
+export interface MentionFolder {
+  name: string
+  path: string
 }
 
 /** Case-insensitive substring match against an adapted item's searchable text. */
@@ -119,8 +129,19 @@ export function buildReferenceGroups(
   // mention panel's substring semantics and use the extra row for truncation.
   const fileItems: SuggestionItem[] = []
   let fileTruncated = false
+  // The folders first: a whole project is what is meant more often than a
+  // file of the box the search runs in.
+  for (const folder of sources.folders ?? []) {
+    const item = folderToSuggestion(folder)
+    if (!suggestionMatches(item, q)) continue
+    if (fileItems.length >= MAX_PER_GROUP) {
+      fileTruncated = true
+      break
+    }
+    fileItems.push(item)
+  }
   const root = sources.workspaceRoot
-  if (root) {
+  if (root && !fileTruncated) {
     for (const entry of sources.files) {
       if (q && !entry.lowerName.includes(q) && !entry.lowerPath.includes(q)) {
         continue
@@ -250,6 +271,8 @@ export interface UseReferenceSearchOptions {
   excludeAssistantUid?: string | null
   /** The primary's name while it has none of its own (localized). */
   primaryAssistantName?: string
+  /** Whole folders offered ahead of the files (`ReferenceSearchSources`). */
+  folders?: readonly MentionFolder[]
 }
 
 /**
@@ -281,6 +304,7 @@ export function useReferenceSearch({
   labels,
   excludeAssistantUid = null,
   primaryAssistantName,
+  folders,
 }: UseReferenceSearchOptions): ReferenceSearch {
   const path = defaultPath || null
 
@@ -300,6 +324,7 @@ export function useReferenceSearch({
   const pathRef = useRef(path)
   const enabledRef = useRef(enabled)
   const labelsRef = useRef(labels)
+  const foldersRef = useRef(folders)
 
   // `pathRef` and `enabledRef` gate the post-await freshness check in `search`,
   // so they must reflect the *committed* folder/enabled state synchronously at
@@ -322,7 +347,15 @@ export function useReferenceSearch({
     excludeRef.current = excludeAssistantUid
     primaryNameRef.current = primaryAssistantName
     labelsRef.current = labels
-  }, [agents, assistants, excludeAssistantUid, primaryAssistantName, labels])
+    foldersRef.current = folders
+  }, [
+    agents,
+    assistants,
+    excludeAssistantUid,
+    primaryAssistantName,
+    labels,
+    folders,
+  ])
 
   // Lazily-fetched network sources, key-cached so repeat searches reuse the
   // in-flight/resolved promise while a folder switch refetches.
@@ -447,6 +480,7 @@ export function useReferenceSearch({
           {
             files,
             workspaceRoot: path,
+            folders: wants("file") ? foldersRef.current : [],
             agents: wants("agent") ? agentsRef.current : [],
             assistants: wants("assistant") ? assistantsRef.current : [],
             excludeAssistantUid: excludeRef.current,

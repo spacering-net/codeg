@@ -1961,21 +1961,21 @@ export interface PersonalAgentSettings {
 }
 
 /** The things codeg draws an assistant as (10.6): the ring — the
- *  primary's — and twelve with a ring or a hole in them. */
+ *  primary's — and twelve things a coder works with. */
 export type BotShape =
   | "ring"
-  | "stand"
-  | "donut"
-  | "gummy"
-  | "tape"
+  | "terminal"
+  | "braces"
+  | "shield"
+  | "chip"
+  | "bug"
+  | "cursor"
   | "gear"
-  | "nut"
+  | "file"
+  | "magnifier"
+  | "package"
+  | "rocket"
   | "mug"
-  | "magnet"
-  | "set_square"
-  | "cookie"
-  | "frame"
-  | "watch"
 
 export type BotColor =
   | "black"

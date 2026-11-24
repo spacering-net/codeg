@@ -46,12 +46,13 @@ import { AboutPage } from "./about-page"
 import { AutomationPage, CommunicationPage, ProactivePage } from "./pref-pages"
 import { ProjectsPage } from "./projects-page"
 
-/** The navigation: the preferences. */
-const GROUPS: { label: "prefs"; pages: SettingsPage[] }[] = [
-  {
-    label: "prefs",
-    pages: ["communication", "projects", "proactive", "automation", "about"],
-  },
+/** The navigation: the preferences, under the view's title. */
+const PAGES: SettingsPage[] = [
+  "communication",
+  "projects",
+  "proactive",
+  "automation",
+  "about",
 ]
 
 const PAGE_ICONS: Record<SettingsPage, LucideIcon> = {
@@ -102,9 +103,8 @@ export function SettingsView() {
     }
   })()
 
-  // Back to the conversation: a pill saying so above the title, its arrow
-  // in the column of the navigation's icons, as the title is in their
-  // column of words' start.
+  // Back to the conversation: a pill saying so above the navigation, its
+  // arrow in the column of the navigation's icons.
   const back = (
     <Button
       variant="ghost"
@@ -117,16 +117,6 @@ export function SettingsView() {
       <span className="truncate">{t("back")}</span>
     </Button>
   )
-  const title = (
-    <div className="min-w-0 px-2.5" data-pa-settings-title>
-      <h1 className="truncate text-xl leading-7 font-semibold tracking-tight">
-        {t("viewTitle")}
-      </h1>
-      <p className="mt-0.5 truncate text-xs leading-4 text-muted-foreground">
-        {t("viewSubtitle")}
-      </p>
-    </div>
-  )
 
   return (
     <div className="flex h-full min-h-0" data-pa-settings>
@@ -135,61 +125,49 @@ export function SettingsView() {
           className="flex w-60 shrink-0 flex-col border-e border-border/60"
           data-pa-settings-nav
         >
-          <div className="flex flex-col gap-4 px-3 pt-3 pb-5">
-            {back}
-            {title}
-          </div>
+          <div className="flex flex-col px-3 pt-3 pb-5">{back}</div>
           <nav
             aria-label={t("viewTitle")}
             className="min-h-0 flex-1 overflow-y-auto px-3 pb-4"
           >
-            {GROUPS.map((g, i) => (
-              <div
-                key={g.label}
-                role="group"
-                aria-label={t(`nav.${g.label}`)}
-                className={cn(i > 0 && "mt-5")}
-              >
-                <p
-                  aria-hidden
-                  className="px-2.5 pb-1.5 text-xs font-medium text-muted-foreground"
-                >
-                  {t(`nav.${g.label}`)}
-                </p>
-                <div className="flex flex-col gap-0.5">
-                  {g.pages.map((p) => {
-                    const Icon = PAGE_ICONS[p]
-                    const on = page === p
-                    return (
-                      <button
-                        key={p}
-                        type="button"
-                        data-pa-nav={p}
-                        aria-current={on ? "page" : undefined}
-                        onClick={() => openSettings(p)}
-                        className={cn(
-                          "flex h-9 w-full items-center gap-2.5 rounded-full px-2.5 text-start text-sm transition-colors",
-                          on
-                            ? "bg-accent font-medium text-accent-foreground"
-                            : "text-foreground/80 hover:bg-muted hover:text-foreground"
-                        )}
-                      >
-                        <Icon
-                          className={cn(
-                            "size-4 shrink-0",
-                            on ? "text-foreground" : "text-muted-foreground"
-                          )}
-                          aria-hidden
-                        />
-                        <span className="min-w-0 truncate">
-                          {t(`nav.${p}`)}
-                        </span>
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-            ))}
+            {/* The view's title, as small as a group's name over its
+                pages. */}
+            <h1
+              className="px-2.5 pb-1.5 text-xs font-medium text-muted-foreground"
+              data-pa-settings-title
+            >
+              {t("viewTitle")}
+            </h1>
+            <div className="flex flex-col gap-0.5">
+              {PAGES.map((p) => {
+                const Icon = PAGE_ICONS[p]
+                const on = page === p
+                return (
+                  <button
+                    key={p}
+                    type="button"
+                    data-pa-nav={p}
+                    aria-current={on ? "page" : undefined}
+                    onClick={() => openSettings(p)}
+                    className={cn(
+                      "flex h-9 w-full items-center gap-2.5 rounded-full px-2.5 text-start text-sm transition-colors",
+                      on
+                        ? "bg-accent font-medium text-accent-foreground"
+                        : "text-foreground/80 hover:bg-muted hover:text-foreground"
+                    )}
+                  >
+                    <Icon
+                      className={cn(
+                        "size-4 shrink-0",
+                        on ? "text-foreground" : "text-muted-foreground"
+                      )}
+                      aria-hidden
+                    />
+                    <span className="min-w-0 truncate">{t(`nav.${p}`)}</span>
+                  </button>
+                )
+              })}
+            </div>
           </nav>
         </aside>
       )}
@@ -200,10 +178,7 @@ export function SettingsView() {
         >
           {isMobile ? (
             <div className="mb-5 flex flex-col gap-3">
-              <div className="-ms-2.5 flex flex-col gap-3">
-                {back}
-                {title}
-              </div>
+              <div className="-ms-2.5 flex flex-col">{back}</div>
               <Select
                 value={page}
                 onValueChange={(v) => openSettings(v as SettingsPage)}
@@ -215,18 +190,16 @@ export function SettingsView() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {GROUPS.map((g) => (
-                    <SelectGroup key={g.label}>
-                      <SelectLabel className="text-2xs">
-                        {t(`nav.${g.label}`)}
-                      </SelectLabel>
-                      {g.pages.map((p) => (
-                        <SelectItem key={p} value={p}>
-                          {t(`nav.${p}`)}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  ))}
+                  <SelectGroup>
+                    <SelectLabel className="text-2xs">
+                      {t("viewTitle")}
+                    </SelectLabel>
+                    {PAGES.map((p) => (
+                      <SelectItem key={p} value={p}>
+                        {t(`nav.${p}`)}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
                 </SelectContent>
               </Select>
             </div>

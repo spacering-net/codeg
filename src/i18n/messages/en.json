@@ -10308,6 +10308,8 @@
       "state": "State"
     },
     "items": {
+      "waitingAnswer": "Waiting for {name}'s answer: {text}",
+      "wroteToYou": "{name} wrote: {text}",
       "waits": {
         "owner": "Waiting for you",
         "agent": "For the agent",
@@ -10374,7 +10376,8 @@
       "name": "Name",
       "nameHint": "The name and picture it goes by on its page and in its messages; the agent knows the name too. An empty name uses the default.",
       "namePlaceholder": "Personal agent",
-      "agentHint": "The agent it thinks and talks on, with every option it runs with.",
+      "agentHint": "The agent it uses to talk with you and think things through.",
+      "agentOptions": "Model and options",
       "switchNote": "Switching to another agent starts a new session with your next message. It does not resume an old one; codeg hands the new session the timeline instead.",
       "autoCompact": "Auto-compact threshold",
       "autoCompactHint": "When the context is at least this full, codeg sends the compact command before the next message. 0 turns it off. Keep it below the agent's own trigger.",
@@ -10387,7 +10390,6 @@
       "handoffBudgetHint": "Characters a new session's handoff card may use; what is cut can be read back with the agent's tools.",
       "skill": "Built-in skill",
       "skillHint": "Teach the agent its conventions (dispatch modes, open matters, memory files) through a skill in its working directory.",
-      "filesNote": "These files live in the agent's working directory and are committed after every turn. Changes to its name, persona and rules reach the agent with your next message.",
       "saveFile": "Save file",
       "fileSaved": "{name} saved.",
       "cancel": "Cancel",
@@ -10423,7 +10425,6 @@
       "readOnly": "The assistants run in another codeg process, so their settings are read-only here.",
       "setUpFirst": "Set up the primary assistant first.",
       "nav": {
-        "prefs": "Preferences",
         "identity": "Identity & brain",
         "persona": "Persona & memory",
         "notify": "Notifications",
@@ -11123,8 +11124,7 @@
         "muted": "Mute",
         "mutedHint": "No system notifications from it; what it says still counts as unread.",
         "hidden": "Hide",
-        "hiddenHint": "It runs as ever, but never notifies you, stays off the roster and out of the badge; “N hidden” at the roster's foot shows it.",
-        "note": "Your reminders come whatever is set here. The levels and quiet hours are in Preferences → Proactive & notifications."
+        "hiddenHint": "It runs as ever, but never notifies you, stays off the roster and out of the badge; “N hidden” at the roster's foot shows it."
       },
       "grade": {
         "firstPass": "first time {rate}% ({pass}/{settled})",
@@ -11145,7 +11145,6 @@
       "deleteSkill": "Delete skill",
       "confirmDeleteSkillHint": "Delete this process skill? Its folder is removed from the working directory.",
       "skillDeleted": "Deleted {name}",
-      "viewSubtitle": "Shared by every assistant",
       "personaUnwritten": "No persona written yet. It fills it in itself — when it introduces itself, as you give it work, and in the nightly tidy-up — or you can write it here.",
       "projects": {
         "about": "The assistants keep an eye on these projects for PRs waiting for your review, and look in them for the first thing they can help with.",
@@ -11164,7 +11163,7 @@
         "note": "A closed project isn't watched; it's back when you open it again."
       },
       "workTitle": "Agent for its work",
-      "workHint": "The brain thinks and talks with you; this agent writes code and runs commands. Changing the brain doesn't change this.",
+      "workHint": "Work you hand it — writing code, running commands — runs on this agent.",
       "workSame": "Same as the brain",
       "workOther": "Pick another",
       "workSameHint": "A copy of the brain's agent and every option. After that the two are separate.",
@@ -11504,18 +11503,18 @@
         "unreadable": "That file could not be read as a picture.",
         "shapes": {
           "ring": "Ring",
-          "stand": "Standing ring",
-          "donut": "Donut",
-          "gummy": "Gummy ring",
-          "tape": "Tape roll",
+          "terminal": "Terminal",
+          "braces": "Braces",
+          "shield": "Shield",
+          "chip": "Chip",
+          "bug": "Bug",
+          "cursor": "Pointer",
           "gear": "Gear",
-          "nut": "Hex nut",
-          "mug": "Mug",
-          "magnet": "Magnet",
-          "set_square": "Set square",
-          "cookie": "Star cookie",
-          "frame": "Picture frame",
-          "watch": "Watch"
+          "file": "Code file",
+          "magnifier": "Magnifier",
+          "package": "Package",
+          "rocket": "Rocket",
+          "mug": "Mug"
         },
         "colors": {
           "black": "Black",
@@ -11534,7 +11533,7 @@
         "reset": "Reset",
         "pages": {
           "bot": "Bot",
-          "make": "Generate",
+          "make": "Text",
           "upload": "Upload"
         },
         "dropHint": "Drag or paste a picture",
@@ -11783,6 +11782,7 @@
     },
     "pills": {
       "attention": "{count, plural, one {# item needs you} other {# items need you}}",
+      "dismissAttention": "Hide until something new needs you",
       "newMessages": "New messages",
       "toBottom": "Jump to latest"
     },

@@ -2,36 +2,36 @@
 
 /**
  * An assistant's avatar is its state (10.6): one of the thirteen things
- * codeg draws (`bot-shapes.ts` — the primary's ring, twelve with a ring or a
- * hole in them), in one of eleven colours, with two capsule eyes whose look
- * says what it is doing — or, for the assistants made before, the executor
- * configs' monogram, emoji or picture, drawn as they always were, its state
- * then only in a ring round it and the dot. Under 32px it is drawn small
- * (its textures gone, its bands thicker, its eyes larger). A new assistant's
+ * codeg draws (`bot-shapes.ts` — the primary's ring, twelve things a coder
+ * works with), a solid in one of eleven colours with two eyes on its face,
+ * turning as a whole with what it is doing — or, for the assistants made
+ * before, the executor configs' monogram, emoji or picture, drawn as they
+ * always were, its state then only in a ring round it and the dot. Under
+ * 32px it is drawn small (no edge lines, larger eyes). A new assistant's
  * face comes from its uid (`defaultBotFace`), the same way the backend picks
  * it, so the page can show it before it is made.
  *
- * - **Looks.** idle: calm, blinking every 2.8–5.5 s (a double blink one
+ * - **Looks.** idle: at rest, blinking every 2.8–5.5 s (a double blink one
  *   time in seven), half the time a glance left, right or up instead, held
- *   0.5–0.9 s; thinking: eyes up, wandering, the head tilting; working: eyes
- *   down and focused, the thing at its own work (a gear turning, steam off
- *   the mug, the frame swinging — globals.css); waiting: eyes
- *   on you, breathing deep; stuck: drowsy, lids half down, swaying; done:
- *   eyes curved into a smile, two hops; failed: eyes drooping, a shake of
- *   the head; sleeping: eyes shut, breathing slowly, "z z z" rising. A new
- *   look comes through a blink. Each moves by a tenth of the face or so —
- *   enough to be seen on a roster row's face, not only on a large one.
+ *   0.5–0.9 s; thinking: looking up and about, its head wandering; working:
+ *   eyes down and narrowed, nodding over its work, bobbing (the ring's star
+ *   running round its band); waiting: turned to face you, breathing deep;
+ *   stuck: drowsy, lids half down, swaying; done: eyes curved into a smile,
+ *   a turn round and two hops; failed: eyes drooping, a shake of the head;
+ *   sleeping: eyes shut, leaning back, breathing slowly, "z z z" rising. A
+ *   new look comes through a blink.
  * - **The pointer.** A face that is alive notices the pointer coming over
  *   it — or over what it is the face of, a row or a tile marked
  *   `data-pa-face-host`: it perks up with a little hop — asleep, it wakes
- *   — and its eyes follow the pointer while it stays (as Grok Bot's do),
- *   settling back once it leaves. Its eyes never leave where they are seen:
- *   they are clipped to its hole, or to the face of the body they are on,
- *   and wander less in a small hole.
+ *   — and turns, whole, toward the pointer while it stays (its eyes a
+ *   little ahead), settling back once it leaves.
  * - **Alive only when told.** A face is still unless it is given a `look`:
  *   the roster, the title and the status line pass one; a face on a card
- *   or a system line stays put. The idle scheduler pauses while the window
- *   is hidden; under reduced motion every look rests in its still pose.
+ *   or a system line stays put, its drawing made once per shape, look and
+ *   size. A face that moves is drawn by one frame loop for all
+ *   (`bot-face-motion`), only while its pose changes; the idle scheduler
+ *   pauses while the window is hidden; under reduced motion every look
+ *   rests in its still pose.
  * - **The dot.** Orange while it waits on the owner (ringed in the colour
  *   under it, `--pa-dot-ring`), blue while something is unread — always
  *   blue, whatever the accent colour. At the bottom end; on the primary,
@@ -39,14 +39,13 @@
  */
 
 import {
-  createElement,
+  useCallback,
   useEffect,
   useId,
+  useInsertionEffect,
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
-  type ReactNode,
   type RefObject,
 } from "react"
 
@@ -60,13 +59,15 @@ import type {
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
+import { startFaceMotion, type FaceMotion } from "./bot-face-motion"
+import { addFaceTones, defineFace } from "./bot-face-page"
 import {
   ART_BOX,
   DEFAULT_SHAPES,
   SMALL_FACE_BELOW,
-  eyeNodes,
-  faceArt,
-  type SvgNode,
+  colorOf,
+  restFace,
+  shapeOf,
 } from "./bot-shapes"
 import type { RosterDot } from "./roster-order"
 
@@ -175,30 +176,6 @@ export const FACE_EYES: Record<BotColor, string> = {
   gray: "text-neutral-900 dark:text-white",
 }
 
-/** Each colour as the two CSS variables its drawing paints with (`$b`,
- *  `$c` in `bot-shapes`): the body's and the eyes' palette steps, light and
- *  dark — `FACE_BODY`'s and `FACE_EYES`'s, which a test keeps them to. */
-export const FACE_VARS: Record<BotColor, string> = {
-  black:
-    "[--pa-b:var(--color-neutral-900)] [--pa-c:var(--color-white)] dark:[--pa-b:var(--color-neutral-200)] dark:[--pa-c:var(--color-neutral-900)]",
-  brown:
-    "[--pa-b:var(--color-amber-800)] [--pa-c:var(--color-white)] dark:[--pa-b:var(--color-amber-600)]",
-  red: "[--pa-b:var(--color-red-500)] [--pa-c:var(--color-white)] dark:[--pa-b:var(--color-red-400)]",
-  orange:
-    "[--pa-b:var(--color-orange-500)] [--pa-c:var(--color-neutral-900)] dark:[--pa-b:var(--color-orange-400)]",
-  yellow:
-    "[--pa-b:var(--color-yellow-400)] [--pa-c:var(--color-neutral-900)] dark:[--pa-b:var(--color-yellow-300)]",
-  green:
-    "[--pa-b:var(--color-green-500)] [--pa-c:var(--color-white)] dark:[--pa-b:var(--color-green-400)] dark:[--pa-c:var(--color-neutral-900)]",
-  teal: "[--pa-b:var(--color-teal-500)] [--pa-c:var(--color-white)] dark:[--pa-b:var(--color-teal-400)] dark:[--pa-c:var(--color-neutral-900)]",
-  blue: "[--pa-b:var(--color-blue-500)] [--pa-c:var(--color-white)] dark:[--pa-b:var(--color-blue-400)]",
-  purple:
-    "[--pa-b:var(--color-violet-500)] [--pa-c:var(--color-white)] dark:[--pa-b:var(--color-violet-400)]",
-  magenta:
-    "[--pa-b:var(--color-fuchsia-500)] [--pa-c:var(--color-white)] dark:[--pa-b:var(--color-fuchsia-400)]",
-  gray: "[--pa-b:var(--color-slate-400)] [--pa-c:var(--color-neutral-900)] dark:[--pa-b:var(--color-slate-500)] dark:[--pa-c:var(--color-white)]",
-}
-
 function rem(px: number): string {
   return `${px / 16}rem`
 }
@@ -217,63 +194,15 @@ const FACE_ROOM = 60
 
 type Glance = "left" | "right" | "up"
 
-const GLANCE_SHIFT: Record<Glance, string> = {
-  left: "translate(-10px, 0px)",
-  right: "translate(10px, 0px)",
-  up: "translate(0px, -8px)",
-}
-
-/** How far the eyes follow the pointer, sideways and up or down. */
-const GAZE_X = 11
-const GAZE_Y = 8
-
-/** Where the eyes sit for a look (moved as a whole, in box units). */
-const EYES_AT: Record<BotLook, number> = {
-  idle: 0,
-  thinking: -7,
-  working: 6,
-  waiting: 0,
-  stuck: 3,
-  done: 0,
-  failed: 5,
-  sleeping: 5,
+/** Where a glance at rest moves the eyes, on the face (up is +). */
+const GLANCE_AT: Record<Glance, readonly [number, number]> = {
+  left: [-14, 0],
+  right: [14, 0],
+  up: [0, 12],
 }
 
 /** The drawing's 512 box in the face's 100 one. */
 const ART_SCALE = 100 / ART_BOX
-
-/** A paint of `bot-shapes` as CSS: the colour's variables (`FACE_VARS`). */
-const PAINT_CSS: Record<string, string> = {
-  $b: "var(--pa-b)",
-  $c: "var(--pa-c)",
-  $w: "#fff",
-}
-
-/** SVG's attribute names as React spells them. */
-function propName(name: string): string {
-  if (name === "class") return "className"
-  return name.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase())
-}
-
-/** A node of `bot-shapes` as React: its paints set as styles, so a colour's
- *  variables reach them in either theme. */
-function toReact(node: SvgNode, key: string | number): ReactNode {
-  const props: Record<string, unknown> = { key }
-  let style: CSSProperties | undefined
-  for (const [name, value] of Object.entries(node.a)) {
-    if ((name === "fill" || name === "stroke") && value in PAINT_CSS) {
-      style = { ...style, [name]: PAINT_CSS[value as string] }
-    } else {
-      props[propName(name)] = value
-    }
-  }
-  if (style) props.style = style
-  return createElement(
-    node.t,
-    props,
-    ...(node.c ?? []).map((child, i) => toReact(child, i))
-  )
-}
 
 /** The ring round a picture, an emoji or a monogram, by look: the state it
  *  has no eyes to show. */
@@ -388,16 +317,17 @@ function PictureAvatar({
 }
 
 /** The pointer over a face that is alive — or over what it is the face of,
- *  a row or a tile marked `data-pa-face-host`: whether it is there, where
- *  the eyes are to look (toward the pointer, as far as they go; `null`
- *  while it is not there), and how many times it came over (each a perk of
- *  the body). A touch is not a pointer that hovers. */
+ *  a row or a tile marked `data-pa-face-host`: whether it is there, and how
+ *  many times it came over (each a perk of the body); where it is goes to
+ *  `aim` once a frame at most — from the face's middle, in its sizes (at
+ *  least 60px), `null` once it leaves. A touch is not a pointer that
+ *  hovers. */
 function useFaceHover(
   ref: RefObject<HTMLElement | null>,
-  on: boolean
-): { over: boolean; gaze: { x: number; y: number } | null; perks: number } {
+  on: boolean,
+  aim: (ptr: readonly [number, number] | null) => void
+): { over: boolean; perks: number } {
   const [over, setOver] = useState(false)
-  const [gaze, setGaze] = useState<{ x: number; y: number } | null>(null)
   const [perks, setPerks] = useState(0)
   useEffect(() => {
     const face = ref.current
@@ -405,25 +335,21 @@ function useFaceHover(
     const host = face.closest<HTMLElement>("[data-pa-face-host]") ?? face
     let frame = 0
     let at: { x: number; y: number } | null = null
-    // Once a frame at most: the eyes on the pointer's last place.
-    const aim = () => {
+    const send = () => {
       frame = 0
       if (!at) return
       const r = face.getBoundingClientRect()
       if (r.width === 0 || r.height === 0) return
-      const dx = (at.x - (r.left + r.width / 2)) / (r.width / 2)
-      const dy = (at.y - (r.top + r.height / 2)) / (r.height / 2)
-      // Over the face, as far as the pointer is off its middle; beyond it,
-      // all the way toward it.
-      const far = Math.max(1, Math.hypot(dx, dy))
-      const x = Math.round((dx / far) * GAZE_X)
-      const y = Math.round((dy / far) * GAZE_Y)
-      setGaze((g) => (g && g.x === x && g.y === y ? g : { x, y }))
+      const unit = Math.max(r.width, 60)
+      aim([
+        (at.x - (r.left + r.width / 2)) / unit,
+        (at.y - (r.top + r.height / 2)) / unit,
+      ])
     }
     const move = (e: PointerEvent) => {
       if (e.pointerType === "touch") return
       at = { x: e.clientX, y: e.clientY }
-      if (!frame) frame = requestAnimationFrame(aim)
+      if (!frame) frame = requestAnimationFrame(send)
     }
     const enter = (e: PointerEvent) => {
       if (e.pointerType === "touch") return
@@ -436,7 +362,7 @@ function useFaceHover(
       if (frame) cancelAnimationFrame(frame)
       frame = 0
       setOver(false)
-      setGaze(null)
+      aim(null)
     }
     host.addEventListener("pointerenter", enter)
     host.addEventListener("pointermove", move)
@@ -447,10 +373,10 @@ function useFaceHover(
       host.removeEventListener("pointerleave", leave)
       if (frame) cancelAnimationFrame(frame)
       setOver(false)
-      setGaze(null)
+      aim(null)
     }
-  }, [ref, on])
-  return { over, gaze, perks }
+  }, [ref, on, aim])
+  return { over, perks }
 }
 
 function FaceAvatar({
@@ -465,10 +391,16 @@ function FaceAvatar({
 }: BotAvatarProps & { face: Extract<BotAvatarValue, { kind: "face" }> }) {
   const reduced = useReducedMotion()
   const alive = look != null && !reduced
-  // The pointer over it (`useFaceHover`): asleep, it wakes up for it, its
-  // eyes open on the pointer, and goes back to sleep once it leaves.
+  // What moves it while it is alive (`bot-face-motion`).
+  const motion = useRef<FaceMotion | null>(null)
+  const aim = useCallback(
+    (ptr: readonly [number, number] | null) => motion.current?.aim(ptr),
+    []
+  )
+  // The pointer over it (`useFaceHover`): asleep, it wakes up for it, turns
+  // to the pointer, and goes back to sleep once it leaves.
   const rootRef = useRef<HTMLSpanElement>(null)
-  const { over, gaze, perks } = useFaceHover(rootRef, alive)
+  const { over, perks } = useFaceHover(rootRef, alive, aim)
   const target: BotLook =
     over && look === "sleeping" ? "idle" : (look ?? "idle")
 
@@ -546,29 +478,63 @@ function FaceAvatar({
   }, [idle])
 
   const blinking = alive && (swapBlink || (idle && idleBlink))
+  const watching = over && displayed !== "sleeping"
+  const shownGlance = idle && !watching ? glance : null
 
-  // The pointer over it: its eyes on the pointer — shut ones (asleep, until
-  // the blink that wakes it) stay shut — and a perk each time it comes, the
-  // attribute's two names taking turns so the animation starts again.
-  const watching = gaze != null && displayed !== "sleeping"
-  const eyesTo = watching
-    ? `translate(${gaze.x}px, ${gaze.y}px)`
-    : idle && glance
-      ? GLANCE_SHIFT[glance]
-      : undefined
   const id = useId()
   const base = `pa-face-${id.replace(/[^\w-]/g, "")}`
-  const clip = `${base}-clip`
-  const { shape, color } = face
+  const shape = shapeOf(face.shape)
+  const color = colorOf(face.color)
   const small = size < SMALL_FACE_BELOW
-  const art = useMemo(
-    () => faceArt(shape, small, (n) => `${base}-${n}`),
-    [shape, small, base]
+  // Its drawing at rest (the page's, `bot-face-page`), still in the look it
+  // shows; alive, in the look it first showed — from then on what moves it
+  // draws it (`bot-face-motion`), so a render never puts back a pose it has
+  // moved on from.
+  const [firstLook] = useState(displayed)
+  const drawnLook = alive ? firstLook : displayed
+  useInsertionEffect(() => {
+    addFaceTones()
+    defineFace(shape, drawnLook, small)
+  }, [shape, drawnLook, small])
+  const html = useMemo(
+    () => ({ __html: restFace(shape, drawnLook, small) }),
+    [shape, drawnLook, small]
   )
-  const { eyes } = art
-  // The eyes move in the face's units, as far as their window lets them:
-  // the look's shift, a glance, the pointer followed, a wander.
-  const move = eyes.move
+  const artRef = useRef<SVGGElement>(null)
+  // Whether it has been moved since its drawing was last the page's.
+  const moved = useRef(false)
+  useEffect(() => {
+    const el = artRef.current
+    if (!alive || !el) return
+    const m = startFaceMotion(el, base)
+    motion.current = m
+    moved.current = true
+    return () => {
+      m.dispose()
+      if (motion.current === m) motion.current = null
+    }
+  }, [alive, base])
+  // No longer moved (reduced motion asked for mid-turn): back to the
+  // drawing the page has for it, which a render does not write again when
+  // it has not changed.
+  useEffect(() => {
+    const el = artRef.current
+    if (alive || !el || !moved.current) return
+    moved.current = false
+    el.innerHTML = html.__html
+  }, [alive, html])
+  useEffect(() => {
+    motion.current?.set(
+      {
+        shape,
+        small,
+        look: displayed,
+        glance: shownGlance ? GLANCE_AT[shownGlance] : null,
+      },
+      drawnLook
+    )
+  }, [alive, base, shape, small, displayed, shownGlance, drawnLook])
+
   return (
     <span
       ref={rootRef}
@@ -578,6 +544,7 @@ function FaceAvatar({
       data-bot-small={small ? "" : undefined}
       data-bot-look={look ? displayed : undefined}
       data-blink={blinking ? "" : undefined}
+      data-glance={shownGlance ?? undefined}
       data-hover={watching ? "" : undefined}
       data-perk={alive && perks > 0 ? (perks % 2 ? "a" : "b") : undefined}
       role="img"
@@ -592,10 +559,8 @@ function FaceAvatar({
           edges are where nothing is drawn. Never in the pointer's way. */}
       <svg
         viewBox={`${-FACE_ROOM} ${-FACE_ROOM} ${100 + 2 * FACE_ROOM} ${100 + 2 * FACE_ROOM}`}
-        className={cn(
-          "pointer-events-none absolute max-w-none",
-          FACE_VARS[color]
-        )}
+        className="pointer-events-none absolute max-w-none"
+        data-pa-tone={color}
         // Inline, so a parent's rule for the icons in it (a card head's
         // `[&_svg]:size-3.5`) never resizes it.
         style={{
@@ -607,40 +572,14 @@ function FaceAvatar({
         overflow="visible"
         aria-hidden
       >
-        <defs>
-          {/* Where its eyes can be seen: its hole, or the face of the body
-              they are on — they never wander off it. */}
-          <clipPath id={clip} transform={`scale(${ART_SCALE})`}>
-            {eyes.window.map((n, i) => toReact(n, i))}
-          </clipPath>
-        </defs>
         <g className="pa-face-body">
           <g className="pa-face-perk">
-            <g className="pa-face-art" transform={`scale(${ART_SCALE})`}>
-              {art.body.map((n, i) => toReact(n, i))}
-            </g>
-            <g clipPath={`url(#${clip})`}>
-              <g transform={`scale(${move})`}>
-                <g transform={`translate(0 ${EYES_AT[displayed]})`}>
-                  <g
-                    className="pa-face-gaze"
-                    style={eyesTo ? { transform: eyesTo } : undefined}
-                  >
-                    <g transform={`scale(${ART_SCALE / move})`}>
-                      <g
-                        className="pa-face-lids"
-                        style={{
-                          color:
-                            eyes.on === "body" ? "var(--pa-c)" : "var(--pa-b)",
-                        }}
-                      >
-                        {toReact(eyeNodes(eyes, displayed), "eyes")}
-                      </g>
-                    </g>
-                  </g>
-                </g>
-              </g>
-            </g>
+            <g
+              ref={artRef}
+              className="pa-face-art"
+              transform={`scale(${ART_SCALE})`}
+              dangerouslySetInnerHTML={html}
+            />
           </g>
         </g>
         {displayed === "sleeping" && size >= Z_MIN_SIZE ? (
