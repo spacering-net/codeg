@@ -266,6 +266,10 @@ describe("AuxPanel", () => {
   it("lists every tab on the vertical rail, in the built-in order by default", () => {
     renderPanel()
     expect(railTabs()).toEqual(BUILT_IN)
+    expect(screen.getByRole("tab", { name: "Files" })).toHaveAttribute(
+      "data-slot",
+      "aux-panel-tab-button"
+    )
     expect(rail()).toHaveAttribute("role", "tablist")
     expect(rail()).toHaveAttribute("aria-orientation", "vertical")
     expect(rail()).toBeVisible()

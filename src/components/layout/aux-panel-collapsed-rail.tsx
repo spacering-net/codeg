@@ -10,7 +10,7 @@ import {
   resolveAuxTabView,
   useAuxTabLabel,
 } from "./aux-panel-tab-meta"
-import { TRIGGER_CLASS } from "./aux-panel-tab-rail"
+import { AuxPanelTabButton } from "./aux-panel-tab-rail"
 
 /**
  * The aux panel's tab rail while the panel itself is closed: the same w-12
@@ -64,22 +64,14 @@ export function AuxPanelCollapsedRail() {
         data-aux-collapsed-rail
         className="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto border-s border-border py-1.5 ws-chrome-border"
       >
-        {tabOrder.map((tab) => {
-          const Icon = TAB_ICONS[tab]
-          const label = tabLabel(tab)
-          return (
-            <button
-              key={tab}
-              type="button"
-              title={label}
-              aria-label={label}
-              onClick={() => openTab(tab)}
-              className={TRIGGER_CLASS}
-            >
-              <Icon className="size-4" />
-            </button>
-          )
-        })}
+        {tabOrder.map((tab) => (
+          <AuxPanelTabButton
+            key={tab}
+            icon={TAB_ICONS[tab]}
+            label={tabLabel(tab)}
+            onClick={() => openTab(tab)}
+          />
+        ))}
       </div>
     </aside>
   )

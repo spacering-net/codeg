@@ -111,7 +111,9 @@ describe("AuxPanelCollapsedRail", () => {
   it("opens the panel on the pressed tab", async () => {
     const user = userEvent.setup()
     renderFold()
-    await user.click(screen.getByRole("button", { name: "Files" }))
+    const files = screen.getByRole("button", { name: "Files" })
+    expect(files).toHaveAttribute("data-slot", "aux-panel-tab-button")
+    await user.click(files)
     expect(openTab).toHaveBeenCalledWith("file_tree")
   })
 
