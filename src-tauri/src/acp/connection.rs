@@ -1552,12 +1552,44 @@ const HANDSHAKE_STARTUP_RETRY_BUDGET: std::time::Duration = if cfg!(test) {
 /// `network::proxy`) — besides 1.x being refused before launch. The name is
 /// looked up in the rendered error and in `data`: ACP renders `data` into
 /// `Display`, but not every adapter puts the name there.
-fn session_establishment_is_retryable(e: &agent_client_protocol::Error) -> bool {
+fn agent_still_starting(e: &agent_client_protocol::Error) -> bool {
     const STARTING: &str = "ServiceUnavailableError";
     e.to_string().contains(STARTING)
         || e.data
             .as_ref()
             .is_some_and(|data| data.to_string().contains(STARTING))
+}
+
+/// Whether a session-establishing request the agent refused may succeed if
+/// asked again shortly: the agent is still starting ([`agent_still_starting`]),
+/// or the session is still held by the codex process that had it a moment ago
+/// ([`codex_session_has_active_writer`]).
+fn session_establishment_is_retryable(e: &agent_client_protocol::Error) -> bool {
+    agent_still_starting(e) || codex_session_has_active_writer(e)
+}
+
+/// Whether codex-acp refused to open the session because another codex process
+/// still holds it as its writer (`data.reason == "thread_active_writer"`, shown
+/// as "This Codex session is in use by another Codex client").
+///
+/// Most of the time that other process is codeg's own: the connection that ran
+/// the session a moment ago, which was disconnected but has not exited yet.
+/// Disconnecting only signals the agent's process tree, and the codex
+/// app-server that holds the session can take seconds to exit. A work task hits
+/// this every time: its run disconnects at the turn's end, and "open the
+/// conversation" resumes the same session right after. Once that process exits
+/// the session opens normally, so the request is retried within the startup
+/// budget. A session that is still held when the budget runs out — open in
+/// another Codex client, say — ends as `session_busy`
+/// ([`classify_session_load_error`]), whose banner offers to reload it.
+///
+/// Only the structured reason counts, not the English sentence.
+fn codex_session_has_active_writer(e: &agent_client_protocol::Error) -> bool {
+    e.data
+        .as_ref()
+        .and_then(|data| data.get("reason"))
+        .and_then(|reason| reason.as_str())
+        == Some("thread_active_writer")
 }
 
 /// Run a session-establishing RPC, retrying while the agent says it is still
@@ -1590,8 +1622,8 @@ where
                     && tokio::time::Instant::now() + delay <= deadline =>
             {
                 tracing::info!(
-                    "[ACP] agent still starting; retrying session request in {delay:?} \
-                     (attempt {attempt}): {e}"
+                    "[ACP] agent cannot serve the session yet; retrying session request \
+                     in {delay:?} (attempt {attempt}): {e}"
                 );
                 attempt += 1;
                 if handshake
@@ -10171,8 +10203,10 @@ async fn run_connection(
                         // back to session/new would bind the conversation to an
                         // empty session the moment the agent finishes starting,
                         // so the handshake fails instead and a reconnect opens
-                        // the original session.
-                        if session_establishment_is_retryable(&e) {
+                        // the original session. (A codex session still held by
+                        // another process once the budget is spent is not this
+                        // case: it is classified `session_busy` below.)
+                        if agent_still_starting(&e) {
                             tracing::warn!(
                                 "[ACP][{agent_type}] session/load: agent still starting after \
                                  the startup budget ({}); not falling back to session/new",
@@ -27626,6 +27660,77 @@ mod tests {
         assert!(!session_establishment_is_retryable(
             &agent_client_protocol::util::internal_error("session_busy")
         ));
+    }
+
+    /// codex-acp 2.10 as codeg sees it on the wire when the session's previous
+    /// codex process still holds it (`threadActiveWriterRequestError`).
+    fn codex_active_writer_error() -> agent_client_protocol::Error {
+        let mut e = agent_client_protocol::Error::invalid_request().data(serde_json::json!({
+            "reason": "thread_active_writer",
+            "threadId": "01a1d022-bcf4-78f0-ab1e-69397f00ab97",
+            "details": "thread 01a1d022-bcf4-78f0-ab1e-69397f00ab97 already has an active writer",
+        }));
+        e.message = "This Codex session is in use by another Codex client (the Codex app, \
+                     the CLI or an IDE extension). Close the session there or quit that \
+                     client, then try again."
+            .to_string();
+        e
+    }
+
+    #[test]
+    fn recognizes_a_codex_session_still_held_by_another_process() {
+        assert!(session_establishment_is_retryable(
+            &codex_active_writer_error()
+        ));
+        // Still held once the budget is spent, it is not an agent still
+        // starting (which fails the handshake) but a busy session, whose
+        // banner offers Reload.
+        assert!(!agent_still_starting(&codex_active_writer_error()));
+        assert_eq!(
+            classify_session_load_error(&codex_active_writer_error()),
+            Some("session_busy")
+        );
+        // Only the structured reason counts: the sentence alone, or another
+        // reason in the same shape, is not a session being let go of.
+        let mut sentence_only = agent_client_protocol::Error::invalid_request();
+        sentence_only.message = codex_active_writer_error().message;
+        assert!(!session_establishment_is_retryable(&sentence_only));
+        assert!(!session_establishment_is_retryable(
+            &agent_client_protocol::Error::invalid_request()
+                .data(serde_json::json!({ "reason": "archived" }))
+        ));
+        assert!(!session_establishment_is_retryable(
+            &agent_client_protocol::Error::invalid_request()
+                .data(serde_json::json!("thread_active_writer"))
+        ));
+    }
+
+    /// The work-task case: the run's connection was disconnected at its turn's
+    /// end and "open the conversation" resumes the same session while the old
+    /// codex process is still exiting. The resume is retried until the session
+    /// is free instead of ending the connection.
+    #[tokio::test(start_paused = true)]
+    async fn retries_a_codex_resume_until_the_previous_process_lets_go() {
+        let handshake = CancellationToken::new();
+        let deadline = tokio::time::Instant::now() + AGENT_STARTUP_RETRY_BUDGET;
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let result = retry_session_establishment(&handshake, deadline, || {
+            let calls = Arc::clone(&calls);
+            async move {
+                let attempt = calls.fetch_add(1, Ordering::SeqCst) + 1;
+                if attempt < 4 {
+                    Err(codex_active_writer_error())
+                } else {
+                    Ok(attempt)
+                }
+            }
+        })
+        .await
+        .expect("no cancellation");
+
+        assert_eq!(result.expect("fourth attempt succeeds"), 4);
+        assert_eq!(calls.load(Ordering::SeqCst), 4);
     }
 
     #[tokio::test(start_paused = true)]
