@@ -343,6 +343,10 @@ pub(crate) struct DispatchConn {
     pub(crate) round_since: Option<u64>,
 }
 
+/// A dispatched session passed between engines: its connection, its route
+/// and the failure its open round already told (`round_failures`).
+pub(crate) type HandedConn = (String, DispatchConn, Option<String>);
+
 /// How a dispatched conversation's round was seen to end.
 #[derive(Debug, Clone)]
 enum RoundEnd {
@@ -360,6 +364,20 @@ enum RoundEnd {
 }
 
 impl RoundEnd {
+    /// The end, given the failure the round told as its reply: one that
+    /// ended as if well (`end_turn`, or found over by the backstop or with
+    /// its connection gone) failed in those words; a cancel or another stop
+    /// stays what it was.
+    fn told(self, failure: Option<String>) -> RoundEnd {
+        match (failure, self) {
+            (Some(failure), RoundEnd::Stop(reason)) if reason == "end_turn" => RoundEnd::Told(failure),
+            (Some(failure), RoundEnd::Missed { .. } | RoundEnd::Gone { canceled: false }) => {
+                RoundEnd::Told(failure)
+            }
+            (_, end) => end,
+        }
+    }
+
     /// The dispatch's state after the round, and why it failed when it did.
     /// The automation engine's reading: a normal end did the work, an
     /// explicit cancel is a cancel, and anything else — a refusal, the token
@@ -1385,7 +1403,7 @@ impl PersonalAgentEngine {
             };
             if let Some(engine) = engine {
                 engine
-                    .adopt_dispatch_conns(vec![(conn_id.to_string(), conn)])
+                    .adopt_dispatch_conns(vec![(conn_id.to_string(), conn, None)])
                     .await;
                 return;
             }
@@ -1398,8 +1416,9 @@ impl PersonalAgentEngine {
     }
 
     /// Let go of the sessions of dispatches `ids` (their assistant is
-    /// deleted): what routes them, for the engine taking them over.
-    pub(super) async fn take_dispatch_conns(&self, ids: &[i32]) -> Vec<(String, DispatchConn)> {
+    /// deleted): what routes them, with the failure an open round already
+    /// told, for the engine taking them over.
+    pub(super) async fn take_dispatch_conns(&self, ids: &[i32]) -> Vec<HandedConn> {
         let mut st = self.state.lock().await;
         let keys: Vec<String> = st
             .dispatch_conns
@@ -1408,14 +1427,21 @@ impl PersonalAgentEngine {
             .map(|(k, _)| k.clone())
             .collect();
         keys.into_iter()
-            .filter_map(|k| st.dispatch_conns.remove(&k).map(|c| (k, c)))
+            .filter_map(|k| {
+                let conn = st.dispatch_conns.remove(&k)?;
+                let failure = st.round_failures.remove(&k);
+                Some((k, conn, failure))
+            })
             .collect()
     }
 
     /// Take over dispatched sessions another engine let go of.
-    pub(super) async fn adopt_dispatch_conns(&self, conns: Vec<(String, DispatchConn)>) {
+    pub(super) async fn adopt_dispatch_conns(&self, conns: Vec<HandedConn>) {
         let mut st = self.state.lock().await;
-        for (k, c) in conns {
+        for (k, c, failure) in conns {
+            if let Some(f) = failure {
+                st.round_failures.insert(k.clone(), f);
+            }
             st.dispatch_conns.insert(k, c);
         }
     }
@@ -1640,12 +1666,12 @@ impl PersonalAgentEngine {
         match &env.payload {
             AcpEvent::TurnComplete { stop_reason, .. } => {
                 if self.close_round(&env.connection_id, Some(env.seq)).await {
-                    let told = self.state.lock().await.round_failures.remove(&env.connection_id);
-                    let end = match told {
-                        Some(failure) if stop_reason == "end_turn" => RoundEnd::Told(failure),
-                        _ => RoundEnd::Stop(stop_reason.clone()),
-                    };
-                    self.settle_conversation_turn(id, &env.connection_id, end).await;
+                    self.settle_conversation_turn(
+                        id,
+                        &env.connection_id,
+                        RoundEnd::Stop(stop_reason.clone()),
+                    )
+                    .await;
                 }
             }
             AcpEvent::SessionFailure { record } if record.echoed_in_reply => {
@@ -1732,6 +1758,10 @@ impl PersonalAgentEngine {
 
     /// A dispatched conversation's round ended.
     async fn settle_conversation_turn(self: &std::sync::Arc<Self>, id: i32, conn_id: &str, end: RoundEnd) {
+        // Whichever way the end was seen — its completion, the backstop, the
+        // connection gone — a round that told a failure as its reply failed.
+        let told = self.state.lock().await.round_failures.remove(conn_id);
+        let end = end.told(told);
         // The send that claimed this round, read before anything can claim
         // the next one.
         let round_op = svc::get_dispatch(&self.db.conn, id)
@@ -3560,6 +3590,26 @@ mod tests {
         assert_eq!(
             RoundEnd::Told("Quota exhausted.".into()).outcome(),
             (DispatchState::Failed, Some("Quota exhausted.".into()))
+        );
+    }
+
+    /// A round that told a failure as its reply failed however its end was
+    /// seen to be a normal one — its completion, the backstop, the
+    /// connection gone; a cancel or another stop keeps its own reading.
+    #[test]
+    fn a_told_failure_fails_every_normal_end() {
+        let told = |end: RoundEnd| end.told(Some("Quota exhausted.".into())).outcome();
+        let failed = (DispatchState::Failed, Some("Quota exhausted.".to_string()));
+        assert_eq!(told(RoundEnd::Stop("end_turn".into())), failed);
+        assert_eq!(told(RoundEnd::Missed { abnormal: false }), failed);
+        assert_eq!(told(RoundEnd::Missed { abnormal: true }), failed);
+        assert_eq!(told(RoundEnd::Gone { canceled: false }), failed);
+        assert_eq!(told(RoundEnd::Gone { canceled: true }).0, DispatchState::Canceled);
+        assert_eq!(told(RoundEnd::Stop("cancelled".into())).0, DispatchState::Canceled);
+        assert!(told(RoundEnd::Stop("refusal".into())).1.unwrap().contains("refusal"));
+        assert_eq!(
+            RoundEnd::Stop("end_turn".into()).told(None).outcome(),
+            (DispatchState::Completed, None)
         );
     }
 }

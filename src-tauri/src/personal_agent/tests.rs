@@ -6776,6 +6776,52 @@ async fn a_round_the_agent_told_failed_as_its_reply_fails_the_dispatch() {
     assert_eq!(dispatch_state(&engine, fine).await.state, DispatchState::Completed);
 }
 
+/// A round's told failure goes with its route: the worker deleted with its
+/// work handed over between the failure and the round's end, the primary
+/// settles it failed in the agent's words.
+#[tokio::test]
+async fn a_told_failure_is_handed_over_with_its_round() {
+    super::options::test_support::install(AgentType::ClaudeCode);
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let worker = host.engine_for(Some(w)).await.unwrap();
+    let d = session_dispatch(&worker, DispatchState::Running, "c-handed").await;
+    worker.track_conn("c-handed", d).await;
+    worker.open_round("c-handed", d).await;
+    host.route(&crate::acp::types::EventEnvelope {
+        seq: 1,
+        connection_id: "c-handed".into(),
+        payload: AcpEvent::SessionFailure {
+            record: crate::acp::types::SessionFailureRecord {
+                id: "antigravity:s1:1".into(),
+                revision: 1,
+                category: "quota".into(),
+                severity: "error".into(),
+                title: "You have exhausted your quota.".into(),
+                details: None,
+                actions: Vec::new(),
+                resolved: false,
+                echoed_in_reply: true,
+            },
+        },
+    })
+    .await;
+    primary
+        .delete_bot(w, &BotDeleteOptions { hand_over: true, ..Default::default() }, host.existing_worker(w).await)
+        .await
+        .unwrap();
+    host.route(&crate::acp::types::EventEnvelope {
+        seq: 2,
+        connection_id: "c-handed".into(),
+        payload: turn_complete("end_turn"),
+    })
+    .await;
+    let row = dispatch_state(&primary, d).await;
+    assert_eq!(row.bot_id, Some(primary.bot().await));
+    assert_eq!(row.state, DispatchState::Failed);
+    assert_eq!(row.error.as_deref(), Some("You have exhausted your quota."));
+}
+
 // ── 1.7: the roster, its order and each assistant's live state ──────────────
 
 use crate::db::entities::personal_agent_notice::NoticeLevel;
