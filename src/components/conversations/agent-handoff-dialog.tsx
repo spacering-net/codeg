@@ -71,12 +71,25 @@ export function AgentHandoffDialog({
   const destinationChosen = useRef(initialAccountId !== undefined)
   const [retry, setRetry] = useState(0)
 
-  useEffect(() => {
-    let current = true
-    if (!open) return
+  const planKey = JSON.stringify([
+    open,
+    conversationId,
+    sourceAgentType,
+    target,
+    account,
+    retry,
+  ])
+  const [previousPlanKey, setPreviousPlanKey] = useState(planKey)
+  if (previousPlanKey !== planKey) {
+    setPreviousPlanKey(planKey)
     setLoading(true)
     setPlan(null)
     setError(null)
+  }
+
+  useEffect(() => {
+    let current = true
+    if (!open) return
     acpHandoffPlan(conversationId, target, account)
       .then((next) => {
         if (!current) return

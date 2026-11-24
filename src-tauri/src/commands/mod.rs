@@ -51,12 +51,30 @@ pub mod forge;
 pub mod handoff;
 /// The `ui-render` skill and the agents it is enabled for (Skill Packs > UI).
 pub mod generative_ui;
+/// The Harness browse commands (Discover) and the SpaceRing image proxy
+/// (both runtimes).
+pub mod harness;
+/// Installing MCP servers from Harness, and the record of what was installed
+/// (both runtimes).
+pub mod harness_mcp;
+/// Installing plugins from Harness, updating, switching and repairing them
+/// (both runtimes).
+pub mod harness_plugins;
+/// Installing skills from Harness through the skills engine (both
+/// runtimes).
+pub mod harness_skills;
+/// The update check of what was installed from Harness (both runtimes).
+pub mod harness_updates;
 /// Folder commands set to run on the desktop's own machine ("Run on this
 /// computer"), even from a remote-desktop window. Desktop-only by design.
 #[cfg(feature = "tauri-runtime")]
 pub mod local_command;
 pub mod logging;
 pub mod mcp;
+/// The MCP engine behind the Harness page: the per-agent inventory, the
+/// operations that change an agent's MCP servers, and the write lock every
+/// writer of those files takes.
+pub mod mcp_engine;
 pub mod mcp_service;
 pub mod model_provider;
 pub mod office_tools;
@@ -64,6 +82,8 @@ pub mod office_tools;
 /// runtimes).
 pub mod opencode_credentials;
 pub mod open_in;
+/// The personal agent's page (both runtimes).
+pub mod personal_agent;
 #[cfg(feature = "tauri-runtime")]
 pub mod notification;
 pub mod pet;
@@ -76,6 +96,10 @@ pub mod remote_proxy;
 pub mod remote_workspace;
 pub mod science;
 pub mod session_info;
+/// The desktop's SRN account (`srn_*`). Desktop-only by design: the account
+/// belongs to this app, and no Web route exposes it.
+#[cfg(feature = "tauri-runtime")]
+pub mod srn;
 pub mod subscription_quota;
 pub mod system_settings;
 pub mod terminal;
@@ -85,8 +109,12 @@ pub mod version_control;
 #[cfg(feature = "tauri-runtime")]
 pub mod windows;
 pub mod work_task;
+pub mod workspace_file_search;
 pub mod workspace_state;
 #[cfg(feature = "tauri-runtime")]
 pub mod workspace_windows;
+/// What a removed worktree does to the workspace — shared by the branch
+/// selector's delete and the to-do task engine's cleanup.
+pub mod worktree_convergence;
 pub mod agent_accounts;
 pub mod account_switch;

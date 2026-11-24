@@ -15,6 +15,7 @@ import type { WorkTask } from "@/lib/types"
 const scheduleMock = vi.fn().mockResolvedValue(undefined)
 
 vi.mock("@/lib/api", () => ({
+  workTaskGet: vi.fn().mockRejectedValue(new Error("not in this test")),
   workTaskSchedule: (...args: unknown[]) => scheduleMock(...args),
 }))
 

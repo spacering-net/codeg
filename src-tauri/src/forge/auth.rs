@@ -159,6 +159,47 @@ pub async fn resolve_forge_auth(
     })
 }
 
+/// Whether [`resolve_forge_auth`] would find an account for `host` without
+/// one pinned — read off the stored accounts only, without touching the
+/// keyring (a list of projects asks it of each).
+pub async fn has_account(
+    conn: &DatabaseConnection,
+    provider: ForgeProvider,
+    server_host: &str,
+) -> bool {
+    let host = server_host.trim().to_ascii_lowercase();
+    match load_accounts(conn).await {
+        Ok(settings) => {
+            unpinned_account(&serving_accounts(&settings.accounts, &host, provider)).is_some()
+        }
+        Err(_) => false,
+    }
+}
+
+/// The stored accounts, read once for many hosts ([`local_account_in`]):
+/// an error when they cannot be read — never taken for "none".
+pub async fn local_accounts(conn: &DatabaseConnection) -> Result<Vec<GitHubAccount>, ForgeError> {
+    Ok(load_accounts(conn).await?.accounts)
+}
+
+/// The forge an account stored for `server_host` serves it as, when one
+/// does — read off `accounts` alone: no network, no keyring. What codeg
+/// asks before spending a request on a project it only watches.
+pub fn local_account_in(server_host: &str, accounts: &[GitHubAccount]) -> Option<ForgeProvider> {
+    let host = server_host.trim().to_ascii_lowercase();
+    let provider = host_profile_in(&host, accounts).provider;
+    unpinned_account(&serving_accounts(accounts, &host, provider)).map(|_| provider)
+}
+
+/// [`local_account_in`] against the stored accounts: `Err` when they
+/// cannot be read, unlike [`has_account`].
+pub async fn local_account_for(
+    conn: &DatabaseConnection,
+    server_host: &str,
+) -> Result<Option<ForgeProvider>, ForgeError> {
+    Ok(local_account_in(server_host, &local_accounts(conn).await?))
+}
+
 /// The accounts on `host` that may be spent against `provider`, in stored
 /// order — what [`resolve_forge_auth`] chooses among.
 fn serving_accounts<'a>(
@@ -220,7 +261,7 @@ pub struct HostProfile {
     /// `(github, host, owner/repo)` triple that no GitHub API can answer, and
     /// the panel used to report that as an account or API failure. Whoever is
     /// about to spend a request on a host checks this first and says "only
-    /// GitHub, GitLab and Gitea are supported" instead.
+    /// GitHub, GitLab, Gitea and CNB are supported" instead.
     ///
     /// Deliberately OPTIMISTIC about a configured host, and the reason is that
     /// a provider-less account is ambiguous by construction. Two flows write
@@ -358,6 +399,13 @@ pub fn provider_from_host_name(server_host: &str) -> Option<ForgeProvider> {
     }
     if names("gitea") || names("forgejo") {
         return Some(ForgeProvider::Gitea);
+    }
+    // `cnb.cool` and its `api.cnb.cool` API host. The label is `cnb`, so a
+    // host like `cnb.example.com` would match too — there is no other
+    // platform that spells it that way, and the alternative is falling back
+    // to GitHub, which cannot answer a single CNB request.
+    if names("cnb") {
+        return Some(ForgeProvider::Cnb);
     }
     None
 }
@@ -562,7 +610,7 @@ async fn detect_forge(host: &str, origin: &str) -> Option<ForgeProvider> {
         return verdict;
     }
     // The public hosts are not worth a round trip; their names ARE the answer.
-    if host == "github.com" || host == "gitlab.com" {
+    if host == "github.com" || host == "gitlab.com" || host == "cnb.cool" {
         return None;
     }
     let client = super::http_client().ok()?;
@@ -702,11 +750,22 @@ fn api_base_for(provider: ForgeProvider, host: &str, server_url: &str) -> String
     if provider == ForgeProvider::GitHub && host == "github.com" {
         return "https://api.github.com".to_string();
     }
+    // CNB serves its OpenAPI from a dedicated host, not under the web origin:
+    // `cnb.cool` is the UI and `api.cnb.cool` is the API. Anything else is
+    // treated as an install that mounts the API under `/api`.
+    if provider == ForgeProvider::Cnb {
+        return if host == "cnb.cool" {
+            "https://api.cnb.cool".to_string()
+        } else {
+            format!("{}/api", server_origin(host, server_url))
+        };
+    }
     let origin = server_origin(host, server_url);
     match provider {
         ForgeProvider::GitHub => format!("{origin}/api/v3"),
         ForgeProvider::GitLab => format!("{origin}/api/v4"),
         ForgeProvider::Gitea => format!("{origin}/api/v1"),
+        ForgeProvider::Cnb => unreachable!("handled above"),
     }
 }
 

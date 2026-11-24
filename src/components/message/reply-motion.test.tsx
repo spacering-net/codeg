@@ -8,7 +8,15 @@ import { ReplyMotion, takesPendingPlace } from "./reply-motion"
  * jsdom lays nothing out: each element says where it is drawn (`data-x`,
  * `data-y`, from the page's corner), and `animate` records what was played.
  */
-type Played = { element: Element; keyframes: Keyframe[] }
+type PlayedAnimation = EventTarget & {
+  timeline: AnimationTimeline | null
+  cancel: ReturnType<typeof vi.fn>
+}
+type Played = {
+  element: Element
+  keyframes: Keyframe[]
+  animation: PlayedAnimation
+}
 let played: Played[] = []
 /** Draw a glide at its first frame: where it starts takes the element, and
  *  everything inside it, off its own place (`data-shift`). */
@@ -53,16 +61,25 @@ beforeEach(() => {
     this: Element,
     keyframes: Keyframe[] | PropertyIndexedKeyframes | null
   ) {
-    played.push({ element: this, keyframes: keyframes as Keyframe[] })
+    const animation: PlayedAnimation = Object.assign(new EventTarget(), {
+      timeline: {} as AnimationTimeline | null,
+      // Native cancellation queues its event. Tests can deliver it after a
+      // replacement has already started, rather than making it synchronous.
+      cancel: vi.fn(),
+    })
+    vi.spyOn(animation, "addEventListener")
+    vi.spyOn(animation, "removeEventListener")
+    played.push({
+      element: this,
+      keyframes: keyframes as Keyframe[],
+      animation,
+    })
     const from = /translate\((-?[\d.]+)px, (-?[\d.]+)px\)/.exec(
       String((keyframes as Keyframe[])[0]?.transform ?? "")
     )
     if (drawGlides && from)
       this.setAttribute("data-shift", `${from[1]},${from[2]}`)
-    return {
-      cancel: vi.fn(),
-      addEventListener: vi.fn(),
-    } as unknown as Animation
+    return animation as unknown as Animation
   }) as unknown as Element["animate"]
 })
 
@@ -106,7 +123,96 @@ const glidesOf = (key: string) =>
     .filter((p) => p.element.getAttribute("data-motion-key") === key)
     .map((p) => p.keyframes[0]!.transform)
 
+function expectReleased(animation: PlayedAnimation) {
+  const handler = vi
+    .mocked(animation.addEventListener)
+    .mock.calls.find(([type]) => type === "finish")?.[1]
+  expect(handler).toBeTypeOf("function")
+  expect(animation.removeEventListener).toHaveBeenCalledWith("finish", handler)
+  expect(animation.removeEventListener).toHaveBeenCalledWith("cancel", handler)
+  expect(animation.timeline).toBeNull()
+}
+
 describe("ReplyMotion", () => {
+  it.each(["finish", "cancel"])(
+    "releases a glide on %s and forgets it before the next shape",
+    (event) => {
+      const view = render(
+        <Reply shape="a">
+          <div data-motion-key="working" data-y="100" />
+        </Reply>
+      )
+      view.rerender(
+        <Reply shape="b">
+          <div data-motion-key="working" data-y="140" />
+        </Reply>
+      )
+      const animation = played[0]!.animation
+      expect(animation.timeline).not.toBeNull()
+      animation.dispatchEvent(new Event(event))
+      expectReleased(animation)
+      // Both terminal callbacks were removed, including the one that did
+      // not fire. A later event must not execute the release again.
+      animation.dispatchEvent(
+        new Event(event === "finish" ? "cancel" : "finish")
+      )
+      expect(animation.removeEventListener).toHaveBeenCalledTimes(2)
+      view.rerender(
+        <Reply shape="c">
+          <div data-motion-key="working" data-y="180" />
+        </Reply>
+      )
+      expect(animation.cancel).not.toHaveBeenCalled()
+      expect(played).toHaveLength(2)
+    }
+  )
+
+  it.each(["finish", "cancel"])("releases an entering fade on %s", (event) => {
+    const view = render(<Reply shape="a">{null}</Reply>)
+    view.rerender(
+      <Reply shape="b">
+        <div data-motion-key="new" data-y="40" />
+      </Reply>
+    )
+    expect(played[0]!.keyframes[0]!.opacity).toBe(0)
+    const animation = played[0]!.animation
+    animation.dispatchEvent(new Event(event))
+    expectReleased(animation)
+    animation.dispatchEvent(new Event(event === "finish" ? "cancel" : "finish"))
+    expect(animation.removeEventListener).toHaveBeenCalledTimes(2)
+  })
+
+  it("keeps the replacement when the previous glide's cancellation arrives late", () => {
+    const view = render(
+      <Reply shape="a">
+        <div data-motion-key="working" data-y="100" />
+      </Reply>
+    )
+    view.rerender(
+      <Reply shape="b">
+        <div data-motion-key="working" data-y="140" />
+      </Reply>
+    )
+    const previous = played[0]!.animation
+    view.rerender(
+      <Reply shape="c">
+        <div data-motion-key="working" data-y="180" />
+      </Reply>
+    )
+    const replacement = played[1]!.animation
+    expect(previous.cancel).toHaveBeenCalledOnce()
+    previous.dispatchEvent(new Event("cancel"))
+    expectReleased(previous)
+    expect(replacement.timeline).not.toBeNull()
+    view.rerender(
+      <Reply shape="d">
+        <div data-motion-key="working" data-y="220" />
+      </Reply>
+    )
+    // A stale terminal event must not delete the replacement's WeakMap entry.
+    expect(replacement.cancel).toHaveBeenCalledOnce()
+  })
+
   it("glides a thing from where it was to where the new shape puts it", () => {
     const view = render(
       <Reply shape="a">

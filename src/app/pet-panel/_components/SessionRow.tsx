@@ -71,6 +71,14 @@ export function SessionRow({ session }: SessionRowProps) {
                 getAgentLabel(parent.agentType)}
             </span>
           ) : null}
+          {session.ask && !session.pending ? (
+            <span className="truncate text-2xs text-amber-600 dark:text-amber-400">
+              {session.ask.kind === "plan"
+                ? t("panel.askPlan")
+                : t("panel.askQuestion")}
+              {session.ask.text ? ` · ${session.ask.text}` : ""}
+            </span>
+          ) : null}
         </span>
         <span className="flex shrink-0 items-center gap-1 text-2xs text-muted-foreground">
           <span

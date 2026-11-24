@@ -32,6 +32,7 @@ import {
 
 import {
   MessageListView,
+  type LiveRunsSource,
   type ResolvedMessageGroup,
 } from "@/components/message/message-list-view"
 import { useConversationDetail } from "@/hooks/use-conversation-detail"
@@ -45,6 +46,7 @@ import { ConnectionBlockingPrompts } from "@/components/chat/connection-blocking
 import { ActivityLiveProvider } from "@/components/message/activity/activity-live-context"
 import { EMPTY_TOOL_APPROVALS } from "@/lib/activity/approval"
 import { blockingPrompts } from "@/lib/blocking-prompts"
+import { getAgentLabel } from "@/lib/custom-agents"
 import type { AgentType } from "@/lib/types"
 
 export function useConnectionStateById(
@@ -292,6 +294,34 @@ export function LiveTranscriptView({
     [awaitingToolCallId, awaitingUser, approvals]
   )
 
+  // What the viewed connection has running beyond its turn. Listed, never
+  // stopped: this is a read-only view of another session.
+  const runsConnectionId = conn?.connectionId ?? null
+  const runsAsyncTasks = conn?.asyncTasks
+  const runsBackgroundTasks = conn?.backgroundTasks
+  const runsDelegatedChildren = conn?.delegatedChildren
+  const liveRuns = useMemo<LiveRunsSource | null>(
+    () =>
+      runsAsyncTasks && runsBackgroundTasks && runsDelegatedChildren
+        ? {
+            connectionId: runsConnectionId,
+            asyncTasks: runsAsyncTasks,
+            backgroundTasks: runsBackgroundTasks,
+            delegatedChildren: runsDelegatedChildren,
+            agentName: transcriptAgent
+              ? getAgentLabel(transcriptAgent)
+              : undefined,
+          }
+        : null,
+    [
+      runsConnectionId,
+      runsAsyncTasks,
+      runsBackgroundTasks,
+      runsDelegatedChildren,
+      transcriptAgent,
+    ]
+  )
+
   return (
     // Sized as a flex child: fills the host column's remaining height under
     // its header (h-full here would overflow by the header's height).
@@ -332,6 +362,7 @@ export function LiveTranscriptView({
             acpLoadError={acpLoadError}
             hideEmptyState={false}
             userTurnHeader={userTurnHeader}
+            liveRuns={liveRuns}
           />
         </ActivityLiveProvider>
       </div>

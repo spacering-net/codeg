@@ -273,3 +273,37 @@ describe("SidebarSectionHeader recent-section filter", () => {
     expect(queryByLabelText(/Show in Recent/)).toBeNull()
   })
 })
+
+describe("SidebarSectionHeader recent grouping toggle", () => {
+  it("toggles grouping mode when clicked", () => {
+    const onRecentGroupingModeChange = vi.fn()
+    const { getByLabelText, rerender } = renderWithIntl(
+      <SidebarSectionHeader
+        section="recent"
+        expanded
+        onToggle={onToggle}
+        recentGroupingMode="time"
+        onRecentGroupingModeChange={onRecentGroupingModeChange}
+      />
+    )
+
+    const btn = getByLabelText("Switch to flat list")
+    fireEvent.click(btn)
+    expect(onRecentGroupingModeChange).toHaveBeenCalledWith("flat")
+
+    rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarSectionHeader
+          section="recent"
+          expanded
+          onToggle={onToggle}
+          recentGroupingMode="flat"
+          onRecentGroupingModeChange={onRecentGroupingModeChange}
+        />
+      </NextIntlClientProvider>
+    )
+    const flatBtn = screen.getByLabelText("Switch to time grouping")
+    fireEvent.click(flatBtn)
+    expect(onRecentGroupingModeChange).toHaveBeenCalledWith("time")
+  })
+})

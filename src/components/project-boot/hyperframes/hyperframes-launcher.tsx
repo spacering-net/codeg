@@ -102,6 +102,7 @@ export function HyperframesLauncher() {
   }, [])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- probes the local toolchain; flips the checking flag before awaiting
     checkPackageManager(packageManager)
   }, [packageManager, checkPackageManager])
 
@@ -125,6 +126,7 @@ export function HyperframesLauncher() {
   }, [])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- probes installed skills; flips the detecting flag before awaiting
     detectSkills()
   }, [detectSkills])
 

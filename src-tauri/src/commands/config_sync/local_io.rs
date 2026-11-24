@@ -269,6 +269,9 @@ async fn apply_import(
     // half-merged state to the remote as if it were a state the user chose.
     // The upload the import DOES deserve happens on the next tick, once the
     // configuration is whole again.
+    // One config-sync operation at a time: an upload must not collect a
+    // snapshot while this is half-way through rewriting it.
+    let _operation = super::webdav_sync::sync_lock().lock().await;
     let _suppression = super::auto_sync::suppress_auto_sync();
     let rollback_path = save_rollback(conn, rollbacks).await;
     let applied = apply_snapshot_core(conn, emitter, snapshot).await?;

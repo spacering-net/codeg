@@ -145,17 +145,18 @@ pub async fn read_segment(
 pub async fn commit(
     conn: &DatabaseConnection,
     expected: &crate::models::DbConversationSummary,
+    selection: &crate::models::ConversationSelection,
     new: NewHandoff,
 ) -> Result<(), DbError> {
     use sea_orm::{ConnectionTrait, DbBackend, Statement, TransactionTrait};
     let txn = conn.begin().await?;
     let result = txn.execute(Statement::from_sql_and_values(DbBackend::Sqlite,
-        "UPDATE conversation SET agent_type = ?, agent_account_id = ?, external_id = ?, model = NULL, title_locked = 1, updated_at = ? \
+        "UPDATE conversation SET agent_type = ?, agent_account_id = ?, external_id = ?, selector_state = ?, model = NULL, title_locked = 1, updated_at = ? \
          WHERE id = ? AND agent_type = ? AND agent_account_id IS ? AND external_id IS ? \
          AND folder_id = ? AND origin_cwd IS ? AND deleted_at IS NULL AND parent_id IS NULL \
          AND NOT EXISTS (SELECT 1 FROM conversation child WHERE child.parent_id = conversation.id AND child.status = 'in_progress') \
          AND (? IS NULL OR EXISTS (SELECT 1 FROM agent_account WHERE id = ? AND removed = 0 AND agent_type = ?))",
-        vec![new.to_agent_type.as_wire().into_owned().into(), new.to_account_id.clone().into(), new.to_external_id.clone().into(), Utc::now().into(),
+        vec![new.to_agent_type.as_wire().into_owned().into(), new.to_account_id.clone().into(), new.to_external_id.clone().into(), selection.to_json().into(), Utc::now().into(),
             expected.id.into(), expected.agent_type.as_wire().into_owned().into(), expected.agent_account_id.clone().into(), expected.external_id.clone().into(),
             expected.folder_id.into(), expected.origin_cwd.clone().into(), new.to_account_id.clone().into(), new.to_account_id.clone().into(), new.to_agent_type.as_wire().into_owned().into()]
     )).await?;
@@ -182,6 +183,7 @@ pub async fn pending_context(
         return Ok(None);
     };
     if row.to_agent_type != current.agent_type.as_wire()
+        || row.to_account_id != current.agent_account_id
         || Some(row.to_external_id.as_str()) != current.external_id.as_deref()
     {
         return Ok(None);
@@ -426,13 +428,23 @@ mod tests {
         let source = super::super::conversation_service::get_by_id(&db.conn, id)
             .await
             .unwrap();
+        let selection = crate::models::ConversationSelection {
+            mode_id: Some("target-mode".into()),
+            ..Default::default()
+        };
         let mut change = new_handoff(id, AgentType::Codex, "target-session");
         change.history_json = Some("[]".into());
-        commit(&db.conn, &source, change).await.unwrap();
+        commit(&db.conn, &source, &selection, change).await.unwrap();
         let current = super::super::conversation_service::get_by_id(&db.conn, id)
             .await
             .unwrap();
         assert_eq!(current.agent_type, AgentType::Codex);
+        assert_eq!(
+            super::super::conversation_service::get_selector_state(&db.conn, id)
+                .await
+                .unwrap(),
+            Some(selection.clone())
+        );
         assert_eq!(current.title, source.title);
         assert!(current.title_locked);
         assert_eq!(current.agent_account_id, None);
@@ -440,6 +452,7 @@ mod tests {
         assert!(commit(
             &db.conn,
             &source,
+            &selection,
             new_handoff(id, AgentType::Grok, "other-session")
         )
         .await
@@ -450,6 +463,7 @@ mod tests {
         assert!(commit(
             &db.conn,
             &current,
+            &selection,
             new_handoff(id, AgentType::Grok, "other-session")
         )
         .await

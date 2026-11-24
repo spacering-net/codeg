@@ -5,12 +5,70 @@ import { Popover as PopoverPrimitive } from "radix-ui"
 
 import { useOverlayPortalContainer } from "@/components/ui/overlay-portal-container"
 import { useNestedLayerDismissGuard } from "@/hooks/use-nested-layer-dismiss-guard"
+import { detectEnvironment } from "@/lib/transport/detect"
 import { cn } from "@/lib/utils"
+import { isWindowDragPress } from "@/lib/window-drag-region"
+
+/** Closes the popover from its content: for the press Radix never hears
+ *  the end of (see `PopoverContent`). */
+const PopoverDismissContext = React.createContext<(() => void) | null>(null)
 
 function Popover({
+  open: openProp,
+  defaultOpen = false,
+  onOpenChange,
   ...props
 }: React.ComponentProps<typeof PopoverPrimitive.Root>) {
-  return <PopoverPrimitive.Root data-slot="popover" {...props} />
+  // Its open state kept here, controlled or not, so the content can close
+  // it as Radix itself would.
+  const [ownOpen, setOwnOpen] = React.useState(defaultOpen)
+  const controlled = openProp !== undefined
+  const open = controlled ? openProp : ownOpen
+  const setOpen = React.useCallback(
+    (next: boolean) => {
+      if (next === open) return
+      if (!controlled) setOwnOpen(next)
+      onOpenChange?.(next)
+    },
+    [open, controlled, onOpenChange]
+  )
+  const dismiss = React.useCallback(() => setOpen(false), [setOpen])
+  return (
+    <PopoverDismissContext value={dismiss}>
+      <PopoverPrimitive.Root
+        data-slot="popover"
+        open={open}
+        onOpenChange={setOpen}
+        {...props}
+      />
+    </PopoverDismissContext>
+  )
+}
+
+/**
+ * On the desktop, a press on a window-drag region outside the popover —
+ * the blank of a top band — closes it as a press anywhere else does. Radix
+ * closes a popover on the click that follows an outside press, and that
+ * click never comes there: Tauri stops the press's `mousedown` and starts
+ * the native window drag, which swallows the mouse-up. Not while a layer
+ * over it (a menu opened from it) has the press: Radix leaves it open then.
+ */
+function useDismissOnWindowDrag(
+  node: HTMLElement | null,
+  dismiss: (() => void) | null
+) {
+  React.useEffect(() => {
+    if (!node || !dismiss || detectEnvironment() !== "tauri") return
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.button !== 0) return
+      if (event.target instanceof Node && node.contains(event.target)) return
+      if (node.style.pointerEvents === "none") return
+      if (isWindowDragPress(event.composedPath())) dismiss()
+    }
+    document.addEventListener("pointerdown", onPointerDown, true)
+    return () =>
+      document.removeEventListener("pointerdown", onPointerDown, true)
+  }, [node, dismiss])
 }
 
 function PopoverTrigger({
@@ -29,8 +87,12 @@ function PopoverContent({
 }: React.ComponentProps<typeof PopoverPrimitive.Content>) {
   // Without this, closing a nested Select/DropdownMenu by clicking elsewhere in
   // the popover closes the popover too.
-  const { setNode, onPointerDownOutside: guardOutsidePress } =
-    useNestedLayerDismissGuard<HTMLDivElement>(ref)
+  const {
+    node,
+    setNode,
+    onPointerDownOutside: guardOutsidePress,
+  } = useNestedLayerDismissGuard<HTMLDivElement>(ref)
+  useDismissOnWindowDrag(node, React.useContext(PopoverDismissContext))
   // Inside a modal Dialog this is the dialog's own content element, so the
   // content lands inside the scroll lock's whitelisted subtree and a wheel over
   // a long list actually scrolls it; inside a Drawer it is the drawer's popup.

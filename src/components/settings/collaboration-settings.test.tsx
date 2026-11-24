@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react"
+import { fireEvent, render, screen } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import { describe, expect, it, vi } from "vitest"
 
@@ -24,6 +24,11 @@ vi.mock("@/lib/api", () => ({
     work_tasks_enabled: false,
   })),
   setChatAuthoringSettings: vi.fn(async (v: unknown) => v),
+}))
+
+const openPage = vi.hoisted(() => vi.fn(async () => {}))
+vi.mock("@/lib/personal-agent-open", () => ({
+  openPersonalAgentPage: openPage,
 }))
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
@@ -75,5 +80,20 @@ describe("CollaborationSettings", () => {
     expect(screen.getByLabelText("Get session info")).toBeInTheDocument()
     expect(screen.getByLabelText("Create automations")).toBeInTheDocument()
     expect(screen.getByLabelText("Create to-do tasks")).toBeInTheDocument()
+  })
+
+  it("points to the sidebar's assistants, where the assistants moved", async () => {
+    renderSettings()
+    await screen.findByRole("heading", { name: "Multi-Agent Collaboration" })
+    // The tab and the personal agent's working directory are gone from here.
+    expect(screen.queryByRole("tab", { name: "Assistants" })).toBeNull()
+    expect(screen.queryByLabelText("Working directory")).toBeNull()
+    expect(
+      screen.getByText(
+        'Assistants: in the sidebar\'s "Personal assistants" group'
+      )
+    ).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Open" }))
+    expect(openPage).toHaveBeenCalledWith("assistants")
   })
 })

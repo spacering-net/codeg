@@ -2,14 +2,42 @@
 
 import { useEffect, type ReactNode } from "react"
 import { useTranslations } from "next-intl"
-import { Check, ChevronDown, Loader2 } from "lucide-react"
+import { toast } from "sonner"
+import {
+  Check,
+  ChevronDown,
+  ListChecks,
+  Loader2,
+  MessageCircleQuestionMark,
+  MessagesSquare,
+  MoreHorizontal,
+  PanelRightOpen,
+  Unlink,
+} from "lucide-react"
 
+import { AgentIcon } from "@/components/agent-icon"
+import { ConversationStatusDot } from "@/components/conversations/conversation-status-dot"
+import { useDetachAskConversation } from "@/components/conversations/use-detach-ask-conversation"
 import { MessageNavList } from "@/components/message/conversation-message-nav"
 import { getPriorityKey, getStatusKey } from "@/components/message/plan-card"
 import { SessionViewerHost } from "@/components/message/session-viewer-host"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { useAskConversations } from "@/hooks/use-ask-conversations"
+import { formatConversationTitle } from "@/lib/conversation-title"
 import { useSessionDetailsSectionOpen } from "@/lib/session-details-prefs"
-import type { PlanEntryInfo } from "@/lib/types"
+import type {
+  ConversationStatus,
+  DbConversationSummary,
+  PlanEntryInfo,
+} from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
+import { useAskConversationDrawerStore } from "@/stores/ask-conversation-drawer-store"
 import {
   demandTranscriptNav,
   useTranscriptInsightsPart,
@@ -19,6 +47,9 @@ interface SessionDetailsInsightsProps {
   /** The active tab's runtime conversation id (`runtimeConversationId ??
    *  conversationId`) — the key its transcript publishes under. */
   conversationId: number | null
+  /** The active tab's persisted conversation id — what its ask conversations
+   *  are linked to. */
+  dbConversationId: number | null
   /** The panel and this tab are on screen. The navigator's rows are only
    *  computed while they are. */
   active: boolean
@@ -26,7 +57,9 @@ interface SessionDetailsInsightsProps {
 
 /**
  * The part of the Session Details side panel that follows the conversation's
- * transcript: the agent's plan and the message navigator, whose messages carry
+ * transcript, each part a card like the summary above it: the agent's plan,
+ * the ask conversations opened from it ("ask about this selection") and the
+ * message navigator, whose messages carry
  * the sub-agents they started and the files they changed — what the
  * conversation page used to stack as chips over the messages' top inline-start
  * corner. The transcript derives them and publishes them to the insights store
@@ -45,27 +78,34 @@ interface SessionDetailsInsightsProps {
  */
 export function SessionDetailsInsights({
   conversationId,
+  dbConversationId,
   active,
 }: SessionDetailsInsightsProps) {
   return (
     // The sections are the tab's own children, spaced like the rest of it.
     <SessionViewerHost>
       <PlanSection conversationId={conversationId} />
+      <AskConversationsSection parentConversationId={dbConversationId} />
       <MessageNavSection conversationId={conversationId} active={active} />
     </SessionViewerHost>
   )
 }
 
+/** The panel's cards: the summary card's tint, hairline and corners. */
+const CARD = "min-w-0 rounded-xl border border-border/70 bg-muted/40"
+
 /**
- * A section of the panel: a header row — the chevron that folds it, then its
- * title and a summary of what it holds — then its body. The chevron takes the
- * rows' left column, over their step icons and message numbers, so the title
- * lines up with the text of the rows under it. The body renders in either
- * state: what a section still shows while folded is its own business. A
- * `sticky` header stays at the top of the panel while the section scrolls
- * under it.
+ * A section of the panel, as a card: a header row — the section's icon and
+ * title, then at its end a summary of what it holds and the chevron that
+ * folds it — then its body. The icon takes the rows' left column, over their
+ * step icons and message numbers, so the title lines up with the text of the
+ * rows under it. The body renders in either state: what a section still shows
+ * while folded is its own business. A `sticky` header stays at the top of the
+ * panel while the section scrolls under it, painted the card's colour over
+ * the page's so the rows going under it don't show through.
  */
 function InsightsSection({
+  icon,
   title,
   summary,
   open,
@@ -73,6 +113,7 @@ function InsightsSection({
   sticky = false,
   children,
 }: {
+  icon: ReactNode
   title: string
   summary: ReactNode
   open: boolean
@@ -81,36 +122,51 @@ function InsightsSection({
   children: ReactNode
 }) {
   return (
-    <section className="min-w-0">
+    <section className={cn(CARD, "px-3 pt-1", open ? "pb-2" : "pb-1")}>
       <h3
         className={cn(
           "min-w-0",
-          // Edge to edge over the panel's padding, so rows scrolling under it
-          // never show at its sides.
-          sticky && "ws-surface sticky top-0 z-10 -mx-3 px-3"
+          // Across the card's padding, so rows scrolling under it never show
+          // at its sides; rounded with the card's inner corners.
+          sticky &&
+            "ws-surface sticky top-0 z-10 -mx-3 rounded-t-[calc(var(--radius-lg)-1px)]"
         )}
       >
-        <button
-          type="button"
-          aria-expanded={open}
-          onClick={() => onOpenChange(!open)}
-          className="group/section flex h-7 w-full min-w-0 items-center gap-2 rounded-md text-start outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        <span
+          className={cn(
+            "block",
+            sticky && "rounded-[inherit] bg-muted/40 px-3"
+          )}
         >
-          <span aria-hidden="true" className="flex w-7 shrink-0 justify-center">
+          <button
+            type="button"
+            aria-expanded={open}
+            onClick={() => onOpenChange(!open)}
+            className="group/section flex h-9 w-full min-w-0 items-center gap-2 rounded-md text-start outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          >
+            <span
+              aria-hidden="true"
+              className="flex w-7 shrink-0 justify-center text-foreground [&>svg]:size-4"
+            >
+              {icon}
+            </span>
+            <span className="min-w-0 flex-1 truncate text-[0.8125rem] font-semibold text-foreground">
+              {title}
+            </span>
+            <span className="shrink-0 text-2xs text-muted-foreground tabular-nums transition-colors group-hover/section:text-foreground">
+              {summary}
+            </span>
             <ChevronDown
+              aria-hidden="true"
               className={cn(
-                "size-3.5 text-muted-foreground transition-transform group-hover/section:text-foreground",
+                "me-0.5 size-3.5 shrink-0 text-muted-foreground transition-transform group-hover/section:text-foreground",
+                // Folded it points along the line, at the end it sits at;
+                // open, down at what it shows.
                 !open && "-rotate-90 rtl:rotate-90"
               )}
             />
-          </span>
-          <span className="min-w-0 truncate text-xs font-semibold text-foreground">
-            {title}
-          </span>
-          <span className="shrink-0 text-2xs text-muted-foreground tabular-nums">
-            {summary}
-          </span>
-        </button>
+          </button>
+        </span>
       </h3>
       {children}
     </section>
@@ -240,6 +296,7 @@ function PlanSection({ conversationId }: { conversationId: number | null }) {
     : plan.entries.filter((entry) => entry.status === "in_progress")
   return (
     <InsightsSection
+      icon={<ListChecks />}
       title={t("title")}
       summary={`${completed}/${plan.entries.length}`}
       open={open}
@@ -248,6 +305,122 @@ function PlanSection({ conversationId }: { conversationId: number | null }) {
       <PlanProgress entries={plan.entries} />
       {steps.length > 0 && (
         <PlanSteps entries={steps} streaming={plan.streaming} />
+      )}
+    </InsightsSection>
+  )
+}
+
+/**
+ * The ask conversations opened from this conversation's transcript ("ask about
+ * this selection"), newest first — the same rows the sidebar nests under this
+ * conversation. A row opens its conversation in the ask drawer to go on with
+ * it, and its menu turns it into an ordinary conversation, which moves it to
+ * the root of the sidebar. Renders nothing while there are none.
+ */
+function AskConversationsSection({
+  parentConversationId,
+}: {
+  parentConversationId: number | null
+}) {
+  const t = useTranslations("Folder.askConversations")
+  const asks = useAskConversations(parentConversationId)
+  const [open, setOpen] = useSessionDetailsSectionOpen("askConversations")
+  const openExisting = useAskConversationDrawerStore((s) => s.openExisting)
+  const openId = useAskConversationDrawerStore(
+    (s) => s.target?.conversationId ?? null
+  )
+  const detach = useDetachAskConversation()
+  if (parentConversationId == null || asks == null || asks.length === 0) {
+    return null
+  }
+  const handleOpen = (ask: DbConversationSummary) => {
+    const opened = openExisting({
+      parentConversationId,
+      conversationId: ask.id,
+      agentType: ask.agent_type,
+      folderId: ask.folder_id,
+      // The folder list resolves the cwd by id; this is only its fallback.
+      workingDir:
+        useAppWorkspaceStore
+          .getState()
+          .allFolders.find((folder) => folder.id === ask.folder_id)?.path ??
+        null,
+    })
+    if (!opened) toast.warning(t("pendingFirstMessage"))
+  }
+  return (
+    <InsightsSection
+      icon={<MessageCircleQuestionMark />}
+      title={t("title")}
+      summary={t("total", { count: asks.length })}
+      open={open}
+      onOpenChange={setOpen}
+    >
+      {open && (
+        <ul className="space-y-px">
+          {asks.map((ask) => {
+            const title = formatConversationTitle(ask.title) || t("untitled")
+            const status = ask.status as ConversationStatus
+            return (
+              <li
+                key={ask.id}
+                className={cn(
+                  "group/ask -mx-1.5 flex h-7 min-w-0 items-center rounded-md transition-colors hover:bg-foreground/[0.06]",
+                  openId === ask.id && "bg-foreground/[0.06]"
+                )}
+              >
+                <button
+                  type="button"
+                  title={title}
+                  onClick={() => handleOpen(ask)}
+                  className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-md ps-1.5 text-start outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                >
+                  <span
+                    aria-hidden="true"
+                    className="flex w-7 shrink-0 justify-center"
+                  >
+                    <ConversationStatusDot
+                      status={status}
+                      size="sm"
+                      className={cn(
+                        status === "in_progress" && "motion-safe:animate-pulse"
+                      )}
+                    />
+                  </span>
+                  <AgentIcon
+                    agentType={ask.agent_type}
+                    className="size-3.5 shrink-0 text-muted-foreground"
+                  />
+                  <span className="min-w-0 flex-1 truncate text-[0.8125rem] text-foreground/85">
+                    {title}
+                  </span>
+                </button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      aria-label={t("actions")}
+                      title={t("actions")}
+                      className="me-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity outline-none group-hover/ask:opacity-100 hover:text-foreground focus-visible:opacity-100 data-[state=open]:opacity-100"
+                    >
+                      <MoreHorizontal className="size-3.5" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onSelect={() => handleOpen(ask)}>
+                      <PanelRightOpen />
+                      {t("open")}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => detach(ask.id)}>
+                      <Unlink />
+                      {t("convertToRegular")}
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </li>
+            )
+          })}
+        </ul>
       )}
     </InsightsSection>
   )
@@ -275,8 +448,9 @@ function MessageNavSection({
   if (nav == null || actions == null || count === 0) return null
   return (
     <InsightsSection
+      icon={<MessagesSquare />}
       title={t("title")}
-      summary={count}
+      summary={t("total", { count })}
       open={open}
       onOpenChange={setOpen}
       sticky
@@ -290,6 +464,7 @@ function MessageNavSection({
           onSelect={actions.selectNavEntry}
           revealingTurnId={nav.revealingTurnId}
           currentTurnId={nav.currentTurnId}
+          running={nav.running}
           earlier={nav.earlier}
           onRetryEarlier={actions.retryEarlierNav}
         />

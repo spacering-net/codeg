@@ -271,6 +271,12 @@ pub fn isolation_env_with_base(
     }
     if agent == AgentType::Cline {
         env.insert(
+            "CLINE_MCP_SETTINGS_PATH".into(),
+            home.join("settings/cline_mcp_settings.json")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        env.insert(
             "CLINE_PROVIDER_SETTINGS_PATH".into(),
             home.join("settings/providers.json")
                 .to_string_lossy()

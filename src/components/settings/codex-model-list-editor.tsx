@@ -364,7 +364,9 @@ export function CodexModelListEditor({
       })
       if (view.format === "openai_list") setPicker({ mode: "manage", view })
     }
-  }, [provider, rawOnChange])
+    // `setPicker` is a stable state setter; listed only because the compiler
+    // infers it as a dependency here.
+  }, [provider, rawOnChange, setPicker])
 
   useEffect(() => {
     if (autoFetch.current && provider.request && !provider.fetching) {
@@ -799,6 +801,7 @@ export function CodexModelListEditor({
         />
       )}
 
+      {/* eslint-disable-next-line react-hooks/refs -- `valueRef` is only read inside the onConfirm handlers, never during render */}
       {pickerProps && (
         <CodexCatalogPickerDialog
           open={!!picker}

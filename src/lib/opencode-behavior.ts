@@ -9,10 +9,10 @@
  *   "default_agent": "build"              // primary agent a new session opens in
  *   "update": "auto" | "notify" | "disable"  // the TUI's self-updater
  *   "snapshots": true                     // snapshots behind undo/revert
- *   "compaction": { "auto": true, "keep": { "tokens": 15000 }, "buffer": … }
+ *   "compaction": { "auto": true, "background": true, "keep": { "tokens": 15000 },
+ *                   "buffer": 20000 | "20%" }
  *   "tool_output": { "max_lines": 2000, "max_bytes": 51200 }
- *   "experimental": { "todo": false, "background_compaction": false,
- *                     "subagent_depth": 1 }
+ *   "experimental": { "todo": false, "subagent_depth": 1 }
  *
  * OpenCode 2 still loads 1.x's spellings of some of these
  * (`core/src/config/normalize.ts`): `autoupdate` → `update`, `snapshot` →
@@ -22,7 +22,9 @@
  * 1.x spelling so the file says one thing. Others it drops with a warning —
  * a top-level `subagent_depth`, `compaction.tail_turns`, `compaction.prune` —
  * and `share` it accepts but no longer acts on; the view lists the ones a
- * document still carries.
+ * document still carries. So does 2.3.1's `experimental.background_compaction`,
+ * which `compaction.background` replaced (on by default) and which OpenCode
+ * now drops without a word.
  *
  * Every write goes through `patchJsoncText`, so the user's comments and
  * formatting survive. A control set back to its unset state DELETES the key
@@ -52,8 +54,14 @@ export type OpenCodeNumberField =
 export type OpenCodeToggleField =
   | "snapshots"
   | "compaction.auto"
+  | "compaction.background"
   | "experimental.todo"
-  | "experimental.background_compaction"
+
+/**
+ * A numeric field's value: an integer, or for a field that takes one
+ * (`percent`), a share of the model's window such as "20%".
+ */
+export type OpenCodeNumberValue = number | string
 
 export interface OpenCodeNumberFieldMeta {
   field: OpenCodeNumberField
@@ -61,15 +69,26 @@ export interface OpenCodeNumberFieldMeta {
   placeholder: string
   /** Schema floor: `PositiveInt` fields reject 0, `NonNegativeInt` accept it. */
   min: 0 | 1
+  /** Also takes a share of the window (`OPENCODE_WINDOW_SHARE`). */
+  percent?: true
 }
+
+/**
+ * OpenCode 2.2.5's `Config.Compaction.Percent`
+ * (`packages/schema/src/config/compaction.ts`): "1%" up to, but not
+ * including, "100%", decimals allowed ("12.5%"). OpenCode 2.2.0 accepted only
+ * the integer and drops a share with a warning, keeping the rest of the file.
+ */
+const OPENCODE_WINDOW_SHARE = /^([1-9]\d?(\.\d+)?)%$/
 
 export const OPENCODE_NUMBER_FIELDS: readonly OpenCodeNumberFieldMeta[] = [
   // NonNegativeInt; 0 means "sub-agents may not launch anything". Default 1.
   { field: "experimental.subagent_depth", placeholder: "1", min: 0 },
   // NonNegativeInt; default 15000 (`session/compaction.ts`).
   { field: "compaction.keep.tokens", placeholder: "15000", min: 0 },
-  // NonNegativeInt; unset reserves 15% of the window, at least 16k.
-  { field: "compaction.buffer", placeholder: "—", min: 0 },
+  // Percent or NonNegativeInt; unset keeps 15% of the window free, at least
+  // 16000 tokens (`RESERVE_SHARE`, `RESERVE_MIN` in `session/compaction.ts`).
+  { field: "compaction.buffer", placeholder: "—", min: 0, percent: true },
   // Both PositiveInt, with the defaults documented in the schema.
   { field: "tool_output.max_lines", placeholder: "2000", min: 1 },
   { field: "tool_output.max_bytes", placeholder: "51200", min: 1 },
@@ -81,8 +100,10 @@ export const OPENCODE_TOGGLE_DEFAULTS: Readonly<
 > = {
   snapshots: true,
   "compaction.auto": true,
+  // `compaction.background` (2.3.1): "default: true". An unused summary still
+  // costs tokens, so this is the switch that saves them.
+  "compaction.background": true,
   "experimental.todo": false,
-  "experimental.background_compaction": false,
 }
 
 const PATHS: Record<OpenCodeNumberField | OpenCodeToggleField, string[]> = {
@@ -93,11 +114,8 @@ const PATHS: Record<OpenCodeNumberField | OpenCodeToggleField, string[]> = {
   "tool_output.max_bytes": ["tool_output", "max_bytes"],
   snapshots: ["snapshots"],
   "compaction.auto": ["compaction", "auto"],
+  "compaction.background": ["compaction", "background"],
   "experimental.todo": ["experimental", "todo"],
-  "experimental.background_compaction": [
-    "experimental",
-    "background_compaction",
-  ],
 }
 
 /** The 1.x spelling OpenCode 2 still reads for a field, removed on write. */
@@ -109,21 +127,24 @@ const LEGACY_PATHS: Partial<
   "compaction.buffer": ["compaction", "reserved"],
 }
 
-/** 1.x keys a field's write also removes although OpenCode 2 ignores them:
- *  setting the 2.x key is the user saying what they want instead. */
+/** Retired keys a field's write also removes although OpenCode ignores them:
+ *  setting the current key is the user saying what they want instead. */
 const DROPPED_ON_WRITE: Partial<
   Record<OpenCodeNumberField | OpenCodeToggleField, string[][]>
 > = {
   "experimental.subagent_depth": [["subagent_depth"]],
+  "compaction.background": [["experimental", "background_compaction"]],
 }
 
-/** 1.x keys OpenCode 2 drops (or, for `share`, accepts and ignores). */
+/** Retired keys OpenCode drops (or, for `share`, accepts and ignores): 1.x's,
+ *  and 2.3.1's `experimental.background_compaction`. */
 const IGNORED_LEGACY_KEYS: string[][] = [
   ["subagent_depth"],
   ["compaction", "tail_turns"],
   ["compaction", "prune"],
   ["share"],
   ["autoshare"],
+  ["experimental", "background_compaction"],
 ]
 
 export interface OpenCodeBehaviorView {
@@ -131,8 +152,9 @@ export interface OpenCodeBehaviorView {
   defaultAgent: string
   update: OpenCodeUpdateMode | null
   toggles: Record<OpenCodeToggleField, boolean | null>
-  numbers: Record<OpenCodeNumberField, number | null>
-  /** 1.x keys the document carries that OpenCode 2 does not act on. */
+  /** A string only for a `percent` field, and only one OpenCode accepts. */
+  numbers: Record<OpenCodeNumberField, OpenCodeNumberValue | null>
+  /** Retired keys the document carries that OpenCode does not act on. */
   ignoredLegacyKeys: string[]
   /** True when the document could not be parsed, so nothing here is authoritative. */
   invalid: boolean
@@ -210,7 +232,7 @@ export function readOpenCodeBehavior(configText: string): OpenCodeBehaviorView {
   ) as Record<OpenCodeToggleField, boolean | null>
   const numbers = Object.fromEntries(
     OPENCODE_NUMBER_FIELDS.map((meta) => [meta.field, null])
-  ) as Record<OpenCodeNumberField, number | null>
+  ) as Record<OpenCodeNumberField, OpenCodeNumberValue | null>
 
   if (!config) {
     return {
@@ -236,6 +258,8 @@ export function readOpenCodeBehavior(configText: string): OpenCodeBehaviorView {
   for (const meta of OPENCODE_NUMBER_FIELDS) {
     const raw = read(meta.field)
     if (typeof raw === "number" && Number.isFinite(raw)) {
+      numbers[meta.field] = raw
+    } else if (isWindowShare(meta, raw)) {
       numbers[meta.field] = raw
     }
   }
@@ -307,20 +331,63 @@ export function setOpenCodeToggle(
   })
 }
 
+function numberFieldMeta(
+  field: OpenCodeNumberField
+): OpenCodeNumberFieldMeta | undefined {
+  return OPENCODE_NUMBER_FIELDS.find((item) => item.field === field)
+}
+
+function isWindowShare(
+  meta: OpenCodeNumberFieldMeta | undefined,
+  value: unknown
+): value is string {
+  return (
+    meta?.percent === true &&
+    typeof value === "string" &&
+    OPENCODE_WINDOW_SHARE.test(value)
+  )
+}
+
+/**
+ * What a numeric field's input text says: `null` when it is empty (unset
+ * the key), the value it spells, or `undefined` while it spells none yet ("1e",
+ * "-", "12.5" on the way to "12.5%"), which should be neither written nor
+ * shown as an error. Whether the value is in range is `setOpenCodeNumber`'s
+ * call.
+ */
+export function parseOpenCodeNumberInput(
+  field: OpenCodeNumberField,
+  raw: string
+): OpenCodeNumberValue | null | undefined {
+  const trimmed = raw.trim()
+  if (trimmed === "") return null
+  if (trimmed.endsWith("%")) {
+    return isWindowShare(numberFieldMeta(field), trimmed) ? trimmed : undefined
+  }
+  const parsed = Number(trimmed)
+  return Number.isInteger(parsed) ? parsed : undefined
+}
+
 /**
  * Numeric fields. `null` (an emptied input) unsets the key; a value below the
- * field's schema floor, or one that is not a finite integer, is rejected and
- * leaves the document untouched — writing it would produce config OpenCode
+ * field's schema floor, one that is not a finite integer, or a share of the
+ * window for a field that takes none or in a form OpenCode rejects, leaves
+ * the document untouched — writing it would produce config OpenCode
  * rejects.
  */
 export function setOpenCodeNumber(
   configText: string,
   field: OpenCodeNumberField,
-  value: number | null
+  value: OpenCodeNumberValue | null
 ): string {
   if (value !== null) {
-    const meta = OPENCODE_NUMBER_FIELDS.find((item) => item.field === field)
-    if (!meta || !Number.isInteger(value) || value < meta.min) return configText
+    const meta = numberFieldMeta(field)
+    if (!meta) return configText
+    if (typeof value === "string") {
+      if (!isWindowShare(meta, value)) return configText
+    } else if (!Number.isInteger(value) || value < meta.min) {
+      return configText
+    }
   }
   return patch(configText, (config) => {
     clearField(config, field)
@@ -328,7 +395,7 @@ export function setOpenCodeNumber(
   })
 }
 
-/** Remove the 1.x keys OpenCode 2 does not act on. */
+/** Remove the retired keys OpenCode does not act on. */
 export function removeIgnoredLegacyKeys(configText: string): string {
   return patch(configText, (config) => {
     for (const path of IGNORED_LEGACY_KEYS) deletePath(config, path)

@@ -919,12 +919,29 @@ fn context_continuation_text(content: &[ContentBlock]) -> Option<&str> {
 }
 
 /// The framing ahead of the summary in a continuation message: its opening
-/// sentence, then the `Summary:` line the CLI puts the summary under.
+/// sentence, any `<system-reminder>` blocks, then the `Summary:` line the CLI
+/// puts the summary under.
+///
+/// Claude Code 2.1.312 started putting a reminder for the model between the
+/// opening sentence and `Summary:` (every summary written by 2.1.312, 2.1.316
+/// and 2.1.318 on the machine this was measured on has one):
+///
+/// ```text
+/// This session is being continued from a previous conversation that ran out of context. …
+///
+/// <system-reminder>
+/// <tools-used-before-summary>Bash, Read, …</tools-used-before-summary>
+/// </system-reminder>
+/// Summary:
+/// ```
+///
+/// Only closed reminder blocks are skipped. An unclosed one, or any other text
+/// there, stays in the summary, as an unknown framing always has.
 fn continuation_preamble_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(&format!(
-            r"\A\s*{}[^\n]*\n(?:[ \t]*\r?\n)*(?:[ \t]*Summary:[ \t]*\r?\n)?",
+            r"\A\s*{}[^\n]*\n(?:[ \t]*\r?\n)*(?:[ \t]*<system-reminder>[\s\S]*?</system-reminder>[ \t]*\r?\n(?:[ \t]*\r?\n)*)*(?:[ \t]*Summary:[ \t]*\r?\n)?",
             regex::escape(CONTEXT_CONTINUATION_PREFIX)
         ))
         .unwrap()
@@ -933,12 +950,17 @@ fn continuation_preamble_regex() -> &'static Regex {
 
 /// Whether `line` is one of the instructions the CLI appends to a continuation
 /// message after the summary: where the full pre-compaction transcript lives,
-/// and to pick the work back up without asking.
+/// to pick the work back up without asking, and (Claude Code 2.1.293 and
+/// later, after every summary) that the messages kept after the summary are
+/// newer than it.
 fn is_continuation_trailer(line: &str) -> bool {
     let line = line.trim_start();
     line.starts_with("If you need specific details from before compaction")
         || line.starts_with("Continue the conversation from where it left off")
         || line.starts_with("Please continue the conversation from where")
+        || line.starts_with(
+            "The messages after this summary are the most recent messages from before compaction",
+        )
 }
 
 /// The summary a continuation message carries, without the framing the CLI
@@ -972,7 +994,7 @@ fn continuation_summary_text(message: &str) -> String {
 
 /// Whether a reconstructed slash-command display line is a `/compact`
 /// invocation — bare, or carrying the focus instructions it accepts.
-fn is_compact_command(display: &str) -> bool {
+pub(crate) fn is_compact_command(display: &str) -> bool {
     display == "/compact" || display.starts_with("/compact ")
 }
 
@@ -1679,6 +1701,12 @@ pub(crate) fn resolve_claude_config_dir_from(
 }
 
 impl AgentParser for ClaudeParser {
+    /// Claude Code's own `<session>.jsonl`, read raw.
+    fn own_record_contains(&self, conversation_id: &str, needle: &str) -> Option<bool> {
+        let path = find_session_file_in(&self.base_dir, conversation_id)?;
+        super::file_lines_contain(&path, needle)
+    }
+
     fn list_conversations(&self) -> Result<Vec<ConversationSummary>, ParseError> {
         let mut conversations = Vec::new();
 
@@ -2149,10 +2177,13 @@ impl ClaudeRecordAccumulator {
                     //
                     // `background_watch` also keys its overlay turn ids by
                     // position, so an insert inside an open episode re-emits
-                    // everything after it. Only a manual compaction inserts,
-                    // and a manual one is a foreground submission — the
-                    // watcher's foreground window is closed around it. Were
-                    // that ever to change the cost is a duplicate overlay
+                    // everything after it. A `/compact` codeg sent is a
+                    // foreground submission, which no episode sees. One it did
+                    // not send (claude-agent-acp 0.101.0 sends its own for an
+                    // idle session) opens an episode AT this echo, handed the
+                    // boundary and the summary the watcher held back for it,
+                    // so the insert lands before the episode's first emission.
+                    // Were that ever to change the cost is a duplicate overlay
                     // turn, which the refetch watermark retires.
                     for owner in usage_owner_by_message_id.values_mut() {
                         if *owner >= at {
@@ -5835,6 +5866,43 @@ mod tests {
         // Nothing but the opening sentence: better the sentence than nothing.
         let bare = "This session is being continued from a previous conversation…";
         assert_eq!(continuation_summary_text(bare), bare);
+    }
+
+    /// Claude Code 2.1.312 puts a `<system-reminder>` block between the opening
+    /// sentence and `Summary:`, and from 2.1.293 every summary ends with a line
+    /// about the messages kept after it. Both are framing for the model, and
+    /// come off like the rest of it.
+    #[test]
+    fn continuation_summary_text_strips_the_2_1_312_framing() {
+        let current = CONTINUATION
+            .replace(
+                "conversation.\n\nSummary:\n",
+                "conversation.\n\n<system-reminder>\n<tools-used-before-summary>Agent, Bash, Read</tools-used-before-summary>\n</system-reminder>\nSummary:\n",
+            )
+            + "\n\nThe messages after this summary are the most recent messages from before compaction, kept verbatim. The summary was written without seeing them, so something it says has not happened yet may already have happened in them.";
+        assert!(current.contains("<system-reminder>"), "fixture applies");
+        assert_eq!(continuation_summary_text(&current), CONTINUATION_SUMMARY);
+
+        // Two reminder blocks, and blank lines around them.
+        let two = CONTINUATION.replace(
+            "conversation.\n\nSummary:\n",
+            "conversation.\n\n<system-reminder>\na\n</system-reminder>\n\n<system-reminder>b</system-reminder>\n\nSummary:\n",
+        );
+        assert_eq!(continuation_summary_text(&two), CONTINUATION_SUMMARY);
+
+        // An unclosed reminder is not framing this knows: it stays.
+        let unclosed = CONTINUATION.replace(
+            "conversation.\n\nSummary:\n",
+            "conversation.\n\n<system-reminder>\nnever closed\nSummary:\n",
+        );
+        assert!(continuation_summary_text(&unclosed).starts_with("<system-reminder>"));
+
+        // A summary that only quotes the kept-messages line mid-body keeps it.
+        let quoting = CONTINUATION.replace(
+            "   Fix the parser.",
+            "   Fix the parser.\nThe messages after this summary are the most recent messages from before compaction, it says.\n   Then test it.",
+        );
+        assert!(continuation_summary_text(&quoting).contains("it says.\n   Then test it."));
     }
 
     /// A compaction is a boundary between turns, so history has to draw the
@@ -10081,6 +10149,14 @@ mod tests {
                 Some("r1"),
                 &["b9052120", "a79caadf", "39e44cd0"],
             ),
+            // CLI 2.1.328 adds this one to the family: a request that resumed
+            // a paused one. Fields as named in the 2.1.328 binary's code,
+            // trimmed; not seen in a live transcript.
+            json!({
+                "type": "api-request-resumed", "sessionId": "s1",
+                "timestamp": "2026-10-15T13:55:17.035Z",
+                "messageId": "msg_2", "pausedRequestId": "r2", "resumedRequestId": "r3",
+            }),
             assistant(
                 "a2",
                 "2026-10-15T13:55:17.040Z",
@@ -10101,7 +10177,7 @@ mod tests {
                 r
             })
             .collect();
-        assert_eq!(with_requests.len() - without_requests.len(), 6);
+        assert_eq!(with_requests.len() - without_requests.len(), 7);
 
         let with = parse_lines("req", &record_lines(&with_requests));
         let without = parse_lines("req", &record_lines(&without_requests));

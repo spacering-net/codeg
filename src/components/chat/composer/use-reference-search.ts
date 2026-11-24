@@ -3,21 +3,23 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from "react"
 
 import { useAcpAgents } from "@/hooks/use-acp-agents"
-import { useFileTree, type FlatFileEntry } from "@/hooks/use-file-tree"
-import { gitLog, listAllConversations } from "@/lib/api"
+import type { FlatFileEntry } from "@/hooks/use-file-tree"
+import { gitLog, listAllConversations, searchWorkspaceFiles } from "@/lib/api"
 import type {
   AcpAgentInfo,
-  AssistantInfo,
   DbConversationSummary,
   GitLogEntry,
+  RosterEntry,
 } from "@/lib/types"
-import { useAssistants } from "@/stores/assistants-store"
+import { useRoster } from "@/stores/personal-agent-roster-store"
+import { randomUUID } from "@/lib/utils"
 
 import {
   agentToSuggestion,
   assistantToSuggestion,
   commitToSuggestion,
   fileToSuggestion,
+  folderToSuggestion,
   sessionToSuggestion,
 } from "./suggestion/adapters"
 import type {
@@ -40,6 +42,7 @@ const MAX_PER_GROUP = 50
 const GIT_LOG_LIMIT = 100
 const EMPTY_SESSIONS: Promise<DbConversationSummary[]> = Promise.resolve([])
 const EMPTY_COMMITS: Promise<GitLogEntry[]> = Promise.resolve([])
+const NO_ASSISTANTS: RosterEntry[] = []
 
 /** Display headings for each group; injected so the host can localize them. */
 export interface ReferenceGroupLabels {
@@ -71,9 +74,17 @@ export interface ReferenceSearchSources {
   files: FlatFileEntry[]
   /** Workspace root the `files` were loaded under; null disables the group. */
   workspaceRoot: string | null
+  /** Whole folders to offer ahead of the files (the workspace's folders, for
+   *  a personal assistant): each a folder reference by its absolute path. */
+  folders?: readonly MentionFolder[]
   agents: AcpAgentInfo[]
-  /** Live assistants in display order (the store's `useAssistants`). */
-  assistants: AssistantInfo[]
+  /** The owner's personal assistants (the roster, `useRoster`). */
+  assistants: RosterEntry[]
+  /** An assistant not offered: the one whose conversation the composer is
+   *  in. */
+  excludeAssistantUid?: string | null
+  /** The primary's name while it has none of its own (localized). */
+  primaryAssistantName?: string
   /** The agents an assistant's own agent is checked against; `agents` when
    *  omitted. Separate so a hidden agent tab need not be built to fill the
    *  assistant one. */
@@ -82,6 +93,12 @@ export interface ReferenceSearchSources {
   commits: GitLogEntry[]
   /** Repo identity for commit URIs; null disables the commit group. */
   repoKey: string | null
+}
+
+/** A folder offered whole in the `@` panel: what it is called, where. */
+export interface MentionFolder {
+  name: string
+  path: string
 }
 
 /** Case-insensitive substring match against an adapted item's searchable text. */
@@ -110,13 +127,23 @@ export function buildReferenceGroups(
 ): SuggestionGroup[] {
   const q = query.trim().toLowerCase()
 
-  // Files: filter the (potentially large) list on its pre-lowered fields before
-  // paying to adapt the survivors. `truncated` is a cheap boolean — set when a
-  // match is found past the cap — so we never scan the whole list for a count.
+  // Native search supplies at most MAX_PER_GROUP + 1 ranked matches. Keep the
+  // mention panel's substring semantics and use the extra row for truncation.
   const fileItems: SuggestionItem[] = []
   let fileTruncated = false
+  // The folders first: a whole project is what is meant more often than a
+  // file of the box the search runs in.
+  for (const folder of sources.folders ?? []) {
+    const item = folderToSuggestion(folder)
+    if (!suggestionMatches(item, q)) continue
+    if (fileItems.length >= MAX_PER_GROUP) {
+      fileTruncated = true
+      break
+    }
+    fileItems.push(item)
+  }
   const root = sources.workspaceRoot
-  if (root) {
+  if (root && !fileTruncated) {
     for (const entry of sources.files) {
       if (q && !entry.lowerName.includes(q) && !entry.lowerPath.includes(q)) {
         continue
@@ -149,9 +176,10 @@ export function buildReferenceGroups(
     .filter((item) => suggestionMatches(item, q))
   const agentItems = agentMatches.slice(0, MAX_PER_GROUP)
 
-  // Only an assistant that can be delegated to is mentionable: enabled, and
-  // on an agent that is enabled too (a delegation to one that is not is
-  // refused). The live list already leaves deleted ones out.
+  // Only an assistant that can be handed work is mentionable: not hidden, and
+  // its work on an agent that is enabled (a delegation to one that is not is
+  // refused). One with no brain yet is (D3): its work needs none. The
+  // primary first, then the roster's order.
   const enabledAgents = new Set(
     (sources.assistantAgents ?? sources.agents)
       .filter((agent) => agent.enabled)
@@ -159,12 +187,28 @@ export function buildReferenceGroups(
   )
   const assistantMatches = sources.assistants
     .filter(
-      (assistant) =>
-        assistant.enabled &&
-        assistant.deleted_at === null &&
-        enabledAgents.has(assistant.agent_type)
+      (entry): entry is RosterEntry & { uid: string } =>
+        !!entry.uid &&
+        entry.uid !== sources.excludeAssistantUid &&
+        !entry.roster.hidden &&
+        !!entry.work_agent_type &&
+        enabledAgents.has(entry.work_agent_type)
     )
-    .map(assistantToSuggestion)
+    .sort(
+      (a, b) =>
+        Number(b.kind === "primary") - Number(a.kind === "primary") ||
+        a.roster.sort_order - b.roster.sort_order ||
+        a.id - b.id
+    )
+    .map((entry) =>
+      assistantToSuggestion(
+        entry,
+        entry.persona_unwritten
+          ? null
+          : entry.persona.replace(/^\s*#+\s*/u, "").trim(),
+        sources.primaryAssistantName
+      )
+    )
     .filter((item) => suggestionMatches(item, q))
   const assistantItems = assistantMatches.slice(0, MAX_PER_GROUP)
 
@@ -236,6 +280,12 @@ export interface UseReferenceSearchOptions {
   enabled?: boolean
   /** Localized group headings; English fallbacks when omitted. */
   labels?: ReferenceGroupLabels
+  /** The assistant whose conversation the composer is in: not offered. */
+  excludeAssistantUid?: string | null
+  /** The primary's name while it has none of its own (localized). */
+  primaryAssistantName?: string
+  /** Whole folders offered ahead of the files (`ReferenceSearchSources`). */
+  folders?: readonly MentionFolder[]
 }
 
 /**
@@ -252,10 +302,11 @@ export interface UseReferenceSearchOptions {
  * on window focus) updates the refs but leaves `search` identity untouched — the
  * open panel keeps its results and the user's selection (R7).
  *
- * Files and agents are hook-loaded (and pre-warmed via `enabled`); assistants
- * come from the assistants store, which the workspace layout keeps live. Sessions and
- * the git log are fetched lazily on the first `@`, key-cached in a ref, and
- * awaited by `search` so the first open is populated without an extra keystroke;
+ * File discovery is pre-warmed in shared, budgeted native storage; only the
+ * current query's matches are transferred on `@`. Agents are hook-loaded and
+ * assistants come from the live store. Sessions and the git log are fetched
+ * lazily on the first `@`, key-cached in a ref, and published independently
+ * so the first open is populated without an extra keystroke;
  * window focus busts those caches so they stay fresh. A tab the user hid (the
  * `kinds` the panel passes leave it out) costs nothing: its source isn't
  * fetched and its group comes back empty.
@@ -264,28 +315,29 @@ export function useReferenceSearch({
   defaultPath,
   enabled = true,
   labels,
+  excludeAssistantUid = null,
+  primaryAssistantName,
+  folders,
 }: UseReferenceSearchOptions): ReferenceSearch {
   const path = defaultPath || null
 
-  const { allFiles, loaded } = useFileTree({
-    folderPath: path ?? undefined,
-    enabled,
-  })
   const { agents } = useAcpAgents()
-  const assistants = useAssistants()
+  const assistants = useRoster() ?? NO_ASSISTANTS
 
   // Mirror every changing source into a ref so `search` can stay identity-stable
   // (see the doc comment). Initialized from the first render so the refs are
   // sane even before the sync effect below runs.
-  const filesRef = useRef<{ root: string | null; files: FlatFileEntry[] }>({
-    root: null,
-    files: [],
-  })
+  const fileSearchRef = useRef<AbortController | null>(null)
+  const consumerRef = useRef<string | undefined>(undefined)
+  const generationRef = useRef(0)
   const agentsRef = useRef(agents)
   const assistantsRef = useRef(assistants)
+  const excludeRef = useRef(excludeAssistantUid)
+  const primaryNameRef = useRef(primaryAssistantName)
   const pathRef = useRef(path)
   const enabledRef = useRef(enabled)
   const labelsRef = useRef(labels)
+  const foldersRef = useRef(folders)
 
   // `pathRef` and `enabledRef` gate the post-await freshness check in `search`,
   // so they must reflect the *committed* folder/enabled state synchronously at
@@ -296,20 +348,27 @@ export function useReferenceSearch({
   useIsomorphicLayoutEffect(() => {
     pathRef.current = path
     enabledRef.current = enabled
+    return () => {
+      generationRef.current += 1
+      fileSearchRef.current?.abort()
+    }
   }, [path, enabled])
 
   useEffect(() => {
-    // Only expose files once the tree has loaded for the *current* path, so the
-    // search never joins the current workspace root onto a previous folder's
-    // relative paths during a folder switch.
-    filesRef.current =
-      loaded && path
-        ? { root: path, files: allFiles }
-        : { root: null, files: [] }
     agentsRef.current = agents
     assistantsRef.current = assistants
+    excludeRef.current = excludeAssistantUid
+    primaryNameRef.current = primaryAssistantName
     labelsRef.current = labels
-  }, [allFiles, loaded, path, agents, assistants, labels])
+    foldersRef.current = folders
+  }, [
+    agents,
+    assistants,
+    excludeAssistantUid,
+    primaryAssistantName,
+    labels,
+    folders,
+  ])
 
   // Lazily-fetched network sources, key-cached so repeat searches reuse the
   // in-flight/resolved promise while a folder switch refetches.
@@ -334,86 +393,150 @@ export function useReferenceSearch({
     return () => window.removeEventListener("focus", onFocus)
   }, [])
 
-  return useCallback<ReferenceSearch>(async (query, signal, kinds) => {
-    if (!enabledRef.current) return []
+  return useCallback<ReferenceSearch>(
+    async (query, signal, kinds, onUpdate) => {
+      if (!enabledRef.current || signal?.aborted) return []
 
-    const path = pathRef.current
-    const wants = (kind: ReferenceKind) => !kinds || kinds.includes(kind)
+      const path = pathRef.current
+      const wants = (kind: ReferenceKind) => !kinds || kinds.includes(kind)
+      const generation = ++generationRef.current
+      fileSearchRef.current?.abort()
+      const abort = new AbortController()
+      fileSearchRef.current = abort
+      const onAbort = () => abort.abort()
+      signal?.addEventListener("abort", onAbort, { once: true })
+      const pendingKinds = new Set<ReferenceKind>()
 
-    // Lazy session fetch. On rejection the cache entry is cleared (not cached as
-    // an empty result) so the next `@` retries instead of wedging on `[]`.
-    let sessionsPromise = EMPTY_SESSIONS
-    if (wants("session")) {
-      const sessionsKey = "all"
-      let sessionsEntry = sessionsRef.current
-      if (sessionsEntry?.key !== sessionsKey) {
-        const created: NonNullable<typeof sessionsRef.current> = {
-          key: sessionsKey,
-          promise: listAllConversations().catch(() => {
-            if (sessionsRef.current === created) sessionsRef.current = null
-            return [] as DbConversationSummary[]
-          }),
-        }
-        sessionsRef.current = created
-        sessionsEntry = created
+      // Retain only this query's matches, never the workspace's full file index.
+      // Ask for one extra row so the existing per-group truncation cue survives.
+      let filesPromise: Promise<FlatFileEntry[]> = Promise.resolve([])
+      if (path && wants("file")) {
+        pendingKinds.add("file")
+        filesPromise = searchWorkspaceFiles(path, query, {
+          limit: MAX_PER_GROUP + 1,
+          request: {
+            consumerId: (consumerRef.current ??= randomUUID()),
+            generation,
+          },
+          signal: abort.signal,
+        })
+          .then((files) =>
+            files.map((file) => ({
+              name: file.name,
+              relativePath: file.path,
+              kind: file.kind,
+              lowerName: file.name.toLowerCase(),
+              lowerPath: file.path.toLowerCase(),
+            }))
+          )
+          .catch(() => [] as FlatFileEntry[])
       }
-      sessionsPromise = sessionsEntry.promise
-    }
 
-    // Lazy git-log fetch, keyed by path with the same retry-on-rejection policy.
-    // A hidden commit tab leaves the cache alone: it is still keyed by path, so
-    // switching the tab back on reuses it or refetches as usual.
-    let commitsPromise = EMPTY_COMMITS
-    if (path && wants("commit")) {
-      let commitsEntry = commitsRef.current
-      if (commitsEntry?.key !== path) {
-        const created: NonNullable<typeof commitsRef.current> = {
-          key: path,
-          promise: gitLog(path, GIT_LOG_LIMIT)
-            .then((result) => result.entries)
-            .catch(() => {
-              if (commitsRef.current === created) commitsRef.current = null
-              return [] as GitLogEntry[]
+      // Lazy session fetch. On rejection the cache entry is cleared (not cached as
+      // an empty result) so the next `@` retries instead of wedging on `[]`.
+      let sessionsPromise = EMPTY_SESSIONS
+      if (wants("session")) {
+        pendingKinds.add("session")
+        const sessionsKey = "all"
+        let sessionsEntry = sessionsRef.current
+        if (sessionsEntry?.key !== sessionsKey) {
+          const created: NonNullable<typeof sessionsRef.current> = {
+            key: sessionsKey,
+            promise: listAllConversations().catch(() => {
+              if (sessionsRef.current === created) sessionsRef.current = null
+              return [] as DbConversationSummary[]
             }),
+          }
+          sessionsRef.current = created
+          sessionsEntry = created
         }
-        commitsRef.current = created
-        commitsEntry = created
+        sessionsPromise = sessionsEntry.promise
       }
-      commitsPromise = commitsEntry.promise
-    } else if (!path) {
-      commitsRef.current = null
-    }
 
-    const [sessions, commits] = await Promise.all([
-      sessionsPromise,
-      commitsPromise,
-    ])
-    // Discard this result if it can no longer be trusted for the live panel: a
-    // newer query aborted us, the composer was disabled, or the workspace folder
-    // changed while the network fetch was in flight (the popup only aborts on a
-    // query change, so a folder switch would otherwise leak the old repo's
-    // commits — built against `path` — into the new folder's panel). The next
-    // keystroke re-runs the search against the current folder.
-    if (signal?.aborted || !enabledRef.current || pathRef.current !== path) {
-      return []
-    }
+      // Lazy git-log fetch, keyed by path with the same retry-on-rejection policy.
+      // A hidden commit tab leaves the cache alone: it is still keyed by path, so
+      // switching the tab back on reuses it or refetches as usual.
+      let commitsPromise = EMPTY_COMMITS
+      if (path && wants("commit")) {
+        pendingKinds.add("commit")
+        let commitsEntry = commitsRef.current
+        if (commitsEntry?.key !== path) {
+          const created: NonNullable<typeof commitsRef.current> = {
+            key: path,
+            promise: gitLog(path, GIT_LOG_LIMIT)
+              .then((result) => result.entries)
+              .catch(() => {
+                if (commitsRef.current === created) commitsRef.current = null
+                return [] as GitLogEntry[]
+              }),
+          }
+          commitsRef.current = created
+          commitsEntry = created
+        }
+        commitsPromise = commitsEntry.promise
+      } else if (!path) {
+        commitsRef.current = null
+      }
 
-    const fileState = filesRef.current
-    return buildReferenceGroups(
-      query,
-      {
-        // Already loaded by their hooks, but a hidden tab's rows would only be
-        // matched and adapted to be thrown away.
-        files: wants("file") ? fileState.files : [],
-        workspaceRoot: fileState.root,
-        agents: wants("agent") ? agentsRef.current : [],
-        assistants: wants("assistant") ? assistantsRef.current : [],
-        assistantAgents: wants("assistant") ? agentsRef.current : [],
-        sessions,
-        commits,
-        repoKey: path,
-      },
-      labelsRef.current ?? DEFAULT_GROUP_LABELS
-    )
-  }, [])
+      let files: FlatFileEntry[] = []
+      let sessions: DbConversationSummary[] = []
+      let commits: GitLogEntry[] = []
+      const current = () =>
+        !signal?.aborted &&
+        !abort.signal.aborted &&
+        enabledRef.current &&
+        pathRef.current === path &&
+        generationRef.current === generation
+      const groups = () =>
+        buildReferenceGroups(
+          query,
+          {
+            files,
+            workspaceRoot: path,
+            folders: wants("file") ? foldersRef.current : [],
+            agents: wants("agent") ? agentsRef.current : [],
+            assistants: wants("assistant") ? assistantsRef.current : [],
+            excludeAssistantUid: excludeRef.current,
+            primaryAssistantName: primaryNameRef.current,
+            assistantAgents: wants("assistant") ? agentsRef.current : [],
+            sessions,
+            commits,
+            repoKey: path,
+          },
+          labelsRef.current ?? DEFAULT_GROUP_LABELS
+        ).map((group) =>
+          pendingKinds.has(group.kind) ? { ...group, loading: true } : group
+        )
+      const publish = () => {
+        if (current()) onUpdate?.(groups())
+      }
+      // Loaded agents/assistants are useful immediately, even if native file
+      // discovery takes a minute. Each lazy source then publishes independently.
+      publish()
+      try {
+        await Promise.all([
+          filesPromise.then((value) => {
+            files = value
+            pendingKinds.delete("file")
+            publish()
+          }),
+          sessionsPromise.then((value) => {
+            sessions = value
+            pendingKinds.delete("session")
+            publish()
+          }),
+          commitsPromise.then((value) => {
+            commits = value
+            pendingKinds.delete("commit")
+            publish()
+          }),
+        ])
+        return current() ? groups() : []
+      } finally {
+        signal?.removeEventListener("abort", onAbort)
+        if (fileSearchRef.current === abort) fileSearchRef.current = null
+      }
+    },
+    []
+  )
 }

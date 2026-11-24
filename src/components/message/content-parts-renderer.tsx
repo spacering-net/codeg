@@ -5,6 +5,7 @@ import {
   useMemo,
   useState,
   type ReactNode,
+  type RefObject,
 } from "react"
 import { useTranslations } from "next-intl"
 
@@ -12,7 +13,6 @@ import type { AdaptedContentPart } from "@/lib/adapters/ai-elements-adapter"
 import type { MessageRole } from "@/lib/types"
 import { buildActivity } from "@/lib/activity/build-activity"
 import type { ActivityModel } from "@/lib/activity/types"
-import { COLLAB_AGENT_TOOL_NAME } from "@/lib/collab-tool"
 import { contextCompactionSummary } from "@/lib/context-compaction"
 import { isAgentHandoffMeta } from "@/lib/agent-handoff"
 import {
@@ -20,16 +20,13 @@ import {
   hasCodexVisualizeRef,
   splitCodexVisualizeRefs,
 } from "@/lib/codex-visualize"
-import { normalizeToolName } from "@/lib/tool-call-normalization"
 import { MessageResponse } from "@/components/ai-elements/message"
 import { useChatMotion } from "@/hooks/use-chat-motion"
 import { JsonRenderScope } from "@/components/ai-elements/json-render-pre"
 import { ActivityTimeline } from "./activity/activity-timeline"
 import type { ActivityFoot } from "./activity/timeline-foot"
 import { AgentHandoffCard } from "./agent-handoff-card"
-import { CodegMcpToolCard } from "./codeg-mcp-tool-card"
 import { CodexVisualizeCard } from "./codex-visualize-card"
-import { CollabAgentCard } from "./collab-agent-card"
 import {
   ContextCompactionCard,
   isContextCompactionMeta,
@@ -38,7 +35,6 @@ import { GeneratedImagesBlock } from "./generated-images-block"
 import { HtmlFilePreviews } from "./html-file-previews"
 import { PlainTextWithBadges } from "./plain-text-with-badges"
 import { PlanMarkdownCard } from "./plan-mode-card"
-import { ResumedDelegationCard } from "./resumed-delegation-card"
 import { TurnErrorPart } from "./turn-error-part"
 
 /**
@@ -228,12 +224,8 @@ const ProposedPlanPart = memo(function ProposedPlanPart({
 type ToolCallPart = Extract<AdaptedContentPart, { type: "tool-call" }>
 
 /**
- * The tool calls whose own cards the timeline hosts on its rail: codex-acp's
- * context compaction (tagged by `_meta.contextCompaction`, not by name),
- * codex's live collab sub-agent activity, and codeg-mcp's `resume_delegation`
- * (the sub-agent that came back, drawn as the delegation card itself, with
- * the generic workbench card for a refused resume, where there is no sub-agent
- * to draw and only the reason is worth reading).
+ * The tool call whose own card the timeline hosts on its rail: codex-acp's
+ * context compaction (tagged by `_meta.contextCompaction`, not by name).
  */
 const HostedToolCall = memo(function HostedToolCall({
   part,
@@ -249,42 +241,6 @@ const HostedToolCall = memo(function HostedToolCall({
         state={part.state}
         meta={part.meta}
         summary={contextCompactionSummary(part.meta, part.output)}
-      />
-    )
-  }
-  const toolName = normalizeToolName(part.toolName).toLowerCase()
-  if (toolName === COLLAB_AGENT_TOOL_NAME) {
-    return (
-      <CollabAgentCard
-        input={part.input ?? null}
-        errorText={part.errorText ?? null}
-        state={part.state}
-      />
-    )
-  }
-  if (toolName === "resume_delegation") {
-    const fallback = (
-      <CodegMcpToolCard
-        tool="resume_delegation"
-        input={part.input ?? null}
-        output={part.output ?? null}
-        errorText={part.errorText ?? null}
-        state={part.state}
-      />
-    )
-    if (!part.toolCallId) return fallback
-    return (
-      <ResumedDelegationCard
-        toolCallId={part.toolCallId}
-        input={part.input ?? null}
-        output={part.output ?? null}
-        errorText={part.errorText ?? null}
-        state={part.state}
-        meta={part.meta ?? null}
-        // Whether a sub-agent resolves is only known inside the card (it takes
-        // a hook to find out), so the fallback goes in rather than the decision
-        // coming out.
-        fallback={fallback}
       />
     )
   }
@@ -371,6 +327,7 @@ export const ActivityParts = memo(function ActivityParts({
   pinnedOnly = false,
   foot,
   headed = false,
+  revealRef,
 }: {
   model: ActivityModel
   isStreaming: boolean
@@ -381,6 +338,8 @@ export const ActivityParts = memo(function ActivityParts({
   foot?: ActivityFoot
   /** Hung under the turn's header (see `ActivityTimeline`). */
   headed?: boolean
+  /** Draws a step a long list has not (see `ActivityTimeline`). */
+  revealRef?: RefObject<((stepKey: string) => boolean) | null>
 }) {
   const render = useAssistantRenderPart(isStreaming)
   return (
@@ -391,6 +350,7 @@ export const ActivityParts = memo(function ActivityParts({
       pinnedOnly={pinnedOnly}
       foot={foot}
       headed={headed}
+      revealRef={revealRef}
     />
   )
 })

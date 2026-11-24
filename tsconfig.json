@@ -34,5 +34,11 @@
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts"
   ],
-  "exclude": ["node_modules", "src-tauri", "browser-agent"]
+  "exclude": [
+    "node_modules",
+    "src-tauri",
+    "browser-agent",
+    // Next's dev validator has unused imports when no route handlers exist.
+    ".next/dev/types/validator.ts"
+  ]
 }

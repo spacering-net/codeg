@@ -9,18 +9,19 @@
 //!     Packs — the same matrix the Experts tab uses.
 //!
 //! The skill reaches an agent the way the bundled skill packs do: a central
-//! copy in the shared store (`~/.codeg/skills/ui-render`), symlinked (or
-//! junctioned) into the agent's preferred skill directory. A cell of the
-//! matrix links or unlinks at once, and what it shows is the link on disk:
-//! nothing is stored anywhere else. Startup brings the central copy up to date
+//! copy in the shared store (`~/.codeg/skills/ui-render`), linked into the
+//! agent's skill directory by the skills engine (`crate::skills`: the agent's
+//! own directory when it has one; a shared one only once the user confirmed
+//! who else sees it). A cell of the matrix links or unlinks at once, and what
+//! it shows is the links on disk. Startup brings the central copy up to date
 //! ([`install_generative_ui_skill`]), so every agent it is linked into reads
 //! the bundled version. It runs before Codeg serves any command, so nothing on
 //! the settings page can race it.
 //!
 //! **Ownership.** The central copy carries a marker file. A link is ours only
-//! when it resolves to the central copy AND that copy is marked. Codeg never
-//! removes its central copy, so a link of ours never dangles: a dangling link
-//! cannot be attributed to anyone and is left alone. A `ui-render` directory
+//! when it resolves to the central copy AND that copy is marked (the engine's
+//! provenance reads the same marker). Codeg never removes its central copy,
+//! so a link of ours never dangles. A `ui-render` directory
 //! in the central store WITHOUT the marker is the user's own skill of that
 //! name, possibly already linked into agents. Codeg then does nothing with
 //! it — no overwrite, no link, no unlink — and the settings page asks the user
@@ -40,21 +41,23 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock};
+use std::sync::LazyLock;
 
 use sea_orm::DatabaseConnection;
 use serde::Serialize;
-use tokio::sync::Mutex;
 
 use crate::acp::types::AgentSkillScope;
 use crate::app_error::AppCommandError;
 use crate::commands::acp::{remove_skill_entry, scoped_skill_dirs, skill_storage_spec};
 use crate::commands::experts::{
-    central_experts_dir, classify_link, create_link_raw, read_link_target, ExpertInstallStatus,
-    ExpertLinkState, LinkOp, LinkOpResult,
+    central_experts_dir, classify_link, create_link_raw, ExpertInstallStatus, ExpertLinkState,
+    LinkOp, LinkOpResult,
 };
 use crate::db::service::app_metadata_service;
 use crate::models::agent::AgentType;
+use crate::skills::model::{codes, ChangedKind, SkillOrigin};
+use crate::skills::{legacy, SkillsCtx};
+use crate::web::event_bridge::EventEmitter;
 
 /// The skill's directory name everywhere, and what the user types
 /// (`/ui-render`, `$ui-render` in Codex).
@@ -134,17 +137,33 @@ impl SkillHome {
         }
     }
 
-    /// One agent's global skill directories, the preferred one first. Empty
-    /// for an agent without a skill store.
-    fn agent_dirs(&self, agent: AgentType) -> Vec<PathBuf> {
+    /// The skills engine over these directories: where links go, what is
+    /// shared, the lock.
+    fn ctx(&self) -> SkillsCtx {
         match self {
-            SkillHome::User => user_agent_dirs(agent),
+            SkillHome::User => SkillsCtx::user(),
             #[cfg(test)]
-            SkillHome::Fixed { agents, .. } => agents
-                .iter()
-                .find(|(a, _)| *a == agent)
-                .map(|(_, dirs)| dirs.clone())
-                .unwrap_or_default(),
+            SkillHome::Fixed {
+                central_root,
+                agents,
+            } => SkillsCtx::new(
+                central_root.clone(),
+                central_root
+                    .parent()
+                    .unwrap_or(central_root)
+                    .join("locks")
+                    .join("skills.lock"),
+                agents
+                    .iter()
+                    .map(|(agent, dirs)| crate::skills::AgentDirs {
+                        agent: *agent,
+                        dirs: dirs.clone(),
+                        read_only: Vec::new(),
+                        markdown_files: false,
+                    })
+                    .collect(),
+                std::sync::Arc::new(crate::skills::link::PlatformLinks),
+            ),
         }
     }
 }
@@ -202,7 +221,9 @@ fn is_foreign(dir: &Path) -> bool {
 
 /// Create the central copy on first use and rewrite its `SKILL.md` whenever
 /// it differs from the bundled one. Refuses to touch a copy that is not ours.
-fn ensure_central_copy(dir: &Path) -> io::Result<()> {
+/// Returns whether its content changed (Codeg's copies of it then follow:
+/// [`refresh_copies`]).
+fn ensure_central_copy(dir: &Path) -> io::Result<bool> {
     match central_copy_state(dir)? {
         CentralCopy::Foreign => {
             return Err(io::Error::new(
@@ -228,26 +249,29 @@ fn ensure_central_copy(dir: &Path) -> io::Result<()> {
     let skill_md = dir.join("SKILL.md");
     if fs::read(&skill_md).ok().as_deref() != Some(SKILL_MD.as_bytes()) {
         // Through a rename, so an agent reading the skill never sees half.
-        let partial = dir.join(".SKILL.md.partial");
-        fs::write(&partial, SKILL_MD)?;
-        if let Err(err) = fs::rename(&partial, &skill_md) {
-            let _ = fs::remove_file(&partial);
-            return Err(err);
-        }
+        crate::skills::fsio::write_content_atomic(&skill_md, SKILL_MD.as_bytes())?;
+        return Ok(true);
     }
-    Ok(())
+    Ok(false)
+}
+
+/// After the central copy changed: Codeg's copies of it (where no link could
+/// be made) that nobody changed get the new content; one changed on the
+/// agent's side is kept, and stays "modified" in the inventory. Caller holds
+/// the skills lock.
+fn refresh_copies(ctx: &SkillsCtx) -> Vec<String> {
+    crate::skills::packs::refresh_copies(ctx, SKILL_ID)
 }
 
 // ─── Links ──────────────────────────────────────────────────────────────
 
-/// Link the central copy into `dir`, an agent's preferred skill directory.
+/// Link the central copy into `dir` — for the move from the old name, which
+/// replaces Codeg's own `json-render` link in the directory 0.35.0 put it.
 /// Whatever already holds the skill's name there stays, and says so.
 fn link_into(central: &Path, dir: &Path) -> io::Result<()> {
     let link = dir.join(SKILL_ID);
     // Decided before creating anything, never by trying and reading the
-    // error: on Windows `create_link_raw` falls back to copying the whole
-    // directory when it cannot make a junction, which would write over a
-    // directory of the same name.
+    // error: nothing is ever made over a directory of the same name.
     let taken = |what: &str| {
         io::Error::new(
             io::ErrorKind::AlreadyExists,
@@ -271,137 +295,89 @@ fn link_into(central: &Path, dir: &Path) -> io::Result<()> {
     }
 }
 
-/// Take our link out of every skill directory of one agent: most built-ins
-/// also read the shared `~/.agents/skills`, so it may sit in either, and a
-/// disable has to leave the agent without the skill. Anything that is not
-/// provably ours stays.
-fn unlink_from(central: &Path, dirs: &[PathBuf]) -> io::Result<()> {
-    if central_copy_state(central)? != CentralCopy::Ours {
-        // Without our marked copy there is nothing a link of ours could
-        // resolve to.
-        return Ok(());
-    }
-    for dir in dirs {
-        let link = dir.join(SKILL_ID);
-        if classify_link(&link, central) != ExpertLinkState::LinkedToCodeg {
-            continue;
-        }
-        remove_skill_entry(&link).map_err(|err| {
-            io::Error::new(err.kind(), format!("remove {}: {err}", link.display()))
-        })?;
-        tracing::info!("[GenerativeUI] unlinked {}", link.display());
-    }
-    Ok(())
-}
-
-/// One cell of the matrix: the link in the agent's preferred directory.
-fn status_of(
-    agent: AgentType,
-    preferred: &Path,
-    central: &Path,
-    ours: bool,
-) -> ExpertInstallStatus {
-    let link = preferred.join(SKILL_ID);
-    let state = match classify_link(&link, central) {
-        // It resolves to a `ui-render` Codeg did not write: the user's own
-        // link, which the matrix must neither count as ours nor remove.
-        ExpertLinkState::LinkedToCodeg if !ours => ExpertLinkState::LinkedElsewhere,
-        state => state,
+/// One op of the settings page: the engine's, with the UI pack's two extras —
+/// enabling first (re)writes the central copy, and the choice retires the
+/// agent's old `json-render` links where it reached.
+fn apply_one(home: &SkillHome, ctx: &SkillsCtx, op: &LinkOp) -> (LinkOpResult, Vec<PathBuf>) {
+    let fail = |code: &str, error: String| LinkOpResult {
+        expert_id: op.expert_id.clone(),
+        agent_type: op.agent_type,
+        ok: false,
+        status: None,
+        error: Some(error),
+        code: Some(code.to_string()),
     };
-    ExpertInstallStatus {
-        expert_id: SKILL_ID.to_string(),
-        agent_type: agent,
-        state,
-        link_path: link.to_string_lossy().to_string(),
-        target_path: read_link_target(&link).map(|p| p.to_string_lossy().to_string()),
-        expected_target_path: central.to_string_lossy().to_string(),
-        copy_mode: false,
-    }
-}
-
-fn install_statuses(home: &SkillHome) -> Vec<ExpertInstallStatus> {
-    let central = home.central_copy();
-    let ours = is_ours(&central);
-    home.agents()
-        .into_iter()
-        .filter_map(|(agent, dirs)| Some(status_of(agent, dirs.first()?, &central, ours)))
-        .collect()
-}
-
-fn apply_one(home: &SkillHome, op: &LinkOp) -> io::Result<Option<ExpertInstallStatus>> {
     if op.expert_id != SKILL_ID {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("unknown skill: {}", op.expert_id),
-        ));
+        return (
+            fail(
+                codes::SKILL_NOT_FOUND,
+                format!("unknown skill: {}", op.expert_id),
+            ),
+            Vec::new(),
+        );
     }
-    let dirs = home.agent_dirs(op.agent_type);
-    let Some(preferred) = dirs.first() else {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            format!("{:?} has no skill directory", op.agent_type),
-        ));
-    };
-    let central = home.central_copy();
+    if ctx.link_dir(op.agent_type).is_none() {
+        return (
+            fail(
+                codes::AGENT_UNSUPPORTED,
+                format!("{:?} has no skill directory", op.agent_type),
+            ),
+            Vec::new(),
+        );
+    }
     if op.enable {
         // Also recreates a central copy that went missing, which brings back
         // every link of ours that was dangling for want of it.
-        ensure_central_copy(&central)?;
-        link_into(&central, preferred)?;
-        // Only where the new link went: an old link in a directory this
-        // agent shares belongs to the agent whose own directory that is, and
-        // waits for its own move.
-        retire_legacy_links(home, std::slice::from_ref(preferred))?;
-        Ok(Some(status_of(op.agent_type, preferred, &central, true)))
-    } else {
-        unlink_from(&central, &dirs)?;
-        // Everywhere the disable just looked: the agent is left without the
-        // skill under either name.
-        retire_legacy_links(home, &dirs)?;
-        Ok(None)
-    }
-}
-
-/// A choice made on the settings page for an agent supersedes the move from
-/// the old name: whatever `json-render` link of ours its directories still
-/// hold goes now, so no later startup acts on it.
-fn retire_legacy_links(home: &SkillHome, dirs: &[PathBuf]) -> io::Result<()> {
-    let old = home.legacy_copy();
-    if central_copy_state(&old)? != CentralCopy::Ours {
-        return Ok(());
-    }
-    for dir in dirs {
-        let link = dir.join(LEGACY_SKILL_ID);
-        if classify_link(&link, &old) != ExpertLinkState::LinkedToCodeg {
-            continue;
+        match ensure_central_copy(&home.central_copy()) {
+            Ok(true) => {
+                for problem in refresh_copies(ctx) {
+                    tracing::warn!("[GenerativeUI] {problem}");
+                }
+            }
+            Ok(false) => {}
+            Err(err) => {
+                let code = if err.kind() == io::ErrorKind::AlreadyExists {
+                    codes::NAME_TAKEN
+                } else {
+                    codes::IO_ERROR
+                };
+                return (fail(code, err.to_string()), Vec::new());
+            }
         }
-        remove_skill_entry(&link).map_err(|err| {
-            io::Error::new(err.kind(), format!("remove {}: {err}", link.display()))
-        })?;
-        tracing::info!("[GenerativeUI] unlinked {}", link.display());
     }
-    Ok(())
+    // A choice made for the agent supersedes the move from the old name: the
+    // engine plans taking its `json-render` links away with the operation
+    // (where it reached, and the agent's own directories) — only while both
+    // names are Codeg's, by their markers.
+    let (result, changed) = legacy::apply_one(ctx, SkillOrigin::Ui, op);
+    (result, changed.dirs)
 }
 
 /// Each op on its own: one that fails records its error and the rest go on.
-/// The settings page reads every state back afterwards, since a disable can
-/// also take the skill from an agent sharing a directory.
-fn apply_links_blocking(home: &SkillHome, ops: Vec<LinkOp>) -> Vec<LinkOpResult> {
-    ops.into_iter()
+/// The settings page reads every state back afterwards. Caller holds the
+/// skills lock.
+fn apply_links_blocking(home: &SkillHome, ops: Vec<LinkOp>) -> (Vec<LinkOpResult>, Vec<PathBuf>) {
+    let ctx = home.ctx();
+    let mut dirs = Vec::new();
+    let results = ops
+        .iter()
         .map(|op| {
-            let (ok, status, error) = match apply_one(home, &op) {
-                Ok(status) => (true, status, None),
-                Err(err) => (false, None, Some(err.to_string())),
-            };
-            LinkOpResult {
-                expert_id: op.expert_id,
-                agent_type: op.agent_type,
-                ok,
-                status,
-                error,
-            }
+            let (result, changed) = apply_one(home, &ctx, op);
+            dirs.extend(changed);
+            result
         })
-        .collect()
+        .collect();
+    (results, dirs)
+}
+
+fn install_statuses(home: &SkillHome) -> Vec<ExpertInstallStatus> {
+    let agents: Vec<AgentType> = home.agents().into_iter().map(|(agent, _)| agent).collect();
+    legacy::statuses(
+        &home.ctx(),
+        SkillOrigin::Ui,
+        &[SKILL_ID.to_string()],
+        &agents,
+    )
 }
 
 // ─── Startup ────────────────────────────────────────────────────────────
@@ -418,8 +394,14 @@ fn install_blocking(home: &SkillHome, legacy_switch: Option<bool>) -> Vec<String
             "[GenerativeUI] {} is a skill of the user's; leaving it alone",
             central.display()
         );
-    } else if let Err(err) = ensure_central_copy(&central) {
-        problems.push(format!("{}: {err}", central.display()));
+    } else {
+        match ensure_central_copy(&central) {
+            // Updated: the copies Codeg made of it follow, as the other
+            // packs' do.
+            Ok(true) => problems.extend(refresh_copies(&home.ctx())),
+            Ok(false) => {}
+            Err(err) => problems.push(format!("{}: {err}", central.display())),
+        }
     }
     problems.extend(migrate_legacy(home, legacy_switch));
     problems
@@ -444,7 +426,8 @@ fn install_blocking(home: &SkillHome, legacy_switch: Option<bool>) -> Vec<String
 ///
 /// What brings `ui-render` back is only a `json-render` link that is still
 /// there, and a choice made on the settings page removes the agent's own
-/// ([`retire_legacy_links`]): a later startup never undoes that choice.
+/// (planned by the skills engine with the operation): a later startup never
+/// undoes that choice.
 fn migrate_legacy(home: &SkillHome, switch: Option<bool>) -> Vec<String> {
     let old = home.legacy_copy();
     match central_copy_state(&old) {
@@ -602,11 +585,6 @@ fn unlink_legacy(old: &Path, dirs: &[PathBuf], keep: &[PathBuf]) -> (Vec<String>
 // ─── The skill's state ──────────────────────────────────────────────────
 
 struct GenerativeUi {
-    /// Held across every write to skill directories — a batch from the
-    /// settings page, the startup install — by the blocking half that does
-    /// the work, so a caller that goes away midway (an HTTP client hanging
-    /// up) cannot let the next one in early.
-    lock: Arc<Mutex<()>>,
     home: SkillHome,
 }
 
@@ -614,14 +592,21 @@ static GENERATIVE_UI: LazyLock<GenerativeUi> = LazyLock::new(|| GenerativeUi::ne
 
 impl GenerativeUi {
     fn new(home: SkillHome) -> Self {
-        Self {
-            lock: Arc::new(Mutex::new(())),
-            home,
-        }
+        Self { home }
     }
 
+    /// Every write to skill directories — a batch from the settings page, the
+    /// startup install — happens under the skills lock, held by the blocking
+    /// half that does the work, so a caller that goes away midway (an HTTP
+    /// client hanging up) cannot let the next one in early.
     async fn install(&self, legacy_switch: Option<bool>) -> Vec<String> {
-        let guard = self.lock.clone().lock_owned().await;
+        let mut ctx = self.home.ctx();
+        // Startup: wait as long as the other startup steps do.
+        ctx.lock_wait = std::time::Duration::from_secs(30);
+        let guard = match ctx.lock().await {
+            Ok(guard) => guard,
+            Err(err) => return vec![format!("skills lock: {err}")],
+        };
         let home = self.home.clone();
         tokio::task::spawn_blocking(move || {
             let _guard = guard;
@@ -631,15 +616,31 @@ impl GenerativeUi {
         .unwrap_or_else(|err| vec![format!("install panicked: {err}")])
     }
 
-    async fn apply_links(&self, ops: Vec<LinkOp>) -> Result<Vec<LinkOpResult>, AppCommandError> {
-        let guard = self.lock.clone().lock_owned().await;
+    async fn apply_links(
+        &self,
+        emitter: &EventEmitter,
+        ops: Vec<LinkOp>,
+    ) -> Result<Vec<LinkOpResult>, AppCommandError> {
+        let ctx = self.home.ctx();
+        let guard = match ctx.lock().await {
+            Ok(guard) => guard,
+            Err(err) => return Ok(legacy::busy(&ops, &err)),
+        };
         let home = self.home.clone();
-        tokio::task::spawn_blocking(move || {
+        let (results, dirs) = tokio::task::spawn_blocking(move || {
             let _guard = guard;
             apply_links_blocking(&home, ops)
         })
         .await
-        .map_err(|err| AppCommandError::task_execution_failed(err.to_string()))
+        .map_err(|err| AppCommandError::task_execution_failed(err.to_string()))?;
+        if !dirs.is_empty() {
+            crate::skills::announce(
+                emitter,
+                [ChangedKind::Links],
+                legacy::changed_agents(&ctx, &dirs),
+            );
+        }
+        Ok(results)
     }
 
     async fn statuses(&self) -> Result<Vec<ExpertInstallStatus>, AppCommandError> {
@@ -692,24 +693,6 @@ pub async fn install_generative_ui_skill(conn: &DatabaseConnection) {
     }
 }
 
-/// The central-store ids this module owns, for the custom-skills pack to keep
-/// out of its list — each only while the copy there is Codeg's. A `ui-render`
-/// the user made stays a custom skill they can see, edit and rename.
-pub(crate) fn reserved_skill_ids() -> Vec<String> {
-    reserved_ids_in(&SkillHome::User)
-}
-
-fn reserved_ids_in(home: &SkillHome) -> Vec<String> {
-    [
-        (SKILL_ID, home.central_copy()),
-        (LEGACY_SKILL_ID, home.legacy_copy()),
-    ]
-    .into_iter()
-    .filter(|(_, dir)| is_ours(dir))
-    .map(|(id, _)| id.to_string())
-    .collect()
-}
-
 // -------- Commands (Tauri, and the web handlers call them too) ---------------
 
 /// The skill's name, and whether a skill of the user's holds it.
@@ -726,11 +709,20 @@ pub async fn generative_ui_list_all_install_statuses(
 }
 
 /// Enable or disable the skill for a batch of agents; one result per op.
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn generative_ui_apply_links(
+pub async fn generative_ui_apply_links_core(
+    emitter: &EventEmitter,
     ops: Vec<LinkOp>,
 ) -> Result<Vec<LinkOpResult>, AppCommandError> {
-    GENERATIVE_UI.apply_links(ops).await
+    GENERATIVE_UI.apply_links(emitter, ops).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn generative_ui_apply_links(
+    ops: Vec<LinkOp>,
+    app: tauri::AppHandle,
+) -> Result<Vec<LinkOpResult>, AppCommandError> {
+    generative_ui_apply_links_core(&EventEmitter::from_app(&app), ops).await
 }
 
 /// The `SKILL.md` agents get, for the settings page's preview.
@@ -804,7 +796,49 @@ mod tests {
                     enable,
                 })
                 .collect();
-            self.ui.apply_links(ops).await.expect("apply")
+            self.ui
+                .apply_links(&EventEmitter::Noop, ops)
+                .await
+                .expect("apply")
+        }
+
+        /// What the Harness page does where a link goes into a directory
+        /// other agents read: preflight, show the effects, send their `ack`.
+        async fn confirmed(
+            &self,
+            agent: AgentType,
+            action: crate::skills::model::SkillAction,
+        ) -> crate::skills::model::SkillsApplyResult {
+            use crate::skills::model::{SkillOp, SkillsApplyRequest};
+            let ctx = self.ui.home.ctx();
+            let op = |ack: Option<String>| SkillOp {
+                skill: SKILL_ID.to_string(),
+                agent,
+                action,
+                ack,
+                replace_modified: false,
+            };
+            let preflight = crate::skills::commands::skills_apply_links_in(
+                ctx.clone(),
+                &EventEmitter::Noop,
+                SkillsApplyRequest {
+                    ops: vec![op(None)],
+                    preflight: true,
+                },
+            )
+            .await
+            .unwrap();
+            let ack = preflight.ops[0].ack.clone();
+            crate::skills::commands::skills_apply_links_in(
+                ctx,
+                &EventEmitter::Noop,
+                SkillsApplyRequest {
+                    ops: vec![op(ack)],
+                    preflight: false,
+                },
+            )
+            .await
+            .unwrap()
         }
 
         async fn enable(&self, agent: AgentType) -> LinkOpResult {
@@ -923,6 +957,69 @@ mod tests {
         );
     }
 
+    /// Where no link could be made, an agent has a copy of the skill (the
+    /// link record says so). An update of the central copy brings Codeg's
+    /// copies that nobody changed along, as the other packs' updates do; a
+    /// copy changed on the agent's side is kept as it is.
+    #[tokio::test]
+    async fn an_update_refreshes_codegs_copies_and_keeps_changed_ones() {
+        use crate::skills::fsio::{copy_tree, hash_skill_dir};
+        use crate::skills::link::LinkMode;
+        use crate::skills::record::{now, LinkRecord, RecordEntry};
+        let fx = Fixture::new();
+        let central = fx.central();
+        let store = fx.ui.home.central_root();
+        // An older release's central copy, copied into Claude's and Codex's
+        // directories; Codex's copy was changed since.
+        fs::create_dir_all(&central).unwrap();
+        fs::write(central.join(MARKER_FILE), MARKER_TEXT).unwrap();
+        fs::write(
+            central.join("SKILL.md"),
+            "---\nname: ui-render\n---\nolder\n",
+        )
+        .unwrap();
+        let mut record = LinkRecord::default();
+        for dir in ["claude/skills", "codex/skills"] {
+            let copy = fx.link(dir);
+            fs::create_dir_all(copy.parent().unwrap()).unwrap();
+            copy_tree(&central, &copy).unwrap();
+            record.insert(RecordEntry {
+                skill: SKILL_ID.to_string(),
+                dir: fx.root.join(dir).to_string_lossy().into_owned(),
+                path: copy.to_string_lossy().into_owned(),
+                mode: LinkMode::Copy,
+                created_at: now(),
+                copy_hash: Some(hash_skill_dir(&copy, SKILL_ID).unwrap()),
+            });
+        }
+        record.save(&store).unwrap();
+        fs::write(fx.link("codex/skills").join("notes.md"), "mine\n").unwrap();
+
+        let problems = fx.ui.install(Some(false)).await;
+        assert!(problems.is_empty(), "{problems:?}");
+        let claude = fx.link("claude/skills");
+        assert_eq!(
+            fs::read_to_string(claude.join("SKILL.md")).unwrap(),
+            SKILL_MD
+        );
+        let record = LinkRecord::load(&store);
+        assert_eq!(
+            record
+                .get(&claude)
+                .and_then(|entry| entry.copy_hash.clone()),
+            Some(hash_skill_dir(&claude, SKILL_ID).unwrap()),
+            "the record follows"
+        );
+        let codex = fx.link("codex/skills");
+        assert!(fs::read_to_string(codex.join("SKILL.md"))
+            .unwrap()
+            .contains("older"));
+        assert_eq!(
+            fs::read_to_string(codex.join("notes.md")).unwrap(),
+            "mine\n"
+        );
+    }
+
     #[tokio::test]
     async fn a_marker_without_a_skill_is_finished_rather_than_disowned() {
         let fx = Fixture::new();
@@ -984,18 +1081,40 @@ mod tests {
         assert!(fx.is_our_link("claude/skills"));
     }
 
+    /// Changed with the skills engine (plan §6.1): a disable still takes our
+    /// link out of every directory the agent reads — but one in a directory
+    /// another agent reads too is not taken unasked. The settings page
+    /// cannot ask, so it is refused there with a code, and done once
+    /// confirmed (the Harness page's preflight and `ack`).
     #[tokio::test]
     async fn disabling_takes_our_link_out_of_every_dir_the_agent_reads() {
+        use crate::skills::model::{ApplyOutcome, SkillAction};
         let fx = Fixture::new();
         assert!(fx.enable(AgentType::Codex).await.ok);
-        assert!(fx.enable(AgentType::Gemini).await.ok);
+        // Gemini's only directory is the one Codex shares: enabling it there
+        // shows the skill to Codex too, so the settings page cannot do it…
+        let refused = fx.enable(AgentType::Gemini).await;
+        assert!(!refused.ok, "{refused:?}");
+        assert_eq!(refused.code.as_deref(), Some("acknowledgement_required"));
+        assert!(!exists(&fx.link("agents/skills")));
+        // …and once confirmed, Codex's own link goes: it sees the shared one.
+        let enabled = fx.confirmed(AgentType::Gemini, SkillAction::Enable).await;
+        assert_eq!(enabled.outcome, ApplyOutcome::Applied, "{enabled:?}");
         assert!(fx.is_our_link("agents/skills"));
+        assert!(!exists(&fx.link("codex/skills")), "an agent never gets two");
         assert!(fx.enable(AgentType::ClaudeCode).await.ok);
 
         // Codex also reads the shared dir Gemini's link is in: a disable that
-        // left it would leave Codex with the skill.
+        // left it would leave Codex with the skill — and one that took it
+        // would take it from Gemini. So not from here:
         let result = fx.disable(AgentType::Codex).await;
-        assert!(result.ok, "{result:?}");
+        assert!(!result.ok, "{result:?}");
+        assert_eq!(result.code.as_deref(), Some("acknowledgement_required"));
+        assert!(fx.is_our_link("agents/skills"), "nothing taken unasked");
+        // Confirmed, it goes from every directory Codex reads.
+        let disabled = fx.confirmed(AgentType::Codex, SkillAction::Disable).await;
+        assert_eq!(disabled.outcome, ApplyOutcome::Applied, "{disabled:?}");
+        assert_eq!(disabled.ops[0].loses, vec![AgentType::Gemini]);
         assert!(!exists(&fx.link("codex/skills")));
         assert!(!exists(&fx.link("agents/skills")));
         assert!(fx.is_our_link("claude/skills"), "other agents keep theirs");
@@ -1120,7 +1239,7 @@ mod tests {
                 enable: true,
             });
         }
-        let results = fx.ui.apply_links(ops).await.unwrap();
+        let results = fx.ui.apply_links(&EventEmitter::Noop, ops).await.unwrap();
         assert_eq!(results.len(), 3);
         assert!(!results[0].ok && results[0].error.is_some(), "{results:?}");
         assert!(!results[1].ok && results[1].error.is_some(), "{results:?}");
@@ -1304,7 +1423,12 @@ mod tests {
             "the disable takes it too"
         );
         fs::remove_dir(&blocker).unwrap();
-        assert!(fx.enable(AgentType::Gemini).await.ok);
+        // Gemini's only directory is shared with Codex: turned on once
+        // confirmed (skills engine, plan §6.1).
+        let enabled = fx
+            .confirmed(AgentType::Gemini, crate::skills::model::SkillAction::Enable)
+            .await;
+        assert!(enabled.ok, "{enabled:?}");
         assert!(
             !exists(&fx.legacy_link("agents/skills")),
             "ui-render replaces it"
@@ -1449,28 +1573,35 @@ mod tests {
         );
     }
 
+    /// The central-store ids this module owns are kept out of the Custom
+    /// skills only while the copy there is Codeg's (its marker): a
+    /// `ui-render` the user made stays a custom skill they can see, edit and
+    /// rename (`custom_skills::ensure_custom_id_in` reads the same marker).
     #[test]
     fn only_marked_copies_reserve_their_names() {
+        use crate::commands::custom_skills::ensure_custom_id_in;
         let tmp = tempfile::tempdir().unwrap();
         let home = SkillHome::Fixed {
             central_root: tmp.path().to_path_buf(),
             agents: Vec::new(),
         };
-        assert!(reserved_ids_in(&home).is_empty(), "absent");
+        let store = home.central_root();
+        let reserved = |id: &str| ensure_custom_id_in(&store, id).is_err();
+        assert!(!reserved(SKILL_ID) && !reserved(LEGACY_SKILL_ID), "absent");
 
         for dir in [home.central_copy(), home.legacy_copy()] {
             fs::create_dir_all(&dir).unwrap();
             fs::write(dir.join("SKILL.md"), "mine\n").unwrap();
         }
-        assert!(reserved_ids_in(&home).is_empty(), "the user's own");
+        assert!(
+            !reserved(SKILL_ID) && !reserved(LEGACY_SKILL_ID),
+            "the user's own"
+        );
 
         fs::write(home.central_copy().join(MARKER_FILE), MARKER_TEXT).unwrap();
-        assert_eq!(reserved_ids_in(&home), vec![SKILL_ID.to_string()]);
+        assert!(reserved(SKILL_ID) && !reserved(LEGACY_SKILL_ID));
         fs::write(home.legacy_copy().join(MARKER_FILE), MARKER_TEXT).unwrap();
-        assert_eq!(
-            reserved_ids_in(&home),
-            vec![SKILL_ID.to_string(), LEGACY_SKILL_ID.to_string()]
-        );
+        assert!(reserved(SKILL_ID) && reserved(LEGACY_SKILL_ID));
     }
 
     /// The settings page draws one column per agent with a skill store; one

@@ -125,6 +125,9 @@ async fn prepare(
     }
     if summary.agent_type == target && summary.agent_account_id.as_deref() == target_account {
         plan.blocked = Some("same_agent");
+    } else if summary.kind == crate::db::entities::conversation::ConversationKind::Personal {
+        plan.blocked = Some("disabled");
+        plan.blocked_message = Some("The personal agent manages this conversation.".into());
     } else if summary.parent_id.is_some() {
         plan.blocked = Some("child_session");
     } else if summary.external_id.as_deref().unwrap_or("").is_empty() {
@@ -452,7 +455,7 @@ async fn handoff_inner(
                 if let Some(session) = &state.external_id {
                     if (!native || state.has_restored_session(&sid)) && state.agent_account_id == request.target_account_id
                         && (!native || super::account_switch::requested_model_applied(&requested_config, state.config_options.as_deref())) {
-                        return Ok((connection.clone(), session.clone()));
+                        return Ok((connection.clone(), session.clone(), crate::acp::selection::selection_snapshot(&state)));
                     }
                 }
             }
@@ -466,7 +469,7 @@ async fn handoff_inner(
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }.await;
-    let (connection_id, external_id) = match startup {
+    let (connection_id, external_id, target_selection) = match startup {
         Ok(result) => result,
         Err(error) => {
             rollback(
@@ -504,9 +507,10 @@ async fn handoff_inner(
     } else {
         native_note.clone()
     };
-    let committed = handoff_service::commit(
+    let committed = manager.selection.commit_binding_change(request.conversation_id, handoff_service::commit(
         &db.conn,
         &prepared.summary,
+        &target_selection,
         handoff_service::NewHandoff {
             conversation_id: request.conversation_id,
             from_agent_type: source,
@@ -531,8 +535,7 @@ async fn handoff_inner(
             source_stats_json: prepared.source_stats.as_ref().map(serde_json::to_string).transpose().map_err(failure)?,
             source_model: prepared.summary.model.clone(),
         },
-    )
-    .await;
+    )).await;
     if let Err(error) = committed {
         if manager
             .disconnect_and_wait_for_account_switch(&connection_id)
@@ -561,6 +564,10 @@ async fn handoff_inner(
         let _ = std::fs::remove_file(backup);
     }
     if let Some(state) = manager.get_state(&connection_id).await {
+        manager
+            .selection
+            .take_authority_on_link(&connection_id, &state, request.conversation_id)
+            .await;
         emit_with_state(
             &state,
             emitter,
@@ -678,7 +685,7 @@ pub async fn acp_handoff(
     handoff_core(
         &db,
         &manager,
-        &EventEmitter::Tauri(app),
+        &EventEmitter::from_app(&app),
         &data,
         window.label().into(),
         HandoffRequest {

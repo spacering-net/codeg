@@ -11,6 +11,7 @@ import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
+import { saveTasksTimeFilter } from "@/lib/tasks-board-filter-storage"
 import type { WorkTask } from "@/lib/types"
 
 const view = {
@@ -34,6 +35,7 @@ vi.mock("@/stores/app-workspace-store", () => {
 const workTaskArchive = vi.fn(async () => {})
 const workTaskDefer = vi.fn(async () => {})
 vi.mock("@/lib/api", () => ({
+  workTaskGet: vi.fn().mockRejectedValue(new Error("not in this test")),
   workTaskArchive: (...args: unknown[]) => workTaskArchive(...(args as [])),
   workTaskCreate: vi.fn(),
   workTaskDefer: (...args: unknown[]) => workTaskDefer(...(args as [])),
@@ -127,6 +129,7 @@ function column(name: string): HTMLElement {
 
 beforeEach(() => {
   localStorage.clear()
+  saveTasksTimeFilter("all")
   vi.clearAllMocks()
   view.viewMode = "board"
   view.tasks = [

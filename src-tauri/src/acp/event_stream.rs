@@ -453,12 +453,25 @@ fn estimate_envelope_size(envelope: &EventEnvelope) -> usize {
             session_id,
             turns,
             outstanding: _,
+            outstanding_tasks,
             settled,
             watermark: _,
         } => {
             json_str_len(session_id)
                 + turns.len().saturating_sub(1)
                 + turns.iter().map(message_turn_size).sum::<usize>()
+                + outstanding_tasks
+                    .iter()
+                    .map(|t| {
+                        // Keys + braces + commas for every field (task_id,
+                        // kind, tool_use_id, description, started_at_ms — an
+                        // i64 is at most 20 bytes) plus the element comma and
+                        // the field's own key, fixed as generously as above.
+                        128 + json_str_len(&t.task_id)
+                            + opt_str_size(&t.tool_use_id)
+                            + opt_str_size(&t.description)
+                    })
+                    .sum::<usize>()
                 + settled
                     .iter()
                     .map(|s| {
@@ -1093,6 +1106,23 @@ mod tests {
                 session_id: "1f8b332f-128a-4603-a5f4-f44d5a0bf932".into(),
                 turns: vec![turn.clone(), turn],
                 outstanding: u32::MAX,
+                outstanding_tasks: vec![
+                    crate::acp::types::BackgroundOutstandingTask {
+                        task_id: "ae6bd822f7a0e23a8".into(),
+                        kind: crate::acp::types::BackgroundTaskKind::Agent,
+                        tool_use_id: Some("toolu_01P782zHv8AMMpXYqaz39ijf".into()),
+                        // Escape-heavy, to exercise the estimate's escaping.
+                        description: Some("Run \"pnpm build\"\n\t".repeat(16)),
+                        started_at_ms: i64::MIN,
+                    },
+                    crate::acp::types::BackgroundOutstandingTask {
+                        task_id: "bipkee1pw".into(),
+                        kind: crate::acp::types::BackgroundTaskKind::Shell,
+                        tool_use_id: None,
+                        description: None,
+                        started_at_ms: i64::MAX,
+                    },
+                ],
                 settled: vec![
                     crate::acp::types::BackgroundSettledInfo {
                         task_id: "ae6bd822f7a0e23a8".into(),
@@ -1128,6 +1158,7 @@ mod tests {
                 session_id: "s".into(),
                 turns: vec![],
                 outstanding: 0,
+                outstanding_tasks: vec![],
                 settled: vec![],
                 watermark: 0,
             },

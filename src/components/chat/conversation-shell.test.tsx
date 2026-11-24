@@ -14,9 +14,6 @@ vi.mock("@/components/chat/chat-width-handles", () => ({
 vi.mock("@/components/chat/composer-status-strips", () => ({
   ComposerStatusStrips: () => null,
 }))
-vi.mock("@/components/chat/async-task-strip", () => ({
-  AsyncTaskStrip: () => null,
-}))
 vi.mock("@/components/chat/remote-control-strip", () => ({
   RemoteControlStrip: (props: {
     remoteControl: { session_url: string | null }

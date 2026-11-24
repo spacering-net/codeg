@@ -6,7 +6,7 @@ Generate any scientific diagram by describing it in natural language.
 Nano Banana 2 handles everything automatically with smart iterative refinement.
 
 Smart iteration: Only regenerates if quality is below threshold for your document type.
-Quality review: Uses Gemini 3.1 Pro Preview for professional scientific evaluation.
+Quality review: Uses Gemini 3.7 Flash for professional scientific evaluation.
 
 Usage:
     # Generate for journal paper (highest quality threshold)
@@ -25,6 +25,65 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Variables forwarded to the generation subprocess. The child needs the
+# OpenRouter credential; the rest keep networking, TLS, and locale working.
+# Copying the whole parent environment instead would hand the child every
+# unrelated secret that happens to be exported in the calling shell.
+FORWARDED_ENV_VARS = (
+    "PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "PYTHONPATH",
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+    "http_proxy", "https_proxy", "no_proxy",
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+    # Windows needs these for sockets, temp files, and interpreter startup.
+    "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT",
+    "APPDATA", "LOCALAPPDATA", "USERPROFILE", "TEMP", "TMP",
+)
+
+
+def resolve_api_key(explicit=None):
+    """Resolve the OpenRouter key from --api-key, the environment, then any .env file.
+
+    The .env scan walks up from the working directory and finally checks the
+    script's own directory, so running from anywhere inside a project picks up
+    the key at its root. The child process is handed the resolved value through
+    build_subprocess_env, so it never has to repeat this search.
+    """
+    if explicit:
+        return explicit
+
+    from_env = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if from_env:
+        return from_env
+
+    cwd = Path.cwd()
+    for directory in [cwd, *cwd.parents, Path(__file__).resolve().parent]:
+        env_file = directory / ".env"
+        if not env_file.is_file():
+            continue
+        try:
+            content = env_file.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for raw in content.splitlines():
+            line = raw.strip()
+            if line.startswith("#") or "=" not in line:
+                continue
+            name, _, value = line.partition("=")
+            if name.strip() == "OPENROUTER_API_KEY":
+                value = value.strip().strip('"').strip("'")
+                if value:
+                    return value
+
+    return None
+
+
+def build_subprocess_env(api_key):
+    """Return a minimal environment for the AI generation subprocess."""
+    env = {name: os.environ[name] for name in FORWARDED_ENV_VARS if name in os.environ}
+    if api_key:
+        env["OPENROUTER_API_KEY"] = api_key
+    return env
+
 
 def main():
     """Command-line interface."""
@@ -36,9 +95,9 @@ How it works:
   Simply describe your diagram in natural language
   Nano Banana 2 generates it automatically with:
   - Smart iteration (only regenerates if quality is below threshold)
-  - Quality review by Gemini 3.1 Pro Preview
+  - Quality review by Gemini 3.7 Flash
   - Document-type aware quality thresholds
-  - Publication-ready output
+  - PNG draft for visual and scientific verification
 
 Document Types (quality thresholds):
   journal      8.5/10  - Nature, Science, peer-reviewed journals
@@ -75,7 +134,7 @@ Environment Variables:
     parser.add_argument("prompt", 
                        help="Description of the diagram to generate")
     parser.add_argument("-o", "--output", required=True,
-                       help="Output file path")
+                       help="Output PNG file path (.png required)")
     parser.add_argument("--doc-type", default="default",
                        choices=["journal", "conference", "poster", "presentation",
                                "report", "grant", "thesis", "preprint", "default"],
@@ -88,16 +147,25 @@ Environment Variables:
                        help="Verbose output")
     
     args = parser.parse_args()
-    
-    # Check for API key
-    api_key = args.api_key or os.getenv("OPENROUTER_API_KEY")
+
+    # Validated here rather than clamped silently, and before the credential
+    # lookup so an out-of-range value reports itself rather than an absent key.
+    if not 1 <= args.iterations <= 2:
+        parser.error("--iterations must be 1 or 2")
+
+    if Path(args.output).suffix.lower() != ".png":
+        parser.error("--output must end in .png; format conversion is not supported")
+
+    # Check for API key — resolves --api-key, the environment, then any .env file
+    api_key = resolve_api_key(args.api_key)
     if not api_key:
-        print("Error: OPENROUTER_API_KEY environment variable not set")
+        print("Error: OPENROUTER_API_KEY not found")
         print("\nFor AI generation, you need an OpenRouter API key.")
         print("Get one at: https://openrouter.ai/keys")
         print("\nSet it with:")
         print("  export OPENROUTER_API_KEY='your_api_key'")
-        print("\nOr use --api-key flag")
+        print("\nOr add OPENROUTER_API_KEY=your_api_key to a .env file")
+        print("Or use --api-key flag")
         sys.exit(1)
     
     # Find AI generation script
@@ -113,21 +181,15 @@ Environment Variables:
     
     if args.doc_type != "default":
         cmd.extend(["--doc-type", args.doc_type])
-    
-    # Enforce max 2 iterations
-    iterations = min(args.iterations, 2)
-    if iterations != 2:
-        cmd.extend(["--iterations", str(iterations)])
-    
+
+    cmd.extend(["--iterations", str(args.iterations)])
+
     if args.verbose:
         cmd.append("-v")
     
     # Execute — pass API key via environment to avoid exposure in process listings
     try:
-        env = os.environ.copy()
-        if api_key:
-            env["OPENROUTER_API_KEY"] = api_key
-        result = subprocess.run(cmd, check=False, env=env)
+        result = subprocess.run(cmd, check=False, env=build_subprocess_env(api_key))
         sys.exit(result.returncode)
     except Exception as e:
         print(f"Error executing AI generation: {e}")

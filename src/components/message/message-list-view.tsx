@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
   type ComponentProps,
+  type ReactNode,
 } from "react"
 import {
   isLiveTurnId,
@@ -31,11 +32,11 @@ import { AgentHandoffCard } from "./agent-handoff-card"
 import { isAgentHandoffMeta } from "@/lib/agent-handoff"
 import {
   createMessageTurnAdapter,
-  groupGoalRuns,
-  mergeAdjacentDelegationStatusGroups,
-  mergeAdjacentBackgroundTaskGroups,
+  mergeRunParts,
   type AdaptedContentPart,
   type AdaptedMessage,
+  type AdaptedToolCallPart,
+  type MergedRunParts,
   type MessageTurnAdapter,
   type ToolCallState,
   type UserImageDisplay,
@@ -43,12 +44,19 @@ import {
 } from "@/lib/adapters/ai-elements-adapter"
 import { TurnStats } from "./turn-stats"
 import { LiveTurnStats } from "./live-turn-stats"
+import { LiveRunsChip, type LiveRunsList } from "./live-runs-chip"
 import { SlideSlot } from "./slide-slot"
 import { ModelLabelProvider } from "./model-label-context"
 import { KnownInvocationsProvider } from "./known-invocations-context"
 import { DelegationStatusIndexProvider } from "./delegation-status-index-context"
 import { useTranscriptKnownInvocations } from "./use-transcript-known-invocations"
 import { ReplyArtifacts } from "./reply-artifacts"
+import {
+  CheckMarks,
+  MessageChecksProvider,
+  useMessageChecks,
+  type CheckAsk,
+} from "./message-checks"
 import { UserResourceLinks } from "./user-resource-links"
 import { UserImageAttachments } from "./user-image-attachments"
 import {
@@ -98,11 +106,22 @@ import {
 } from "@/lib/agent-plan"
 import type {
   AgentType,
+  AsyncTaskRecord,
   AvailableCommandInfo,
+  BackgroundOutstandingTask,
   ConnectionStatus,
   MessageTurn,
   PlanEntryInfo,
 } from "@/lib/types"
+import {
+  collectLiveRuns,
+  runningSubAgentCalls,
+  subAgentCallsById,
+} from "@/lib/live-runs"
+import {
+  useOptionalDelegation,
+  type DelegationBinding,
+} from "@/contexts/delegation-context"
 import { cn, copyTextToClipboard } from "@/lib/utils"
 import {
   VirtualizedMessageThread,
@@ -123,6 +142,7 @@ import {
   useTranscriptNavDemanded,
   type TranscriptInsights,
   type TranscriptInsightsActions,
+  type TranscriptRunningRound,
 } from "@/stores/transcript-insights-store"
 import { useModelLabels } from "@/hooks/use-model-labels"
 import { useChatAnimationsEnabled } from "@/hooks/use-appearance"
@@ -157,6 +177,8 @@ interface MessageListViewProps {
   availableCommands: readonly AvailableCommandInfo[] | null | undefined
   connStatus?: ConnectionStatus | null
   isActive?: boolean
+  /** Whether the mounted transcript is shown, including unfocused tiles. */
+  isVisible?: boolean
   sendSignal?: number
   detailLoading?: boolean
   detailError?: string | null
@@ -197,12 +219,13 @@ interface MessageListViewProps {
    */
   onQuoteSelection?: (text: string) => void
   /**
-   * Ask a question about a text selection made in this transcript: the host
-   * opens a new conversation on the same agent and sends the quoted selection
-   * followed by the question. Enables the "ask" entry on the selection bubble,
-   * on the same terms as `onQuoteSelection`. MUST be referentially stable.
+   * Ask a question about a text selection made in this transcript: the
+   * selection bubble's "ask" entry opens what this returns — the host's ask
+   * composer, holding the selection — in place of its buttons (see
+   * `SelectionActionBubble.renderAskComposer`). Enables the entry on the same
+   * terms as `onQuoteSelection`. MUST be referentially stable.
    */
-  onAskSelection?: (selection: string, question: string) => void
+  renderAskComposer?: (selection: string, close: () => void) => ReactNode
   /**
    * Keep a text selection from this transcript as a note next to it. Only the
    * canvas has a board to put one on, so every other surface omits it and the
@@ -220,6 +243,29 @@ interface MessageListViewProps {
    * (see `forkBusy`) rather than making every reply's footer flicker.
    */
   onForkFromTurn?: (turnId: string) => void
+  /**
+   * The connection's work that can outlive a turn, for the "N running" chip
+   * on the live activity row above the composer (see `LiveRunsChip`). Every
+   * surface with a connection passes it — the conversation page, a canvas
+   * card, the read-only sub-agent and task drawers (those without the stop).
+   * Omitted, the row shows the running turn's figures only. MUST be
+   * referentially stable while its contents are unchanged.
+   */
+  liveRuns?: LiveRunsSource | null
+}
+
+/** What `MessageListView` lists under its "N running" chip. */
+export interface LiveRunsSource {
+  /** The backend connection id: whose delegations these are. */
+  connectionId: string | null
+  asyncTasks: readonly AsyncTaskRecord[]
+  backgroundTasks: readonly BackgroundOutstandingTask[]
+  delegatedChildren: readonly string[]
+  /** Stops one async task. Omitted on read-only surfaces — a viewer has no
+   *  connection to send the stop on, so no row offers one. */
+  onStopAsyncTask?: (taskId: string) => Promise<boolean>
+  /** The agent's display name, for the row of a turn it started on its own. */
+  agentName?: string
 }
 
 export interface ResolvedMessageGroup {
@@ -250,6 +296,9 @@ export type ThreadRenderItem =
       showStats: boolean
       isRoleTransition: boolean
       previousUserIndex: number | null
+      /** The owner's message this reply answers (the closest user turn
+       *  before it): what a check of the reply is handed (10.3). */
+      previousUserGroup: ResolvedMessageGroup | null
       /** The newest assistant reply in the thread. Together with the view's
        *  `armed` flag this is what makes a run "the current round" — see the
        *  fold state below. */
@@ -468,6 +517,13 @@ const EMPTY_NAV_ENTRIES: MessageNavEntry[] = []
 // Stable empty reference for "the live reply has no plan".
 const EMPTY_PLAN_ENTRIES: PlanEntryInfo[] = []
 
+// Stable empty references for the running list's inputs.
+const EMPTY_ASYNC_TASKS: readonly AsyncTaskRecord[] = []
+const EMPTY_BACKGROUND_TASKS: readonly BackgroundOutstandingTask[] = []
+const EMPTY_IDS: readonly string[] = []
+const EMPTY_BINDINGS: readonly DelegationBinding[] = []
+const EMPTY_AGENT_CALLS: readonly AdaptedToolCallPart[] = []
+
 // A single turn's `sourceTurns` is just `[turn]`. Cache the wrapper per turn
 // object so an unchanged historical turn keeps a stable `sourceTurns` reference
 // across streaming-token re-renders — that's the last prop preventing
@@ -493,8 +549,8 @@ export function singletonSourceTurns(turn: MessageTurn): MessageTurn[] {
 //   - `resume_delegation`, which brought an interrupted one BACK. Its own
 //     tool_call_id is not a binding key (the broker re-binds the child to the
 //     original delegate call, usually in an earlier turn), so it is keyed by
-//     the task id in its arguments — `taskIdHint`, exactly as
-//     `ResumedDelegationCard` does. Without this arm a resumed sub-agent would
+//     the task id in its arguments — `taskIdHint`, exactly as the timeline's
+//     `DelegationResumeRow` does. Without this arm a resumed sub-agent would
 //     be missing from the overlay while it runs, because the reply that
 //     resumed it contains no `delegate_to_agent` call at all.
 //
@@ -527,7 +583,7 @@ function collectDelegationSources(
       } else if (name === "resume_delegation") {
         // A refusal names the task's agent and child but revived nothing —
         // listing it would put a sub-agent in the overlay that is not running
-        // on this turn's behalf. Same judgement as `ResumedDelegationCard`,
+        // on this turn's behalf. Same judgement as `DelegationResumeRow`,
         // which falls back to the plain tool card here.
         if (isRefusedResume(part.output ?? null, part.errorText ?? null)) {
           continue
@@ -542,7 +598,7 @@ function collectDelegationSources(
           taskIdHint: taskId,
           // Deliberately not the resume's `{task_id, reason}` arguments —
           // `parseInput` looks for `task`/`agent_type`/`working_dir` and would
-          // only warn about an unrecognized shape. See `ResumedDelegationCard`.
+          // only warn about an unrecognized shape. See `DelegationResumeRow`.
           input: null,
           output: part.output ?? null,
           errorText: part.errorText ?? null,
@@ -773,6 +829,9 @@ export interface MergedAssistantRunCacheEntry {
   memberKeys: string[]
   memberCompletion: boolean[]
   item: AssistantTurnItem
+  /** Its parts' merge, which the run's next merge starts from when only its
+   *  last members changed — a reply streaming in (see `mergeRunParts`). */
+  merge: MergedRunParts
 }
 export type MergedAssistantRunCache = WeakMap<
   ResolvedMessageGroup,
@@ -798,6 +857,18 @@ export function isTurnErrorGroup(group: ResolvedMessageGroup): boolean {
   )
 }
 
+type CompactionOnlyPart = {
+  meta: Record<string, unknown> | null
+  summary: string | null
+  state: ToolCallState
+  callId: string
+} | null
+
+const compactionOnlyByGroup = new WeakMap<
+  ResolvedMessageGroup,
+  CompactionOnlyPart
+>()
+
 /**
  * When a resolved group's ONLY meaningful content is a single context-compaction
  * tool-call part, return that part's `_meta`, retained summary and call id (so
@@ -808,20 +879,35 @@ export function isTurnErrorGroup(group: ResolvedMessageGroup): boolean {
  * boolean marker or the 1.3.0+ versioned object), so a non-null return is
  * unambiguous.
  */
-export function compactionOnlyPart(group: ResolvedMessageGroup): {
-  meta: Record<string, unknown> | null
-  summary: string | null
-  state: ToolCallState
-  callId: string
-} | null {
+export function compactionOnlyPart(
+  group: ResolvedMessageGroup
+): CompactionOnlyPart {
+  // Asked of every group on every batch, and a group keeps its object for as
+  // long as it reads the same.
+  let found = compactionOnlyByGroup.get(group)
+  if (found === undefined) {
+    found = findCompactionOnlyPart(group)
+    compactionOnlyByGroup.set(group, found)
+  }
+  return found
+}
+
+function findCompactionOnlyPart(
+  group: ResolvedMessageGroup
+): CompactionOnlyPart {
   if (group.role !== "assistant") return null
   if (group.resources.length > 0 || group.images.length > 0) return null
-  const meaningful = group.parts.filter(
-    (p) => !(p.type === "text" && p.text.trim().length === 0)
-  )
-  if (meaningful.length !== 1) return null
-  const only = meaningful[0]
-  if (only.type !== "tool-call" || !isContextCompactionMeta(only.meta)) {
+  let only: AdaptedContentPart | null = null
+  for (const part of group.parts) {
+    if (part.type === "text" && part.text.trim().length === 0) continue
+    if (only) return null
+    only = part
+  }
+  if (
+    !only ||
+    only.type !== "tool-call" ||
+    !isContextCompactionMeta(only.meta)
+  ) {
     return null
   }
   return {
@@ -1003,20 +1089,21 @@ export function mergeConsecutiveAssistantTurns(
     } else if (reuseCachedMergedRun()) {
       // Reused — nothing to rebuild.
     } else {
-      const allParts = buffer.flatMap((it) => it.group.parts)
       // A goal run straddling these merged sub-turns is still live only if the
       // final sub-turn is streaming; once it settles (stop / turn end / reload)
       // the unfinished-run shimmer must stop. Mirror groupGoalRuns' per-turn
       // isStreaming gate at the merge layer.
       const mergedStreaming = buffer.some((it) => it.phase === "streaming")
       // Collapse runs of single-poll delegation-status and background-task
-      // groups (each polling round is its own turn) into one.
-      const mergedParts = groupGoalRuns(
-        mergeAdjacentBackgroundTaskGroups(
-          mergeAdjacentDelegationStatusGroups(allParts)
-        ),
-        mergedStreaming
+      // groups (each polling round is its own turn) into one, and a goal's
+      // lifecycle into its run — starting from the run's last merge where
+      // only its last members changed, as they do while it streams.
+      const merge = mergeRunParts(
+        buffer.map((it) => it.group.parts),
+        mergedStreaming,
+        mergeCache?.get(buffer[0].group)?.merge ?? null
       )
+      const mergedParts = merge.parts
       const last = buffer[buffer.length - 1]
       const first = buffer[0]
 
@@ -1092,6 +1179,7 @@ export function mergeConsecutiveAssistantTurns(
         memberKeys: buffer.map((it) => it.key),
         memberCompletion: buffer.map((it) => it.isResponseComplete),
         item: merged,
+        merge,
       })
     }
 
@@ -1257,6 +1345,8 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
   onForkFromTurn,
   forkDisabled = false,
   isThreadTail = false,
+  previousUserGroup = null,
+  checkKey,
 }: {
   group: ResolvedMessageGroup
   dimmed?: boolean
@@ -1273,11 +1363,17 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
   /** Whether nothing follows this group in the thread — the one position where
    *  a turn the backend cannot name still forks where the user pointed. */
   isThreadTail?: boolean
+  /** The owner's message this reply answers (10.3). */
+  previousUserGroup?: ResolvedMessageGroup | null
+  /** The reply's key in the thread: a selection in it is checked as a
+   *  sentence of it (10.3). */
+  checkKey?: string
 }) {
   // A message the user has just sent rises into the thread. Decided once, as
   // it mounts on its way (`dimmed`): the virtual list bringing a stored one
   // back never replays it.
   const [risesIn] = useState(dimmed && group.role === "user")
+  const checks = useMessageChecks()
   if (group.role === "system") {
     // A failed turn's line is the agent's account of the failure, not a
     // message the system sent: it closes the round in place, unboxed.
@@ -1293,6 +1389,12 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
     ? sourceTurns[sourceTurns.length - 1]
     : null
   const forkPointUnnamed = isForkPointUnnamed(forkPoint, isThreadTail)
+  const replyText =
+    group.role === "assistant" && isResponseComplete
+      ? extractTextFromParts(group.parts)
+      : ""
+  const askedOf = () =>
+    previousUserGroup ? askedTextOf(previousUserGroup) : null
 
   return (
     // Dimmed while the message is on its way (not yet stored); it brightens
@@ -1303,6 +1405,11 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
       <Message
         from={group.role}
         className={risesIn ? "chat-enter-rise" : undefined}
+        data-check-key={
+          checks && group.role === "assistant" && isResponseComplete
+            ? checkKey
+            : undefined
+        }
       >
         {group.role === "user" && group.images.length > 0 ? (
           <UserImageAttachments images={group.images} className="self-end" />
@@ -1332,6 +1439,9 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
           <UserResourceLinks resources={group.resources} className="self-end" />
         ) : null}
       </Message>
+      {checks && replyText ? (
+        <CheckMarks text={replyText} askedOf={askedOf} />
+      ) : null}
       {showStats && group.role === "assistant" && sourceTurns && (
         <ReplyArtifacts
           sourceTurns={sourceTurns}
@@ -1346,7 +1456,9 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
           models={group.models}
           previousUserIndex={previousUserIndex}
           isResponseComplete={isResponseComplete}
-          copyText={extractTextFromParts(group.parts)}
+          // The row shows nothing until the reply is done; joining all of a
+          // long reply's prose on every batch while it streams bought nothing.
+          copyText={replyText}
           completedAt={group.completed_at}
           forkDisabled={forkDisabled || forkPointUnnamed}
           forkDisabledReason={forkPointUnnamed ? "unnamed" : "busy"}
@@ -1366,11 +1478,27 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
                 }
               : undefined
           }
+          onCheck={
+            checks && replyText
+              ? () =>
+                  checks.check({
+                    message: replyText,
+                    asked: askedOf(),
+                    quote: null,
+                  })
+              : undefined
+          }
         />
       )}
     </div>
   )
 })
+
+/** The owner's message, as it reads (its composer escaping undone). */
+function askedTextOf(group: ResolvedMessageGroup): string | null {
+  const text = unescapeComposerText(extractTextFromParts(group.parts)).trim()
+  return text || null
+}
 
 /** No parts yet: the reply the pending one stands for has said nothing. */
 const NO_PARTS: AdaptedContentPart[] = []
@@ -1398,22 +1526,54 @@ const PendingReply = memo(function PendingReply() {
 
 type LiveStatsMessage = ComponentProps<typeof LiveTurnStats>["message"]
 
+interface LiveActivityContent {
+  /** The running turn, `null` when none runs. */
+  message: LiveStatsMessage
+  runs: LiveRunsList
+}
+
 /**
- * The running turn's figures, kept at the turn's last ones while the bar
- * slides away after it ends (the live message goes as the turn does), so the
- * figures leave with the bar instead of blanking it first. Mounted only while
- * the bar is, so a new turn starts from its own.
+ * The live activity row above the composer: the running turn's figures and the
+ * "N running" chip. While it shows (`show`) it draws what is live — so a turn
+ * that ends with work still running leaves the chip alone on the row. While it
+ * slides away it keeps its last content, so that leaves with the row instead
+ * of blanking it first. Mounted only while the row is, so a new turn starts
+ * from its own.
  */
-function HeldLiveTurnStats({ message }: { message: LiveStatsMessage | null }) {
-  const [held, setHeld] = useState(message)
-  if (message !== null && message !== held) setHeld(message)
-  const shown = message ?? held
-  // Keyed by its turn: a turn that starts while the last one's bar is still
-  // sliding away gets figures of its own, its clock from zero.
-  return shown ? (
-    <LiveTurnStats key={shown.id} message={shown} />
-  ) : (
-    <div className="h-8" />
+function HeldLiveActivityBar({
+  show,
+  message,
+  runs,
+  onStopAsyncTask,
+  agentName,
+}: LiveActivityContent & {
+  show: boolean
+  onStopAsyncTask?: (taskId: string) => Promise<boolean>
+  agentName?: string
+}) {
+  const [held, setHeld] = useState<LiveActivityContent>(() => ({
+    message,
+    runs,
+  }))
+  if (show && (held.message !== message || held.runs !== runs)) {
+    setHeld({ message, runs })
+  }
+  const shown = show ? { message, runs } : held
+  if (!shown.message && shown.runs.count === 0) return <div className="h-8" />
+  return (
+    <LiveTurnStats
+      message={shown.message}
+      trailing={
+        shown.runs.count > 0 ? (
+          <LiveRunsChip
+            runs={shown.runs}
+            interactive={show}
+            onStopAsyncTask={onStopAsyncTask}
+            agentName={agentName}
+          />
+        ) : null
+      }
+    />
   )
 }
 
@@ -1452,6 +1612,7 @@ export function MessageListView({
   availableCommands,
   connStatus,
   isActive = true,
+  isVisible = true,
   sendSignal = 0,
   detailLoading = false,
   detailError = null,
@@ -1462,9 +1623,10 @@ export function MessageListView({
   insightsInSidebar = false,
   userTurnHeader = null,
   onQuoteSelection,
-  onAskSelection,
+  renderAskComposer,
   onSaveNoteSelection,
   onForkFromTurn,
+  liveRuns = null,
 }: MessageListViewProps) {
   const t = useTranslations("Folder.chat.messageList")
   const sharedT = useTranslations("Folder.chat.shared")
@@ -1658,6 +1820,7 @@ export function MessageListView({
         showStats: false,
         isRoleTransition: false,
         previousUserIndex: null,
+        previousUserGroup: null,
         isLastAssistantRun: false,
         isThreadTail: false,
         sourceTurns: singletonSourceTurns(allTurns[i]),
@@ -1678,6 +1841,7 @@ export function MessageListView({
     // previousUserIndex points at the closest preceding user turn (used by the
     // post-stream stats row's "jump to previous user message" button).
     let lastUserIdx: number | null = null
+    let lastUserGroup: ResolvedMessageGroup | null = null
     let lastAssistantItem: AssistantTurnItem | null = null
     for (let idx = 0; idx < items.length; idx++) {
       const item = items[idx]
@@ -1688,6 +1852,7 @@ export function MessageListView({
       item.showStats = false
       item.isRoleTransition = false
       item.previousUserIndex = null
+      item.previousUserGroup = null
       item.isLastAssistantRun = false
       item.isThreadTail = false
 
@@ -1701,11 +1866,13 @@ export function MessageListView({
 
       if (item.group.role === "user") {
         lastUserIdx = idx
+        lastUserGroup = item.group
       }
 
       // showStats: only on the last assistant turn before a non-assistant or end
       if (item.group.role === "assistant") {
         lastAssistantItem = item
+        item.previousUserGroup = lastUserGroup
         const next = items[idx + 1]
         if (!next || next.kind !== "turn" || next.group.role !== "assistant") {
           item.showStats = true
@@ -1819,6 +1986,8 @@ export function MessageListView({
                 onForkFromTurn={onForkFromTurn}
                 forkDisabled={forkBusy}
                 isThreadTail={item.isThreadTail}
+                previousUserGroup={item.previousUserGroup}
+                checkKey={item.key}
               />
             </div>
           )
@@ -1941,6 +2110,34 @@ export function MessageListView({
   // (non-scrolling) frame, so the bubble is clipped to the message area and
   // never overlaps the composer or the tab strip.
   const selectionBoxRef = useRef<HTMLDivElement | null>(null)
+  // The thread as last rendered, for a selection checked as a sentence of
+  // its reply (10.3): read at the click, not on every render.
+  const threadItemsRef = useRef(threadItems)
+  useEffect(() => {
+    threadItemsRef.current = threadItems
+  }, [threadItems])
+  const resolveCheck = useCallback(
+    (key: string): Omit<CheckAsk, "quote"> | null => {
+      const item = threadItemsRef.current.find((i) => i.key === key)
+      if (
+        !item ||
+        item.kind !== "turn" ||
+        item.group.role !== "assistant" ||
+        !item.isResponseComplete
+      ) {
+        return null
+      }
+      const message = extractTextFromParts(item.group.parts)
+      if (!message.trim()) return null
+      return {
+        message,
+        asked: item.previousUserGroup
+          ? askedTextOf(item.previousUserGroup)
+          : null,
+      }
+    },
+    []
+  )
 
   // The loaded user messages: how many, and where each renders. Cheap — no
   // diff parsing — so the message count and the jumps can use it while
@@ -2073,6 +2270,31 @@ export function MessageListView({
       : null
   const navRevealingTurnId = navJump.revealingTurnId
   const replyStreaming = connStatus === "prompting"
+  // The round the agent is on, which the navigator lists first while it runs:
+  // from the send (the prompt is in, no word back yet) to the reply settling,
+  // for a passive viewer too. Its message is the last user turn — a walk back
+  // from the end, cheap enough for every batch; the store keeps the value
+  // while it is unchanged.
+  const roundRunning = replyStreaming || lastAssistantRunning
+  const liveStartedAt = liveMessage?.startedAt ?? null
+  const runningUserTurn = useMemo(() => {
+    if (!insightsInSidebar || !roundRunning) return null
+    for (let i = timelineTurns.length - 1; i >= 0; i--) {
+      const turn = timelineTurns[i].turn
+      if (turn.role === "user") return turn
+    }
+    return null
+  }, [insightsInSidebar, roundRunning, timelineTurns])
+  const runningRound = useMemo<TranscriptRunningRound | null>(() => {
+    if (!runningUserTurn) return null
+    const sentAt = Date.parse(runningUserTurn.timestamp)
+    return {
+      turnId: runningUserTurn.id,
+      // The composer's live timer counts from the live reply's start; agree
+      // with it while one is streaming.
+      startedAt: liveStartedAt ?? (Number.isNaN(sentAt) ? null : sentAt),
+    }
+  }, [runningUserTurn, liveStartedAt])
   const transcriptInsights = useMemo<TranscriptInsights | null>(
     () =>
       insightsInSidebar
@@ -2083,6 +2305,7 @@ export function MessageListView({
               earlier: navEarlier,
               revealingTurnId: navRevealingTurnId,
               currentTurnId: currentNavTurnId,
+              running: runningRound,
             },
             plan: { entries: sidebarPlanEntries, streaming: replyStreaming },
             actions: insightsActions,
@@ -2095,6 +2318,7 @@ export function MessageListView({
       navEarlier,
       navRevealingTurnId,
       currentNavTurnId,
+      runningRound,
       sidebarPlanEntries,
       replyStreaming,
       insightsActions,
@@ -2112,16 +2336,105 @@ export function MessageListView({
     return () => retractTranscriptInsights(conversationId, insightsOwner)
   }, [insightsInSidebar, conversationId, insightsOwner])
 
+  // --- The live activity row ------------------------------------------------
+  const turnLive = liveMessage !== null && connStatus === "prompting"
+  // The streaming reply's sub-agents still at work. Only while the turn runs:
+  // a foreground sub-agent blocks its turn, and a reply that ended keeps its
+  // frozen calls (a background one is the producer's to report, below).
+  const foregroundAgents = useMemo(() => {
+    if (!turnLive) return EMPTY_AGENT_CALLS
+    const out: AdaptedToolCallPart[] = []
+    for (const item of threadItems) {
+      if (
+        item.kind === "turn" &&
+        item.phase === "streaming" &&
+        item.group.role === "assistant"
+      ) {
+        out.push(...runningSubAgentCalls(item.group.parts))
+      }
+    }
+    return out.length > 0 ? out : EMPTY_AGENT_CALLS
+  }, [turnLive, threadItems])
+  const delegation = useOptionalDelegation()
+  const runsConnectionId = liveRuns?.connectionId ?? null
+  const delegationBindings = useMemo(
+    () =>
+      delegation && runsConnectionId
+        ? delegation.bindingsForParent(runsConnectionId)
+        : EMPTY_BINDINGS,
+    [delegation, runsConnectionId]
+  )
+  const backgroundTasks = liveRuns?.backgroundTasks ?? EMPTY_BACKGROUND_TASKS
+  // A background sub-agent's row takes its title from its launch card. The
+  // thread is only searched while there is one, so the list is not rebuilt on
+  // every streaming batch for nothing.
+  const cardThread = backgroundTasks.some((task) => task.kind === "agent")
+    ? threadItems
+    : null
+  const liveRunList = useMemo<LiveRunsList>(
+    () =>
+      collectLiveRuns({
+        asyncTasks: liveRuns?.asyncTasks ?? EMPTY_ASYNC_TASKS,
+        foregroundAgents,
+        backgroundTasks,
+        nativeShellTasks: agentType === "antigravity",
+        findLaunchCard: (toolCallId) => {
+          if (!cardThread) return null
+          for (let i = cardThread.length - 1; i >= 0; i -= 1) {
+            const item = cardThread[i]
+            if (item.kind !== "turn" || item.group.role !== "assistant")
+              continue
+            const part = subAgentCallsById(item.group.parts).get(toolCallId)
+            if (part) return part
+          }
+          return null
+        },
+        delegatedChildren: liveRuns?.delegatedChildren ?? EMPTY_IDS,
+        delegationBindings,
+      }),
+    [
+      agentType,
+      liveRuns?.asyncTasks,
+      liveRuns?.delegatedChildren,
+      foregroundAgents,
+      backgroundTasks,
+      cardThread,
+      delegationBindings,
+    ]
+  )
+  const activityShown = turnLive || liveRunList.count > 0
+  // Slides in over the composer as a turn starts or work starts running past
+  // one, and out once neither is left, so the transcript above eases up and
+  // back instead of jumping. Drawn under the loading and load-error states
+  // too: what runs is the connection's, not the transcript's, and its stop
+  // must not wait on the history loading.
+  const activityRow = (
+    <SlideSlot className="shrink-0" show={activityShown}>
+      <HeldLiveActivityBar
+        show={activityShown}
+        message={turnLive ? liveMessage : null}
+        runs={liveRunList}
+        onStopAsyncTask={liveRuns?.onStopAsyncTask}
+        agentName={liveRuns?.agentName}
+      />
+    </SlideSlot>
+  )
+
   const hasRenderableContent = threadItems.length > 0 || Boolean(liveMessage)
 
   if (detailLoading && !hasRenderableContent) {
     return (
-      <div className="flex h-full items-center justify-center">
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          <span>{t("loading")}</span>
+      <SessionViewerHost>
+        <div className="flex h-full min-h-0 flex-col">
+          <div className="flex min-h-0 flex-1 items-center justify-center">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span>{t("loading")}</span>
+            </div>
+          </div>
+          {activityRow}
         </div>
-      </div>
+      </SessionViewerHost>
     )
   }
 
@@ -2139,48 +2452,59 @@ export function MessageListView({
     const showActions = Boolean(onReload || onNewSession)
     const reloading = detailLoading
     return (
-      <div role="alert" className="flex h-full items-center justify-center p-6">
-        <div className="flex max-w-md flex-col items-center gap-4 text-center">
-          <AlertCircle
-            aria-hidden="true"
-            className="h-8 w-8 text-destructive"
-          />
-          <div className="space-y-1">
-            <h3 className="text-sm font-medium">{t("errorTitle")}</h3>
-            <p className="text-sm text-muted-foreground break-words">
-              {renderedLoadError}
-            </p>
-          </div>
-          {showActions && (
-            <div className="flex flex-wrap items-center justify-center gap-2">
-              {onReload && (
-                <Button
-                  size="sm"
-                  onClick={onReload}
-                  disabled={reloading}
-                  aria-busy={reloading}
-                >
-                  {reloading ? (
-                    <Loader2
-                      aria-hidden="true"
-                      className="me-1.5 h-4 w-4 animate-spin"
-                    />
-                  ) : (
-                    <RefreshCw aria-hidden="true" className="me-1.5 h-4 w-4" />
+      <SessionViewerHost>
+        <div className="flex h-full min-h-0 flex-col">
+          <div
+            role="alert"
+            className="flex min-h-0 flex-1 items-center justify-center p-6"
+          >
+            <div className="flex max-w-md flex-col items-center gap-4 text-center">
+              <AlertCircle
+                aria-hidden="true"
+                className="h-8 w-8 text-destructive"
+              />
+              <div className="space-y-1">
+                <h3 className="text-sm font-medium">{t("errorTitle")}</h3>
+                <p className="text-sm text-muted-foreground break-words">
+                  {renderedLoadError}
+                </p>
+              </div>
+              {showActions && (
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  {onReload && (
+                    <Button
+                      size="sm"
+                      onClick={onReload}
+                      disabled={reloading}
+                      aria-busy={reloading}
+                    >
+                      {reloading ? (
+                        <Loader2
+                          aria-hidden="true"
+                          className="me-1.5 h-4 w-4 animate-spin"
+                        />
+                      ) : (
+                        <RefreshCw
+                          aria-hidden="true"
+                          className="me-1.5 h-4 w-4"
+                        />
+                      )}
+                      {t("errorActionReload")}
+                    </Button>
                   )}
-                  {t("errorActionReload")}
-                </Button>
-              )}
-              {onNewSession && (
-                <Button size="sm" variant="outline" onClick={onNewSession}>
-                  <Plus aria-hidden="true" className="me-1.5 h-4 w-4" />
-                  {t("errorActionNewSession")}
-                </Button>
+                  {onNewSession && (
+                    <Button size="sm" variant="outline" onClick={onNewSession}>
+                      <Plus aria-hidden="true" className="me-1.5 h-4 w-4" />
+                      {t("errorActionNewSession")}
+                    </Button>
+                  )}
+                </div>
               )}
             </div>
-          )}
+          </div>
+          {activityRow}
         </div>
-      </div>
+      </SessionViewerHost>
     )
   }
 
@@ -2245,14 +2569,7 @@ export function MessageListView({
             </Button>
           )}
         </MessageThread>
-        {/* Slides in over the composer as a turn starts and out as it ends,
-            so the transcript above eases up and back instead of jumping. */}
-        <SlideSlot
-          className="shrink-0"
-          show={liveMessage !== null && connStatus === "prompting"}
-        >
-          <HeldLiveTurnStats message={liveMessage} />
-        </SlideSlot>
+        {activityRow}
         {/* Overlay stack pinned to the inline-start edge (top-left in LTR,
         top-right in RTL) — only where the plan and sub-agents have no side
         panel to go to (see `insightsInSidebar`). A flex column keeps the order
@@ -2280,11 +2597,13 @@ export function MessageListView({
             />
           </div>
         )}
-        <SelectionActionBubble
+        <CheckableSelectionBubble
           containerRef={selectionBoxRef}
+          isVisible={isVisible}
           onQuote={onQuoteSelection}
-          onAsk={onAskSelection}
+          renderAskComposer={renderAskComposer}
           onSaveAsNote={onSaveNoteSelection}
+          resolveCheck={resolveCheck}
         />
       </div>
     </SessionViewerHost>
@@ -2294,11 +2613,37 @@ export function MessageListView({
     <MarkdownImageProvider rootPath={resolvedImageRoot}>
       <ModelLabelProvider value={modelLabel}>
         <DelegationStatusIndexProvider value={delegationStatusIndex}>
-          <KnownInvocationsProvider value={knownInvocations}>
-            {thread}
-          </KnownInvocationsProvider>
+          <MessageChecksProvider conversationId={conversationId}>
+            <KnownInvocationsProvider value={knownInvocations}>
+              {thread}
+            </KnownInvocationsProvider>
+          </MessageChecksProvider>
         </DelegationStatusIndexProvider>
       </ModelLabelProvider>
     </MarkdownImageProvider>
   )
+}
+
+/** The selection bubble, with "Check" for a sentence of a reply where the
+ *  conversation's checks are offered (10.3). */
+function CheckableSelectionBubble({
+  resolveCheck,
+  ...props
+}: ComponentProps<typeof SelectionActionBubble> & {
+  resolveCheck: (key: string) => Omit<CheckAsk, "quote"> | null
+}) {
+  const checks = useMessageChecks()
+  const check = checks?.check
+  const onCheck = useMemo(
+    () =>
+      check
+        ? (text: string, from: Element) => {
+            const key = from.getAttribute("data-check-key")
+            const ask = key ? resolveCheck(key) : null
+            if (ask) check({ ...ask, quote: text })
+          }
+        : undefined,
+    [check, resolveCheck]
+  )
+  return <SelectionActionBubble {...props} onCheck={onCheck} />
 }

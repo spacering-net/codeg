@@ -2,6 +2,7 @@ import { defineCatalog } from "@json-render/core"
 import { schema } from "@json-render/react/schema"
 import { shadcnComponentDefinitions } from "@json-render/shadcn/catalog"
 
+import { assistantActionDefinitions } from "./assistant-actions"
 import { chartComponentDefinitions } from "./charts"
 
 /**
@@ -18,4 +19,15 @@ import { chartComponentDefinitions } from "./charts"
 export const jsonRenderCatalog = defineCatalog(schema, {
   components: { ...shadcnComponentDefinitions, ...chartComponentDefinitions },
   actions: {},
+})
+
+/**
+ * An assistant's catalog: the same components, plus its three actions
+ * (`./assistant-actions.ts`). Only the assistant's guide is generated from
+ * it; the assistants page renders with the components of the shared one and
+ * hands the actions to its own provider.
+ */
+export const assistantJsonRenderCatalog = defineCatalog(schema, {
+  components: { ...shadcnComponentDefinitions, ...chartComponentDefinitions },
+  actions: assistantActionDefinitions,
 })

@@ -114,6 +114,7 @@ export function StatusBarMcp() {
 
   useEffect(() => {
     aliveRef.current = true
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- starts the external status poll
     void refresh()
     const id = setInterval(() => void refresh(), POLL_MS)
     return () => {

@@ -432,6 +432,7 @@ export function CursorConfigPanel({
   // Probe on mount and whenever the method changes (the ref above is updated
   // first, so the probe sees the right credential for the new mode).
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- auth probe against the CLI; the loader flips its loading flag first
     void refreshAuth()
   }, [refreshAuth, mode])
 
@@ -473,12 +474,16 @@ export function CursorConfigPanel({
   useEffect(() => {
     if (authState !== "ok") return
     if (modelsLoaded || modelsLoading) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- model list fetch; the loader flips its loading flag first
     void loadModels()
   }, [authState, loadModels, modelsLoaded, modelsLoading])
 
   // Reset the "loaded" latch when the method changes so the effect above
-  // re-probes the model list for the newly-selected credential.
+  // re-probes the model list for the newly-selected credential. Kept as an
+  // effect: it must run after the auth probe above has flipped `authLoading`,
+  // or the model fetch would fire against the previous method's auth state.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- ordered after the auth-probe effect, see above
     setModelsLoaded(false)
     setModels([])
     setModelsError(null)

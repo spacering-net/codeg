@@ -263,6 +263,7 @@ mod tests {
             details: Some("try later".into()),
             actions: vec![],
             resolved: false,
+            echoed_in_reply: false,
         };
         assert_eq!(
             error_text(&AcpEvent::SessionFailure {

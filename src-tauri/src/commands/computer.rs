@@ -581,7 +581,7 @@ impl ComputerService {
             #[cfg(feature = "tauri-runtime")]
             ComputerHost::Desktop(app) => (
                 ComputerEvents::Desktop(app.clone()),
-                EventEmitter::Tauri(app.clone()),
+                EventEmitter::from_app(app),
             ),
             ComputerHost::Server {
                 broadcaster,

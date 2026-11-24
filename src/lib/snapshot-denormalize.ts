@@ -1,6 +1,9 @@
+import { stripKimiMcpOAuth } from "@/lib/kimi-mcp-oauth"
 import type {
   ActiveDelegationState,
+  AskDelegate,
   AsyncTaskRecord,
+  BackgroundOutstandingTask,
   AvailableCommandInfo,
   ConfigStaleKind,
   ConnectionStatus,
@@ -20,6 +23,7 @@ import type {
 } from "@/lib/types"
 
 import { routeAcpError, type AcpErrorLevel } from "@/lib/acp-error-presentation"
+import { replaceLiveToolRawOutput } from "@/lib/live-tool-output"
 import type {
   LiveContentBlock as LocalLiveContentBlock,
   LiveMessage as LocalLiveMessage,
@@ -70,12 +74,16 @@ export interface SnapshotPatch {
    *  so a client attaching mid-turn re-renders the plan-approval card. `null`
    *  when no approval is pending. */
   pendingPlanApproval: PendingPlanApprovalState | null
+  /** What the dispatching assistant answers here for the owner (7.3.1). */
+  askDelegate?: AskDelegate | null
   /** In-flight user prompt carried by the snapshot, so a client attaching
    *  mid-turn can synthesize the user turn (Bug-2 / cross-client viewing).
    *  `null` when no turn is in flight. */
   pendingUserMessage: PendingUserMessage | null
   promptCapabilities: PromptCapabilitiesInfo | null
   selectorsReady: boolean
+  /** The composer's pending mode pick on this connection, or `null`. */
+  composerModeId: string | null
   supportsFork: boolean
   /** Whether the running session is on stale (launch-time) config — recovered
    *  from the snapshot so a reconnect/refresh/new tile sees the banner state
@@ -87,6 +95,9 @@ export interface SnapshotPatch {
    *  `background_activity` events won't replay. `0` when the server omitted
    *  the field. */
   backgroundOutstanding: number
+  /** Those tasks one by one (`background_outstanding_tasks`), for the
+   *  composer's running list. Empty when the server omitted the field. */
+  backgroundTasks: readonly BackgroundOutstandingTask[]
   /** AIR typed session failure table carried by the snapshot — resolved
    *  entries and their revision watermarks included. MERGED into the in-memory
    *  table by the monotonic per-id rule (`mergeSessionFailures`) on BOTH
@@ -116,6 +127,9 @@ export interface SnapshotPatch {
    *  `seedDelegationsFromSnapshot`); the reducer does not store this on
    *  ConnectionState. `[]` when the server omitted the field. */
   activeDelegations: ActiveDelegationState[]
+  /** Child connection ids of every running codeg delegation — the parent's
+   *  busy signal (`ConnectionState.delegatedChildren`). `[]` when absent. */
+  delegatedChildren: string[]
 }
 
 const DEFAULT_PROMPT_CAPS: PromptCapabilitiesInfo = {
@@ -167,6 +181,7 @@ export function denormalizeSnapshot(wire: LiveSessionSnapshot): SnapshotPatch {
     pendingAskQuestion: wire.pending_question ?? null,
     // The snapshot shape already matches PendingPlanApprovalState; pass through.
     pendingPlanApproval: wire.pending_plan_approval ?? null,
+    askDelegate: wire.ask_delegate ?? null,
     pendingUserMessage: wire.pending_user_message
       ? {
           messageId: wire.pending_user_message.message_id,
@@ -175,10 +190,12 @@ export function denormalizeSnapshot(wire: LiveSessionSnapshot): SnapshotPatch {
       : null,
     promptCapabilities: wire.prompt_capabilities ?? DEFAULT_PROMPT_CAPS,
     selectorsReady: wire.selectors_ready,
+    composerModeId: wire.composer_mode_id ?? null,
     supportsFork: wire.fork_supported,
     configStale: wire.config_stale ?? false,
     configStaleKind: wire.config_stale_kind ?? null,
     backgroundOutstanding: wire.background_outstanding ?? 0,
+    backgroundTasks: wire.background_outstanding_tasks ?? [],
     sessionFailures: wire.session_failures ?? [],
     toolApprovals: wire.tool_approvals ?? [],
     asyncTasks: wire.async_tasks ?? [],
@@ -187,6 +204,7 @@ export function denormalizeSnapshot(wire: LiveSessionSnapshot): SnapshotPatch {
     lastErrorLevel: routeAcpError(lastErrorCode).level,
     eventSeq: wire.event_seq,
     activeDelegations: wire.active_delegations ?? [],
+    delegatedChildren: wire.delegated_children ?? [],
   }
 }
 
@@ -208,9 +226,22 @@ function denormalizeLiveMessage(
   return {
     id: wire.id,
     role: wire.role === "tool" ? "tool" : "assistant",
-    content: wire.content
-      .map((block) => denormalizeBlock(block, toolMap))
-      .filter((b): b is LocalLiveContentBlock => b !== null),
+    content: [
+      ...wire.content
+        .map((block) => denormalizeBlock(block, toolMap))
+        .filter((b): b is LocalLiveContentBlock => b !== null),
+      // Only the agent's own account is kept (a blank title is worded by the
+      // client from the category), so the line is the agent's.
+      ...(wire.turn_error
+        ? [
+            {
+              type: "turn_error" as const,
+              message: wire.turn_error,
+              fromAgent: true,
+            },
+          ]
+        : []),
+    ],
     startedAt: Number.isNaN(startedAtMs) ? Date.now() : startedAtMs,
   }
 }
@@ -302,13 +333,8 @@ function toolStateToInfo(tc: ToolCallState): ToolCallInfo {
   // Backend's structured output is collapsed into a single raw chunk for
   // hydration. Chunk history isn't recoverable from the snapshot — the
   // frontend's per-chunk delta tracking will resume from subsequent events.
-  const outputChunks: string[] = []
-  let outputBytes = 0
-  const rawOutput = toolOutputRawText(tc.output)
-  if (rawOutput !== null) {
-    outputChunks.push(rawOutput)
-    outputBytes = rawOutput.length
-  }
+  const output = replaceLiveToolRawOutput(toolOutputRawText(tc.output))
+
   return {
     tool_call_id: tc.id,
     title: tc.label,
@@ -316,10 +342,9 @@ function toolStateToInfo(tc: ToolCallState): ToolCallInfo {
     status: tc.status,
     content: tc.content,
     raw_input: tc.input == null ? null : JSON.stringify(tc.input),
-    raw_output_chunks: outputChunks,
-    raw_output_total_bytes: outputBytes,
+    ...output,
     locations: tc.locations ?? null,
-    meta: tc.meta ?? null,
+    meta: stripKimiMcpOAuth(tc.meta ?? null),
     images: tc.images ?? [],
   }
 }

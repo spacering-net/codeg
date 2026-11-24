@@ -74,8 +74,11 @@ export function EditModelProviderDialog({
     customs: [],
   })
 
+  // Seed the form from the provider being edited, on mount and whenever the
+  // parent hands in a different one.
   useEffect(() => {
     if (provider) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- form seeding from the `provider` prop, including on mount
       setName(provider.name)
       setApiUrl(provider.api_url)
       setApiKey("")

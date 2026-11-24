@@ -121,6 +121,25 @@ describe("buildMessageNavEntries", () => {
     expect(entries[2].files.map((f) => f.path)).toEqual(["/repo/b.ts"])
   })
 
+  it("says when each message was sent", () => {
+    const entries = buildMessageNavEntries({
+      earlierTurns: null,
+      earlierUserCount: 0,
+      loadedTurns: [
+        user("turn-1", "first"),
+        { ...user("turn-2", "second"), timestamp: "" },
+      ],
+      threadIndexByTurnId: new Map([
+        ["turn-1", 0],
+        ["turn-2", 1],
+      ]),
+    })
+    expect(entries.map((e) => e.sentAt)).toEqual([
+      Date.parse("2026-10-01T08:00:00Z"),
+      null,
+    ])
+  })
+
   it("numbers the loaded messages on from the unlisted ones above them", () => {
     const entries = buildMessageNavEntries({
       earlierTurns: null,

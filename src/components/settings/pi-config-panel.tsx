@@ -56,6 +56,7 @@ import {
   PI_MIN_RUNTIME_VERSION,
   piRuntimeIsTooOld,
 } from "@/lib/pi-config"
+import { PI_BUILTIN_PROVIDERS } from "@/lib/pi-providers"
 import {
   PI_THINKING_LEVELS,
   clampThinkingLevel,
@@ -112,46 +113,6 @@ const NO_REASONING: PiModelReasoning = {
   levels: [],
   wireValues: {},
 }
-
-/**
- * Curated built-in providers for the enum, as `{ id, label }`: the Select stores
- * the `id` (pi's provider key, written to settings.json / auth.json) but shows the
- * brand `label`. Mirrors pi's authoritative `env-api-keys.ts` `envMap` — the
- * single-API-key subset most users want. Labels are brand names, not localized
- * (same convention as `HERMES_PROVIDERS`). Special-auth providers (azure /
- * bedrock / vertex / cloudflare / github-copilot) are omitted on purpose — they
- * need more than a single key, so they don't fit this flow; use "Custom" for them.
- */
-const PI_BUILTIN_PROVIDERS: { id: string; label: string }[] = [
-  { id: "anthropic", label: "Anthropic" },
-  { id: "openai", label: "OpenAI" },
-  { id: "google", label: "Google Gemini" },
-  { id: "openrouter", label: "OpenRouter" },
-  { id: "vercel-ai-gateway", label: "Vercel AI Gateway" },
-  { id: "xai", label: "xAI" },
-  { id: "deepseek", label: "DeepSeek" },
-  { id: "groq", label: "Groq" },
-  { id: "cerebras", label: "Cerebras" },
-  { id: "mistral", label: "Mistral" },
-  { id: "nvidia", label: "NVIDIA NIM" },
-  { id: "together", label: "Together AI" },
-  { id: "fireworks", label: "Fireworks" },
-  { id: "huggingface", label: "Hugging Face" },
-  { id: "kimi-coding", label: "Kimi For Coding" },
-  { id: "moonshotai", label: "Moonshot AI" },
-  { id: "moonshotai-cn", label: "Moonshot AI (China)" },
-  { id: "zai", label: "Z.AI Coding Plan (Global)" },
-  { id: "zai-coding-cn", label: "Z.AI Coding Plan (China)" },
-  { id: "minimax", label: "MiniMax" },
-  { id: "minimax-cn", label: "MiniMax (China)" },
-  { id: "ant-ling", label: "Ant Ling" },
-  { id: "xiaomi", label: "Xiaomi MiMo" },
-  { id: "xiaomi-token-plan-cn", label: "Xiaomi MiMo Token Plan (China)" },
-  { id: "xiaomi-token-plan-ams", label: "Xiaomi MiMo Token Plan (Amsterdam)" },
-  { id: "xiaomi-token-plan-sgp", label: "Xiaomi MiMo Token Plan (Singapore)" },
-  { id: "opencode", label: "OpenCode Zen" },
-  { id: "opencode-go", label: "OpenCode Go" },
-]
 
 /** Sentinel Select value that switches the credentials form to custom mode. */
 const PI_CUSTOM_SENTINEL = "__custom__"
@@ -414,6 +375,7 @@ export function PiConfigPanel({
   // throw away edits the user has not saved yet.
   useEffect(() => {
     let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reload of pi's config files when the agent dir changes
     setLoadingCreds(true)
     setConfigLoadError(null)
     if (invalidSavedAgentDir) {
@@ -468,6 +430,7 @@ export function PiConfigPanel({
   useEffect(() => {
     let cancelled = false
     if (invalidSavedAgentDir || invalidSavedCommand) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- the no-fetch branch of the catalog load below
       setCatalog({
         source: catalogSource,
         value: { status: "relative_path", models: [] },
@@ -717,6 +680,7 @@ export function PiConfigPanel({
   }, [])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- binary detection on mount; the loader flips its loading flag first
     void detectPiBinary()
   }, [detectPiBinary])
 
@@ -788,6 +752,7 @@ export function PiConfigPanel({
       return
     }
     let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset paired with the command validation fetch below
     setValidation(null)
     acpValidatePiCommand(savedPiCommand)
       .then((result) => {
@@ -820,6 +785,7 @@ export function PiConfigPanel({
   }, [invalidSavedAgentDir])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- trust list fetch from pi's trust.json
     void loadTrustEntries()
   }, [loadTrustEntries])
 

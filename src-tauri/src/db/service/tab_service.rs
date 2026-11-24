@@ -191,6 +191,113 @@ pub struct TabInvalidation {
     pub emit: Option<Vec<OpenedTab>>,
 }
 
+/// The server-side tab mutations that run under [`mutate_tabs_and_bump`].
+enum TabMutation<'a> {
+    DeleteConversation(i32),
+    DeleteFolder(i32),
+    RetargetConversations(&'a [i32]),
+}
+
+/// The skeleton every server-side tab invalidation shares: take
+/// [`version_lock`], open ONE transaction, apply `mutation`, ALWAYS bump the
+/// version (the barrier that rejects a concurrent stale `save_all_tabs_cas`),
+/// and snapshot only when a row actually changed.
+async fn mutate_tabs_and_bump(
+    conn: &DatabaseConnection,
+    mutation: TabMutation<'_>,
+) -> Result<TabInvalidation, DbError> {
+    let _guard = version_lock().lock().await;
+    let txn = conn.begin().await?;
+    let changed = match mutation {
+        TabMutation::DeleteConversation(conversation_id) => {
+            opened_tab::Entity::delete_many()
+                .filter(opened_tab::Column::ConversationId.eq(conversation_id))
+                .exec(&txn)
+                .await?
+                .rows_affected
+        }
+        TabMutation::DeleteFolder(folder_id) => {
+            opened_tab::Entity::delete_many()
+                .filter(opened_tab::Column::FolderId.eq(folder_id))
+                .exec(&txn)
+                .await?
+                .rows_affected
+        }
+        TabMutation::RetargetConversations(conversation_ids) => {
+            retarget_rows(&txn, conversation_ids).await?
+        }
+    };
+    let next = get_tabs_version(&txn).await? + 1;
+    app_metadata_service::upsert_value(&txn, OPENED_TABS_VERSION_KEY, &next.to_string()).await?;
+    let emit = if changed > 0 {
+        Some(list_all_tabs(&txn).await?)
+    } else {
+        None
+    };
+    txn.commit().await?;
+    Ok(TabInvalidation {
+        version: next,
+        emit,
+    })
+}
+
+/// Point every persisted tab of `conversation_ids` at the folder its
+/// conversation row is in NOW (read inside the same transaction, so a move
+/// that lands after another one still leaves the tab on the final folder).
+/// Returns how many rows changed.
+async fn retarget_rows<C: ConnectionTrait>(
+    conn: &C,
+    conversation_ids: &[i32],
+) -> Result<u64, DbError> {
+    use crate::db::entities::conversation;
+    use sea_orm::QuerySelect;
+
+    if conversation_ids.is_empty() {
+        return Ok(0);
+    }
+    // Lead with a (self-assigning) write so SQLite takes the writer lock now,
+    // not a read snapshot it may fail to upgrade at the first real write — the
+    // delete mutations get this from their opening DELETE.
+    opened_tab::Entity::update_many()
+        .col_expr(
+            opened_tab::Column::UpdatedAt,
+            sea_orm::sea_query::Expr::col(opened_tab::Column::UpdatedAt).into(),
+        )
+        .filter(opened_tab::Column::ConversationId.is_in(conversation_ids.to_vec()))
+        .exec(conn)
+        .await?;
+    let current: std::collections::HashMap<i32, i32> = conversation::Entity::find()
+        .select_only()
+        .column(conversation::Column::Id)
+        .column(conversation::Column::FolderId)
+        .filter(conversation::Column::Id.is_in(conversation_ids.to_vec()))
+        .into_tuple::<(i32, i32)>()
+        .all(conn)
+        .await?
+        .into_iter()
+        .collect();
+    let tabs = opened_tab::Entity::find()
+        .filter(opened_tab::Column::ConversationId.is_in(conversation_ids.to_vec()))
+        .all(conn)
+        .await?;
+    let now = Utc::now();
+    let mut changed = 0;
+    for tab in tabs {
+        let Some(folder_id) = tab.conversation_id.and_then(|id| current.get(&id).copied()) else {
+            continue;
+        };
+        if tab.folder_id == folder_id {
+            continue;
+        }
+        let mut active: opened_tab::ActiveModel = tab.into();
+        active.folder_id = Set(folder_id);
+        active.updated_at = Set(now);
+        active.update(conn).await?;
+        changed += 1;
+    }
+    Ok(changed)
+}
+
 /// Atomically invalidate every tab pointing at a conversation: delete the rows,
 /// ALWAYS bump the version (barrier), and snapshot — all in ONE transaction
 /// under [`version_lock`]. Conversation deletion is a SOFT delete (sets
@@ -203,24 +310,7 @@ pub async fn delete_conversation_tabs_and_bump(
     conn: &DatabaseConnection,
     conversation_id: i32,
 ) -> Result<TabInvalidation, DbError> {
-    let _guard = version_lock().lock().await;
-    let txn = conn.begin().await?;
-    let removed = opened_tab::Entity::delete_many()
-        .filter(opened_tab::Column::ConversationId.eq(conversation_id))
-        .exec(&txn)
-        .await?;
-    let next = get_tabs_version(&txn).await? + 1;
-    app_metadata_service::upsert_value(&txn, OPENED_TABS_VERSION_KEY, &next.to_string()).await?;
-    let emit = if removed.rows_affected > 0 {
-        Some(list_all_tabs(&txn).await?)
-    } else {
-        None
-    };
-    txn.commit().await?;
-    Ok(TabInvalidation {
-        version: next,
-        emit,
-    })
+    mutate_tabs_and_bump(conn, TabMutation::DeleteConversation(conversation_id)).await
 }
 
 /// Atomically invalidate every tab belonging to a folder (folder removed from
@@ -231,22 +321,18 @@ pub async fn delete_folder_tabs_and_bump(
     conn: &DatabaseConnection,
     folder_id: i32,
 ) -> Result<TabInvalidation, DbError> {
-    let _guard = version_lock().lock().await;
-    let txn = conn.begin().await?;
-    let removed = opened_tab::Entity::delete_many()
-        .filter(opened_tab::Column::FolderId.eq(folder_id))
-        .exec(&txn)
-        .await?;
-    let next = get_tabs_version(&txn).await? + 1;
-    app_metadata_service::upsert_value(&txn, OPENED_TABS_VERSION_KEY, &next.to_string()).await?;
-    let emit = if removed.rows_affected > 0 {
-        Some(list_all_tabs(&txn).await?)
-    } else {
-        None
-    };
-    txn.commit().await?;
-    Ok(TabInvalidation {
-        version: next,
-        emit,
-    })
+    mutate_tabs_and_bump(conn, TabMutation::DeleteFolder(folder_id)).await
+}
+
+/// Re-point every persisted tab of `conversation_ids` at its conversation's
+/// current folder (conversations the user moved to another project): the tab
+/// id embeds the folder, so a tab left on the old folder would open the
+/// conversation in the directory it just left. Same barrier and snapshot rules
+/// as [`delete_conversation_tabs_and_bump`]. Client-submitted saves are not
+/// rewritten — each client re-points its own tabs from the conversation rows.
+pub async fn retarget_conversation_tabs_and_bump(
+    conn: &DatabaseConnection,
+    conversation_ids: &[i32],
+) -> Result<TabInvalidation, DbError> {
+    mutate_tabs_and_bump(conn, TabMutation::RetargetConversations(conversation_ids)).await
 }

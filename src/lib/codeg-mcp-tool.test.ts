@@ -142,3 +142,44 @@ describe("parseCodegMcpToolCall: work-task report acks", () => {
     expect(model.resultText).toBe('{"recorded":true}')
   })
 })
+
+describe("parseCodegMcpToolCall: create_work_task attachments", () => {
+  it("reads the paths the way the companion does", () => {
+    const model = parseCodegMcpToolCall({
+      tool: "create_work_task",
+      input: JSON.stringify({
+        title: "t",
+        prompt: "p",
+        attachments: [" /tmp/a.png ", "", 3, "/tmp/a.png", "logs/run.log"],
+      }),
+      state: "output-available",
+    })
+    expect(model.attachments).toEqual(["/tmp/a.png", "logs/run.log"])
+  })
+
+  it("takes a lone path as a one-item list", () => {
+    const model = parseCodegMcpToolCall({
+      tool: "create_work_task",
+      input: JSON.stringify({ title: "t", prompt: "p", attachments: "/a.png" }),
+      state: "output-available",
+    })
+    expect(model.attachments).toEqual(["/a.png"])
+  })
+
+  it("is empty without attachments and for every other tool", () => {
+    expect(
+      parseCodegMcpToolCall({
+        tool: "create_work_task",
+        input: JSON.stringify({ title: "t", prompt: "p" }),
+        state: "output-available",
+      }).attachments
+    ).toEqual([])
+    expect(
+      parseCodegMcpToolCall({
+        tool: "create_automation",
+        input: JSON.stringify({ name: "n", prompt: "p", attachments: ["/a"] }),
+        state: "output-available",
+      }).attachments
+    ).toEqual([])
+  })
+})
