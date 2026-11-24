@@ -2022,102 +2022,150 @@ describe("buildRows under a tag filter (hideEmptyFolders)", () => {
 })
 
 describe("classifyRecentConversation", () => {
-  const now = new Date("2026-11-21T12:00:00Z").getTime()
+  // Built from LOCAL calendar fields, like the boundaries under test, so the
+  // cases hold in every time zone the suite runs in.
+  const local = (day: number, hour = 12) =>
+    new Date(2026, 10, day, hour).getTime()
+  const at = (id: number, ms: number, status = "completed") =>
+    conv(id, 10, { status, updated_at: new Date(ms).toISOString() })
+  const now = local(21)
 
-  it("classifies in_progress as priorities, while pending_review falls to time bucket", () => {
-    const running = conv(1, 10, {
-      status: "in_progress",
-      updated_at: new Date("2026-11-01T00:00:00Z").toISOString(),
-    })
-    const review = conv(2, 10, {
-      status: "pending_review",
-      updated_at: new Date("2026-11-21T09:00:00Z").toISOString(),
-    })
-    expect(classifyRecentConversation(running, now)).toBe("priorities")
-    expect(classifyRecentConversation(review, now)).toBe("today")
-  })
-
-  it("supports flat vs time grouping mode in buildRows", () => {
-    const c1 = conv(1, 10, {
-      updated_at: new Date("2026-11-21T08:00:00Z").toISOString(),
-    })
-    const flatRows = buildRows({
-      pinned: [],
-      pinnedExpanded: false,
-      orderedFolderIds: [],
-      byFolder: new Map(),
-      folderExpanded: {},
-      folderTotalCounts: new Map(),
-      foldersExpanded: false,
-      chatConversations: [],
-      chatsExpanded: false,
-      recentConversations: [c1],
-      recentExpanded: true,
-      showRecent: true,
-      recentGroupingMode: "flat",
-      currentTime: now,
-    })
-    expect(flatRows.some((r) => r.kind === "recent-time-group")).toBe(false)
+  it("puts a running conversation in priorities whatever its stamp", () => {
     expect(
-      flatRows.some((r) => r.kind === "conversation" && r.conversation.id === 1)
-    ).toBe(true)
+      classifyRecentConversation(at(1, local(1), "in_progress"), now)
+    ).toBe("priorities")
+    // Finished its turn: dated like any other.
+    expect(
+      classifyRecentConversation(at(2, local(21, 9), "pending_review"), now)
+    ).toBe("today")
+  })
 
-    const timeRows = buildRows({
-      pinned: [],
-      pinnedExpanded: false,
-      orderedFolderIds: [],
-      byFolder: new Map(),
-      folderExpanded: {},
-      folderTotalCounts: new Map(),
-      foldersExpanded: false,
-      chatConversations: [],
-      chatsExpanded: false,
-      recentConversations: [c1],
-      recentExpanded: true,
-      showRecent: true,
+  it("dates by local calendar day", () => {
+    expect(classifyRecentConversation(at(1, local(21, 0)), now)).toBe("today")
+    expect(classifyRecentConversation(at(2, local(20, 23)), now)).toBe(
+      "yesterday"
+    )
+    expect(classifyRecentConversation(at(3, local(20, 0)), now)).toBe(
+      "yesterday"
+    )
+    expect(classifyRecentConversation(at(4, local(19, 23)), now)).toBe(
+      "previous7Days"
+    )
+    expect(classifyRecentConversation(at(5, local(15, 0)), now)).toBe(
+      "previous7Days"
+    )
+    expect(classifyRecentConversation(at(6, local(14, 23)), now)).toBe(
+      "previous30Days"
+    )
+    expect(
+      classifyRecentConversation(at(7, new Date(2026, 9, 23).getTime()), now)
+    ).toBe("previous30Days")
+    expect(
+      classifyRecentConversation(
+        at(8, new Date(2026, 9, 22, 23).getTime()),
+        now
+      )
+    ).toBe("older")
+  })
+
+  it("treats an unparseable stamp as older", () => {
+    const broken = conv(1, 10, { updated_at: "", created_at: "garbage" })
+    expect(classifyRecentConversation(broken, now)).toBe("older")
+  })
+})
+
+describe("buildRows Recent time grouping", () => {
+  const local = (day: number, hour = 12) =>
+    new Date(2026, 10, day, hour).toISOString()
+  const now = new Date(2026, 10, 21, 12).getTime()
+  const base = {
+    pinned: [],
+    pinnedExpanded: false,
+    orderedFolderIds: [],
+    byFolder: new Map(),
+    folderExpanded: {},
+    folderTotalCounts: new Map(),
+    foldersExpanded: false,
+    chatConversations: [],
+    chatsExpanded: false,
+    recentExpanded: true,
+    showRecent: true,
+    currentTime: now,
+  }
+  // Just the Recent section's rows, from its own header on.
+  const recentKeys = (rows: readonly SidebarRow[]) =>
+    rows
+      .slice(
+        rows.findIndex((r) => r.kind === "section" && r.section === "recent")
+      )
+      .map(key)
+  const key = (r: SidebarRow): string =>
+    r.kind === "recent-time-group"
+      ? `group:${r.groupId}:${r.count}`
+      : r.kind === "conversation"
+        ? `conv:${r.conversation.id}`
+        : r.kind
+  // Ordered by updated_at desc, as selectRecentConversationsWithReuse hands
+  // them over.
+  const recentConversations = [
+    conv(1, 10, { status: "completed", updated_at: local(21, 11) }),
+    conv(2, 10, { status: "in_progress", updated_at: local(21, 10) }),
+    conv(3, 10, { status: "completed", updated_at: local(21, 9) }),
+    conv(4, 10, { status: "completed", updated_at: local(17) }),
+    conv(5, 10, { status: "completed", updated_at: local(1) }),
+  ]
+
+  it("heads each non-empty group, running ones first, empty ones omitted", () => {
+    const rows = buildRows({
+      ...base,
+      recentConversations,
       recentGroupingMode: "time",
-      currentTime: now,
     })
-    expect(timeRows.some((r) => r.kind === "recent-time-group")).toBe(true)
+    expect(recentKeys(rows)).toEqual([
+      "section",
+      "group:priorities:1",
+      "conv:2",
+      "group:today:2",
+      "conv:1",
+      "conv:3",
+      "group:previous7Days:1",
+      "conv:4",
+      "group:previous30Days:1",
+      "conv:5",
+    ])
   })
 
-  it("classifies today conversations", () => {
-    const todayConv = conv(3, 10, {
-      status: "completed",
-      updated_at: new Date("2026-11-21T08:00:00Z").toISOString(),
+  it("groups only the shown page and counts only its rows", () => {
+    const rows = buildRows({
+      ...base,
+      recentConversations,
+      recentLimit: 3,
+      recentGroupingMode: "time",
     })
-    expect(classifyRecentConversation(todayConv, now)).toBe("today")
+    expect(recentKeys(rows)).toEqual([
+      "section",
+      "group:priorities:1",
+      "conv:2",
+      "group:today:2",
+      "conv:1",
+      "conv:3",
+      "recent-more",
+    ])
   })
 
-  it("classifies yesterday conversations", () => {
-    const yesterdayConv = conv(4, 10, {
-      status: "completed",
-      updated_at: new Date("2026-11-20T15:00:00Z").toISOString(),
+  it("flat mode keeps the plain updated_at run with no headings", () => {
+    const rows = buildRows({
+      ...base,
+      recentConversations,
+      recentGroupingMode: "flat",
     })
-    expect(classifyRecentConversation(yesterdayConv, now)).toBe("yesterday")
-  })
-
-  it("classifies previous 7 days conversations", () => {
-    const weekConv = conv(5, 10, {
-      status: "completed",
-      updated_at: new Date("2026-11-17T10:00:00Z").toISOString(),
-    })
-    expect(classifyRecentConversation(weekConv, now)).toBe("previous7Days")
-  })
-
-  it("classifies previous 30 days conversations", () => {
-    const monthConv = conv(55, 10, {
-      status: "completed",
-      updated_at: new Date("2026-11-05T10:00:00Z").toISOString(),
-    })
-    expect(classifyRecentConversation(monthConv, now)).toBe("previous30Days")
-  })
-
-  it("classifies older conversations", () => {
-    const oldConv = conv(6, 10, {
-      status: "completed",
-      updated_at: new Date("2026-10-01T10:00:00Z").toISOString(),
-    })
-    expect(classifyRecentConversation(oldConv, now)).toBe("older")
+    expect(recentKeys(rows)).toEqual([
+      "section",
+      "conv:1",
+      "conv:2",
+      "conv:3",
+      "conv:4",
+      "conv:5",
+    ])
   })
 })

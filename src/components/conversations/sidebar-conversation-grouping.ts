@@ -311,6 +311,59 @@ export function selectChatConversationsWithReuse(
 }
 
 /**
+ * Which time group of the "Recent" section a conversation lands in when the
+ * section is grouped by time (see `recentGroupingMode` on {@link buildRows}).
+ *
+ * - A RUNNING conversation (`in_progress`, the same status the card spins on)
+ *   goes to "priorities" whatever its stamp says, so work under way sits on
+ *   top. A `pending_review` one has finished its turn and is dated like any
+ *   other.
+ * - Everything else is dated by `updated_at`, the stamp the section is ordered
+ *   and labelled by (see {@link selectRecentConversationsWithReuse}), so each
+ *   group is a contiguous run of the flat order.
+ * - Day boundaries are LOCAL midnights, built from calendar fields rather than
+ *   by subtracting 24 h multiples, so a DST change never shifts a boundary by
+ *   an hour. "previous7Days" / "previous30Days" cover the 7 / 30 calendar days
+ *   ending today (today and yesterday are claimed first).
+ */
+export function classifyRecentConversation(
+  conv: DbConversationSummary,
+  now: number
+): RecentTimeGroupId {
+  if (conv.status === "in_progress") return "priorities"
+  const ts = parseTimestamp(conv.updated_at || conv.created_at)
+  if (!ts) return "older"
+  const today = new Date(now)
+  const dayStart = (daysAgo: number) =>
+    new Date(
+      today.getFullYear(),
+      today.getMonth(),
+      today.getDate() - daysAgo
+    ).getTime()
+  if (ts >= dayStart(0)) return "today"
+  if (ts >= dayStart(1)) return "yesterday"
+  if (ts >= dayStart(6)) return "previous7Days"
+  if (ts >= dayStart(29)) return "previous30Days"
+  return "older"
+}
+
+/** Local midnight starting the calendar day `now` falls on. */
+export function localDayStart(now: number = Date.now()): number {
+  const d = new Date(now)
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+}
+
+/** Display order of the time groups; an empty group is omitted. */
+const RECENT_TIME_GROUP_ORDER: readonly RecentTimeGroupId[] = [
+  "priorities",
+  "today",
+  "yesterday",
+  "previous7Days",
+  "previous30Days",
+  "older",
+]
+
+/**
  * Select the flat "Recent" bucket: every conversation the sidebar can reach,
  * folder-bound and chat alike, most recently active first — the whole point
  * of the section is that it does NOT distinguish the two. Reference reuse as
@@ -342,40 +395,6 @@ export function selectChatConversationsWithReuse(
  *
  * `prev` is the array returned last call (threaded via a ref by the caller).
  */
-export function classifyRecentConversation(
-  conv: DbConversationSummary,
-  now: number
-): RecentTimeGroupId {
-  if (conv.status === "in_progress") {
-    return "priorities"
-  }
-  const ts = parseTimestamp(conv.updated_at || conv.created_at)
-  if (!ts) return "older"
-  const nowDate = new Date(now)
-  const startOfToday = new Date(
-    nowDate.getFullYear(),
-    nowDate.getMonth(),
-    nowDate.getDate()
-  ).getTime()
-  if (ts >= startOfToday) {
-    return "today"
-  }
-  const oneDayMs = 24 * 60 * 60 * 1000
-  const startOfYesterday = startOfToday - oneDayMs
-  if (ts >= startOfYesterday) {
-    return "yesterday"
-  }
-  const startOf7Days = startOfToday - 6 * oneDayMs
-  if (ts >= startOf7Days) {
-    return "previous7Days"
-  }
-  const startOf30Days = startOfToday - 29 * oneDayMs
-  if (ts >= startOf30Days) {
-    return "previous30Days"
-  }
-  return "older"
-}
-
 export function selectRecentConversationsWithReuse(
   conversations: readonly DbConversationSummary[],
   showCompleted: boolean,
@@ -1035,6 +1054,28 @@ export interface RecentEmptyRow {
   kind: "recent-empty"
 }
 
+/** A time group of the "Recent" section (see
+ *  {@link classifyRecentConversation}). */
+export type RecentTimeGroupId =
+  | "priorities"
+  | "today"
+  | "yesterday"
+  | "previous7Days"
+  | "previous30Days"
+  | "older"
+
+/**
+ * The heading of one time group inside the "Recent" section, emitted only when
+ * the section is grouped by time and the group has rows on the current page.
+ * `count` is how many of the SHOWN rows the group holds; rows still behind the
+ * paging footer are not counted (the section header carries the total).
+ */
+export interface RecentTimeGroupRow {
+  kind: "recent-time-group"
+  groupId: RecentTimeGroupId
+  count: number
+}
+
 /**
  * The paging footer of the "Recent" section. Recent re-lists every reachable
  * conversation, so an untruncated one buries the sections below it; the list
@@ -1047,20 +1088,6 @@ export interface RecentEmptyRow {
  * Retiring it there would take the only way out of a fully expanded list away
  * exactly when the list is longest.
  */
-export type RecentTimeGroupId =
-  | "priorities"
-  | "today"
-  | "yesterday"
-  | "previous7Days"
-  | "previous30Days"
-  | "older"
-
-export interface RecentTimeGroupRow {
-  kind: "recent-time-group"
-  groupId: RecentTimeGroupId
-  count: number
-}
-
 export interface RecentMoreRow {
   kind: "recent-more"
   remaining: number
@@ -1373,9 +1400,14 @@ export function buildRows(args: {
    * omitted keeps every folder, as before.
    */
   hideEmptyFolders?: boolean
-  /** How recent conversations are grouped: by time horizons ("time") or flat ("flat"). */
+  /**
+   * How the "Recent" section lays out its page: under time-group headings
+   * (`"time"`, the default) or as one flat `updated_at`-ordered run
+   * (`"flat"`). See {@link classifyRecentConversation}.
+   */
   recentGroupingMode?: SidebarRecentGroupingMode
-  /** Current timestamp for time-based classification. Defaults to Date.now(). */
+  /** The instant the time groups are measured from; only its local calendar
+   *  day matters. Defaults to `Date.now()`. */
   currentTime?: number
 }): SidebarRow[] {
   const {
@@ -1617,38 +1649,24 @@ export function buildRows(args: {
         )
       }
     } else {
-      // Group shown conversations into time segments
-      const timeGroupBuckets = new Map<
-        RecentTimeGroupId,
-        DbConversationSummary[]
-      >()
-      const timeGroupOrder: readonly RecentTimeGroupId[] = [
-        "priorities",
-        "today",
-        "yesterday",
-        "previous7Days",
-        "previous30Days",
-        "older",
-      ]
-      for (const gid of timeGroupOrder) {
-        timeGroupBuckets.set(gid, [])
-      }
-
+      // Grouped by time. `shown` is ordered by `updated_at`, so each date
+      // group is a contiguous run of it; only "priorities" pulls rows (the
+      // running ones) out of place, and only from the page being shown.
+      const buckets = new Map<RecentTimeGroupId, DbConversationSummary[]>()
       for (const conv of shown) {
         const gid = classifyRecentConversation(conv, currentTime)
-        timeGroupBuckets.get(gid)?.push(conv)
+        const bucket = buckets.get(gid)
+        if (bucket) bucket.push(conv)
+        else buckets.set(gid, [conv])
       }
-
-      for (const gid of timeGroupOrder) {
-        const bucket = timeGroupBuckets.get(gid)
-        if (!bucket || bucket.length === 0) continue
-
+      for (const gid of RECENT_TIME_GROUP_ORDER) {
+        const bucket = buckets.get(gid)
+        if (!bucket) continue
         rows.push({
           kind: "recent-time-group",
           groupId: gid,
           count: bucket.length,
         })
-
         for (const conv of bucket) {
           pushConversationRow(
             rows,
