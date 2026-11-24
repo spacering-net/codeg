@@ -1101,13 +1101,16 @@ export type ConversationStatus =
  *  `loop` rows belong to the Loop Engineering workbench and never appear in
  *  the sidebar list; `delegate` rows nest under their parent's tool-call view;
  *  `personal` rows are the personal agent's own session segments, shown on its
- *  page only. */
+ *  page only; `ask` rows ("ask about this selection") nest under the
+ *  conversation they were asked from (`parent_id`) and are listed in its
+ *  Session Details. */
 export type ConversationKind =
   | "regular"
   | "chat"
   | "loop"
   | "delegate"
   | "personal"
+  | "ask"
 
 /** Mirrors Rust `FolderKind` (src-tauri/src/db/entities/folder.rs).
  *  `personal` is the personal agent's working directory: hidden everywhere,

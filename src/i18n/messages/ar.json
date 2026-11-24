@@ -2468,6 +2468,19 @@
       "copiedField": "تم نسخ {field}",
       "assistant": "المساعد"
     },
+    "askConversations": {
+      "title": "محادثات الأسئلة",
+      "total": "{count, plural, zero {لا محادثات} one {محادثة واحدة} two {محادثتان} few {# محادثات} many {# محادثة} other {# محادثة}}",
+      "untitled": "سؤال جديد",
+      "actions": "إجراءات إضافية",
+      "open": "فتح",
+      "convertToRegular": "تحويل إلى محادثة عادية",
+      "converted": "تم التحويل إلى محادثة عادية",
+      "convertFailed": "تعذر تحويل المحادثة",
+      "drawerTitle": "محادثة سؤال",
+      "drawerDescription": "محادثة جانبية فُتحت من تحديد في هذه المحادثة",
+      "pendingFirstMessage": "سؤالك بانتظار جاهزية الوكيل. كرّر الإجراء لتجاهله."
+    },
     "conversationCard": {
       "untitledConversation": "محادثة بدون عنوان",
       "newConversation": "محادثة جديدة",
@@ -3893,7 +3906,7 @@
         "selectionSaveAsNote": "ملاحظة",
         "selectionAsk": "اسأل",
         "selectionAskPlaceholder": "اسأل عن هذا التحديد…",
-        "selectionAskSubmit": "اطرح سؤالاً في محادثة جديدة",
+        "selectionAskClose": "إغلاق",
         "downloadImage": "تنزيل الصورة",
         "copyImage": "نسخ الصورة",
         "copiedImage": "تم نسخ الصورة",

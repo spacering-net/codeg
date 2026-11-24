@@ -2468,6 +2468,19 @@
       "copiedField": "{field} kopiert",
       "assistant": "Assistent"
     },
+    "askConversations": {
+      "title": "Fragen-Unterhaltungen",
+      "total": "{count, plural, one {# Unterhaltung} other {# Unterhaltungen}}",
+      "untitled": "Neue Frage",
+      "actions": "Weitere Aktionen",
+      "open": "Öffnen",
+      "convertToRegular": "In normale Unterhaltung umwandeln",
+      "converted": "In eine normale Unterhaltung umgewandelt",
+      "convertFailed": "Unterhaltung konnte nicht umgewandelt werden",
+      "drawerTitle": "Fragen-Unterhaltung",
+      "drawerDescription": "Eine Nebenunterhaltung, gestartet aus einer Auswahl in dieser Unterhaltung",
+      "pendingFirstMessage": "Deine Frage wartet darauf, dass der Agent bereit ist. Wiederhole die Aktion, um sie zu verwerfen."
+    },
     "conversationCard": {
       "untitledConversation": "Unbenannte Konversation",
       "newConversation": "Neue Konversation",
@@ -3893,7 +3906,7 @@
         "selectionSaveAsNote": "Notiz",
         "selectionAsk": "Fragen",
         "selectionAskPlaceholder": "Frage zu dieser Auswahl…",
-        "selectionAskSubmit": "In einer neuen Konversation fragen",
+        "selectionAskClose": "Schließen",
         "downloadImage": "Bild herunterladen",
         "copyImage": "Bild kopieren",
         "copiedImage": "Bild kopiert",

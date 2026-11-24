@@ -4605,6 +4605,53 @@ export async function createConversation(
   })
 }
 
+/** What {@link createAskConversation} created, and where. */
+export interface CreateAskConversationResult {
+  conversationId: number
+  folderId: number
+  /** The conversation the ask was filed under — for an ask asked from another
+   *  ask, that ask's own main conversation, not the one passed in. */
+  parentConversationId: number
+}
+
+/**
+ * Create an ask conversation ("ask about this selection") in `folderId` — the
+ * folder its agent is running in — as a child of `parentConversationId`
+ * (`kind: "ask"`), so the sidebar nests it under that conversation and its
+ * Session Details lists it. Asking from inside an ask conversation links to
+ * that one's main conversation.
+ */
+export async function createAskConversation(
+  parentConversationId: number,
+  folderId: number,
+  agentType: AgentType,
+  title?: string
+): Promise<CreateAskConversationResult> {
+  return getTransport().call("create_ask_conversation", {
+    parentConversationId,
+    folderId,
+    agentType,
+    title: title ?? null,
+  })
+}
+
+/** The ask conversations of `parentConversationId`, newest first. */
+export async function listAskConversations(
+  parentConversationId: number
+): Promise<DbConversationSummary[]> {
+  return getTransport().call("list_ask_conversations", {
+    parentConversationId,
+  })
+}
+
+/** Turn an ask conversation into an ordinary one (it becomes a root of the
+ *  sidebar). */
+export async function detachAskConversation(
+  conversationId: number
+): Promise<void> {
+  return getTransport().call("detach_ask_conversation", { conversationId })
+}
+
 /**
  * Create a folderless "chat mode" conversation. The backend lazily creates a
  * dated per-conversation scratch dir and a dedicated hidden chat folder

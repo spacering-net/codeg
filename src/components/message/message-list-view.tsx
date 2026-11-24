@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
   type ComponentProps,
+  type ReactNode,
 } from "react"
 import {
   isLiveTurnId,
@@ -216,12 +217,13 @@ interface MessageListViewProps {
    */
   onQuoteSelection?: (text: string) => void
   /**
-   * Ask a question about a text selection made in this transcript: the host
-   * opens a new conversation on the same agent and sends the quoted selection
-   * followed by the question. Enables the "ask" entry on the selection bubble,
-   * on the same terms as `onQuoteSelection`. MUST be referentially stable.
+   * Ask a question about a text selection made in this transcript: the
+   * selection bubble's "ask" entry opens what this returns — the host's ask
+   * composer, holding the selection — in place of its buttons (see
+   * `SelectionActionBubble.renderAskComposer`). Enables the entry on the same
+   * terms as `onQuoteSelection`. MUST be referentially stable.
    */
-  onAskSelection?: (selection: string, question: string) => void
+  renderAskComposer?: (selection: string, close: () => void) => ReactNode
   /**
    * Keep a text selection from this transcript as a note next to it. Only the
    * canvas has a board to put one on, so every other surface omits it and the
@@ -1589,7 +1591,7 @@ export function MessageListView({
   insightsInSidebar = false,
   userTurnHeader = null,
   onQuoteSelection,
-  onAskSelection,
+  renderAskComposer,
   onSaveNoteSelection,
   onForkFromTurn,
   liveRuns = null,
@@ -2557,7 +2559,7 @@ export function MessageListView({
           containerRef={selectionBoxRef}
           isVisible={isVisible}
           onQuote={onQuoteSelection}
-          onAsk={onAskSelection}
+          renderAskComposer={renderAskComposer}
           onSaveAsNote={onSaveNoteSelection}
           resolveCheck={resolveCheck}
         />

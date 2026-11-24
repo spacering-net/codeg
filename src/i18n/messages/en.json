@@ -2468,6 +2468,19 @@
       "copiedField": "Copied {field}",
       "assistant": "Assistant"
     },
+    "askConversations": {
+      "title": "Ask conversations",
+      "total": "{count, plural, one {# conversation} other {# conversations}}",
+      "untitled": "New question",
+      "actions": "More actions",
+      "open": "Open",
+      "convertToRegular": "Convert to normal conversation",
+      "converted": "Converted to a normal conversation",
+      "convertFailed": "Couldn't convert the conversation",
+      "drawerTitle": "Ask conversation",
+      "drawerDescription": "A side conversation opened from a selection in this conversation",
+      "pendingFirstMessage": "Your question is waiting for the agent to be ready. Do that again to discard it."
+    },
     "conversationCard": {
       "untitledConversation": "Untitled conversation",
       "newConversation": "New Conversation",
@@ -3893,7 +3906,7 @@
         "selectionSaveAsNote": "Note",
         "selectionAsk": "Ask",
         "selectionAskPlaceholder": "Ask about this selection…",
-        "selectionAskSubmit": "Ask in a new conversation",
+        "selectionAskClose": "Close",
         "downloadImage": "Download image",
         "copyImage": "Copy image",
         "copiedImage": "Image copied",

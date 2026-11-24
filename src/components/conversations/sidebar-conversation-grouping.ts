@@ -1074,6 +1074,9 @@ export interface RecentTimeGroupRow {
   kind: "recent-time-group"
   groupId: RecentTimeGroupId
   count: number
+  /** The section's first heading, sitting right under the "Recent" header —
+   *  it skips the top gap that separates later groups from the rows above. */
+  first: boolean
 }
 
 /**
@@ -1690,6 +1693,7 @@ export function buildRows(args: {
         if (bucket) bucket.push(conv)
         else buckets.set(gid, [conv])
       }
+      let firstGroup = true
       for (const gid of RECENT_TIME_GROUP_ORDER) {
         const bucket = buckets.get(gid)
         if (!bucket) continue
@@ -1697,7 +1701,9 @@ export function buildRows(args: {
           kind: "recent-time-group",
           groupId: gid,
           count: bucket.length,
+          first: firstGroup,
         })
+        firstGroup = false
         for (const conv of bucket) {
           pushConversationRow(
             rows,

@@ -94,6 +94,7 @@ export function SessionDetailsTab() {
               <SessionDetailsCard summary={summary} model={model} />
               <SessionDetailsInsights
                 conversationId={activeRuntimeId}
+                dbConversationId={activeConversationTab?.conversationId ?? null}
                 active={active}
               />
             </div>

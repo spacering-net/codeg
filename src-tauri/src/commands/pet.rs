@@ -226,7 +226,10 @@ pub async fn pet_list_active_sessions_core(
         // doesn't match) falls through with an empty title — degrade, don't
         // fail or drop.
         if let Ok(summary) = conversation_service::get_by_id(db, entry.conversation_id).await {
-            if let Some(parent_id) = summary.parent_id {
+            let delegation_parent = summary.parent_id.filter(|_| {
+                summary.kind == crate::db::entities::conversation::ConversationKind::Delegate
+            });
+            if let Some(parent_id) = delegation_parent {
                 if !entry.is_waiting() {
                     continue;
                 }

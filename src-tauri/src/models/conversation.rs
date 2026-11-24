@@ -78,13 +78,14 @@ pub struct DbConversationSummary {
     pub agent_type: AgentType,
     pub status: String,
     /// Mirrors `conversation.kind` — drives sidebar visibility/grouping
-    /// (serialized as "regular" | "chat" | "loop" | "delegate").
+    /// (serialized as "regular" | "chat" | "loop" | "delegate" | "ask").
     pub kind: ConversationKind,
     pub model: Option<String>,
     pub git_branch: Option<String>,
     pub external_id: Option<String>,
     pub message_count: u32,
-    /// Number of direct, non-deleted delegation children. Drives the sidebar
+    /// Number of direct, non-deleted children (delegation sub-sessions and
+    /// ask conversations). Drives the sidebar
     /// chevron: a row with `child_count > 0` is expandable into its sub-session
     /// subtree. Not stored on the row — computed by a single GROUP BY aggregate
     /// (`fill_child_counts`) over the returned set, so `child_count > 0` iff

@@ -16,7 +16,12 @@ import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { Virtualizer, type VirtualizerHandle } from "virtua"
 import {
+  Activity,
   Bot,
+  Calendar1,
+  CalendarDays,
+  CalendarMinus,
+  CalendarRange,
   Check,
   ChevronDown,
   ChevronRight,
@@ -28,6 +33,7 @@ import {
   FolderOpen,
   FolderOpenDot,
   FolderRoot,
+  History,
   Layers,
   LayersPlus,
   Link2,
@@ -42,6 +48,7 @@ import {
   Tag,
   Tags,
   XCircle,
+  type LucideIcon,
 } from "lucide-react"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
@@ -209,6 +216,20 @@ import { toErrorMessage } from "@/lib/app-error"
 // paint) but a no-op-safe passive effect during the static-export prerender.
 const useIsomorphicLayoutEffect =
   typeof window !== "undefined" ? useLayoutEffect : useEffect
+
+// Leading glyph of each Recent time-group heading — the same slot the
+// "show more" footer puts its chevron in. Running sessions get a live pulse;
+// the date groups stay in one calendar family that widens with the span (a
+// single day → the day before → a range → a month grid), and "older" falls
+// back to history rather than Archive, which would read as archived.
+const RECENT_TIME_GROUP_ICONS: Record<RecentTimeGroupId, LucideIcon> = {
+  priorities: Activity,
+  today: Calendar1,
+  yesterday: CalendarMinus,
+  previous7Days: CalendarRange,
+  previous30Days: CalendarDays,
+  older: History,
+}
 
 // Shared empty merge map used when "Show worktrees" is on: worktree children
 // then keep their own conversation bucket / count / theme instead of being
@@ -1194,11 +1215,15 @@ export function SidebarConversationList({
   // stale fetch snapshot or out-of-order upsert can't resurrect a deleted child —
   // the child-cache analog of the context's root deletion guard.
   const deletedChildIdsRef = useRef<Set<number>>(new Set())
+  // Ids an upsert has shown as roots (FIFO-bounded in the sync hook): a root
+  // never becomes a child, so a stale fetch snapshot can't nest one back (an ask
+  // conversation converted while the fetch was in flight).
+  const rootIdsRef = useRef<Set<number>>(new Set())
 
   // Keep the lazily-loaded sub-session cache live in real time: route child
   // upsert/status/deleted events into `childrenByParent` (roots stay with the
   // AppWorkspace context). child_count converges via backend parent re-emits.
-  useSubsessionSync({ setChildrenByParent, deletedChildIdsRef })
+  useSubsessionSync({ setChildrenByParent, deletedChildIdsRef, rootIdsRef })
   const [removeConfirm, setRemoveConfirm] = useState<{
     folderId: number
     folderName: string
@@ -2033,9 +2058,22 @@ export function SidebarConversationList({
         // queried before the soft-delete committed) — then merge the snapshot
         // with live events buffered mid-flight (events win by id) so a child
         // created after the query isn't lost.
+        // Likewise a child that became a root while the fetch was in flight
+        // (an ask conversation converted into an ordinary one): the stale
+        // snapshot must not nest it back. Known as a root either from its
+        // `parent_id`-less upsert or from the root list — a refresh after a
+        // reconnect carries it when the upsert itself was missed.
         const tomb = deletedChildIdsRef.current
-        const liveFetched =
-          tomb.size > 0 ? fetched.filter((c) => !tomb.has(c.id)) : fetched
+        const seenRoots = rootIdsRef.current
+        const listedRoots = new Set(
+          fetched.length > 0
+            ? useAppWorkspaceStore.getState().conversations.map((c) => c.id)
+            : []
+        )
+        const liveFetched = fetched.filter(
+          (c) =>
+            !tomb.has(c.id) && !seenRoots.has(c.id) && !listedRoots.has(c.id)
+        )
         const buffered = prev.get(id)
         const merged =
           buffered && buffered.length > 0
@@ -3364,16 +3402,47 @@ export function SidebarConversationList({
         row.groupId === "priorities"
           ? t("timeGroupPrioritiesTooltip")
           : undefined
+      const GroupIcon = RECENT_TIME_GROUP_ICONS[row.groupId]
+      // A heading, not a control — but it copies the "show more" footer's
+      // geometry so the section reads as one column: the glyph sits on the
+      // rail axis where a card's agent icon does (0.75rem glyph in a 0.875rem
+      // box, centred on the var), the label starts at the card's title inset
+      // (`axis + 0.875rem`), same row height, size and colour. No hover:
+      // nothing here is clickable. Every heading but the first gets a top gap
+      // to set its group off from the previous group's rows; the first sits
+      // right under the section header and stays tight to it. Padding, not
+      // margin: the virtualizer measures the row box, and a child's margin
+      // would collapse out of it.
       return (
         <div
           data-recent-time-group={row.groupId}
-          className="flex items-center justify-between px-3 pt-2.5 pb-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground/60 select-none"
+          className={cn(!row.first && "pt-[0.75rem]")}
           title={tooltip}
         >
-          <span className="truncate">{label}</span>
-          <span className="font-mono text-[0.625rem] font-normal opacity-70 ml-2 shrink-0">
-            {row.count}
-          </span>
+          {/* 2rem slot holding a 1.9375rem content box, exactly like the
+              footer's wrapper + button, so icon and label share its centre. */}
+          <div className="h-[2rem]">
+            <div
+              className="relative flex h-[1.9375rem] items-center pr-[0.25rem] text-[0.75rem] text-muted-foreground/80 select-none"
+              style={{
+                paddingLeft: "calc(var(--conv-rail-axis, 0.875rem) + 0.875rem)",
+              }}
+            >
+              <span
+                aria-hidden
+                className="pointer-events-none absolute top-1/2 flex items-center justify-center"
+                style={{
+                  left: "var(--conv-rail-axis, 0.875rem)",
+                  width: "0.875rem",
+                  height: "0.875rem",
+                  transform: "translate(-50%, -50%)",
+                }}
+              >
+                <GroupIcon className="h-[0.75rem] w-[0.75rem]" />
+              </span>
+              <span className="truncate">{label}</span>
+            </div>
+          </div>
         </div>
       )
     }

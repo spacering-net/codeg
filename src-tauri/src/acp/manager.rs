@@ -2800,8 +2800,10 @@ impl ConnectionManager {
                 // external_id (→ S2) changed, and a brand-new sibling row now
                 // exists (external_id S1, PendingReview). Broadcast both on
                 // `conversation://changed` so every other client converges in
-                // real time instead of waiting for a manual refresh. Both rows
-                // are roots; the helper still guards `parent_id` internally.
+                // real time instead of waiting for a manual refresh. A forked
+                // ask's sibling hangs off the same conversation, whose
+                // `child_count` (its sidebar chevron) just grew — re-broadcast
+                // it too.
                 crate::commands::conversations::emit_conversation_upsert(
                     &emitter,
                     &db_conn,
@@ -2812,6 +2814,17 @@ impl ConnectionManager {
                     &emitter, &db_conn, sibling_id,
                 )
                 .await;
+                if let Ok(sibling) =
+                    crate::db::service::conversation_service::get_by_id(&db_conn, sibling_id)
+                        .await
+                {
+                    if let Some(parent_id) = sibling.parent_id {
+                        crate::commands::conversations::emit_conversation_upsert(
+                            &emitter, &db_conn, parent_id,
+                        )
+                        .await;
+                    }
+                }
 
                 Ok(ForkResultInfo {
                     forked_session_id,
@@ -2962,13 +2975,16 @@ impl ConnectionManager {
                     // eligible for later backfills.
                     let title_locked = current.title_locked;
                     // The sibling keeps the original's sidebar routing (a forked
-                    // chat conversation must stay in the Chat group). `Delegate`
-                    // is unreachable here — children are never forked from the
-                    // UI — but the invariant `delegate ⟺ parent_id set` wins
-                    // over inheritance, so it degrades to `Regular`.
-                    let sibling_kind = match current.kind {
-                        ConversationKind::Delegate => ConversationKind::Regular,
-                        ref kind => kind.clone(),
+                    // chat conversation must stay in the Chat group, a forked
+                    // ask under the same conversation). `Delegate` is
+                    // unreachable here — children are never forked from the
+                    // UI — but a delegation is one tool call of its parent's,
+                    // which the sibling is not, so it degrades to a root
+                    // `Regular`.
+                    let (sibling_kind, sibling_parent_id) = match current.kind {
+                        ConversationKind::Delegate => (ConversationKind::Regular, None),
+                        ConversationKind::Ask => (ConversationKind::Ask, current.parent_id),
+                        ref kind => (kind.clone(), None),
                     };
                     // The pre-fork history was started where the original was.
                     let source = current.source.clone();
@@ -3062,7 +3078,7 @@ impl ConnectionManager {
                         model: Set(None),
                         git_branch: Set(git_branch),
                         external_id: Set(Some(original_session_id)),
-                        parent_id: Set(None),
+                        parent_id: Set(sibling_parent_id),
                         parent_tool_use_id: Set(None),
                         delegation_call_id: Set(None),
                         message_count: Set(0),

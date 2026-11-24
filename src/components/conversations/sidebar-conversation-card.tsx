@@ -23,6 +23,8 @@ import {
   Sparkles,
   SquareTerminal,
   ListChecks,
+  MessageCircleQuestionMark,
+  Unlink,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useImeGuard } from "@/hooks/use-ime-guard"
@@ -83,6 +85,7 @@ import { AgentIcon } from "@/components/agent-icon"
 import { useIdentityAssistant } from "@/components/message/delegation-identity"
 import { BotAvatar } from "@/components/personal-agent/bot-avatar"
 import { useBranchChip, useResolvedTags } from "@/hooks/use-conversation-tags"
+import { useDetachAskConversation } from "./use-detach-ask-conversation"
 
 /**
  * Horizontal indent added per delegation-nesting level. Chosen so a child's
@@ -252,6 +255,8 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   const tSidebar = useTranslations("Folder.sidebar")
   const tStatus = useTranslations("Folder.statusLabels")
   const tDetails = useTranslations("Folder.sessionDetails")
+  const tAsk = useTranslations("Folder.askConversations")
+  const detachAsk = useDetachAskConversation()
   const timeLabelClassName = cn(
     "relative shrink-0 tabular-nums text-[0.71875rem]",
     isSelected
@@ -274,6 +279,10 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   // time / running badge then stays visible on hover (nothing swaps in for it).
   // Nor a branch chip, like they get no tags: their parent row carries it.
   const isSubsession = conversation.parent_id != null
+  // An ask conversation ("ask about this selection") nests under the
+  // conversation it was asked from like a sub-agent run, and can be turned
+  // into an ordinary conversation from its menu.
+  const isAsk = conversation.kind === "ask"
   const branch = useBranchChip(isSubsession ? null : conversation.git_branch)
 
   const handleClick = useCallback(() => {
@@ -508,8 +517,6 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                       size="xs"
                       className="relative -ml-[0.25rem] max-w-[calc(100%-3.875rem)] shrink overflow-hidden"
                     />
-                    {/* Started by `codeg-cli`: told apart from the window's
-                    own, and found again with the Recent filter. */}
                     {/* Dispatched by the personal agent: its executor's
                     avatar already marks the row; this says who sent it. */}
                     {conversation.source === "personal_agent" ? (
@@ -526,6 +533,10 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                         </span>
                       </span>
                     ) : null}
+                    {/* Started by `codeg-cli`: told apart from the window's
+                    own, and found again with the Recent filter. An ask
+                    conversation is told apart from the sub-agent runs it
+                    nests beside. */}
                     {conversation.source === "cli" ? (
                       <span
                         className="ml-auto inline-flex shrink-0 items-center"
@@ -536,6 +547,17 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                           aria-hidden
                         />
                         <span className="sr-only">{tSidebar("cliBadge")}</span>
+                      </span>
+                    ) : isAsk ? (
+                      <span
+                        className="ml-auto inline-flex shrink-0 items-center"
+                        title={tAsk("title")}
+                      >
+                        <MessageCircleQuestionMark
+                          className="h-3 w-3 text-muted-foreground/60"
+                          aria-hidden
+                        />
+                        <span className="sr-only">{tAsk("title")}</span>
                       </span>
                     ) : null}
                     {/* No mark for a conversation re-parented out of a removed
@@ -766,6 +788,12 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
               <AtSign className="h-4 w-4" />
               {t("attachToCurrentSession")}
             </ContextMenuItem>
+            {isAsk && (
+              <ContextMenuItem onSelect={() => detachAsk(conversation.id)}>
+                <Unlink className="h-4 w-4" />
+                {tAsk("convertToRegular")}
+              </ContextMenuItem>
+            )}
             <ContextMenuSeparator />
             {/* Sub-sessions opt out like they do of pinning: a sub-agent run
                 is not a conversation the user files away, and the sidebar
