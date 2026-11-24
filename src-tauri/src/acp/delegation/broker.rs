@@ -931,15 +931,17 @@ fn running_ack(
     call_id: String,
     child_conversation_id: i32,
     agent_type: AgentType,
+    deliver_first_result: bool,
 ) -> DelegationTaskReport {
     // Embed the literal task_id in the message so it survives clients that only
     // surface the MCP `content` text (not `structuredContent`) — without it the
     // LLM couldn't call get_delegation_status / cancel_delegation.
-    let message = format!(
-        "Delegation successful. task_id={call_id}. Call get_delegation_status \
-         with this id in the task_ids array (optionally wait_ms) to collect the \
-         result, or cancel_delegation to stop it."
-    );
+    let instructions = if deliver_first_result {
+        "Codeg will send the result back to this session. Finish your current turn after starting your tasks so their replies can arrive. Status and cancellation remain available."
+    } else {
+        "Call get_delegation_status with this id in the task_ids array (optionally wait_ms) to collect the result, or cancel_delegation to stop it."
+    };
+    let message = format!("Delegation successful. task_id={call_id}. {instructions}");
     DelegationTaskReport {
         task_id: Some(call_id),
         status: TaskStatus::Running,
@@ -2814,6 +2816,7 @@ impl DelegationBroker {
             );
         }
 
+        let deliver_first_result = notify_mode == "deliver";
         let policy = crate::db::service::turn_delivery_service::DeliveryPolicy {
             parent_conversation_id: req.parent_conversation_id,
             notify_mode,
@@ -3237,7 +3240,7 @@ impl DelegationBroker {
 
         // Registered and running in the background — return the ack. The child
         // resolves later via the lifecycle → `complete_call` (or a cancel path).
-        running_ack(call_id, child_conversation_id, req.agent_type)
+        running_ack(call_id, child_conversation_id, req.agent_type, deliver_first_result)
     }
 
     /// Called by the child-session lifecycle subscriber on `TurnComplete`
@@ -10135,7 +10138,7 @@ mod tests {
     /// can still call get_delegation_status / cancel_delegation.
     #[test]
     fn running_ack_message_embeds_task_id() {
-        let report = running_ack("task-xyz".into(), 42, AgentType::Codex);
+        let report = running_ack("task-xyz".into(), 42, AgentType::Codex, false);
         assert_eq!(report.task_id.as_deref(), Some("task-xyz"));
         assert!(
             report.message.as_deref().unwrap().contains("task-xyz"),
