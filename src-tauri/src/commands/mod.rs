@@ -34,6 +34,7 @@ pub mod computer_tools;
 pub mod config_sync;
 pub mod conversation_tags;
 pub mod conversations;
+pub mod session_digest;
 /// "New folder" in the directory browser (both runtimes).
 pub mod create_directory;
 pub mod custom_agents;

@@ -10232,5 +10232,20 @@
       "rateLimited": "SRN 要求 Codeg 稍后再试。",
       "server": "SRN 返回了错误。"
     }
+  },
+  "SessionDigest": {
+    "title": "会话摘要",
+    "now": "正在进行",
+    "news": "最新进展",
+    "needsYou": "待你回答",
+    "suggestions": "建议",
+    "recommended": "推荐",
+    "dismiss": "回绝 {title}",
+    "updatedAt": "更新于 {time}",
+    "pendingCount": "{count} 项待答",
+    "inProgress": "进行中",
+    "answerWhenReady": "会话连接后，等待当前轮和消息队列处理完即可回答。",
+    "sendFailed": "回答未发送，请重试。",
+    "actionFailed": "操作未保存，请重试。"
   }
 }

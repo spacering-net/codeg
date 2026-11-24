@@ -478,7 +478,14 @@ pub enum BrokerMessage {
     CancelTask(BrokerCancelTaskRequest),
     ResumeTask(BrokerResumeTaskRequest),
     SessionMessage(BrokerSessionMessageRequest),
-    SessionBrief { token: String, args: crate::db::service::conversation_context_service::BriefOperation },
+    SessionBrief {
+        token: String,
+        args: crate::db::service::conversation_context_service::BriefOperation,
+    },
+    SessionDigest {
+        token: String,
+        args: crate::db::service::session_digest_service::DigestInput,
+    },
     CreateSession(BrokerCreateSessionRequest),
     GetCurrentSession {
         token: String,
@@ -1479,6 +1486,18 @@ mod tests {
     }
 }
 
-pub async fn client_session_brief_round_trip(socket_path: &str, token: String, args: crate::db::service::conversation_context_service::BriefOperation) -> io::Result<BrokerResponse> {
+pub async fn client_session_brief_round_trip(
+    socket_path: &str,
+    token: String,
+    args: crate::db::service::conversation_context_service::BriefOperation,
+) -> io::Result<BrokerResponse> {
     message_round_trip(socket_path, &BrokerMessage::SessionBrief { token, args }).await
+}
+
+pub async fn client_session_digest_round_trip(
+    socket_path: &str,
+    token: String,
+    args: crate::db::service::session_digest_service::DigestInput,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::SessionDigest { token, args }).await
 }

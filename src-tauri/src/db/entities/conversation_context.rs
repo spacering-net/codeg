@@ -7,6 +7,8 @@ pub struct Model {
     pub conversation_id: i32,
     pub brief: String,
     pub brief_updated_at: Option<DateTimeUtc>,
+    pub digest: Option<String>,
+    pub dismissed_suggestions: String,
 }
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {}

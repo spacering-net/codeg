@@ -78,7 +78,7 @@
   },
   {
     "name": "get_current_session",
-    "description": "Read your own Codeg conversation information: conversation ID, title, agent type, status, folder ID and path, and parent conversation ID if present. The conversation_id can be used by another session with send_to_session.",
+    "description": "Read your own Codeg conversation information: conversation ID, title, agent type, status, folder ID and path, and parent conversation ID if present, plus your persistent session brief. The conversation_id can be used by another session with send_to_session.",
     "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
     "annotations": { "readOnlyHint": true }
   },
@@ -1677,6 +1677,110 @@
     },
     "required": [
       "operation"
+    ],
+    "additionalProperties": false
+  }
+},
+{
+  "name": "session_digest",
+  "description": "Replace your current session digest in full. Keep now (up to 8), news (5), needsYou (3 questions, 4 options each), and suggestions (3) concise; each line has at most 300 characters. recommended must exactly equal an option. Use stable question IDs until the question changes. Dismissed suggestion titles are persistently filtered and returned in dismissedSuggestions; respect them instead of rephrasing the same suggestion. The user sees the digest above chat and answers through ordinary user messages.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "now": {
+        "type": "array",
+        "maxItems": 8,
+        "items": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        }
+      },
+      "news": {
+        "type": "array",
+        "maxItems": 5,
+        "items": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        }
+      },
+      "needsYou": {
+        "type": "array",
+        "maxItems": 3,
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300
+            },
+            "question": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300
+            },
+            "options": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 4,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300
+              }
+            },
+            "recommended": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300
+            }
+          },
+          "required": [
+            "id",
+            "question",
+            "options"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "suggestions": {
+        "type": "array",
+        "maxItems": 3,
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300
+            },
+            "detail": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300
+            }
+          },
+          "required": [
+            "id",
+            "title"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": [
+      "now",
+      "news",
+      "needsYou",
+      "suggestions"
     ],
     "additionalProperties": false
   }

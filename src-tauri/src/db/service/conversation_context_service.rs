@@ -43,7 +43,10 @@ async fn ensure_live<C: ConnectionTrait>(db: &C, id: i32) -> Result<(), DbError>
 
 // Acquire SQLite's writer lock before reading the document. This also serializes
 // edits with deletion; a deferred read-then-write transaction can lose that race.
-async fn lock_context(db: &DatabaseConnection, id: i32) -> Result<DatabaseTransaction, DbError> {
+pub(crate) async fn lock_context(
+    db: &DatabaseConnection,
+    id: i32,
+) -> Result<DatabaseTransaction, DbError> {
     let txn = db.begin().await?;
     let locked = conversation::Entity::update_many()
         .col_expr(
@@ -61,6 +64,8 @@ async fn lock_context(db: &DatabaseConnection, id: i32) -> Result<DatabaseTransa
         conversation_id: Set(id),
         brief: Set(String::new()),
         brief_updated_at: Set(None),
+        digest: Set(None),
+        dismissed_suggestions: Set("[]".into()),
     })
     .on_conflict(
         OnConflict::column(conversation_context::Column::ConversationId)

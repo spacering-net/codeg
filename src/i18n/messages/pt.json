@@ -10232,5 +10232,20 @@
       "rateLimited": "O SRN pediu que o Codeg espere antes de tentar novamente.",
       "server": "O SRN respondeu com um erro."
     }
+  },
+  "SessionDigest": {
+    "title": "Resumo da sessão",
+    "now": "Em andamento",
+    "news": "Novidades",
+    "needsYou": "Aguardando sua resposta",
+    "suggestions": "Sugestões",
+    "recommended": "Recomendado",
+    "dismiss": "Recusar {title}",
+    "updatedAt": "Atualizado {time}",
+    "pendingCount": "{count} respostas pendentes",
+    "inProgress": "Em andamento",
+    "answerWhenReady": "Você pode responder quando a sessão estiver conectada e a fila de mensagens estiver vazia.",
+    "sendFailed": "Não foi possível enviar a resposta. Tente novamente.",
+    "actionFailed": "Não foi possível salvar esta ação."
   }
 }

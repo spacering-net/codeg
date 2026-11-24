@@ -10232,5 +10232,20 @@
       "rateLimited": "SRN asked Codeg to wait before trying again.",
       "server": "SRN answered with an error."
     }
+  },
+  "SessionDigest": {
+    "title": "Session summary",
+    "now": "In progress",
+    "news": "News",
+    "needsYou": "Needs your answer",
+    "suggestions": "Suggestions",
+    "recommended": "Recommended",
+    "dismiss": "Dismiss {title}",
+    "updatedAt": "Updated {time}",
+    "pendingCount": "{count} awaiting answer",
+    "inProgress": "In progress",
+    "answerWhenReady": "Answers are available when the session is connected and its message queue is empty.",
+    "sendFailed": "Answer could not be sent. Please try again.",
+    "actionFailed": "Could not save this action."
   }
 }

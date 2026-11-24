@@ -10232,5 +10232,20 @@
       "rateLimited": "SRN から、しばらく待ってから再試行するよう求められました。",
       "server": "SRN がエラーを返しました。"
     }
+  },
+  "SessionDigest": {
+    "title": "セッションの要約",
+    "now": "進行中",
+    "news": "最新情報",
+    "needsYou": "回答待ち",
+    "suggestions": "提案",
+    "recommended": "推奨",
+    "dismiss": "{title} を却下",
+    "updatedAt": "更新 {time}",
+    "pendingCount": "{count} 件の回答待ち",
+    "inProgress": "進行中",
+    "answerWhenReady": "接続後、現在のターンとメッセージキューが完了すると回答できます。",
+    "sendFailed": "回答を送信できませんでした。再試行してください。",
+    "actionFailed": "操作を保存できませんでした。"
   }
 }

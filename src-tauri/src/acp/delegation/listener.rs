@@ -495,6 +495,9 @@ impl DelegationListener {
             BrokerMessage::SessionMessage(req) => BrokerResponse {
                 outcome: self.process_session_message(req).await,
             },
+            BrokerMessage::SessionDigest { token, args } => BrokerResponse {
+                outcome: self.process_session_digest(&token, args).await,
+            },
             BrokerMessage::SessionBrief { token, args } => BrokerResponse {
                 outcome: self.process_session_brief(&token, args).await,
             },
@@ -995,13 +998,78 @@ impl DelegationListener {
         }
     }
 
-    async fn process_session_brief(&self, token: &str, args: crate::db::service::conversation_context_service::BriefOperation) -> Value {
-        let Some(entry) = self.tokens.lookup(token).await else { return serde_json::json!({"error": "Session brief is unavailable"}); };
-        if entry.agent_hosts_tools || !self.broker.config_snapshot().await.session_messaging_enabled {
+    async fn process_session_digest(
+        &self,
+        token: &str,
+        args: crate::db::service::session_digest_service::DigestInput,
+    ) -> Value {
+        let Some(entry) = self.tokens.lookup(token).await else {
+            return serde_json::json!({"error": "Session digest is unavailable"});
+        };
+        if entry.agent_hosts_tools
+            || !self
+                .broker
+                .config_snapshot()
+                .await
+                .session_messaging_enabled
+        {
             return serde_json::json!({"error": "Session messaging is disabled"});
         }
-        let Some(id) = self.parent_lookup.current_conversation_id(&entry.parent_connection_id).await else { return serde_json::json!({"error": "Caller has no active conversation"}); };
-        let Some(db) = self.session_message_db.get() else { return serde_json::json!({"error": "Session brief is unavailable"}); };
+        let Some(id) = self
+            .parent_lookup
+            .current_conversation_id(&entry.parent_connection_id)
+            .await
+        else {
+            return serde_json::json!({"error": "Caller has no active conversation"});
+        };
+        let Some(db) = self.session_message_db.get() else {
+            return serde_json::json!({"error": "Session digest is unavailable"});
+        };
+        match crate::db::service::session_digest_service::update(db, id, args).await {
+            Ok(digest) => {
+                if let Some(creator) = self.session_creator.get() {
+                    if let Some((_, emitter)) = creator
+                        .manager
+                        .get_state_and_emitter(&entry.parent_connection_id)
+                        .await
+                    {
+                        crate::db::service::session_digest_service::broadcast(db, &emitter, id)
+                            .await;
+                    }
+                }
+                serde_json::json!({"digest": digest, "dismissedSuggestions": digest.dismissed_suggestions})
+            }
+            Err(error) => serde_json::json!({"error": error.to_string()}),
+        }
+    }
+
+    async fn process_session_brief(
+        &self,
+        token: &str,
+        args: crate::db::service::conversation_context_service::BriefOperation,
+    ) -> Value {
+        let Some(entry) = self.tokens.lookup(token).await else {
+            return serde_json::json!({"error": "Session brief is unavailable"});
+        };
+        if entry.agent_hosts_tools
+            || !self
+                .broker
+                .config_snapshot()
+                .await
+                .session_messaging_enabled
+        {
+            return serde_json::json!({"error": "Session messaging is disabled"});
+        }
+        let Some(id) = self
+            .parent_lookup
+            .current_conversation_id(&entry.parent_connection_id)
+            .await
+        else {
+            return serde_json::json!({"error": "Caller has no active conversation"});
+        };
+        let Some(db) = self.session_message_db.get() else {
+            return serde_json::json!({"error": "Session brief is unavailable"});
+        };
         match crate::db::service::conversation_context_service::update_brief(db, id, args).await {
             Ok(brief) => serde_json::json!({"brief": brief}),
             Err(error) => serde_json::json!({"error": error.to_string()}),

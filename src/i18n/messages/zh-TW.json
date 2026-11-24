@@ -10232,5 +10232,20 @@
       "rateLimited": "SRN 要求 Codeg 稍後再試。",
       "server": "SRN 回傳了錯誤。"
     }
+  },
+  "SessionDigest": {
+    "title": "工作階段摘要",
+    "now": "正在進行",
+    "news": "最新進展",
+    "needsYou": "待你回答",
+    "suggestions": "建議",
+    "recommended": "推薦",
+    "dismiss": "回絕 {title}",
+    "updatedAt": "更新於 {time}",
+    "pendingCount": "{count} 項待答",
+    "inProgress": "進行中",
+    "answerWhenReady": "工作階段連線後，等待目前回合和訊息佇列處理完即可回答。",
+    "sendFailed": "回答未傳送，請重試。",
+    "actionFailed": "操作未儲存，請重試。"
   }
 }

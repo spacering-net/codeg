@@ -10232,5 +10232,20 @@
       "rateLimited": "طلب SRN من Codeg الانتظار قبل إعادة المحاولة.",
       "server": "ردّ SRN بخطأ."
     }
+  },
+  "SessionDigest": {
+    "title": "ملخص الجلسة",
+    "now": "قيد التنفيذ",
+    "news": "المستجدات",
+    "needsYou": "بانتظار إجابتك",
+    "suggestions": "اقتراحات",
+    "recommended": "موصى به",
+    "dismiss": "رفض {title}",
+    "updatedAt": "آخر تحديث {time}",
+    "pendingCount": "{count} بانتظار الإجابة",
+    "inProgress": "قيد التنفيذ",
+    "answerWhenReady": "يمكنك الإجابة عندما تكون الجلسة متصلة وتكون قائمة الرسائل فارغة.",
+    "sendFailed": "تعذر إرسال الإجابة. حاول مرة أخرى.",
+    "actionFailed": "تعذر حفظ هذا الإجراء."
   }
 }

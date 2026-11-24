@@ -547,3 +547,24 @@ pub async fn move_conversations(
     .await?;
     Ok(Json(result))
 }
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionDigestParams {
+    pub conversation_id: i32,
+    pub action: crate::commands::session_digest::DigestAction,
+}
+pub async fn session_digest_action(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<SessionDigestParams>,
+) -> Result<Json<serde_json::Value>, AppCommandError> {
+    Ok(Json(
+        crate::commands::session_digest::session_digest_action_core(
+            &state.db.conn,
+            &state.emitter,
+            params.conversation_id,
+            params.action,
+        )
+        .await?,
+    ))
+}

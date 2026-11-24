@@ -23,6 +23,9 @@ const h = vi.hoisted(() => ({
   refreshConversations: vi.fn(),
 }))
 
+vi.mock("@/hooks/use-session-digest", () => ({
+  useSessionDigest: () => ({ digest: null, refresh: async () => {} }),
+}))
 vi.mock("@/lib/api", () => ({
   updateConversationTitle: h.updateConversationTitle,
   deleteConversation: h.deleteConversation,

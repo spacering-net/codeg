@@ -83,6 +83,10 @@ pub fn build_router_with_srn(
         )
         // ─── Conversations ───
         .route(
+            "/session_digest_action",
+            post(handlers::conversations::session_digest_action),
+        )
+        .route(
             "/list_conversations",
             post(handlers::conversations::list_conversations),
         )

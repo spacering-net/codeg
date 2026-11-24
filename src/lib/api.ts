@@ -6923,3 +6923,13 @@ export async function forgeAutoScanNow(
 ): Promise<ForgeAutoScanReport> {
   return getTransport().call("forge_auto_scan_now", { folderId })
 }
+
+export async function sessionDigestAction<T>(
+  conversationId: number,
+  action: import("./session-digest").DigestAction
+): Promise<T> {
+  return getTransport().call<T>("session_digest_action", {
+    conversationId,
+    action,
+  })
+}

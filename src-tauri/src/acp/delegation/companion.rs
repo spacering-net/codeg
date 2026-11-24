@@ -326,9 +326,13 @@ impl CompanionFeatures {
             | "get_delegation_status"
             | "cancel_delegation"
             | "resume_delegation" => self.delegation,
-            "send_to_session" | "create_session" | "get_current_session" | "list_sessions" | "stop_session" | "session_brief" => {
-                self.session_messaging
-            }
+            "send_to_session"
+            | "create_session"
+            | "get_current_session"
+            | "list_sessions"
+            | "stop_session"
+            | "session_brief"
+            | "session_digest" => self.session_messaging,
             _ => false,
         }
     }
@@ -1250,6 +1254,18 @@ async fn build_tools_call_spawn(
             let round_trip =
                 Box::pin(async move { client_session_round_trip(&socket, &req).await });
             register_and_spawn(inflight, id, None, round_trip, render_session_result).await
+        }
+        "session_digest" => {
+            let args = match serde_json::from_value::<crate::db::service::session_digest_service::DigestInput>(arguments) {
+                Ok(args) => args,
+                Err(error) => return LineAction::Respond(err(id, -32602, format!("session_digest: {error}"))),
+            };
+            if let Err(error) = crate::db::service::session_digest_service::validate(&args) {
+                return LineAction::Respond(err(id, -32602, error.to_string()));
+            }
+            let token = ctx.token.clone();
+            let round_trip = Box::pin(async move { super::transport::client_session_digest_round_trip(&socket, token, args).await });
+            register_and_spawn(inflight, id, None, round_trip, render_session_action).await
         }
         "session_brief" => {
             let args = match serde_json::from_value::<crate::db::service::conversation_context_service::BriefOperation>(arguments) {
@@ -5681,6 +5697,9 @@ mod tests {
         assert!(names.contains(&"create_session".into()));
         assert!(names.contains(&"send_to_session".into()));
         assert!(names.contains(&"session_brief".into()));
+        assert!(names.contains(&"session_digest".into()));
+        assert!(!CompanionFeatures::parse(None).allows_tool("session_brief"));
+        assert!(!CompanionFeatures::parse(None).allows_tool("session_digest"));
         assert!(!names.contains(&"delegate_to_agent".into()));
 
         let invalid = json!({

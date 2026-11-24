@@ -63,6 +63,7 @@ import {
 } from "@/components/message/goal-control-context"
 import { useAdvertisedGoalActions } from "@/hooks/use-goal-actions"
 import { ConversationShell } from "@/components/chat/conversation-shell"
+import { SessionDigestOverlay } from "@/components/chat/session-digest-panel"
 import { SessionConfigStaleBanner } from "@/components/chat/session-config-stale-banner"
 import { PiProjectTrustBanner } from "@/components/chat/pi-project-trust-banner"
 import { FeedbackNotesDisplay } from "@/components/chat/feedback-notes-display"
@@ -1458,6 +1459,62 @@ const ConversationTabView = memo(function ConversationTabView({
     ]
   )
 
+  const handleDigestAnswer = useCallback(
+    async (text: string, clientMessageId: string) => {
+      const persistedId = dbConvIdRef.current
+      if (
+        !persistedId ||
+        !connectionReady ||
+        connStatusRef.current !== "connected" ||
+        mqGetQueueLength() > 0
+      )
+        return false
+      const draft: PromptDraft = {
+        blocks: [{ type: "text", text }],
+        displayText: text,
+      }
+      const optimisticTurn = {
+        ...buildOptimisticUserTurnFromDraft(
+          draft,
+          sharedT("attachedResources")
+        ),
+        id: clientMessageId,
+      }
+      appendOptimisticTurn(
+        effectiveConversationId,
+        optimisticTurn,
+        clientMessageId
+      )
+      setSendSignal((prev) => prev + 1)
+      setSyncState(effectiveConversationId, "awaiting_persist")
+      let sent = true
+      const failed = () => {
+        sent = false
+        removeOptimisticTurn(effectiveConversationId, clientMessageId)
+      }
+      await lifecycleSend(draft, selectedModeId, {
+        folderId,
+        conversationId: persistedId,
+        clientMessageId,
+        onTurnInProgress: failed,
+        onSendFailed: failed,
+      })
+      return sent
+    },
+    [
+      connectionReady,
+      mqGetQueueLength,
+      sharedT,
+      appendOptimisticTurn,
+      effectiveConversationId,
+      setSyncState,
+      lifecycleSend,
+      selectedModeId,
+      folderId,
+      removeOptimisticTurn,
+    ]
+  )
+
   // Sync handleSend ref for auto-send effect (declared before handleSend)
   useEffect(() => {
     handleSendRef.current = handleSend
@@ -2395,6 +2452,15 @@ const ConversationTabView = memo(function ConversationTabView({
       getSentHistory={getSentHistory}
       topBanner={
         <>
+          <SessionDigestOverlay
+            conversationId={dbConversationId}
+            disabled={
+              !connectionReady ||
+              connStatus !== "connected" ||
+              msgQueue.length > 0
+            }
+            onSendAnswer={handleDigestAnswer}
+          />
           <SessionConfigStaleBanner contextKey={tabId} />
           <PiProjectTrustBanner
             contextKey={tabId}
