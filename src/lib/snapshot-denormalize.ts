@@ -79,6 +79,8 @@ export interface SnapshotPatch {
   pendingUserMessage: PendingUserMessage | null
   promptCapabilities: PromptCapabilitiesInfo | null
   selectorsReady: boolean
+  /** The composer's pending mode pick on this connection, or `null`. */
+  composerModeId: string | null
   supportsFork: boolean
   /** Whether the running session is on stale (launch-time) config — recovered
    *  from the snapshot so a reconnect/refresh/new tile sees the banner state
@@ -184,6 +186,7 @@ export function denormalizeSnapshot(wire: LiveSessionSnapshot): SnapshotPatch {
       : null,
     promptCapabilities: wire.prompt_capabilities ?? DEFAULT_PROMPT_CAPS,
     selectorsReady: wire.selectors_ready,
+    composerModeId: wire.composer_mode_id ?? null,
     supportsFork: wire.fork_supported,
     configStale: wire.config_stale ?? false,
     configStaleKind: wire.config_stale_kind ?? null,

@@ -1,0 +1,112 @@
+diff --git a/dist/cjs/index.js b/dist/cjs/index.js
+index 6b8092d8fd1ab2d678b07780bf51281d7d37f55e..2ed6340e45bd870f8b65fcfefa88699886211321 100644
+--- a/dist/cjs/index.js
++++ b/dist/cjs/index.js
+@@ -2562,7 +2562,8 @@ class NativeAnimation extends WithPromise {
+         if (transition.autoplay === false) {
+             this.animation.pause();
+         }
+-        this.animation.onfinish = () => {
++        this.animation.onfinish = this.onFinish = () => {
++            this.animation.onfinish = null;
+             this.finishedTime = this.time;
+             if (!pseudoElement) {
+                 const keyframe = getFinalKeyframe(keyframes, this.options, finalKeyframe, this.speed);
+@@ -2588,6 +2589,7 @@ class NativeAnimation extends WithPromise {
+         if (this.isStopped)
+             return;
+         this.manualStartTime = null;
++        this.animation.onfinish = this.onFinish;
+         this.animation.play();
+         if (this.state === "finished") {
+             this.updateFinished();
+@@ -2597,9 +2599,12 @@ class NativeAnimation extends WithPromise {
+         this.animation.pause();
+     }
+     complete() {
++        if (!this.isStopped)
++            this.animation.onfinish = this.onFinish;
+         this.animation.finish?.();
+     }
+     cancel() {
++        this.animation.onfinish = null;
+         try {
+             this.animation.cancel();
+         }
+@@ -2691,7 +2696,7 @@ class NativeAnimation extends WithPromise {
+         if (this.allowFlatten) {
+             this.animation.effect?.updateTiming({ easing: "linear" });
+         }
+-        this.animation.onfinish = null;
++        this.animation.onfinish = this.onFinish = null;
+         if (timeline && supportsScrollTimeline()) {
+             this.animation.timeline = timeline;
+             if (rangeStart)
+@@ -3228,7 +3233,8 @@ class NativeAnimationWrapper extends NativeAnimation {
+     constructor(animation) {
+         super();
+         this.animation = animation;
+-        animation.onfinish = () => {
++        animation.onfinish = this.onFinish = () => {
++            animation.onfinish = null;
+             this.finishedTime = this.time;
+             this.notifyFinished();
+         };
+diff --git a/dist/es/animation/NativeAnimation.mjs b/dist/es/animation/NativeAnimation.mjs
+index 0ba986302e2968521a4957712467a249f2b77ca8..81fd720b5998ae5346074687576a5d97dd260af9 100644
+--- a/dist/es/animation/NativeAnimation.mjs
++++ b/dist/es/animation/NativeAnimation.mjs
+@@ -33,7 +33,8 @@ class NativeAnimation extends WithPromise {
+         if (transition.autoplay === false) {
+             this.animation.pause();
+         }
+-        this.animation.onfinish = () => {
++        this.animation.onfinish = this.onFinish = () => {
++            this.animation.onfinish = null;
+             this.finishedTime = this.time;
+             if (!pseudoElement) {
+                 const keyframe = getFinalKeyframe(keyframes, this.options, finalKeyframe, this.speed);
+@@ -59,6 +60,7 @@ class NativeAnimation extends WithPromise {
+         if (this.isStopped)
+             return;
+         this.manualStartTime = null;
++        this.animation.onfinish = this.onFinish;
+         this.animation.play();
+         if (this.state === "finished") {
+             this.updateFinished();
+@@ -68,9 +70,12 @@ class NativeAnimation extends WithPromise {
+         this.animation.pause();
+     }
+     complete() {
++        if (!this.isStopped)
++            this.animation.onfinish = this.onFinish;
+         this.animation.finish?.();
+     }
+     cancel() {
++        this.animation.onfinish = null;
+         try {
+             this.animation.cancel();
+         }
+@@ -162,7 +167,7 @@ class NativeAnimation extends WithPromise {
+         if (this.allowFlatten) {
+             this.animation.effect?.updateTiming({ easing: "linear" });
+         }
+-        this.animation.onfinish = null;
++        this.animation.onfinish = this.onFinish = null;
+         if (timeline && supportsScrollTimeline()) {
+             this.animation.timeline = timeline;
+             if (rangeStart)
+diff --git a/dist/es/animation/NativeAnimationWrapper.mjs b/dist/es/animation/NativeAnimationWrapper.mjs
+index 9566448ae51b6bee24f470b4e8b6ed4c8022fa87..5fb922f782ecd1ae44163d3de90313d17dc4ac95 100644
+--- a/dist/es/animation/NativeAnimationWrapper.mjs
++++ b/dist/es/animation/NativeAnimationWrapper.mjs
+@@ -5,7 +5,8 @@ class NativeAnimationWrapper extends NativeAnimation {
+     constructor(animation) {
+         super();
+         this.animation = animation;
+-        animation.onfinish = () => {
++        animation.onfinish = this.onFinish = () => {
++            animation.onfinish = null;
+             this.finishedTime = this.time;
+             this.notifyFinished();
+         };

@@ -66,31 +66,47 @@ pub const CANCEL_TOOL_REWRITE_TITLE: &str = "codeg-mcp__cancel_delegation";
 pub const RESUME_TOOL_REWRITE_TITLE: &str = "codeg-mcp__resume_delegation";
 
 /// Whether a host's name for a tool is codeg-mcp's own `tool`, in whatever
-/// spelling the host composed it — `mcp__codeg-mcp__ask_user_question` from
-/// claude-agent-acp, `codeg-mcp__ask_user_question`, `codeg-mcp/…`,
-/// `codeg-mcp: …`, `mcp.codeg-mcp.…`, any case. The name is cut at the first
-/// separator between server and tool (`__`, `/`, `:` or `.`, after an optional
-/// leading `mcp`), and each half must be exactly codeg-mcp's and the tool's: a
-/// server named `other-codeg-mcp` or `codeg` (whose `mcp_submit_result` would
-/// read the same with the boundary gone), or a tool named
-/// `ask_user_question_twice`, is someone else's. It decides auto-approvals, so a
-/// near miss keeps its approval card.
+/// spelling the host composed it — `mcp__codeg-mcp__ask_user_question` (the
+/// raw name claude-agent-acp sent as the title until 0.109.1),
+/// `codeg-mcp: ask_user_question` (its title since), `codeg-mcp__…`,
+/// `codeg-mcp/…`, `mcp.codeg-mcp.…`, any case. The name is cut at the first
+/// separator between server and tool (`__`, `/`, `:` or `.`), and each half
+/// must be exactly codeg-mcp's and the tool's: a server named
+/// `other-codeg-mcp` or `codeg` (whose `mcp_submit_result` would read the same
+/// with the boundary gone), or a tool named `ask_user_question_twice`, is
+/// someone else's. It decides auto-approvals, so a near miss keeps its
+/// approval card.
+///
+/// A leading `mcp` namespace is set aside only when it is spelled with the
+/// same separator as the boundary after it (`mcp__codeg-mcp__…`,
+/// `mcp.codeg-mcp.…`). Otherwise `mcp` is the server: since claude-agent-acp
+/// 0.109.1 a third-party server named `mcp` whose tool is called
+/// `codeg-mcp__ask_user_question` is titled `mcp: codeg-mcp__ask_user_question`,
+/// and reading that `mcp:` as a namespace would hand codeg's shortcut to it.
 pub fn is_codeg_mcp_tool(name: &str, tool: &str) -> bool {
     const BOUNDARIES: [&str; 4] = ["__", "/", ":", "."];
-    let name = name.trim().to_ascii_lowercase();
-    let name = BOUNDARIES
-        .iter()
-        .find_map(|sep| name.strip_prefix(&format!("mcp{sep}")))
-        .unwrap_or(&name);
-    let Some((at, sep)) = BOUNDARIES
-        .iter()
-        .filter_map(|sep| name.find(sep).map(|at| (at, *sep)))
-        .min_by_key(|(at, _)| *at)
-    else {
-        return false;
+    // The first boundary in `text`: (server, tool, separator).
+    fn split(text: &str) -> Option<(&str, &str, &'static str)> {
+        let (at, sep) = BOUNDARIES
+            .iter()
+            .filter_map(|sep| text.find(sep).map(|at| (at, *sep)))
+            .min_by_key(|(at, _)| *at)?;
+        Some((text[..at].trim(), text[at + sep.len()..].trim(), sep))
+    }
+    let names_it = |server: &str, named_tool: &str| {
+        matches!(server, "codeg-mcp" | "codeg_mcp") && named_tool == tool
     };
-    let (server, named_tool) = (name[..at].trim(), name[at + sep.len()..].trim());
-    matches!(server, "codeg-mcp" | "codeg_mcp") && named_tool == tool
+    let name = name.trim().to_ascii_lowercase();
+    if split(&name).is_some_and(|(server, named_tool, _)| names_it(server, named_tool)) {
+        return true;
+    }
+    BOUNDARIES.iter().any(|sep| {
+        name.strip_prefix(&format!("mcp{sep}"))
+            .and_then(split)
+            .is_some_and(|(server, named_tool, inner)| {
+                inner == *sep && names_it(server, named_tool)
+            })
+    })
 }
 
 #[cfg(test)]
@@ -105,6 +121,7 @@ mod tests {
             "codeg-mcp/submit_result",
             "codeg-mcp: submit_result",
             "mcp.codeg-mcp.submit_result",
+            "mcp:codeg-mcp:submit_result",
             "  MCP__Codeg-MCP__Submit_Result  ",
         ] {
             assert!(is_codeg_mcp_tool(name, "submit_result"), "{name}");
@@ -118,6 +135,13 @@ mod tests {
             // words, another boundary.
             "mcp__codeg__mcp_submit_result",
             "codeg/mcp_submit_result",
+            // A server named `mcp` whose tool borrows codeg's whole name, as
+            // claude-agent-acp 0.109.1+ titles it (`<server>: <tool>`) and as
+            // other hosts join it: `mcp` is the server there, not a namespace.
+            "mcp: codeg-mcp__submit_result",
+            "mcp: codeg-mcp.submit_result",
+            "mcp/codeg-mcp__submit_result",
+            "mcp__mcp__codeg-mcp__submit_result",
             "submit_result",
             "codeg-mcp",
             "",

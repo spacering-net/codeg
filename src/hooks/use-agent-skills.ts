@@ -44,6 +44,8 @@ interface SkillsEntry {
 const entries = new Map<string, SkillsEntry>()
 /** The folders some mounted component is reading right now. */
 const readers = new Map<string, Set<() => void>>()
+/** Keep recent lists for quick reopen, apart from entries with active readers. */
+const MAX_INACTIVE_SKILL_LISTS = 32
 let listeningForFocus = false
 /** Stops following `skills://changed`; set while anything is read. */
 let stopFollowingChanges: (() => void) | null = null
@@ -146,6 +148,17 @@ function onSkillsChanged(change: SkillsChanged | null) {
   }
 }
 
+function keepRecentlyClosedList(key: string, entry: SkillsEntry) {
+  // Insertion order tracks when a list became inactive. Leave active lists
+  // shared by all readers regardless of how many folders are open.
+  entries.delete(key)
+  entries.set(key, entry)
+  for (const oldest of entries.keys()) {
+    if (entries.size - readers.size <= MAX_INACTIVE_SKILL_LISTS) break
+    if (!readers.has(oldest)) entries.delete(oldest)
+  }
+}
+
 function subscribe(
   agentType: AgentType,
   workspacePath: string | null,
@@ -173,6 +186,7 @@ function subscribe(
     keyReaders.delete(onChange)
     if (keyReaders.size === 0 && readers.get(key) === keyReaders) {
       readers.delete(key)
+      keepRecentlyClosedList(key, entry)
     }
     if (readers.size === 0 && listeningForFocus) {
       window.removeEventListener("focus", onWindowFocus)

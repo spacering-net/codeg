@@ -111,6 +111,11 @@ pub struct WorkTaskInfo {
     /// `latest_progress`, from the generation's open `background_wait` event.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background_wait: Option<WorkTaskBackgroundWait>,
+    /// The bound conversation's own model / options, as the next rerun will
+    /// run them (codeg#1179) — stamped only on a single-task fetch
+    /// (`work_task_get`), absent on lists and on a task with no conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_selection: Option<WorkTaskConversationSelection>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
@@ -244,6 +249,33 @@ pub struct WorkTaskConfig {
     /// editing this afterwards cannot re-base a task that already ran.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_branch: Option<String>,
+    /// `true` = the selector tuple above (`agent_type` / `mode_id` /
+    /// `config_values` / `label_snapshot`) is the task's own, fixed when it
+    /// was created or explicitly edited, and is never re-resolved from the
+    /// folder's task settings. `false` for every task from before this
+    /// existed: it is resolved once at its next launch and stamped frozen.
+    /// Server-owned — `work_task_service::update` derives it and never takes
+    /// it from a client payload.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub agent_config_frozen: bool,
+}
+
+/// What [`WorkTaskInfo::conversation_selection`] reports.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkTaskConversationSelection {
+    pub conversation_id: i32,
+    /// The conversation's folder (the task's worktree), for opening it.
+    pub folder_id: i32,
+    /// The conversation's agent (a task with a conversation keeps it).
+    pub agent_type: String,
+    /// Config option values (model, effort, …) by option id.
+    pub config_values: std::collections::BTreeMap<String, String>,
+    /// The conversation predates stored selections: these are what its next
+    /// connect would replay once and then keep.
+    pub legacy: bool,
+    /// A legacy task whose agent was changed while bound: its next run starts
+    /// a new conversation with the task's own tuple instead.
+    pub replaces_conversation: bool,
 }
 
 /// The one recognized [`WorkTaskConfig::deliverable`] value.
@@ -551,6 +583,13 @@ pub struct WorkTaskPreflight {
     /// Trailing combined output (capped) — shown when the light is red.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_tail: Option<String>,
+    /// Which run of the command this light belongs to — minted when the run
+    /// writes its `running` light. The run's verdict is only written while the
+    /// row still holds that exact light, so a run whose light was cleared
+    /// (the task's content changed under it) or replaced by a newer run cannot
+    /// put a stale verdict back. `None` on lights written before this existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
 }
 
 /// Changed file of a task worktree vs. its recorded base (`git diff --numstat`).

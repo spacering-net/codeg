@@ -13,6 +13,7 @@ import {
   harnessList,
   harnessPrompt,
   harnessReadme,
+  harnessReleases,
   harnessStatus,
   harnessVersions,
   isSrnAssetPath,
@@ -101,6 +102,12 @@ describe("Harness commands — names and arguments", () => {
 
     call.mockResolvedValueOnce(null)
     await expect(harnessReadme("acme/pdf-tools")).resolves.toBeNull()
+
+    call.mockResolvedValueOnce([{ version: "7.0.2" }])
+    await expect(harnessReleases("obra/superpowers")).resolves.toHaveLength(1)
+    expect(call).toHaveBeenLastCalledWith("harness_releases", {
+      itemRef: "obra/superpowers",
+    })
 
     call.mockResolvedValueOnce("Write a haiku.")
     await expect(harnessPrompt("acme/haiku")).resolves.toBe("Write a haiku.")
@@ -274,6 +281,11 @@ describe("Harness answers — read tolerantly", () => {
     ["the item list", () => harnessList(), { items: "nope" }],
     ["an item", () => harnessItem("acme/pdf-tools"), "<html>"],
     ["the versions", () => harnessVersions("acme/pdf-tools"), { versions: [] }],
+    [
+      "the releases",
+      () => harnessReleases("obra/superpowers"),
+      { releases: [] },
+    ],
     ["the configuration", () => harnessConfig(), null],
     ["the status", () => harnessStatus(), { enabled: "yes" }],
     ["a description", () => harnessReadme("acme/pdf-tools"), { html: "x" }],

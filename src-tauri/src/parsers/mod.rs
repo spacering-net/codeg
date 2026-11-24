@@ -404,9 +404,17 @@ pub trait AgentParser {
 /// so a parser handed [`AgentEnv::inherited`] instead reads the default
 /// directory while the agent writes elsewhere (#948).
 pub fn build_agent_parser(agent_type: AgentType, env: &AgentEnv) -> Box<dyn AgentParser> {
+    build_agent_parser_with_text(agent_type, env, codex::CodexText::Display)
+}
+
+pub(crate) fn build_agent_parser_with_text(
+    agent_type: AgentType,
+    env: &AgentEnv,
+    text: codex::CodexText,
+) -> Box<dyn AgentParser> {
     let inner: Box<dyn AgentParser> = match agent_type {
         AgentType::ClaudeCode => Box::new(claude::ClaudeParser::for_env(env)),
-        AgentType::Codex => Box::new(codex::CodexParser::for_env(env)),
+        AgentType::Codex => Box::new(codex::CodexParser::for_env(env).with_text(text)),
         AgentType::OpenCode => Box::new(opencode::OpenCodeParser::for_env(env)),
         AgentType::Gemini => Box::new(gemini::GeminiParser::for_env(env)),
         // This parser reads a fixed `~/.openclaw/agents` and follows no
@@ -1183,10 +1191,14 @@ pub fn infer_context_window_max_tokens(model: Option<&str>) -> Option<u64> {
             // `effective_context_window_percent: 95`. gpt-6 shares that profile
             // byte for byte (see `resources/codex/bundled-catalog.json`), so it
             // rides the same lane rather than falling through to `None` and
-            // leaving those sessions with no context meter at all. The one
-            // exception is GPT-6.1 Terra (codex 0.165): `context_window:
-            // 500000` at the same 95%.
-            if normalized.starts_with("gpt-6.1-terra") {
+            // leaving those sessions with no context meter at all. The
+            // exceptions are the 500K models at the same 95%: GPT-6.1 Terra
+            // (codex 0.165), and from codex 0.170 GPT-6.2 Sol and GPT-6.1 Sol
+            // (272K up to 0.166). GPT-6.2 Astra stays on 272K.
+            if normalized.starts_with("gpt-6.1-terra")
+                || normalized.starts_with("gpt-6.1-sol")
+                || normalized.starts_with("gpt-6.2-sol")
+            {
                 Some(475_000)
             } else if normalized.starts_with("gpt-5") || normalized.starts_with("gpt-6") {
                 Some(258_000)
@@ -2603,8 +2615,18 @@ mod tests {
             infer_context_window_max_tokens(Some("openai/gpt-6.1-terra")),
             Some(475_000)
         );
+        // codex 0.170 moves GPT-6.1 Sol to 500K and ships GPT-6.2 Sol there;
+        // GPT-6.2 Astra keeps the 272K profile.
         assert_eq!(
             infer_context_window_max_tokens(Some("gpt-6.1-sol")),
+            Some(475_000)
+        );
+        assert_eq!(
+            infer_context_window_max_tokens(Some("gpt-6.2-sol")),
+            Some(475_000)
+        );
+        assert_eq!(
+            infer_context_window_max_tokens(Some("gpt-6.2-astra")),
             Some(258_000)
         );
         // Kimi's k3 family is the 1M lane; k2.x stays on 256K. The provider

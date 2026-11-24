@@ -1087,6 +1087,8 @@ pub(crate) async fn installed(
         skills: Vec::new(),
         mcp_problem: None,
         skills_problem: None,
+        plugins: Vec::new(),
+        plugins_problem: None,
     })
 }
 

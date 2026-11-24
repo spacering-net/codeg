@@ -181,6 +181,25 @@ pub(crate) fn check_listing(
     origin: &Origin,
     limits: &PackageLimits,
 ) -> Vec<Reason> {
+    check_listing_of(info, origin, limits, true)
+}
+
+/// [`check_listing`] for a package that need not be one skill (a plugin's
+/// folder: no `SKILL.md` at its root).
+pub(crate) fn check_folder_listing(
+    info: &InstallInfo,
+    origin: &Origin,
+    limits: &PackageLimits,
+) -> Vec<Reason> {
+    check_listing_of(info, origin, limits, false)
+}
+
+fn check_listing_of(
+    info: &InstallInfo,
+    origin: &Origin,
+    limits: &PackageLimits,
+    skill_md: bool,
+) -> Vec<Reason> {
     let mut out = Vec::new();
     match (&info.archive, &info.source) {
         (Some(archive), _) => check_archive(archive, origin, limits, &mut out),
@@ -189,7 +208,7 @@ pub(crate) fn check_listing(
             crate::harness::mcp::model::codes::NOTHING_TO_INSTALL,
         )),
     }
-    check_files(&info.files, limits, &mut out);
+    check_files(&info.files, limits, skill_md, &mut out);
     out.truncate(MAX_ISSUES);
     out
 }
@@ -264,7 +283,7 @@ fn check_source(source: &Source, out: &mut Vec<Reason>) {
     }
 }
 
-fn check_files(files: &[FileEntry], limits: &PackageLimits, out: &mut Vec<Reason>) {
+fn check_files(files: &[FileEntry], limits: &PackageLimits, skill_md: bool, out: &mut Vec<Reason>) {
     if files.len() as u64 > limits.files {
         out.push(
             Reason::new(codes::TOO_MANY_FILES)
@@ -331,7 +350,7 @@ fn check_files(files: &[FileEntry], limits: &PackageLimits, out: &mut Vec<Reason
                 .param("limit", limits.total_bytes.to_string()),
         );
     }
-    if !files.iter().any(|file| file.path == "SKILL.md") {
+    if skill_md && !files.iter().any(|file| file.path == "SKILL.md") {
         out.push(Reason::new(codes::SKILL_MD_MISSING));
     }
 }
@@ -561,7 +580,7 @@ fn raw_url(raw_origin: &Origin, source: &Source, file: &str) -> Option<reqwest::
     raw_origin.holds(&url).then_some(url)
 }
 
-async fn fetch_from_source(
+pub(crate) async fn fetch_from_source(
     harness: &Harness,
     raw_origin: &Origin,
     source: &Source,

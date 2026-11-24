@@ -12,6 +12,7 @@ overrides:
 
 patchedDependencies:
   '@tauri-apps/api@2.12.4': d028b59c6e5591cf2e23346a24e10ea74825bb4314ba2cdf4b439c33abc5563a
+  motion-dom@13.3.0: e7f7f6d3629b24eaf008596652d1196d961a63ee196f5081e79b500c7543d7ad
   overlayscrollbars@2.15.1: d31b0912d157c6838f7cea20573a5917730580b13fceaa2c7c53b4856f605328
   streamdown@2.7.1: 37dc22ee017cf9114cea238a0a4ea19ff599b2380dcb9b2529014158178b73ea
 
@@ -11021,7 +11022,7 @@ snapshots:
 
   framer-motion@13.4.0(react-dom@19.2.4(react@19.2.4))(react@19.2.4):
     dependencies:
-      motion-dom: 13.3.0
+      motion-dom: 13.3.0(patch_hash=e7f7f6d3629b24eaf008596652d1196d961a63ee196f5081e79b500c7543d7ad)
       motion-utils: 13.3.0
       tslib: 2.8.1
     optionalDependencies:
@@ -12332,7 +12333,7 @@ snapshots:
       dompurify: 3.4.17
       marked: 14.0.0
 
-  motion-dom@13.3.0:
+  motion-dom@13.3.0(patch_hash=e7f7f6d3629b24eaf008596652d1196d961a63ee196f5081e79b500c7543d7ad):
     dependencies:
       motion-utils: 13.3.0
 

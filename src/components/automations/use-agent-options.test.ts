@@ -2,7 +2,10 @@ import { act, renderHook } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import type { AgentOptionsSnapshot, AgentType } from "@/lib/types"
-import { useAgentOptions } from "./use-agent-options"
+import {
+  __resetAgentOptionsCacheForTests,
+  useAgentOptions,
+} from "./use-agent-options"
 
 const describeAgentOptions = vi.hoisted(() => vi.fn())
 
@@ -202,5 +205,75 @@ describe("useAgentOptions provenance", () => {
     })
     expect(result.current.snapshotModel).toBeNull()
     expect(result.current.current).toBe(true)
+  })
+})
+
+describe("useAgentOptions cache retention", () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    __resetAgentOptionsCacheForTests()
+    describeAgentOptions.mockReset()
+    describeAgentOptions.mockImplementation((agent: AgentType) =>
+      Promise.resolve(snapshotFor(agent))
+    )
+  })
+
+  afterEach(() => {
+    __resetAgentOptionsCacheForTests()
+    vi.useRealTimers()
+  })
+
+  it("refetches the least recently used snapshot after visiting 33 folders", async () => {
+    const folder = (index: number) => `/workspaces/options-cache-${index}`
+    const { result, rerender } = renderHook(
+      ({ index }) => useAgentOptions("open_code", folder(index), false),
+      { initialProps: { index: 0 } }
+    )
+
+    for (let index = 0; index < 32; index++) {
+      rerender({ index })
+      await result.current.ensure()
+    }
+    expect(describeAgentOptions).toHaveBeenCalledTimes(32)
+
+    rerender({ index: 0 })
+    await result.current.ensure()
+    rerender({ index: 32 })
+    await result.current.ensure()
+    expect(describeAgentOptions).toHaveBeenCalledTimes(33)
+
+    rerender({ index: 0 })
+    await result.current.ensure()
+    expect(describeAgentOptions).toHaveBeenCalledTimes(33)
+
+    rerender({ index: 1 })
+    await result.current.ensure()
+    expect(describeAgentOptions).toHaveBeenCalledTimes(34)
+    expect(describeAgentOptions).toHaveBeenLastCalledWith(
+      "open_code",
+      folder(1),
+      null
+    )
+  })
+
+  it("keeps the original freshness timestamp when a hit refreshes recency", async () => {
+    const { result } = renderHook(() =>
+      useAgentOptions("open_code", "/workspaces/options-cache-ttl", false)
+    )
+
+    await result.current.ensure()
+    expect(describeAgentOptions).toHaveBeenCalledTimes(1)
+
+    // A hit inside the TTL is served from cache and moves the entry to the
+    // most-recent end...
+    vi.advanceTimersByTime(20_000)
+    await result.current.ensure()
+    expect(describeAgentOptions).toHaveBeenCalledTimes(1)
+
+    // ...but must not restart its 30s clock: 31s after the PROBE it is stale,
+    // even though it was read only 11s ago.
+    vi.advanceTimersByTime(11_000)
+    await result.current.ensure()
+    expect(describeAgentOptions).toHaveBeenCalledTimes(2)
   })
 })

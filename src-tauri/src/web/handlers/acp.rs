@@ -74,6 +74,11 @@ pub struct AcpConnectParams {
     pub preferred_mode_id: Option<String>,
     #[serde(default)]
     pub preferred_config_values: Option<BTreeMap<String, String>>,
+    /// The conversation this connect opens, when it is an existing one: its
+    /// stored selection wins over the client's default (codeg#1179). Older
+    /// clients omit it and fall back to the session-id lookup.
+    #[serde(default)]
+    pub conversation_id: Option<i32>,
 }
 
 pub async fn acp_connect(
@@ -100,39 +105,78 @@ pub async fn acp_connect(
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
 
     let emitter = state.emitter.clone();
-    let connection_id = manager
-        .spawn_agent(
-            params.agent_type,
-            params.working_dir,
-            params.session_id,
-            runtime_env,
-            "web".to_string(),
-            emitter,
-            params.preferred_mode_id,
-            params.preferred_config_values.unwrap_or_default(),
-        )
-        .await
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    let connection_id = acp_commands::spawn_with_conversation_selection(
+        manager,
+        &db.conn,
+        params.agent_type,
+        params.working_dir,
+        params.session_id,
+        runtime_env,
+        "web".to_string(),
+        emitter,
+        params.conversation_id,
+        params.preferred_mode_id,
+        params.preferred_config_values.unwrap_or_default(),
+    )
+    .await
+    .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
 
     Ok(Json(connection_id))
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AcpSetComposerModeParams {
+    pub connection_id: String,
+    #[serde(default)]
+    pub mode_id: Option<String>,
+    #[serde(default)]
+    pub initial: Option<bool>,
+}
+
+pub async fn acp_set_composer_mode(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AcpSetComposerModeParams>,
+) -> Result<Json<bool>, AppCommandError> {
+    let applied = state
+        .connection_manager
+        .set_composer_mode(
+            &params.connection_id,
+            params.mode_id,
+            params.initial.unwrap_or(false),
+        )
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(applied))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AcpDisconnectParams {
     pub connection_id: String,
+    #[serde(default)]
+    pub only_if_idle: bool,
 }
 
 pub async fn acp_disconnect(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AcpDisconnectParams>,
-) -> Result<Json<()>, AppCommandError> {
+) -> Result<Json<Option<bool>>, AppCommandError> {
     let manager = &state.connection_manager;
-    manager
-        .disconnect(&params.connection_id)
-        .await
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
-    Ok(Json(()))
+    let result = if params.only_if_idle {
+        manager
+            .release_idle(&params.connection_id, chrono::Utc::now())
+            .await
+            .map(Some)
+    } else {
+        manager
+            .disconnect(&params.connection_id)
+            .await
+            .map(|()| None)
+    };
+    result
+        .map(Json)
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))
 }
 
 #[derive(Deserialize)]

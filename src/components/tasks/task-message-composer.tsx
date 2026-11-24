@@ -17,7 +17,10 @@ import {
 import { useAgentOptions } from "@/components/automations/use-agent-options"
 import { ComposerAddMenu } from "@/components/chat/composer/composer-add-menu"
 import { ComposerImageThumbnails } from "@/components/chat/composer/composer-image-thumbnails"
-import { restampSkillPrefixes } from "@/components/chat/composer/composer-commands"
+import {
+  restampExpertNames,
+  restampSkillPrefixes,
+} from "@/components/chat/composer/composer-commands"
 import { useComposerChromeFocus } from "@/components/chat/composer/use-composer-chrome-focus"
 import {
   RichComposer,
@@ -197,10 +200,15 @@ export function TaskMessageComposer({
 
   // Keep already-inserted skill badges on the current agent's trigger (`$` is
   // Codex's; everyone else invokes skills as `/`).
+  const expertInvocation = shortcuts.expertInvocation
   useEffect(() => {
     const editor = editorRef.current?.getEditor()
-    if (editor) restampSkillPrefixes(editor, agentType === "codex" ? "$" : "/")
-  }, [agentType])
+    if (!editor) return
+    restampSkillPrefixes(editor, agentType === "codex" ? "$" : "/")
+    // And an expert's name: a Harness plugin installed whole may give it to
+    // one agent as `superpowers:<id>`.
+    restampExpertNames(editor, expertInvocation)
+  }, [agentType, expertInvocation])
 
   /** The bytes-bearing block behind every embedded badge still in the document,
    *  walked live so a deleted badge simply never emits (and an undo re-emits). */

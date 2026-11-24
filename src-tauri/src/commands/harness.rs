@@ -65,6 +65,14 @@ pub async fn harness_versions_core(
     Ok(harness.versions(item_ref).await?)
 }
 
+/// A plugin's `releases` array, newest first.
+pub async fn harness_releases_core(
+    harness: &Harness,
+    item_ref: &str,
+) -> Result<Value, AppCommandError> {
+    Ok(harness.releases(item_ref).await?)
+}
+
 /// The sanitized HTML fragment as text; `None` when the item has none.
 pub async fn harness_readme_core(
     harness: &Harness,
@@ -162,6 +170,14 @@ mod tauri_commands {
         item_ref: String,
     ) -> Result<Value, AppCommandError> {
         harness_versions_core(&harness(&app), &item_ref).await
+    }
+
+    #[tauri::command]
+    pub async fn harness_releases(
+        app: tauri::AppHandle,
+        item_ref: String,
+    ) -> Result<Value, AppCommandError> {
+        harness_releases_core(&harness(&app), &item_ref).await
     }
 
     #[tauri::command]

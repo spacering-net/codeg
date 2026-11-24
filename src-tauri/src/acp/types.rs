@@ -579,6 +579,16 @@ pub enum AcpEvent {
     ForkSupported { supported: bool },
     /// Current session mode changed
     ModeChanged { mode_id: String },
+    /// The composer's pending mode pick for this connection changed (see
+    /// `SessionState::composer_mode_id`). Never sent to the agent: a tab
+    /// applies it at its next send. `mode_id: None` clears it — emitted once
+    /// the agent's current mode reached the pick. `explicit` marks a user's
+    /// own pick (vs a draft's one-time hand-over or a reconnect's restore).
+    ComposerModeChanged {
+        mode_id: Option<String>,
+        #[serde(default)]
+        explicit: bool,
+    },
     /// Agent reported plan update for current turn
     PlanUpdate { entries: Vec<PlanEntryInfo> },
     /// Connection status changed
@@ -1567,6 +1577,30 @@ pub struct SessionConfigSelectOptionInfo {
     pub value: String,
     pub name: String,
     pub description: Option<String>,
+    /// What the agent says about this entry's model's reasoning efforts —
+    /// only on an entry of the model option, and only where the agent names
+    /// them (see [`ModelReasoningEffortsInfo`]). Left off the wire when
+    /// absent, and `#[serde(default)]` so snapshots written before the field
+    /// existed still deserialize.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_efforts: Option<ModelReasoningEffortsInfo>,
+}
+
+/// One model's reasoning efforts, as its entry of the `model` option names
+/// them: JetBrains AIR's `reasoningEfforts` (claude-agent-acp 0.110.0,
+/// codex-acp 2.10.0). It lets a model's effort levels be known before that
+/// model is current — the effort option itself lists only the current
+/// model's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelReasoningEffortsInfo {
+    /// The model's effort ids, in the order the agent's effort option lists
+    /// them once the model is current. Never empty.
+    pub values: Vec<String>,
+    /// The one the agent recommends for the model — one of `values`, or
+    /// `None` when the agent names none (codex-acp, when the model's default
+    /// effort is not in its list).
+    #[serde(default)]
+    pub recommended: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2336,6 +2370,9 @@ pub struct AgentSkillItem {
     /// A copy Codeg made where no link could be made (Windows); `owner` names
     /// what it is a copy of.
     pub codeg_copy: bool,
+    /// A Harness plugin's member skill (`owner` is `harness`): the plugin's
+    /// install name.
+    pub plugin: Option<String>,
 }
 
 /// Whose skill an agent's listed skill is.
@@ -2405,6 +2442,10 @@ pub struct RemoteControlInfo {
 pub struct ForkProtocolResult {
     pub forked_session_id: String,
     pub original_session_id: String,
+    /// The selection the fork actually inherited, read in the connection loop
+    /// after every setter queued before the fork was applied. Written to both
+    /// the re-pointed row and the sibling (`persist_fork_outcome`).
+    pub inherited_selection: crate::models::ConversationSelection,
 }
 
 #[derive(Debug, Clone, Serialize)]

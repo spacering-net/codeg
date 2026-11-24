@@ -7,10 +7,10 @@
  * A mark has two halves, as the MCP section's (`mcp-marks.ts`). `local` is
  * how the folder stands against what Codeg installed (known now). `remote`
  * is what the catalog says of the installed version — up to date, a newer
- * one out, withdrawn, taken down — which the host's update check tells (H6,
- * `./updates.ts`): `null` until it has, and where it has nothing to say, so
- * the section then shows no "update available" and offers no filter for it
- * (a filter that can never match is not offered).
+ * one out, withdrawn, taken down, no longer on SRN — which the host's update
+ * check tells (H6, `./updates.ts`): `null` until it has, and where it has
+ * nothing to say, so the section then shows no "update available" and
+ * offers no filter for it (a filter that can never match is not offered).
  */
 import { useMemo } from "react"
 
@@ -35,8 +35,10 @@ export const SKILLS_HARNESS_STATES = [
   "latest",
   "updateAvailable",
   "yanked",
+  "unapproved",
   "disabledByAuthor",
   "removedByHarness",
+  "gone",
   "changedLocally",
   "filesMissing",
 ] as const
@@ -57,8 +59,10 @@ export type SkillsHarnessRemoteState = Extract<
   | "latest"
   | "updateAvailable"
   | "yanked"
+  | "unapproved"
   | "disabledByAuthor"
   | "removedByHarness"
+  | "gone"
 >
 
 /** One skill installed from Harness, under its store id. */

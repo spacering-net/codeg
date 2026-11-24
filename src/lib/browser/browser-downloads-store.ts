@@ -105,9 +105,11 @@ function visibleFor(workspaceTabId: string): BrowserDownload[] {
     (d) =>
       !dismissed.has(d.id) && browserWorkspaceTabId(d.tabId) === workspaceTabId
   )
-  const value = list.length === 0 ? EMPTY : list
-  cache.set(workspaceTabId, value)
-  return value
+  // Empty tabs already share a stable snapshot. Caching their IDs would
+  // retain each closed tab until the next download or dismissal.
+  if (list.length === 0) return EMPTY
+  cache.set(workspaceTabId, list)
+  return list
 }
 
 function getServerSnapshot(): BrowserDownload[] {
@@ -123,6 +125,11 @@ export function useBrowserTabDownloads(
     () => (workspaceTabId ? visibleFor(workspaceTabId) : EMPTY),
     getServerSnapshot
   )
+}
+
+/** How many workspace tabs currently hold a memoised snapshot. */
+export function browserDownloadsCachedTabCountForTests(): number {
+  return cache.size
 }
 
 export function resetBrowserDownloadsForTests(): void {

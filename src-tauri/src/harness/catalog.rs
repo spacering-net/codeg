@@ -132,7 +132,7 @@ pub(crate) fn validate_sha256(sha256: &str) -> Result<&str, HarnessError> {
 pub struct ListQuery {
     /// Search text. Without it the catalog is browsed in `sort` order.
     pub q: Option<String>,
-    /// `skill`, `mcp`, `prompt` or `assistant`.
+    /// `skill`, `mcp`, `prompt`, `assistant` or `plugin`.
     pub kind: Option<String>,
     pub tag: Option<String>,
     pub runtime: Option<String>,
@@ -219,6 +219,18 @@ impl Harness {
         match answer.get_mut("versions").map(Value::take) {
             Some(versions @ Value::Array(_)) => Ok(versions),
             _ => Err(HarnessError::invalid_response("/versions has no versions")),
+        }
+    }
+
+    /// The `releases` array of `GET /items/{ref}/releases` (plugins only),
+    /// newest first.
+    pub async fn releases(&self, item_ref: &str) -> Result<Value, HarnessError> {
+        self.ensure_enabled()?;
+        let item_ref = ItemRef::parse(item_ref)?;
+        let mut answer = self.json(&item_ref.api_path("/releases"), &[]).await?;
+        match answer.get_mut("releases").map(Value::take) {
+            Some(releases @ Value::Array(_)) => Ok(releases),
+            _ => Err(HarnessError::invalid_response("/releases has no releases")),
         }
     }
 
