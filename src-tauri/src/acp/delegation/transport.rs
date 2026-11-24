@@ -206,6 +206,14 @@ pub struct BrokerSessionRequest {
     pub max_messages: Option<u32>,
 }
 
+/// Rename the calling conversation or one of its direct delegation children.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerRenameSessionRequest {
+    pub token: String,
+    pub session_id: Option<i32>,
+    pub title: String,
+}
+
 /// Report a progress milestone for the work task driving the parent session.
 /// Backs the `task_progress` MCP tool. Authenticated by the per-launch `token`;
 /// the listener resolves the parent connection from it and the task engine maps
@@ -467,6 +475,7 @@ pub enum BrokerMessage {
     CommitFeedback(BrokerCommitFeedbackRequest),
     Ask(BrokerAskRequest),
     SessionInfo(BrokerSessionRequest),
+    RenameSession(BrokerRenameSessionRequest),
     TaskProgress(BrokerTaskProgressRequest),
     TaskComplete(BrokerTaskCompleteRequest),
     ResultSchema(BrokerResultSchemaRequest),
@@ -838,6 +847,14 @@ pub async fn client_ask_round_trip(
     req: &BrokerAskRequest,
 ) -> io::Result<BrokerResponse> {
     message_round_trip(socket_path, &BrokerMessage::Ask(req.clone())).await
+}
+
+/// Dispatch an authenticated rename request.
+pub async fn client_rename_session_round_trip(
+    socket_path: &str,
+    req: BrokerRenameSessionRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::RenameSession(req)).await
 }
 
 /// Dispatch a `get_session_info` request and read back the serialized

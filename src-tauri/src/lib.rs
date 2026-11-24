@@ -1343,6 +1343,8 @@ mod tauri_app {
                                 std::sync::Arc::new(db::AppDatabase {
                                     conn: db_conn.clone(),
                                 }),
+                                crate::web::event_bridge::EventEmitter::from_app(app.handle()),
+                                session_info_config.clone(),
                             ),
                         ),
                         std::sync::Arc::new(crate::work_task::EngineWorkTaskTools),

@@ -294,6 +294,23 @@
     }
   },
   {
+    "name": "rename_session",
+    "description": "Rename your current Codeg conversation or one of your direct delegated child conversations. Omit session_id to rename yourself. The title is locked against later automatic title refreshes and imports.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["title"],
+      "properties": {
+        "session_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Codeg conversation ID. Defaults to your current conversation. Only your own or a direct child conversation is allowed."
+        },
+        "title": { "type": "string", "minLength": 1, "description": "The new conversation title." }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "get_session_info",
     "description": "Look up a session/conversation the user referenced in their message and return what it is: its title, which agent ran it, its status, workspace folder, git branch, model, message count, and token-usage stats — and, on request, a compact view of its most recent messages. RECOGNIZING A MENTIONED SESSION: the user can @-mention a past session directly in their message — it appears as a Markdown link `[Session title](codeg://session/<number>)`, whose text is that session's title and whose `<number>` is codeg's internal conversation id (e.g. `[Fix auth](codeg://session/214)` is the session titled 'Fix auth'). Such a mention IS the user explicitly pointing you at that session, even when they never name this tool — call it whenever what that session is about or what happened in it matters to the request (e.g. to continue its work, build on its results, answer questions about it, or summarize it). If the message mentions several sessions, make one call per session. Pass the NUMBER from the reference as `session_id` (it is codeg's internal conversation id, NOT the agent's own session id). The result is read-only and never modifies the session. A session that no longer exists returns a `found: false` result you can act on — it is not an error.",
     "inputSchema": {

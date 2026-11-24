@@ -531,6 +531,8 @@ async fn async_main(
                 Arc::new(codeg_lib::db::AppDatabase {
                     conn: state.db.conn.clone(),
                 }),
+                state.emitter.clone(),
+                session_info_config.clone(),
             )),
             Arc::new(codeg_lib::work_task::EngineWorkTaskTools),
             Arc::new(codeg_lib::commands::chat_authoring::DbChatAuthoring::new(

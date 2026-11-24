@@ -136,6 +136,9 @@ pub trait SessionInfoAccess: Send + Sync {
     /// most recent compacted turns (capped at [`MAX_SESSION_MESSAGES`]). A
     /// missing / deleted id yields [`SessionInfo::not_found`].
     async fn resolve(&self, session_id: i32, max_messages: u32) -> SessionInfo;
+
+    /// The listener supplies the caller from its authenticated connection.
+    async fn rename(&self, caller_id: i32, session_id: i32, title: String) -> Result<(), String>;
 }
 
 /// The hot-swappable feature config read at MCP injection time. Kept tiny and

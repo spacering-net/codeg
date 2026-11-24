@@ -59,17 +59,18 @@ use crate::acp::delegation::transport::{
     client_computer_verify_round_trip, client_computer_windows_round_trip,
     client_create_automation_round_trip, client_create_work_task_round_trip,
     client_feedback_round_trip, client_list_assistants_round_trip, client_ping,
-    client_result_schema_round_trip, client_resume_task_round_trip, client_round_trip,
-    client_session_round_trip, client_status_round_trip, client_submit_result_round_trip,
-    client_task_complete_round_trip, client_task_progress_round_trip, BrokerAskRequest,
-    BrokerBrowserActRequest, BrokerBrowserCaptureRequest, BrokerBrowserConsoleRequest,
-    BrokerBrowserEvalRequest, BrokerBrowserSnapshotRequest, BrokerBrowserTabOpRequest,
-    BrokerBrowserTabsRequest, BrokerCancelRequest, BrokerCancelTaskRequest,
-    BrokerCommitFeedbackRequest, BrokerComputerActRequest, BrokerComputerAppsRequest,
-    BrokerComputerCaptureRequest, BrokerComputerClipboardRequest, BrokerComputerLaunchRequest,
-    BrokerComputerSnapshotRequest, BrokerComputerVerifyRequest, BrokerComputerWindowsRequest,
-    BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest, BrokerFeedbackRequest,
-    BrokerListAssistantsRequest, BrokerRequest, BrokerResponse, BrokerResultSchemaRequest,
+    client_rename_session_round_trip, client_result_schema_round_trip,
+    client_resume_task_round_trip, client_round_trip, client_session_round_trip,
+    client_status_round_trip, client_submit_result_round_trip, client_task_complete_round_trip,
+    client_task_progress_round_trip, BrokerAskRequest, BrokerBrowserActRequest,
+    BrokerBrowserCaptureRequest, BrokerBrowserConsoleRequest, BrokerBrowserEvalRequest,
+    BrokerBrowserSnapshotRequest, BrokerBrowserTabOpRequest, BrokerBrowserTabsRequest,
+    BrokerCancelRequest, BrokerCancelTaskRequest, BrokerCommitFeedbackRequest,
+    BrokerComputerActRequest, BrokerComputerAppsRequest, BrokerComputerCaptureRequest,
+    BrokerComputerClipboardRequest, BrokerComputerLaunchRequest, BrokerComputerSnapshotRequest,
+    BrokerComputerVerifyRequest, BrokerComputerWindowsRequest, BrokerCreateAutomationRequest,
+    BrokerCreateWorkTaskRequest, BrokerFeedbackRequest, BrokerListAssistantsRequest,
+    BrokerRenameSessionRequest, BrokerRequest, BrokerResponse, BrokerResultSchemaRequest,
     BrokerResumeTaskRequest, BrokerSessionRequest, BrokerStatusRequest, BrokerSubmitResultRequest,
     BrokerTaskCompleteRequest, BrokerTaskProgressRequest, ThreadReply,
 };
@@ -286,7 +287,7 @@ impl CompanionFeatures {
         match name {
             "check_user_feedback" => self.feedback,
             "ask_user_question" => self.ask,
-            "get_session_info" => self.sessions,
+            "get_session_info" | "rename_session" => self.sessions,
             "task_progress" | "task_complete" => self.tasks,
             "submit_result" => self.result,
             "create_automation" => self.automations,
@@ -1088,6 +1089,40 @@ async fn build_tools_call_spawn(
             // pending question down — no broker-side cancel to dispatch.
             let round_trip = Box::pin(async move { client_ask_round_trip(&socket, &req).await });
             register_and_spawn(inflight, id, None, round_trip, render_ask_result).await
+        }
+        "rename_session" => {
+            let Some(title) = arguments
+                .get("title")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|title| !title.is_empty())
+            else {
+                return LineAction::Respond(err(
+                    id,
+                    -32602,
+                    "rename_session requires a non-empty title",
+                ));
+            };
+            let session_id = if arguments.get("session_id").is_some() {
+                let Some(session_id) = parse_session_id(&arguments).filter(|id| *id > 0) else {
+                    return LineAction::Respond(err(
+                        id,
+                        -32602,
+                        "session_id must be a positive conversation ID",
+                    ));
+                };
+                Some(session_id)
+            } else {
+                None
+            };
+            let req = BrokerRenameSessionRequest {
+                token: ctx.token.clone(),
+                session_id,
+                title: title.to_owned(),
+            };
+            let round_trip =
+                Box::pin(async move { client_rename_session_round_trip(&socket, req).await });
+            register_and_spawn(inflight, id, None, round_trip, render_rename_session_result).await
         }
         "get_session_info" => {
             // `session_id` is the codeg conversation id the agent read out of a
@@ -2278,6 +2313,14 @@ fn parse_max_messages(arguments: &Value) -> u32 {
         Some(n) => n.min(u64::from(MAX_SESSION_MESSAGES)) as u32,
         None => DEFAULT_MAX_MESSAGES,
     }
+}
+
+fn render_rename_session_result(outcome: &Value) -> Value {
+    json!({
+        "content": [{"type": "text", "text": outcome.to_string()}],
+        "structuredContent": outcome,
+        "isError": outcome.get("error").is_some(),
+    })
 }
 
 /// Map the `get_session_info` round-trip outcome (a serialized
@@ -5763,7 +5806,7 @@ mod tests {
             dispatch_for_test(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).await,
         );
         assert!(!names.contains(&"get_session_info".to_string()));
-        // sessions feature on → exactly that one tool surfaces.
+        // The sessions group exposes both lookup and rename.
         let names = list_tool_names(
             dispatch_with_features(
                 SESSIONS_ONLY,
@@ -5771,7 +5814,49 @@ mod tests {
             )
             .await,
         );
-        assert_eq!(names, vec!["get_session_info".to_string()]);
+        assert_eq!(
+            names,
+            vec!["rename_session".to_string(), "get_session_info".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn rename_session_validates_arguments_and_uses_sessions_gate() {
+        for arguments in [
+            json!({"title": "New title"}),
+            json!({"session_id": 42, "title": "Child"}),
+        ] {
+            let line = json!({
+                "jsonrpc": "2.0", "id": 40, "method": "tools/call",
+                "params": {"name": "rename_session", "arguments": arguments}
+            })
+            .to_string();
+            assert!(matches!(
+                dispatch_with_features(SESSIONS_ONLY, &line).await,
+                LineAction::Spawn(_)
+            ));
+            assert!(matches!(
+                dispatch_for_test(&line).await,
+                LineAction::Respond(_)
+            ));
+        }
+        for arguments in [
+            json!({}),
+            json!({"title": "   "}),
+            json!({"title": 3}),
+            json!({"session_id": "bad", "title": "Name"}),
+            json!({"session_id": 0, "title": "Name"}),
+        ] {
+            let line = json!({
+                "jsonrpc": "2.0", "id": 41, "method": "tools/call",
+                "params": {"name": "rename_session", "arguments": arguments}
+            })
+            .to_string();
+            match dispatch_with_features(SESSIONS_ONLY, &line).await {
+                LineAction::Respond(response) => assert_eq!(response.error.unwrap().code, -32602),
+                _ => panic!("invalid rename arguments must be rejected"),
+            }
+        }
     }
 
     #[tokio::test]

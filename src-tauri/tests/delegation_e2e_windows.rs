@@ -74,6 +74,15 @@ impl SessionQuestionAccess for NoQuestions {
 struct NoSessionInfo;
 #[async_trait]
 impl codeg_lib::acp::session_info::SessionInfoAccess for NoSessionInfo {
+    async fn rename(
+        &self,
+        _caller_id: i32,
+        _session_id: i32,
+        _title: String,
+    ) -> Result<(), String> {
+        Err("Session rename is unavailable".into())
+    }
+
     async fn resolve(
         &self,
         session_id: i32,
