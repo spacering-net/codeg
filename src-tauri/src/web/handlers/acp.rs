@@ -237,6 +237,9 @@ pub async fn acp_prompt(
                 _ => AppCommandError::task_execution_failed(message),
             }
         })?;
+    // A person typed this in a codeg window: a dispatch they write in is
+    // theirs from now on.
+    crate::personal_agent::note_owner_prompt(&params.connection_id, params.conversation_id);
     Ok(Json(()))
 }
 
@@ -1062,10 +1065,20 @@ pub async fn acp_list_pi_model_capabilities(
     ))
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpLoadDeepSeekModelCatalogParams {
+    /// The deepseek-acp version the settings page judges by (installed, else
+    /// pinned): it decides which document holds the catalog.
+    #[serde(default)]
+    pub version: Option<String>,
+}
+
 pub async fn acp_load_deepseek_model_catalog(
+    Json(params): Json<AcpLoadDeepSeekModelCatalogParams>,
 ) -> Result<Json<deepseek_settings_commands::DeepSeekModelCatalog>, AppCommandError> {
     Ok(Json(
-        deepseek_settings_commands::load_deepseek_model_catalog_core(),
+        deepseek_settings_commands::load_deepseek_model_catalog_core(params.version.as_deref()),
     ))
 }
 
@@ -1076,6 +1089,9 @@ pub struct AcpUpdateDeepSeekModelCatalogParams {
     /// is inherited again.
     #[serde(default)]
     pub models: Option<Vec<deepseek_settings_commands::DeepSeekCatalogModel>>,
+    /// As in [`AcpLoadDeepSeekModelCatalogParams::version`].
+    #[serde(default)]
+    pub version: Option<String>,
 }
 
 pub async fn acp_update_deepseek_model_catalog(
@@ -1083,8 +1099,12 @@ pub async fn acp_update_deepseek_model_catalog(
     Json(params): Json<AcpUpdateDeepSeekModelCatalogParams>,
 ) -> Result<Json<()>, AppCommandError> {
     let emitter = state.emitter.clone();
-    deepseek_settings_commands::update_deepseek_model_catalog_core(params.models, &emitter)
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    deepseek_settings_commands::update_deepseek_model_catalog_core(
+        params.models,
+        params.version.as_deref(),
+        &emitter,
+    )
+    .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(()))
 }
 

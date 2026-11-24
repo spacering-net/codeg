@@ -12,8 +12,9 @@
  * them. Codeg swaps two components. `Link`: json-render's is a bare
  * `<a href>`, and Codeg's main window has no navigation guard, so a click on
  * it would navigate the whole app away. Codeg's own Markdown link opens it
- * the way every other link in the chat opens. And `Card`, for one without
- * a shadow. The one thing Codeg adds is charts, which json-render leaves to
+ * the way every other link in the chat opens. `Card`, for one without
+ * a shadow. And `Table`, for one that scrolls sideways under the chat's own
+ * overlay scrollbar instead of the platform's. The one thing Codeg adds is charts, which json-render leaves to
  * each app (`./json-render-charts.tsx`).
  */
 
@@ -32,9 +33,11 @@ import {
   type BaseComponentProps,
 } from "@json-render/react"
 import { shadcnComponents, type ShadcnProps } from "@json-render/shadcn"
+import type { Spec } from "@json-render/core"
 import { StreamdownContext } from "streamdown"
 
 import { MarkdownLink } from "@/components/ai-elements/markdown-link"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import { Skeleton } from "@/components/ui/skeleton"
 import { jsonRenderCatalog } from "@/lib/json-render/catalog"
 import { chartBox } from "@/lib/json-render/chart-data"
@@ -96,6 +99,66 @@ function Card({ props, ...rest }: BaseComponentProps<ShadcnProps<"Card">>) {
   )
 }
 
+/** json-render's table — the same markup, classes and slots — scrolled
+ *  sideways in Codeg's ScrollArea: a table wider than its message takes the
+ *  thin overlay bar the conversation scrolls with, not the platform's thick
+ *  one under its last row. */
+function Table({ props }: BaseComponentProps<ShadcnProps<"Table">>) {
+  const columns = props.columns ?? []
+  const rows = (props.rows ?? []).map((row) => row.map(String))
+  return (
+    <div className="overflow-hidden rounded-md border border-border">
+      <ScrollArea x="scroll" y="hidden">
+        <table data-slot="table" className="w-full caption-bottom text-sm">
+          {props.caption ? (
+            <caption
+              data-slot="table-caption"
+              className="mt-4 text-sm text-muted-foreground"
+            >
+              {props.caption}
+            </caption>
+          ) : null}
+          <thead data-slot="table-header" className="[&_tr]:border-b">
+            <tr
+              data-slot="table-row"
+              className="border-b transition-colors hover:bg-muted/50"
+            >
+              {columns.map((col) => (
+                <th
+                  key={col}
+                  data-slot="table-head"
+                  className="h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-foreground"
+                >
+                  {col}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody data-slot="table-body" className="[&_tr:last-child]:border-0">
+            {rows.map((row, i) => (
+              <tr
+                key={i}
+                data-slot="table-row"
+                className="border-b transition-colors hover:bg-muted/50"
+              >
+                {row.map((cell, j) => (
+                  <td
+                    key={j}
+                    data-slot="table-cell"
+                    className="p-2 align-middle whitespace-nowrap"
+                  >
+                    {cell}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </ScrollArea>
+    </div>
+  )
+}
+
 /** Recharts and the charts that use it, loaded the first time a card has a
  *  chart: they weigh nearly as much as the rest of this chunk. */
 const JsonRenderChart = lazy(() => import("./json-render-charts"))
@@ -117,20 +180,39 @@ function chart(type: ChartType) {
   }
 }
 
+/** Every component a card can hold, as a session's card draws it; an
+ *  assistant's card (`personal-agent/pa-json-render-block.tsx`) swaps its
+ *  Button and Link. */
+export const jsonRenderComponents = {
+  ...shadcnComponents,
+  Card,
+  Link,
+  Table,
+  AreaChart: chart("AreaChart"),
+  BarChart: chart("BarChart"),
+  LineChart: chart("LineChart"),
+  PieChart: chart("PieChart"),
+  RadarChart: chart("RadarChart"),
+  RadialChart: chart("RadialChart"),
+  ScatterChart: chart("ScatterChart"),
+}
+
 const { registry } = defineRegistry(jsonRenderCatalog, {
-  components: {
-    ...shadcnComponents,
-    Card,
-    Link,
-    AreaChart: chart("AreaChart"),
-    BarChart: chart("BarChart"),
-    LineChart: chart("LineChart"),
-    PieChart: chart("PieChart"),
-    RadarChart: chart("RadarChart"),
-    RadialChart: chart("RadialChart"),
-    ScatterChart: chart("ScatterChart"),
-  },
+  components: jsonRenderComponents,
 })
+
+/** The fence's spec, or `null` when it is not one json-render can render
+ *  (then it stays code). */
+export function renderableSpec(source: string): Spec | null {
+  if (!isSpecStream(source)) return null
+  try {
+    const compiled = compileSpec(source)
+    return hasChildCycle(compiled) ? null : compiled
+  } catch {
+    // A `test` patch that fails throws; the fence stays code.
+    return null
+  }
+}
 
 export default function JsonRenderBlock({
   source,
@@ -145,16 +227,7 @@ export default function JsonRenderBlock({
   // still arriving, json-render keeps quiet about children that have not
   // arrived yet.
   const { mode } = useContext(StreamdownContext)
-  const spec = useMemo(() => {
-    if (!isSpecStream(source)) return null
-    try {
-      const compiled = compileSpec(source)
-      return hasChildCycle(compiled) ? null : compiled
-    } catch {
-      // A `test` patch that fails throws; the fence stays code.
-      return null
-    }
-  }, [source])
+  const spec = useMemo(() => renderableSpec(source), [source])
 
   if (!spec) return <>{fallback}</>
   return (

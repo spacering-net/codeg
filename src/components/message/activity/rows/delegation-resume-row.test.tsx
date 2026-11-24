@@ -87,6 +87,7 @@ function bindingOf(overrides: Partial<DelegationBinding>): DelegationBinding {
     taskId: TASK_ID,
     assistantId: null,
     assistantName: null,
+    botUid: null,
     ...overrides,
   }
 }

@@ -335,6 +335,30 @@ describe("ConfigSyncSettings — file import", () => {
     expect(options.description).toContain("1 assistant was renamed")
   })
 
+  it("says when assistants kept their own persona on the way in", async () => {
+    vi.mocked(pickConfigFileToImport).mockResolvedValue(pickedPath())
+    vi.mocked(importPickedConfig).mockResolvedValue({
+      applied: {
+        domains: { assistants: 2 },
+        total: 2,
+        renamed: 1,
+        personaKept: 2,
+      },
+      rollbackPath: null,
+    })
+    await renderLoaded()
+    fireEvent.click(screen.getByRole("button", { name: t.importButton }))
+    await screen.findByText(t.importConfirmTitle)
+    fireEvent.click(screen.getByRole("button", { name: t.importConfirmAction }))
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalled())
+    const [, options] =
+      toastSuccess.mock.calls[toastSuccess.mock.calls.length - 1]
+    expect(options.description).toContain("1 assistant was renamed")
+    expect(options.description).toContain(
+      "2 assistants kept their own personas"
+    )
+  })
+
   /// The panel is deliberately blind to which runtime produced the pick: it
   /// hands the `source` back exactly as given. Which source a real browser
   /// produces is decided inside `@/lib/config-sync` — mocked here — and is

@@ -66,6 +66,16 @@ describe("sessionStatusKind", () => {
     )
   })
 
+  it("a question or a plan approval is waiting too", () => {
+    for (const kind of ["question", "plan"] as const) {
+      const ask = { kind, text: "Which database?" }
+      expect(sessionStatusKind(entry({ status: "prompting", ask }))).toBe(
+        "waiting"
+      )
+      expect(sessionSortRank(entry({ ask }))).toBe(0)
+    }
+  })
+
   it("errored connection is error", () => {
     expect(sessionStatusKind(entry({ status: "error" }))).toBe("error")
   })

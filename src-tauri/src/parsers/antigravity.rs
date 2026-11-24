@@ -42,6 +42,7 @@
 //! upstream's to change.
 
 pub(crate) mod background;
+mod failure;
 
 use std::path::{Path, PathBuf};
 
@@ -651,6 +652,95 @@ impl ErrorDetails {
         .find(|s| !s.trim().is_empty())
         .map(|s| truncate_str(s, TOOL_OUTPUT_CAP))
     }
+
+    /// The executor's raw error string, the one the ACP server words its
+    /// account from (see [`failure`]).
+    fn raw_error(&self) -> Option<&str> {
+        [&self.short_error, &self.full_error]
+            .into_iter()
+            .map(|s| s.trim())
+            .find(|s| !s.is_empty())
+    }
+}
+
+/// A failure that ENDED a turn, worded as the ACP server told it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TurnFailure {
+    pub(crate) text: String,
+    /// AIR category (`access|limit|request|service|unknown`).
+    pub(crate) category: &'static str,
+}
+
+impl Step {
+    /// The failure this step records as ending the turn: an `error_message`
+    /// step the server marked `should_show_user`. agy 1.5.2 stores one when
+    /// the agent executor dies (the model API refused, the quota ran out, …)
+    /// and the server then sends the user its account as a plain
+    /// `agent_message_chunk` and ends the turn `end_turn`. An `error_message`
+    /// WITHOUT the flag is model-facing (an invalid tool call the model is
+    /// asked to fix), and the turn goes on.
+    fn turn_failure(&self) -> Option<TurnFailure> {
+        let step = self.error_message.as_ref().filter(|e| e.should_show_user)?;
+        let details = step.error.as_ref()?;
+        let (text, category) = match details.raw_error() {
+            Some(raw) => (
+                failure::turn_failure_text(raw),
+                failure::failure_category(raw),
+            ),
+            None => (details.user_error_message.trim().to_string(), "unknown"),
+        };
+        (!text.trim().is_empty()).then(|| TurnFailure {
+            text: truncate_str(text.trim(), TOOL_OUTPUT_CAP),
+            category,
+        })
+    }
+}
+
+/// The failure the newest round of `session_id`'s trajectory ended on, with
+/// the step's position among the decoded steps (stable, and unique within the
+/// session) — `None` when that round did not end on one, or when its prompt
+/// was stored before `since` (the turn that just ended has not reached the
+/// trajectory, and the newest round is an earlier one).
+///
+/// The live counterpart of the failure line [`project_steps`] draws: read when
+/// a turn ends, because the server tells the failure as an ordinary reply
+/// chunk. Measured on 1.5.2: the step is on disk before the prompt response
+/// is sent.
+pub(crate) fn newest_round_failure(
+    sessions_dir: &Path,
+    session_id: &str,
+    since: DateTime<Utc>,
+) -> Option<(usize, TurnFailure)> {
+    if !crate::parsers::is_safe_subagent_id(session_id) {
+        return None;
+    }
+    let fallback = default_trajectory_dir();
+    let (steps, _) = read_trajectory(&session_db_path(
+        sessions_dir,
+        fallback.as_deref(),
+        session_id,
+    ));
+    let prompt = steps.iter().rposition(|step| step.user_input.is_some())?;
+    let prompted_at = steps[prompt]
+        .metadata
+        .as_ref()
+        .and_then(|m| m.created_at.as_ref())
+        .and_then(Timestamp::to_utc)?;
+    if prompted_at < since {
+        return None;
+    }
+    let mut failure = None;
+    for (position, step) in steps.iter().enumerate().skip(prompt + 1) {
+        if let Some(found) = step.turn_failure() {
+            failure = Some((position, found));
+        } else if step.planner_response.as_ref().is_some_and(|planner| {
+            !planner.response.trim().is_empty() || !planner.tool_calls.is_empty()
+        }) {
+            // The model went on after it: that failure did not end the turn.
+            failure = None;
+        }
+    }
+    failure
 }
 
 // ---------------------------------------------------------------------------
@@ -1089,6 +1179,40 @@ fn project_steps(steps: &[Step]) -> SessionParse {
             agent_message_id: None,
             });
             parsed.message_count = parsed.message_count.saturating_add(1);
+            continue;
+        }
+
+        // A failure that ended the turn closes the round as its failure line
+        // (`turn_error_message`), never as a reply or a tool result: it is the
+        // server's account, not the model's words, and nothing was called.
+        // The work before it stays its own assistant turn.
+        if let Some(failure) = step.turn_failure() {
+            if !pending.is_empty() {
+                let fallback = pending.last_ts.or(ts).unwrap_or_else(Utc::now);
+                let id = background_id
+                    .take()
+                    .unwrap_or_else(|| format!("agy-{turn_index}"));
+                parsed.turns.push(pending.finish(id, fallback));
+                turn_index += 1;
+                pending = PendingAssistant::default();
+            }
+            if let Some(line) = crate::parsers::turn_error_message(
+                format!("agy-{idx}-error"),
+                &failure.text,
+                ts.unwrap_or_else(Utc::now),
+            ) {
+                parsed.turns.push(MessageTurn {
+                    id: line.id,
+                    role: TurnRole::System,
+                    blocks: line.content,
+                    timestamp: line.timestamp,
+                    usage: None,
+                    duration_ms: None,
+                    model: None,
+                    completed_at: line.completed_at,
+                    agent_message_id: None,
+                });
+            }
             continue;
         }
 
@@ -2040,15 +2164,203 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].0.as_deref().unwrap_or_default().contains("boom"));
         assert_eq!(errors[0].1, Some(2), "the run's exit code is kept");
-        assert!(errors[1]
-            .0
-            .as_deref()
-            .unwrap_or_default()
-            .contains("quota exhausted"));
-        assert_eq!(errors[1].1, None, "an error step ran no process");
+        // The error the server showed the user ended the turn: it closes the
+        // round as the failure line, after the work it interrupted.
+        assert_eq!(detail.turns.len(), 3, "{:?}", detail.turns);
+        assert!(matches!(detail.turns[2].role, TurnRole::System));
+        assert!(matches!(
+            detail.turns[2].blocks.as_slice(),
+            [ContentBlock::TurnError { message }] if message == "quota exhausted"
+        ));
+    }
+
+    /// The executor error agy 1.5.2 stores for a prompt Google refused (field
+    /// capture of a 403 turn), with the generic `user_error_message` it
+    /// carries beside the raw error.
+    fn refused_turn_error(should_show_user: bool) -> ErrorMessageStep {
+        ErrorMessageStep {
+            error: Some(ErrorDetails {
+                user_error_message: "Agent execution terminated due to error.".into(),
+                short_error: "agent executor error: Error 403, Message: Your current account \
+                              is not eligible for Gemini Code Assist for individuals because \
+                              it is not currently available in your location., Status: \
+                              PERMISSION_DENIED, Details: [map[@type:type.googleapis.com/\
+                              google.rpc.ErrorInfo domain:cloudaicompanion.googleapis.com \
+                              metadata:map[error_number:1008 uiMessage:true] \
+                              reason:UNSUPPORTED_LOCATION]]"
+                    .into(),
+                ..Default::default()
+            }),
+            should_show_user,
+        }
+    }
+
+    const REFUSAL_TEXT: &str = "Your current account is not eligible for Gemini Code Assist \
+                                for individuals because it is not currently available in \
+                                your location.";
+
+    fn prompt_step(at: i64, text: &str) -> Step {
+        Step {
+            metadata: Some(StepMetadata {
+                created_at: ts(at),
+                ..Default::default()
+            }),
+            user_input: Some(UserInput {
+                query: text.into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn error_step(at: i64, should_show_user: bool) -> Step {
+        Step {
+            metadata: Some(StepMetadata {
+                created_at: ts(at),
+                ..Default::default()
+            }),
+            error_message: Some(refused_turn_error(should_show_user)),
+            ..Default::default()
+        }
+    }
+
+    fn reply_step(at: i64, text: &str) -> Step {
+        Step {
+            status: STEP_STATUS_DONE,
+            metadata: Some(StepMetadata {
+                created_at: ts(at),
+                ..Default::default()
+            }),
+            planner_response: Some(PlannerResponse {
+                response: text.into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    // A turn the executor died in before the model said anything (the 403
+    // refusal of a user's location) is the prompt and the failure line — in
+    // the server's words, not the generic "terminated due to error", and not a
+    // tool result with no call (which drew as a failed "Result" card).
+    #[test]
+    fn a_refused_turn_reads_as_its_failure_line() {
+        let dir = tempfile::tempdir().unwrap();
+        write_steps(
+            dir.path(),
+            "s-refused",
+            &[
+                prompt_step(1_700_000_000, "hi"),
+                error_step(1_700_000_004, true),
+                prompt_step(1_700_000_010, "again"),
+                error_step(1_700_000_013, true),
+            ],
+        );
+        let parser = AntigravityParser::with_base_dir(dir.path().to_path_buf());
+        let detail = parser.get_conversation("s-refused").unwrap();
+        let shape: Vec<_> = detail
+            .turns
+            .iter()
+            .map(|turn| match (&turn.role, turn.blocks.as_slice()) {
+                (TurnRole::User, [ContentBlock::Text { text }]) => format!("user:{text}"),
+                (TurnRole::System, [ContentBlock::TurnError { message }]) => {
+                    format!("failed:{message}")
+                }
+                other => panic!("unexpected turn {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            vec![
+                "user:hi".to_string(),
+                format!("failed:{REFUSAL_TEXT}"),
+                "user:again".to_string(),
+                format!("failed:{REFUSAL_TEXT}"),
+            ]
+        );
+        assert_eq!(
+            detail.summary.message_count, 2,
+            "a failure line says nothing"
+        );
+    }
+
+    // An error the model is asked to fix (no `should_show_user`) does not end
+    // the turn, so it is not a failure line.
+    #[test]
+    fn a_model_facing_error_is_not_a_failure_line() {
+        let dir = tempfile::tempdir().unwrap();
+        write_steps(
+            dir.path(),
+            "s-retry",
+            &[
+                prompt_step(1_700_000_000, "go"),
+                error_step(1_700_000_001, false),
+                reply_step(1_700_000_002, "done"),
+            ],
+        );
+        let parser = AntigravityParser::with_base_dir(dir.path().to_path_buf());
+        let detail = parser.get_conversation("s-retry").unwrap();
+        assert!(detail
+            .turns
+            .iter()
+            .all(|turn| !matches!(turn.role, TurnRole::System)));
+    }
+
+    #[test]
+    fn the_newest_round_failure_is_read_for_the_turn_that_just_ended() {
+        let dir = tempfile::tempdir().unwrap();
+        let at = |seconds| Utc.timestamp_opt(seconds, 0).single().unwrap();
+        write_steps(
+            dir.path(),
+            "s-live",
+            &[
+                prompt_step(1_700_000_000, "hi"),
+                error_step(1_700_000_004, true),
+            ],
+        );
+        let (position, failure) =
+            newest_round_failure(dir.path(), "s-live", at(1_700_000_000)).unwrap();
+        assert_eq!(position, 1);
+        assert_eq!(failure.text, REFUSAL_TEXT);
+        assert_eq!(failure.category, "access");
+        // A prompt stored before the turn began is an EARLIER round's: the
+        // turn that just ended has not reached the trajectory.
+        assert_eq!(
+            newest_round_failure(dir.path(), "s-live", at(1_700_000_001)),
+            None
+        );
+        assert_eq!(newest_round_failure(dir.path(), "missing", at(0)), None);
+
+        // The model going on after a shown error means it did not end the turn.
+        write_steps(
+            dir.path(),
+            "s-recovered",
+            &[
+                prompt_step(1_700_000_000, "hi"),
+                error_step(1_700_000_001, true),
+                reply_step(1_700_000_002, "hello"),
+            ],
+        );
+        assert_eq!(
+            newest_round_failure(dir.path(), "s-recovered", at(1_700_000_000)),
+            None
+        );
+        // A round with no failure at all.
+        write_steps(
+            dir.path(),
+            "s-ok",
+            &[
+                prompt_step(1_700_000_000, "hi"),
+                reply_step(1_700_000_001, "hello"),
+            ],
+        );
+        assert_eq!(
+            newest_round_failure(dir.path(), "s-ok", at(1_700_000_000)),
+            None
+        );
     }
 
     // The decoder declares a strict SUBSET of the real `Step`. Every field it

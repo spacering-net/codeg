@@ -255,7 +255,7 @@ pub async fn list_issues(
     } else {
         None
     };
-    let q = search_query(
+    let mut q = search_query(
         &repo,
         req.tab,
         &req.state,
@@ -263,6 +263,15 @@ pub async fn list_issues(
         &req.labels,
         req.search.as_deref(),
     );
+    if req.review_requested_me {
+        // A qualifier, so anywhere in `q` will do; the login is the one the
+        // assignee filter uses (`@me` is not taken by every server version).
+        let login = match assignee.as_deref() {
+            Some(l) => l.to_string(),
+            None => current_login(conn_auth).await?,
+        };
+        q.push_str(&format!(" review-requested:{login}"));
+    }
     let url = format!(
         "{}/search/issues?q={}&advanced_search=true&sort={}&order={}&page={page}&per_page={per_page}",
         conn_auth.api_base,
@@ -558,6 +567,35 @@ pub async fn set_item_state(
     Ok(raw.into_row(kind == ForgeItemKind::Change))
 }
 
+/// `GET /repos/{o}/{r}/issues/{n}` or `/pulls/{n}` — one item's state, and
+/// the commit a merged pull request landed as: what an action taken on it is
+/// checked against afterwards.
+pub async fn item_facts(
+    auth: &ResolvedAuth,
+    owner_repo: &str,
+    kind: ForgeItemKind,
+    number: i64,
+) -> Result<super::ItemFacts, ForgeError> {
+    let repo = super::normalize_repo(owner_repo)
+        .ok_or_else(|| ForgeError::Invalid(format!("bad repository path: {owner_repo}")))?;
+    if number <= 0 {
+        return Err(ForgeError::Invalid(format!(
+            "bad work item number: {number}"
+        )));
+    }
+    let collection = match kind {
+        ForgeItemKind::Issue => "issues",
+        ForgeItemKind::Change => "pulls",
+    };
+    let url = format!("{}/repos/{repo}/{collection}/{number}", auth.api_base);
+    let raw: serde_json::Value = api_get(auth, &url)
+        .await?
+        .json()
+        .await
+        .map_err(|e| ForgeError::Network(format!("bad item payload: {e}")))?;
+    Ok(super::ItemFacts::from_json(&raw))
+}
+
 /// `POST /repos/{o}/{r}/issues` — open an issue, and hand back the row for it.
 ///
 /// The row is what lets the list show the new issue without a refetch, and it
@@ -616,6 +654,8 @@ struct RawPull {
     head: Option<RawPullRef>,
     #[serde(default)]
     base: Option<RawPullRef>,
+    #[serde(default)]
+    updated_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -732,6 +772,7 @@ pub async fn change_detail(
         changed_files: raw.changed_files,
         commits: raw.commits,
         checks,
+        updated_at: raw.updated_at.filter(|s| !s.is_empty()),
         workflow_approval,
     })
 }
@@ -740,6 +781,10 @@ pub async fn change_detail(
 struct RawCheckRunPage {
     #[serde(default)]
     check_runs: Vec<RawCheckRun>,
+    /// How many there are in all: more than this page holds means the list
+    /// is not the whole answer.
+    #[serde(default)]
+    total_count: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -770,6 +815,8 @@ struct RawCheckOutput {
 struct RawCombinedStatus {
     #[serde(default)]
     statuses: Vec<RawCommitStatus>,
+    #[serde(default)]
+    total_count: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -808,12 +855,18 @@ async fn head_checks(auth: &ResolvedAuth, repo: &str, sha: &str) -> ForgeCheckLi
     if sha.is_empty() || !sha.chars().all(|c| c.is_ascii_alphanumeric()) {
         return ForgeCheckList::unavailable();
     }
+    // A collection with more than one page holds is read as not whole: a
+    // failing check on the next page must not read as green.
+    let mut more = false;
     let runs: Option<Vec<ForgeCheck>> = async {
         let url = format!(
             "{}/repos/{repo}/commits/{sha}/check-runs?per_page={LABEL_PAGE_SIZE}",
             auth.api_base
         );
         let page: RawCheckRunPage = api_get(auth, &url).await.ok()?.json().await.ok()?;
+        if page.total_count.is_some_and(|n| n > page.check_runs.len()) {
+            more = true;
+        }
         Some(
             page.check_runs
                 .into_iter()
@@ -841,6 +894,12 @@ async fn head_checks(auth: &ResolvedAuth, repo: &str, sha: &str) -> ForgeCheckLi
             auth.api_base
         );
         let combined: RawCombinedStatus = api_get(auth, &url).await.ok()?.json().await.ok()?;
+        if combined
+            .total_count
+            .is_some_and(|n| n > combined.statuses.len())
+        {
+            more = true;
+        }
         Some(
             combined
                 .statuses
@@ -863,7 +922,7 @@ async fn head_checks(auth: &ResolvedAuth, repo: &str, sha: &str) -> ForgeCheckLi
     if runs.is_none() && statuses.is_none() {
         return ForgeCheckList::unavailable();
     }
-    let partial = runs.is_none() || statuses.is_none();
+    let partial = runs.is_none() || statuses.is_none() || more;
     let mut checks = runs.unwrap_or_default();
     // A repository can have both, and an integration that writes each way
     // writes the same NAME to both — showing it twice reads as two checks that
@@ -2120,6 +2179,7 @@ mod tests {
             tab,
             state: "open".into(),
             assigned_me: false,
+            review_requested_me: false,
             labels: vec![],
             search: None,
             sort: super::super::ForgeSort::default(),
@@ -2370,6 +2430,22 @@ mod tests {
         let second = list_issues(&auth, &request).await.unwrap();
         assert_eq!(second.rows.len(), 1);
         assert_eq!(user_hits.load(Ordering::SeqCst), 1, "login cached after first use");
+    }
+
+    /// Codeg's own "changes waiting on my review": a `review-requested:`
+    /// qualifier with the signed-in login, beside the one `repo:`.
+    #[tokio::test]
+    async fn review_requested_asks_for_the_signed_in_login() {
+        let (api_base, _, seen) = mock_api().await;
+        let auth = auth_for(api_base);
+        let request = ListIssuesRequest {
+            review_requested_me: true,
+            ..req(ForgeTab::Prs)
+        };
+        list_issues(&auth, &request).await.unwrap();
+        let q = seen.read().unwrap().q.clone();
+        assert!(q.starts_with("repo:acme/app is:pr"), "{q}");
+        assert!(q.ends_with(" review-requested:alice"), "{q}");
     }
 
     /// 403 + exhausted quota is a rate limit (with its retry hint), NOT an

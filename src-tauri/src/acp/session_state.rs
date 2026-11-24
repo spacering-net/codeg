@@ -34,6 +34,14 @@ pub struct LiveMessage {
     pub role: MessageRole,
     pub content: Vec<LiveContentBlock>,
     pub started_at: DateTime<Utc>,
+    /// The turn FAILED, in the agent's words: a terminal `SessionFailure`
+    /// applied while it ran. Kept so a snapshot taken before `TurnComplete`
+    /// closes the turn on the same failure line the watching clients drew
+    /// from the event (the frontend's closing `turn_error` block). A field
+    /// rather than a content block so a client that predates it ignores it
+    /// instead of meeting a block kind it cannot decode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_error: Option<String>,
 }
 
 /// 流式 turn 的内容块。事件按到达顺序追加。
@@ -236,6 +244,8 @@ pub struct ActiveDelegationState {
     pub assistant_id: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assistant_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot_uid: Option<String>,
 }
 
 /// The in-flight user prompt for the current turn. Captured from
@@ -312,6 +322,11 @@ pub struct SessionState {
     /// `exit_plan_mode` tool call); the connection parks the ext responder keyed
     /// by `approval_id`.
     pub pending_plan_approval: Option<PendingPlanApprovalState>,
+
+    /// What the assistant that dispatched this session answers for the owner
+    /// (7.3.1): a window holds back its notification of those until one is
+    /// forwarded. Set by `AskDelegate`; outlives turns.
+    pub ask_delegate: Option<crate::acp::types::AskDelegate>,
 
     /// In-flight (running) sub-agent delegations keyed by `parent_tool_use_id`.
     /// `DelegationStarted` inserts; `DelegationCompleted` removes. UNLIKE
@@ -686,6 +701,13 @@ pub struct SessionState {
     /// client snapshot.
     pub codex_user_input_shape: Option<crate::acp::question::CodexUserInputShape>,
 
+    /// What the RUNNING adapter said it is at initialize: `agentInfo`'s
+    /// `(name, version)`, when it sent one. The personal agent reads it to
+    /// decide whether a message can be folded into a turn in flight
+    /// (claude-agent-acp 0.86.0 and earlier never answer a folded prompt).
+    /// Backend-only: not part of the client snapshot.
+    pub agent_info: Option<(String, String)>,
+
     /// Which `session_info_update` meta key carries goal snapshots for this
     /// connection: `true` ⇒ the provider-neutral `_meta.goal` (adapter
     /// advertised the goal extension at initialize — claude-agent-acp 0.66+,
@@ -907,6 +929,18 @@ pub struct SessionState {
     /// one. Never on the snapshot.
     pub cli_output_schema: Option<Arc<crate::cli_run::OutputSchema>>,
 
+    /// The personal agent's own connection: given the personal-agent tool
+    /// group and never the delegation or board-authoring ones. Set from the
+    /// spawn seed before anything can read it, never inherited by a
+    /// delegation child. Never on the snapshot.
+    pub personal_agent: bool,
+
+    /// The personal agent's replies, built from the events of the prompts its
+    /// engine tagged (see [`crate::acp::reply_turn`]). Opened when such a
+    /// prompt starts, fed by [`Self::apply_event`] under the write lock,
+    /// released by the engine. Never on the snapshot.
+    pub reply_turns: crate::acp::reply_turn::ReplyTurns,
+
     /// Which writer owns the conversation-status write of a `TurnComplete`,
     /// keyed by that event's envelope `seq`. See [`Self::claim_turn_status`].
     pub turn_status_claim: Option<(u64, TurnStatusWriter)>,
@@ -981,6 +1015,7 @@ impl SessionState {
             pending_permission: None,
             pending_question: None,
             pending_plan_approval: None,
+            ask_delegate: None,
             active_delegations: BTreeMap::new(),
             delegated_children: BTreeSet::new(),
             feedback: Vec::new(),
@@ -1032,6 +1067,7 @@ impl SessionState {
             antigravity_reconcile_at: None,
             native_steering_available: false,
             codex_user_input_shape: None,
+            agent_info: None,
             neutral_goal_channel: false,
             goal_control_method: crate::acp::codex_goal::LEGACY_GOAL_CONTROL_METHOD.to_string(),
             goal_actions: None,
@@ -1056,6 +1092,8 @@ impl SessionState {
             wire_title_wake: Arc::new(tokio::sync::Notify::new()),
             cli_run: None,
             cli_output_schema: None,
+            personal_agent: false,
+            reply_turns: Default::default(),
             turn_status_claim: None,
         }
     }
@@ -1106,6 +1144,15 @@ impl SessionState {
     /// 单一分发器：把一个 AcpEvent 应用到 self。注意此方法**不**自增 event_seq——
     /// seq 由 emit_with_state 在外层管理（这样 apply_event 可独立单元测试）。
     pub fn apply_event(&mut self, payload: &AcpEvent) {
+        // The personal agent's reply in the making sees every event, before
+        // anything below changes the state it reads. `event_seq` is bumped
+        // right after this applies (`emit_with_state_built`), so the event's
+        // envelope seq is the next one.
+        if self.reply_turns.is_active() {
+            let turn_open = self.turn_in_flight || self.live_message.is_some();
+            self.reply_turns
+                .apply(payload, self.event_seq + 1, turn_open);
+        }
         let was_prompting = self.status == ConnectionStatus::Prompting;
         // A tool call's status before this event, to spot the moment it settles.
         let tool_call_before = match payload {
@@ -1536,7 +1583,7 @@ impl SessionState {
                     created_at: Utc::now(),
                 });
             }
-            AcpEvent::QuestionResolved { question_id } => {
+            AcpEvent::QuestionResolved { question_id, .. } => {
                 // Mirror `PermissionResolved`: only clear when the resolved id
                 // matches the current one, so a late event for an already-
                 // replaced question can't wipe a live card from under the user.
@@ -1559,7 +1606,12 @@ impl SessionState {
                     created_at: Utc::now(),
                 });
             }
-            AcpEvent::PlanApprovalResolved { approval_id } => {
+            AcpEvent::AskDelegate { delegate } => {
+                self.ask_delegate = *delegate;
+            }
+            // A notification for the windows; nothing to keep.
+            AcpEvent::AskForwarded { .. } => {}
+            AcpEvent::PlanApprovalResolved { approval_id, .. } => {
                 // Mirror `QuestionResolved`: only clear when the resolved id
                 // matches the current one, so a late event for an already-
                 // replaced approval can't wipe a live card from under the user.
@@ -1826,6 +1878,7 @@ impl SessionState {
                 task_id,
                 assistant_id,
                 assistant_name,
+                bot_uid,
                 ..
             } => {
                 // Record the running delegation so the binding is snapshot-
@@ -1845,6 +1898,7 @@ impl SessionState {
                         task_id: task_id.clone(),
                         assistant_id: *assistant_id,
                         assistant_name: assistant_name.clone(),
+                        bot_uid: bot_uid.clone(),
                     },
                 );
             }
@@ -1964,6 +2018,24 @@ impl SessionState {
                     .get(&record.id)
                     .is_none_or(|existing| record.revision > existing.revision);
                 if accept {
+                    // The reply chunk that told this failure is no reply: a
+                    // snapshot taken before `TurnComplete` must not hand it to
+                    // an attaching client as one (the frontend reducer drops it
+                    // the same way for the clients already watching).
+                    if record.echoed_in_reply && record.severity == "error" {
+                        if let Some(live) = self.live_message.as_mut() {
+                            drop_echoed_failure_text(&mut live.content, &record.title);
+                        }
+                    }
+                    // A terminal record told during the turn closes it: the
+                    // snapshot keeps the line, as a watching client's reducer
+                    // does (`TURN_FAILED`), so an attach before `TurnComplete`
+                    // does not lose it. A blank title is left to the clients,
+                    // which word it from the category.
+                    let title = record.title.trim();
+                    if record.severity == "error" && self.turn_in_flight && !title.is_empty() {
+                        self.ensure_live_message().turn_error = Some(title.to_string());
+                    }
                     self.session_failures
                         .insert(record.id.clone(), record.clone());
                 }
@@ -2380,6 +2452,7 @@ impl SessionState {
                 role: MessageRole::Assistant,
                 content: Vec::new(),
                 started_at: Utc::now(),
+                turn_error: None,
             });
         }
         self.live_message
@@ -2736,6 +2809,7 @@ impl SessionState {
             pending_permission: self.pending_permission.clone(),
             pending_question: self.pending_question.clone(),
             pending_plan_approval: self.pending_plan_approval.clone(),
+            ask_delegate: self.ask_delegate,
             pending_user_message: self.pending_user_message.clone(),
             active_delegations: self.active_delegations.values().cloned().collect(),
             delegated_children: self.delegated_children.iter().cloned().collect(),
@@ -2779,16 +2853,63 @@ impl SessionState {
 /// `codeg-cli` run lets its connection go as soon as its one turn has ended.
 /// Nor a one-shot generation (owner
 /// [`OWNER_LABEL`](crate::acp::one_shot::OWNER_LABEL)), which has no
-/// conversation to continue at all.
+/// conversation to continue at all. Nor the personal agent and the work it
+/// dispatches ([`crate::personal_agent::is_personal_agent_owner`]): codeg's
+/// own engine writes their prompts.
 /// For them a prediction would only be paid for.
 /// Everything else is a person's window, a work task (its session takes
 /// follow-ups once the task stops), or a delegated child (which inherits its
 /// parent's label, and whose session the user can open and continue).
 pub(crate) fn owner_composes_prompts(owner_window_label: &str) -> bool {
     owner_window_label != "automation"
+        && !crate::personal_agent::is_personal_agent_owner(owner_window_label)
         && owner_window_label != crate::cli_run::service::CLI_OWNER_LABEL
         && !crate::acp::one_shot::is_one_shot_owner(owner_window_label)
         && !owner_window_label.starts_with("chat_channel:")
+}
+
+/// `content` without the failure account `title` a reply chunk told (see
+/// `SessionFailureRecord::echoed_in_reply`): its LAST occurrence in the last
+/// main-thread text block is cut out — anything the agent appended after it
+/// (Antigravity's citation notice) stays — and the block goes once nothing is
+/// left. `false` when no such occurrence exists.
+///
+/// The frontend's `dropEchoedFailureText` is the same rule; keep them in step.
+fn drop_echoed_failure_text(content: &mut Vec<LiveContentBlock>, title: &str) -> bool {
+    let title = title.trim();
+    if title.is_empty() {
+        return false;
+    }
+    let Some(index) = content.iter().rposition(|block| {
+        matches!(
+            block,
+            LiveContentBlock::Text {
+                parent_tool_use_id: None,
+                ..
+            }
+        )
+    }) else {
+        return false;
+    };
+    let LiveContentBlock::Text { text, .. } = &mut content[index] else {
+        return false;
+    };
+    let Some(at) = text.rfind(title) else {
+        return false;
+    };
+    let before = text[..at].trim_end();
+    let after = text[at + title.len()..].trim_start();
+    let rest = match (before.is_empty(), after.is_empty()) {
+        (true, _) => after.to_string(),
+        (false, true) => before.to_string(),
+        (false, false) => format!("{before}\n\n{after}"),
+    };
+    if rest.is_empty() {
+        content.remove(index);
+    } else {
+        *text = rest;
+    }
+    true
 }
 
 /// The answer of the last assistant turn in `turns`: its last non-empty `Text`
@@ -2858,6 +2979,10 @@ pub struct LiveSessionSnapshot {
     /// pre-feature shape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_plan_approval: Option<PendingPlanApprovalState>,
+    /// See `SessionState.ask_delegate`; off the wire when nobody answers for
+    /// the owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ask_delegate: Option<crate::acp::types::AskDelegate>,
     /// The in-flight user prompt for the current turn (see
     /// `SessionState.pending_user_message`). `#[serde(default)]` so older
     /// payloads still deserialize; `skip_serializing_if` so the no-pending case
@@ -3171,12 +3296,14 @@ mod tests {
         // A resolve for a DIFFERENT id must not wipe the live approval.
         s.apply_event(&AcpEvent::PlanApprovalResolved {
             approval_id: "other".into(),
+            resolution: None,
         });
         assert!(s.pending_plan_approval.is_some());
 
         // Matching resolve clears it (and the snapshot).
         s.apply_event(&AcpEvent::PlanApprovalResolved {
             approval_id: "ap-1".into(),
+            resolution: None,
         });
         assert!(s.pending_plan_approval.is_none());
         assert!(s.to_snapshot().pending_plan_approval.is_none());
@@ -3195,6 +3322,7 @@ mod tests {
                     details: None,
                     actions: vec!["retry".into()],
                     resolved: false,
+                    echoed_in_reply: false,
                 },
             }
         }
@@ -3547,6 +3675,85 @@ mod tests {
         assert_eq!(s.last_assistant_text.as_deref(), Some("You're welcome."));
     }
 
+    /// Antigravity streams a dead executor's account as a reply chunk; the
+    /// terminal record marked `echoed_in_reply` takes those words out of the
+    /// live message, so a snapshot taken before `TurnComplete` does not hand
+    /// them to an attaching client as the reply — and closes the turn on the
+    /// failure line instead. A record without the mark (an AIR adapter's)
+    /// leaves matching prose alone, but still closes the turn.
+    #[test]
+    fn an_echoed_terminal_failure_leaves_the_reply() {
+        let text = |text: &str| AcpEvent::ContentDelta {
+            text: text.into(),
+            parent_tool_use_id: None,
+        };
+        let failure = |id: &str, echoed: bool| AcpEvent::SessionFailure {
+            record: SessionFailureRecord {
+                id: id.into(),
+                revision: 1,
+                category: "access".into(),
+                severity: "error".into(),
+                title: "Not eligible.".into(),
+                details: None,
+                actions: Vec::new(),
+                resolved: false,
+                echoed_in_reply: echoed,
+            },
+        };
+        let texts = |s: &SessionState| -> Vec<String> {
+            s.live_message
+                .as_ref()
+                .map(|live| {
+                    live.content
+                        .iter()
+                        .filter_map(|block| match block {
+                            LiveContentBlock::Text { text, .. } => Some(text.clone()),
+                            _ => None,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+
+        let lines = |s: &SessionState| -> Vec<String> {
+            s.to_snapshot()
+                .live_message
+                .and_then(|live| live.turn_error)
+                .into_iter()
+                .collect()
+        };
+
+        let mut s = fresh_state();
+        s.apply_event(&AcpEvent::StatusChanged {
+            status: ConnectionStatus::Prompting,
+        });
+        s.turn_in_flight = true;
+        s.apply_event(&text("Not eligible."));
+        s.apply_event(&failure("a:1", false));
+        assert_eq!(texts(&s), vec!["Not eligible.".to_string()]);
+        // The snapshot closes the turn on the line, once.
+        assert_eq!(lines(&s), vec!["Not eligible.".to_string()]);
+        s.apply_event(&failure("a:2", true));
+        assert!(texts(&s).is_empty(), "{:?}", texts(&s));
+        assert_eq!(lines(&s), vec!["Not eligible.".to_string()]);
+
+        // Outside a turn (a `session/load` replay of an earlier turn's record)
+        // nothing is drawn.
+        let mut idle = fresh_state();
+        idle.apply_event(&failure("a:9", false));
+        assert!(lines(&idle).is_empty());
+
+        // Fused onto the model's words, with a citation notice after it.
+        let mut s = fresh_state();
+        s.apply_event(&AcpEvent::StatusChanged {
+            status: ConnectionStatus::Prompting,
+        });
+        s.turn_in_flight = true;
+        s.apply_event(&text("Let me look.Not eligible.\n\nSources: x"));
+        s.apply_event(&failure("a:3", true));
+        assert_eq!(texts(&s), vec!["Let me look.\n\nSources: x".to_string()]);
+    }
+
     #[test]
     fn session_failure_warnings_survive_non_clean_turn_ends() {
         fn failure(id: &str, revision: u64, severity: &str, title: &str) -> AcpEvent {
@@ -3560,6 +3767,7 @@ mod tests {
                     details: None,
                     actions: vec!["new_session".into()],
                     resolved: false,
+                    echoed_in_reply: false,
                 },
             }
         }
@@ -3620,6 +3828,7 @@ mod tests {
                     details: None,
                     actions: vec![],
                     resolved: false,
+                    echoed_in_reply: false,
                 },
             }
         }
@@ -5255,6 +5464,7 @@ mod tests {
             task_id: "task-ss-1".into(),
             assistant_id: None,
             assistant_name: None,
+            bot_uid: None,
         }
     }
 
@@ -5271,6 +5481,7 @@ mod tests {
             },
             assistant_id: None,
             assistant_name: None,
+            bot_uid: None,
         }
     }
 
@@ -5480,6 +5691,7 @@ mod tests {
                 },
             ],
             started_at: Utc::now(),
+            turn_error: None,
         });
         s.apply_event(&AcpEvent::TurnComplete {
             session_id: "ext".into(),
@@ -5507,6 +5719,7 @@ mod tests {
                 },
             ],
             started_at: Utc::now(),
+            turn_error: None,
         });
         s.apply_event(&AcpEvent::TurnComplete {
             session_id: "ext".into(),
@@ -5534,6 +5747,7 @@ mod tests {
                 },
             ],
             started_at: Utc::now(),
+            turn_error: None,
         });
         s.apply_event(&AcpEvent::TurnComplete {
             session_id: "ext".into(),
@@ -5569,6 +5783,7 @@ mod tests {
                 },
             ],
             started_at: Utc::now(),
+            turn_error: None,
         });
         s.apply_event(&AcpEvent::TurnComplete {
             session_id: "ext".into(),
@@ -5597,6 +5812,7 @@ mod tests {
                 },
             ],
             started_at: Utc::now(),
+            turn_error: None,
         });
         s.apply_event(&AcpEvent::TurnComplete {
             session_id: "ext".into(),
@@ -5620,6 +5836,7 @@ mod tests {
                 parent_tool_use_id: None,
             }],
             started_at: Utc::now(),
+            turn_error: None,
         });
         let complete = AcpEvent::TurnComplete {
             session_id: "ext".into(),
@@ -5674,6 +5891,7 @@ mod tests {
                 parent_tool_use_id: None,
             }],
             started_at: Utc::now(),
+            turn_error: None,
         });
         let complete = AcpEvent::TurnComplete {
             session_id: "ext".into(),

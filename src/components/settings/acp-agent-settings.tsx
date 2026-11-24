@@ -221,6 +221,7 @@ import {
 import {
   DeepSeekModelListEditor,
   deepseekReadsHarnessCatalog,
+  deepseekReadsProviderRoutes,
 } from "./deepseek-model-list-editor"
 import { DeepSeekProviderRoutesEditor } from "./deepseek-provider-routes-editor"
 import { MiniMaxCodeConfigPanel } from "./minimax-code-config-panel"
@@ -5148,6 +5149,9 @@ export function AcpAgentSettings() {
       null,
     [selectedAgentType, sortedAgents]
   )
+  // The release the DeepSeek editors are judged on: installed, else pinned.
+  const deepseekVersion =
+    selectedAgent?.installed_version ?? selectedAgent?.registry_version ?? null
   const agentTypesKey = useMemo(
     () =>
       [...new Set(agents.map((agent) => agent.agent_type))].sort().join(","),
@@ -12049,29 +12053,40 @@ base_url = "https://api.openai.com/v1"`}
                       choose from. Through deepseek-acp 0.9.0 that is an
                       editable catalog in the harness' own `settings.yaml`
                       (`llm-deepseek.models`), not the agent env, so it has its
-                      own section and its own save. 0.10.0 builds that catalog
-                      into the bridge and reads the file no more; the surface it
-                      does read is `llm-pi-ai.providers` in the bridge's own
+                      own section and its own save. 0.10.0 and 0.11.0 build
+                      that catalog into the bridge and read the file no more;
+                      0.12.0 lays the section over it again. From 0.10.0 the
+                      bridge also reads `llm-pi-ai.providers` in its own
                       document, where each route adds a provider's catalog to
-                      the picker. Judged on the installed release, else the
-                      pinned one. */}
-                    {deepseekReadsHarnessCatalog(
-                      selectedAgent.installed_version ??
-                        selectedAgent.registry_version
-                    ) ? (
+                      the same picker, so 0.12.0 on shows both editors. Judged
+                      on the installed release, else the pinned one. */}
+                    {deepseekReadsHarnessCatalog(deepseekVersion) && (
                       <DeepSeekModelListEditor
+                        key={deepseekVersion ?? ""}
+                        version={deepseekVersion}
                         launchModel={selectedAgent.env.DEEPSEEK_ACP_MODEL}
-                        endpoint={{
-                          // The releases that read this list speak OpenAI
-                          // Chat Completions, so their own default endpoint
-                          // is the one to list models from.
-                          baseUrl:
-                            selectedAgent.env.DEEPSEEK_BASE_URL?.trim() ||
-                            DEEPSEEK_LEGACY_BASE_URL,
-                          apiKey: selectedAgent.env.DEEPSEEK_API_KEY ?? "",
-                        }}
+                        endpoint={
+                          // Only the releases before 0.10.0 get the import:
+                          // they speak OpenAI Chat Completions to
+                          // DEEPSEEK_BASE_URL (else their default endpoint),
+                          // which lists models the OpenAI way. From 0.10.0 the
+                          // official route speaks Anthropic Messages, and from
+                          // 0.12.0 the section may set its own `baseURL`, so
+                          // the endpoint the agent really uses (and whose key
+                          // this is) cannot be told from the env alone.
+                          deepseekReadsProviderRoutes(deepseekVersion)
+                            ? undefined
+                            : {
+                                baseUrl:
+                                  selectedAgent.env.DEEPSEEK_BASE_URL?.trim() ||
+                                  DEEPSEEK_LEGACY_BASE_URL,
+                                apiKey:
+                                  selectedAgent.env.DEEPSEEK_API_KEY ?? "",
+                              }
+                        }
                       />
-                    ) : (
+                    )}
+                    {deepseekReadsProviderRoutes(deepseekVersion) && (
                       <DeepSeekProviderRoutesEditor />
                     )}
                   </>
