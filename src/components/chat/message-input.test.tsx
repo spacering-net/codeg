@@ -21,6 +21,7 @@ import {
 } from "./composer/to-prompt-blocks"
 import {
   clearMessageInputDraftV2,
+  hasLiveComposerContent,
   loadMessageInputDraftV2,
   saveMessageInputDraftV2,
 } from "@/lib/message-input-draft"
@@ -76,6 +77,8 @@ vi.mock("@/hooks/use-built-in-science", () => ({ useBuiltInScience: () => [] }))
 vi.mock("@/hooks/use-enabled-skill-ids", () => ({
   useEnabledSkillIds: () => ({
     enabledIds: new Set(),
+    providers: new Map(),
+    providersKnown: true,
     ready: false,
     supported: true,
   }),
@@ -124,6 +127,9 @@ vi.mock("@/hooks/use-open-file-target", () => ({
 vi.mock("@/lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api")>()),
   quickMessagesList: vi.fn(async () => []),
+  // jsdom runs in web mode, where a dropped image is uploaded: keep that
+  // upload pending instead of letting a real fetch fail and drop the image.
+  uploadAttachment: vi.fn(() => new Promise(() => {})),
 }))
 // Real classifier only recognizes actual backend NoActiveTurn payloads; the
 // steering tests flip this per-case to drive the enqueue fallback.
@@ -144,6 +150,10 @@ type ComposerAttachmentsApi = ReturnType<
 const attachmentsOverride = vi.hoisted(() => ({
   current: null as Partial<ComposerAttachmentsApi> | null,
 }))
+// The real hook's latest result, for tests that drive it directly.
+const attachmentsCapture = vi.hoisted(() => ({
+  current: null as ComposerAttachmentsApi | null,
+}))
 vi.mock("./composer/use-composer-attachments", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("./composer/use-composer-attachments")>()
@@ -153,6 +163,7 @@ vi.mock("./composer/use-composer-attachments", async (importOriginal) => {
       ...args: Parameters<typeof actual.useComposerAttachments>
     ) => {
       const real = actual.useComposerAttachments(...args)
+      attachmentsCapture.current = real
       const override = attachmentsOverride.current
       return override ? { ...real, ...override } : real
     },
@@ -247,6 +258,13 @@ function renderInput(
     </NextIntlClientProvider>
   )
 }
+
+/** Runs the next animation frame inside act(), so what the composer defers to
+ *  a frame is committed — effects included — before the test goes on. */
+const nextFrame = () =>
+  act(async () => {
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(null)))
+  })
 
 describe("MessageInput (RichComposer integration)", () => {
   afterEach(() => cleanup())
@@ -388,12 +406,6 @@ describe("MessageInput (RichComposer integration)", () => {
         />
       </NextIntlClientProvider>
     )
-    const nextFrame = () =>
-      act(async () => {
-        await new Promise((resolve) =>
-          requestAnimationFrame(() => resolve(null))
-        )
-      })
     async function mountReady(isActive: boolean, coarse: boolean) {
       setPointer(coarse)
       saveMessageInputDraftV2(draftKey, {
@@ -810,6 +822,307 @@ describe("MessageInput injectContent", () => {
       expect(serializeDocToText(editor.state.doc)).toBe("quick action prompt")
     )
   })
+
+  // A send handed back undelivered (a canvas card's prompt that bounced off a
+  // turn already in flight). The composer had cleared itself for it, and the
+  // user may have started writing again before it came back.
+  const imageHi = {
+    type: "image" as const,
+    data: "aGk=",
+    mime_type: "image/png",
+  }
+  const imageYo = {
+    type: "image" as const,
+    data: "eW8=",
+    mime_type: "image/png",
+  }
+  const notesFile = {
+    type: "resource" as const,
+    uri: "clipboard://notes.md-1",
+    mime_type: "text/markdown",
+    text: "# Notes",
+    blob: null,
+  }
+
+  // Enter reaches the send through the editor's keymap, which takes the
+  // composer's latest send handler in an effect — so an image on screen is not
+  // in the send until React has run the effects of the render that showed it.
+  // A hand-back that gets sent therefore has its frame run inside act().
+  function pressEnter(editor: Editor) {
+    act(() => {
+      ;(editor.view.dom as HTMLElement).dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        })
+      )
+    })
+  }
+
+  it("puts a handed-back message back whole into the empty composer", async () => {
+    const onSend = vi.fn()
+    const onInjectConsumed = vi.fn()
+    const { view, editor } = await mount({ onSend, onInjectConsumed })
+    const prose = "check [app.ts](file:///repo/app.ts) against the mock"
+
+    view.rerender(
+      tree({
+        onSend,
+        onInjectConsumed,
+        injectContent: {
+          handBack: [{ type: "text", text: prose }, imageHi],
+        },
+      })
+    )
+    await nextFrame() // the hand-back's own frame
+    await waitFor(() =>
+      expect(serializeDocToText(editor.state.doc)).toBe(prose)
+    )
+    // The file mention is a badge again, not its link text...
+    expect(JSON.stringify(editor.getJSON())).toContain('"type":"reference"')
+    // ...and the image is back in the strip.
+    expect(await screen.findByAltText("image.png")).toBeInTheDocument()
+    expect(onInjectConsumed).toHaveBeenCalled()
+
+    // Sending it again ships the very message the bounce took away.
+    pressEnter(editor)
+    expect(onSend).toHaveBeenCalledTimes(1)
+    expect(onSend.mock.calls[0][0].blocks).toEqual([
+      { type: "text", text: prose },
+      expect.objectContaining(imageHi),
+    ])
+  })
+
+  it("adds a hand-back after what was written since, losing neither", async () => {
+    const onSend = vi.fn()
+    const { view, editor } = await mount({ onSend })
+    act(() => {
+      editor.commands.setContent("and another thing")
+    })
+
+    view.rerender(
+      tree({
+        onSend,
+        injectContent: {
+          handBack: [{ type: "text", text: "12" }, notesFile, imageHi],
+        },
+      })
+    )
+    await nextFrame() // the hand-back's own frame
+    await waitFor(() =>
+      expect(serializeDocToText(editor.state.doc).trim()).toBe(
+        "and another thing\n\n12"
+      )
+    )
+    expect(await screen.findByAltText("image.png")).toBeInTheDocument()
+
+    // The user's newer text, the handed-back prose, its file and its image.
+    pressEnter(editor)
+    expect(onSend).toHaveBeenCalledTimes(1)
+    expect(onSend.mock.calls[0][0].blocks).toEqual([
+      { type: "text", text: "and another thing\n\n12" },
+      notesFile,
+      expect.objectContaining(imageHi),
+    ])
+  })
+
+  it("adds a handed-back image beside what was written since", async () => {
+    const onInjectConsumed = vi.fn()
+    const { view, editor } = await mount({ onInjectConsumed })
+    act(() => {
+      editor.commands.setContent("and another thing")
+    })
+
+    view.rerender(
+      tree({ onInjectConsumed, injectContent: { handBack: [imageHi] } })
+    )
+    expect(await screen.findByAltText("image.png")).toBeInTheDocument()
+    expect(onInjectConsumed).toHaveBeenCalled()
+    // Nothing to add to the text, so not even a blank line.
+    expect(serializeDocToText(editor.state.doc)).toBe("and another thing")
+  })
+
+  it("puts a handed-back file on a line of its own after what was written since", async () => {
+    const { view, editor } = await mount({})
+    act(() => {
+      editor.commands.setContent("and another thing")
+    })
+
+    view.rerender(tree({ injectContent: { handBack: [notesFile] } }))
+    await waitFor(() =>
+      expect(serializeDocToDisplayText(editor.state.doc)).toMatch(
+        /^and another thing\n\n\[notes\.md-1]\(codeg:\/\/embedded\//
+      )
+    )
+  })
+
+  it("takes a second hand-back after the first, files and images and all", async () => {
+    const onSend = vi.fn()
+    const { view, editor } = await mount({ onSend })
+
+    view.rerender(
+      tree({
+        onSend,
+        injectContent: {
+          handBack: [{ type: "text", text: "first" }, notesFile, imageHi],
+        },
+      })
+    )
+    await nextFrame() // the hand-back's own frame
+    await waitFor(() =>
+      expect(serializeDocToText(editor.state.doc).trim()).toBe("first")
+    )
+    view.rerender(
+      tree({
+        onSend,
+        injectContent: {
+          handBack: [{ type: "text", text: "second" }, imageYo],
+        },
+      })
+    )
+    await nextFrame() // the hand-back's own frame
+    // (The space is the one a restored file badge always gets after it.)
+    await waitFor(() =>
+      expect(serializeDocToText(editor.state.doc).trim()).toBe(
+        "first \n\nsecond"
+      )
+    )
+    await waitFor(() =>
+      expect(screen.getAllByAltText("image.png")).toHaveLength(2)
+    )
+
+    // The first's file is still backed by its bytes after the second landed.
+    pressEnter(editor)
+    expect(onSend.mock.calls[0][0].blocks).toEqual([
+      { type: "text", text: "first \n\nsecond" },
+      notesFile,
+      expect.objectContaining(imageHi),
+      expect.objectContaining(imageYo),
+    ])
+  })
+})
+
+// A surface with no message queue (a canvas card) still renders this composer
+// while the agent answers. The backend runs one prompt per turn, so a message
+// sent then could only bounce — and it used to be cleared out of the composer
+// on its way to that bounce, vanishing without a trace (#991).
+describe("MessageInput mid-turn send with no queue", () => {
+  const MI = enMessages.Folder.chat.messageInput
+  const DRAFT_KEY = "canvas-draft:canvas-node-1"
+
+  afterEach(() => {
+    cleanup()
+    composerHandle.current = null
+    clearMessageInputDraftV2(DRAFT_KEY)
+    vi.clearAllMocks()
+  })
+
+  function pressEnter(editor: Editor) {
+    act(() => {
+      ;(editor.view.dom as HTMLElement).dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        })
+      )
+    })
+  }
+
+  function tree(props: Partial<React.ComponentProps<typeof MessageInput>>) {
+    return (
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <MessageInput
+          onSend={vi.fn()}
+          promptCapabilities={CAPS}
+          onCancel={vi.fn()}
+          draftStorageKey={DRAFT_KEY}
+          {...props}
+        />
+      </NextIntlClientProvider>
+    )
+  }
+
+  async function mountWithDraft(
+    props: Partial<React.ComponentProps<typeof MessageInput>>
+  ) {
+    // The draft as the composer itself would have stored it while typing.
+    saveMessageInputDraftV2(DRAFT_KEY, {
+      type: "doc",
+      content: [{ type: "paragraph", content: [{ type: "text", text: "12" }] }],
+    })
+    const view = render(tree(props))
+    await waitFor(() => expect(composerHandle.current?.getText()).toBe("12"), {
+      timeout: 5000,
+    })
+    const editor = composerHandle.current?.getEditor()
+    if (!editor) throw new Error("composer editor not mounted")
+    return { view, editor }
+  }
+
+  it("holds the message in the composer and says why, instead of sending it", async () => {
+    const onSend = vi.fn()
+    const { editor } = await mountWithDraft({ onSend, isPrompting: true })
+
+    pressEnter(editor)
+
+    expect(onSend).not.toHaveBeenCalled()
+    expect(composerHandle.current?.getText()).toBe("12")
+    // Nor is the stored draft dropped, as a send drops it.
+    expect(loadMessageInputDraftV2(DRAFT_KEY)).not.toBeNull()
+    expect(toast.info).toHaveBeenCalledWith(MI.heldWhileResponding, {
+      id: expect.any(String),
+    })
+  })
+
+  it("sends the held message once the turn is over", async () => {
+    const onSend = vi.fn()
+    const { view, editor } = await mountWithDraft({ onSend, isPrompting: true })
+    pressEnter(editor)
+    expect(onSend).not.toHaveBeenCalled()
+
+    view.rerender(tree({ onSend, isPrompting: false }))
+    pressEnter(editor)
+
+    expect(onSend).toHaveBeenCalledTimes(1)
+    expect(onSend.mock.calls[0][0]).toEqual({
+      blocks: [{ type: "text", text: "12" }],
+      displayText: "12",
+    })
+    expect(composerHandle.current?.getText()).toBe("")
+  })
+
+  it("says nothing for an empty composer", async () => {
+    const onSend = vi.fn()
+    render(tree({ onSend, isPrompting: true }))
+    await waitFor(
+      () => expect(composerHandle.current?.getEditor()).toBeTruthy(),
+      { timeout: 5000 }
+    )
+
+    pressEnter(composerHandle.current!.getEditor()!)
+
+    expect(onSend).not.toHaveBeenCalled()
+    expect(toast.info).not.toHaveBeenCalled()
+  })
+
+  it("still queues it where the surface has a queue", async () => {
+    const onSend = vi.fn()
+    const onEnqueue = vi.fn()
+    const { editor } = await mountWithDraft({
+      onSend,
+      onEnqueue,
+      isPrompting: true,
+    })
+
+    pressEnter(editor)
+
+    expect(onEnqueue).toHaveBeenCalledTimes(1)
+    expect(onSend).not.toHaveBeenCalled()
+    expect(toast.info).not.toHaveBeenCalled()
+    expect(composerHandle.current?.getText()).toBe("")
+  })
 })
 
 // The sidebar's "add to session" drops a session mention — the same reference the
@@ -1022,14 +1335,11 @@ describe("MessageInput file-tree drag-and-drop", () => {
   })
 })
 
-// When the composer is narrow the model/config/mode selectors collapse behind a
-// cog button into a single Popover that renders a master–detail panel: the
-// settings on the left, the active setting's options (plain buttons) on the
-// right. This is the WebKit-safe replacement for the old nested dropdown/submenu
-// — a nested Radix dismissable layer drops the selection on WKWebView, so the
-// options are plain <button>s in the one popover layer. jsdom has no layout, so
-// the container-query-hidden wide row stays hidden and this collapsed path is
-// what renders here.
+// The model / mode / config selectors are one chip — every current value joined
+// by "/" — opening one popover in which each setting is adjusted in place. A
+// pick applies at once and the popover stays open. Every control inside is a
+// plain button (or the Radix Switch): a nested Radix dismissable layer drops
+// the selection on WKWebView.
 const MODEL_OPTION: SessionConfigOptionInfo = {
   id: "model",
   name: "Model",
@@ -1047,11 +1357,10 @@ const MODEL_OPTION: SessionConfigOptionInfo = {
 }
 
 const MSGS = enMessages.Folder.chat.messageInput
+const SETTINGS = new RegExp(`^${MSGS.agentSettings}`)
 
 // Cline 3.0.50's `auto_approve` — the first boolean config option any pinned
-// agent ships. Both the wide inline row and the collapsed popover are always in
-// the DOM (a container query, which jsdom does not evaluate, picks one), so a
-// single render exercises both surfaces.
+// agent ships.
 const AUTO_APPROVE_OPTION: SessionConfigOptionInfo = {
   id: "auto_approve",
   name: "Auto-approve tools",
@@ -1060,10 +1369,15 @@ const AUTO_APPROVE_OPTION: SessionConfigOptionInfo = {
   kind: { type: "boolean", current_value: false },
 }
 
+async function openSettings(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: SETTINGS }))
+  return screen.findByRole("dialog", { name: MSGS.agentSettings })
+}
+
 describe("MessageInput boolean config options", () => {
   afterEach(() => cleanup())
 
-  it("renders the inline chip as a toggle and flips it on click", async () => {
+  it("flips the option from a switch in the settings popover", async () => {
     const user = userEvent.setup()
     const onConfigOptionChange = vi.fn()
     const { container } = renderInput({
@@ -1074,38 +1388,16 @@ describe("MessageInput boolean config options", () => {
       expect(container.querySelector('[role="textbox"]')).not.toBeNull()
     )
 
-    const toggle = screen.getByRole("button", {
-      name: `Auto-approve tools: ${MSGS.toggleOff}`,
+    // Off, so the chip's label leaves it out — but its name still says it.
+    expect(screen.getByRole("button", { name: SETTINGS })).toHaveAccessibleName(
+      `${MSGS.agentSettings}: Auto-approve tools ${MSGS.toggleOff}`
+    )
+    const popover = await openSettings(user)
+    const toggle = within(popover).getByRole("switch", {
+      name: "Auto-approve tools",
     })
-    expect(toggle).toHaveAttribute("aria-pressed", "false")
-
+    expect(toggle).toHaveAttribute("aria-checked", "false")
     await user.click(toggle)
-    expect(onConfigOptionChange).toHaveBeenCalledWith("auto_approve", "true")
-  })
-
-  it("offers On/Off rows in the collapsed cog popover", async () => {
-    const user = userEvent.setup()
-    const onConfigOptionChange = vi.fn()
-    const { container } = renderInput({
-      configOptions: [AUTO_APPROVE_OPTION],
-      onConfigOptionChange,
-    })
-    await waitFor(() =>
-      expect(container.querySelector('[role="textbox"]')).not.toBeNull()
-    )
-
-    const settingsLabel = MSGS.agentSettings
-    await user.click(screen.getByRole("button", { name: settingsLabel }))
-    const popover = await screen.findByRole("dialog", { name: settingsLabel })
-
-    // The left rail summarizes the current state…
-    expect(
-      within(popover).getByRole("button", { name: /Auto-approve tools/ })
-    ).toBeInTheDocument()
-    // …and the detail pane is a plain two-item choice.
-    await user.click(
-      within(popover).getByRole("button", { name: MSGS.toggleOn })
-    )
     expect(onConfigOptionChange).toHaveBeenCalledWith("auto_approve", "true")
   })
 })
@@ -1115,8 +1407,7 @@ describe("MessageInput selector loading placeholder", () => {
 
   it("shows a visible placeholder in the selector row while the session comes up", async () => {
     // Opening a historical conversation spends seconds with no selectors known.
-    // The cue has to be in the row itself — the cog popover's loading text is
-    // only reachable by a user who already suspects something is loading.
+    // The cue has to be in the row itself, where the chip will be.
     const { container } = renderInput({
       configOptionsLoading: true,
       configOptions: [],
@@ -1150,7 +1441,9 @@ describe("MessageInput selector loading placeholder", () => {
       </NextIntlClientProvider>
     )
     expect(screen.queryByRole("status")).toBeNull()
-    expect(screen.getByRole("button", { name: /Model/ })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: SETTINGS })).toHaveTextContent(
+      "Default"
+    )
   })
 
   it("renders no selector affordance at all when nothing is loading or known", async () => {
@@ -1161,16 +1454,14 @@ describe("MessageInput selector loading placeholder", () => {
       expect(container.querySelector('[role="textbox"]')).not.toBeNull()
     )
     expect(screen.queryByRole("status")).toBeNull()
-    expect(
-      screen.queryByRole("button", { name: MSGS.agentSettings })
-    ).toBeNull()
+    expect(screen.queryByRole("button", { name: SETTINGS })).toBeNull()
   })
 })
 
-describe("MessageInput collapsed selectors popover", () => {
+describe("MessageInput settings popover", () => {
   afterEach(() => cleanup())
 
-  it("selects a config option from the cog Popover and closes it", async () => {
+  it("selects a config option and stays open for the next change", async () => {
     const user = userEvent.setup()
     const onConfigOptionChange = vi.fn()
     const { container } = renderInput({
@@ -1181,26 +1472,15 @@ describe("MessageInput collapsed selectors popover", () => {
       expect(container.querySelector('[role="textbox"]')).not.toBeNull()
     )
 
-    const settingsLabel = enMessages.Folder.chat.messageInput.agentSettings
-    await user.click(screen.getByRole("button", { name: settingsLabel }))
-
-    const popover = await screen.findByRole("dialog", { name: settingsLabel })
-    // The left rail shows the setting as a title + current value row.
-    expect(
-      within(popover).getByRole("button", { name: /Model/ })
-    ).toBeInTheDocument()
-
-    // Options are plain buttons (native clicks) — selecting fires the change.
+    const popover = await openSettings(user)
     await user.click(within(popover).getByRole("button", { name: /Opus/ }))
     expect(onConfigOptionChange).toHaveBeenCalledWith("model", "opus")
-
-    // Selecting a value closes the controlled popover.
-    await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: settingsLabel })).toBeNull()
-    )
+    expect(
+      screen.getByRole("dialog", { name: MSGS.agentSettings })
+    ).toBeInTheDocument()
   })
 
-  it("groups model values by their provider prefix in the cog Popover", async () => {
+  it("groups model values by their provider prefix", async () => {
     const user = userEvent.setup()
     const onConfigOptionChange = vi.fn()
     const groupedModel: SessionConfigOptionInfo = {
@@ -1230,17 +1510,12 @@ describe("MessageInput collapsed selectors popover", () => {
       expect(container.querySelector('[role="textbox"]')).not.toBeNull()
     )
 
-    const settingsLabel = enMessages.Folder.chat.messageInput.agentSettings
-    await user.click(screen.getByRole("button", { name: settingsLabel }))
-    const popover = await screen.findByRole("dialog", { name: settingsLabel })
-
-    // The detail pane carries one header per provider namespace…
+    const popover = await openSettings(user)
+    // One header per provider namespace…
     expect(within(popover).getByText("anthropic")).toBeInTheDocument()
     expect(within(popover).getByText("openai")).toBeInTheDocument()
-
     // …and the option label drops the redundant `openai/` prefix, while the
-    // committed value stays the full id. (Pick the non-current model so its
-    // label is unique to the detail pane, not echoed in the left-rail summary.)
+    // committed value stays the full id.
     await user.click(within(popover).getByRole("button", { name: /gpt-4o/ }))
     expect(onConfigOptionChange).toHaveBeenCalledWith("model", "openai/gpt-4o")
   })
@@ -1273,11 +1548,8 @@ describe("MessageInput collapsed selectors popover", () => {
       expect(container.querySelector('[role="textbox"]')).not.toBeNull()
     )
 
-    const settingsLabel = enMessages.Folder.chat.messageInput.agentSettings
-    await user.click(screen.getByRole("button", { name: settingsLabel }))
-    const popover = await screen.findByRole("dialog", { name: settingsLabel })
-
-    // A long list (> threshold) renders the searchable combobox, not plain rows.
+    const popover = await openSettings(user)
+    // A long list renders the searchable combobox, not plain rows.
     const search = within(popover).getByRole("combobox")
     await user.type(search, "model-17")
     // Filtering narrows to the one match; the full id is committed on click.
@@ -1288,7 +1560,7 @@ describe("MessageInput collapsed selectors popover", () => {
     )
   })
 
-  it("selects a mode from the cog Popover and closes it", async () => {
+  it("selects a legacy mode from the popover", async () => {
     const user = userEvent.setup()
     const onModeChange = vi.fn()
     const { container } = renderInput({
@@ -1303,16 +1575,12 @@ describe("MessageInput collapsed selectors popover", () => {
       expect(container.querySelector('[role="textbox"]')).not.toBeNull()
     )
 
-    const settingsLabel = enMessages.Folder.chat.messageInput.agentSettings
-    await user.click(screen.getByRole("button", { name: settingsLabel }))
-
-    const popover = await screen.findByRole("dialog", { name: settingsLabel })
-    await user.click(within(popover).getByRole("button", { name: /Act/ }))
-    expect(onModeChange).toHaveBeenCalledWith("act")
-
-    await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: settingsLabel })).toBeNull()
+    expect(screen.getByRole("button", { name: SETTINGS })).toHaveTextContent(
+      "Plan"
     )
+    const popover = await openSettings(user)
+    await user.click(within(popover).getByRole("button", { name: "Act" }))
+    expect(onModeChange).toHaveBeenCalledWith("act")
   })
 })
 
@@ -1483,6 +1751,436 @@ describe("MessageInput slash menu while the agent connects", () => {
       )
     })
     await waitFor(() => expect(screen.queryByTestId("slash-menu")).toBeNull())
+  })
+})
+
+// Each row of the `/` list shows what the agent says goes after the command —
+// codex `/review-branch` takes a branch name — so the user need not know it.
+describe("MessageInput slash menu rows", () => {
+  afterEach(() => {
+    cleanup()
+    composerHandle.current = null
+  })
+
+  it("shows the argument a command takes beside its token", async () => {
+    renderInput({
+      availableCommands: [
+        {
+          name: "review-branch",
+          description: "Review a branch",
+          input_hint: "branch name",
+        },
+        { name: "compact", description: "Compact the thread" },
+      ],
+    })
+    await waitFor(
+      () => expect(composerHandle.current?.getEditor()).toBeTruthy(),
+      { timeout: 5000 }
+    )
+    const editor = composerHandle.current?.getEditor()
+    if (!editor) throw new Error("composer editor not mounted")
+    act(() => {
+      editor.commands.insertContent("/")
+    })
+
+    const menu = await screen.findByTestId("slash-menu")
+    const review = within(menu)
+      .getByText("/review-branch")
+      .closest("button") as HTMLElement
+    expect(review.textContent).toBe("/review-branchbranch nameReview a branch")
+    const compact = within(menu)
+      .getByText("/compact")
+      .closest("button") as HTMLElement
+    expect(compact.textContent).toBe("/compactCompact the thread")
+  })
+})
+
+// claude-agent-acp 0.99.1 marks Claude's skills among its commands: at first
+// only the ones whose SKILL.md it found on disk, and once Claude Code's own
+// skill list is read, all of them (a bundled one without a path). The menu
+// shows the marks only in that second list, so it never shows some skills
+// marked and others not.
+describe("MessageInput slash menu skill rows", () => {
+  afterEach(() => {
+    cleanup()
+    composerHandle.current = null
+  })
+
+  const USER_SKILL_PATH = "/home/u/.claude/skills/user-skill/SKILL.md"
+
+  async function openMenu(
+    availableCommands: React.ComponentProps<
+      typeof MessageInput
+    >["availableCommands"]
+  ) {
+    renderInput({ agentType: "claude_code", availableCommands })
+    await waitFor(
+      () => expect(composerHandle.current?.getEditor()).toBeTruthy(),
+      { timeout: 5000 }
+    )
+    const editor = composerHandle.current?.getEditor()
+    if (!editor) throw new Error("composer editor not mounted")
+    act(() => {
+      editor.commands.insertContent("/")
+    })
+    return screen.findByTestId("slash-menu")
+  }
+
+  function kindOf(menu: HTMLElement, token: string) {
+    const row = within(menu).getByText(token).closest("button") as HTMLElement
+    const column = row.querySelector<HTMLElement>("[data-command-kind]")
+    return {
+      kind: column?.dataset.commandKind ?? null,
+      icon: column?.querySelector("svg") != null,
+      text: row.textContent,
+    }
+  }
+
+  it("shows every skill with the skill icon once the agent has marked them all", async () => {
+    const menu = await openMenu([
+      {
+        name: "user-skill",
+        description: "User skill probe",
+        skill: true,
+        skill_path: USER_SKILL_PATH,
+      },
+      {
+        name: "simplify",
+        description: "Review the changed code",
+        input_hint: "[<target>]",
+        skill: true,
+      },
+      { name: "compact", description: "Compact the thread" },
+    ])
+    expect(kindOf(menu, "/user-skill")).toEqual({
+      kind: "skill",
+      icon: true,
+      text: "/user-skillUser skill probe",
+    })
+    expect(kindOf(menu, "/simplify")).toEqual({
+      kind: "skill",
+      icon: true,
+      text: "/simplify[<target>]Review the changed code",
+    })
+    // A command keeps an empty column, so the tokens line up.
+    expect(kindOf(menu, "/compact")).toEqual({
+      kind: "command",
+      icon: false,
+      text: "/compactCompact the thread",
+    })
+    // Hovering a skill's token shows its SKILL.md, when there is one.
+    expect(within(menu).getByText("/user-skill")).toHaveAttribute(
+      "title",
+      USER_SKILL_PATH
+    )
+    expect(within(menu).getByText("/simplify")).not.toHaveAttribute("title")
+  })
+
+  it("keeps every row plain while only some skills are marked", async () => {
+    const menu = await openMenu([
+      {
+        name: "user-skill",
+        description: "User skill probe",
+        skill: true,
+        skill_path: USER_SKILL_PATH,
+      },
+      { name: "simplify", description: "Review the changed code" },
+      { name: "compact", description: "Compact the thread" },
+    ])
+    expect(menu.querySelector("[data-command-kind]")).toBeNull()
+    expect(within(menu).getByText("/user-skill")).not.toHaveAttribute("title")
+    expect(kindOf(menu, "/user-skill").text).toBe("/user-skillUser skill probe")
+  })
+})
+
+// Antigravity's ACP server advertises only its built-ins and never a skill, so
+// the skills it loads reach the `/` menu from disk, after those commands.
+describe("MessageInput slash menu for skills an agent does not advertise", () => {
+  afterEach(() => {
+    cleanup()
+    composerHandle.current = null
+    agentSkills.mockReturnValue([])
+    agentSkills.mockClear()
+  })
+
+  // What antigravity 1.4.0 advertises, all of it.
+  const COMMANDS = [
+    { name: "plan", description: "Plan carefully before executing a task." },
+    { name: "logout", description: "Log out and clear stored credentials." },
+    { name: "usage", description: "Show model token usage and quota limits." },
+  ]
+  const DEPLOY = {
+    id: "deploy",
+    name: "Deploy",
+    description: "Ship the build",
+    scope: "global",
+  }
+  // Sending `/plan` runs the built-in, never a skill of that name.
+  const SHADOWED = {
+    id: "plan",
+    name: "Plan skill",
+    description: "A skill named like a command",
+    scope: "project",
+  }
+
+  async function mountAndType(
+    props: Partial<React.ComponentProps<typeof MessageInput>>,
+    text = "/"
+  ) {
+    const view = renderInput(props)
+    await waitFor(
+      () => expect(composerHandle.current?.getEditor()).toBeTruthy(),
+      { timeout: 5000 }
+    )
+    const editor = composerHandle.current?.getEditor()
+    if (!editor) throw new Error("composer editor not mounted")
+    act(() => {
+      editor.commands.insertContent(text)
+    })
+    return { editor, view }
+  }
+
+  function rerenderInput(
+    view: ReturnType<typeof renderInput>,
+    props: Partial<React.ComponentProps<typeof MessageInput>>
+  ) {
+    view.rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <MessageInput onSend={vi.fn()} promptCapabilities={CAPS} {...props} />
+      </NextIntlClientProvider>
+    )
+  }
+
+  it("lists Antigravity's skills from disk after its commands", async () => {
+    agentSkills.mockReturnValue([DEPLOY, SHADOWED])
+    await mountAndType({
+      agentType: "antigravity",
+      availableCommands: COMMANDS,
+    })
+
+    const menu = await screen.findByTestId("slash-menu")
+    const rows = within(menu)
+      .getAllByRole("button")
+      .map((row) => row.textContent)
+    expect(rows).toEqual([
+      expect.stringMatching(/^\/plan/),
+      expect.stringMatching(/^\/logout/),
+      expect.stringMatching(/^\/usage/),
+      "DeployShip the build",
+    ])
+    expect(within(menu).queryByText("Plan skill")).toBeNull()
+    expect(agentSkills).toHaveBeenCalledWith("antigravity", null)
+  })
+
+  it("lists custom ACP agents' skills from disk after their commands", async () => {
+    agentSkills.mockReturnValue([DEPLOY, SHADOWED])
+    await mountAndType({
+      agentType: "custom:antigravity-b",
+      availableCommands: COMMANDS,
+    })
+
+    const menu = await screen.findByTestId("slash-menu")
+    const rows = within(menu)
+      .getAllByRole("button")
+      .map((row) => row.textContent)
+    expect(rows).toEqual([
+      expect.stringMatching(/^\/plan/),
+      expect.stringMatching(/^\/logout/),
+      expect.stringMatching(/^\/usage/),
+      "DeployShip the build",
+    ])
+    expect(within(menu).queryByText("Plan skill")).toBeNull()
+    expect(agentSkills).toHaveBeenCalledWith("custom:antigravity-b", null)
+  })
+
+  it("inserts a picked Antigravity skill as its `/` token", async () => {
+    agentSkills.mockReturnValue([DEPLOY])
+    const { editor } = await mountAndType(
+      { agentType: "antigravity", availableCommands: COMMANDS },
+      "/dep"
+    )
+    const menu = await screen.findByTestId("slash-menu")
+    expect(within(menu).getByText("Deploy")).toBeInTheDocument()
+
+    act(() => {
+      ;(editor.view.dom as HTMLElement).dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        })
+      )
+    })
+    await waitFor(() =>
+      expect(composerHandle.current?.getText()).toBe("/deploy ")
+    )
+    expect(JSON.stringify(composerHandle.current?.getJSON())).toContain(
+      '"refType":"skill"'
+    )
+  })
+
+  // `useAgentSkills` reports an in-flight scan as an empty list, and with no
+  // connection there are no commands either: the `/` must stay armed.
+  it("fills in Antigravity's skills on `/` with no commands to show", async () => {
+    const { view } = await mountAndType({
+      agentType: "antigravity",
+      availableCommands: [],
+      commandsLoading: false,
+    })
+    expect(screen.queryByTestId("slash-menu")).toBeNull()
+
+    agentSkills.mockReturnValue([DEPLOY])
+    rerenderInput(view, {
+      agentType: "antigravity",
+      availableCommands: [],
+      commandsLoading: false,
+    })
+    const menu = await screen.findByTestId("slash-menu")
+    expect(within(menu).getByText("Deploy")).toBeInTheDocument()
+  })
+
+  // OpenCode 1.x advertised every skill as a command; 2.x advertises only its
+  // commands, so after the move to 2.x its `/` menu showed just these four
+  // (#1089). Its skills now come from disk, as Antigravity's do.
+  it("lists OpenCode's skills from disk after its commands", async () => {
+    // What opencode 2.2.5 advertises with no MCP prompts or custom commands.
+    const OPENCODE_COMMANDS = [
+      { name: "init", description: "guided AGENTS.md setup" },
+      {
+        name: "review",
+        description:
+          "review changes [commit|branch|pr], defaults to uncommitted",
+      },
+      {
+        name: "goal",
+        description:
+          "keep working until an objective is met [pause|resume|clear]",
+      },
+      { name: "compact", description: "Compact the session" },
+    ]
+    // Sending `/review` runs OpenCode's command, never a skill of that name.
+    const REVIEW_SKILL = { ...SHADOWED, id: "review", name: "Review skill" }
+    agentSkills.mockReturnValue([DEPLOY, REVIEW_SKILL])
+    const { editor } = await mountAndType({
+      agentType: "open_code",
+      availableCommands: OPENCODE_COMMANDS,
+    })
+
+    const menu = await screen.findByTestId("slash-menu")
+    const rows = within(menu)
+      .getAllByRole("button")
+      .map((row) => row.textContent)
+    expect(rows).toEqual([
+      expect.stringMatching(/^\/init/),
+      expect.stringMatching(/^\/review/),
+      expect.stringMatching(/^\/goal/),
+      expect.stringMatching(/^\/compact/),
+      "DeployShip the build",
+    ])
+    expect(within(menu).queryByText("Review skill")).toBeNull()
+    expect(agentSkills).toHaveBeenCalledWith("open_code", null)
+
+    // Picking it inserts the `/` token OpenCode passes to its model as written.
+    act(() => {
+      editor.commands.insertContent("dep")
+    })
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId("slash-menu")).getAllByRole("button")
+      ).toHaveLength(1)
+    )
+    act(() => {
+      ;(editor.view.dom as HTMLElement).dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        })
+      )
+    })
+    await waitFor(() =>
+      expect(composerHandle.current?.getText()).toBe("/deploy ")
+    )
+  })
+
+  it("keeps a `$` typed for Antigravity as plain text", async () => {
+    agentSkills.mockReturnValue([DEPLOY])
+    await mountAndType(
+      { agentType: "antigravity", availableCommands: COMMANDS },
+      "$dep"
+    )
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(screen.queryByTestId("slash-menu")).toBeNull()
+  })
+
+  it("keeps Codex's disk skills off its `/` menu", async () => {
+    agentSkills.mockReturnValue([DEPLOY])
+    await mountAndType({ agentType: "codex", availableCommands: COMMANDS })
+    const menu = await screen.findByTestId("slash-menu")
+    expect(within(menu).getByText("/plan")).toBeInTheDocument()
+    expect(within(menu).queryByText("Deploy")).toBeNull()
+  })
+
+  it("reads no skills from disk for an agent that advertises its own", async () => {
+    await mountAndType({
+      agentType: "claude_code",
+      availableCommands: COMMANDS,
+    })
+    await screen.findByTestId("slash-menu")
+    expect(agentSkills).toHaveBeenCalledWith(null, null)
+    expect(agentSkills).not.toHaveBeenCalledWith("claude_code", null)
+  })
+
+  // While the commands still load, the loading row sits above the skills, so
+  // the row kept in view must be found among the rows, not by child position.
+  it("keeps the highlighted skill in view below the loading row", async () => {
+    const ROW = 40
+    const skills = Array.from({ length: 8 }, (_, i) => ({
+      id: `skill-${i}`,
+      name: `Skill ${i}`,
+      description: `Skill number ${i}`,
+      scope: "global",
+    }))
+    agentSkills.mockReturnValue(skills)
+    const { editor } = await mountAndType({
+      agentType: "antigravity",
+      availableCommands: [],
+      commandsLoading: true,
+    })
+    const menu = await screen.findByTestId("slash-menu")
+    expect(within(menu).getByRole("status")).toBeInTheDocument()
+
+    // jsdom lays nothing out: give the list a four-row viewport and each row
+    // its place under the one-row loading status.
+    const list = menu.firstElementChild as HTMLElement
+    let scrollTop = 0
+    Object.defineProperty(list, "clientHeight", { value: 4 * ROW })
+    Object.defineProperty(list, "scrollTop", {
+      get: () => scrollTop,
+      set: (value: number) => {
+        scrollTop = value
+      },
+    })
+    within(menu)
+      .getAllByRole("button")
+      .forEach((row, i) => {
+        Object.defineProperty(row, "offsetTop", { value: ROW + i * ROW })
+        Object.defineProperty(row, "offsetHeight", { value: ROW })
+      })
+
+    // Down to the fifth skill, whose bottom edge lies at 6 rows.
+    for (let i = 0; i < 4; i++) {
+      act(() => {
+        ;(editor.view.dom as HTMLElement).dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "ArrowDown",
+            bubbles: true,
+            cancelable: true,
+          })
+        )
+      })
+    }
+    await waitFor(() => expect(scrollTop).toBe(2 * ROW))
   })
 })
 
@@ -2621,5 +3319,351 @@ describe("MessageInput folder data arriving after mount", () => {
     expect(handle.getText()).toBe("keep this draft")
     act(() => editor.commands.undo())
     expect(handle.getText()).toBe("")
+  })
+})
+
+describe("MessageInput predicted follow-up prompt", () => {
+  afterEach(() => cleanup())
+
+  const offered = (suggestion: string) =>
+    enMessages.Folder.chat.messageInput.promptSuggestion.replace(
+      "{suggestion}",
+      suggestion
+    )
+
+  async function mounted(
+    props: Partial<React.ComponentProps<typeof MessageInput>>
+  ) {
+    const result = renderInput({ placeholder: "Send a message...", ...props })
+    await waitFor(
+      () =>
+        expect(
+          result.container.querySelector('[role="textbox"]')
+        ).not.toBeNull(),
+      { timeout: 5000 }
+    )
+    return result
+  }
+
+  it("shows the suggestion as the placeholder between turns and fills it in on Tab", async () => {
+    const { container } = await mounted({ promptSuggestion: "Run the tests" })
+    expect(
+      container.querySelector(
+        `[data-placeholder="${offered("Run the tests")}"]`
+      )
+    ).not.toBeNull()
+    // The textbox keeps its own name; the suggestion is only the hint.
+    expect(container.querySelector('[role="textbox"]')).toHaveAttribute(
+      "aria-label",
+      "Send a message..."
+    )
+
+    const dom = composerHandle.current!.getEditor()!.view.dom as HTMLElement
+    act(() => {
+      dom.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Tab",
+          bubbles: true,
+          cancelable: true,
+        })
+      )
+    })
+    expect(composerHandle.current!.getText()).toBe("Run the tests")
+    // Filled, not sent: Send is now enabled for the user to press.
+    const sendButton = container.querySelector<HTMLButtonElement>(
+      `button[title="${enMessages.Folder.chat.messageInput.send}"]`
+    )
+    expect(sendButton).not.toBeDisabled()
+  })
+
+  it("offers a button beside Send that fills it in, gone once the composer holds text", async () => {
+    const onSend = vi.fn()
+    const { container } = await mounted({
+      promptSuggestion: "Run the tests",
+      onSend,
+    })
+    const useLabel = enMessages.Folder.chat.messageInput.usePromptSuggestion
+    const useButton = () =>
+      container.querySelector<HTMLButtonElement>(
+        `button[aria-label="${useLabel}"]`
+      )
+    expect(useButton()).not.toBeNull()
+
+    fireEvent.click(useButton()!)
+    expect(composerHandle.current!.getText()).toBe("Run the tests")
+    // Filled, not sent.
+    expect(onSend).not.toHaveBeenCalled()
+    await waitFor(() => expect(useButton()).toBeNull())
+
+    // Clearing the composer brings it back.
+    act(() => composerHandle.current!.clear())
+    await waitFor(() => expect(useButton()).not.toBeNull())
+
+    // Text the user typed hides it too.
+    act(() => composerHandle.current!.setText("my own words"))
+    await waitFor(() => expect(useButton()).toBeNull())
+  })
+
+  it("shows no fill button without a suggestion or while one is not offered", async () => {
+    const useLabel = enMessages.Folder.chat.messageInput.usePromptSuggestion
+    for (const props of [
+      { promptSuggestion: null },
+      {
+        promptSuggestion: "Run the tests",
+        isPrompting: true,
+        onCancel: vi.fn(),
+      },
+      { promptSuggestion: "Run the tests", disabled: true },
+      { promptSuggestion: "Run the tests", isEditingQueueItem: true },
+    ]) {
+      const { container, unmount } = await mounted(props)
+      expect(
+        container.querySelector(`button[aria-label="${useLabel}"]`)
+      ).toBeNull()
+      unmount()
+    }
+  })
+
+  it("does not offer it while a turn runs, while disabled, or while editing a queued message", async () => {
+    for (const props of [
+      { isPrompting: true },
+      { disabled: true },
+      { isEditingQueueItem: true },
+    ]) {
+      const { container, unmount } = await mounted({
+        promptSuggestion: "Run the tests",
+        ...props,
+      })
+      expect(
+        container.querySelector(
+          `[data-placeholder="${offered("Run the tests")}"]`
+        )
+      ).toBeNull()
+      const dom = composerHandle.current!.getEditor()!.view.dom as HTMLElement
+      act(() => {
+        dom.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "Tab",
+            bubbles: true,
+            cancelable: true,
+          })
+        )
+      })
+      expect(composerHandle.current!.isEmpty()).toBe(true)
+      unmount()
+    }
+  })
+})
+
+// The tab store closes a draft tab only when it holds nothing. What a saved
+// draft cannot show — typing still inside the save debounce, an image
+// attachment (never saved) — the mounted composer reports itself.
+describe("MessageInput live content for draft tidying", () => {
+  const draftKey = "draft:live-content"
+  afterEach(() => {
+    cleanup()
+    composerHandle.current = null
+    clearMessageInputDraftV2(draftKey)
+  })
+
+  function tree(props: Partial<React.ComponentProps<typeof MessageInput>>) {
+    return (
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <MessageInput
+          onSend={vi.fn()}
+          promptCapabilities={CAPS}
+          draftStorageKey={draftKey}
+          {...props}
+        />
+      </NextIntlClientProvider>
+    )
+  }
+
+  it("reports typed text and image attachments until the composer goes", async () => {
+    const view = render(tree({}))
+    await waitFor(
+      () => expect(composerHandle.current?.getEditor()).toBeTruthy(),
+      { timeout: 5000 }
+    )
+    const editor = composerHandle.current!.getEditor()!
+    expect(hasLiveComposerContent(draftKey)).toBe(false)
+
+    act(() => {
+      editor.commands.insertContent("half a thought")
+    })
+    await waitFor(() => expect(hasLiveComposerContent(draftKey)).toBe(true))
+    act(() => {
+      editor.commands.clearContent(true)
+    })
+    await waitFor(() => expect(hasLiveComposerContent(draftKey)).toBe(false))
+
+    // An image alone, no text.
+    view.rerender(
+      tree({
+        injectContent: {
+          handBack: [{ type: "image", data: "aGk=", mime_type: "image/png" }],
+        },
+      })
+    )
+    expect(await screen.findByAltText("image.png")).toBeInTheDocument()
+    await waitFor(() => expect(hasLiveComposerContent(draftKey)).toBe(true))
+
+    view.unmount()
+    expect(hasLiveComposerContent(draftKey)).toBe(false)
+  })
+
+  // A dropped image is read before it shows: from the drop on, the draft
+  // already counts as holding content, not only once the thumbnail commits.
+  it("reports a file intake the moment it starts, before its content commits", async () => {
+    const { container } = render(tree({}))
+    await waitFor(
+      () => expect(composerHandle.current?.getEditor()).toBeTruthy(),
+      { timeout: 5000 }
+    )
+    const host = container.firstElementChild as HTMLElement
+    const image = new File([new Uint8Array([137, 80, 78, 71])], "shot.png", {
+      type: "image/png",
+    })
+    expect(hasLiveComposerContent(draftKey)).toBe(false)
+
+    // Dispatched outside act(): React must not get to commit (and run the
+    // composer's effects) before the assertion, as it would not in a browser.
+    const drop = new Event("drop", { bubbles: true, cancelable: true })
+    Object.defineProperty(drop, "dataTransfer", {
+      value: { files: [image], types: ["Files"], items: [] },
+    })
+    host.dispatchEvent(drop)
+    // Synchronously, with the file still being read.
+    expect(screen.queryByAltText("shot.png")).toBeNull()
+    expect(hasLiveComposerContent(draftKey)).toBe(true)
+
+    expect(await screen.findByAltText("shot.png")).toBeInTheDocument()
+    await waitFor(() => expect(hasLiveComposerContent(draftKey)).toBe(true))
+  })
+
+  describe("a context-menu paste", () => {
+    let finishRead: ((text: string) => void) | null = null
+    function setClipboard(readText: () => Promise<string>) {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { readText, read: async () => [], writeText: async () => {} },
+      })
+    }
+    async function openPasteItem() {
+      render(tree({}))
+      await waitFor(
+        () => expect(composerHandle.current?.getEditor()).toBeTruthy(),
+        { timeout: 5000 }
+      )
+      const surface = document.querySelector<HTMLElement>(".ProseMirror")!
+      fireEvent.contextMenu(surface, { clientX: 40, clientY: 12 })
+      return screen.findByRole("menuitem", { name: "Paste as plain text" })
+    }
+
+    it("counts as content on its way from the first clipboard read", async () => {
+      setClipboard(
+        () =>
+          new Promise<string>((resolve) => {
+            finishRead = resolve
+          })
+      )
+      const paste = await openPasteItem()
+      fireEvent.click(paste)
+      // The read has not answered yet: nothing in the composer, but it counts.
+      expect(hasLiveComposerContent(draftKey)).toBe(true)
+      // An empty clipboard: nothing lands, and the mark goes with the paste.
+      await act(async () => {
+        finishRead?.("")
+      })
+      await waitFor(() => expect(hasLiveComposerContent(draftKey)).toBe(false))
+    })
+
+    describe("with files copied in Finder / Explorer", () => {
+      afterEach(() => {
+        attachmentsOverride.current = null
+      })
+
+      // jsdom has no `ClipboardEvent`, which ProseMirror's `pasteText` builds,
+      // so the text paste itself is only observed being asked for.
+      function spyOnTextPaste() {
+        const view = composerHandle.current!.getEditor()!.view
+        return vi.spyOn(view, "pasteText").mockImplementation(() => true)
+      }
+
+      it("attaches the files instead of pasting the names the text API sees", async () => {
+        let attachedFiles = false
+        const appendClipboardFiles = vi.fn(async () => {
+          attachedFiles = true
+          return true
+        })
+        attachmentsOverride.current = { appendClipboardFiles }
+        setClipboard(async () => "bundle.zip")
+        const paste = await openPasteItem()
+        const pasteText = spyOnTextPaste()
+        fireEvent.click(paste)
+        await waitFor(() => expect(attachedFiles).toBe(true))
+        await act(async () => {})
+        expect(pasteText).not.toHaveBeenCalled()
+      })
+
+      it("still pastes the text when the clipboard holds no files", async () => {
+        attachmentsOverride.current = {
+          appendClipboardFiles: vi.fn(async () => false),
+        }
+        setClipboard(async () => "plain words")
+        const paste = await openPasteItem()
+        const pasteText = spyOnTextPaste()
+        fireEvent.click(paste)
+        await waitFor(() =>
+          expect(pasteText).toHaveBeenCalledWith("plain words")
+        )
+      })
+    })
+  })
+
+  // A pasted image the hook drops at once (here an empty one): the intake
+  // starts and settles with nothing, and the mark set at its start goes.
+  it("lets go of an intake that brought nothing", async () => {
+    render(tree({}))
+    await waitFor(
+      () => expect(composerHandle.current?.getEditor()).toBeTruthy(),
+      { timeout: 5000 }
+    )
+    const surface = document.querySelector<HTMLElement>(".ProseMirror")!
+    const empty = new File([], "empty.png", { type: "image/png" })
+    const paste = new Event("paste", { bubbles: true, cancelable: true })
+    Object.defineProperty(paste, "clipboardData", {
+      value: {
+        files: [empty],
+        items: [],
+        types: ["Files"],
+        getData: () => "",
+      },
+    })
+    surface.dispatchEvent(paste)
+    // The intake did start (and marked the draft at once)…
+    expect(hasLiveComposerContent(draftKey)).toBe(true)
+    // …and once it has settled with nothing, the mark goes.
+    await waitFor(() => expect(hasLiveComposerContent(draftKey)).toBe(false))
+  })
+
+  // Started and settled before React renders (an intake begun outside an
+  // event that finds nothing to do): `intakePending` reads false both times,
+  // so only the revision makes the composer report again — without it, the
+  // mark set at the start would protect a blank draft for good.
+  it("lets go of an intake that started and settled within one render", async () => {
+    render(tree({}))
+    await waitFor(
+      () => expect(composerHandle.current?.getEditor()).toBeTruthy(),
+      { timeout: 5000 }
+    )
+    let markedAtStart = false
+    act(() => {
+      const settle = attachmentsCapture.current!.beginIntake()
+      markedAtStart = hasLiveComposerContent(draftKey)
+      settle()
+    })
+    expect(markedAtStart).toBe(true)
+    await waitFor(() => expect(hasLiveComposerContent(draftKey)).toBe(false))
   })
 })

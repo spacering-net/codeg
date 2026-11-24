@@ -8,10 +8,10 @@ use chrono::{DateTime, Utc};
 use regex::Regex;
 use walkdir::WalkDir;
 
-use crate::acp::agent_mentions::{
-    contains_only_internal_agent_routes, strip_internal_agent_routes,
-};
+use crate::acp::agent_mentions::{contains_only_internal_frames, strip_internal_frames};
+use crate::acp::js_text::is_js_whitespace;
 use crate::models::*;
+use crate::parsers::codex_async_questions::{self, AsyncQuestionCall, ReplyMessage};
 use crate::parsers::codex_code_mode::{
     extract_chunk_ids, extract_shell_session_ids, is_code_mode_call, parse_code_mode_script,
     script_card_input,
@@ -19,12 +19,19 @@ use crate::parsers::codex_code_mode::{
     Separator, CODEX_SCRIPT_TOOL_NAME,
 };
 use crate::parsers::{
-    codex_desktop_attachments, folder_name_from_path, title_from_user_text, truncate_str,
+    codex_desktop_attachments, folder_name_from_path, title_from_user_text, truncate_str, AgentEnv,
     AgentParser, ParseError,
 };
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CodexText {
+    Display,
+    Fork,
+}
+
 pub struct CodexParser {
     base_dir: PathBuf,
+    text: CodexText,
 }
 
 /// How far into a rollout to look for the `session_meta` carrying its history
@@ -205,15 +212,31 @@ impl Default for CodexParser {
 
 impl CodexParser {
     pub fn new() -> Self {
-        let base_dir = resolve_codex_home_dir().join("sessions");
-        Self { base_dir }
+        Self::for_env(&AgentEnv::inherited())
+    }
+
+    /// The history of the Codex launched with `env`. `session_index.jsonl`
+    /// (the thread-name index) is read from the same home.
+    pub fn for_env(env: &AgentEnv) -> Self {
+        Self {
+            base_dir: resolve_codex_home_dir_for_env(env).join("sessions"),
+            text: CodexText::Display,
+        }
+    }
+
+    pub(crate) fn with_text(mut self, text: CodexText) -> Self {
+        self.text = text;
+        self
     }
 
     /// Test-only constructor that lets callers point the parser at a fixture
     /// directory instead of `~/.codex/sessions`.
     #[cfg(any(test, feature = "test-utils"))]
     pub fn with_base_dir(base_dir: PathBuf) -> Self {
-        Self { base_dir }
+        Self {
+            base_dir,
+            text: CodexText::Display,
+        }
     }
 
     /// Every line of a rollout, with the history it inherits BY REFERENCE
@@ -398,10 +421,9 @@ impl CodexParser {
             let thread_name = value
                 .get("thread_name")
                 .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|name| !name.is_empty());
+                .and_then(codex_thread_title);
             if let (Some(id), Some(name)) = (session_id, thread_name) {
-                titles.insert(id.to_string(), truncate_str(name, 100));
+                titles.insert(id.to_string(), name);
             }
         }
 
@@ -572,12 +594,12 @@ impl CodexParser {
                                 }
 
                                 let visible_text =
-                                    strip_internal_agent_routes(&decode_user_text(raw_text));
+                                    strip_internal_frames(&decode_user_text(raw_text));
                                 let has_images = payload
                                     .get("images")
                                     .and_then(|v| v.as_array())
                                     .is_some_and(|images| !images.is_empty());
-                                if contains_only_internal_agent_routes(raw_text) && !has_images {
+                                if contains_only_internal_frames(raw_text) && !has_images {
                                     continue;
                                 }
                                 if skip_duplicate_user_record(
@@ -656,10 +678,9 @@ impl CodexParser {
                                     .or_else(|| payload.get("threadName"))
                                     .or_else(|| payload.get("name"))
                                     .and_then(|n| n.as_str())
-                                    .map(str::trim)
-                                    .filter(|n| !n.is_empty())
+                                    .and_then(codex_thread_title)
                                 {
-                                    title = Some(truncate_str(name, 100));
+                                    title = Some(name);
                                     title_from_thread_name = true;
                                 }
                             }
@@ -847,7 +868,13 @@ impl CodexParser {
 }
 
 pub(crate) fn resolve_codex_home_dir() -> PathBuf {
-    resolve_codex_home_dir_from(std::env::var_os("CODEX_HOME"), dirs::home_dir())
+    resolve_codex_home_dir_for_env(&AgentEnv::inherited())
+}
+
+/// The home of the Codex launched with `env`: its `CODEX_HOME`, else
+/// `~/.codex`.
+pub(crate) fn resolve_codex_home_dir_for_env(env: &AgentEnv) -> PathBuf {
+    resolve_codex_home_dir_from(env.var_os("CODEX_HOME"), dirs::home_dir())
 }
 
 fn resolve_codex_home_dir_from(
@@ -1421,6 +1448,7 @@ fn unwrap_code_mode_script(
             is_error,
             agent_stats: None,
             images: Vec::new(),
+            exit_code: None,
         }
     };
 
@@ -1588,6 +1616,30 @@ struct CompletedMcpCall {
     input_preview: Option<String>,
     output_preview: Option<String>,
     is_error: bool,
+    /// The result's `image` blocks. Live, the same call's card shows them
+    /// (codex-acp reports the result's `content` as `rawOutput`). A result over
+    /// 64 KiB was persisted as a text stand-in and has none left to show.
+    images: Vec<ImageData>,
+}
+
+/// The `image` blocks of an MCP result's `content`.
+fn mcp_result_images(result: Option<&serde_json::Value>) -> Vec<ImageData> {
+    result
+        .and_then(|result| result.get("content"))
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|block| block.get("type").and_then(|v| v.as_str()) == Some("image"))
+        .filter_map(|block| {
+            let data = block.get("data")?.as_str()?;
+            let mime_type = block.get("mimeType")?.as_str()?;
+            (!data.is_empty() && mime_type.starts_with("image/")).then(|| ImageData {
+                data: data.to_string(),
+                mime_type: mime_type.to_string(),
+                uri: None,
+            })
+        })
+        .collect()
 }
 
 /// How much of a serialized MCP result stands in for a call that answered in
@@ -1657,6 +1709,137 @@ fn serialize_preview(value: &serde_json::Value, max_chars: usize) -> Option<Stri
     (!text.is_empty()).then(|| truncate_str(&text, max_chars))
 }
 
+/// What a persisted MCP result over 64 KiB became in codex 0.164: codex's
+/// rollout policy swaps it for ONE text block holding the result's own JSON
+/// serialization, cut in the middle with codex's `…N chars truncated…` marker
+/// (`truncate_mcp_tool_result`), drops `structuredContent` and keeps
+/// `isError`. Read as text, that block is JSON: an image-only result's
+/// preview went from the 4,000-character fallback below to 65,000 characters
+/// of escaped base64, and a text result came back JSON-escaped.
+///
+/// The preview of such a stand-in: the text of the text blocks the
+/// serialization opens on, decoded out of their JSON strings and joined the
+/// way an MCP result's text always is
+/// ([`crate::parsers::pi::tool_result_content_text`]), then codex's marker —
+/// unless the cut fell after the whole `content` array (inside the dropped
+/// `structuredContent`, say), so that no text was lost. Reading stops at the
+/// cut, at a block that is not text, and at a shape it does not know. A
+/// stand-in with no text to show — one opening on an image, a resource or an
+/// empty `content` — is capped like a result that answered in blocks alone.
+/// `None` when `result` is not the stand-in.
+fn codex_truncated_mcp_result_preview(result: &serde_json::Value) -> Option<String> {
+    static MARKER: OnceLock<Regex> = OnceLock::new();
+    let result = result.as_object()?;
+    if result.contains_key("structuredContent") {
+        return None;
+    }
+    let [block] = result.get("content")?.as_array()?.as_slice() else {
+        return None;
+    };
+    if block.get("type").and_then(serde_json::Value::as_str) != Some("text") {
+        return None;
+    }
+    let text = block.get("text")?.as_str()?;
+    if !text.starts_with(r#"{"content":["#) {
+        return None;
+    }
+    let marker = MARKER
+        .get_or_init(|| Regex::new(r"…\d+ chars truncated…").expect("valid marker regex"))
+        .find(text)?;
+    let mut rest = &text[r#"{"content":["#.len()..marker.start()];
+    let mut shown = String::new();
+    let mut whole = false;
+    while let Some(string) = [r#"{"type":"text","text":""#, r#"{"text":""#]
+        .iter()
+        .find_map(|opening| rest.strip_prefix(opening))
+    {
+        let (decoded, after) = decode_json_string_prefix(string);
+        shown.push_str(&decoded);
+        // `None`: the cut fell inside this text.
+        let Some(after) = after else {
+            break;
+        };
+        // A block written `{"text":…,"type":"text"}` closes after its type.
+        let after = after.strip_prefix(r#","type":"text""#).unwrap_or(after);
+        if let Some(next) = after.strip_prefix("},") {
+            rest = next;
+            continue;
+        }
+        whole = after.starts_with("}]");
+        break;
+    }
+    if shown.is_empty() {
+        return Some(truncate_str(text, MCP_RESULT_FALLBACK_CAP));
+    }
+    Some(if whole {
+        shown
+    } else {
+        format!("{shown}{}", marker.as_str())
+    })
+}
+
+/// `s` read as the inside of a JSON string literal whose end may have been cut
+/// off: the decoded text up to the closing quote, with what follows the quote,
+/// or up to the end of `s` with `None`, an escape the cut left unfinished
+/// dropped. An escape JSON does not have ends the text there too (`None`). A
+/// `\u` surrogate with no partner decodes to U+FFFD.
+fn decode_json_string_prefix(s: &str) -> (String, Option<&str>) {
+    fn hex4(chars: &mut std::str::Chars<'_>) -> Option<u32> {
+        let digits: String = chars.by_ref().take(4).collect();
+        (digits.len() == 4 && digits.chars().all(|c| c.is_ascii_hexdigit()))
+            .then(|| u32::from_str_radix(&digits, 16).ok())
+            .flatten()
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => return (out, Some(chars.as_str())),
+            '\\' => {
+                let decoded = match chars.next() {
+                    Some('"') => '"',
+                    Some('\\') => '\\',
+                    Some('/') => '/',
+                    Some('b') => '\u{8}',
+                    Some('f') => '\u{c}',
+                    Some('n') => '\n',
+                    Some('r') => '\r',
+                    Some('t') => '\t',
+                    Some('u') => {
+                        let Some(unit) = hex4(&mut chars) else {
+                            break;
+                        };
+                        if (0xD800..0xDC00).contains(&unit) {
+                            let mut lookahead = chars.clone();
+                            let low = (lookahead.next() == Some('\\')
+                                && lookahead.next() == Some('u'))
+                            .then(|| hex4(&mut lookahead))
+                            .flatten()
+                            .filter(|low| (0xDC00..0xE000).contains(low));
+                            match low {
+                                Some(low) => {
+                                    chars = lookahead;
+                                    char::from_u32(
+                                        0x10000 + ((unit - 0xD800) << 10) + (low - 0xDC00),
+                                    )
+                                    .unwrap_or('\u{FFFD}')
+                                }
+                                None => '\u{FFFD}',
+                            }
+                        } else {
+                            char::from_u32(unit).unwrap_or('\u{FFFD}')
+                        }
+                    }
+                    _ => break,
+                };
+                out.push(decoded);
+            }
+            c => out.push(c),
+        }
+    }
+    (out, None)
+}
+
 fn completed_mcp_call(payload: &serde_json::Value) -> Option<CompletedMcpCall> {
     let item = payload.get("item")?;
     if item.get("type").and_then(|v| v.as_str()) != Some("McpToolCall") {
@@ -1679,10 +1862,16 @@ fn completed_mcp_call(payload: &serde_json::Value) -> Option<CompletedMcpCall> {
     // `status` inside it (`infer_output_text_is_error`), and truncating valid
     // JSON makes that parse fail silently, settling a call that reported
     // failure GREEN. So the cut branch also hands back the value it cut, and
-    // the outcome is read from that instead.
+    // the outcome is read from that instead. codex 0.164's stand-in for an
+    // oversized result goes first: its one text block is JSON, not the
+    // result's text (`codex_truncated_mcp_result_preview`).
     let output_preview = result
-        .and_then(|result| result.get("content"))
-        .and_then(crate::parsers::pi::tool_result_content_text)
+        .and_then(codex_truncated_mcp_result_preview)
+        .or_else(|| {
+            result
+                .and_then(|result| result.get("content"))
+                .and_then(crate::parsers::pi::tool_result_content_text)
+        })
         .or_else(|| {
             result
                 .and_then(|result| result.get("structuredContent"))
@@ -1729,6 +1918,7 @@ fn completed_mcp_call(payload: &serde_json::Value) -> Option<CompletedMcpCall> {
                 && (infer_tool_call_output_is_error(item, result, output_preview.as_deref())
                     || blocks_report_failure(blocks))),
         output_preview,
+        images: mcp_result_images(result),
     })
 }
 
@@ -1804,7 +1994,8 @@ fn unwrap_completed_mcp_calls(
             output_preview: item.output_preview,
             is_error: item.is_error,
             agent_stats: None,
-            images: Vec::new(),
+            images: item.images,
+            exit_code: None,
         });
     }
     Some((uses, results))
@@ -3054,6 +3245,8 @@ fn parse_codex_subagent_stats(
         lines_removed: None,
         other_tool_count: None,
         tool_calls,
+        timeline: Vec::new(),
+        recovered_result: None,
         // Codex's sub-agent rollout is folded into these stats; there is no
         // separate session for the card to open.
         child_session_id: None,
@@ -3157,6 +3350,9 @@ impl CodexParser {
         // Live and reconstructed capsules never double-render (live during
         // streaming, this on reload).
         let mut spawn_agent_call_ids: HashSet<String> = HashSet::new();
+        // codex's `request_user_input_async` calls by call id, for the reply
+        // envelope that answers them (see `codex_async_questions`).
+        let mut async_question_calls: HashMap<String, AsyncQuestionCall> = HashMap::new();
         let mut agent_id_to_spawn_call_id: HashMap<String, String> = HashMap::new();
         // `agent_path` ("/root/history_limits") → the thread id currently
         // answering to it. Last write wins, which is exactly the pairing an
@@ -3186,6 +3382,11 @@ impl CodexParser {
         let mut close_agent_targets: HashMap<String, String> = HashMap::new();
         let mut active_agent_count: u32 = 0;
         let mut call_id_tool_names: HashMap<String, String> = HashMap::new();
+        // Direct MCP calls (`namespace: "mcp__<server>"`, or the older
+        // `mcp__<server>__<tool>` name). Only their outputs hand images to the
+        // card: live, codex-acp reports an MCP result's image blocks, but a
+        // `view_image` only as a link to its path.
+        let mut mcp_call_ids: HashSet<String> = HashSet::new();
         // Code-mode scripts (`custom_tool_call` named `exec`) awaiting their
         // output. A placeholder script card is pushed when the call is read, so
         // an interrupted turn still shows it in place; the output arm rewrites
@@ -3282,12 +3483,17 @@ impl CodexParser {
         // Index in `messages` of the compaction divider the next
         // `item_completed.ContextCompaction` names (see the `compacted` arm).
         let mut unnamed_compaction_divider: Option<usize> = None;
+        let mut completed_agent = None;
+        // By-reference forks replay ancestor headers before the child's own records.
+        let mut source_threads = HashSet::from([conversation_id.to_owned()]);
 
         for line in lines {
             if line.trim().is_empty() {
                 continue;
             }
 
+            // Only adjacent records from the same rollout can be twins.
+            let preceding_agent = completed_agent.take();
             let value: serde_json::Value = match serde_json::from_str(&line) {
                 Ok(v) => v,
                 Err(_) => continue,
@@ -3312,6 +3518,24 @@ impl CodexParser {
 
             match msg_type {
                 "session_meta" => {
+                    if let Some(header) = value.get("payload") {
+                        if let Some(id) = header.get("id").and_then(|id| id.as_str()) {
+                            if !session_header_seen || source_threads.contains(id) {
+                                source_threads.insert(id.to_owned());
+                                for parent in [
+                                    header.pointer("/history_base/thread_id"),
+                                    header.get("forked_from_id"),
+                                ]
+                                .into_iter()
+                                .flatten()
+                                {
+                                    if let Some(parent) = parent.as_str() {
+                                        source_threads.insert(parent.to_owned());
+                                    }
+                                }
+                            }
+                        }
+                    }
                     // First header wins for every identity field — see the same
                     // latch in `parse_jsonl_summary`: the parent header that
                     // follows a forked child's own (replayed inline, or spliced
@@ -3488,6 +3712,22 @@ impl CodexParser {
                                     continue;
                                 }
 
+                                let text = match codex_async_questions::take_reply(
+                                    &text,
+                                    &mut async_question_calls,
+                                ) {
+                                    ReplyMessage::NotAReply => text,
+                                    ReplyMessage::Display(display) => display,
+                                    ReplyMessage::Answered(calls) => {
+                                        refresh_async_question_results(
+                                            &mut messages,
+                                            &async_question_calls,
+                                            &calls,
+                                        );
+                                        continue;
+                                    }
+                                };
+
                                 let normalized = normalize_user_text(&text);
                                 if title.is_none() {
                                     title = extract_codex_title_candidate(&normalized, true);
@@ -3519,7 +3759,7 @@ impl CodexParser {
                                     }
                                 }
 
-                                if blocks.is_empty() && contains_only_internal_agent_routes(&text) {
+                                if blocks.is_empty() && contains_only_internal_frames(&text) {
                                     continue;
                                 }
 
@@ -3572,6 +3812,7 @@ impl CodexParser {
                                     .and_then(|m| m.as_str())
                                     .unwrap_or("")
                                     .to_string();
+                                let source_id = completed_twin_id(preceding_agent, &text);
                                 messages.push(UnifiedMessage {
                                     id: format!("assistant-{}", messages.len()),
                                     role: MessageRole::Assistant,
@@ -3581,7 +3822,7 @@ impl CodexParser {
                                     duration_ms: None,
                                     model: None,
                                     completed_at: Some(timestamp),
-                                agent_message_id: None,
+                                    agent_message_id: source_id,
                                 });
                             }
                             "thread_goal_updated" => {
@@ -3654,6 +3895,7 @@ impl CodexParser {
                                                 is_error: false,
                                                 agent_stats: None,
                                                 images: Vec::new(),
+                                                exit_code: None,
                                             },
                                         ],
                                         timestamp,
@@ -3680,14 +3922,38 @@ impl CodexParser {
                                     .or_else(|| payload.get("threadName"))
                                     .or_else(|| payload.get("name"))
                                     .and_then(|n| n.as_str())
-                                    .map(str::trim)
-                                    .filter(|n| !n.is_empty())
+                                    .and_then(codex_thread_title)
                                 {
-                                    title = Some(truncate_str(name, 100));
+                                    title = Some(name);
                                     title_from_thread_name = true;
                                 }
                             }
+                            "task_complete" => {
+                                // A FAILED turn closes on the error that ended
+                                // it, the record's only trace of the failure
+                                // (codex persists no `error` event). An
+                                // interrupted turn closes on `turn_aborted`
+                                // instead and is no failure.
+                                if let Some(failure) =
+                                    codex_turn_failure(payload).and_then(|message| {
+                                        super::turn_error_message(
+                                            format!("turn-error-{}", messages.len()),
+                                            &message,
+                                            timestamp,
+                                        )
+                                    })
+                                {
+                                    messages.push(failure);
+                                }
+                            }
                             "item_completed" => {
+                                if payload
+                                    .get("thread_id")
+                                    .and_then(|id| id.as_str())
+                                    .is_none_or(|id| source_threads.contains(id))
+                                {
+                                    completed_agent = completed_agent_anchor(payload);
+                                }
                                 // The compaction the last `compacted` record
                                 // drew a divider for, now under the id codex-acp
                                 // gave the live divider (`compactionId` IS this
@@ -4110,6 +4376,13 @@ impl CodexParser {
                                     None
                                 };
 
+                                let async_question = (raw_tool_name
+                                    == codex_async_questions::TOOL_NAME)
+                                    .then(|| parse_codex_json_arg(payload))
+                                    .flatten()
+                                    .as_ref()
+                                    .and_then(AsyncQuestionCall::from_arguments);
+
                                 match raw_tool_name {
                                     // No card of its own: the output it is about
                                     // to collect IS the parked script's return
@@ -4120,6 +4393,32 @@ impl CodexParser {
                                         {
                                             deferred_waits.insert(id, cell);
                                         }
+                                    }
+                                    // codex's async question: the answered-question
+                                    // card live codeg shows for it, answered by the
+                                    // reply envelope later in the file.
+                                    _ if async_question.is_some() && tool_use_id.is_some() => {
+                                        let call = async_question.expect("guarded");
+                                        let id = tool_use_id.expect("guarded");
+                                        messages.push(UnifiedMessage {
+                                            id: format!("tool-{}", messages.len()),
+                                            role: MessageRole::Assistant,
+                                            content: vec![ContentBlock::ToolUse {
+                                                tool_use_id: Some(id.clone()),
+                                                tool_name: codex_async_questions::CARD_TOOL_NAME
+                                                    .to_string(),
+                                                input_preview: Some(call.card_input()),
+                                                status: None,
+                                                meta: None,
+                                            }],
+                                            timestamp,
+                                            usage: None,
+                                            duration_ms: None,
+                                            model: None,
+                                            completed_at: Some(timestamp),
+                                            agent_message_id: None,
+                                        });
+                                        async_question_calls.insert(id, call);
                                     }
                                     "spawn_agent" => {
                                         let args = parse_codex_json_arg(payload);
@@ -4265,6 +4564,14 @@ impl CodexParser {
                                         if let Some(ref id) = tool_use_id {
                                             call_id_tool_names
                                                 .insert(id.clone(), raw_tool_name.to_string());
+                                            let is_mcp = raw_tool_name.starts_with("mcp__")
+                                                || payload
+                                                    .get("namespace")
+                                                    .and_then(|v| v.as_str())
+                                                    .is_some_and(|ns| ns.starts_with("mcp__"));
+                                            if is_mcp {
+                                                mcp_call_ids.insert(id.clone());
+                                            }
                                         }
                                         let raw_args = || {
                                             // `send_message` and friends carry a
@@ -4469,6 +4776,31 @@ impl CodexParser {
                                         completed_at: Some(timestamp),
                                     agent_message_id: None,
                                     });
+                                } else if let Some(call) = tool_use_id
+                                    .as_ref()
+                                    .and_then(|id| async_question_calls.get_mut(id))
+                                {
+                                    // Not `{"accepted":true}`: what the user
+                                    // answered, as far as the file has said yet.
+                                    call.result_index = Some(messages.len());
+                                    messages.push(UnifiedMessage {
+                                        id: format!("tool-result-{}", messages.len()),
+                                        role: MessageRole::Tool,
+                                        content: vec![ContentBlock::ToolResult {
+                                            tool_use_id,
+                                            output_preview: Some(call.card_output()),
+                                            is_error: false,
+                                            agent_stats: None,
+                                            images: Vec::new(),
+                                            exit_code: None,
+                                        }],
+                                        timestamp,
+                                        usage: None,
+                                        duration_ms: None,
+                                        model: None,
+                                        completed_at: Some(timestamp),
+                                        agent_message_id: None,
+                                    });
                                 } else if is_spawn {
                                     if let Some(output_obj) = parse_codex_json_output(payload) {
                                         if let (Some(agent_id), Some(call_id)) = (
@@ -4488,6 +4820,7 @@ impl CodexParser {
                                             is_error: false,
                                             agent_stats: None,
                                             images: Vec::new(),
+                                            exit_code: None,
                                         }],
                                         timestamp,
                                         usage: None,
@@ -4564,6 +4897,7 @@ impl CodexParser {
                                                 is_error,
                                                 agent_stats: None,
                                                 images: Vec::new(),
+                                                exit_code: None,
                                             }],
                                             timestamp,
                                             usage: None,
@@ -4677,6 +5011,27 @@ impl CodexParser {
                                             output_value,
                                             output.as_deref(),
                                         );
+                                    // The item_completed preview can truncate an
+                                    // MCP image. The response item has the original.
+                                    let is_mcp = tool_use_id
+                                        .as_ref()
+                                        .is_some_and(|id| mcp_call_ids.contains(id));
+                                    let images = output_value
+                                        .filter(|_| is_mcp)
+                                        .and_then(serde_json::Value::as_array)
+                                        .into_iter()
+                                        .flatten()
+                                        .filter(|item| {
+                                            item.get("type").and_then(|v| v.as_str())
+                                                == Some("input_image")
+                                        })
+                                        .filter_map(parse_input_image_data_uri)
+                                        .map(|(mime_type, data)| ImageData {
+                                            data,
+                                            mime_type,
+                                            uri: None,
+                                        })
+                                        .collect();
                                     messages.push(UnifiedMessage {
                                         id: format!("tool-result-{}", messages.len()),
                                         role: MessageRole::Tool,
@@ -4685,7 +5040,8 @@ impl CodexParser {
                                             output_preview: output,
                                             is_error,
                                             agent_stats: None,
-                                            images: Vec::new(),
+                                            images,
+                                            exit_code: None,
                                         }],
                                         timestamp,
                                         usage: None,
@@ -4759,7 +5115,42 @@ impl CodexParser {
                                 };
                                 // An image-only record has nothing for the
                                 // deny-lists (which are text rules) to judge.
-                                let text = first_text_block(&blocks).unwrap_or_default();
+                                let mut text = first_text_block(&blocks).unwrap_or_default();
+                                let source_id = if is_user {
+                                    None
+                                } else {
+                                    agent_message_id(payload).or_else(|| {
+                                        completed_twin_id(
+                                            preceding_agent,
+                                            &codex_item_text(payload),
+                                        )
+                                    })
+                                };
+                                let mut blocks = blocks;
+                                // A reply to codex's async questions folds into
+                                // their card (see `codex_async_questions`).
+                                if is_user {
+                                    match codex_async_questions::take_reply(
+                                        &text,
+                                        &mut async_question_calls,
+                                    ) {
+                                        ReplyMessage::NotAReply => {}
+                                        ReplyMessage::Display(display) => {
+                                            blocks = vec![ContentBlock::Text {
+                                                text: display.clone(),
+                                            }];
+                                            text = display;
+                                        }
+                                        ReplyMessage::Answered(calls) => {
+                                            refresh_async_question_results(
+                                                &mut messages,
+                                                &async_question_calls,
+                                                &calls,
+                                            );
+                                            continue;
+                                        }
+                                    }
+                                }
 
                                 // Plan mode's plan document, intercepted ahead of
                                 // the promotion gate. It must render even where the
@@ -4789,7 +5180,10 @@ impl CodexParser {
                                             .filter(|(_, seen)| seen == body)
                                             .map(|(index, _)| index);
                                         match twin.and_then(|index| messages.get_mut(index)) {
-                                            Some(existing) => existing.content = blocks,
+                                            Some(existing) => {
+                                                existing.content = blocks;
+                                                existing.agent_message_id = source_id;
+                                            }
                                             None => {
                                                 messages.push(UnifiedMessage {
                                                     id: format!("assistant-plan-{}", messages.len()),
@@ -4800,7 +5194,7 @@ impl CodexParser {
                                                     duration_ms: None,
                                                     model: None,
                                                     completed_at: Some(timestamp),
-                                                    agent_message_id: None,
+                                                    agent_message_id: source_id,
                                                 });
                                             }
                                         }
@@ -4828,6 +5222,7 @@ impl CodexParser {
                                 promotion.push_candidate(record_ordinal, is_user, &text);
                                 pending_promotions.push(PendingPromotedMessage {
                                     insert_at: messages.len(),
+                                    agent_message_id: source_id,
                                     is_user,
                                     blocks,
                                     timestamp,
@@ -5124,7 +5519,7 @@ impl CodexParser {
                     duration_ms: None,
                     model: None,
                     completed_at: Some(pending.timestamp),
-                agent_message_id: None,
+                    agent_message_id: pending.agent_message_id,
                 })
                 .collect();
             messages.splice(insert_at..insert_at, group);
@@ -5198,6 +5593,14 @@ impl CodexParser {
         // After every pass that drops messages, so it sees every pair of cards
         // they leave touching.
         merge_touching_thinking_cards(&mut messages, turn_starts);
+        // After the promotion and dedupe passes, which compare the raw text of
+        // a record's twins.
+        match self.text {
+            CodexText::Display => {
+                render_agent_message_citations(&mut messages, cwd.as_deref().unwrap_or(""))
+            }
+            CodexText::Fork => prepare_fork_text(&mut messages),
+        }
         let mut turns = group_into_turns(messages);
         reconcile_turn_usage(&mut turns, &recorded_round_usage);
         super::relocate_orphaned_tool_results(&mut turns);
@@ -5223,7 +5626,7 @@ impl CodexParser {
             title,
             started_at: first_timestamp.unwrap_or_else(Utc::now),
             ended_at: last_timestamp,
-            message_count: turns.len() as u32,
+            message_count: super::message_turn_count(&turns),
             model,
             git_branch,
             parent_id,
@@ -5277,29 +5680,11 @@ fn extract_total_tokens_from_usage(usage: &serde_json::Value) -> Option<u64> {
 }
 
 fn extract_turn_usage_from_codex_usage(usage: &serde_json::Value) -> Option<TurnUsage> {
-    let input_tokens = usage
-        .get("input_tokens")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let output_tokens = usage
-        .get("output_tokens")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let cache_read_input_tokens = usage
-        .get("cached_input_tokens")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-
-    if input_tokens == 0 && output_tokens == 0 && cache_read_input_tokens == 0 {
+    let counters = codex_usage_counters(usage);
+    if codex_usage_is_zero(&counters) {
         return None;
     }
-
-    Some(TurnUsage {
-        input_tokens: input_tokens.saturating_sub(cache_read_input_tokens),
-        output_tokens,
-        cache_creation_input_tokens: 0,
-        cache_read_input_tokens,
-    })
+    Some(counters)
 }
 
 /// A codex usage payload read as raw counters, keeping zeros.
@@ -5308,15 +5693,28 @@ fn extract_turn_usage_from_codex_usage(usage: &serde_json::Value) -> Option<Turn
 /// so it collapses an all-zero payload to `None`. The running-total arithmetic
 /// below needs the opposite: a cumulative counter that legitimately still reads
 /// zero is a real datapoint, not an absent one.
+///
+/// Codex's `input_tokens` is the WHOLE prompt. It includes the tokens read from
+/// the prompt cache (`cached_input_tokens`) and the tokens written to it
+/// (`cache_write_input_tokens`, which some providers and gateways report and
+/// OpenAI's API leaves at 0), while codeg's four counters are disjoint. So
+/// both are split out of the input rather than counted as fresh input;
+/// codex-acp 2.2.0 made the same correction to its own `TokenCount`. A real
+/// rollout on codeg's bound provider reads `input 19915, cached 17152, write
+/// 2304`: 459 fresh.
+///
+/// The write is capped at what the input has left after the read, so a provider
+/// that over-reports it cannot make the counters add up to more than the input
+/// did before the split.
 fn codex_usage_counters(usage: &serde_json::Value) -> TurnUsage {
     let field = |name: &str| usage.get(name).and_then(|v| v.as_u64()).unwrap_or(0);
+    let input = field("input_tokens");
     let cache_read = field("cached_input_tokens");
+    let cache_write = field("cache_write_input_tokens").min(input.saturating_sub(cache_read));
     TurnUsage {
-        // Codex reports `input_tokens` *inclusive* of the cached prefix, so the
-        // cached part is split out rather than counted twice.
-        input_tokens: field("input_tokens").saturating_sub(cache_read),
+        input_tokens: input.saturating_sub(cache_read).saturating_sub(cache_write),
         output_tokens: field("output_tokens"),
-        cache_creation_input_tokens: 0,
+        cache_creation_input_tokens: cache_write,
         cache_read_input_tokens: cache_read,
     }
 }
@@ -5535,6 +5933,139 @@ fn push_turn_start(turn_starts: &mut Vec<DateTime<Utc>>, ts: DateTime<Utc>) {
     }
 }
 
+/// Rewrite the model's file citations in agent prose as the Markdown links
+/// codex-acp 2.4.0 streams for them (#698), resolved against the session cwd —
+/// see [`super::codex_file_citations`]. The adapter rewrites `agentMessage`
+/// text only, so this takes the two places that text lands: the
+/// `event_msg.agent_message` arm (`assistant-N`) and promoted `response_item`
+/// messages (`codex-ri-…`). Plan documents, image generations and the
+/// plan-review marker keep their text, as they do live.
+fn render_agent_message_citations(messages: &mut [UnifiedMessage], cwd: &str) {
+    for message in messages.iter_mut() {
+        if !matches!(message.role, MessageRole::Assistant)
+            || !is_agent_prose_message_id(&message.id)
+        {
+            continue;
+        }
+        for block in &mut message.content {
+            if let ContentBlock::Text { text } = block {
+                if let std::borrow::Cow::Owned(rendered) =
+                    super::codex_file_citations::render_file_citations(text, cwd)
+                {
+                    *text = rendered;
+                }
+            }
+        }
+    }
+}
+
+/// Only the source assistant message can name a fork point. Tool output
+/// grouped into its display turn is not part of Codex's agentMessage.text.
+fn prepare_fork_text(messages: &mut [UnifiedMessage]) {
+    for message in messages {
+        if matches!(message.role, MessageRole::Tool) {
+            message
+                .content
+                .retain(|block| !matches!(block, ContentBlock::Text { .. }));
+        } else if matches!(message.role, MessageRole::Assistant) {
+            for block in &mut message.content {
+                if let ContentBlock::Text { text } = block {
+                    if let std::borrow::Cow::Owned(visible) = without_memory_citations(text) {
+                        *text = visible;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Codex extracts these literal, non-nesting tags into separate metadata.
+/// An unclosed tag consumes the rest of the message. Preserve all other bytes.
+fn without_memory_citations(text: &str) -> std::borrow::Cow<'_, str> {
+    const OPEN: &str = "<oai-mem-citation>";
+    const CLOSE: &str = "</oai-mem-citation>";
+    let Some((before, mut body)) = text.split_once(OPEN) else {
+        return text.into();
+    };
+    let mut visible = before.to_owned();
+    while let Some((_, rest)) = body.split_once(CLOSE) {
+        match rest.split_once(OPEN) {
+            Some((between, next)) => {
+                visible.push_str(between);
+                body = next;
+            }
+            None => {
+                visible.push_str(rest);
+                break;
+            }
+        }
+    }
+    visible.into()
+}
+
+/// Some rollouts persist the item id only on the preceding completion event.
+fn completed_agent_anchor(payload: &serde_json::Value) -> Option<(String, String)> {
+    let item = payload.get("item")?;
+    if item.get("type")?.as_str()? != "AgentMessage" {
+        return None;
+    }
+    let [block] = item.get("content")?.as_array()?.as_slice() else {
+        return None;
+    };
+    if block.get("type")?.as_str()? != "Text" {
+        return None;
+    }
+    Some((
+        agent_message_id(item)?,
+        crate::acp::fork::fingerprint_agent_message(block.get("text")?.as_str()?),
+    ))
+}
+
+fn completed_twin_id(anchor: Option<(String, String)>, text: &str) -> Option<String> {
+    let (id, fingerprint) = anchor?;
+    (crate::acp::fork::fingerprint_agent_message(&without_memory_citations(text)) == fingerprint)
+        .then_some(id)
+}
+
+/// An assistant record's text the way Codex builds its item from it: every
+/// text part concatenated as-is (`parse_agent_message`, `finalize_turn_item`).
+/// Not the `"\n"`-joined text [`extract_response_item_message_blocks`]
+/// renders, which would miss the twin of a multi-part reply.
+fn codex_item_text(payload: &serde_json::Value) -> String {
+    match payload.get("content") {
+        Some(serde_json::Value::String(text)) => text.clone(),
+        Some(serde_json::Value::Array(parts)) => parts
+            .iter()
+            .filter(|part| {
+                matches!(
+                    part.get("type").and_then(|t| t.as_str()),
+                    Some("output_text" | "input_text")
+                )
+            })
+            .filter_map(|part| part.get("text")?.as_str())
+            .collect(),
+        _ => String::new(),
+    }
+}
+
+fn agent_message_id(payload: &serde_json::Value) -> Option<String> {
+    payload
+        .get("id")?
+        .as_str()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+}
+
+/// `assistant-<n>` (the agent-message arm) or a promoted record
+/// (`codex-ri-…`), as opposed to `assistant-plan-…`, `assistant-imagegen-…`
+/// and the other synthesized assistant messages.
+fn is_agent_prose_message_id(id: &str) -> bool {
+    id.strip_prefix("assistant-")
+        .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+        || id.starts_with("codex-ri-")
+}
+
 /// Join the thinking cards left touching once the transcript is assembled.
 ///
 /// A reasoning run ends at the first record that is not reasoning, and many of
@@ -5729,6 +6260,29 @@ const PROMOTED_USER_DENY_PREFIXES: &[&str] = &[
     "Warning: apply_patch was requested via exec_command",
 ];
 
+/// Rewrite the result cards of the async question `calls` with the answers
+/// they now hold. A call whose output the file has not reached yet takes them
+/// when it does.
+fn refresh_async_question_results(
+    messages: &mut [UnifiedMessage],
+    async_question_calls: &HashMap<String, AsyncQuestionCall>,
+    calls: &[String],
+) {
+    for id in calls {
+        let Some(call) = async_question_calls.get(id) else {
+            continue;
+        };
+        let Some(message) = call.result_index.and_then(|i| messages.get_mut(i)) else {
+            continue;
+        };
+        for block in &mut message.content {
+            if let ContentBlock::ToolResult { output_preview, .. } = block {
+                *output_preview = Some(call.card_output());
+            }
+        }
+    }
+}
+
 /// Whether a candidate user record is machine context rather than a prompt.
 fn is_promotable_user_text(input: &str) -> bool {
     let trimmed = input.trim();
@@ -5845,6 +6399,7 @@ fn push_plan_review_marker(messages: &mut Vec<UnifiedMessage>, timestamp: DateTi
                 is_error: false,
                 agent_stats: None,
                 images: Vec::new(),
+                exit_code: None,
             },
         ],
         timestamp,
@@ -5865,6 +6420,78 @@ fn turn_collaboration_mode(value: &serde_json::Value) -> Option<&str> {
         .get("collaboration_mode")?
         .get("mode")?
         .as_str()
+}
+
+/// The title a codex thread name reads as: exactly what the live path makes
+/// of the same name, so the session index, a rollout's `thread_name_updated`
+/// and `session_info_update.title` all title the row with one string.
+///
+/// codex stores a name as it was given, only trimmed (`thread/name/set` runs
+/// `codex_core::util::normalize_thread_name`), and codex-acp's `/rename` hands
+/// it the raw argument: `/rename   Fix  the\nflaky\ttest` puts
+/// `"Fix  the\nflaky\ttest"` in `session_index.jsonl`. codex-acp publishes a
+/// name through [`codex_acp_session_title`], on a rename echo and on
+/// `session/load` alike, and the live path then normalizes that through
+/// `acp::session_title::native_title_from_session_info`. Reading the raw name
+/// had every live title and every list or detail load rewrite the row with
+/// the other spelling, and the list path forwards each rewrite to the chat
+/// channels. Taking both steps here agrees by construction.
+fn codex_thread_title(name: &str) -> Option<String> {
+    crate::acp::session_title::native_title_from_session_info(Some(&codex_acp_session_title(name)))
+}
+
+/// Whether a session-index name is one `load_thread_name_index` takes; backup
+/// restore merges the index by the same test (`ExternalSource::indexes`).
+pub(crate) fn is_usable_thread_name(name: &str) -> bool {
+    codex_thread_title(name).is_some()
+}
+
+/// `MAX_SESSION_TITLE_LENGTH` of codex-acp's `SessionTitle.ts`: UTF-16 units,
+/// the ellipsis included.
+const CODEX_ACP_TITLE_MAX_UNITS: usize = 256;
+
+/// codex-acp's `normalizeSessionTitle` (`SessionTitle.ts`), which makes every
+/// `session_info_update.title` it publishes (a `session/list` title is not cut
+/// since 2.2.2, but codeg never lists): whitespace runs collapsed to one
+/// space, then a title over 256 UTF-16 units cut to 255, never through a
+/// surrogate pair, and ended with "…". The cut cannot be left to codeg's own
+/// 100-character one: it comes first, and the archive markers the live path
+/// strips afterwards can pull it inside the characters codeg keeps.
+fn codex_acp_session_title(name: &str) -> String {
+    let collapsed = name
+        .split(is_js_whitespace)
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if collapsed.encode_utf16().count() <= CODEX_ACP_TITLE_MAX_UNITS {
+        return collapsed;
+    }
+    let mut units = 0;
+    let kept: String = collapsed
+        .chars()
+        .take_while(|c| {
+            units += c.len_utf16();
+            units < CODEX_ACP_TITLE_MAX_UNITS
+        })
+        .collect();
+    format!("{}…", kept.trim_end_matches(is_js_whitespace))
+}
+
+/// What a failed turn died of, from the `error` its closing `task_complete`
+/// carries (`{"message", "codex_error_info"}` as of 0.160). Read the way
+/// codex-acp titles the live failure record with the same message
+/// ([`crate::acp::service_error`]), so the line a reload draws is the line the
+/// turn showed live.
+fn codex_turn_failure(payload: &serde_json::Value) -> Option<String> {
+    let error = payload.get("error")?;
+    let message = error
+        .get("message")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| error.as_str())?;
+    Some(
+        crate::acp::service_error::readable_service_error_message(message)
+            .unwrap_or_else(|| message.to_string()),
+    )
 }
 
 fn extract_codex_title_candidate(input: &str, fallback_attached: bool) -> Option<String> {
@@ -6101,7 +6728,7 @@ fn promotion_payload_type<'a>(msg_type: &str, value: &'a serde_json::Value) -> &
         let route_only = payload
             .and_then(|payload| payload.get("message"))
             .and_then(serde_json::Value::as_str)
-            .is_some_and(contains_only_internal_agent_routes);
+            .is_some_and(contains_only_internal_frames);
         let has_images = payload
             .and_then(|payload| payload.get("images"))
             .and_then(serde_json::Value::as_array)
@@ -6146,6 +6773,7 @@ struct PendingPromotedMessage {
     /// something else mutates `messages`, which is why the splice runs first in
     /// the post-loop sequence.
     insert_at: usize,
+    agent_message_id: Option<String>,
     is_user: bool,
     blocks: Vec<ContentBlock>,
     timestamp: DateTime<Utc>,
@@ -6459,6 +7087,7 @@ fn codex_compaction_divider(
             is_error: false,
             agent_stats: None,
             images: Vec::new(),
+            exit_code: None,
         },
     ];
     if let Some(summary) = summary {
@@ -6686,7 +7315,7 @@ fn strip_blocked_resource_mentions(input: &str) -> String {
     let blocked_re = Regex::new(r"@([^\s@]+)\s*\[blocked[^\]]*\]").expect("valid blocked regex");
     let image_tag_re = Regex::new(r"(?i)</?image\s*/?>").expect("valid image tag regex");
     let collapsed_ws_re = Regex::new(r"[ \t]{2,}").expect("valid whitespace regex");
-    let visible = strip_internal_agent_routes(input);
+    let visible = strip_internal_frames(input);
     let text = blocked_re.replace_all(&visible, "").to_string();
     let text = image_tag_re.replace_all(&text, "").to_string();
     let text = collapsed_ws_re.replace_all(&text, " ").to_string();
@@ -6766,7 +7395,7 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
                 duration_ms,
                 model: turn_model,
                 completed_at,
-            agent_message_id: None,
+                agent_message_id: msg.agent_message_id.clone(),
             });
         }
     }
@@ -7719,9 +8348,12 @@ mod tests {
     use super::extract_context_window_used_tokens_from_token_count_info;
     use super::extract_response_item_user_image_blocks;
     use super::extract_turn_usage_from_codex_usage;
+    use super::codex_usage_counters;
     use super::codex_line_ordinal;
     use super::codex_parent_thread_id;
+    use super::codex_truncated_mcp_result_preview;
     use super::completed_mcp_call;
+    use super::decode_json_string_prefix;
     use super::serialize_preview;
     use super::truncate_str;
     use super::BudgetedSink;
@@ -8188,6 +8820,169 @@ mod tests {
             .get_conversation(conversation_id)
             .expect("detail unreadable index");
         assert_eq!(detail.summary.title.as_deref(), Some("Makefile 文件的作用"));
+    }
+
+    /// Thread names paired with the `session_info_update.title` codex-acp
+    /// 2.2.2 publishes for each. The second column is the output of the
+    /// adapter's own `SessionTitle.ts` run in Node, not a hand-written
+    /// expectation: it collapses JavaScript's `\s`, which is not Rust's
+    /// whitespace (U+0085 stays, U+FEFF goes), and cuts at 256 UTF-16 units.
+    fn adapter_published_titles() -> Vec<(String, Option<String>)> {
+        let cut = |kept: String| Some(format!("{kept}…"));
+        vec![
+            (
+                "Fix  the\nflaky\ttest".into(),
+                Some("Fix the flaky test".into()),
+            ),
+            (
+                "  Fix the flaky\n test  ".into(),
+                Some("Fix the flaky test".into()),
+            ),
+            ("a\u{A0}b\u{3000}c".into(), Some("a b c".into())),
+            ("a\u{85}b".into(), Some("a\u{85}b".into())),
+            ("\u{85}a b\u{85}".into(), Some("\u{85}a b\u{85}".into())),
+            ("a\u{FEFF}b".into(), Some("a b".into())),
+            (
+                "\u{2028}Line\u{2029}sep\u{2028}".into(),
+                Some("Line sep".into()),
+            ),
+            (" \n\t ".into(), None),
+            ("x".repeat(300), cut("x".repeat(255))),
+            ("名字".repeat(70), Some("名字".repeat(70))),
+            ("\u{1F600}".repeat(130), cut("\u{1F600}".repeat(127))),
+            (
+                "[archived] Old  thread".into(),
+                Some("[archived] Old thread".into()),
+            ),
+            ("a \u{200B} b".into(), Some("a \u{200B} b".into())),
+            ("a\u{180E}b".into(), Some("a\u{180E}b".into())),
+            ("a\u{0B}b\u{0C}c".into(), Some("a b c".into())),
+            ("a\u{2000}\u{200A}b".into(), Some("a b".into())),
+            (
+                "a\u{1680}b\u{202F}c\u{205F}d".into(),
+                Some("a b c d".into()),
+            ),
+            // The cut comes before codeg strips archive markers, so markers
+            // can pull it inside the 100 characters codeg keeps.
+            (
+                format!("{}{}", "[archived] ".repeat(15), "x".repeat(100)),
+                cut(format!("{}{}", "[archived] ".repeat(15), "x".repeat(90))),
+            ),
+            (
+                format!("{}{}", "[archived] ".repeat(6), "\u{1F600}".repeat(100)),
+                cut(format!(
+                    "{}{}",
+                    "[archived] ".repeat(6),
+                    "\u{1F600}".repeat(94)
+                )),
+            ),
+            (
+                format!("{} b{}", "a".repeat(254), "c".repeat(10)),
+                cut("a".repeat(254)),
+            ),
+            (
+                format!("{}\u{1F600}z", "a".repeat(254)),
+                cut("a".repeat(254)),
+            ),
+            ("a".repeat(256), Some("a".repeat(256))),
+        ]
+    }
+
+    /// The port reproduces the adapter's string exactly, row by row.
+    #[test]
+    fn a_thread_name_is_published_as_codex_acp_publishes_it() {
+        for (name, published) in adapter_published_titles() {
+            assert_eq!(
+                super::codex_acp_session_title(&name),
+                published.unwrap_or_default(),
+                "{name:?}"
+            );
+        }
+    }
+
+    /// The live path titles a codex session by what codex-acp publishes; the
+    /// parser by the name codex stored, which codex only trims. Unless both
+    /// read the same, every live title and every list or detail load rewrites
+    /// the row with the other spelling.
+    #[test]
+    fn a_thread_name_reads_as_its_live_title() {
+        for (name, published) in adapter_published_titles() {
+            assert_eq!(
+                super::codex_thread_title(&name),
+                crate::acp::session_title::native_title_from_session_info(published.as_deref()),
+                "{name:?}"
+            );
+        }
+        assert_eq!(
+            super::codex_thread_title("Fix  the\nflaky\ttest").as_deref(),
+            Some("Fix the flaky test")
+        );
+        assert_eq!(
+            super::codex_thread_title("a\u{85}b").as_deref(),
+            Some("a\u{85}b")
+        );
+        assert_eq!(super::codex_thread_title(" \n\t "), None);
+    }
+
+    /// `/rename   Fix  the\nflaky\ttest   ` sent through codex-acp 2.2.2
+    /// published `Fix the flaky test`, and codex appended this line to its
+    /// index, verbatim from that run.
+    #[test]
+    fn an_indexed_thread_name_reads_as_its_live_title() {
+        let conversation_id = "01a12422-f8e0-72a2-aa87-729556ccabd1";
+        let (_temp_dir, parser, index_path) = write_index_title_fixture(conversation_id);
+        fs::write(
+            &index_path,
+            "{\"id\":\"01a12422-f8e0-72a2-aa87-729556ccabd1\",\"thread_name\":\"Fix  the\\nflaky\\ttest\",\"updated_at\":\"2026-10-10T04:47:19.375134Z\"}\n",
+        )
+        .expect("write index");
+
+        let indexed = parser.load_thread_name_index();
+        assert_eq!(
+            indexed.get(conversation_id).map(String::as_str),
+            Some("Fix the flaky test")
+        );
+        let summaries = parser.list_conversations().expect("list conversations");
+        assert_eq!(summaries[0].title.as_deref(), Some("Fix the flaky test"));
+        let detail = parser
+            .get_conversation(conversation_id)
+            .expect("get conversation");
+        assert_eq!(detail.summary.title.as_deref(), Some("Fix the flaky test"));
+    }
+
+    #[test]
+    fn a_rollout_thread_name_reads_as_its_live_title() {
+        let conversation_id = "rollout-multiline-thread-name";
+        let (_temp_dir, parser, _index_path) = write_index_title_fixture(conversation_id);
+        let rollout_path = parser
+            .base_dir
+            .join("2026")
+            .join("08")
+            .join("15")
+            .join(format!(
+                "rollout-2026-08-15T16-00-00-{conversation_id}.jsonl"
+            ));
+        let mut rollout = fs::read_to_string(&rollout_path).expect("read rollout");
+        rollout.push_str(
+            &serde_json::json!({
+                "timestamp": "2026-08-15T08:00:02Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "thread_name_updated",
+                    "thread_name": "Fix  the\nflaky\ttest"
+                }
+            })
+            .to_string(),
+        );
+        rollout.push('\n');
+        fs::write(&rollout_path, rollout).expect("append rollout title");
+
+        let summaries = parser.list_conversations().expect("list conversations");
+        assert_eq!(summaries[0].title.as_deref(), Some("Fix the flaky test"));
+        let detail = parser
+            .get_conversation(conversation_id)
+            .expect("get conversation");
+        assert_eq!(detail.summary.title.as_deref(), Some("Fix the flaky test"));
     }
 
     #[test]
@@ -8701,6 +9496,88 @@ mod tests {
         assert_eq!(parsed.output_tokens, 16);
         assert_eq!(parsed.cache_creation_input_tokens, 0);
         assert_eq!(parsed.cache_read_input_tokens, 80);
+    }
+
+    #[test]
+    fn a_cache_write_is_split_out_of_codex_input() {
+        // A `last_token_usage` codex wrote for gpt-5.6-terra on codeg's bound
+        // provider: the 19 915 input tokens are 17 152 cache reads, 2 304
+        // cache writes and only 459 fresh ones.
+        let usage = serde_json::json!({
+            "input_tokens": 19_915,
+            "cached_input_tokens": 17_152,
+            "cache_write_input_tokens": 2_304,
+            "output_tokens": 2_095,
+            "reasoning_output_tokens": 0,
+            "total_tokens": 22_010
+        });
+        let parsed = extract_turn_usage_from_codex_usage(&usage).expect("usage");
+        assert_eq!(parsed.input_tokens, 459);
+        assert_eq!(parsed.cache_creation_input_tokens, 2_304);
+        assert_eq!(parsed.cache_read_input_tokens, 17_152);
+        assert_eq!(parsed.output_tokens, 2_095);
+        // The split moves tokens between columns; the total is untouched.
+        assert_eq!(
+            parsed.input_tokens
+                + parsed.cache_creation_input_tokens
+                + parsed.cache_read_input_tokens
+                + parsed.output_tokens,
+            22_010
+        );
+        assert_eq!(codex_usage_counters(&usage), parsed);
+    }
+
+    #[test]
+    fn an_over_reported_codex_cache_write_cannot_inflate_the_input() {
+        let usage = serde_json::json!({
+            "input_tokens": 100,
+            "cached_input_tokens": 80,
+            "cache_write_input_tokens": 50,
+            "output_tokens": 1
+        });
+        let parsed = codex_usage_counters(&usage);
+        assert_eq!(parsed.input_tokens, 0);
+        assert_eq!(parsed.cache_creation_input_tokens, 20);
+        assert_eq!(parsed.cache_read_input_tokens, 80);
+    }
+
+    #[test]
+    fn a_codex_session_with_cache_writes_reports_them_per_turn() {
+        // Two rounds on a provider that writes the prompt cache. The rounds are
+        // differenced off the cumulative counter, so the write column has to
+        // come through that arithmetic too, not only the single-payload path.
+        let content = concat!(
+            "{\"timestamp\":\"2026-03-01T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"cache-write-1\",\"cwd\":\"/tmp/demo\"}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:01Z\",\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5.6-terra\"}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:02Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\",\"message\":\"working\"}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:03Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":19915,\"cached_input_tokens\":17152,\"cache_write_input_tokens\":2304,\"output_tokens\":2095,\"reasoning_output_tokens\":0,\"total_tokens\":22010},\"last_token_usage\":{\"input_tokens\":19915,\"cached_input_tokens\":17152,\"cache_write_input_tokens\":2304,\"output_tokens\":2095,\"reasoning_output_tokens\":0,\"total_tokens\":22010}}}}\n",
+            "{\"timestamp\":\"2026-03-01T10:00:13Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":51592,\"cached_input_tokens\":45056,\"cache_write_input_tokens\":5632,\"output_tokens\":3706,\"reasoning_output_tokens\":0,\"total_tokens\":55298},\"last_token_usage\":{\"input_tokens\":31677,\"cached_input_tokens\":27904,\"cache_write_input_tokens\":3328,\"output_tokens\":1611,\"reasoning_output_tokens\":0,\"total_tokens\":33288}}}}\n"
+        );
+        let detail = parse_rollout("cache-write", content, "cache-write-1");
+
+        assert_eq!(turn_usage_total(&detail), 55_298);
+        let written: u64 = detail
+            .turns
+            .iter()
+            .filter_map(|t| t.usage.as_ref())
+            .map(|u| u.cache_creation_input_tokens)
+            .sum();
+        assert_eq!(written, 5_632);
+        let fresh: u64 = detail
+            .turns
+            .iter()
+            .filter_map(|t| t.usage.as_ref())
+            .map(|u| u.input_tokens)
+            .sum();
+        assert_eq!(fresh, 51_592 - 45_056 - 5_632);
+
+        let total = detail
+            .session_stats
+            .expect("session stats")
+            .total_usage
+            .expect("total usage");
+        assert_eq!(total.cache_creation_input_tokens, 5_632);
+        assert_eq!(total.input_tokens, 51_592 - 45_056 - 5_632);
     }
 
     #[test]
@@ -10547,6 +11424,73 @@ mod tests {
 
     fn rollout_line(ts: &str, msg_type: &str, payload: serde_json::Value) -> String {
         serde_json::json!({ "timestamp": ts, "type": msg_type, "payload": payload }).to_string()
+    }
+
+    #[test]
+    fn codex_mcp_screenshot_history_uses_the_full_function_output() {
+        let ts = "2026-11-11T09:20:00Z";
+        let image_data = "AQID".repeat(20_000);
+        let lines = [
+            rollout_line(
+                ts,
+                "response_item",
+                serde_json::json!({
+                    "type": "function_call",
+                    "namespace": "mcp__cua_repl",
+                    "name": "js",
+                    "arguments": "{}",
+                    "call_id": "screenshot"
+                }),
+            ),
+            rollout_line(
+                ts,
+                "event_msg",
+                serde_json::json!({
+                    "type": "item_completed",
+                    "item": {
+                        "type": "McpToolCall",
+                        "id": "screenshot",
+                        "server": "cua_repl",
+                        "tool": "js",
+                        "status": "completed",
+                        "result": {"content": [{"type": "text", "text": "… truncated …"}]}
+                    }
+                }),
+            ),
+            rollout_line(
+                ts,
+                "response_item",
+                serde_json::json!({
+                    "type": "function_call_output",
+                    "call_id": "screenshot",
+                    "output": [
+                        {"type": "input_text", "text": "Page loaded"},
+                        {"type": "input_image", "image_url": format!("data:image/jpeg;base64,{image_data}")}
+                    ]
+                }),
+            ),
+        ];
+        let detail = parse_rollout("mcp-screenshot", &lines.join("\n"), "session-1");
+        let results: Vec<_> = detail
+            .turns
+            .iter()
+            .flat_map(|turn| &turn.blocks)
+            .filter_map(|block| match block {
+                ContentBlock::ToolResult {
+                    tool_use_id: Some(id),
+                    output_preview,
+                    images,
+                    ..
+                } if id == "screenshot" => Some((output_preview, images)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(results.len(), 1);
+        let (output, images) = results[0];
+        assert_eq!(output.as_deref(), Some("Page loaded\n"));
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].mime_type, "image/jpeg");
+        assert_eq!(images[0].data, image_data);
     }
 
     /// A directory of its own, for the tests that exercise the sibling-file
@@ -12735,6 +13679,31 @@ mod tests {
             .collect()
     }
 
+    /// Each tool result's id and the `(mime_type, data)` of its images.
+    fn tool_result_images(
+        detail: &crate::models::ConversationDetail,
+    ) -> Vec<(String, Vec<(String, String)>)> {
+        detail
+            .turns
+            .iter()
+            .flat_map(|t| t.blocks.iter())
+            .filter_map(|b| match b {
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    images,
+                    ..
+                } => Some((
+                    tool_use_id.clone().unwrap_or_default(),
+                    images
+                        .iter()
+                        .map(|img| (img.mime_type.clone(), img.data.clone()))
+                        .collect(),
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn tool_results(
         detail: &crate::models::ConversationDetail,
     ) -> Vec<(String, Option<String>, bool)> {
@@ -13330,6 +14299,14 @@ mod tests {
             output.as_deref().is_some_and(|text| text.contains("image")),
             "a textless result must still carry its content: {output:?}"
         );
+        // And the picture itself, as the live card shows it.
+        assert_eq!(
+            tool_result_images(&detail),
+            vec![(
+                "exec-shot".to_string(),
+                vec![("image/png".to_string(), "iVBORw0KGgo=".to_string())]
+            )]
+        );
     }
 
     /// The guard that keeps every correlation honest: a script that mixes an
@@ -13496,6 +14473,170 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    /// codex 0.164's stand-in for an MCP result over 64 KiB, shaped like the
+    /// one a live 0.164.0 rollout holds for a 100,000-character text result
+    /// (codex's `truncate_mcp_tool_result`: the result's JSON cut in the middle,
+    /// `structuredContent` dropped, `isError` kept).
+    fn truncated_result(serialized: &str) -> serde_json::Value {
+        serde_json::json!({
+            "content": [{"type": "text", "text": serialized}],
+            "isError": false,
+        })
+    }
+
+    #[test]
+    fn a_truncated_text_result_reads_as_its_text_up_to_the_cut() {
+        let stub = truncated_result(
+            r#"{"content":[{"type":"text","text":"big-head BIGDATA-BIGDATA-B…34680 chars truncated…IGDATA-BIGDATA-"}],"structuredContent":{"size":100000,"status":"ok"},"isError":false}"#,
+        );
+        assert_eq!(
+            codex_truncated_mcp_result_preview(&stub).as_deref(),
+            Some("big-head BIGDATA-BIGDATA-B…34680 chars truncated…")
+        );
+
+        // Escapes are text again, and one the cut left unfinished is dropped.
+        let stub = truncated_result(
+            r#"{"content":[{"type":"text","text":"line 1\nsaid \"hi\" \\ café 😀 \u00…99 chars truncated…ignored"}],"isError":false}"#,
+        );
+        assert_eq!(
+            codex_truncated_mcp_result_preview(&stub).as_deref(),
+            Some("line 1\nsaid \"hi\" \\ café 😀 …99 chars truncated…")
+        );
+
+        // Text blocks are joined the way an MCP result's text always is, up
+        // to the cut, whichever order a server writes a block's keys in.
+        let stub = truncated_result(
+            r#"{"content":[{"text":"first ","type":"text"},{"type":"text","text":"x…10 chars truncated…y"}],"isError":false}"#,
+        );
+        assert_eq!(
+            codex_truncated_mcp_result_preview(&stub).as_deref(),
+            Some("first x…10 chars truncated…")
+        );
+
+        // A cut after the whole `content` array lost none of the text.
+        let stub = truncated_result(
+            r#"{"content":[{"type":"text","text":"all "},{"type":"text","text":"of it"}],"structuredContent":{"blob":"aaa…5 chars truncated…bb"},"isError":false}"#,
+        );
+        assert_eq!(
+            codex_truncated_mcp_result_preview(&stub).as_deref(),
+            Some("all of it")
+        );
+
+        // A block that is not text ends the reading, and the marker says that
+        // something after it was cut.
+        let stub = truncated_result(
+            r#"{"content":[{"type":"text","text":"caption"},{"type":"image","data":"AAAA…9 chars truncated…B","mimeType":"image/png"}],"isError":false}"#,
+        );
+        assert_eq!(
+            codex_truncated_mcp_result_preview(&stub).as_deref(),
+            Some("caption…9 chars truncated…")
+        );
+
+        // Nothing to show as text is never an empty preview.
+        let serialized = r#"{"content":[{"type":"text","text":""},{"type":"image","data":"AAAA…9 chars truncated…B","mimeType":"image/png"}],"isError":false}"#;
+        assert_eq!(
+            codex_truncated_mcp_result_preview(&truncated_result(serialized)).as_deref(),
+            Some(serialized)
+        );
+    }
+
+    #[test]
+    fn a_truncated_result_of_other_blocks_is_capped_like_any_block_result() {
+        let serialized = format!(
+            r#"{{"content":[{{"type":"image","data":"{}…71177 chars truncated…{}","mimeType":"image/png"}}],"isError":false}}"#,
+            "A".repeat(30_000),
+            "B".repeat(30_000)
+        );
+        let preview = codex_truncated_mcp_result_preview(&truncated_result(&serialized))
+            .expect("the stand-in");
+        assert_eq!(preview, truncate_str(&serialized, MCP_RESULT_FALLBACK_CAP));
+        assert!(preview.chars().count() <= MCP_RESULT_FALLBACK_CAP + 3);
+    }
+
+    /// Only codex's stand-in: one text block opening on the result's own
+    /// JSON with codex's marker in it, and no `structuredContent` beside it.
+    #[test]
+    fn a_result_that_only_resembles_the_stand_in_is_left_alone() {
+        let cut = r#"{"content":[{"type":"text","text":"a…5 chars truncated…b"}],"isError":false}"#;
+        for result in [
+            // No marker: a tool that answers with JSON of its own.
+            truncated_result(r#"{"content":[{"type":"text","text":"whole"}],"isError":false}"#),
+            // The stand-in never keeps `structuredContent`.
+            serde_json::json!({
+                "content": [{"type": "text", "text": cut}],
+                "structuredContent": {"ok": true},
+            }),
+            // Nor more than one block.
+            serde_json::json!({
+                "content": [{"type": "text", "text": cut}, {"type": "text", "text": "more"}],
+            }),
+            // Nor a block of another kind.
+            serde_json::json!({"content": [{"type": "resource", "text": cut}]}),
+            // And it opens on the result's `content`.
+            truncated_result(&format!("prefix {cut}")),
+        ] {
+            assert_eq!(
+                codex_truncated_mcp_result_preview(&result),
+                None,
+                "{result}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_cut_json_string_decodes_as_far_as_it_goes() {
+        assert_eq!(
+            decode_json_string_prefix(r#"done" tail"#),
+            ("done".into(), Some(" tail"))
+        );
+        assert_eq!(decode_json_string_prefix("cut \\"), ("cut ".into(), None));
+        assert_eq!(
+            decode_json_string_prefix("cut \\u12"),
+            ("cut ".into(), None)
+        );
+        assert_eq!(
+            decode_json_string_prefix("bad \\x tail"),
+            ("bad ".into(), None)
+        );
+        assert_eq!(
+            decode_json_string_prefix("plus \\u+123"),
+            ("plus ".into(), None)
+        );
+        assert_eq!(
+            decode_json_string_prefix("lone \\ud800 x"),
+            ("lone \u{FFFD} x".into(), None)
+        );
+        assert_eq!(
+            decode_json_string_prefix("pair \\ud83d\\ude00!\""),
+            ("pair 😀!".into(), Some(""))
+        );
+        assert_eq!(
+            decode_json_string_prefix("ctl \\u0001\\b\\f\\r\\t\\/"),
+            ("ctl \u{1}\u{8}\u{c}\r\t/".into(), None)
+        );
+    }
+
+    /// End to end: the semantic MCP call recovered from a code-mode script
+    /// shows the stand-in's text and keeps the outcome codex stated.
+    #[test]
+    fn a_truncated_mcp_call_keeps_its_text_and_its_outcome() {
+        let call = completed_mcp_call(&serde_json::json!({
+            "item": {
+                "type": "McpToolCall", "id": "i", "server": "s", "tool": "t",
+                "status": "completed",
+                "result": truncated_result(
+                    r#"{"content":[{"type":"text","text":"Error: looks bad…9 chars truncated…"}],"isError":false}"#,
+                ),
+            }
+        }))
+        .expect("well-formed item");
+        assert_eq!(
+            call.output_preview.as_deref(),
+            Some("Error: looks bad…9 chars truncated…")
+        );
+        assert!(!call.is_error, "codex kept `isError: false`");
     }
 
     /// The marker search reads a block's own outcome fields and stops there.
@@ -14230,6 +15371,89 @@ mod tests {
         );
 
         let _ = fs::remove_file(path);
+    }
+
+    /// `view_image` returns the picture itself: an `input_image` holding a
+    /// base64 data URL, and no text. That used to land on the card as the whole
+    /// JSON object, base64 included, under a card that showed no picture. The
+    /// call keeps the path it viewed, which is how the card shows the picture.
+    #[test]
+    fn view_image_output_carries_no_base64_text() {
+        let image = serde_json::json!({
+            "type": "input_image",
+            "image_url": "data:image/png;base64,iVBORw0KGgo=",
+            "detail": "high",
+        });
+        let lines = vec![
+            rollout_line(
+                "2026-07-20T08:40:00Z",
+                "event_msg",
+                serde_json::json!({"type": "user_message", "message": "look"}),
+            ),
+            rollout_line(
+                "2026-07-20T08:40:01Z",
+                "response_item",
+                serde_json::json!({
+                    "type": "function_call",
+                    "name": "view_image",
+                    "call_id": "call_v",
+                    "arguments": "{\"path\":\"/tmp/shot.png\",\"detail\":\"high\"}",
+                }),
+            ),
+            rollout_line(
+                "2026-07-20T08:40:02Z",
+                "response_item",
+                serde_json::json!({
+                    "type": "function_call_output",
+                    "call_id": "call_v",
+                    "output": [image],
+                }),
+            ),
+            // Code mode: the script hands the same picture back with `image()`.
+            rollout_line(
+                "2026-07-20T08:40:03Z",
+                "response_item",
+                serde_json::json!({
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "call_s",
+                    "input": "const r = await tools.view_image({path:\"/tmp/other.png\", detail:\"original\"});\nimage(r.image_url);\n",
+                }),
+            ),
+            rollout_line(
+                "2026-07-20T08:40:04Z",
+                "response_item",
+                serde_json::json!({
+                    "type": "custom_tool_call_output",
+                    "call_id": "call_s",
+                    "output": [
+                        {"type": "input_text", "text": "Script completed\nWall time 0.0 seconds\nOutput:\n"},
+                        image,
+                    ],
+                }),
+            ),
+        ];
+        let detail = parse_lines(&lines, "view-image");
+
+        let uses = tool_uses(&detail);
+        for path in ["/tmp/shot.png", "/tmp/other.png"] {
+            assert!(
+                uses.iter().any(|(_, name, input)| name == "view_image"
+                    && input.as_deref().is_some_and(|i| i.contains(path))),
+                "a view_image card for {path}: {uses:?}"
+            );
+        }
+        let results = tool_results(&detail);
+        assert_eq!(results.len(), 2, "{results:?}");
+        for (id, output, is_error) in &results {
+            assert_eq!(output, &None, "{id}");
+            assert!(!is_error, "{id}");
+        }
+        // Not an MCP call: live, codex-acp reports a `view_image` as a link to
+        // its path, so its card must not turn into an image card on reload.
+        for (id, images) in tool_result_images(&detail) {
+            assert!(images.is_empty(), "{id}: {images:?}");
+        }
     }
 
     /// `wait` / `write_stdin` carry a session id, never a command — which is
@@ -15481,6 +16705,153 @@ mod tests {
         )
     }
 
+    /// A turn that FAILED closes on codex's own account of why — the `error`
+    /// of its `task_complete`, the only trace the rollout keeps — as a
+    /// `System` turn holding one `TurnError`: never a reply, so it neither puts
+    /// the error in the model's mouth nor shifts any reply count. A clean close
+    /// and an interrupt (`turn_aborted`) add nothing.
+    #[test]
+    fn a_failed_turn_closes_on_codex_s_account_of_the_failure() {
+        let failure = "unexpected status 521 <unknown status code>: error code: 521";
+        let content = jsonl(&[
+            record(
+                "2026-10-10T00:00:00Z",
+                "session_meta",
+                serde_json::json!({"id": "fail-1", "cwd": "/tmp/demo", "cli_version": "0.160.1"}),
+            ),
+            record(
+                "2026-10-10T00:00:01Z",
+                "event_msg",
+                serde_json::json!({"type": "task_started", "turn_id": "t1"}),
+            ),
+            record(
+                "2026-10-10T00:00:02Z",
+                "response_item",
+                serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}),
+            ),
+            record(
+                "2026-10-10T00:00:03Z",
+                "event_msg",
+                serde_json::json!({"type": "task_complete", "turn_id": "t1", "last_agent_message": null, "error": {"message": failure, "codex_error_info": {"http_connection_failed": {"http_status_code": 521}}}}),
+            ),
+            record(
+                "2026-10-10T00:01:00Z",
+                "event_msg",
+                serde_json::json!({"type": "task_started", "turn_id": "t2"}),
+            ),
+            record(
+                "2026-10-10T00:01:01Z",
+                "response_item",
+                serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "again"}]}),
+            ),
+            assistant_item("2026-10-10T00:01:02Z", "Hi!"),
+            record(
+                "2026-10-10T00:01:03Z",
+                "event_msg",
+                serde_json::json!({"type": "task_complete", "turn_id": "t2", "last_agent_message": "Hi!"}),
+            ),
+            record(
+                "2026-10-10T00:02:00Z",
+                "event_msg",
+                serde_json::json!({"type": "task_started", "turn_id": "t3"}),
+            ),
+            record(
+                "2026-10-10T00:02:01Z",
+                "response_item",
+                serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "stop"}]}),
+            ),
+            record(
+                "2026-10-10T00:02:02Z",
+                "event_msg",
+                serde_json::json!({"type": "turn_aborted", "turn_id": "t3", "reason": "interrupted"}),
+            ),
+        ]);
+        let detail = parse_rollout("failed-turn", &content, "fail-1");
+
+        assert_eq!(
+            turn_texts(&detail),
+            vec![
+                ("user", Some("hi".into())),
+                ("system", None),
+                ("user", Some("again".into())),
+                ("assistant", Some("Hi!".into())),
+                ("user", Some("stop".into())),
+            ]
+        );
+        assert!(
+            matches!(
+                detail.turns[1].blocks.as_slice(),
+                [ContentBlock::TurnError { message }] if message == failure
+            ),
+            "{:?}",
+            detail.turns[1].blocks
+        );
+        // A line, not a message: the count stays the conversation's.
+        assert_eq!(detail.summary.message_count, 4);
+    }
+
+    /// codex keeps a provider's error envelope verbatim as the turn error,
+    /// while codex-acp titles the live failure with its `error.message` only
+    /// (`readableServiceErrorMessage`); the reload must read it the same way
+    /// or the line changes on reopen. Both `task_complete` records are
+    /// verbatim from codex-acp 2.2.2 / codex 0.160.1 failing two turns against
+    /// a provider answering 400, whose live records were titled "The model is
+    /// not supported with this account." and "probe: model does not exist".
+    #[test]
+    fn a_failed_turn_reads_a_provider_error_as_codex_acp_does() {
+        let content = [
+            record(
+                "2026-10-10T07:29:27.200Z",
+                "session_meta",
+                serde_json::json!({"id": "fail-2", "cwd": "/tmp/demo"}),
+            )
+            .to_string(),
+            record(
+                "2026-10-10T07:29:27.210Z",
+                "event_msg",
+                serde_json::json!({"type": "task_started", "turn_id": "01a124b7-7c9d-7592-ba13-fb11c73b79bb"}),
+            )
+            .to_string(),
+            record(
+                "2026-10-10T07:29:27.220Z",
+                "response_item",
+                serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "FAIL400ENV please"}]}),
+            )
+            .to_string(),
+            r#"{"timestamp":"2026-10-10T07:29:27.271Z","ordinal":8,"type":"event_msg","payload":{"type":"task_complete","turn_id":"01a124b7-7c9d-7592-ba13-fb11c73b79bb","last_agent_message":null,"error":{"message":"{\"type\": \"error\", \"status\": 400, \"error\": {\"type\": \"invalid_request_error\", \"message\": \"The model is not supported with this account.\"}}","codex_error_info":"other"},"started_at":1791617367,"completed_at":1791617367,"duration_ms":68}}"#.to_string(),
+            record(
+                "2026-10-10T07:29:29.250Z",
+                "event_msg",
+                serde_json::json!({"type": "task_started", "turn_id": "01a124b7-84d1-7763-bf6d-fef72a40b02c"}),
+            )
+            .to_string(),
+            record(
+                "2026-10-10T07:29:29.260Z",
+                "response_item",
+                serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "FAIL400TEXT please"}]}),
+            )
+            .to_string(),
+            r#"{"timestamp":"2026-10-10T07:29:29.317Z","ordinal":14,"type":"event_msg","payload":{"type":"task_complete","turn_id":"01a124b7-84d1-7763-bf6d-fef72a40b02c","last_agent_message":null,"error":{"message":"probe: model does not exist","codex_error_info":"other"},"started_at":1791617369,"completed_at":1791617369,"duration_ms":16}}"#.to_string(),
+        ]
+        .join("\n");
+        let detail = parse_rollout("failed-envelope", &content, "fail-2");
+        let lines: Vec<&str> = detail
+            .turns
+            .iter()
+            .filter_map(|turn| match turn.blocks.as_slice() {
+                [ContentBlock::TurnError { message }] => Some(message.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            lines,
+            vec![
+                "The model is not supported with this account.",
+                "probe: model does not exist"
+            ]
+        );
+    }
+
     const HANDOFF: &str = "## Task and status\nUser asked to clean /private/tmp.\n\n## Next\n- Confirm before deleting.";
 
     /// A `/compact` as codex 0.152+ writes it: its own turn, whose handoff the
@@ -16257,6 +17628,394 @@ mod tests {
         assert_eq!(
             turn_texts(&detail),
             vec![("assistant", Some("still readable".into()))]
+        );
+    }
+
+    /// Where the adapter's `path.join(cwd, path)` lands on this host: `/` on
+    /// posix, `\` under `path.win32` (a rooted `/w` keeps no drive there).
+    fn host_joined(cwd: &str, path: &str) -> String {
+        if cfg!(windows) {
+            format!("{cwd}/{path}").replace('/', "\\")
+        } else {
+            format!("{cwd}/{path}")
+        }
+    }
+
+    /// A codex 0.165 rollout written through codex-acp 2.4.0, recorded live:
+    /// no `event_msg.user_message` / `agent_message`, only the `response_item`
+    /// records and their `item_completed` twins. The reply cites two files,
+    /// one in code and one escaped; codex-acp streamed it as
+    /// `[docs/policy.txt](<cwd>/docs/policy.txt)` and `[/abs/dir/a b.txt](</abs/dir/a b.txt>)`,
+    /// leaving the other two as written, and a reload reads the same.
+    #[test]
+    fn a_reloaded_reply_shows_its_file_citations_as_the_links_live_showed() {
+        const REPLY: &str = "Read the policy :codex-file-citation{path=\"docs/policy.txt\" purpose=\"source\"} and ::codex-file-citation{path='/abs/dir/a b.txt'}. Code `:codex-file-citation{path=\"in-code.txt\"}` stays, so does \\:codex-file-citation{path=\"escaped.txt\"} here. End with a tick `x`";
+        let content = jsonl(&[
+            record(
+                "2026-10-29T11:20:34.397Z",
+                "session_meta",
+                serde_json::json!({"id": "cite-1", "cwd": "/w/proj", "cli_version": "0.165.0", "source": "vscode", "model_provider": "fake"}),
+            ),
+            record(
+                "2026-10-29T11:20:34.398Z",
+                "event_msg",
+                serde_json::json!({"type": "task_started", "turn_id": "t1"}),
+            ),
+            record(
+                "2026-10-29T11:20:34.418Z",
+                "turn_context",
+                serde_json::json!({"turn_id": "t1", "cwd": "/w/proj", "model": "gpt-5.5"}),
+            ),
+            record(
+                "2026-10-29T11:20:34.422Z",
+                "response_item",
+                serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "CITE please"}]}),
+            ),
+            record(
+                "2026-10-29T11:20:34.423Z",
+                "event_msg",
+                serde_json::json!({"type": "item_completed", "turn_id": "t1", "item": {"type": "UserMessage", "id": "u1", "content": [{"type": "text", "text": "CITE please", "text_elements": []}]}}),
+            ),
+            record(
+                "2026-10-29T11:20:34.761Z",
+                "event_msg",
+                serde_json::json!({"type": "item_completed", "turn_id": "t1", "item": {"type": "AgentMessage", "id": "msg_1", "content": [{"type": "Text", "text": REPLY}]}}),
+            ),
+            assistant_item("2026-10-29T11:20:34.762Z", REPLY),
+            record(
+                "2026-10-29T11:20:34.770Z",
+                "event_msg",
+                serde_json::json!({"type": "task_complete", "turn_id": "t1", "last_agent_message": REPLY}),
+            ),
+        ]);
+        let detail = parse_rollout("cite-live", &content, "cite-1");
+
+        assert_eq!(
+            turn_texts(&detail),
+            vec![
+                ("user", Some("CITE please".into())),
+                (
+                    "assistant",
+                    Some(format!("Read the policy [docs/policy.txt]({}) and [/abs/dir/a b.txt](</abs/dir/a b.txt>). Code `:codex-file-citation{{path=\"in-code.txt\"}}` stays, so does \\:codex-file-citation{{path=\"escaped.txt\"}} here. End with a tick `x`", host_joined("/w/proj", "docs/policy.txt")))
+                ),
+            ]
+        );
+    }
+
+    /// The older shape, an `event_msg.agent_message`, reads the same, against
+    /// the session's own cwd.
+    #[test]
+    fn an_agent_message_event_renders_its_citations_against_the_session_cwd() {
+        let content = jsonl(&[
+            record(
+                "2026-10-29T10:00:00Z",
+                "session_meta",
+                serde_json::json!({"id": "cite-2", "cwd": "/repo"}),
+            ),
+            record(
+                "2026-10-29T10:00:01Z",
+                "event_msg",
+                serde_json::json!({"type": "user_message", "message": "where is it?"}),
+            ),
+            record(
+                "2026-10-29T10:00:02Z",
+                "event_msg",
+                serde_json::json!({"type": "agent_message", "message": "Here: :codex-file-citation{path=\"src/app.ts\" purpose=\"source\"}"}),
+            ),
+        ]);
+        let detail = parse_rollout("cite-event", &content, "cite-2");
+
+        assert_eq!(
+            turn_texts(&detail),
+            vec![
+                ("user", Some("where is it?".into())),
+                (
+                    "assistant",
+                    Some(format!(
+                        "Here: [src/app.ts]({})",
+                        host_joined("/repo", "src/app.ts")
+                    ))
+                ),
+            ]
+        );
+    }
+
+    /// codex-acp rewrites agent messages only. A plan document, and a
+    /// user's own text, keep a directive as written.
+    #[test]
+    fn citations_stay_as_written_outside_agent_prose() {
+        let directive = ":codex-file-citation{path=\"a.txt\"}";
+        let plan = format!("Plan.\n\n<proposed_plan>\n1. Edit {directive}\n</proposed_plan>\n");
+        let content = jsonl(&[
+            record(
+                "2026-10-29T10:00:00Z",
+                "session_meta",
+                serde_json::json!({"id": "cite-3", "cwd": "/repo"}),
+            ),
+            record(
+                "2026-10-29T10:00:01Z",
+                "event_msg",
+                serde_json::json!({"type": "user_message", "message": format!("keep {directive}")}),
+            ),
+            assistant_item("2026-10-29T10:00:02Z", &plan),
+        ]);
+        let detail = parse_rollout("cite-plan", &content, "cite-3");
+        let texts = turn_texts(&detail);
+        assert_eq!(texts[0], ("user", Some(format!("keep {directive}"))));
+        let rendered: String = detail
+            .turns
+            .iter()
+            .flat_map(|turn| turn.blocks.iter())
+            .filter_map(|block| match block {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(rendered.contains(directive), "{rendered}");
+        assert!(!rendered.contains("[a.txt]("), "{rendered}");
+    }
+
+    /// A note steered into a running codex turn (codex-acp 2.4.0 + codex
+    /// 0.165, recorded live): the steered response was cut off before its
+    /// first item, and the note is a user `response_item` with a
+    /// `client_id`-bearing twin, mid-turn. History shows it where it was sent.
+    #[test]
+    fn a_steered_note_reads_as_the_user_message_it_was() {
+        let content = jsonl(&[
+            record(
+                "2026-10-29T11:23:18.966Z",
+                "session_meta",
+                serde_json::json!({"id": "steer-1", "cwd": "/w", "cli_version": "0.165.0"}),
+            ),
+            record(
+                "2026-10-29T11:23:19.106Z",
+                "event_msg",
+                serde_json::json!({"type": "task_started", "turn_id": "t2"}),
+            ),
+            record(
+                "2026-10-29T11:23:19.112Z",
+                "turn_context",
+                serde_json::json!({"turn_id": "t2", "cwd": "/w", "model": "gpt-5.5"}),
+            ),
+            record(
+                "2026-10-29T11:23:19.114Z",
+                "response_item",
+                serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "SLOW:5 first"}]}),
+            ),
+            record(
+                "2026-10-29T11:23:19.115Z",
+                "event_msg",
+                serde_json::json!({"type": "item_completed", "turn_id": "t2", "item": {"type": "UserMessage", "id": "u2", "content": [{"type": "text", "text": "SLOW:5 first", "text_elements": []}]}}),
+            ),
+            token_count("2026-10-29T11:23:19.130Z", 1000, 10),
+            record(
+                "2026-10-29T11:23:19.133Z",
+                "response_item",
+                serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "PLAIN steered note"}]}),
+            ),
+            record(
+                "2026-10-29T11:23:19.134Z",
+                "event_msg",
+                serde_json::json!({"type": "item_completed", "turn_id": "t2", "item": {"type": "UserMessage", "id": "u3", "client_id": "aeaeb2f0-d3cf-4188-b659-ae30ef7bd7f7", "content": [{"type": "text", "text": "PLAIN steered note", "text_elements": []}]}}),
+            ),
+            record(
+                "2026-10-29T11:23:19.144Z",
+                "event_msg",
+                serde_json::json!({"type": "item_completed", "turn_id": "t2", "item": {"type": "AgentMessage", "id": "msg_3", "content": [{"type": "Text", "text": "Plain answer."}]}}),
+            ),
+            assistant_item("2026-10-29T11:23:19.145Z", "Plain answer."),
+            token_count("2026-10-29T11:23:19.148Z", 2000, 20),
+            record(
+                "2026-10-29T11:23:19.168Z",
+                "event_msg",
+                serde_json::json!({"type": "task_complete", "turn_id": "t2", "last_agent_message": "Plain answer."}),
+            ),
+        ]);
+        let detail = parse_rollout("steered", &content, "steer-1");
+
+        assert_eq!(
+            turn_texts(&detail),
+            vec![
+                ("user", Some("SLOW:5 first".into())),
+                ("user", Some("PLAIN steered note".into())),
+                ("assistant", Some("Plain answer.".into())),
+            ]
+        );
+    }
+
+    /// codex 0.166's `request_user_input_async` through codex-acp 2.6.0,
+    /// recorded live (GPT-6.1 Sol): the call, codex's async agent message, the
+    /// `{"accepted":true}` output, then the answer the adapter steered into the
+    /// running turn as a reply envelope. History shows the answered-question
+    /// card live codeg showed, and no user bubble of raw envelope JSON.
+    #[test]
+    fn an_async_question_and_its_reply_read_as_one_answered_card() {
+        let envelope = "<send_user_message_question_reply>\n[{\"answer\":\"Staging\\n\\nprobe note\",\"question\":\"Which environment should I deploy to?\",\"questionItemId\":\"[\\\"request_user_input_async\\\",\\\"call_1\\\",0]\"}]\n</send_user_message_question_reply>";
+        let content = jsonl(&[
+            record(
+                "2026-11-09T12:41:40.770Z",
+                "session_meta",
+                serde_json::json!({"id": "ask-1", "cwd": "/w", "cli_version": "0.166.0", "model_provider": "fake"}),
+            ),
+            record(
+                "2026-11-09T12:41:40.771Z",
+                "event_msg",
+                serde_json::json!({"type": "task_started", "turn_id": "t1"}),
+            ),
+            record(
+                "2026-11-09T12:41:40.776Z",
+                "response_item",
+                serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "ASKASYNC please"}],
+                    "internal_chat_message_metadata_passthrough": {"turn_id": "t1", "content_item_kinds": ["user.text"]}}),
+            ),
+            record(
+                "2026-11-09T12:41:40.776Z",
+                "event_msg",
+                serde_json::json!({"type": "item_completed", "turn_id": "t1", "item": {"type": "UserMessage", "id": "u1", "content": [{"type": "text", "text": "ASKASYNC please", "text_elements": []}]}}),
+            ),
+            record(
+                "2026-11-09T12:41:40.786Z",
+                "response_item",
+                serde_json::json!({"type": "function_call", "id": "fc_1", "name": "request_user_input_async",
+                    "arguments": "{\"questions\": [{\"title\": \"Which environment should I deploy to?\", \"options\": [\"Staging\", \"Production\"]}]}",
+                    "call_id": "call_1"}),
+            ),
+            record(
+                "2026-11-09T12:41:40.787Z",
+                "event_msg",
+                serde_json::json!({"type": "item_completed", "turn_id": "t1", "item": {"type": "AgentMessage", "id": "call_1",
+                    "content": [{"type": "Text", "text": "Which environment should I deploy to?\n- Staging\n- Production"}],
+                    "phase": "final_answer", "delivery": "async",
+                    "questions": [{"title": "Which environment should I deploy to?", "options": ["Staging", "Production"]}]}}),
+            ),
+            record(
+                "2026-11-09T12:41:40.789Z",
+                "response_item",
+                serde_json::json!({"type": "function_call_output", "id": "fco_1", "call_id": "call_1", "output": "{\"accepted\":true}"}),
+            ),
+            token_count("2026-11-09T12:41:40.790Z", 1000, 10),
+            record(
+                "2026-11-09T12:41:41.800Z",
+                "response_item",
+                serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": envelope}]}),
+            ),
+            record(
+                "2026-11-09T12:41:41.801Z",
+                "event_msg",
+                serde_json::json!({"type": "item_completed", "turn_id": "t1", "item": {"type": "UserMessage", "id": "u2", "client_id": "0532430b", "content": [{"type": "text", "text": envelope, "text_elements": []}]}}),
+            ),
+            record(
+                "2026-11-09T12:41:41.825Z",
+                "event_msg",
+                serde_json::json!({"type": "item_completed", "turn_id": "t1", "item": {"type": "AgentMessage", "id": "msg_3", "content": [{"type": "Text", "text": "Deploying to staging."}]}}),
+            ),
+            assistant_item("2026-11-09T12:41:41.826Z", "Deploying to staging."),
+            token_count("2026-11-09T12:41:41.830Z", 2000, 20),
+            record(
+                "2026-11-09T12:41:41.831Z",
+                "event_msg",
+                serde_json::json!({"type": "task_complete", "turn_id": "t1", "last_agent_message": "Deploying to staging."}),
+            ),
+        ]);
+        let detail = parse_rollout("async-question", &content, "ask-1");
+
+        let uses = tool_uses(&detail);
+        assert_eq!(uses.len(), 1, "{uses:?}");
+        assert_eq!(uses[0].0, "call_1");
+        assert_eq!(uses[0].1, "request_user_input");
+        let input: serde_json::Value =
+            serde_json::from_str(uses[0].2.as_deref().expect("input")).unwrap();
+        assert_eq!(
+            input["questions"][0]["question"],
+            "Which environment should I deploy to?"
+        );
+        let results = tool_results(&detail);
+        assert_eq!(results.len(), 1, "{results:?}");
+        let output: serde_json::Value =
+            serde_json::from_str(results[0].1.as_deref().expect("output")).unwrap();
+        assert_eq!(
+            output,
+            serde_json::json!({"answers": {"question_0": {"answers": ["Staging", "user_note: probe note"]}}})
+        );
+        // One user turn: the envelope is folded into the card.
+        let texts = turn_texts(&detail);
+        assert_eq!(
+            texts.iter().filter(|(role, _)| *role == "user").count(),
+            1,
+            "{texts:?}"
+        );
+        assert!(
+            !texts
+                .iter()
+                .any(|(_, text)| text.as_deref().is_some_and(|t| t.contains("send_user_message"))),
+            "{texts:?}"
+        );
+        assert!(texts.contains(&("assistant", Some("Deploying to staging.".into()))));
+    }
+
+    /// codex 0.165 turns `reasoning_effort_override` on: under a ChatGPT
+    /// login (the built-in OpenAI provider), a mid-thread effort change is
+    /// recorded as a `configuration_update` response item after the prompt.
+    /// It is model input, not conversation, so the transcript is the one the
+    /// rollout without it reads as.
+    #[test]
+    fn a_configuration_update_record_changes_nothing_on_screen() {
+        let records = |with_update: bool| {
+            let mut records = vec![
+                record(
+                    "2026-10-29T10:00:00Z",
+                    "session_meta",
+                    serde_json::json!({"id": "cfg-1", "cwd": "/w", "cli_version": "0.165.0"}),
+                ),
+                record(
+                    "2026-10-29T10:00:01Z",
+                    "event_msg",
+                    serde_json::json!({"type": "task_started", "turn_id": "t1"}),
+                ),
+                record(
+                    "2026-10-29T10:00:01.500Z",
+                    "response_item",
+                    serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "think harder"}]}),
+                ),
+            ];
+            if with_update {
+                records.push(record(
+                    "2026-10-29T10:00:01.600Z",
+                    "response_item",
+                    serde_json::json!({"type": "configuration_update", "reasoning": {"effort": "high"}}),
+                ));
+            }
+            records.extend([
+                record("2026-10-29T10:00:02Z", "response_item", serde_json::json!({"type": "reasoning", "id": "rs_1", "summary": [{"type": "summary_text", "text": "**Thinking it over**"}]})),
+                assistant_item("2026-10-29T10:00:03Z", "Done."),
+                token_count("2026-10-29T10:00:03.100Z", 1000, 10),
+                record("2026-10-29T10:00:04Z", "event_msg", serde_json::json!({"type": "task_complete", "turn_id": "t1"})),
+            ]);
+            jsonl(&records)
+        };
+        let with = parse_rollout("cfg-update", &records(true), "cfg-1");
+        let without = parse_rollout("cfg-plain", &records(false), "cfg-1");
+
+        assert_eq!(turn_texts(&with), turn_texts(&without));
+        assert_eq!(
+            serde_json::to_value(&with.turns).unwrap(),
+            serde_json::to_value(&without.turns).unwrap()
+        );
+        assert_eq!(
+            summary_of("cfg-update-sum", &records(true)).message_count,
+            summary_of("cfg-plain-sum", &records(false)).message_count
+        );
+    }
+
+    /// #948: built with an agent's launch env, the parser reads where THAT
+    /// env puts the agent's files, not where codeg's own environment does.
+    #[test]
+    fn for_env_reads_the_home_of_the_launch_env() {
+        let env = crate::parsers::AgentEnv::with_overrides(&[("CODEX_HOME", "/relocated/codex")]);
+        // `session_index.jsonl` is read from the sessions dir's parent.
+        assert_eq!(
+            super::CodexParser::for_env(&env).base_dir,
+            std::path::PathBuf::from("/relocated/codex").join("sessions")
         );
     }
 }

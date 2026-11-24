@@ -168,6 +168,54 @@ export function adoptUnknownAsyncTasks(
 }
 
 /**
+ * The task type of a turn the agent started on its own, with no prompt open —
+ * Claude Code's answer to a finished background task's notification, or a
+ * scheduled wakeup. claude-agent-acp 0.97.0 publishes each one as an async
+ * task (`autonomous-turn-<uuid>`, named "Claude is working", stoppable, no
+ * tool call) because ACP v1 has no other sign that the agent works again after
+ * the prompt's `end_turn`. It ends `completed`/`failed` with the turn, or when
+ * a prompt is folded into it; stopping it interrupts the turn.
+ */
+export const AUTONOMOUS_TURN_TASK_TYPE = "turn"
+
+/** What started an autonomous turn, read from its task's `description`. */
+export type AutonomousTurnCause =
+  /** The adapter could not tell. */
+  | { kind: "unknown" }
+  /** A `ScheduleWakeup` (dynamic `/loop`) wakeup; `at` is the time it was set
+   *  for, when the adapter says. */
+  | { kind: "scheduledWakeup"; at: Date | null }
+  /** Another scheduled task, such as a cron job. */
+  | { kind: "scheduledTask" }
+  /** Claude Code's own words, e.g. the summary of the task notification that
+   *  started the turn ("Background command "…" completed (exit code 0)"). */
+  | { kind: "text"; text: string }
+
+/** claude-agent-acp 0.97.0's fixed descriptions (`autonomousTurnStarted` and
+ *  `scheduledFireCause`). Matched whole, so a reworded one is shown as
+ *  Claude Code's own text rather than misread. */
+const AUTONOMOUS_TURN_NO_CAUSE = "Claude Code started a turn without a prompt."
+const SCHEDULED_WAKEUP = "A scheduled wakeup fired."
+const SCHEDULED_WAKEUP_AT = /^A scheduled wakeup fired \(set for (.+)\)\.$/
+const SCHEDULED_TASK = "A scheduled task fired."
+
+export function autonomousTurnCause(description: string): AutonomousTurnCause {
+  const text = description.trim()
+  if (!text || text === AUTONOMOUS_TURN_NO_CAUSE) return { kind: "unknown" }
+  if (text === SCHEDULED_WAKEUP) return { kind: "scheduledWakeup", at: null }
+  if (text === SCHEDULED_TASK) return { kind: "scheduledTask" }
+  const wakeup = SCHEDULED_WAKEUP_AT.exec(text)
+  if (wakeup) {
+    const at = new Date(wakeup[1])
+    return {
+      kind: "scheduledWakeup",
+      at: Number.isNaN(at.getTime()) ? null : at,
+    }
+  }
+  return { kind: "text", text }
+}
+
+/**
  * What the strip renders: tasks still running or paused.
  *
  * Settled tasks drop off immediately. They are not lost — a task that owned a

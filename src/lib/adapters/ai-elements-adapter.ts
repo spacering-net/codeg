@@ -21,6 +21,7 @@ import {
 import { isGrepNoMatchCommandResult } from "@/lib/grep-no-match"
 import { isBackgroundTaskToolCall } from "@/lib/background-task"
 import { isContextCompactionMeta } from "@/lib/context-compaction"
+import { readKimiMcpOAuth } from "@/lib/kimi-mcp-oauth"
 import { isUnsettledToolCall } from "@/lib/tool-call-lifecycle"
 import { feedbackCheckHasContent } from "@/lib/feedback-check"
 import {
@@ -75,7 +76,7 @@ export type AdaptedToolCallPart = {
    * Forwarded ACP tool-call status for live/promoted turns (`ContentBlock.
    * tool_use.status`); absent/`null` for DB-persisted rows (the Rust `ToolUse`
    * model has no status field). Consumed via `isUnsettledToolCall` by both the
-   * generic tool-group filter (`dropEmptyInFlightToolCalls`) and the specialized
+   * generic empty-call filter (`dropEmptyInFlightToolCalls`) and the specialized
    * lane row-builders (`buildDelegationTaskRows` / `buildBackgroundTaskRows`) to
    * recognise an interrupted arg-less orphan that survives `COMPLETE_TURN`
    * promotion (its `state` flips to `output-available`, but its status stays
@@ -85,27 +86,33 @@ export type AdaptedToolCallPart = {
   /**
    * ACP extensibility metadata forwarded from `ContentBlock.tool_use.meta`.
    * Opaque pass-through, read by narrow accessors rather than interpreted here:
-   * `<DelegatedSubThread>` takes `meta["codeg.delegation"]` as a binding
+   * the delegation row takes `meta["codeg.delegation"]` as a binding
    * fallback when the live DelegationContext entry is missing (page refresh,
-   * late mount), and the command card takes
+   * late mount), every row takes `meta["codeg.approval"]` for the approval
+   * the user gave the call, and the command row takes
    * `meta.jetbrains.air.asyncTasks.backgrounded` (`toolCallMovedToBackground`)
    * to explain a call that will never settle inside the turn.
    */
   meta?: Record<string, unknown> | null
   /**
-   * Live subagent transcript (claude-agent-acp ≥0.63), forwarded from
-   * `ContentBlock.tool_result.agent_transcript`. Present only on a RUNNING
-   * Agent card during streaming — promotion and history never carry it.
+   * The child's mixed timeline: the live transcript
+   * (`ContentBlock.tool_result.agent_transcript`, claude-agent-acp ≥0.63),
+   * which stays attached through settle and promotion, or — once history
+   * reloads from disk — the parsed `agent_stats.timeline`. Its `tool_call`
+   * markers index into `agentStats.tool_calls`.
    */
   agentTranscript?: AgentTranscriptEntry[] | null
+  /** The command's exit code, when the transcript keeps it as a field
+   *  (`ContentBlock.tool_result.exit_code`). */
+  exitCode?: number | null
 }
 
 /**
  * Inline rendering of codex-acp v0.14+ image generation. Mirrors the
  * `ContentBlock::ImageGeneration` data shape. Distinct from regular tool
- * calls so it never folds into a `tool-group` — each image stands alone
- * with its own labeled card. One image per part — multi-image turns are
- * already split into multiple consecutive blocks at the runtime layer.
+ * calls: each image stands alone, drawn in place with its own label. One
+ * image per part — multi-image turns are already split into multiple
+ * consecutive blocks at the runtime layer.
  *
  * `status` lets the renderer distinguish "still generating" from "the call
  * failed without producing an image" when `image` is null. `null` means
@@ -131,8 +138,8 @@ export type AdaptedGoalRunPart = {
 }
 
 /**
- * A plan / todo checklist, rendered by the dedicated `<PlanCard>` instead of
- * the generic tool card (and never as a `reasoning`/thinking block). Produced
+ * A plan / todo checklist, drawn as the timeline's plan row instead of a
+ * generic tool call (and never as a `reasoning`/thinking block). Produced
  * from two converging sources:
  *   - the LIVE synthetic `ContentBlock.plan` (ACP PlanUpdate → reducer), and
  *   - a persisted plan-like `TodoWrite` tool_use (converted in
@@ -170,11 +177,6 @@ export type AdaptedContentPart =
       state: "output-available" | "output-error"
     }
   | { type: "reasoning"; content: string; isStreaming: boolean }
-  | {
-      type: "tool-group"
-      items: AdaptedToolCallPart[]
-      isStreaming: boolean
-    }
   /**
    * A run of consecutive `get_delegation_status` poll cards, merged into one
    * card. When a delegated task runs longer than the 60s status-wait cap, the
@@ -202,6 +204,11 @@ export type AdaptedContentPart =
   | AdaptedGeneratedImagePart
   | AdaptedPlanPart
   | AdaptedProposedPlanPart
+  /**
+   * The turn FAILED, in the agent's own words (`turn_error` block) — drawn as
+   * one muted line closing the round, never as a reply.
+   */
+  | { type: "turn-error"; message: string }
 
 export interface UserResourceDisplay {
   name: string
@@ -1573,6 +1580,9 @@ function adaptContentBlock(
         isStreaming,
       }
 
+    case "turn_error":
+      return { type: "turn-error", message: block.message }
+
     default:
       return null
   }
@@ -1646,93 +1656,10 @@ function adaptImageToolResultParts(
 }
 
 /**
- * Merge adjacent tool-group parts in a parts array into a single tool-group.
- * Used for cross-turn merging when concatenated content from consecutive
- * assistant turns lands two tool-groups next to each other.
- */
-export function mergeAdjacentToolGroups(
-  parts: AdaptedContentPart[]
-): AdaptedContentPart[] {
-  const result: AdaptedContentPart[] = []
-  for (const part of parts) {
-    const last = result[result.length - 1]
-    if (part.type === "tool-group" && last?.type === "tool-group") {
-      const mergedItems = [...last.items, ...part.items]
-      result[result.length - 1] = {
-        type: "tool-group",
-        items: mergedItems,
-        isStreaming: mergedItems.some(
-          (item) =>
-            item.state === "input-streaming" || item.state === "input-available"
-        ),
-      }
-    } else {
-      result.push(part)
-    }
-  }
-  return result
-}
-
-/**
- * Wrap any consecutive run of tool-call parts into a single tool-group.
- * Text, reasoning, tool-result and any other part types break the run.
- * Even a single tool call is wrapped, so the renderer can present a uniform
- * collapsed summary across history.
- */
-export function groupConsecutiveToolCalls(
-  parts: AdaptedContentPart[]
-): AdaptedContentPart[] {
-  const result: AdaptedContentPart[] = []
-  let buffer: AdaptedToolCallPart[] = []
-
-  const flush = () => {
-    if (buffer.length === 0) return
-    const items = buffer
-    buffer = []
-    const isStreaming = items.some(
-      (item) =>
-        item.state === "input-streaming" || item.state === "input-available"
-    )
-    result.push({ type: "tool-group", items, isStreaming })
-  }
-
-  for (const part of parts) {
-    if (
-      part.type === "tool-call" &&
-      !isAgentLikeToolName(part.toolName) &&
-      // Plan-mode tools (EnterPlanMode/ExitPlanMode/switch_mode) render through
-      // a dedicated <PlanModeCard>, so they break the run instead of folding
-      // into a "思考 N 次" tool-group. `part.toolName` is the raw name here;
-      // `isPlanModeToolName` normalizes it internally.
-      !isPlanModeToolName(part.toolName) &&
-      // Claude Code background-task polls (TaskOutput/TaskStop) render through a
-      // dedicated <BackgroundTaskCard> that merges a task's repeated polls, so
-      // they break the run instead of folding into a "执行 N 个任务" tool-group.
-      !isBackgroundTaskToolCall(part) &&
-      // Context-compaction items (codex `_meta.contextCompaction`, and Grok's
-      // synthesized auto_compact card) render through the dedicated subtle
-      // <ContextCompactionCard>, so they break the run and render standalone
-      // instead of being wrapped in a single-item "调用 1 个工具" tool-group.
-      !isContextCompactionMeta(part.meta)
-    ) {
-      buffer.push(part)
-      continue
-    }
-    flush()
-    result.push(part)
-  }
-  flush()
-
-  return result
-}
-
-/**
  * Drop `check_user_feedback` tool-call parts that have nothing to surface — the
  * no-op polls (count: 0), in-flight checks, and unparseable results. Only checks
  * that actually received steering notes (or errored) survive, so a turn full of
- * routine "no new feedback" polls stays clean and the survivors don't fragment
- * a neighbouring tool run into separate groups. Runs before
- * `groupConsecutiveToolCalls` so the dropped parts never reach grouping.
+ * routine "no new feedback" polls stays clean.
  */
 export function dropHiddenFeedbackChecks(
   parts: AdaptedContentPart[]
@@ -1781,9 +1708,9 @@ function toolCallHasInput(input: string | null | undefined): boolean {
  * interrupted and retried (connection error / Claude API retry), the aborted
  * attempt's arg-less `tool_call` — which carries its own id, never gets refined,
  * and is never written to the JSONL transcript — lingers in `liveMessage`. It
- * then inflates the "运行 N 个命令" tool-group count and renders as a blank
- * `bash · 运行中` card. The settled view (rebuilt from the transcript) never
- * contains it, hence the live-only mismatch.
+ * then inflates the reply's command count and draws as a blank running
+ * command. The settled view (rebuilt from the transcript) never contains it,
+ * hence the live-only mismatch.
  *
  * Two render passes see the orphan, so the predicate spans both: (1) during
  * streaming its state is `input-available` (running); (2) after `COMPLETE_TURN`
@@ -1793,13 +1720,11 @@ function toolCallHasInput(input: string | null | undefined): boolean {
  * authoritative detail reload replaces the promoted copy. DB-persisted history
  * carries no forwarded status, so it is exempt.
  *
- * The lane guard mirrors `groupConsecutiveToolCalls`'s fold condition exactly,
- * so this only ever removes parts that would fold into a generic tool-group.
- * Every specialized lane (agent/delegation/ask/feedback/goal via
- * `isAgentLikeToolName`, plan-mode, background-task) is left untouched — those
- * render through their own cards and handle their own empty in-flight polls
- * (see commit 1ddf751b, same disease in the other lanes). Runs before
- * `groupConsecutiveToolCalls`.
+ * Only generic calls are ever removed. Every specialized lane
+ * (agent/delegation/ask/feedback/goal via `isAgentLikeToolName`, plan-mode,
+ * background-task, context compaction) is left untouched — those draw through
+ * their own rows and handle their own empty in-flight polls (see commit
+ * 1ddf751b, same disease in the other lanes).
  */
 export function dropEmptyInFlightToolCalls(
   parts: AdaptedContentPart[]
@@ -1810,7 +1735,13 @@ export function dropEmptyInFlightToolCalls(
     if (
       isAgentLikeToolName(part.toolName) ||
       isPlanModeToolName(part.toolName) ||
-      isBackgroundTaskToolCall(part)
+      isBackgroundTaskToolCall(part) ||
+      // A compaction runs with no arguments until it completes; dropping it
+      // would hide the "compacting" divider for as long as it works.
+      isContextCompactionMeta(part.meta) ||
+      // Kimi's synthetic authenticate tool takes {} and has no result while
+      // awaiting OAuth. Its scoped progress is the content the user needs.
+      readKimiMcpOAuth(part.meta)?.toolName === part.toolName
     ) {
       return true
     }
@@ -1831,13 +1762,11 @@ export function dropEmptyInFlightToolCalls(
 
 /**
  * Wrap each run of consecutive `get_delegation_status` poll parts into a single
- * `delegation-status-group` part. Runs after `groupConsecutiveToolCalls`, which
- * leaves delegation (agent-like) tool calls standalone — so the status polls
- * arrive here as bare `tool-call` parts. Any non-status part (text, reasoning,
- * tool-group, the `delegate_to_agent` / `cancel_delegation` cards, …) breaks
- * the run, so only genuinely consecutive polls collapse. Even a single poll is
- * wrapped, so the merged-card status resolution (a returned "running" poll
- * reads as a settled snapshot, not a spinner) applies uniformly.
+ * `delegation-status-group` part. Any non-status part (text, reasoning, another
+ * tool call, the `delegate_to_agent` / `cancel_delegation` calls, …) breaks the
+ * run, so only genuinely consecutive polls collapse. Even a single poll is
+ * wrapped, so the merged status resolution (a returned "running" poll reads as
+ * a settled snapshot, not a spinner) applies uniformly.
  */
 export function groupConsecutiveDelegationStatus(
   parts: AdaptedContentPart[]
@@ -1869,25 +1798,32 @@ export function groupConsecutiveDelegationStatus(
 }
 
 /**
- * Merge adjacent `delegation-status-group` parts into one. Mirrors
- * `mergeAdjacentToolGroups`: used for cross-turn merging, where each polling
- * round is its own assistant turn and the concatenated parts land two
- * single-poll groups next to each other.
+ * Merge adjacent `delegation-status-group` parts into one. Used for cross-turn
+ * merging, where each polling round is its own assistant turn and the
+ * concatenated parts land two single-poll groups next to each other.
  */
 export function mergeAdjacentDelegationStatusGroups(
   parts: AdaptedContentPart[]
 ): AdaptedContentPart[] {
   const result: AdaptedContentPart[] = []
+  // The group this pass built last, whose polls it may still append to: a
+  // run of single-poll groups (an agent polling in a loop, a poll a turn)
+  // grows one list instead of copying it once per poll.
+  let built: {
+    type: "delegation-status-group"
+    polls: AdaptedToolCallPart[]
+  } | null = null
   for (const part of parts) {
     const last = result[result.length - 1]
     if (
       part.type === "delegation-status-group" &&
       last?.type === "delegation-status-group"
     ) {
-      result[result.length - 1] = {
-        type: "delegation-status-group",
-        polls: [...last.polls, ...part.polls],
+      if (built !== last) {
+        built = { type: "delegation-status-group", polls: [...last.polls] }
+        result[result.length - 1] = built
       }
+      built.polls.push(...part.polls)
     } else {
       result.push(part)
     }
@@ -1898,11 +1834,9 @@ export function mergeAdjacentDelegationStatusGroups(
 /**
  * Wrap each run of consecutive Claude Code background-task polls
  * (`TaskOutput`/`TaskStop`) into a single `background-task-group` part. Mirrors
- * `groupConsecutiveDelegationStatus`: those polls are left standalone by
- * `groupConsecutiveToolCalls` (they break the run), so they arrive here as bare
- * `tool-call` parts. Any other part breaks the run, so only genuinely
- * consecutive polls collapse. Even a single poll is wrapped, so the merged-card
- * status resolution applies uniformly.
+ * `groupConsecutiveDelegationStatus`: any other part breaks the run, so only
+ * genuinely consecutive polls collapse. Even a single poll is wrapped, so the
+ * merged status resolution applies uniformly.
  */
 export function groupConsecutiveBackgroundTasks(
   parts: AdaptedContentPart[]
@@ -1940,16 +1874,22 @@ export function mergeAdjacentBackgroundTaskGroups(
   parts: AdaptedContentPart[]
 ): AdaptedContentPart[] {
   const result: AdaptedContentPart[] = []
+  // As in `mergeAdjacentDelegationStatusGroups`: one list per run of polls.
+  let built: {
+    type: "background-task-group"
+    polls: AdaptedToolCallPart[]
+  } | null = null
   for (const part of parts) {
     const last = result[result.length - 1]
     if (
       part.type === "background-task-group" &&
       last?.type === "background-task-group"
     ) {
-      result[result.length - 1] = {
-        type: "background-task-group",
-        polls: [...last.polls, ...part.polls],
+      if (built !== last) {
+        built = { type: "background-task-group", polls: [...last.polls] }
+        result[result.length - 1] = built
       }
+      built.polls.push(...part.polls)
     } else {
       result.push(part)
     }
@@ -2005,9 +1945,19 @@ function stringProperty(
     : null
 }
 
+/** The key a goal's objective is written under, as it reads in JSON. */
+const OBJECTIVE_KEY = '"objective"'
+
 function goalObjectiveKeyFromTool(part: AdaptedToolCallPart): string | null {
-  const input = parseJsonRecord(part.input)
-  const output = parseJsonRecord(part.output ?? part.errorText)
+  // Every call of a turn passes through here on each update of a streaming
+  // turn: parse only what can name an objective at all.
+  const result = part.output ?? part.errorText
+  const input = part.input?.includes(OBJECTIVE_KEY)
+    ? parseJsonRecord(part.input)
+    : null
+  const output = result?.includes(OBJECTIVE_KEY)
+    ? parseJsonRecord(result)
+    : null
   const outputGoal = nestedRecord(output, "goal")
   const objective =
     stringProperty(outputGoal, "objective") ??
@@ -2049,11 +1999,14 @@ function collectGoalObjectives(parts: AdaptedContentPart[]): string[] {
 function mergeGoalObjectiveHints(
   existing: readonly string[] | undefined,
   incoming: readonly string[]
-): string[] {
+): readonly string[] {
   const merged = new Set(existing ?? [])
   for (const objective of incoming) {
     if (objective.trim().length > 0) merged.add(objective.trim())
   }
+  // Nothing new: the same list, so a turn adapted with it reads as adapted
+  // with the hints it has (see the adapter's cache).
+  if (existing && merged.size === existing.length) return existing
   return Array.from(merged).sort((a, b) => b.length - a.length)
 }
 
@@ -2079,7 +2032,7 @@ function mergeGoalObjectiveHints(
 /**
  * Parts that ARE the turn's answer rather than the process that produced it:
  * prose, the codex Plan-mode document the user has to read, and a generated
- * image. Everything else (tool calls/results/groups, reasoning, todo plans,
+ * image. Everything else (tool calls and results, reasoning, todo plans,
  * delegation and background-task polls) is process and belongs in the capsule.
  *
  * Written as an exhaustive switch rather than a type set on purpose: a new
@@ -2093,11 +2046,11 @@ export function isTurnAnswerPart(part: AdaptedContentPart): boolean {
     case "text":
     case "proposed-plan":
     case "generated-image":
+    case "turn-error":
       return true
     case "reasoning":
     case "tool-call":
     case "tool-result":
-    case "tool-group":
     case "delegation-status-group":
     case "background-task-group":
     case "goal-run":
@@ -2266,6 +2219,112 @@ export function groupGoalRuns(
 
   flushActive()
   return result
+}
+
+/** One merge of a reply split across turns (see `mergeRunParts`). */
+export interface MergedRunParts {
+  parts: AdaptedContentPart[]
+  /**
+   * The merge of every member but the last, kept for the next merge of the
+   * same reply to start from — or null when it cannot be (it holds a goal run,
+   * the one part of the merge that reads across members).
+   */
+  prefix: {
+    /** The members it merges: each one's parts, as they were. */
+    members: readonly AdaptedContentPart[][]
+    parts: AdaptedContentPart[]
+  } | null
+}
+
+/** Merges adjacent poll groups the way the run's merge does, across turns. */
+function mergeAdjacentPollGroups(
+  parts: AdaptedContentPart[]
+): AdaptedContentPart[] {
+  return mergeAdjacentBackgroundTaskGroups(
+    mergeAdjacentDelegationStatusGroups(parts)
+  )
+}
+
+/** Two merged stretches of a run, one after the other: two poll groups of a
+ *  kind that meet across the seam are one group, as in a merge of the whole. */
+function joinMergedParts(
+  head: AdaptedContentPart[],
+  tail: AdaptedContentPart[]
+): AdaptedContentPart[] {
+  if (head.length === 0) return tail
+  if (tail.length === 0) return head
+  const last = head[head.length - 1]!
+  const first = tail[0]!
+  if (
+    (last.type === "delegation-status-group" &&
+      first.type === "delegation-status-group") ||
+    (last.type === "background-task-group" &&
+      first.type === "background-task-group")
+  ) {
+    const joined = {
+      type: last.type,
+      polls: [...last.polls, ...first.polls],
+    } as AdaptedContentPart
+    return [...head.slice(0, -1), joined, ...tail.slice(1)]
+  }
+  return head.concat(tail)
+}
+
+/** A goal's lifecycle: what `groupGoalRuns` reads across the parts. */
+function holdsGoalParts(parts: AdaptedContentPart[]): boolean {
+  return parts.some(
+    (part) =>
+      part.type === "goal-run" || isGoalStartPart(part) || isGoalEndPart(part)
+  )
+}
+
+/**
+ * Merge the parts of a reply the agent split across turns (one per tool round
+ * trip): adjacent poll groups across turns become one, and a goal's lifecycle
+ * becomes its run — `groupGoalRuns(mergeAdjacentPollGroups(all parts))`.
+ *
+ * While a long reply streams, only its last turn or two change from one batch
+ * to the next; merging every turn's parts again on each batch made a batch cost
+ * the whole reply. `previous` — the last merge of the same reply — lets this
+ * start from its merge of the members that did not change, as long as they
+ * hold no goal (a goal run reads across members, so its merge does not extend;
+ * a reply with one merges whole, as before).
+ */
+export function mergeRunParts(
+  members: readonly AdaptedContentPart[][],
+  isStreaming: boolean,
+  previous: MergedRunParts | null
+): MergedRunParts {
+  const count = members.length
+  const kept = previous?.prefix
+  const reuse =
+    kept !== null &&
+    kept !== undefined &&
+    kept.members.length < count &&
+    kept.members.every((parts, index) => parts === members[index])
+  const from = reuse ? kept.members.length : 0
+  let headParts = reuse ? kept.parts : []
+  if (from < count - 1) {
+    const added = members.slice(from, count - 1).flat()
+    if (holdsGoalParts(added)) {
+      return {
+        parts: groupGoalRuns(
+          mergeAdjacentPollGroups(members.flat()),
+          isStreaming
+        ),
+        prefix: null,
+      }
+    }
+    headParts = joinMergedParts(headParts, mergeAdjacentPollGroups(added))
+  }
+  const last = members[count - 1] ?? []
+  return {
+    parts: joinMergedParts(
+      headParts,
+      groupGoalRuns(mergeAdjacentPollGroups(last), isStreaming)
+    ),
+    prefix: { members: members.slice(0, count - 1), parts: headParts },
+  }
 }
 
 /**
@@ -2442,14 +2501,14 @@ export function adaptMessageTurn(
     }
 
     if (block.type === "tool_use") {
-      // Persisted plan-like tool calls (TodoWrite, *plan*) render as the same
-      // dedicated <PlanCard> the live stream produces, so live and historical
-      // look identical. Gated on `!isStreaming`: while streaming, the plan's
-      // single source of truth is the synthetic `plan` block (ACP PlanUpdate),
-      // so converting a live TodoWrite tool call here would double-render it.
+      // Persisted plan-like tool calls (TodoWrite, *plan*) become the same plan
+      // part the live stream produces, so live and historical look identical.
+      // Gated on `!isStreaming`: while streaming, the plan's single source of
+      // truth is the synthetic `plan` block (ACP PlanUpdate), so converting a
+      // live TodoWrite tool call here would double-render it.
       // Gated on BOTH a plan-like name AND successfully parsed entries so
       // unrelated tools (e.g. "explain") never convert — unparsable input
-      // falls through to the normal tool-card path below.
+      // falls through to the normal tool-call path below.
       const planEntries =
         !isStreaming && isPlanLikeToolName(block.tool_name)
           ? parseTodosFromJson(block.input_preview ?? "")
@@ -2520,8 +2579,16 @@ export function adaptMessageTurn(
               ? matchedResult.output_preview || undefined
               : undefined,
           agentStats: matchedResult.agent_stats ?? undefined,
+          exitCode: matchedResult.exit_code ?? undefined,
           meta: block.meta ?? null,
-          agentTranscript: matchedResult.agent_transcript ?? undefined,
+          // The settled card keeps its interleaved view from whichever source
+          // survives: the live transcript while localTurns still holds it, the
+          // parsed child transcript once history reloads from disk.
+          agentTranscript: matchedResult.agent_transcript?.length
+            ? matchedResult.agent_transcript
+            : matchedResult.agent_stats?.timeline?.length
+              ? matchedResult.agent_stats.timeline
+              : undefined,
         })
       } else {
         // Position-based matching: if this tool_use has no ID, check next block
@@ -2563,8 +2630,14 @@ export function adaptMessageTurn(
                 ? positionalResult.output_preview || undefined
                 : undefined,
             agentStats: positionalResult.agent_stats ?? undefined,
+            exitCode: positionalResult.exit_code ?? undefined,
             meta: block.meta ?? null,
-            agentTranscript: positionalResult.agent_transcript ?? undefined,
+            // Same dual source as the id-matched branch above.
+            agentTranscript: positionalResult.agent_transcript?.length
+              ? positionalResult.agent_transcript
+              : positionalResult.agent_stats?.timeline?.length
+                ? positionalResult.agent_stats.timeline
+                : undefined,
           })
         } else {
           // For live streaming, unmatched tools are still running.
@@ -2637,11 +2710,9 @@ export function adaptMessageTurn(
       ? groupGoalRuns(
           groupConsecutiveBackgroundTasks(
             groupConsecutiveDelegationStatus(
-              groupConsecutiveToolCalls(
-                dropEmptyInFlightToolCalls(
-                  dropHiddenFeedbackChecks(
-                    dropPlanTextDuplicatedByReviewCard(adaptedContent)
-                  )
+              dropEmptyInFlightToolCalls(
+                dropHiddenFeedbackChecks(
+                  dropPlanTextDuplicatedByReviewCard(adaptedContent)
                 )
               )
             )
@@ -2711,15 +2782,46 @@ interface TurnCacheEntry {
   model: string | null | undefined
   completed_at: string | null | undefined
   source_turn_id: string | null | undefined
+  /** Adapted as a turn still being written. */
+  isStreaming: boolean
+  /** Its calls still running as it was adapted (`inProgressKey`). */
+  inProgressKey: string
+  /** The goal objectives it was adapted with — checked only for a turn still
+   *  being written, which picks up the objectives its own earlier copies named
+   *  (see `collectGoalObjectives`). */
+  hints: readonly string[] | undefined
   adapted: AdaptedMessage
+}
+
+/**
+ * Which of a turn's calls `inProgress` holds, as a string: all the adapter reads
+ * of the set, since a call's running state is all it takes from there.
+ */
+function inProgressKey(
+  turn: MessageTurn,
+  inProgress: ReadonlySet<string> | undefined
+): string {
+  if (!inProgress || inProgress.size === 0) return ""
+  let key = ""
+  for (const block of turn.blocks) {
+    if (
+      block.type === "tool_use" &&
+      block.tool_use_id &&
+      inProgress.has(block.tool_use_id)
+    ) {
+      key += `${block.tool_use_id}\u0000`
+    }
+  }
+  return key
 }
 
 export interface MessageTurnAdapter {
   /**
    * Adapt all turns to messages, reusing previously computed `AdaptedMessage`
-   * references for turns whose content hasn't changed. Streaming turns and
-   * turns with in-progress tool calls are never cached so partial state always
-   * re-flows through the adapter.
+   * references for turns whose content hasn't changed. A turn still being
+   * written is reused too, while it is the same object (the live message keeps
+   * the rounds that did not change, see `buildStreamingTurnsFromLiveMessage`)
+   * with the same calls running.
    */
   adapt(
     turns: MessageTurn[],
@@ -2755,7 +2857,7 @@ export interface MessageTurnAdapter {
  */
 export function createMessageTurnAdapter(): MessageTurnAdapter {
   const cache = new Map<string, TurnCacheEntry>()
-  const goalObjectiveHints = new Map<string, string[]>()
+  const goalObjectiveHints = new Map<string, readonly string[]>()
 
   return {
     adapt(turns, text, streamingIndices, inProgressToolCallIdsByIndex) {
@@ -2767,27 +2869,30 @@ export function createMessageTurnAdapter(): MessageTurnAdapter {
         seen.add(turn.id)
         const isStreaming = streamingIndices?.has(i) ?? false
         const inProgress = inProgressToolCallIdsByIndex?.get(i)
-        const cacheable = !isStreaming && !inProgress
+        const live = isStreaming || inProgress !== undefined
+        const running = inProgressKey(turn, inProgress)
+        const hints = goalObjectiveHints.get(turn.id)
         const blocksLen = turn.blocks.length
 
-        if (cacheable) {
-          const cached = cache.get(turn.id)
-          if (
-            cached &&
-            cached.text === text &&
-            cached.blocks === turn.blocks &&
-            cached.blocksLen === blocksLen &&
-            cached.timestamp === turn.timestamp &&
-            cached.role === turn.role &&
-            cached.usage === turn.usage &&
-            cached.duration_ms === turn.duration_ms &&
-            cached.model === turn.model &&
-            cached.completed_at === turn.completed_at &&
-            cached.source_turn_id === turn.source_turn_id
-          ) {
-            out[i] = cached.adapted
-            continue
-          }
+        const cached = cache.get(turn.id)
+        if (
+          cached &&
+          cached.text === text &&
+          cached.blocks === turn.blocks &&
+          cached.blocksLen === blocksLen &&
+          cached.timestamp === turn.timestamp &&
+          cached.role === turn.role &&
+          cached.usage === turn.usage &&
+          cached.duration_ms === turn.duration_ms &&
+          cached.model === turn.model &&
+          cached.completed_at === turn.completed_at &&
+          cached.source_turn_id === turn.source_turn_id &&
+          cached.isStreaming === isStreaming &&
+          cached.inProgressKey === running &&
+          (!live || cached.hints === hints)
+        ) {
+          out[i] = cached.adapted
+          continue
         }
 
         const adapted = adaptMessageTurn(
@@ -2795,7 +2900,7 @@ export function createMessageTurnAdapter(): MessageTurnAdapter {
           text,
           isStreaming,
           inProgress,
-          goalObjectiveHints.get(turn.id)
+          hints
         )
         out[i] = adapted
 
@@ -2803,27 +2908,26 @@ export function createMessageTurnAdapter(): MessageTurnAdapter {
         if (objectives.length > 0) {
           goalObjectiveHints.set(
             turn.id,
-            mergeGoalObjectiveHints(goalObjectiveHints.get(turn.id), objectives)
+            mergeGoalObjectiveHints(hints, objectives)
           )
         }
 
-        if (cacheable) {
-          cache.set(turn.id, {
-            text,
-            blocks: turn.blocks,
-            blocksLen,
-            timestamp: turn.timestamp,
-            role: turn.role,
-            usage: turn.usage,
-            duration_ms: turn.duration_ms,
-            model: turn.model,
-            completed_at: turn.completed_at,
-            source_turn_id: turn.source_turn_id,
-            adapted,
-          })
-        } else {
-          cache.delete(turn.id)
-        }
+        cache.set(turn.id, {
+          text,
+          blocks: turn.blocks,
+          blocksLen,
+          timestamp: turn.timestamp,
+          role: turn.role,
+          usage: turn.usage,
+          duration_ms: turn.duration_ms,
+          model: turn.model,
+          completed_at: turn.completed_at,
+          source_turn_id: turn.source_turn_id,
+          isStreaming,
+          inProgressKey: running,
+          hints,
+          adapted,
+        })
       }
 
       if (cache.size > seen.size) {

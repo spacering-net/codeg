@@ -52,6 +52,8 @@ export interface AppWorkspaceStoreState {
    * group hasn't arrived — would render a half-built sidebar.
    */
   folderGroups: FolderGroupDetail[]
+  /** True only after a successful folder snapshot, so an offline start cannot
+   * mistake an unknown folder list for deleted folders and prune drafts. */
   foldersHydrated: boolean
   foldersLoading: boolean
 
@@ -388,11 +390,12 @@ export const useAppWorkspaceStore = create<AppWorkspaceStoreState>()(
           allFolders: allList,
           folderGroups: groupList,
           branches,
+          foldersHydrated: true,
         })
       } catch (err) {
         console.error("[AppWorkspace] fetchFolders failed:", err)
       } finally {
-        set({ foldersLoading: false, foldersHydrated: true })
+        set({ foldersLoading: false })
       }
     },
 

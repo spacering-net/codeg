@@ -50,6 +50,33 @@ describe("parseCodegReferenceUri", () => {
     })
   })
 
+  it("parses an assistant uri, stripping a leading @ from the label", () => {
+    expect(
+      parseCodegReferenceUri("codeg://assistant/3", "@Code Reviewer")
+    ).toEqual({
+      refType: "assistant",
+      id: "3",
+      label: "Code Reviewer",
+      uri: "codeg://assistant/3",
+      meta: { assistantId: 3 },
+    })
+    expect(parseCodegReferenceUri("codeg://assistant/12", "")?.label).toBe(
+      "#12"
+    )
+  })
+
+  it("takes only the assistant ids the backend routes", () => {
+    for (const uri of [
+      "codeg://assistant/0",
+      "codeg://assistant/03",
+      "codeg://assistant/abc",
+      "codeg://assistant/12345678901",
+      "codeg://assistant/3/extra",
+    ]) {
+      expect(parseCodegReferenceUri(uri, "@x")).toBeNull()
+    }
+  })
+
   it("parses a new-format session uri, recovering the agent type", () => {
     expect(
       parseCodegReferenceUri("codeg://session/codex_abc123", "My chat")
@@ -210,5 +237,22 @@ describe("an embedded reference uri that carries its ref", () => {
       label: "Page screenshot",
       uri,
     })
+  })
+})
+
+it("preserves MiniMax Code agent and session references", () => {
+  expect(
+    parseCodegReferenceUri("codeg://agent/minimax_code", "@MiniMax Code")
+  ).toMatchObject({
+    refType: "agent",
+    label: "MiniMax Code",
+    meta: { agentType: "minimax_code" },
+  })
+  expect(
+    parseCodegReferenceUri("codeg://session/minimax_code_session-123", "")
+  ).toMatchObject({
+    refType: "session",
+    id: "minimax_code_session-123",
+    meta: { agentType: "minimax_code" },
   })
 })

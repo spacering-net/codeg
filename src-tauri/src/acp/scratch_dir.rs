@@ -21,8 +21,29 @@
 //!
 //! macOS is the same bug two orders of magnitude smaller: that build is not
 //! PyInstaller, but it still drops ~172 KB of read-only resource files into
-//! `TMPDIR` per launch and still leaks them when killed. So the isolation is
-//! applied to every agent launch on every platform rather than special-cased.
+//! `TMPDIR` per launch and still leaks them when killed. So off Windows the
+//! isolation is applied to every agent launch rather than special-cased.
+//!
+//! # Why Windows isolates only the agents that need it
+//!
+//! On Windows `TMP` does not stay inside the process tree that was given it.
+//! Git for Windows' default `/etc/fstab` mounts `/tmp` as `usertemp`, which the
+//! MSYS2 runtime resolves with `GetTempPathW` in whichever MSYS process of the
+//! user starts FIRST, then keeps in per-user shared memory until the last one
+//! exits. An agent that runs shell commands itself starts them with its own
+//! `TMP`, so whenever one of them was the user's first MSYS process, the launch
+//! directory became `/tmp` for every MSYS program the user ran — other
+//! sessions' shells and the user's own Git Bash included — and pointed at
+//! nothing once that launch was reclaimed, for as long as any MSYS process
+//! lived (#1025: `bash.exe: warning: could not find /tmp, please create!` on
+//! every command, and what had been written to `/tmp` deleted with the launch).
+//!
+//! Every agent paid that, and only one that unpacks itself into the temp
+//! directory gained anything, so on Windows [`isolates`] keeps the redirect for
+//! those alone ([`unpacks_into_temp_on_windows`]). For them it is still the only
+//! lever there is: the bootloader and MSYS read the same `GetTempPathW`, so such
+//! a session whose tree starts the user's first MSYS process still lends `/tmp`
+//! its launch directory.
 //!
 //! # Invariants
 //!
@@ -46,6 +67,8 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
+
+use crate::models::agent::AgentType;
 
 /// Directory under the temp root that codeg owns outright. Every sweep is
 /// confined to this subtree, which is what makes it safe to delete without
@@ -144,6 +167,81 @@ pub fn isolation_enabled() -> bool {
     )
 }
 
+/// Whether a launch of `agent` gets a scratch directory: never with
+/// [`ISOLATION_ENV`] off, always off Windows, and on Windows only for an agent
+/// that unpacks itself into the temp directory — the module docs say what a
+/// per-launch `TMP` costs everyone else there.
+fn isolates(agent: AgentType) -> bool {
+    isolation_enabled() && isolates_on(cfg!(windows), agent)
+}
+
+/// [`isolates`] with the platform handed in and the escape hatch left out, so
+/// both platforms' answers are testable on either.
+fn isolates_on(windows: bool, agent: AgentType) -> bool {
+    !windows || unpacks_into_temp_on_windows(agent)
+}
+
+/// Returns true if the command binary matches the Antigravity ACP server executable.
+///
+/// Strips any leading directory path (`/` or `\`), ignores case, and strips an optional
+/// `.exe` extension before checking if the file stem equals `agy_acp_server`.
+fn is_antigravity_server_cmd(cmd: &str) -> bool {
+    let file_name = cmd.rsplit(['/', '\\']).next().unwrap_or("");
+    let stem = if file_name
+        .get(file_name.len().saturating_sub(4)..)
+        .is_some_and(|ext| ext.eq_ignore_ascii_case(".exe"))
+    {
+        &file_name[..file_name.len() - 4]
+    } else {
+        file_name
+    };
+    stem.eq_ignore_ascii_case("agy_acp_server")
+}
+
+/// Agents whose Windows build unpacks itself into the temp directory on every
+/// launch and cleans up only on a graceful exit: the leak this module exists
+/// for. Antigravity's server is a PyInstaller onefile (its registry entry
+/// records each version checked).
+///
+/// A custom agent that runs the same server binary (a user-registered
+/// Antigravity) leaks the same way, so it is matched by its Windows launch
+/// entry: a binary distribution whose entry (the nested `dir_entry` path, else
+/// `cmd` — on Windows hydration takes `cmd` from the `windows-*` spec) is
+/// named `agy_acp_server`. Any other custom agent keeps the ambient temp dir.
+///
+/// An allowlist rather than a list of agents that run Git Bash, because what a
+/// redirect breaks depends on which programs a session happens to start, not on
+/// the agent: any agent's commands can start Git's `bash.exe`, or `git` itself
+/// can start its `ssh.exe`.
+fn unpacks_into_temp_on_windows(agent: AgentType) -> bool {
+    match agent {
+        AgentType::Antigravity => true,
+        AgentType::Custom(id) => {
+            let Some(meta) = crate::acp::custom_registry::get(id) else {
+                return false;
+            };
+            match &meta.distribution {
+                crate::acp::registry::AgentDistribution::Binary {
+                    platforms,
+                    dir_entry,
+                    cmd,
+                    ..
+                } => {
+                    let has_windows_platform =
+                        platforms.iter().any(|p| p.platform.starts_with("windows-"));
+                    if !has_windows_platform {
+                        return false;
+                    }
+                    let win_cmd = dir_entry.map(|e| e.windows).unwrap_or(*cmd);
+                    is_antigravity_server_cmd(win_cmd)
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
 /// A scratch root is only usable if a child can still bind a unix socket
 /// INSIDE it. Isolation costs `/codeg-acp/<pid>-<hex>` — about 25 bytes — and
 /// [`SUN_PATH_CAP`] is small enough that spending them can push a child that
@@ -169,8 +267,11 @@ fn leaves_room_for_a_child_socket(root: &Path) -> bool {
 /// account to run codeg would own `codeg-acp` and every other account would be
 /// unable to create inside it. [`create`] makes it `0700` so the contents stay
 /// as private as they were in the per-user directory this replaces.
+///
+/// `pub(crate)` so [`crate::acp::delegation::listener`]'s socket tests can
+/// construct a temp directory inside the sweep scope this root belongs to.
 #[cfg(unix)]
-fn short_root() -> PathBuf {
+pub(crate) fn short_root() -> PathBuf {
     PathBuf::from(format!(
         "/tmp/{SCRATCH_NAMESPACE}-{}",
         // Always succeeds; `geteuid` has no failure mode.
@@ -275,6 +376,68 @@ fn sweep_roots() -> Vec<PathBuf> {
         }
     }
     roots
+}
+
+/// Whether `path` sits inside (or equals) a scratch root — i.e. it or an
+/// ancestor may be deleted wholesale as a `<pid>-<8hex>` launch dir.
+/// Consumer: the delegation listener's `default_socket_path`, which must never
+/// place the long-lived broker socket where that can happen.
+///
+/// Three tests, any one enough:
+///
+/// * Under one of THIS process's [`sweep_roots`], as written.
+/// * Under any directory NAMED like a scratch root ([`is_scratch_root_name`]),
+///   wherever it sits. This process is not the only thing that deletes launch
+///   dirs: the codeg that owns one removes it when that launch ends, and every
+///   other codeg on the machine sweeps its own roots at startup. A launch dir
+///   inherited as `TMPDIR` hangs off THAT process's root, which this process's
+///   list need not contain — Linux's default `/tmp/codeg-acp` drops out of it
+///   as soon as the inherited `TMPDIR` pushes [`choose_root`] to the short
+///   root, and a `/private/tmp` spelling of the macOS short root never matches
+///   the literal one. The name test sees both.
+/// * The same name test on the path RESOLVED through its nearest existing
+///   ancestor, because an alias can hide every root component from the two
+///   tests above: a symlink into a launch dir, or a relative `TMPDIR=.` taken
+///   from inside one.
+///
+/// Resolution only ever adds a way in; it never replaces the literal tests.
+/// The roots are compared as written because that is how the sweeps enumerate
+/// them, and on macOS a resolved `/tmp` becomes `/private/tmp`, which would
+/// stop matching — the same convention the listener's own path guards follow.
+///
+/// Unix-only because its consumer is: the Windows `default_socket_path` is a
+/// named pipe and ignores the temp directory, so an unused copy here would be
+/// dead code on that target.
+#[cfg(unix)]
+pub(crate) fn is_inside_sweep_scope(path: &Path) -> bool {
+    let named = |path: &Path| {
+        path.ancestors()
+            .any(|dir| dir.file_name().is_some_and(is_scratch_root_name))
+    };
+    sweep_roots().iter().any(|root| path.starts_with(root))
+        || named(path)
+        || path
+            .ancestors()
+            .find_map(|dir| std::fs::canonicalize(dir).ok())
+            .is_some_and(|resolved| named(&resolved))
+}
+
+/// The last component of every root [`scratch_root`] can pick, under whatever
+/// parent: `codeg-acp` (nested under the ambient temp directory or under
+/// [`ROOT_ENV`]), or [`short_root`]'s `codeg-acp-<euid>` — any euid, since
+/// which account's root it is changes nothing about whether it gets swept.
+#[cfg(unix)]
+fn is_scratch_root_name(name: &std::ffi::OsStr) -> bool {
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    match name.strip_prefix(SCRATCH_NAMESPACE) {
+        Some("") => true,
+        Some(rest) => rest
+            .strip_prefix('-')
+            .is_some_and(|euid| !euid.is_empty() && euid.bytes().all(|b| b.is_ascii_digit())),
+        None => false,
+    }
 }
 
 /// A scratch directory owned by one agent launch.
@@ -384,8 +547,9 @@ async fn remove_with_retries(name: String, path: PathBuf) {
     }
 }
 
-/// Create a scratch directory for one launch, or `None` when isolation is off
-/// or the directory cannot be created.
+/// Create a scratch directory for one launch of `agent`, or `None` when that
+/// launch is not isolated (see [`isolates`]) or the directory cannot be
+/// created.
 ///
 /// `None` is a normal outcome, not an error: the caller leaves
 /// `TMP`/`TEMP`/`TMPDIR` alone and the child uses the system temp directory
@@ -393,8 +557,8 @@ async fn remove_with_retries(name: String, path: PathBuf) {
 /// make a scratch directory — and it WOULD fail if the variables were set to a
 /// path that does not exist, because the PyInstaller bootloader only creates
 /// its own `_MEIxxxxxx` leaf, not the parents above it.
-pub fn create() -> Option<LaunchScratch> {
-    if !isolation_enabled() {
+pub fn create(agent: AgentType) -> Option<LaunchScratch> {
+    if !isolates(agent) {
         return None;
     }
     let root = scratch_root();
@@ -574,7 +738,12 @@ pub(crate) fn apply_to_env(env: &mut std::collections::BTreeMap<String, String>,
 /// Exact set arithmetic, no heuristic: a live launch is in the registry by
 /// construction (invariant 1), so it can never appear in the diff.
 pub fn sweep_own_orphans() {
-    let roots = sweep_roots();
+    sweep_own_orphans_in(&sweep_roots(), &std::env::temp_dir());
+}
+
+/// [`sweep_own_orphans`] over explicit roots, so tests can point it somewhere
+/// other than the machine's real scratch roots.
+fn sweep_own_orphans_in(roots: &[PathBuf], temp_dir: &Path) {
     let our_pid = std::process::id();
 
     // INVARIANT 3: enumerate + diff under the lock...
@@ -596,6 +765,9 @@ pub fn sweep_own_orphans() {
     };
     // ...delete outside it.
     for path in claimed {
+        if holds_temp_dir(&path, temp_dir) {
+            continue;
+        }
         if remove_dir_robust(&path).is_ok() {
             tracing::info!("[ACP][scratch] reclaimed orphan {}", path.display());
         }
@@ -609,8 +781,14 @@ pub fn sweep_own_orphans() {
 /// see [`probe_pid`] for why "the probe failed" must not be read as "the owner
 /// is gone".
 pub fn sweep_foreign_orphans() {
+    sweep_foreign_orphans_in(&sweep_roots(), &std::env::temp_dir());
+}
+
+/// [`sweep_foreign_orphans`] over explicit roots, so tests can point it
+/// somewhere other than the machine's real scratch roots.
+fn sweep_foreign_orphans_in(roots: &[PathBuf], temp_dir: &Path) {
     let our_pid = std::process::id();
-    for entry in sweep_roots()
+    for entry in roots
         .iter()
         .filter_map(|root| std::fs::read_dir(root).ok())
         .flatten()
@@ -629,12 +807,48 @@ pub fn sweep_foreign_orphans() {
             continue;
         }
         let path = entry.path();
+        if holds_temp_dir(&path, temp_dir) {
+            tracing::info!(
+                "[ACP][scratch] leaving orphan {} from dead pid {pid} in place: \
+                 this process's own temp dir {} is inside it",
+                path.display(),
+                temp_dir.display()
+            );
+            continue;
+        }
         if remove_dir_robust(&path).is_ok() {
             tracing::info!(
                 "[ACP][scratch] reclaimed orphan {} from dead pid {pid}",
                 path.display()
             );
         }
+    }
+}
+
+/// Whether reclaiming `dir` would delete `temp_dir`, this process's own temp
+/// directory, along with it.
+///
+/// A codeg launched from inside an agent session inherits that session's
+/// scratch `TMPDIR` — another codeg's `<pid>-<8 hex>` launch dir — and adopts
+/// it as its own `std::env::temp_dir()`. Once that owner is dead it is an
+/// orphan by every rule above, and on macOS it sits under the short root this
+/// process sweeps as well, so the startup sweep would delete the temp directory
+/// the process has just started using: the parent of its broker socket, the
+/// directory a pi catalog query creates, the `TMPDIR` its terminals inherit.
+/// It is adopted, not orphaned. A sweep from a process that does not live in it
+/// reclaims it later.
+///
+/// Literal first, then resolved: the sweeps enumerate roots as written, while
+/// `TMPDIR` may spell the same directory another way (`/private/tmp` for
+/// `/tmp`). Only ever consulted to SKIP a delete, so a resolution that fails or
+/// surprises can cost a reclaim but never widen one.
+fn holds_temp_dir(dir: &Path, temp_dir: &Path) -> bool {
+    if temp_dir.starts_with(dir) {
+        return true;
+    }
+    match (std::fs::canonicalize(dir), std::fs::canonicalize(temp_dir)) {
+        (Ok(dir), Ok(temp_dir)) => temp_dir.starts_with(dir),
+        _ => false,
     }
 }
 
@@ -960,6 +1174,184 @@ mod tests {
             "and the ambient one, which a previous version may have filled"
         );
         assert!(roots.contains(&short_root()), "and the short fallback");
+        // Every root is inside the sweep scope by definition — the scope IS
+        // this list — which is what lets the socket guard refuse them all.
+        for root in &roots {
+            assert!(
+                is_inside_sweep_scope(root),
+                "{} is a sweep root, so it must be in scope",
+                root.display()
+            );
+        }
+    }
+
+    /// The guard the broker socket leans on: exactly the paths a startup sweep
+    /// may delete wholesale, and nothing else. Both sides are built from the
+    /// same helpers the sweeps use, so this encodes the scope rather than this
+    /// machine's current temp layout.
+    #[cfg(unix)]
+    #[test]
+    fn the_sweep_scope_covers_scratch_dirs_and_nothing_else() {
+        // Equal to a root, and a `<pid>-<8 hex>` leaf under one.
+        assert!(is_inside_sweep_scope(&short_root()));
+        assert!(is_inside_sweep_scope(
+            &short_root().join(format!("{}-deadbeef", std::process::id()))
+        ));
+        // The ambient root, wherever this machine's temp_dir points.
+        assert!(is_inside_sweep_scope(
+            &std::env::temp_dir().join(SCRATCH_NAMESPACE).join("4242-deadbeef")
+        ));
+        // A plain per-user temp path is NOT in scope: a socket there must keep
+        // the ordinary placement. Constructed, not read, so it holds on every
+        // machine.
+        assert!(!is_inside_sweep_scope(Path::new(
+            "/var/folders/hl/26lfwjvs4s760g9fm1nk15xm0000gn/T/codeg-delegation-4242.sock"
+        )));
+    }
+
+    /// The scope is every codeg's roots, not just this process's: the launch
+    /// dir a codeg inherits as `TMPDIR` is deleted by its OWNER when that launch
+    /// ends, and swept at startup by any codeg whose root it sits under — and
+    /// the root it hangs off need not be among this process's own.
+    #[cfg(unix)]
+    #[test]
+    fn the_sweep_scope_covers_any_codeg_root_by_name() {
+        for path in [
+            // Linux's default root. A codeg launched with a `TMPDIR` under it
+            // derives the short root instead, so it is not in that list.
+            "/tmp/codeg-acp/4242-deadbeef/codeg-delegation-1.sock",
+            // Another codeg's `CODEG_ACP_TMP_ROOT`, which this process lacks.
+            "/srv/elsewhere/codeg-acp/4242-deadbeef",
+            // The macOS short root as a resolved `/tmp` spells it.
+            "/private/tmp/codeg-acp-501/4242-deadbeef/codeg-delegation-1.sock",
+        ] {
+            assert!(is_inside_sweep_scope(Path::new(path)), "{path} is in scope");
+        }
+        for path in [
+            // The broker socket's own fallback directory.
+            "/tmp/codeg-501/codeg-delegation-1.sock",
+            // Names that merely resemble a root.
+            "/tmp/codeg-acpx/4242-deadbeef/codeg-delegation-1.sock",
+            "/tmp/codeg-acp-/4242-deadbeef/codeg-delegation-1.sock",
+            "/tmp/codeg-acp-50a/4242-deadbeef/codeg-delegation-1.sock",
+        ] {
+            assert!(!is_inside_sweep_scope(Path::new(path)), "{path} is not");
+        }
+    }
+
+    /// A pid that is positively dead with no reuse window: past the largest
+    /// `pid_max` Linux allows (2^22) and macOS's 99999, so no process can ever
+    /// hold it. A spawned-and-reaped child would not do — its number can be
+    /// handed to another process before the sweep gets to probe it.
+    #[cfg(unix)]
+    fn a_dead_pid() -> u32 {
+        let pid = 999_999_999;
+        assert_eq!(probe_pid(pid), PidState::Dead);
+        pid
+    }
+
+    /// A codeg launched from inside an agent session lives in that session's
+    /// launch dir. Its owner being dead makes that dir an orphan by name, but
+    /// reclaiming it would delete this process's own temp directory — the
+    /// startup sweep must leave it, and only it.
+    ///
+    /// The root is enumerated through a symlink while the temp dir is handed
+    /// over by its real path, so the two spellings never match as written —
+    /// the way a `/private/tmp` `TMPDIR` meets the literal `/tmp` short root on
+    /// macOS, but on every platform. Only the resolved comparison can keep it.
+    #[cfg(unix)]
+    #[test]
+    fn a_startup_sweep_leaves_the_launch_dir_this_process_lives_in() {
+        let holder = tempfile::tempdir().expect("tempdir");
+        let root = holder.path().join("root");
+        std::fs::create_dir(&root).expect("create root");
+        let alias = holder.path().join("alias");
+        std::os::unix::fs::symlink(&root, &alias).expect("symlink");
+        let dead = a_dead_pid();
+        let adopted = root.join(format!("{dead}-0000feed"));
+        let orphan = root.join(format!("{dead}-0000dead"));
+        for dir in [&adopted, &orphan] {
+            std::fs::create_dir(dir).expect("create");
+        }
+
+        sweep_foreign_orphans_in(&[alias], &adopted);
+
+        assert!(adopted.exists(), "the dir this process lives in must survive");
+        assert!(
+            !orphan.exists(),
+            "and the guard must not cost a real orphan its reclaim"
+        );
+    }
+
+    /// The scope checked against what a sweep ACTUALLY deletes rather than
+    /// against its own reasoning: everything a sweep takes down must have been
+    /// in scope beforehand, including through an alias that hides the root's
+    /// name. The bystander is the control — it survives and is out of scope, so
+    /// the scope is not simply answering yes.
+    ///
+    /// Rooted in `/tmp` rather than `TMPDIR`: inside a codeg-managed session
+    /// `TMPDIR` is itself a launch dir, which would put the bystander in scope.
+    #[cfg(unix)]
+    #[test]
+    fn everything_a_sweep_deletes_was_in_scope() {
+        let holder = tempfile::tempdir_in("/tmp").expect("tempdir");
+        let dead = a_dead_pid();
+        let mut roots = Vec::new();
+        let mut probes = Vec::new();
+        for root_name in ["codeg-acp", "codeg-acp-4242"] {
+            let root = holder.path().join(root_name);
+            let leaf = root.join(format!("{dead}-deadbeef"));
+            std::fs::create_dir_all(&leaf).expect("create leaf");
+            let socket = leaf.join("codeg-delegation-1.sock");
+            std::fs::write(&socket, b"").expect("write");
+            let alias = holder.path().join(format!("alias-{root_name}"));
+            std::os::unix::fs::symlink(&leaf, &alias).expect("symlink");
+            let bystander = holder.path().join(format!("{root_name}-bystander.sock"));
+            std::fs::write(&bystander, b"").expect("write");
+            probes.extend([socket, alias.join("codeg-delegation-1.sock"), bystander]);
+            roots.push(root);
+        }
+        // Asked BEFORE the sweep, the way the broker asks at startup.
+        let in_scope: Vec<bool> = probes.iter().map(|p| is_inside_sweep_scope(p)).collect();
+
+        sweep_foreign_orphans_in(&roots, Path::new("/nonexistent-temp-dir"));
+
+        for (probe, in_scope) in probes.iter().zip(in_scope) {
+            let deleted = !probe.exists();
+            let is_bystander = probe.to_string_lossy().ends_with("-bystander.sock");
+            assert_eq!(deleted, !is_bystander, "{} deleted: {deleted}", probe.display());
+            assert_eq!(
+                in_scope,
+                deleted,
+                "{} was {}deleted but scoped {in_scope}",
+                probe.display(),
+                if deleted { "" } else { "not " }
+            );
+        }
+    }
+
+    /// The in-session sweep gets the same guard. Only a recycled pid can put
+    /// this process inside a dir named for its own pid, but that sweep runs
+    /// every few minutes for the life of the process.
+    #[test]
+    fn the_in_session_sweep_leaves_the_launch_dir_this_process_lives_in() {
+        let root = tempfile::tempdir().expect("tempdir");
+        // Never registered, so both are orphans to `sweep_own_orphans`.
+        let adopted = root.path().join(new_dir_name(std::process::id()));
+        let orphan = root.path().join(new_dir_name(std::process::id()));
+        for dir in [&adopted, &orphan] {
+            std::fs::create_dir(dir).expect("create");
+        }
+        let temp_dir = adopted.join("nested");
+        std::fs::create_dir(&temp_dir).expect("create");
+
+        sweep_own_orphans_in(&[root.path().to_path_buf()], &temp_dir);
+
+        assert!(adopted.exists(), "the dir this process lives in must survive");
+        assert!(
+            !orphan.exists(),
+            "and the guard must not cost a real orphan its reclaim"
+        );
     }
 
     #[test]
@@ -988,6 +1380,10 @@ mod tests {
             "123",                 // no suffix at all
             "",                    // empty
             "-deadbeef",           // no pid
+            // The broker socket's own names never match; the danger is the
+            // PARENT directory they sit in going with a sweep.
+            "codeg-delegation-16527.sock",
+            ".stg-16527-f41c5659",
         ] {
             assert_eq!(pid_from_dir_name(name), None, "{name} must not parse");
         }
@@ -1089,6 +1485,46 @@ mod tests {
         }
     }
 
+    /// #1025. On Windows a per-launch `TMP` becomes Git Bash's `/tmp` for the
+    /// user's whole session and dangles once the launch is reclaimed, so there
+    /// only an agent that unpacks itself into temp is given one: a single
+    /// built-in, and no custom agent.
+    #[test]
+    fn on_windows_only_an_agent_that_unpacks_into_temp_is_isolated() {
+        let isolated: Vec<AgentType> = crate::models::agent::BUILTIN_AGENT_TYPES
+            .iter()
+            .copied()
+            .filter(|agent| isolates_on(true, *agent))
+            .collect();
+        assert_eq!(isolated, [AgentType::Antigravity]);
+        assert!(!isolates_on(true, AgentType::Custom("custom-agent")));
+    }
+
+    /// Off Windows `TMPDIR` reaches nothing beyond the launch's own process
+    /// tree, so every agent keeps its scratch directory there.
+    #[test]
+    fn off_windows_every_agent_is_isolated() {
+        for agent in crate::models::agent::BUILTIN_AGENT_TYPES
+            .iter()
+            .copied()
+            .chain([AgentType::Custom("custom-agent")])
+        {
+            assert!(
+                isolates_on(false, agent),
+                "{agent:?} must keep its scratch dir"
+            );
+        }
+    }
+
+    /// Where the rule takes effect: a Windows launch of an agent that does not
+    /// unpack into temp is handed no directory, so its `TMP` reaches the child
+    /// untouched. `create` answers before touching the disk.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_launch_that_is_not_isolated_gets_no_scratch_dir() {
+        assert!(create(AgentType::ClaudeCode).is_none());
+    }
+
     #[test]
     fn apply_to_env_sets_all_three_names() {
         let mut env = std::collections::BTreeMap::new();
@@ -1122,5 +1558,110 @@ mod tests {
 
         assert!(remove_dir_robust(&target).is_ok());
         assert!(!target.exists());
+    }
+
+    #[test]
+    fn matches_antigravity_server_cmd_names() {
+        assert!(is_antigravity_server_cmd("agy_acp_server.exe"));
+        assert!(is_antigravity_server_cmd("./agy_acp_server.exe"));
+        assert!(is_antigravity_server_cmd("bin\\AGY_ACP_SERVER.EXE"));
+        assert!(is_antigravity_server_cmd("dist/agy_acp_server"));
+
+        assert!(!is_antigravity_server_cmd("agy_acp_server_real.exe"));
+        assert!(!is_antigravity_server_cmd("goose.exe"));
+        assert!(!is_antigravity_server_cmd(""));
+        assert!(!is_antigravity_server_cmd("agy_acp_server.exe.bak"));
+    }
+
+    #[test]
+    fn custom_antigravity_agent_is_isolated_on_windows() {
+        use crate::acp::custom_registry::{
+            hydrate, hydrate_test_guard, BinaryPlatformSpec, CustomAgentDef, CustomAgentSpec,
+            CustomDistributionKind, NpxSpec,
+        };
+        use std::collections::BTreeMap;
+
+        fn custom_binary_def(id: &str, win_cmd: &str) -> CustomAgentDef {
+            let mut binary = BTreeMap::new();
+            for platform in [
+                "darwin-aarch64",
+                "darwin-x86_64",
+                "linux-aarch64",
+                "linux-x86_64",
+                "windows-aarch64",
+                "windows-x86_64",
+            ] {
+                binary.insert(
+                    platform.to_string(),
+                    BinaryPlatformSpec {
+                        archive: format!("https://example.com/{id}-{platform}.zip"),
+                        cmd: win_cmd.to_string(),
+                        args: vec![],
+                        env: BTreeMap::new(),
+                        sha256: None,
+                    },
+                );
+            }
+            CustomAgentDef {
+                registry_id: id.to_string(),
+                name: id.to_string(),
+                description: "test custom agent".to_string(),
+                version: "1.0.0".to_string(),
+                distribution_kind: CustomDistributionKind::Binary,
+                spec: CustomAgentSpec {
+                    binary,
+                    ..Default::default()
+                },
+                icon_url: None,
+                skills_shared_store: false,
+                skills_dir: None,
+                source: Default::default(),
+                version_probe: None,
+                supports_mcp: true,
+            }
+        }
+
+        let _guard = hydrate_test_guard();
+        let agy = custom_binary_def("custom-antigravity", "agy_acp_server.exe");
+        // A nested entry is published as `dir_entry` and matched by its
+        // Windows path rather than the bare `cmd`.
+        let nested = custom_binary_def("custom-antigravity-nested", "./bin/agy_acp_server.exe");
+        let other = custom_binary_def("custom-other", "goose.exe");
+        // Only a binary distribution can be the onefile server: an npx package
+        // whose console script happens to share the name is not matched.
+        let npx = CustomAgentDef {
+            registry_id: "custom-antigravity-npx".to_string(),
+            distribution_kind: CustomDistributionKind::Npx,
+            spec: CustomAgentSpec {
+                npx: Some(NpxSpec {
+                    package: "agy-acp-server@1.0.0".to_string(),
+                    args: vec![],
+                    env: BTreeMap::new(),
+                    cmd: Some("agy_acp_server".to_string()),
+                    node_required: None,
+                }),
+                ..Default::default()
+            },
+            ..custom_binary_def("custom-antigravity-npx", "unused")
+        };
+
+        let errors = hydrate(&[agy, nested, other, npx]);
+        assert!(errors.is_empty(), "hydration should succeed: {errors:?}");
+
+        assert!(isolates_on(true, AgentType::Custom("custom-antigravity")));
+        assert!(isolates_on(
+            true,
+            AgentType::Custom("custom-antigravity-nested")
+        ));
+        assert!(!isolates_on(true, AgentType::Custom("custom-other")));
+        assert!(!isolates_on(
+            true,
+            AgentType::Custom("custom-antigravity-npx")
+        ));
+        // Not registered at all: the lookup misses and nothing changes.
+        assert!(!isolates_on(true, AgentType::Custom("custom-unregistered")));
+
+        let cleanup_errors = hydrate(&[]);
+        assert!(cleanup_errors.is_empty());
     }
 }

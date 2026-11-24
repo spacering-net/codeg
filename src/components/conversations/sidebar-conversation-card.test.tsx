@@ -20,6 +20,10 @@ import {
 } from "@/lib/session-attachment-events"
 import type { DbConversationSummary } from "@/lib/types"
 import enMessages from "@/i18n/messages/en.json"
+import {
+  resetAssistantsStore,
+  useAssistantsStore,
+} from "@/stores/assistants-store"
 
 // AgentIcon renders exactly once per card body execution, so counting its
 // renders counts how many cards actually re-rendered (a card that bails out via
@@ -211,6 +215,183 @@ describe("SidebarConversationCard pin action", () => {
     fireEvent.contextMenu(getByText("conv-2"))
     fireEvent.click(getByText("Unpin"))
     expect(onTogglePin).toHaveBeenCalledWith(2, false)
+  })
+})
+
+describe("SidebarConversationCard move to folder", () => {
+  const onMoveToFolder = vi.fn()
+  const onManageConversations = vi.fn()
+  beforeEach(() => {
+    onMoveToFolder.mockClear()
+    onManageConversations.mockClear()
+    resetAppWorkspaceStore()
+    const base = {
+      git_branch: null,
+      default_agent_type: null,
+      last_opened_at: "2026-11-12T00:00:00Z",
+      color: "inherit",
+      parent_id: null,
+      alias: null,
+      group_id: null,
+    } as const
+    useAppWorkspaceStore.setState({
+      folders: [
+        {
+          ...base,
+          id: 1,
+          name: "repo",
+          path: "/w/repo",
+          sort_order: 1,
+          kind: "regular",
+        },
+        {
+          ...base,
+          id: 2,
+          name: "other",
+          path: "/w/other",
+          sort_order: 2,
+          kind: "regular",
+        },
+      ],
+    })
+  })
+
+  function renderCard(c: DbConversationSummary) {
+    return renderWithIntl(
+      <SidebarConversationCard
+        conversation={c}
+        isSelected={false}
+        timeLabel=""
+        onSelect={onSelect}
+        onDoubleClick={onDoubleClick}
+        onRename={onRename}
+        onDelete={onDelete}
+        onStatusChange={onStatusChange}
+        onMoveToFolder={onMoveToFolder}
+        onManageConversations={onManageConversations}
+      />
+    )
+  }
+
+  function openMoveSubmenu() {
+    fireEvent.keyDown(screen.getByText("Move to"), { key: "ArrowRight" })
+  }
+
+  it("lists the other open folders and hands the pick over", async () => {
+    const c = conv(1)
+    const { getByText } = renderCard(c)
+    fireEvent.contextMenu(getByText("conv-1"))
+    openMoveSubmenu()
+    const other = await screen.findByText("other")
+    // The conversation's own folder is no destination.
+    expect(screen.queryByText("repo")).toBeNull()
+    fireEvent.click(other)
+    expect(onMoveToFolder).toHaveBeenCalledWith(c, 2)
+  })
+
+  it("says so when there is no other folder", async () => {
+    useAppWorkspaceStore.setState({
+      folders: useAppWorkspaceStore.getState().folders.slice(0, 1),
+    })
+    const { getByText } = renderCard(conv(1))
+    fireEvent.contextMenu(getByText("conv-1"))
+    openMoveSubmenu()
+    expect(await screen.findByText("No other open folder")).toBeDefined()
+  })
+
+  it("offers the move on a chat conversation", () => {
+    const { getByText } = renderCard({ ...conv(2), kind: "chat" })
+    fireEvent.contextMenu(getByText("conv-2"))
+    expect(screen.getByText("Move to")).toBeDefined()
+  })
+
+  it("does not offer it on a sub-session — it moves with its root", () => {
+    const child: DbConversationSummary = {
+      ...conv(3),
+      kind: "delegate",
+      parent_id: 1,
+    }
+    const { getByText } = renderCard(child)
+    fireEvent.contextMenu(getByText("conv-3"))
+    expect(screen.queryByText("Move to")).toBeNull()
+  })
+
+  it("opens Manage conversations for a folder conversation", () => {
+    const c = conv(4)
+    const { getByText } = renderCard(c)
+    fireEvent.contextMenu(getByText("conv-4"))
+    fireEvent.click(getByText("Manage conversations…"))
+    expect(onManageConversations).toHaveBeenCalledWith(c)
+  })
+
+  it("leaves Manage conversations off a sub-session", () => {
+    const child: DbConversationSummary = {
+      ...conv(6),
+      kind: "delegate",
+      parent_id: 1,
+    }
+    const { getByText } = renderCard(child)
+    fireEvent.contextMenu(getByText("conv-6"))
+    expect(screen.queryByText("Manage conversations…")).toBeNull()
+  })
+
+  it("leaves Manage conversations off a chat — no folder scope names it", () => {
+    const { getByText } = renderCard({ ...conv(5), kind: "chat" })
+    fireEvent.contextMenu(getByText("conv-5"))
+    expect(screen.queryByText("Manage conversations…")).toBeNull()
+  })
+})
+
+describe("SidebarConversationCard command-line badge", () => {
+  function renderCard(c: DbConversationSummary) {
+    return renderWithIntl(
+      <SidebarConversationCard
+        conversation={c}
+        isSelected={false}
+        timeLabel=""
+        onSelect={onSelect}
+        onDoubleClick={onDoubleClick}
+        onRename={onRename}
+        onDelete={onDelete}
+        onStatusChange={onStatusChange}
+      />
+    )
+  }
+
+  it("marks a conversation codeg-cli started, and only that one", () => {
+    const fromCli = renderCard({ ...conv(1), source: "cli" })
+    expect(fromCli.getByTitle("Started from the command line")).toBeTruthy()
+    fromCli.unmount()
+    const fromWindow = renderCard(conv(2))
+    expect(fromWindow.queryByTitle("Started from the command line")).toBeNull()
+    fromWindow.unmount()
+    // A source this build does not know is shown as nothing.
+    const unknown = renderCard({ ...conv(3), source: "future" })
+    expect(unknown.queryByTitle("Started from the command line")).toBeNull()
+  })
+})
+
+describe("SidebarConversationCard running badge", () => {
+  it("turns a span around its icon, never the icon itself", () => {
+    // An SVG element's turn animates on the main thread and lays the page out
+    // every frame, for as long as the conversation runs.
+    const { getByTitle } = renderWithIntl(
+      <SidebarConversationCard
+        conversation={{ ...conv(1), status: "in_progress" }}
+        isSelected={false}
+        timeLabel=""
+        onSelect={onSelect}
+        onDoubleClick={onDoubleClick}
+        onRename={onRename}
+        onDelete={onDelete}
+        onStatusChange={onStatusChange}
+      />
+    )
+    const badge = getByTitle("Running")
+    const turning = badge.querySelector(".animate-spin")
+    expect(turning?.tagName).toBe("SPAN")
+    expect(turning?.querySelector("svg")).not.toBeNull()
+    expect(badge.querySelector("svg.animate-spin")).toBeNull()
   })
 })
 
@@ -643,6 +824,21 @@ describe("SidebarConversationCard hover details bubble", () => {
     expect(screen.queryByText(FOLDER_PATH)).toBeNull()
   })
 
+  it("leaves a removed source worktree to the bubble, with no mark on the row", () => {
+    const origin = "/Users/dev/projects/codeg-feature-x"
+    const { container } = renderCard({ ...conv(1), origin_cwd: origin })
+
+    expect(screen.queryByText("Original working directory")).toBeNull()
+    expect(screen.queryByTitle("Original working directory")).toBeNull()
+
+    fireEvent.pointerEnter(rowOf(container), { pointerType: "mouse" })
+    act(() => {
+      vi.advanceTimersByTime(600)
+    })
+    expect(screen.getByText("Original working directory")).toBeDefined()
+    expect(screen.getByText(origin)).toBeDefined()
+  })
+
   // NOT covered here: touch. Radix's `excludeTouch` drops enter/leave whose
   // `pointerType === "touch"`, so a tap never strands a bubble on screen — but
   // jsdom ships no `PointerEvent`, so every synthetic pointer event arrives as a
@@ -773,5 +969,73 @@ describe("SidebarConversationCard branch chip", () => {
 
     setBranchTag(false, "#1a7f37")
     expect(screen.queryByTitle("Branch: main")).toBeNull()
+  })
+})
+
+describe("SidebarConversationCard — assistant sub-sessions", () => {
+  beforeEach(() => {
+    resetAssistantsStore()
+  })
+
+  function renderChild(c: DbConversationSummary) {
+    return renderWithIntl(
+      <SidebarConversationCard
+        conversation={c}
+        isSelected={false}
+        timeLabel=""
+        onSelect={onSelect}
+        onDoubleClick={onDoubleClick}
+        onRename={onRename}
+        onDelete={onDelete}
+        onStatusChange={onStatusChange}
+      />
+    )
+  }
+
+  it("shows the assistant's avatar where the agent icon goes", () => {
+    useAssistantsStore.getState().merge([
+      {
+        id: 3,
+        uid: "u-3",
+        name: "Reviewer",
+        description: "",
+        avatar: { kind: "emoji", emoji: "🦉", color: "teal" },
+        agent_type: "codex",
+        agent_options: { config_values: {} },
+        label_snapshot: { agent: "Codex", mode: null, options: [] },
+        instructions: "",
+        enabled: true,
+        sort_order: 1,
+        revision: 1,
+        created_at: "2026-10-16T00:00:00Z",
+        updated_at: "2026-10-16T00:00:00Z",
+        deleted_at: null,
+      },
+    ])
+    const before = probe.agentIconRenders
+    const { container } = renderChild({
+      ...conv(7),
+      parent_id: 1,
+      assistant_id: 3,
+      assistant_name: "Reviewer",
+    })
+    expect(
+      container.querySelector('[data-slot="assistant-avatar"]')
+    ).toHaveTextContent("🦉")
+    expect(probe.agentIconRenders).toBe(before)
+  })
+
+  it("draws the generic assistant glyph when the store lacks the row", () => {
+    const before = probe.agentIconRenders
+    const { container } = renderChild({
+      ...conv(8),
+      parent_id: 1,
+      assistant_id: 9,
+      assistant_name: "Planner",
+    })
+    const avatar = container.querySelector('[data-slot="assistant-avatar"]')
+    expect(avatar?.querySelector("svg")).not.toBeNull()
+    // Still not the agent's icon: the row ran as an assistant.
+    expect(probe.agentIconRenders).toBe(before)
   })
 })

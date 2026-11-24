@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::{
     extract::{DefaultBodyLimit, Extension},
-    http::{StatusCode, Uri},
+    http::{header, HeaderValue, StatusCode, Uri},
     middleware::{self, Next},
     response::IntoResponse,
     routing::{any, get, post},
@@ -18,18 +18,59 @@ use super::{auth, handlers, ws};
 use crate::app_state::AppState;
 use tracing::Instrument;
 
+/// Token-only authentication: the desktop app's web service and the tests.
 pub fn build_router(
     state: Arc<AppState>,
     token: String,
     static_dir: std::path::PathBuf,
     shutdown_signal: Arc<ShutdownSignal>,
 ) -> Router {
+    build_router_with_proxy_auth(state, token, None, static_dir, shutdown_signal)
+}
+
+/// `proxy_auth` turns on the opt-in proxy-JWT authentication beside the
+/// token (`CODEG_AUTH=proxy-jwt`, standalone `codeg-server` only); `None` is
+/// the same as `build_router`.
+pub fn build_router_with_proxy_auth(
+    state: Arc<AppState>,
+    token: String,
+    proxy_auth: Option<Arc<super::proxy_auth::ProxyJwtAuth>>,
+    static_dir: std::path::PathBuf,
+    shutdown_signal: Arc<ShutdownSignal>,
+) -> Router {
+    build_router_with_srn(
+        state,
+        token,
+        proxy_auth,
+        static_dir,
+        shutdown_signal,
+        crate::srn::web::installed(),
+    )
+}
+
+/// [`build_router_with_proxy_auth`] with Codeg Web's SRN sign-in given
+/// rather than the one this process set up (`srn::web::installed`); `None`
+/// answers "not enabled".
+pub fn build_router_with_srn(
+    state: Arc<AppState>,
+    token: String,
+    proxy_auth: Option<Arc<super::proxy_auth::ProxyJwtAuth>>,
+    static_dir: std::path::PathBuf,
+    shutdown_signal: Arc<ShutdownSignal>,
+    srn_web: Option<Arc<crate::srn::web::SrnWeb>>,
+) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
 
-    let token_for_ws = token.clone();
+    let web_auth = auth::WebAuth {
+        token: token.clone(),
+        proxy: proxy_auth,
+    };
+    let web_auth_for_ws = web_auth.clone();
+    let web_auth_for_srn = web_auth.clone();
+    let token_for_cli_hello = token.clone();
 
     let api = Router::new()
         .route("/health", post(health_check))
@@ -217,6 +258,10 @@ pub fn build_router(
             post(handlers::conversations::get_folder_conversation_turns),
         )
         .route(
+            "/get_folder_conversation_outline",
+            post(handlers::conversations::get_folder_conversation_outline),
+        )
+        .route(
             "/list_opened_tabs",
             post(handlers::conversations::list_opened_tabs),
         )
@@ -269,6 +314,10 @@ pub fn build_router(
         .route(
             "/delete_conversation",
             post(handlers::conversations::delete_conversation),
+        )
+        .route(
+            "/move_conversations",
+            post(handlers::conversations::move_conversations),
         )
         // ─── Folders ───
         .route(
@@ -333,6 +382,26 @@ pub fn build_router(
         .route(
             "/set_folder_group",
             post(handlers::folders::set_folder_group),
+        )
+        .route(
+            "/assistant_list",
+            post(handlers::assistants::assistant_list),
+        )
+        .route(
+            "/assistant_create",
+            post(handlers::assistants::assistant_create),
+        )
+        .route(
+            "/assistant_update",
+            post(handlers::assistants::assistant_update),
+        )
+        .route(
+            "/assistant_delete",
+            post(handlers::assistants::assistant_delete),
+        )
+        .route(
+            "/assistant_reorder",
+            post(handlers::assistants::assistant_reorder),
         )
         .route(
             "/list_conversation_tags",
@@ -474,6 +543,10 @@ pub fn build_router(
             post(handlers::folders::list_directory_entries),
         )
         .route(
+            "/create_directory",
+            post(handlers::folders::create_directory),
+        )
+        .route(
             "/list_directory_with_files",
             post(handlers::folders::list_directory_with_files),
         )
@@ -481,6 +554,18 @@ pub fn build_router(
         .route(
             "/list_workspace_files",
             post(handlers::folders::list_workspace_files),
+        )
+        .route(
+            "/search_workspace_files",
+            post(handlers::folders::search_workspace_files),
+        )
+        .route(
+            "/cancel_workspace_file_search",
+            post(handlers::folders::cancel_workspace_file_search),
+        )
+        .route(
+            "/prepare_workspace_file_search",
+            post(handlers::folders::prepare_workspace_file_search),
         )
         .route(
             "/start_workspace_state_stream",
@@ -610,6 +695,26 @@ pub fn build_router(
             post(handlers::git::git_update_branch),
         )
         .route("/git_commit", post(handlers::git::git_commit))
+        .route(
+            "/git_generate_commit_message",
+            post(handlers::commit_message::git_generate_commit_message),
+        )
+        .route(
+            "/git_generate_commit_message_cancel",
+            post(handlers::commit_message::git_generate_commit_message_cancel),
+        )
+        .route(
+            "/get_commit_message_settings",
+            post(handlers::commit_message::get_commit_message_settings),
+        )
+        .route(
+            "/set_commit_message_settings",
+            post(handlers::commit_message::set_commit_message_settings),
+        )
+        .route(
+            "/delete_commit_message_settings",
+            post(handlers::commit_message::delete_commit_message_settings),
+        )
         .route("/git_fetch_remote", post(handlers::git::git_fetch_remote))
         .route("/git_delete_branch", post(handlers::git::git_delete_branch))
         .route(
@@ -787,6 +892,10 @@ pub fn build_router(
             post(handlers::config_sync::config_sync_apply_rollback),
         )
         .route(
+            "/config_sync_mirror_appearance",
+            post(handlers::config_sync::config_sync_mirror_appearance),
+        )
+        .route(
             "/download_workspace_file",
             post(handlers::workspace_files::download_workspace_file),
         )
@@ -846,6 +955,127 @@ pub fn build_router(
             post(handlers::mcp::mcp_set_server_apps),
         )
         .route("/mcp_remove_server", post(handlers::mcp::mcp_remove_server))
+        // The MCP engine behind the Harness page. The eight routes above
+        // stay one release longer, for older clients of this server.
+        .route("/mcp_inventory", post(handlers::mcp::mcp_inventory))
+        .route("/mcp_apply", post(handlers::mcp::mcp_apply))
+        .route(
+            "/mcp_parse_snippet",
+            post(handlers::mcp::mcp_parse_snippet),
+        )
+        // ─── Harness catalog (Discover) and the SpaceRing image proxy ───
+        .route("/harness_status", post(handlers::harness::harness_status))
+        .route("/harness_config", post(handlers::harness::harness_config))
+        .route("/harness_list", post(handlers::harness::harness_list))
+        .route("/harness_item", post(handlers::harness::harness_item))
+        .route(
+            "/harness_versions",
+            post(handlers::harness::harness_versions),
+        )
+        .route(
+            "/harness_releases",
+            post(handlers::harness::harness_releases),
+        )
+        .route("/harness_readme", post(handlers::harness::harness_readme))
+        .route("/harness_prompt", post(handlers::harness::harness_prompt))
+        .route("/harness_blob", post(handlers::harness::harness_blob))
+        .route("/srn_asset", post(handlers::harness::srn_asset))
+        // ─── Harness MCP installs and the record of what was installed ───
+        .route(
+            "/harness_mcp_plan",
+            post(handlers::harness_mcp::harness_mcp_plan),
+        )
+        .route(
+            "/harness_mcp_install",
+            post(handlers::harness_mcp::harness_mcp_install),
+        )
+        .route(
+            "/harness_installed",
+            post(handlers::harness_mcp::harness_installed),
+        )
+        .route(
+            "/harness_mcp_uninstall",
+            post(handlers::harness_mcp::harness_mcp_uninstall),
+        )
+        // ─── Harness skill installs ───
+        .route(
+            "/harness_skill_plan",
+            post(handlers::harness_skills::harness_skill_plan),
+        )
+        .route(
+            "/harness_skill_install",
+            post(handlers::harness_skills::harness_skill_install),
+        )
+        .route(
+            "/harness_skill_uninstall",
+            post(handlers::harness_skills::harness_skill_uninstall),
+        )
+        // ─── Harness plugin installs, updates, switches and repairs ───
+        .route(
+            "/harness_plugin_plan",
+            post(handlers::harness_plugins::harness_plugin_plan),
+        )
+        .route(
+            "/harness_plugin_install",
+            post(handlers::harness_plugins::harness_plugin_install),
+        )
+        .route(
+            "/harness_plugin_uninstall",
+            post(handlers::harness_plugins::harness_plugin_uninstall),
+        )
+        .route(
+            "/harness_plugin_plan_update",
+            post(handlers::harness_plugins::harness_plugin_plan_update),
+        )
+        .route(
+            "/harness_plugin_update",
+            post(handlers::harness_plugins::harness_plugin_update),
+        )
+        .route(
+            "/harness_plugin_set_host",
+            post(handlers::harness_plugins::harness_plugin_set_host),
+        )
+        .route(
+            "/harness_plugin_set_enabled",
+            post(handlers::harness_plugins::harness_plugin_set_enabled),
+        )
+        .route(
+            "/harness_plugin_repair",
+            post(handlers::harness_plugins::harness_plugin_repair),
+        )
+        .route(
+            "/harness_plugin_hook_trust",
+            post(handlers::harness_plugins::harness_plugin_hook_trust),
+        )
+        // ─── The update check of what was installed from Harness ───
+        .route(
+            "/harness_updates",
+            post(handlers::harness_updates::harness_updates),
+        )
+        .route(
+            "/harness_check_updates",
+            post(handlers::harness_updates::harness_check_updates),
+        )
+        // ─── Skills engine (Harness page: skills and skill packs) ───
+        .route("/skills_inventory", post(handlers::skills::skills_inventory))
+        .route(
+            "/skills_apply_links",
+            post(handlers::skills::skills_apply_links),
+        )
+        .route("/skills_adopt", post(handlers::skills::skills_adopt))
+        .route(
+            "/skills_repair_link",
+            post(handlers::skills::skills_repair_link),
+        )
+        .route("/skills_backups", post(handlers::skills::skills_backups))
+        .route(
+            "/skills_backup_restore",
+            post(handlers::skills::skills_backup_restore),
+        )
+        .route(
+            "/skills_backup_delete",
+            post(handlers::skills::skills_backup_delete),
+        )
         // ─── Version control settings ───
         .route("/detect_git", post(handlers::version_control::detect_git))
         .route(
@@ -879,6 +1109,10 @@ pub fn build_router(
         .route(
             "/validate_gitea_token",
             post(handlers::version_control::validate_gitea_token),
+        )
+        .route(
+            "/validate_cnb_token",
+            post(handlers::version_control::validate_cnb_token),
         )
         .route(
             "/save_account_token",
@@ -955,6 +1189,10 @@ pub fn build_router(
         .route(
             "/acp_set_config_option",
             post(handlers::acp::acp_set_config_option),
+        )
+        .route(
+            "/acp_set_composer_mode",
+            post(handlers::acp::acp_set_composer_mode),
         )
         .route(
             "/acp_goal_control",
@@ -1039,12 +1277,12 @@ pub fn build_router(
             post(handlers::acp::acp_qoder_auth_status),
         )
         .route(
-            "/acp_update_kimi_code_config",
-            post(handlers::acp::acp_update_kimi_code_config),
+            "/acp_update_claude_model_picker",
+            post(handlers::acp::acp_update_claude_model_picker),
         )
         .route(
-            "/acp_fetch_kimi_models",
-            post(handlers::acp::acp_fetch_kimi_models),
+            "/acp_update_kimi_code_config",
+            post(handlers::acp::acp_update_kimi_code_config),
         )
         .route(
             "/acp_update_pi_config",
@@ -1065,6 +1303,14 @@ pub fn build_router(
         .route(
             "/acp_update_deepseek_model_catalog",
             post(handlers::acp::acp_update_deepseek_model_catalog),
+        )
+        .route(
+            "/acp_load_deepseek_provider_routes",
+            post(handlers::acp::acp_load_deepseek_provider_routes),
+        )
+        .route(
+            "/acp_update_deepseek_provider_routes",
+            post(handlers::acp::acp_update_deepseek_provider_routes),
         )
         .route(
             "/acp_validate_pi_command",
@@ -1119,6 +1365,10 @@ pub fn build_router(
             post(handlers::acp::acp_download_agent_binary),
         )
         .route(
+            "/acp_update_system_agent",
+            post(handlers::acp::acp_update_system_agent),
+        )
+        .route(
             "/acp_install_uv_tool",
             post(handlers::acp::acp_install_uv_tool),
         )
@@ -1171,6 +1421,10 @@ pub fn build_router(
             post(handlers::acp::acp_list_agent_skills),
         )
         .route(
+            "/acp_list_agent_runtime_skills",
+            post(handlers::acp::acp_list_agent_runtime_skills),
+        )
+        .route(
             "/acp_read_agent_skill",
             post(handlers::acp::acp_read_agent_skill),
         )
@@ -1195,12 +1449,48 @@ pub fn build_router(
             post(handlers::acp::codex_bundled_catalog),
         )
         .route(
-            "/opencode_install_plugins",
-            post(handlers::acp::opencode_install_plugins),
+            "/opencode_list_integrations",
+            post(handlers::opencode_credentials::opencode_list_integrations),
         )
         .route(
-            "/opencode_uninstall_plugin",
-            post(handlers::acp::opencode_uninstall_plugin),
+            "/opencode_connect_key",
+            post(handlers::opencode_credentials::opencode_connect_key),
+        )
+        .route(
+            "/opencode_disconnect_provider",
+            post(handlers::opencode_credentials::opencode_disconnect_provider),
+        )
+        .route(
+            "/codex_fetch_endpoint_catalog",
+            post(handlers::acp::codex_fetch_endpoint_catalog),
+        )
+        .route(
+            "/codex_catalog_plan_preview",
+            post(handlers::acp::codex_catalog_plan_preview),
+        )
+        .route(
+            "/codex_endpoint_catalog_published",
+            post(handlers::acp::codex_endpoint_catalog_published),
+        )
+        .route(
+            "/codex_endpoint_catalog_cached",
+            post(handlers::acp::codex_endpoint_catalog_cached),
+        )
+        .route(
+            "/codex_endpoint_catalog_status",
+            post(handlers::acp::codex_endpoint_catalog_status),
+        )
+        .route(
+            "/codex_refresh_endpoint_catalog",
+            post(handlers::acp::codex_refresh_endpoint_catalog),
+        )
+        .route(
+            "/opencode_add_plugin",
+            post(handlers::acp::opencode_add_plugin),
+        )
+        .route(
+            "/opencode_remove_plugin",
+            post(handlers::acp::opencode_remove_plugin),
         )
         .route(
             "/codex_request_device_code",
@@ -1213,24 +1503,12 @@ pub fn build_router(
         // ─── Experts ───
         .route("/experts_list", post(handlers::experts::experts_list))
         .route(
-            "/experts_get_install_status",
-            post(handlers::experts::experts_get_install_status),
-        )
-        .route(
             "/experts_list_all_install_statuses",
             post(handlers::experts::experts_list_all_install_statuses),
         )
         .route(
-            "/experts_link_to_agent",
-            post(handlers::experts::experts_link_to_agent),
-        )
-        .route(
             "/experts_apply_links",
             post(handlers::experts::experts_apply_links),
-        )
-        .route(
-            "/experts_unlink_from_agent",
-            post(handlers::experts::experts_unlink_from_agent),
         )
         .route(
             "/experts_read_content",
@@ -1240,35 +1518,36 @@ pub fn build_router(
             "/experts_open_central_dir",
             post(handlers::experts::experts_open_central_dir),
         )
+        // ─── Generative UI (the ui-render skill) ───
+        .route(
+            "/generative_ui_skill_info",
+            post(handlers::generative_ui::generative_ui_skill_info),
+        )
+        .route(
+            "/generative_ui_list_all_install_statuses",
+            post(handlers::generative_ui::generative_ui_list_all_install_statuses),
+        )
+        .route(
+            "/generative_ui_apply_links",
+            post(handlers::generative_ui::generative_ui_apply_links),
+        )
+        .route(
+            "/generative_ui_read_content",
+            post(handlers::generative_ui::generative_ui_read_content),
+        )
         // ─── Science ───
         .route("/science_list", post(handlers::science::science_list))
         .route(
-            "/science_get_install_status",
-            post(handlers::science::science_get_install_status),
-        )
-        .route(
             "/science_list_all_install_statuses",
             post(handlers::science::science_list_all_install_statuses),
-        )
-        .route(
-            "/science_link_to_agent",
-            post(handlers::science::science_link_to_agent),
         )
         .route(
             "/science_apply_links",
             post(handlers::science::science_apply_links),
         )
         .route(
-            "/science_unlink_from_agent",
-            post(handlers::science::science_unlink_from_agent),
-        )
-        .route(
             "/science_read_content",
             post(handlers::science::science_read_content),
-        )
-        .route(
-            "/science_open_central_dir",
-            post(handlers::science::science_open_central_dir),
         )
         // ─── Custom skills ───
         .route("/custom_list", post(handlers::custom_skills::custom_list))
@@ -1343,18 +1622,6 @@ pub fn build_router(
             post(handlers::office_tools::officecli_sync_skills),
         )
         .route(
-            "/officecli_skill_link_to_agent",
-            post(handlers::office_tools::officecli_skill_link_to_agent),
-        )
-        .route(
-            "/officecli_skill_unlink_from_agent",
-            post(handlers::office_tools::officecli_skill_unlink_from_agent),
-        )
-        .route(
-            "/officecli_skill_get_install_status",
-            post(handlers::office_tools::officecli_skill_get_install_status),
-        )
-        .route(
             "/officecli_skill_list_all_install_statuses",
             post(handlers::office_tools::officecli_skill_list_all_install_statuses),
         )
@@ -1377,6 +1644,10 @@ pub fn build_router(
         .route(
             "/stop_office_watch",
             post(handlers::office_tools::stop_office_watch),
+        )
+        .route(
+            "/renew_office_watch",
+            post(handlers::office_tools::renew_office_watch),
         )
         // ─── Project boot ───
         .route(
@@ -1516,6 +1787,14 @@ pub fn build_router(
             post(handlers::chat_channel::set_chat_event_webhooks),
         )
         .route(
+            "/get_chat_event_top_level_only",
+            post(handlers::chat_channel::get_chat_event_top_level_only),
+        )
+        .route(
+            "/set_chat_event_top_level_only",
+            post(handlers::chat_channel::set_chat_event_top_level_only),
+        )
+        .route(
             "/get_chat_message_language",
             post(handlers::chat_channel::get_chat_message_language),
         )
@@ -1547,6 +1826,10 @@ pub fn build_router(
         .route(
             "/delete_model_provider",
             post(handlers::model_provider::delete_model_provider),
+        )
+        .route(
+            "/list_provider_models",
+            post(handlers::model_provider::list_provider_models),
         )
         // ─── Quick Messages ───
         .route(
@@ -1688,6 +1971,11 @@ pub fn build_router(
             post(handlers::forge::forge_list_issues),
         )
         .route(
+            "/forge_issue_detail",
+            post(handlers::forge::forge_issue_detail),
+        )
+        .route("/forge_read_image", post(handlers::forge::forge_read_image))
+        .route(
             "/forge_tab_count",
             post(handlers::forge::forge_tab_count),
         )
@@ -1716,6 +2004,14 @@ pub fn build_router(
             post(handlers::forge::forge_change_detail),
         )
         .route(
+            "/forge_check_summaries",
+            post(handlers::forge::forge_check_summaries),
+        )
+        .route(
+            "/forge_approve_workflows",
+            post(handlers::forge::forge_approve_workflows),
+        )
+        .route(
             "/forge_change_files",
             post(handlers::forge::forge_change_files),
         )
@@ -1733,6 +2029,10 @@ pub fn build_router(
             post(handlers::forge::work_task_create_from_forge),
         )
         .route(
+            "/work_task_create_from_forge_issues",
+            post(handlers::forge::work_task_create_from_forge_issues),
+        )
+        .route(
             "/work_task_lookup_by_source",
             post(handlers::forge::work_task_lookup_by_source),
         )
@@ -1743,6 +2043,14 @@ pub fn build_router(
         .route(
             "/forge_settings_set",
             post(handlers::forge::forge_settings_set),
+        )
+        .route(
+            "/forge_auto_status",
+            post(handlers::forge::forge_auto_status),
+        )
+        .route(
+            "/forge_auto_scan_now",
+            post(handlers::forge::forge_auto_scan_now),
         )
         .route(
             "/work_task_deliver_pr",
@@ -1761,12 +2069,24 @@ pub fn build_router(
             post(handlers::work_task::work_task_merge_unqueue),
         )
         .route(
+            "/work_task_stop_background_wait",
+            post(handlers::work_task::work_task_stop_background_wait),
+        )
+        .route(
             "/work_task_complete",
             post(handlers::work_task::work_task_complete),
         )
         .route(
             "/work_task_archive",
             post(handlers::work_task::work_task_archive),
+        )
+        .route(
+            "/work_task_defer",
+            post(handlers::work_task::work_task_defer),
+        )
+        .route(
+            "/work_task_set_writeback",
+            post(handlers::work_task::work_task_set_writeback),
         )
         .route(
             "/work_task_cleanup",
@@ -1776,6 +2096,10 @@ pub fn build_router(
         .route(
             "/work_task_changed_files",
             post(handlers::work_task::work_task_changed_files),
+        )
+        .route(
+            "/work_task_uncommitted_files",
+            post(handlers::work_task::work_task_uncommitted_files),
         )
         .route(
             "/work_task_settings_get",
@@ -1816,13 +2140,13 @@ pub fn build_router(
         )
         .route(
             "/background_set",
-            // A 16MiB image becomes ~21.4MiB once base64-encoded and wrapped in
+            // A 64MiB image becomes ~85.4MiB once base64-encoded and wrapped in
             // the JSON envelope; axum's default 2MiB `DefaultBodyLimit` would
             // 413 any real photo before the handler runs. Raise it to cover the
             // advertised ceiling; `backgrounds::validate_background` stays the
             // authoritative size boundary on the decoded bytes.
             post(handlers::background::background_set)
-                .layer(DefaultBodyLimit::max(24 * 1024 * 1024)),
+                .layer(DefaultBodyLimit::max(96 * 1024 * 1024)),
         )
         .route(
             "/background_clear",
@@ -1903,19 +2227,56 @@ pub fn build_router(
         )
         .route("/terminal_kill", post(handlers::terminal::terminal_kill))
         .route("/terminal_list", post(handlers::terminal::terminal_list))
+        .route(
+            "/cli_access_status",
+            post(handlers::cli_access::cli_access_status),
+        )
+        .route(
+            "/cli_access_set_enabled",
+            post(handlers::cli_access::cli_access_set_enabled),
+        )
+        // `codeg-cli` against this runtime with the main token (how CI reaches
+        // a remote server); the loopback listener serves the same handlers.
+        .merge(crate::cli_run::http::routes(state.cli_runs.clone()))
         // Catch-all
         .fallback(api_not_found)
         .layer(middleware::from_fn(move |req, next| {
-            auth::require_token(req, next, token.clone())
+            auth::require_auth(req, next, web_auth.clone())
         }));
 
     // Public endpoints — no token required.
     // The login page needs to read the user's preferred language before
     // authenticating so it can render in their chosen locale.
     let public_api = Router::new()
+        // Image URLs carry short-lived, per-resource capabilities issued by
+        // forge_read_image. <img> cannot attach a Bearer header.
+        .route(
+            "/forge_image/{key}",
+            get(crate::forge::image_cache::serve_image),
+        )
         .route(
             "/get_system_language_settings",
             post(handlers::system_settings::get_system_language_settings),
+        )
+        // The CLI's challenge, answered before any token is sent; signed with
+        // the main token here (no port: a proxy may hide it).
+        .merge(crate::cli_run::http::public_routes(
+            state.cli_runs.clone(),
+            crate::cli_run::http::HelloKey {
+                token: token_for_cli_hello,
+                port: None,
+            },
+        ))
+        // Forge webhooks for the repository panel's auto-processing. No forge
+        // can send codeg's bearer token, so the delivery authenticates itself:
+        // its HMAC signature (GitHub / Gitea) or secret token (GitLab) is
+        // checked against the folders' webhook secrets before anything else
+        // happens. See `handlers::forge::forge_webhook`.
+        .route(
+            "/forge_webhook",
+            post(handlers::forge::forge_webhook).layer(DefaultBodyLimit::max(
+                handlers::forge::WEBHOOK_BODY_LIMIT,
+            )),
         )
         .route(
             "/workspace_download/{ticket}",
@@ -1948,7 +2309,7 @@ pub fn build_router(
     // the viewer. `.instrument()` the downstream future; never `.enter()` across
     // an await, which corrupts the span stack.
     //
-    // Layer order: the protected router's `auth::require_token` layer was added
+    // Layer order: the protected router's `auth::require_auth` layer was added
     // (above) BEFORE this `.layer()`, and this layer is applied to the MERGED
     // router, so it is the OUTERMOST layer. The instrumented `next.run(req)`
     // future therefore wraps routing + auth + handler — auth-reject logs land
@@ -1971,7 +2332,7 @@ pub fn build_router(
             get(crate::web::browser_tunnel::ws_handler),
         )
         .layer(middleware::from_fn(move |req, next| {
-            auth::require_token(req, next, token_for_ws.clone())
+            auth::require_auth(req, next, web_auth_for_ws.clone())
         }));
 
     // Static file serving.
@@ -1979,6 +2340,9 @@ pub fn build_router(
     // We use a middleware to rewrite "/folder" → "/folder.html" before ServeDir.
     let fallback =
         ServeDir::new(&static_dir).fallback(ServeFile::new(static_dir.join("index.html")));
+    let static_files: Router = Router::new()
+        .fallback_service(fallback)
+        .layer(middleware::from_fn(static_cache_control));
 
     let static_dir_for_mw = static_dir.clone();
     let html_rewrite = middleware::from_fn(move |req: axum::extract::Request, next: Next| {
@@ -2012,12 +2376,19 @@ pub fn build_router(
         }
     });
 
+    // Codeg Web's SRN sign-in (`srn::web::routes`): its own instance-access
+    // check on three routes, none on the callback. Merged after the layers
+    // above so the wildcard CORS (meant for Bearer clients) does not cover
+    // it, and matched ahead of the static pages and the API's catch-all.
+    let srn_routes = crate::srn::web::routes::router(srn_web, web_auth_for_srn);
+
     Router::new()
         .nest("/api", api)
         .merge(ws_route)
-        .fallback_service(fallback)
+        .fallback_service(static_files)
         .layer(html_rewrite)
         .layer(cors)
+        .merge(srn_routes)
         .layer(Extension(state))
         .layer(Extension(shutdown_signal))
         // Compress API JSON and static text assets. Allowlist predicate —
@@ -2034,6 +2405,34 @@ pub fn build_router(
         .layer(middleware::from_fn(
             crate::web::browser_bridge::route_by_host,
         ))
+}
+
+/// Only `/_next/static/` is fingerprinted: a new build puts its scripts and
+/// styles there under new names. Everything else keeps its name from one
+/// release to the next, the HTML documents above all, and ServeDir sends no
+/// freshness of its own, so a browser would apply heuristic freshness (a tenth
+/// of the file's age) and could open the previous release for hours after the
+/// server was upgraded. `no-cache` still lets it keep its copy, revalidated on
+/// every use.
+async fn static_cache_control(
+    req: axum::extract::Request,
+    next: Next,
+) -> axum::response::Response {
+    let fingerprinted = req.uri().path().starts_with("/_next/static/");
+    let mut response = next.run(req).await;
+    // An asset that is not there is answered with index.html, which must not
+    // be kept under the asset's name either.
+    let html = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("text/html"));
+    if !fingerprinted || html {
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    }
+    response
 }
 
 async fn health_check() -> impl IntoResponse {

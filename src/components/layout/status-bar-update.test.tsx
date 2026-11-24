@@ -14,6 +14,13 @@ vi.mock("@/components/providers/update-provider", () => ({
 const openUrl = vi.fn()
 vi.mock("@/lib/platform", () => ({ openUrl: (u: string) => openUrl(u) }))
 
+// The local desktop app (true) or a server (false, the jsdom default).
+let tauriUpdater = false
+vi.mock("@/lib/updater", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/updater")>()),
+  usesTauriUpdater: () => tauriUpdater,
+}))
+
 // The popover pulls the markdown stack in lazily; keep the test off the ESM
 // markdown pipeline (its rendering is the settings page's concern).
 vi.mock("@/components/settings/release-notes", () => ({
@@ -86,6 +93,7 @@ const UNWRITABLE_BIN = {
 }
 
 beforeEach(() => {
+  tauriUpdater = false
   startUpdate.mockClear()
   restart.mockClear()
   dismissAvailable.mockClear()
@@ -214,6 +222,26 @@ describe("StatusBarUpdate — popover", () => {
     const actions = screen.getAllByRole("button", { name: /Restart to update/ })
     fireEvent.click(actions[actions.length - 1])
     expect(restart).toHaveBeenCalledTimes(1)
+  })
+
+  it("waits for a restarting server to come back", async () => {
+    renderWith({ state: { seq: 6, status: "restarting" }, restartCountdown: 0 })
+    fireEvent.click(screen.getByRole("button", { name: /Restarting/ }))
+    expect(
+      await screen.findByText("Waiting for the server to come back...")
+    ).toBeVisible()
+  })
+
+  it("has no server to wait for while the desktop app restarts", async () => {
+    // On Windows the installer runs at the restart, so the app spends a few
+    // seconds here.
+    tauriUpdater = true
+    renderWith({ state: { seq: 6, status: "restarting" }, isRestarting: true })
+    fireEvent.click(screen.getByRole("button", { name: /Restarting/ }))
+    expect(await screen.findAllByText("Restarting...")).toHaveLength(2)
+    expect(
+      screen.queryByText("Waiting for the server to come back...")
+    ).not.toBeInTheDocument()
   })
 
   it("still offers the upgrade after a dismissal, without the Later button", async () => {

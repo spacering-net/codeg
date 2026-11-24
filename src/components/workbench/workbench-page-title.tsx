@@ -5,6 +5,7 @@ import { ChevronRight, MessagesSquare } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
+import { cn } from "@/lib/utils"
 
 interface WorkbenchPageTitleProps {
   title: string
@@ -18,6 +19,9 @@ interface WorkbenchPageTitleProps {
   titleActionLabel?: string
   /** Further breadcrumb segments after the title. */
   trail?: ReactNode
+  /** For a route whose trail can outgrow the strip (Harness's section tabs):
+   *  `shrink`, so the trail gives way rather than the window's drag area. */
+  className?: string
 }
 
 /**
@@ -39,6 +43,7 @@ export function WorkbenchPageTitle({
   onTitleClick,
   titleActionLabel,
   trail,
+  className,
 }: WorkbenchPageTitleProps) {
   const tTitleBar = useTranslations("Folder.folderTitleBar")
   const { openConversations } = useWorkbenchRoute()
@@ -46,7 +51,12 @@ export function WorkbenchPageTitle({
   return (
     // pl-3, not pl-4: the icon button carries its own optical padding, so the
     // breadcrumb's glyph lands on the same rail a bare pl-4 title used to.
-    <div className="flex h-10 min-w-0 shrink-0 items-center gap-1 pl-3">
+    <div
+      className={cn(
+        "flex h-10 min-w-0 shrink-0 items-center gap-1 pl-3",
+        className
+      )}
+    >
       <Button
         variant="ghost"
         size="icon"

@@ -21,14 +21,14 @@ use super::types::{
 };
 
 pub fn emit_state(app: &AppHandle, state: &BrowserTabState) {
-    emit_event(&EventEmitter::Tauri(app.clone()), STATE_EVENT, state);
+    emit_event(&EventEmitter::from_app(app), STATE_EVENT, state);
 }
 
 /// The inspector for `tab_id` has gone; the page can be put back where the
 /// host wants it. See [`DEVTOOLS_CLOSED_EVENT`].
 pub fn emit_devtools_closed(app: &AppHandle, tab_id: &str) {
     emit_event(
-        &EventEmitter::Tauri(app.clone()),
+        &EventEmitter::from_app(app),
         DEVTOOLS_CLOSED_EVENT,
         BrowserDevtoolsClosedPayload {
             tab_id: tab_id.to_string(),
@@ -45,7 +45,7 @@ pub fn emit_closed(
     request_id: Option<&str>,
 ) {
     emit_event(
-        &EventEmitter::Tauri(app.clone()),
+        &EventEmitter::from_app(app),
         CLOSED_EVENT,
         BrowserClosedPayload {
             tab_id: tab_id.to_string(),
@@ -56,16 +56,16 @@ pub fn emit_closed(
 }
 
 pub fn emit_popup(app: &AppHandle, payload: &BrowserPopupPayload) {
-    emit_event(&EventEmitter::Tauri(app.clone()), POPUP_EVENT, payload);
+    emit_event(&EventEmitter::from_app(app), POPUP_EVENT, payload);
 }
 
 pub fn emit_open_request(app: &AppHandle, payload: &BrowserOpenRequestPayload) {
-    emit_event(&EventEmitter::Tauri(app.clone()), OPEN_REQUEST_EVENT, payload);
+    emit_event(&EventEmitter::from_app(app), OPEN_REQUEST_EVENT, payload);
 }
 
 pub fn emit_shortcut(app: &AppHandle, tab_id: &str, shortcut: &str) {
     emit_event(
-        &EventEmitter::Tauri(app.clone()),
+        &EventEmitter::from_app(app),
         SHORTCUT_EVENT,
         BrowserShortcutPayload {
             tab_id: tab_id.to_string(),
@@ -75,11 +75,11 @@ pub fn emit_shortcut(app: &AppHandle, tab_id: &str, shortcut: &str) {
 }
 
 pub fn emit_doc_state(app: &AppHandle, state: &DocGuestState) {
-    emit_event(&EventEmitter::Tauri(app.clone()), DOC_STATE_EVENT, state);
+    emit_event(&EventEmitter::from_app(app), DOC_STATE_EVENT, state);
 }
 
 pub fn emit_download(app: &AppHandle, download: &BrowserDownload) {
-    emit_event(&EventEmitter::Tauri(app.clone()), DOWNLOAD_EVENT, download);
+    emit_event(&EventEmitter::from_app(app), DOWNLOAD_EVENT, download);
 }
 
 /// A tab's agent grant changed, and why. The level itself also travels with
@@ -94,7 +94,7 @@ pub fn emit_agent_grant(
     origin: Option<&str>,
 ) {
     emit_event(
-        &EventEmitter::Tauri(app.clone()),
+        &EventEmitter::from_app(app),
         AGENT_GRANT_EVENT,
         AgentGrantPayload {
             tab_id: tab_id.to_string(),
@@ -116,7 +116,7 @@ pub fn emit_agent_activity(
     at: i64,
 ) {
     emit_event(
-        &EventEmitter::Tauri(app.clone()),
+        &EventEmitter::from_app(app),
         AGENT_ACTIVITY_EVENT,
         AgentActivityPayload {
             tab_id: tab_id.to_string(),
@@ -134,7 +134,7 @@ pub fn emit_agent_activity(
 /// showing the same question would be two chances to answer it, and the second
 /// answer would arrive after the first had already decided.
 pub fn emit_eval_request(app: &AppHandle, payload: &EvalRequestPayload) {
-    emit_event(&EventEmitter::Tauri(app.clone()), EVAL_REQUEST_EVENT, payload);
+    emit_event(&EventEmitter::from_app(app), EVAL_REQUEST_EVENT, payload);
 }
 
 /// Whether the document in a tab has printed an error — see
@@ -143,7 +143,7 @@ pub fn emit_eval_request(app: &AppHandle, payload: &EvalRequestPayload) {
 /// lands in it.
 pub fn emit_console_errors(app: &AppHandle, tab_id: &str, errors: bool) {
     emit_event(
-        &EventEmitter::Tauri(app.clone()),
+        &EventEmitter::from_app(app),
         CONSOLE_ERRORS_EVENT,
         BrowserConsoleErrorsPayload {
             tab_id: tab_id.to_string(),
@@ -154,7 +154,7 @@ pub fn emit_console_errors(app: &AppHandle, tab_id: &str, errors: bool) {
 
 pub fn emit_egress(app: &AppHandle, connection_id: i32, status: &crate::browser::egress::EgressStatus) {
     emit_event(
-        &EventEmitter::Tauri(app.clone()),
+        &EventEmitter::from_app(app),
         EGRESS_EVENT,
         BrowserEgressPayload {
             connection_id,
@@ -165,7 +165,7 @@ pub fn emit_egress(app: &AppHandle, connection_id: i32, status: &crate::browser:
 
 pub fn emit_navigation_blocked(app: &AppHandle, tab_id: &str, url: &str, reason: NavigationBlockReason) {
     emit_event(
-        &EventEmitter::Tauri(app.clone()),
+        &EventEmitter::from_app(app),
         NAVIGATION_BLOCKED_EVENT,
         BrowserNavigationBlockedPayload {
             tab_id: tab_id.to_string(),

@@ -7,6 +7,8 @@ import {
   textToSeededDoc,
   textToSeededInlineContent,
 } from "./plain-text-content"
+import { referenceToMarkdown } from "./reference-text"
+import type { ReferenceAttrs } from "./types"
 
 /** What the agent in these tests advertises: `/review` and `$deploy`, nothing else. */
 const KNOWN = new Set(["/review", "$deploy"])
@@ -263,6 +265,27 @@ describe("textToHydratedInlineContent", () => {
         meta: { invocationPrefix: "/" },
       }),
     })
+  })
+
+  it("hydrates a namespaced command and sends it back byte for byte", () => {
+    // Qoder advertises skills like `sites:sites-building`. A pasted or seeded
+    // one becomes a badge, and the badge must serialize to the exact token, or
+    // the agent receives a command it does not have.
+    const known = new Set(["/my_plugin:run_all"])
+    const content = textToHydratedInlineContent("/my_plugin:run_all now", known)
+    expect(content).toEqual([
+      {
+        type: "reference",
+        attrs: expect.objectContaining({
+          refType: "skill",
+          id: "my_plugin:run_all",
+          meta: { invocationPrefix: "/" },
+        }),
+      },
+      { type: "text", text: " now" },
+    ])
+    const badge = content?.[0] as { attrs: ReferenceAttrs }
+    expect(referenceToMarkdown(badge.attrs)).toBe("/my_plugin:run_all")
   })
 
   describe("bare tokens the agent does not advertise", () => {

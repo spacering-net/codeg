@@ -137,6 +137,7 @@ describe("GeneralSettings", () => {
       "Default Terminal",
       "Colorize command output",
       "Disable hardware acceleration",
+      "Mention panel",
       "Desktop notifications",
       "Notification sounds",
     ]) {

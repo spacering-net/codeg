@@ -21,6 +21,11 @@
 //! and a menu item there would close the window the same way whenever that
 //! shortcut did not apply.
 //!
+//! The Window menu also opens the local workspace (`main`), which a launch
+//! that brings back only remote workspaces leaves hidden. The menu bar is
+//! there whatever the key window shows — a remote workspace whose server is
+//! down, or one whose credentials expired.
+//!
 //! Windows and Linux have no application menu, so nothing there turns an
 //! unclaimed Ctrl+W into closing the window.
 
@@ -39,6 +44,9 @@ use tauri::{AppHandle, Emitter, Manager, Wry};
 const CLOSE_ID: &str = "app-menu:close";
 /// The Window menu's "Close Window", without a shortcut.
 const CLOSE_WINDOW_ID: &str = "app-menu:close-window";
+/// The Window menu's "Open Local Workspace": `main`, unminimized, shown and
+/// focused, as the tray's "Show Workspace" does.
+const OPEN_LOCAL_WORKSPACE_ID: &str = "app-menu:open-local-workspace";
 
 /// Sent to a workspace window when ⌘W reached the menu while it was the key
 /// window. Mirrored by `CLOSE_SHORTCUT_EVENT` in `src/lib/menu-close-shortcut.ts`.
@@ -57,7 +65,7 @@ struct CloseShortcutPayload {
 }
 
 /// Tauri's default macOS menu (`tauri::menu::Menu::default`), item for item,
-/// except for the two close items.
+/// except for the close items and the local workspace entry.
 pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let pkg_info = app.package_info();
     let config = app.config();
@@ -70,6 +78,13 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     };
     let close = MenuItem::with_id(app, CLOSE_ID, "Close", true, Some("CmdOrCtrl+W"))?;
     let close_window = MenuItem::with_id(app, CLOSE_WINDOW_ID, "Close Window", true, None::<&str>)?;
+    let open_local_workspace = MenuItem::with_id(
+        app,
+        OPEN_LOCAL_WORKSPACE_ID,
+        "Open Local Workspace",
+        true,
+        None::<&str>,
+    )?;
     Menu::with_items(
         app,
         &[
@@ -115,6 +130,8 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
                 "Window",
                 true,
                 &[
+                    &open_local_workspace,
+                    &PredefinedMenuItem::separator(app)?,
                     &PredefinedMenuItem::minimize(app, None)?,
                     &PredefinedMenuItem::maximize(app, None)?,
                     &PredefinedMenuItem::separator(app)?,
@@ -130,6 +147,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
 /// are delivered on the main thread.
 pub fn handle_event(app: &AppHandle, id: &str) -> bool {
     match id {
+        OPEN_LOCAL_WORKSPACE_ID => crate::commands::windows::show_main_window(app),
         CLOSE_ID => close_shortcut(app),
         CLOSE_WINDOW_ID => {
             if let Some(window) = key_window() {

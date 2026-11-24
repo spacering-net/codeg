@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest"
 
 import {
   clickAt,
@@ -761,7 +761,7 @@ function watchScrolling(el: Element) {
 }
 
 /** The `top` of every scroll asked for, in order. */
-function tops(spy: ReturnType<typeof vi.fn>): number[] {
+function tops(spy: Mock): number[] {
   return spy.mock.calls.map((call) => (call[0] as ScrollToOptions).top!)
 }
 

@@ -1,11 +1,19 @@
 import { act, render, waitFor, cleanup } from "@testing-library/react"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest"
 import {
   resetAppWorkspaceStore,
   useAppWorkspaceStore,
 } from "@/stores/app-workspace-store"
 
-let tabs: { tabsHydrated: boolean; openTab: ReturnType<typeof vi.fn> }
+let tabs: { tabsHydrated: boolean; openTab: Mock }
 
 const h = vi.hoisted(() => ({ toastError: vi.fn() }))
 
@@ -18,7 +26,10 @@ vi.mock("@/contexts/tab-context", () => ({
 vi.mock("@/lib/transport", () => ({
   getTransport: () => ({ subscribe: async () => () => {} }),
 }))
-vi.mock("@/lib/deep-link", () => ({ takePendingDeepLink: async () => null }))
+vi.mock("@/lib/deep-link", () => ({
+  takePendingDeepLink: async () => null,
+  takePendingHarnessLink: async () => null,
+}))
 
 import { DeepLinkBootstrap } from "./deep-link-bootstrap"
 

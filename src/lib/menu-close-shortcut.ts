@@ -89,16 +89,24 @@ export function workspacePaneOf(element: Element): WorkspacePane | null {
 }
 
 /** Which tab strip the workspace's tab shortcuts act on, with `pane` as the
- *  pane the user is in. */
+ *  pane the user is in. A maximized column covers the other one, so while
+ *  either is maximized its strip — the only one on screen — is the one meant,
+ *  whatever pane was last active. */
 export function tabShortcutTarget(
   mode: WorkspaceMode,
   pane: WorkspacePane,
-  filesMaximized: boolean
+  filesMaximized: boolean,
+  conversationMaximized: boolean
 ): { conversation: boolean; files: boolean } {
+  const target: WorkspacePane = filesMaximized
+    ? "files"
+    : conversationMaximized
+      ? "conversation"
+      : pane
   return {
     conversation:
       mode === "conversation" ||
-      (mode === "fusion" && pane === "conversation" && !filesMaximized),
-    files: mode === "fusion" && (pane === "files" || filesMaximized),
+      (mode === "fusion" && target === "conversation"),
+    files: mode === "fusion" && target === "files",
   }
 }

@@ -1,0 +1,116 @@
+{
+  "schema_version": "2.0",
+  "checklist_id": "FC-SYN-001",
+  "record_id": "HG-SYN-001",
+  "hypotheses": [
+    {
+      "hypothesis_id": "H1",
+      "candidate_status": "candidate",
+      "assumptions": [
+        "Synthetic assignment, manipulation, and measurements operate as declared."
+      ],
+      "boundary_conditions": [
+        "Synthetic eligible units over one prespecified interval."
+      ],
+      "falsifier": {
+        "prediction_id": "P1",
+        "conditions": "The manipulation and measurement checks pass and uncertainty is small enough to distinguish the patterns.",
+        "observable": "Intermediate M and outcome Y measured at prespecified times.",
+        "incompatible_result": "Outcome Y changes without the prespecified change in intermediate M.",
+        "assumption_failure_checks": [
+          "Verify assignment, manipulation, calibration, missingness, and temporal ordering before interpreting incompatibility."
+        ]
+      },
+      "discriminating_tests": [
+        {
+          "test_id": "DT1",
+          "rival_hypothesis_id": "H2",
+          "focal_expected": "Intermediate M changes before outcome Y with no negative-control reference shift.",
+          "rival_expected": "Outcome Y and the negative-control reference shift together without the prespecified intermediate change.",
+          "indeterminate_result": "Both intermediate M and the negative-control reference change, so mixed mechanisms or bias remain possible."
+        }
+      ],
+      "nulls": [
+        {
+          "null_id": "N1",
+          "statement": "The population mean of outcome Y is equal under X and comparator at the prespecified horizon.",
+          "analysis_id": "A1",
+          "interpretation_limit": "Failure to reject is not equivalence, absence of effect, or proof of the rival."
+        }
+      ],
+      "controls": [
+        {
+          "control_id": "NC1",
+          "control_type": "negative_outcome",
+          "rationale": "The synthetic reference cannot be changed by process M but shares the acquisition workflow.",
+          "expected_result": "No assignment-linked reference difference after the prespecified acquisition adjustment.",
+          "failure_implication": "Investigate acquisition, selection, or analysis bias before a causal interpretation."
+        },
+        {
+          "control_id": "PC1",
+          "control_type": "positive_control",
+          "rationale": "A known synthetic calibration input checks whether the outcome procedure detects a declared change.",
+          "expected_result": "The calibration input is recovered within the locked tolerance.",
+          "failure_implication": "The target test is not interpretable until measurement performance is restored."
+        }
+      ],
+      "outcome_interpretation": {
+        "consistent_with_candidate": "The focal pattern is observed, the rival pattern is not, controls pass, and uncertainty is compatible with the prespecified target.",
+        "challenges_candidate": "The incompatible result is observed while manipulation, measurements, and declared assumptions remain credible.",
+        "supports_neither_or_mixed": "The result matches neither pattern, both patterns occur, or an assumption/control fails."
+      },
+      "human_review_status": "pending"
+    },
+    {
+      "hypothesis_id": "H2",
+      "candidate_status": "candidate",
+      "assumptions": [
+        "Any synthetic acquisition drift affects the outcome and reference through a shared pathway."
+      ],
+      "boundary_conditions": [
+        "Synthetic acquisition periods covered by the declared reference process."
+      ],
+      "falsifier": {
+        "prediction_id": "P2",
+        "conditions": "Independent calibration periods overlap both assigned conditions and reference measurement is valid.",
+        "observable": "Synthetic negative-control reference and outcome Y by acquisition period.",
+        "incompatible_result": "The reference remains stable while outcome Y changes reproducibly by assignment.",
+        "assumption_failure_checks": [
+          "Verify reference sensitivity, batch overlap, calibration, and missing acquisition records."
+        ]
+      },
+      "discriminating_tests": [
+        {
+          "test_id": "DT2",
+          "rival_hypothesis_id": "H1",
+          "focal_expected": "Reference and outcome shift together by acquisition period.",
+          "rival_expected": "Outcome changes by assignment without a reference shift and after intermediate M changes.",
+          "indeterminate_result": "Acquisition period is confounded with assignment, so the rivals cannot be separated."
+        }
+      ],
+      "nulls": [
+        {
+          "null_id": "N2",
+          "statement": "The negative-control reference mean is equal across acquisition periods.",
+          "analysis_id": "A2",
+          "interpretation_limit": "Failure to reject does not prove absence of drift when precision or reference sensitivity is insufficient."
+        }
+      ],
+      "controls": [
+        {
+          "control_id": "NC1",
+          "control_type": "negative_outcome",
+          "rationale": "The reference is outside process M while sharing the acquisition pathway.",
+          "expected_result": "A drift explanation predicts a shared acquisition-linked shift.",
+          "failure_implication": "A stable, sensitive reference challenges the drift candidate."
+        }
+      ],
+      "outcome_interpretation": {
+        "consistent_with_candidate": "Outcome and reference shifts align by acquisition period under valid measurement.",
+        "challenges_candidate": "The stable reference and independent calibration are incompatible with the declared shared-drift process.",
+        "supports_neither_or_mixed": "Assignment and acquisition cannot be separated or both mechanism and drift patterns occur."
+      },
+      "human_review_status": "pending"
+    }
+  ]
+}

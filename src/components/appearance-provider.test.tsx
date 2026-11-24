@@ -1,9 +1,25 @@
+import { memo } from "react"
 import { act, fireEvent, render, screen } from "@testing-library/react"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest"
 
 import { AppearanceProvider } from "./appearance-provider"
-import { useCustomStyle } from "@/hooks/use-appearance"
 import {
+  useChatAnimationsEnabled,
+  useChatAnimationsSetting,
+  useChatContentWidth,
+  useCustomStyle,
+} from "@/hooks/use-appearance"
+import {
+  STORAGE_KEY_CHAT_ANIMATIONS,
+  STORAGE_KEY_CHAT_CONTENT_WIDTH,
   STORAGE_KEY_CUSTOM_THEME,
   STORAGE_KEY_ZOOM_LEVEL,
 } from "@/lib/appearance-script"
@@ -123,7 +139,7 @@ describe("window zoom keys", () => {
   }
 
   /** Zoom writes reach Tauri IPC and an on-disk SQLite upsert on the same path. */
-  function zoomWrites(spy: ReturnType<typeof vi.spyOn>): number {
+  function zoomWrites(spy: MockInstance): number {
     return spy.mock.calls.filter(([key]) => key === STORAGE_KEY_ZOOM_LEVEL)
       .length
   }
@@ -138,6 +154,12 @@ describe("window zoom keys", () => {
     )
     return vi.spyOn(Storage.prototype, "setItem")
   }
+
+  // spyOn hands back the method's existing spy when there is one, calls and
+  // all, so each test's spy has to be taken down before the next renderZoom.
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
 
   it("stops writing once a held zoom-out key hits the bottom of the range", () => {
     // 80% is the lowest rung, so every further repeat is a no-op on screen. It
@@ -229,5 +251,226 @@ describe("window zoom keys", () => {
     })
 
     expect(currentZoomPx()).toBe("16px")
+  })
+})
+
+describe("chat animations switch", () => {
+  function ChatAnimationsProbe() {
+    const { setChatAnimations } = useChatAnimationsSetting()
+    const enabled = useChatAnimationsEnabled()
+    return (
+      <>
+        <span data-testid="enabled">{String(enabled)}</span>
+        <button onClick={() => setChatAnimations(!enabled)}>toggle</button>
+      </>
+    )
+  }
+
+  const html = () => document.documentElement
+
+  beforeEach(() => {
+    html().removeAttribute("data-chat-animations")
+  })
+
+  it("is on by default and leaves <html> unmarked", () => {
+    render(
+      <AppearanceProvider>
+        <ChatAnimationsProbe />
+      </AppearanceProvider>
+    )
+    expect(screen.getByTestId("enabled").textContent).toBe("true")
+    expect(html().hasAttribute("data-chat-animations")).toBe(false)
+  })
+
+  it("marks <html> and persists when turned off, and clears both when back on", () => {
+    render(
+      <AppearanceProvider>
+        <ChatAnimationsProbe />
+      </AppearanceProvider>
+    )
+    fireEvent.click(screen.getByText("toggle"))
+    expect(screen.getByTestId("enabled").textContent).toBe("false")
+    expect(html().getAttribute("data-chat-animations")).toBe("off")
+    expect(localStorage.getItem(STORAGE_KEY_CHAT_ANIMATIONS)).toBe("0")
+
+    fireEvent.click(screen.getByText("toggle"))
+    expect(html().hasAttribute("data-chat-animations")).toBe(false)
+    expect(localStorage.getItem(STORAGE_KEY_CHAT_ANIMATIONS)).toBe("1")
+  })
+
+  it("restores a stored off state on mount", () => {
+    localStorage.setItem(STORAGE_KEY_CHAT_ANIMATIONS, "0")
+    render(
+      <AppearanceProvider>
+        <ChatAnimationsProbe />
+      </AppearanceProvider>
+    )
+    expect(screen.getByTestId("enabled").textContent).toBe("false")
+    expect(html().getAttribute("data-chat-animations")).toBe("off")
+  })
+
+  it("falls back to enabled outside a provider", () => {
+    render(<ChatAnimationsProbeOutside />)
+    expect(screen.getByTestId("outside").textContent).toBe("true")
+  })
+
+  it("follows another window's toggle via the storage event", () => {
+    render(
+      <AppearanceProvider>
+        <ChatAnimationsProbe />
+      </AppearanceProvider>
+    )
+    localStorage.setItem(STORAGE_KEY_CHAT_ANIMATIONS, "0")
+    act(() => {
+      window.dispatchEvent(
+        new StorageEvent("storage", {
+          key: STORAGE_KEY_CHAT_ANIMATIONS,
+          newValue: "0",
+        })
+      )
+    })
+    expect(screen.getByTestId("enabled").textContent).toBe("false")
+    expect(html().getAttribute("data-chat-animations")).toBe("off")
+  })
+
+  it("re-renders the flag's readers only when the flag changes", () => {
+    // The readers sit on the transcript's hot path behind memo boundaries; a
+    // chat-width change (or any other appearance change) must not reach them.
+    const rendered = vi.fn()
+    const FlagReader = memo(function FlagReader() {
+      rendered()
+      return (
+        <span data-testid="flag">{String(useChatAnimationsEnabled())}</span>
+      )
+    })
+    function Controls() {
+      const { setChatAnimations } = useChatAnimationsSetting()
+      const { setChatContentWidth } = useChatContentWidth()
+      return (
+        <>
+          <button onClick={() => setChatContentWidth(900)}>width</button>
+          <button onClick={() => setChatAnimations(false)}>off</button>
+        </>
+      )
+    }
+    render(
+      <AppearanceProvider>
+        <Controls />
+        <FlagReader />
+      </AppearanceProvider>
+    )
+    const before = rendered.mock.calls.length
+    fireEvent.click(screen.getByText("width"))
+    expect(rendered).toHaveBeenCalledTimes(before)
+    fireEvent.click(screen.getByText("off"))
+    expect(rendered).toHaveBeenCalledTimes(before + 1)
+    expect(screen.getByTestId("flag").textContent).toBe("false")
+  })
+})
+
+function ChatAnimationsProbeOutside() {
+  return <span data-testid="outside">{String(useChatAnimationsEnabled())}</span>
+}
+
+describe("chat content width", () => {
+  function WidthProbe() {
+    const { chatContentWidth, setChatContentWidth, previewChatContentWidth } =
+      useChatContentWidth()
+    return (
+      <>
+        <span data-testid="width">{String(chatContentWidth)}</span>
+        <button onClick={() => setChatContentWidth(900)}>set</button>
+        <button onClick={() => previewChatContentWidth(1000)}>preview</button>
+        <button onClick={() => setChatContentWidth(null)}>reset</button>
+      </>
+    )
+  }
+
+  const rootVar = () =>
+    document.documentElement.style.getPropertyValue("--chat-content-width")
+
+  const mount = () =>
+    render(
+      <AppearanceProvider>
+        <WidthProbe />
+      </AppearanceProvider>
+    )
+
+  it("defaults to null and sets no variable", () => {
+    mount()
+    expect(screen.getByTestId("width").textContent).toBe("null")
+    expect(rootVar()).toBe("")
+  })
+
+  it("restores a stored width into state on mount", () => {
+    localStorage.setItem(STORAGE_KEY_CHAT_CONTENT_WIDTH, "880")
+    mount()
+    expect(screen.getByTestId("width").textContent).toBe("880")
+  })
+
+  it("set updates state, <html> and storage; reset clears all three", () => {
+    mount()
+    fireEvent.click(screen.getByText("set"))
+    expect(screen.getByTestId("width").textContent).toBe("900")
+    expect(rootVar()).toBe("56.25rem") // 900px at 100% zoom
+    expect(localStorage.getItem(STORAGE_KEY_CHAT_CONTENT_WIDTH)).toBe("900")
+
+    fireEvent.click(screen.getByText("reset"))
+    expect(screen.getByTestId("width").textContent).toBe("null")
+    expect(rootVar()).toBe("")
+    expect(localStorage.getItem(STORAGE_KEY_CHAT_CONTENT_WIDTH)).toBeNull()
+  })
+
+  it("preview only touches <html>, not state or storage", () => {
+    mount()
+    fireEvent.click(screen.getByText("preview"))
+    expect(rootVar()).toBe("62.5rem")
+    expect(screen.getByTestId("width").textContent).toBe("null")
+    expect(localStorage.getItem(STORAGE_KEY_CHAT_CONTENT_WIDTH)).toBeNull()
+  })
+
+  it("reads the stored width outside a provider", () => {
+    localStorage.setItem(STORAGE_KEY_CHAT_CONTENT_WIDTH, "880")
+    render(<WidthProbe />)
+    expect(screen.getByTestId("width").textContent).toBe("880")
+  })
+
+  it("follows another window's change via the storage event", () => {
+    mount()
+    localStorage.setItem(STORAGE_KEY_CHAT_CONTENT_WIDTH, "1100")
+    act(() => {
+      window.dispatchEvent(
+        new StorageEvent("storage", {
+          key: STORAGE_KEY_CHAT_CONTENT_WIDTH,
+          newValue: "1100",
+        })
+      )
+    })
+    expect(screen.getByTestId("width").textContent).toBe("1100")
+    expect(rootVar()).toBe("68.75rem")
+  })
+})
+
+describe("the timeline's accent", () => {
+  const accent = () =>
+    document.documentElement.style.getPropertyValue("--activity-accent")
+
+  it("follows a primary set in the custom style, held to a readable lightness", () => {
+    localStorage.setItem(
+      STORAGE_KEY_CUSTOM_THEME,
+      JSON.stringify({ light: { primary: "#ef4444" }, dark: {} })
+    )
+    renderProbe()
+    expect(accent()).toBe("oklch(0.5 0.203 25.331)")
+  })
+
+  it("leaves the preset's when no primary is set", () => {
+    localStorage.setItem(
+      STORAGE_KEY_CUSTOM_THEME,
+      JSON.stringify({ light: { background: "#ffffff" }, dark: {} })
+    )
+    document.documentElement.style.setProperty("--activity-accent", "red")
+    renderProbe()
+    expect(accent()).toBe("")
   })
 })

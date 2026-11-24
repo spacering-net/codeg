@@ -79,7 +79,47 @@ fn only_codeg_is_a_binary_target_tauri_build_bundles() {
              compiled with the desktop's features and put in the desktop bundle"
         );
     }
-    assert!(others >= 3, "codeg-server, codeg-mcp and the helper");
+    assert!(
+        others >= 4,
+        "codeg-server, codeg-mcp, the helper and codeg-cli"
+    );
+}
+
+/// The desktop bundle carries `codeg-cli` as a sidecar, so the desktop user
+/// needs no server package to have the command. Four places must agree: the
+/// sidecar build, both bundle configurations, and the placeholders `build.rs`
+/// writes for a build that skipped the sidecars.
+#[test]
+fn codeg_cli_is_a_sidecar_everywhere_the_desktop_build_looks() {
+    let read = |file: &str| std::fs::read_to_string(root().join(file)).unwrap();
+    let prepare = read("scripts/prepare-sidecars.mjs");
+    let bin_names = prepare
+        .lines()
+        .find(|l| l.starts_with("const BIN_NAMES"))
+        .expect("BIN_NAMES");
+    assert!(bin_names.contains("\"codeg-cli\""), "{bin_names}");
+    let features = prepare
+        .lines()
+        .find(|l| l.starts_with("const FEATURES"))
+        .expect("FEATURES");
+    for feature in ["mcp-bin", "computer-helper", "cli-bin"] {
+        assert!(features.contains(feature), "{features} lacks {feature}");
+    }
+    for config in ["tauri.conf.json", "tauri.macos.conf.json"] {
+        let json: serde_json::Value = serde_json::from_str(&read(config)).unwrap();
+        let bins: Vec<&str> = json["bundle"]["externalBin"]
+            .as_array()
+            .expect("externalBin")
+            .iter()
+            .map(|b| b.as_str().unwrap())
+            .collect();
+        assert!(bins.contains(&"binaries/codeg-cli"), "{config}: {bins:?}");
+    }
+    let build = read("build.rs");
+    assert!(
+        build.contains("\"codeg-cli\""),
+        "build.rs writes no codeg-cli placeholder"
+    );
 }
 
 /// The release workflow gives `tauri build` no features of its own: one named

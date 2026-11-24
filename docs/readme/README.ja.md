@@ -31,7 +31,7 @@
 
 <table>
   <tr>
-    <td width="50%" valign="top">🧩 <strong>すべてのエージェントを、ひとつのインターフェースで</strong><br/>15 種のエージェントを内蔵し、ACP エージェントならどれでも加えられます — いずれもターミナルではなく、同じ構造化された会話として表示されます。</td>
+    <td width="50%" valign="top">🧩 <strong>すべてのエージェントを、ひとつのインターフェースで</strong><br/>20 種のエージェントを内蔵し、ACP エージェントならどれでも加えられます — いずれもターミナルではなく、同じ構造化された会話として表示されます。</td>
     <td width="50%" valign="top">🔎 <strong>引き継げるセッション</strong><br/>各エージェントがディスクに残す履歴をインポート・検索・再開でき、さらに別のエージェントへ引き継げます。</td>
   </tr>
   <tr>
@@ -39,66 +39,6 @@
     <td width="50%" valign="top">🌍 <strong>どこで作業していても</strong><br/>デスクトップアプリ、セルフホストのサーバーまたは Docker、iPhone・iPad・Android — さらに Telegram、Lark、WeChat からも。</td>
   </tr>
 </table>
-
-## 💖 スポンサー
-
-<table>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://www.compshare.cn/?ytag=GPU_YY_git_codeg" target="_blank"><img src="../images/compshare.png" alt="Compshare" width="160" /></a><br/>
-      <strong><a href="https://www.compshare.cn/?ytag=GPU_YY_git_codeg">Compshare（UCloud）</a></strong>
-    </td>
-    <td>本プロジェクトをスポンサードしてくださった Compshare に感謝します！Compshare は UCloud 傘下の AI クラウドプラットフォームで、月額制・従量制のコストパフォーマンスに優れた国内モデル agent Plan プランを提供しており、月額 49 元から利用可能です。安定した公式リダイレクトによる海外モデルへのアクセスも提供しています。Claude Code、Codex、API 連携に対応。企業向けの高並列対応、7×24 テクニカルサポート、セルフ請求書発行をサポートしています。<a href="https://www.compshare.cn/?ytag=GPU_YY_git_codeg">こちらのリンク</a>から登録された方には、5 元分の無料プラットフォームクレジットが進呈されます！</td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://hezu.ink/sign-up?aff=0wVz" target="_blank"><img src="../images/hezu-ink.jpg" alt="合租巴士" width="200" /></a><br/>
-      <strong><a href="https://hezu.ink/sign-up?aff=0wVz">合租巴士</a></strong>
-    </td>
-    <td>本プロジェクトをスポンサードしてくださった合租巴士に感謝します！合租巴士は、Codex や Claude Code などの主流モデルに高い安定性の中継機能を提供する、信頼性が高く効率的な AI 中継サービスプラットフォームです。チャージ比率は透明（1:1）で、Codex のレート補助は 0.08 から利用可能です。<a href="https://hezu.ink/sign-up?aff=0wVz">公式サイトからグループに参加すると $5 分の体験クレジットがもらえます</a>。</td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://console.lqapi.xyz/sign-up?aff=KPy9" target="_blank"><img src="../images/lq-router.png" alt="LQ router" width="160" /></a><br/>
-      <strong><a href="https://console.lqapi.xyz/sign-up?aff=KPy9">LQ router</a></strong>
-    </td>
-    <td>本プロジェクトをスポンサードしてくださった LQ router 中継サービスに感謝します！LQ router は、エンタープライズ級の AI 中継サービスを専門とし、企業や個人開発者に安定・高効率・低コストな AI モデル API の接続サービスを提供します。GPT、Claude、Grok、Gemini などの主要モデルに対応し、GPT Pro の課金倍率は最低 0.1 倍です。<a href="https://console.lqapi.xyz/sign-up?aff=KPy9">公式サイトからグループに参加すると $1 分の体験クレジットがもらえます</a>。</td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://go.apimart.ai/gh-codeg" target="_blank"><img src="../images/apimart-ai.png" alt="APIMart" width="200" /></a><br/>
-      <strong><a href="https://go.apimart.ai/gh-codeg">APIMart</a></strong>
-    </td>
-    <td>本プロジェクトをスポンサードしてくださった APIMart に感謝します！APIMart は AI 画像・動画生成に特化した低価格 API プラットフォームです。GPT-Image-2 は 1 枚 $0.006 から、1 ドルで 160 枚以上を生成できます。画像も動画も 1 つの非同期 API でカバー：タスクを送信して ID を受け取り、ポーリングまたはコールバックで結果を取得します。数万枚のバッチ処理でもタイムアウトせず、モデルを切り替えてもコードの変更は不要です。従量課金で月額費用は不要——<a href="https://go.apimart.ai/gh-codeg">こちらから登録</a>すればすぐに使い始められます。</td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://www.ucloud.cn/site/active/astraflow?ytag=geo_waituo_codeg" target="_blank"><img src="../images/astraflow.png" alt="UCloud ·星图AstraFlow" width="120" /></a><br/>
-      <strong><a href="https://www.ucloud.cn/site/active/astraflow?ytag=geo_waituo_codeg">UCloud ·星图AstraFlow</a></strong>
-    </td>
-    <td>
-      <a href="https://www.ucloud.cn/site/active/astraflow?ytag=geo_waituo_codeg">UCloud ·星图AstraFlow</a><br/>
-      UCloud の星図 AstraFlow 大規模モデルプラットフォームは、200 以上のモデルをワンクリックで呼び出せます。Kimi K3、DeepSeek V4/V3、Qwen 3、GLM5.2、happyhorse など世界トップクラスのオープンソース大規模モデルを内蔵しており、自前の学習は不要、すぐに使い始められます。<br/>
-      上のリンクから<strong>メールアドレス</strong>で登録し、実名認証を完了すると<a href="https://f.howxm.com/xs/u/HVFW5X8EIYV1">50 元分の計算リソースクレジットを受け取れます</a>。
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://fluxionai.space/register?source=github&campaign=github-codeg-202609&promo=CODEG" target="_blank"><img src="../images/fluxion-ai.png" alt="Fluxion AI" width="160" /></a><br/>
-      <strong><a href="https://fluxionai.space/register?source=github&campaign=github-codeg-202609&promo=CODEG">Fluxion AI</a></strong>
-    </td>
-    <td>本プロジェクトをスポンサードしてくださった Fluxion AI に感謝します！Fluxion AI は、統一されたひとつの API を通じて、GPT、Claude、Gemini をはじめとする主要な AI モデルへの高速・安定・低コストなアクセスを提供します。新規ユーザーは<a href="https://fluxionai.space/register?source=github&campaign=github-codeg-202609&promo=CODEG">専用リンク</a>から登録すると $3 分の API クレジットを受け取れます。</td>
-  </tr>
-  <tr>
-    <td align="center" width="220">
-      <a href="https://beeapi.ai/signup?aff=HIAB5JCVRNNA" target="_blank"><img src="../images/beeapi.jpg" alt="BeeAPI" width="200" /></a><br/>
-      <strong><a href="https://beeapi.ai/signup?aff=HIAB5JCVRNNA">BeeAPI</a></strong>
-    </td>
-    <td>本プロジェクトをスポンサードしてくださった <a href="https://beeapi.ai/signup?aff=HIAB5JCVRNNA">BeeAPI</a> に感謝します！BeeAPI は、マルチモデル対応の AI API 中継・集約プラットフォームです。複数のサービスプロバイダーと主要な AI モデルを集約し、事業者間の価格比較、グループ単位のスマートルーティング、統一された API 接続と課金に対応しており、より柔軟・安定・低コストに AI サービスを呼び出せます。</td>
-  </tr>
-</table>
-
-> Codeg のスポンサーになりませんか？[メールでお問い合わせください。](mailto:itpkcn@gmail.com)
 
 ## ✨ 機能
 
@@ -108,9 +48,9 @@
 
 ### すべてのエージェントを、ひとつのインターフェースで
 
-15 種のエージェントを内蔵し、ほかの ACP エージェントも公開レジストリまたはその distribution JSON から加えられます。Codeg はそのすべてと Agent Client Protocol で通信するので、どれも目を凝らして読むターミナルではなく、同じリッチな会話 — ツールカード、ライブ diff、計画、権限の確認 — として表示されます。
+20 の内蔵エージェントと任意の ACP エージェントに対応。ツールカードや差分、対話型の返答を同じ画面で。
 
-[ドキュメント →](https://docs.codeg.app/guide/supported-agents) · [カスタムエージェント →](https://docs.codeg.app/guide/custom-agents)
+[ドキュメント →](https://docs.codeg.app/guide/supported-agents) · [カスタムエージェント →](https://docs.codeg.app/guide/custom-agents) · [UI レンダリング →](https://docs.codeg.app/guide/skills#cards-tables-and-charts-in-replies)
 
 </td>
 <td width="50%">
@@ -125,9 +65,9 @@
 
 ### すべてのセッションを、検索可能に
 
-Codeg は各エージェント CLI がディスクに残す履歴を読み取ります：ワンクリックでインポートし、すべてを検索し、どのセッションも止まったところから再開できます。古いセッションを `@` で指名すれば、いま話しているエージェントがそれを読めます — 別のエージェントが書いたものでも構いません。
+履歴を取り込み、検索して再開。`@` で別のエージェントにセッションを共有し、タグで整理できます。
 
-[ドキュメント →](https://docs.codeg.app/guide/aggregation)
+[ドキュメント →](https://docs.codeg.app/guide/aggregation) · [タグ →](https://docs.codeg.app/guide/workspace#tag-conversations)
 
 </td>
 <td width="50%">
@@ -142,7 +82,7 @@ Codeg は各エージェント CLI がディスクに残す履歴を読み取り
 
 ### マルチエージェント協調
 
-`@` を打ち、エージェントを選び、送信するだけ。指名したエージェントはそれぞれ独立したセッションとして並走し、その出力があなたのスレッドへストリーミングで流れ込みます — Claude Code が下書きする間に Codex がレビューする、という具合に。サブエージェントは、動いている間に中身が埋まっていくカードとして現れます。
+`@` でエージェントに依頼。複数のエージェントが並行して働き、進捗が会話に届きます。
 
 [ドキュメント →](https://docs.codeg.app/guide/multi-agent)
 
@@ -159,9 +99,9 @@ Codeg は各エージェント CLI がディスクに残す履歴を読み取り
 
 ### 無人で進む ToDo タスク
 
-仕事を書き留めたら、あとは席を外すだけ。ToDo タスクはそれぞれ専用の git ワークツリーとブランチを持ち、すぐに、または予約した時刻に始まり、そのあと「レビュー」で待ちます。diff を受け入れるとエージェントが取り込み、Codeg は git を確かめてから完了とします。
+タスク専用のワークツリーで、今すぐ、または指定時刻に実行。変更はあなたが確認して承認します。
 
-[ドキュメント →](https://docs.codeg.app/guide/tasks)
+[ドキュメント →](https://docs.codeg.app/guide/tasks) · [自動処理 →](https://docs.codeg.app/guide/repository#let-it-pick-items-up-by-itself)
 
 </td>
 <td width="50%">
@@ -176,7 +116,7 @@ Codeg は各エージェント CLI がディスクに残す履歴を読み取り
 
 ### 無限キャンバス
 
-作業を空間に広げましょう：会話、ファイル、ターミナル、メモがボード上のカードになり、フォルダーとエージェントごとにまとまるので、複数のエージェントが並んで動く様子をひと目で見渡せます。
+会話、ファイル、ターミナル、メモを無限のボードに配置。各エージェントの作業をひと目で把握できます。
 
 [ドキュメント →](https://docs.codeg.app/guide/canvas)
 
@@ -193,9 +133,9 @@ Codeg は各エージェント CLI がディスクに残す履歴を読み取り
 
 ### デスクトップ・サーバー・モバイル・チャット
 
-Codeg はデスクトップアプリとしても、任意のブラウザで開けるセルフホストのサーバーとしても、ひとつの Docker コンテナとしても動かせます。ネイティブの iPhone・iPad・Android クライアント — さらに Telegram、Lark、WeChat のチャットチャンネル — でエージェントにいつでも手が届き、その間もファイルとセッションはあなた自身のマシンにとどまります。
+デスクトップ、サーバー、Docker、モバイルに対応。Telegram、Lark、WeChat からもエージェントと会話できます。
 
-[ドキュメント →](https://docs.codeg.app/getting-started/deployment) · [モバイルアプリ →](https://docs.codeg.app/getting-started/installation#mobile-apps) · [チャットチャンネル →](https://docs.codeg.app/guide/chat-channels)
+[ドキュメント →](https://docs.codeg.app/getting-started/deployment) · [リモートワークスペース →](https://docs.codeg.app/guide/workspace#desktop-and-browser) · [モバイルアプリ →](https://docs.codeg.app/getting-started/installation#mobile-apps) · [チャットチャンネル →](https://docs.codeg.app/guide/chat-channels)
 
 </td>
 <td width="50%">
@@ -210,7 +150,7 @@ Codeg はデスクトップアプリとしても、任意のブラウザで開�
 
 ### Office ドキュメントと科学研究
 
-スライドでも、レポートでも、表計算でも、頼めば本物の `.pptx`、`.docx`、`.xlsx` が会話の隣でリアルタイムに描画されていく様子を見られます。同梱の研究スキル — 仮説生成、実験計画、統計、文献検索 — はどのエージェントでも使えます。
+Office ファイルを作成してライブプレビュー、PDF も閲覧。研究スキルはどのエージェントでも使えます。
 
 [ドキュメント →](https://docs.codeg.app/guide/office) · [科学研究 →](https://docs.codeg.app/guide/research)
 
@@ -227,7 +167,7 @@ Codeg はデスクトップアプリとしても、任意のブラウザで開�
 
 ### ブラウザとコンピューター操作
 
-デスクトップアプリでは、リンクはファイルの隣の内蔵ブラウザで開きます：ページ、要素、スクリーンショット、コンソールエラーをエージェントに渡すことも、共有したページをエージェントに操作させることもできます。プレビュー版の機能として、共有したウィンドウをエージェントが見て操作することもできます — 停止はいつでもワンクリックです。
+デスクトップの内蔵ブラウザからページやエラーを共有。コンピューター操作（プレビュー）で共有ウィンドウも操作できます。
 
 [ドキュメント →](https://docs.codeg.app/guide/browser) · [コンピューター操作 →](https://docs.codeg.app/guide/computer-use)
 
@@ -242,38 +182,45 @@ Codeg はデスクトップアプリとしても、任意のブラウザで開�
 <tr>
 <td width="50%" valign="middle">
 
-### 開発の一連の流れをまるごと
+### コマンドラインと CI
 
-エディタ、ライブ diff と左右分割の diff、三ペインのマージエディタを備えた完全な Git クライアント、ワンクリックのワークツリー、内蔵ターミナル、画面分割 — そのすべてがエージェントの隣にあり、リポジトリの本物のファイルを扱います。
+`codeg-cli` でスクリプトや CI から起動中の Codeg に依頼。返答や JSON イベントを出力します。
 
-[ドキュメント →](https://docs.codeg.app/guide/workspace) · [Git とワークツリー →](https://docs.codeg.app/guide/git)
+[ドキュメント →](https://docs.codeg.app/guide/command-line)
 
 </td>
-<td width="50%">
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../images/features/workspace-dark.gif" />
-  <img src="../images/features/workspace-light.gif" alt="開発の一連の流れをまるごと" width="100%" />
-</picture>
+<td width="50%" valign="middle">
+
+```bash
+codeg-cli -a codex \
+  -p "Review the latest commit"
+
+git diff | codeg-cli -a codex \
+  -p "Review this diff"
+```
+
 </td>
 </tr>
 </table>
 
 **このほかにも：**
 
+- **[開発の一連の流れをまるごと](https://docs.codeg.app/guide/workspace)** — コードエディター、ライブ差分、[Git とワークツリー](https://docs.codeg.app/guide/git)、3 ペインのマージエディター、ターミナル、分割表示
 - **[リポジトリパネル](https://docs.codeg.app/guide/repository)** — GitHub、GitLab、Gitea、Forgejo のイシュー、プルリクエスト、チェック、マージ。どのイシューや PR も ToDo タスクにできます
 - **[オートメーション](https://docs.codeg.app/guide/automations)** — 設定済みの入力欄を保存し、cron スケジュールまたは任意のタイミングでヘッドレス実行
-- **[トークン使用量](https://docs.codeg.app/guide/token-usage)** — 推移、キャッシュヒット率、アクティビティのヒートマップ、フォルダー・エージェント・モデル・セッション別の使用量
+- **[トークン使用量](https://docs.codeg.app/guide/token-usage)** — 推移、キャッシュヒット率、アクティビティのヒートマップ、フォルダー・エージェント・モデル・セッション別の使用量、API の定価で見積もったコスト
 - **[分岐とステアリング](https://docs.codeg.app/guide/workspace#follow-along-%E2%80%94-the-conversation)** — 対応しているエージェントでは、完了した返信から会話を分岐させたり、まだ実行中のターンにメッセージを送り込んだりできます
 - **[スキル](https://docs.codeg.app/guide/skills) と [MCP](https://docs.codeg.app/guide/mcp)** — エージェントごとのスキルパック、ローカルの MCP スキャン、レジストリの検索とインストール
 - **[プロジェクトブート](https://docs.codeg.app/guide/project-boot)** — ライブプレビュー付きで新規プロジェクトを視覚的に構築
-- **[自分好みに](https://docs.codeg.app/reference/settings/appearance)** — カラートークン単位で塗り替えられる 12 のテーマ、壁紙、角丸、カスタム CSS — インターフェースは 10 言語に対応
+- **[通知](https://docs.codeg.app/reference/settings/general#desktop-notifications)** — ターンが終わったときやエージェントに呼ばれたときに、デスクトップ通知と通知音、タスクバーボタンの点滅や Dock アイコンのバウンドで知らせます
+- **[自分好みに](https://docs.codeg.app/reference/settings/appearance)** — カラートークン単位で塗り替えられる 12 のテーマ、壁紙、角丸、チャット幅、カスタム CSS、デスクトップペット — インターフェースは 10 言語に対応
 - **[バックアップと同期](https://docs.codeg.app/reference/settings/system#backup-restore)** — 暗号化バックアップと、ファイルまたは自分の WebDAV サーバーを介したマシン間の設定同期
 - **[URL スキーム](../../docs/url-scheme.md)** — `codeg://session/<id>` で別のアプリから会話を開けます（デスクトップ）
 - **まだまだあります** — ほぼすべてのリリースで何かが加わります。全リストは [リリースノート](https://github.com/spacering-net/codeg/releases) で確認できます
 
 ## 🤖 対応エージェント
 
-Codeg はすべてのエージェントと [Agent Client Protocol](https://agentclientprotocol.com) で通信するため、どのエージェントにも同じ構造化されたインターフェースが用意されます。15 種を内蔵し、その多くは Codeg がインストール・バージョン固定・更新まで面倒を見ます：
+Codeg はすべてのエージェントと [Agent Client Protocol](https://agentclientprotocol.com) で通信するため、どのエージェントにも同じ構造化されたインターフェースが用意されます。20 種を内蔵し、その多くは Codeg がインストール・バージョン固定・更新まで面倒を見ます：
 
 <p>
   <a href="https://www.anthropic.com/claude-code"><kbd><img src="../images/agents/claude-code.svg" alt="" width="16" valign="middle" /> Claude Code</kbd></a> &nbsp;
@@ -285,12 +232,17 @@ Codeg はすべてのエージェントと [Agent Client Protocol](https://agent
   <a href="https://hermes-agent.nousresearch.com"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/hermes-agent-dark.svg" /><img src="../images/agents/hermes-agent.svg" alt="" width="16" valign="middle" /></picture> Hermes Agent</kbd></a> &nbsp;
   <a href="https://www.codebuddy.ai"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/codebuddy-dark.svg" /><img src="../images/agents/codebuddy.svg" alt="" width="16" valign="middle" /></picture> CodeBuddy</kbd></a> &nbsp;
   <a href="https://www.kimi.com/code"><kbd><img src="../images/agents/kimi-code.svg" alt="" width="16" valign="middle" /> Kimi Code</kbd></a> &nbsp;
+  <a href="../agents/minimax-code.md"><kbd><img src="../images/agents/minimax-code.svg" alt="" width="16" valign="middle" /> MiniMax Code</kbd></a> &nbsp;
   <a href="https://pi.dev"><kbd><img src="../images/agents/pi.svg" alt="" width="16" valign="middle" /> Pi</kbd></a> &nbsp;
   <a href="https://x.ai/cli"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/grok-dark.svg" /><img src="../images/agents/grok.svg" alt="" width="16" valign="middle" /></picture> Grok</kbd></a> &nbsp;
   <a href="https://cursor.com/cli"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/cursor-dark.svg" /><img src="../images/agents/cursor.svg" alt="" width="16" valign="middle" /></picture> Cursor</kbd></a> &nbsp;
   <a href="https://deepseek-harness.github.io/deepseek-harness/"><kbd><img src="../images/agents/deepseek-harness.svg" alt="" width="16" valign="middle" /> DeepSeek Harness</kbd></a> &nbsp;
   <a href="https://qoder.com"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/qoder-dark.svg" /><img src="../images/agents/qoder.svg" alt="" width="16" valign="middle" /></picture> Qoder</kbd></a> &nbsp;
   <a href="https://antigravity.google"><kbd><picture><source media="(prefers-color-scheme: dark)" srcset="../images/agents/google-antigravity-dark.svg" /><img src="../images/agents/google-antigravity.svg" alt="" width="16" valign="middle" /></picture> Google Antigravity</kbd></a> &nbsp;
+  <a href="https://kiro.dev/cli/"><kbd><img src="../images/agents/kiro.svg" alt="" width="16" valign="middle" /> Kiro CLI</kbd></a> &nbsp;
+  <a href="../agents/zcode.md"><kbd><img src="../images/agents/zcode.svg" alt="" width="16" valign="middle" /> ZCode</kbd></a> &nbsp;
+  <a href="https://docs.trae.cn/cli_about-trae-code-cli-2"><kbd><img src="../images/agents/trae.svg" alt="" width="16" valign="middle" /> TRAE CLI</kbd></a> &nbsp;
+  <a href="https://commandcode.ai"><kbd><img src="../images/agents/command-code.svg" alt="" width="16" valign="middle" /> Command Code</kbd></a> &nbsp;
   <a href="https://docs.codeg.app/guide/custom-agents"><kbd>+ 任意の ACP エージェント</kbd></a>
 </p>
 
@@ -317,8 +269,10 @@ $env:CODEG_STATIC_DIR="$env:LOCALAPPDATA\codeg-server\web"; codeg-server
 **Docker** — 同じサーバーを、ひとつのコンテナで：
 
 ```bash
-docker run -d -p 3080:3080 -v codeg-data:/data ghcr.io/xintaofei/codeg:latest
+docker run -d -p 3080:3080 -v codeg-data:/data ghcr.io/spacering-net/codeg:latest
 ```
+
+どちらの場合も、ブラウザで `http://<host>:3080` を開き、サーバーが起動時に出力するアクセストークンを入力します（コンテナでは `docker logs` で確認できます）。`CODEG_TOKEN` で自分で決めることもできます。
 
 **モバイル** — [iOS アプリ](https://apps.apple.com/app/codeg-client/id6785199071) または [Android APK](https://github.com/xintaofei/codeg-android/releases/latest) をインストールし、デスクトップアプリの **Webサービス**か自分の `codeg-server` を指定するだけ：アドレスとトークンを入れれば完了です。接続手順は [モバイルアプリ](https://docs.codeg.app/getting-started/installation#mobile-apps)。
 
@@ -362,6 +316,8 @@ Compose、ビルド済みバイナリ、ソースからのビルド、その場�
 - [Superpowers](https://github.com/obra/superpowers) — Codeg のエキスパートスキルモジュールを支えるプロジェクト
 - [OfficeCLI](https://github.com/iOfficeAI/OfficeCLI) — Codeg の Office ドキュメントワークフローを支えるプロジェクト
 - [scientific-agent-skills](https://github.com/K-Dense-AI/scientific-agent-skills) — Codeg の科学研究スキルを支えるプロジェクト（MIT ライセンスのサブセット）
+- [json-render](https://github.com/vercel-labs/json-render) — Codeg の UI レンダリング（カード・表・グラフ）を支えるプロジェクト
+- [cua-driver](https://github.com/trycua/cua) — Codeg のコンピューター操作を支えるプロジェクト
 
 ## 📜 ライセンス
 

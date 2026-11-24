@@ -1,0 +1,56 @@
+{
+  "schema_version": "2.0",
+  "checklist_id": "OP-SYN-001",
+  "record_id": "HG-SYN-001",
+  "human_reviewer": "Qualified measurement reviewer pending",
+  "items": [
+    {
+      "measurement_id": "M-OUTCOME",
+      "applicability": "applicable",
+      "construct_defined": true,
+      "variable_role": "outcome",
+      "operational_definition_recorded": true,
+      "population_scope_recorded": true,
+      "unit_or_categories_recorded": true,
+      "timing_recorded": true,
+      "instrument_or_method_recorded": true,
+      "validity_evidence_source_ids": [
+        "SRC-SYN-001"
+      ],
+      "validity_applicability_reviewed": false,
+      "reliability_or_repeatability_plan_recorded": true,
+      "calibration_or_quality_control_status": "planned",
+      "measurement_invariance_or_comparability_status": "unresolved",
+      "masking_status": "planned",
+      "missingness_plan_recorded": true,
+      "threshold_or_cutpoint_status": "not_applicable",
+      "limitations_recorded": true,
+      "human_review_status": "pending",
+      "note": "Synthetic example. A qualified human must determine whether the validity evidence applies to the target system."
+    },
+    {
+      "measurement_id": "M-NEGATIVE-CONTROL",
+      "applicability": "applicable",
+      "construct_defined": true,
+      "variable_role": "negative_control",
+      "operational_definition_recorded": true,
+      "population_scope_recorded": true,
+      "unit_or_categories_recorded": true,
+      "timing_recorded": true,
+      "instrument_or_method_recorded": true,
+      "validity_evidence_source_ids": [
+        "SRC-SYN-001"
+      ],
+      "validity_applicability_reviewed": false,
+      "reliability_or_repeatability_plan_recorded": true,
+      "calibration_or_quality_control_status": "planned",
+      "measurement_invariance_or_comparability_status": "not_applicable",
+      "masking_status": "not_applicable",
+      "missingness_plan_recorded": true,
+      "threshold_or_cutpoint_status": "planned",
+      "limitations_recorded": true,
+      "human_review_status": "pending",
+      "note": "Synthetic example. Confirm that the target mechanism cannot affect this control and that relevant bias pathways are shared."
+    }
+  ]
+}

@@ -79,7 +79,6 @@ import {
   rollbackToSnapshot,
   scanExternalConflicts,
   stageRestoreWeb,
-  uploadBackupWeb,
 } from "@/lib/api"
 
 const t = enMessages.BackupSettings
@@ -117,7 +116,7 @@ async function selectBackup(preview: Record<string, unknown>) {
   const file = new File(["x"], "b.codeg.zip")
   Object.defineProperty(input, "files", { value: [file] })
   fireEvent.change(input)
-  await waitFor(() => expect(uploadBackupWeb).toHaveBeenCalled())
+  await screen.findByText(t.restore.preview.title)
 }
 
 /** The card opens on configuration sync, so every test selects its own panel. */

@@ -103,27 +103,46 @@ describe("workspacePaneOf", () => {
 
 describe("tabShortcutTarget", () => {
   it("acts on the conversation strip when there is no file column", () => {
-    expect(tabShortcutTarget("conversation", "files", false)).toEqual({
+    expect(tabShortcutTarget("conversation", "files", false, false)).toEqual({
       conversation: true,
       files: false,
     })
   })
 
   it("follows the pane in a split", () => {
-    expect(tabShortcutTarget("fusion", "conversation", false)).toEqual({
+    expect(tabShortcutTarget("fusion", "conversation", false, false)).toEqual({
       conversation: true,
       files: false,
     })
-    expect(tabShortcutTarget("fusion", "files", false)).toEqual({
+    expect(tabShortcutTarget("fusion", "files", false, false)).toEqual({
       conversation: false,
       files: true,
     })
   })
 
   it("acts on the files strip while it is maximized, whatever the pane", () => {
-    expect(tabShortcutTarget("fusion", "conversation", true)).toEqual({
+    expect(tabShortcutTarget("fusion", "conversation", true, false)).toEqual({
       conversation: false,
       files: true,
+    })
+    expect(tabShortcutTarget("fusion", "files", true, false)).toEqual({
+      conversation: false,
+      files: true,
+    })
+  })
+
+  // The file strip is hidden under the conversation then: a pane left on
+  // "files" (the user clicked there, then maximized from the conversation
+  // strip, which leaves the pane alone) must not route ⌘W to a tab nobody can
+  // see.
+  it("acts on the conversation strip while it is maximized, whatever the pane", () => {
+    expect(tabShortcutTarget("fusion", "files", false, true)).toEqual({
+      conversation: true,
+      files: false,
+    })
+    expect(tabShortcutTarget("fusion", "conversation", false, true)).toEqual({
+      conversation: true,
+      files: false,
     })
   })
 })

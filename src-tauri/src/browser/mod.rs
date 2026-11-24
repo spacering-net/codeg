@@ -4,8 +4,8 @@
 //! next to the chat: on macOS / Windows a wry child webview embedded in the
 //! workspace window at the bounds of a placeholder element (see Cargo.toml's
 //! `browser-child` note for why wry is driven directly rather than through
-//! tauri's `add_child`), on Linux (and as
-//! the fallback everywhere) an owned top-level window. The frontend only ever
+//! tauri's `add_child`), on Linux a GTK overlay within that same window.
+//! An owned top-level window remains an explicit fallback. The frontend only ever
 //! talks to it through the `browser_*` commands and the `browser://*` events;
 //! the page itself has no Tauri IPC at all — `browser-*` labels are absent from
 //! every capability on purpose, so a page script cannot reach any command.
@@ -98,7 +98,7 @@ pub mod surface;
 #[cfg(all(
     feature = "browser-child",
     feature = "tauri-runtime",
-    any(target_os = "macos", target_os = "windows")
+    any(target_os = "macos", target_os = "windows", target_os = "linux")
 ))]
 pub mod surface_child;
 #[cfg(feature = "tauri-runtime")]

@@ -38,6 +38,7 @@ use super::snapshot::{
     ENCRYPTION_NONE,
 };
 use crate::app_error::{AppCommandError, CONFIG_SYNC_I18N_KEY_INVALID_SNAPSHOT};
+use crate::web::event_bridge::EventEmitter;
 
 /// Marker + version of the single-file export envelope.
 pub const EXPORT_FORMAT_VERSION: u32 = 1;
@@ -237,26 +238,29 @@ fn preview_of(export: ConfigExportFile) -> Result<ConfigImportPreview, AppComman
 
 pub async fn import_from_file_core(
     conn: &DatabaseConnection,
+    emitter: &EventEmitter,
     path: &Path,
     rollbacks: &Path,
 ) -> Result<ConfigImportResult, AppCommandError> {
     // Parse before writing the rollback snapshot: a malformed file should cost
     // the user nothing at all.
     let export = read_export_file(path)?;
-    apply_import(conn, &export.config, rollbacks).await
+    apply_import(conn, emitter, &export.config, rollbacks).await
 }
 
 pub async fn import_bytes_core(
     conn: &DatabaseConnection,
+    emitter: &EventEmitter,
     bytes: &[u8],
     rollbacks: &Path,
 ) -> Result<ConfigImportResult, AppCommandError> {
     let export = parse_export_bytes(bytes, &stored_passphrase())?;
-    apply_import(conn, &export.config, rollbacks).await
+    apply_import(conn, emitter, &export.config, rollbacks).await
 }
 
 async fn apply_import(
     conn: &DatabaseConnection,
+    emitter: &EventEmitter,
     snapshot: &ConfigSnapshot,
     rollbacks: &Path,
 ) -> Result<ConfigImportResult, AppCommandError> {
@@ -265,9 +269,12 @@ async fn apply_import(
     // half-merged state to the remote as if it were a state the user chose.
     // The upload the import DOES deserve happens on the next tick, once the
     // configuration is whole again.
+    // One config-sync operation at a time: an upload must not collect a
+    // snapshot while this is half-way through rewriting it.
+    let _operation = super::webdav_sync::sync_lock().lock().await;
     let _suppression = super::auto_sync::suppress_auto_sync();
     let rollback_path = save_rollback(conn, rollbacks).await;
-    let applied = apply_snapshot_core(conn, snapshot).await?;
+    let applied = apply_snapshot_core(conn, emitter, snapshot).await?;
     Ok(ConfigImportResult {
         applied,
         rollback_path,
@@ -284,12 +291,13 @@ async fn apply_import(
 /// the developer's `~/.codeg`.
 pub async fn apply_rollback_core(
     conn: &DatabaseConnection,
+    emitter: &EventEmitter,
     dir: &Path,
     id: &str,
 ) -> Result<ConfigImportResult, AppCommandError> {
     let path = resolve_rollback(dir, id)?;
     let snapshot = read_rollback(&path)?;
-    apply_import(conn, &snapshot, dir).await
+    apply_import(conn, emitter, &snapshot, dir).await
 }
 
 /// Newest first. Empty — never an error — when nothing has ever been imported:
@@ -365,7 +373,7 @@ mod tests {
 
         let target = fresh_in_memory_db().await;
         let rollbacks = tempfile::tempdir().expect("tempdir");
-        let result = import_from_file_core(&target.conn, &dest, rollbacks.path())
+        let result = import_from_file_core(&target.conn, &EventEmitter::Noop, &dest, rollbacks.path())
             .await
             .expect("import");
         assert!(result.applied.total >= 1);
@@ -429,7 +437,7 @@ mod tests {
 
         let target = fresh_in_memory_db().await;
         let rollbacks = tempfile::tempdir().expect("tempdir");
-        let result = import_bytes_core(&target.conn, &sealed, rollbacks.path())
+        let result = import_bytes_core(&target.conn, &EventEmitter::Noop, &sealed, rollbacks.path())
             .await
             .expect("import");
         assert!(result.applied.total >= 1);
@@ -460,7 +468,7 @@ mod tests {
         // And nothing is written when the import is attempted anyway.
         let target = fresh_in_memory_db().await;
         let rollbacks = tempfile::tempdir().expect("tempdir");
-        import_bytes_core(&target.conn, &bytes, rollbacks.path())
+        import_bytes_core(&target.conn, &EventEmitter::Noop, &bytes, rollbacks.path())
             .await
             .expect_err("must refuse");
         assert_eq!(
@@ -497,7 +505,7 @@ mod tests {
         std::fs::write(&path, compact).expect("write");
 
         let target = fresh_in_memory_db().await;
-        import_from_file_core(&target.conn, &path, dir.path())
+        import_from_file_core(&target.conn, &EventEmitter::Noop, &path, dir.path())
             .await
             .expect("import compact");
         assert_eq!(
@@ -530,7 +538,7 @@ mod tests {
         let target = fresh_in_memory_db().await;
         seed_message(&target.conn, "Imported").await;
 
-        let result = apply_rollback_core(&target.conn, dir.path(), &listed[0].id)
+        let result = apply_rollback_core(&target.conn, &EventEmitter::Noop, dir.path(), &listed[0].id)
             .await
             .expect("apply rollback");
         assert!(result.applied.total >= 1);
@@ -547,7 +555,7 @@ mod tests {
         // An id that is not on this machine is a plain "gone", not a panic and
         // not a path.
         assert!(
-            apply_rollback_core(&target.conn, dir.path(), "../../etc/passwd")
+            apply_rollback_core(&target.conn, &EventEmitter::Noop, dir.path(), "../../etc/passwd")
                 .await
                 .is_err()
         );
@@ -576,7 +584,7 @@ mod tests {
         seed_message(&target.conn, "Local").await;
         assert!(list_rollbacks_core(rollbacks.path()).is_empty());
 
-        let result = import_bytes_core(&target.conn, &bytes, rollbacks.path())
+        let result = import_bytes_core(&target.conn, &EventEmitter::Noop, &bytes, rollbacks.path())
             .await
             .expect("import");
 
@@ -600,7 +608,7 @@ mod tests {
         std::fs::write(&path, b"just some notes").expect("write");
 
         let target = fresh_in_memory_db().await;
-        let err = import_from_file_core(&target.conn, &path, dir.path())
+        let err = import_from_file_core(&target.conn, &EventEmitter::Noop, &path, dir.path())
             .await
             .expect_err("must reject");
         assert_eq!(

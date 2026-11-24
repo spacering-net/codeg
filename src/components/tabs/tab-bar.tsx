@@ -3,14 +3,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Reorder } from "motion/react"
 import type { PanInfo } from "motion/react"
-import { SquarePen } from "lucide-react"
+import { Maximize2, Minimize2, SquarePen } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { cn } from "@/lib/utils"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useTabActions, useTabStore } from "@/contexts/tab-context"
 import type { TabItem as TabItemData } from "@/contexts/tab-context"
-import { groupOfTab } from "@/stores/tab-store"
+import {
+  useWorkspaceActions,
+  useWorkspaceView,
+} from "@/contexts/workspace-context"
+import { useIsMobile } from "@/hooks/use-mobile"
+import { useFolderTabsStore } from "@/stores/folder-tabs-store"
+import {
+  groupOfTab,
+  useVisibleConversationLayout,
+  useVisibleConversationTabs,
+} from "@/stores/tab-store"
 import {
   firstLeafId,
   leafIds,
@@ -22,6 +32,7 @@ import {
 } from "@/lib/tab-drag-drop"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { useIsCoarsePointer } from "@/hooks/use-is-coarse-pointer"
+import { STRIP_ICON_BTN } from "./strip-icon-button"
 import { TabItem, type TabMoveTarget } from "./tab-item"
 
 interface TabBarProps {
@@ -29,15 +40,27 @@ interface TabBarProps {
    *  selected tab, and target new tabs/reorders at the group. Omitted = the
    *  single title-bar strip shown while unsplit. */
   groupId?: string
+  /** Carry the conversation column's maximize/restore button. The column has
+   *  one, so exactly one strip does: the unsplit strip, or while split the
+   *  top-right group's — the strip in the unsplit one's place. */
+  maximizeControl?: boolean
 }
 
 // Rendered inside the desktop conversation-column title strip while unsplit,
 // or once per group shell (with `groupId`) while split. The old standalone
 // mobile variant is gone — mobile shows the conversation detail header instead
 // and navigates tabs from the sidebar.
-export function TabBar({ groupId }: TabBarProps) {
+export function TabBar({ groupId, maximizeControl = false }: TabBarProps) {
   const t = useTranslations("Folder.conversationCard")
-  const tabs = useTabStore((s) => s.tabs)
+  const { mode, conversationMaximized } = useWorkspaceView()
+  const { toggleConversationMaximized } = useWorkspaceActions()
+  const isMobile = useIsMobile()
+  // Maximizing means covering the file column, so it is offered only while
+  // there is one (fusion) — the file strip's own button follows the same rule.
+  // Mobile shows one pane at a time and has nothing to cover.
+  const showMaximize = maximizeControl && mode === "fusion" && !isMobile
+  const tabsFollowFolder = useFolderTabsStore((s) => s.enabled)
+  const tabs = useVisibleConversationTabs()
   const activeTabId = useTabStore((s) => s.activeTabId)
   const groupOf = useTabStore((s) => s.groupOf)
   const groupLayout = useTabStore((s) => s.groupLayout)
@@ -70,7 +93,11 @@ export function TabBar({ groupId }: TabBarProps) {
   // The group this strip represents (unsplit strip = the single first leaf),
   // its tabs, and its displayed "active" tab: the GROUP's selected tab — for
   // the focused group (and the unsplit strip) that IS the global active tab.
-  const stripGroupId = groupId ?? firstLeafId(groupLayout)
+  const stripGroupId =
+    groupId ??
+    (tabs[0]
+      ? groupOfTab(groupOf, groupLayout, tabs[0].id)
+      : firstLeafId(groupLayout))
   const groupTabs = useMemo(
     () =>
       groupId == null
@@ -88,8 +115,12 @@ export function TabBar({ groupId }: TabBarProps) {
     [toggleGroupTile, stripGroupId]
   )
 
-  // Split-group context-menu wiring, shared by every tab in this strip.
-  const orderedLeaves = useMemo(() => leafIds(groupLayout), [groupLayout])
+  // Split-group context-menu wiring, shared by every tab in this strip: the
+  // groups on screen are the split targets. While tabs follow the folder that
+  // is the folder's own layout, which the visible one narrows to its tabs
+  // before the tab set is known.
+  const visibleLayout = useVisibleConversationLayout()
+  const orderedLeaves = useMemo(() => leafIds(visibleLayout), [visibleLayout])
   const isSplit = orderedLeaves.length > 1
   const canSplitMove = groupTabs.length >= 2
   const moveTargets = useMemo<TabMoveTarget[]>(() => {
@@ -278,7 +309,11 @@ export function TabBar({ groupId }: TabBarProps) {
     []
   )
 
-  if (groupTabs.length === 0) return null
+  // While tabs follow the folder, the unsplit strip stays up for a folder with
+  // nothing open: its "+" is how that folder gets its first conversation.
+  if (groupTabs.length === 0 && (groupId != null || !tabsFollowFolder)) {
+    return null
+  }
 
   const activeIndex = groupTabs.findIndex((tab) => tab.id === displayActiveId)
   // When the LAST tab is active, the trailing new-conversation wrapper is its
@@ -368,16 +403,18 @@ export function TabBar({ groupId }: TabBarProps) {
           />
         )
       })}
-      {/* The new-conversation button + drag spacer are the Reorder.Group's own
-          trailing children, so they share the tabs' flex line — the button hugs
-          the last tab and the spacer fills the leftover row as a window-drag
-          region. They are not Reorder.Items, so dragging a tab only ever permutes
-          the tabs. Wrapped in one `flex-1` `ws-strip-line` box so the
-          workspace-bg bottom hairline runs unbroken under both — the short
-          `self-start h-7` button can't carry the line itself. NO `min-w-0`: its
-          min-content (the shrink-0 button + the spacer's `min-w-10`) is its floor,
-          so under many-tab overflow the tabs shrink to reserve it instead of it
-          collapsing to 0 and clipping the button. */}
+      {/* The new-conversation button + drag spacer (+ the maximize/restore
+          button, flush right, while a file column sits beside this one) are the
+          Reorder.Group's own trailing children, so they share the tabs' flex
+          line — the new-conversation button hugs the last tab and the spacer
+          fills the leftover row as a window-drag region. They are not
+          Reorder.Items, so dragging a tab only ever permutes the tabs. Wrapped
+          in one `flex-1` `ws-strip-line` box so the workspace-bg bottom hairline
+          runs unbroken under all of them — the short `self-start h-7` buttons
+          can't carry the line themselves. NO `min-w-0`: its min-content (the
+          shrink-0 buttons + the spacer's `min-w-10`) is its floor, so under
+          many-tab overflow the tabs shrink to reserve it instead of it
+          collapsing to 0 and clipping the buttons. */}
       <div
         // `relative` anchors two decorative pseudo-elements: the
         // `data-adjacent-active` inset baseline (globals.css `.ws-strip-line`
@@ -395,19 +432,13 @@ export function TabBar({ groupId }: TabBarProps) {
         <button
           type="button"
           onClick={handleNewConversation}
-          // Ghost-style CIRCULAR icon button, evenly inset from the strip's three
-          // visible edges so its round hover fill never touches the last tab.
-          // `self-start` seats it against the group's `pt-1.5` top rather than
-          // centering in the pt-shortened trailing box: with `h-7` on the `h-10`
-          // strip that yields an equal 6px top and 6px bottom gap, so its center
-          // still lands on the strip midline (matching the tab content). `ml-1.5`
-          // adds a matching 6px LEFT gap from the last tab's edge. The hover uses
-          // the chrome-standard adaptive tint (`bg-foreground/10`, matching the
-          // bottom branch/command blocks) plus `backdrop-blur-sm`: over the fully
-          // transparent strip (workspace bg image on) the fill reads as frosted
-          // glass rather than a muddy patch, and the tint is clearly visible in
-          // both light and dark themes (unlike the old near-white `bg-accent/40`).
-          className="ml-1.5 mr-0.5 flex h-7 w-7 shrink-0 items-center justify-center self-start rounded-full text-muted-foreground backdrop-blur-sm transition-colors hover:bg-foreground/10 hover:text-foreground"
+          // Ghost-style CIRCULAR icon button (STRIP_ICON_BTN: the shape, the
+          // midline seating and the frosted adaptive hover), evenly inset from
+          // the strip's three visible edges so its round hover fill never
+          // touches the last tab: seated against the group's `pt-1.5` top it
+          // has 6px above and below, and `ml-1.5` adds a matching 6px LEFT gap
+          // from the last tab's edge.
+          className={cn(STRIP_ICON_BTN, "ml-1.5 mr-0.5")}
           aria-label={t("newConversation")}
           title={t("newConversation")}
         >
@@ -416,14 +447,38 @@ export function TabBar({ groupId }: TabBarProps) {
         {/* Drag spacer, floored at `min-w-10` (40px) instead of `min-w-0`: even
             when many tabs overflow and squeeze this region, a grabbable
             window-drag gap always remains to the RIGHT of the new-conversation
-            button, so the button never reaches the strip's right edge and the
-            packed strip stays draggable. Group strips keep the drag region too:
-            while split there is NO dedicated title-bar row above the shells
-            (the workspace layout drops it), so each strip's tail is that
-            group's slice of the window-drag surface — for the top row it IS
-            the title bar, and lower rows offer the same grab area, mirroring
-            the unsplit strip. */}
+            button, so the button never reaches the strip's right edge (or the
+            maximize button) and the packed strip stays draggable. Group strips
+            keep the drag region too: while split there is NO dedicated
+            title-bar row above the shells (the workspace layout drops it), so
+            each strip's tail is that group's slice of the window-drag surface —
+            for the top row it IS the title bar, and lower rows offer the same
+            grab area, mirroring the unsplit strip. */}
         <div data-tauri-drag-region className="h-full min-w-10 flex-1" />
+        {/* Maximize/restore, flush right like the file strip's own: the
+            conversation column over the whole middle area with the file column
+            hidden under it, and back. `mr-1.5` gives it the 6px inset from the
+            strip's right edge it has above and below. */}
+        {showMaximize && groupTabs.length > 0 && (
+          <button
+            type="button"
+            onClick={toggleConversationMaximized}
+            className={cn(
+              STRIP_ICON_BTN,
+              "mr-1.5",
+              conversationMaximized && "text-primary"
+            )}
+            aria-label={conversationMaximized ? t("restore") : t("maximize")}
+            aria-pressed={conversationMaximized}
+            title={conversationMaximized ? t("restore") : t("maximize")}
+          >
+            {conversationMaximized ? (
+              <Minimize2 className="h-3.5 w-3.5" />
+            ) : (
+              <Maximize2 className="h-3.5 w-3.5" />
+            )}
+          </button>
+        )}
       </div>
     </Reorder.Group>
   )

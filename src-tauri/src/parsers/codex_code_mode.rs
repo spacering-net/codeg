@@ -1869,6 +1869,12 @@ fn chunk_text(value: &Value) -> Option<String> {
         Value::String(s) => Some(s.clone()),
         Value::Object(map) => match map.get("text").and_then(|t| t.as_str()) {
             Some(text) => Some(text.to_string()),
+            // A picture (`view_image` returns one, a script's `image()` hands
+            // it back) is a base64 data URL, not text. It keeps its slot, so
+            // the chunks still divide per call; it just has nothing to say.
+            None if map.get("type").and_then(|t| t.as_str()) == Some("input_image") => {
+                Some(String::new())
+            }
             None => Some(value.to_string()),
         },
         other => Some(other.to_string()),
@@ -2766,6 +2772,32 @@ mod tests {
         let parsed = split_code_mode_output(Some(&output));
         assert_eq!(parsed.status, ScriptStatus::Unknown);
         assert_eq!(parsed.chunks, vec!["just text"]);
+    }
+
+    /// A script's `image()` hands back the picture itself (what `view_image`
+    /// returns): a base64 data URL, which is no text to show. Each image keeps
+    /// its slot, so the chunks still divide per call exactly as before.
+    #[test]
+    fn image_items_keep_their_slot_without_their_bytes() {
+        let image = serde_json::json!({
+            "type": "input_image",
+            "image_url": "data:image/png;base64,iVBORw0KGgo=",
+            "detail": "high",
+        });
+        let output = serde_json::json!([
+            {"type": "input_text", "text": "Script completed\nWall time 0.0 seconds\nOutput:\n"},
+            {"type": "input_text", "text": "mobile"},
+            image,
+            {"type": "input_text", "text": "desktop"},
+            image,
+        ]);
+        let parsed = split_code_mode_output(Some(&output));
+        assert_eq!(parsed.status, ScriptStatus::Completed);
+        assert_eq!(parsed.chunks, vec!["mobile", "", "desktop", ""]);
+
+        // `view_image` called directly: the image is its whole output.
+        let parsed = split_code_mode_output(Some(&serde_json::json!([image])));
+        assert!(parsed.chunks.is_empty(), "{:?}", parsed.chunks);
     }
 
     /// One call SITE is not one invocation, and arguments reached through a

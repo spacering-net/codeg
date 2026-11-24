@@ -38,6 +38,7 @@ import { isHtmlPreviewable } from "@/lib/language-detect"
 import { openFileDialog } from "@/lib/platform"
 import { isDesktop, isRemoteDesktopMode } from "@/lib/transport"
 import { cn, handleMiddleClickClose } from "@/lib/utils"
+import { STRIP_ICON_BTN } from "@/components/tabs/strip-icon-button"
 import {
   ContextMenu,
   ContextMenuContent,
@@ -53,23 +54,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-
-/**
- * The strip's own icon buttons ("+" and maximize/restore), copied from the
- * conversation strip's new-conversation button (`tabs/tab-bar.tsx`) so the two
- * strips read as one piece of chrome: a circular ghost button evenly inset
- * from the strip's edges, with the adaptive `bg-foreground/10` hover tint and
- * `backdrop-blur-sm` so the fill reads as frosted glass over a workspace
- * background image rather than a muddy patch.
- *
- * `self-start` — NOT `self-center` — is what centers these. The trailing box
- * they sit in is shortened by the group's `pt-1.5`, so `self-center` centers
- * an `h-7` button in 34px and lands it 3px BELOW the strip midline (the tab
- * labels' line); seating it against the top instead yields an equal 6px above
- * and below, putting its centre back on that midline.
- */
-const STRIP_ICON_BTN =
-  "flex h-7 w-7 shrink-0 items-center justify-center self-start rounded-full text-muted-foreground backdrop-blur-sm transition-colors hover:bg-foreground/10 hover:text-foreground"
 
 // Rendered only inside the desktop file-column title strip (embedded). The old
 // standalone mobile variant is gone — mobile shows the FileWorkspaceHeader

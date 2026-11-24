@@ -1,6 +1,12 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
-import { sizeSvgForRaster } from "./mermaid-export"
+import { saveDiagram, sizeSvgForRaster } from "./mermaid-export"
+
+const mocks = vi.hoisted(() => ({
+  saveTextFile: vi.fn(async () => "saved" as const),
+}))
+
+vi.mock("@/lib/save-file", () => ({ saveTextFile: mocks.saveTextFile }))
 
 // Mermaid 11's root tag: `width="100%"`, the real size only in the viewBox,
 // plus an inline `max-width` that would cap the raster back down to 1x.
@@ -60,5 +66,35 @@ describe("sizeSvgForRaster", () => {
     const svg =
       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100.4 33.3"></svg>'
     expect(sizeSvgForRaster(svg, 1.5)).toMatchObject({ width: 151, height: 50 })
+  })
+})
+
+describe("saveDiagram", () => {
+  it("saves a Mermaid fence's source as .mmd", async () => {
+    await saveDiagram({ format: "mmd", svg: null, source: "graph TD;" })
+
+    expect(mocks.saveTextFile).toHaveBeenLastCalledWith({
+      content: "graph TD;",
+      suggestedName: "diagram.mmd",
+      mimeType: "text/plain",
+      filterName: "Mermaid",
+      ext: "mmd",
+    })
+  })
+
+  it("saves a PlantUML fence's source as .puml, without needing the drawing", async () => {
+    const source = "@startuml\nAlice -> Bob\n@enduml"
+
+    await expect(
+      saveDiagram({ format: "puml", svg: null, source })
+    ).resolves.toBe("saved")
+
+    expect(mocks.saveTextFile).toHaveBeenLastCalledWith({
+      content: source,
+      suggestedName: "diagram.puml",
+      mimeType: "text/plain",
+      filterName: "PlantUML",
+      ext: "puml",
+    })
   })
 })

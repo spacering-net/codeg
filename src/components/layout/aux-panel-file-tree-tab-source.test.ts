@@ -280,9 +280,14 @@ describe("markdown-document-preview resolves local refs safely", () => {
     expect(markdownSource).toMatch(
       /const localRefsEnabled = !fileDir \|\| !isUncPath\(fileDir\)/
     )
+    // The image loader and link opener are both gated through the derived
+    // `baseDir` / `effectivePreviewRoot` pair, which is null for UNC docs.
     expect(markdownSource).toMatch(
-      /fileDir=\{localRefsEnabled \? fileDir : null\}/
+      /const baseDir = localRefsEnabled \? \(fileDir \?\? previewRoot\) : null/
     )
+    expect(markdownSource).toMatch(/enabled=\{localRefsEnabled\}/)
+    expect(markdownSource).toMatch(/baseDir=\{baseDir\}/)
+    expect(markdownSource).toMatch(/previewRoot=\{effectivePreviewRoot\}/)
     expect(markdownSource).toMatch(/isRelative && href && localRefsEnabled/)
   })
 
@@ -373,6 +378,14 @@ describe("aux file tree drag/selection polish", () => {
     // horizontal padding on the tree container leaves a small left/right gutter
     // so it no longer runs edge-to-edge.
     expect(auxTreeSource).toMatch(/w-max min-w-full px-1\.5/)
+  })
+
+  it("keeps the first row's highlight off the title strip above", () => {
+    // Without top padding a selected root row sat flush against the panel's
+    // title strip. Rows repeat the inset as a scroll margin, so keyboard
+    // navigation back up to the root doesn't scroll the padding away again.
+    expect(auxTreeSource).toMatch(/w-max min-w-full px-1\.5 pt-1\.5 /)
+    expect(auxTreeSource).toMatch(/\[&_\[data-tree-row-path\]\]:scroll-mt-1\.5/)
   })
 })
 

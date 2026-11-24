@@ -66,6 +66,11 @@ export function onTransportReconnect(
   return getTransport().onReconnect?.(callback) ?? null
 }
 
+/** Includes first server readiness after a page started while offline. */
+export function onTransportReady(callback: () => void): UnsubscribeFn | null {
+  return getTransport().onReady?.(callback) ?? null
+}
+
 /**
  * Per-connection Subscribe-with-Snapshot stream. Returns `null` only on
  * the desktop Tauri transport (which uses local IPC and is race-free, so
@@ -177,7 +182,14 @@ export async function openFileDialog(options?: {
 }): Promise<string | string[] | null> {
   if (isDesktop() && getActiveRemoteConnectionId() === null) {
     const { open } = await import("@tauri-apps/plugin-dialog")
-    return open(options ?? {})
+    // The macOS panel's own "New Folder" button. The plugin turns it on by
+    // default today; asking for it keeps folder pickers able to make the
+    // folder they are about to pick. Windows and Linux dialogs always have it.
+    return open(
+      options?.directory
+        ? { ...options, canCreateDirectories: true }
+        : (options ?? {})
+    )
   }
   // Web fallback: for directory selection, prompt for server-side path.
   // For file selection, use a hidden file input.

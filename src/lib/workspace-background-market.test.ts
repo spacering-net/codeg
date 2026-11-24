@@ -49,10 +49,16 @@ describe("workspace-background-market transport bindings", () => {
       "https://w.wallhaven.cc/full/ab/x.jpg",
       "https://wallhaven.cc/w/x"
     )
-    expect(callMock).toHaveBeenCalledWith("background_market_download", {
-      url: "https://w.wallhaven.cc/full/ab/x.jpg",
-      sourceUrl: "https://wallhaven.cc/w/x",
-    })
+    // The timeout sits above the backend's 570 s download deadline so its
+    // structured error, not a 60 s transport abort, reaches the user.
+    expect(callMock).toHaveBeenCalledWith(
+      "background_market_download",
+      {
+        url: "https://w.wallhaven.cc/full/ab/x.jpg",
+        sourceUrl: "https://wallhaven.cc/w/x",
+      },
+      { timeoutMs: 600_000 }
+    )
   })
 })
 
@@ -67,19 +73,27 @@ describe("marketWallpaperBlocker", () => {
 
   it("passes a wallpaper inside both caps", () => {
     expect(marketWallpaperBlocker(sized(4_455_320))).toBeNull()
+    // Past the old 16 MiB ceiling — no longer refused.
+    expect(marketWallpaperBlocker(sized(20 * 1024 * 1024))).toBeNull()
     // Exactly at the ceiling is still fine — the backend uses `>` too.
-    expect(marketWallpaperBlocker(sized(16 * 1024 * 1024))).toBeNull()
+    expect(marketWallpaperBlocker(sized(64 * 1024 * 1024))).toBeNull()
     expect(marketWallpaperBlocker(sized(1000, 8000, 5000))).toBeNull()
+    // A 10K wallpaper, past the old 40 Mpx ceiling — no longer refused.
+    expect(marketWallpaperBlocker(sized(1000, 10240, 5760))).toBeNull()
+    expect(marketWallpaperBlocker(sized(1000, 10_000, 10_000))).toBeNull()
   })
 
   it("blocks a wallpaper past the byte cap", () => {
-    expect(marketWallpaperBlocker(sized(16 * 1024 * 1024 + 1))).toBe(
+    expect(marketWallpaperBlocker(sized(64 * 1024 * 1024 + 1))).toBe(
       "tooManyBytes"
     )
   })
 
   it("blocks a wallpaper past the pixel cap", () => {
     expect(marketWallpaperBlocker(sized(1000, 15360, 8640))).toBe(
+      "tooManyPixels"
+    )
+    expect(marketWallpaperBlocker(sized(1000, 10_000, 10_001))).toBe(
       "tooManyPixels"
     )
   })
@@ -98,7 +112,7 @@ describe("market formatting helpers", () => {
   })
 
   it("formats sizes the way the 'too large' hint reads them", () => {
-    expect(formatMarketBytes(16 * 1024 * 1024)).toBe("16.0 MB")
+    expect(formatMarketBytes(64 * 1024 * 1024)).toBe("64.0 MB")
     expect(formatMarketPixels(132_710_400)).toBe("132.7 MP")
   })
 })

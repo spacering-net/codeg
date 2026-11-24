@@ -41,6 +41,7 @@ import {
   resetConversationRuntimeStore,
   useConversationRuntime,
 } from "@/contexts/conversation-runtime-context"
+import { parseHoldsTheLatestRound } from "@/stores/conversation-runtime-store"
 import type {
   LiveContentBlock,
   LiveMessage,
@@ -1778,7 +1779,7 @@ describe("buildStreamingTurnsFromLiveMessage — orphan status provenance", () =
   // The forward that lets the render layer drop an interrupted arg-less orphan
   // after it is promoted into localTurns at COMPLETE_TURN (see
   // dropEmptyInFlightToolCalls). Without it, the promoted block loses its ACP
-  // status and the orphan re-inflates the "运行 N 个命令" count post-completion.
+  // status and the orphan re-inflates the reply's command count post-completion.
   it("forwards the ACP tool status onto the promoted tool_use block", () => {
     const blocks = buildStreamingTurnsFromLiveMessage(1, {
       id: "lm-orphan",
@@ -1831,15 +1832,13 @@ describe("buildStreamingTurnsFromLiveMessage — subagent transcript routing (cl
     type: "tool_call",
     info: toolInfo({ tool_call_id: id, title: "Agent", kind: "other" }),
   })
-  const build = (
-    content: LiveContentBlock[],
-    opts?: { attachAgentTranscripts?: boolean }
-  ) =>
-    buildStreamingTurnsFromLiveMessage(
-      1,
-      { id: "lm-sub", role: "assistant", startedAt: 0, content },
-      opts
-    )
+  const build = (content: LiveContentBlock[]) =>
+    buildStreamingTurnsFromLiveMessage(1, {
+      id: "lm-sub",
+      role: "assistant",
+      startedAt: 0,
+      content,
+    })
 
   it("routes parented text/thinking out of the main thread and attaches them in order", () => {
     const result = build([
@@ -1912,23 +1911,6 @@ describe("buildStreamingTurnsFromLiveMessage — subagent transcript routing (cl
     expect(
       carrier?.type === "tool_result" ? carrier.agent_transcript : null
     ).toEqual([{ type: "text", text: "just prose" }])
-  })
-
-  it("attachAgentTranscripts:false (promotion) routes blocks out but attaches nothing", () => {
-    const result = build(
-      [
-        agentCall("toolu_agent"),
-        { type: "text", text: "sub prose", parentToolUseId: "toolu_agent" },
-      ],
-      { attachAgentTranscripts: false }
-    )
-    const blocks = result.turns.flatMap((t) => t.blocks)
-    expect(blocks.some((b) => b.type === "text")).toBe(false)
-    for (const b of blocks) {
-      if (b.type === "tool_result") {
-        expect(b.agent_transcript).toBeUndefined()
-      }
-    }
   })
 
   it("drops a parented block whose parent is not a classified agent", () => {
@@ -2041,6 +2023,9 @@ describe("buildStreamingTurnsFromLiveMessage — subagent transcript routing (cl
       carrier?.type === "tool_result" ? carrier.agent_transcript : null
     ).toEqual([
       { type: "thinking", text: "before" },
+      // The child tool call keeps its chronological position: a marker the
+      // capsule resolves back through `agent_stats.tool_calls` by ordinal.
+      { type: "tool_call", childIndex: 0 },
       { type: "thinking", text: "after" },
     ])
   })
@@ -2197,7 +2182,7 @@ describe("buildStreamingTurnsFromLiveMessage — Kimi TodoList suppression", () 
   const toolResults = (b: ContentBlock[]) =>
     b.filter((x) => x.type === "tool_result")
 
-  it("renders a PlanCard from the call's own todos before Kimi's plan arrives (no tool card, no flash)", () => {
+  it("renders a plan checklist from the call's own todos before Kimi's plan arrives (no tool row, no flash)", () => {
     const blocks = buildBlocks([
       kimiToolCall(
         write([
@@ -2218,7 +2203,7 @@ describe("buildStreamingTurnsFromLiveMessage — Kimi TodoList suppression", () 
     ])
   })
 
-  it("drops the redundant tool card once Kimi's own plan block is present (single PlanCard)", () => {
+  it("drops the redundant tool call once Kimi's own plan block is present (single plan)", () => {
     const blocks = buildBlocks([
       kimiToolCall(write([{ title: "A", status: "pending" }])),
       planBlock([{ content: "A", status: "pending", priority: "medium" }]),
@@ -2231,7 +2216,7 @@ describe("buildStreamingTurnsFromLiveMessage — Kimi TodoList suppression", () 
   it("shows the latest write's content, not an earlier write's stale plan block", () => {
     // Pre-plan window of a SECOND write: tool_call(write2 = {A,B}) is present,
     // but the reducer's collapsed plan block still reflects write1 ({A}) until
-    // write2's own `plan` update lands. The single PlanCard must reflect write2.
+    // write2's own `plan` update lands. The single plan must reflect write2.
     const blocks = buildBlocks([
       kimiToolCall(write([{ title: "A", status: "pending" }]), {
         tool_call_id: "w1",
@@ -2524,6 +2509,131 @@ describe("buildStreamingTurnsFromLiveMessage — codex search/list-files command
 const STEER_AT = "2026-05-28T00:05:00.000Z"
 /** A turn the agent wrote after that injection — i.e. its own copy. */
 const AFTER_STEER = "2026-05-28T00:05:01.000Z"
+
+/**
+ * A failed turn's account (`turn_error`, appended by the connection reducer)
+ * closes the reply as a `system` turn of its own — the shape a reload draws
+ * from the agent's record of the failure — so it is never part of the reply,
+ * and no reply count (`syncTurnMetadata`'s alignment counts assistant turns)
+ * moves when live and the transcript disagree about it.
+ */
+/**
+ * A failed round closes on a `system` line written as its last record, so a
+ * parse ending there holds the round that just ended — when that round failed
+ * here too — as surely as one ending on the reply, and the post-turn sync may
+ * name the replies it aligned (a failure that left a partial reply would
+ * otherwise keep that reply's fork greyed for good). A parse still ending on an
+ * EARLIER failure while this client's newest round succeeded is behind.
+ */
+describe("parseHoldsTheLatestRound", () => {
+  const at = "2026-10-10T00:00:00Z"
+  const user = (id: string): MessageTurn => ({
+    id,
+    role: "user",
+    blocks: [],
+    timestamp: at,
+  })
+  const reply = (id: string): MessageTurn => ({
+    id,
+    role: "assistant",
+    blocks: [{ type: "text", text: id }],
+    timestamp: at,
+  })
+  const failed = (id: string): MessageTurn => ({
+    id,
+    role: "system",
+    blocks: [{ type: "turn_error", message: "API Error: 503" }],
+    timestamp: at,
+  })
+
+  it("holds it when the parse ends on the reply", () => {
+    expect(
+      parseHoldsTheLatestRound([user("u"), reply("a")], [user("u"), reply("a")])
+    ).toBe(true)
+  })
+
+  it("holds it when the parse ends on the line of the round that just failed", () => {
+    expect(
+      parseHoldsTheLatestRound(
+        [user("u"), reply("a1"), failed("f")],
+        [user("u"), reply("a"), failed("live-f")]
+      )
+    ).toBe(true)
+  })
+
+  it("is behind when it ends on an earlier failure and the newest round succeeded", () => {
+    // Round A failed after streaming (parsed as two sub-turns), round B then
+    // succeeded but is not on disk yet: locals [A, B] against parsed [A1, A2]
+    // align with offset 0, so only this keeps B from A2's name.
+    expect(
+      parseHoldsTheLatestRound(
+        [user("uA"), reply("A1"), reply("A2"), failed("fA")],
+        [user("uA"), reply("A"), failed("live-fA"), user("uB"), reply("B")]
+      )
+    ).toBe(false)
+  })
+
+  it("is behind when it ends on the prompt or on any other system turn", () => {
+    expect(parseHoldsTheLatestRound([user("u")], [user("u"), reply("a")])).toBe(
+      false
+    )
+    expect(
+      parseHoldsTheLatestRound(
+        [
+          user("u"),
+          {
+            id: "s",
+            role: "system",
+            blocks: [{ type: "text", text: "summary" }],
+            timestamp: at,
+          },
+        ],
+        [user("u"), failed("live-f")]
+      )
+    ).toBe(false)
+    expect(parseHoldsTheLatestRound([], [])).toBe(false)
+  })
+})
+
+describe("buildStreamingTurnsFromLiveMessage - a failed turn", () => {
+  function live(content: LiveContentBlock[]): LiveMessage {
+    return { id: "lm-fail", role: "assistant", content, startedAt: 0 }
+  }
+
+  it("closes the reply with a system turn holding the failure", () => {
+    const { turns } = buildStreamingTurnsFromLiveMessage(
+      1,
+      live([
+        { type: "text", text: "looking" },
+        {
+          type: "turn_error",
+          message: "stream disconnected before completion",
+          fromAgent: true,
+        },
+      ])
+    )
+    expect(turns.map((turn) => [turn.role, turn.blocks])).toEqual([
+      ["assistant", [{ type: "text", text: "looking" }]],
+      [
+        "system",
+        [
+          {
+            type: "turn_error",
+            message: "stream disconnected before completion",
+          },
+        ],
+      ],
+    ])
+  })
+
+  it("is the whole turn when nothing else came back", () => {
+    const { turns } = buildStreamingTurnsFromLiveMessage(
+      1,
+      live([{ type: "turn_error", message: "API Error: 503", fromAgent: true }])
+    )
+    expect(turns.map((turn) => turn.role)).toEqual(["system"])
+  })
+})
 
 describe("buildStreamingTurnsFromLiveMessage - mid-turn steering messages", () => {
   function live(content: LiveContentBlock[]): LiveMessage {

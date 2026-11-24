@@ -37,6 +37,7 @@ import {
   filesFromClipboard,
   imageFilesFromClipboardApi,
 } from "@/lib/clipboard-images"
+import { readClipboardFiles } from "@/lib/clipboard-files"
 import {
   hasFileTreeDragType,
   readFileTreeDragPayload,
@@ -62,17 +63,15 @@ import {
 } from "@/components/chat/message-input-attachments"
 import { restoreBlocksIntoEditor } from "@/components/chat/composer/composer-commands"
 import { buildEmbeddedReferenceUri } from "@/components/chat/composer/reference-uri"
+import { pairPastedFilesWithPaths } from "@/components/chat/composer/pasted-file-paths"
 import type { RichComposerHandle } from "@/components/chat/composer/rich-composer"
 import {
   blobToBase64,
-  buildClipboardResourceUri,
-  buildDataUri,
   DRAG_DROP_IMAGE_MAX_BYTES,
   editorHasFileReference,
   fileNameFromPath,
   getFilePath,
   hasDragFiles,
-  isTextLikeFile,
   mimeTypeFromPath,
   pointWithinElement,
 } from "@/components/chat/composer/attachment-files"
@@ -87,8 +86,10 @@ import {
  *   {@link imageAttachmentToPromptBlock} (native `image` block, or an embedded
  *   `resource` blob for agents that take embedded context but reject images).
  * - **Everything else** → an inline file-reference badge in the editor document,
- *   exactly like an `@`-file mention. A real path uses its `file://` uri; bytes
- *   with no path (a desktop paste) get an inert `codeg://embedded/…` display uri
+ *   exactly like an `@`-file mention, carrying a real file's `file://` uri. A
+ *   desktop paste of copied files is paired back to their paths on the OS
+ *   clipboard; bytes with no file behind them are uploaded first. Restored
+ *   blocks that carry their bytes get an inert `codeg://embedded/…` display uri
  *   whose real block is held in `embeddedPayloadsRef` until send.
  *
  * Every entry point funnels through the same classifier, so paste, OS drop,
@@ -114,6 +115,10 @@ export interface ComposerAttachmentsOptions {
   /** Start directory for the native picker and the server file browser. */
   defaultPath?: string | null
   logLabel?: LogLabel
+  /** Called synchronously when a file intake (a read, an upload, a picker)
+   *  starts while none was in flight: content is on its way before React
+   *  renders it. `intakePending` reports when the last one has settled. */
+  onIntakeStart?: () => void
 }
 
 export interface ComposerAttachments {
@@ -127,6 +132,15 @@ export interface ComposerAttachments {
   hasUploadingImage: boolean
   /** An OS/browser drag is hovering the composer. */
   isDragActive: boolean
+  /** A file intake (read, upload, picker) is still in flight. */
+  intakePending: boolean
+  /** Bumped whenever an intake starts or the last one settles — even when
+   *  both happen within one render batch, so a host re-reads `intakePending`
+   *  after every intake. */
+  intakeRevision: number
+  /** For a host's own async intake (e.g. a context-menu paste reading the
+   *  clipboard): counts it like the hook's own, until the returned settle. */
+  beginIntake: () => () => void
   /** Local desktop: OS paths are readable by the agent, so the native picker is
    *  offered. False in web mode and for a desktop bound to a remote workspace. */
   showNativePaperclip: boolean
@@ -155,6 +169,9 @@ export interface ComposerAttachments {
     opts?: { atCaret?: boolean }
   ) => void
   appendFilesFromInput: (files: File[]) => Promise<void>
+  /** Local desktop: attach the files on the OS clipboard by path, for a paste
+   *  that has no `File`s of its own to pair. False when there are none. */
+  appendClipboardFiles: () => Promise<boolean>
 
   /** Routed from RichComposer's `onPasteFiles`; true = the paste was consumed. */
   handlePasteFiles: (event: ClipboardEvent) => boolean
@@ -174,13 +191,15 @@ export interface ComposerAttachments {
 
   /** Replay a stored `PromptInputBlock[]` into this composer: prose + file
    *  badges inline, images into the strip, bytes-bearing resources re-registered
-   *  behind fresh sentinel badges. Replaces whatever the editor held. `known`
-   *  is the host's advertised invocations, gating bare `/cmd` tokens in the
-   *  prose (see {@link restoreBlocksIntoEditor}). */
+   *  behind fresh sentinel badges. Replaces whatever the editor held — or, with
+   *  `append`, keeps it all and adds the blocks after it. `known` is the host's
+   *  advertised invocations, gating bare `/cmd` tokens in the prose (see
+   *  {@link restoreBlocksIntoEditor}). */
   hydrateFromBlocks: (
     editor: Editor,
     blocks: PromptInputBlock[],
-    known?: KnownInvocations
+    known?: KnownInvocations,
+    opts?: { append?: boolean }
   ) => void
   removeAttachment: (id: string) => void
   clearAttachments: () => void
@@ -197,6 +216,7 @@ export function useComposerAttachments({
   attachmentTabId = null,
   defaultPath = null,
   logLabel = "Composer",
+  onIntakeStart,
 }: ComposerAttachmentsOptions): ComposerAttachments {
   // Same namespace the conversation composer has always used for these toasts,
   // so no message moves and every surface reports uploads identically.
@@ -241,6 +261,32 @@ export function useComposerAttachments({
   useEffect(() => {
     pageHandoffNameRef.current = pageHandoffName
   }, [pageHandoffName])
+
+  // Intakes in flight, counted the moment each starts (before any await), so
+  // `onIntakeStart` tells the host about content still on its way; the state
+  // flips back once the last intake has settled and its content is set.
+  const intakeCountRef = useRef(0)
+  const [intake, setIntake] = useState({ pending: false, revision: 0 })
+  const onIntakeStartRef = useRef(onIntakeStart)
+  useEffect(() => {
+    onIntakeStartRef.current = onIntakeStart
+  }, [onIntakeStart])
+  const beginIntake = useCallback(() => {
+    intakeCountRef.current += 1
+    if (intakeCountRef.current === 1) {
+      onIntakeStartRef.current?.()
+      setIntake((prev) => ({ pending: true, revision: prev.revision + 1 }))
+    }
+    let settled = false
+    return () => {
+      if (settled) return
+      settled = true
+      intakeCountRef.current -= 1
+      if (intakeCountRef.current === 0) {
+        setIntake((prev) => ({ pending: false, revision: prev.revision + 1 }))
+      }
+    }
+  }, [])
 
   const setDragActiveIfChanged = useCallback((next: boolean) => {
     if (dragActiveRef.current === next) return
@@ -474,40 +520,12 @@ export function useComposerAttachments({
     [appendResourceAttachments, attachmentTabId, logLabel, tAttach]
   )
 
-  const appendEmbeddedResources = useCallback(
-    (
-      resources: Array<{
-        uri: string
-        name: string
-        mimeType: string | null
-        text?: string | null
-        blob?: string | null
-      }>
-    ) => {
-      // Inline bytes (no real path): each becomes a sentinel file badge whose
-      // embedded `resource` block is reconciled back in at send time.
-      insertFileReferences(
-        resources.map((resource) => ({
-          name: resource.name,
-          realBlock: {
-            type: "resource" as const,
-            uri: resource.uri,
-            mime_type: resource.mimeType,
-            text: resource.text ?? null,
-            blob: resource.blob ?? null,
-          },
-        }))
-      )
-    },
-    [insertFileReferences]
-  )
-
-  // Path-less files (browser `File` objects: drag-drop in web mode, paste,
-  // or `<input type=file>` in any mode) need a real backing path before
-  // the agent can read them. Only the truly local desktop keeps the legacy
-  // base64/embedded fallback — web and remote-desktop both push through
-  // `uploadAndAppendFiles` so the resulting ResourceLink points at a real
-  // server-side file.
+  // Path-less files (browser `File` objects: a paste with no file behind it,
+  // drag-drop in web mode, `<input type=file>`) need a real backing path
+  // before the agent can read them, so they are uploaded: to the server in web
+  // and remote-desktop mode, into this desktop's own uploads directory
+  // otherwise (see `uploadAttachment`). Either way the ResourceLink points at
+  // a real file, as a dropped one does.
   const appendFilesAsResources = useCallback(
     async (files: File[]) => {
       if (files.length === 0) return
@@ -517,87 +535,32 @@ export function useComposerAttachments({
         mimeType: string | null
         dedupeKey: string
       }> = []
-      const fallbackDataLinks: Array<{
-        uri: string
-        name: string
-        mimeType: string | null
-        dedupeKey: string
-      }> = []
-      const embeddedResources: Array<{
-        uri: string
-        name: string
-        mimeType: string | null
-        text?: string | null
-        blob?: string | null
-      }> = []
       const uploadCandidates: File[] = []
 
       for (const file of files) {
         const path = getFilePath(file)
-        const name = file.name || `resource-${randomUUID()}`
-        const mimeType = file.type || mimeTypeFromPath(name)
-        if (path) {
-          const uri = buildFileUri(path)
-          pathLinks.push({
-            uri,
-            name: fileNameFromPath(path),
-            mimeType: mimeTypeFromPath(path) ?? mimeType ?? null,
-            dedupeKey: uri,
-          })
-          continue
-        }
-
-        if (!showNativePaperclip) {
+        if (!path) {
           uploadCandidates.push(file)
           continue
         }
-
-        if (!promptCapabilities.embedded_context) {
-          const base64 = await blobToBase64(file)
-          const dataUri = buildDataUri(base64, mimeType ?? null)
-          fallbackDataLinks.push({
-            uri: dataUri,
-            name,
-            mimeType: mimeType ?? null,
-            dedupeKey: `${name}:${file.size}:${file.lastModified}`,
-          })
-          continue
-        }
-
-        const uri = buildClipboardResourceUri(name)
-        if (isTextLikeFile(file)) {
-          const textContent = await file.text()
-          embeddedResources.push({
-            uri,
-            name,
-            mimeType: mimeType ?? null,
-            text: textContent,
-          })
-        } else {
-          const blobContent = await blobToBase64(file)
-          embeddedResources.push({
-            uri,
-            name,
-            mimeType: mimeType ?? null,
-            blob: blobContent,
-          })
-        }
+        const uri = buildFileUri(path)
+        pathLinks.push({
+          uri,
+          name: fileNameFromPath(path),
+          mimeType:
+            mimeTypeFromPath(path) ??
+            (file.type || mimeTypeFromPath(file.name)) ??
+            null,
+          dedupeKey: uri,
+        })
       }
 
       appendResourceLinks(pathLinks)
-      appendResourceLinks(fallbackDataLinks)
-      appendEmbeddedResources(embeddedResources)
       if (uploadCandidates.length > 0) {
         await uploadAndAppendFiles(uploadCandidates)
       }
     },
-    [
-      appendEmbeddedResources,
-      appendResourceLinks,
-      promptCapabilities.embedded_context,
-      showNativePaperclip,
-      uploadAndAppendFiles,
-    ]
+    [appendResourceLinks, uploadAndAppendFiles]
   )
 
   const appendImageAttachments = useCallback(
@@ -611,7 +574,7 @@ export function useComposerAttachments({
       // block (`stripUploadedImagePayloads`), leaving the server to
       // re-inline the bytes from the uploaded file (`prompt_hydration`).
       // Desktop-local mode keeps the inline path — Tauri IPC has no body
-      // limit and the workspace has no uploads dir.
+      // limit and nothing hydrates an image from a desktop upload.
       const uploadImages = !showNativePaperclip
 
       const oversized = uploadImages
@@ -747,6 +710,7 @@ export function useComposerAttachments({
       )
 
       const parsed: ImageInputAttachment[] = []
+      const unread: string[] = []
       settled.forEach((result, index) => {
         if (result.status === "fulfilled") {
           parsed.push(result.value)
@@ -756,11 +720,14 @@ export function useComposerAttachments({
           `[${logLabel}] drop image path failed (${paths[index]}):`,
           result.reason
         )
+        unread.push(paths[index])
       })
-      if (parsed.length === 0) return
-      setAttachments((prev) => [...prev, ...parsed])
+      if (parsed.length > 0) setAttachments((prev) => [...prev, ...parsed])
+      // An image whose thumbnail cannot be read (over the inline cap, say)
+      // still goes by its path, like any other file, rather than vanishing.
+      if (unread.length > 0) appendResourceAttachments(unread)
     },
-    [canAttachImages, logLabel]
+    [appendResourceAttachments, canAttachImages, logLabel]
   )
 
   const appendPathsFromDrop = useCallback(
@@ -944,7 +911,7 @@ export function useComposerAttachments({
     uploadPathsToRemoteRef.current = uploadPathsToRemote
   }, [uploadPathsToRemote])
 
-  const appendFilesFromInput = useCallback(
+  const appendFilesFromInputNow = useCallback(
     async (files: File[]) => {
       if (files.length === 0) return
       const imageFiles: File[] = []
@@ -967,6 +934,84 @@ export function useComposerAttachments({
     },
     [appendFilesAsResources, appendImageAttachments, canAttachImages]
   )
+  const appendFilesFromInput = useCallback(
+    async (files: File[]) => {
+      if (files.length === 0) return
+      const settle = beginIntake()
+      try {
+        await appendFilesFromInputNow(files)
+      } finally {
+        settle()
+      }
+    },
+    [appendFilesFromInputNow, beginIntake]
+  )
+
+  // The files on the OS clipboard, or none when it cannot be read: a paste
+  // then falls back to sending what it carries, as before.
+  const readClipboardFilesOrNone = useCallback(async () => {
+    try {
+      return await readClipboardFiles()
+    } catch (error) {
+      console.warn(`[${logLabel}] reading the clipboard's files failed:`, error)
+      return []
+    }
+  }, [logLabel])
+
+  // A paste of files copied in Finder / Explorer reaches the page as `File`s
+  // without their paths, but the OS clipboard still holds the paths. On the
+  // local desktop each `File` paired with one is attached by that path,
+  // exactly as if it had been dropped; only what has no file behind it (a
+  // screenshot, an image copied out of a page) is read for its bytes.
+  const appendPastedFiles = useCallback(
+    async (files: File[]) => {
+      const settle = beginIntake()
+      try {
+        let rest = files
+        if (showNativePaperclip) {
+          const paired = pairPastedFilesWithPaths(
+            files,
+            await readClipboardFilesOrNone()
+          )
+          if (paired.paths.length > 0) await appendPathsFromDrop(paired.paths)
+          rest = paired.rest
+        }
+        if (rest.length > 0) await appendFilesFromInputNow(rest)
+      } finally {
+        settle()
+      }
+    },
+    [
+      appendFilesFromInputNow,
+      appendPathsFromDrop,
+      beginIntake,
+      readClipboardFilesOrNone,
+      showNativePaperclip,
+    ]
+  )
+
+  // For a paste with no `File`s to pair (the composer's own context-menu
+  // Paste, which reads the clipboard through the async API: that sees a copied
+  // file only as its name). On the local desktop it attaches the files on the
+  // OS clipboard by path, as a drop would; false when there are none, so the
+  // caller goes on to paste text or an image.
+  const appendClipboardFiles = useCallback(async (): Promise<boolean> => {
+    if (!showNativePaperclip || disabledRef.current) return false
+    const settle = beginIntake()
+    try {
+      const entries = await readClipboardFilesOrNone()
+      if (entries.length === 0) return false
+      await appendPathsFromDrop(entries.map((entry) => entry.path))
+      return true
+    } finally {
+      settle()
+    }
+  }, [
+    appendPathsFromDrop,
+    beginIntake,
+    readClipboardFilesOrNone,
+    showNativePaperclip,
+  ])
 
   // Routed from RichComposer's `onPasteFiles`. Returns true when the paste was
   // consumed as an attachment (so the editor doesn't also insert it as text).
@@ -982,7 +1027,7 @@ export function useComposerAttachments({
       if (!event.clipboardData) return false
       const files = filesFromClipboard(event.clipboardData)
       if (files.length > 0) {
-        void appendFilesFromInput(files).catch((error) => {
+        void appendPastedFiles(files).catch((error) => {
           console.error(`[${logLabel}] paste files failed:`, error)
         })
         return true
@@ -996,6 +1041,7 @@ export function useComposerAttachments({
       // web content isn't hijacked into an image attachment. Kept synchronous
       // so `imageFilesFromClipboardApi` runs inside the paste user gesture.
       if (clipboardHasText(event.clipboardData)) return false
+      const settle = beginIntake()
       void imageFilesFromClipboardApi()
         .then((imageFiles) => {
           if (imageFiles.length === 0) return
@@ -1004,10 +1050,11 @@ export function useComposerAttachments({
         .catch((error) => {
           console.error(`[${logLabel}] clipboard image paste failed:`, error)
         })
+        .finally(settle)
       // The default paste of a textless clipboard is a no-op, so don't claim it.
       return false
     },
-    [appendFilesFromInput, disabled, logLabel]
+    [appendFilesFromInput, appendPastedFiles, beginIntake, disabled, logLabel]
   )
 
   // Insert an inline file reference for a file-tree entry dropped onto the
@@ -1146,21 +1193,28 @@ export function useComposerAttachments({
         setDragActiveIfChanged(false)
         if (Date.now() - lastDomDropAtRef.current < 250) return
         if (!inside || disabledRef.current) return
+        const settle = beginIntake()
         if (getActiveRemoteConnectionId() !== null) {
           // Remote workspace: local OS paths are unreachable from the
           // remote agent, so stream the bytes through the upload proxy and
           // attach the resulting server-side paths instead.
-          void uploadPathsToRemoteRef.current(payload.paths).catch((error) => {
-            console.error(
-              `[${logLabel}] remote drag-drop upload failed:`,
-              error
-            )
-          })
+          void uploadPathsToRemoteRef
+            .current(payload.paths)
+            .catch((error) => {
+              console.error(
+                `[${logLabel}] remote drag-drop upload failed:`,
+                error
+              )
+            })
+            .finally(settle)
           return
         }
-        void appendPathsFromDropRef.current(payload.paths).catch((error) => {
-          console.error(`[${logLabel}] drag drop paths failed:`, error)
-        })
+        void appendPathsFromDropRef
+          .current(payload.paths)
+          .catch((error) => {
+            console.error(`[${logLabel}] drag drop paths failed:`, error)
+          })
+          .finally(settle)
         return
       }
       setDragActiveIfChanged(inside && !disabledRef.current)
@@ -1232,12 +1286,13 @@ export function useComposerAttachments({
       cancelled = true
       cleanupListeners()
     }
-  }, [containerRef, logLabel, setDragActiveIfChanged])
+  }, [beginIntake, containerRef, logLabel, setDragActiveIfChanged])
 
   const handlePickFiles = useCallback(async () => {
     if (disabled) return
     // Only wired up when `showNativePaperclip` is true (i.e. local desktop),
     // so we can hand raw OS paths to the local agent without a round-trip.
+    const settle = beginIntake()
     try {
       const selected = await openFileDialog({
         multiple: true,
@@ -1249,8 +1304,10 @@ export function useComposerAttachments({
       appendResourceAttachments(picked.filter((item): item is string => !!item))
     } catch (error) {
       console.error(`[${logLabel}] pick files failed:`, error)
+    } finally {
+      settle()
     }
-  }, [appendResourceAttachments, defaultPath, disabled, logLabel])
+  }, [appendResourceAttachments, beginIntake, defaultPath, disabled, logLabel])
 
   const handleUploadLocalFiles = useCallback(async () => {
     if (disabled) return
@@ -1287,12 +1344,21 @@ export function useComposerAttachments({
   // re-registered in the payload map (their original sentinel uri was never
   // serialized, so each gets a fresh one).
   const hydrateFromBlocks = useCallback(
-    (editor: Editor, blocks: PromptInputBlock[], known?: KnownInvocations) => {
-      embeddedPayloadsRef.current.clear()
-      const restored = restoreBlocksIntoEditor(editor, blocks, known)
-      setAttachments(
-        restored.filter((a): a is ImageInputAttachment => a.type === "image")
+    (
+      editor: Editor,
+      blocks: PromptInputBlock[],
+      known?: KnownInvocations,
+      { append = false }: { append?: boolean } = {}
+    ) => {
+      // Appending keeps the payloads behind the badges already in the editor.
+      if (!append) embeddedPayloadsRef.current.clear()
+      const restored = restoreBlocksIntoEditor(editor, blocks, known, {
+        append,
+      })
+      const images = restored.filter(
+        (a): a is ImageInputAttachment => a.type === "image"
       )
+      setAttachments(append ? (current) => [...current, ...images] : images)
       const resources = restored.filter(
         (a): a is ResourceInputAttachment => a.type === "resource"
       )
@@ -1381,6 +1447,9 @@ export function useComposerAttachments({
     imageAttachments,
     hasUploadingImage,
     isDragActive,
+    intakePending: intake.pending,
+    intakeRevision: intake.revision,
+    beginIntake,
     showNativePaperclip,
     canAttachImages,
     embeddedPayloadsRef,
@@ -1388,6 +1457,7 @@ export function useComposerAttachments({
     appendResourceAttachments,
     appendFileRangeAttachment,
     appendFilesFromInput,
+    appendClipboardFiles,
     handlePasteFiles,
     handleEditorDrop,
     containerDragProps: {

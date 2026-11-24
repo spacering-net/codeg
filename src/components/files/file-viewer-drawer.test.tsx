@@ -120,6 +120,9 @@ vi.mock("@/components/ai-elements/code-block", () => ({
 vi.mock("@/components/files/image-preview", () => ({
   ImagePreview: () => <div data-testid="image" />,
 }))
+vi.mock("@/components/files/pdf-preview", () => ({
+  PdfPreview: () => <div data-testid="pdf" />,
+}))
 vi.mock("@/components/files/office-preview", () => ({
   OfficePreview: ({ relPath }: { relPath: string | null }) => (
     <div data-testid="office" data-rel={relPath ?? ""} />
@@ -226,10 +229,14 @@ describe("FileViewerDrawer", () => {
     )
   })
 
-  it("routes image and office tabs to their own renderers", async () => {
+  it("routes image, PDF and office tabs to their own renderers", async () => {
     state.fileTabs = [tab({ language: "image" })]
     await open({ path: ABS_PATH, line: null })
     expect(screen.getByTestId("image")).toBeInTheDocument()
+
+    state.fileTabs = [tab({ language: "pdf" })]
+    await open({ path: ABS_PATH, line: null })
+    expect(screen.getByTestId("pdf")).toBeInTheDocument()
 
     state.fileTabs = [tab({ language: "office" })]
     await open({ path: ABS_PATH, line: null })

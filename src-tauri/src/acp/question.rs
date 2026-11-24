@@ -67,6 +67,10 @@ pub struct QuestionOption {
     pub description: String,
 }
 
+fn default_true() -> bool {
+    true
+}
+
 /// A single multiple-choice question.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QuestionSpec {
@@ -81,7 +85,7 @@ pub struct QuestionSpec {
     /// When true the user may select multiple options.
     pub multi_select: bool,
     /// The choices (0..=[`MAX_OPTIONS`]). Empty means free-text: the card
-    /// renders only its always-present "Other" input (codex `request_user_input`
+    /// renders only its free-text "Other" input (codex `request_user_input`
     /// and MCP-server elicitations both ask open questions this way; the
     /// codeg-mcp ask tool still requires [`MIN_OPTIONS`] at its own parse
     /// layer).
@@ -91,6 +95,13 @@ pub struct QuestionSpec {
     /// input. Default false — absent on the wire for every non-secret source.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub is_secret: bool,
+    /// When false, the question card hides the "Other" option and free-text input.
+    /// Defaults to true; false for native permission bridges (Antigravity, Pi select)
+    /// where only predetermined option IDs can be submitted. Only meaningful with
+    /// options: those bridges always carry at least [`MIN_OPTIONS`], and an
+    /// option-less question still renders its free-text input regardless.
+    #[serde(default = "default_true")]
+    pub allow_other: bool,
 }
 
 /// The pending (awaiting-answer) question set stored on
@@ -169,6 +180,32 @@ pub trait SessionQuestionAccess: Send + Sync {
         parent_connection_id: &str,
         questions: Vec<QuestionSpec>,
     ) -> Option<RegisteredQuestion>;
+
+    /// [`Self::register_question`] for a question the agent did not stop for
+    /// (codex's `request_user_input_async`): it gives way to the next question
+    /// asked on the connection instead of making that one wait. A connection
+    /// holds one question at a time, and the agent keeps working while this one
+    /// is open, so it may well ask something it DOES wait for (a Plan-mode
+    /// `request_user_input`, an MCP form, codeg's ask tool), which would
+    /// otherwise be refused unseen. The yielding question is withdrawn as if
+    /// cancelled: its card closes and its receiver resolves to an error.
+    ///
+    /// The default registers an ordinary question, for stubs.
+    async fn register_yielding_question(
+        &self,
+        parent_connection_id: &str,
+        questions: Vec<QuestionSpec>,
+    ) -> Option<RegisteredQuestion> {
+        self.register_question(parent_connection_id, questions).await
+    }
+
+    /// Stop the connection's running turn the way the user's Stop does
+    /// (`ConnectionManager::cancel`: the agent's `session/cancel` and the
+    /// conversation row's `Cancelled`), for an agent that waits for the turn to
+    /// be cancelled once its question is declined (antigravity-acp 1.5.2).
+    ///
+    /// The default does nothing, for stubs.
+    async fn cancel_turn(&self, _connection_id: &str) {}
 
     /// Cancel a pending question — the companion's tool call was canceled
     /// (peer-close) or the connection is tearing down. Removes it and clears
@@ -292,6 +329,7 @@ pub fn parse_questions(arguments: &Value) -> Result<Vec<QuestionSpec>, String> {
             multi_select,
             options,
             is_secret: false,
+            allow_other: true,
         });
     }
     Ok(out)
@@ -549,6 +587,7 @@ pub fn parse_grok_ext_questions(params: &Value) -> Result<Vec<QuestionSpec>, Str
             multi_select,
             options,
             is_secret: false,
+            allow_other: true,
         });
     }
     Ok(out)
@@ -657,6 +696,7 @@ pub fn parse_pi_select_ask(tool_call: &Value, options: &[(String, String)]) -> O
             multi_select: false,
             options: choices,
             is_secret: false,
+            allow_other: false,
         },
         option_ids,
     })
@@ -664,8 +704,9 @@ pub fn parse_pi_select_ask(tool_call: &Value, options: &[(String, String)]) -> O
 
 /// The permission `optionId` that answers pi with what the user picked, or
 /// `None` when the card produced nothing pi can accept: a declined card, or a
-/// free-text "Other" answer (the card always offers one, but pi's select can
-/// only be answered with one of ITS options). `None` means reply `Cancelled`,
+/// free-text "Other" answer (the card hides "Other" for this ask —
+/// `allow_other: false` — since pi's select can only be answered with one of ITS
+/// options; the check stays as the backstop). `None` means reply `Cancelled`,
 /// which pi-acp forwards to the extension as `{cancelled: true}` — the same
 /// thing `ctx.ui.select` returns when a TUI user presses Escape.
 pub fn pi_select_option_id(outcome: &QuestionOutcome, ask: &PiSelectAsk) -> Option<String> {
@@ -683,10 +724,11 @@ pub fn pi_select_option_id(outcome: &QuestionOutcome, ask: &PiSelectAsk) -> Opti
 /// companion tool, in whatever spelling the host composed it
 /// (`mcp__codeg-mcp__ask_user_question` from claude-agent-acp,
 /// `codeg-mcp/ask_user_question`, `codeg-mcp: ask_user_question`, …). Separators
-/// are folded and case is ignored, so only the two identifying words matter.
+/// are folded and case is ignored ([`crate::acp::delegation::is_codeg_mcp_tool`]).
 ///
-/// BOTH halves have to be present — the server name codeg itself injects
-/// (`codeg-mcp`, see `acp::connection::inject_codeg_mcp`) AND the tool name.
+/// BOTH halves have to be present, and nothing else — the server name codeg
+/// itself injects (`codeg-mcp`, see `acp::connection::inject_codeg_mcp`) AND the
+/// tool name: a server named `other-codeg-mcp` is not codeg's.
 /// The frontend can afford a bare `*ask_user_question` suffix rule because a
 /// wrong match there only picks a nicer card; this one unlocks an AUTO-APPROVAL
 /// of a blocked `session/request_permission`, and a third-party MCP server's
@@ -697,11 +739,112 @@ pub fn pi_select_option_id(outcome: &QuestionOutcome, ask: &PiSelectAsk) -> Opti
 /// block until the user answers it. The consent IS the next dialog, so gating it
 /// behind a generic "run this tool?" card asks the user to approve being asked.
 pub fn is_codeg_ask_tool_name(name: &str) -> bool {
-    let normalized = name
-        .trim()
-        .to_ascii_lowercase()
-        .replace(['-', ' ', '.', '/', ':'], "_");
-    normalized.ends_with("ask_user_question") && normalized.contains("codeg_mcp")
+    crate::acp::delegation::is_codeg_mcp_tool(name, "ask_user_question")
+}
+
+/// The id prefix antigravity-acp gives the synthetic tool call of one of its
+/// own questions: `server.py::_ask_user_handler` mints
+/// `interaction_<8 hex>` for each question it asks (the model's `ask_question`,
+/// asked one question at a time, and the workspace-trust prompt alike). It is
+/// the only producer of that prefix in 1.4.1, 1.4.3 and 1.4.4.
+pub const ANTIGRAVITY_INTERACTION_ID_PREFIX: &str = "interaction_";
+
+/// True when `id` has the shape of an antigravity-acp question's tool call id
+/// (see [`ANTIGRAVITY_INTERACTION_ID_PREFIX`]). The prefix alone says nothing
+/// about the agent, so callers must also check that the connection is
+/// antigravity-acp's (`SessionState::antigravity_interactions`).
+pub fn is_antigravity_interaction_id(id: &str) -> bool {
+    id.strip_prefix(ANTIGRAVITY_INTERACTION_ID_PREFIX)
+        .is_some_and(|rest| !rest.is_empty())
+}
+
+/// Antigravity 原生交互通过权限选项承载答案，保留文字到 optionId 的映射。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AntigravityAsk {
+    pub spec: QuestionSpec,
+    pub option_ids: Vec<(String, String)>,
+}
+
+/// 识别 antigravity-acp 1.4.1 的交互请求，而非模型调用 ask_question 的参数。
+/// 实测 title 是问题正文、rawInput 为空，选项位于请求外层。
+/// 调用方还必须校验连接是 antigravity-acp（`SessionState::antigravity_interactions`），避免接管其他代理的权限请求。
+pub fn parse_antigravity_ask(
+    tool_call: &Value,
+    options: &[(String, String)],
+) -> Option<AntigravityAsk> {
+    let id = tool_call.get("toolCallId")?.as_str()?;
+    if !is_antigravity_interaction_id(id) || !(MIN_OPTIONS..=MAX_OPTIONS).contains(&options.len()) {
+        return None;
+    }
+    if let Some(kind) = tool_call.get("kind").and_then(Value::as_str) {
+        if kind != "other" {
+            return None;
+        }
+    }
+    if let Some(status) = tool_call.get("status").and_then(Value::as_str) {
+        if status != "pending" {
+            return None;
+        }
+    }
+    if let Some(raw_input) = tool_call.get("rawInput") {
+        let is_empty_or_null = raw_input.is_null()
+            || raw_input.as_object().is_some_and(serde_json::Map::is_empty);
+        if !is_empty_or_null {
+            return None;
+        }
+    }
+    let question = tool_call.get("title")?.as_str()?.trim();
+    if question.is_empty() || question.chars().count() > MAX_QUESTION_TEXT_CHARS {
+        return None;
+    }
+    let mut choices = Vec::with_capacity(options.len());
+    let mut option_ids = Vec::with_capacity(options.len());
+    let mut labels = std::collections::HashSet::new();
+    let mut ids = std::collections::HashSet::new();
+    for (id, name) in options {
+        let label = name.trim();
+        if id.trim().is_empty()
+            || label.is_empty()
+            || label.chars().count() > MAX_QUESTION_TEXT_CHARS
+            || !labels.insert(label)
+            || !ids.insert(id)
+        {
+            return None;
+        }
+        choices.push(QuestionOption {
+            label: label.to_string(),
+            description: String::new(),
+        });
+        option_ids.push((label.to_string(), id.clone()));
+    }
+    Some(AntigravityAsk {
+        spec: QuestionSpec {
+            id: uuid::Uuid::new_v4().to_string(),
+            question: question.to_string(),
+            header: synthesize_header(question),
+            // ACP 权限响应只接受一个 optionId，原生代理逐题发送交互请求。
+            multi_select: false,
+            options: choices,
+            is_secret: false,
+            allow_other: false,
+        },
+        option_ids,
+    })
+}
+
+/// 只回传本题的一个原生选项；取消或无法表达的自由文本不伪装为首项。
+pub fn antigravity_option_id(outcome: &QuestionOutcome, ask: &AntigravityAsk) -> Option<String> {
+    if outcome.declined || outcome.answers.len() != 1 {
+        return None;
+    }
+    let answer = &outcome.answers[0];
+    if answer.question != ask.spec.question || answer.selected.len() != 1 {
+        return None;
+    }
+    ask.option_ids
+        .iter()
+        .find(|(label, _)| label == &answer.selected[0])
+        .map(|(_, id)| id.clone())
 }
 
 /// Serialize a resolved [`QuestionOutcome`] into grok's `AskUserQuestionExtResponse`
@@ -751,11 +894,13 @@ pub fn grok_ext_skip_response() -> Value {
 /// entry) the accept response must send back. The two differ when a generic
 /// MCP server elicits with `enum` + `enumNames` (codex-acp normalizes that to
 /// `oneOf` with `const` ≠ `title`); codex's own `request_user_input` sets them
-/// identical. The typed schema drops per-option descriptions, so they are left
-/// empty (the card renders fine without one).
+/// identical. Each choice's `description` is displayed separately from its
+/// label on the card, regardless of which peer supplied the form.
 struct ElicitationChoice {
     label: String,
     value: String,
+    /// The option's own `description`, when the wire carries one.
+    description: Option<String>,
 }
 
 fn string_prop_choices(s: &StringPropertySchema) -> Vec<ElicitationChoice> {
@@ -769,6 +914,7 @@ fn string_prop_choices(s: &StringPropertySchema) -> Vec<ElicitationChoice> {
                     o.title.clone()
                 },
                 value: o.value.clone(),
+                description: o.description.clone(),
             })
             .collect();
     }
@@ -778,6 +924,7 @@ fn string_prop_choices(s: &StringPropertySchema) -> Vec<ElicitationChoice> {
             .map(|v| ElicitationChoice {
                 label: v.clone(),
                 value: v.clone(),
+                description: None,
             })
             .collect();
     }
@@ -796,6 +943,7 @@ fn multi_select_choices(items: &MultiSelectItems) -> Vec<ElicitationChoice> {
                     o.title.clone()
                 },
                 value: o.value.clone(),
+                description: o.description.clone(),
             })
             .collect(),
         MultiSelectItems::String(u) => u
@@ -804,6 +952,7 @@ fn multi_select_choices(items: &MultiSelectItems) -> Vec<ElicitationChoice> {
             .map(|v| ElicitationChoice {
                 label: v.clone(),
                 value: v.clone(),
+                description: None,
             })
             .collect(),
         // `MultiSelectItems` is `#[non_exhaustive]`; an unknown item kind
@@ -836,6 +985,8 @@ pub enum ElicitationFieldKind {
 /// [`build_elicitation_response`] needs that [`QuestionSpec`] (a shared wire
 /// type the card renders) must not carry.
 pub struct ElicitationField {
+    /// MiniMax requires custom text under its separate companion property.
+    pub other_field_id: Option<String>,
     /// Schema property name — the key the accepted content is sent under.
     pub id: String,
     pub kind: ElicitationFieldKind,
@@ -855,6 +1006,13 @@ pub struct ElicitationQuestions {
     /// `codex.rs` from the same id) are one card. `None` when the wire carried
     /// no session scope tool_call_id.
     pub tool_call_id: Option<String>,
+    /// codex's `request_user_input_async` (codex-acp 2.6.0, #707): the agent
+    /// asked without waiting, and its turn goes on while the form is open.
+    /// codex-acp cancels the form when that turn ends, steers an accepted
+    /// answer into it, and sends nothing for a decline. The form carries no
+    /// `toolCallId`. Read from `_meta.codex.delivery == "async"` for a codex
+    /// peer only (see [`ElicitationPeer`]).
+    pub async_delivery: bool,
 }
 
 /// One selectable option of an approval-style elicitation, shaped for the
@@ -976,25 +1134,37 @@ pub enum CodexUserInputShape {
 /// The identity has to come from the connection, not from the payload. `_meta`
 /// is an OPEN namespace: the ACP spec tells implementations to make no
 /// assumptions about keys they do not own, and this parser is shared — codeg
-/// advertises `elicitation.form` to DeepSeek as well as Codex, and EITHER
-/// adapter also forwards arbitrary MCP-server forms through it. Deciding "this
-/// is codex" from `_meta.codex.*` in the request would let a third party, by
-/// coincidence or on purpose, switch on codex's orientation flip, its companion
-/// skip and its synthetic-option filter for a form codex never sent — which can
-/// hide a legitimate field or change how an answer is encoded.
+/// advertises `elicitation.form` to DeepSeek and Qoder as well as Codex, and
+/// codex-acp and deepseek-acp also forward arbitrary MCP-server forms through
+/// it. Deciding "this is codex" from `_meta.codex.*` in the request would let a
+/// third party, by coincidence or on purpose, switch on codex's orientation
+/// flip, its companion skip and its synthetic-option filter for a form codex
+/// never sent — which can hide a legitimate field or change how an answer is
+/// encoded.
 ///
 /// So `Other` is absolute: no codex fixup runs for it, whatever `_meta` claims.
 /// Only inside `Codex` does the payload get a say, and then only about WHICH
 /// generation sent it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ElicitationPeer {
-    /// Anything that is not codex-acp (DeepSeek today; any future
-    /// `elicitation.form` speaker). The form is parsed generically.
+    /// Anything that is neither codex-acp nor OpenCode (DeepSeek and Qoder
+    /// today; any future `elicitation.form` speaker). The form is parsed
+    /// generically.
     Other,
     /// codex-acp, carrying the `request_user_input` shape its RUNNING version
     /// implies — `None` when `agentInfo.version` was absent or unparseable, in
     /// which case the form's own markers have to date it.
     Codex(Option<CodexUserInputShape>),
+    /// OpenCode 2, whose question forms pair every select field `<id>` with a
+    /// free-text `<id>_custom` companion (see [`is_opencode_custom_companion`]).
+    /// Otherwise parsed generically.
+    OpenCode,
+    /// MiniMax Code (`mcode acp`), whose `ask_user` questionnaire arrives as one
+    /// field per step: `title` is the question, `description` the step's
+    /// optional supporting context, each choice's `const` its option id.
+    /// Every step with options gets a free-text `<id>__other` companion (see
+    /// [`minimax_other_fields`]) that the typed-in answer must be written to.
+    MiniMax,
 }
 
 impl ElicitationPeer {
@@ -1160,6 +1330,105 @@ fn is_codex_synthetic_other_choice(raw: &Value, id: &str, label: &str, value: &s
     })
 }
 
+/// True when `id` is the free-text companion OpenCode 2 puts beside a select
+/// field: `<field>_custom`, next to a `<field>` that offers choices. OpenCode
+/// marks it with nothing but the name — `custom: true` on a question field
+/// becomes a select plus a `"<title> (other)"` string property
+/// (`packages/cli/src/acp/elicitation.ts` `other` / `customKey`, 2.2.0) — so,
+/// like codex's `_meta.codex` markers, the rule is trusted only on an OpenCode
+/// connection, where the card's own "Other" input stands in for it.
+///
+/// The typed answer then rides under the select field's own id
+/// ([`build_elicitation_response`] writes every value there), which OpenCode
+/// accepts: its question fields are `custom`, so a value outside the options
+/// is the user's own answer (`core/src/form.ts`).
+fn is_opencode_custom_companion(
+    properties: &BTreeMap<String, ElicitationPropertySchema>,
+    id: &str,
+) -> bool {
+    let Some(field) = id.strip_suffix("_custom") else {
+        return false;
+    };
+    match properties.get(field) {
+        Some(ElicitationPropertySchema::String(s)) => !string_prop_choices(s).is_empty(),
+        Some(ElicitationPropertySchema::Array(_)) => true,
+        _ => false,
+    }
+}
+
+/// MiniMax names companions `<id>__other`, appending underscores on collision.
+/// Match the emitted title and plain-string shape as well as the name so real
+/// questions whose ids contain `__other` remain visible.
+fn minimax_other_fields(
+    properties: &BTreeMap<String, ElicitationPropertySchema>,
+) -> BTreeMap<String, String> {
+    let mut result = BTreeMap::new();
+    for (id, property) in properties {
+        let title = match property {
+            ElicitationPropertySchema::String(s) if !string_prop_choices(s).is_empty() => {
+                s.title.as_deref()
+            }
+            ElicitationPropertySchema::Array(a) => a.title.as_deref(),
+            _ => continue,
+        };
+        let Some(title) = title else { continue };
+        let prefix = format!("{id}__other");
+        let expected_title = format!("{title} — Other");
+        for (candidate, property) in properties {
+            let Some(suffix) = candidate.strip_prefix(&prefix) else {
+                continue;
+            };
+            if !suffix.chars().all(|c| c == '_') {
+                continue;
+            }
+            if let ElicitationPropertySchema::String(s) = property {
+                if s.title.as_deref() == Some(expected_title.as_str())
+                    && string_prop_choices(s).is_empty()
+                {
+                    result.insert(id.clone(), candidate.clone());
+                    break;
+                }
+            }
+        }
+    }
+    result
+}
+
+/// Whether an OpenCode 2 `elicitation/create` is its `question` tool's form:
+/// one `q<n>` field per question, each optionally beside its `q<n>_custom`
+/// companion (`core/src/tool/plugin/question.ts` `toField`, 2.2.0). OpenCode
+/// elicits one other form, the web-search provider choice
+/// (`core/src/tool/plugin/websearch.ts`, a `choice` field), which codeg does not
+/// ask the user: it is declined, and the search fails over to the model.
+pub fn is_opencode_question_form(raw: &Value) -> bool {
+    let Some(properties) = raw
+        .get("requestedSchema")
+        .and_then(|schema| schema.get("properties"))
+        .and_then(Value::as_object)
+    else {
+        return false;
+    };
+    let is_question_key = |key: &str| {
+        key.strip_prefix('q')
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    };
+    !properties.is_empty()
+        && properties.keys().any(|key| is_question_key(key))
+        && properties.keys().all(|key| {
+            is_question_key(key) || key.strip_suffix("_custom").is_some_and(is_question_key)
+        })
+}
+
+/// The elicitation reply that ANSWERS an OpenCode question with nothing:
+/// `accept` with no content. OpenCode then hands the model "Unanswered" for
+/// each question and the turn goes on (`core/src/tool/plugin/question.ts`
+/// `toModelContent`). Used where codeg cannot ask the user (the ask feature is
+/// off, another question is already open): a `decline` there would read to
+/// OpenCode as the user DISMISSING the question, which ends the turn.
+pub fn elicitation_unanswered_response() -> CreateElicitationResponse {
+    CreateElicitationResponse::new(ElicitationAction::Accept(ElicitationAcceptAction::new()))
+}
+
 /// True when the raw schema property carries the shared custom-answer marker
 /// (`_meta._askUserQuestionCustomAnswer.isCustomAnswer`), i.e. it is the
 /// free-text "Other" companion of a sibling select question.
@@ -1280,7 +1549,7 @@ pub fn classify_elicitation(
             tool_call_id,
         )));
     }
-    let mut questions = parse_form_questions(form, raw, peer);
+    let mut questions = parse_form_questions(form, raw, peer, &message);
     if questions.specs.is_empty() {
         // A form with nothing to fill in is a bare confirmation — mirror
         // codex-acp's own no-capability fallback (Accept/Decline options).
@@ -1300,8 +1569,14 @@ pub fn classify_elicitation(
     }
     // Carry the elicitation's tool_call_id so the connection handler can key the
     // synthesized in-stream result card to it — codex delivers `request_user_input`
-    // ONLY as this elicitation, never as a stream tool_call.
+    // ONLY as this elicitation, never as a stream tool_call. (Qoder streams its
+    // ask as a tool_call of its own, so the handler synthesizes no card there.)
     questions.tool_call_id = tool_call_id;
+    questions.async_delivery = matches!(peer, ElicitationPeer::Codex(_))
+        && raw
+            .pointer("/_meta/codex/delivery")
+            .and_then(Value::as_str)
+            == Some("async");
     Ok(ElicitationPlan::Questions(questions))
 }
 
@@ -1399,23 +1674,34 @@ fn is_secret_property(raw: &Value, id: &str) -> bool {
 /// property with no usable choices renders as free text (the card's
 /// always-present "Other" input) — including plain strings, numbers, integers,
 /// and choice fields whose options were all empty/duplicate.
+///
+/// For a sole rendered generic question without property prose, the trimmed,
+/// bounded request `message` supplies the question before the title/id fallback.
+/// Codex user-input forms and MiniMax retain their own orientation rules.
 fn parse_form_questions(
     form: &agent_client_protocol::schema::v1::ElicitationFormMode,
     raw: &Value,
     peer: ElicitationPeer,
+    message: &str,
 ) -> ElicitationQuestions {
     // Decided once for the whole form: codex-acp 1.12.0 swapped which of
     // `title`/`description` carries the question (see [`codex_form_shape`]).
     let codex_shape = codex_form_shape(raw, peer);
     // The 1.12.0-only fixups below apply to exactly one generation of exactly
-    // one adapter; everything else — DeepSeek, generic MCP servers — shares this
-    // parser and must come through untouched.
+    // one adapter; everything else — DeepSeek, Qoder, generic MCP servers —
+    // shares this parser and must come through untouched.
     let is_codex_112_form = codex_shape == Some(CodexUserInputShape::QuestionInTitle);
     // `_meta.codex` is only codex's to interpret. On any other peer the same
     // keys are an unrelated extension that must not silently eat a field.
     let peer_is_codex = peer.is_codex();
+    let minimax_companions = if peer == ElicitationPeer::MiniMax {
+        minimax_other_fields(&form.requested_schema.properties)
+    } else {
+        BTreeMap::new()
+    };
     let mut specs = Vec::new();
     let mut fields = Vec::new();
+    let mut message_fallback_needs_header = None;
     for (id, prop) in &form.requested_schema.properties {
         if specs.len() == MAX_QUESTIONS {
             tracing::warn!(
@@ -1431,9 +1717,12 @@ fn parse_form_questions(
         // deliberately un-namespaced so every bridge is recognized alike).
         // The card always offers its own "Other" input, so a companion would
         // render as a duplicate question.
-        if is_other_companion(id)
+        if (peer != ElicitationPeer::MiniMax && is_other_companion(id))
+            || minimax_companions.values().any(|companion| companion == id)
             || (peer_is_codex && codex_companion_role(raw, id).is_some())
             || is_custom_answer_property(raw, id)
+            || (peer == ElicitationPeer::OpenCode
+                && is_opencode_custom_companion(&form.requested_schema.properties, id))
         {
             continue;
         }
@@ -1461,10 +1750,12 @@ fn parse_form_questions(
                     ElicitationChoice {
                         label: "Yes".to_string(),
                         value: "true".to_string(),
+                        description: None,
                     },
                     ElicitationChoice {
                         label: "No".to_string(),
                         value: "false".to_string(),
+                        description: None,
                     },
                 ],
             ),
@@ -1492,11 +1783,31 @@ fn parse_form_questions(
         // original reading (`description` is the prose, `title` the label);
         // 1.12.0 swapped codex's two slots, so that one form is read the other
         // way round. See [`codex_form_shape`].
-        let (question_text, header_text) = if is_codex_112_form {
+        //
+        // MiniMax puts the question in `title` too, but its `description` is
+        // the step's supporting prose (or, on a step without options, the
+        // input placeholder "Others..."), never a short label: MiniMax sends
+        // no header at all. So the chip is synthesized from the question —
+        // MiniMax's contract keeps the question self-contained and lets a UI
+        // hide the description.
+        let is_minimax = peer == ElicitationPeer::MiniMax;
+        let no_header = None;
+        let (question_text, header_text) = if is_minimax {
+            (&title, &no_header)
+        } else if is_codex_112_form {
             (&title, &description)
         } else {
             (&description, &title)
         };
+        if codex_shape.is_none()
+            && !is_minimax
+            && description.as_deref().is_none_or(|d| d.trim().is_empty())
+        {
+            // Defer until companion/unsupported fields have been skipped and
+            // we know there is exactly one question. Preserve a supplied title.
+            message_fallback_needs_header =
+                Some(header_text.as_deref().is_none_or(|h| h.trim().is_empty()));
+        }
         let question = question_text
             .as_deref()
             .map(str::trim)
@@ -1531,7 +1842,11 @@ fn parse_form_questions(
             value_by_label.insert(label.clone(), c.value.clone());
             options.push(QuestionOption {
                 label,
-                description: String::new(),
+                description: c
+                    .description
+                    .as_deref()
+                    .map(|d| d.trim().chars().take(MAX_QUESTION_TEXT_CHARS).collect())
+                    .unwrap_or_default(),
             });
         }
         let header = header_text
@@ -1547,12 +1862,22 @@ fn parse_form_questions(
             multi_select,
             options,
             is_secret: is_secret_property(raw, id),
+            allow_other: true,
         });
         fields.push(ElicitationField {
+            other_field_id: minimax_companions.get(id).cloned(),
             id: id.clone(),
             kind,
             value_by_label,
         });
+    }
+    if specs.len() == 1 && !message.is_empty() {
+        if let Some(needs_header) = message_fallback_needs_header {
+            specs[0].question = message.to_string();
+            if needs_header {
+                specs[0].header = synthesize_header(message);
+            }
+        }
     }
     // `tool_call_id` is filled in by `classify_elicitation` (which reads the
     // form scope); the parser itself only shapes the questions.
@@ -1560,6 +1885,7 @@ fn parse_form_questions(
         specs,
         fields,
         tool_call_id: None,
+        async_delivery: false,
     }
 }
 
@@ -1597,6 +1923,12 @@ fn parse_bool_answer(v: &str) -> Option<bool> {
 /// `elicitation.form` to an agent that requires the answer under the companion
 /// key instead (claude-agent-acp reads `question_<n>_custom` separately), this
 /// has to route the free-text answer there using the marker's `questionId`.
+///
+/// MiniMax is such an agent: it reads a choice field's typed-in answer only
+/// from the `<id>__other` companion and drops a main-field string that matches
+/// none of its option ids. So a field carrying
+/// [`ElicitationField::other_field_id`] sends its chosen options under the main
+/// id and the user's own text under the companion.
 pub fn build_elicitation_response(
     questions: &ElicitationQuestions,
     outcome: &QuestionOutcome,
@@ -1614,10 +1946,33 @@ pub fn build_elicitation_response(
             continue;
         };
         let field = &questions.fields[idx];
+        if let Some(other_id) = &field.other_field_id {
+            let other: Vec<_> = item
+                .selected
+                .iter()
+                .filter(|label| !field.value_by_label.contains_key(*label))
+                .cloned()
+                .collect();
+            if !other.is_empty() {
+                content.insert(
+                    other_id.clone(),
+                    ElicitationContentValue::String(other.join("\n")),
+                );
+            }
+        }
         let mapped: Vec<String> = item
             .selected
             .iter()
-            .map(|l| field.value_by_label.get(l).cloned().unwrap_or_else(|| l.clone()))
+            .filter(|label| {
+                field.other_field_id.is_none() || field.value_by_label.contains_key(*label)
+            })
+            .map(|l| {
+                field
+                    .value_by_label
+                    .get(l)
+                    .cloned()
+                    .unwrap_or_else(|| l.clone())
+            })
             .collect();
         let value = match field.kind {
             ElicitationFieldKind::Text => match mapped.into_iter().next() {
@@ -1727,6 +2082,7 @@ pub fn grok_result_card_input(specs: &[QuestionSpec]) -> Value {
                 "question": s.question,
                 "multiSelect": s.multi_select,
                 "options": s.options,
+                "allowOther": s.allow_other,
             })
         })
         .collect();
@@ -1817,6 +2173,31 @@ mod tests {
         assert!(!qs[0].multi_select);
         assert_eq!(qs[0].options.len(), 2);
         assert!(!qs[0].id.is_empty());
+        assert!(qs[0].allow_other);
+    }
+
+    #[test]
+    fn question_spec_allow_other_defaults_true_and_round_trips() {
+        // A spec stored or sent before the field existed (pending-question
+        // snapshots, an older codeg-mcp) must keep offering "Other".
+        let legacy: QuestionSpec = serde_json::from_value(json!({
+            "id": "q1",
+            "question": "Which approach?",
+            "header": "Approach",
+            "multi_select": false,
+            "options": [{ "label": "A", "description": "" }]
+        }))
+        .unwrap();
+        assert!(legacy.allow_other);
+
+        let closed = QuestionSpec {
+            allow_other: false,
+            ..legacy
+        };
+        let wire = serde_json::to_value(&closed).unwrap();
+        assert_eq!(wire["allow_other"], false);
+        let back: QuestionSpec = serde_json::from_value(wire).unwrap();
+        assert!(!back.allow_other);
     }
 
     fn elicitation_raw(props: Value, required: Value) -> Value {
@@ -1840,11 +2221,470 @@ mod tests {
         }
     }
 
+    #[test]
+    fn classify_elicitation_generic_single_question_uses_message() {
+        let mut raw = elicitation_raw(
+            json!({"delivery": {
+                "type": "string", "title": "Delivery",
+                "oneOf": [
+                    {"const": "safe", "title": "Safe", "description": " Back up first "},
+                    {"const": "fast", "title": "Fast", "description": "Deploy immediately"}
+                ]
+            }}),
+            json!(["delivery"]),
+        );
+        raw["message"] = json!(" How should we deliver the release? ");
+        for peer in [
+            ElicitationPeer::Other,
+            ElicitationPeer::OpenCode,
+            ElicitationPeer::Codex(Some(CodexUserInputShape::QuestionInTitle)),
+            ElicitationPeer::Codex(Some(CodexUserInputShape::QuestionInDescription)),
+        ] {
+            let q = expect_questions(classify_elicitation(&raw, peer).unwrap());
+            assert_eq!(q.specs.len(), 1);
+            assert_eq!(q.specs[0].question, "How should we deliver the release?");
+            assert_eq!(q.specs[0].header, "Delivery");
+            assert_eq!(q.specs[0].options[0].description, "Back up first");
+            assert_eq!(q.specs[0].options[1].description, "Deploy immediately");
+            let card = grok_result_card_input(&q.specs);
+            assert_eq!(card["questions"][0]["question"], q.specs[0].question);
+            assert_eq!(card["questions"][0]["options"], json!(q.specs[0].options));
+            let outcome = build_outcome(
+                &q.specs,
+                &QuestionAnswer {
+                    answers: vec![QuestionAnswerItem {
+                        question_id: "delivery".into(),
+                        labels: vec!["Safe".into()],
+                    }],
+                    declined: false,
+                },
+            );
+            let response =
+                serde_json::to_value(build_elicitation_response(&q, &outcome)).unwrap();
+            assert_eq!(response["content"], json!({"delivery": "safe"}));
+        }
+    }
+
+    #[test]
+    fn classify_elicitation_message_fallback_precedence_and_bounds() {
+        let message = "Which delivery method should we use?";
+        for (description, title, message, expected) in [
+            (Some(" Field prose "), Some("Delivery"), message, "Field prose"),
+            (None, Some("Delivery"), message, message),
+            (Some(" \n "), Some("Delivery"), message, message),
+            (None, None, message, message),
+            (None, Some("Delivery"), "", "Delivery"),
+            (None, None, " \n ", "delivery"),
+        ] {
+            let mut raw = elicitation_raw(
+                json!({"delivery": {"type": "string", "title": title, "description": description}}),
+                json!([]),
+            );
+            raw["message"] = json!(message);
+            let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::Other).unwrap());
+            assert_eq!(q.specs[0].question, expected);
+            assert_eq!(
+                q.specs[0].header,
+                title.unwrap_or(&synthesize_header(expected))
+            );
+        }
+        for extra in [0, 1] {
+            let text = "文".repeat(MAX_QUESTION_TEXT_CHARS + extra);
+            let title = "题".repeat(MAX_HEADER_CHARS + extra);
+            let mut raw = elicitation_raw(
+                json!({"delivery": {"type": "string", "title": title,
+                    "oneOf": [
+                        {"const": "safe", "title": "Safe", "description": format!(" {text} ")},
+                        {"const": "fast", "title": "Fast", "description": " \n "}
+                    ]}}),
+                json!([]),
+            );
+            raw["message"] = json!(format!(" {text} "));
+            let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::Other).unwrap());
+            assert_eq!(q.specs[0].question, "文".repeat(MAX_QUESTION_TEXT_CHARS));
+            assert_eq!(q.specs[0].header, "题".repeat(MAX_HEADER_CHARS));
+            assert_eq!(
+                q.specs[0].options[0].description,
+                "文".repeat(MAX_QUESTION_TEXT_CHARS)
+            );
+            assert_eq!(q.specs[0].options[1].description, "");
+        }
+    }
+
+    #[test]
+    fn classify_elicitation_message_fallback_counts_rendered_questions() {
+        let mut raw = elicitation_raw(
+            json!({
+                "delivery": {"type": "string", "title": "Delivery", "enum": ["Safe", "Fast"]},
+                "delivery_custom": {"type": "string", "_meta": {"_askUserQuestionCustomAnswer": true}}
+            }),
+            json!([]),
+        );
+        raw["message"] = json!("How should we deliver the release?");
+        let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::Other).unwrap());
+        assert_eq!(q.specs.len(), 1);
+        assert_eq!(q.specs[0].question, "How should we deliver the release?");
+        for i in 1..=MAX_QUESTIONS {
+            raw["requestedSchema"]["properties"][format!("extra_{i}")] =
+                json!({"type": "string", "title": "Another question"});
+            let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::Other).unwrap());
+            assert_eq!(q.specs.len(), (i + 1).min(MAX_QUESTIONS));
+            assert_eq!(q.specs[0].question, "Delivery");
+            assert!(q.specs[1..].iter().all(|s| s.question == "Another question"));
+        }
+    }
+
+    /// deepseek-acp 0.9.0's ask, verbatim off the wire (#1138): the full
+    /// question rides only in `message`, the property `title` is a short label,
+    /// and every choice carries its own explanation.
+    #[test]
+    fn classify_elicitation_reads_deepseek_single_question_form() {
+        let question = "客户端流水线从 11-11 23:29 被 Windows Update 关机切断，已停 9.5 小时（服务端 queued 0，看门狗报了 176 次不自动拉起）。现在要不要我把它拉起来？";
+        let raw = json!({
+            "mode": "form",
+            "sessionId": "sess-1",
+            "message": question,
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "restart": {
+                        "type": "string",
+                        "title": "流水线",
+                        "oneOf": [
+                            {
+                                "const": "现在拉起来（推荐）",
+                                "title": "现在拉起来（推荐）",
+                                "description": "跑计划任务 step11-upscale 起 launch_step11.py，不动任何代码/参数，从 batch_6 剩余 52,362 张继续。"
+                            },
+                            {
+                                "const": "先不拉，我自己来",
+                                "title": "先不拉，我自己来",
+                                "description": "保持停止状态，我不碰客户端。"
+                            }
+                        ]
+                    }
+                },
+                "required": ["restart"]
+            }
+        });
+        let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::Other).unwrap());
+        assert_eq!(q.specs.len(), 1);
+        assert_eq!(q.specs[0].question, question);
+        assert_eq!(q.specs[0].header, "流水线");
+        assert_eq!(
+            q.specs[0].options[0].description,
+            "跑计划任务 step11-upscale 起 launch_step11.py，不动任何代码/参数，从 batch_6 剩余 52,362 张继续。"
+        );
+        assert_eq!(q.specs[0].options[1].description, "保持停止状态，我不碰客户端。");
+        assert!(validate_specs(&q.specs).is_ok());
+    }
+
+    /// codex-acp 2.6.0's form for `request_user_input_async`, as sent live to
+    /// codeg's exact capabilities: no `toolCallId`, the question in `title`,
+    /// a note companion for the choice question, and `_meta.codex.delivery`.
+    fn codex_async_question_form() -> Value {
+        serde_json::json!({
+            "sessionId": "01a1c054-1e88-74a2-9366-9d88d7b1fb66",
+            "mode": "form",
+            "message": "Codex keeps working while you answer. An answer sent after it finishes is not delivered.",
+            "requestedSchema": {"type": "object", "properties": {
+                "question_0": {"title": "Which environment should I deploy to?",
+                    "_meta": {"codex": {"isOther": true, "isSecret": false}}, "type": "string",
+                    "oneOf": [{"const": "Staging", "title": "Staging"}, {"const": "Production", "title": "Production"}]},
+                "question_0_note": {"type": "string", "title": "Additional answer or note",
+                    "_meta": {"codex": {"questionId": "question_0", "role": "user_note", "isSecret": false},
+                        "_askUserQuestionCustomAnswer": true,
+                        "jetbrains": {"air": {"version": 1, "customAnswer": true}}}},
+                "question_1": {"title": "Anything else I should know?",
+                    "_meta": {"codex": {"isOther": false, "isSecret": false}}, "type": "string"}
+            }},
+            "_meta": {"codex": {"delivery": "async"}}
+        })
+    }
+
+    #[test]
+    fn codex_async_question_form_is_marked_async_for_codex_only() {
+        let raw = codex_async_question_form();
+        let q = expect_questions(
+            classify_elicitation(
+                &raw,
+                ElicitationPeer::Codex(Some(CodexUserInputShape::QuestionInTitle)),
+            )
+            .unwrap(),
+        );
+        assert!(q.async_delivery);
+        assert!(q.tool_call_id.is_none());
+        let asked: Vec<&str> = q.specs.iter().map(|s| s.question.as_str()).collect();
+        assert_eq!(
+            asked,
+            ["Which environment should I deploy to?", "Anything else I should know?"]
+        );
+        // `_meta` is an open namespace: another speaker's `codex` block decides nothing.
+        let other = expect_questions(classify_elicitation(&raw, ElicitationPeer::Other).unwrap());
+        assert!(!other.async_delivery);
+        // A blocking `request_user_input` form is not async.
+        let mut blocking = raw.clone();
+        blocking["_meta"] = serde_json::json!({"codex": {"autoResolutionMs": 60000}});
+        let q = expect_questions(
+            classify_elicitation(&blocking, ElicitationPeer::Codex(None)).unwrap(),
+        );
+        assert!(!q.async_delivery);
+    }
+
     fn expect_approval(plan: ElicitationPlan) -> ElicitationApproval {
         match plan {
             ElicitationPlan::Approval(a) => a,
             ElicitationPlan::Questions(_) => panic!("expected an approval plan"),
         }
+    }
+
+    #[test]
+    fn minimax_questionnaire_preserves_ids_and_custom_answers() {
+        let raw = json!({"mode":"form", "sessionId":"session-1", "message":"Questions",
+        "requestedSchema":{"type":"object","properties":{
+            "delivery":{"type":"string","title":"How should we deliver?","description":"Supporting context",
+                "oneOf":[{"const":"safe","title":"Safe","description":"Back up first"},{"const":"fast","title":"Fast"}]},
+            "delivery__other":{"type":"string","title":"A real collision question"},
+            "delivery__other_":{"type":"string","title":"How should we deliver? — Other"},
+            "tags":{"type":"array","title":"Which tags?","items":{"anyOf":[{"const":"r","title":"Red"},{"const":"b","title":"Blue","description":"Cool tone"}]}},
+            "tags__other":{"type":"string","title":"Which tags? — Other"}
+        }}});
+        let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::MiniMax).unwrap());
+        assert_eq!(q.specs.len(), 3);
+        assert_eq!(q.specs[0].question, "How should we deliver?");
+        // MiniMax sends no header and `description` is prose, so the chip is
+        // cut from the question rather than from the supporting context.
+        assert_eq!(
+            q.specs[0].header,
+            synthesize_header("How should we deliver?")
+        );
+        // Each choice's own description reaches the card.
+        assert_eq!(q.specs[0].options[0].description, "Back up first");
+        assert_eq!(q.specs[0].options[1].description, "");
+        assert_eq!(q.specs[2].options[1].description, "Cool tone");
+        assert_eq!(q.specs[1].id, "delivery__other");
+        // Generic peers keep description as the question and also display
+        // each choice's explanation.
+        let generic =
+            expect_questions(classify_elicitation(&raw, ElicitationPeer::Other).unwrap());
+        assert_eq!(generic.specs[0].question, "Supporting context");
+        assert_eq!(generic.specs[0].options[0].description, "Back up first");
+        assert_eq!(generic.specs[0].options[1].description, "");
+        assert_eq!(
+            q.fields[0].other_field_id.as_deref(),
+            Some("delivery__other_")
+        );
+        let outcome = |answers: &[(&str, Vec<&str>)]| QuestionOutcome {
+            declined: false,
+            answers: answers
+                .iter()
+                .map(|(id, selected)| {
+                    let spec = q.specs.iter().find(|spec| spec.id == *id).unwrap();
+                    QuestionAnsweredItem {
+                        question: spec.question.clone(),
+                        header: spec.header.clone(),
+                        multi_select: spec.multi_select,
+                        selected: selected.iter().map(|s| s.to_string()).collect(),
+                    }
+                })
+                .collect(),
+        };
+        assert_eq!(
+            serde_json::to_value(build_elicitation_response(
+                &q,
+                &outcome(&[
+                    ("delivery", vec!["Safe"]),
+                    ("tags", vec!["Red", "Handmade"])
+                ])
+            ))
+            .unwrap(),
+            json!({"action":"accept","content":{"delivery":"safe","tags":["r"],"tags__other":"Handmade"}})
+        );
+        assert_eq!(
+            serde_json::to_value(build_elicitation_response(
+                &q,
+                &outcome(&[("delivery", vec!["Custom route"])])
+            ))
+            .unwrap(),
+            json!({"action":"accept","content":{"delivery__other_":"Custom route"}})
+        );
+        assert_eq!(
+            serde_json::to_value(build_elicitation_response(
+                &q,
+                &QuestionOutcome {
+                    answers: vec![],
+                    declined: true
+                }
+            ))
+            .unwrap(),
+            json!({"action":"decline"})
+        );
+    }
+
+    #[test]
+    fn minimax_free_text_without_choices_uses_main_field() {
+        let raw = json!({"mode":"form", "sessionId":"session-1", "message":"Question", "requestedSchema":{"type":"object","properties":{
+            "name":{"type":"string","title":"Your name?","description":"Full name"}
+        }}});
+        let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::MiniMax).unwrap());
+        assert_eq!(q.specs[0].question, "Your name?");
+        assert!(q.fields[0].other_field_id.is_none());
+        let outcome = QuestionOutcome {
+            declined: false,
+            answers: vec![QuestionAnsweredItem {
+                question: q.specs[0].question.clone(),
+                header: q.specs[0].header.clone(),
+                multi_select: false,
+                selected: vec!["Ada".into()],
+            }],
+        };
+        assert_eq!(
+            serde_json::to_value(build_elicitation_response(&q, &outcome)).unwrap(),
+            json!({"action":"accept","content":{"name":"Ada"}})
+        );
+    }
+
+    /// OpenCode 2.2.0's `question` tool, as its bridge elicits it (live
+    /// capture): a `q<n>` select per question beside a `q<n>_custom` text
+    /// companion, scoped to the streamed tool call.
+    fn opencode_question_raw() -> Value {
+        json!({
+            "mode": "form",
+            "sessionId": "ses_e826307d6ffepX5ltg2opas3fw",
+            "toolCallId": "call_main_11_15",
+            "message": "Questions",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "q0": {
+                        "type": "string",
+                        "title": "Color",
+                        "description": "Which color do you prefer?",
+                        "oneOf": [
+                            {"const": "Red", "title": "Red", "description": "Warm"},
+                            {"const": "Blue", "title": "Blue", "description": "Cool"},
+                        ],
+                    },
+                    "q0_custom": {
+                        "type": "string",
+                        "title": "Color (other)",
+                        "description": "Type your own answer",
+                    },
+                },
+                "required": [],
+            },
+        })
+    }
+
+    #[test]
+    fn classify_elicitation_reads_opencode_question_form() {
+        let raw = opencode_question_raw();
+        assert!(is_opencode_question_form(&raw));
+        let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::OpenCode).unwrap());
+        // The companion is the card's own "Other" input, not a question.
+        assert_eq!(q.specs.len(), 1, "{:?}", q.specs);
+        let spec = &q.specs[0];
+        assert_eq!(spec.id, "q0");
+        assert_eq!(spec.header, "Color");
+        assert_eq!(spec.question, "Which color do you prefer?");
+        assert!(!spec.multi_select);
+        let labels: Vec<_> = spec.options.iter().map(|o| o.label.as_str()).collect();
+        assert_eq!(labels, ["Red", "Blue"]);
+        assert_eq!(q.tool_call_id.as_deref(), Some("call_main_11_15"));
+
+        // A typed answer rides under the select field itself, which OpenCode
+        // takes as the user's own answer (its question fields are `custom`).
+        let outcome = QuestionOutcome {
+            answers: vec![QuestionAnsweredItem {
+                question: "Which color do you prefer?".to_string(),
+                header: "Color".to_string(),
+                multi_select: false,
+                selected: vec!["Teal".to_string()],
+            }],
+            declined: false,
+        };
+        assert_eq!(
+            serde_json::to_value(build_elicitation_response(&q, &outcome)).unwrap(),
+            json!({"action": "accept", "content": {"q0": "Teal"}})
+        );
+
+        // The name alone is no companion on another connection.
+        let generic = expect_questions(classify_elicitation(&raw, ElicitationPeer::Other).unwrap());
+        assert_eq!(generic.specs.len(), 2);
+    }
+
+    #[test]
+    fn opencode_multi_select_question_keeps_its_companion_hidden() {
+        let raw = json!({
+            "mode": "form",
+            "sessionId": "ses_1",
+            "toolCallId": "call_1",
+            "message": "Questions",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "q0": {
+                        "type": "array",
+                        "title": "Integrations",
+                        "description": "Pick the integrations",
+                        "items": {"anyOf": [
+                            {"const": "GitHub", "title": "GitHub"},
+                            {"const": "Slack", "title": "Slack"},
+                        ]},
+                        "minItems": 1,
+                    },
+                    "q0_custom": {
+                        "type": "string",
+                        "title": "Integrations (other)",
+                        "description": "Add your own answer",
+                    },
+                },
+                "required": ["q0"],
+            },
+        });
+        let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::OpenCode).unwrap());
+        assert_eq!(q.specs.len(), 1);
+        assert!(q.specs[0].multi_select);
+    }
+
+    /// OpenCode's other form, the web-search provider choice, is not a
+    /// question form (`core/src/tool/plugin/websearch.ts`).
+    #[test]
+    fn opencode_websearch_form_is_not_a_question_form() {
+        let raw = json!({
+            "mode": "form",
+            "sessionId": "ses_1",
+            "message": "Web Search",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "choice": {
+                        "type": "string",
+                        "description": "Allow OpenCode to search the web for up-to-date information?",
+                        "oneOf": [
+                            {"const": "allow", "title": "Allow search via Exa"},
+                            {"const": "disable", "title": "Disable web search"},
+                        ],
+                    },
+                },
+                "required": ["choice"],
+            },
+        });
+        assert!(!is_opencode_question_form(&raw));
+        assert!(!is_opencode_question_form(&json!({"requestedSchema": {"properties": {}}})));
+        assert!(!is_opencode_question_form(&json!({
+            "requestedSchema": {"properties": {"q0_custom": {"type": "string"}}}
+        })));
+    }
+
+    /// An answer with nothing in it: OpenCode tells the model "Unanswered" and
+    /// goes on, where a decline would end the turn as a dismissal.
+    #[test]
+    fn unanswered_response_accepts_with_no_content() {
+        assert_eq!(
+            serde_json::to_value(elicitation_unanswered_response()).unwrap(),
+            json!({"action": "accept"})
+        );
     }
 
     #[test]
@@ -1879,6 +2719,63 @@ mod tests {
             q.tool_call_id.as_deref(),
             Some("item-1"),
             "carries the elicitation toolCallId for the synthesized card"
+        );
+    }
+
+    /// qodercli 1.1.67's native `AskUserQuestion` form, verbatim off the wire
+    /// (raw ACP probe, 2026-10-10): the question prose — with qoder's own
+    /// option explanations appended — is in `description`, the short header in
+    /// `title`, choices are `oneOf` const/title pairs, and the scope is
+    /// flattened top-level (`sessionId` + `toolCallId`). The crate's flatten
+    /// lands that in `ElicitationSessionScope`, so the toolCallId is read like
+    /// any form's: it names the `Ask user` `tool_call` qoder streams just
+    /// before the elicitation, which is why the handler synthesizes no card
+    /// for qoder (see `handle_elicitation_request`).
+    #[test]
+    fn classify_elicitation_reads_qoder_ask_user_question_form() {
+        let raw = serde_json::json!({
+            "mode": "form",
+            "sessionId": "8c706dde-7ac9-4ac9-824d-29ec8179d734",
+            "toolCallId": "call_d341dc678fad4b7a8ea5f42e",
+            "message": "Answer Questions",
+            "requestedSchema": {
+                "type": "object",
+                "title": "Answer Questions",
+                "properties": {
+                    "q0": {
+                        "type": "string",
+                        "title": "选择",
+                        "description": "选 A 还是 B？\nA: 选择 A 选项。\nB: 选择 B 选项。",
+                        "oneOf": [
+                            {"const": "A", "title": "A"},
+                            {"const": "B", "title": "B"}
+                        ]
+                    }
+                },
+                "required": ["q0"]
+            },
+            "_meta": {"qoder": {"toolName": "AskUserQuestion"}}
+        });
+        let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::Other).unwrap());
+        assert_eq!(q.specs.len(), 1);
+        assert_eq!(q.specs[0].id, "q0", "property key becomes the spec id");
+        assert_eq!(
+            q.specs[0].question,
+            "选 A 还是 B？\nA: 选择 A 选项。\nB: 选择 B 选项。"
+        );
+        assert_eq!(q.specs[0].header, "选择");
+        assert!(!q.specs[0].multi_select);
+        let labels: Vec<_> = q.specs[0]
+            .options
+            .iter()
+            .map(|o| o.label.as_str())
+            .collect();
+        assert_eq!(labels, ["A", "B"]);
+        assert_eq!(q.fields[0].kind, ElicitationFieldKind::Text);
+        assert_eq!(
+            q.tool_call_id.as_deref(),
+            Some("call_d341dc678fad4b7a8ea5f42e"),
+            "the flattened scope's toolCallId is read"
         );
     }
 
@@ -2017,7 +2914,7 @@ mod tests {
                 "title": "Which approach should I take?",
                 "description": "Approach",
                 "_meta": {"codex": {"isOther": false, "isSecret": false}},
-                "oneOf": [{"const": "Incremental", "title": "Incremental"}]
+                "oneOf": [{"const": "Incremental", "title": "Incremental", "description": "Small steps"}]
             }
         });
         let raw = elicitation_raw(props, json!(["q1"]));
@@ -2028,6 +2925,7 @@ mod tests {
         );
         assert_eq!(q.specs[0].question, "Which approach should I take?");
         assert_eq!(q.specs[0].header, "Approach");
+        assert_eq!(q.specs[0].options[0].description, "Small steps");
 
         // Running ≤1.11.0 — the old reading, even though no marker dates the
         // form. A custom pin is a supported configuration.
@@ -2035,6 +2933,7 @@ mod tests {
             classify_elicitation(&raw, ElicitationPeer::Codex(Some(CodexUserInputShape::QuestionInDescription))).unwrap(),
         );
         assert_eq!(q.specs[0].question, "Approach");
+        assert_eq!(q.specs[0].options[0].description, "Small steps");
         // …and the question text lands in the header slot, where the
         // `MAX_HEADER_CHARS` clamp shears it — which is what the wrong
         // orientation costs a user: a truncated chip and no question.
@@ -2606,6 +3505,7 @@ mod tests {
 
     #[test]
     fn classify_elicitation_multi_select_marks_multi_and_maps_values() {
+        let description = "文".repeat(MAX_QUESTION_TEXT_CHARS + 1);
         let raw = elicitation_raw(
             json!({
                 "langs": {
@@ -2613,29 +3513,41 @@ mod tests {
                     "title": "Langs",
                     "description": "Pick languages",
                     "items": { "anyOf": [
-                        {"const": "rust", "title": "Rust"},
+                        {"const": "rust", "title": "Rust", "description": format!(" {description} ")},
                         {"const": "ts", "title": "TS"}
                     ]}
                 }
             }),
             json!([]),
         );
-        let q = expect_questions(classify_elicitation(&raw, ElicitationPeer::Codex(None)).unwrap());
-        assert_eq!(q.specs.len(), 1);
-        assert!(q.specs[0].multi_select);
-        // Titles display; consts ride back on accept.
-        let labels: Vec<_> = q.specs[0].options.iter().map(|o| o.label.as_str()).collect();
-        assert_eq!(labels, ["Rust", "TS"]);
-        let answer = QuestionAnswer {
-            answers: vec![QuestionAnswerItem {
-                question_id: q.specs[0].id.clone(),
-                labels: vec!["Rust".into(), "TS".into()],
-            }],
-            declined: false,
-        };
-        let outcome = build_outcome(&q.specs, &answer);
-        let v = serde_json::to_value(build_elicitation_response(&q, &outcome)).unwrap();
-        assert_eq!(v["content"]["langs"], json!(["rust", "ts"]));
+        for peer in [
+            ElicitationPeer::Other,
+            ElicitationPeer::OpenCode,
+            ElicitationPeer::MiniMax,
+            ElicitationPeer::Codex(None),
+        ] {
+            let q = expect_questions(classify_elicitation(&raw, peer).unwrap());
+            assert_eq!(q.specs.len(), 1);
+            assert!(q.specs[0].multi_select);
+            assert_eq!(
+                q.specs[0].options[0].description,
+                "文".repeat(MAX_QUESTION_TEXT_CHARS)
+            );
+            assert_eq!(q.specs[0].options[1].description, "");
+            // Titles display; consts ride back on accept.
+            let labels: Vec<_> = q.specs[0].options.iter().map(|o| o.label.as_str()).collect();
+            assert_eq!(labels, ["Rust", "TS"]);
+            let answer = QuestionAnswer {
+                answers: vec![QuestionAnswerItem {
+                    question_id: q.specs[0].id.clone(),
+                    labels: vec!["Rust".into(), "TS".into()],
+                }],
+                declined: false,
+            };
+            let outcome = build_outcome(&q.specs, &answer);
+            let v = serde_json::to_value(build_elicitation_response(&q, &outcome)).unwrap();
+            assert_eq!(v["content"], json!({"langs": ["rust", "ts"]}));
+        }
     }
 
     #[test]
@@ -2851,6 +3763,7 @@ mod tests {
             specs: vec![],
             fields: vec![],
             tool_call_id: None,
+            async_delivery: false,
         };
         let v = serde_json::to_value(build_elicitation_response(&empty, &outcome)).unwrap();
         assert_eq!(v["action"], "decline");
@@ -2882,6 +3795,7 @@ mod tests {
                 })
                 .collect(),
             is_secret: false,
+            allow_other: true,
         };
 
         assert!(validate_specs(&[]).is_err(), "empty set");
@@ -2925,6 +3839,7 @@ mod tests {
                 },
             ],
             is_secret: false,
+            allow_other: true,
         };
         assert!(validate_specs(&[blank_id]).is_err(), "blank id");
         // Duplicate option label within one question (parse_questions rejects it).
@@ -2944,6 +3859,7 @@ mod tests {
                 },
             ],
             is_secret: false,
+            allow_other: true,
         };
         assert!(
             validate_specs(&[dup_label]).is_err(),
@@ -3263,6 +4179,7 @@ mod tests {
         );
         // `ctx.ui.select` yields one value.
         assert!(!ask.spec.multi_select);
+        assert!(!ask.spec.allow_other);
         assert_eq!(ask.spec.options.len(), 4);
         assert_eq!(
             ask.spec.options[0].label,
@@ -3370,6 +4287,14 @@ mod tests {
             // Right server, right words, wrong tool — the match is anchored at
             // the END so a longer name cannot borrow it.
             "mcp__codeg-mcp__ask_user_question_twice",
+            // A third-party server named `mcp` whose tool borrows the whole
+            // name: claude-agent-acp 0.109.1+ titles it `<server>: <tool>`.
+            "mcp: codeg-mcp__ask_user_question",
+            // …and at the start: a server whose name only ends in codeg-mcp
+            // is another one, and so is a server `codeg` whose tool is
+            // `mcp_ask_user_question`.
+            "mcp__other-codeg-mcp__ask_user_question",
+            "mcp__codeg__mcp_ask_user_question",
             "",
         ] {
             assert!(
@@ -3479,6 +4404,16 @@ mod tests {
         assert_eq!(q["options"][0]["label"], "Red");
         // No header field is serialized (the frontend reads it as "").
         assert!(q.get("header").is_none(), "input must not carry a header");
+        assert_eq!(q["allowOther"], true);
+    }
+
+    #[test]
+    fn grok_result_card_input_carries_allow_other_false_for_native_bridges() {
+        // pi and Antigravity reuse this card input for their answered capsule;
+        // the history card must hide "Other" just like the live one did.
+        let ask = parse_pi_select_ask(&pi_select_tool_call(), &pi_select_options()).unwrap();
+        let input = grok_result_card_input(std::slice::from_ref(&ask.spec));
+        assert_eq!(input["questions"][0]["allowOther"], false);
     }
 
     #[test]
@@ -3553,5 +4488,98 @@ mod tests {
         let output = grok_result_card_output(&outcome);
         assert_eq!(input["questions"][0]["question"], output["answers"][0]["question"]);
         assert_eq!(output["answers"][0]["header"], "");
+    }
+    fn antigravity_interaction() -> Value {
+        json!({
+            "toolCallId": "interaction_396e46cc",
+            "status": "pending",
+            "title": "关于接下来的开发工作，您希望优先聚焦于哪个核心方向？",
+            "rawInput": {},
+            "kind": "other"
+        })
+    }
+
+    fn antigravity_choices() -> Vec<(String, String)> {
+        vec![
+            ("opaque-first".into(), "后端开发".into()),
+            ("opaque-second".into(), "前端开发".into()),
+        ]
+    }
+
+    #[test]
+    fn antigravity_live_interaction_is_recognized() {
+        let ask = parse_antigravity_ask(&antigravity_interaction(), &antigravity_choices())
+            .expect("实测交互格式应转换为问题卡片");
+        assert_eq!(ask.spec.options[1].label, "前端开发");
+        assert!(!ask.spec.multi_select);
+        assert!(!ask.spec.allow_other);
+        assert_eq!(ask.option_ids[1].1, "opaque-second");
+
+        let mut no_kind = antigravity_interaction();
+        no_kind.as_object_mut().unwrap().remove("kind");
+        let ask_no_kind = parse_antigravity_ask(&no_kind, &antigravity_choices())
+            .expect("实测 antigravity-acp 1.4.1 省略 kind 字段亦应正确识别为问题卡片");
+        assert_eq!(ask_no_kind.spec.options[1].label, "前端开发");
+        assert!(!ask_no_kind.spec.allow_other);
+    }
+
+    #[test]
+    fn antigravity_answer_preserves_second_option_and_decline() {
+        let ask =
+            parse_antigravity_ask(&antigravity_interaction(), &antigravity_choices()).unwrap();
+        let mut outcome = QuestionOutcome {
+            answers: vec![QuestionAnsweredItem {
+                question: ask.spec.question.clone(),
+                header: ask.spec.header.clone(),
+                multi_select: false,
+                selected: vec!["前端开发".into()],
+            }],
+            declined: false,
+        };
+        assert_eq!(
+            antigravity_option_id(&outcome, &ask).as_deref(),
+            Some("opaque-second")
+        );
+        outcome.declined = true;
+        assert_eq!(antigravity_option_id(&outcome, &ask), None);
+        outcome.declined = false;
+        outcome.answers[0].selected = vec!["自由文本".into()];
+        assert_eq!(antigravity_option_id(&outcome, &ask), None);
+        outcome.answers[0].selected = vec!["后端开发".into(), "前端开发".into()];
+        assert_eq!(antigravity_option_id(&outcome, &ask), None);
+        outcome.answers.clear();
+        assert_eq!(antigravity_option_id(&outcome, &ask), None);
+    }
+
+    #[test]
+    fn antigravity_parser_preserves_ordinary_permissions_and_invalid_choices() {
+        for (field, value) in [
+            ("toolCallId", json!("tool-1")),
+            ("toolCallId", json!("interaction_")),
+            ("title", json!(" ")),
+            ("kind", json!("execute")),
+            ("status", json!("completed")),
+            ("rawInput", json!({"command":"cargo build"})),
+        ] {
+            let mut call = antigravity_interaction();
+            call[field] = value;
+            assert!(
+                parse_antigravity_ask(&call, &antigravity_choices()).is_none(),
+                "{call}"
+            );
+        }
+        for choices in [
+            vec![],
+            vec![("1".into(), "仅一项".into())],
+            vec![("1".into(), "重复".into()), ("2".into(), "重复".into())],
+            vec![("1".into(), "A".into()), ("1".into(), "B".into())],
+            vec![("".into(), "A".into()), ("2".into(), "B".into())],
+            vec![("1".into(), " ".into()), ("2".into(), "B".into())],
+            (0..5)
+                .map(|i| (i.to_string(), format!("选项{i}")))
+                .collect(),
+        ] {
+            assert!(parse_antigravity_ask(&antigravity_interaction(), &choices).is_none());
+        }
     }
 }

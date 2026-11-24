@@ -511,8 +511,10 @@ impl ComputerActRequest {
 
     /// Whether the action can be done at all only by bringing the window to
     /// the front on `platform`: restoring a window on Linux, where the only
-    /// way back is the window manager's activation; and a menu command,
-    /// which the drivers choose with the application active.
+    /// way back is the window manager's activation; and a menu command, which
+    /// Linux's driver chooses with the application active — and macOS's with
+    /// the window brought forward within its application, where that
+    /// application is the one in front.
     pub fn needs_front(&self, platform: crate::computer::keys::Platform) -> bool {
         match self {
             Self::Restore => platform == crate::computer::keys::Platform::Linux,

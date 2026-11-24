@@ -260,7 +260,7 @@ pub async fn set_delegation_settings(
     {
         // `app.emit` fans out to every window, so the status-bar popover's
         // switch converges with this save.
-        let emitter = EventEmitter::Tauri(app);
+        let emitter = EventEmitter::from_app(&app);
         set_delegation_settings_core(&db.conn, broker.inner(), &emitter, settings).await
     }
     #[cfg(not(feature = "tauri-runtime"))]

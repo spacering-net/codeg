@@ -103,8 +103,10 @@ pub fn doc_label(tab_id: &str) -> String {
 }
 
 /// Whether this build can host document guests: the embedded surface with a
-/// per-webview scheme handler. Linux has no embedded surface, and the inline
-/// preview stays in place there.
+/// per-webview scheme handler. Linux has the surface but not the handler: its
+/// views are built related to a view of another context, so a scheme wry's
+/// builder registers lands on a context they do not use. The inline preview
+/// stays in place there.
 pub fn supported() -> bool {
     cfg!(all(
         feature = "browser-child",

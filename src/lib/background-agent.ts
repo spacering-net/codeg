@@ -42,6 +42,15 @@ export function hasTranscriptOverlay(agentType: string): boolean {
 }
 
 /**
+ * Id prefix of codex-acp's MCP start-up report (`McpStartupReporter`): one
+ * failed tool call per MCP server that failed, was cancelled or was skipped
+ * while the session opened, id `mcp_startup.<server>.<uuid>`, titled
+ * `mcp__<server>__startup`. It goes out whenever start-up settles — right
+ * after `session/new` as a rule, after the first turn when a server is slow.
+ */
+const MCP_STARTUP_REPORT_ID_PREFIX = "mcp_startup."
+
+/**
  * Whether an envelope carries turn material that would be LOST if it arrived
  * outside a prompting turn — i.e. worth telling the user their transcript has
  * content the timeline is not showing.
@@ -53,15 +62,51 @@ export function hasTranscriptOverlay(agentType: string): boolean {
  * - Empty or whitespace-only deltas carry no new readable content. Codex can
  *   flush a final newline after a completed or cancelled turn; treating it as
  *   background work leaves a persistent recovery notice on ordinary replies.
+ * - codex-acp's MCP start-up report is a `tool_call` the adapter makes up to
+ *   say how the session opened, not one the agent made in a turn: the
+ *   transcript never has it, so re-reading it would show nothing new.
  */
 export function isOutOfTurnContentEvent(envelope: {
   type: string
-  text?: string
+  // `null` too: the `prompt_suggestion` event carries `text: null` to withdraw
+  // its offer, and is not content either way.
+  text?: string | null
+  tool_call_id?: string
 }): boolean {
   if (envelope.type === "content_delta" || envelope.type === "thinking") {
     return (envelope.text?.trim().length ?? 0) > 0
   }
-  return envelope.type === "tool_call"
+  if (envelope.type !== "tool_call") return false
+  return !envelope.tool_call_id?.startsWith(MCP_STARTUP_REPORT_ID_PREFIX)
+}
+
+/**
+ * Whether turn content that just reached a connection is a turn the agent ran
+ * on its own: content the out-of-turn guard dropped and nothing else renders,
+ * so the timeline should offer to re-read the transcript.
+ *
+ * Takes the connection as the store holds it AFTER the reducer applied the
+ * envelope, which is what the guard itself read.
+ *
+ * - `prompting`: the content belongs to the running turn, which renders it.
+ * - No turn has run on the connection yet (`hasPrompted`): the content is the
+ *   adapter's own start-up output, such as an MCP server's failed-start report.
+ *   A turn an agent runs by itself follows one of ours (it drains a background
+ *   task, continues a goal), so nothing before the first turn is one. A new
+ *   conversation also has no transcript to re-read before its first prompt.
+ *   Arming there is how the notice appeared the instant a new conversation's
+ *   first message was sent: it was raised while the welcome screen hid the
+ *   thread, and shown as soon as the thread rendered.
+ * - Agents with a transcript overlay render this content themselves.
+ */
+export function isUnrenderedAgentTurnContent(
+  connection:
+    | { status: string; hasPrompted: boolean; agentType: string }
+    | undefined
+): boolean {
+  if (!connection || connection.status === "prompting") return false
+  if (!connection.hasPrompted) return false
+  return !hasTranscriptOverlay(connection.agentType)
 }
 
 export interface BackgroundTaskLifecycle {
@@ -72,6 +117,10 @@ export interface BackgroundTaskLifecycle {
   summary: string | null
   /** The notification's `<result>` markdown (parser-capped). */
   result: string | null
+  /** The latest notification says the task will notify again (it stopped
+   *  while background work of its own still runs, or it is being resumed), so
+   *  its result may be interim. Says nothing about whether it still runs. */
+  interim: boolean
 }
 
 /** Parse a parser-rewritten lifecycle marker out of a tool output preview.
@@ -93,6 +142,7 @@ export function parseBackgroundTaskMarker(
       status: typeof payload.status === "string" ? payload.status : null,
       summary: typeof payload.summary === "string" ? payload.summary : null,
       result: typeof payload.result === "string" ? payload.result : null,
+      interim: payload.interim === true,
     }
   } catch {
     return null
@@ -102,19 +152,23 @@ export function parseBackgroundTaskMarker(
 /**
  * Whether a LIVE wire tool output is an async sub-agent launch ack —
  * Claude Code's ("Async agent launched successfully. … You will be
- * notified…") or Grok's `spawn_subagent(background: true)` ack ("Subagent
+ * notified…"), Grok's `spawn_subagent(background: true)` ack ("Subagent
  * started in background.\nsubagent_id: …\nUse get_command_or_subagent_output
- * …"). Presentation-only: used to show a "running in background" state
- * instead of dumping the internal ack text while the turn's wire data is
- * still what the card renders (the parser marker — or, for Grok, the live
- * `subagent_finished` settle — replaces it).
+ * …") or OpenCode 2's `subagent(background: true)` one ("The subagent is
+ * working in the background (sessionID: …)", packages/core/src/tool/plugin/
+ * subagent.ts `backgroundResult`, 2.2.0). Presentation-only: used to show a
+ * "running in background" state instead of dumping the internal ack text while
+ * the turn's wire data is still what the card renders (the parser marker — or,
+ * for Grok, the live `subagent_finished` settle — replaces it).
  */
 export function isAsyncLaunchAckText(
   output: string | null | undefined
 ): boolean {
   if (!output) return false
+  const text = output.trimStart()
   return (
     output.includes("Async agent launched successfully") ||
-    output.trimStart().startsWith("Subagent started in background")
+    text.startsWith("Subagent started in background") ||
+    text.startsWith("The subagent is working in the background (sessionID:")
   )
 }

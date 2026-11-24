@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest"
 
 import {
   canCopyImageToClipboard,
@@ -18,7 +18,7 @@ type FakeItem = { items: Record<string, Blob | Promise<Blob>> }
  * `revokeObjectURL` spy, which is how the leak-on-failure test checks that
  * every exit from the raster releases its URL.
  */
-function stubObjectUrls(): ReturnType<typeof vi.fn> {
+function stubObjectUrls(): Mock {
   const revoke = vi.fn()
   vi.stubGlobal("URL", {
     ...URL,
@@ -31,7 +31,7 @@ function stubObjectUrls(): ReturnType<typeof vi.fn> {
 /** Stub `ClipboardItem` + `clipboard.write`, and collect what was written. */
 function stubClipboard(): {
   writes: FakeItem[]
-  write: ReturnType<typeof vi.fn>
+  write: Mock
 } {
   const writes: FakeItem[] = []
   vi.stubGlobal(

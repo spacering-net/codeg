@@ -1,88 +1,82 @@
 /**
- * Pure model for OpenCode's `permission` config block.
+ * Pure model for OpenCode 2's `permissions` config: an ordered list of rules.
  *
- * Shape comes from the official schema (`https://opencode.ai/config.json`,
- * `$defs/PermissionConfig`), semantics from the docs
- * (https://opencode.ai/docs/permissions/):
+ *   "permissions": [
+ *     { "action": "shell", "resource": "*", "effect": "ask" },
+ *     { "action": "shell", "resource": "git status *", "effect": "allow" },
+ *     { "action": "shell", "resource": "git push *", "effect": "deny" }
+ *   ]
  *
- *   "permission": "allow"                     // one action for everything
- *   "permission": { "*": "ask", "bash": "allow" }
- *   "permission": { "bash": { "*": "ask", "git *": "allow" } }
+ * `action` names a tool's permission (`shell`, `edit`, `read`, …, `*` for all),
+ * `resource` is what it acts on (a command, a path, a URL, a skill id, …), and
+ * `effect` is `allow` / `ask` / `deny`. Both are whole-value wildcards. A call
+ * is decided by the LAST matching rule (`core/src/permission.ts`:
+ * `rulesets.flat().findLast(…)`), and with no match at all OpenCode asks —
+ * though every agent starts from a base policy that allows everything except
+ * reading `.env` files, so in practice an unset action is allowed.
  *
- * An action is `allow` (run without approval) / `ask` (prompt) / `deny`
- * (block).
+ * ## The editor's model, and why order is load-bearing
  *
- * ## Why key order is load-bearing
+ * The UI shows a global default (the `*`/`*` rule), then per action a base
+ * effect (its `*` resource) and pattern rules. That is exactly what the list
+ * means when it is written grouped: the global rules first, then each action's
+ * rules together, its base before its patterns. Every writer here emits that
+ * order. A list that arrived otherwise — an action's rules split up, a base
+ * after its patterns, the global rule last, or a later rule covering an
+ * earlier one — has rules that are written but not in force, so
+ * {@link readOpenCodePermissions} reports `orderingUnsafe` and the UI says so.
  *
- * OpenCode flattens the whole block into ONE list of rules and resolves a call
- * with `findLast` (`packages/opencode/src/permission/index.ts`):
+ * ## OpenCode 1.x's `permission`
  *
- *     for (const [key, value] of Object.entries(permission)) {
- *       if (typeof value === "string") { ruleset.push({permission: key, action: value, pattern: "*"}) ... }
- *       ruleset.push(...Object.entries(value).map(([pattern, action]) => ({permission: key, pattern, action})))
- *     }
- *     rulesets.flat().findLast((rule) =>
- *       Wildcard.match(permission, rule.permission) && Wildcard.match(pattern, rule.pattern))
- *
- * The tool name is matched with the same wildcard matcher as the pattern, so a
- * top-level `"*"` matches EVERY tool — and because the last match wins, a `"*"`
- * written after `"bash"` silently overrides it. `{"bash":"deny","*":"allow"}`
- * allows bash. Every writer here therefore re-emits `"*"` first, in its scope,
- * and {@link readOpenCodePermissions} reports `orderingUnsafe` for a document
- * that arrived the other way round so the UI never shows a rule that is not the
- * one actually in force.
- *
- * `"*"` inside a scope is that scope's base action: at the top level it is the
- * global default, inside a key it is the key's default before its patterns.
- * This module treats "base action" and `"*"` as the same thing so the UI has a
- * single mental model.
+ * OpenCode 2 still loads 1.x's `permission` object (and the older `tools`
+ * map), converting it in memory into rules placed before the 2.x ones, with
+ * three actions renamed: `bash` → `shell`, `task` → `subagent`, and
+ * `write`/`patch`/`apply_patch` → `edit` (`core/src/config/normalize.ts`,
+ * `v1/config/migrate.ts`). This module reads such a document through the same
+ * conversion, and the first edit writes the result as `permissions` and drops
+ * the 1.x keys, so the file says one thing.
  *
  * ## Agents
  *
- * Per-agent blocks (`agent.<name>.permission`) are appended AFTER the global
- * rules, so they win the same `findLast`. Anything claiming "nothing will
- * prompt" has to account for them — see {@link applyOpenCodeAutoAccept}.
+ * `agents.<id>.permissions` are appended after the global rules, so they win
+ * the same `findLast`. Anything claiming "nothing will prompt" has to account
+ * for them — see {@link applyOpenCodeAutoAccept}.
  *
- * Every function is pure: it parses the given JSON text, mutates a clone and
- * returns new JSON text, leaving all unrelated keys untouched. Invalid JSON is
- * returned unchanged — the caller's raw-JSON editor owns that error.
+ * Every writer goes through `patchJsoncText`, so comments and formatting
+ * outside `permissions` survive; a document that does not parse is returned
+ * unchanged — the caller's raw editor owns that error.
  */
+
+import { parseJsoncObject, patchJsoncText, type JsonObject } from "./jsonc-edit"
 
 export type OpenCodePermissionAction = "allow" | "ask" | "deny"
 
 export const OPENCODE_PERMISSION_ACTIONS: readonly OpenCodePermissionAction[] =
   ["allow", "ask", "deny"] as const
 
-/** The wildcard pattern that carries a scope's base action. */
+/** The wildcard: as an action it is every tool, as a resource every target. */
 export const OPENCODE_PERMISSION_WILDCARD = "*"
 
 export interface OpenCodePermissionKeyMeta {
   key: string
-  /**
-   * Whether the schema types this key as `PermissionRuleConfig` (action *or*
-   * pattern object) rather than a bare `PermissionActionConfig`. Only these
-   * get a fine-grained rule editor.
-   *
-   * NOTE: the prose docs describe `webfetch`/`websearch` as matched by URL and
-   * query, but the published schema types both as action-only — so codeg keeps
-   * them action-only rather than emit config the `$schema` would reject. The
-   * raw-JSON editor remains available for anyone who wants to try patterns.
-   */
+  /** Whether rules for specific resources are worth offering. Every action
+   *  accepts them; the action-only ones are checked against `*` alone. */
   fineGrained: boolean
-  /** What OpenCode does when the key is unset (docs → "Defaults"). */
+  /** What OpenCode does when nothing configures the action: every agent's
+   *  base policy allows all actions. */
   defaultAction: OpenCodePermissionAction
-  /** Example pattern for the rule editor's placeholder. */
+  /** Example resource for the rule editor's placeholder. */
   patternExample?: string
 }
 
 /**
- * Known permission keys, ordered by how much a user is likely to care.
- * `additionalProperties` in the schema means other keys (MCP tools, etc.) are
- * legal too — those are surfaced separately as "custom" entries.
+ * OpenCode 2's built-in permission actions (docs: "Actions"), ordered by how
+ * much a user is likely to care. MCP tools (`<server>_<tool>`) and plugin
+ * actions are surfaced as custom entries.
  */
 export const OPENCODE_PERMISSION_KEYS: readonly OpenCodePermissionKeyMeta[] = [
   {
-    key: "bash",
+    key: "shell",
     fineGrained: true,
     defaultAction: "allow",
     patternExample: "git *",
@@ -91,7 +85,7 @@ export const OPENCODE_PERMISSION_KEYS: readonly OpenCodePermissionKeyMeta[] = [
     key: "edit",
     fineGrained: true,
     defaultAction: "allow",
-    patternExample: "src/**/*.ts",
+    patternExample: "src/*.ts",
   },
   {
     key: "read",
@@ -102,11 +96,11 @@ export const OPENCODE_PERMISSION_KEYS: readonly OpenCodePermissionKeyMeta[] = [
   {
     key: "external_directory",
     fineGrained: true,
-    defaultAction: "ask",
-    patternExample: "~/projects/**",
+    defaultAction: "allow",
+    patternExample: "~/projects/*",
   },
   {
-    key: "task",
+    key: "subagent",
     fineGrained: true,
     defaultAction: "allow",
     patternExample: "general",
@@ -118,10 +112,22 @@ export const OPENCODE_PERMISSION_KEYS: readonly OpenCodePermissionKeyMeta[] = [
     patternExample: "my-skill",
   },
   {
+    key: "webfetch",
+    fineGrained: true,
+    defaultAction: "allow",
+    patternExample: "https://docs.example.com/*",
+  },
+  {
+    key: "websearch",
+    fineGrained: true,
+    defaultAction: "allow",
+    patternExample: "*",
+  },
+  {
     key: "glob",
     fineGrained: true,
     defaultAction: "allow",
-    patternExample: "src/**",
+    patternExample: "src/*",
   },
   {
     key: "grep",
@@ -129,27 +135,12 @@ export const OPENCODE_PERMISSION_KEYS: readonly OpenCodePermissionKeyMeta[] = [
     defaultAction: "allow",
     patternExample: "TODO.*",
   },
-  {
-    key: "list",
-    fineGrained: true,
-    defaultAction: "allow",
-    patternExample: "src/**",
-  },
-  // Upstream types `lsp` as a `PermissionRuleConfig` (see `InputObject` in
-  // `config/v1/permission.ts`), i.e. it takes per-operation patterns like the
-  // keys above — `lsp_diagnostics`, `lsp_goto_definition`, … — not just a bare
-  // action.
-  {
-    key: "lsp",
-    fineGrained: true,
-    defaultAction: "allow",
-    patternExample: "lsp_diagnostics",
-  },
-  { key: "webfetch", fineGrained: false, defaultAction: "allow" },
-  { key: "websearch", fineGrained: false, defaultAction: "allow" },
-  { key: "todowrite", fineGrained: false, defaultAction: "allow" },
+  // Code Mode: denying it removes `execute` and the MCP tools reached only
+  // through it, while nested tools keep enforcing their own rules.
+  { key: "execute", fineGrained: false, defaultAction: "allow" },
   { key: "question", fineGrained: false, defaultAction: "allow" },
-  { key: "doom_loop", fineGrained: false, defaultAction: "ask" },
+  // Only present with `experimental.todo`.
+  { key: "todowrite", fineGrained: false, defaultAction: "allow" },
 ]
 
 const KNOWN_KEYS = new Set(OPENCODE_PERMISSION_KEYS.map((meta) => meta.key))
@@ -161,99 +152,222 @@ export interface OpenCodePermissionRule {
 
 export interface OpenCodePermissionEntry {
   key: string
-  /** Base action: the bare string form, or the scope's `"*"`. null = unset. */
+  /** Base effect: the action's `*` rule. null = unset. */
   action: OpenCodePermissionAction | null
-  /** Pattern rules other than `"*"`, in file order (last match wins). */
+  /** Rules for specific resources, in list order (last match wins). */
   rules: OpenCodePermissionRule[]
-  /** True for a key that is not in {@link OPENCODE_PERMISSION_KEYS}. */
+  /** True for an action that is not in {@link OPENCODE_PERMISSION_KEYS}
+   *  (an MCP tool, a plugin's action, or `*` rules for specific resources). */
   custom: boolean
 }
 
 export interface OpenCodePermissionView {
-  /** How `permission` is written on disk right now. */
-  shape: "unset" | "action" | "object"
-  /** Effective global default: the bare action, or the object's `"*"`. */
+  /** Whether the document configures permissions at all. */
+  shape: "unset" | "rules"
+  /** The rules come (partly) from 1.x's `permission` / `tools`, which the
+   *  next edit rewrites as `permissions`. */
+  legacy: boolean
+  /** The global default: the `*`/`*` rule's effect. */
   globalAction: OpenCodePermissionAction | null
   /**
    * True when nothing can prompt or block: the global default is `allow` and no
-   * key or rule narrows it to `ask` / `deny`.
+   * rule or agent narrows it to `ask` / `deny`.
    */
   autoAcceptAll: boolean
-  /** Every known key (unset ones carry `action: null`) then custom keys. */
+  /** Every known action (unset ones carry `action: null`) then custom ones. */
   entries: OpenCodePermissionEntry[]
   /**
-   * A key somewhere in the block is shadowed by a later, more general one — the
-   * plain `"*"` written last, or a glob like `"mymcp_*"` after `"mymcp_run"`.
-   * Those rows are displayed but not in force, so the UI must say so.
+   * Some rule is written but not in force: the list is not in the grouped
+   * order the editor shows, or a later rule covers an earlier one. The rows
+   * shown are the grouped reading, so the UI must say so.
    */
   orderingUnsafe: boolean
-  /**
-   * True when {@link normalizeOpenCodePermissionOrder} would clear
-   * `orderingUnsafe`. False for shadowing between two globs, which has no one
-   * obviously-correct order — that has to be fixed in the raw JSON.
-   */
+  /** True when {@link normalizeOpenCodePermissionOrder} would clear
+   *  `orderingUnsafe`. False when two overlapping globs remain, which has no
+   *  one obviously-correct order — that has to be fixed in the raw editor. */
   orderingFixable: boolean
-  /**
-   * Names of `agent.<name>` / `mode.<name>` blocks that can still prompt or
-   * block. Agent rules are applied after the global ones, so these outrank
-   * everything modelled in `entries`.
-   */
+  /** Agents whose own rules can still prompt or block. They are applied after
+   *  the global ones, so they outrank everything modelled in `entries`. */
   agentOverrides: string[]
-  /**
-   * A top-level `tools` map contains a `false`. OpenCode folds the deprecated
-   * map into `permission`, so it denies a tool that this editor shows as
-   * unset — worth saying out loud, since nothing here edits it.
-   */
-  legacyToolsDeny: boolean
-  /**
-   * `permission` exists but is not a valid action string or object (e.g. an
-   * array, or an object holding a non-action value). The UI should stay
-   * read-only and point at the raw-JSON editor.
-   */
+  /** The rules cannot be read (not a list of `{action, resource, effect}`).
+   *  The UI stays read-only and points at the raw editor. */
   invalid: boolean
+}
+
+interface Rule {
+  action: string
+  resource: string
+  effect: OpenCodePermissionAction
 }
 
 function isAction(value: unknown): value is OpenCodePermissionAction {
   return value === "allow" || value === "ask" || value === "deny"
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
+function asRecord(value: unknown): JsonObject | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null
-  return value as Record<string, unknown>
-}
-
-/** Parse a config document; returns null when the text is not a JSON object. */
-function parseConfig(configText: string): Record<string, unknown> | null {
-  const trimmed = configText.trim()
-  if (!trimmed) return {}
-  try {
-    return asRecord(JSON.parse(trimmed))
-  } catch {
-    return null
-  }
-}
-
-/** Serialize back, collapsing an empty document to "" (= no file). */
-function serializeConfig(config: Record<string, unknown>): string {
-  return Object.keys(config).length === 0 ? "" : JSON.stringify(config, null, 2)
+  return value as JsonObject
 }
 
 /**
  * Whether the visual editor can write at all: every writer here refuses to
- * touch a document it cannot parse, so the UI must fall back to the raw-JSON
- * editor instead of silently swallowing clicks.
+ * touch a document it cannot parse, so the UI must fall back to the raw editor
+ * instead of silently swallowing clicks.
  */
 export function isOpenCodeConfigEditable(configText: string): boolean {
-  return parseConfig(configText) !== null
+  return parseJsoncObject(configText).value !== null
 }
 
-function emptyEntries(): OpenCodePermissionEntry[] {
-  return OPENCODE_PERMISSION_KEYS.map((meta) => ({
-    key: meta.key,
-    action: null,
-    rules: [],
-    custom: false,
-  }))
+/** 1.x's action names, as OpenCode 2 renames them (`v1/config/migrate.ts`). */
+function normalizeLegacyAction(action: string): string {
+  if (action === "write" || action === "patch" || action === "apply_patch")
+    return "edit"
+  if (action === "task") return "subagent"
+  if (action === "bash") return "shell"
+  return action
+}
+
+/** 1.x's `tools` and `permission`, converted the way OpenCode 2 converts them
+ *  (`core/src/config/normalize.ts`: `migrateTools`, `migratePermissions`).
+ *  `null` when either is malformed. */
+function legacyRules(config: JsonObject): Rule[] | null {
+  const rules: Rule[] = []
+  if (config.tools !== undefined) {
+    const tools = asRecord(config.tools)
+    if (!tools) return null
+    for (const [action, enabled] of Object.entries(tools)) {
+      if (typeof enabled !== "boolean") return null
+      rules.push({
+        action: normalizeLegacyAction(action),
+        resource: "*",
+        effect: enabled ? "allow" : "deny",
+      })
+    }
+  }
+  const permission = config.permission
+  if (permission === undefined || permission === null) return rules
+  if (isAction(permission)) {
+    rules.push({ action: "*", resource: "*", effect: permission })
+    return rules
+  }
+  const record = asRecord(permission)
+  if (!record) return null
+  for (const [action, value] of Object.entries(record)) {
+    if (isAction(value)) {
+      rules.push({
+        action: normalizeLegacyAction(action),
+        resource: "*",
+        effect: value,
+      })
+      continue
+    }
+    const patterns = asRecord(value)
+    if (!patterns) return null
+    for (const [resource, effect] of Object.entries(patterns)) {
+      if (!isAction(effect)) return null
+      rules.push({ action: normalizeLegacyAction(action), resource, effect })
+    }
+  }
+  return rules
+}
+
+/** `permissions` as rules; `null` when it is not a well-formed rule list. */
+function nativeRules(value: unknown): Rule[] | null {
+  if (value === undefined || value === null) return []
+  if (!Array.isArray(value)) return null
+  const rules: Rule[] = []
+  for (const raw of value) {
+    const rule = asRecord(raw)
+    if (
+      !rule ||
+      typeof rule.action !== "string" ||
+      typeof rule.resource !== "string" ||
+      !isAction(rule.effect)
+    )
+      return null
+    rules.push({
+      action: rule.action,
+      resource: rule.resource,
+      effect: rule.effect,
+    })
+  }
+  return rules
+}
+
+/** Every rule the document contributes, in OpenCode's order: 1.x's first. */
+function documentRules(config: JsonObject): Rule[] | null {
+  const legacy = legacyRules(config)
+  const native = nativeRules(config.permissions)
+  if (!legacy || !native) return null
+  return [...legacy, ...native]
+}
+
+function hasLegacyPermissions(config: JsonObject): boolean {
+  return (
+    config.tools !== undefined ||
+    (config.permission !== undefined && config.permission !== null)
+  )
+}
+
+interface Group {
+  key: string
+  base: OpenCodePermissionAction | null
+  rules: OpenCodePermissionRule[]
+}
+
+/** The editor's reading of a rule list: the global group first, then each
+ *  action's rules in order of first appearance, a later duplicate resource
+ *  replacing an earlier one. */
+function regroup(rules: Rule[]): Group[] {
+  const groups = new Map<string, Group>()
+  for (const rule of rules) {
+    let group = groups.get(rule.action)
+    if (!group) {
+      group = { key: rule.action, base: null, rules: [] }
+      groups.set(rule.action, group)
+    }
+    if (rule.resource === OPENCODE_PERMISSION_WILDCARD) {
+      group.base = rule.effect
+      continue
+    }
+    const existing = group.rules.findIndex((r) => r.pattern === rule.resource)
+    if (existing >= 0) group.rules.splice(existing, 1)
+    group.rules.push({ pattern: rule.resource, action: rule.effect })
+  }
+  const ordered = [...groups.values()]
+  const global = ordered.findIndex(
+    (g) => g.key === OPENCODE_PERMISSION_WILDCARD
+  )
+  if (global > 0) ordered.unshift(...ordered.splice(global, 1))
+  return ordered
+}
+
+/** The rule list a grouped model stands for. */
+function serialize(groups: Group[]): Rule[] {
+  const rules: Rule[] = []
+  for (const group of groups) {
+    if (group.base)
+      rules.push({ action: group.key, resource: "*", effect: group.base })
+    for (const rule of group.rules)
+      rules.push({
+        action: group.key,
+        resource: rule.pattern,
+        effect: rule.action,
+      })
+  }
+  return rules
+}
+
+function sameRules(a: Rule[], b: Rule[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every(
+      (rule, i) =>
+        rule.action === b[i].action &&
+        rule.resource === b[i].resource &&
+        rule.effect === b[i].effect
+    )
+  )
 }
 
 /**
@@ -455,437 +569,316 @@ function globCovers(a: string, b: string): boolean {
 }
 
 /**
- * True when some key in this scope is shadowed by a later one that covers it.
- *
- * OpenCode flattens the block and resolves with `findLast`, so of two keys that
- * can match the same call the later one wins. If a later key covers an earlier
- * key's whole language, that earlier rule is dead: `{"bash":"deny","*":"allow"}`
- * allows bash, `{"mymcp_run":"deny","mymcp_*":"allow"}` allows `mymcp_run`, and
- * `{"git ?":"ask","git *":"allow"}` never asks. The documented arrangement —
- * specific written after general — is not flagged, because a specific pattern
- * does not cover the general one.
+ * True when a rule in the grouped list is dead because a later one covers it:
+ * an action group covered by a later group's action glob (`{"mymcp_run"}`
+ * then `{"mymcp_*"}`), or a resource rule covered by a later one in its group
+ * (`"git ?"` then `"git *"`). The documented arrangement — specific after
+ * general — is not flagged, because a specific glob does not cover a general
+ * one. The global group comes first, so it never shadows.
  */
-function scopeOrderingUnsafe(scope: Record<string, unknown>): boolean {
-  const keys = Object.keys(scope)
-  // The matcher folds `\` to `/` before doing anything else, so two keys the
+function groupsShadowed(groups: Group[]): boolean {
+  const keys = groups
+    .map((group) => group.key)
+    .filter((key) => key !== OPENCODE_PERMISSION_WILDCARD)
+  if (listShadowed(keys)) return true
+  return groups.some((group) =>
+    listShadowed(group.rules.map((rule) => rule.pattern))
+  )
+}
+
+/** Whether a later glob in `items` covers an earlier one. */
+function listShadowed(items: string[]): boolean {
+  // The matcher folds `\` to `/` before anything else, so two items the
   // JSON kept apart can still be the same pattern.
-  const normalized = keys.map((key) => key.replace(/\\/g, "/"))
-  for (let i = 0; i < keys.length; i++) {
-    for (let j = i + 1; j < keys.length; j++) {
-      // A wildcard-free key matches exactly itself, so the only earlier key it
-      // can cover is one that normalizes to the same thing. Skipping the rest
-      // keeps the pairwise sweep cheap on the ordinary all-literal config.
+  const normalized = items.map((item) => item.replace(/\\/g, "/"))
+  for (let i = 0; i < items.length; i++) {
+    for (let j = i + 1; j < items.length; j++) {
+      // A wildcard-free item matches exactly itself, so the only earlier item
+      // it can cover is one that normalizes to the same thing. Skipping the
+      // rest keeps the pairwise sweep cheap on an all-literal list.
       if (!/[*?]/.test(normalized[j]) && normalized[j] !== normalized[i]) {
         continue
       }
-      if (globCovers(keys[i], keys[j])) return true
+      if (globCovers(items[i], items[j])) return true
     }
   }
   return false
 }
 
-/** Any `tools` entry set to `false` — the legacy way of writing a deny. */
-function legacyToolsDeny(value: unknown): boolean {
-  const tools = asRecord(value)
-  if (!tools) return false
-  return Object.values(tools).some((enabled) => enabled === false)
+/** Whether an `agents.<id>.permissions` list (or 1.x agent block) can still
+ *  prompt or block. A block that only allows cannot stop a call. */
+function rulesNarrow(rules: Rule[] | null): boolean {
+  return (rules ?? []).some((rule) => rule.effect !== "allow")
 }
 
-/** True when a `permission` value carries any `ask` / `deny`. */
-function permissionNarrows(value: unknown): boolean {
-  if (isAction(value)) return value !== "allow"
-  const record = asRecord(value)
-  if (!record) return false
-  return Object.values(record).some((entry) => {
-    if (isAction(entry)) return entry !== "allow"
-    const rules = asRecord(entry)
-    if (!rules) return false
-    return Object.values(rules).some(
-      (action) => isAction(action) && action !== "allow"
-    )
-  })
-}
-
-/**
- * Agent blocks that can still prompt or block, from any of the three sources
- * OpenCode folds into an agent's ruleset: `agent.<name>.permission`,
- * the deprecated `agent.<name>.tools` (`false` → deny, converted in
- * `packages/core/src/v1/config/agent.ts`), and the deprecated `mode.<name>`,
- * which `config.ts` merges into `agent.<name>` before any of that runs.
- *
- * A block that only grants `allow` cannot stop a call, so it does not count.
- */
-function findAgentOverrides(config: Record<string, unknown>): string[] {
+/** Agents whose own rules can still prompt or block: OpenCode 2's
+ *  `agents.<id>.permissions`, and 1.x's `agent.<name>` / `mode.<name>`
+ *  `permission` and `tools`, which it converts the same way. */
+function findAgentOverrides(config: JsonObject): string[] {
   const names = new Set<string>()
+  const native = asRecord(config.agents)
+  for (const [name, raw] of Object.entries(native ?? {})) {
+    const agent = asRecord(raw)
+    if (agent && rulesNarrow(nativeRules(agent.permissions))) names.add(name)
+  }
   for (const scopeKey of ["agent", "mode"]) {
     const scope = asRecord(config[scopeKey])
-    if (!scope) continue
-    for (const [name, rawAgent] of Object.entries(scope)) {
-      const agent = asRecord(rawAgent)
+    for (const [name, raw] of Object.entries(scope ?? {})) {
+      const agent = asRecord(raw)
       if (!agent) continue
-      if (permissionNarrows(agent.permission) || legacyToolsDeny(agent.tools)) {
-        names.add(name)
-      }
+      const legacy = legacyRules({
+        permission: agent.permission,
+        tools: agent.tools,
+      })
+      if (rulesNarrow(legacy)) names.add(name)
     }
   }
   return [...names]
 }
 
-/** Read the `permission` block into a flat, UI-friendly view. */
+function entriesOf(groups: Group[]): OpenCodePermissionEntry[] {
+  const byKey = new Map(groups.map((group) => [group.key, group]))
+  const entries: OpenCodePermissionEntry[] = OPENCODE_PERMISSION_KEYS.map(
+    (meta) => {
+      const group = byKey.get(meta.key)
+      return {
+        key: meta.key,
+        action: group?.base ?? null,
+        rules: group?.rules ?? [],
+        custom: false,
+      }
+    }
+  )
+  for (const group of groups) {
+    if (KNOWN_KEYS.has(group.key)) continue
+    if (group.key === OPENCODE_PERMISSION_WILDCARD) {
+      // The global default is shown on its own; `*` rules for specific
+      // resources are listed like a custom action's so they stay visible.
+      if (group.rules.length > 0)
+        entries.push({
+          key: group.key,
+          action: null,
+          rules: group.rules,
+          custom: true,
+        })
+      continue
+    }
+    entries.push({
+      key: group.key,
+      action: group.base,
+      rules: group.rules,
+      custom: true,
+    })
+  }
+  return entries
+}
+
+/** Read the document's permissions into a flat, UI-friendly view. */
 export function readOpenCodePermissions(
   configText: string
 ): OpenCodePermissionView {
-  const config = parseConfig(configText)
-  const raw = config?.permission
-  const agentOverrides = config ? findAgentOverrides(config) : []
-  const rootToolsDeny = config ? legacyToolsDeny(config.tools) : false
-  const clean = {
+  const config = parseJsoncObject(configText).value
+  const empty: OpenCodePermissionView = {
+    shape: "unset",
+    legacy: false,
+    globalAction: null,
+    autoAcceptAll: false,
+    entries: entriesOf([]),
     orderingUnsafe: false,
     orderingFixable: false,
-    agentOverrides,
-    legacyToolsDeny: rootToolsDeny,
+    agentOverrides: [],
+    invalid: false,
   }
-  const unblocked = agentOverrides.length === 0 && !rootToolsDeny
-
-  if (!config || raw === undefined || raw === null) {
-    return {
-      shape: "unset",
-      globalAction: null,
-      autoAcceptAll: false,
-      entries: emptyEntries(),
-      ...clean,
-      invalid: false,
-    }
+  if (!config) return empty
+  const agentOverrides = findAgentOverrides(config)
+  const legacy = hasLegacyPermissions(config)
+  const rules = documentRules(config)
+  if (!rules) {
+    return { ...empty, shape: "rules", legacy, agentOverrides, invalid: true }
+  }
+  if (rules.length === 0 && config.permissions === undefined && !legacy) {
+    return { ...empty, agentOverrides }
   }
 
-  if (isAction(raw)) {
-    return {
-      shape: "action",
-      globalAction: raw,
-      autoAcceptAll: raw === "allow" && unblocked,
-      entries: emptyEntries(),
-      ...clean,
-      invalid: false,
-    }
-  }
-
-  const record = asRecord(raw)
-  if (!record) {
-    return {
-      shape: "object",
-      globalAction: null,
-      autoAcceptAll: false,
-      entries: emptyEntries(),
-      ...clean,
-      invalid: true,
-    }
-  }
-
-  let invalid = false
-  let orderingUnsafe = scopeOrderingUnsafe(record)
-  let globalAction: OpenCodePermissionAction | null = null
-  const parsed = new Map<string, OpenCodePermissionEntry>()
-
-  for (const [key, value] of Object.entries(record)) {
-    if (key === OPENCODE_PERMISSION_WILDCARD) {
-      if (isAction(value)) globalAction = value
-      else invalid = true
-      continue
-    }
-
-    if (isAction(value)) {
-      parsed.set(key, {
-        key,
-        action: value,
-        rules: [],
-        custom: !KNOWN_KEYS.has(key),
-      })
-      continue
-    }
-
-    const ruleRecord = asRecord(value)
-    if (!ruleRecord) {
-      invalid = true
-      continue
-    }
-    if (scopeOrderingUnsafe(ruleRecord)) orderingUnsafe = true
-
-    let base: OpenCodePermissionAction | null = null
-    const rules: OpenCodePermissionRule[] = []
-    for (const [pattern, action] of Object.entries(ruleRecord)) {
-      if (!isAction(action)) {
-        invalid = true
-        continue
-      }
-      if (pattern === OPENCODE_PERMISSION_WILDCARD) base = action
-      else rules.push({ pattern, action })
-    }
-    parsed.set(key, {
-      key,
-      action: base,
-      rules,
-      custom: !KNOWN_KEYS.has(key),
-    })
-  }
-
-  const entries: OpenCodePermissionEntry[] = OPENCODE_PERMISSION_KEYS.map(
-    (meta) =>
-      parsed.get(meta.key) ?? {
-        key: meta.key,
-        action: null,
-        rules: [],
-        custom: false,
-      }
-  )
-  for (const entry of parsed.values()) {
-    if (entry.custom) entries.push(entry)
-  }
-
-  const narrowed = entries.some(
-    (entry) =>
-      entry.action === "ask" ||
-      entry.action === "deny" ||
-      entry.rules.some((rule) => rule.action !== "allow")
-  )
+  const groups = regroup(rules)
+  const grouped = sameRules(serialize(groups), rules)
+  const shadowed = groupsShadowed(groups)
+  const orderingUnsafe = !grouped || shadowed
+  const globalAction =
+    groups.find((g) => g.key === OPENCODE_PERMISSION_WILDCARD)?.base ?? null
+  const entries = entriesOf(groups)
+  const narrowed = rules.some((rule) => rule.effect !== "allow")
 
   return {
-    shape: "object",
+    shape: "rules",
+    legacy,
     globalAction,
     autoAcceptAll:
       globalAction === "allow" &&
       !narrowed &&
-      !invalid &&
       !orderingUnsafe &&
-      unblocked,
+      agentOverrides.length === 0,
     entries,
     orderingUnsafe,
-    // Reordering only helps when moving the wildcards to the front is enough;
-    // two overlapping globs have no single obviously-correct order.
-    orderingFixable:
-      orderingUnsafe && !scopeOrderingUnsafeAfterNormalize(record),
+    orderingFixable: orderingUnsafe && !shadowed,
     agentOverrides,
-    legacyToolsDeny: rootToolsDeny,
-    invalid,
+    invalid: false,
   }
 }
 
-/** Whether shadowing would survive moving every `"*"` to the front. */
-function scopeOrderingUnsafeAfterNormalize(
-  record: Record<string, unknown>
-): boolean {
-  const top = withWildcardFirst(record)
-  if (scopeOrderingUnsafe(top)) return true
-  return Object.values(top).some((value) => {
-    const rules = asRecord(value)
-    return rules ? scopeOrderingUnsafe(withWildcardFirst(rules)) : false
+/**
+ * Rewrite the document's rules through a mutator over the grouped model, as
+ * OpenCode 2's `permissions`, dropping 1.x's `permission` and `tools` (whose
+ * rules the model already holds). An emptied model removes the key.
+ *
+ * Rules written in another order than the grouped one are left alone unless
+ * `reorder` is set: writing them back grouped would change what rules the
+ * edit never touched decide, so only the explicit repair may do that.
+ */
+function patchPermissions(
+  configText: string,
+  mutate: (groups: Group[]) => void,
+  reorder = false
+): string {
+  const parsed = parseJsoncObject(configText).value
+  if (!parsed) return configText
+  const rules = documentRules(parsed)
+  if (!rules) return configText
+  if (!reorder && !sameRules(serialize(regroup(rules)), rules))
+    return configText
+  return patchJsoncText(configText, (config) => {
+    const groups = regroup(rules)
+    mutate(groups)
+    const next = serialize(groups.filter((g) => g.base || g.rules.length > 0))
+    delete config.permission
+    delete config.tools
+    if (next.length > 0) config.permissions = next
+    else delete config.permissions
   })
 }
 
-/**
- * Re-emit a scope with `"*"` first. Everything else keeps its relative order,
- * which is what decides precedence among the specific rules.
- */
-function withWildcardFirst(
-  scope: Record<string, unknown>
-): Record<string, unknown> {
-  if (!(OPENCODE_PERMISSION_WILDCARD in scope)) return scope
-  const ordered: Record<string, unknown> = {
-    [OPENCODE_PERMISSION_WILDCARD]: scope[OPENCODE_PERMISSION_WILDCARD],
+function groupFor(groups: Group[], key: string): Group {
+  let group = groups.find((g) => g.key === key)
+  if (!group) {
+    group = { key, base: null, rules: [] }
+    if (key === OPENCODE_PERMISSION_WILDCARD) groups.unshift(group)
+    else groups.push(group)
   }
-  for (const [key, value] of Object.entries(scope)) {
-    if (key !== OPENCODE_PERMISSION_WILDCARD) ordered[key] = value
-  }
-  return ordered
+  return group
 }
 
 /**
- * Rewrite `permission` through a mutator over the object form.
- *
- * A bare-action `permission` is first widened to `{ "*": <action> }` — the same
- * thing semantically — so per-key edits never silently drop the global default.
- * The result always leads with `"*"`: appending it instead would make it
- * override every key written before it (see the module header). When the
- * mutator leaves the object empty the key is removed entirely, and an emptied
- * document serializes to "".
- */
-function patchPermissionObject(
-  configText: string,
-  mutate: (permission: Record<string, unknown>) => void
-): string {
-  const config = parseConfig(configText)
-  if (!config) return configText
-  const clone = JSON.parse(JSON.stringify(config)) as Record<string, unknown>
-
-  const raw = clone.permission
-  const rawRecord = asRecord(raw)
-  const permission: Record<string, unknown> = isAction(raw)
-    ? { [OPENCODE_PERMISSION_WILDCARD]: raw }
-    : { ...(rawRecord ?? {}) }
-
-  mutate(permission)
-
-  if (Object.keys(permission).length === 0) delete clone.permission
-  else clone.permission = withWildcardFirst(permission)
-
-  return serializeConfig(clone)
-}
-
-/**
- * Move every `"*"` — the block's own and each key's — back to the front of its
- * scope, so the rules the UI shows are the rules OpenCode will apply. Offered
- * as an explicit repair for a document codeg did not write; no value changes.
+ * Write the rules in the grouped order the editor shows, so the rules shown
+ * are the rules OpenCode applies. Offered as an explicit repair for a list
+ * codeg did not write.
  */
 export function normalizeOpenCodePermissionOrder(configText: string): string {
-  return patchPermissionObject(configText, (permission) => {
-    for (const [key, value] of Object.entries(permission)) {
-      const rules = asRecord(value)
-      if (rules) permission[key] = withWildcardFirst(rules)
-    }
-  })
+  return patchPermissions(configText, () => {}, true)
 }
 
-/**
- * Rebuild one key's value from a base action plus ordered pattern rules.
- * Rules are emitted after `"*"` so the wildcard stays the fallback and the
- * specific patterns keep last-match-wins priority, matching the docs' advice.
- * Blank and duplicate patterns are dropped (a later duplicate wins, mirroring
- * what JSON parsing would do anyway).
- */
-function buildKeyValue(
-  action: OpenCodePermissionAction | null,
-  rules: OpenCodePermissionRule[]
-): OpenCodePermissionAction | Record<string, string> | null {
-  const cleaned: OpenCodePermissionRule[] = []
-  const seen = new Set<string>()
-  for (const rule of rules) {
-    const pattern = rule.pattern.trim()
-    if (!pattern || pattern === OPENCODE_PERMISSION_WILDCARD) continue
-    if (seen.has(pattern)) {
-      const index = cleaned.findIndex((item) => item.pattern === pattern)
-      if (index >= 0) cleaned.splice(index, 1)
-    }
-    seen.add(pattern)
-    cleaned.push({ pattern, action: rule.action })
-  }
-
-  if (cleaned.length === 0) return action
-  const value: Record<string, string> = {}
-  if (action) value[OPENCODE_PERMISSION_WILDCARD] = action
-  for (const rule of cleaned) value[rule.pattern] = rule.action
-  return value
-}
-
-/** Set (or clear, with `null`) the global default — `permission["*"]`. */
+/** Set (or clear, with `null`) the global default — the `*`/`*` rule. */
 export function setOpenCodeGlobalPermission(
   configText: string,
   action: OpenCodePermissionAction | null
 ): string {
-  return patchPermissionObject(configText, (permission) => {
-    if (action) permission[OPENCODE_PERMISSION_WILDCARD] = action
-    else delete permission[OPENCODE_PERMISSION_WILDCARD]
+  return patchPermissions(configText, (groups) => {
+    groupFor(groups, OPENCODE_PERMISSION_WILDCARD).base = action
   })
 }
 
-/**
- * Set (or clear) one key's base action, keeping its existing pattern rules.
- * Clearing a key that still has rules leaves the rules in place — only the
- * key's own `"*"` goes away.
- */
+/** Set (or clear) one action's base effect, keeping its resource rules. */
 export function setOpenCodeKeyPermission(
   configText: string,
   key: string,
   action: OpenCodePermissionAction | null
 ): string {
   if (!key || key === OPENCODE_PERMISSION_WILDCARD) return configText
-  return patchPermissionObject(configText, (permission) => {
-    const current = permission[key]
-    const rules: OpenCodePermissionRule[] = []
-    const record = asRecord(current)
-    if (record) {
-      for (const [pattern, value] of Object.entries(record)) {
-        if (pattern === OPENCODE_PERMISSION_WILDCARD) continue
-        if (isAction(value)) rules.push({ pattern, action: value })
-      }
-    }
-    const next = buildKeyValue(action, rules)
-    if (next === null) delete permission[key]
-    else permission[key] = next
+  return patchPermissions(configText, (groups) => {
+    groupFor(groups, key).base = action
   })
 }
 
-/** Replace one key's pattern rules, keeping its base action. */
+/**
+ * Replace one action's resource rules, keeping its base effect. Blank
+ * resources, and `*` (the base), are dropped; a later duplicate wins, as it
+ * would in OpenCode.
+ */
 export function setOpenCodeKeyRules(
   configText: string,
   key: string,
   rules: OpenCodePermissionRule[]
 ): string {
-  if (!key || key === OPENCODE_PERMISSION_WILDCARD) return configText
-  return patchPermissionObject(configText, (permission) => {
-    const current = permission[key]
-    let action: OpenCodePermissionAction | null = null
-    if (isAction(current)) {
-      action = current
-    } else {
-      const record = asRecord(current)
-      const base = record?.[OPENCODE_PERMISSION_WILDCARD]
-      if (isAction(base)) action = base
-    }
-    const next = buildKeyValue(action, rules)
-    if (next === null) delete permission[key]
-    else permission[key] = next
+  if (!key) return configText
+  const cleaned: OpenCodePermissionRule[] = []
+  for (const rule of rules) {
+    const pattern = rule.pattern.trim()
+    if (!pattern || pattern === OPENCODE_PERMISSION_WILDCARD) continue
+    const existing = cleaned.findIndex((item) => item.pattern === pattern)
+    if (existing >= 0) cleaned.splice(existing, 1)
+    cleaned.push({ pattern, action: rule.action })
+  }
+  return patchPermissions(configText, (groups) => {
+    groupFor(groups, key).rules = cleaned
   })
 }
 
 /**
- * Auto-accept everything: replace the block with `{ "*": "allow" }` and clear
- * every other source of a deny.
+ * Auto-accept everything: one `*`/`*` allow rule, and every other source of
+ * an ask or deny cleared — 1.x's `permission` and `tools`, and each agent's
+ * own rules, which OpenCode applies after the global ones and which would
+ * therefore win (`agents.<id>.permissions`, and 1.x's `agent.<name>` /
+ * `mode.<name>` `permission` and `tools`).
  *
- * Per-key overrides and pattern rules go, because one leftover
- * `"bash": { "rm *": "deny" }` would still stop a run. So do the per-agent
- * sources, which OpenCode applies *after* the global rules and which therefore
- * win outright: `agent.<name>.permission`, the deprecated
- * `agent.<name>.tools` (`false` → deny), and the deprecated `mode.<name>`,
- * which config loading folds into `agent.<name>`. The legacy top-level `tools`
- * map goes too, for the same reason.
- *
- * Everything else in an agent block — model, prompt, mode — is preserved, and
- * a block emptied by this is KEPT: OpenCode registers a custom agent from the
- * mere presence of `agent.<name>`, so deleting the entry would delete the agent.
+ * Everything else in an agent block is preserved, and a block emptied by this
+ * is KEPT: the mere presence of `agents.<id>` defines a custom agent.
+ * `policies` are not permissions and are left alone: a `tool.use` deny there
+ * still blocks, by design.
  */
 export function applyOpenCodeAutoAccept(configText: string): string {
-  const config = parseConfig(configText)
-  if (!config) return configText
-  const clone = JSON.parse(JSON.stringify(config)) as Record<string, unknown>
-  clone.permission = { [OPENCODE_PERMISSION_WILDCARD]: "allow" }
-  delete clone.tools
-
-  for (const scopeKey of ["agent", "mode"]) {
-    const scope = asRecord(clone[scopeKey])
-    if (!scope) continue
-    for (const rawAgent of Object.values(scope)) {
-      const agent = asRecord(rawAgent)
-      if (!agent) continue
-      delete agent.permission
-      delete agent.tools
-    }
+  try {
+    return patchJsoncText(configText, (config) => {
+      config.permissions = [{ action: "*", resource: "*", effect: "allow" }]
+      delete config.permission
+      delete config.tools
+      const agents = asRecord(config.agents)
+      for (const raw of Object.values(agents ?? {})) {
+        const agent = asRecord(raw)
+        if (agent) delete agent.permissions
+      }
+      for (const scopeKey of ["agent", "mode"]) {
+        const scope = asRecord(config[scopeKey])
+        for (const raw of Object.values(scope ?? {})) {
+          const agent = asRecord(raw)
+          if (!agent) continue
+          delete agent.permission
+          delete agent.tools
+        }
+      }
+    })
+  } catch {
+    return configText
   }
-
-  return serializeConfig(clone)
 }
 
-/** Drop the whole `permission` block, restoring OpenCode's own defaults. */
+/** Drop every permission rule the document sets, restoring OpenCode's own
+ *  defaults. */
 export function clearOpenCodePermissions(configText: string): string {
-  const config = parseConfig(configText)
-  if (!config) return configText
-  if (config.permission === undefined) return configText
-  const clone = JSON.parse(JSON.stringify(config)) as Record<string, unknown>
-  delete clone.permission
-  return serializeConfig(clone)
+  const config = parseJsoncObject(configText).value
+  if (
+    !config ||
+    (config.permissions === undefined && !hasLegacyPermissions(config))
+  )
+    return configText
+  return patchJsoncText(configText, (draft) => {
+    delete draft.permissions
+    delete draft.permission
+    delete draft.tools
+  })
 }
 
 /**
- * What a key actually resolves to when the user hasn't set it: the global
- * default when one is configured, otherwise OpenCode's own per-key default.
+ * What an action resolves to when the user hasn't set it: the global default
+ * when one is configured, otherwise OpenCode's own (its base policy allows).
  */
 export function effectiveOpenCodeDefault(
   key: string,

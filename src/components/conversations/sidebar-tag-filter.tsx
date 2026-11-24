@@ -1,6 +1,13 @@
 "use client"
 
-import { memo, useMemo, useState } from "react"
+import {
+  memo,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react"
 import { Check, ListFilter, Settings2, X } from "lucide-react"
 import { useTranslations } from "next-intl"
 import {
@@ -24,15 +31,75 @@ import {
   CommandList,
 } from "@/components/ui/command"
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover"
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+} from "@/components/ui/dropdown-menu"
 import { ConversationTagChip } from "./conversation-tag-chip"
 import { openConversationTagsManager } from "./conversation-tags-manager"
 
 const FOOTER_ITEM_CLASS =
   "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm text-muted-foreground outline-none hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-50"
+
+// The panel's keyboard stops, in DOM order: the match toggle, the search box
+// and the footer actions. Tag rows are not among them — the search box walks
+// those (cmdk) — so Tab moves between controls, never tag by tag.
+const PANEL_TAB_STOPS = "button:not(:disabled), input:not(:disabled)"
+
+// How many tags are picked, at the trailing edge of the "Filter by tags" row,
+// so an open menu says a filter is on before its submenu does. Same chip as
+// the sidebar's To-dos attention count.
+const COUNT_CHIP_CLASS = cn(
+  "inline-flex h-[0.9375rem] min-w-[0.9375rem] shrink-0 items-center justify-center",
+  "rounded-full bg-primary/10 px-1",
+  "font-mono text-[0.625rem] font-medium leading-none tabular-nums text-primary"
+)
+
+/**
+ * One Tab step through the panel's controls in document order, wrapping at
+ * either end — what Tab did natively in the popover. Focus can also sit
+ * between controls (on the tag list after a press on a row) or around them
+ * (the panel element itself): Tab then goes to the next control after it
+ * and Shift+Tab to the last one before it.
+ */
+function stepPanelTabStop(panel: HTMLElement | null, backwards: boolean) {
+  const stops = panel
+    ? Array.from(panel.querySelectorAll<HTMLElement>(PANEL_TAB_STOPS))
+    : []
+  if (stops.length === 0) return
+  const current = document.activeElement
+  const follows = (stop: HTMLElement) =>
+    !current ||
+    (current.compareDocumentPosition(stop) &
+      Node.DOCUMENT_POSITION_FOLLOWING) !==
+      0
+  const next = backwards
+    ? ([...stops]
+        .reverse()
+        .find((stop) => stop !== current && !follows(stop)) ??
+      stops[stops.length - 1])
+    : (stops.find(follows) ?? stops[0])
+  next.focus()
+}
+
+/**
+ * Radix reads ← (→ in a right-to-left layout) anywhere inside a submenu as
+ * "back to the parent menu", and handles it on the submenu element after
+ * anything passed to that element — so only a descendant can keep the key
+ * from it. A search box with text to move through keeps it; an empty box
+ * lets it go back. Every other key passes through untouched: the panel holds
+ * no menu items, so the menu's type-ahead has nothing to jump to.
+ */
+function keepArrowsInSearchBox(event: KeyboardEvent<HTMLDivElement>) {
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return
+  const target = event.target
+  if (
+    target instanceof HTMLInputElement &&
+    (target.value !== "" || event.nativeEvent.isComposing)
+  ) {
+    event.stopPropagation()
+  }
+}
 
 function ModeToggle({
   mode,
@@ -79,7 +146,7 @@ function ModeToggle({
 }
 
 /**
- * The popover body: every tag a conversation the sidebar can show could carry
+ * The submenu body: every tag a conversation the sidebar can show could carry
  * — global ones first, then each folder scope in reach (see `groups`) — each
  * with how many of those conversations carry it. Its footer clears the filter
  * and leads to the tag manager.
@@ -95,6 +162,7 @@ function TagFilterPanel({
 }) {
   const t = useTranslations("ConversationTags")
   const [query, setQuery] = useState("")
+  const searchRef = useRef<HTMLInputElement>(null)
   const tags = useConversationTagsStore((s) => s.tags)
   const tagsById = useConversationTagsStore((s) => s.tagsById)
   const folders = useAppWorkspaceStore((s) => s.folders)
@@ -198,6 +266,7 @@ function TagFilterPanel({
       />
       <Command className="rounded-none" shouldFilter={false}>
         <CommandInput
+          ref={searchRef}
           value={query}
           onValueChange={setQuery}
           placeholder={t("filter.searchPlaceholder")}
@@ -218,6 +287,10 @@ function TagFilterPanel({
                     value={`filter-tag-${tag.id}`}
                     onSelect={() => onChange(toggleTagInFilter(filter, tag.id))}
                     data-checked={checked || undefined}
+                    // The box beside the chip is drawn, not announced, and
+                    // cmdk's own `aria-selected` is the keyboard highlight:
+                    // this is what tells assistive tech a tag is picked.
+                    aria-checked={checked}
                   >
                     <span
                       aria-hidden
@@ -247,7 +320,15 @@ function TagFilterPanel({
         <button
           type="button"
           disabled={!isTagFilterActive(filter)}
-          onClick={() => onChange({ ...filter, tagIds: [] })}
+          onClick={(event) => {
+            onChange({ ...filter, tagIds: [] })
+            // Clearing disables this very button, and a browser drops the
+            // focus of a control that turns disabled onto the page — out of
+            // the menu. Pressed from the keyboard (a click with no pointer
+            // behind it, `detail` 0), focus moves on to the search box
+            // first. A pointer press leaves focus alone: no touch keyboard.
+            if (event.detail === 0) searchRef.current?.focus()
+          }}
           className={FOOTER_ITEM_CLASS}
         >
           <X className="size-4 shrink-0" />
@@ -260,60 +341,114 @@ function TagFilterPanel({
 }
 
 /**
- * The sidebar header's tag filter: a funnel (the view-options eye beside it
- * only changes WHAT KIND of rows show; this narrows the list to matches) that
- * lights up and counts the selection while a filter is on.
+ * "Filter by tags" in the sidebar's view-options menu: a submenu row (the
+ * funnel, plus how many tags are picked while a filter is on) opening onto the
+ * tag filter panel. It used to be a header button of its own; it lives with
+ * the menu's other choices about what the list shows.
+ *
+ * What opens is a panel, not a menu (hence `role="dialog"`, as it was when a
+ * popover): the match toggle, a search box over the tag rows (cmdk) and two
+ * footer actions, none of them menu items. The menu's key handling assumes
+ * nothing but items, so the panel keeps it out: Tab walks the panel's controls
+ * (Radix would swallow it) and ← / → stay with a search box that has text
+ * (`keepArrowsInSearchBox`). Opening it from the keyboard, Radix focuses the
+ * panel element itself, from which nothing is one arrow away, so that focus is
+ * handed on to the search box (with no tags yet, to the first control). A
+ * press on the panel's padding focuses the panel element too and is left
+ * there, so a tap never throws up a touch keyboard; Tab still steps in from
+ * it. Opening it by pointer leaves focus where it was, as with every submenu.
  */
-export const SidebarTagFilterButton = memo(function SidebarTagFilterButton({
+export const SidebarTagFilterSubmenu = memo(function SidebarTagFilterSubmenu({
   filter,
   onChange,
+  onCloseMenu,
 }: {
   /** Already pruned to tags that exist. */
   filter: TagFilter
   onChange: (filter: TagFilter) => void
+  /** Close the whole menu this row is in: the manage entry leaves it for a
+   *  dialog. */
+  onCloseMenu: () => void
 }) {
   const t = useTranslations("ConversationTags.filter")
-  const [open, setOpen] = useState(false)
+  const activeId = useId()
+  const panelRef = useRef<HTMLDivElement>(null)
+  // True only for the rest of the task a press starts in: the focus a press
+  // moves is its mousedown's default action, run in that same task. What
+  // tells a press on the panel's padding from a keyboard entry (both focus
+  // the panel element itself), with nothing left behind by a press that
+  // moves no focus or is released outside the panel.
+  const pressRef = useRef(false)
+  const label = t("button")
   const active = isTagFilterActive(filter)
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon"
-          className={cn(
-            "relative h-6 w-6 shrink-0",
-            active ? "bg-accent text-foreground" : "text-muted-foreground"
-          )}
-          title={t("button")}
-          aria-label={t("button")}
-          aria-pressed={active}
-        >
-          <ListFilter aria-hidden="true" className="h-3.5 w-3.5" />
-          {active ? (
-            <span
-              aria-hidden
-              className="absolute -top-0.5 -right-0.5 flex h-3 min-w-3 items-center justify-center rounded-full bg-primary px-0.5 text-[0.5625rem] leading-none font-semibold text-primary-foreground tabular-nums"
-            >
+    <DropdownMenuSub>
+      {/* `textValue`: type-ahead in the menu matches the label, not the
+          label with the count run into it. The description is the old
+          header button's pressed state: the count chip is only drawn. */}
+      <DropdownMenuSubTrigger
+        textValue={label}
+        aria-haspopup="dialog"
+        aria-describedby={active ? activeId : undefined}
+      >
+        <ListFilter className="text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate">{label}</span>
+        {active ? (
+          <>
+            <span aria-hidden className={COUNT_CHIP_CLASS}>
               {filter.tagIds.length}
             </span>
-          ) : null}
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent
-        align="end"
-        className="flex w-72 flex-col gap-0 overflow-hidden p-0"
+            <span id={activeId} hidden>
+              {t("active")}
+            </span>
+          </>
+        ) : null}
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent
+        role="dialog"
+        aria-orientation={undefined}
+        className="flex w-72 flex-col gap-0 p-0"
+        onMouseDown={() => {
+          pressRef.current = true
+          window.setTimeout(() => {
+            pressRef.current = false
+          }, 0)
+        }}
+        onFocus={(event) => {
+          if (pressRef.current || event.target !== event.currentTarget) return
+          const panel = panelRef.current
+          const entry =
+            panel?.querySelector<HTMLElement>("input") ??
+            panel?.querySelector<HTMLElement>(PANEL_TAB_STOPS)
+          entry?.focus()
+        }}
+        onKeyDown={(event) => {
+          // Runs ahead of Radix's own key handling on this element, which
+          // skips an event already prevented — so a Tab never reaches the
+          // menu's "no Tab in menus" rule. Handled here rather than inside
+          // the panel so it also works with focus on the panel element itself.
+          if (event.key !== "Tab") return
+          if (event.altKey || event.ctrlKey || event.metaKey) return
+          event.preventDefault()
+          stepPanelTabStop(panelRef.current, event.shiftKey)
+        }}
       >
-        <TagFilterPanel
-          filter={filter}
-          onChange={onChange}
-          onManage={() => {
-            setOpen(false)
-            openConversationTagsManager()
-          }}
-        />
-      </PopoverContent>
-    </Popover>
+        <div
+          ref={panelRef}
+          onKeyDown={keepArrowsInSearchBox}
+          className="flex flex-col"
+        >
+          <TagFilterPanel
+            filter={filter}
+            onChange={onChange}
+            onManage={() => {
+              onCloseMenu()
+              openConversationTagsManager()
+            }}
+          />
+        </div>
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
   )
 })
 

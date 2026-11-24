@@ -94,9 +94,9 @@ export function imageAttachmentToPromptBlock(
 }
 
 /** Stable `clipboard://` identifier for a path-less image sent as an embedded
- *  resource. Mirrors the `buildClipboardResourceUri` scheme in
- *  `message-input.tsx` but is deterministic (keyed on the attachment id, not a
- *  fresh UUID) so serialization is pure. */
+ *  resource: the `clipboard://<name>-<id>` shape pasted files have always had,
+ *  keyed on the attachment id rather than a fresh UUID so serialization is
+ *  pure. */
 function synthClipboardImageUri(attachment: ImageInputAttachment): string {
   const label = attachment.name.trim() || "clipboard-image"
   return `clipboard://${encodeURIComponent(`${label}-${attachment.id}`)}`

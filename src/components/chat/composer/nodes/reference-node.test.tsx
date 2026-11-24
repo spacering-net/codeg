@@ -180,6 +180,22 @@ describe("Reference node", () => {
     expect(node?.attrs?.meta).toMatchObject({ shortHash: "abc1234" })
   })
 
+  it("keeps an assistant reference through copy and paste", () => {
+    const html =
+      '<p><span data-reference data-ref-type="assistant" ' +
+      'data-ref-id="3" data-label="Reviewer" ' +
+      'data-uri="codeg://assistant/3" ' +
+      'data-meta="{&quot;assistantId&quot;:3}"></span></p>'
+    const node = findReference(generateJSON(html, buildComposerExtensions()))
+    expect(node?.attrs).toMatchObject({
+      refType: "assistant",
+      id: "3",
+      label: "Reviewer",
+      uri: "codeg://assistant/3",
+      meta: { assistantId: 3 },
+    })
+  })
+
   describe("untrusted HTML parse hardening", () => {
     it("drops a reference uri with a disallowed scheme", () => {
       const html =

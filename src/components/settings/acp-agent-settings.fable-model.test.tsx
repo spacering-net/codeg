@@ -61,7 +61,6 @@ function claudeAgent(overrides: Partial<AcpAgentInfo> = {}): AcpAgentInfo {
     env: {},
     config_json: null,
     config_file_path: null,
-    opencode_auth_json: null,
     codex_auth_json: null,
     cline_secrets_json: null,
     codex_config_toml: null,

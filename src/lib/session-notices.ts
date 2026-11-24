@@ -37,7 +37,9 @@ export interface NoticeToast {
  * multiple compactions can cause the model to be less accurate…" as a plain
  * `Warning` right after EVERY compaction (`core/src/compact.rs`), and
  * codex-acp forwards warnings as notices. Older releases said "conversations"
- * instead of "threads", so match the one phrase both share.
+ * instead of "threads", so match the one phrase both share. codex 0.164 (the
+ * one codex-acp 2.3.0 drives) no longer sends it; the filter stays for a
+ * codex-acp pinned to an older one.
  */
 const COMPACTION_ADVISORY = /\bmultiple compactions\b/i
 

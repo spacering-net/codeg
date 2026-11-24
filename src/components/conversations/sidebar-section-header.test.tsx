@@ -194,7 +194,7 @@ describe("SidebarSectionHeader recent-section filter", () => {
     onRecentFilterChange.mockClear()
   })
 
-  it("opens a labelled All / Chat / Folders menu and reports the pick", async () => {
+  it("opens a labelled All / Chat / Folders / Command line menu and reports the pick", async () => {
     renderWithIntl(
       <SidebarSectionHeader
         section="recent"
@@ -219,6 +219,7 @@ describe("SidebarSectionHeader recent-section filter", () => {
       "All",
       "Chat",
       "Folders",
+      "Command line",
     ])
     expect(options[0]).toHaveAttribute("aria-checked", "true")
     click(screen.getByRole("menuitemradio", { name: "Chat" }))

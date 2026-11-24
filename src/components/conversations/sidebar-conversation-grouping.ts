@@ -19,7 +19,7 @@ import {
 // off the screen — a page keeps it a glance-able "where was I" list. Lives here
 // (not in the list component) because `buildRows` needs it to tell an untouched
 // first page from an expanded one.
-export const RECENT_PAGE_SIZE = 15
+export const RECENT_PAGE_SIZE = 10
 
 export function parseTimestamp(value: string): number {
   const timestamp = Date.parse(value)
@@ -95,11 +95,10 @@ export function compareByPinnedAtDesc(
 
 /**
  * Relative time label (e.g. "5m", "3h", "2d"). `now` is passed in rather than
- * read from `Date.now()` so a whole render tick shares one value: every
- * unchanged row then produces an identical label string and the card `memo`
- * stays hit. The list refreshes `now` once a minute (see
- * `SidebarConversationList`), bounding label staleness without making a single
- * status event re-render every card.
+ * read from `Date.now()` so every label reads the same instant: the list's
+ * shared once-a-minute clock (see `createSidebarRelativeClock`). Each label
+ * subscribes to that clock on its own and re-renders only when its formatted
+ * text changes, so neither a tick nor a status event re-renders every card.
  */
 export function formatRelative(iso: string, now: number): string {
   const ts = parseTimestamp(iso)
@@ -116,6 +115,38 @@ export function formatRelative(iso: string, now: number): string {
   if (mo < 12) return `${mo}mo`
   const y = Math.floor(mo / 12)
   return `${y}y`
+}
+
+/**
+ * The timestamp a conversation row's relative time label reads.
+ *
+ * The label has to explain where its row sits, so it reads the stamp the row
+ * is ordered by:
+ * - Sub-sessions read `created_at`. They are creation-ordered under every
+ *   parent whatever the sidebar's `sortMode` says (see
+ *   {@link mergeChildrenById}), so the copies under a Recent parent also read
+ *   the same as their twins under the folder. Told apart by `parent_id`, the
+ *   card's own test, not by depth: a folder's own rows sit at depth 1 too
+ *   inside a folder group, and under Show worktrees.
+ * - Recent's and Chat's own rows read `updated_at`. Both sections order by
+ *   last activity whatever `sortMode` says (see
+ *   {@link selectRecentConversationsWithReuse} and
+ *   {@link selectChatConversationsWithReuse}). A Chat row is recognised by what
+ *   that bucket admits: a chat-kind conversation that is not pinned (a pinned
+ *   one sits in Pinned instead).
+ * - Every other row follows `sortMode`: the Folders rows, which are sorted by
+ *   it, and the Pinned rows, which are ordered by pin time, a stamp no label
+ *   shows.
+ */
+export function conversationRowTimestamp(
+  row: ConversationRow,
+  sortMode: SidebarSortMode
+): string {
+  const conv = row.conversation
+  if (conv.parent_id != null) return conv.created_at
+  if (row.recent) return conv.updated_at
+  if (conv.kind === "chat" && conv.pinned_at == null) return conv.updated_at
+  return sortMode === "updated" ? conv.updated_at : conv.created_at
 }
 
 function arraysShallowEqual<T>(a: readonly T[], b: readonly T[]): boolean {
@@ -251,8 +282,10 @@ export function selectPinnedWithReuse(
 
 /**
  * Select the folderless "chat mode" conversations (`kind === "chat"`) for the
- * flat "Chat" sidebar section. Sorted most-recently-updated first, with
- * reference reuse (same motivation as {@link selectPinnedWithReuse}).
+ * flat "Chat" sidebar section. Sorted most-recently-updated first whatever the
+ * sidebar's `sortMode` says, and labelled with that same stamp (see
+ * {@link conversationRowTimestamp}), with reference reuse (same motivation as
+ * {@link selectPinnedWithReuse}).
  *
  * Excludes pinned conversations (they surface in the Pinned section, an explicit
  * override) and — unless `showCompleted` — completed ones, matching how
@@ -278,9 +311,9 @@ export function selectChatConversationsWithReuse(
 
 /**
  * Select the flat "Recent" bucket: every conversation the sidebar can reach,
- * folder-bound and chat alike, newest first — the whole point of the section is
- * that it does NOT distinguish the two. Reference reuse as in
- * {@link selectPinnedWithReuse}.
+ * folder-bound and chat alike, most recently active first — the whole point
+ * of the section is that it does NOT distinguish the two. Reference reuse as
+ * in {@link selectPinnedWithReuse}.
  *
  * Deliberate inclusions / exclusions:
  * - Pinned conversations are excluded. They already have a dedicated top
@@ -295,17 +328,22 @@ export function selectChatConversationsWithReuse(
  *   screen (with no folder entry to theme or resolve them). Chat conversations
  *   live in a hidden folder that is never in the open set, so they are admitted
  *   by `kind` instead.
- * - Sorted by `sortMode` (not always `updated_at`) so the row order agrees with
- *   the timestamp each card actually shows.
- * - `filter` optionally narrows the mix to chats only or folder sessions only;
- *   the default (`"all"`) is the section's whole point.
+ * - Sorted by the last activity (`updated_at`) ALWAYS, never by the sidebar's
+ *   created/updated `sortMode` preference. A section called "Recent" that
+ *   ordered by `created_at` would bury a session created last month but used
+ *   this morning, which is exactly what the section exists to surface. Its
+ *   rows' time labels read the same stamp (see
+ *   {@link conversationRowTimestamp}), so the order and the label can never
+ *   disagree.
+ * - `filter` optionally narrows the mix to chats only, folder sessions only,
+ *   or the conversations `codeg-cli` started; the default (`"all"`) is the
+ *   section's whole point.
  *
  * `prev` is the array returned last call (threaded via a ref by the caller).
  */
 export function selectRecentConversationsWithReuse(
   conversations: readonly DbConversationSummary[],
   showCompleted: boolean,
-  sortMode: SidebarSortMode,
   openFolderIds: ReadonlySet<number>,
   prev: DbConversationSummary[],
   filter: SidebarRecentFilter = "all"
@@ -320,11 +358,10 @@ export function selectRecentConversationsWithReuse(
     // the Chat and Folders sections use, so the two views always agree.
     if (filter === "chats" && !isChat) continue
     if (filter === "folders" && isChat) continue
+    if (filter === "cli" && conv.source !== "cli") continue
     next.push(conv)
   }
-  next.sort(
-    sortMode === "updated" ? compareByUpdatedAtDesc : compareByCreatedAtDesc
-  )
+  next.sort(compareByUpdatedAtDesc)
   return arraysShallowEqual(prev, next) ? prev : next
 }
 
@@ -990,9 +1027,9 @@ export interface RecentMoreRow {
  * when there are pinned conversations) plus the three user-reorderable ones —
  * "folders" (wraps the whole folder list), "chats" (a flat list of folderless
  * chat-mode conversations), and "recent" (a flat, folder-agnostic list of the
- * newest conversations, shown only when the user keeps it enabled). All live in
- * the same flat row array so the single Virtualizer windows them like any other
- * row — there is no separate, un-virtualized list.
+ * most recently active conversations, shown only when the user keeps it
+ * enabled). All live in the same flat row array so the single Virtualizer
+ * windows them like any other row — there is no separate, un-virtualized list.
  */
 export interface SectionHeaderRow {
   kind: "section"
@@ -1169,10 +1206,10 @@ function pushConversationRow(
  * linear row list for windowing by the one Virtualizer — pinned conversations
  * are ordinary conversation rows in the SAME array, never a separate list.
  *
- * Pure and deliberately **does not take `now`**: the per-minute `now` tick that
+ * Pure and deliberately **does not take `now`**: the per-minute clock tick that
  * refreshes relative time labels must not rebuild this array (that would defeat
- * the Phase 1 memo chain). `timeLabel` stays computed at the row renderer from
- * the shared `now` against the row's `conversation`.
+ * the Phase 1 memo chain). The row renderer passes only the row's timestamp;
+ * each card's `SidebarRelativeTime` formats it against the shared clock.
  *
  * Structure (top to bottom): the "Pinned" section (when present) is always
  * first; the "Folders", "Chat" and "Recent" sections follow in the order set by
@@ -1217,8 +1254,9 @@ export function buildRows(args: {
   chatConversations: readonly DbConversationSummary[]
   chatsExpanded: boolean
   /** The flat "Recent" bucket — every reachable conversation, folder-bound and
-   *  chat alike (or just one kind, under the user's filter), newest first (see
-   *  {@link selectRecentConversationsWithReuse}). Only read when `showRecent`.
+   *  chat alike (or just one kind, under the user's filter), most recently
+   *  active first (see {@link selectRecentConversationsWithReuse}). Only read
+   *  when `showRecent`.
    *  Optional — defaults to empty. */
   recentConversations?: readonly DbConversationSummary[]
   /** Whether the Recent section's rows are shown (its own collapse toggle).

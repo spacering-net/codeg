@@ -39,8 +39,12 @@ const routeMock = vi.hoisted(() => ({
 vi.mock("@/contexts/workbench-route-context", () => ({
   useOptionalWorkbenchRoute: () => routeMock.current,
 }))
+// The flag a covered workspace column publishes (`OverlayHostHiddenProvider`):
+// the file column under a maximized conversation, everything under a
+// full-page route.
+const hostHiddenMock = vi.hoisted(() => ({ current: false }))
 vi.mock("@/components/ui/overlay-host-hidden", () => ({
-  useOverlayHostHidden: () => false,
+  useOverlayHostHidden: () => hostHiddenMock.current,
 }))
 
 import {
@@ -178,6 +182,65 @@ describe("BrowserSurfaceHost", () => {
   afterEach(() => {
     vi.restoreAllMocks()
     routeMock.current = null
+    hostHiddenMock.current = false
+  })
+
+  // A maximized conversation covers the file column this host sits in. No CSS
+  // reaches a native view, so the flag the covered column publishes is what
+  // takes the page down — at once, not on the next visibility poll — and what
+  // brings it back on restore.
+  it("hides the page while the column it sits in is covered, and shows it again after", async () => {
+    api.browserOpenTab.mockImplementation(() =>
+      Promise.resolve(state("cover1"))
+    )
+    const { rerender } = render(<BrowserSurfaceHost tab={tab("cover1")} />)
+    await flush()
+    expect(api.browserSetVisible).toHaveBeenLastCalledWith(
+      "cover1",
+      true,
+      false
+    )
+
+    hostHiddenMock.current = true
+    rerender(<BrowserSurfaceHost tab={tab("cover1")} />)
+    await flush()
+    expect(api.browserSetVisible).toHaveBeenLastCalledWith(
+      "cover1",
+      false,
+      true,
+      false
+    )
+    // Not an overlay over a placeholder still on screen: no still to paint.
+    expect(api.browserFreezeFrame).not.toHaveBeenCalled()
+
+    // The column changes size while covered — closing the aux panel under a
+    // maximized conversation widens it — so the page must come back where
+    // the column is now, not where it was hidden from.
+    api.browserSetBounds.mockClear()
+    vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue({
+      x: 100,
+      y: 50,
+      left: 100,
+      top: 50,
+      width: 980,
+      height: 600,
+      right: 1080,
+      bottom: 650,
+      toJSON: () => ({}),
+    })
+    hostHiddenMock.current = false
+    rerender(<BrowserSurfaceHost tab={tab("cover1")} />)
+    await flush()
+    expect(api.browserSetBounds).toHaveBeenLastCalledWith(
+      "cover1",
+      { x: 100, y: 50, width: 980, height: 600 },
+      null
+    )
+    expect(api.browserSetVisible).toHaveBeenLastCalledWith(
+      "cover1",
+      true,
+      false
+    )
   })
 
   it("creates the surface once at its rect, hides it under an overlay lease, and hides on unmount", async () => {

@@ -19,6 +19,7 @@ const state = vi.hoisted(() => ({
   mode: "fusion" as "conversation" | "fusion",
   activePane: "conversation" as "conversation" | "files",
   filesMaximized: false,
+  conversationMaximized: false,
   activeTabId: "conv-1" as string | null,
   activeFileTabId: "browser:tab-1" as string | null,
   desktop: true,
@@ -29,6 +30,9 @@ const state = vi.hoisted(() => ({
 const spies = vi.hoisted(() => ({
   closeTab: vi.fn(),
   closeFileTab: vi.fn(),
+  switchTab: vi.fn(),
+  switchFileTab: vi.fn(),
+  closeAllFileTabs: vi.fn(),
   setActivePane: vi.fn(),
   closeCurrentWindow: vi.fn(() => Promise.resolve()),
   subscribe: vi.fn(),
@@ -50,11 +54,15 @@ vi.mock("@/contexts/aux-panel-context", () => ({
 vi.mock("@/contexts/terminal-context", () => ({
   useTerminalContext: () => ({ toggle: vi.fn() }),
 }))
+vi.mock("@/stores/tab-store", () => ({
+  useVisibleConversationTabs: () =>
+    state.activeTabId ? [{ id: state.activeTabId }] : [],
+}))
 vi.mock("@/contexts/tab-context", () => ({
   useTabActions: () => ({
     openNewConversationTab: vi.fn(),
     openTab: vi.fn(),
-    switchTab: vi.fn(),
+    switchTab: spies.switchTab,
     closeTab: spies.closeTab,
   }),
   useTabStore: <T,>(
@@ -70,6 +78,7 @@ vi.mock("@/contexts/workspace-context", () => ({
     mode: state.mode,
     activePane: state.activePane,
     filesMaximized: state.filesMaximized,
+    conversationMaximized: state.conversationMaximized,
   }),
   useWorkspaceFileTabs: () => ({
     activeFileTabId: state.activeFileTabId,
@@ -77,8 +86,8 @@ vi.mock("@/contexts/workspace-context", () => ({
   }),
   useWorkspaceActions: () => ({
     closeFileTab: spies.closeFileTab,
-    closeAllFileTabs: vi.fn(),
-    switchFileTab: vi.fn(),
+    closeAllFileTabs: spies.closeAllFileTabs,
+    switchFileTab: spies.switchFileTab,
     openFilePreview: vi.fn(),
     openBrowserTab: vi.fn(),
     setActivePane: spies.setActivePane,
@@ -142,6 +151,7 @@ beforeEach(() => {
   state.mode = "fusion"
   state.activePane = "conversation"
   state.filesMaximized = false
+  state.conversationMaximized = false
   state.activeTabId = "conv-1"
   state.activeFileTabId = "browser:tab-1"
   state.desktop = true
@@ -149,6 +159,9 @@ beforeEach(() => {
   state.listeners.clear()
   spies.closeTab.mockClear()
   spies.closeFileTab.mockClear()
+  spies.switchTab.mockClear()
+  spies.switchFileTab.mockClear()
+  spies.closeAllFileTabs.mockClear()
   spies.setActivePane.mockClear()
   spies.closeCurrentWindow.mockClear()
   spies.subscribe.mockReset()
@@ -210,6 +223,35 @@ describe("WorkspaceChromeController — ⌘W from the app menu", () => {
     const press = await renderController()
     press({ window: "main", surfaceTabId: null })
     expect(spies.closeFileTab).toHaveBeenCalledWith("browser:tab-1")
+    expect(spies.closeCurrentWindow).not.toHaveBeenCalled()
+  })
+
+  // A press traced to a column the other one covers — reachable only where
+  // the engine cannot report the hidden placeholder's visibility (no
+  // `checkVisibility`, as here in jsdom) — must not move the pane into it,
+  // and acts on the strip that is on screen.
+  it("never moves the pane into a column a maximized conversation covers", async () => {
+    state.conversationMaximized = true
+    mount(
+      `<div data-workspace-pane="files"><div data-browser-surface="tab-1"></div></div>`
+    )
+    const press = await renderController()
+    press({ window: "main", surfaceTabId: "tab-1" })
+    expect(spies.setActivePane).not.toHaveBeenCalled()
+    expect(spies.closeTab).toHaveBeenCalledWith("conv-1")
+    expect(spies.closeFileTab).not.toHaveBeenCalled()
+  })
+
+  // The file strip is hidden under the conversation: a pane last left on
+  // "files" must not close a file tab nobody can see.
+  it("routes ⌘W that no view held to a maximized conversation", async () => {
+    state.activePane = "files"
+    state.conversationMaximized = true
+    vi.spyOn(document, "hasFocus").mockReturnValue(false)
+    const press = await renderController()
+    press({ window: "main", surfaceTabId: null })
+    expect(spies.closeTab).toHaveBeenCalledWith("conv-1")
+    expect(spies.closeFileTab).not.toHaveBeenCalled()
     expect(spies.closeCurrentWindow).not.toHaveBeenCalled()
   })
 
@@ -277,6 +319,45 @@ describe("WorkspaceChromeController — ⌘W the page hears", () => {
     fireEvent(document, event)
     expect(spies.closeTab).toHaveBeenCalledWith("conv-1")
     expect(event.defaultPrevented).toBe(true)
+  })
+
+  it("closes the conversation tab while the conversation is maximized, whatever the pane", () => {
+    state.activePane = "files"
+    state.conversationMaximized = true
+    render(<WorkspaceChromeController />)
+    const event = createEvent.keyDown(document, { key: "w", metaKey: true })
+    fireEvent(document, event)
+    expect(spies.closeTab).toHaveBeenCalledWith("conv-1")
+    expect(spies.closeFileTab).not.toHaveBeenCalled()
+    expect(event.defaultPrevented).toBe(true)
+  })
+
+  // The rest of the strip shortcuts follow the same rule: the numbered jump
+  // picks from the conversation strip, and "close all file tabs" declines —
+  // with the file strip hidden, it would empty a column nobody can see.
+  it("keeps the other tab shortcuts off the hidden file strip while the conversation is maximized", () => {
+    state.activePane = "files"
+    state.conversationMaximized = true
+    render(<WorkspaceChromeController />)
+
+    const jump = createEvent.keyDown(document, {
+      key: "1",
+      code: "Digit1",
+      metaKey: true,
+    })
+    fireEvent(document, jump)
+    expect(spies.switchTab).toHaveBeenCalledWith("conv-1")
+    expect(spies.switchFileTab).not.toHaveBeenCalled()
+    expect(jump.defaultPrevented).toBe(true)
+
+    const closeAll = createEvent.keyDown(document, {
+      key: "w",
+      metaKey: true,
+      shiftKey: true,
+    })
+    fireEvent(document, closeAll)
+    expect(spies.closeAllFileTabs).not.toHaveBeenCalled()
+    expect(closeAll.defaultPrevented).toBe(false)
   })
 
   it("lets it through when the active pane has nothing to close", () => {

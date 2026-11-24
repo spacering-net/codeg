@@ -1,7 +1,15 @@
 import { type ReactNode, useEffect } from "react"
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest"
 
 vi.mock("@/lib/api", () => ({
   getLogSettings: vi.fn(),
@@ -44,9 +52,7 @@ const viewportState = vi.hoisted(() => {
   return {
     SCROLL_HEIGHT,
     CLIENT_HEIGHT,
-    current: null as
-      | (HTMLElement & { __scrollTopSet: ReturnType<typeof vi.fn> })
-      | null,
+    current: null as (HTMLElement & { __scrollTopSet: Mock }) | null,
     onScroll: undefined as ((e: Event) => void) | undefined,
     make() {
       const el = document.createElement("div")
@@ -107,6 +113,7 @@ vi.mock("@/components/ui/scroll-area", () => ({
   },
 }))
 
+import * as logBuffer from "./log-buffer"
 import { LogsSettings } from "./logs-settings"
 import enMessages from "@/i18n/messages/en.json"
 import {
@@ -456,18 +463,51 @@ describe("LogsSettings", () => {
     expect(screen.getByText("charlie")).toBeInTheDocument()
   })
 
+  it("keeps only the newest logs while the live-tail frame is paused", async () => {
+    const applyBatch = vi.spyOn(logBuffer, "applyLogBatch")
+    try {
+      renderWithIntl()
+      await waitFor(() => expect(appendedHandler).toBeDefined())
+      const sentinel = "latest retained log"
+      fireEvent.change(screen.getByPlaceholderText(M.searchPlaceholder), {
+        target: { value: sentinel },
+      })
+
+      const total = 12_000
+      await act(async () => {
+        for (let seq = 1; seq <= total; seq++) {
+          appendedHandler?.(
+            rec(seq, "INFO", "web", seq === total ? sentinel : "background log")
+          )
+        }
+      })
+      expect(rafScheduleCount).toBe(1)
+      expect(applyBatch).not.toHaveBeenCalled()
+
+      await flushRaf()
+      const [, batch, limit] = applyBatch.mock.calls[0]
+      expect(batch).toHaveLength(limit)
+      expect(batch.map(({ seq }) => seq)).toEqual(
+        Array.from({ length: limit }, (_, index) => total - limit + index + 1)
+      )
+      expect(screen.getByText(sentinel)).toBeInTheDocument()
+    } finally {
+      applyBatch.mockRestore()
+    }
+  })
+
   it("re-schedules flushes after toggling live tail off and back on", async () => {
     renderWithIntl()
     await waitFor(() => expect(appendedHandler).toBeDefined())
 
-    // Append (schedules a frame) then pause mid-pending: cleanup must cancel AND
-    // reset the rAF id so a later resume can schedule again.
+    // Append (schedules a frame) then pause mid-pending: cleanup must cancel
+    // this frame so resume can schedule a new one.
     await act(async () => {
       appendedHandler?.(rec(1, "INFO", "web", "before"))
     })
     expect(rafScheduleCount).toBe(1)
 
-    fireEvent.click(screen.getByRole("button", { name: M.pause }))
+    fireEvent.click(await screen.findByRole("button", { name: M.pause }))
     fireEvent.click(screen.getByRole("button", { name: M.resume }))
     await waitFor(() => expect(mockSubAppended).toHaveBeenCalledTimes(2))
 
@@ -475,7 +515,7 @@ describe("LogsSettings", () => {
     await act(async () => {
       appendedHandler?.(rec(2, "INFO", "web", "after toggle"))
     })
-    // A fresh frame is scheduled (would be 0 if rafRef held a stale id).
+    // A fresh frame is scheduled.
     expect(rafScheduleCount).toBe(1)
     await flushRaf()
     expect(screen.getByText("after toggle")).toBeInTheDocument()

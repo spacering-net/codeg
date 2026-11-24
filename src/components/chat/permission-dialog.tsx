@@ -9,6 +9,7 @@ import {
   Compass,
   FileText,
   Globe,
+  GlobeLock,
   Search,
   KeyRound,
 } from "lucide-react"
@@ -103,7 +104,12 @@ export function PermissionDialog({
   const hasPlanMarkdown = Boolean(parsed.planMarkdown)
   const hasAllowedPrompts = parsed.allowedPrompts.length > 0
   const hasWeb = Boolean(parsed.url) || Boolean(parsed.query)
+  // A Claude Code sandbox asking to let a command reach a host. The request
+  // is only that host, so it gets the CLI's own framing rather than a dump of
+  // the request: what is being asked, and of which host.
+  const networkHost = parsed.networkHost
   const hasOtherStructured =
+    Boolean(networkHost) ||
     Boolean(parsed.command) ||
     hasFileChanges ||
     hasPlan ||
@@ -132,7 +138,9 @@ export function PermissionDialog({
                 `parsePermissionToolCall` also drops a description that IS that
                 command, which is what claude-agent-acp ≥0.79.0 puts there. */}
             <span className="truncate">
-              {parsed.description ?? parsed.title}
+              {networkHost
+                ? t("networkRequest")
+                : (parsed.description ?? parsed.title)}
             </span>
           </div>
           {/* The agent's own reason for asking, when it gave one — strictly
@@ -140,7 +148,8 @@ export function PermissionDialog({
               the only place codex-acp ≥1.7.0 still carries it. Wraps rather
               than truncating: this is the sentence the decision rests on. */}
           <p className="text-xs text-muted-foreground">
-            {parsed.reason ?? t("subtitle")}
+            {parsed.reason ??
+              (networkHost ? t("networkQuestion") : t("subtitle"))}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
@@ -152,12 +161,24 @@ export function PermissionDialog({
             </Badge>
           ) : null}
           <Badge variant="outline" className="text-3xs">
-            {formatKindLabel(parsed.normalizedKind, t("kindFallbackTool"))}
+            {networkHost
+              ? t("kindNetwork")
+              : formatKindLabel(parsed.normalizedKind, t("kindFallbackTool"))}
           </Badge>
         </div>
       </div>
 
       <div className="mt-3 max-h-[min(36vh,18rem)] space-y-2 overflow-y-auto pr-1">
+        {networkHost && (
+          <div className="flex items-center gap-2 rounded-md border border-border/60 bg-muted/20 p-2 text-xs">
+            <GlobeLock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span className="text-muted-foreground">{t("networkHost")}</span>
+            <span className="break-all font-mono text-foreground/90" dir="ltr">
+              {networkHost}
+            </span>
+          </div>
+        )}
+
         {parsed.command && (
           <div className="space-y-1.5 rounded-md border border-border/60 bg-muted/20 p-2">
             <div className="flex items-center gap-1 text-xs text-muted-foreground">

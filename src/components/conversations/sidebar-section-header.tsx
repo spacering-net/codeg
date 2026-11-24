@@ -138,7 +138,9 @@ export const SidebarSectionHeader = memo(function SidebarSectionHeader({
       ? t("sectionChats")
       : filter === "folders"
         ? t("sectionFolders")
-        : t("recentFilterAll")
+        : filter === "cli"
+          ? t("recentFilterCli")
+          : t("recentFilterAll")
   const recentFilterLabel = t("recentFilterTitle", {
     filter: recentFilterOptionLabel(recentFilter ?? "all"),
   })

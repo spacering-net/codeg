@@ -45,11 +45,18 @@ import {
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import { useAgentInstallStream } from "@/hooks/use-agent-install-stream"
+import { useProviderModels } from "@/hooks/use-provider-models"
+import {
+  ModelIdInputWithFetch,
+  ModelIdListField,
+} from "@/components/settings/provider-models"
+import type { ProviderModelsProtocol } from "@/lib/types"
 import {
   PI_CONFIG_DIR_ENV,
   PI_MIN_RUNTIME_VERSION,
   piRuntimeIsTooOld,
 } from "@/lib/pi-config"
+import { PI_BUILTIN_PROVIDERS } from "@/lib/pi-providers"
 import {
   PI_THINKING_LEVELS,
   clampThinkingLevel,
@@ -107,46 +114,6 @@ const NO_REASONING: PiModelReasoning = {
   wireValues: {},
 }
 
-/**
- * Curated built-in providers for the enum, as `{ id, label }`: the Select stores
- * the `id` (pi's provider key, written to settings.json / auth.json) but shows the
- * brand `label`. Mirrors pi's authoritative `env-api-keys.ts` `envMap` — the
- * single-API-key subset most users want. Labels are brand names, not localized
- * (same convention as `HERMES_PROVIDERS`). Special-auth providers (azure /
- * bedrock / vertex / cloudflare / github-copilot) are omitted on purpose — they
- * need more than a single key, so they don't fit this flow; use "Custom" for them.
- */
-const PI_BUILTIN_PROVIDERS: { id: string; label: string }[] = [
-  { id: "anthropic", label: "Anthropic" },
-  { id: "openai", label: "OpenAI" },
-  { id: "google", label: "Google Gemini" },
-  { id: "openrouter", label: "OpenRouter" },
-  { id: "vercel-ai-gateway", label: "Vercel AI Gateway" },
-  { id: "xai", label: "xAI" },
-  { id: "deepseek", label: "DeepSeek" },
-  { id: "groq", label: "Groq" },
-  { id: "cerebras", label: "Cerebras" },
-  { id: "mistral", label: "Mistral" },
-  { id: "nvidia", label: "NVIDIA NIM" },
-  { id: "together", label: "Together AI" },
-  { id: "fireworks", label: "Fireworks" },
-  { id: "huggingface", label: "Hugging Face" },
-  { id: "kimi-coding", label: "Kimi For Coding" },
-  { id: "moonshotai", label: "Moonshot AI" },
-  { id: "moonshotai-cn", label: "Moonshot AI (China)" },
-  { id: "zai", label: "Z.AI Coding Plan (Global)" },
-  { id: "zai-coding-cn", label: "Z.AI Coding Plan (China)" },
-  { id: "minimax", label: "MiniMax" },
-  { id: "minimax-cn", label: "MiniMax (China)" },
-  { id: "ant-ling", label: "Ant Ling" },
-  { id: "xiaomi", label: "Xiaomi MiMo" },
-  { id: "xiaomi-token-plan-cn", label: "Xiaomi MiMo Token Plan (China)" },
-  { id: "xiaomi-token-plan-ams", label: "Xiaomi MiMo Token Plan (Amsterdam)" },
-  { id: "xiaomi-token-plan-sgp", label: "Xiaomi MiMo Token Plan (Singapore)" },
-  { id: "opencode", label: "OpenCode Zen" },
-  { id: "opencode-go", label: "OpenCode Go" },
-]
-
 /** Sentinel Select value that switches the credentials form to custom mode. */
 const PI_CUSTOM_SENTINEL = "__custom__"
 
@@ -157,6 +124,13 @@ const PI_CUSTOM_API_PROTOCOLS = [
   "anthropic-messages",
   "google-generative-ai",
 ]
+
+/** How a custom provider speaking `api` lists its models. */
+function piModelsProtocol(api: string): ProviderModelsProtocol {
+  if (api === "anthropic-messages") return "anthropic"
+  if (api === "google-generative-ai") return "gemini"
+  return "openai"
+}
 
 function isAbsolutePiPath(path: string): boolean {
   return (
@@ -302,6 +276,7 @@ export function PiConfigPanel({
   onSaved: () => Promise<void>
 }) {
   const t = useTranslations("AcpAgentSettings")
+  const tModels = useTranslations("ProviderModels")
 
   // --- Credentials (pi's native ~/.pi/agent/{settings,auth,models}.json) ---
   // `selectedProvider` is the Select value: a built-in id, a loaded-but-not-
@@ -312,6 +287,9 @@ export function PiConfigPanel({
   const [customBaseUrl, setCustomBaseUrl] = useState("")
   const [customApi, setCustomApi] = useState(PI_CUSTOM_API_PROTOCOLS[0])
   const [customProviders, setCustomProviders] = useState<PiCustomProvider[]>([])
+  /** The custom provider's model list as edited; `null` until touched, so a
+   *  save leaves the list on disk as it is. */
+  const [customModels, setCustomModels] = useState<string[] | null>(null)
   const [model, setModel] = useState("")
   const [thinkingLevel, setThinkingLevel] = useState("")
   const [apiKey, setApiKey] = useState("")
@@ -343,6 +321,33 @@ export function PiConfigPanel({
   const isCustom = selectedProvider === PI_CUSTOM_SENTINEL
   const effectiveProvider = (isCustom ? customId : selectedProvider).trim()
 
+  // The edited model list belongs to one provider; another one starts from
+  // its own list on disk.
+  const [customModelsFor, setCustomModelsFor] = useState(effectiveProvider)
+  if (customModelsFor !== effectiveProvider) {
+    setCustomModelsFor(effectiveProvider)
+    setCustomModels(null)
+  }
+  const storedCustomModels =
+    customProviders
+      .find((provider) => provider.id === effectiveProvider)
+      ?.models?.map((entry) => entry.id) ?? []
+  // The custom provider's own models, asked the way its protocol lists them —
+  // with the key typed here, else the one pi keeps for it.
+  const providerModels = useProviderModels(
+    isCustom
+      ? {
+          protocol: piModelsProtocol(customApi),
+          baseUrl: customBaseUrl,
+          apiKey,
+          storedKey:
+            effectiveProvider && authProviders.includes(effectiveProvider)
+              ? { kind: "piAuth", provider: effectiveProvider }
+              : null,
+        }
+      : null
+  )
+
   // Rehydrate the reasoning controls whenever the edited model's identity changes
   // (provider switch, or a different model id typed in). Reading the stored entry
   // rather than defaulting the form to "off" is what stops a save from wiping a
@@ -370,6 +375,7 @@ export function PiConfigPanel({
   // throw away edits the user has not saved yet.
   useEffect(() => {
     let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reload of pi's config files when the agent dir changes
     setLoadingCreds(true)
     setConfigLoadError(null)
     if (invalidSavedAgentDir) {
@@ -424,6 +430,7 @@ export function PiConfigPanel({
   useEffect(() => {
     let cancelled = false
     if (invalidSavedAgentDir || invalidSavedCommand) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- the no-fetch branch of the catalog load below
       setCatalog({
         source: catalogSource,
         value: { status: "relative_path", models: [] },
@@ -534,6 +541,8 @@ export function PiConfigPanel({
               >,
             }
           : undefined,
+        customModels:
+          isCustom && customModels !== null ? customModels : undefined,
       })
       if (apiKey.trim()) {
         setApiKey("")
@@ -549,9 +558,16 @@ export function PiConfigPanel({
         // the chips that are now on disk rather than a stale read.
         setCustomProviders((prev) => {
           const previous = prev.find((c) => c.id === effectiveProvider)
+          const listed = customModels === null ? null : new Set(customModels)
           const models = (previous?.models ?? []).filter(
-            (entry) => entry.id !== trimmedModel
+            (entry) =>
+              entry.id !== trimmedModel && (!listed || listed.has(entry.id))
           )
+          for (const id of customModels ?? []) {
+            if (id !== trimmedModel && !models.some((m) => m.id === id)) {
+              models.push({ id, reasoning: null, thinkingLevelMap: {} })
+            }
+          }
           models.push({
             id: trimmedModel,
             reasoning: reasoning.enabled,
@@ -591,6 +607,7 @@ export function PiConfigPanel({
     defaultLevelUnlisted,
     reasoning,
     apiKey,
+    customModels,
     onSaved,
     t,
   ])
@@ -663,6 +680,7 @@ export function PiConfigPanel({
   }, [])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- binary detection on mount; the loader flips its loading flag first
     void detectPiBinary()
   }, [detectPiBinary])
 
@@ -734,6 +752,7 @@ export function PiConfigPanel({
       return
     }
     let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset paired with the command validation fetch below
     setValidation(null)
     acpValidatePiCommand(savedPiCommand)
       .then((result) => {
@@ -766,6 +785,7 @@ export function PiConfigPanel({
   }, [invalidSavedAgentDir])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- trust list fetch from pi's trust.json
     void loadTrustEntries()
   }, [loadTrustEntries])
 
@@ -1296,14 +1316,25 @@ export function PiConfigPanel({
           <label className="text-2xs text-muted-foreground">
             {t("pi.modelLabel")}
           </label>
-          <Input
+          <ModelIdInputWithFetch
             value={model}
-            onChange={(event) => setModel(event.target.value)}
+            onChange={setModel}
+            state={providerModels}
             placeholder="claude-sonnet-5-5"
-            spellCheck={false}
             disabled={savingCreds || loadingCreds}
           />
         </div>
+
+        {isCustom && (
+          <ModelIdListField
+            ids={customModels ?? storedCustomModels}
+            onChange={setCustomModels}
+            state={providerModels}
+            readOnly={savingCreds || loadingCreds}
+            title={tModels("piList.title")}
+            hint={tModels("piList.hint")}
+          />
+        )}
 
         {/* ---- Reasoning card ----
             pi reads `reasoning: modelDef.reasoning ?? false`, and an undeclared

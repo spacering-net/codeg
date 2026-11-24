@@ -1,18 +1,25 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 import { useTranslations } from "next-intl"
 import { isImeCompositionKey } from "@/lib/ime-composition"
 import { Button } from "@/components/ui/button"
-import { Skeleton } from "@/components/ui/skeleton"
 import {
   BookOpenText,
   Check,
   ChevronUp,
   ClipboardPaste,
   Clock,
-  Cog,
   Copy,
+  Lightbulb,
   MessageSquareText,
   Scissors,
   Send,
@@ -28,11 +35,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover"
-import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
@@ -42,7 +44,6 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu"
-import { AgentIcon } from "@/components/agent-icon"
 import { cn, copyTextFromMenu } from "@/lib/utils"
 import { useShortcutSettings } from "@/hooks/use-shortcut-settings"
 import { imageFilesFromClipboardApi } from "@/lib/clipboard-images"
@@ -83,33 +84,19 @@ import {
 } from "@/components/chat/conversation-context-bar"
 import { ComposerContextUsage } from "@/components/chat/composer-context-usage"
 import { ComposerConnectionStatus } from "@/components/chat/composer-connection-status"
-import { InlineModeSelector } from "@/components/chat/mode-selector"
+import { SessionSettingsPicker } from "@/components/chat/session-settings-picker"
 import {
-  InlineSessionConfigSelector,
-  InlineSessionConfigToggle,
-} from "@/components/chat/session-config-selector"
-import { ModelOptionPicker } from "@/components/chat/model-option-picker"
-import { SelectorTooltip } from "@/components/chat/selector-tooltip"
-import {
-  SessionSelectorsPanel,
-  type SessionSelectorGroup,
-  type SessionSelectorSetting,
-} from "@/components/chat/session-selectors-panel"
-import {
-  deriveModelGroups,
-  isModelConfigOption,
-  modelListGroups,
-  MODEL_LIST_VIRTUALIZE_THRESHOLD,
-  type ModelOptionGroup,
-} from "@/lib/model-config-groups"
+  buildSessionSettings,
+  type SessionSettingTarget,
+} from "@/lib/session-settings"
 import { useAgentSkills } from "@/hooks/use-agent-skills"
 import { isPrimaryPointerCoarse } from "@/hooks/use-is-coarse-pointer"
-import { useScrollbarSafeDismiss } from "@/hooks/use-scrollbar-safe-dismiss"
 import { useAgentVocabulary } from "@/hooks/use-agent-vocabulary"
 import {
   clearMessageInputDraftV2,
   loadMessageInputDraftV2,
   saveMessageInputDraftV2,
+  setLiveComposerContent,
 } from "@/lib/message-input-draft"
 import { rankByTextMatch } from "@/lib/fuzzy-text-match"
 import {
@@ -126,7 +113,9 @@ import { textToInlineContent } from "@/components/chat/composer/plain-text-conte
 import { isEmbeddedReferenceUri } from "@/components/chat/composer/reference-uri"
 import {
   applyExpertReference,
+  blankLineAfter,
   isComposerEmpty,
+  restampExpertNames,
   restampSkillPrefixes,
 } from "@/components/chat/composer/composer-commands"
 import { useComposerChromeFocus } from "@/components/chat/composer/use-composer-chrome-focus"
@@ -136,10 +125,13 @@ import {
 } from "@/components/chat/composer/composer-sizing"
 import {
   buildKnownInvocations,
-  commandInvocationToken,
   commandToReference,
+  diskSkillTrigger,
+  skillMarkedCommands,
+  skillsForMenu,
   skillToReference,
 } from "@/components/chat/composer/invocation-reference"
+import { CommandOptionLabel } from "@/components/chat/composer/command-option-label"
 import { cutSelectionToClipboard } from "@/components/chat/composer/clipboard-actions"
 import {
   ComposerTokenAction,
@@ -164,20 +156,34 @@ import { useComposerShortcuts } from "@/components/chat/composer/use-composer-sh
  * as the leading invocation badge (serializes to `${prefix}${id}` as the first
  * token).
  */
-export interface ComposerInjectContent {
-  text: string
-  skill?: { id: string; label: string }
-  /**
-   * How `text` lands in the composer.
-   *
-   * - `"replace"` (default) swaps the whole document — the welcome quick-action
-   *   behaviour, where the card's prompt IS the message.
-   * - `"append"` keeps whatever the user has already drafted and adds `text` as
-   *   a trailing block, caret after it. Used for quoting a message selection,
-   *   which is only ever the *start* of what the user is about to write.
-   */
-  mode?: "replace" | "append"
-}
+export type ComposerInjectContent =
+  | {
+      text: string
+      /** `expertId`: an expert's own id, where `id` is the name the agent
+       *  sees it under (re-stamped when the agent changes). */
+      skill?: { id: string; label: string; expertId?: string }
+      /**
+       * How `text` lands in the composer.
+       *
+       * - `"replace"` (default) swaps the whole document — the welcome
+       *   quick-action behaviour, where the card's prompt IS the message.
+       * - `"append"` keeps whatever the user has already drafted and adds
+       *   `text` as a trailing block, caret after it. Used for quoting a
+       *   message selection, which is only ever the *start* of what the user
+       *   is about to write.
+       */
+      mode?: "replace" | "append"
+    }
+  | {
+      /**
+       * A message this composer already let go of — a send the backend turned
+       * away after the composer had cleared itself for it — as the blocks it
+       * was sent as. It comes back whole, badges and images included, and
+       * AFTER whatever the composer holds by then: usually nothing, but what
+       * the user has started writing since is never replaced.
+       */
+      handBack: PromptInputBlock[]
+    }
 
 interface MessageInputProps {
   onSend: (draft: PromptDraft, modeId?: string | null) => void
@@ -198,6 +204,13 @@ interface MessageInputProps {
   onConfigOptionChange?: (configId: string, valueId: string) => void
   agentType?: AgentType | null
   availableCommands?: AvailableCommandInfo[] | null
+  /**
+   * The prompt the agent predicts the user will send next (claude-agent-acp
+   * 0.92.0). Between turns the empty composer shows it as its placeholder and
+   * a bare Tab fills it in, sending nothing. Not offered while a turn runs,
+   * while the composer is disabled, or while a queued message is being edited.
+   */
+  promptSuggestion?: string | null
   /**
    * The agent's command list is still on its way (the connection is being
    * established). The editor stays typable throughout, so `/` opens its panel
@@ -314,6 +327,11 @@ function stripEmbeddedReferences(doc: JSONContent): JSONContent {
   return { ...doc, content }
 }
 
+/** The notice for a send held while the agent is still responding (see
+ *  `handleSend`), under one id: pressing Enter into the hold again updates the
+ *  toast on screen instead of stacking another copy of it. */
+const HELD_WHILE_RESPONDING_TOAST = "composer-held-while-responding"
+
 function SelectorLoadingChip({ label }: { label: string }) {
   return (
     <div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground">
@@ -321,45 +339,6 @@ function SelectorLoadingChip({ label }: { label: string }) {
       <span>{label}</span>
     </div>
   )
-}
-
-/**
- * Stand-in for the model / mode / config chips while the session is still being
- * established. It holds the row open at the real chips' height (`h-6`, matching
- * `Button size="xs"`) so nothing jumps when they arrive, and — unlike the
- * loading row inside the collapsed cog popover, which only a user who opens the
- * popover ever sees — it is visible where the chips themselves will be. Opening
- * a historical conversation spends seconds in exactly this state, and showing
- * nothing there made a live, still-connecting composer look like a dead one.
- */
-function SelectorLoadingPlaceholder({ label }: { label: string }) {
-  return (
-    <div
-      role="status"
-      aria-live="polite"
-      aria-label={label}
-      title={label}
-      className="flex h-6 shrink-0 items-center gap-1.5 px-1"
-    >
-      <Skeleton className="h-3 w-16 rounded-sm" />
-      <Skeleton className="h-3 w-10 rounded-sm" />
-    </div>
-  )
-}
-
-// Groups for the searchable + virtualized model picker, or `null` when the
-// option should keep the lightweight selectors. Only the MODEL option, and only
-// when its list is long enough to jank, qualifies. Falls back to a single
-// headerless group for a long flat (un-prefixed) list.
-function modelPickerGroups(
-  option: SessionConfigOptionInfo
-): ModelOptionGroup[] | null {
-  if (!isModelConfigOption(option)) return null
-  if (option.kind.type !== "select") return null
-  if (option.kind.options.length <= MODEL_LIST_VIRTUALIZE_THRESHOLD) return null
-  // Preserve derived `provider/` groups, server-provided groups, or a flat list
-  // (never silently flatten server groups — keeps wide/collapsed consistent).
-  return modelListGroups(option)
 }
 
 export function MessageInput({
@@ -381,6 +360,7 @@ export function MessageInput({
   onConfigOptionChange,
   agentType,
   availableCommands,
+  promptSuggestion,
   commandsLoading = false,
   promptCapabilities,
   attachmentTabId,
@@ -410,16 +390,22 @@ export function MessageInput({
   // upload / attachment toasts — read as a single coherent group when
   // scanning the file. Same namespace, no extra runtime cost.
   const tAttach = useTranslations("Folder.chat.messageInput")
-  // The `$` prefix autocomplete is Codex-only: Codex advertises very few
-  // native slash commands, so we augment the dropdown with the agent's
-  // skills read from disk. Other agents already surface their full command
-  // set through ACP `availableCommands`, so injecting skills there would
-  // be duplicate/extra UI noise — skip the skills fetch for them entirely.
-  const skillAgentType = agentType === "codex" ? "codex" : null
+  // Skills read from disk feed the menu only for an agent that does not
+  // advertise them itself: Codex under `$` (its native command set is very
+  // small), Antigravity and OpenCode under `/` beside their commands (their
+  // ACP servers list only commands, never a skill), and custom agents under `/`
+  // from the skill directories their user declared (codeg cannot know what an
+  // arbitrary ACP server advertises). Every other built-in agent surfaces its
+  // skills through ACP `availableCommands`, so a disk scan would only repeat
+  // them — skip it.
+  const skillTrigger = diskSkillTrigger(agentType)
   // Pass the working dir so we see both global skills and folder-scoped
   // project skills (e.g. `{folder}/.codex/skills`). Without this, users
   // only ever saw global skills in the `$` autocomplete.
-  const availableSkills = useAgentSkills(skillAgentType, defaultPath ?? null)
+  const availableSkills = useAgentSkills(
+    skillTrigger ? (agentType ?? null) : null,
+    defaultPath ?? null
+  )
   const skillPrefix = agentType === "codex" ? "$" : "/"
   // Exactly what the `/`·`$` menu below can offer. Seeding or pasting text turns
   // a bare `/cmd`·`$skill` token into a badge only when it is on this list, so
@@ -445,6 +431,16 @@ export function MessageInput({
   const { shortcuts } = useShortcutSettings()
   const effectiveDraftStorageKey = draftStorageKey ?? null
   const resolvedPlaceholder = placeholder ?? t("askAnything")
+  // The predicted follow-up prompt, only where sending it could follow: never
+  // mid-turn (Enter then queues or steers), never into a queued message being
+  // edited, never into a composer that cannot send.
+  const offeredSuggestion =
+    !isPrompting && !disabled && !isEditingQueueItem
+      ? promptSuggestion?.trim() || null
+      : null
+  const shownPlaceholder = offeredSuggestion
+    ? t("promptSuggestion", { suggestion: offeredSuggestion })
+    : resolvedPlaceholder
   const editorRef = useRef<RichComposerHandle>(null)
   // Prompt-history navigation. `historyRef` is seeded from `getSentHistory`
   // lazily, the first time the user steps into history, so a session that never
@@ -479,6 +475,21 @@ export function MessageInput({
     setComposerEmpty(ed ? isComposerEmpty(ed) : true)
   }, [])
 
+  // What this composer holds that its saved draft may not show yet — typing
+  // inside the save debounce, image attachments (never saved), a file still
+  // being read or uploaded — reported per draft key for the tab store, which
+  // reads it before tidying a "blank" draft tab away. An intake is reported
+  // the moment it starts; the rest once React has committed it (below).
+  const composerId = useId()
+  const reportIntakeStart = useCallback(() => {
+    if (!effectiveDraftStorageKey) return
+    setLiveComposerContent(
+      effectiveDraftStorageKey,
+      `${composerId}:intake`,
+      true
+    )
+  }, [composerId, effectiveDraftStorageKey])
+
   // Attachments (images → thumbnail strip, files → inline badges) and the "+"
   // menu's insertable shortcuts. Both are shared with the to-do task composers,
   // so paste/drop/pick and the skill/quick-message entries behave identically
@@ -491,6 +502,7 @@ export function MessageInput({
     attachmentTabId,
     defaultPath,
     logLabel: "MessageInput",
+    onIntakeStart: reportIntakeStart,
   })
   const {
     attachments,
@@ -507,14 +519,6 @@ export function MessageInput({
     logLabel: "MessageInput",
   })
 
-  // Collapsed (narrow) selectors live in a controlled Popover holding a
-  // master–detail panel (`SessionSelectorsPanel`). It's controlled so a value
-  // pick closes it explicitly — matching the prior cog menu, which also closed
-  // on every selection.
-  const [collapsedSelectorsOpen, setCollapsedSelectorsOpen] = useState(false)
-  // Keep the collapsed settings popover open while dragging the (virtualized)
-  // model list's native scrollbar — see `useScrollbarSafeDismiss`.
-  const collapsedSelectorsGuard = useScrollbarSafeDismiss()
   // Whether the async Clipboard read API is usable here. It's absent in
   // non-secure web deployments served over HTTP/LAN (see installClipboardFallback
   // in lib/utils, which only shims writeText), so the composer's custom
@@ -549,6 +553,7 @@ export function MessageInput({
   useEffect(() => {
     // navigator.clipboard is undefined at runtime in non-secure contexts even
     // though the DOM types claim it is always present, so guard with typeof.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- browser-only read after mount keeps static-export hydration consistent
     setClipboardReadSupported(
       typeof navigator !== "undefined" &&
         typeof navigator.clipboard?.readText === "function"
@@ -761,7 +766,21 @@ export function MessageInput({
     // and lets the cleanup cancel our own rAF before it runs.
     const raf = requestAnimationFrame(() => {
       const handle = editorRef.current
-      if (handle) {
+      if ("handBack" in payload) {
+        // Added after whatever the composer holds, never in its place. The
+        // restore's edits reach `handleComposerChange` like typing does, so
+        // the stored draft the send cleared is written again too.
+        const editor = handle?.getEditor()
+        if (editor) {
+          hydrateFromBlocks(
+            editor,
+            payload.handBack,
+            knownInvocationsRef.current,
+            { append: true }
+          )
+          setComposerEmpty(isComposerEmpty(editor))
+        }
+      } else if (handle) {
         if (payload.mode === "append") {
           // Land at the end of whatever is already drafted, separated by a blank
           // line so a Markdown block (the quote) is never glued onto the tail of
@@ -770,15 +789,10 @@ export function MessageInput({
           // remembered selection is stale and could be anywhere.
           const editor = handle.getEditor()
           const existing = editor ? serializeDocToText(editor.state.doc) : ""
-          const gap = !existing.trim()
-            ? ""
-            : existing.endsWith("\n\n")
-              ? ""
-              : existing.endsWith("\n")
-                ? "\n"
-                : "\n\n"
           handle.focus()
-          handle.insertTextAtCursor(`${gap}${payload.text}\n\n`)
+          handle.insertTextAtCursor(
+            `${blankLineAfter(existing)}${payload.text}\n\n`
+          )
         } else {
           handle.setText(payload.text)
           // Prepend the skill as the leading invocation badge, so the sent
@@ -791,7 +805,13 @@ export function MessageInput({
                 id: payload.skill.id,
                 label: payload.skill.label,
                 uri: null,
-                meta: { invocationPrefix: skillPrefix, scope: "expert" },
+                meta: {
+                  invocationPrefix: skillPrefix,
+                  scope: "expert",
+                  ...(payload.skill.expertId
+                    ? { expertId: payload.skill.expertId }
+                    : {}),
+                },
               })
             }
           }
@@ -802,7 +822,13 @@ export function MessageInput({
       onInjectConsumed?.()
     })
     return () => cancelAnimationFrame(raf)
-  }, [injectContent, composerReady, skillPrefix, onInjectConsumed])
+  }, [
+    injectContent,
+    composerReady,
+    skillPrefix,
+    onInjectConsumed,
+    hydrateFromBlocks,
+  ])
 
   // A skill / expert badge freezes its invocation prefix (`$` for Codex, `/`
   // elsewhere) at insert time. On the welcome page users routinely click a
@@ -814,14 +840,20 @@ export function MessageInput({
   // carry no scope and stay `/`). rAF-deferred like the sibling editor-mutation
   // effects to stay off React's commit phase — the badge NodeView re-renders via
   // a synchronous flushSync().
+  // An expert's name goes with the agent too: a Harness plugin installed
+  // whole gives it as `superpowers:<id>` to one agent, as `<id>` to another.
+  const expertInvocation = menuShortcuts.expertInvocation
   useEffect(() => {
     if (!composerReady) return
     const raf = requestAnimationFrame(() => {
       const editor = editorRef.current?.getEditor()
-      if (editor) restampSkillPrefixes(editor, skillPrefix)
+      if (editor) {
+        restampSkillPrefixes(editor, skillPrefix)
+        restampExpertNames(editor, expertInvocation)
+      }
     })
     return () => cancelAnimationFrame(raf)
-  }, [skillPrefix, composerReady])
+  }, [skillPrefix, expertInvocation, composerReady])
 
   const handleComposerChange = useCallback(() => {
     // The history's own writes are not edits. They must not end navigation, and
@@ -902,11 +934,9 @@ export function MessageInput({
     setComposerReady(true)
   }, [])
 
-  // Localised HERE, once, rather than at each selector: the composer renders
-  // this data through three independent paths (the searchable model picker,
-  // the inline dropdowns, and the collapsed panel's own projection), and a
-  // per-selector fix leaves whichever one the reader is not looking at in the
-  // agent's own language. Non-DeepSeek agents get their arrays back unchanged,
+  // Localised HERE, once, at the source: the settings chip, its accessible
+  // name and every control in its popover all read these arrays, so one pass
+  // covers them all. Non-DeepSeek agents get their arrays back unchanged,
   // identity included, so the memos below do not churn.
   const vocabulary = useAgentVocabulary(agentType)
   const availableModes = useMemo(
@@ -937,11 +967,6 @@ export function MessageInput({
   const showSelectorsLoading = showConfigLoading || showModeLoading
   const hasAnySelector =
     hasConfigOptions || showModeSelector || showSelectorsLoading
-  // The loading placeholder takes the inline slot too, not just the collapsed
-  // popover's row: at composer widths the chips would occupy, "still loading"
-  // has to be visible without opening anything.
-  const hasInlineSelectors =
-    hasConfigOptions || showModeSelector || showSelectorsLoading
   const hasFolderBranchPicker = useConversationFolderBranchPickerVisible(
     attachmentTabId,
     folderPickerOverride
@@ -950,14 +975,41 @@ export function MessageInput({
   const imageAttachments = attach.imageAttachments
   const hasAttachments = attachments.length > 0
   const hasSendableContent = !composerEmpty || hasAttachments
+  // The committed half of the report above: what the composer holds, and
+  // whether an intake is still in flight (once it settles, what it brought is
+  // already in `hasSendableContent` here). `intakeRevision` re-runs this after
+  // every intake, even one that started and settled within one render batch,
+  // where `intakePending` reads false both times.
+  const { intakePending, intakeRevision } = attach
+  useEffect(() => {
+    if (!effectiveDraftStorageKey) return
+    const intakeId = `${composerId}:intake`
+    setLiveComposerContent(
+      effectiveDraftStorageKey,
+      composerId,
+      hasSendableContent
+    )
+    setLiveComposerContent(effectiveDraftStorageKey, intakeId, intakePending)
+    return () => {
+      setLiveComposerContent(effectiveDraftStorageKey, composerId, false)
+      setLiveComposerContent(effectiveDraftStorageKey, intakeId, false)
+    }
+  }, [
+    composerId,
+    effectiveDraftStorageKey,
+    hasSendableContent,
+    intakePending,
+    intakeRevision,
+  ])
 
   // ── Slash command autocomplete ──
   //
   // The slash list shows the agent's own `availableCommands` verbatim —
   // experts are advertised as commands and now appear here alongside the
-  // rest. Codex additionally gets a `$`-triggered skills list (experts are
-  // symlinked skills, so they surface there) because its native command set
-  // is very small.
+  // rest. An agent that does not advertise its skills also gets the ones read
+  // from disk (experts are symlinked skills, so they surface there too): Codex
+  // on a `$`-triggered list, because its native command set is very small, and
+  // Antigravity after its commands on `/`.
   const [slashMenuOpen, setSlashMenuOpen] = useState(false)
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(0)
   // The trigger char (`/` for agent commands, `$` for Codex skills) and the
@@ -971,29 +1023,41 @@ export function MessageInput({
     () => availableCommands ?? [],
     [availableCommands]
   )
+  // Read off the full list, not the filtered one, so typing never moves the
+  // rows' icon column in or out.
+  const skillCommandNames = useMemo(
+    () => skillMarkedCommands(slashCommands),
+    [slashCommands]
+  )
   const filteredSlashCommands = useMemo(() => {
     if (!slashMenuOpen || slashCommands.length === 0) return []
     if (slashTriggerChar !== "/") return []
     return rankByTextMatch(slashFilter, slashCommands, (cmd) => cmd.name)
   }, [slashMenuOpen, slashCommands, slashTriggerChar, slashFilter])
   const filteredSlashSkills = useMemo(() => {
-    // Skills autocomplete is Codex-only and triggered by `$`.
-    if (agentType !== "codex") return []
+    // Disk skills are listed only under the trigger their agent invokes them by.
+    if (!skillTrigger || slashTriggerChar !== skillTrigger) return []
     if (!slashMenuOpen || availableSkills.length === 0) return []
-    if (slashTriggerChar !== "$") return []
     return rankByTextMatch(
       slashFilter,
-      availableSkills,
+      skillsForMenu(availableSkills, slashCommands, skillTrigger),
       (skill) => skill.name,
       (skill) => skill.id
     )
-  }, [slashMenuOpen, availableSkills, agentType, slashTriggerChar, slashFilter])
+  }, [
+    slashMenuOpen,
+    availableSkills,
+    slashCommands,
+    skillTrigger,
+    slashTriggerChar,
+    slashFilter,
+  ])
   const slashAutocompleteCount =
     filteredSlashCommands.length + filteredSlashSkills.length
   // `/` is fed by the agent's own command list, which only exists once the
   // connection is up — so while it is being established the panel shows a
-  // loading row rather than nothing at all. `$` (Codex skills) is read from
-  // disk and never waits on a connection.
+  // loading row rather than nothing at all. Disk skills (Codex's `$` list,
+  // Antigravity's `/` rows) never wait on a connection.
   const slashLoading =
     slashMenuOpen &&
     slashTriggerChar === "/" &&
@@ -1008,15 +1072,14 @@ export function MessageInput({
   // types and the filter narrows, the previously-highlighted index can point
   // past the end of the merged list (commands + experts), which would make
   // Enter/Tab a silent no-op. Clamp back to the last available row whenever
-  // the count changes.
-  useEffect(() => {
-    if (
-      slashAutocompleteCount > 0 &&
-      slashSelectedIndex >= slashAutocompleteCount
-    ) {
-      setSlashSelectedIndex(slashAutocompleteCount - 1)
-    }
-  }, [slashAutocompleteCount, slashSelectedIndex])
+  // the count changes. Adjusted during render so no frame (and no key handler)
+  // ever sees the out-of-range index.
+  if (
+    slashAutocompleteCount > 0 &&
+    slashSelectedIndex >= slashAutocompleteCount
+  ) {
+    setSlashSelectedIndex(slashAutocompleteCount - 1)
+  }
 
   // Keep the highlighted row visible inside the popup when keyboard navigation
   // pushes it past the scroll viewport. Without this the cursor silently runs
@@ -1027,7 +1090,12 @@ export function MessageInput({
     if (!slashMenuOpen || slashAutocompleteCount === 0) return
     const container = slashMenuListRef.current
     if (!container) return
-    const el = container.children[slashSelectedIndex] as HTMLElement | undefined
+    // Rows by their marker, not by child position: the loading row can sit
+    // above them (an agent's disk skills show while its commands still load).
+    const el =
+      container.querySelectorAll<HTMLElement>("[data-slash-row]")[
+        slashSelectedIndex
+      ]
     if (!el) return
     const elTop = el.offsetTop
     const elBottom = elTop + el.offsetHeight
@@ -1040,7 +1108,8 @@ export function MessageInput({
     }
   }, [slashMenuOpen, slashSelectedIndex, slashAutocompleteCount])
 
-  // ── Editor-driven `/` (commands) and `$` (Codex skills) trigger detection ──
+  // ── Editor-driven `/` (commands, plus Antigravity's and OpenCode's skills)
+  // and `$` (Codex skills) trigger detection ──
   // The `@` mention panel is now owned by RichComposer; this only handles the
   // runtime-command menus. We inspect the text before the collapsed caret in the
   // current block: a `/` (any agent) or `$` (Codex) at the start or right after
@@ -1063,26 +1132,32 @@ export function MessageInput({
       " "
     )
     const regex =
-      agentType === "codex" ? /(^|\s)([/$])(\S*)$/ : /(^|\s)(\/)(\S*)$/
+      skillTrigger === "$" ? /(^|\s)([/$])(\S*)$/ : /(^|\s)(\/)(\S*)$/
     const match = before.match(regex)
     if (!match) return close()
     const trigger = match[2] as "/" | "$"
-    // Only `/` is gated here. Its source is the agent's own command list, which
-    // exists only once the connection is up — so an empty list means "nothing to
-    // show" unless the connection is still coming, where the panel opens on a
-    // loading row instead. `$` (the on-disk Codex skills) is deliberately
+    // Only a commands-only `/` is gated here. Its source is the agent's own
+    // command list, which exists only once the connection is up — so an empty
+    // list means "nothing to show" unless the connection is still coming, where
+    // the panel opens on a loading row instead. A trigger that also lists disk
+    // skills (Codex's `$`, Antigravity's and OpenCode's `/`) is deliberately
     // ungated: `useAgentSkills` reports an in-flight scan as an empty list, so
-    // closing on empty would strand a `$` typed before the scan lands. Left
-    // open, the panel simply stays hidden until the skills arrive and then
-    // fills itself in — no second keystroke needed.
-    if (trigger === "/" && slashCommands.length === 0 && !commandsLoading) {
+    // closing on empty would strand a trigger typed before the scan lands. Left
+    // open, the panel simply stays hidden until the skills arrive and then fills
+    // itself in — no second keystroke needed.
+    if (
+      trigger === "/" &&
+      skillTrigger !== "/" &&
+      slashCommands.length === 0 &&
+      !commandsLoading
+    ) {
       return close()
     }
     setSlashTriggerChar(trigger)
     setSlashFilter(match[3])
     setSlashSelectedIndex(0)
     setSlashMenuOpen(true)
-  }, [slashCommands.length, commandsLoading, agentType])
+  }, [slashCommands.length, commandsLoading, skillTrigger])
 
   useEffect(() => {
     detectSlashTriggerRef.current = detectSlashTrigger
@@ -1111,9 +1186,10 @@ export function MessageInput({
 
   // Replace the live `/`-or-`$` token immediately before the caret with
   // an inline reference badge (+ a trailing space unless one already follows),
-  // then close the menu. Used by both the command (`/`) and Codex-skill (`$`)
-  // selections — the badge serializes back to its literal `/cmd` / `$skill`
-  // token on send (see invocation-reference / referenceToMarkdown).
+  // then close the menu. Used by both the command (`/`) and disk-skill (`$` for
+  // Codex, `/` for Antigravity) selections — the badge serializes back to its
+  // literal `/cmd` / `$skill` token on send (see invocation-reference /
+  // referenceToMarkdown).
   const replaceTriggerWithReference = useCallback(
     (ref: ReferenceAttrs) => {
       const editor = editorRef.current?.getEditor()
@@ -1270,24 +1346,30 @@ export function MessageInput({
   // reproduces the shortcut everywhere in the box. Reading the clipboard happens
   // inside the menu-click / keydown user gesture, so the async Clipboard API has
   // the activation it needs.
-  const handleContextPaste = useCallback(async () => {
+  const pasteFromClipboard = useCallback(async () => {
     if (disabled) return
     const editor = editorRef.current?.getEditor()
     if (!editor) return
-    let text = ""
     // The async clipboard read can be blocked at call time even though the API
     // exists (denied permission, browser policy), so track that: with the native
     // menu (and its Paste) suppressed to show this one, a silent failure would
     // leave the user with no feedback and no fallback.
     let readBlocked = false
-    try {
-      text = (await navigator.clipboard.readText()) ?? ""
-    } catch {
-      // Permission denied / unsupported / no activation — fall through to the
-      // image path (a textless clipboard may still hold a screenshot).
-      readBlocked = true
-      text = ""
-    }
+    // Started before anything is awaited, so it still runs inside the gesture.
+    const textRead = (async () => {
+      try {
+        return (await navigator.clipboard.readText()) ?? ""
+      } catch {
+        // Permission denied / unsupported / no activation — fall through to the
+        // image path (a textless clipboard may still hold a screenshot).
+        readBlocked = true
+        return ""
+      }
+    })()
+    // Files copied in Finder / Explorer reach the text API only as their
+    // names: attach the files themselves instead, as a keyboard paste does.
+    if (await attach.appendClipboardFiles()) return
+    const text = await textRead
     if (text) {
       // Route through ProseMirror's own text paste so newlines, marks and the
       // editor's paste pipeline behave exactly like a keyboard paste.
@@ -1313,6 +1395,17 @@ export function MessageInput({
       toast.error(t("pasteUnavailable"))
     }
   }, [disabled, attach, t])
+  // Content is on its way from the first clipboard read on: counted as an
+  // intake, so draft tidying never takes this composer for blank meanwhile.
+  const handleContextPaste = useCallback(async () => {
+    if (disabled) return
+    const settle = attach.beginIntake()
+    try {
+      await pasteFromClipboard()
+    } finally {
+      settle()
+    }
+  }, [attach, disabled, pasteFromClipboard])
 
   // Bridges the composer's Ctrl/⌘+Shift+V key to the plain-text paste above.
   // Returns whether the shortcut was consumed: when disabled or when the async
@@ -1488,7 +1581,10 @@ export function MessageInput({
     // doc — guarantees the wire text matches the current agent regardless of any
     // timing/ordering (Codex needs `$skill`, not the slash-command `/skill`).
     // Cheap: one small-doc walk, and no dispatch when nothing is stale.
-    if (editor) restampSkillPrefixes(editor, skillPrefix)
+    if (editor) {
+      restampSkillPrefixes(editor, skillPrefix)
+      restampExpertNames(editor, expertInvocation)
+    }
     // Inline badges + prose → text/resource_link blocks (file mentions become
     // first-class ResourceLinks; agent/session/commit/skill stay inline text;
     // embedded badges are dropped here and re-added below from the payload map).
@@ -1533,7 +1629,13 @@ export function MessageInput({
       displayProse ||
       `Attached ${attachments.length} attachment${attachments.length > 1 ? "s" : ""}`
     return { blocks, displayText }
-  }, [attachments, skillPrefix, imagePromptBlocks, embeddedPayloadsRef])
+  }, [
+    attachments,
+    skillPrefix,
+    expertInvocation,
+    imagePromptBlocks,
+    embeddedPayloadsRef,
+  ])
 
   // Clear the editor + attachments after a send / enqueue / save.
   const resetComposer = useCallback(() => {
@@ -1551,10 +1653,14 @@ export function MessageInput({
     buildDraft,
     draftStorageKey: effectiveDraftStorageKey,
   })
-  currentComposerRef.current = {
-    buildDraft,
-    draftStorageKey: effectiveDraftStorageKey,
-  }
+  // Only read after an await in the steer handler, so syncing it after commit
+  // is early enough.
+  useLayoutEffect(() => {
+    currentComposerRef.current = {
+      buildDraft,
+      draftStorageKey: effectiveDraftStorageKey,
+    }
+  })
 
   const handleSend = useCallback(() => {
     // The editor stays editable while `disabled` (the agent is busy) so the user
@@ -1587,6 +1693,16 @@ export function MessageInput({
       return
     }
 
+    // Prompting with no queue to park the draft in (a canvas card). The backend
+    // runs one prompt per turn and turns a second one away, so sending here
+    // only ever bounced — after this composer had cleared itself for it, which
+    // is how the message used to vanish. Keep it where it is instead: like the
+    // upload gate above, a "wait a moment", not a loss.
+    if (isPrompting) {
+      toast.info(t("heldWhileResponding"), { id: HELD_WHILE_RESPONDING_TOAST })
+      return
+    }
+
     onSend(draft, showModeSelector ? effectiveModeId : null)
     if (effectiveDraftStorageKey) {
       clearMessageInputDraftV2(effectiveDraftStorageKey)
@@ -1596,6 +1712,7 @@ export function MessageInput({
     disabled,
     hasUploadingImage,
     tAttach,
+    t,
     buildDraft,
     isEditingQueueItem,
     isPrompting,
@@ -1777,200 +1894,39 @@ export function MessageInput({
   const boxMinHeight = composerBoxMinHeight(tall)
   const editableMinHeight = composerEditableMinHeight(tall, hasImageAttachments)
 
-  const inlineSelectorItems = (
-    <>
-      {showSelectorsLoading && (
-        <SelectorLoadingPlaceholder
-          label={showConfigLoading ? t("loadingSettings") : t("loadingMode")}
-        />
-      )}
-      {hasConfigOptions &&
-        availableConfigOptions.map((option) => {
-          // On/off options flip in place — a dropdown for a binary choice is a
-          // wasted interaction.
-          if (option.kind.type === "boolean") {
-            return (
-              <InlineSessionConfigToggle
-                key={option.id}
-                option={option}
-                onLabel={t("toggleOn")}
-                offLabel={t("toggleOff")}
-                onSelect={(configId, value) =>
-                  onConfigOptionChange?.(configId, value)
-                }
-              />
-            )
-          }
-          // Long model lists get the searchable + virtualized popover (a Radix
-          // menu of hundreds of items is the scroll jank); every other option —
-          // and short model lists — keep the lightweight inline dropdown.
-          const listGroups = modelPickerGroups(option)
-          if (listGroups) {
-            return (
-              <ModelOptionPicker
-                key={option.id}
-                option={option}
-                groups={listGroups}
-                onSelect={(configId, valueId) =>
-                  onConfigOptionChange?.(configId, valueId)
-                }
-              />
-            )
-          }
-          return (
-            <InlineSessionConfigSelector
-              key={option.id}
-              option={option}
-              derivedGroups={deriveModelGroups(option)}
-              recommendedLabel={t("recommendedBadge")}
-              onSelect={(configId, valueId) =>
-                onConfigOptionChange?.(configId, valueId)
-              }
-            />
-          )
-        })}
-      {showModeSelector && (
-        <InlineModeSelector
-          modes={availableModes}
-          selectedModeId={effectiveModeId!}
-          onSelect={handleModeSelect}
-          label={t("modeLabel")}
-        />
-      )}
-    </>
+  // The agent's settings — its config options, or the legacy mode list for an
+  // agent that publishes none (the two never show together, see
+  // `showModeSelector`) — as the one ordered list the settings chip edits.
+  const sessionSettings = useMemo(
+    () =>
+      buildSessionSettings({
+        configOptions: availableConfigOptions,
+        modes: showModeSelector ? availableModes : [],
+        currentModeId: showModeSelector ? effectiveModeId : null,
+        modeTitle: t("modeLabel"),
+      }),
+    [
+      availableConfigOptions,
+      showModeSelector,
+      availableModes,
+      effectiveModeId,
+      t,
+    ]
+  )
+  const handleSessionSettingChange = useCallback(
+    (target: SessionSettingTarget, value: string) => {
+      if (target.type === "mode") handleModeSelect(value)
+      else onConfigOptionChange?.(target.configId, value)
+    },
+    [handleModeSelect, onConfigOptionChange]
   )
 
-  // Normalized settings for the collapsed (narrow) master–detail panel. Config
-  // options and the mode picker are mutually exclusive in this UI (see
-  // `showModeSelector`), but both are mapped so the panel stays agnostic.
-  const collapsedSettings = useMemo<SessionSelectorSetting[]>(() => {
-    const result: SessionSelectorSetting[] = []
-    if (hasConfigOptions) {
-      for (const option of availableConfigOptions) {
-        // An on/off option becomes a two-item headerless group — the same shape
-        // the mode picker below uses — so the panel needs no toggle affordance
-        // of its own.
-        if (option.kind.type === "boolean") {
-          const checked = option.kind.current_value
-          result.push({
-            key: `config:${option.id}`,
-            title: option.name,
-            currentValue: checked ? "true" : "false",
-            currentLabel: checked ? t("toggleOn") : t("toggleOff"),
-            groups: [
-              {
-                key: "__boolean__",
-                name: null,
-                options: [
-                  { value: "true", name: t("toggleOn"), description: null },
-                  { value: "false", name: t("toggleOff"), description: null },
-                ],
-              },
-            ],
-            onSelect: (value) => onConfigOptionChange?.(option.id, value),
-          })
-          continue
-        }
-        if (option.kind.type !== "select") continue
-        const kind = option.kind
-        // Model values that carry a `provider/` prefix group by provider; every
-        // other option keeps its server groups or stays flat (`null` derived).
-        const derived = deriveModelGroups(option)
-        const groups: SessionSelectorGroup[] = derived
-          ? derived.map((group) => ({
-              key: group.key,
-              name: group.name,
-              options: group.options.map((item) => ({
-                value: item.value,
-                name: item.name,
-                description: item.description,
-              })),
-            }))
-          : kind.groups.length > 0
-            ? kind.groups.map((group) => ({
-                key: group.group,
-                name: group.name,
-                options: group.options.map((item) => ({
-                  value: item.value,
-                  name: item.name,
-                  description: item.description,
-                })),
-              }))
-            : [
-                {
-                  key: "__flat__",
-                  name: null,
-                  options: kind.options.map((item) => ({
-                    value: item.value,
-                    name: item.name,
-                    description: item.description,
-                  })),
-                },
-              ]
-        // Resolve the left-rail summary against the built groups so a grouped
-        // model shows its prefix-stripped name (the provider is implied) rather
-        // than repeating `provider/`.
-        const current = groups
-          .flatMap((group) => group.options)
-          .find((item) => item.value === kind.current_value)
-        // A long model list gets a searchable + virtualized detail pane (a plain
-        // list of hundreds of buttons janks); short lists keep plain buttons.
-        const searchable =
-          isModelConfigOption(option) &&
-          kind.options.length > MODEL_LIST_VIRTUALIZE_THRESHOLD
-        result.push({
-          key: `config:${option.id}`,
-          title: option.name,
-          currentValue: kind.current_value,
-          currentLabel: current?.name ?? kind.current_value,
-          groups,
-          recommendedValue: option.recommended_value,
-          onSelect: (value) => onConfigOptionChange?.(option.id, value),
-          ...(searchable && {
-            search: {
-              placeholder: t("searchModel"),
-              inputLabel: t("searchModelAria"),
-              listLabel: t("modelListLabel"),
-              empty: t("noModels"),
-            },
-          }),
-        })
-      }
-    }
-    if (showModeSelector) {
-      const selected = availableModes.find(
-        (mode) => mode.id === effectiveModeId
-      )
-      result.push({
-        key: "mode",
-        title: t("modeLabel"),
-        currentValue: effectiveModeId ?? "",
-        currentLabel: selected?.name ?? effectiveModeId ?? "",
-        groups: [
-          {
-            key: "__modes__",
-            name: null,
-            options: availableModes.map((mode) => ({
-              value: mode.id,
-              name: mode.name,
-              description: mode.description,
-            })),
-          },
-        ],
-        onSelect: (value) => handleModeSelect(value),
-      })
-    }
-    return result
-  }, [
-    hasConfigOptions,
-    availableConfigOptions,
-    showModeSelector,
-    availableModes,
-    effectiveModeId,
-    onConfigOptionChange,
-    handleModeSelect,
-    t,
-  ])
+  const handleUsePromptSuggestion = useCallback(() => {
+    const ed = editorRef.current
+    if (!ed || !offeredSuggestion) return
+    ed.setText(offeredSuggestion)
+    ed.focus()
+  }, [offeredSuggestion])
 
   const actionButtons = isEditingQueueItem ? (
     <div className="flex items-center gap-1">
@@ -2067,15 +2023,33 @@ export function MessageInput({
       </Button>
     )
   ) : (
-    <Button
-      onClick={handleSend}
-      disabled={disabled || !hasSendableContent}
-      size="icon"
-      className="h-8 w-8"
-      title={t("send")}
-    >
-      <Send className="size-4" />
-    </Button>
+    <div className="flex items-center gap-1">
+      {/* The click twin of Tab for a keyboard without one (a phone reaching
+          the web build): fills the predicted follow-up prompt into the empty
+          composer, sending nothing. Gone as soon as the composer holds text,
+          the same moment the placeholder hint goes. */}
+      {offeredSuggestion && composerEmpty && (
+        <Button
+          onClick={handleUsePromptSuggestion}
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
+          title={t("usePromptSuggestion")}
+          aria-label={t("usePromptSuggestion")}
+        >
+          <Lightbulb className="size-4" />
+        </Button>
+      )}
+      <Button
+        onClick={handleSend}
+        disabled={disabled || !hasSendableContent}
+        size="icon"
+        className="h-8 w-8"
+        title={t("send")}
+      >
+        <Send className="size-4" />
+      </Button>
+    </div>
   )
 
   return (
@@ -2114,6 +2088,7 @@ export function MessageInput({
               <button
                 key={`cmd-${cmd.name}`}
                 type="button"
+                data-slash-row=""
                 className={cn(
                   "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm",
                   i === slashSelectedIndex
@@ -2125,12 +2100,11 @@ export function MessageInput({
                   handleSlashSelect(cmd)
                 }}
               >
-                <span className="shrink-0 font-mono text-primary">
-                  {commandInvocationToken(cmd.name)}
-                </span>
-                <span className="truncate text-xs text-muted-foreground">
-                  {cmd.description}
-                </span>
+                <CommandOptionLabel
+                  command={cmd}
+                  skill={skillCommandNames.has(cmd.name)}
+                  kindColumn={skillCommandNames.size > 0}
+                />
               </button>
             ))}
             {filteredSlashSkills.map((skill, i) => {
@@ -2139,6 +2113,7 @@ export function MessageInput({
                 <button
                   key={`skill-${skill.scope}-${skill.id}`}
                   type="button"
+                  data-slash-row=""
                   className={cn(
                     "flex w-full items-start gap-2 rounded-lg px-3 py-2 text-left text-sm",
                     absoluteIndex === slashSelectedIndex
@@ -2244,8 +2219,9 @@ export function MessageInput({
               />
               <RichComposer
                 ref={editorRef}
-                placeholder={resolvedPlaceholder}
+                placeholder={shownPlaceholder}
                 ariaLabel={resolvedPlaceholder}
+                promptSuggestion={offeredSuggestion}
                 autoFocus={autoFocus}
                 referenceSearch={referenceSearch}
                 mentionUiLabels={mentionUiLabels}
@@ -2285,79 +2261,19 @@ export function MessageInput({
                     onAddFeedback={onAddFeedback}
                     feedbackAddDisabled={feedbackAddDisabled}
                   />
-                  {hasInlineSelectors && (
-                    <div className="hidden min-w-0 items-end gap-1 @[30rem]:flex">
-                      {inlineSelectorItems}
-                    </div>
-                  )}
                   {hasAnySelector && (
-                    <div
-                      className={cn(
-                        "flex",
-                        hasInlineSelectors && "@[30rem]:hidden"
-                      )}
-                    >
-                      <Popover
-                        open={collapsedSelectorsOpen}
-                        onOpenChange={setCollapsedSelectorsOpen}
-                      >
-                        {/* Suppressed while the panel is open — the Popover is
-                            non-modal, so the trigger keeps taking hover under
-                            it (see SelectorTooltip). */}
-                        <SelectorTooltip
-                          label={t("agentSettings")}
-                          suppressed={collapsedSelectorsOpen}
-                        >
-                          <PopoverTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon-xs"
-                              className="shrink-0"
-                              aria-label={t("agentSettings")}
-                            >
-                              {agentType ? (
-                                <AgentIcon
-                                  agentType={agentType}
-                                  className="size-3"
-                                />
-                              ) : (
-                                <Cog className="size-3" />
-                              )}
-                            </Button>
-                          </PopoverTrigger>
-                        </SelectorTooltip>
-                        <PopoverContent
-                          ref={collapsedSelectorsGuard.contentRef}
-                          side="top"
-                          align="start"
-                          aria-label={t("agentSettings")}
-                          onPointerDownOutside={
-                            collapsedSelectorsGuard.onPointerDownOutside
-                          }
-                          onFocusOutside={
-                            collapsedSelectorsGuard.onFocusOutside
-                          }
-                          className="w-[22rem] max-w-[calc(100vw-1rem)] p-1"
-                        >
-                          {showConfigLoading && (
-                            <SelectorLoadingChip label={t("loadingSettings")} />
-                          )}
-                          {showModeLoading && (
-                            <SelectorLoadingChip label={t("loadingMode")} />
-                          )}
-                          {collapsedSettings.length > 0 && (
-                            <SessionSelectorsPanel
-                              settings={collapsedSettings}
-                              settingsLabel={t("agentSettings")}
-                              recommendedLabel={t("recommendedBadge")}
-                              onAfterSelect={() =>
-                                setCollapsedSelectorsOpen(false)
-                              }
-                            />
-                          )}
-                        </PopoverContent>
-                      </Popover>
-                    </div>
+                    <SessionSettingsPicker
+                      agentType={agentType ?? null}
+                      settings={sessionSettings}
+                      loadingLabel={
+                        showSelectorsLoading
+                          ? showConfigLoading
+                            ? t("loadingSettings")
+                            : t("loadingMode")
+                          : null
+                      }
+                      onChange={handleSessionSettingChange}
+                    />
                   )}
                 </div>
                 <div className="shrink-0">{actionButtons}</div>

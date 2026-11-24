@@ -4,13 +4,13 @@
  * Owns the transcript's side-panel viewers — the "查看会话" drawers and the
  * file viewer — ABOVE the virtual list.
  *
- * The cards that offer those viewers — `DelegatedSubThread` for a
- * `delegate_to_agent` call, `AgentToolCallPart` for a grok `spawn_subagent` —
- * render inside `VirtualizedMessageThread`'s rows. They used to hold the
- * viewer's open state and render the drawer themselves, which meant scrolling
- * the card out of virtua's buffer unmounted the row and took the open drawer
- * down with it. Hoisting the state and the drawer to `MessageListView` (which
- * renders the virtualizer, not a row inside it) is what decouples the two.
+ * The rows that offer those viewers — the delegation row for a
+ * `delegate_to_agent` call, the sub-agent row for a grok `spawn_subagent` —
+ * render inside `VirtualizedMessageThread`'s rows. Holding the viewer's open
+ * state and rendering the drawer there would mean scrolling the row out of
+ * virtua's buffer unmounts it and takes the open drawer down with it. Hoisting
+ * the state and the drawer to `MessageListView` (which renders the
+ * virtualizer, not a row inside it) is what decouples the two.
  *
  * Nesting is unaffected: the viewer's own transcript renders another
  * `MessageListView`, which provides its own host, so a grandchild viewer still
@@ -135,7 +135,7 @@ function DelegationViewer({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
-  const { agentType, task, childConversationId, childConnectionId } =
+  const { identity, task, childConversationId, childConnectionId } =
     useDelegationCardModel(source)
 
   if (childConversationId == null) return null
@@ -146,7 +146,7 @@ function DelegationViewer({
       onOpenChange={onOpenChange}
       childConversationId={childConversationId}
       childConnectionId={childConnectionId}
-      agentType={agentType}
+      identity={identity}
       kickoffTask={task}
     />
   )

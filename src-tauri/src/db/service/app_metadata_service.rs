@@ -36,6 +36,15 @@ pub async fn get_value(conn: &DatabaseConnection, key: &str) -> Result<Option<St
     get_value_conn(conn, key).await
 }
 
+/// Remove `key`; a key that is not there is not an error.
+pub async fn delete_value(conn: &DatabaseConnection, key: &str) -> Result<(), DbError> {
+    app_metadata::Entity::delete_many()
+        .filter(app_metadata::Column::Key.eq(key))
+        .exec(conn)
+        .await?;
+    Ok(())
+}
+
 /// Generic-over-connection variant of [`get_value`] so callers can read a value
 /// inside a transaction (`&DatabaseTransaction`) and compose it with a write.
 pub async fn get_value_conn<C: ConnectionTrait>(

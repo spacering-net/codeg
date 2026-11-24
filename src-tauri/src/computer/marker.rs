@@ -29,6 +29,7 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindo
 use tokio::sync::watch;
 
 use super::agent::ComputerAction;
+use super::overlay;
 
 pub const MARKER_LABEL: &str = "computer-marker";
 
@@ -126,14 +127,14 @@ async fn follow(app: AppHandle, mut rx: watch::Receiver<Wanted>) {
         let wanted = *rx.borrow_and_update();
         if !wanted.armed {
             if let Some(window) = app.get_webview_window(MARKER_LABEL) {
-                let _ = window.hide();
+                overlay::hide(&window);
             }
         } else if let Some(window) = window(&app) {
             match wanted.mark {
                 Some(mark) if shown != Some(mark.id) => {
                     shown = Some(mark.id);
                     place(&app, &window, mark.at);
-                    let _ = window.show();
+                    overlay::show(&window);
                     let _ = app.emit_to(
                         MARKER_LABEL,
                         MARKER_EVENT,
@@ -144,7 +145,7 @@ async fn follow(app: AppHandle, mut rx: watch::Receiver<Wanted>) {
                     );
                     tokio::select! {
                         _ = tokio::time::sleep(SHOWN_FOR) => {
-                            let _ = window.hide();
+                            overlay::hide(&window);
                         }
                         changed = rx.changed() => {
                             if changed.is_err() {
@@ -156,7 +157,7 @@ async fn follow(app: AppHandle, mut rx: watch::Receiver<Wanted>) {
                 }
                 Some(_) => {}
                 None => {
-                    let _ = window.hide();
+                    overlay::hide(&window);
                 }
             }
         }

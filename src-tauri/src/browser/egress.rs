@@ -703,7 +703,14 @@ impl Egress {
             &target.headers,
         )
         .map_err(down)?;
-        match tokio::time::timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(request)).await {
+        // Dialed like the connection's own event socket: an address of the host
+        // that never answers must not stop the tunnel reaching one that does.
+        match tokio::time::timeout(
+            CONNECT_TIMEOUT,
+            crate::commands::remote_proxy::connect_remote_ws(request),
+        )
+        .await
+        {
             Ok(Ok((socket, _))) => Ok(socket),
             Ok(Err(WsError::Http(response))) => Err(match response.status().as_u16() {
                 // An older server has no such route: a 404, or — where it

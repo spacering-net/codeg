@@ -7,7 +7,8 @@
 //      `TAURI_TARGET_TRIPLE` env, or the host's `rustc -vV` host triple.
 //   2. Runs `cargo build --release --no-default-features`, with the feature
 //      each binary target requires, for each sidecar bin (`codeg-mcp`,
-//      `codeg-computer-helper`) for that triple from `src-tauri/`.
+//      `codeg-computer-helper`, `codeg-cli`) for that triple from
+//      `src-tauri/`.
 //   3. Copies each produced binary to
 //      `src-tauri/binaries/<bin>-<triple>{.exe}` so Tauri's externalBin
 //      bundler picks it up under its bare name at install time.
@@ -47,7 +48,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs"
-import { dirname, join, resolve } from "node:path"
+import { dirname, isAbsolute, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import process from "node:process"
 
@@ -56,9 +57,11 @@ const SRC_TAURI = resolve(SCRIPT_DIR, "..")
 const BINARIES_DIR = join(SRC_TAURI, "binaries")
 // Every sidecar in `bundle.externalBin`, in the order they are built. (On
 // macOS the helper is bundled as an app instead; see `stageHelperApp`.)
-const BIN_NAMES = ["codeg-mcp", "codeg-computer-helper"]
-// The features their binary targets require (Cargo.toml).
-const FEATURES = "mcp-bin,computer-helper"
+const BIN_NAMES = ["codeg-mcp", "codeg-computer-helper", "codeg-cli"]
+// The features their binary targets require (Cargo.toml) — all of them, in one
+// cargo invocation: naming only a new sidecar's feature would leave the
+// others' binary targets disabled.
+const FEATURES = "mcp-bin,computer-helper,cli-bin"
 const HELPER = "codeg-computer-helper"
 const HELPER_APP = join(BINARIES_DIR, `${HELPER}.app`)
 
@@ -92,6 +95,32 @@ function resolveHostTriple() {
     return line.replace(/^host:\s*/, "").trim()
   } catch (e) {
     die(`cannot determine host triple via rustc -vV: ${e.message}`)
+  }
+}
+
+function resolveCargoTargetDirectory() {
+  try {
+    const metadata = JSON.parse(
+      execFileSync(
+        "cargo",
+        ["metadata", "--no-deps", "--format-version", "1"],
+        {
+          cwd: SRC_TAURI,
+          encoding: "utf8",
+        }
+      )
+    )
+    if (
+      typeof metadata?.target_directory !== "string" ||
+      !isAbsolute(metadata.target_directory)
+    ) {
+      throw new Error(
+        "cargo metadata did not return an absolute target_directory"
+      )
+    }
+    return metadata.target_directory
+  } catch (e) {
+    die(`cannot determine Cargo output directory: ${e.message}`)
   }
 }
 
@@ -172,9 +201,12 @@ function main() {
     { stdio: "inherit", cwd: SRC_TAURI }
   )
 
+  // Cargo resolves CARGO_TARGET_DIR and build.target-dir (including relative
+  // configuration paths). The binaries need not live under src-tauri/target.
+  const targetDirectory = resolveCargoTargetDirectory()
   mkdirSync(BINARIES_DIR, { recursive: true })
   for (const name of BIN_NAMES) {
-    const built = join(SRC_TAURI, "target", target, "release", `${name}${ext}`)
+    const built = join(targetDirectory, target, "release", `${name}${ext}`)
     if (!existsSync(built)) {
       die(`expected ${built} after cargo build, but it does not exist`)
     }

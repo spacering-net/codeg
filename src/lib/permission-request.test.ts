@@ -238,6 +238,38 @@ describe("parsePermissionToolCall — request-level _meta.permission", () => {
   })
 })
 
+describe("parsePermissionToolCall — a sandbox network request", () => {
+  it("reads the host only when the request names SandboxNetworkAccess", () => {
+    expect(
+      parsePermissionToolCall({
+        toolCallId: "n1",
+        title: "example.com",
+        rawInput: { host: " example.com " },
+        _meta: { claudeCode: { toolName: "SandboxNetworkAccess" } },
+      }).networkHost
+    ).toBe("example.com")
+    const others = [
+      // The bare request, before the live call lent it a name.
+      { toolCallId: "n1", title: "example.com", rawInput: { host: "x.dev" } },
+      // Another tool that takes a host.
+      {
+        toolCallId: "n2",
+        rawInput: { host: "x.dev" },
+        _meta: { claudeCode: { toolName: "mcp__net__ping" } },
+      },
+      // The right tool with no host to name.
+      {
+        toolCallId: "n3",
+        rawInput: { host: "  " },
+        _meta: { claudeCode: { toolName: "SandboxNetworkAccess" } },
+      },
+    ]
+    for (const toolCall of others) {
+      expect(parsePermissionToolCall(toolCall).networkHost).toBeNull()
+    }
+  })
+})
+
 describe("parsePermissionToolCall — a heading must not restate the command", () => {
   // The exact frame claude-agent-acp 0.79.0 (#1070) sends for a shell
   // approval: `toolCall.title` and `_meta.permission.title` are both the raw

@@ -9,21 +9,28 @@
  * owned by the shared overlay-stack container in `MessageListView`, which
  * places this panel BELOW the plan panel when both are present.
  *
- * Each row resolves its agent type / task / status / child ids from the same
- * `useDelegationCardModel` the inline `DelegatedSubThread` card uses, so the
- * overlay and the message-stream card never disagree. Clicking a row opens the
- * child's full conversation via `SubAgentSessionDialog` ("查看会话").
+ * The overlay is for transcripts with no side panel (a canvas card, the
+ * read-only sub-agent and task drawers); the conversation page lists the same
+ * rows in the Session Details side panel instead.
+ *
+ * Each row (`SubAgentRow`, shared with that panel) resolves its agent type /
+ * task / status / child ids from the same `useDelegationCardModel` the
+ * timeline's delegation row uses, so the overlay and the transcript never
+ * disagree. Clicking a row opens the child's full conversation via
+ * `SubAgentSessionDialog` ("查看会话").
  */
 
 import { memo, useState } from "react"
-import { getAgentLabel } from "@/lib/custom-agents"
 import { useTranslations } from "next-intl"
 import { BotIcon, ChevronDownIcon } from "lucide-react"
 
-import { AgentIcon } from "@/components/agent-icon"
 import { CollapsedOverlayChip } from "@/components/chat/collapsed-overlay-chip"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import {
+  DelegationIdentityAvatar,
+  DelegationIdentityName,
+} from "@/components/message/delegation-identity"
 import { StatusBadge } from "@/components/message/delegation-status-badge"
 import { SubAgentSessionDialog } from "@/components/message/sub-agent-session-dialog"
 import { useSessionViewerHost } from "@/components/message/session-viewer-host"
@@ -101,7 +108,7 @@ export const SubAgentOverlay = memo(function SubAgentOverlay({
 
         <div className="max-h-96 overflow-y-auto p-2 space-y-1.5">
           {delegations.map((source) => (
-            <SubAgentOverlayRow key={source.parentToolUseId} source={source} />
+            <SubAgentRow key={source.parentToolUseId} source={source} />
           ))}
         </div>
       </div>
@@ -109,19 +116,22 @@ export const SubAgentOverlay = memo(function SubAgentOverlay({
   )
 })
 
-const SubAgentOverlayRow = memo(function SubAgentOverlayRow({
+/** One sub-agent: who runs it, its task id and status, and its task. Opens the
+ *  child's conversation when it has one. */
+export const SubAgentRow = memo(function SubAgentRow({
   source,
 }: {
   source: DelegationCardSource
 }) {
   const t = useTranslations("Folder.chat.delegation")
   // Same host as the inline card — so the two entry points share one viewer,
-  // and neither depends on its own row surviving. `null` = rendered outside a
-  // `MessageListView`; keep the local drawer then.
+  // and neither depends on its own row surviving. The Session Details side
+  // panel brings a host of its own. `null` = rendered outside any host; keep
+  // the local drawer then.
   const viewerHost = useSessionViewerHost()
   const [dialogOpen, setDialogOpen] = useState(false)
   const {
-    agentType,
+    identity,
     task,
     taskId,
     status,
@@ -130,8 +140,8 @@ const SubAgentOverlayRow = memo(function SubAgentOverlayRow({
     childConnectionId,
   } = useDelegationCardModel(source)
 
-  // Unlike the inline DelegatedSubThread (which falls through to the generic
-  // tool renderer when nothing resolves), the overlay always renders one row
+  // Unlike the delegation row (which falls back to a plain tool row when
+  // nothing resolves), the overlay always renders one row
   // per real delegation so the collapsed count never disagrees with the list,
   // and meta/output-only states (e.g. after a refresh) still surface. Rows
   // degrade gracefully: unknown agent → neutral dot + "Sub-agent" label,
@@ -142,16 +152,11 @@ const SubAgentOverlayRow = memo(function SubAgentOverlayRow({
     <div className="min-w-0 flex-1 space-y-1">
       {/* Name line: small icon inline with the name, then task id + status. */}
       <div className="flex items-center gap-1.5">
-        <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-border bg-background text-foreground">
-          {agentType ? (
-            <AgentIcon agentType={agentType} className="h-3.5 w-3.5" />
-          ) : (
-            <span className="h-1.5 w-1.5 rounded-sm bg-muted-foreground/60" />
-          )}
-        </span>
-        <span className="min-w-0 truncate text-xs font-semibold text-foreground">
-          {agentType ? getAgentLabel(agentType) : t("unknownAgent")}
-        </span>
+        <DelegationIdentityAvatar identity={identity} size="overlay" />
+        <DelegationIdentityName
+          identity={identity}
+          className="min-w-0 truncate text-xs font-semibold text-foreground"
+        />
         {taskId && (
           <span
             className="shrink-0 font-mono text-2xs text-muted-foreground"
@@ -201,7 +206,7 @@ const SubAgentOverlayRow = memo(function SubAgentOverlayRow({
           onOpenChange={setDialogOpen}
           childConversationId={childConversationId}
           childConnectionId={childConnectionId}
-          agentType={agentType}
+          identity={identity}
           kickoffTask={task}
         />
       )}

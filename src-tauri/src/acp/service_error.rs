@@ -17,10 +17,51 @@
 //! a blank message, so the card reads the sentence the banner does. One input
 //! it cannot follow: a body escaping a lone surrogate (`"\ud800"`), which
 //! `JSON.parse` takes and serde_json refuses, so that body stays as written.
+//!
+//! codex-acp 2.3.0 (#668) adds one rule ahead of the envelope: an
+//! `invalid_encrypted_content` error reads as a sentence explaining it
+//! ([`INVALID_ENCRYPTED_CONTENT_MESSAGE`]). codex resends the encrypted
+//! reasoning of earlier turns, which only the provider (or account) that
+//! encrypted it can read, so a thread whose provider changed fails every turn
+//! with it. The adapter puts the sentence on the `sessionFailure` title only;
+//! the same rule here gives it to the line a reloaded failed turn draws and to
+//! a failed compaction's card.
+//!
+//! codex-acp 2.4.0 (#697) adds one more rule, ahead of both: a ChatGPT login
+//! looks its workspace up on chatgpt.com before each model request, and when
+//! that lookup gets no answer the turn fails with one of two bare texts
+//! ([`WORKSPACE_ROUTING_UNAVAILABLE_MESSAGES`]). They read as a sentence that
+//! says so, with the original text kept at its end.
 
 use serde_json::Value;
 
 use crate::acp::js_text::is_js_blank;
+
+/// codex-acp 2.3.0's `INVALID_ENCRYPTED_CONTENT_MESSAGE`, word for word.
+pub(crate) const INVALID_ENCRYPTED_CONTENT_MESSAGE: &str =
+    "The current provider can't read this thread's earlier reasoning, \
+which another provider or account encrypted. This happens after the provider changes in a thread. \
+Switch back to the previous provider or start a new thread.";
+
+/// The provider error code the explanation is for.
+const INVALID_ENCRYPTED_CONTENT_CODE: &str = "invalid_encrypted_content";
+
+/// codex-acp 2.4.0's `ACCOUNT_READ_UNAVAILABLE_MESSAGES`: the whole error text
+/// of a workspace lookup that got no answer from the ChatGPT backend. Matched
+/// exactly, as the adapter's `Set.has` does.
+const WORKSPACE_ROUTING_UNAVAILABLE_MESSAGES: &[&str] = &[
+    "workspace routing discovery failed",
+    "workspace routing discovery timed out",
+];
+
+/// codex-acp 2.4.0's `workspaceRoutingUnavailableMessage`, word for word.
+fn workspace_routing_unavailable_message(text: &str) -> String {
+    format!(
+        "Codex can't reach chatgpt.com to look up your ChatGPT workspace. \
+Check your network connection and any proxy, VPN, or firewall that blocks chatgpt.com, then try again. \
+({text})"
+    )
+}
 
 /// The error types the adapter recognizes. Any other type is not the envelope.
 const SERVICE_ERROR_TYPES: &[&str] = &[
@@ -35,16 +76,28 @@ const SERVICE_ERROR_TYPES: &[&str] = &[
     "overloaded_error",
 ];
 
-/// The message of a known service error envelope, or `None` for any other
-/// text, which then stays as it is.
+/// The message of a known service error envelope, the explanation of an
+/// `invalid_encrypted_content` error or of an unreachable workspace lookup, or
+/// `None` for any other text, which then stays as it is.
 ///
 /// Strict on purpose, like the adapter: a key beyond `type`/`status`/`error`
 /// (or beyond `type`/`message`/`code`/`param` inside `error`), a status that is
 /// not a whole number from 400 to 599, an unknown error type, a non-string
 /// `code`/`param`, or a blank message all mean the text is something else, and
-/// custom JSON a provider wrote is never cut down to one field of it.
+/// custom JSON a provider wrote is never cut down to one field of it. The
+/// encrypted-content check comes first and reads any JSON, as the adapter's
+/// does: its gateway shapes carry keys the envelope rule refuses.
 pub(crate) fn readable_service_error_message(text: &str) -> Option<String> {
-    let Ok(Value::Object(envelope)) = serde_json::from_str::<Value>(text) else {
+    if WORKSPACE_ROUTING_UNAVAILABLE_MESSAGES.contains(&text) {
+        return Some(workspace_routing_unavailable_message(text));
+    }
+    let Ok(value) = serde_json::from_str::<Value>(text) else {
+        return None;
+    };
+    if is_invalid_encrypted_content_error(&value) {
+        return Some(INVALID_ENCRYPTED_CONTENT_MESSAGE.to_string());
+    }
+    let Value::Object(envelope) = value else {
         return None;
     };
     if envelope
@@ -79,6 +132,31 @@ pub(crate) fn readable_service_error_message(text: &str) -> Option<String> {
     }
     let message = error.get("message")?.as_str()?;
     (!is_js_blank(message)).then(|| message.to_string())
+}
+
+/// The adapter's `isInvalidEncryptedContentError`: a provider error
+/// `{"error": {"code": "invalid_encrypted_content", …}}` (bare, or inside
+/// codex's service envelope), or a gateway's error that carries it in
+/// `error.metadata` — as `provider_error_code`, or inside the provider's raw
+/// body, a JSON string in `metadata.raw` that is read the same way.
+fn is_invalid_encrypted_content_error(value: &Value) -> bool {
+    let Some(Value::Object(error)) = value.as_object().and_then(|object| object.get("error"))
+    else {
+        return false;
+    };
+    if error.get("code").and_then(Value::as_str) == Some(INVALID_ENCRYPTED_CONTENT_CODE) {
+        return true;
+    }
+    let Some(Value::Object(metadata)) = error.get("metadata") else {
+        return false;
+    };
+    metadata.get("provider_error_code").and_then(Value::as_str)
+        == Some(INVALID_ENCRYPTED_CONTENT_CODE)
+        || metadata
+            .get("raw")
+            .and_then(Value::as_str)
+            .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+            .is_some_and(|raw| is_invalid_encrypted_content_error(&raw))
 }
 
 #[cfg(test)]
@@ -242,6 +320,154 @@ mod tests {
     #[test]
     fn reads_exactly_what_the_adapter_reads() {
         for (text, want) in ADAPTER_READ {
+            assert_eq!(
+                readable_service_error_message(text).as_deref(),
+                *want,
+                "{text:?}"
+            );
+        }
+    }
+
+    // codex-acp 2.3.0's own encrypted-content cases
+    // (`src/__tests__/ServiceErrorMessage.test.ts`, #668).
+
+    fn provider_error(code: &str) -> Value {
+        json!({
+            "message": "The encrypted content for item rs_1 could not be verified. Reason: Encrypted content could not be decrypted or parsed.",
+            "type": "invalid_request_error",
+            "param": null,
+            "code": code,
+        })
+    }
+
+    /// The explanation, as the adapter's snapshot file
+    /// (`data/service-error-invalid-encrypted-content.txt`) spells it.
+    #[test]
+    fn the_explanation_is_the_adapters_word_for_word() {
+        assert_eq!(
+            INVALID_ENCRYPTED_CONTENT_MESSAGE,
+            "The current provider can't read this thread's earlier reasoning, which another provider or account encrypted. This happens after the provider changes in a thread. Switch back to the previous provider or start a new thread."
+        );
+    }
+
+    #[test]
+    fn explains_encrypted_content_from_another_provider() {
+        let error = provider_error("invalid_encrypted_content");
+        let raw = serde_json::to_string_pretty(&json!({"error": error})).unwrap();
+        let cases = [
+            ("the provider error", json!({"error": error})),
+            (
+                "the Codex service envelope",
+                json!({"type": "error", "status": 400, "error": error}),
+            ),
+            (
+                "a gateway error with the raw provider error",
+                json!({
+                    "error": {"message": "Provider returned error", "code": 400, "metadata": {"raw": raw}},
+                    "user_id": "org_1",
+                }),
+            ),
+            (
+                "a gateway error with the provider error code",
+                json!({
+                    "error": {
+                        "message": "Provider returned error",
+                        "code": 400,
+                        "metadata": {"provider_name": "Azure", "is_byok": false, "provider_error_code": "invalid_encrypted_content"},
+                    },
+                }),
+            ),
+        ];
+        for (name, value) in cases {
+            assert_eq!(
+                readable_service_error_message(&value.to_string()).as_deref(),
+                Some(INVALID_ENCRYPTED_CONTENT_MESSAGE),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn keeps_other_provider_errors_verbatim() {
+        let cases = [
+            json!({"error": provider_error("other_code")}),
+            json!({"error": {"message": "Provider returned error", "metadata": {"raw": "{not json}"}}}),
+            json!({"error": {"message": "Provider returned error", "metadata": {"raw": json!({"error": {"code": "other_code"}}).to_string()}}}),
+        ];
+        for value in cases {
+            let text = value.to_string();
+            assert_eq!(readable_service_error_message(&text), None, "{text}");
+        }
+    }
+
+    /// Inputs run through codex-acp 2.3.0's own `readableServiceErrorMessage`
+    /// under Node 24 (the adapter's cases, then codeg's edges), each with
+    /// what it returned (`None` where it returned the text unchanged).
+    /// `EXPLAINED` stands for [`INVALID_ENCRYPTED_CONTENT_MESSAGE`], which
+    /// the adapter returned verbatim in each such row.
+    const ADAPTER_EXPLAINS: &[(&str, Option<&str>)] = &[
+        ("{\"error\":{\"message\":\"The encrypted content for item rs_1 could not be verified. Reason: Encrypted content could not be decrypted or parsed.\",\"type\":\"invalid_request_error\",\"param\":null,\"code\":\"invalid_encrypted_content\"}}", Some(EXPLAINED)),
+        ("{\"type\":\"error\",\"status\":400,\"error\":{\"message\":\"The encrypted content for item rs_1 could not be verified. Reason: Encrypted content could not be decrypted or parsed.\",\"type\":\"invalid_request_error\",\"param\":null,\"code\":\"invalid_encrypted_content\"}}", Some(EXPLAINED)),
+        ("{\"error\":{\"message\":\"Provider returned error\",\"code\":400,\"metadata\":{\"raw\":\"{\\n  \\\"error\\\": {\\n    \\\"message\\\": \\\"The encrypted content for item rs_1 could not be verified. Reason: Encrypted content could not be decrypted or parsed.\\\",\\n    \\\"type\\\": \\\"invalid_request_error\\\",\\n    \\\"param\\\": null,\\n    \\\"code\\\": \\\"invalid_encrypted_content\\\"\\n  }\\n}\"}},\"user_id\":\"org_1\"}", Some(EXPLAINED)),
+        ("{\"error\":{\"message\":\"Provider returned error\",\"code\":400,\"metadata\":{\"provider_name\":\"Azure\",\"is_byok\":false,\"provider_error_code\":\"invalid_encrypted_content\"}}}", Some(EXPLAINED)),
+        ("{\"error\":{\"message\":\"The encrypted content for item rs_1 could not be verified. Reason: Encrypted content could not be decrypted or parsed.\",\"type\":\"invalid_request_error\",\"param\":null,\"code\":\"other_code\"}}", None),
+        ("{\"error\":{\"message\":\"Provider returned error\",\"metadata\":{\"raw\":\"{not json}\"}}}", None),
+        ("{\"error\":{\"message\":\"Provider returned error\",\"metadata\":{\"raw\":\"{\\\"error\\\":{\\\"code\\\":\\\"other_code\\\"}}\"}}}", None),
+        ("{\"error\":{\"code\":\"invalid_encrypted_content\"}}", Some(EXPLAINED)),
+        ("{\"error\":{\"code\":\"Invalid_Encrypted_Content\"}}", None),
+        ("{\"error\":{\"code\":\" invalid_encrypted_content\"}}", None),
+        ("{\"error\":{\"code\":[\"invalid_encrypted_content\"]}}", None),
+        ("{\"error\":[{\"code\":\"invalid_encrypted_content\"}]}", None),
+        ("[{\"error\":{\"code\":\"invalid_encrypted_content\"}}]", None),
+        ("{\"error\":null}", None),
+        ("{\"error\":\"invalid_encrypted_content\"}", None),
+        ("{\"code\":\"invalid_encrypted_content\"}", None),
+        ("{\"error\":{\"metadata\":[\"invalid_encrypted_content\"]}}", None),
+        ("{\"error\":{\"metadata\":{\"provider_error_code\":[\"invalid_encrypted_content\"]}}}", None),
+        ("{\"error\":{\"metadata\":{\"raw\":{\"error\":{\"code\":\"invalid_encrypted_content\"}}}}}", None),
+        ("{\"error\":{\"metadata\":{\"raw\":\"{\\\"error\\\":{\\\"metadata\\\":{\\\"raw\\\":\\\"{\\\\\\\"error\\\\\\\":{\\\\\\\"code\\\\\\\":\\\\\\\"invalid_encrypted_content\\\\\\\"}}\\\"}}}\"}}}", Some(EXPLAINED)),
+        ("{\"error\":{\"metadata\":{\"raw\":\"{\\\"error\\\":{\\\"metadata\\\":{\\\"provider_error_code\\\":\\\"invalid_encrypted_content\\\"}}}\"}}}", Some(EXPLAINED)),
+        ("{\"error\":{\"metadata\":{\"raw\":\"[{\\\"error\\\":{\\\"code\\\":\\\"invalid_encrypted_content\\\"}}]\"}}}", None),
+        ("{\"error\":{\"code\":\"other\",\"code\":\"invalid_encrypted_content\"}}", Some(EXPLAINED)),
+        ("{\"error\":{\"code\":\"invalid_encrypted_content\",\"code\":\"other\"}}", None),
+        ("  {\"error\":{\"code\":\"invalid_encrypted_content\"}}\n", Some(EXPLAINED)),
+        ("unexpected status 400 Bad Request: {\"error\":{\"code\":\"invalid_encrypted_content\"}}", None),
+        ("{\"type\":\"error\",\"status\":400,\"error\":{\"type\":\"invalid_request_error\",\"message\":\"m\",\"code\":\"invalid_encrypted_content\"}}", Some(EXPLAINED)),
+        ("{\"type\":\"error\",\"status\":400,\"error\":{\"type\":\"invalid_request_error\",\"message\":\"m\",\"code\":\"c\"}}", Some("m")),
+    ];
+
+    const EXPLAINED: &str = INVALID_ENCRYPTED_CONTENT_MESSAGE;
+
+    #[test]
+    fn explains_exactly_what_the_adapter_explains() {
+        for (text, want) in ADAPTER_EXPLAINS {
+            assert_eq!(
+                readable_service_error_message(text).as_deref(),
+                *want,
+                "{text:?}"
+            );
+        }
+    }
+
+    /// Inputs run through codex-acp 2.4.0's own `readableServiceErrorMessage`
+    /// under Node 24.18 (#697), each with what it returned (`None` where it
+    /// returned the text unchanged): only the whole bare text matches, and an
+    /// envelope carrying it as its message reads down to the bare text.
+    const ADAPTER_EXPLAINS_ROUTING: &[(&str, Option<&str>)] = &[
+        ("workspace routing discovery failed", Some("Codex can't reach chatgpt.com to look up your ChatGPT workspace. Check your network connection and any proxy, VPN, or firewall that blocks chatgpt.com, then try again. (workspace routing discovery failed)")),
+        ("workspace routing discovery timed out", Some("Codex can't reach chatgpt.com to look up your ChatGPT workspace. Check your network connection and any proxy, VPN, or firewall that blocks chatgpt.com, then try again. (workspace routing discovery timed out)")),
+        (" workspace routing discovery failed", None),
+        ("workspace routing discovery failed\n", None),
+        ("Workspace routing discovery failed", None),
+        ("workspace routing discovery unauthorized (401)", None),
+        ("workspace routing discovery", None),
+        ("\"workspace routing discovery failed\"", None),
+        ("{\"type\":\"error\",\"status\":400,\"error\":{\"type\":\"invalid_request_error\",\"message\":\"workspace routing discovery failed\"}}", Some("workspace routing discovery failed")),
+    ];
+
+    #[test]
+    fn explains_an_unreachable_workspace_lookup_as_the_adapter_does() {
+        for (text, want) in ADAPTER_EXPLAINS_ROUTING {
             assert_eq!(
                 readable_service_error_message(text).as_deref(),
                 *want,

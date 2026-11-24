@@ -1,6 +1,13 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 import { useTranslations } from "next-intl"
 import {
   Check,
@@ -268,8 +275,8 @@ function HeadlessSignIn({
 
   // Read by the abandon effect below, which must NOT re-run whenever the
   // pending attempt changes — only when the attempt stops being ours.
+  // Synced from `pending` by the layout effect below `currentMethod`.
   const pendingRef = useRef<PendingLogin | null>(null)
-  pendingRef.current = pending
 
   // The single owner of "this attempt is over". A pending sign-in belongs to
   // the method it was started for, and behind the handle is an agent process
@@ -305,7 +312,13 @@ function HeadlessSignIn({
   // — so an answer that arrives late has to be checked against this rather
   // than against the `method` its closure captured.
   const currentMethod = useRef(method)
-  currentMethod.current = method
+  // Synced at commit rather than during render. Every reader runs later: the
+  // abandon cleanup is a passive effect (layout effects run first), and
+  // `stillOurs` is only called after an await.
+  useLayoutEffect(() => {
+    pendingRef.current = pending
+    currentMethod.current = method
+  })
 
   /** Whether a reply that just arrived still belongs on screen. */
   const stillOurs = useCallback(

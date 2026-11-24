@@ -273,6 +273,17 @@ pub async fn list_runs(
     Ok(rows.into_iter().map(run_to_info).collect())
 }
 
+/// One run, by id (`codeg-cli automations run --wait` follows it).
+pub async fn get_run(
+    conn: &DatabaseConnection,
+    run_id: i32,
+) -> Result<Option<AutomationRunInfo>, DbError> {
+    Ok(automation_run::Entity::find_by_id(run_id)
+        .one(conn)
+        .await?
+        .map(run_to_info))
+}
+
 pub async fn create(
     conn: &DatabaseConnection,
     draft: AutomationDraft,

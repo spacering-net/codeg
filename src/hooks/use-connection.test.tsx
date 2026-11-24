@@ -27,6 +27,7 @@ const fake = vi.hoisted(() => {
     store: {
       getConnection: () => conn,
       getConnectPending: () => pending,
+      getConnectError: () => undefined,
       getActiveKey: () => null,
       subscribeKey: (_key: string, cb: () => void) => {
         listeners.add(cb)

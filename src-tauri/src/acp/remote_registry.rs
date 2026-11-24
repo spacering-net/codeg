@@ -263,12 +263,20 @@ pub async fn fetch_catalog(
 /// than codeg's own. Without this the picker would offer a second, redundant
 /// integration of an agent the user already has — verified against the live
 /// registry, where Kimi is published as `kimi` while codeg's built-in registry
-/// id is `kimi-code`, and Qoder as `qoder` against codeg's `qoder-cli`.
+/// id is `kimi-code`, and Qoder as `qoder` against codeg's `qoder-cli`. Kiro is
+/// not in the registry yet, but its vendor's pending entry
+/// (agentclientprotocol/registry#561) is `kiro`, against codeg's `kiro-cli`.
+/// MiniMax Code is published as `minimax-code`, against codeg's
+/// `codeg-minimax-code` (prefixed so a `minimax-code` custom agent added before
+/// the built-in keeps resolving to its own definition). OpenCode publishes its
+/// 2.x line a second time as `opencode-v2` (the same 2.2.0 archives, served from
+/// opencode.ai), which the built-in `opencode` runs since codeg moved to
+/// OpenCode 2; one a user added as a custom agent earlier keeps working.
 ///
 /// Missing an alias is not merely redundant, it is a DEAD entry: the picker
 /// lists the agent as addable, and the add then fails validation because the
 /// id collides with a built-in wire name (`is_valid_custom_agent_id`).
-const BUILTIN_REGISTRY_ALIASES: &[&str] = &["kimi", "qoder"];
+const BUILTIN_REGISTRY_ALIASES: &[&str] = &["kimi", "qoder", "kiro", "minimax-code", "opencode-v2"];
 
 /// Whether an id is one of codeg's hand-written built-in agents. Deliberately
 /// does NOT consult the custom registry (unlike `registry::from_registry_id`,
@@ -483,6 +491,14 @@ mod tests {
         // duplicate — see the assertion below.
         assert!(is_builtin_registry_id("qoder"));
         assert!(is_builtin_registry_id("qoder-cli"));
+        // And for Kiro (`kiro` in its vendor's pending registry entry,
+        // `kiro-cli` here).
+        assert!(is_builtin_registry_id("kiro"));
+        assert!(is_builtin_registry_id("kiro-cli"));
+        // And for MiniMax Code (`minimax-code` upstream, `codeg-minimax-code`
+        // here).
+        assert!(is_builtin_registry_id("minimax-code"));
+        assert!(is_builtin_registry_id("codeg-minimax-code"));
         // Antigravity needs NO alias: codeg's registry id is byte-identical
         // to the one the ACP registry publishes, so the picker resolves it
         // through the built-in table and never offers a duplicate entry.
@@ -491,19 +507,26 @@ mod tests {
         assert!(!is_builtin_registry_id("qwen-code"));
     }
 
-    // Why a missing alias is a BUG and not just noise. The two entries in the
-    // table fail differently, and Qoder is the worse of the two:
+    // Why a missing alias is a BUG and not just noise. The entries in the
+    // table fail differently, and Qoder and Kiro are the worse kind:
     //
-    // * `kimi` IS a legal custom-agent id (codeg's wire name is `kimi_code`),
+    // * `kimi`, `minimax-code` and `opencode-v2` ARE legal custom-agent ids
+    //   (codeg's wire names are `kimi_code`, `minimax_code` and `open_code`),
     //   so without the alias the picker would let the user add a SECOND,
-    //   redundant Kimi alongside the built-in.
-    // * `qoder` is NOT (it is codeg's wire name, blocked outright), so without
-    //   the alias the picker lists an entry whose "Add" button can only ever
-    //   error — a dead end with no way for the user to understand it.
+    //   redundant copy alongside the built-in.
+    // * `qoder` and `kiro` are NOT (they are codeg's wire names, blocked
+    //   outright), so without the alias the picker lists an entry whose "Add"
+    //   button can only ever error — a dead end with no way for the user to
+    //   understand it.
     #[test]
     fn aliases_that_are_addable_would_duplicate_and_the_rest_would_dead_end() {
         assert!(crate::models::agent::is_valid_custom_agent_id("kimi"));
+        assert!(crate::models::agent::is_valid_custom_agent_id(
+            "minimax-code"
+        ));
+        assert!(crate::models::agent::is_valid_custom_agent_id("opencode-v2"));
         assert!(!crate::models::agent::is_valid_custom_agent_id("qoder"));
+        assert!(!crate::models::agent::is_valid_custom_agent_id("kiro"));
         for alias in BUILTIN_REGISTRY_ALIASES {
             assert!(
                 is_builtin_registry_id(alias),
