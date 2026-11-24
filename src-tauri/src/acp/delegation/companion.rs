@@ -326,7 +326,7 @@ impl CompanionFeatures {
             | "get_delegation_status"
             | "cancel_delegation"
             | "resume_delegation" => self.delegation,
-            "send_to_session" | "create_session" | "get_current_session" | "list_sessions" => {
+            "send_to_session" | "create_session" | "get_current_session" | "list_sessions" | "stop_session" => {
                 self.session_messaging
             }
             _ => false,
@@ -1127,6 +1127,20 @@ async fn build_tools_call_spawn(
             let round_trip = Box::pin(async move { client_ask_round_trip(&socket, &req).await });
             register_and_spawn(inflight, id, None, round_trip, render_ask_result).await
         }
+        "stop_session" => {
+            let session_id = match optional_session_id(&arguments) {
+                Ok(id) => id,
+                Err(message) => return LineAction::Respond(err(id, -32602, message)),
+            };
+            let req = super::transport::BrokerStopSessionRequest {
+                token: ctx.token.clone(),
+                session_id,
+            };
+            let round_trip = Box::pin(async move {
+                super::transport::client_stop_session_round_trip(&socket, req).await
+            });
+            register_and_spawn(inflight, id, None, round_trip, render_session_control_result).await
+        }
         "rename_session" => {
             let Some(title) = arguments
                 .get("title")
@@ -1140,17 +1154,9 @@ async fn build_tools_call_spawn(
                     "rename_session requires a non-empty title",
                 ));
             };
-            let session_id = if arguments.get("session_id").is_some() {
-                let Some(session_id) = parse_session_id(&arguments).filter(|id| *id > 0) else {
-                    return LineAction::Respond(err(
-                        id,
-                        -32602,
-                        "session_id must be a positive conversation ID",
-                    ));
-                };
-                Some(session_id)
-            } else {
-                None
+            let session_id = match optional_session_id(&arguments) {
+                Ok(id) => id,
+                Err(message) => return LineAction::Respond(err(id, -32602, message)),
             };
             let req = BrokerRenameSessionRequest {
                 token: ctx.token.clone(),
@@ -1159,7 +1165,7 @@ async fn build_tools_call_spawn(
             };
             let round_trip =
                 Box::pin(async move { client_rename_session_round_trip(&socket, req).await });
-            register_and_spawn(inflight, id, None, round_trip, render_rename_session_result).await
+            register_and_spawn(inflight, id, None, round_trip, render_session_control_result).await
         }
         "read_session_history" => {
             let Some(session_id) = parse_session_id(&arguments) else {
@@ -2342,6 +2348,16 @@ fn truncate_chars(s: &str, cap: usize) -> String {
     crate::acp::chat_authoring::truncate_chars(s, cap)
 }
 
+fn optional_session_id(arguments: &Value) -> Result<Option<i32>, &'static str> {
+    if arguments.get("session_id").is_none() {
+        return Ok(None);
+    }
+    parse_session_id(arguments)
+        .filter(|id| *id > 0)
+        .map(Some)
+        .ok_or("session_id must be a positive conversation ID")
+}
+
 /// Extract the `session_id` integer from the `get_session_info` arguments,
 /// tolerating a JSON number (int or whole float) or a numeric string — some MCP
 /// hosts stringify integer args. `None` for missing / non-integer / out-of-range,
@@ -2390,7 +2406,7 @@ fn parse_max_messages(arguments: &Value) -> u32 {
     }
 }
 
-fn render_rename_session_result(outcome: &Value) -> Value {
+fn render_session_control_result(outcome: &Value) -> Value {
     json!({
         "content": [{"type": "text", "text": outcome.to_string()}],
         "structuredContent": outcome,

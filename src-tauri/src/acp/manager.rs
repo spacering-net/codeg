@@ -2330,6 +2330,31 @@ impl ConnectionManager {
             .map_err(|_| AcpError::protocol("Async task stop reply channel closed".to_string()))?
     }
 
+    /// Stop an active, already-bound conversation without waking an idle one.
+    pub(crate) async fn cancel_conversation_turn(
+        &self,
+        db: &DatabaseConnection,
+        conversation_id: i32,
+    ) -> Result<bool, AcpError> {
+        let Some(conn_id) = self.find_connection_by_conversation_id(conversation_id).await else {
+            return Ok(false);
+        };
+        let lock = self.clone_prompt_lock(&conn_id).await?;
+        let _guard = lock.lock().await;
+        let Some(state) = self.get_state(&conn_id).await else {
+            return Ok(false);
+        };
+        let state = state.read().await;
+        if state.conversation_id != Some(conversation_id)
+            || !(state.turn_in_flight || state.status == ConnectionStatus::Prompting)
+        {
+            return Ok(false);
+        }
+        drop(state);
+        self.cancel(db, &conn_id).await?;
+        Ok(true)
+    }
+
     pub async fn cancel(&self, db: &DatabaseConnection, conn_id: &str) -> Result<(), AcpError> {
         let (cmd_tx, state_arc, emitter) = {
             let connections = self.connections.lock().await;

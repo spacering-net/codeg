@@ -154,6 +154,22 @@
     }
   },
   {
+    "name": "stop_session",
+    "description": "Request that the active turn stop in your own Codeg session or a direct delegation child. Uses the same cancellation as the Stop button. Keeps the conversation and queued messages. Returns idle if there is no active turn. Only call when asked to stop the work.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Codeg conversation ID. Omit to stop your own session."
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": { "destructiveHint": true }
+  },
+  {
     "name": "send_to_session",
     "description": "Send a message to an existing Codeg conversation. Returns a message_id once queued. Codeg activates offline recipients in the background. Put only your message in the body. Codeg adds the sender's conversation ID automatically. To follow up on an incoming message, use the sender ID in its Codeg header as the destination. For conversations chatting or taking turns, use reply=true, then finish your turn: the recipient's answer will arrive automatically as a visible incoming message and start your next turn. Do not poll get_session_info for the answer. Use reply=false only for a one-way notification or when explicitly sending an answer back.",
     "inputSchema": {

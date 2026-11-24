@@ -97,6 +97,23 @@ impl DbSessionInfoLookup {
     }
 }
 
+pub(crate) async fn authorize_session_control(
+    conn: &sea_orm::DatabaseConnection,
+    caller_id: i32,
+    session_id: i32,
+) -> Result<(), String> {
+    conversation_service::get_by_id(conn, caller_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let target = conversation_service::get_by_id(conn, session_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    if target.id != caller_id && target.parent_id != Some(caller_id) {
+        return Err("You can only control your own session or a direct delegation child".into());
+    }
+    Ok(())
+}
+
 #[async_trait]
 impl SessionInfoAccess for DbSessionInfoLookup {
     async fn rename(&self, caller_id: i32, session_id: i32, title: String) -> Result<(), String> {
@@ -108,15 +125,7 @@ impl SessionInfoAccess for DbSessionInfoLookup {
             return Err("title must not be empty".into());
         }
         let conn = &self.db.conn;
-        conversation_service::get_by_id(conn, caller_id)
-            .await
-            .map_err(|e| e.to_string())?;
-        let target = conversation_service::get_by_id(conn, session_id)
-            .await
-            .map_err(|e| e.to_string())?;
-        if target.id != caller_id && target.parent_id != Some(caller_id) {
-            return Err("Only your own session or a direct child session can be renamed".into());
-        }
+        authorize_session_control(conn, caller_id, session_id).await?;
         crate::commands::conversations::update_conversation_title_core(
             conn,
             session_id,

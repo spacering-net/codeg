@@ -214,6 +214,12 @@ pub struct BrokerRenameSessionRequest {
     pub title: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerStopSessionRequest {
+    pub token: String,
+    pub session_id: Option<i32>,
+}
+
 /// Read transcript history with the same token and readable-session scope as
 /// BrokerSessionRequest. Options are re-bounded by the production resolver.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -485,6 +491,7 @@ pub enum BrokerMessage {
     Ask(BrokerAskRequest),
     SessionInfo(BrokerSessionRequest),
     RenameSession(BrokerRenameSessionRequest),
+    StopSession(BrokerStopSessionRequest),
     SessionHistory(BrokerSessionHistoryRequest),
     TaskProgress(BrokerTaskProgressRequest),
     TaskComplete(BrokerTaskCompleteRequest),
@@ -857,6 +864,13 @@ pub async fn client_ask_round_trip(
 }
 
 /// Dispatch an authenticated rename request.
+pub async fn client_stop_session_round_trip(
+    socket_path: &str,
+    req: BrokerStopSessionRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::StopSession(req)).await
+}
+
 pub async fn client_rename_session_round_trip(
     socket_path: &str,
     req: BrokerRenameSessionRequest,

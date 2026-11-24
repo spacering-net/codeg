@@ -593,6 +593,9 @@ impl DelegationListener {
                 write_frame(conn, &resp).await?;
                 return Ok(());
             }
+            BrokerMessage::StopSession(req) => BrokerResponse {
+                outcome: self.process_stop_session(req).await,
+            },
             BrokerMessage::RenameSession(req) => BrokerResponse {
                 outcome: self.process_rename_session(req).await,
             },
@@ -1114,21 +1117,49 @@ impl DelegationListener {
             .await;
     }
 
-    async fn process_rename_session(&self, req: BrokerRenameSessionRequest) -> Value {
-        let Some(entry) = self.tokens.lookup(&req.token).await else {
-            return serde_json::json!({"error": "Session rename is unavailable"});
+    async fn session_control_target(
+        &self,
+        token: &str,
+        requested: Option<i32>,
+    ) -> Result<(i32, i32), &'static str> {
+        let entry = self.tokens.lookup(token).await
+            .filter(|entry| !entry.agent_hosts_tools)
+            .ok_or("Session control is unavailable")?;
+        let caller_id = self.parent_lookup.current_conversation_id(&entry.parent_connection_id)
+            .await.ok_or("Caller has no active conversation")?;
+        Ok((caller_id, requested.unwrap_or(caller_id)))
+    }
+
+    async fn process_stop_session(&self, req: super::transport::BrokerStopSessionRequest) -> Value {
+        let (caller_id, session_id) = match self.session_control_target(&req.token, req.session_id).await {
+            Ok(ids) => ids,
+            Err(error) => return serde_json::json!({"error": error}),
         };
-        if entry.agent_hosts_tools {
-            return serde_json::json!({"error": "Session rename is unavailable"});
+        let Some(creator) = self.session_creator.get() else {
+            return serde_json::json!({"error": "Session control is unavailable"});
+        };
+        if !self.broker.config_snapshot().await.session_messaging_enabled {
+            return serde_json::json!({"error": "Session messaging is disabled"});
         }
-        let Some(caller_id) = self
-            .parent_lookup
-            .current_conversation_id(&entry.parent_connection_id)
-            .await
-        else {
-            return serde_json::json!({"error": "Caller has no active conversation"});
+        if let Err(error) = crate::commands::session_info::authorize_session_control(
+            &creator.db, caller_id, session_id,
+        ).await {
+            return serde_json::json!({"error": error});
+        }
+        match creator.manager.cancel_conversation_turn(&creator.db, session_id).await {
+            Ok(requested) => serde_json::json!({
+                "session_id": session_id,
+                "status": if requested { "stop_requested" } else { "idle" },
+            }),
+            Err(error) => serde_json::json!({"error": error.to_string()}),
+        }
+    }
+
+    async fn process_rename_session(&self, req: BrokerRenameSessionRequest) -> Value {
+        let (caller_id, session_id) = match self.session_control_target(&req.token, req.session_id).await {
+            Ok(ids) => ids,
+            Err(error) => return serde_json::json!({"error": error}),
         };
-        let session_id = req.session_id.unwrap_or(caller_id);
         match self
             .session_info
             .rename(caller_id, session_id, req.title.clone())
