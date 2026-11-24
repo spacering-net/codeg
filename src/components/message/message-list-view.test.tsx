@@ -1,12 +1,29 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  advanceReplyFold,
+  compactionOnlyPart,
+  currentNavTurnIdAt,
+  dedupeCompactionItems,
+  extractDelegationSources,
+  extractMessageDelegationSources,
+  groupDelegationSources,
+  hoistedCompaction,
+  isForkPointUnnamed,
+  markThreadTail,
   mergeConsecutiveAssistantTurns,
   singletonSourceTurns,
+  threadDelegationStatusTasks,
   type MergedAssistantRunCache,
+  type ReplyFoldState,
   type ResolvedMessageGroup,
   type ThreadRenderItem,
 } from "./message-list-view"
+import type {
+  AdaptedContentPart,
+  AdaptedToolCallPart,
+} from "@/lib/adapters/ai-elements-adapter"
+import { buildDelegationStatusIndex } from "@/lib/delegation-status-index"
 import type { MessageTurn } from "@/lib/types"
 
 function turn(id: string): MessageTurn {
@@ -32,12 +49,206 @@ function assistantItem(
       ...groupOverrides,
     },
     phase: "persisted",
+    isResponseComplete: true,
     showStats: false,
     isRoleTransition: false,
     previousUserIndex: null,
+    isLastAssistantRun: false,
+    isThreadTail: false,
     sourceTurns: [],
   }
 }
+
+describe("advanceReplyFold", () => {
+  const initial: ReplyFoldState = {
+    signal: 0,
+    epoch: 0,
+    armed: false,
+    running: false,
+    runId: null,
+    roundOpen: true,
+  }
+  // Live-message ids — the logical run, one per reply.
+  const A = "lm-a"
+  const B = "lm-b"
+  const idle = (runId: string | null = null, sendSignal = 0) => ({
+    sendSignal,
+    running: false,
+    runId,
+  })
+  const live = (runId: string, sendSignal = 0) => ({
+    sendSignal,
+    running: true,
+    runId,
+  })
+
+  it("opens a conversation with every reply folded", () => {
+    // Nothing is streaming on load, so no run is the current round and every
+    // reply falls back to its own (empty) fold override.
+    expect(advanceReplyFold(initial, idle(A))).toBe(initial)
+  })
+
+  it("arms once the agent starts replying and stays armed after it settles", () => {
+    const armed = advanceReplyFold(initial, live(A))
+    expect(armed.armed).toBe(true)
+    // The reply settling must NOT disarm — that is the auto-fold-on-finish
+    // this replaced. Only the running edge moves.
+    const settled = advanceReplyFold(armed, idle(A))
+    expect(settled.armed).toBe(true)
+    expect(settled.roundOpen).toBe(true)
+    expect(settled.running).toBe(false)
+    // Steady state after that: nothing left to move.
+    expect(advanceReplyFold(settled, idle(A))).toBe(settled)
+  })
+
+  it("keeps a hand-folded round folded while it settles", () => {
+    const folded: ReplyFoldState = {
+      signal: 0,
+      epoch: 0,
+      armed: true,
+      running: true,
+      runId: A,
+      roundOpen: false,
+    }
+    expect(advanceReplyFold(folded, idle(A)).roundOpen).toBe(false)
+  })
+
+  it("folds the thread and disarms on send", () => {
+    const settled = advanceReplyFold(
+      advanceReplyFold(initial, live(A)),
+      idle(A)
+    )
+    const sent = advanceReplyFold(settled, idle(A, 1))
+    expect(sent).toMatchObject({
+      signal: 1,
+      armed: false,
+      running: false,
+      roundOpen: true,
+    })
+    // The epoch only ever has to MOVE — its absolute value is an invalidation
+    // token, and a round starting bumps it too.
+    expect(sent.epoch).toBeGreaterThan(settled.epoch)
+  })
+
+  it("re-arms immediately when a send lands mid-reply (steering)", () => {
+    const armed = advanceReplyFold(initial, live(A))
+    const steered = advanceReplyFold(armed, live(A, 1))
+    // The reply being written is at once the new round: bumping the epoch folds
+    // the history above it without folding the reply itself.
+    expect(steered).toMatchObject({
+      signal: 1,
+      armed: true,
+      running: true,
+      roundOpen: true,
+    })
+    expect(steered.epoch).toBeGreaterThan(armed.epoch)
+  })
+
+  it("starts a fresh round on the running edge, with no send signal at all", () => {
+    // `live-transcript-view` mounts MessageListView WITHOUT `sendSignal` for a
+    // work-task transcript the engine drives through many rounds. Keying the
+    // round off `sendSignal` alone left every finished round expanded there.
+    let s = advanceReplyFold(initial, live(A)) // round 1 starts
+    s = advanceReplyFold(s, idle(A)) // round 1 settles
+    const roundOneEpoch = s.epoch
+
+    const roundTwo = advanceReplyFold(s, live(B)) // round 2, same signal
+    expect(roundTwo.armed).toBe(true)
+    expect(roundTwo.roundOpen).toBe(true)
+    expect(roundTwo.runId).toBe(B)
+    // A fresh epoch is what folds round 1 shut behind round 2.
+    expect(roundTwo.epoch).toBeGreaterThan(roundOneEpoch)
+  })
+
+  it("does not hand a hand-folded round's collapse to the next round", () => {
+    // Same no-send host: folding round 1 by hand set `roundOpen: false`, and a
+    // latched `armed` meant round 2 inherited it and arrived already collapsed.
+    let s = advanceReplyFold(initial, live(A))
+    s = { ...s, roundOpen: false } // reader folds the live round
+    s = advanceReplyFold(s, idle(A)) // it settles, still folded
+    expect(s.roundOpen).toBe(false)
+
+    expect(advanceReplyFold(s, live(B)).roundOpen).toBe(true)
+  })
+
+  it("starts a fresh round for a streaming reply that merges behind a settled one", () => {
+    // Background / loop turns arrive with no user turn between, so a settled
+    // reply and a brand-new streaming one end up CONSECUTIVE and
+    // `mergeConsecutiveAssistantTurns` folds them into one render item whose id
+    // is pinned to the first member. Identifying the round by that id would
+    // read the new reply as the old one resuming — it would arrive folded (if
+    // the reader had folded the old one) with its live content hidden. The live
+    // message is the run, so the merge cannot alias the two.
+    let s = advanceReplyFold(initial, live(A))
+    s = { ...s, roundOpen: false } // reader folds reply A
+    s = advanceReplyFold(s, idle(null)) // A settles, live message cleared
+    const settledEpoch = s.epoch
+
+    const merged = advanceReplyFold(s, live(B))
+    expect(merged.roundOpen).toBe(true)
+    expect(merged.armed).toBe(true)
+    expect(merged.epoch).toBeGreaterThan(settledEpoch)
+  })
+
+  it("latches a live identity that arrives after the round started", () => {
+    // Mid-turn attach: a viewer joining a reply already in flight sees it
+    // through the backend's in-flight marker first (running, but no live
+    // message yet) and bridges the live stream a beat later. Leaving the round
+    // anonymous gives a later re-bridge nothing to recognise the reply by.
+    let s = advanceReplyFold(initial, {
+      sendSignal: 0,
+      running: true,
+      runId: null,
+    })
+    s = advanceReplyFold(s, live(A)) // live stream attaches mid-round
+    expect(s.runId).toBe(A)
+    const latchedEpoch = s.epoch
+    s = { ...s, roundOpen: false } // reader folds the reply
+
+    s = advanceReplyFold(s, idle(null)) // premature COMPLETE_TURN
+    const rebridged = advanceReplyFold(s, live(A))
+    // Still the same reply: the latch is what keeps this from reading as new.
+    expect(rebridged.epoch).toBe(latchedEpoch)
+    expect(rebridged.roundOpen).toBe(false)
+  })
+
+  it("re-identifies, not re-rounds, when a running reply's id is rebased", () => {
+    // `STATUS_CHANGED(prompting)` mints a client-side `randomUUID` live
+    // message; a reconnect that hydrates from a snapshot swaps it wholesale for
+    // the backend's, mid-reply. Reading that as a new round would re-open a
+    // reply the reader had folded and fold the history they had opened — on
+    // every reconnect.
+    let s = advanceReplyFold(initial, live(A))
+    s = { ...s, roundOpen: false } // reader folds the live reply
+    const rebased = advanceReplyFold(s, live(B)) // snapshot hydration
+    expect(rebased.runId).toBe(B)
+    expect(rebased.epoch).toBe(s.epoch)
+    expect(rebased.roundOpen).toBe(false)
+    // And the new id is what a later re-bridge is recognised by.
+    const settled = advanceReplyFold(rebased, idle(null))
+    expect(advanceReplyFold(settled, live(B)).roundOpen).toBe(false)
+  })
+
+  it("treats a re-bridged live reply as the same round, not a new one", () => {
+    // The runtime completes a live reply prematurely and then re-bridges the
+    // SAME liveMessage while it is still streaming (see "drops the promoted
+    // snapshot when the same liveMessage is still streaming" in
+    // conversation-runtime-context.test.tsx). That reaches the fold state as
+    // running true → false → true for ONE reply, carrying one unchanged id.
+    let s = advanceReplyFold(initial, live(A))
+    s = { ...s, roundOpen: false } // reader folds the live reply
+    const armedEpoch = s.epoch
+
+    s = advanceReplyFold(s, idle(A)) // premature COMPLETE_TURN
+    const rebridged = advanceReplyFold(s, live(A)) // same liveMessage returns
+
+    expect(rebridged.running).toBe(true)
+    // Neither may move: a bump would fold history the reader had opened, and a
+    // reset would re-open the reply they had just folded.
+    expect(rebridged.epoch).toBe(armedEpoch)
+    expect(rebridged.roundOpen).toBe(false)
+  })
+})
 
 describe("singletonSourceTurns", () => {
   it("returns the same array reference for the same turn", () => {
@@ -131,9 +342,12 @@ function makeItem(
     kind: "turn",
     group,
     phase,
+    isResponseComplete: phase === "persisted",
     showStats: false,
     isRoleTransition: false,
     previousUserIndex: null,
+    isLastAssistantRun: false,
+    isThreadTail: false,
     sourceTurns: singletonSourceTurns(turn(group.id)),
   }
 }
@@ -171,8 +385,29 @@ describe("mergeConsecutiveAssistantTurns merged-run cache", () => {
     expect(second.group).toBe(first.group)
     expect(second.group.parts).toBe(first.group.parts)
     expect(second.sourceTurns).toBe(first.sourceTurns)
-    expect(first.key).toBe("merged-persisted-a1-0")
+    expect(first.key).toBe("persisted-a1-0")
     expect(first.group.id).toBe("a1")
+  })
+
+  it("keeps a reply's row as it grows from one turn to two", () => {
+    // The agent answers its first tool mid-reply: the reply that was one turn
+    // becomes a run of two. Keyed apart, the virtual list re-mounted the
+    // whole reply at that moment.
+    const cache: MergedAssistantRunCache = new WeakMap()
+    const g1 = makeGroup("assistant", "a1")
+    const g2 = makeGroup("assistant", "a2")
+    const user = makeUserItem("u1", 0)
+
+    const [, alone] = mergeConsecutiveAssistantTurns(
+      [user, makeItem(g1, 1)],
+      cache
+    )
+    const [, run] = mergeConsecutiveAssistantTurns(
+      [user, makeItem(g1, 1), makeItem(g2, 2)],
+      cache
+    )
+
+    expect(run.key).toBe(alone.key)
   })
 
   it("rebuilds a run whose member changed without touching a neighboring run", () => {
@@ -208,6 +443,25 @@ describe("mergeConsecutiveAssistantTurns merged-run cache", () => {
 
     expect(out2[0]).not.toBe(out1[0])
     expect(out2[2]).toBe(out1[2])
+  })
+
+  it("rebuilds when a persisted run changes from in-flight to completed", () => {
+    const cache: MergedAssistantRunCache = new WeakMap()
+    const g1 = makeGroup("assistant", "a1")
+    const g2 = makeGroup("assistant", "a2")
+    const firstItems = [makeItem(g1, 0), makeItem(g2, 1)]
+    if (firstItems[1].kind !== "turn") throw new Error("expected turn")
+    firstItems[1].isResponseComplete = false
+
+    const out1 = mergeConsecutiveAssistantTurns(firstItems, cache)
+    const out2 = mergeConsecutiveAssistantTurns(
+      [makeItem(g1, 0), makeItem(g2, 1)],
+      cache
+    )
+
+    expect(out2[0]).not.toBe(out1[0])
+    if (out2[0].kind !== "turn") throw new Error("expected turn")
+    expect(out2[0].isResponseComplete).toBe(true)
   })
 
   it("misses when the run gains a member, then caches the new membership", () => {
@@ -279,5 +533,745 @@ describe("mergeConsecutiveAssistantTurns merged-run cache", () => {
     expect(out1).toHaveLength(1)
     expect(out2[0]).not.toBe(out1[0])
     expect(out2[0]).toEqual(out1[0])
+  })
+})
+
+describe("extractDelegationSources", () => {
+  function toolCall(
+    toolCallId: string,
+    toolName: string,
+    input?: string | null
+  ): AdaptedToolCallPart {
+    return {
+      type: "tool-call",
+      toolCallId,
+      toolName,
+      input: input ?? null,
+      state: "output-available",
+      output: null,
+    }
+  }
+
+  it("collects a delegate_to_agent call keyed by its own tool_use_id", () => {
+    const sources = extractDelegationSources([
+      toolCall(
+        "tu-1",
+        "mcp__codeg-mcp__delegate_to_agent",
+        '{"agent_type":"codex"}'
+      ),
+    ])
+    expect(sources).toHaveLength(1)
+    expect(sources[0]).toMatchObject({
+      parentToolUseId: "tu-1",
+      input: '{"agent_type":"codex"}',
+    })
+    expect(sources[0].taskIdHint).toBeUndefined()
+  })
+
+  // The overlay lists the sub-agents of the LAST reply. A reply that RESUMED
+  // one contains no `delegate_to_agent` call at all (the original is in an
+  // earlier turn), so without this arm a resumed sub-agent would be missing
+  // from the overlay for its whole second run.
+  it("collects a resume_delegation call keyed by the task id in its arguments", () => {
+    const sources = extractDelegationSources([
+      toolCall("tu-resume", "resume_delegation", '{"task_id":"task-abc"}'),
+    ])
+    expect(sources).toHaveLength(1)
+    expect(sources[0]).toMatchObject({
+      parentToolUseId: "tu-resume",
+      taskIdHint: "task-abc",
+      // Not the `{task_id, reason}` arguments — `parseInput` would only warn.
+      input: null,
+    })
+  })
+
+  it("skips a resume whose task id is unreadable, and de-dupes repeats", () => {
+    const sources = extractDelegationSources([
+      toolCall("tu-a", "resume_delegation", "{}"),
+      toolCall(
+        "tu-b",
+        "mcp__codeg-mcp__resume_delegation",
+        '{"task_id":"t-1"}'
+      ),
+      toolCall("tu-c", "resume_delegation", '{"task_id":"t-1"}'),
+    ])
+    expect(sources).toHaveLength(1)
+    expect(sources[0]).toMatchObject({ parentToolUseId: "tu-b" })
+  })
+
+  it("finds delegations nested inside goal runs", () => {
+    const sources = extractDelegationSources([
+      {
+        type: "goal-run",
+        start: toolCall("tu-goal", "create_goal", "{}"),
+        end: null,
+        isRunning: true,
+        items: [
+          toolCall("tu-resume", "resume_delegation", '{"task_id":"t-1"}'),
+        ],
+      },
+    ])
+    expect(sources).toHaveLength(1)
+    expect(sources[0].taskIdHint).toBe("t-1")
+  })
+
+  it("ignores unrelated tool calls", () => {
+    expect(
+      extractDelegationSources([
+        toolCall("tu-1", "bash", '{"command":"ls"}'),
+        toolCall("tu-2", "get_delegation_status", '{"task_ids":["t-1"]}'),
+      ])
+    ).toEqual([])
+  })
+
+  // A refusal reports the task's REAL status plus its agent and child, so it
+  // reads like a successful resume to everything but `error_code`. Listing it
+  // would put a sub-agent in the overlay that this reply never revived.
+  it("skips a refused resume", () => {
+    const refused: AdaptedContentPart = {
+      type: "tool-call",
+      toolCallId: "tu-resume",
+      toolName: "resume_delegation",
+      input: '{"task_id":"t-1"}',
+      state: "output-available",
+      output: JSON.stringify({
+        task_id: "t-1",
+        status: "completed",
+        error_code: "not_resumable",
+        agent_type: "codex",
+        child_conversation_id: 9,
+        message: "Not resumed: the task already completed.",
+      }),
+    }
+    expect(extractDelegationSources([refused])).toEqual([])
+  })
+})
+
+describe("extractMessageDelegationSources", () => {
+  function delegate(
+    toolCallId: string,
+    fields: Partial<Extract<AdaptedContentPart, { type: "tool-call" }>> = {}
+  ): AdaptedContentPart {
+    return {
+      type: "tool-call",
+      toolCallId,
+      toolName: "mcp__codeg-mcp__delegate_to_agent",
+      input: '{"agent_type":"codex","task":"do it"}',
+      state: "output-available",
+      output: null,
+      ...fields,
+    }
+  }
+  function resume(toolCallId: string, taskId: string): AdaptedContentPart {
+    return {
+      type: "tool-call",
+      toolCallId,
+      toolName: "resume_delegation",
+      input: JSON.stringify({ task_id: taskId }),
+      state: "output-available",
+      output: null,
+    }
+  }
+  function reply(id: string, parts: AdaptedContentPart[]): ThreadItem {
+    return assistantItem(id, { parts })
+  }
+  function message(id: string): ThreadItem {
+    return assistantItem(id, {
+      role: "user",
+      parts: [{ type: "text", text: `message ${id}` }],
+    })
+  }
+  const ids = (sources: readonly { parentToolUseId: string }[] = []) =>
+    sources.map((source) => source.parentToolUseId)
+
+  it("lists each message's sub-agents under it, in order", () => {
+    const { byUserTurnId, leading } = extractMessageDelegationSources([
+      message("u1"),
+      reply("a1", [delegate("tu-1"), { type: "text", text: "started" }]),
+      message("u2"),
+      reply("a2", [delegate("tu-2")]),
+      reply("a3", [delegate("tu-3")]),
+      message("u3"),
+    ])
+    expect(ids(byUserTurnId.get("u1"))).toEqual(["tu-1"])
+    expect(ids(byUserTurnId.get("u2"))).toEqual(["tu-2", "tu-3"])
+    // A round that started none has no list.
+    expect(byUserTurnId.has("u3")).toBe(false)
+    expect(leading).toEqual([])
+  })
+
+  // That round put the sub-agent back to work, wherever it was started.
+  it("lists a resume under the message whose round issued it", () => {
+    const { byUserTurnId } = extractMessageDelegationSources([
+      message("u1"),
+      reply("a1", [
+        delegate("tu-1", {
+          output: JSON.stringify({ task_id: "task-1", status: "running" }),
+        }),
+      ]),
+      message("u2"),
+      reply("a2", [resume("tu-resume", "task-1")]),
+    ])
+    expect(ids(byUserTurnId.get("u1"))).toEqual(["tu-1"])
+    expect(byUserTurnId.get("u2")?.[0]).toMatchObject({
+      parentToolUseId: "tu-resume",
+      taskIdHint: "task-1",
+    })
+  })
+
+  // The resume re-binds the child to the ORIGINAL call, whose row then tracks
+  // the resumed run — a second row would list one sub-agent twice.
+  it("drops a resume of a task its own round already lists", () => {
+    const { byUserTurnId } = extractMessageDelegationSources([
+      message("u1"),
+      reply("a1", [
+        delegate("tu-1", {
+          output: JSON.stringify({ task_id: "task-1", status: "running" }),
+        }),
+      ]),
+      reply("a2", [resume("tu-resume", "task-1")]),
+    ])
+    expect(ids(byUserTurnId.get("u1"))).toEqual(["tu-1"])
+  })
+
+  it("lists a task resumed twice in one round once", () => {
+    const { byUserTurnId } = extractMessageDelegationSources([
+      message("u1"),
+      reply("a1", [resume("tu-r1", "task-2")]),
+      reply("a2", [resume("tu-r2", "task-2")]),
+    ])
+    expect(ids(byUserTurnId.get("u1"))).toEqual(["tu-r1"])
+  })
+
+  // The loaded window can start in the middle of a round: its prompt, and the
+  // message the navigator lists these under, are above it.
+  it("keeps the replies ahead of the first loaded message apart", () => {
+    const { byUserTurnId, leading } = extractMessageDelegationSources([
+      reply("a0", [resume("tu-resume", "task-9")]),
+      message("u1"),
+      reply("a1", [delegate("tu-1")]),
+    ])
+    expect(ids(leading)).toEqual(["tu-resume"])
+    expect(ids(byUserTurnId.get("u1"))).toEqual(["tu-1"])
+  })
+
+  it("lists a call seen twice once, in its first place, with its latest fields", () => {
+    const { byUserTurnId } = extractMessageDelegationSources([
+      message("u1"),
+      reply("a1", [delegate("tu-1", { state: "input-available" })]),
+      reply("a2", [delegate("tu-2")]),
+      reply("a3", [delegate("tu-1", { output: '{"task_id":"task-1"}' })]),
+    ])
+    const sources = byUserTurnId.get("u1") ?? []
+    expect(ids(sources)).toEqual(["tu-1", "tu-2"])
+    expect(sources[0]).toMatchObject({
+      state: "output-available",
+      output: '{"task_id":"task-1"}',
+    })
+  })
+
+  // A second copy of a resume must update its row, not read as a second
+  // resume of the task.
+  it("refreshes a resume seen twice with its latest fields", () => {
+    const acknowledged = JSON.stringify({
+      task_id: "task-9",
+      status: "running",
+    })
+    const { byUserTurnId } = extractMessageDelegationSources([
+      message("u1"),
+      reply("a1", [resume("tu-resume", "task-9")]),
+      reply("a2", [
+        {
+          ...resume("tu-resume", "task-9"),
+          output: acknowledged,
+        } as AdaptedContentPart,
+      ]),
+    ])
+    const sources = byUserTurnId.get("u1") ?? []
+    expect(ids(sources)).toEqual(["tu-resume"])
+    expect(sources[0].output).toBe(acknowledged)
+  })
+
+  it("hands back one shared empty list while nothing leads the first message", () => {
+    const first = extractMessageDelegationSources([message("u1")])
+    const second = extractMessageDelegationSources([
+      reply("a1", [{ type: "text", text: "no sub-agents" }]),
+    ])
+    expect(first.leading).toEqual([])
+    expect(second.leading).toBe(first.leading)
+  })
+
+  // What keeps a streaming batch from re-scanning (and re-keying) every
+  // settled reply: a group that keeps its identity keeps its sources.
+  it("scans a group once and hands back the same sources after", () => {
+    const item = reply("a1", [delegate("tu-1")])
+    if (item.kind !== "turn") throw new Error("expected a turn item")
+    const first = groupDelegationSources(item.group)
+    expect(groupDelegationSources(item.group)).toBe(first)
+    expect(
+      extractMessageDelegationSources([message("u1"), item]).byUserTurnId.get(
+        "u1"
+      )?.[0]
+    ).toBe(first[0])
+  })
+})
+
+describe("threadDelegationStatusTasks", () => {
+  function statusPoll(
+    id: string,
+    taskId: string
+  ): Extract<AdaptedContentPart, { type: "tool-call" }> {
+    const report = { task_id: taskId, status: "running", message: "Running." }
+    return {
+      type: "tool-call",
+      toolCallId: id,
+      toolName: "mcp__codeg-mcp__get_delegation_status",
+      input: JSON.stringify({ task_ids: [taskId] }),
+      state: "output-available",
+      output: JSON.stringify({
+        content: [{ type: "text", text: "Running." }],
+        isError: false,
+        structuredContent: { tasks: [report] },
+      }),
+    }
+  }
+
+  it("reads the status rows of every turn, so a task's newest row is the thread's last", () => {
+    const first = assistantItem("a1", {
+      parts: [
+        {
+          type: "delegation-status-group",
+          polls: [statusPoll("p1", "t1")],
+        },
+        { type: "text", text: "Still waiting." },
+        statusPoll("p2", "t1"),
+      ],
+    })
+    const compaction: ThreadItem = {
+      key: "compaction-c1",
+      kind: "compaction",
+      meta: null,
+    }
+    const second = assistantItem("a2", {
+      parts: [
+        {
+          type: "delegation-status-group",
+          polls: [statusPoll("p3", "t1")],
+        },
+      ],
+    })
+    const tasks = threadDelegationStatusTasks([first, compaction, second])
+    expect(tasks.map((refs) => refs.map((r) => r.latestPollId))).toEqual([
+      ["p1", "p2"],
+      ["p3"],
+    ])
+    expect(buildDelegationStatusIndex(tasks).get("t1")?.latestPollId).toBe("p3")
+    // A group that keeps its identity is read once.
+    expect(threadDelegationStatusTasks([first])[0]).toBe(tasks[0])
+  })
+})
+
+describe("currentNavTurnIdAt", () => {
+  function message(id: string): ThreadItem {
+    return assistantItem(id, {
+      role: "user",
+      parts: [{ type: "text", text: `message ${id}` }],
+    })
+  }
+  // Thread: a reply whose prompt is above the window, then u1, its reply, u2.
+  const items = [
+    assistantItem("a0"),
+    message("u1"),
+    assistantItem("a1"),
+    message("u2"),
+  ]
+
+  it("names the message whose prompt or reply is at the top", () => {
+    expect(currentNavTurnIdAt(items, { index: 1, atEnd: false }, null)).toBe(
+      "u1"
+    )
+    expect(currentNavTurnIdAt(items, { index: 2, atEnd: false }, null)).toBe(
+      "u1"
+    )
+    expect(currentNavTurnIdAt(items, { index: 3, atEnd: false }, null)).toBe(
+      "u2"
+    )
+  })
+
+  it("names the latest message once the view rests at the end", () => {
+    expect(currentNavTurnIdAt(items, { index: 1, atEnd: true }, null)).toBe(
+      "u2"
+    )
+  })
+
+  it("gives a reply loaded ahead of every message to the round above the window", () => {
+    expect(
+      currentNavTurnIdAt(items, { index: 0, atEnd: false }, "earlier")
+    ).toBe("earlier")
+    expect(currentNavTurnIdAt(items, { index: 0, atEnd: false }, null)).toBe(
+      null
+    )
+  })
+
+  it("reads an index past the end as the last row", () => {
+    expect(currentNavTurnIdAt(items, { index: 40, atEnd: false }, null)).toBe(
+      "u2"
+    )
+  })
+})
+
+/**
+ * The fork affordance sends a turn id to the backend, and the backend cannot
+ * resolve an id this client minted for its own live stream — it tail-forks
+ * instead of refusing. That is the right answer for the newest reply and a
+ * silent wrong one for any earlier reply, which a steered turn creates: it
+ * promotes as assistant / user message / assistant, so its first half sits
+ * settled and non-tail with a fork button while the parser's name is still a
+ * reparse away.
+ */
+describe("isForkPointUnnamed", () => {
+  function forkTurn(id: string, sourceTurnId?: string | null): MessageTurn {
+    return {
+      id,
+      role: "assistant",
+      blocks: [],
+      timestamp: "",
+      ...(sourceTurnId !== undefined ? { source_turn_id: sourceTurnId } : {}),
+    }
+  }
+
+  it("withholds a live-named reply that is not the thread's last item", () => {
+    expect(isForkPointUnnamed(forkTurn("live-7-lm-1"), false)).toBe(true)
+  })
+
+  it("allows one at the end of the thread — there the tail IS the fork point", () => {
+    expect(isForkPointUnnamed(forkTurn("live-7-lm-1"), true)).toBe(false)
+  })
+
+  it("withholds the newest REPLY when a message follows it", () => {
+    // Steering at the very end of a turn promotes as assistant + user message
+    // with nothing after it: the reply is the newest one, and still not the
+    // tail. The backend's tail fork would land after the steered message, and
+    // a parse ending on a user turn never backfills a name to correct it — so
+    // "newest assistant run" is the wrong exception and `isThreadTail` is the
+    // right one.
+    expect(isForkPointUnnamed(forkTurn("live-7-lm"), false)).toBe(true)
+  })
+
+  it("allows it again once the reparse names it", () => {
+    expect(isForkPointUnnamed(forkTurn("live-7-lm-1", "turn-4"), false)).toBe(
+      false
+    )
+  })
+
+  it("leaves parser-named history alone", () => {
+    // Every historical turn arrives under a parser id and no `source_turn_id`;
+    // treating that as unnamed would grey out the whole thread.
+    expect(isForkPointUnnamed(forkTurn("turn-4"), false)).toBe(false)
+  })
+
+  it("says nothing about a group with no turns", () => {
+    expect(isForkPointUnnamed(null, false)).toBe(false)
+  })
+})
+
+describe("markThreadTail", () => {
+  const compaction: ThreadItem = {
+    key: "persisted-compact",
+    kind: "compaction",
+    meta: { contextCompaction: true },
+  }
+  const tailFlags = (items: ThreadItem[]) =>
+    items.map((it) => (it.kind === "turn" ? it.isThreadTail : null))
+
+  it("marks the last rendered turn", () => {
+    const items = [assistantItem("a"), assistantItem("b")]
+    markThreadTail(items)
+    expect(tailFlags(items)).toEqual([false, true])
+  })
+
+  it("leaves a reply unmarked when a message follows it", () => {
+    // The shape a steer at the very end of a turn promotes to: the reply is
+    // still the newest one, and the tail is the message after it.
+    const items = [assistantItem("a"), makeUserItem("u", 1)]
+    markThreadTail(items)
+    expect(tailFlags(items)).toEqual([false, true])
+  })
+
+  it("marks nothing when a compaction divider is last", () => {
+    const items = [assistantItem("a"), compaction]
+    markThreadTail(items)
+    expect(tailFlags(items)).toEqual([false, null])
+  })
+
+  it("steps over a failed round's closing line", () => {
+    // A tail fork keeps everything up to the reply before the line, so the
+    // partial reply a failed turn left is still where "fork from here" lands.
+    const failure = assistantItem("err", {
+      role: "system",
+      parts: [{ type: "turn-error", message: "API Error: 503" }],
+    })
+    const items = [assistantItem("partial"), failure]
+    markThreadTail(items)
+    expect(tailFlags(items)).toEqual([true, false])
+  })
+
+  it("steps over a trailing turn that renders nothing", () => {
+    const items = [assistantItem("a"), assistantItem("empty", { parts: [] })]
+    markThreadTail(items)
+    expect(tailFlags(items)).toEqual([true, false])
+  })
+
+  it("marks nothing in an empty thread", () => {
+    const items: ThreadItem[] = []
+    markThreadTail(items)
+    expect(items).toEqual([])
+  })
+})
+
+describe("dedupeCompactionItems", () => {
+  const divider = (
+    key: string,
+    payload: Record<string, unknown>,
+    callId?: string
+  ): ThreadItem => ({
+    key,
+    kind: "compaction",
+    meta: { contextCompaction: { version: 1, ...payload } },
+    callId,
+  })
+  const full = { preTokens: 108716, postTokens: 4462, durationMs: 92728 }
+  const keys = (items: ThreadItem[]) => items.map((i) => i.key)
+
+  // The live ACP tool_call and the transcript-derived divider are the same
+  // compaction under two ids, and mid-turn both are in the timeline at once.
+  it("keeps the first of two renderings of one compaction", () => {
+    const items = [
+      assistantItem("a"),
+      divider("persisted-c", full),
+      assistantItem("b"),
+      divider("live-c", full),
+    ]
+    expect(keys(dedupeCompactionItems(items))).toEqual([
+      "persisted-a",
+      "persisted-c",
+      "persisted-b",
+    ])
+  })
+
+  it("keeps two genuinely different compactions", () => {
+    const items = [
+      divider("c1", full),
+      divider("c2", {
+        preTokens: 475949,
+        postTokens: 12634,
+        durationMs: 134503,
+      }),
+    ]
+    expect(dedupeCompactionItems(items)).toHaveLength(2)
+  })
+
+  // codex-acp sends a bare `{version: 1}` for every compaction it runs, so a
+  // key that tolerated missing counters would fold a whole session's
+  // compactions into one.
+  it("never folds payloads that cannot identify an event", () => {
+    const bare = [divider("c1", {}), divider("c2", {})]
+    expect(dedupeCompactionItems(bare)).toHaveLength(2)
+    const partial = [
+      divider("c1", { preTokens: 100, postTokens: 10 }),
+      divider("c2", { preTokens: 100, postTokens: 10 }),
+    ]
+    expect(dedupeCompactionItems(partial)).toHaveLength(2)
+    // grok's boolean-marker shape carries no versioned payload at all.
+    const grok: ThreadItem[] = [
+      { key: "g1", kind: "compaction", meta: { contextCompaction: true } },
+      { key: "g2", kind: "compaction", meta: { contextCompaction: true } },
+    ]
+    expect(dedupeCompactionItems(grok)).toHaveLength(2)
+  })
+
+  // Identity-stable so the memo around it does not invalidate every batch.
+  it("returns the input array when nothing is dropped", () => {
+    const items = [assistantItem("a"), divider("c1", full)]
+    expect(dedupeCompactionItems(items)).toBe(items)
+  })
+
+  // codex names the live divider by the app-server item id, and its history
+  // parser names the persisted one by the same id — the only identity a bare
+  // `{version: 1}` payload has.
+  it("folds two renderings that name the same call", () => {
+    const named = (key: string, callId: string) => divider(key, {}, callId)
+    expect(
+      keys(
+        dedupeCompactionItems([
+          named("persisted-c", "01a0eaed-d00a"),
+          assistantItem("b"),
+          named("live-c", "01a0eaed-d00a"),
+        ])
+      )
+    ).toEqual(["persisted-c", "persisted-b"])
+    // …while distinct calls stay distinct.
+    expect(
+      dedupeCompactionItems([named("c1", "item-1"), named("c2", "item-2")])
+    ).toHaveLength(2)
+  })
+
+  // Either identity is enough: claude's live and history copies share their
+  // counters but not their ids.
+  it("still folds on content when the ids differ", () => {
+    const items = [
+      divider("persisted-c", full, "boundary-uuid"),
+      divider("live-c", full, "compacting-uuid"),
+    ]
+    expect(keys(dedupeCompactionItems(items))).toEqual(["persisted-c"])
+  })
+
+  // Identity is transitive: a repeat folded on one identity still lends its
+  // other one to the event, so a third copy matching only that one folds too.
+  it("remembers the other identity of a copy it drops", () => {
+    const other = { preTokens: 1, postTokens: 2, durationMs: 3 }
+    const items = [
+      divider("c-first", full, "call-a"),
+      divider("c-same-call", other, "call-a"),
+      divider("c-same-counters", other, "call-b"),
+    ]
+    expect(keys(dedupeCompactionItems(items))).toEqual(["c-first"])
+  })
+})
+
+describe("compactionOnlyPart", () => {
+  function compactionGroup(
+    state: "input-available" | "output-available"
+  ): ResolvedMessageGroup {
+    return {
+      id: "live-1",
+      role: "assistant",
+      parts: [
+        {
+          type: "tool-call",
+          toolCallId: "cmp_1",
+          toolName: "Context compaction",
+          input: null,
+          state,
+          output: "We kept the parser notes.",
+          meta: {
+            contextCompaction: { version: 1 },
+            "codeg.compactionSummary": true,
+          },
+        },
+      ],
+      resources: [],
+      images: [],
+    }
+  }
+
+  // A `/compact` still running is a compaction-only live turn, hoisted like a
+  // finished one — so the hoisted item has to keep the lifecycle, or it reads
+  // "compacted" (and its summary renders settled) while it is still going.
+  it("carries the call's state and claimed summary onto the hoisted item", () => {
+    expect(compactionOnlyPart(compactionGroup("input-available"))).toEqual({
+      meta: {
+        contextCompaction: { version: 1 },
+        "codeg.compactionSummary": true,
+      },
+      summary: "We kept the parser notes.",
+      state: "input-available",
+      callId: "cmp_1",
+    })
+    expect(compactionOnlyPart(compactionGroup("output-available"))?.state).toBe(
+      "output-available"
+    )
+  })
+})
+
+describe("hoistedCompaction", () => {
+  const compacted = (id: string): ResolvedMessageGroup => ({
+    id,
+    role: "assistant",
+    parts: [
+      { type: "text", text: "" },
+      {
+        type: "tool-call",
+        toolCallId: `codex-compaction-${id}`,
+        toolName: "context_compaction",
+        input: null,
+        state: "output-available",
+        output: null,
+        meta: { contextCompaction: { version: 1 } },
+      },
+    ],
+    resources: [],
+    images: [],
+  })
+  const reply = (id: string): ResolvedMessageGroup => ({
+    id,
+    role: "assistant",
+    parts: [{ type: "text", text: `reply ${id}` }],
+    resources: [],
+    images: [],
+  })
+  const user = (id: string): ResolvedMessageGroup => ({
+    ...reply(id),
+    role: "user",
+  })
+  const placeholder = (id: string): ResolvedMessageGroup => ({
+    ...reply(id),
+    parts: [],
+  })
+  const hoisted = (groups: ResolvedMessageGroup[]) =>
+    groups.map((_, index) => hoistedCompaction(groups, index) !== null)
+
+  // codex compacts by itself when the context fills, and goes on with the
+  // same reply: live, the compaction is a step of that reply.
+  it("keeps a compaction the reply goes on after, as one of its steps", () => {
+    expect(
+      hoisted([user("u"), reply("a"), compacted("c"), reply("b"), user("v")])
+    ).toEqual([false, false, false, false, false])
+    // At the start of the reply too, and past the empty turns between.
+    expect(
+      hoisted([user("u"), compacted("c"), placeholder("p"), reply("b")])
+    ).toEqual([false, false, false, false])
+  })
+
+  it("hoists a compaction no more of the reply follows", () => {
+    // `/compact` between replies: the next message is the user's.
+    expect(
+      hoisted([reply("a"), compacted("c"), user("v"), reply("b")])
+    ).toEqual([false, true, false, false])
+    // The last thing in the thread.
+    expect(hoisted([reply("a"), compacted("c"), placeholder("p")])).toEqual([
+      false,
+      true,
+      false,
+    ])
+  })
+
+  // The persisted divider beside the live copy of the same `/compact` — both
+  // hoisted, so `dedupeCompactionItems` can fold them.
+  it("hoists a compaction only another compaction follows", () => {
+    expect(hoisted([reply("a"), compacted("c"), compacted("live")])).toEqual([
+      false,
+      true,
+      true,
+    ])
+  })
+
+  it("draws the reply as one, the compaction among its steps", () => {
+    const groups = [reply("a"), compacted("c"), reply("b")]
+    const items: ThreadItem[] = groups.map((group, index) => {
+      const compaction = hoistedCompaction(groups, index)
+      return compaction
+        ? { key: group.id, kind: "compaction", meta: compaction.meta }
+        : assistantItem(group.id, group)
+    })
+    const merged = mergeConsecutiveAssistantTurns(items)
+    expect(merged).toHaveLength(1)
+    const parts = (merged[0] as TurnItem).group.parts
+    expect(parts.map((part) => part.type)).toEqual([
+      "text",
+      "text",
+      "tool-call",
+      "text",
+    ])
   })
 })

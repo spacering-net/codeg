@@ -5,6 +5,47 @@ use super::agent::AgentType;
 use super::message::{MessageTurn, TurnUsage};
 use crate::db::entities::conversation::ConversationKind;
 
+/// A conversation's own selector state, stored as JSON on
+/// `conversation.selector_state` and replayed alone when the conversation
+/// reconnects (the client's new-conversation default is never mixed in).
+///
+/// `mode_id` is the mode the session actually RUNS with; `composer_mode_id`
+/// is a mode the user picked in a tab's composer that the tab applies at its
+/// next send (a legacy-modes pick is deferred to send time). They are kept
+/// apart so an engine rerun never runs a tab's unsent intent as the applied
+/// mode. `config_values` round-trips what the preference replay consumes
+/// (a select's value id; `"true"`/`"false"` for a boolean).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationSelection {
+    #[serde(default)]
+    pub mode_id: Option<String>,
+    #[serde(default)]
+    pub composer_mode_id: Option<String>,
+    #[serde(default)]
+    pub config_values: std::collections::BTreeMap<String, String>,
+}
+
+impl ConversationSelection {
+    /// Parse the stored column. Malformed JSON is treated as absent (logged):
+    /// the conversation then takes the legacy one-time fallback instead of
+    /// failing to connect.
+    pub fn parse(raw: Option<&str>) -> Option<Self> {
+        let raw = raw?;
+        match serde_json::from_str::<Self>(raw) {
+            Ok(sel) => Some(sel),
+            Err(e) => {
+                tracing::warn!("[conversation] unparsable selector_state ignored: {e}");
+                None
+            }
+        }
+    }
+
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_else(|_| "{}".to_string())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationSummary {
     pub id: String,
@@ -65,9 +106,50 @@ pub struct DbConversationSummary {
     pub delegation_call_id: Option<String>,
     /// Mirror of `conversation.origin_cwd`: the working directory this
     /// conversation actually ran in when it differs from its current folder's
-    /// path (set when a removed task worktree's conversations were re-parented).
+    /// path (set when a removed task worktree's conversations were re-parented,
+    /// or the user moved the conversation to another project).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub origin_cwd: Option<String>,
+    /// Mirror of `conversation.assistant_id`: the assistant a delegation child
+    /// ran as. Absent on every other row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assistant_id: Option<i32>,
+    /// That assistant's name when the delegation started, out of the row's
+    /// `assistant_snapshot`. The UI prefers the assistant's current name and
+    /// falls back to this one when the assistant row is unknown to it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assistant_name: Option<String>,
+    /// Mirror of `conversation.source`: `"cli"` for a conversation a
+    /// `codeg-cli` run started. Absent on every other row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// Ids of the tags on this conversation, ascending. Not stored on the row —
+    /// backfilled from `conversation_tag_link` by one query over the returned
+    /// set (`fill_summary_extras`), the same way `child_count` is. Omitted from
+    /// the wire when empty, so the frontend reads an absent field as "no tags".
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tag_ids: Vec<i32>,
+}
+
+/// A conversation tag as the UI sees it. `folder_id` is the scope: `None` for
+/// a global tag, otherwise the root folder whose conversations it is offered
+/// on. `color` is always a normalized `#rrggbb`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ConversationTagDetail {
+    pub id: i32,
+    pub folder_id: Option<i32>,
+    pub name: String,
+    pub color: String,
+    pub sort_order: i32,
+}
+
+/// The branch tag: every conversation's git branch (the one it started on)
+/// drawn as a chip beside its tags — whether at all, and in which colour. One
+/// setting for the whole app; `color` is a normalized `#rrggbb`, like a tag's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConversationBranchTag {
+    pub enabled: bool,
+    pub color: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,6 +215,13 @@ pub struct DbConversationDetail {
     /// its send-time history baseline between global and window coordinates.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assistant_turns_before_offset: Option<usize>,
+    /// User turns in `full[0..turns_offset)`. The message navigator counts
+    /// and numbers every message of the conversation, including the ones
+    /// above the loaded window; this is what it adds to the window's own.
+    /// Absent from servers that predate it (and from legacy full responses),
+    /// which also tells the client the outline endpoint isn't there.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_turns_before_offset: Option<usize>,
     /// Structural fingerprint of `full[0..turns_offset)` (see
     /// `commands::turn_window::prefix_fingerprint`), as a fixed-width 16-hex
     /// string — a u64 JSON number would be rounded past 2^53-1 by JS.
@@ -156,6 +245,9 @@ pub struct ConversationTurnsPage {
     pub turns_offset: usize,
     pub turns_total: usize,
     pub assistant_turns_before_offset: usize,
+    /// User turns in `full[0..turns_offset)` — the window's new
+    /// `user_turns_before_offset` after a successful prepend.
+    pub user_turns_before_offset: usize,
     /// Fingerprint of `full[0..turns_offset)` — adopted by the client as its
     /// new window fingerprint after a successful prepend.
     pub prefix_hash: String,
@@ -166,6 +258,21 @@ pub struct ConversationTurnsPage {
     pub prefix_hash_before_index: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uncovered_prefix_max_ts: Option<DateTime<Utc>>,
+}
+
+/// The message navigator's view of the history ABOVE the loaded window:
+/// `full[0..min(beforeIndex, total))`, one entry per turn (so `turns[i]` is
+/// global turn `i`), each reduced to what the navigator reads — see
+/// `commands::turn_window::nav_outline_turns` for exactly what survives.
+/// Every turn keeps its id, role and timestamp, so the client can fingerprint
+/// any prefix of it and check it against its window before using it.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConversationOutline {
+    pub turns: Vec<MessageTurn>,
+    pub turns_total: usize,
+    /// Fingerprint of `full[0..turns.len())` — equal to the client's window
+    /// fingerprint when the outline was cut at the window start.
+    pub prefix_hash: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -203,6 +310,12 @@ pub struct ImportResult {
     /// at first import). Manual renames are never touched.
     pub updated: u32,
     pub skipped: u32,
+    /// Soft-deleted conversations brought back by this import. Only ever
+    /// non-zero for a run whose caller opted into
+    /// `DeletedPolicy::Restore` — i.e. the picker, where the user checked that
+    /// specific deleted session. A whole-folder sweep never resurrects.
+    #[serde(default)]
+    pub restored: u32,
 }
 
 /// Reconciliation state of one locally-discovered session against the codeg DB,
@@ -212,9 +325,15 @@ pub struct ImportResult {
 pub enum ScanSessionStatus {
     /// Not in the DB — importable.
     New,
-    /// At least one live (non-deleted) row exists — already imported.
+    /// At least one live (non-deleted) row exists — already imported. Also a
+    /// Claude Code session whose usage a live conversation of a custom agent
+    /// on the official Claude adapter counts: the import skips it.
     Imported,
-    /// Only soft-deleted rows exist — never resurrected by import.
+    /// Only soft-deleted rows exist. Deletion is a soft delete, so the row (and
+    /// its whole history) is still there: the picker offers such a session for
+    /// RESTORE, and importing it un-deletes the existing row in place rather
+    /// than inserting a second one. Never restored implicitly — only when the
+    /// user checks that row (see `DeletedPolicy`).
     Deleted,
 }
 
@@ -283,6 +402,9 @@ pub struct ImportFolderOutcome {
     pub imported: u32,
     pub updated: u32,
     pub skipped: u32,
+    /// Soft-deleted conversations restored in place under this folder.
+    #[serde(default)]
+    pub restored: u32,
 }
 
 /// Aggregate result of `import_selected_sessions`.
@@ -291,6 +413,10 @@ pub struct ImportSelectedResult {
     pub imported: u32,
     pub updated: u32,
     pub skipped: u32,
+    /// Soft-deleted conversations the user re-selected and this run brought
+    /// back (see [`ImportResult::restored`]).
+    #[serde(default)]
+    pub restored: u32,
     /// Selection keys that no longer resolved to a scanned session (deleted on
     /// disk between scan and import, or bogus input).
     pub not_found: u32,

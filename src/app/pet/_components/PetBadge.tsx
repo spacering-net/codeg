@@ -57,7 +57,7 @@ export function PetBadge() {
       }}
       className={[
         "absolute right-0.5 top-0.5 z-10 flex h-5 min-w-[1.25rem] cursor-pointer",
-        "items-center justify-center gap-0.5 rounded-full px-1 text-[10px] font-semibold",
+        "items-center justify-center gap-0.5 rounded-full px-1 text-3xs font-semibold",
         "leading-none text-white shadow-md ring-2 ring-white/70",
         "focus-visible:outline-none focus-visible:ring-white",
         kind === "error"

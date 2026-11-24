@@ -5,7 +5,8 @@
  * task's session: `{ kind: "work" | "retry" | "return" | "merge", intent,
  * run_seq, prompt_head }` with the head of the prompt's first text block. The
  * transcript viewer labels each user turn with its phase by matching the turn's
- * text against those heads.
+ * text against those heads. A pre-prompt compaction contributes a `compact`
+ * round from its own event (see [`extractRounds`]).
  *
  * `intent` is set on `return` rounds only — every follow-up scenario shares the
  * `return` kind (the folder's per-stage prompt settings key off it), so the
@@ -29,12 +30,26 @@ export interface TaskRound {
   promptHead: string
 }
 
-/** Ordered `round` markers of a task's event log. */
+/** Ordered `round` markers of a task's event log.
+ *
+ * A pre-prompt context compaction is folded in as a round of its own
+ * (`kind: "compact"`), because on the transcript it IS one: the engine sends
+ * the agent's compact command as an ordinary prompt, so the viewer shows a
+ * user turn nobody typed sitting between two labelled phases. Its head is the
+ * command itself, taken from the `started` half of the pair — the outcome half
+ * does not carry a turn. */
 export function extractRounds(events: WorkTaskEvent[]): TaskRound[] {
   const rounds: TaskRound[] = []
   for (const event of events) {
-    if (event.kind !== "round") continue
     const payload = event.payload
+    if (event.kind === "context_compact") {
+      if (payload?.status !== "started") continue
+      const command =
+        typeof payload?.command === "string" ? payload.command : ""
+      if (command.trim()) rounds.push({ kind: "compact", promptHead: command })
+      continue
+    }
+    if (event.kind !== "round") continue
     const kind = typeof payload?.kind === "string" ? payload.kind : null
     const head =
       typeof payload?.prompt_head === "string" ? payload.prompt_head : ""

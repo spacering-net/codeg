@@ -50,13 +50,34 @@ pub struct FeedbackItem {
     pub text: String,
     pub created_at: DateTime<Utc>,
     pub status: FeedbackStatus,
-    /// When the agent read this note. `None` while `Pending`.
+    /// When the agent read this note. `None` while `Pending`. On the native
+    /// push path it is the submit instant (see [`Self::new_delivered`]) — a
+    /// lower bound on the read rather than the read itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivered_at: Option<DateTime<Utc>>,
+    /// What the user actually sent, when the note carried more than plain text
+    /// (image attachments). `None` for a text-only note, which is every note on
+    /// the pull channel and the historical native one — the frontend then
+    /// renders `text` alone, exactly as before.
+    ///
+    /// Needed because `text` is the note's DISPLAY form: the composer collapses
+    /// a draft's attachments into it, so a steered image would otherwise reach
+    /// the live transcript as words about an image rather than the image. The
+    /// projection is [`crate::acp::user_blocks_from_prompt`] applied AFTER
+    /// hydration — the same contract `AcpEvent::UserMessage` follows for an
+    /// ordinary prompt, so a steered message and a prompted one carry their
+    /// images identically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocks: Option<Vec<crate::acp::types::UserMessageBlock>>,
 }
 
 impl FeedbackItem {
     /// Build a fresh `Pending` note with a new id and the current timestamp.
+    ///
+    /// Always text-only: the pull tool (`check_user_feedback`) hands the agent a
+    /// string, so `submit_feedback` refuses a draft carrying blocks on that
+    /// channel rather than dropping them silently, and this constructor is only
+    /// reached once that gate has passed.
     pub fn new_pending(id: String, text: String, created_at: DateTime<Utc>) -> Self {
         Self {
             id,
@@ -64,6 +85,7 @@ impl FeedbackItem {
             created_at,
             status: FeedbackStatus::Pending,
             delivered_at: None,
+            blocks: None,
         }
     }
 
@@ -73,13 +95,29 @@ impl FeedbackItem {
     /// let `read_pending_feedback` hand the same text to a `check_user_feedback`
     /// call and double-deliver it (the Pending-only read is the mutual
     /// exclusion between the push and pull channels).
-    pub fn new_delivered(id: String, text: String, at: DateTime<Utc>) -> Self {
+    ///
+    /// `at` is the SUBMIT instant, taken before the injection is handed to the
+    /// adapter (`submit_feedback_native`), so `created_at` is provably earlier
+    /// than the agent's own transcript copy of the message — the ordering the
+    /// frontend needs to recognize that copy. `delivered_at` shares it, and is
+    /// therefore a lower bound on the read rather than the read itself.
+    ///
+    /// `blocks` is `Some` only when the draft carried more than plain text; see
+    /// the field's own doc for why `text` alone cannot stand in for it. Passing
+    /// `None` reproduces the historical text-only note byte for byte.
+    pub fn new_delivered(
+        id: String,
+        text: String,
+        at: DateTime<Utc>,
+        blocks: Option<Vec<crate::acp::types::UserMessageBlock>>,
+    ) -> Self {
         Self {
             id,
             text,
             created_at: at,
             status: FeedbackStatus::Delivered,
             delivered_at: Some(at),
+            blocks,
         }
     }
 }
@@ -90,6 +128,35 @@ impl FeedbackItem {
 /// single pathological note. NOT a throughput limit — the per-turn note set is
 /// cleared every turn, so its count scales with human typing, not unboundedly.
 pub const MAX_FEEDBACK_CHARS: usize = 4096;
+
+/// Per-TURN bound on the attachment bytes retained across a turn's notes.
+///
+/// [`MAX_FEEDBACK_CHARS`] bounds one note's text and leans on "the count scales
+/// with human typing" for the rest — an argument that holds at 4 KiB a note and
+/// does not survive base64 image data, which is three orders of magnitude
+/// larger. Notes are turn-scoped but a turn is not short, so without an
+/// aggregate bound a run of image steers grows `SessionState.feedback` (and
+/// every snapshot built from it) without limit.
+///
+/// Exceeding it is NOT an error: the note is still delivered, it simply records
+/// no blocks, so it renders from `text` alone — the same fallback a text-only
+/// steer has always taken. Degrading a picture to its caption is the right
+/// trade against refusing a message the agent has already been handed.
+pub const MAX_FEEDBACK_ATTACHMENT_BYTES_PER_TURN: usize = 32 * 1024 * 1024;
+
+/// Bytes a projected block list contributes to the per-turn attachment budget.
+/// Only image payloads are counted: text rides the already-bounded `text`
+/// field, and `user_blocks_from_prompt` has by this point folded every other
+/// carriage into either an image or a markdown link.
+pub fn attachment_bytes(blocks: &[crate::acp::types::UserMessageBlock]) -> usize {
+    blocks
+        .iter()
+        .map(|b| match b {
+            crate::acp::types::UserMessageBlock::Image { data, .. } => data.len(),
+            crate::acp::types::UserMessageBlock::Text { .. } => 0,
+        })
+        .sum()
+}
 
 /// Hard ceiling on a single `check_user_feedback` RESPONSE's *serialized* size,
 /// in bytes. Chosen well under the transport frame cap (`MAX_FRAME_BYTES` =

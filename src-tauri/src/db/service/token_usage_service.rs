@@ -639,8 +639,30 @@ pub async fn facet_agents(conn: &DatabaseConnection) -> Result<Vec<String>, DbEr
         .all(conn)
         .await?;
     let mut rows = rows;
-    rows.sort_by_key(|b| std::cmp::Reverse(b.tokens.unwrap_or(0)));
-    Ok(rows.into_iter().map(|r| r.agent_type).collect())
+    rows.sort_by(|a, b| {
+        b.tokens
+            .unwrap_or(0)
+            .cmp(&a.tokens.unwrap_or(0))
+            .then_with(|| a.agent_type.cmp(&b.agent_type))
+    });
+    let mut agents: Vec<String> = rows.into_iter().map(|r| r.agent_type).collect();
+    // The conversation count includes sessions without usage. Their agents
+    // must remain filterable too, including custom agents and disabled ones.
+    let historical: Vec<String> = conversation::Entity::find()
+        .filter(conversation::Column::DeletedAt.is_null())
+        .select_only()
+        .column(conversation::Column::AgentType)
+        .distinct()
+        .order_by_asc(conversation::Column::AgentType)
+        .into_tuple()
+        .all(conn)
+        .await?;
+    for agent in historical {
+        if !agents.contains(&agent) {
+            agents.push(agent);
+        }
+    }
+    Ok(agents)
 }
 
 pub async fn facet_models(conn: &DatabaseConnection) -> Result<Vec<String>, DbError> {
@@ -1161,13 +1183,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn facets_only_offer_dimensions_that_actually_have_data() {
+    async fn agent_facets_include_sessions_without_usage_while_folders_and_models_require_data() {
         let db = fresh_in_memory_db().await;
         let folder_a = seed_folder(&db, "/tmp/tu-i1").await;
         // A folder with a conversation but no recorded usage must not appear.
         let folder_b = seed_folder(&db, "/tmp/tu-i2").await;
         let conv_a = seed_conversation(&db, folder_a, AgentType::ClaudeCode).await;
         let _conv_b = seed_conversation(&db, folder_b, AgentType::Codex).await;
+        let _custom = seed_conversation(&db, folder_b, AgentType::Custom("claude-code-2")).await;
+        let deleted = seed_conversation(&db, folder_b, AgentType::Custom("removed-agent")).await;
+        crate::db::service::conversation_service::soft_delete(&db.conn, deleted)
+            .await
+            .unwrap();
 
         let mut untagged = fact("t2", "2026-08-02T10:00:00Z", 50, 0);
         untagged.model = None;
@@ -1186,7 +1213,11 @@ mod tests {
 
         assert_eq!(
             facet_agents(&db.conn).await.expect("agents"),
-            vec!["claude_code".to_string()]
+            vec![
+                "claude_code".to_string(),
+                "codex".to_string(),
+                "custom:claude-code-2".to_string()
+            ]
         );
         // A NULL model is not offered as a filter option — there is nothing to
         // type into the query.

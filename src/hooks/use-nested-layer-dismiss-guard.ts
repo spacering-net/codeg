@@ -9,29 +9,19 @@ import {
   type RefCallback,
 } from "react"
 
+import { attachRef } from "@/lib/attach-ref"
+
 // Radix dismiss events are cancelable `CustomEvent`s; cancelling is all this
 // guard needs from them, so it stays structural and works for every surface.
 type CancelableDismissEvent = { preventDefault: () => void }
 
-/** Point a caller-supplied ref at `node`; returns its detach. */
-function attachRef<T>(ref: Ref<T> | undefined, node: T | null): () => void {
-  if (typeof ref === "function") {
-    const cleanup = ref(node)
-    return typeof cleanup === "function" ? cleanup : () => ref(null)
-  }
-  if (ref) {
-    ref.current = node
-    return () => {
-      ref.current = null
-    }
-  }
-  return () => {}
-}
-
 /**
- * Keeps a Radix `Dialog` / `Sheet` / `Popover` open when the press that closed a
- * nested layer (a `Select`, a `DropdownMenu`, a modal `Popover`) landed inside
- * it.
+ * Keeps a Radix `Dialog` / `Popover` open when the press that closed a nested
+ * layer (a `Select`, a `DropdownMenu`, a modal `Popover`) landed inside it.
+ *
+ * Radix-only by construction — it reads the inline `pointer-events` Radix
+ * writes onto its own layers. `Drawer` is a Base UI surface and needs none of
+ * this: its dismissal already ignores presses that pass through its React tree.
  *
  * Why it's needed: those nested layers set `disableOutsidePointerEvents`, which
  * makes Radix write `pointer-events: none` onto every layer below them — our
@@ -57,8 +47,8 @@ function attachRef<T>(ref: Ref<T> | undefined, node: T | null): () => void {
  * `ref` and chain `onPointerDownOutside` into the content's handler.
  *
  * `node` is the same element as a rendered value, for callers that need to lay
- * something out against it — `Dialog` / `Sheet` publish it as the portal host
- * for nested layers (see `OverlayPortalContainerProvider`).
+ * something out against it — `Dialog` publishes it as the portal host for
+ * nested layers (see `OverlayPortalContainerProvider`).
  */
 export function useNestedLayerDismissGuard<T extends HTMLElement = HTMLElement>(
   forwardedRef?: Ref<T>

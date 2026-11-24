@@ -11,8 +11,10 @@ use sea_orm::{
 };
 
 use crate::acp::connection::{
-    spawn_agent_connection, AgentConnection, ConnectionCommand, GoalControlAction, SteerOutcome,
+    spawn_agent_connection, AgentConnection, ConnectionCommand, GoalControlAction, SetterOutcome,
+    SteerOutcome,
 };
+use crate::acp::agent_mentions::strip_route_separator_from_prompt;
 use crate::acp::error::AcpError;
 use crate::acp::feedback::{
     bounded_feedback_batch, FeedbackItem, FeedbackStatus, PendingFeedback,
@@ -28,7 +30,7 @@ use crate::acp::question::{
 use crate::acp::terminal_runtime::TerminalShellRuntimeConfig;
 use crate::acp::types::{
     AcpEvent, AgentOptionsSnapshot, ConfigStaleKind, ConnectionInfo, ConnectionStatus,
-    ForkResultInfo, PromptCapabilitiesInfo, PromptInputBlock,
+    ForkResultInfo, PermissionAnswerOrigin, PromptCapabilitiesInfo, PromptInputBlock,
 };
 use crate::db::entities::conversation::{self, ConversationKind, ConversationStatus};
 use crate::db::service::conversation_service;
@@ -50,6 +52,161 @@ const USER_PROMPT_PREVIEW_MAX_CHARS: usize = 500;
 /// make the agent's death gentler — the graceful path ends in the same
 /// `kill_tree`.
 const DISCONNECT_ALL_GRACE: Duration = Duration::from_millis(500);
+
+/// How long the polite signal gets before [`kill_tree_and_wait`] escalates to
+/// `SIGKILL`. Counted from the first signal, which itself only lands after
+/// [`DISCONNECT_ALL_GRACE`] of graceful shutdown, so anything still here has
+/// already had a second to leave of its own accord.
+const ESCALATE_TO_SIGKILL_AFTER: Duration = Duration::from_millis(500);
+
+/// How often that sweep re-checks while it waits.
+const CONFIRM_GONE_POLL: Duration = Duration::from_millis(50);
+
+/// How long that sweep waits after `SIGKILL` for the reap to land. `kill(2)`
+/// returns once the signal is queued, not once the target has been descheduled,
+/// so on another core it can still be executing — briefly. Bounded tightly
+/// because the wait can also end in no answer at all: a child that has already
+/// exited but that nobody has reaped yet never zeroes its cell.
+const SIGKILL_SETTLE: Duration = Duration::from_millis(200);
+
+/// What one pass of [`kill_tree_pass`] established about the target itself.
+#[derive(Debug, PartialEq, Eq)]
+enum KillPass {
+    /// The OS says there is no such process — the only report that positively
+    /// means "not running".
+    AlreadyGone,
+    /// The signal was delivered to the target.
+    Signalled,
+    /// Neither could be established.
+    Failed,
+}
+
+/// One signal pass over the process tree rooted at `pid`, reporting what
+/// happened to the target itself (its descendants are killed either way).
+///
+/// `signal` is a `kill_tree` signal name; Windows ignores it and terminates
+/// unconditionally. Blocking — call from `spawn_blocking`.
+fn kill_tree_pass(pid: u32, signal: &str) -> KillPass {
+    let config = kill_tree::Config {
+        signal: signal.to_string(),
+        ..Default::default()
+    };
+    match kill_tree::blocking::kill_tree_with_config(pid, &config) {
+        Ok(outputs) => outputs
+            .iter()
+            .find_map(|o| match o {
+                kill_tree::Output::MaybeAlreadyTerminated { process_id, .. }
+                    if *process_id == pid =>
+                {
+                    Some(KillPass::AlreadyGone)
+                }
+                kill_tree::Output::Killed { process_id, .. } if *process_id == pid => {
+                    Some(KillPass::Signalled)
+                }
+                _ => None,
+            })
+            .unwrap_or(KillPass::Failed),
+        Err(e) => {
+            tracing::debug!("[ACP] kill_tree pid={pid} signal={signal}: {e}");
+            KillPass::Failed
+        }
+    }
+}
+
+/// Wait for `on_exit` to zero a connection's pid cell. `true` if it did within
+/// roughly `budget` — the check follows the sleep, so the transition it sees
+/// can be up to one poll late. Costs nothing per poll: no signal, no
+/// process-table walk.
+fn wait_for_reap(cell: &std::sync::atomic::AtomicU32, budget: Duration) -> bool {
+    let started = std::time::Instant::now();
+    while started.elapsed() < budget {
+        std::thread::sleep(CONFIRM_GONE_POLL);
+        if cell.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            return true;
+        }
+    }
+    false
+}
+
+/// Kill the process tree behind a connection's live pid cell and wait for the
+/// target to stop running. Two signals at most: `SIGTERM`, then `SIGKILL` if
+/// that was not enough.
+///
+/// `kill_tree` returns as soon as the signal is delivered, and its default
+/// `SIGTERM` is both catchable and ignorable, so "the call returned" is not
+/// "the agent is finished". That does not matter at quit — the OS cleans up
+/// whatever is left — but it does for a caller that is about to touch state the
+/// agent also writes (see [`ConnectionManager::disconnect_by_agent_type`]). So:
+/// signal, give it the grace it deserves, then escalate.
+///
+/// Between the signals it waits on the pid CELL rather than re-signalling.
+/// A second `SIGTERM` buys nothing — the first was delivered — while each extra
+/// pass re-walks the whole process table and re-aims at a pid NUMBER that, once
+/// the target exits, the OS is free to hand to something else.
+///
+/// The pid is loaded from the cell HERE, at the last possible moment, for the
+/// reasons [`ConnectionManager::disconnect_all`] spells out. A cell reading
+/// zero needs nothing: `on_exit` only zeroes it on a real reap, and a child
+/// that never spawned has nothing to kill.
+///
+/// What `true` means, exactly, weakest case first:
+/// - `SIGKILL` was delivered and [`SIGKILL_SETTLE`] passed without the reap
+///   landing. `SIGKILL` cannot be caught, ignored or blocked, so the process
+///   cannot run userspace code again; it is either unreaped, or stuck in an
+///   uninterruptible syscall and will die on the way out of it. An in-flight
+///   write already issued to the kernel may still complete.
+/// - Or the reap landed, or the OS reported no such process. Then it is gone
+///   outright.
+///
+/// `false` means the ESCALATION did not land: the `SIGKILL` pass came back with
+/// neither a delivery nor a no-such-process. An earlier `SIGTERM` may well have
+/// been delivered — see the call site for what is done about it.
+///
+/// One hazard survives all of this, and cannot be closed from here: between the
+/// target exiting and its cell being zeroed, the pid NUMBER may be recycled, and
+/// the escalation would then signal whatever now holds it. It is the same
+/// exposure `disconnect_all` accepts — narrowed here to a single signal, where
+/// re-probing in the wait loop would have spent one per poll — and closing it
+/// properly needs a handle rather than a number: a pidfd, a process group, a job
+/// object, all of them decided at spawn time.
+///
+/// Note the asymmetry: "the pid is out of the process table" is deliberately
+/// NOT the bar, because it is not waitable. A child that has already exited but
+/// has not been reaped yet answers signals exactly like a live one, so a
+/// wait-for-the-pid-to-vanish loop would burn its whole window on a process
+/// that died instantly.
+///
+/// Scope: this tracks the ROOT. Each pass re-walks and signals the whole tree,
+/// but a descendant that ignores `SIGTERM` and outlives its parent is
+/// reparented out of that tree and left to the OS — the same limit
+/// `disconnect_all` has always had. Fine for the sign-out this exists for: the
+/// credential lives in the agent process itself, not in the MCP servers it
+/// starts. Closing it properly would mean giving every agent a process group or
+/// a job object at spawn time.
+///
+/// Blocking — call from `spawn_blocking`.
+fn kill_tree_and_wait(cell: &std::sync::atomic::AtomicU32) -> bool {
+    let pid = cell.load(std::sync::atomic::Ordering::SeqCst);
+    if pid == 0 {
+        return true;
+    }
+    if kill_tree_pass(pid, "SIGTERM") == KillPass::AlreadyGone {
+        return true;
+    }
+    if wait_for_reap(cell, ESCALATE_TO_SIGKILL_AFTER) {
+        return true;
+    }
+
+    if kill_tree_pass(pid, "SIGKILL") == KillPass::Failed {
+        // Neither gone nor reachable: someone else owns that pid now (recycled
+        // onto another user's process, say), so it is not ours to wait for.
+        // Reported, not acted on — retrying would not change the answer.
+        tracing::warn!("[ACP] pid={pid} could not be signalled or confirmed gone");
+        return false;
+    }
+    wait_for_reap(cell, SIGKILL_SETTLE);
+    true
+}
 
 /// True for ids in the parsers' turn-id namespace (`turn-<digits>`), which every
 /// parser assigns via `format!("turn-{}", n)`. A broadcast `message_id` must
@@ -94,10 +251,15 @@ fn user_prompt_text_preview(blocks: &[PromptInputBlock]) -> Option<String> {
 /// delegating prompt's text blocks (the sub-agent's task). Uses the parser's own
 /// `title_from_user_text` (folds reference links, caps at 100 chars) so the value
 /// matches what `refresh_auto_title` would later compute from that same first
-/// turn — the conditional UPDATE then sees no change and doesn't churn. Returns
-/// `None` for a textless prompt, leaving the title unset to be backfilled on
-/// first detail load as before. Kept unlocked by the caller so an AI-generated
-/// title can still replace it later.
+/// turn — the conditional UPDATE then sees no change and doesn't churn. Kept
+/// unlocked by the caller so an AI-generated title can still replace it later.
+///
+/// A prompt with no prose at all — one dropped-in file and nothing else — is
+/// named after what it carries instead. That row would otherwise read
+/// "Untitled" forever: for an agent with no store parser, ACP has no title
+/// channel and the history parse honestly reports no title. This value only
+/// ever reaches `seed_auto_title_if_empty` / a fresh row's `title`, never
+/// `refresh_auto_title`, so it cannot displace a name the agent published.
 fn delegation_child_title_seed(blocks: &[PromptInputBlock]) -> Option<String> {
     let joined = blocks
         .iter()
@@ -111,11 +273,11 @@ fn delegation_child_title_seed(blocks: &[PromptInputBlock]) -> Option<String> {
         .collect::<Vec<_>>()
         .join(" ");
     let trimmed = joined.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(crate::parsers::title_from_user_text(trimmed))
+    if !trimmed.is_empty() {
+        return Some(crate::parsers::title_from_user_text(trimmed));
     }
+    crate::acp::types::attachment_names_from_prompt(blocks)
+        .map(|names| crate::parsers::title_from_user_text(&names))
 }
 
 /// Composite key identifying a logical agent session for spawn-time dedup.
@@ -135,6 +297,27 @@ struct SpawnDedupKey {
 /// without deadlocking the next concurrent acp_connect when an agent is
 /// genuinely broken.
 pub(crate) const SPAWN_HANDSHAKE_TIMEOUT_SECS: u64 = 60;
+
+/// Whether the turn a steer was admitted against is no longer the turn now in
+/// flight — the guard `submit_feedback_native` applies across attachment
+/// hydration, the one await between admission and the enqueue.
+///
+/// Both halves are needed. `turn_in_flight` alone cannot see "turn N ended and
+/// N+1 started while we hydrated" — it reads true both times.
+/// `SessionState.turns_completed` closes exactly that: it moves only on
+/// `TurnComplete`, so it is stable for a turn's whole life and differs across
+/// turns, whatever the new turn did to the flag. It is also independent of
+/// whether the turn ever published a user message, which
+/// `pending_user_message_started_at` is not (`user_message` is `None` for
+/// delegation children and unbound conversations, so those turns would have
+/// carried no identity at all).
+fn steered_turn_changed(
+    admitted_turns_completed: u64,
+    now_in_flight: bool,
+    now_turns_completed: u64,
+) -> bool {
+    !now_in_flight || now_turns_completed != admitted_turns_completed
+}
 
 /// Read the spawn-handshake timeout from `CODEG_ACP_SPAWN_HANDSHAKE_TIMEOUT_SECS`,
 /// falling back to `SPAWN_HANDSHAKE_TIMEOUT_SECS`. Returns the configured
@@ -188,8 +371,62 @@ async fn wait_for_session_started(
     (outcome, start.elapsed())
 }
 
+/// A connection that has left the map while its process may still be running.
+struct DrainingChild {
+    agent: AgentType,
+    /// The connection's live pid cell. `on_spawn` publishes the pid and
+    /// `on_exit` zeroes it on a real reap.
+    pid: Arc<std::sync::atomic::AtomicU32>,
+    parked_at: std::time::Instant,
+}
+
+type DrainingChildren = Vec<DrainingChild>;
+
+/// How long a child whose pid reads zero is still treated as possibly running.
+///
+/// Zero is ambiguous: it means "reaped" AND "not spawned yet". A connection
+/// torn down mid-spawn can publish a live pid moments later, so dropping it
+/// immediately would hide a real writer. The grace resolves the ambiguity in
+/// the safe direction — a false positive only downgrades a restore to the side
+/// location, while a false negative unlinks a file an agent is writing.
+const DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Drop entries that are provably finished: pid back to zero and long enough
+/// ago that it cannot be a spawn still in flight.
+fn prune_reaped(draining: &mut DrainingChildren) {
+    draining.retain(|c| {
+        c.pid.load(std::sync::atomic::Ordering::SeqCst) != 0
+            || c.parked_at.elapsed() < DRAIN_GRACE
+    });
+}
+
 pub struct ConnectionManager {
     pub(crate) connections: Arc<Mutex<HashMap<String, AgentConnection>>>,
+    /// Connections whose teardown was requested but whose child process has
+    /// not been reaped yet.
+    ///
+    /// `disconnect` drops the map entry immediately and only then signals the
+    /// child, so without this an agent that is still exiting — and still able
+    /// to append to its transcript — is invisible to the backup restore gate,
+    /// which would then unlink files it is still writing.
+    ///
+    /// Each entry holds the connection's live `child_pid` cell. `on_exit`
+    /// zeroes it on a REAL reap; a connection that merely ended keeps its pid,
+    /// because `ChildGuard::drop` signals the tree without waiting. So
+    /// "non-zero" is exactly the codebase's existing definition of "this
+    /// process may still be running", the same one the shutdown backstop
+    /// relies on. Pruned on every push and every read, so it stays small.
+    draining: Arc<Mutex<DrainingChildren>>,
+    /// Read-held for the whole of `spawn_agent`, write-held while a backup
+    /// restore writes transcripts back to the agents' own directories.
+    ///
+    /// Enumerating live connections and then writing is a check-then-use with
+    /// a gap wide enough to drive through: staging a large archive takes
+    /// minutes, and automations, the work-task engine and MCP delegation all
+    /// start connections without a user clicking anything. Taking the write
+    /// lock BEFORE enumerating closes it — no connection can appear between
+    /// the count and the writes.
+    external_restore_lock: Arc<tokio::sync::RwLock<()>>,
     /// Per-(agent, working_dir, session_id) async mutex. Held across the
     /// dedup-lookup + spawn + SessionStarted-wait critical section so two
     /// concurrent `spawn_agent` calls for the same logical session can't
@@ -213,6 +450,10 @@ pub struct ConnectionManager {
     /// init. `Arc<OnceLock>` so the inner `Self` cloned from `clone_ref` sees
     /// the install too — the lock is set once at startup and never mutated.
     delegation_injection: Arc<std::sync::OnceLock<crate::acp::connection::DelegationInjection>>,
+    /// Chat-channel manager installed during bootstrap so live title writes
+    /// can sync Telegram topic names without threading the manager through
+    /// every `send_prompt_linked` caller. Optional in tests.
+    chat_channel: Arc<std::sync::OnceLock<crate::chat_channel::manager::ChatChannelManager>>,
     /// Per-agent-type serialization for `probe_agent_options`. Without
     /// this, rapid agent-tab clicks in the settings UI would fan out one
     /// real CLI process per click — each one running up to 60s. The
@@ -228,6 +469,13 @@ pub struct ConnectionManager {
     /// no cap, no cumulative growth; entries are removed on answer / cancel /
     /// connection teardown.
     pending_questions: Arc<Mutex<HashMap<String, PendingQuestionEntry>>>,
+    /// Held across a question's registration AND its publication. A newer
+    /// question may withdraw a yielding one (codex's async question), so two
+    /// registrations on one connection can overlap; without this, the older
+    /// one's `QuestionRequest` could be published after the newer one's and
+    /// overwrite its card, and its drained-entry compensation would then clear
+    /// the card altogether, leaving the newer question waiting unseen.
+    question_registration: Arc<Mutex<()>>,
     /// In-flight Grok `exit_plan_mode` approvals awaiting the user's decision,
     /// keyed by the globally-unique `approval_id`. The connection's ext handler
     /// parks on the receiver; the answer / cancel path resolves (and removes) the
@@ -236,15 +484,77 @@ pub struct ConnectionManager {
     /// touch the same map. At most one per connection (the agent is blocked in
     /// its `exit_plan_mode` call) — no cap, no cumulative growth.
     pending_plan_approvals: Arc<Mutex<HashMap<String, PendingPlanApprovalEntry>>>,
+    /// Conversations a user moved to another folder during this process's
+    /// life (root and the delegation children that moved with it).
+    ///
+    /// Membership only. The fences that consult it — prompt admission in
+    /// `send_prompt_linked_full` and live-connection discovery — read the
+    /// row's CURRENT folder from the database and compare it with the
+    /// connection's launch directory, so a second move, or a move into a
+    /// worktree that is later removed and re-parented, is judged by where the
+    /// row is now, never by where some earlier move put it. Conversations that
+    /// were never moved are not in here, so nothing about them changes: a
+    /// to-do task's retry still resumes its session wherever the task put it.
+    /// Bounded by the number of conversations moved in one process lifetime.
+    relocated: Arc<std::sync::Mutex<std::collections::HashSet<i32>>>,
+    /// Per-conversation selection persistence: the serialized persister and
+    /// the one-writer-per-row authority map (see `acp::selection`).
+    pub(crate) selection: Arc<crate::acp::selection::SelectionPersister>,
 }
 
 /// A parked `ask_user_question` awaiting its answer. The `sender` resolves the
 /// blocked listener round-trip; `questions` is retained so `answer_question` can
 /// build the self-describing outcome without a `SessionState` read (race-free).
+/// A test-only stop between a question's registration and its publication,
+/// per connection, so a test can line up the interleaving that
+/// `ConnectionManager::question_registration` rules out.
+#[cfg(test)]
+pub(crate) mod question_registration_test_gate {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, OnceLock};
+    use tokio::sync::Notify;
+
+    struct Gate {
+        reached: Arc<Notify>,
+        resume: Arc<Notify>,
+    }
+
+    fn gates() -> &'static Mutex<HashMap<String, Gate>> {
+        static GATES: OnceLock<Mutex<HashMap<String, Gate>>> = OnceLock::new();
+        GATES.get_or_init(Default::default)
+    }
+
+    /// Stop the next registration on `conn` before it publishes. Returns
+    /// (reached, resume): wait on the first, notify the second to let it go.
+    pub(crate) fn install(conn: &str) -> (Arc<Notify>, Arc<Notify>) {
+        let reached = Arc::new(Notify::new());
+        let resume = Arc::new(Notify::new());
+        gates().lock().unwrap().insert(
+            conn.to_string(),
+            Gate {
+                reached: reached.clone(),
+                resume: resume.clone(),
+            },
+        );
+        (reached, resume)
+    }
+
+    pub(crate) async fn pause(conn: &str) {
+        let gate = gates().lock().unwrap().remove(conn);
+        if let Some(gate) = gate {
+            gate.reached.notify_one();
+            gate.resume.notified().await;
+        }
+    }
+}
+
 struct PendingQuestionEntry {
     parent_connection_id: String,
     questions: Vec<QuestionSpec>,
     sender: tokio::sync::oneshot::Sender<QuestionOutcome>,
+    /// Withdrawn when the connection asks another question (see
+    /// `SessionQuestionAccess::register_yielding_question`).
+    yields_to_newer: bool,
 }
 
 /// A parked Grok `exit_plan_mode` approval awaiting the user's decision. The
@@ -253,6 +563,118 @@ struct PendingQuestionEntry {
 struct PendingPlanApprovalEntry {
     parent_connection_id: String,
     sender: tokio::sync::oneshot::Sender<PlanApprovalAnswer>,
+}
+
+/// Why ending a connection right now would kill work the user started.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionBusy {
+    /// A turn is in flight.
+    Turn,
+    /// The agent is waiting on a permission answer.
+    PendingPermission,
+    /// Launched-but-unresolved background work (async sub-agent, background
+    /// shell) — it runs inside the agent CLI and dies with it.
+    BackgroundWork,
+    /// Claude Code's Remote Control: the session was handed to claude.ai/code
+    /// or a phone.
+    RemoteControl,
+    /// A codeg delegation whose child is still running; ending the parent
+    /// cancels it.
+    DelegatedChild,
+    /// A goal loop is open and driving work the agent starts on its own.
+    Goal,
+}
+
+/// The work a connection is carrying that its teardown would kill — the
+/// conditions the idle sweep honours on a `Connected` connection, shared with
+/// "move conversation", which must not pull a working agent out of its folder
+/// either. `child_live` answers whether a delegated child connection is still
+/// in the connection map: an entry whose terminal frame never arrived must not
+/// pin the parent forever.
+fn teardown_blocker(
+    state: &crate::acp::session_state::SessionState,
+    now: chrono::DateTime<chrono::Utc>,
+    child_live: impl Fn(&str) -> bool,
+) -> Option<ConnectionBusy> {
+    if state.pending_permission.is_some() {
+        return Some(ConnectionBusy::PendingPermission);
+    }
+    if state.has_active_background_work(now) {
+        return Some(ConnectionBusy::BackgroundWork);
+    }
+    // Claude Code's Remote Control runs in the agent CLI: the user handed the
+    // session to claude.ai/code or a phone, and disconnecting would end it
+    // there. It stays until they turn it off or close the connection
+    // themselves.
+    if state.remote_control.is_some() {
+        return Some(ConnectionBusy::RemoteControl);
+    }
+    // A codeg delegation still running. It outlives the turn that started it,
+    // so its parent is idle by design while the child works, and ending the
+    // parent cancels every child it has in flight (`cancel_by_parent`). Every
+    // delegation is counted, not just the ones bound to a card
+    // (`active_delegations`).
+    if state
+        .delegated_children
+        .iter()
+        .any(|child| child_live(child))
+    {
+        return Some(ConnectionBusy::DelegatedChild);
+    }
+    None
+}
+
+/// Whether a connection launched in `launch` is running in `current` (a folder
+/// path from the database). Compared as the parsers compare paths first, then
+/// — only if that says no — with both sides canonicalized, so a symlinked or
+/// differently-spelled path to the same directory still matches. A connection
+/// with no launch directory never matches.
+pub(crate) fn launch_dir_matches(launch: Option<&std::path::Path>, current: &str) -> bool {
+    let Some(launch) = launch else {
+        return false;
+    };
+    if crate::parsers::path_eq_for_matching(&launch.to_string_lossy(), current) {
+        return true;
+    }
+    match (
+        std::fs::canonicalize(launch),
+        std::fs::canonicalize(current),
+    ) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// A conversation "move to project" is about to relocate: what identifies the
+/// connections working on it.
+#[derive(Debug, Clone)]
+pub struct RelocatingConversation {
+    pub id: i32,
+    pub agent_type: AgentType,
+    pub external_id: Option<String>,
+}
+
+/// The prompt locks of every connection working on a set of conversations,
+/// held — in connection-id order — while they are checked for work in flight,
+/// the rows are moved, and the idle connections are ended. No prompt can be
+/// admitted on any of them meanwhile. Dropping it releases the locks.
+pub struct ConversationConnectionsLock {
+    connection_ids: Vec<String>,
+    _guards: Vec<tokio::sync::OwnedMutexGuard<()>>,
+}
+
+impl ConversationConnectionsLock {
+    pub fn connection_ids(&self) -> &[String] {
+        &self.connection_ids
+    }
+}
+
+/// What [`ConnectionManager::spawn_agent_with_outcome`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpawnOutcome {
+    pub connection_id: String,
+    /// The connection already existed and was handed back by the dedup.
+    pub reused: bool,
 }
 
 impl Default for ConnectionManager {
@@ -265,13 +687,19 @@ impl ConnectionManager {
     pub fn new() -> Self {
         Self {
             connections: Arc::new(Mutex::new(HashMap::new())),
+            external_restore_lock: Arc::new(tokio::sync::RwLock::new(())),
+            draining: Arc::new(Mutex::new(Vec::new())),
             spawn_locks: Arc::new(Mutex::new(HashMap::new())),
             spawn_handshake_timeout: spawn_handshake_timeout_from_env(),
             terminal_shell_config: TerminalShellRuntimeConfig::new(),
             delegation_injection: Arc::new(std::sync::OnceLock::new()),
+            chat_channel: Arc::new(std::sync::OnceLock::new()),
             probe_locks: Arc::new(Mutex::new(HashMap::new())),
             pending_questions: Arc::new(Mutex::new(HashMap::new())),
+            question_registration: Arc::new(Mutex::new(())),
             pending_plan_approvals: Arc::new(Mutex::new(HashMap::new())),
+            relocated: Arc::new(std::sync::Mutex::new(Default::default())),
+            selection: Arc::new(crate::acp::selection::SelectionPersister::default()),
         }
     }
 
@@ -279,13 +707,19 @@ impl ConnectionManager {
     pub fn clone_ref(&self) -> Self {
         Self {
             connections: self.connections.clone(),
+            external_restore_lock: self.external_restore_lock.clone(),
+            draining: self.draining.clone(),
             spawn_locks: self.spawn_locks.clone(),
             spawn_handshake_timeout: self.spawn_handshake_timeout,
             terminal_shell_config: self.terminal_shell_config.clone(),
             delegation_injection: self.delegation_injection.clone(),
+            chat_channel: self.chat_channel.clone(),
             probe_locks: self.probe_locks.clone(),
             pending_questions: self.pending_questions.clone(),
+            question_registration: self.question_registration.clone(),
             pending_plan_approvals: self.pending_plan_approvals.clone(),
+            relocated: self.relocated.clone(),
+            selection: self.selection.clone(),
         }
     }
 
@@ -294,6 +728,22 @@ impl ConnectionManager {
     /// the unlikely event a second `build_delegation_stack` runs.
     pub fn install_delegation(&self, injection: crate::acp::connection::DelegationInjection) {
         let _ = self.delegation_injection.set(injection);
+    }
+
+    /// Install the chat-channel manager exactly once during bootstrap so
+    /// live title writes can sync bound forum topics. Calling twice is a
+    /// no-op. Tests leave this unset and skip the remote sync.
+    pub fn install_chat_channel(
+        &self,
+        manager: crate::chat_channel::manager::ChatChannelManager,
+    ) {
+        let _ = self.chat_channel.set(manager);
+    }
+
+    pub(crate) fn chat_channel(
+        &self,
+    ) -> Option<crate::chat_channel::manager::ChatChannelManager> {
+        self.chat_channel.get().map(|c| c.clone_ref())
     }
 
     fn delegation_snapshot(&self) -> Option<crate::acp::connection::DelegationInjection> {
@@ -313,13 +763,19 @@ impl ConnectionManager {
     fn with_spawn_handshake_timeout(timeout: Duration) -> Self {
         Self {
             connections: Arc::new(Mutex::new(HashMap::new())),
+            external_restore_lock: Arc::new(tokio::sync::RwLock::new(())),
+            draining: Arc::new(Mutex::new(Vec::new())),
             spawn_locks: Arc::new(Mutex::new(HashMap::new())),
             spawn_handshake_timeout: timeout,
             terminal_shell_config: TerminalShellRuntimeConfig::new(),
             delegation_injection: Arc::new(std::sync::OnceLock::new()),
+            chat_channel: Arc::new(std::sync::OnceLock::new()),
             probe_locks: Arc::new(Mutex::new(HashMap::new())),
             pending_questions: Arc::new(Mutex::new(HashMap::new())),
+            question_registration: Arc::new(Mutex::new(())),
             pending_plan_approvals: Arc::new(Mutex::new(HashMap::new())),
+            relocated: Arc::new(std::sync::Mutex::new(Default::default())),
+            selection: Arc::new(crate::acp::selection::SelectionPersister::default()),
         }
     }
 
@@ -354,9 +810,9 @@ impl ConnectionManager {
         let conn = AgentConnection {
             id: id.to_string(),
             agent_type,
-            status: ConnectionStatus::Connected,
             owner_window_label: "test-window".to_string(),
             cmd_tx: tx,
+            handshake: tokio_util::sync::CancellationToken::new(),
             state: Arc::new(tokio::sync::RwLock::new(state)),
             emitter,
             prompt_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -397,9 +853,9 @@ impl ConnectionManager {
         let conn = AgentConnection {
             id: id.to_string(),
             agent_type,
-            status: ConnectionStatus::Connected,
             owner_window_label: "test-window".to_string(),
             cmd_tx: tx,
+            handshake: tokio_util::sync::CancellationToken::new(),
             state: Arc::new(tokio::sync::RwLock::new(state)),
             emitter,
             prompt_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -423,6 +879,101 @@ impl ConnectionManager {
         preferred_mode_id: Option<String>,
         preferred_config_values: BTreeMap<String, String>,
     ) -> Result<String, AcpError> {
+        self.spawn_agent_with_outcome(
+            agent_type,
+            working_dir,
+            session_id,
+            runtime_env,
+            owner_window_label,
+            emitter,
+            preferred_mode_id,
+            preferred_config_values,
+        )
+        .await
+        .map(|outcome| outcome.connection_id)
+    }
+
+    /// [`Self::spawn_agent`], also saying whether the connection was REUSED:
+    /// for a resumed session (`session_id` given), the dedup below hands back a
+    /// live connection that already represents it — one a user may be driving
+    /// in an open tab — instead of spawning. The answer is the dedup's own,
+    /// decided under its lock, so it cannot be fooled by a connection that
+    /// appears between a caller's look-up and this call.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn spawn_agent_with_outcome(
+        &self,
+        agent_type: AgentType,
+        working_dir: Option<String>,
+        session_id: Option<String>,
+        runtime_env: BTreeMap<String, String>,
+        owner_window_label: String,
+        emitter: EventEmitter,
+        preferred_mode_id: Option<String>,
+        preferred_config_values: BTreeMap<String, String>,
+    ) -> Result<SpawnOutcome, AcpError> {
+        self.spawn_agent_seeded(
+            agent_type,
+            working_dir,
+            session_id,
+            runtime_env,
+            owner_window_label,
+            emitter,
+            preferred_mode_id,
+            preferred_config_values,
+            None,
+        )
+        .await
+    }
+
+    /// A fresh connection for the root of a `codeg-cli` run, marked as the
+    /// run's from the moment it exists — before its agent starts, so the
+    /// codeg-mcp it is given knows the run ([`crate::cli_run::RootSeed`]).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn spawn_cli_root(
+        &self,
+        agent_type: AgentType,
+        working_dir: Option<String>,
+        runtime_env: BTreeMap<String, String>,
+        owner_window_label: String,
+        emitter: EventEmitter,
+        preferred_mode_id: Option<String>,
+        preferred_config_values: BTreeMap<String, String>,
+        seed: crate::cli_run::RootSeed,
+    ) -> Result<String, AcpError> {
+        self.spawn_agent_seeded(
+            agent_type,
+            working_dir,
+            None,
+            runtime_env,
+            owner_window_label,
+            emitter,
+            preferred_mode_id,
+            preferred_config_values,
+            Some(seed),
+        )
+        .await
+        .map(|outcome| outcome.connection_id)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn spawn_agent_seeded(
+        &self,
+        agent_type: AgentType,
+        working_dir: Option<String>,
+        session_id: Option<String>,
+        mut runtime_env: BTreeMap<String, String>,
+        owner_window_label: String,
+        emitter: EventEmitter,
+        preferred_mode_id: Option<String>,
+        preferred_config_values: BTreeMap<String, String>,
+        cli_root: Option<crate::cli_run::RootSeed>,
+    ) -> Result<SpawnOutcome, AcpError> {
+        // Held for the whole establishment. A restore writing back to the
+        // agents' own directories takes the write side, so it can never see an
+        // empty connection list and then have one appear underneath it. Not
+        // re-entrant: nothing reachable from here calls `spawn_agent` again.
+        let _restore_guard = self.external_restore_lock.read().await;
+
         // Connection dedup: when resuming an agent session (session_id is
         // Some), look for a live AgentConnection that already represents
         // the same external session in the same working_dir for the same
@@ -468,13 +1019,24 @@ impl ConnectionManager {
                 existing,
                 session_id.as_deref().unwrap_or("")
             );
-            return Ok(existing);
+            return Ok(SpawnOutcome {
+                connection_id: existing,
+                reused: true,
+            });
         }
 
         let connection_id = uuid::Uuid::new_v4().to_string();
         tracing::info!(
             "[ACP] spawning connection id={} owner_window={} agent={:?}",
             connection_id, owner_window_label, agent_type
+        );
+        // Every connection's processes know which connection they belong to,
+        // whoever started it (UI, automation, delegation, CLI), so a nested
+        // `codeg-cli` call can be traced back to it. Kept out of the config
+        // fingerprint (`is_volatile_fingerprint_key`).
+        runtime_env.insert(
+            crate::cli_run::CLI_CALLER_ENV.to_string(),
+            connection_id.clone(),
         );
 
         // `spawn_agent_connection` inserts the entry into `self.connections`,
@@ -494,6 +1056,8 @@ impl ConnectionManager {
             preferred_config_values,
             self.delegation_snapshot(),
             self.terminal_shell_config.clone(),
+            cli_root,
+            Some(self.selection.clone()),
         )
         .await?;
 
@@ -521,7 +1085,60 @@ impl ConnectionManager {
 
         drop(dedup_lock);
 
-        Ok(connection_id)
+        Ok(SpawnOutcome {
+            connection_id,
+            reused: false,
+        })
+    }
+
+    /// Every live connection that belongs to the CLI run `run_id`: its root and
+    /// the delegation children that inherited its tag.
+    pub async fn connections_of_cli_run(
+        &self,
+        run_id: &str,
+    ) -> Vec<(String, Arc<tokio::sync::RwLock<crate::acp::SessionState>>)> {
+        let all: Vec<_> = {
+            let conns = self.connections.lock().await;
+            conns
+                .iter()
+                .map(|(id, conn)| (id.clone(), conn.state.clone()))
+                .collect()
+        };
+        let mut tagged = Vec::new();
+        for (id, state) in all {
+            let belongs = state
+                .read()
+                .await
+                .cli_run
+                .as_ref()
+                .is_some_and(|tag| tag.run_id == run_id);
+            if belongs {
+                tagged.push((id, state));
+            }
+        }
+        tagged
+    }
+
+    /// Carry a CLI run's tag from `parent` to `child`, a connection the
+    /// delegation spawner has just created for it — before the child's first
+    /// prompt, so it is in place before the child can ask for anything. A
+    /// no-op when the parent belongs to no run. Never call it for a REUSED
+    /// connection: that one belongs to whoever already drives it.
+    async fn inherit_cli_run_tag(&self, parent_connection_id: &str, child_connection_id: &str) {
+        let (parent, child) = {
+            let conns = self.connections.lock().await;
+            (
+                conns.get(parent_connection_id).map(|c| c.state.clone()),
+                conns.get(child_connection_id).map(|c| c.state.clone()),
+            )
+        };
+        let (Some(parent), Some(child)) = (parent, child) else {
+            return;
+        };
+        let tag = parent.read().await.cli_run.clone();
+        if let Some(tag) = tag {
+            child.write().await.cli_run = Some(tag);
+        }
     }
 
     /// Bump `last_activity_at` for a live connection so the idle sweep
@@ -554,7 +1171,9 @@ impl ConnectionManager {
     /// "Idle" means: status is `Connected`, no `pending_permission`, no
     /// launched-but-unresolved background work (async sub-agent / background
     /// shell — disconnecting kills the agent CLI and the background work with
-    /// it), and no activity (no events, no commands) for at least
+    /// it), no Claude Remote Control (it runs in the same CLI), no codeg
+    /// delegation whose child is still running (ending the parent cancels it),
+    /// and no activity (no events, no commands) for at least
     /// `idle_timeout`. `Prompting` connections are always preserved (a turn is
     /// in flight). Returns the number of connections that were disconnected.
     pub async fn sweep_idle(&self, idle_timeout: Duration) -> usize {
@@ -576,10 +1195,8 @@ impl ConnectionManager {
                 if state.status != ConnectionStatus::Connected {
                     continue;
                 }
-                if state.pending_permission.is_some() {
-                    continue;
-                }
-                if state.has_active_background_work(now) {
+                if teardown_blocker(&state, now, |child| connections.contains_key(child)).is_some()
+                {
                     continue;
                 }
                 let elapsed = now.signed_duration_since(state.last_activity_at);
@@ -591,8 +1208,8 @@ impl ConnectionManager {
         };
         let mut disconnected = 0;
         for id in to_disconnect {
-            tracing::info!("[ACP] idle sweep disconnecting connection={}", id);
-            if self.disconnect(&id).await.is_ok() {
+            if matches!(self.release_idle(&id, now - timeout).await, Ok(true)) {
+                tracing::info!("[ACP] idle sweep disconnected connection={}", id);
                 disconnected += 1;
             }
         }
@@ -704,8 +1321,9 @@ impl ConnectionManager {
     async fn send_prompt_inner(
         &self,
         conn_id: &str,
-        blocks: Vec<PromptInputBlock>,
+        mut blocks: Vec<PromptInputBlock>,
         user_message: Option<(String, Vec<crate::acp::UserMessageBlock>)>,
+        internal_suffix: Vec<PromptInputBlock>,
     ) -> Result<(), AcpError> {
         // Reject an empty prompt BEFORE touching the concurrency gate. An empty
         // prompt produces no turn — and thus no `TurnComplete` to clear the gate
@@ -717,6 +1335,11 @@ impl ConnectionManager {
             return Err(AcpError::protocol(
                 "prompt must contain at least one content block".to_string(),
             ));
+        }
+        if strip_route_separator_from_prompt(&mut blocks) {
+            tracing::debug!(
+                "[ACP][{conn_id}] removed the reserved routing separator from an outgoing prompt"
+            );
         }
         let (cmd_tx, state_arc) = {
             let connections = self.connections.lock().await;
@@ -761,6 +1384,7 @@ impl ConnectionManager {
         permit.send(ConnectionCommand::Prompt {
             blocks,
             user_message,
+            internal_suffix,
         });
         Ok(())
     }
@@ -786,7 +1410,8 @@ impl ConnectionManager {
     ) -> Result<(), AcpError> {
         let prompt_lock = self.clone_prompt_lock(conn_id).await?;
         let _guard = prompt_lock.lock_owned().await;
-        self.send_prompt_inner(conn_id, blocks, None).await
+        self.send_prompt_inner(conn_id, blocks, None, Vec::new())
+            .await
     }
 
     /// Send a prompt while ensuring a `Conversation` DB row is bound to this
@@ -841,11 +1466,65 @@ impl ConnectionManager {
         &self,
         db: &AppDatabase,
         conn_id: &str,
+        blocks: Vec<PromptInputBlock>,
+        folder_id: Option<i32>,
+        conversation_id: Option<i32>,
+        delegation: Option<crate::acp::delegation::spawner::DelegationLink>,
+        client_message_id: Option<String>,
+    ) -> Result<Option<i32>, AcpError> {
+        self.send_prompt_linked_full(
+            db,
+            conn_id,
+            blocks,
+            folder_id,
+            conversation_id,
+            delegation,
+            client_message_id,
+            Vec::new(),
+        )
+        .await
+    }
+
+    /// As [`send_prompt_linked`], plus `internal_suffix`: Codeg-authored
+    /// blocks appended after `blocks` at the final agent boundary only (the
+    /// assistant brief of a delegated child's first and resume prompts). They
+    /// never reach the conversation row, a broadcast, the ledger or the title
+    /// seed — see [`ConnectionCommand::Prompt`].
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send_prompt_linked_with_suffix(
+        &self,
+        db: &AppDatabase,
+        conn_id: &str,
+        blocks: Vec<PromptInputBlock>,
+        folder_id: Option<i32>,
+        conversation_id: Option<i32>,
+        delegation: Option<crate::acp::delegation::spawner::DelegationLink>,
+        internal_suffix: Vec<PromptInputBlock>,
+    ) -> Result<Option<i32>, AcpError> {
+        self.send_prompt_linked_full(
+            db,
+            conn_id,
+            blocks,
+            folder_id,
+            conversation_id,
+            delegation,
+            None,
+            internal_suffix,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn send_prompt_linked_full(
+        &self,
+        db: &AppDatabase,
+        conn_id: &str,
         mut blocks: Vec<PromptInputBlock>,
         folder_id: Option<i32>,
         conversation_id: Option<i32>,
         delegation: Option<crate::acp::delegation::spawner::DelegationLink>,
         client_message_id: Option<String>,
+        internal_suffix: Vec<PromptInputBlock>,
     ) -> Result<Option<i32>, AcpError> {
         // Reject an empty prompt up front, BEFORE any side effects: linking /
         // creating the conversation row, flipping it to InProgress, or emitting
@@ -857,6 +1536,14 @@ impl ConnectionManager {
             return Err(AcpError::protocol(
                 "prompt must contain at least one content block".to_string(),
             ));
+        }
+        // Scrub the reserved separator HERE, before the conversation row, the
+        // optimistic broadcast, and the ledger all take their copy of `blocks`,
+        // so every persisted / displayed / on-the-wire copy is byte-identical.
+        if strip_route_separator_from_prompt(&mut blocks) {
+            tracing::debug!(
+                "[ACP][{conn_id}] removed the reserved routing separator from an outgoing prompt"
+            );
         }
         // Caller-supplied conversation_id requires folder_id (we include it in
         // the emitted ConversationLinked event so subscribers don't have to
@@ -888,21 +1575,31 @@ impl ConnectionManager {
         // Snapshot what we need from the connection map under one short lock.
         // The conversation-linked check happens INSIDE the prompt lock so
         // any racing send sees a consistent post-link state.
-        let (state_arc, emitter, agent_type, already_linked, turn_in_flight) = {
+        let (
+            state_arc,
+            emitter,
+            agent_type,
+            already_linked,
+            turn_in_flight,
+            bound_conversation_id,
+            launch_dir,
+        ) = {
             let connections = self.connections.lock().await;
             let conn = connections
                 .get(conn_id)
                 .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.into()))?;
-            let (already, in_flight) = {
+            let (bound, in_flight, launch_dir) = {
                 let s = conn.state.read().await;
-                (s.conversation_id.is_some(), s.turn_in_flight)
+                (s.conversation_id, s.turn_in_flight, s.working_dir.clone())
             };
             (
                 conn.state.clone(),
                 conn.emitter.clone(),
                 conn.agent_type,
-                already,
+                bound.is_some(),
                 in_flight,
+                bound,
+                launch_dir,
             )
         };
 
@@ -924,6 +1621,18 @@ impl ConnectionManager {
             return Err(AcpError::TurnInProgress);
         }
 
+        // A conversation the user moved to another folder must not run a turn
+        // on a connection started in the folder it left — on the already-linked
+        // fast path, or when adopting the caller's row (Branch A). Checked under
+        // `prompt_lock`, which the move holds while it writes the row and marks
+        // it, so a prompt is judged either entirely before the move (and the
+        // move waits for it, then sees the turn and skips) or after it. Before
+        // any side effect: a refusal changes no row and broadcasts nothing.
+        if let Some(cid) = bound_conversation_id.or(conversation_id) {
+            self.admit_relocated(&db.conn, cid, launch_dir.as_deref())
+                .await?;
+        }
+
         // Re-hydrate uploaded image attachments (web / remote-workspace mode
         // sends empty-payload marker blocks with a `file://` uri into the
         // uploads root; see `prompt_hydration`). Deliberately placed AFTER
@@ -941,67 +1650,204 @@ impl ConnectionManager {
         )
         .await?;
 
-        if !already_linked {
-            match (conversation_id, folder_id) {
-                // Branch A: caller already owns a row — adopt it. No DB write.
-                (Some(caller_conv_id), Some(caller_folder_id)) => {
-                    emit_with_state(
-                        &state_arc,
-                        &emitter,
-                        AcpEvent::ConversationLinked {
-                            conversation_id: caller_conv_id,
-                            folder_id: caller_folder_id,
-                            parent_conversation_id: None,
-                            parent_tool_use_id: None,
-                        },
-                    )
-                    .await;
-                }
-                // Function-entry guard rejects this combination.
-                (Some(_), None) => unreachable!(
-                    "conversation_id without folder_id should have been rejected at function entry"
-                ),
-                // Branch B: backend creates the row from caller-supplied
-                // folder_id. Phase 3c-1 made folder_id required here — every
-                // production caller that reaches this branch passes one, and
-                // silent fallback to working_dir-based find-or-create masked
-                // contract violations.
-                (None, Some(folder_id)) => {
-                    // Snapshot the delegation link before move-into-create: we
-                    // still need the parent ids for the ConversationLinked
-                    // event payload.
-                    let parent_conversation_id_for_event =
-                        delegation.as_ref().map(|d| d.parent_conversation_id);
-                    let parent_tool_use_id_for_event =
-                        delegation.as_ref().map(|d| d.parent_tool_use_id.clone());
-                    // Seed a delegation child's title from the task prompt so the
-                    // sidebar shows a meaningful label immediately. `list_children`
-                    // returns the raw DB title, so a child born with NULL reads
-                    // "Untitled" until the first detail load backfills it. Roots
-                    // (no delegation) keep `None` and follow the existing backfill.
-                    let seed_title = if delegation.is_some() {
-                        delegation_child_title_seed(&blocks)
+        // CANCELLATION SHIELD around the first link, same shape and for the same
+        // reason as `fork_session` below.
+        //
+        // Everything above this point is side-effect-free: drop this future and
+        // `_prompt_guard` drops with it, having changed nothing. What follows is
+        // not. `bind_external_id` COMMITS ownership of the agent session to a
+        // row, and only the publication after it makes that row reachable —
+        // `ConversationLinked` latches `state.conversation_id` (which is exactly
+        // what `already_linked` reads), and the upsert puts the row in every
+        // client's sidebar. Leaving that pair tied to this future means a
+        // dropped caller (server mode: an HTTP client disconnecting
+        // mid-request) can commit the bind and never publish, stranding a row
+        // that owns the session but that nothing was told about — after which
+        // Branch B fails EVERY retry with a `Conflict` naming that invisible
+        // row, until the connection is re-established.
+        //
+        // Reordering does not solve it, it only moves the damage: publishing
+        // first means a drop during the bind leaves the link latched onto a row
+        // that does NOT hold the session, so the next prompt takes the
+        // `already_linked` fast path and silently misfiles into the holder's
+        // transcript. Both orderings are unsafe under cancellation, so the
+        // phase must not be cancellable at all. It runs in a DETACHED task that
+        // OWNS the guard and hands it back: dropping this future no longer
+        // aborts the phase, it runs to completion and releases the lock when its
+        // result is dropped. The handle is awaited only to hand the outcome to a
+        // caller that is still there.
+        let _prompt_guard = if already_linked {
+            _prompt_guard
+        } else {
+            // Seed a delegation child's title from the task prompt so the
+            // sidebar shows a meaningful label immediately. `list_children`
+            // returns the raw DB title, so a child born with NULL reads
+            // "Untitled" until the first detail load backfills it. Roots keep
+            // `None` here and get the same first-prompt seed after the send
+            // succeeds (so a failed enqueue does not name a cancelled row).
+            // Computed out here so `blocks` stays with the caller for the
+            // actual prompt.
+            let seed_title = if delegation.is_some() {
+                delegation_child_title_seed(&blocks)
+            } else {
+                None
+            };
+            let db_conn = db.conn.clone();
+            let task_state = state_arc.clone();
+            let task_emitter = emitter.clone();
+            let task_conn_id = conn_id.to_string();
+            let task_delegation = delegation.clone();
+            let task_selection = self.selection.clone();
+            let handle = tokio::spawn(async move {
+                // Holding the owned guard for the whole task is what shields the
+                // bind + publication from caller cancellation.
+                let guard = _prompt_guard;
+                let outcome: Result<(), AcpError> = async {
+                    // Resolve which row this prompt belongs to WITHOUT
+                    // announcing it yet — the announce is held back until the
+                    // session id has actually been bound to that row below.
+                    let (
+                        linked_conversation_id,
+                        linked_folder_id,
+                        parent_conv_for_event,
+                        parent_tool_for_event,
+                    ) = match (conversation_id, folder_id) {
+                        // Branch A: caller already owns a row — adopt it. No DB write.
+                        (Some(caller_conv_id), Some(caller_folder_id)) => {
+                            (caller_conv_id, caller_folder_id, None, None)
+                        }
+                        // Function-entry guard rejects this combination.
+                        (Some(_), None) => unreachable!(
+                            "conversation_id without folder_id should have been rejected at function entry"
+                        ),
+                        // Branch B: backend creates the row from caller-supplied
+                        // folder_id. Phase 3c-1 made folder_id required here —
+                        // every production caller that reaches this branch passes
+                        // one, and silent fallback to working_dir-based
+                        // find-or-create masked contract violations.
+                        (None, Some(folder_id)) => {
+                            // Snapshot the delegation link before
+                            // move-into-create: we still need the parent ids for
+                            // the ConversationLinked event payload.
+                            let parent_conversation_id_for_event =
+                                task_delegation.as_ref().map(|d| d.parent_conversation_id);
+                            let parent_tool_use_id_for_event = task_delegation
+                                .as_ref()
+                                .map(|d| d.parent_tool_use_id.clone());
+                            let row = conversation_service::create_with_delegation(
+                                &db_conn,
+                                folder_id,
+                                agent_type,
+                                seed_title,
+                                None,
+                                task_delegation,
+                            )
+                            .await
+                            .map_err(|e| AcpError::protocol(e.to_string()))?;
+                            (
+                                row.id,
+                                folder_id,
+                                parent_conversation_id_for_event,
+                                parent_tool_use_id_for_event,
+                            )
+                        }
+                        (None, None) => {
+                            return Err(AcpError::protocol(
+                                "folder_id required for new conversation row".to_string(),
+                            ));
+                        }
+                    };
+
+                    // UI new-conversation path: SessionStarted applied
+                    // state.external_id back during acp_connect, but
+                    // conversation_id was None then so the lifecycle
+                    // subscriber's SessionStarted handler skipped the DB write.
+                    // Now that we have resolved the row in the same prompt_lock
+                    // critical section, snapshot external_id and persist it
+                    // synchronously — no dependence on broadcaster eventual
+                    // consistency. The chat_channel reverse-order path (link
+                    // before SessionStarted) is unaffected and continues to be
+                    // handled by the lifecycle subscriber.
+                    let eid_opt = task_state.read().await.external_id.clone();
+                    let preserved = if let Some(eid) = eid_opt {
+                        // THE codeg#500 write. Branch A above adopts a row the
+                        // caller supplied, which may still be bound to an older
+                        // session — a connection spawned with `session_id = None`
+                        // (a reconnect that lost the id, or an unclassified
+                        // `session/load` failure that fell through to
+                        // `session/new`) arrives here holding a session that has
+                        // nothing to do with the row's history.
+                        // `bind_external_id` splits that history onto its own row
+                        // instead of overwriting it.
+                        let continues = crate::acp::continued_session_ids(agent_type, &eid);
+                        match conversation_service::bind_external_id(
+                            &db_conn,
+                            linked_conversation_id,
+                            &eid,
+                            &continues,
+                        )
+                        .await
+                        {
+                            Ok(preserved) => preserved,
+                            Err(e) => {
+                                // Refused, or a genuine DB failure. Either way
+                                // this row does not hold the session, so the
+                                // prompt must not go out and the link must not
+                                // stick.
+                                //
+                                // Branch B minted a row moments ago that no
+                                // client has been told about — it was never
+                                // announced, because the announce is below this
+                                // bind. Drop it, or every refused attempt would
+                                // leave another empty conversation behind for the
+                                // sidebar's next full refetch to surface. Branch
+                                // A creates nothing and has nothing to undo.
+                                if conversation_id.is_none() {
+                                    if let Err(cleanup) = conversation_service::soft_delete(
+                                        &db_conn,
+                                        linked_conversation_id,
+                                    )
+                                    .await
+                                    {
+                                        tracing::warn!(
+                                            conversation_id = linked_conversation_id,
+                                            error = %cleanup,
+                                            "[manager] failed to drop the unannounced row left \
+                                             by a refused bind"
+                                        );
+                                    }
+                                }
+                                return Err(AcpError::protocol(e.to_string()));
+                            }
+                        }
                     } else {
+                        tracing::info!(
+                            "[manager] send_prompt_linked: conversation resolved but \
+                             external_id not yet on state (conn={task_conn_id}); lifecycle \
+                             subscriber will catch up when SessionStarted arrives"
+                        );
                         None
                     };
-                    let row = conversation_service::create_with_delegation(
-                        &db.conn,
-                        folder_id,
-                        agent_type,
-                        seed_title,
-                        None,
-                        delegation.clone(),
-                    )
-                    .await
-                    .map_err(|e| AcpError::protocol(e.to_string()))?;
+
+                    // Bound (or nothing to bind). NOW the link is real, so
+                    // announce it: this is the write that makes `already_linked`
+                    // true for every subsequent prompt on this connection.
+                    //
+                    // The connection becomes the row's selection writer here,
+                    // synchronously — not when the lifecycle worker gets to the
+                    // event, which may be after the connection ended
+                    // (codeg#1179).
+                    task_selection
+                        .take_authority_on_link(&task_conn_id, &task_state, linked_conversation_id)
+                        .await;
                     emit_with_state(
-                        &state_arc,
-                        &emitter,
+                        &task_state,
+                        &task_emitter,
                         AcpEvent::ConversationLinked {
-                            conversation_id: row.id,
-                            folder_id,
-                            parent_conversation_id: parent_conversation_id_for_event,
-                            parent_tool_use_id: parent_tool_use_id_for_event,
+                            conversation_id: linked_conversation_id,
+                            folder_id: linked_folder_id,
+                            parent_conversation_id: parent_conv_for_event,
+                            parent_tool_use_id: parent_tool_for_event,
                         },
                     )
                     .await;
@@ -1009,12 +1855,16 @@ impl ConnectionManager {
                     // prompt sent without a pre-created row, not the create
                     // button) must reach every client immediately via the global
                     // `conversation://changed` channel. Roots land in the sidebar
-                    // list; delegation children (parent set) are routed into their
-                    // parent's expanded sub-session subtree and bump its chevron.
-                    // Both carry `external_id: null` here (no session yet) — the
-                    // external_id write below re-broadcasts the full summary.
+                    // list; delegation children (parent set) are routed into
+                    // their parent's expanded sub-session subtree and bump its
+                    // chevron. Emitted after the bind, so — unlike before, when
+                    // Branch B broadcast an `external_id: null` summary and a
+                    // second upsert corrected it — this carries the complete
+                    // summary first time.
                     crate::commands::conversations::emit_conversation_upsert(
-                        &emitter, &db.conn, row.id,
+                        &task_emitter,
+                        &db_conn,
+                        linked_conversation_id,
                     )
                     .await;
                     // A new delegation child changes its parent's child_count
@@ -1022,54 +1872,45 @@ impl ConnectionManager {
                     // the parent so every client converges its count from the
                     // authoritative DB aggregate rather than a drift-prone
                     // per-client increment. The parent may itself be a root or a
-                    // nested child — the upsert routes correctly either way by its
-                    // own parent_id.
-                    if let Some(parent_id) = parent_conversation_id_for_event {
+                    // nested child — the upsert routes correctly either way by
+                    // its own parent_id.
+                    if let Some(parent_id) = parent_conv_for_event {
                         crate::commands::conversations::emit_conversation_upsert(
-                            &emitter, &db.conn, parent_id,
+                            &task_emitter,
+                            &db_conn,
+                            parent_id,
                         )
                         .await;
                     }
-                }
-                (None, None) => {
-                    return Err(AcpError::protocol(
-                        "folder_id required for new conversation row".to_string(),
-                    ));
-                }
-            }
-
-            // UI new-conversation path: SessionStarted applied state.external_id
-            // back during acp_connect, but conversation_id was None then so the
-            // lifecycle subscriber's SessionStarted handler skipped the DB write.
-            // Now that we just linked the row in the same prompt_lock critical
-            // section, snapshot external_id and persist it synchronously — no
-            // dependence on broadcaster eventual consistency. The chat_channel
-            // reverse-order path (link before SessionStarted) is unaffected and
-            // continues to be handled by the lifecycle subscriber.
-            let (cid_opt, eid_opt) = {
-                let s = state_arc.read().await;
-                (s.conversation_id, s.external_id.clone())
-            };
-            if let (Some(cid), Some(eid)) = (cid_opt, eid_opt) {
-                conversation_service::update_external_id(&db.conn, cid, eid)
-                    .await
-                    .map_err(|e| AcpError::protocol(e.to_string()))?;
-                // SessionStarted arrived BEFORE this link, so the lifecycle
-                // subscriber skipped its broadcast (no conversation_id then).
-                // Now that external_id is persisted, converge every client's
-                // sidebar with the complete summary — this also corrects a
-                // Branch B upsert above that necessarily carried
-                // `external_id: null`. Root-only via the helper.
-                crate::commands::conversations::emit_conversation_upsert(&emitter, &db.conn, cid)
+                    crate::commands::conversations::emit_preserved_conversation(
+                        &task_emitter,
+                        &db_conn,
+                        preserved,
+                    )
                     .await;
-            } else if cid_opt.is_some() {
-                tracing::info!(
-                    "[manager] send_prompt_linked: conversation linked but \
-                     external_id not yet on state (conn={conn_id}); lifecycle \
-                     subscriber will catch up when SessionStarted arrives"
-                );
-            }
-        }
+                    Ok(())
+                }
+                .await;
+                // Logged HERE, not just returned. Once the phase is detached the
+                // caller may be gone by now, and `handle.await`'s result is then
+                // dropped unread — a `Conflict` (or any failure) would leave no
+                // trace at all in exactly the disconnect case this shield exists
+                // to handle.
+                if let Err(e) = &outcome {
+                    tracing::warn!(
+                        connection_id = %task_conn_id,
+                        error = %e,
+                        "[manager] conversation link phase failed"
+                    );
+                }
+                (outcome, guard)
+            });
+            let (outcome, guard) = handle.await.map_err(|e| {
+                AcpError::protocol(format!("conversation link phase failed to join: {e}"))
+            })?;
+            outcome?;
+            guard
+        };
 
         // Centralized status transition: every prompt send flips the
         // conversation row to InProgress. This MUST happen on every call
@@ -1103,6 +1944,15 @@ impl ConnectionManager {
         // never reached the agent produces no "user message" notification.
         let user_prompt_preview = if delegation.is_none() {
             user_prompt_text_preview(&blocks)
+        } else {
+            None
+        };
+        // Seed an unlocked title from the first prompt so the sidebar is not
+        // "Untitled" while the agent is still working. Native ACP titles
+        // (session_info_update) replace this later via refresh_auto_title.
+        // Delegation children are already seeded at row create.
+        let first_prompt_title = if delegation.is_none() {
+            delegation_child_title_seed(&blocks)
         } else {
             None
         };
@@ -1152,7 +2002,10 @@ impl ConnectionManager {
         // for a prompt that never reached the agent, so without this the
         // lifecycle subscriber's PendingReview write also never fires and the
         // row would be stuck until a follow-up `send_prompt_linked` re-flipped it.
-        match self.send_prompt_inner(conn_id, blocks, user_message).await {
+        match self
+            .send_prompt_inner(conn_id, blocks, user_message, internal_suffix)
+            .await
+        {
             Ok(()) => {
                 // The prompt reached the agent: surface it to the chat-channel
                 // "user message" event feed. Notification-only — never gates the
@@ -1164,6 +2017,33 @@ impl ConnectionManager {
                         AcpEvent::UserPromptSent { text_preview },
                     )
                     .await;
+                }
+                if let (Some(cid), Some(title)) =
+                    (conversation_id_for_status, first_prompt_title)
+                {
+                    match conversation_service::seed_auto_title_if_empty(&db.conn, cid, title)
+                        .await
+                    {
+                        Ok(true) => {
+                            crate::commands::conversations::emit_conversation_upsert(
+                                &emitter, &db.conn, cid,
+                            )
+                            .await;
+                            if let Some(ccm) = self.chat_channel() {
+                                crate::commands::conversations::spawn_sync_conversation_title_until_current(
+                                    db.conn.clone(),
+                                    ccm,
+                                    cid,
+                                );
+                            }
+                        }
+                        Ok(false) => {}
+                        Err(e) => tracing::warn!(
+                            conversation_id = cid,
+                            error = %e,
+                            "[manager] first-prompt title seed failed"
+                        ),
+                    }
                 }
                 Ok(conversation_id_for_status)
             }
@@ -1211,9 +2091,34 @@ impl ConnectionManager {
             conn.cmd_tx.clone()
         };
         cmd_tx
-            .send(ConnectionCommand::SetMode { mode_id })
+            .send(ConnectionCommand::SetMode {
+                mode_id,
+                reply: None,
+            })
             .await
             .map_err(|_| AcpError::ProcessExited)
+    }
+
+    /// [`Self::set_mode`], then wait for the agent's answer to this request —
+    /// see [`SetterOutcome`] for why the broadcasts cannot stand in for it.
+    /// Unbounded: the caller sets the deadline. A connection that ends before
+    /// answering drops the reply and reads as `ProcessExited`; an agent error
+    /// is `Protocol`.
+    pub async fn set_mode_and_wait(
+        &self,
+        conn_id: &str,
+        mode_id: String,
+    ) -> Result<SetterOutcome, AcpError> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.cmd_sender(conn_id)
+            .await?
+            .send(ConnectionCommand::SetMode {
+                mode_id,
+                reply: Some(tx),
+            })
+            .await
+            .map_err(|_| AcpError::ProcessExited)?;
+        Self::await_setter_reply(rx).await
     }
 
     pub async fn set_config_option(
@@ -1233,30 +2138,180 @@ impl ConnectionManager {
             .send(ConnectionCommand::SetConfigOption {
                 config_id,
                 value_id,
+                reply: None,
             })
             .await
             .map_err(|_| AcpError::ProcessExited)
     }
 
-    /// Pause or clear the session's active Codex goal via the connection loop
-    /// (codex-acp #293). Looked up by connectionId; the loop sources the
-    /// sessionId from the live session, so callers only supply the action.
+    /// [`Self::set_config_option`], then wait for the agent's answer, as
+    /// [`Self::set_mode_and_wait`].
+    pub async fn set_config_option_and_wait(
+        &self,
+        conn_id: &str,
+        config_id: String,
+        value_id: String,
+    ) -> Result<SetterOutcome, AcpError> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.cmd_sender(conn_id)
+            .await?
+            .send(ConnectionCommand::SetConfigOption {
+                config_id,
+                value_id,
+                reply: Some(tx),
+            })
+            .await
+            .map_err(|_| AcpError::ProcessExited)?;
+        Self::await_setter_reply(rx).await
+    }
+
+    async fn cmd_sender(
+        &self,
+        conn_id: &str,
+    ) -> Result<tokio::sync::mpsc::Sender<ConnectionCommand>, AcpError> {
+        let connections = self.connections.lock().await;
+        connections
+            .get(conn_id)
+            .map(|conn| conn.cmd_tx.clone())
+            .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.into()))
+    }
+
+    async fn await_setter_reply(
+        rx: tokio::sync::oneshot::Receiver<Result<SetterOutcome, String>>,
+    ) -> Result<SetterOutcome, AcpError> {
+        match rx.await {
+            Ok(Ok(outcome)) => Ok(outcome),
+            Ok(Err(message)) => Err(AcpError::Protocol(message)),
+            // The loop dropped the reply unanswered: the connection ended.
+            Err(_) => Err(AcpError::ProcessExited),
+        }
+    }
+
+    /// Pause or clear the session's active goal via the connection loop
+    /// (codex-acp #293; the provider-neutral `_session/goal` since codex 1.2 /
+    /// claude 0.66). Looked up by connectionId; the loop sources the sessionId
+    /// from the live session, so callers only supply the action.
+    ///
+    /// STOPS THE RUNNING TURN TOO, for adapters whose control request travels
+    /// out of band (see `registry::goal_control_is_out_of_band`). Without that,
+    /// the button is a lie: codex's pause/clear are pure app-server metadata
+    /// that only take hold at the next idle point, so the user clicks 暂停 and
+    /// watches the agent keep working — the whole reason the goal card's
+    /// controls were once ripped out.
+    ///
+    /// Two conditions guard it, and neither is "is a turn running?":
+    /// * the goal must have been ACTIVE when the user clicked
+    ///   (`SessionState.goal_active`, read before the request goes out). An
+    ///   active goal is the thing driving the work, so stopping the work is
+    ///   what the click means. A PAUSED goal drives nothing — clearing one is
+    ///   housekeeping, and must never abort a turn the user started themselves
+    ///   in the meantime.
+    /// * the control must have LANDED. The loop reports that back over a
+    ///   oneshot; a rejected request (or a closed channel) leaves the turn
+    ///   alone, so a goal that is still `active` never gets its work killed
+    ///   only to have codex resume it at the next idle point. The round-trip
+    ///   also makes the interrupt strictly second: the goal is already
+    ///   non-active when the abort lands, so nothing auto-continues on the way
+    ///   out.
+    ///
+    /// Liveness deliberately does NOT gate it. `ConnectionStatus::Prompting`
+    /// (and `turn_in_flight` with it) tracks turns CODEG started, and a goal
+    /// loop's continuations are started by codex itself — detached turns no host
+    /// request owns — so gating on them would skip the interrupt in exactly the
+    /// case that motivated this. Any post-hoc read is unsound anyway: by the
+    /// time the manager acts on it the turn it described may have ended. With
+    /// the goal known active, the interrupt means precisely "press Stop on the
+    /// user's behalf": `cancel()`'s row write is CAS'd from `InProgress`, a
+    /// `session/cancel` with nothing running is a no-op, and its permission
+    /// drain / delegation cascade are the semantics the Stop button already has
+    /// (including its own turn-boundary race, which is not made worse here).
+    ///
+    /// Awaiting the round-trip is deliberate and cheap — an out-of-band control
+    /// is a plain RPC that returns without waiting for the turn. It is NOT
+    /// cancellation-shielded (unlike `submit_feedback_native`): a caller that
+    /// disappears mid-await simply doesn't get the follow-up interrupt, which is
+    /// the pre-existing behavior, never worse. The control itself is owned by
+    /// the loop from the moment it is enqueued.
     pub async fn goal_control(
         &self,
+        db: &DatabaseConnection,
         conn_id: &str,
         action: GoalControlAction,
     ) -> Result<(), AcpError> {
-        let cmd_tx = {
+        let (cmd_tx, agent_type, state_arc) = {
             let connections = self.connections.lock().await;
             let conn = connections
                 .get(conn_id)
                 .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.into()))?;
-            conn.cmd_tx.clone()
+            (conn.cmd_tx.clone(), conn.agent_type, conn.state.clone())
+        };
+        // Read the goal state as it was when the user clicked — reading it after
+        // the round-trip would see the transition we just asked for.
+        let interrupts = crate::acp::registry::goal_control_is_out_of_band(agent_type)
+            && state_arc.read().await.goal_active;
+        // Only ask for an answer when it would change what we do next.
+        let (reply_tx, reply_rx) = if interrupts {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            (Some(tx), Some(rx))
+        } else {
+            (None, None)
         };
         cmd_tx
-            .send(ConnectionCommand::GoalControl { action })
+            .send(ConnectionCommand::GoalControl {
+                action,
+                reply: reply_tx,
+            })
             .await
-            .map_err(|_| AcpError::ProcessExited)
+            .map_err(|_| AcpError::ProcessExited)?;
+
+        let Some(reply_rx) = reply_rx else {
+            return Ok(());
+        };
+        if !matches!(reply_rx.await, Ok(true)) {
+            return Ok(());
+        }
+        tracing::info!(
+            "[ACP] goal {:?} landed; interrupting so the work stops now connection={}",
+            action,
+            conn_id
+        );
+        self.cancel(db, conn_id).await
+    }
+
+    /// Stop one AIR async task (`_session/async_task/stop`).
+    ///
+    /// Returns the adapter's own verdict, not "the request went through": it
+    /// answers `false` for a task it declines to stop. Unshielded, unlike
+    /// `submit_feedback_native` — there is nothing to persist on this path, so a
+    /// caller that disconnects mid-await leaves no half-written state, and the
+    /// user-visible result arrives on the session channel regardless of who is
+    /// still listening for the reply.
+    ///
+    /// The task id is NOT pre-validated against `SessionState.async_tasks`. The
+    /// adapter owns that table's real lifecycle (its `claimStop` already refuses
+    /// unknown, terminal, and already-stopping tasks), and a local check could
+    /// only ever be staler than the adapter's — it would turn a race into a
+    /// silent no-op rather than the `false` the caller can report.
+    pub async fn stop_async_task(&self, conn_id: &str, task_id: &str) -> Result<bool, AcpError> {
+        let cmd_tx = {
+            let connections = self.connections.lock().await;
+            connections
+                .get(conn_id)
+                .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.into()))?
+                .cmd_tx
+                .clone()
+        };
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        cmd_tx
+            .send(ConnectionCommand::StopAsyncTask {
+                task_id: task_id.to_string(),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| AcpError::ProcessExited)?;
+        reply_rx
+            .await
+            .map_err(|_| AcpError::protocol("Async task stop reply channel closed".to_string()))?
     }
 
     pub async fn cancel(&self, db: &DatabaseConnection, conn_id: &str) -> Result<(), AcpError> {
@@ -1317,11 +2372,26 @@ impl ConnectionManager {
         Ok(())
     }
 
+    /// Answer a permission card as the person looking at it.
     pub async fn respond_permission(
         &self,
         conn_id: &str,
         request_id: &str,
         option_id: &str,
+    ) -> Result<(), AcpError> {
+        self.respond_permission_from(conn_id, request_id, option_id, PermissionAnswerOrigin::User)
+            .await
+    }
+
+    /// Answer a permission card on behalf of `origin`. Queued, like every
+    /// command: success means the connection has it, not that it took effect —
+    /// the first answer wins, and `PermissionResolved` names whose that was.
+    pub async fn respond_permission_from(
+        &self,
+        conn_id: &str,
+        request_id: &str,
+        option_id: &str,
+        origin: PermissionAnswerOrigin,
     ) -> Result<(), AcpError> {
         let cmd_tx = {
             let connections = self.connections.lock().await;
@@ -1334,6 +2404,7 @@ impl ConnectionManager {
             .send(ConnectionCommand::RespondPermission {
                 request_id: request_id.into(),
                 option_id: option_id.into(),
+                origin,
             })
             .await
             .map_err(|_| AcpError::ProcessExited)
@@ -1362,6 +2433,9 @@ impl ConnectionManager {
         // `send_prompt_linked`'s Branch A contract).
         link_conversation_id: Option<i32>,
         link_folder_id: Option<i32>,
+        // Fork at this rendered turn instead of at the tail ("fork from here").
+        // Resolved to an agent-specific `ForkPoint` below.
+        fork_from_turn_id: Option<String>,
     ) -> Result<ForkResultInfo, AcpError> {
         let (state_arc, cmd_tx, emitter) = {
             let connections = self.connections.lock().await;
@@ -1398,6 +2472,9 @@ impl ConnectionManager {
         // below then rejects, unchanged).
         if state_arc.read().await.conversation_id.is_none() {
             if let (Some(cid), Some(fid)) = (link_conversation_id, link_folder_id) {
+                self.selection
+                    .take_authority_on_link(conn_id, &state_arc, cid)
+                    .await;
                 emit_with_state(
                     &state_arc,
                     &emitter,
@@ -1419,6 +2496,59 @@ impl ConnectionManager {
         let conversation_id = state_arc.read().await.conversation_id.ok_or_else(|| {
             AcpError::protocol("fork_session requires a linked conversation row".to_string())
         })?;
+
+        // Resolve the fork point BEFORE the cancellation shield below: this is
+        // a read-only parse, so a caller that disappears here has changed
+        // nothing. A historical Codex point must not silently select a later tail.
+        let fork_point = match fork_from_turn_id {
+            None => None,
+            Some(turn_id) => {
+                let agent_type = state_arc.read().await.agent_type;
+                match crate::commands::conversations::get_folder_conversation_with_text(
+                    &db.conn,
+                    conversation_id,
+                    crate::parsers::codex::CodexText::Fork,
+                )
+                .await
+                {
+                    Ok((detail, _)) => {
+                        let point = crate::acp::fork::requested_fork_point(
+                            &detail.turns,
+                            &turn_id,
+                            agent_type,
+                        )?;
+                        if point.is_none() {
+                            tracing::info!(
+                                connection_id = %conn_id,
+                                turn_id = %turn_id,
+                                agent = %agent_type,
+                                "[ACP] no fork point for this turn; forking at the tail"
+                            );
+                        }
+                        point
+                    }
+                    Err(e) => {
+                        // A historical Codex point refuses rather than tail-forks;
+                        // say why it could not be located, not just that it wasn't.
+                        let point =
+                            crate::acp::fork::requested_fork_point(&[], &turn_id, agent_type)
+                                .map_err(|_| {
+                                    AcpError::protocol(format!(
+                                        "Cannot read the conversation to locate the selected \
+                                         Codex fork point {turn_id}: {e}"
+                                    ))
+                                })?;
+                        tracing::warn!(
+                            connection_id = %conn_id,
+                            turn_id = %turn_id,
+                            "[ACP] could not read the conversation to resolve a fork point \
+                             ({e}); forking at the tail"
+                        );
+                        point
+                    }
+                }
+            }
+        };
 
         // Reject if a turn is already in flight. `prompt_lock` is FREE between a
         // prompt's enqueue and its `TurnComplete` (it is released the moment the
@@ -1453,6 +2583,7 @@ impl ConnectionManager {
         // caller; the result is harmlessly discarded if the caller is gone.
         let db_conn = db.conn.clone();
         let conn_id_for_task = conn_id.to_string();
+        let selection = self.selection.clone();
         let handle = tokio::spawn(async move {
             // Holding the owned guard for the whole task is what shields the
             // persistence from caller cancellation.
@@ -1461,7 +2592,10 @@ impl ConnectionManager {
                 // Protocol-only round trip — no DB writes inside the loop.
                 let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
                 cmd_tx
-                    .send(ConnectionCommand::Fork { reply: reply_tx })
+                    .send(ConnectionCommand::Fork {
+                        fork_point,
+                        reply: reply_tx,
+                    })
                     .await
                     .map_err(|_| AcpError::ProcessExited)?;
                 let protocol_result = reply_rx
@@ -1471,13 +2605,25 @@ impl ConnectionManager {
                 let forked_session_id = protocol_result.forked_session_id;
                 let original_session_id = protocol_result.original_session_id;
 
+                // The re-pointed row is written only while this connection
+                // holds its selection write authority (`acp::selection`) —
+                // checked and written under the persister lock, so a newer
+                // writer cannot bind and save in between.
+                let owners = selection.lock().await;
+                let write_current = owners
+                    .get(&conversation_id)
+                    .is_some_and(|owner| owner == &conn_id_for_task);
                 let sibling_id = Self::persist_fork_outcome(
                     &db_conn,
                     conversation_id,
                     forked_session_id.clone(),
                     original_session_id.clone(),
+                    Some(protocol_result.inherited_selection.to_json()),
+                    write_current,
                 )
-                .await?;
+                .await;
+                drop(owners);
+                let sibling_id = sibling_id?;
 
                 // Fork mutates the sidebar in two ways the rest of the system
                 // never sees otherwise: the current row's title (`[Fork] …`) and
@@ -1573,6 +2719,12 @@ impl ConnectionManager {
         conversation_id: i32,
         forked_session_id: String,
         original_session_id: String,
+        // The selection the fork actually inherited (JSON
+        // `ConversationSelection`), read in the connection loop. The sibling
+        // always gets it — whichever path created it — and the re-pointed row
+        // gets it when `write_current` (the connection owns its selection).
+        inherited_selection: Option<String>,
+        write_current: bool,
     ) -> Result<i32, AcpError> {
         use sea_orm::sea_query::Expr;
         use sea_orm::{ColumnTrait, QueryFilter};
@@ -1648,6 +2800,17 @@ impl ConnectionManager {
                         ConversationKind::Delegate => ConversationKind::Regular,
                         ref kind => kind.clone(),
                     };
+                    // The pre-fork history was started where the original was.
+                    let source = current.source.clone();
+                    // ...and was recorded in the directory the original
+                    // remembers as its origin (a worktree it was re-parented
+                    // out of, the scratch dir of a chat it was moved out of).
+                    // The stale-id history fallback matches on it, and the chat
+                    // scratch-dir GC keeps the directory alive while some row
+                    // remembers it — so the sibling must carry it too, or
+                    // deleting the original would leave the sibling's history
+                    // (and the files the agent wrote) to be reclaimed.
+                    let origin_cwd = current.origin_cwd.clone();
 
                     // UPDATE current row → S2. Writing external_id explicitly
                     // here closes the race against `refreshConversations()`
@@ -1673,7 +2836,48 @@ impl ConnectionManager {
                     }
                     active.external_id = Set(Some(forked_session_id));
                     active.updated_at = Set(now);
+                    if write_current && inherited_selection.is_some() {
+                        active.selector_state = Set(inherited_selection.clone());
+                    }
                     active.update(txn).await?;
+
+                    // The lifecycle subscriber may have got here first. Its
+                    // `SessionStarted{S2}` handler now runs the guarded
+                    // `bind_external_id`, which preserves S1 on its own row
+                    // when nothing else holds it — and that race is real, not
+                    // theoretical: the fork reply is sent to us BEFORE
+                    // `handle_fork_or_exit` emits `SessionStarted{S2}` (see
+                    // `connection.rs`), so this detached persistence task and
+                    // the lifecycle worker run concurrently from that point.
+                    //
+                    // Inserting a second S1 row would not merely duplicate it:
+                    // `idx_conversation_external_agent` is UNIQUE over
+                    // `(external_id, agent_type)`, so the INSERT would fail and
+                    // roll back the whole fork. Adopt whatever already holds S1
+                    // instead and return ITS id — the caller feeds that straight
+                    // into `ForkResultInfo.sibling_conversation_id` and the
+                    // sidebar upsert, both of which must name a real row.
+                    if let Some(existing) = conversation::Entity::find()
+                        .filter(conversation::Column::ExternalId.eq(original_session_id.clone()))
+                        .filter(conversation::Column::AgentType.eq(agent_type_str.clone()))
+                        .filter(conversation::Column::Id.ne(conversation_id))
+                        .filter(conversation::Column::DeletedAt.is_null())
+                        .one(txn)
+                        .await?
+                    {
+                        // Adopted sibling: it copied whatever the column held
+                        // when the lifecycle path split it off, which may
+                        // predate the last pick — give it what the fork
+                        // really inherited.
+                        if let Some(sel) = inherited_selection.clone() {
+                            conversation::Entity::update_many()
+                                .col_expr(conversation::Column::SelectorState, Expr::value(sel))
+                                .filter(conversation::Column::Id.eq(existing.id))
+                                .exec(txn)
+                                .await?;
+                        }
+                        return Ok(existing.id);
+                    }
 
                     // INSERT sibling row preserving pre-fork (S1) history.
                     // PendingReview because no live agent is attached to S1.
@@ -1696,9 +2900,23 @@ impl ConnectionManager {
                         updated_at: Set(now),
                         deleted_at: Set(None),
                         pinned_at: Set(None),
-                        origin_cwd: Set(None),
+                        origin_cwd: Set(origin_cwd),
+                        assistant_id: Set(None),
+                        assistant_snapshot: Set(None),
+                        source: Set(source),
+                        selector_state: Set(inherited_selection.clone()),
                     };
                     let inserted = sibling.insert(txn).await?;
+                    // The sibling keeps the pre-fork history under the
+                    // original's name, so it keeps the original's tags too —
+                    // without them the user's tagging would appear to have
+                    // fallen off the conversation they forked FROM.
+                    crate::db::service::conversation_tag_service::copy_conversation_tags(
+                        txn,
+                        conversation_id,
+                        inserted.id,
+                    )
+                    .await?;
                     Ok(inserted.id)
                 })
             })
@@ -1707,17 +2925,107 @@ impl ConnectionManager {
     }
 
     pub async fn disconnect(&self, conn_id: &str) -> Result<(), AcpError> {
-        let cmd_tx = {
+        self.remove_connection(conn_id, None).await.map(|_| ())
+    }
+
+    /// Passive releases recheck the authoritative state while removing the
+    /// entry. A client can be one background frame behind, and a selected
+    /// sweep victim can have received a prompt in the meantime.
+    pub(crate) async fn release_idle(
+        &self,
+        conn_id: &str,
+        deadline: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool, AcpError> {
+        self.remove_connection(conn_id, Some(deadline)).await
+    }
+
+    async fn remove_connection(
+        &self,
+        conn_id: &str,
+        idle_before: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<bool, AcpError> {
+        let removed = {
+            // The map lock is held ACROSS the handoff into `draining`, and
+            // readers take it in the same order, so an observer can never see
+            // the connection in neither place.
             let mut connections = self.connections.lock().await;
-            connections.remove(conn_id).map(|conn| conn.cmd_tx)
+            if let (Some(deadline), Some(conn)) = (idle_before, connections.get(conn_id)) {
+                let Ok(state) = conn.state.try_read() else {
+                    return Ok(false);
+                };
+                // Closing an unclaimed tab may still cancel an unused handshake.
+                // A sweep selects connected sessions first and also rechecks
+                // its original inactivity deadline below.
+                if state.status == ConnectionStatus::Prompting
+                    || state.turn_in_flight
+                    || state.last_activity_at > deadline
+                    || teardown_blocker(&state, chrono::Utc::now(), |id| {
+                        connections.contains_key(id)
+                    })
+                    .is_some()
+                {
+                    return Ok(false);
+                }
+            }
+            let removed = connections.remove(conn_id);
+            if let Some(conn) = &removed {
+                self.park_draining(conn).await;
+            }
+            removed
         };
-        if let Some(cmd_tx) = cmd_tx {
+        if let Some(conn) = removed {
             tracing::info!("[ACP] disconnect connection={}", conn_id);
-            let _ = cmd_tx.send(ConnectionCommand::Disconnect).await;
-            Ok(())
+            // A dying process may never report its turn's end.
+            crate::agent_turn_files::end_turn(conn_id, false, std::time::SystemTime::now());
+            // First: a connection still in its handshake is not reading
+            // `cmd_tx`, and a full channel would hold the send below until it
+            // did. Cancelled, it stops and drops the receiver instead.
+            conn.handshake.cancel();
+            let _ = conn.cmd_tx.send(ConnectionCommand::Disconnect).await;
+            Ok(true)
         } else {
             Err(AcpError::ConnectionNotFound(conn_id.into()))
         }
+    }
+
+    /// Remember a connection's child until it is provably finished. Call while
+    /// holding the connections lock, immediately after removing the entry.
+    async fn park_draining(&self, conn: &AgentConnection) {
+        let mut draining = self.draining.lock().await;
+        prune_reaped(&mut draining);
+        draining.push(DrainingChild {
+            agent: conn.agent_type,
+            pid: conn.child_pid.clone(),
+            parked_at: std::time::Instant::now(),
+        });
+    }
+
+    /// Every agent that could still be writing to its own files: connected or
+    /// prompting, plus any whose connection is gone but whose process is not.
+    ///
+    /// Taken under the connections lock so the `disconnect` handoff into
+    /// `draining` is atomic from here — otherwise a restore could look between
+    /// the two and conclude nothing is running.
+    pub async fn live_or_draining_agent_names(&self) -> Vec<String> {
+        let connections = self.connections.lock().await;
+        let mut names = Vec::new();
+        for connection in connections.values() {
+            let state = connection.state.read().await;
+            if matches!(
+                state.status,
+                ConnectionStatus::Connecting
+                    | ConnectionStatus::Connected
+                    | ConnectionStatus::Prompting
+            ) {
+                names.push(connection.agent_type.to_string());
+            }
+        }
+        let mut draining = self.draining.lock().await;
+        prune_reaped(&mut draining);
+        names.extend(draining.iter().map(|c| c.agent.to_string()));
+        names.sort();
+        names.dedup();
+        names
     }
 
     /// Probe an agent for the modes / config_options it advertises on a fresh
@@ -1732,6 +3040,15 @@ impl ConnectionManager {
     /// what `codeg-mcp` will pass through to `session/set_config_option`
     /// when a delegation actually fires.
     ///
+    /// `preferred_config_values` are applied on the probe session before the
+    /// snapshot is read, exactly as a real launch would apply them: an agent
+    /// that derives one option's choices from another's value (opencode
+    /// re-lists `effort` per selected model) then answers for the user's
+    /// selection instead of its own default. A value the agent rejects is
+    /// logged and skipped — the snapshot still comes back. Each applied
+    /// option itself still reports the agent's own pick as its current value
+    /// (see [`report_agent_chosen_values`]).
+    ///
     /// Returns `Ok(snapshot)` even when the agent advertises no options
     /// (empty `config_options`, `None` modes) — that's a valid outcome the
     /// UI can render as "this agent has nothing to configure."
@@ -1740,6 +3057,7 @@ impl ConnectionManager {
         agent_type: AgentType,
         working_dir: Option<String>,
         runtime_env: BTreeMap<String, String>,
+        preferred_config_values: BTreeMap<String, String>,
     ) -> Result<AgentOptionsSnapshot, AcpError> {
         // Owner window label is informational only (used for
         // disconnect_by_owner_window), but worth being explicit so a probe
@@ -1766,6 +3084,7 @@ impl ConnectionManager {
                 .clone()
         };
         let _probe_guard = per_agent_lock.lock_owned().await;
+        let requested = preferred_config_values.clone();
         let conn_id = self
             .spawn_agent(
                 agent_type,
@@ -1775,7 +3094,7 @@ impl ConnectionManager {
                 owner_window,
                 EventEmitter::Noop,
                 None,
-                BTreeMap::new(),
+                preferred_config_values,
             )
             .await?;
 
@@ -1800,7 +3119,27 @@ impl ConnectionManager {
         // message over the generic ProbeTimedOut / ConnectionNotFound —
         // an agent that died on Initialize already explained why.
         let snapshot = match raw_snapshot {
-            Ok(s) => Ok(s),
+            Ok(s) => {
+                let (pinned, asserted, agent_chosen) = match state_arc.as_ref() {
+                    Some(state) => {
+                        let guard = state.read().await;
+                        (
+                            guard.env_pinned_config_option_ids.clone(),
+                            guard.asserted_config_values.clone(),
+                            guard.agent_chosen_config_values.clone(),
+                        )
+                    }
+                    None => (Vec::new(), BTreeMap::new(), BTreeMap::new()),
+                };
+                Ok(finish_probe_snapshot(
+                    s,
+                    agent_type,
+                    &pinned,
+                    &requested,
+                    &asserted,
+                    &agent_chosen,
+                ))
+            }
             Err(wait_err) => {
                 let captured = if let Some(state) = state_arc.as_ref() {
                     state.read().await.last_error.clone()
@@ -1884,6 +3223,8 @@ impl ConnectionManager {
                         config_options: config_options.unwrap_or_default(),
                         available_commands,
                         prompt_capabilities,
+                        // Filled by the probe, against this same snapshot.
+                        unapplied_config_ids: Vec::new(),
                     });
                 }
             }
@@ -1911,6 +3252,11 @@ impl ConnectionManager {
             let mut txs = Vec::with_capacity(ids.len());
             for id in ids {
                 if let Some(conn) = connections.remove(&id) {
+                    crate::agent_turn_files::end_turn(&id, false, std::time::SystemTime::now());
+                    // Same handoff as `disconnect`: closing a window leaves
+                    // the agents exiting, not exited.
+                    self.park_draining(&conn).await;
+                    conn.handshake.cancel();
                     txs.push(conn.cmd_tx);
                 }
             }
@@ -1928,15 +3274,181 @@ impl ConnectionManager {
         disconnected
     }
 
+    /// End every live connection bound to `conversation_id` and report how many
+    /// there were. Called when the conversation is deleted: that is the user
+    /// saying they are done with it, so the agent working on it goes too —
+    /// including one a closed tab deliberately left running because it still
+    /// had work in flight (a background task, Remote Control), which nothing
+    /// could otherwise reach again. Covers every client, not only the one that
+    /// deleted it.
+    pub async fn disconnect_by_conversation_id(&self, conversation_id: i32) -> usize {
+        // Read each state after letting go of the map, as `connections_of_cli_run`
+        // does: never wait on a state lock while holding the map lock.
+        let all: Vec<_> = {
+            let conns = self.connections.lock().await;
+            conns
+                .iter()
+                .map(|(id, conn)| (id.clone(), conn.state.clone()))
+                .collect()
+        };
+        let mut disconnected = 0;
+        for (id, state) in all {
+            if state.read().await.conversation_id != Some(conversation_id) {
+                continue;
+            }
+            if self.disconnect(&id).await.is_ok() {
+                disconnected += 1;
+            }
+        }
+        if disconnected > 0 {
+            tracing::info!(
+                "[ACP] disconnect by deleted conversation conversation_id={} count={}",
+                conversation_id,
+                disconnected
+            );
+        }
+        disconnected
+    }
+
+    /// End every live connection running `agent_type` and report how many there
+    /// were, not returning until this agent's processes — the ones just ended
+    /// AND any it already had exiting — have been put past running, as far as
+    /// the OS lets that be established ([`kill_tree_and_wait`] is precise about
+    /// where that stops).
+    ///
+    /// Added for the Antigravity sign-out, and the reason is the shape of that
+    /// agent's credential store rather than anything about connections. An
+    /// Antigravity process caches its OAuth credentials in memory and writes
+    /// them back to the keychain (or token file) on every silent refresh,
+    /// behind a lock that is per-PROCESS. So a connection still running while
+    /// the credential is cleared will, at its next token expiry, helpfully
+    /// restore the account the user just signed out of — or overwrite the one
+    /// they signed in as afterwards.
+    ///
+    /// That is why this borrows [`Self::disconnect_all`]'s shape rather than
+    /// [`Self::disconnect_by_owner_window`]'s, despite reading like the latter.
+    /// The caller needs "those processes are gone", not "those processes were
+    /// asked to go", and it differs from the shutdown backstop in the two ways
+    /// that follow from exactly that:
+    ///
+    /// - It sweeps the `draining` list, not just the map. A connection an
+    ///   earlier `disconnect` (or a closed window) already removed is invisible
+    ///   in the map while its process is still exiting — and that process holds
+    ///   the same in-memory credential. Only `draining` knows about it, and
+    ///   nothing else would ever kill it.
+    /// - It waits for each process to be past acting, escalating to `SIGKILL`;
+    ///   see [`kill_tree_and_wait`] for what that does and does not establish.
+    ///   `kill_tree` on its own returns as soon as `SIGTERM` is delivered, and
+    ///   `SIGTERM` can be caught or ignored, so its return says nothing about
+    ///   whether the agent is still there to write the credential back.
+    ///
+    /// Everything `disconnect_all` says about `try_send`, about sleeping the
+    /// WHOLE grace window, and about loading each pid only afterwards applies
+    /// verbatim. In particular the pid must not be read early: a connection
+    /// still `Connecting` reads zero now and publishes a live pid moments later,
+    /// and that is exactly the child that would go on to rewrite the credential.
+    ///
+    /// The return value counts the LIVE connections ended, not the processes
+    /// swept — a drainer was disconnected by whoever parked it, and counting it
+    /// again here would report a teardown that did not happen. A pid the sweep
+    /// could not settle is logged, not raised. On unix that means `kill(2)`
+    /// answered something other than `ESRCH` — in practice `EPERM`, i.e. that
+    /// pid is not ours to signal, which points at a recycled number rather than
+    /// a surviving agent, though it does not prove either. Weighed against
+    /// refusing to return on it, which would strand the sign-out in exactly the
+    /// dead end it exists to undo: the agent restoring a credential costs the
+    /// user another press of the button, and never signing out costs them the
+    /// account.
+    ///
+    /// Callers that need no new connection to appear behind them must hold
+    /// [`Self::lock_out_new_connections`] BEFORE calling, as `disconnect_all`'s
+    /// shutdown caller does by construction.
+    pub async fn disconnect_by_agent_type(&self, agent_type: AgentType) -> usize {
+        let cmd_txs: Vec<tokio::sync::mpsc::Sender<ConnectionCommand>> = {
+            let mut connections = self.connections.lock().await;
+            let ids: Vec<String> = connections
+                .iter()
+                .filter(|(_, conn)| conn.agent_type == agent_type)
+                .map(|(id, _)| id.clone())
+                .collect();
+
+            let mut txs = Vec::with_capacity(ids.len());
+            for id in ids {
+                if let Some(conn) = connections.remove(&id) {
+                    crate::agent_turn_files::end_turn(&id, false, std::time::SystemTime::now());
+                    // Same handoff as every other teardown: the entry goes
+                    // immediately, so the child is parked as draining to stay
+                    // visible while it exits — and, here, to be swept below.
+                    self.park_draining(&conn).await;
+                    conn.handshake.cancel();
+                    txs.push(conn.cmd_tx);
+                }
+            }
+            txs
+        };
+
+        let disconnected = cmd_txs.len();
+        for cmd_tx in &cmd_txs {
+            let _ = cmd_tx.try_send(ConnectionCommand::Disconnect);
+        }
+        tracing::info!(
+            "[ACP] disconnect by agent type agent={:?} count={}",
+            agent_type, disconnected
+        );
+
+        // Every child that could still be running as this agent: the ones just
+        // parked above AND the ones an earlier teardown left draining. Cells,
+        // not pids — each pid is loaded at the last possible moment, inside the
+        // sweep.
+        let pid_cells: Vec<Arc<std::sync::atomic::AtomicU32>> = {
+            let mut draining = self.draining.lock().await;
+            prune_reaped(&mut draining);
+            draining
+                .iter()
+                .filter(|c| c.agent == agent_type)
+                .map(|c| c.pid.clone())
+                .collect()
+        };
+        if pid_cells.is_empty() {
+            return disconnected;
+        }
+
+        tokio::time::sleep(DISCONNECT_ALL_GRACE).await;
+
+        match tokio::task::spawn_blocking(move || {
+            pid_cells
+                .iter()
+                .filter(|cell| !kill_tree_and_wait(cell))
+                .count()
+        })
+        .await
+        {
+            Ok(0) => {}
+            Ok(unconfirmed) => tracing::warn!(
+                "[ACP] disconnect by agent type agent={:?}: {} process(es) could not be confirmed gone",
+                agent_type, unconfirmed
+            ),
+            // Only reachable if the sweep panicked or the runtime is shutting
+            // down under it. Nothing to retry against — but it must not pass
+            // silently for "everything was confirmed".
+            Err(e) => tracing::warn!(
+                "[ACP] disconnect by agent type agent={:?}: sweep did not finish: {e}",
+                agent_type
+            ),
+        }
+
+        disconnected
+    }
+
     /// Disconnect every connection, then hard-kill any surviving agent process
     /// trees as a shutdown backstop.
     ///
     /// The graceful path (send `Disconnect` → the connection driver thread
-    /// breaks its command loop → `run_connection` unwinds → the vendored
-    /// `sacp-tokio` `ChildGuard::drop` runs `kill_tree`) is enough on its own
+    /// breaks its command loop → `run_connection` unwinds →
+    /// `acp::agent_process`'s `ChildGuard::drop` runs `kill_tree`) is enough on its own
     /// *when it gets to run*. It doesn't at process exit: `run_connection` is
-    /// driven on a dedicated `std::thread` (see `spawn_agent`), and when Tauri's
-    /// `ExitRequested` handler returns the process terminates those threads
+    /// driven on a dedicated `std::thread` (see `spawn_agent`), and when the
+    /// quit handler returns the process terminates those threads
     /// mid-flight — often before the driver reaches `ChildGuard::drop` — so the
     /// agent CLI (and its own children, e.g. MCP servers / a forked `node`) is
     /// reparented and lingers until it independently notices its stdin EOF
@@ -1976,7 +3488,11 @@ impl ConnectionManager {
             let mut connections = self.connections.lock().await;
             connections
                 .drain()
-                .map(|(_, conn)| (conn.cmd_tx, conn.child_pid))
+                .map(|(id, conn)| {
+                    crate::agent_turn_files::end_turn(&id, false, std::time::SystemTime::now());
+                    conn.handshake.cancel();
+                    (conn.cmd_tx, conn.child_pid)
+                })
                 .collect()
         };
         let disconnected = handles.len();
@@ -2029,9 +3545,77 @@ impl ConnectionManager {
         disconnected
     }
 
+    /// Block new connections from being established until the returned guard
+    /// is dropped. The caller must enumerate live connections only AFTER
+    /// holding this, never before.
+    pub async fn lock_out_new_connections(
+        &self,
+    ) -> tokio::sync::OwnedRwLockWriteGuard<()> {
+        self.external_restore_lock.clone().write_owned().await
+    }
+
     pub async fn list_connections(&self) -> Vec<ConnectionInfo> {
-        let connections = self.connections.lock().await;
-        connections.values().map(|c| c.info()).collect()
+        // Status comes from the shared SessionState: the connection driver
+        // publishes every transition there (`emit_with_state`), and snapshots
+        // and event consumers read the same field. Copy the state handles
+        // while holding the map lock, then read them after releasing it, so
+        // one connection's busy writer cannot stall the map for everyone.
+        let entries = {
+            let connections = self.connections.lock().await;
+            connections
+                .values()
+                .map(|connection| {
+                    (
+                        connection.id.clone(),
+                        connection.agent_type,
+                        Arc::clone(&connection.state),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let mut result = Vec::with_capacity(entries.len());
+        for (id, agent_type, state) in entries {
+            result.push(ConnectionInfo {
+                id,
+                agent_type,
+                status: state.read().await.status.clone(),
+            });
+        }
+        result
+    }
+
+    /// Whether any live connection bound to `conversation_id`, or running in
+    /// `folder_id`, has a turn going right now — prompted and not yet
+    /// complete. Either id may be absent; with both absent nothing matches.
+    /// Used by the work-task engine to hold an unattended merge off a task
+    /// whose session (or worktree) someone is still working in.
+    pub async fn has_turn_in_flight_for(
+        &self,
+        conversation_id: Option<i32>,
+        folder_id: Option<i32>,
+    ) -> bool {
+        if conversation_id.is_none() && folder_id.is_none() {
+            return false;
+        }
+        let states = {
+            let connections = self.connections.lock().await;
+            connections
+                .values()
+                .map(|connection| Arc::clone(&connection.state))
+                .collect::<Vec<_>>()
+        };
+        for state in states {
+            let state = state.read().await;
+            let bound = (conversation_id.is_some() && state.conversation_id == conversation_id)
+                || (folder_id.is_some() && state.folder_id == folder_id);
+            if bound
+                && (state.turn_in_flight || matches!(state.status, ConnectionStatus::Prompting))
+            {
+                return true;
+            }
+        }
+        false
     }
 
     /// Raw per-connection rows for the pet panel's active-session list.
@@ -2081,9 +3665,50 @@ impl ConnectionManager {
                 // Same reason as `title`: resolving a delegation child's parent
                 // needs the DB. Filled by `pet_list_active_sessions_core`.
                 parent: None,
+                assistant_name: None,
             });
         }
         out
+    }
+
+    /// Install the database the selection persister writes to. Called once at
+    /// bootstrap (`lifecycle_subscriber_task`).
+    pub fn install_selection_db(&self, db: sea_orm::DatabaseConnection) {
+        self.selection.install_db(db);
+    }
+
+    /// Bind a connection to an existing conversation row so its selection is
+    /// persisted there before the first prompt links it (see
+    /// `acp::selection::SelectionPersister::bind`).
+    pub async fn bind_selection_conversation(
+        &self,
+        conn_id: &str,
+        row_id: i32,
+        stored_composer_mode_id: Option<String>,
+    ) -> Result<(), AcpError> {
+        let (state, emitter) = self
+            .get_state_and_emitter(conn_id)
+            .await
+            .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.into()))?;
+        self.selection
+            .bind(conn_id, &state, &emitter, row_id, stored_composer_mode_id)
+            .await
+    }
+
+    /// Record the composer's pending mode pick on a connection, without
+    /// talking to the agent (see `acp::selection::set_composer_mode`).
+    pub async fn set_composer_mode(
+        &self,
+        conn_id: &str,
+        mode_id: Option<String>,
+        initial: bool,
+    ) -> Result<bool, AcpError> {
+        let (state, emitter) = self
+            .get_state_and_emitter(conn_id)
+            .await
+            .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.into()))?;
+        crate::acp::selection::set_composer_mode(conn_id, &state, &emitter, mode_id, initial)
+            .await
     }
 
     /// Clone the `Arc<RwLock<SessionState>>` for a given connection id so the
@@ -2171,12 +3796,20 @@ impl ConnectionManager {
     /// feedback is mid-turn steering, pulled by the agent via the
     /// `check_user_feedback` MCP tool; with no active turn there is nothing to
     /// steer and the note would strand (the frontend falls back to an ordinary
-    /// prompt). The append rides `emit_with_state` so `SessionState.feedback`,
-    /// the ring buffer, and every attached client stay in lockstep.
+    /// prompt). The native channel also answers `NoActiveTurn` while a
+    /// permission card is open on an agent that would drop the note
+    /// (`registry::steering_waits_out_open_permission`). The append rides
+    /// `emit_with_state` so `SessionState.feedback`, the ring buffer, and
+    /// every attached client stay in lockstep.
+    /// `blocks`, when present, is the full prompt-block draft (text plus
+    /// image attachments) to deliver on the native wire instead of the bare
+    /// `text` — `text` then serves as the recorded note. Only the native
+    /// channel can carry blocks; see the pull-path gate below.
     pub async fn submit_feedback(
         &self,
         conn_id: &str,
         text: String,
+        blocks: Option<Vec<PromptInputBlock>>,
     ) -> Result<FeedbackItem, AcpError> {
         let trimmed = text.trim();
         if trimmed.is_empty() {
@@ -2188,6 +3821,7 @@ impl ConnectionManager {
             )));
         }
         let text = trimmed.to_string();
+        let blocks = blocks.filter(|b| !b.is_empty());
         let (state, cmd_tx, emitter) = {
             let connections = self.connections.lock().await;
             let conn = connections
@@ -2216,7 +3850,22 @@ impl ConnectionManager {
         }
 
         if native {
-            return Self::submit_feedback_native(conn_id, state, cmd_tx, emitter, text).await;
+            return Self::submit_feedback_native(conn_id, state, cmd_tx, emitter, text, blocks)
+                .await;
+        }
+
+        // The pull tool delivers plain text (`PendingFeedback`), so a draft
+        // carrying attachment blocks cannot ride it without silently dropping
+        // them. Two ways to get here: an ordinary pull session (the composer
+        // offers its mid-turn send on every session with a delivery channel,
+        // so a codex/grok/gemini draft with an image lands right here), or a
+        // native session that downgraded between the frontend's channel read
+        // and this call (startedNewTurn latch). `NoActiveTurn` is the
+        // rejection the caller already maps to its queue fallback, which
+        // re-routes the WHOLE draft — attachments included — as the next
+        // turn's prompt.
+        if blocks.is_some() {
+            return Err(AcpError::NoActiveTurn);
         }
 
         let item = FeedbackItem::new_pending(
@@ -2265,26 +3914,128 @@ impl ConnectionManager {
     ///   note recorded right after `TurnComplete` is harmless — the notes
     ///   list renders only while prompting, and the next turn's `UserMessage`
     ///   clears `feedback`.
+    /// * `created_at` PRECEDES THE INJECTION. It is taken before the `Steer`
+    ///   command is enqueued, so it is earlier than any transcript entry the
+    ///   injection can cause. The frontend relies on that ordering to tell the
+    ///   agent's own copy of the message from the same words sent in an
+    ///   earlier round (`suppressPersistedSteeredPrompts`).
     async fn submit_feedback_native(
         conn_id: &str,
         state: Arc<tokio::sync::RwLock<crate::acp::session_state::SessionState>>,
         cmd_tx: tokio::sync::mpsc::Sender<ConnectionCommand>,
         emitter: EventEmitter,
         text: String,
+        blocks: Option<Vec<PromptInputBlock>>,
     ) -> Result<FeedbackItem, AcpError> {
         // Cheap pre-flight, NOT the authoritative check (that's the loop's
         // idle arm replying `NoActiveTurn`): skip the round-trip when no turn
-        // is in flight at all.
-        if !state.read().await.turn_in_flight {
-            return Err(AcpError::NoActiveTurn);
-        }
+        // is in flight at all. The counter read alongside it identifies WHICH
+        // turn this steer was admitted against — see the re-check below.
+        let admitted_turns_completed = {
+            let s = state.read().await;
+            if !s.turn_in_flight {
+                return Err(AcpError::NoActiveTurn);
+            }
+            // An agent that drops an injected note when an open card's answer
+            // aborts the turn (codex's `cancel`) takes it as the next prompt
+            // instead — the same reroute as an ended turn. A card that opens
+            // after this read is not covered: the request may already be on
+            // the wire.
+            if s.pending_permission.is_some()
+                && crate::acp::registry::steering_waits_out_open_permission(s.agent_type)
+            {
+                return Err(AcpError::NoActiveTurn);
+            }
+            s.turns_completed
+        };
+        // The wire payload: the caller's full draft when it carried blocks
+        // (attachments included), else the recorded text as a single block —
+        // byte-identical to the historical text-only steer. Uploaded-image
+        // markers (web / remote mode) are re-hydrated exactly like a prompt's,
+        // AFTER the admission checks above so a rejected steer never triggers
+        // file reads, and BEFORE the shield below so a failure aborts with no
+        // side effects.
+        // Whether the caller sent a real draft rather than bare text. Read
+        // BEFORE `blocks` is consumed below, and the sole gate on recording a
+        // block list at all: a text-only steer must keep producing exactly the
+        // note it always produced.
+        let had_blocks = blocks.is_some();
+        let wire_blocks = match blocks {
+            Some(mut blocks) => {
+                crate::acp::prompt_hydration::hydrate_prompt_blocks(
+                    &mut blocks,
+                    &crate::paths::codeg_uploads_root(),
+                )
+                .await?;
+                // Hydration is the ONLY await this path puts between admission
+                // and the enqueue, and it runs for as long as reading the
+                // uploads takes. The loop's idle arm already covers "the turn
+                // ended" (it replies `NoActiveTurn`), but it cannot cover "the
+                // NEXT turn started in the meantime": the loop would then be
+                // in its active arm and inject the note into a turn the user
+                // never aimed at, recorded `Delivered` while the composer
+                // clears. Re-check the admitted turn's identity so that case
+                // takes the caller's queue fallback instead — which re-routes
+                // the whole draft, attachment included.
+                let changed = {
+                    let s = state.read().await;
+                    steered_turn_changed(
+                        admitted_turns_completed,
+                        s.turn_in_flight,
+                        s.turns_completed,
+                    )
+                };
+                if changed {
+                    return Err(AcpError::NoActiveTurn);
+                }
+                blocks
+            }
+            None => vec![PromptInputBlock::Text { text: text.clone() }],
+        };
+        // Project what the user sent for the broadcast, AFTER hydration and
+        // from the same bytes the agent gets — the contract an ordinary prompt
+        // already follows (`user_blocks_from_prompt` at the `UserMessage`
+        // emit). Without it the note reaches the live transcript as `text`
+        // alone, which is the composer's DISPLAY form: a steered image would
+        // render as words about an image until a reload replaced it with the
+        // agent's own copy.
+        //
+        // `None` for a text-only steer, so that path's note is unchanged and
+        // the frontend keeps rendering it from `text`.
+        //
+        // Filtered on the ATTACHMENT bytes rather than on `blocks.is_some()`: a
+        // draft that projects down to text alone says nothing `text` does not
+        // already say, and recording a list for it would put one on a note the
+        // field's contract calls text-only.
+        //
+        // No budget check here on purpose — the per-turn attachment bound lives
+        // at the single authorized writer (`SessionState::apply_event`'s
+        // `FeedbackSubmitted` arm), where the check and the append share one
+        // critical section. Enforcing it here would be a read, an agent
+        // round-trip, then a write: concurrent steers would both read the same
+        // total and both pass it.
+        let record_blocks = had_blocks
+            .then(|| crate::acp::user_blocks_from_prompt(&wire_blocks))
+            .filter(|projected| crate::acp::feedback::attachment_bytes(projected) > 0);
         let conn_id_for_task = conn_id.to_string();
         let handle = tokio::spawn(async move {
             let outcome: Result<FeedbackItem, AcpError> = async {
+                // Stamped BEFORE the command goes out, so the note's instant is
+                // causally earlier than anything the injection can cause. The
+                // adapter pushes the text to the agent before it answers, and
+                // the agent may write its own transcript copy of the message
+                // while this task is still awaiting that answer — a note
+                // stamped on the way back would then look NEWER than the copy
+                // it produced, and the frontend (which folds a persisted copy
+                // away only when it postdates the injection — see
+                // `suppressPersistedSteeredPrompts`) would show the message
+                // twice. Same clock, same host: `created_at` is when the note
+                // was created, which is also what the pull path records.
+                let created_at = chrono::Utc::now();
                 let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
                 cmd_tx
                     .send(ConnectionCommand::Steer {
-                        text: text.clone(),
+                        blocks: wire_blocks,
                         reply: reply_tx,
                     })
                     .await
@@ -2316,7 +4067,8 @@ impl ConnectionManager {
                 let item = FeedbackItem::new_delivered(
                     uuid::Uuid::new_v4().to_string(),
                     text,
-                    chrono::Utc::now(),
+                    created_at,
+                    record_blocks,
                 );
                 // Ungated on purpose — see the invariant on this fn's doc.
                 emit_with_state(
@@ -2447,19 +4199,53 @@ impl ConnectionManager {
         conn_id: &str,
         questions: Vec<QuestionSpec>,
     ) -> Option<RegisteredQuestion> {
+        self.register_question_with(conn_id, questions, false).await
+    }
+
+    /// [`Self::register_question`] for a question that gives way to the next
+    /// one asked on the connection (codex's `request_user_input_async`; see
+    /// `SessionQuestionAccess::register_yielding_question`).
+    pub async fn register_yielding_question(
+        &self,
+        conn_id: &str,
+        questions: Vec<QuestionSpec>,
+    ) -> Option<RegisteredQuestion> {
+        self.register_question_with(conn_id, questions, true).await
+    }
+
+    async fn register_question_with(
+        &self,
+        conn_id: &str,
+        questions: Vec<QuestionSpec>,
+        yields_to_newer: bool,
+    ) -> Option<RegisteredQuestion> {
         // Defense-in-depth: the companion validates, but the broker socket is
         // only token-gated, so refuse to broadcast malformed/oversized specs
         // (None → the listener declines the ask, as for any other None path).
         if crate::acp::question::validate_specs(&questions).is_err() {
             return None;
         }
+        // Registration and publication happen as one step (see
+        // `question_registration`). The answer / cancel paths do not take it.
+        let _registering = self.question_registration.lock().await;
         let (state, emitter) = self.get_state_and_emitter(conn_id).await?;
         let question_id = uuid::Uuid::new_v4().to_string();
         let (tx, rx) = tokio::sync::oneshot::channel();
-        {
+        // A pending question that yields is withdrawn for this one; any other
+        // pending question refuses it. Dropping a withdrawn entry's sender
+        // resolves its waiter with an error, as a cancel does.
+        let withdrawn: Vec<String> = {
             let mut reg = self.pending_questions.lock().await;
-            if reg.values().any(|e| e.parent_connection_id == conn_id) {
+            let held: Vec<(String, bool)> = reg
+                .iter()
+                .filter(|(_, e)| e.parent_connection_id == conn_id)
+                .map(|(id, e)| (id.clone(), e.yields_to_newer))
+                .collect();
+            if held.iter().any(|(_, yields)| !yields) {
                 return None;
+            }
+            for (id, _) in &held {
+                reg.remove(id);
             }
             reg.insert(
                 question_id.clone(),
@@ -2467,8 +4253,21 @@ impl ConnectionManager {
                     parent_connection_id: conn_id.to_string(),
                     questions: questions.clone(),
                     sender: tx,
+                    yields_to_newer,
                 },
             );
+            held.into_iter().map(|(id, _)| id).collect()
+        };
+        #[cfg(test)]
+        question_registration_test_gate::pause(conn_id).await;
+        // Clear the withdrawn card before the new one goes up.
+        for id in withdrawn {
+            emit_with_state(
+                &state,
+                &emitter,
+                AcpEvent::QuestionResolved { question_id: id },
+            )
+            .await;
         }
         // Ungated emit: the agent is blocked in the tool call, so the card must
         // show regardless of any turn-flag timing.
@@ -2779,20 +4578,257 @@ impl ConnectionManager {
         }
     }
 
+    /// Take the prompt locks of every connection working on `rows`: those bound
+    /// to one of the conversations, plus those not bound to any conversation
+    /// yet whose session is one of theirs (`agent_type` + `external_id`) — a
+    /// connection binds its conversation only on its first prompt, so a
+    /// conversation opened but not yet prompted is still worked on by it.
+    /// Locks are taken in connection-id order, so two moves can't deadlock.
+    ///
+    /// A connection that appears after this returns is not covered; the
+    /// relocation fence (see [`Self::mark_relocated`]) is what stops it from
+    /// running a turn in the old folder.
+    pub async fn lock_conversation_connections(
+        &self,
+        rows: &[RelocatingConversation],
+    ) -> ConversationConnectionsLock {
+        // Read each state after letting go of the map: never wait on a state
+        // lock while holding the map lock.
+        let all: Vec<_> = {
+            let conns = self.connections.lock().await;
+            conns
+                .iter()
+                .map(|(id, conn)| {
+                    (
+                        id.clone(),
+                        conn.agent_type,
+                        conn.state.clone(),
+                        conn.prompt_lock.clone(),
+                    )
+                })
+                .collect()
+        };
+        let mut matched = Vec::new();
+        for (id, agent_type, state, lock) in all {
+            let s = state.read().await;
+            let hit = match s.conversation_id {
+                Some(cid) => rows.iter().any(|r| r.id == cid),
+                None => s.external_id.as_deref().is_some_and(|eid| {
+                    rows.iter().any(|r| {
+                        r.agent_type == agent_type && r.external_id.as_deref() == Some(eid)
+                    })
+                }),
+            };
+            if hit {
+                matched.push((id, lock));
+            }
+        }
+        matched.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut guards = Vec::with_capacity(matched.len());
+        let mut connection_ids = Vec::with_capacity(matched.len());
+        for (id, lock) in matched {
+            guards.push(lock.lock_owned().await);
+            connection_ids.push(id);
+        }
+        ConversationConnectionsLock {
+            connection_ids,
+            _guards: guards,
+        }
+    }
+
+    /// The first reason any connection under `lock` must not be ended now:
+    /// everything the idle sweep honours, plus a turn in flight and an open
+    /// goal loop (its continuations are turns the agent starts itself, which
+    /// `Prompting` never shows). Read while the prompt locks are held, so no
+    /// prompt can be admitted between this and the move.
+    pub async fn busy_reason(&self, lock: &ConversationConnectionsLock) -> Option<ConnectionBusy> {
+        let now = chrono::Utc::now();
+        let (states, live): (Vec<_>, std::collections::HashSet<String>) = {
+            let conns = self.connections.lock().await;
+            (
+                lock.connection_ids
+                    .iter()
+                    .filter_map(|id| conns.get(id).map(|c| c.state.clone()))
+                    .collect(),
+                conns.keys().cloned().collect(),
+            )
+        };
+        for state in states {
+            let s = state.read().await;
+            if matches!(
+                s.status,
+                ConnectionStatus::Disconnected | ConnectionStatus::Error
+            ) {
+                continue;
+            }
+            if s.turn_in_flight || s.status == ConnectionStatus::Prompting {
+                return Some(ConnectionBusy::Turn);
+            }
+            if let Some(reason) = teardown_blocker(&s, now, |child| live.contains(child)) {
+                return Some(reason);
+            }
+            if s.goal_active {
+                return Some(ConnectionBusy::Goal);
+            }
+        }
+        None
+    }
+
+    /// What `conn_id` is still doing now that its turn has ended — the input
+    /// of `acp::turn_end_hold`. `None` when the connection is gone or its
+    /// agent has ended.
+    pub(crate) async fn turn_end_probe(
+        &self,
+        conn_id: &str,
+    ) -> Option<crate::acp::turn_end_hold::TurnEndProbe> {
+        let now = chrono::Utc::now();
+        let (state, agent_type, live): (_, _, std::collections::HashSet<String>) = {
+            let conns = self.connections.lock().await;
+            let conn = conns.get(conn_id)?;
+            (
+                conn.state.clone(),
+                conn.agent_type,
+                conns.keys().cloned().collect(),
+            )
+        };
+        let s = state.read().await;
+        crate::acp::turn_end_hold::probe(&s, agent_type, now, |child| live.contains(child))
+    }
+
+    /// End every connection under `lock` (all idle — the caller checked
+    /// [`Self::busy_reason`]) and then release the locks. `disconnect` does not
+    /// take the prompt lock, so ending them while it is held cannot deadlock.
+    pub async fn disconnect_locked(&self, lock: ConversationConnectionsLock) -> usize {
+        let mut ended = 0;
+        for id in &lock.connection_ids {
+            if self.disconnect(id).await.is_ok() {
+                ended += 1;
+            }
+        }
+        drop(lock);
+        ended
+    }
+
+    /// Record that the user moved `conversation_ids` to another folder. Call
+    /// after the rows are written and before the connection locks are
+    /// released, so no prompt is admitted on an old-folder connection in
+    /// between.
+    pub fn mark_relocated(&self, conversation_ids: &[i32]) {
+        let mut set = self.relocated.lock().unwrap_or_else(|e| e.into_inner());
+        set.extend(conversation_ids.iter().copied());
+    }
+
+    /// For a conversation moved during this process's life, the folder it is in
+    /// now (`(folder_id, path)`, read from the database); `None` when it was
+    /// never moved — or its row or folder is gone — and no fence applies.
+    pub(crate) async fn relocation_fence(
+        &self,
+        db: &DatabaseConnection,
+        conversation_id: i32,
+    ) -> Option<(i32, String)> {
+        let moved = {
+            let set = self.relocated.lock().unwrap_or_else(|e| e.into_inner());
+            set.contains(&conversation_id)
+        };
+        if !moved {
+            return None;
+        }
+        let row = conversation::Entity::find_by_id(conversation_id)
+            .one(db)
+            .await
+            .ok()
+            .flatten()?;
+        let folder = crate::db::entities::folder::Entity::find_by_id(row.folder_id)
+            .one(db)
+            .await
+            .ok()
+            .flatten()?;
+        Some((folder.id, folder.path))
+    }
+
+    /// Refuse a prompt for a moved conversation on a connection launched
+    /// anywhere but the folder the conversation is in now.
+    async fn admit_relocated(
+        &self,
+        db: &DatabaseConnection,
+        conversation_id: i32,
+        launch_dir: Option<&std::path::Path>,
+    ) -> Result<(), AcpError> {
+        match self.relocation_fence(db, conversation_id).await {
+            Some((folder_id, path)) if !launch_dir_matches(launch_dir, &path) => {
+                tracing::info!(
+                    conversation_id,
+                    folder_id,
+                    "[ACP] prompt refused: the conversation was moved out of this \
+                     connection's folder"
+                );
+                Err(AcpError::ConversationMoved {
+                    conversation_id,
+                    folder_id,
+                })
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// [`Self::find_connection_by_conversation_id`] restricted to connections
+    /// launched in `dir` (`None`: any).
+    pub(crate) async fn find_connection_by_conversation_id_in(
+        &self,
+        conversation_id: i32,
+        dir: Option<&str>,
+    ) -> Option<String> {
+        let connections = self.connections.lock().await;
+        for (id, conn) in connections.iter() {
+            let state = conn.state.read().await;
+            if state.conversation_id != Some(conversation_id) {
+                continue;
+            }
+            if let Some(dir) = dir {
+                if !launch_dir_matches(state.working_dir.as_deref(), dir) {
+                    continue;
+                }
+            }
+            return Some(id.clone());
+        }
+        None
+    }
+
+    /// [`Self::find_connection_by_external_id`] restricted to connections
+    /// launched in `dir` (`None`: any).
+    pub(crate) async fn find_connection_by_external_id_in(
+        &self,
+        external_id: &str,
+        agent_type: AgentType,
+        dir: Option<&str>,
+    ) -> Option<String> {
+        let connections = self.connections.lock().await;
+        for (id, conn) in connections.iter() {
+            if conn.agent_type != agent_type {
+                continue;
+            }
+            let state = conn.state.read().await;
+            if state.external_id.as_deref() != Some(external_id) {
+                continue;
+            }
+            if let Some(dir) = dir {
+                if !launch_dir_matches(state.working_dir.as_deref(), dir) {
+                    continue;
+                }
+            }
+            return Some(id.clone());
+        }
+        None
+    }
+
     /// Resolve a conversation_id to its currently-active connection id, if any.
     /// Used by the by-conversation snapshot endpoint and the LifecycleSubscriber.
     /// Per-session state is acquired via `read().await` to avoid the
     /// `try_read`-skip false negative that would intermittently return None
     /// while `emit_with_state` is mid-update — the wait is microseconds.
     pub async fn find_connection_by_conversation_id(&self, conversation_id: i32) -> Option<String> {
-        let connections = self.connections.lock().await;
-        for (id, conn) in connections.iter() {
-            let state = conn.state.read().await;
-            if state.conversation_id == Some(conversation_id) {
-                return Some(id.clone());
-            }
-        }
-        None
+        self.find_connection_by_conversation_id_in(conversation_id, None)
+            .await
     }
 
     /// The in-flight user prompt for `conversation_id` and the instant its turn
@@ -2848,17 +4884,8 @@ impl ConnectionManager {
         external_id: &str,
         agent_type: AgentType,
     ) -> Option<String> {
-        let connections = self.connections.lock().await;
-        for (id, conn) in connections.iter() {
-            if conn.agent_type != agent_type {
-                continue;
-            }
-            let state = conn.state.read().await;
-            if state.external_id.as_deref() == Some(external_id) {
-                return Some(id.clone());
-            }
-        }
-        None
+        self.find_connection_by_external_id_in(external_id, agent_type, None)
+            .await
     }
 }
 
@@ -2873,6 +4900,13 @@ impl ConnectionManager {
 /// `data_dir` is required so `spawn` can build a runtime env that
 /// includes the git credential helper — without it, delegated subagents
 /// fail any git command that depends on the codeg-injected helper.
+/// The internal suffix carrying an assistant brief, if there is one.
+fn brief_suffix(brief: Option<String>) -> Vec<PromptInputBlock> {
+    brief
+        .map(|text| vec![PromptInputBlock::Text { text }])
+        .unwrap_or_default()
+}
+
 #[derive(Clone)]
 pub struct ConnectionManagerSpawner {
     pub manager: Arc<ConnectionManager>,
@@ -2929,7 +4963,8 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
         .await
         .map_err(|e| SpawnerError::Spawn(e.to_string()))?;
 
-        self.manager
+        let connection_id = self
+            .manager
             .spawn_agent(
                 agent_type,
                 effective_working_dir,
@@ -2941,7 +4976,13 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
                 preferred_config_values,
             )
             .await
-            .map_err(|e| SpawnerError::Spawn(e.to_string()))
+            .map_err(|e| SpawnerError::Spawn(e.to_string()))?;
+        // A fresh session is always a new connection. The broker sends the
+        // child's prompt only after this returns, so the tag is in place first.
+        self.manager
+            .inherit_cli_run_tag(parent_connection_id, &connection_id)
+            .await;
+        Ok(connection_id)
     }
 
     async fn send_prompt_linked_for_delegation(
@@ -2949,6 +4990,7 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
         conn_id: &str,
         task: String,
         link: crate::acp::delegation::spawner::DelegationLink,
+        brief: Option<String>,
     ) -> Result<i32, crate::acp::delegation::spawner::SpawnerError> {
         use crate::acp::delegation::spawner::SpawnerError;
         // The child has no caller-supplied conversation_id (it's brand new).
@@ -2971,19 +5013,27 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
             })?
             .to_string_lossy()
             .to_string();
-        let folder = crate::db::service::folder_service::add_folder(&self.db.conn, &folder_path)
-            .await
-            .map_err(|e| SpawnerError::Send(format!("add_folder: {e}")))?;
+        // `ensure_folder_for_path`, NOT `add_folder`: the row exists to carry the
+        // child's `folder_id` and to resolve its cwd on resume, and neither of
+        // those reads `is_open`. Opening it would turn whatever `working_dir` the
+        // agent picked — a PR checkout under /tmp, a throwaway worktree — into a
+        // top-level project in the user's sidebar, and would silently reopen a
+        // folder the user had closed.
+        let folder =
+            crate::db::service::folder_service::ensure_folder_for_path(&self.db.conn, &folder_path)
+                .await
+                .map_err(|e| SpawnerError::Send(format!("ensure_folder_for_path: {e}")))?;
 
         let result = self
             .manager
-            .send_prompt_linked(
+            .send_prompt_linked_with_suffix(
                 &self.db,
                 conn_id,
                 vec![PromptInputBlock::Text { text: task }],
                 Some(folder.id),
                 None,
                 Some(link),
+                brief_suffix(brief),
             )
             .await
             .map_err(|e| SpawnerError::Send(e.to_string()))?;
@@ -2992,6 +5042,121 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
                 "send_prompt_linked succeeded but no conversation_id was bound".into(),
             )
         })
+    }
+
+    async fn spawn_for_resume(
+        &self,
+        parent_connection_id: &str,
+        agent_type: AgentType,
+        working_dir: Option<String>,
+        external_session_id: &str,
+        preferred_mode_id: Option<String>,
+        preferred_config_values: BTreeMap<String, String>,
+    ) -> Result<crate::acp::delegation::spawner::ResumedSpawn, crate::acp::delegation::spawner::SpawnerError>
+    {
+        use crate::acp::delegation::spawner::{ResumedSpawn, SpawnerError};
+        // Same parent inheritance as `spawn` — a resumed child whose emitter is
+        // wired to a different broadcaster would stream to nobody.
+        let (emitter, owner_window, parent_working_dir) = {
+            let conns = self.manager.connections.lock().await;
+            let parent = conns.get(parent_connection_id).ok_or_else(|| {
+                SpawnerError::Spawn(format!(
+                    "parent connection {parent_connection_id} not found"
+                ))
+            })?;
+            let pwd = {
+                let s = parent.state.read().await;
+                s.working_dir
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string())
+            };
+            (
+                parent.emitter.clone(),
+                parent.owner_window_label.clone(),
+                pwd,
+            )
+        };
+        let effective_working_dir = working_dir.or(parent_working_dir);
+
+        let runtime_env = crate::commands::acp::build_session_runtime_env(
+            &self.db,
+            agent_type,
+            None,
+            self.data_dir.as_path(),
+        )
+        .await
+        .map_err(|e| SpawnerError::Spawn(e.to_string()))?;
+
+        // `session_id = Some(..)` is the whole difference vs `spawn`: the
+        // connection loads the child's prior agent session (and its context)
+        // instead of minting a fresh one — unless a live connection already
+        // represents that session (e.g. the user has the canceled child open
+        // in a tab), which the dedup hands back instead. The broker must know
+        // which, because its failure teardown may only disconnect a connection
+        // this call actually created; and a reused connection must not take
+        // the parent's CLI run tag, or the run's policy would answer the cards
+        // of a session a person is driving. `reused` is the dedup's own
+        // verdict, so a connection appearing just before the spawn cannot slip
+        // past it.
+        let outcome = self
+            .manager
+            .spawn_agent_with_outcome(
+                agent_type,
+                effective_working_dir,
+                Some(external_session_id.to_string()),
+                runtime_env,
+                owner_window,
+                emitter,
+                preferred_mode_id,
+                preferred_config_values,
+            )
+            .await
+            .map_err(|e| SpawnerError::Spawn(e.to_string()))?;
+        if !outcome.reused {
+            self.manager
+                .inherit_cli_run_tag(parent_connection_id, &outcome.connection_id)
+                .await;
+        }
+        Ok(ResumedSpawn {
+            connection_id: outcome.connection_id,
+            reused: outcome.reused,
+        })
+    }
+
+    async fn send_resume_prompt(
+        &self,
+        conn_id: &str,
+        prompt: String,
+        folder_id: i32,
+        child_conversation_id: i32,
+        brief: Option<String>,
+    ) -> Result<(), crate::acp::delegation::spawner::SpawnerError> {
+        use crate::acp::delegation::spawner::SpawnerError;
+        // Adopt the child's EXISTING row (caller-supplied path) — no delegation
+        // link: the row already carries parent_id / parent_tool_use_id /
+        // delegation_call_id from the original delegation, and
+        // `send_prompt_linked` rejects a link combined with an explicit
+        // conversation_id precisely because adopted rows own their linkage.
+        self.manager
+            .send_prompt_linked_with_suffix(
+                &self.db,
+                conn_id,
+                vec![PromptInputBlock::Text { text: prompt }],
+                Some(folder_id),
+                Some(child_conversation_id),
+                None,
+                brief_suffix(brief),
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| SpawnerError::Send(e.to_string()))
+    }
+
+    async fn has_live_connection_for_conversation(&self, conversation_id: i32) -> bool {
+        self.manager
+            .find_connection_by_conversation_id(conversation_id)
+            .await
+            .is_some()
     }
 
     async fn cancel(
@@ -3084,6 +5249,16 @@ impl SessionQuestionAccess for ConnectionManagerQuestionLookup {
             .await
     }
 
+    async fn register_yielding_question(
+        &self,
+        parent_connection_id: &str,
+        questions: Vec<QuestionSpec>,
+    ) -> Option<RegisteredQuestion> {
+        self.manager
+            .register_yielding_question(parent_connection_id, questions)
+            .await
+    }
+
     async fn cancel_question(&self, parent_connection_id: &str, question_id: &str) {
         self.manager
             .cancel_question(parent_connection_id, question_id)
@@ -3094,6 +5269,20 @@ impl SessionQuestionAccess for ConnectionManagerQuestionLookup {
         self.manager
             .cancel_questions_by_parent(parent_connection_id)
             .await
+    }
+
+    async fn cancel_turn(&self, connection_id: &str) {
+        // The database the lifecycle installed at bootstrap; there is no other
+        // way to reach it from inside a connection.
+        let Some(db) = self.manager.selection.db().cloned() else {
+            tracing::warn!(
+                "[ACP] cannot stop the turn conn={connection_id}: no database installed"
+            );
+            return;
+        };
+        if let Err(e) = self.manager.cancel(&db, connection_id).await {
+            tracing::warn!("[ACP] stopping the turn failed conn={connection_id}: {e}");
+        }
     }
 }
 
@@ -3126,10 +5315,601 @@ impl SessionPlanApprovalAccess for ConnectionManagerPlanApprovalLookup {
     }
 }
 
+/// Turn what the probe session holds into the snapshot an editor reads.
+///
+/// Three steps, in this order:
+///   1. drop the options no launch replays a saved value for
+///      ([`config_option_never_replayed`]) — an editor offering one would store
+///      a pick that is never applied (cline's provider, owned by the agent's
+///      settings panel; env-pinned ones never reach the snapshot at all);
+///   2. record which requested options the session did not end up holding
+///      (`unapplied_config_ids`) — off this same snapshot, so no later push
+///      can make it disagree with the options returned. `asserted` is what the
+///      establishment confirmed holding (`SessionState::asserted_config_values`):
+///      a pick it replayed under the spelling the agent lists now
+///      (`heal_retired_model_pick`) took if the session holds THAT spelling;
+///   3. only then rewrite the applied options to the agent's own pick
+///      ([`report_agent_chosen_values`]), after which a requested model the
+///      session never switched to would be indistinguishable from one it did.
+///
+/// [`config_option_never_replayed`]: crate::acp::connection::config_option_never_replayed
+fn finish_probe_snapshot(
+    mut snapshot: AgentOptionsSnapshot,
+    agent_type: AgentType,
+    env_pinned: &[String],
+    requested: &BTreeMap<String, String>,
+    asserted: &BTreeMap<String, String>,
+    agent_chosen: &BTreeMap<String, String>,
+) -> AgentOptionsSnapshot {
+    use crate::acp::connection::config_option_never_replayed;
+    let never_replayed = |id: &str| config_option_never_replayed(agent_type, env_pinned, id);
+    snapshot
+        .config_options
+        .retain(|option| !never_replayed(&option.id));
+    snapshot.unapplied_config_ids = unapplied_config_ids(
+        &snapshot.config_options,
+        requested,
+        asserted,
+        never_replayed,
+    );
+    if !requested.is_empty() {
+        let applied_ids: Vec<String> = requested.keys().cloned().collect();
+        report_agent_chosen_values(&mut snapshot.config_options, &applied_ids, agent_chosen);
+    }
+    snapshot
+}
+
+/// The requested options the probe session does not hold the requested value
+/// for: rejected, skipped as no longer offered, or not listed at all — in
+/// request order. A value counts as held under its requested spelling or the
+/// one the establishment replayed and confirmed (`asserted`, see
+/// [`finish_probe_snapshot`]). Options codeg never replays (`never_replayed`)
+/// are left out: they are not in the snapshot, and no request could have set
+/// them.
+fn unapplied_config_ids(
+    options: &[crate::acp::types::SessionConfigOptionInfo],
+    requested: &BTreeMap<String, String>,
+    asserted: &BTreeMap<String, String>,
+    never_replayed: impl Fn(&str) -> bool,
+) -> Vec<String> {
+    use crate::acp::types::SessionConfigKindInfo;
+    let holds = |id: &str, value: &str| {
+        options
+            .iter()
+            .find(|o| o.id == id)
+            .is_some_and(|o| match &o.kind {
+                SessionConfigKindInfo::Select(select) => select.current_value == value,
+                SessionConfigKindInfo::Boolean(boolean) => {
+                    boolean.current_value == (value == "true")
+                }
+            })
+    };
+    requested
+        .iter()
+        .filter(|(id, _)| !never_replayed(id))
+        .filter(|(id, value)| {
+            let replayed_as = asserted.get(*id).filter(|healed| healed != value);
+            !(holds(id, value) || replayed_as.is_some_and(|healed| holds(id, healed)))
+        })
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
+/// Make every option the probe applied a caller's selection to report the value
+/// the agent picked on its own, instead of that selection.
+///
+/// Every consumer of the probe's snapshot reads an option's current value as
+/// what it runs when the caller leaves it unset: the delegation settings panel
+/// names its "Default" choice after it, and the task and automation editors
+/// show and pin it for an option nobody touched. For an applied option that is
+/// the agent's own pick, which the session no longer holds once the selection
+/// is in — reporting the selection would label the user's model as the agent's
+/// default. The options the agent derived from the selection (opencode's
+/// `effort`, re-listed per model) keep the value it answered, because that is
+/// what they run when unset given the selection.
+///
+/// `agent_chosen` is the establishment's own answer
+/// (`SessionState::agent_chosen_config_values`). An applied id the agent never
+/// answered with, or the snapshot does not carry, is left alone.
+fn report_agent_chosen_values(
+    options: &mut [crate::acp::types::SessionConfigOptionInfo],
+    applied_ids: &[String],
+    agent_chosen: &BTreeMap<String, String>,
+) {
+    use crate::acp::types::SessionConfigKindInfo;
+    for option in options
+        .iter_mut()
+        .filter(|option| applied_ids.contains(&option.id))
+    {
+        let Some(chosen) = agent_chosen.get(&option.id) else {
+            continue;
+        };
+        match &mut option.kind {
+            SessionConfigKindInfo::Select(select) => select.current_value = chosen.clone(),
+            SessionConfigKindInfo::Boolean(boolean) => boolean.current_value = chosen == "true",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::acp::connection::AgentConnection;
+
+    /// A select option holding `current`; its value list plays no part here.
+    fn probe_option(id: &str, current: &str) -> crate::acp::types::SessionConfigOptionInfo {
+        use crate::acp::types::{SessionConfigKindInfo, SessionConfigSelectInfo};
+        crate::acp::types::SessionConfigOptionInfo {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: None,
+            category: None,
+            kind: SessionConfigKindInfo::Select(SessionConfigSelectInfo {
+                current_value: current.to_string(),
+                options: Vec::new(),
+                groups: Vec::new(),
+            }),
+            recommended_value: None,
+        }
+    }
+
+    fn probe_snapshot(
+        options: Vec<crate::acp::types::SessionConfigOptionInfo>,
+    ) -> AgentOptionsSnapshot {
+        AgentOptionsSnapshot {
+            modes: None,
+            config_options: options,
+            available_commands: Vec::new(),
+            prompt_capabilities: None,
+            unapplied_config_ids: Vec::new(),
+        }
+    }
+
+    fn current_of(snapshot: &AgentOptionsSnapshot, id: &str) -> Option<String> {
+        use crate::acp::types::SessionConfigKindInfo;
+        snapshot
+            .config_options
+            .iter()
+            .find(|o| o.id == id)
+            .map(|o| match &o.kind {
+                SessionConfigKindInfo::Select(select) => select.current_value.clone(),
+                SessionConfigKindInfo::Boolean(boolean) => boolean.current_value.to_string(),
+            })
+    }
+
+    /// Cline advertises `provider` whenever the launch did NOT pin it (no
+    /// `CLINE_PROVIDER` — the env filter would otherwise have removed it before
+    /// this, and the test would pass for the wrong reason). No launch replays a
+    /// saved provider, so no editor may offer one. Another agent's option of
+    /// the same id is untouched.
+    #[test]
+    fn the_probe_leaves_out_what_no_launch_replays() {
+        let cline = finish_probe_snapshot(
+            probe_snapshot(vec![
+                probe_option("provider", "cline"),
+                probe_option("model", "claude-sonnet"),
+            ]),
+            AgentType::Cline,
+            &[],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        );
+        assert_eq!(current_of(&cline, "provider"), None);
+        assert_eq!(
+            current_of(&cline, "model").as_deref(),
+            Some("claude-sonnet")
+        );
+
+        let codex = finish_probe_snapshot(
+            probe_snapshot(vec![probe_option("provider", "openai")]),
+            AgentType::Codex,
+            &[],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        );
+        assert_eq!(current_of(&codex, "provider").as_deref(), Some("openai"));
+    }
+
+    /// The probe and the launch replay ask the SAME question.
+    #[test]
+    fn never_replayed_is_one_rule_for_the_probe_and_the_replay() {
+        use crate::acp::connection::config_option_never_replayed as never;
+        assert!(never(AgentType::Cline, &[], "provider"));
+        assert!(!never(AgentType::Cline, &[], "model"));
+        assert!(!never(AgentType::Codex, &[], "provider"));
+        let pinned = vec!["sandbox".to_string()];
+        assert!(never(AgentType::Codex, &pinned, "sandbox"));
+    }
+
+    /// The editor asked for model B. The session holding A — the switch was
+    /// rejected or skipped — lists `model`; holding B lists nothing. Decided
+    /// BEFORE the applied options are rewritten to the agent's own pick (A
+    /// here, deliberately different from the request), or B-held and
+    /// A-held would read the same.
+    #[test]
+    fn the_probe_says_whether_the_requested_model_took() {
+        let requested = BTreeMap::from([("model".to_string(), "model-b".to_string())]);
+        let agent_chosen = BTreeMap::from([("model".to_string(), "model-a".to_string())]);
+
+        let switched = finish_probe_snapshot(
+            probe_snapshot(vec![
+                probe_option("model", "model-b"),
+                probe_option("effort", "high"),
+            ]),
+            AgentType::OpenCode,
+            &[],
+            &requested,
+            &BTreeMap::new(),
+            &agent_chosen,
+        );
+        assert!(switched.unapplied_config_ids.is_empty());
+        assert_eq!(
+            current_of(&switched, "model").as_deref(),
+            Some("model-a"),
+            "the applied option still reports the agent's own pick"
+        );
+
+        let stuck = finish_probe_snapshot(
+            probe_snapshot(vec![
+                probe_option("model", "model-a"),
+                probe_option("effort", "low"),
+            ]),
+            AgentType::OpenCode,
+            &[],
+            &requested,
+            &BTreeMap::new(),
+            &agent_chosen,
+        );
+        assert_eq!(stuck.unapplied_config_ids, vec!["model".to_string()]);
+
+        // Not listed at all: not held either.
+        let gone = finish_probe_snapshot(
+            probe_snapshot(vec![probe_option("effort", "low")]),
+            AgentType::Grok,
+            &[],
+            &requested,
+            &BTreeMap::new(),
+            &agent_chosen,
+        );
+        assert_eq!(gone.unapplied_config_ids, vec!["model".to_string()]);
+    }
+
+    /// A saved Claude Code pick under a retired spelling is replayed as the
+    /// one the agent lists now (`heal_retired_model_pick`), and the
+    /// establishment records that spelling as confirmed. Holding it means the
+    /// request took; holding anything else still means it did not.
+    #[test]
+    fn a_replayed_respelling_counts_as_the_requested_model() {
+        let requested = BTreeMap::from([("model".to_string(), "opus[1m]".to_string())]);
+        let asserted = BTreeMap::from([("model".to_string(), "opus".to_string())]);
+        let probe = |held: &str| {
+            finish_probe_snapshot(
+                probe_snapshot(vec![probe_option("model", held)]),
+                AgentType::ClaudeCode,
+                &[],
+                &requested,
+                &asserted,
+                &BTreeMap::new(),
+            )
+            .unapplied_config_ids
+        };
+        assert!(probe("opus").is_empty());
+        assert!(probe("opus[1m]").is_empty());
+        assert_eq!(probe("sonnet"), vec!["model".to_string()]);
+    }
+
+    /// A switch is held when its state matches the request's wire spelling
+    /// (`"true"` / `"false"`). An option codeg never replays is not reported:
+    /// no request could have set it, so its absence says nothing.
+    #[test]
+    fn the_unapplied_list_reads_switches_and_skips_what_is_never_replayed() {
+        use crate::acp::types::{SessionConfigBooleanInfo, SessionConfigKindInfo};
+        let switch = |on: bool| crate::acp::types::SessionConfigOptionInfo {
+            kind: SessionConfigKindInfo::Boolean(SessionConfigBooleanInfo { current_value: on }),
+            ..probe_option("fast", "")
+        };
+        let requested = BTreeMap::from([
+            ("fast".to_string(), "false".to_string()),
+            ("provider".to_string(), "anthropic".to_string()),
+        ]);
+        let probe = |on: bool| {
+            finish_probe_snapshot(
+                probe_snapshot(vec![switch(on), probe_option("provider", "cline")]),
+                AgentType::Cline,
+                &[],
+                &requested,
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+            )
+            .unapplied_config_ids
+        };
+        assert!(probe(false).is_empty());
+        assert_eq!(probe(true), vec!["fast".to_string()]);
+    }
+
+    /// A snapshot written before the field existed reads back as confirming
+    /// nothing was left unapplied, rather than failing to deserialize.
+    #[test]
+    fn a_snapshot_without_the_unapplied_list_still_reads() {
+        let snapshot: AgentOptionsSnapshot = serde_json::from_value(serde_json::json!({
+            "modes": null,
+            "config_options": [],
+            "available_commands": [],
+        }))
+        .expect("an older snapshot deserializes");
+        assert!(snapshot.unapplied_config_ids.is_empty());
+    }
+
+    #[test]
+    fn the_unapplied_list_is_always_on_the_wire() {
+        let snapshot = finish_probe_snapshot(
+            probe_snapshot(Vec::new()),
+            AgentType::Codex,
+            &[],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        );
+        let wire = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(wire["unapplied_config_ids"], serde_json::json!([]));
+    }
+
+    /// The probe applies the caller's model, so the session it reads holds that
+    /// model; the delegation panel names its "Default" choice after the
+    /// snapshot's current value. Model ids from a live opencode 2.0.24 probe:
+    /// the agent opened on `exo-free` and the caller asked for
+    /// `step-5-preview-free`. The agent's own effort differs from the one it
+    /// answered after the switch, so the test can tell which one survives.
+    #[test]
+    fn the_probe_reports_the_agents_own_pick_for_the_options_it_applied() {
+        use crate::acp::types::{
+            SessionConfigBooleanInfo, SessionConfigKindInfo, SessionConfigOptionInfo,
+            SessionConfigSelectInfo,
+        };
+        let option = |id: &str, kind: SessionConfigKindInfo| SessionConfigOptionInfo {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: None,
+            category: None,
+            kind,
+            recommended_value: None,
+        };
+        let select = |current: &str| {
+            SessionConfigKindInfo::Select(SessionConfigSelectInfo {
+                current_value: current.to_string(),
+                options: Vec::new(),
+                groups: Vec::new(),
+            })
+        };
+        let current = |options: &[SessionConfigOptionInfo], id: &str| {
+            let option = options.iter().find(|o| o.id == id).expect("present");
+            match &option.kind {
+                SessionConfigKindInfo::Select(select) => select.current_value.clone(),
+                SessionConfigKindInfo::Boolean(boolean) => boolean.current_value.to_string(),
+            }
+        };
+        let mut options = vec![
+            option("model", select("opencode/step-5-preview-free")),
+            option("effort", select("default")),
+            option("mode", select("plan")),
+            option(
+                "auto_approve",
+                SessionConfigKindInfo::Boolean(SessionConfigBooleanInfo {
+                    current_value: true,
+                }),
+            ),
+        ];
+        let agent_chosen: BTreeMap<String, String> = [
+            ("model", "opencode/exo-free"),
+            ("effort", "high"),
+            ("mode", "build"),
+            ("auto_approve", "false"),
+        ]
+        .into_iter()
+        .map(|(id, value)| (id.to_string(), value.to_string()))
+        .collect();
+        // `provider` was applied but neither answered nor in the snapshot.
+        let applied = ["model", "auto_approve", "provider"].map(String::from);
+
+        report_agent_chosen_values(&mut options, &applied, &agent_chosen);
+
+        assert_eq!(current(&options, "model"), "opencode/exo-free");
+        assert_eq!(current(&options, "auto_approve"), "false");
+        // Not applied: what the agent answered GIVEN the selection stands — the
+        // default effort of the selected model, and a mode nobody asked for.
+        assert_eq!(current(&options, "effort"), "default");
+        assert_eq!(current(&options, "mode"), "plan");
+    }
+
+    #[tokio::test]
+    async fn list_connections_reports_live_session_status() {
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("c1", AgentType::Codex, None, EventEmitter::Noop)
+            .await;
+
+        // The connection driver advances the shared session state through its
+        // status events; inventory must report that authoritative state.
+        let state = {
+            let connections = mgr.connections.lock().await;
+            connections.get("c1").unwrap().state.clone()
+        };
+        state.write().await.status = ConnectionStatus::Prompting;
+
+        let rows = mgr.list_connections().await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "c1");
+        assert_eq!(rows[0].status, ConnectionStatus::Prompting);
+    }
+
+    /// The restore gate reads the same session status. A connection still in
+    /// its handshake counts; one whose driver has already published a terminal
+    /// status (it is unwinding, its map entry not yet removed) does not — the
+    /// filter `restore::live_agent_names` documents, which the frozen spawn-time
+    /// copy used to defeat by reporting every entry as `Connecting`.
+    #[tokio::test]
+    async fn live_or_draining_agent_names_follows_session_status() {
+        let mgr = ConnectionManager::new();
+        for (id, agent_type) in [
+            ("handshake", AgentType::Codex),
+            ("errored", AgentType::ClaudeCode),
+            ("closed", AgentType::Gemini),
+        ] {
+            mgr.insert_test_connection(id, agent_type, None, EventEmitter::Noop)
+                .await;
+        }
+        for (id, status) in [
+            ("handshake", ConnectionStatus::Connecting),
+            ("errored", ConnectionStatus::Error),
+            ("closed", ConnectionStatus::Disconnected),
+        ] {
+            mgr.get_state(id).await.unwrap().write().await.status = status;
+        }
+
+        assert_eq!(
+            mgr.live_or_draining_agent_names().await,
+            vec!["Codex CLI".to_string()]
+        );
+    }
+
+    /// An agent that has left the connection map but not yet exited can still
+    /// be appending to the transcript a restore is about to unlink, so the
+    /// gate has to see it. `disconnect` drops the map entry immediately, which
+    /// is why the pid is parked separately rather than the entry being kept.
+    #[tokio::test]
+    async fn disconnect_keeps_a_live_child_visible_after_the_map_entry_is_gone() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        let pid = {
+            let conns = mgr.connections.lock().await;
+            conns.get("c1").unwrap().child_pid.clone()
+        };
+        pid.store(4242, SeqCst); // spawned
+
+        mgr.disconnect("c1").await.unwrap();
+        assert!(
+            mgr.list_connections().await.is_empty(),
+            "the map entry goes immediately — that is the whole problem"
+        );
+        assert_eq!(
+            mgr.live_or_draining_agent_names().await,
+            vec!["Claude Code".to_string()]
+        );
+    }
+
+    /// Closing a window tears down its agents the same way, and leaves them
+    /// exiting rather than exited.
+    #[tokio::test]
+    async fn closing_a_window_also_keeps_its_children_visible() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("c1", AgentType::Codex, None, EventEmitter::Noop)
+            .await;
+        {
+            let conns = mgr.connections.lock().await;
+            conns.get("c1").unwrap().child_pid.store(777, SeqCst);
+        }
+        assert_eq!(mgr.disconnect_by_owner_window("test-window").await, 1);
+        assert_eq!(
+            mgr.live_or_draining_agent_names().await,
+            vec!["Codex CLI".to_string()]
+        );
+    }
+
+    /// The Antigravity sign-out ends that agent's connections and nobody
+    /// else's. Precision is the point: their processes would write the cleared
+    /// credential back on their next refresh, while an unrelated agent's
+    /// session has nothing to do with it and must survive.
+    #[tokio::test]
+    async fn disconnecting_one_agent_type_leaves_the_others_running() {
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("agy1", AgentType::Antigravity, None, EventEmitter::Noop)
+            .await;
+        mgr.insert_test_connection("agy2", AgentType::Antigravity, None, EventEmitter::Noop)
+            .await;
+        mgr.insert_test_connection("cdx", AgentType::Codex, None, EventEmitter::Noop)
+            .await;
+
+        assert_eq!(
+            mgr.disconnect_by_agent_type(AgentType::Antigravity).await,
+            2
+        );
+        let left: Vec<String> = mgr
+            .list_connections()
+            .await
+            .into_iter()
+            .map(|c| c.id)
+            .collect();
+        assert_eq!(left, vec!["cdx".to_string()]);
+
+        // And they leave exiting, not exited — the same handoff every other
+        // teardown makes, so the shutdown backstop can still reach them. They
+        // are out of the map yet still named here, alongside the live Codex.
+        assert_eq!(
+            mgr.live_or_draining_agent_names().await,
+            vec!["Codex CLI".to_string(), "Google Antigravity".to_string()]
+        );
+
+        // Nothing of that type left: a second pass is a no-op rather than an
+        // error, which is what makes the sign-out safe to retry.
+        assert_eq!(
+            mgr.disconnect_by_agent_type(AgentType::Antigravity).await,
+            0
+        );
+    }
+
+    /// A pid of zero means BOTH "reaped" and "not spawned yet", so a
+    /// connection torn down mid-spawn — which can publish a live pid moments
+    /// later — must not be dismissed. It ages out instead.
+    #[tokio::test]
+    async fn a_child_that_has_not_published_a_pid_is_still_assumed_live() {
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("c1", AgentType::Codex, None, EventEmitter::Noop)
+            .await;
+        mgr.disconnect("c1").await.unwrap();
+        assert_eq!(
+            mgr.live_or_draining_agent_names().await,
+            vec!["Codex CLI".to_string()],
+            "within the grace window an unpublished pid counts as running"
+        );
+
+        // Backdate past the grace: now zero can only mean finished.
+        {
+            let mut draining = mgr.draining.lock().await;
+            for child in draining.iter_mut() {
+                child.parked_at = std::time::Instant::now() - DRAIN_GRACE * 2;
+            }
+        }
+        assert!(mgr.live_or_draining_agent_names().await.is_empty());
+        assert_eq!(
+            mgr.draining.lock().await.len(),
+            0,
+            "reading prunes, so the list cannot grow without bound"
+        );
+    }
+
+    /// `spawn_agent` takes the read side of `external_restore_lock` as its
+    /// very first statement, so holding the write side is what makes a backup
+    /// restore's "are any agents running?" check a real gate rather than a
+    /// check-then-use with a multi-minute gap.
+    #[tokio::test]
+    async fn lock_out_new_connections_blocks_connection_establishment() {
+        let mgr = ConnectionManager::new();
+        let guard = mgr.lock_out_new_connections().await;
+        assert!(
+            mgr.external_restore_lock.try_read().is_err(),
+            "no connection may be established while the lockout is held"
+        );
+        drop(guard);
+        assert!(mgr.external_restore_lock.try_read().is_ok());
+    }
+    // Test-only: the budget itself is enforced at the append in
+    // `SessionState::apply_event`, so nothing in this module's production code
+    // names it — only the tests that pin the bound do.
+    use crate::acp::feedback::MAX_FEEDBACK_ATTACHMENT_BYTES_PER_TURN;
     use crate::acp::session_state::SessionState;
     use crate::acp::types::ConnectionStatus;
     use crate::web::event_bridge::{EventEmitter, WebEvent, WebEventBroadcaster};
@@ -3167,9 +5947,9 @@ mod tests {
         AgentConnection {
             id: id.to_string(),
             agent_type: crate::models::agent::AgentType::ClaudeCode,
-            status: ConnectionStatus::Connected,
             owner_window_label: "test-window".to_string(),
             cmd_tx: tx,
+            handshake: tokio_util::sync::CancellationToken::new(),
             state: Arc::new(RwLock::new(state)),
             emitter: EventEmitter::Noop,
             prompt_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -3336,6 +6116,263 @@ mod tests {
         let _ = child.wait();
     }
 
+    /// The Antigravity sign-out needs "no process of this agent is running",
+    /// and a child an earlier `disconnect` left draining is exactly the one the
+    /// map cannot see. It was asked to go — `disconnect` sends and returns —
+    /// but nothing ever checked that it went, and while it lives it still holds
+    /// the credential the sign-out is about to clear.
+    ///
+    /// The test connection's command receiver is dropped, so the graceful path
+    /// is unavailable: this process can only die from the sweep.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn disconnect_by_agent_type_sweeps_a_child_left_draining_by_an_earlier_teardown() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (mut child, gpid) = spawn_process_tree(&dir.path().join("g.pid")).await;
+
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("agy-old", AgentType::Antigravity, None, EventEmitter::Noop)
+            .await;
+        mgr.connections
+            .lock()
+            .await
+            .get("agy-old")
+            .unwrap()
+            .child_pid
+            .store(child.id(), std::sync::atomic::Ordering::SeqCst);
+
+        // Out of the map, into `draining` — a closed tab, say.
+        mgr.disconnect("agy-old").await.unwrap();
+        assert!(mgr.list_connections().await.is_empty());
+
+        // Nothing live to end, so nothing to report — but its process is still
+        // there, and that is what has to be gone.
+        assert_eq!(
+            mgr.disconnect_by_agent_type(AgentType::Antigravity).await,
+            0
+        );
+        assert!(
+            wait_until_dead(gpid).await,
+            "grandchild {gpid} survived — a draining child of the same agent was never swept"
+        );
+        let _ = child.wait();
+    }
+
+    /// `kill_tree` sends `SIGTERM` and returns; `SIGTERM` can be caught or
+    /// ignored. So "the kill call returned" is not "the agent is gone", and the
+    /// sign-out's whole premise is that it IS gone before the credential goes.
+    /// A process that ignores `SIGTERM` must still end up dead, via `SIGKILL`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn disconnect_by_agent_type_escalates_to_sigkill_for_a_child_that_ignores_sigterm() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (mut child, gpid) = spawn_sigterm_proof_tree(&dir.path().join("g.pid")).await;
+
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("agy", AgentType::Antigravity, None, EventEmitter::Noop)
+            .await;
+        mgr.connections
+            .lock()
+            .await
+            .get("agy")
+            .unwrap()
+            .child_pid
+            .store(child.id(), std::sync::atomic::Ordering::SeqCst);
+
+        assert_eq!(
+            mgr.disconnect_by_agent_type(AgentType::Antigravity).await,
+            1
+        );
+
+        // The target is this test's own child, so how it died is readable, and
+        // signal 9 is the escalation: it ignores SIGTERM, so nothing softer did
+        // this. `try_wait` rather than `wait` because it does not block — a
+        // status from it means the process was dead by the time the sweep
+        // returned, not merely that it died eventually. (Strictly it means
+        // "dead a few microseconds after", which is as close to the ordering as
+        // a caller outside the process can observe.)
+        use std::os::unix::process::ExitStatusExt;
+        let status = child
+            .try_wait()
+            .expect("read the target's status")
+            .expect("target was still running when the sweep returned");
+        assert_eq!(
+            status.signal(),
+            Some(libc::SIGKILL),
+            "target survived SIGTERM and was never SIGKILLed"
+        );
+        assert!(
+            wait_until_dead(gpid).await,
+            "grandchild {gpid} survived — the escalation reached the target but not its tree"
+        );
+    }
+
+    /// Every path that ends a connection also cancels its handshake. The
+    /// `Disconnect` each sends goes unread until the session is established, so
+    /// a path that skipped the cancel would leave a connection still starting
+    /// up to finish its handshake — and its agent running — before it noticed.
+    #[tokio::test]
+    async fn every_disconnect_path_cancels_the_handshake() {
+        let mgr = ConnectionManager::new();
+        async fn connect(
+            mgr: &ConnectionManager,
+            id: &str,
+            agent_type: AgentType,
+        ) -> tokio_util::sync::CancellationToken {
+            mgr.insert_test_connection(id, agent_type, None, EventEmitter::Noop)
+                .await;
+            mgr.connections.lock().await[id].handshake.clone()
+        }
+
+        let closed_tab = connect(&mgr, "closed-tab", AgentType::Codex).await;
+        mgr.disconnect("closed-tab").await.unwrap();
+        assert!(closed_tab.is_cancelled(), "disconnect");
+
+        let closed_window = connect(&mgr, "closed-window", AgentType::Codex).await;
+        mgr.disconnect_by_owner_window("test-window").await;
+        assert!(closed_window.is_cancelled(), "disconnect_by_owner_window");
+
+        let signed_out = connect(&mgr, "signed-out", AgentType::Antigravity).await;
+        mgr.disconnect_by_agent_type(AgentType::Antigravity).await;
+        assert!(signed_out.is_cancelled(), "disconnect_by_agent_type");
+
+        let quit = connect(&mgr, "quit", AgentType::Codex).await;
+        mgr.disconnect_all().await;
+        assert!(quit.is_cancelled(), "disconnect_all");
+    }
+
+    /// The case that made it matter: a draft switching agents disconnects the
+    /// connection it is leaving, whose agent may not have answered Initialize
+    /// yet. The `Disconnect` goes unread until the conversation loop starts,
+    /// and Initialize waits up to 60 s, so the agent process outlived the
+    /// disconnect by up to a minute.
+    ///
+    /// The agent is `sleep`, launched as a custom binary agent: it never
+    /// answers. Unix-only (relies on `sleep` / `kill(2)`).
+    #[cfg(unix)]
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn disconnect_stops_an_agent_that_has_not_answered_initialize() {
+        use crate::acp::custom_registry::{
+            hydrate, hydrate_test_guard, BinaryPlatformSpec, CustomAgentDef, CustomAgentSpec,
+            CustomDistributionKind,
+        };
+
+        // `hydrate` replaces a process-global map; hold its lock throughout.
+        let _registry = hydrate_test_guard();
+        let def = CustomAgentDef {
+            registry_id: "never-answers".into(),
+            name: "Never answers".into(),
+            description: String::new(),
+            version: "1.0.0".into(),
+            distribution_kind: CustomDistributionKind::Binary,
+            spec: CustomAgentSpec {
+                binary: BTreeMap::from([(
+                    crate::acp::registry::current_platform().to_string(),
+                    BinaryPlatformSpec {
+                        archive: "https://example.invalid/never-answers.tar.gz".into(),
+                        // Nothing cached under this id, so the launch falls
+                        // back to `sleep` on PATH.
+                        cmd: "sleep".into(),
+                        args: vec!["120".into()],
+                        env: BTreeMap::new(),
+                        sha256: None,
+                    },
+                )]),
+                ..Default::default()
+            },
+            icon_url: None,
+            skills_shared_store: false,
+            skills_dir: None,
+            source: Default::default(),
+            version_probe: None,
+            supports_mcp: true,
+        };
+        assert!(hydrate(std::slice::from_ref(&def)).is_empty());
+        let agent_type = AgentType::custom("never-answers").unwrap();
+
+        let mgr = ConnectionManager::new();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let id = mgr
+            .spawn_agent(
+                agent_type,
+                Some(dir.path().to_string_lossy().into_owned()),
+                None,
+                BTreeMap::new(),
+                "test-window".to_string(),
+                EventEmitter::Noop,
+                None,
+                BTreeMap::new(),
+            )
+            .await
+            .expect("the agent launches");
+        let pid_cell = Arc::clone(&mgr.connections.lock().await[&id].child_pid);
+        let mut pid = 0;
+        for _ in 0..500 {
+            pid = pid_cell.load(std::sync::atomic::Ordering::SeqCst);
+            if pid != 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_ne!(pid, 0, "the agent process never started");
+        // Up and still waiting to be answered, so whatever ends it below is
+        // the disconnect and not the agent leaving on its own.
+        assert!(is_alive(pid as i32), "the agent exited on its own");
+
+        mgr.disconnect(&id).await.unwrap();
+
+        // Longer than `wait_until_dead` allows, for a loaded CI machine; the
+        // handshake used to hold on for up to 60 s.
+        let mut gone = false;
+        for _ in 0..500 {
+            if !is_alive(pid as i32) {
+                gone = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        hydrate(&[]);
+        assert!(
+            gone,
+            "agent {pid} outlived its disconnect — the handshake kept it running"
+        );
+    }
+
+    /// Like [`spawn_process_tree`], but both levels ignore `SIGTERM`: the shell
+    /// sets it to `SIG_IGN`, which `sleep` then inherits across `exec`. Stands
+    /// in for an agent that traps it and takes its time — or never leaves.
+    #[cfg(unix)]
+    async fn spawn_sigterm_proof_tree(pidfile: &std::path::Path) -> (std::process::Child, i32) {
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!(
+                "trap '' TERM; sleep 30 & echo $! > '{}'; wait",
+                pidfile.display()
+            ))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn sh");
+        for _ in 0..150 {
+            if let Ok(raw) = std::fs::read_to_string(pidfile) {
+                if let Ok(pid) = raw.trim().parse::<i32>() {
+                    return (child, pid);
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        // SIGTERM would bounce off, so the bail-out path has to use SIGKILL.
+        let config = kill_tree::Config {
+            signal: "SIGKILL".to_string(),
+            ..Default::default()
+        };
+        let _ = kill_tree::blocking::kill_tree_with_config(child.id(), &config);
+        let _ = child.wait();
+        panic!("grandchild never recorded its pid");
+    }
+
     /// Build a broadcaster + subscribed receiver. Subscribing here (not lazily
     /// inside the test) ensures events emitted between construction and the
     /// first `recv` are buffered rather than dropped.
@@ -3497,9 +6534,9 @@ mod tests {
         let conn = AgentConnection {
             id: conn_id.to_string(),
             agent_type,
-            status: ConnectionStatus::Connected,
             owner_window_label: "test-window".to_string(),
             cmd_tx: tx,
+            handshake: tokio_util::sync::CancellationToken::new(),
             state: Arc::new(RwLock::new(state)),
             emitter: EventEmitter::Noop,
             prompt_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -3512,6 +6549,331 @@ mod tests {
             .await
             .insert(conn_id.to_string(), conn);
         rx
+    }
+
+    /// Put a turn in flight on a connection inserted by
+    /// [`insert_live_connection`] (which starts them `Connected`).
+    async fn mark_prompting(mgr: &ConnectionManager, conn_id: &str) {
+        let state = mgr.get_state(conn_id).await.expect("connection");
+        state.write().await.status = ConnectionStatus::Prompting;
+    }
+
+    /// Mirror what a live `active` goal snapshot leaves on the state.
+    async fn mark_goal_active(mgr: &ConnectionManager, conn_id: &str) {
+        let state = mgr.get_state(conn_id).await.expect("connection");
+        state.write().await.goal_active = true;
+    }
+
+    /// Stand in for the connection loop's `GoalControl` arm: take the command,
+    /// assert the action, answer `landed`, and hand the receiver back so the
+    /// test can see what (if anything) the manager enqueues next. Returns a
+    /// JoinHandle because `goal_control` blocks on that answer.
+    fn answer_goal_control(
+        mut rx: tokio::sync::mpsc::Receiver<crate::acp::connection::ConnectionCommand>,
+        expected: GoalControlAction,
+        landed: bool,
+    ) -> tokio::task::JoinHandle<tokio::sync::mpsc::Receiver<crate::acp::connection::ConnectionCommand>>
+    {
+        tokio::spawn(async move {
+            match rx.recv().await.expect("goal control enqueued") {
+                ConnectionCommand::GoalControl { action, reply } => {
+                    assert_eq!(action, expected);
+                    reply
+                        .expect("an interrupting caller attaches a reply")
+                        .send(landed)
+                        .expect("manager is listening");
+                }
+                _ => panic!("expected a GoalControl command"),
+            }
+            rx
+        })
+    }
+
+    fn cli_tag(run_id: &str) -> crate::cli_run::CliRunTag {
+        crate::cli_run::CliRunTag {
+            run_id: run_id.to_string(),
+            policy: crate::cli_run::PermissionPolicy::Deny,
+            depth: 0,
+        }
+    }
+
+    async fn state_of(mgr: &ConnectionManager, id: &str) -> Arc<tokio::sync::RwLock<SessionState>> {
+        let conns = mgr.connections.lock().await;
+        conns.get(id).expect("connection").state.clone()
+    }
+
+    async fn cli_run_of(mgr: &ConnectionManager, id: &str) -> Option<crate::cli_run::CliRunTag> {
+        state_of(mgr, id).await.read().await.cli_run.clone()
+    }
+
+    /// A resume the dedup answers with a connection someone is already
+    /// driving says so, and that connection does NOT take the parent's CLI
+    /// run tag — the run's policy must not answer a person's cards. The
+    /// verdict is the dedup's own: there is no look-up before the spawn for a
+    /// newly opened tab to slip past.
+    #[tokio::test]
+    async fn a_resume_onto_a_live_connection_is_reused_and_keeps_no_cli_tag() {
+        use crate::acp::delegation::spawner::{ConnectionSpawner, ResumedSpawn};
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let data_dir = tempfile::tempdir().expect("tempdir");
+        let mgr = Arc::new(ConnectionManager::new());
+        let wd = PathBuf::from("/tmp/cli-tag-resume");
+        for id in ["parent", "users-child"] {
+            let wd = Some(wd.clone());
+            mgr.insert_test_connection(id, AgentType::ClaudeCode, wd, EventEmitter::Noop)
+                .await;
+        }
+        state_of(&mgr, "parent").await.write().await.cli_run = Some(cli_tag("run-1"));
+        let child = state_of(&mgr, "users-child").await;
+        child.write().await.external_id = Some("child-session".to_string());
+
+        let spawner = ConnectionManagerSpawner {
+            manager: Arc::clone(&mgr),
+            db: Arc::new(db),
+            data_dir: Arc::new(data_dir.path().to_path_buf()),
+        };
+        let resumed = spawner
+            .spawn_for_resume(
+                "parent",
+                AgentType::ClaudeCode,
+                Some(wd.to_string_lossy().into_owned()),
+                "child-session",
+                None,
+                BTreeMap::new(),
+            )
+            .await
+            .expect("the live connection is reused");
+        assert_eq!(
+            resumed,
+            ResumedSpawn {
+                connection_id: "users-child".to_string(),
+                reused: true,
+            }
+        );
+        assert_eq!(cli_run_of(&mgr, "users-child").await, None);
+    }
+
+    #[tokio::test]
+    async fn a_new_child_inherits_its_parents_cli_tag() {
+        let mgr = ConnectionManager::new();
+        for id in ["parent", "child", "plain-parent", "plain-child"] {
+            mgr.insert_test_connection(id, AgentType::ClaudeCode, None, EventEmitter::Noop)
+                .await;
+        }
+        {
+            let parent = state_of(&mgr, "parent").await;
+            let mut parent = parent.write().await;
+            parent.cli_run = Some(cli_tag("run-2"));
+            parent.cli_output_schema = Some(Arc::new(
+                crate::cli_run::OutputSchema::compile(serde_json::json!({"type": "object"}))
+                    .unwrap(),
+            ));
+        }
+
+        mgr.inherit_cli_run_tag("parent", "child").await;
+        mgr.inherit_cli_run_tag("plain-parent", "plain-child").await;
+        mgr.inherit_cli_run_tag("gone", "plain-child").await;
+
+        assert_eq!(cli_run_of(&mgr, "child").await, Some(cli_tag("run-2")));
+        assert_eq!(cli_run_of(&mgr, "plain-child").await, None);
+        // The run's result is its root's to hand in: never a child's.
+        assert!(state_of(&mgr, "child")
+            .await
+            .read()
+            .await
+            .cli_output_schema
+            .is_none());
+    }
+
+    /// The waiting setters hand back whatever the connection loop answered,
+    /// and read a loop that went away without answering as the process gone.
+    #[tokio::test]
+    async fn waiting_setters_return_the_loops_answer() {
+        use crate::acp::connection::SetterOutcome;
+        let mgr = ConnectionManager::new();
+        let mut rx = insert_live_connection(&mgr, "c-setter", AgentType::Codex, None).await;
+        let loop_stub = tokio::spawn(async move {
+            match rx.recv().await.expect("set mode enqueued") {
+                ConnectionCommand::SetMode { mode_id, reply } => {
+                    assert_eq!(mode_id, "plan");
+                    let _ = reply.expect("a waiting caller attaches a reply").send(Ok(
+                        SetterOutcome::Confirmed {
+                            current: "plan".to_string(),
+                        },
+                    ));
+                }
+                _ => panic!("expected SetMode"),
+            }
+            match rx.recv().await.expect("set config option enqueued") {
+                ConnectionCommand::SetConfigOption { reply, .. } => {
+                    let _ = reply
+                        .expect("a waiting caller attaches a reply")
+                        .send(Err("agent says no".to_string()));
+                }
+                _ => panic!("expected SetConfigOption"),
+            }
+            match rx.recv().await.expect("set config option enqueued") {
+                // Dropped unanswered, as a loop that ends mid-request does.
+                ConnectionCommand::SetConfigOption { reply, .. } => drop(reply),
+                _ => panic!("expected SetConfigOption"),
+            }
+            rx
+        });
+
+        assert_eq!(
+            mgr.set_mode_and_wait("c-setter", "plan".to_string())
+                .await
+                .unwrap(),
+            SetterOutcome::Confirmed {
+                current: "plan".to_string()
+            }
+        );
+        assert!(matches!(
+            mgr.set_config_option_and_wait("c-setter", "model".into(), "x".into())
+                .await,
+            Err(AcpError::Protocol(message)) if message == "agent says no"
+        ));
+        assert!(matches!(
+            mgr.set_config_option_and_wait("c-setter", "model".into(), "x".into())
+                .await,
+            Err(AcpError::ProcessExited)
+        ));
+        loop_stub.await.unwrap();
+        assert!(matches!(
+            mgr.set_mode_and_wait("missing", "plan".to_string()).await,
+            Err(AcpError::ConnectionNotFound(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_codex_goal_pause_mid_turn_interrupts_the_turn_after_the_goal_rpc() {
+        // codex's pause is app-server metadata: it stops the goal from starting
+        // ANOTHER turn but never touches the one that is running, so without
+        // the interrupt the user clicks Pause and watches the agent keep
+        // working. Order matters — the goal RPC has to LAND first, so the goal
+        // is already non-active when the turn aborts and nothing auto-continues
+        // on the way out.
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let mgr = ConnectionManager::new();
+        let rx = insert_live_connection(&mgr, "c-goal-codex", AgentType::Codex, None).await;
+        mark_prompting(&mgr, "c-goal-codex").await;
+        mark_goal_active(&mgr, "c-goal-codex").await;
+        let loop_stub = answer_goal_control(rx, GoalControlAction::Pause, true);
+
+        mgr.goal_control(&db.conn, "c-goal-codex", GoalControlAction::Pause)
+            .await
+            .unwrap();
+
+        let mut rx = loop_stub.await.unwrap();
+        assert!(matches!(rx.try_recv(), Ok(ConnectionCommand::Cancel)));
+        assert!(rx.try_recv().is_err(), "nothing else is enqueued");
+    }
+
+    #[tokio::test]
+    async fn a_rejected_goal_control_leaves_the_turn_alone() {
+        // The agent refused the pause (bad params, unknown session, dead
+        // process). The goal is still active, so killing the turn would destroy
+        // in-flight work AND let codex resume the goal at the next idle point —
+        // strictly worse than the error banner the loop already emitted.
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let mgr = ConnectionManager::new();
+        let rx = insert_live_connection(&mgr, "c-goal-refused", AgentType::Codex, None).await;
+        mark_prompting(&mgr, "c-goal-refused").await;
+        mark_goal_active(&mgr, "c-goal-refused").await;
+        let loop_stub = answer_goal_control(rx, GoalControlAction::Pause, false);
+
+        mgr.goal_control(&db.conn, "c-goal-refused", GoalControlAction::Pause)
+            .await
+            .unwrap();
+
+        let mut rx = loop_stub.await.unwrap();
+        assert!(rx.try_recv().is_err(), "a failed control cancels nothing");
+    }
+
+    #[tokio::test]
+    async fn a_codex_goal_clear_interrupts_even_when_codeg_thinks_it_is_idle() {
+        // Codeg's `Prompting` only covers turns IT started. A goal loop's
+        // continuations are started by codex — detached turns no host request
+        // owns — so the session reads "connected" while the agent is very much
+        // working, which is precisely when the user hits Clear. Gating on our
+        // own turn bookkeeping would skip the interrupt exactly there, so the
+        // interrupt is not gated on liveness: with an ACTIVE goal, whatever is
+        // running is the goal's work, and with nothing running the interrupt is
+        // the same harmless no-op the Stop button is.
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let mgr = ConnectionManager::new();
+        let rx = insert_live_connection(&mgr, "c-goal-idle", AgentType::Codex, None).await;
+        mark_goal_active(&mgr, "c-goal-idle").await;
+        let loop_stub = answer_goal_control(rx, GoalControlAction::Clear, true);
+
+        mgr.goal_control(&db.conn, "c-goal-idle", GoalControlAction::Clear)
+            .await
+            .unwrap();
+
+        let mut rx = loop_stub.await.unwrap();
+        assert!(matches!(rx.try_recv(), Ok(ConnectionCommand::Cancel)));
+        assert!(rx.try_recv().is_err(), "nothing else is enqueued");
+    }
+
+    #[tokio::test]
+    async fn clearing_a_paused_goal_never_touches_the_users_own_turn() {
+        // A paused goal drives nothing, so a turn running alongside it is
+        // something the user started themselves. Dismissing the stale card is
+        // housekeeping — killing that prompt (and draining its permissions, and
+        // cascading to its delegations) would be destroying unrelated work.
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let mgr = ConnectionManager::new();
+        let mut rx = insert_live_connection(&mgr, "c-goal-paused", AgentType::Codex, None).await;
+        mark_prompting(&mgr, "c-goal-paused").await; // the user's own prompt
+        // `goal_active` stays false: the last snapshot was `paused`.
+
+        mgr.goal_control(&db.conn, "c-goal-paused", GoalControlAction::Clear)
+            .await
+            .unwrap();
+
+        match rx.try_recv() {
+            Ok(ConnectionCommand::GoalControl { action, reply }) => {
+                assert_eq!(action, GoalControlAction::Clear);
+                assert!(reply.is_none(), "no interrupt is intended, so none waits");
+            }
+            _ => panic!("expected a GoalControl command"),
+        }
+        assert!(rx.try_recv().is_err(), "the user's turn survives");
+    }
+
+    #[tokio::test]
+    async fn a_claude_goal_clear_never_interrupts_the_turn_carrying_it() {
+        // claude-agent-acp implements `_session/goal` by STEERING the text
+        // "/goal clear" into the running turn (or prompting when idle).
+        // Cancelling would kill the message that carries the clear and leave
+        // the goal armed — worse than doing nothing. Same for every adapter
+        // whose control channel we haven't verified. No interrupt is intended,
+        // so no reply is even asked for and the call doesn't wait.
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let mgr = ConnectionManager::new();
+        let mut rx =
+            insert_live_connection(&mgr, "c-goal-claude", AgentType::ClaudeCode, None).await;
+        mark_prompting(&mgr, "c-goal-claude").await;
+        mark_goal_active(&mgr, "c-goal-claude").await;
+
+        mgr.goal_control(&db.conn, "c-goal-claude", GoalControlAction::Clear)
+            .await
+            .unwrap();
+
+        match rx.try_recv() {
+            Ok(ConnectionCommand::GoalControl { action, reply }) => {
+                assert_eq!(action, GoalControlAction::Clear);
+                assert!(reply.is_none(), "nobody waits on an in-band control");
+            }
+            _ => panic!("expected a GoalControl command"),
+        }
+        assert!(rx.try_recv().is_err(), "the carrying turn survives");
     }
 
     #[tokio::test]
@@ -3564,6 +6926,517 @@ mod tests {
             um.1.iter().any(|t| t == "hello viewers"),
             "user_message must carry the prompt text, got {um:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn linked_ui_prompt_leaves_the_user_blocks_untouched() {
+        use crate::db::test_helpers;
+
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/agent-routes").await;
+        let mgr = ConnectionManager::new();
+        let conn_id = "conn-agent-routes";
+        let mut cmd_rx = insert_live_connection(
+            &mgr,
+            conn_id,
+            AgentType::Codex,
+            Some(PathBuf::from("/tmp/agent-routes")),
+        )
+        .await;
+
+        mgr.send_prompt_linked_with_message_id(
+            &db,
+            conn_id,
+            vec![PromptInputBlock::Text {
+                text: "ask [@Antigravity](codeg://agent/antigravity) to review".into(),
+            }],
+            Some(folder_id),
+            None,
+            None,
+            Some("optimistic-route".into()),
+        )
+        .await
+        .unwrap();
+
+        let command = cmd_rx.try_recv().expect("one prompt command");
+        let ConnectionCommand::Prompt {
+            blocks,
+            user_message,
+            ..
+        } = command
+        else {
+            panic!("expected prompt command");
+        };
+        // The routing frame is appended at the agent boundary in the connection
+        // loop, never here: what the manager enqueues, persists and broadcasts
+        // is exactly what the user typed.
+        assert!(matches!(
+            blocks.as_slice(),
+            [PromptInputBlock::Text { text }]
+                if text == "ask [@Antigravity](codeg://agent/antigravity) to review"
+        ));
+        let (message_id, user_blocks) = user_message.expect("root prompt is broadcast");
+        assert_eq!(message_id, "optimistic-route");
+        assert!(matches!(
+            user_blocks.as_slice(),
+            [crate::acp::types::UserMessageBlock::Text { text }]
+                if text == "ask [@Antigravity](codeg://agent/antigravity) to review"
+        ));
+    }
+
+    /// A delegated assistant child's brief rides ITS prompt command and
+    /// nothing else: the separators it is framed with survive (ingress scrubs
+    /// only the user's blocks), and the child row's seeded title, the stored
+    /// prompt and any broadcast see the task alone.
+    #[tokio::test]
+    async fn an_internal_suffix_rides_its_own_prompt_command_only() {
+        use crate::acp::delegation::spawner::{AssistantLink, DelegationLink};
+        use crate::db::test_helpers;
+
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/brief-suffix").await;
+        let parent_id = test_helpers::seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        let mgr = ConnectionManager::new();
+        let conn_id = "conn-brief-suffix";
+        let mut cmd_rx = insert_live_connection(
+            &mgr,
+            conn_id,
+            AgentType::Codex,
+            Some(PathBuf::from("/tmp/brief-suffix")),
+        )
+        .await;
+
+        let brief = crate::acp::agent_mentions::render_assistant_brief("Reviewer", "Cite lines.")
+            .expect("brief");
+        let child_id = mgr
+            .send_prompt_linked_with_suffix(
+                &db,
+                conn_id,
+                vec![PromptInputBlock::Text {
+                    text: "Review the diff".into(),
+                }],
+                Some(folder_id),
+                None,
+                Some(DelegationLink {
+                    parent_conversation_id: parent_id,
+                    parent_tool_use_id: "pt-brief".into(),
+                    delegation_call_id: "call-brief".into(),
+                    assistant: Some(AssistantLink {
+                        id: 3,
+                        snapshot: crate::models::AssistantRunSnapshot {
+                            name: "Reviewer".into(),
+                            agent_options: Default::default(),
+                            instructions: "Cite lines.".into(),
+                        },
+                    }),
+                }),
+                vec![PromptInputBlock::Text {
+                    text: brief.clone(),
+                }],
+            )
+            .await
+            .unwrap()
+            .expect("child row bound");
+
+        let ConnectionCommand::Prompt {
+            blocks,
+            user_message,
+            internal_suffix,
+        } = cmd_rx.try_recv().expect("one prompt command")
+        else {
+            panic!("expected prompt command");
+        };
+        assert!(matches!(
+            blocks.as_slice(),
+            [PromptInputBlock::Text { text }] if text == "Review the diff"
+        ));
+        assert!(user_message.is_none(), "a delegation child broadcasts no user message");
+        assert!(matches!(
+            internal_suffix.as_slice(),
+            [PromptInputBlock::Text { text }] if text == &brief
+        ));
+        assert!(brief.contains('\u{1e}'), "the brief keeps its separators");
+
+        let row = crate::db::service::conversation_service::get_by_id(&db.conn, child_id)
+            .await
+            .unwrap();
+        assert_eq!(row.title.as_deref(), Some("Review the diff"));
+        assert_eq!(row.assistant_id, Some(3));
+        assert_eq!(row.assistant_name.as_deref(), Some("Reviewer"));
+        let (assistant_id, snapshot) =
+            crate::db::service::conversation_service::get_assistant_run(&db.conn, child_id)
+                .await
+                .unwrap()
+                .expect("assistant run recorded");
+        assert_eq!(assistant_id, 3);
+        assert_eq!(
+            snapshot.expect("snapshot readable").instructions,
+            "Cite lines."
+        );
+
+        // The next prompt on the same connection — a user typing into the
+        // child's tab — carries no brief.
+        mgr.get_state(conn_id)
+            .await
+            .expect("live connection")
+            .write()
+            .await
+            .turn_in_flight = false;
+        mgr.send_prompt_linked(
+            &db,
+            conn_id,
+            vec![PromptInputBlock::Text {
+                text: "and also this".into(),
+            }],
+            Some(folder_id),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let ConnectionCommand::Prompt {
+            internal_suffix, ..
+        } = cmd_rx.try_recv().expect("second prompt command")
+        else {
+            panic!("expected prompt command");
+        };
+        assert!(internal_suffix.is_empty());
+    }
+
+    #[tokio::test]
+    async fn reserved_route_separator_is_scrubbed_not_rejected() {
+        // The separator is invisible and usually arrives inside content the user
+        // did not author — an attached file's bytes land in `Resource.text`.
+        // Rejecting made such a message permanently unsendable; the prompt must
+        // go through with the character removed from EVERY copy.
+        use crate::db::test_helpers;
+
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/route-separator").await;
+        let mgr = ConnectionManager::new();
+        let conn_id = "conn-route-separator";
+        let mut cmd_rx = insert_live_connection(
+            &mgr,
+            conn_id,
+            AgentType::Codex,
+            Some(PathBuf::from("/tmp/route-separator")),
+        )
+        .await;
+
+        mgr.send_prompt_linked_with_message_id(
+            &db,
+            conn_id,
+            vec![
+                PromptInputBlock::Text {
+                    text: "user\u{001e}frame".into(),
+                },
+                PromptInputBlock::Resource {
+                    uri: "file:///tmp/records.dat".into(),
+                    mime_type: Some("text/plain".into()),
+                    text: Some("row-a\u{001e}row-b".into()),
+                    blob: None,
+                },
+            ],
+            Some(folder_id),
+            None,
+            None,
+            Some("optimistic-reserved".into()),
+        )
+        .await
+        .expect("an invisible control character must not block the send");
+
+        let ConnectionCommand::Prompt {
+            blocks,
+            user_message,
+            ..
+        } = cmd_rx.try_recv().expect("the prompt still reaches the agent")
+        else {
+            panic!("expected prompt command");
+        };
+        assert!(matches!(
+            blocks.as_slice(),
+            [
+                PromptInputBlock::Text { text },
+                PromptInputBlock::Resource { text: Some(resource), .. },
+            ] if text == "userframe" && resource == "row-arow-b"
+        ));
+        // The broadcast copy is projected from the SAME scrubbed blocks, so the
+        // stored, displayed, and on-the-wire messages cannot drift apart.
+        let (_, user_blocks) = user_message.expect("root prompt is broadcast");
+        assert!(matches!(
+            user_blocks.first(),
+            Some(crate::acp::types::UserMessageBlock::Text { text }) if text == "userframe"
+        ));
+    }
+
+    #[tokio::test]
+    async fn send_prompt_linked_preserves_history_when_the_session_was_re_minted() {
+        // codeg#500, end to end, in the exact shape the reporter described:
+        // an existing completed conversation, then a new session started in the
+        // same folder and pane.
+        //
+        // The connection was spawned with `session_id = None` (a reconnect that
+        // lost the id, or an unclassified `session/load` failure that fell
+        // through to `session/new`), so it holds S2 while the row the UI still
+        // points at holds S1. Branch A adopts that row and persists the session
+        // id onto it. Before the guard, S1 was left with no row at all — and
+        // since the conversation list is built purely from DB rows, the user's
+        // 49-minute conversation simply vanished from the sidebar.
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/reminted").await;
+        let existing = conversation_service::create(
+            &db.conn,
+            folder_id,
+            AgentType::Codex,
+            Some("nouveauté de cette version".into()),
+            None,
+        )
+        .await
+        .unwrap();
+        conversation_service::bind_external_id(&db.conn, existing.id, "S1", &[])
+            .await
+            .unwrap();
+        conversation_service::update_status(
+            &db.conn,
+            existing.id,
+            ConversationStatus::PendingReview,
+        )
+        .await
+        .unwrap();
+
+        let mgr = ConnectionManager::new();
+        let conn_id = "conn-reminted";
+        let _cmd_rx = insert_live_connection(
+            &mgr,
+            conn_id,
+            AgentType::Codex,
+            Some(PathBuf::from("/tmp/reminted")),
+        )
+        .await;
+        // The connection came up on a session of its own — nobody told it about
+        // S1, which is the whole problem.
+        mgr.get_state(conn_id)
+            .await
+            .unwrap()
+            .write()
+            .await
+            .external_id = Some("S2".into());
+
+        mgr.send_prompt_linked(
+            &db,
+            conn_id,
+            vec![PromptInputBlock::Text {
+                text: "tu peux faire 2 couleur".into(),
+            }],
+            Some(folder_id),
+            Some(existing.id),
+            None,
+        )
+        .await
+        .expect("the prompt itself must still go through");
+
+        // The row the user has open follows the live session...
+        let current = conversation_service::get_by_id(&db.conn, existing.id)
+            .await
+            .expect("current row");
+        assert_eq!(current.external_id.as_deref(), Some("S2"));
+
+        // ...and S1 is still indexed, under the title the user recognises, so
+        // it remains visible and reopenable from the sidebar.
+        let listed = crate::commands::conversations::list_all_conversations_core(
+            &db.conn,
+            &EventEmitter::Noop,
+            &crate::chat_channel::manager::ChatChannelManager::new(),
+            crate::commands::conversations::ListAllConversationsOptions::default(),
+        )
+        .await
+        .expect("list");
+        let preserved = listed
+            .iter()
+            .find(|c| c.external_id.as_deref() == Some("S1"))
+            .expect("the previous session must remain in the conversation index");
+        assert_eq!(
+            preserved.title.as_deref(),
+            Some("nouveauté de cette version")
+        );
+        assert_ne!(
+            preserved.id, existing.id,
+            "the preserved history lives on its own row"
+        );
+        assert_eq!(listed.len(), 2, "exactly two conversations, got {listed:?}");
+    }
+
+    #[tokio::test]
+    async fn send_prompt_linked_refuses_a_session_owned_by_another_conversation() {
+        // The connection holds a session that ALREADY belongs to a different
+        // row, so no bind can make this row own it.
+        //
+        // The retry is the whole point of the test. `ConversationLinked` is
+        // applied to `SessionState`, and `already_linked` is read from exactly
+        // that field — so announcing the link before the bind meant the first
+        // call failed with the link latched, and the SECOND call skipped the
+        // entire link/bind block and dispatched the turn into a session this
+        // row does not own. Both calls must fail identically, and neither may
+        // enqueue a prompt.
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/conflict").await;
+
+        let holder = conversation_service::create(
+            &db.conn,
+            folder_id,
+            AgentType::Codex,
+            Some("owns the session".into()),
+            None,
+        )
+        .await
+        .unwrap();
+        conversation_service::bind_external_id(&db.conn, holder.id, "S_SHARED", &[])
+            .await
+            .unwrap();
+        let target = conversation_service::create(
+            &db.conn,
+            folder_id,
+            AgentType::Codex,
+            Some("the row the user is looking at".into()),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let mgr = ConnectionManager::new();
+        let conn_id = "conn-conflict";
+        let mut cmd_rx = insert_live_connection(
+            &mgr,
+            conn_id,
+            AgentType::Codex,
+            Some(PathBuf::from("/tmp/conflict")),
+        )
+        .await;
+        mgr.get_state(conn_id)
+            .await
+            .unwrap()
+            .write()
+            .await
+            .external_id = Some("S_SHARED".into());
+
+        for attempt in 1..=2 {
+            let err = mgr
+                .send_prompt_linked(
+                    &db,
+                    conn_id,
+                    vec![PromptInputBlock::Text {
+                        text: "should never reach the agent".into(),
+                    }],
+                    Some(folder_id),
+                    Some(target.id),
+                    None,
+                )
+                .await
+                .expect_err("a session owned by another row must be refused");
+            assert!(
+                err.to_string().contains("already bound"),
+                "attempt {attempt} must name the conflict, got {err}"
+            );
+            assert!(
+                mgr.get_state(conn_id)
+                    .await
+                    .unwrap()
+                    .read()
+                    .await
+                    .conversation_id
+                    .is_none(),
+                "attempt {attempt} must leave the connection UNLINKED, or the next \
+                 prompt takes the already_linked fast path and skips the bind"
+            );
+            assert!(
+                drain_prompt_user_messages(&mut cmd_rx).is_empty(),
+                "attempt {attempt} must not enqueue a prompt"
+            );
+        }
+
+        // Neither row moved, and no split row was manufactured.
+        assert_eq!(
+            conversation_service::get_by_id(&db.conn, target.id)
+                .await
+                .expect("target")
+                .external_id,
+            None
+        );
+        assert_eq!(
+            conversation_service::get_by_id(&db.conn, holder.id)
+                .await
+                .expect("holder")
+                .external_id
+                .as_deref(),
+            Some("S_SHARED")
+        );
+    }
+
+    #[tokio::test]
+    async fn send_prompt_linked_drops_the_row_it_minted_when_the_bind_is_refused() {
+        // Branch B mints the row before the bind can be attempted. Since the
+        // announce now happens AFTER the bind, a refused one leaves a row no
+        // client was ever told about — invisible until the sidebar's next full
+        // refetch surfaces it as an empty untitled conversation. Every retry
+        // would add another.
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/conflict-b").await;
+
+        let holder =
+            conversation_service::create(&db.conn, folder_id, AgentType::Codex, None, None)
+                .await
+                .unwrap();
+        conversation_service::bind_external_id(&db.conn, holder.id, "S_SHARED", &[])
+            .await
+            .unwrap();
+
+        let mgr = ConnectionManager::new();
+        let conn_id = "conn-conflict-b";
+        let _cmd_rx = insert_live_connection(
+            &mgr,
+            conn_id,
+            AgentType::Codex,
+            Some(PathBuf::from("/tmp/conflict-b")),
+        )
+        .await;
+        mgr.get_state(conn_id)
+            .await
+            .unwrap()
+            .write()
+            .await
+            .external_id = Some("S_SHARED".into());
+
+        for _ in 0..2 {
+            mgr.send_prompt_linked(
+                &db,
+                conn_id,
+                vec![PromptInputBlock::Text { text: "hi".into() }],
+                Some(folder_id),
+                // No conversation_id — Branch B.
+                None,
+                None,
+            )
+            .await
+            .expect_err("must be refused");
+        }
+
+        let listed = crate::commands::conversations::list_all_conversations_core(
+            &db.conn,
+            &EventEmitter::Noop,
+            &crate::chat_channel::manager::ChatChannelManager::new(),
+            crate::commands::conversations::ListAllConversationsOptions::default(),
+        )
+        .await
+        .expect("list");
+        assert_eq!(
+            listed.len(),
+            1,
+            "only the pre-existing holder may remain, got {listed:?}"
+        );
+        assert_eq!(listed[0].id, holder.id);
     }
 
     #[tokio::test]
@@ -3729,7 +7602,7 @@ mod tests {
             s.turn_in_flight = true; // a turn is already running
         }
 
-        let res = mgr.fork_session(&db, conn_id, None, None).await;
+        let res = mgr.fork_session(&db, conn_id, None, None, None).await;
         assert!(
             matches!(res, Err(AcpError::TurnInProgress)),
             "fork must reject with TurnInProgress while a turn is in flight, got {res:?}"
@@ -3768,7 +7641,7 @@ mod tests {
             .await
             .conversation_id = Some(9);
 
-        let res = mgr.fork_session(&db, conn_id, None, None).await;
+        let res = mgr.fork_session(&db, conn_id, None, None, None).await;
         assert!(res.is_err(), "fork with a dead receiver must fail");
         assert!(
             !mgr.get_state(conn_id)
@@ -3812,7 +7685,7 @@ mod tests {
         )
         .await
         .unwrap();
-        conversation_service::update_external_id(&db.conn, pre.id, "session-S1".into())
+        conversation_service::bind_external_id(&db.conn, pre.id, "session-S1", &[])
             .await
             .unwrap();
 
@@ -3831,9 +7704,9 @@ mod tests {
         let conn = AgentConnection {
             id: "c-shield".to_string(),
             agent_type: AgentType::ClaudeCode,
-            status: ConnectionStatus::Connected,
             owner_window_label: "test-window".to_string(),
             cmd_tx: tx,
+            handshake: tokio_util::sync::CancellationToken::new(),
             state: Arc::new(RwLock::new(state)),
             emitter: EventEmitter::Noop,
             prompt_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -3849,11 +7722,12 @@ mod tests {
 
         let (go_tx, go_rx) = tokio::sync::oneshot::channel::<()>();
         let fake_loop = tokio::spawn(async move {
-            if let Some(ConnectionCommand::Fork { reply }) = rx.recv().await {
+            if let Some(ConnectionCommand::Fork { reply, .. }) = rx.recv().await {
                 go_rx.await.ok(); // withhold the reply until the test releases it
                 let _ = reply.send(Ok(crate::acp::types::ForkProtocolResult {
                     forked_session_id: "session-S2".into(),
                     original_session_id: "session-S1".into(),
+                    inherited_selection: Default::default(),
                 }));
             }
             rx // keep the receiver alive
@@ -3864,7 +7738,7 @@ mod tests {
         // DROPS this caller future. The detached persistence task must survive.
         let timed = tokio::time::timeout(
             std::time::Duration::from_millis(100),
-            mgr.fork_session(&db, "c-shield", None, None),
+            mgr.fork_session(&db, "c-shield", None, None, None),
         )
         .await;
         assert!(
@@ -3938,6 +7812,7 @@ mod tests {
                     text: "filler".into(),
                 }],
                 user_message: None,
+                internal_suffix: Vec::new(),
             })
             .await
             .unwrap();
@@ -3950,6 +7825,7 @@ mod tests {
                 text: "blocked".into(),
             }],
             None,
+            Vec::new(),
         );
         let res = tokio::time::timeout(std::time::Duration::from_millis(50), fut).await;
         assert!(
@@ -4092,6 +7968,7 @@ mod tests {
                 parent_conversation_id: parent.id,
                 parent_tool_use_id: "tu-1".into(),
                 delegation_call_id: "call-1".into(),
+                assistant: None,
             }),
         )
         .await
@@ -4156,6 +8033,27 @@ mod tests {
         assert!(preview.ends_with("..."));
     }
 
+    /// The chat-channel handle is installed once at bootstrap on the ONE
+    /// manager Tauri/axum owns, but every consumer (the web AppState at
+    /// `web/mod.rs`, the lifecycle worker) holds a `clone_ref` of it. The
+    /// handle therefore has to live behind the shared `Arc<OnceLock>` — if a
+    /// clone ever got a fresh lock, live title writes would stop renaming
+    /// bound Telegram topics on exactly the paths that do the writing, with
+    /// no error anywhere.
+    #[test]
+    fn installed_chat_channel_survives_clone_ref() {
+        let mgr = ConnectionManager::new();
+        assert!(mgr.chat_channel().is_none(), "unset before bootstrap");
+
+        // Install on a clone: the handle must become visible on the original
+        // too (bootstrap order across `clone_ref` boundaries is not fixed).
+        let clone = mgr.clone_ref();
+        clone.install_chat_channel(crate::chat_channel::manager::ChatChannelManager::new());
+
+        assert!(mgr.chat_channel().is_some());
+        assert!(mgr.clone_ref().chat_channel().is_some());
+    }
+
     #[test]
     fn delegation_child_title_seed_uses_parser_title_from_first_prompt() {
         // The delegating prompt is a single text block (the task) — the seed must
@@ -4184,6 +8082,48 @@ mod tests {
             uri: None,
         }];
         assert!(delegation_child_title_seed(&img).is_none());
+    }
+
+    /// A message that is one dropped-in file and no prose. The row would read
+    /// "Untitled" forever otherwise — for an agent with no store parser, ACP
+    /// has no title channel and the history parse honestly reports none. The
+    /// value is a SEED: it reaches `seed_auto_title_if_empty` / a fresh row's
+    /// `title`, never `refresh_auto_title`, so a name the agent publishes over
+    /// `session_info_update` still wins.
+    #[test]
+    fn delegation_child_title_seed_names_an_attachment_only_prompt() {
+        let blocks = vec![
+            PromptInputBlock::ResourceLink {
+                uri: "file:///tmp/report.pdf".into(),
+                name: "report.pdf".into(),
+                mime_type: None,
+                description: None,
+            },
+            PromptInputBlock::Resource {
+                uri: "clipboard://my%20notes.txt-9f2".into(),
+                mime_type: Some("text/plain".into()),
+                text: Some("body".into()),
+                blob: None,
+            },
+        ];
+        assert_eq!(
+            delegation_child_title_seed(&blocks).as_deref(),
+            Some("report.pdf, my notes.txt-9f2")
+        );
+
+        // Prose still wins outright, attachments and all — and matches what
+        // `refresh_auto_title` will later compute, so the row doesn't churn.
+        let mut with_prose = blocks.clone();
+        with_prose.insert(
+            0,
+            PromptInputBlock::Text {
+                text: "Review these".into(),
+            },
+        );
+        assert_eq!(
+            delegation_child_title_seed(&with_prose),
+            Some(crate::parsers::title_from_user_text("Review these"))
+        );
     }
 
     #[test]
@@ -4237,6 +8177,52 @@ mod tests {
             }
         }
         assert_eq!(found.as_deref(), Some("hello world"));
+    }
+
+    #[tokio::test]
+    async fn send_prompt_linked_seeds_first_prompt_title_when_untitled() {
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/title-seed").await;
+        let mgr = ConnectionManager::new();
+        let conn_id = "conn-title-seed";
+        let _rx = insert_live_connection(
+            &mgr,
+            conn_id,
+            AgentType::ClaudeCode,
+            Some(PathBuf::from("/tmp/title-seed")),
+        )
+        .await;
+
+        mgr.send_prompt_linked(
+            &db,
+            conn_id,
+            vec![PromptInputBlock::Text {
+                text: "hello world".into(),
+            }],
+            Some(folder_id),
+            None,
+            None,
+        )
+        .await
+        .expect("send");
+
+        let cid = mgr
+            .get_state(conn_id)
+            .await
+            .unwrap()
+            .read()
+            .await
+            .conversation_id
+            .expect("row linked");
+        let row = conversation_service::get_by_id(&db.conn, cid)
+            .await
+            .expect("get");
+        assert_eq!(row.title.as_deref(), Some("hello world"));
+        assert!(
+            !row.title_locked,
+            "first-prompt seed must stay unlocked so a later ACP title can replace it"
+        );
     }
 
     /// A textless prompt (image-only) succeeds but emits NO `UserPromptSent` —
@@ -5059,6 +9045,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn passive_release_rechecks_an_antigravity_task_while_explicit_disconnect_still_stops_it()
+    {
+        let mgr = ConnectionManager::new();
+        insert_fake_connection(
+            &mgr,
+            "agy",
+            AgentType::Antigravity,
+            None,
+            EventEmitter::Noop,
+        )
+        .await;
+        let state = mgr.get_state("agy").await.unwrap();
+        backdate_last_activity(&mgr, "agy", 600).await;
+        state.write().await.antigravity_reconcile_at = Some(chrono::Utc::now());
+        assert!(!mgr.release_idle("agy", chrono::Utc::now()).await.unwrap());
+        assert_eq!(mgr.sweep_idle(Duration::from_secs(180)).await, 0);
+        {
+            let mut state = state.write().await;
+            state.antigravity_reconcile_at = None;
+            state.background_outstanding = 1;
+            state.background_activity_at = Some(chrono::Utc::now());
+        }
+        assert!(!mgr.release_idle("agy", chrono::Utc::now()).await.unwrap());
+        mgr.disconnect("agy").await.unwrap();
+        assert!(mgr.get_state("agy").await.is_none());
+
+        insert_fake_connection(
+            &mgr, "opening", AgentType::Antigravity, None, EventEmitter::Noop,
+        )
+        .await;
+        let opening = mgr.get_state("opening").await.unwrap();
+        opening.write().await.status = ConnectionStatus::Connecting;
+        assert!(mgr.release_idle("opening", chrono::Utc::now()).await.unwrap());
+    }
+
+    #[tokio::test]
     async fn sweep_idle_skips_active_background_work() {
         let mgr = ConnectionManager::new();
         insert_fake_connection(
@@ -5096,6 +9118,93 @@ mod tests {
         }
         let n = mgr.sweep_idle(Duration::from_secs(300)).await;
         assert_eq!(n, 1, "settled background work no longer exempts the sweep");
+    }
+
+    #[tokio::test]
+    async fn sweep_idle_skips_remote_control() {
+        let mgr = ConnectionManager::new();
+        insert_fake_connection(
+            &mgr,
+            "remote",
+            AgentType::ClaudeCode,
+            None,
+            EventEmitter::Noop,
+        )
+        .await;
+        {
+            let state = mgr.get_state("remote").await.unwrap();
+            state
+                .write()
+                .await
+                .apply_event(&crate::acp::types::AcpEvent::RemoteControl {
+                    remote_control: Some(crate::acp::types::RemoteControlInfo {
+                        session_url: Some("https://claude.ai/code/session_01".into()),
+                    }),
+                });
+        }
+        // After the event, which counts as activity itself.
+        backdate_last_activity(&mgr, "remote", 600).await;
+        let n = mgr.sweep_idle(Duration::from_secs(300)).await;
+        assert_eq!(
+            n, 0,
+            "a connection with Remote Control on must not be swept \
+             (disconnecting kills the CLI and ends the remote session)"
+        );
+        assert!(mgr.connections.lock().await.contains_key("remote"));
+
+        // Turned off, the same connection is sweepable again.
+        {
+            let state = mgr.get_state("remote").await.unwrap();
+            state
+                .write()
+                .await
+                .apply_event(&crate::acp::types::AcpEvent::RemoteControl {
+                    remote_control: None,
+                });
+        }
+        backdate_last_activity(&mgr, "remote", 600).await;
+        let n = mgr.sweep_idle(Duration::from_secs(300)).await;
+        assert_eq!(n, 1, "Remote Control off no longer exempts the sweep");
+    }
+
+    /// An async delegation outlives the turn that started it, so its parent
+    /// sits idle while the child works — and ending the parent cancels every
+    /// child it has in flight (`cancel_by_parent`). With its tab closed nothing
+    /// touches the parent, so the sweep alone decides whether the child lives.
+    /// The child here has a synthetic parent tool-use id: no card, so nothing
+    /// in `active_delegations`, and the sweep must spare the parent anyway.
+    #[tokio::test]
+    async fn sweep_idle_skips_a_parent_while_its_delegated_child_runs() {
+        let mgr = ConnectionManager::new();
+        insert_fake_connection(
+            &mgr,
+            "parent",
+            AgentType::ClaudeCode,
+            None,
+            EventEmitter::Noop,
+        )
+        .await;
+        insert_fake_connection(&mgr, "child", AgentType::Codex, None, EventEmitter::Noop).await;
+        mgr.get_state("child").await.unwrap().write().await.status = ConnectionStatus::Prompting;
+        mgr.get_state("parent")
+            .await
+            .unwrap()
+            .write()
+            .await
+            .apply_event(&AcpEvent::DelegationChildRunning {
+                child_connection_id: "child".into(),
+                running: true,
+            });
+        backdate_last_activity(&mgr, "parent", 600).await;
+        let n = mgr.sweep_idle(Duration::from_secs(300)).await;
+        assert_eq!(n, 0, "the parent of a running delegation must not be swept");
+        assert!(mgr.connections.lock().await.contains_key("parent"));
+
+        // A child that is gone no longer counts, even if its completion never
+        // reached the parent: a stranded entry must not pin the parent forever.
+        mgr.connections.lock().await.remove("child");
+        let n = mgr.sweep_idle(Duration::from_secs(300)).await;
+        assert_eq!(n, 1, "with the child gone the idle parent is reclaimed");
     }
 
     #[tokio::test]
@@ -5405,9 +9514,9 @@ mod tests {
         let conn = AgentConnection {
             id: conn_id.to_string(),
             agent_type: crate::models::agent::AgentType::ClaudeCode,
-            status: ConnectionStatus::Connected,
             owner_window_label: "test-window".to_string(),
             cmd_tx: tx,
+            handshake: tokio_util::sync::CancellationToken::new(),
             state: Arc::new(RwLock::new(state)),
             emitter: EventEmitter::Noop,
             prompt_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -5425,10 +9534,11 @@ mod tests {
         let original = original_session_id.to_string();
         let join = tokio::spawn(async move {
             while let Some(cmd) = rx.recv().await {
-                if let ConnectionCommand::Fork { reply } = cmd {
+                if let ConnectionCommand::Fork { reply, .. } = cmd {
                     let _ = reply.send(Ok(crate::acp::types::ForkProtocolResult {
                         forked_session_id: forked.clone(),
                         original_session_id: original.clone(),
+                        inherited_selection: Default::default(),
                     }));
                     return;
                 }
@@ -5455,14 +9565,14 @@ mod tests {
         .await
         .unwrap();
         // External_id starts as S1 — manager.fork_session will swap to S2.
-        conversation_service::update_external_id(&db.conn, pre.id, "session-S1".into())
+        conversation_service::bind_external_id(&db.conn, pre.id, "session-S1", &[])
             .await
             .unwrap();
 
         let (mgr, join) =
             manager_with_fake_fork("c-fork", pre.id, "session-S2", "session-S1").await;
         let result = mgr
-            .fork_session(&db, "c-fork", None, None)
+            .fork_session(&db, "c-fork", None, None, None)
             .await
             .expect("fork_session should succeed");
         let _ = join.await;
@@ -5491,6 +9601,127 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fork_session_sibling_keeps_the_conversations_tags() {
+        use crate::db::service::conversation_tag_service;
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/fork-tags").await;
+        let pre = conversation_service::create(
+            &db.conn,
+            folder_id,
+            AgentType::ClaudeCode,
+            Some("Tagged".into()),
+            None,
+        )
+        .await
+        .unwrap();
+        conversation_service::bind_external_id(&db.conn, pre.id, "session-S1", &[])
+            .await
+            .unwrap();
+        let global = conversation_tag_service::create_tag(&db.conn, None, "bug", "#d73a4a")
+            .await
+            .unwrap();
+        let owned = conversation_tag_service::create_tag(&db.conn, Some(folder_id), "ui", "#0e8a16")
+            .await
+            .unwrap();
+        conversation_tag_service::update_conversation_tags(
+            &db.conn,
+            pre.id,
+            &[global.id, owned.id],
+            &[],
+        )
+        .await
+        .unwrap();
+
+        let (mgr, join) =
+            manager_with_fake_fork("c-fork-tags", pre.id, "session-S2", "session-S1").await;
+        let result = mgr
+            .fork_session(&db, "c-fork-tags", None, None, None)
+            .await
+            .expect("fork_session should succeed");
+        let _ = join.await;
+
+        let mut expected = vec![global.id, owned.id];
+        expected.sort_unstable();
+        let sibling = conversation_service::get_by_id(&db.conn, result.sibling_conversation_id)
+            .await
+            .unwrap();
+        assert_eq!(sibling.tag_ids, expected, "the pre-fork history keeps its tags");
+        let current = conversation_service::get_by_id(&db.conn, pre.id)
+            .await
+            .unwrap();
+        assert_eq!(current.tag_ids, expected, "the forked row keeps them too");
+    }
+
+    /// The sibling holds the pre-fork history, which was recorded where the
+    /// original remembers: a chat moved into a project, forked, and then the
+    /// moved row deleted must still leave the sibling's history (and the chat's
+    /// scratch dir, which the GC keeps for any row remembering it) intact.
+    #[tokio::test]
+    async fn fork_session_sibling_remembers_where_the_history_was_recorded() {
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let data_dir = tempfile::tempdir().expect("tempdir");
+        let project = test_helpers::seed_folder(&db, "/tmp/fork-origin-project").await;
+        let chat = crate::commands::conversations::create_chat_conversation_core(
+            &db.conn,
+            data_dir.path(),
+            AgentType::ClaudeCode,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        conversation_service::bind_external_id(&db.conn, chat.conversation_id, "session-S1", &[])
+            .await
+            .unwrap();
+        crate::commands::conversations::move_conversations_core(
+            &EventEmitter::Noop,
+            &db.conn,
+            &ConnectionManager::new(),
+            vec![chat.conversation_id],
+            project,
+        )
+        .await
+        .unwrap();
+
+        let (mgr, join) = manager_with_fake_fork(
+            "c-fork-origin",
+            chat.conversation_id,
+            "session-S2",
+            "session-S1",
+        )
+        .await;
+        let result = mgr
+            .fork_session(&db, "c-fork-origin", None, None, None)
+            .await
+            .expect("fork_session should succeed");
+        let _ = join.await;
+
+        let sibling = conversation_service::get_by_id(&db.conn, result.sibling_conversation_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            sibling.origin_cwd.as_deref(),
+            Some(chat.folder.path.as_str())
+        );
+        assert_eq!(sibling.folder_id, project);
+
+        conversation_service::soft_delete(&db.conn, chat.conversation_id)
+            .await
+            .unwrap();
+        let removed = crate::commands::conversations::gc_orphan_chat_dirs_core_with_threshold(
+            &db.conn,
+            data_dir.path(),
+            Duration::ZERO,
+        )
+        .await
+        .unwrap();
+        assert_eq!(removed, 0);
+        assert!(std::path::Path::new(&chat.folder.path).is_dir());
+    }
+
+    #[tokio::test]
     async fn fork_session_strips_existing_fork_prefix_without_stacking() {
         use crate::db::test_helpers;
         let db = test_helpers::fresh_in_memory_db().await;
@@ -5508,7 +9739,7 @@ mod tests {
         .unwrap();
         let (mgr, join) =
             manager_with_fake_fork("c-restack", pre.id, "session-S2", "session-S1").await;
-        let result = mgr.fork_session(&db, "c-restack", None, None).await.unwrap();
+        let result = mgr.fork_session(&db, "c-restack", None, None, None).await.unwrap();
         let _ = join.await;
 
         let current = conversation_service::get_by_id(&db.conn, pre.id)
@@ -5523,6 +9754,75 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(sibling.title.as_deref(), Some("Topic"));
+    }
+
+    #[tokio::test]
+    async fn fork_session_adopts_a_sibling_the_lifecycle_subscriber_already_made() {
+        // Fork's reply reaches us BEFORE `handle_fork_or_exit` emits
+        // `SessionStarted{S2}`, so this persistence and the lifecycle worker
+        // (which retries with backoff) run concurrently. If the lifecycle side
+        // lands first, its guarded `bind_external_id` has already preserved S1
+        // on a row of its own.
+        //
+        // Inserting a second S1 row then is not a cosmetic duplicate:
+        // `(external_id, agent_type)` is UNIQUE, so the INSERT fails and rolls
+        // back the entire fork — the user's fork just breaks. Adopt the
+        // existing row instead, and return ITS id, because the caller puts that
+        // id straight into the fork result and the sidebar upsert.
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/fork-raced").await;
+
+        let pre = conversation_service::create(
+            &db.conn,
+            folder_id,
+            AgentType::ClaudeCode,
+            Some("Topic".into()),
+            None,
+        )
+        .await
+        .unwrap();
+        conversation_service::bind_external_id(&db.conn, pre.id, "session-S1", &[])
+            .await
+            .unwrap();
+        // Lifecycle got there first: S2 landed on the row and S1 was preserved.
+        let preserved_id = conversation_service::bind_external_id(&db.conn, pre.id, "session-S2", &[])
+            .await
+            .unwrap()
+            .expect("the lifecycle bind preserves S1");
+
+        let (mgr, join) =
+            manager_with_fake_fork("c-raced", pre.id, "session-S2", "session-S1").await;
+        let result = mgr
+            .fork_session(&db, "c-raced", None, None, None)
+            .await
+            .expect("fork must survive the lifecycle subscriber winning the race");
+        let _ = join.await;
+
+        assert_eq!(
+            result.sibling_conversation_id, preserved_id,
+            "fork must report the row that actually holds S1"
+        );
+        let listed = crate::commands::conversations::list_all_conversations_core(
+            &db.conn,
+            &EventEmitter::Noop,
+            &crate::chat_channel::manager::ChatChannelManager::new(),
+            crate::commands::conversations::ListAllConversationsOptions::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            listed.len(),
+            2,
+            "exactly two rows regardless of who won the race, got {listed:?}"
+        );
+        assert_eq!(
+            listed
+                .iter()
+                .filter(|c| c.external_id.as_deref() == Some("session-S1"))
+                .count(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -5546,7 +9846,7 @@ mod tests {
         .unwrap();
         let (mgr, join) =
             manager_with_fake_fork("c-nosp", pre.id, "session-S2", "session-S1").await;
-        mgr.fork_session(&db, "c-nosp", None, None).await.unwrap();
+        mgr.fork_session(&db, "c-nosp", None, None, None).await.unwrap();
         let _ = join.await;
 
         let current = conversation_service::get_by_id(&db.conn, pre.id)
@@ -5592,7 +9892,7 @@ mod tests {
 
         let (mgr, join) =
             manager_with_fake_fork("c-latest", pre.id, "session-S2", "session-S1").await;
-        let result = mgr.fork_session(&db, "c-latest", None, None).await.unwrap();
+        let result = mgr.fork_session(&db, "c-latest", None, None, None).await.unwrap();
         let _ = join.await;
 
         let current = conversation_service::get_by_id(&db.conn, pre.id)
@@ -5642,7 +9942,7 @@ mod tests {
 
         let (mgr, join) =
             manager_with_fake_fork("c-fork-lock", pre.id, "session-S2", "session-S1").await;
-        let result = mgr.fork_session(&db, "c-fork-lock", None, None).await.unwrap();
+        let result = mgr.fork_session(&db, "c-fork-lock", None, None, None).await.unwrap();
         let _ = join.await;
 
         let sibling_id = result.sibling_conversation_id;
@@ -5712,7 +10012,7 @@ mod tests {
         let (mgr, join) =
             manager_with_fake_fork("c-fork-prefix", pre.id, "session-S2", "session-S1").await;
         let result = mgr
-            .fork_session(&db, "c-fork-prefix", None, None)
+            .fork_session(&db, "c-fork-prefix", None, None, None)
             .await
             .unwrap();
         let _ = join.await;
@@ -5768,7 +10068,7 @@ mod tests {
         let (mgr, join) =
             manager_with_fake_fork("c-fork-untitled", pre.id, "session-S2", "session-S1").await;
         let result = mgr
-            .fork_session(&db, "c-fork-untitled", None, None)
+            .fork_session(&db, "c-fork-untitled", None, None, None)
             .await
             .unwrap();
         let _ = join.await;
@@ -5820,7 +10120,7 @@ mod tests {
         let (mgr, join) =
             manager_with_fake_fork("c-fork-unlocked", pre.id, "session-S2", "session-S1").await;
         let result = mgr
-            .fork_session(&db, "c-fork-unlocked", None, None)
+            .fork_session(&db, "c-fork-unlocked", None, None, None)
             .await
             .unwrap();
         let _ = join.await;
@@ -5863,7 +10163,7 @@ mod tests {
         )
         .await;
         let err = mgr
-            .fork_session(&db, "c-missing", None, None)
+            .fork_session(&db, "c-missing", None, None, None)
             .await
             .expect_err("fork against a missing row must error");
         let _ = join.await;
@@ -5902,7 +10202,7 @@ mod tests {
         )
         .await
         .unwrap();
-        conversation_service::update_external_id(&db.conn, pre.id, "session-S1".into())
+        conversation_service::bind_external_id(&db.conn, pre.id, "session-S1", &[])
             .await
             .unwrap();
         conversation_service::soft_delete(&db.conn, pre.id)
@@ -5912,7 +10212,7 @@ mod tests {
         let (mgr, join) =
             manager_with_fake_fork("c-deleted", pre.id, "session-S2", "session-S1").await;
         let err = mgr
-            .fork_session(&db, "c-deleted", None, None)
+            .fork_session(&db, "c-deleted", None, None, None)
             .await
             .expect_err("fork against a soft-deleted row must error");
         let _ = join.await;
@@ -5958,7 +10258,7 @@ mod tests {
             map.insert("c-unbound".into(), fake_connection("c-unbound", None));
         }
         let err = mgr
-            .fork_session(&db, "c-unbound", None, None)
+            .fork_session(&db, "c-unbound", None, None, None)
             .await
             .expect_err("unbound fork must error");
         assert!(
@@ -5988,7 +10288,7 @@ mod tests {
         )
         .await
         .unwrap();
-        conversation_service::update_external_id(&db.conn, pre.id, "session-S1".into())
+        conversation_service::bind_external_id(&db.conn, pre.id, "session-S1", &[])
             .await
             .unwrap();
 
@@ -6007,9 +10307,9 @@ mod tests {
         let conn = AgentConnection {
             id: "c-relink".to_string(),
             agent_type: AgentType::ClaudeCode,
-            status: ConnectionStatus::Connected,
             owner_window_label: "test-window".to_string(),
             cmd_tx: tx,
+            handshake: tokio_util::sync::CancellationToken::new(),
             state: Arc::new(RwLock::new(state)),
             emitter: EventEmitter::Noop,
             prompt_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -6024,10 +10324,11 @@ mod tests {
         }
         let join = tokio::spawn(async move {
             while let Some(cmd) = rx.recv().await {
-                if let ConnectionCommand::Fork { reply } = cmd {
+                if let ConnectionCommand::Fork { reply, .. } = cmd {
                     let _ = reply.send(Ok(crate::acp::types::ForkProtocolResult {
                         forked_session_id: "session-S2".to_string(),
                         original_session_id: "session-S1".to_string(),
+                        inherited_selection: Default::default(),
                     }));
                     return;
                 }
@@ -6035,7 +10336,7 @@ mod tests {
         });
 
         let result = mgr
-            .fork_session(&db, "c-relink", Some(pre.id), Some(folder_id))
+            .fork_session(&db, "c-relink", Some(pre.id), Some(folder_id), None)
             .await
             .expect("fork must link the unbound row from caller ids and succeed");
         let _ = join.await;
@@ -6101,6 +10402,7 @@ mod tests {
                 options: vec![],
                 groups: vec![],
             }),
+            recommended_value: None,
         }]
     }
 
@@ -6284,7 +10586,7 @@ mod tests {
         // (e.g. its session started before the feature was enabled), even mid-turn.
         let state = mgr.get_state("c1").await.unwrap();
         state.write().await.turn_in_flight = true;
-        let err = mgr.submit_feedback("c1", "note".into()).await.unwrap_err();
+        let err = mgr.submit_feedback("c1", "note".into(), None).await.unwrap_err();
         assert!(matches!(err, AcpError::FeedbackDisabled));
         assert!(state.read().await.feedback.is_empty());
     }
@@ -6296,7 +10598,7 @@ mod tests {
             .await;
         // Tool available but no turn in flight → nothing to steer.
         set_feedback_tool_available(&mgr, "c1").await;
-        let err = mgr.submit_feedback("c1", "note".into()).await.unwrap_err();
+        let err = mgr.submit_feedback("c1", "note".into(), None).await.unwrap_err();
         assert!(matches!(err, AcpError::NoActiveTurn));
         // And nothing was appended.
         let state = mgr.get_state("c1").await.unwrap();
@@ -6307,7 +10609,7 @@ mod tests {
     async fn submit_feedback_missing_connection_errors() {
         let mgr = ConnectionManager::new();
         let err = mgr
-            .submit_feedback("nope", "note".into())
+            .submit_feedback("nope", "note".into(), None)
             .await
             .unwrap_err();
         assert!(matches!(err, AcpError::ConnectionNotFound(_)));
@@ -6320,7 +10622,7 @@ mod tests {
             .await;
         mark_feedback_ready(&mgr, "c1").await;
         let item = mgr
-            .submit_feedback("c1", "  use UserService  ".into())
+            .submit_feedback("c1", "  use UserService  ".into(), None)
             .await
             .unwrap();
         assert_eq!(item.status, FeedbackStatus::Pending);
@@ -6340,16 +10642,16 @@ mod tests {
         mark_feedback_ready(&mgr, "c1").await;
         // Empty / whitespace-only → rejected, nothing appended.
         for empty in ["", "   ", "\n\t "] {
-            let err = mgr.submit_feedback("c1", empty.into()).await.unwrap_err();
+            let err = mgr.submit_feedback("c1", empty.into(), None).await.unwrap_err();
             assert!(matches!(err, AcpError::InvalidFeedback(_)));
         }
         // Oversized → rejected.
         let huge = "x".repeat(MAX_FEEDBACK_CHARS + 1);
-        let err = mgr.submit_feedback("c1", huge).await.unwrap_err();
+        let err = mgr.submit_feedback("c1", huge, None).await.unwrap_err();
         assert!(matches!(err, AcpError::InvalidFeedback(_)));
         // Exactly at the bound is accepted.
         let at_bound = "y".repeat(MAX_FEEDBACK_CHARS);
-        assert!(mgr.submit_feedback("c1", at_bound).await.is_ok());
+        assert!(mgr.submit_feedback("c1", at_bound, None).await.is_ok());
         let state = mgr.get_state("c1").await.unwrap();
         assert_eq!(state.read().await.feedback.len(), 1, "only the valid note stuck");
     }
@@ -6364,20 +10666,88 @@ mod tests {
     }
 
     /// Play the connection loop's role: receive one `Steer` command and reply
-    /// the given outcome. Returns the text the command carried.
+    /// the given outcome. Returns the blocks the command carried.
     fn answer_steer(
         mut rx: tokio::sync::mpsc::Receiver<ConnectionCommand>,
         outcome: Result<SteerOutcome, AcpError>,
-    ) -> tokio::task::JoinHandle<String> {
+    ) -> tokio::task::JoinHandle<Vec<PromptInputBlock>> {
         tokio::spawn(async move {
             match rx.recv().await {
-                Some(ConnectionCommand::Steer { text, reply }) => {
+                Some(ConnectionCommand::Steer { blocks, reply }) => {
                     let _ = reply.send(outcome);
-                    text
+                    blocks
                 }
                 _ => panic!("expected a Steer command"),
             }
         })
+    }
+
+    /// [`answer_steer`] for a test that submits more than once: answers `n`
+    /// Steer commands with the same outcome. The loop is what makes concurrent
+    /// submits resolvable — each waits on its own reply channel, so a
+    /// single-shot answerer would leave the second one hanging.
+    /// Takes a bare [`SteerOutcome`] (which is `Copy`) rather than the
+    /// `Result` [`answer_steer`] accepts, because `AcpError` is not `Clone` and
+    /// a repeated answerer has to hand out the same value more than once. No
+    /// caller needs a repeated FAILURE.
+    fn answer_steer_n(
+        mut rx: tokio::sync::mpsc::Receiver<ConnectionCommand>,
+        outcome: SteerOutcome,
+        n: usize,
+    ) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            for _ in 0..n {
+                match rx.recv().await {
+                    Some(ConnectionCommand::Steer { reply, .. }) => {
+                        let _ = reply.send(Ok(outcome));
+                    }
+                    _ => panic!("expected a Steer command"),
+                }
+            }
+        })
+    }
+
+    /// The note's instant must precede the injection reaching the agent. The
+    /// adapter hands the text to the agent BEFORE it answers `injected`, so the
+    /// agent can write its own transcript copy of the message while this call
+    /// is still awaiting that answer. A note stamped on the way back would
+    /// postdate the copy it caused, and the frontend — which folds a persisted
+    /// copy away only when it postdates the injection, so that the same words
+    /// sent in an earlier round are never hidden — would show the message both
+    /// as a transcript turn and as a live one.
+    #[tokio::test]
+    async fn native_submit_stamps_the_note_before_the_agent_can_see_it() {
+        let mgr = ConnectionManager::new();
+        let mut rx = mgr
+            .insert_test_connection_live("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        mark_native_steering_ready(&mgr, "c1").await;
+        // Stand in for the adapter: note when the injection reached it (the
+        // earliest instant the agent could record the message), then dawdle
+        // before answering, as a real round-trip does.
+        let fake_loop = tokio::spawn(async move {
+            match rx.recv().await {
+                Some(ConnectionCommand::Steer { reply, .. }) => {
+                    let seen_by_agent = chrono::Utc::now();
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                    let _ = reply.send(Ok(SteerOutcome::Injected));
+                    seen_by_agent
+                }
+                _ => panic!("expected a Steer command"),
+            }
+        });
+
+        let item = mgr
+            .submit_feedback("c1", "use the other API".into(), None)
+            .await
+            .unwrap();
+        let seen_by_agent = fake_loop.await.unwrap();
+        assert!(
+            item.created_at <= seen_by_agent,
+            "created_at ({}) must precede the injection reaching the agent ({})",
+            item.created_at,
+            seen_by_agent
+        );
     }
 
     #[tokio::test]
@@ -6393,12 +10763,23 @@ mod tests {
         set_feedback_tool_available(&mgr, "c1").await;
         let fake_loop = answer_steer(rx, Ok(SteerOutcome::Injected));
 
-        let item = mgr.submit_feedback("c1", "  ship it  ".into()).await.unwrap();
+        let item = mgr.submit_feedback("c1", "  ship it  ".into(), None).await.unwrap();
         assert_eq!(item.status, FeedbackStatus::Delivered);
         assert!(item.delivered_at.is_some());
         assert_eq!(item.text, "ship it");
-        // The wire carried the trimmed text.
-        assert_eq!(fake_loop.await.unwrap(), "ship it");
+        // The wire carried the trimmed text as a single block (a blocks-less
+        // submit stays byte-identical to the historical text-only steer).
+        assert_eq!(
+            fake_loop.await.unwrap(),
+            vec![PromptInputBlock::Text {
+                text: "ship it".into()
+            }]
+        );
+        // ...and so does the NOTE: a text-only steer records no block list, so
+        // every consumer keeps rendering it from `text` alone. This is the
+        // half that keeps the attachment support below from changing the
+        // historical path.
+        assert_eq!(item.blocks, None);
 
         let state = mgr.get_state("c1").await.unwrap();
         {
@@ -6414,6 +10795,291 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn native_submit_with_blocks_carries_the_draft_and_records_the_text() {
+        // A draft with an image attachment steers as its full block list (the
+        // wire payload) while the recorded note's `text` stays the display
+        // form. The note ALSO carries the projected blocks, because `text` is
+        // what the composer collapsed the attachment into: without them the
+        // live transcript renders a sentence about an image where the image
+        // should be, and only a reload (which reads the agent's own copy) puts
+        // it back. Projection matches an ordinary prompt's `user_message`.
+        let mgr = ConnectionManager::new();
+        let rx = mgr
+            .insert_test_connection_live("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        mark_native_steering_ready(&mgr, "c1").await;
+        let fake_loop = answer_steer(rx, Ok(SteerOutcome::Injected));
+
+        let draft = vec![
+            PromptInputBlock::Text {
+                text: "make it match this mock".into(),
+            },
+            PromptInputBlock::Image {
+                data: "aGk=".into(),
+                mime_type: "image/png".into(),
+                uri: None,
+            },
+        ];
+        let item = mgr
+            .submit_feedback("c1", "make it match this mock".into(), Some(draft.clone()))
+            .await
+            .unwrap();
+        assert_eq!(item.status, FeedbackStatus::Delivered);
+        assert_eq!(item.text, "make it match this mock");
+        // The note carries the image, so the live transcript can render it at
+        // the point the user sent it rather than waiting for a reload.
+        assert_eq!(
+            item.blocks,
+            Some(vec![
+                crate::acp::types::UserMessageBlock::Text {
+                    text: "make it match this mock".into()
+                },
+                crate::acp::types::UserMessageBlock::Image {
+                    data: "aGk=".into(),
+                    mime_type: "image/png".into(),
+                },
+            ])
+        );
+        // The wire carried the caller's blocks verbatim, attachment included.
+        assert_eq!(fake_loop.await.unwrap(), draft);
+    }
+
+    #[tokio::test]
+    async fn a_draft_that_projects_to_text_alone_records_no_block_list() {
+        // `blocks` means "this note carried more than its text". A draft whose
+        // projection is text-only says nothing `text` does not, so recording a
+        // list for it would put one on a note the field's contract calls
+        // text-only — and the frontend would key its dedup on that list.
+        let mgr = ConnectionManager::new();
+        let rx = mgr
+            .insert_test_connection_live("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        mark_native_steering_ready(&mgr, "c1").await;
+        let fake_loop = answer_steer(rx, Ok(SteerOutcome::Injected));
+
+        let item = mgr
+            .submit_feedback(
+                "c1",
+                "just words".into(),
+                Some(vec![PromptInputBlock::Text {
+                    text: "just words".into(),
+                }]),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(item.blocks, None);
+        // The wire still carried what the caller sent — only the RECORD is
+        // trimmed, so the agent's input is untouched.
+        assert_eq!(
+            fake_loop.await.unwrap(),
+            vec![PromptInputBlock::Text {
+                text: "just words".into()
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn steer_attachments_past_the_per_turn_budget_are_not_retained() {
+        // The budget guards what OUTLIVES the event: `SessionState.feedback`,
+        // which every snapshot is rebuilt from. So it is enforced at the append
+        // — the single authorized writer, where the check and the push share
+        // one critical section — not at the submit site, where a read, an agent
+        // round-trip and a write would let two concurrent steers both pass it.
+        //
+        // Past the budget the note still DELIVERS and the event still carries
+        // its blocks to whoever is attached right now; only the retained copy
+        // drops them, so a reconnect renders it from `text` like any text-only
+        // steer.
+        let mgr = ConnectionManager::new();
+        let rx = mgr
+            .insert_test_connection_live("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        mark_native_steering_ready(&mgr, "c1").await;
+        let fake_loop = answer_steer(rx, Ok(SteerOutcome::Injected));
+
+        let huge = "A".repeat(MAX_FEEDBACK_ATTACHMENT_BYTES_PER_TURN + 1);
+        let item = mgr
+            .submit_feedback(
+                "c1",
+                "one enormous screenshot".into(),
+                Some(vec![PromptInputBlock::Image {
+                    data: huge,
+                    mime_type: "image/png".into(),
+                    uri: None,
+                }]),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            item.status,
+            FeedbackStatus::Delivered,
+            "over budget is not a rejection — the agent already has the content"
+        );
+
+        // The RETAINED note is the one that had to shed the attachment.
+        let state = mgr.get_state("c1").await.unwrap();
+        {
+            let s = state.read().await;
+            assert_eq!(s.feedback.len(), 1);
+            assert_eq!(
+                s.feedback[0].blocks, None,
+                "an over-budget attachment must not be kept for the turn"
+            );
+            assert_eq!(s.feedback[0].text, "one enormous screenshot");
+        }
+
+        // And the wire was never trimmed: the budget governs what codeg KEEPS,
+        // not what the agent receives.
+        let sent = fake_loop.await.unwrap();
+        assert!(matches!(
+            sent.as_slice(),
+            [PromptInputBlock::Image { data, .. }]
+                if data.len() == MAX_FEEDBACK_ATTACHMENT_BYTES_PER_TURN + 1
+        ));
+    }
+
+    #[tokio::test]
+    async fn concurrent_over_budget_steers_cannot_both_be_retained() {
+        // The interleaving a submit-site check could not stop: two steers whose
+        // attachments each fit the budget alone but not together. The append is
+        // serialized by the state write lock, so the second one sees the first
+        // already retained and sheds its own blocks.
+        let mgr = ConnectionManager::new();
+        let rx = mgr
+            .insert_test_connection_live("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        mark_native_steering_ready(&mgr, "c1").await;
+        let fake_loop = answer_steer_n(rx, SteerOutcome::Injected, 2);
+
+        // Two thirds of the budget each: either alone is admissible, the pair
+        // is not.
+        let half = "A".repeat((MAX_FEEDBACK_ATTACHMENT_BYTES_PER_TURN / 3) * 2);
+        let shot = |text: &str| {
+            let data = half.clone();
+            let text = text.to_string();
+            let mgr = &mgr;
+            async move {
+                mgr.submit_feedback(
+                    "c1",
+                    text,
+                    Some(vec![PromptInputBlock::Image {
+                        data,
+                        mime_type: "image/png".into(),
+                        uri: None,
+                    }]),
+                )
+                .await
+                .unwrap()
+            }
+        };
+        let (a, b) = tokio::join!(shot("first"), shot("second"));
+        assert_eq!(a.status, FeedbackStatus::Delivered);
+        assert_eq!(b.status, FeedbackStatus::Delivered);
+        fake_loop.await.unwrap();
+
+        let state = mgr.get_state("c1").await.unwrap();
+        let s = state.read().await;
+        assert_eq!(s.feedback.len(), 2, "both notes are still recorded");
+        let retained: usize = s
+            .feedback
+            .iter()
+            .filter_map(|f| f.blocks.as_deref())
+            .map(crate::acp::feedback::attachment_bytes)
+            .sum();
+        assert!(
+            retained <= MAX_FEEDBACK_ATTACHMENT_BYTES_PER_TURN,
+            "the aggregate bound holds across concurrent steers: retained={retained}"
+        );
+        assert_eq!(
+            s.feedback.iter().filter(|f| f.blocks.is_some()).count(),
+            1,
+            "exactly one of the pair keeps its attachment"
+        );
+    }
+
+    #[test]
+    fn a_steer_admitted_against_one_turn_does_not_ride_the_next_one() {
+        // The guard `submit_feedback_native` applies across attachment
+        // hydration — the one await between admission and the enqueue. The
+        // loop's idle arm covers "the turn ended"; only this covers "the next
+        // turn started", which would otherwise have the loop inject the note
+        // into a turn the user never aimed at.
+        //
+        // Same turn throughout — the overwhelmingly common case.
+        assert!(!steered_turn_changed(3, true, 3));
+        // The turn ended and a NEW one started: still in flight, so the flag
+        // alone says nothing. This is the case nothing else catches.
+        assert!(steered_turn_changed(3, true, 4));
+        // The turn simply ended (the loop's idle arm would also catch this).
+        assert!(steered_turn_changed(3, false, 4));
+        // A repeat `TurnComplete` double-counts; only inequality is read, so
+        // the verdict is the same.
+        assert!(steered_turn_changed(3, true, 5));
+        // First turn of a connection: the counter starts at zero and carries
+        // identity from the very first turn, with no "unknown" window.
+        assert!(!steered_turn_changed(0, true, 0));
+        assert!(steered_turn_changed(0, true, 1));
+    }
+
+    #[tokio::test]
+    async fn turn_complete_moves_the_turn_identity_the_steer_guard_reads() {
+        // The guard above is only as good as the counter under it: prove
+        // `TurnComplete` — the single production clear of `turn_in_flight` —
+        // is what moves it, so "the turn I was admitted against is over" is
+        // observable even once a NEXT turn has set the flag again.
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        let state = mgr.get_state("c1").await.unwrap();
+        let admitted = {
+            let mut s = state.write().await;
+            s.turn_in_flight = true;
+            s.turns_completed
+        };
+        state.write().await.apply_event(&AcpEvent::TurnComplete {
+            session_id: "ext".into(),
+            stop_reason: "end_turn".into(),
+            agent_type: "claude_code".into(),
+        });
+        // A next turn re-sets the flag, exactly as `send_prompt_inner` does.
+        state.write().await.turn_in_flight = true;
+
+        let s = state.read().await;
+        assert!(
+            steered_turn_changed(admitted, s.turn_in_flight, s.turns_completed),
+            "an in-flight flag that belongs to the NEXT turn must not read as the admitted one"
+        );
+    }
+
+    #[tokio::test]
+    async fn pull_submit_with_blocks_rejects_instead_of_dropping_attachments() {
+        // The pull tool delivers plain text, so a blocks-bearing note on a
+        // pull-only session (native downgraded mid-race) must reject with
+        // NoActiveTurn — the caller's queue fallback re-routes the whole
+        // draft — rather than deliver the text and silently drop the image.
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        mark_feedback_ready(&mgr, "c1").await;
+        let draft = vec![PromptInputBlock::Image {
+            data: "aGk=".into(),
+            mime_type: "image/png".into(),
+            uri: None,
+        }];
+        let err = mgr
+            .submit_feedback("c1", "1 attachment".into(), Some(draft))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AcpError::NoActiveTurn));
+        // Nothing recorded: the content is still draft-owned.
+        let state = mgr.get_state("c1").await.unwrap();
+        assert!(state.read().await.feedback.is_empty());
+        assert!(mgr.read_pending_feedback("c1").await.is_empty());
+    }
+
+    #[tokio::test]
     async fn native_submit_prompt_required_maps_to_no_active_turn_and_records_nothing() {
         let mgr = ConnectionManager::new();
         let rx = mgr
@@ -6422,7 +11088,7 @@ mod tests {
         mark_native_steering_ready(&mgr, "c1").await;
         let fake_loop = answer_steer(rx, Ok(SteerOutcome::PromptRequired));
 
-        let err = mgr.submit_feedback("c1", "note".into()).await.unwrap_err();
+        let err = mgr.submit_feedback("c1", "note".into(), None).await.unwrap_err();
         assert!(matches!(err, AcpError::NoActiveTurn));
         let _ = fake_loop.await;
 
@@ -6432,6 +11098,103 @@ mod tests {
         // channel stays native — the caller resubmits as a normal prompt.
         assert!(s.feedback.is_empty());
         assert!(s.native_steering_available);
+    }
+
+    async fn open_permission_card(mgr: &ConnectionManager, conn_id: &str) {
+        use crate::acp::session_state::PendingPermissionState;
+        let state = mgr.get_state(conn_id).await.unwrap();
+        state.write().await.pending_permission = Some(PendingPermissionState {
+            request_id: "req-1".into(),
+            tool_call_id: "tc-1".into(),
+            tool_call: serde_json::json!({ "toolCallId": "tc-1", "title": "touch x" }),
+            options: vec![],
+            created_at: chrono::Utc::now(),
+            queued: 0,
+        });
+    }
+
+    /// codex aborts the turn on an approval's `cancel` answer and drops a note
+    /// injected while the card was open, so the note is not steered: it gets
+    /// the reroute an ended turn gets, and nothing reaches the loop.
+    #[tokio::test]
+    async fn native_codex_submit_under_an_open_permission_card_takes_the_queue() {
+        let mgr = ConnectionManager::new();
+        let mut rx = mgr
+            .insert_test_connection_live("c1", AgentType::Codex, None, EventEmitter::Noop)
+            .await;
+        mark_native_steering_ready(&mgr, "c1").await;
+        open_permission_card(&mgr, "c1").await;
+
+        // Bounded: without the rule the submit would wait forever on a steer
+        // reply nobody sends, and the test should fail rather than hang.
+        let err = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            mgr.submit_feedback("c1", "do it the other way".into(), None),
+        )
+        .await
+        .expect("the submit must not wait on a steer")
+        .unwrap_err();
+        assert!(matches!(err, AcpError::NoActiveTurn), "{err:?}");
+        assert!(
+            matches!(
+                rx.try_recv(),
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+            ),
+            "no steer may go out while the card is open"
+        );
+        let state = mgr.get_state("c1").await.unwrap();
+        let s = state.read().await;
+        assert!(s.feedback.is_empty());
+        assert!(s.native_steering_available, "the channel stays native");
+    }
+
+    /// Once the card is answered, codex steers again.
+    #[tokio::test]
+    async fn native_codex_submit_steers_once_no_card_is_open() {
+        let mgr = ConnectionManager::new();
+        let rx = mgr
+            .insert_test_connection_live("c1", AgentType::Codex, None, EventEmitter::Noop)
+            .await;
+        mark_native_steering_ready(&mgr, "c1").await;
+        open_permission_card(&mgr, "c1").await;
+        mgr.get_state("c1")
+            .await
+            .unwrap()
+            .write()
+            .await
+            .pending_permission = None;
+        let fake_loop = answer_steer(rx, Ok(SteerOutcome::Injected));
+
+        let item = mgr
+            .submit_feedback("c1", "ship it".into(), None)
+            .await
+            .unwrap();
+        assert_eq!(item.status, FeedbackStatus::Delivered);
+        assert_eq!(
+            fake_loop.await.unwrap(),
+            vec![PromptInputBlock::Text {
+                text: "ship it".into()
+            }]
+        );
+    }
+
+    /// The rule is codex's: Claude Code keeps steering through an open card.
+    #[tokio::test]
+    async fn native_claude_submit_still_steers_under_an_open_permission_card() {
+        let mgr = ConnectionManager::new();
+        let rx = mgr
+            .insert_test_connection_live("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        mark_native_steering_ready(&mgr, "c1").await;
+        open_permission_card(&mgr, "c1").await;
+        let fake_loop = answer_steer(rx, Ok(SteerOutcome::Injected));
+
+        let item = mgr
+            .submit_feedback("c1", "note".into(), None)
+            .await
+            .unwrap();
+        assert_eq!(item.status, FeedbackStatus::Delivered);
+        let _ = fake_loop.await;
     }
 
     #[tokio::test]
@@ -6446,7 +11209,7 @@ mod tests {
 
         // The adapter ignored the opt-in: content consumed → recorded
         // Delivered (never resent), and the session downgrades to pull.
-        let item = mgr.submit_feedback("c1", "note one".into()).await.unwrap();
+        let item = mgr.submit_feedback("c1", "note one".into(), None).await.unwrap();
         assert_eq!(item.status, FeedbackStatus::Delivered);
         let _ = fake_loop.await;
         let state = mgr.get_state("c1").await.unwrap();
@@ -6458,7 +11221,7 @@ mod tests {
         // The NEXT note rides the pull path: lands Pending, no Steer command
         // (the loop receiver was consumed above — a native attempt would fail
         // on the dead channel, so an Ok(Pending) proves the pull branch ran).
-        let second = mgr.submit_feedback("c1", "note two".into()).await.unwrap();
+        let second = mgr.submit_feedback("c1", "note two".into(), None).await.unwrap();
         assert_eq!(second.status, FeedbackStatus::Pending);
         let pending = mgr.read_pending_feedback("c1").await;
         assert_eq!(pending.len(), 1);
@@ -6491,7 +11254,7 @@ mod tests {
             }
         });
 
-        let item = mgr.submit_feedback("c1", "late note".into()).await.unwrap();
+        let item = mgr.submit_feedback("c1", "late note".into(), None).await.unwrap();
         assert_eq!(item.status, FeedbackStatus::Delivered);
         let _ = fake_loop.await;
         assert_eq!(state.read().await.feedback.len(), 1);
@@ -6533,7 +11296,7 @@ mod tests {
         // caller future.
         let timed = tokio::time::timeout(
             std::time::Duration::from_millis(100),
-            mgr.submit_feedback("c1", "shielded note".into()),
+            mgr.submit_feedback("c1", "shielded note".into(), None),
         )
         .await;
         assert!(
@@ -6573,7 +11336,7 @@ mod tests {
         mark_native_steering_ready(&mgr, "c1").await;
         // feedback_tool_available stays false.
         let fake_loop = answer_steer(rx, Ok(SteerOutcome::Injected));
-        let item = mgr.submit_feedback("c1", "no tool needed".into()).await.unwrap();
+        let item = mgr.submit_feedback("c1", "no tool needed".into(), None).await.unwrap();
         assert_eq!(item.status, FeedbackStatus::Delivered);
         let _ = fake_loop.await;
     }
@@ -6597,6 +11360,7 @@ mod tests {
                 },
             ],
             is_secret: false,
+            allow_other: true,
         }]
     }
 
@@ -6864,6 +11628,120 @@ mod tests {
         assert!(mgr.register_question("nope", q_spec()).await.is_none());
     }
 
+    /// codex's async question (codex-acp 2.6.0) leaves the turn running, so a
+    /// question the agent asks while it is open replaces it instead of being
+    /// refused unseen. It never displaces a question the agent waits on.
+    #[tokio::test]
+    async fn an_async_question_gives_way_to_the_next_one() {
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("cx", AgentType::Codex, None, EventEmitter::Noop)
+            .await;
+        async fn pending(mgr: &ConnectionManager) -> Option<String> {
+            let state = mgr.get_state("cx").await.unwrap();
+            let id = state
+                .read()
+                .await
+                .pending_question
+                .as_ref()
+                .map(|p| p.question_id.clone());
+            id
+        }
+
+        let first = mgr
+            .register_yielding_question("cx", q_spec())
+            .await
+            .expect("the async question registers");
+        // Another async question replaces it, and so does a blocking one.
+        let second = mgr
+            .register_yielding_question("cx", q_spec())
+            .await
+            .expect("a newer async question takes its place");
+        assert!(first.answer_rx.await.is_err(), "the first was withdrawn");
+        let blocking = mgr
+            .register_question("cx", q_spec())
+            .await
+            .expect("a blocking question takes its place");
+        assert!(second.answer_rx.await.is_err(), "the second was withdrawn");
+        assert_eq!(pending(&mgr).await, Some(blocking.question_id.clone()));
+
+        // While the blocking one is open, an async question is the one refused.
+        assert!(mgr
+            .register_yielding_question("cx", q_spec())
+            .await
+            .is_none());
+        assert_eq!(pending(&mgr).await, Some(blocking.question_id));
+    }
+
+    /// A blocking question that withdraws an async one while the async one is
+    /// still being published must not have its card overwritten by the older
+    /// one (and then cleared by its compensation). The async registration is
+    /// stopped between registering and publishing; the blocking one cannot
+    /// finish until it is let go, and the card ends up on the blocking one.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_question_registering_meanwhile_keeps_its_card() {
+        use std::sync::Arc;
+        let mgr = Arc::new(ConnectionManager::new());
+        mgr.insert_test_connection("race", AgentType::Codex, None, EventEmitter::Noop)
+            .await;
+        let (reached, resume) = question_registration_test_gate::install("race");
+        let async_q = tokio::spawn({
+            let mgr = mgr.clone();
+            async move { mgr.register_yielding_question("race", q_spec()).await }
+        });
+        reached.notified().await;
+        let mut blocking = tokio::spawn({
+            let mgr = mgr.clone();
+            async move { mgr.register_question("race", q_spec()).await }
+        });
+        // Registration is one step with publication: the blocking question
+        // waits for the async one to be published.
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(200), &mut blocking)
+                .await
+                .is_err(),
+            "the blocking question registered while the async one was mid-publication"
+        );
+        resume.notify_one();
+        let async_q = async_q
+            .await
+            .unwrap()
+            .expect("the async question registered");
+        let blocking = blocking
+            .await
+            .unwrap()
+            .expect("the blocking question registers");
+        assert!(
+            async_q.answer_rx.await.is_err(),
+            "the async question was withdrawn"
+        );
+
+        let state = mgr.get_state("race").await.unwrap();
+        assert_eq!(
+            state
+                .read()
+                .await
+                .pending_question
+                .as_ref()
+                .map(|p| p.question_id.clone()),
+            Some(blocking.question_id.clone()),
+            "the card shows the question that is pending"
+        );
+        mgr.answer_question(
+            "race",
+            &blocking.question_id,
+            crate::acp::question::QuestionAnswer {
+                answers: vec![crate::acp::question::QuestionAnswerItem {
+                    question_id: "qa".into(),
+                    labels: vec!["A".into()],
+                }],
+                declined: false,
+            },
+        )
+        .await
+        .expect("answerable");
+        assert!(blocking.answer_rx.await.is_ok());
+    }
+
     #[tokio::test]
     async fn second_concurrent_ask_is_refused_and_first_stays_answerable() {
         // A parallel/misbehaving client could fire two asks on one connection
@@ -6912,8 +11790,8 @@ mod tests {
         mgr.insert_test_connection("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
             .await;
         mark_feedback_ready(&mgr, "c1").await;
-        let a = mgr.submit_feedback("c1", "a".into()).await.unwrap();
-        let b = mgr.submit_feedback("c1", "b".into()).await.unwrap();
+        let a = mgr.submit_feedback("c1", "a".into(), None).await.unwrap();
+        let b = mgr.submit_feedback("c1", "b".into(), None).await.unwrap();
 
         // READ returns both pending notes (insert order) WITHOUT mutating state.
         let pending = mgr.read_pending_feedback("c1").await;

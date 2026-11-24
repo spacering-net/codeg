@@ -1,517 +1,220 @@
-# Proteomics and Metabolomics File Formats Reference
+# Proteomics and Metabolomics Formats
 
-This reference covers file formats specific to proteomics, metabolomics, lipidomics, and related omics workflows.
+**Reviewed:** 2026-09-30
+**Executable scope:** No omics-native standard is parsed by bundled scripts.
+Rectangular CSV/TSV result exports can use the general tabular CLIs after the
+schema, units, and missing/censoring codes are confirmed.
 
-## Mass Spectrometry-Based Proteomics
+## Exact capability boundary
 
-### .mzML - Mass Spectrometry Markup Language
-**Description:** Standard XML format for MS data
-**Typical Data:** MS1 and MS2 spectra, retention times, intensities
-**Use Cases:** Proteomics, metabolomics pipelines
-**Python Libraries:**
-- `pymzml`: `pymzml.run.Reader('file.mzML')`
-- `pyteomics.mzml`: `pyteomics.mzml.read('file.mzML')`
-- `pyopenms`: OpenMS Python bindings
-**EDA Approach:**
-- Scan count and MS level distribution
-- Total ion chromatogram (TIC) analysis
-- Base peak chromatogram (BPC)
-- m/z coverage and resolution
-- Retention time range
-- Precursor selection patterns
-- Data completeness
-- Quality control metrics (lock mass, standards)
+| Format | Bundled native inspection | Status |
+|---|---|---|
+| mzML/mzXML, vendor RAW | No | Reference-only MS tooling; see `spectroscopy_analytical_formats.md` |
+| mzIdentML (`.mzid`, `.mzIdentML`) | No | Reference-only PSI schema/CV-aware tooling |
+| mzTab 1.0 / mzTab-M 2.0 | No | Reference-only version-aware validator; generic TSV parsing is insufficient |
+| pepXML/protXML | No | Reference-only search/inference-aware parser |
+| featureXML/consensusXML/idXML | No | Reference-only OpenMS tooling |
+| Rectangular `.csv`/`.tsv` feature or abundance table | General scripts | Bounded aggregate tabular EDA, no omics semantics |
+| `.h5`/`.hdf5` | Generic metadata only | No payload values or convention validation |
+| `.h5ad`, `.loom` | No semantic support | See bioinformatics reference |
+| Pickled models/results | **Never** | Request non-executable export |
 
-### .mzXML - Legacy MS XML Format
-**Description:** Older XML-based MS format
-**Typical Data:** Mass spectra with metadata
-**Use Cases:** Legacy proteomics data
-**Python Libraries:**
-- `pyteomics.mzxml`
-- `pymzml`: Can read mzXML
-**EDA Approach:**
-- Similar to mzML
-- Format version compatibility
-- Conversion quality validation
-- Metadata preservation check
+Unknown formats fail closed. No format is identified from free-text metadata or
+content guessing.
 
-### .mzIdentML - Peptide Identification Format
-**Description:** PSI standard for peptide identifications
-**Typical Data:** Peptide-spectrum matches, proteins, scores
-**Use Cases:** Search engine results, proteomics workflows
-**Python Libraries:**
-- `pyteomics.mzid`
-- `pyopenms`: MzIdentML support
-**EDA Approach:**
-- PSM count and score distribution
-- FDR calculation and filtering
-- Modification analysis
-- Missed cleavage statistics
-- Protein inference results
-- Search parameters validation
-- Decoy hit analysis
-- Rank-1 vs lower ranks
+## mzML and raw spectra
 
-### .pepXML - Trans-Proteomic Pipeline Peptide XML
-**Description:** TPP format for peptide identifications
-**Typical Data:** Search results with statistical validation
-**Use Cases:** Proteomics database search output
-**Python Libraries:**
-- `pyteomics.pepxml`
-**EDA Approach:**
-- Search engine comparison
-- Score distributions (XCorr, expect value, etc.)
-- Charge state analysis
-- Modification frequencies
-- PeptideProphet probabilities
-- Protein coverage
-- Spectral counting
+mzML is a HUPO-PSI standard for spectra/chromatograms; use PSI-aware tooling.
+Vendor RAW extensions are ambiguous and often require vendor libraries or
+conversion. Preserve originals and record converter, version, options, and
+checksums.
 
-### .protXML - Protein Inference Results
-**Description:** TPP protein-level identifications
-**Typical Data:** Protein groups, probabilities, peptides
-**Use Cases:** Protein-level analysis
-**Python Libraries:**
-- `pyteomics.protxml`
-**EDA Approach:**
-- Protein group statistics
-- Parsimonious protein sets
-- ProteinProphet probabilities
-- Coverage and peptide count per protein
-- Unique vs shared peptides
-- Protein molecular weight distribution
-- GO term enrichment preparation
+For spectral EDA, inventory:
 
-### .pride.xml - PRIDE XML Format
-**Description:** Proteomics Identifications Database format
-**Typical Data:** Complete proteomics experiment data
-**Use Cases:** Public data deposition (legacy)
-**Python Libraries:**
-- `pyteomics.pride`
-- Custom XML parsers
-**EDA Approach:**
-- Experiment metadata extraction
-- Identification completeness
-- Cross-linking to spectra
-- Protocol information
-- Instrument details
+- acquisition method, instrument, polarity, MS levels, scan modes, precursor
+  isolation/activation, resolution, and centroid/profile status;
+- run order, batches, blanks, pooled QC, standards, carryover, drift, and
+  calibration;
+- spectrum/chromatogram counts, retention/mobility ranges, m/z coverage, TIC/
+  BPC, peak counts, and missing/corrupt scans; and
+- processing history, controlled-vocabulary terms, source files, and units.
 
-### .tsv / .csv (Proteomics)
-**Description:** Tab or comma-separated proteomics results
-**Typical Data:** Peptide or protein quantification tables
-**Use Cases:** MaxQuant, Proteome Discoverer, Skyline output
-**Python Libraries:**
-- `pandas`: `pd.read_csv()` or `pd.read_table()`
-**EDA Approach:**
-- Identification counts
-- Quantitative value distributions
-- Missing value patterns
-- Intensity-based analysis
-- Label-free quantification assessment
-- Isobaric tag ratio analysis
-- Coefficient of variation
-- Batch effects
+Do not automatically centroid, denoise, recalibrate, align, peak-pick, or
+discard spectra.
 
-### .msf - Thermo MSF Database
-**Description:** Proteome Discoverer results database
-**Typical Data:** SQLite database with search results
-**Use Cases:** Thermo Proteome Discoverer workflows
-**Python Libraries:**
-- `sqlite3`: Database access
-- Custom MSF parsers
-**EDA Approach:**
-- Database schema exploration
-- Peptide and protein tables
-- Score thresholds
-- Quantification data
-- Processing node information
-- Confidence levels
+## Identification formats
 
-### .pdResult - Proteome Discoverer Result
-**Description:** Proteome Discoverer study results
-**Typical Data:** Comprehensive search and quantification
-**Use Cases:** PD study exports
-**Python Libraries:**
-- Vendor tools for conversion
-- Export to TSV for Python analysis
-**EDA Approach:**
-- Study design validation
-- Result filtering criteria
-- Quantitative comparison groups
-- Imputation strategies
+### mzIdentML
 
-### .pep.xml - Peptide Summary
-**Description:** Compact peptide identification format
-**Typical Data:** Peptide sequences, modifications, scores
-**Use Cases:** Downstream analysis input
-**Python Libraries:**
-- `pyteomics`: XML parsing
-**EDA Approach:**
-- Unique peptide counting
-- PTM site localization
-- Retention time predictability
-- Charge state preferences
+mzIdentML represents peptide/protein identification results, scores, search
+parameters, databases, modifications, and links to spectra using controlled
+vocabularies. Validate the schema and CV mapping with PSI-aware tooling.
 
-## Quantitative Proteomics
+Check:
 
-### .sky - Skyline Document
-**Description:** Skyline targeted proteomics document
-**Typical Data:** Transition lists, chromatograms, results
-**Use Cases:** Targeted proteomics (SRM/MRM/PRM)
-**Python Libraries:**
-- `skyline`: Python API (limited)
-- Export to CSV for analysis
-**EDA Approach:**
-- Transition selection validation
-- Chromatographic peak quality
-- Interference detection
-- Retention time consistency
-- Calibration curve assessment
-- Replicate correlation
-- LOD/LOQ determination
+- search engine/version, sequence database/version, decoy strategy, enzyme,
+  tolerances, fixed/variable modifications, and spectrum references;
+- score direction/meaning, rank, charge, mass error, peptide-spectrum matches,
+  peptides, proteins, and protein groups;
+- target/decoy and FDR method at each reported level; and
+- ambiguity from shared peptides, indistinguishable proteins, and inference.
 
-### .sky.zip - Zipped Skyline Document
-**Description:** Skyline document with external files
-**Typical Data:** Complete Skyline analysis
-**Use Cases:** Sharing Skyline projects
-**Python Libraries:**
-- `zipfile`: Extract for processing
-**EDA Approach:**
-- Document structure
-- External file references
-- Result export and analysis
+A score threshold is not automatically a validated FDR threshold. Do not
+recompute or reinterpret confidence without the method and decoy design.
 
-### .wiff - SCIEX WIFF Format
-**Description:** SCIEX instrument data with quantitation
-**Typical Data:** LC-MS/MS with MRM transitions
-**Use Cases:** SCIEX QTRAP, TripleTOF data
-**Python Libraries:**
-- Vendor tools (limited Python access)
-- Conversion to mzML
-**EDA Approach:**
-- MRM transition performance
-- Dwell time optimization
-- Cycle time analysis
-- Peak integration quality
+### pepXML/protXML
 
-### .raw (Thermo)
-**Description:** Thermo raw instrument file
-**Typical Data:** Full MS data from Orbitrap, Q Exactive
-**Use Cases:** Label-free and TMT quantification
-**Python Libraries:**
-- `pymsfilereader`: Thermo RawFileReader
-- `ThermoRawFileParser`: Cross-platform CLI
-**EDA Approach:**
-- MS1 and MS2 acquisition rates
-- AGC target and fill times
-- Resolution settings
-- Isolation window validation
-- SPS ion selection (TMT)
-- Contamination assessment
+These formats are Trans-Proteomic Pipeline conventions. Use Pyteomics or TPP
+tools with the generating software/version known. Preserve search-engine,
+PeptideProphet/ProteinProphet, modification, decoy, and inference context.
 
-### .d (Agilent)
-**Description:** Agilent data directory
-**Typical Data:** LC-MS and GC-MS data
-**Use Cases:** Agilent instrument workflows
-**Python Libraries:**
-- Community parsers
-- Export to mzML
-**EDA Approach:**
-- Method consistency
-- Calibration status
-- Sequence run information
-- Retention time stability
+## mzTab and mzTab-M
 
-## Metabolomics and Lipidomics
+HUPO-PSI lists:
 
-### .mzML (Metabolomics)
-**Description:** Standard MS format for metabolomics
-**Typical Data:** Full scan MS, targeted MS/MS
-**Use Cases:** Untargeted and targeted metabolomics
-**Python Libraries:**
-- Same as proteomics mzML tools
-**EDA Approach:**
-- Feature detection quality
-- Mass accuracy assessment
-- Retention time alignment
-- Blank subtraction
-- QC sample consistency
-- Isotope pattern validation
-- Adduct formation analysis
-- In-source fragmentation check
+- mzTab 1.0.0 as the final proteomics release (accepted June 2014); and
+- mzTab-M 2.0.0 as the final metabolomics/small-molecule release (accepted
+  March 2019).
 
-### .cdf / .netCDF - ANDI-MS
-**Description:** Analytical Data Interchange for MS
-**Typical Data:** GC-MS, LC-MS chromatography data
-**Use Cases:** Metabolomics, GC-MS workflows
-**Python Libraries:**
-- `netCDF4`: Low-level access
-- `pyopenms`: CDF support
-- `xcms` via R integration
-**EDA Approach:**
-- TIC and extracted ion chromatograms
-- Peak detection across samples
-- Retention index calculation
-- Mass spectral matching
-- Library search preparation
+mzTab-M 2.1.0 is listed as draft, not a final standard. Do not silently treat
+it as 2.0. The draft has moved to the separate
+[HUPO-PSI/mzTab-M repository](https://github.com/HUPO-PSI/mzTab-M); the released
+2.0 materials remain in HUPO-PSI/mzTab.
 
-### .msp - Mass Spectral Format (NIST)
-**Description:** NIST spectral library format
-**Typical Data:** Reference mass spectra
-**Use Cases:** Metabolite identification, library matching
-**Python Libraries:**
-- `matchms`: Spectral matching
-- Custom MSP parsers
-**EDA Approach:**
-- Library coverage
-- Metadata completeness (InChI, SMILES)
-- Spectral quality metrics
-- Collision energy standardization
-- Precursor type annotation
+Although mzTab is tab-delimited, it has section-specific row types, metadata,
+controlled vocabulary, optional columns, and null conventions. The generic
+rectangular TSV scanner is not a validator and will reject legitimate
+non-rectangular section structure. Use the PSI specification/reference
+validator, then export a controlled rectangular analysis table if needed.
 
-### .mgf (Metabolomics)
-**Description:** Mascot Generic Format for MS/MS
-**Typical Data:** MS/MS spectra for metabolite ID
-**Use Cases:** Spectral library searching
-**Python Libraries:**
-- `matchms`: Metabolomics spectral analysis
-- `pyteomics.mgf`
-**EDA Approach:**
-- Spectrum quality filtering
-- Precursor isolation purity
-- Fragment m/z accuracy
-- Neutral loss patterns
-- MS/MS completeness
+## Rectangular quantitative tables
 
-### .nmrML - NMR Markup Language
-**Description:** Standard XML format for NMR metabolomics
-**Typical Data:** 1D/2D NMR spectra with metadata
-**Use Cases:** NMR-based metabolomics
-**Python Libraries:**
-- `nmrml2isa`: Format conversion
-- Custom XML parsers
-**EDA Approach:**
-- Spectral quality metrics
-- Binning consistency
-- Reference compound validation
-- pH and temperature effects
-- Metabolite identification confidence
+Common outputs contain features/peptides/proteins/metabolites in rows and
+samples in columns, or long-form measurements. Before using general CLIs,
+create a data dictionary that records:
 
-### .json (Metabolomics)
-**Description:** JSON format for metabolomics results
-**Typical Data:** Feature tables, annotations, metadata
-**Use Cases:** GNPS, MetaboAnalyst, web tools
-**Python Libraries:**
-- `json`: Standard library
-- `pandas`: JSON normalization
-**EDA Approach:**
-- Feature annotation coverage
-- GNPS clustering results
-- Molecular networking statistics
-- Adduct and in-source fragment linkage
-- Putative identification confidence
+- row entity and identifier namespace/version;
+- sample/subject/specimen, condition, batch, injection order, and QC role;
+- abundance scale (raw intensity, area, count, ratio, normalized/logged);
+- zero, missing, censored, filtered, not-identified, and not-quantified codes;
+- normalization, transformation, imputation, roll-up, and batch correction
+  already applied;
+- internal standards, dilution, LOD/LOQ, blank subtraction, and detection
+  frequency; and
+- peptide-to-protein or feature-to-metabolite ambiguity.
 
-### .txt (Metabolomics Tables)
-**Description:** Tab-delimited feature tables
-**Typical Data:** m/z, RT, intensities across samples
-**Use Cases:** MZmine, XCMS, MS-DIAL output
-**Python Libraries:**
-- `pandas`: Text file reading
-**EDA Approach:**
-- Feature count and quality
-- Missing value imputation
-- Data normalization assessment
-- Batch correction validation
-- PCA and clustering for QC
-- Fold change calculations
-- Statistical test preparation
+Do not assume zeros are measured zeros. Missingness is often abundance-,
+feature-, batch-, or identification-dependent and may be non-random.
 
-### .featureXML - OpenMS Feature Format
-**Description:** OpenMS detected features
-**Typical Data:** LC-MS features with quality scores
-**Use Cases:** OpenMS workflows
-**Python Libraries:**
-- `pyopenms`: FeatureXML support
-**EDA Approach:**
-- Feature detection parameters
-- Quality metrics per feature
-- Isotope pattern fitting
-- Charge state assignment
-- FWHM and asymmetry
+### Safe commands
 
-### .consensusXML - OpenMS Consensus Features
-**Description:** Linked features across samples
-**Typical Data:** Aligned features with group info
-**Use Cases:** Multi-sample LC-MS analysis
-**Python Libraries:**
-- `pyopenms`: ConsensusXML reading
-**EDA Approach:**
-- Feature correspondence quality
-- Retention time alignment
-- Missing value patterns
-- Intensity normalization needs
-- Batch-wise feature agreement
+```bash
+python scripts/tabular_profile.py abundance.csv \
+  --root /approved/project \
+  --missing-token NA \
+  --max-rows 100000
 
-### .idXML - OpenMS Identification Format
-**Description:** Peptide/metabolite identifications
-**Typical Data:** MS/MS identifications with scores
-**Use Cases:** OpenMS ID workflows
-**Python Libraries:**
-- `pyopenms`: IdXML support
-**EDA Approach:**
-- Identification rate
-- Score distribution
-- Spectral match quality
-- False discovery assessment
-- Annotation transfer validation
+python scripts/missingness_leakage_audit.py abundance.csv \
+  --root /approved/project \
+  --group-column condition \
+  --entity-column subject_id \
+  --split-column split \
+  --time-column acquisition_time
 
-## Lipidomics-Specific Formats
+python scripts/distribution_sensitivity.py abundance.csv \
+  --root /approved/project \
+  --column intensity
+```
 
-### .lcb - LipidCreator Batch
-**Description:** LipidCreator transition list
-**Typical Data:** Lipid transitions for targeted MS
-**Use Cases:** Targeted lipidomics
-**Python Libraries:**
-- Export to CSV for processing
-**EDA Approach:**
-- Transition coverage per lipid class
-- Retention time prediction
-- Collision energy optimization
-- Class-specific fragmentation patterns
+The column arguments are exact local identifiers; output tokenizes them unless
+`--reveal-identifiers` is explicit. Values and subject/sample identifiers are
+not emitted.
 
-### .mzTab - Proteomics/Metabolomics Tabular Format
-**Description:** PSI tabular summary format
-**Typical Data:** Protein/peptide/metabolite quantification
-**Use Cases:** Publication and data sharing
-**Python Libraries:**
-- `pyteomics.mztab`
-- `pandas` for TSV-like structure
-**EDA Approach:**
-- Data completeness
-- Metadata section validation
-- Quantification method
-- Identification confidence
-- Software and parameters
-- Quality metrics summary
+## Missingness, censoring, and limits
 
-### .csv (LipidSearch, LipidMatch)
-**Description:** Lipid identification results
-**Typical Data:** Lipid annotations, grades, intensities
-**Use Cases:** Lipidomics software output
-**Python Libraries:**
-- `pandas`: CSV reading
-**EDA Approach:**
-- Lipid class distribution
-- Identification grade/confidence
-- Fatty acid composition analysis
-- Double bond and chain length patterns
-- Intensity correlations
-- Normalization to internal standards
+Separate at least:
 
-### .sdf (Metabolomics)
-**Description:** Structure data file for metabolites
-**Typical Data:** Chemical structures with properties
-**Use Cases:** Metabolite database creation
-**Python Libraries:**
-- `RDKit`: `Chem.SDMolSupplier('file.sdf')`
-**EDA Approach:**
-- Structure validation
-- Property calculation (logP, MW, TPSA)
-- Molecular formula consistency
-- Tautomer enumeration
-- Retention time prediction features
+- structurally absent/not applicable;
+- not detected;
+- detected below quantitation;
+- failed identification or confidence filter;
+- failed extraction/integration;
+- filtered during preprocessing;
+- saturated/above range; and
+- genuinely missing metadata.
 
-### .mol (Metabolomics)
-**Description:** Single molecule structure files
-**Typical Data:** Metabolite chemical structure
-**Use Cases:** Structure-based searches
-**Python Libraries:**
-- `RDKit`: `Chem.MolFromMolFile('file.mol')`
-**EDA Approach:**
-- Structure correctness
-- Stereochemistry validation
-- Charge state
-- Implicit hydrogen handling
+Preserve flags and limits in separate columns. Do not automatically replace
+non-detects with zero, half-minimum, LOD/2, or a random draw. Report missing/
+censored fractions by feature, sample, condition, batch, and run order, and
+compare conclusions across scientifically justified handling strategies.
 
-## Data Processing and Analysis
+## Distribution and outlier sensitivity
 
-### .h5 / .hdf5 (Omics)
-**Description:** HDF5 for large omics datasets
-**Typical Data:** Feature matrices, spectra, metadata
-**Use Cases:** Large-scale studies, cloud computing
-**Python Libraries:**
-- `h5py`: HDF5 access
-- `anndata`: For single-cell proteomics
-**EDA Approach:**
-- Dataset organization
-- Chunking and compression
-- Metadata structure
-- Efficient data access patterns
-- Sample and feature annotations
+For abundance tables:
 
-### .Rdata / .rds - R Objects
-**Description:** Serialized R analysis objects
-**Typical Data:** Processed omics results from R packages
-**Use Cases:** xcms, CAMERA, MSnbase workflows
-**Python Libraries:**
-- `pyreadr`: `pyreadr.read_r('file.Rdata')`
-- `rpy2`: R-Python integration
-**EDA Approach:**
-- Object structure exploration
-- Data extraction
-- Method parameter review
-- Conversion to Python-native formats
+- inspect sample totals/detection rates and feature detection frequency;
+- compare raw-scale and scientifically justified log/variance-stabilizing
+  diagnostics without overwriting raw data;
+- compare mean/SD with median/IQR/MAD and leave-one-sample/batch sensitivity;
+- investigate outliers against blank/QC/internal-standard performance,
+  acquisition order, contamination, carryover, and sample handling; and
+- preserve excluded samples/features with reasons and show sensitivity.
 
-### .mzTab-M - Metabolomics mzTab
-**Description:** mzTab specific to metabolomics
-**Typical Data:** Small molecule quantification
-**Use Cases:** Metabolomics data sharing
-**Python Libraries:**
-- `pyteomics.mztab`: Can parse mzTab-M
-**EDA Approach:**
-- Small molecule evidence
-- Feature quantification
-- Database references (HMDB, KEGG, etc.)
-- Adduct and charge annotation
-- MS level information
+PCA/clustering can reveal structure but is not proof of batch, identity, or
+biological separation. Fit transformations and feature selection on training
+data only.
 
-### .parquet (Omics)
-**Description:** Columnar storage for large tables
-**Typical Data:** Feature matrices, metadata
-**Use Cases:** Efficient big data omics
-**Python Libraries:**
-- `pandas`: `pd.read_parquet()`
-- `pyarrow`: Direct parquet access
-**EDA Approach:**
-- Compression efficiency
-- Column-wise statistics
-- Partition structure
-- Schema validation
-- Fast filtering and aggregation
+## Design, leakage, and inference
 
-### .pkl (Omics Models)
-**Description:** Pickled Python objects
-**Typical Data:** ML models, processed data
-**Use Cases:** Workflow intermediate storage
-**Python Libraries:**
-- `pickle`: Standard serialization
-- `joblib`: Enhanced pickling
-**EDA Approach:**
-- Object type and structure
-- Model parameters
-- Feature importance (if ML model)
-- Data shapes and types
-- Deserialization validation
+1. Define the independent experimental unit; technical injections, spectra,
+   peptides, or features are usually not independent subjects.
+2. Preserve subject/sample pairing, repeated measures, batches, sites, and
+   acquisition order.
+3. Split by subject/specimen/batch/time before normalization, imputation,
+   feature selection, PCA, or model tuning.
+4. Ensure spectra/peptides/features derived from one sample do not cross
+   train/test boundaries.
+5. Distinguish QC, blank, pooled, calibrator, and biological samples.
+6. Treat identification/feature discovery and differential testing as separate
+   selection stages when assessing error rates.
+7. Define the hypothesis family (features, contrasts, endpoints) and report
+   effect sizes/uncertainty plus an appropriate FWER/FDR method.
+8. Label discoveries from EDA as exploratory and confirm on independent data.
+9. Do not make biomarker, diagnostic, mechanism, exposure, or causal claims
+   from descriptive patterns.
 
-### .zarr (Omics)
-**Description:** Chunked, compressed array storage
-**Typical Data:** Multi-dimensional omics data
-**Use Cases:** Cloud-optimized analysis
-**Python Libraries:**
-- `zarr`: Array storage
-**EDA Approach:**
-- Chunk optimization
-- Compression codecs
-- Multi-scale data
-- Parallel access patterns
-- Metadata annotations
+## HDF5 and related containers
+
+The generic HDF5 inspector reports only bounded hierarchy/dataset metadata. It
+does not:
+
+- read spectra, abundance matrices, annotations, or attributes;
+- follow soft/external links or external dataset storage;
+- validate mzMLb, H5AD, Loom, or vendor schemas; or
+- invoke filter plugins for dataset decompression.
+
+Use the convention's official reader/validator for semantics. NumPy object
+arrays and all pickle-based objects are rejected.
+
+## Authoritative sources
+
+Current parser APIs and format guidance reviewed 2026-09-30. Historical
+methodology citations are retained as source context.
+
+- HUPO-PSI, [mzML specification/status](https://www.psidev.info/mzml)
+  (mzML 1.1.0 long-term stable).
+- HUPO-PSI, [mzIdentML](https://www.psidev.info/mzidentml).
+- HUPO-PSI, [mzTab specifications](https://www.psidev.info/mztab-specifications)
+  (page updated 2024-04-19; mzTab 1.0.0 final, mzTab-M 2.0.0 final,
+  mzTab-M 2.1.0 draft).
+- HUPO-PSI, [mzTab repository and released specifications](https://github.com/HUPO-PSI/mzTab).
+- Hoffmann et al. (2019), [mzTab-M 2.0](https://doi.org/10.1021/acs.analchem.8b04310),
+  published 2019-01-28.
+- Pyteomics, [formats documentation](https://pyteomics.readthedocs.io/en/latest/).
+- OpenMS, [recognized file types](https://openms.de/documentation/structOpenMS_1_1FileTypes.html).
+- US EPA, [Detection Limits Best Practices Guide](https://www.epa.gov/system/files/documents/2025-09/wqxdetectionlimitsbestpracticesguide_final.pdf),
+  dated August 2025.
+- FDA/ICH E9(R1), [sensitivity analysis guidance](https://www.fda.gov/regulatory-information/search-fda-guidance-documents/e9r1-statistical-principles-clinical-trials-addendum-estimands-and-sensitivity-analysis-clinical),
+  final May 2021.
+- Benjamini and Hochberg (1995), [FDR control](https://academic.oup.com/jrsssb/article/57/1/289/7035855).
+- scikit-learn, [data leakage guidance](https://scikit-learn.org/stable/common_pitfalls.html).

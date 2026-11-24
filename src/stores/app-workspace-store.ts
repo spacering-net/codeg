@@ -1,24 +1,38 @@
 import { create } from "zustand"
 import { registerBackendScopedStoreReset } from "@/stores/backend-scoped-store-reset"
 import {
+  applySidebarLayout as apiApplySidebarLayout,
+  createFolderGroup as apiCreateFolderGroup,
+  deleteFolderGroup as apiDeleteFolderGroup,
   getFolder as apiGetFolder,
+  getGitHead,
   listAllConversations,
   listAllFolderDetails,
+  listFolderGroups,
   listOpenFolderDetails,
   openFolder as apiOpenFolder,
   openFolderById as apiOpenFolderById,
   openWorktreeFolder as apiOpenWorktreeFolder,
   removeFolderFromWorkspace as apiRemoveFolderFromWorkspace,
-  reorderFolders as apiReorderFolders,
+  setFolderGroup as apiSetFolderGroup,
+  updateFolderGroup as apiUpdateFolderGroup,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
+import {
+  forgetClosedConversation,
+  forgetClosedTabsInFolder,
+} from "@/lib/closed-tab-stack"
 import type {
   AgentStats,
   AgentType,
   DbConversationSummary,
   FolderDetail,
+  FolderGroupChange,
+  FolderGroupDetail,
   GitHeadInfo,
+  SidebarLayoutEntry,
 } from "@/lib/types"
+import type { FolderThemeColor } from "@/lib/theme-presets"
 
 /**
  * Workspace-level shared state (folders, conversations, branches) as a Zustand
@@ -32,6 +46,14 @@ import type {
 export interface AppWorkspaceStoreState {
   folders: FolderDetail[]
   allFolders: FolderDetail[]
+  /**
+   * Sidebar folder groups, in `sort_order`. Fetched alongside the folder lists
+   * (one `fetchFolders`), since a group without its members — or a member whose
+   * group hasn't arrived — would render a half-built sidebar.
+   */
+  folderGroups: FolderGroupDetail[]
+  /** True only after a successful folder snapshot, so an offline start cannot
+   * mistake an unknown folder list for deleted folders and prune drafts. */
   foldersHydrated: boolean
   foldersLoading: boolean
 
@@ -75,7 +97,7 @@ export interface AppWorkspaceStoreState {
   updateConversationLocal: (
     id: number,
     patch: Partial<
-      Pick<DbConversationSummary, "status" | "title" | "pinned_at">
+      Pick<DbConversationSummary, "status" | "title" | "pinned_at" | "tag_ids">
     >
   ) => void
   applyConversationUpsert: (summary: DbConversationSummary) => void
@@ -84,6 +106,13 @@ export interface AppWorkspaceStoreState {
   setBranch: (folderId: number, branch: string | null) => void
   /** Equality-guarded merge of one folder's polled HEAD into branches/gitHeads. */
   applyGitHead: (folderId: number, head: GitHeadInfo) => void
+  /**
+   * Resolve one folder's HEAD on demand, for a surface showing a folder the
+   * active-folder poll isn't covering. Fire-and-forget and idempotent: a folder
+   * whose HEAD is already known, or whose fetch is already in flight, costs
+   * nothing, so N mounted branch chips across M folders make M requests.
+   */
+  ensureGitHead: (folderId: number, path: string) => void
   /**
    * Insert/replace a folder in local state, mirroring the backend's list
    * split: a `kind === "chat"` folder goes into `allFolders` only (matching
@@ -108,7 +137,26 @@ export interface AppWorkspaceStoreState {
   ) => Promise<FolderDetail>
   addFolderToWorkspaceById: (folderId: number) => Promise<FolderDetail>
   removeFolderFromWorkspace: (folderId: number) => Promise<void>
-  reorderFolders: (ids: number[]) => Promise<void>
+  /**
+   * Persist a whole sidebar layout (top-level order + each group's members)
+   * after a drag. Optimistic: local `group_id` / `sort_order` are patched first
+   * and rolled back if the write fails, so the list never snaps back mid-drop.
+   */
+  applySidebarLayout: (entries: SidebarLayoutEntry[]) => Promise<void>
+  createFolderGroup: (
+    name: string,
+    color?: FolderThemeColor
+  ) => Promise<FolderGroupDetail>
+  updateFolderGroup: (
+    groupId: number,
+    patch: { name?: string; color?: FolderThemeColor }
+  ) => Promise<void>
+  /** Delete a group; its member folders return to the top level (never closed). */
+  deleteFolderGroup: (groupId: number) => Promise<void>
+  /** Move one folder into (`groupId`) or out of (`null`) a group, appending it. */
+  setFolderGroup: (folderId: number, groupId: number | null) => Promise<void>
+  /** Apply a `folder-group://changed` broadcast from another window/client. */
+  applyFolderGroupChange: (change: FolderGroupChange) => void
   refreshFolder: (id: number) => Promise<void>
   setActiveFolderId: (id: number | null) => void
 }
@@ -152,6 +200,17 @@ const DELETED_TOMBSTONE_CAP = 512
 // reused, so the tombstone is permanent; the set is FIFO-bounded.
 const deletedIds = new Set<number>()
 
+/**
+ * Has this client seen `id` deleted? `reopen_last_closed_tab` asks before it
+ * restores a conversation: `applyConversationRemove` purges what is on the
+ * stack at that moment, but a tab that was still OPEN when the delete landed
+ * gets recorded afterwards, when the user closes it by hand. Consulting the
+ * tombstone at restore time means a deletion seen at any point wins.
+ */
+export function isConversationDeleted(id: number): boolean {
+  return deletedIds.has(id)
+}
+
 // Folder removals, as `folder id → the mutation sequence number it landed at`.
 // `fetchFolders` replaces both lists wholesale, so a snapshot that was ALREADY
 // IN FLIGHT when a removal arrived would put the folder straight back on screen;
@@ -189,10 +248,87 @@ function rememberRemovedFolder(folderId: number): void {
   }
 }
 
+// Group deletions, stamped the same way and for the same reason: `fetchFolders`
+// replaces `folderGroups` wholesale, so a snapshot already in flight when a
+// delete landed would put the band straight back on screen — and nothing would
+// take it down again, because the `deleted` broadcast has already been applied
+// and no-ops the second time. Folders pointing at a filtered-out group fall back
+// to the top level on their own (`buildSidebarLayout` treats an unknown
+// `group_id` as ungrouped), so filtering the group list is the whole fix.
+const deletedGroupSeq = new Map<number, number>()
+
+/** True when `groupId` was deleted after a snapshot requested at `seq`. */
+function groupDeletedSince(groupId: number, seq: number): boolean {
+  const at = deletedGroupSeq.get(groupId)
+  return at !== undefined && at > seq
+}
+
+function rememberDeletedGroup(groupId: number): void {
+  folderMutationSeq += 1
+  deletedGroupSeq.set(groupId, folderMutationSeq)
+  if (deletedGroupSeq.size > DELETED_TOMBSTONE_CAP) {
+    const oldest = deletedGroupSeq.keys().next().value
+    if (oldest !== undefined) deletedGroupSeq.delete(oldest)
+  }
+}
+
+function forgetDeletedGroup(groupId: number): void {
+  // A group with this id exists again, so no snapshot should be filtered on its
+  // account. (Group ids come from an AUTOINCREMENT column and so are not reused
+  // in practice; this keeps the map honest anyway, and bounded.)
+  deletedGroupSeq.delete(groupId)
+}
+
+// Monotonic id per `fetchFolders` call, so an older snapshot can never land on
+// top of a newer one. Every drag now ends in a `layout` nudge that triggers a
+// refetch, so two fetches are routinely in flight at once and out-of-order
+// completion would leave the sidebar showing the second-to-last order.
+let folderFetchSeq = 0
+let lastAppliedFolderFetch = 0
+
+/**
+ * Folders whose on-demand HEAD read is in flight (see `ensureGitHead`), each
+ * stamped with a token identifying the read that owns the slot. A canvas board
+ * mounts one branch chip per card, so without this the same folder would be
+ * asked N times in the same frame.
+ *
+ * A token rather than a bare id because a folder row can be removed and revived
+ * under the SAME id — a retried task re-creating its worktree does exactly that
+ * (see `upsertFolder`). `removedFolderSeq` cannot tell the two incarnations
+ * apart, since `upsertFolder` forgets the tombstone the moment the row is back.
+ * `applyFolderRemove` drops the slot, so the revived folder is free to ask
+ * again, and the older read recognises that it no longer owns the slot and
+ * discards its answer instead of writing the departed directory's branch onto
+ * the new one.
+ */
+const gitHeadInFlight = new Map<number, symbol>()
+
+/**
+ * Undo an optimistic folder/group mutation whose request failed, then re-read
+ * from the server.
+ *
+ * The restore alone is not enough. It reinstates a snapshot captured before the
+ * request, so anything that landed WHILE the request was in flight — a peer's
+ * layout change, another window's rename — is erased along with our own failed
+ * write. The refetch is what converges: it is ordered against every other fetch
+ * by `folderFetchSeq`, so whatever the server actually holds wins. The restore
+ * still happens first so the sidebar snaps back immediately instead of sitting
+ * on a lie for a round trip.
+ */
+function rollbackAndResync(
+  set: (partial: Partial<AppWorkspaceStoreState>) => void,
+  get: () => AppWorkspaceStoreState,
+  restore: Partial<AppWorkspaceStoreState>
+): void {
+  set(restore)
+  void get().fetchFolders()
+}
+
 export const useAppWorkspaceStore = create<AppWorkspaceStoreState>()(
   (set, get) => ({
     folders: [],
     allFolders: [],
+    folderGroups: [],
     foldersHydrated: false,
     foldersLoading: true,
 
@@ -210,33 +346,56 @@ export const useAppWorkspaceStore = create<AppWorkspaceStoreState>()(
       // Stamped BEFORE the requests go out: anything removed from here on is
       // newer than the snapshot they return.
       const seqAtRequest = folderMutationSeq
+      const fetchId = ++folderFetchSeq
       try {
-        const [openRaw, allRaw] = await Promise.all([
+        const [openRaw, allRaw, groups] = await Promise.all([
           listOpenFolderDetails(),
           listAllFolderDetails(),
+          // Fetched in the SAME round trip as the folders: a snapshot where one
+          // has landed and the other hasn't renders a group with no members (or
+          // members whose group is unknown, which fall back to the top level and
+          // visibly jump once the other arrives).
+          listFolderGroups(),
         ])
         // Both lists are replaced wholesale, so a snapshot that predates a
         // removal would resurrect the folder. Subtract only what was removed
         // AFTER this snapshot was requested — an earlier removal is already
         // reflected in it, and if that row was since revived the snapshot is
         // the truth (this is how a revive during a disconnect is learned).
+        // A snapshot older than one already applied is thrown away wholesale
+        // rather than merged: it is not "extra information", it is a strictly
+        // earlier view of the same three lists, and applying it would undo the
+        // newer one.
+        if (fetchId < lastAppliedFolderFetch) return
+        lastAppliedFolderFetch = fetchId
         const live = (list: FolderDetail[]) =>
           removedFolderSeq.size === 0
             ? list
             : list.filter((f) => !removedSince(f.id, seqAtRequest))
         const openList = live(openRaw)
         const allList = live(allRaw)
+        // Same subtraction for groups deleted after this snapshot was requested.
+        const groupList =
+          deletedGroupSeq.size === 0
+            ? groups
+            : groups.filter((g) => !groupDeletedSince(g.id, seqAtRequest))
         const branches = new Map(get().branches)
         for (const f of allList) {
           if (!branches.has(f.id)) {
             branches.set(f.id, f.git_branch ?? null)
           }
         }
-        set({ folders: openList, allFolders: allList, branches })
+        set({
+          folders: openList,
+          allFolders: allList,
+          folderGroups: groupList,
+          branches,
+          foldersHydrated: true,
+        })
       } catch (err) {
         console.error("[AppWorkspace] fetchFolders failed:", err)
       } finally {
-        set({ foldersLoading: false, foldersHydrated: true })
+        set({ foldersLoading: false })
       }
     },
 
@@ -264,8 +423,10 @@ export const useAppWorkspaceStore = create<AppWorkspaceStoreState>()(
       const next = prev.slice()
       // A pin toggle is a view preference, not activity — mirror the backend
       // (`update_pin`) and leave `updated_at` untouched so an updated-sorted
-      // folder doesn't briefly float the row. Status/title patches still bump.
-      const bumpUpdatedAt = !("pinned_at" in patch)
+      // folder doesn't briefly float the row. Tagging is the same kind of
+      // edit (the backend never touches the row for it). Status/title patches
+      // still bump.
+      const bumpUpdatedAt = !("pinned_at" in patch) && !("tag_ids" in patch)
       next[idx] = {
         ...next[idx],
         ...patch,
@@ -273,8 +434,9 @@ export const useAppWorkspaceStore = create<AppWorkspaceStoreState>()(
       }
       // `stats` (computeStats) depends ONLY on the conversation count and each
       // row's agent_type/message_count. This path replaces a row IN PLACE (count
-      // never changes), and the patch type is restricted to status/title/pinned_at
-      // — none of which is a stat input — so a patch here can never move a stat.
+      // never changes), and the patch type is restricted to status/title/
+      // pinned_at/tag_ids — none of which is a stat input — so a patch here can
+      // never move a stat.
       // Reuse the existing `stats` reference instead of recomputing O(n) and
       // minting a fresh object: otherwise every turn-boundary
       // `conversation_status_changed` tick (one per turn start/stop, per running
@@ -310,6 +472,14 @@ export const useAppWorkspaceStore = create<AppWorkspaceStoreState>()(
     // Remove a conversation by id. Idempotent: an unknown id leaves state
     // untouched (no re-render; keeps `stats` stable).
     applyConversationRemove: (id) => {
+      // The single funnel for "this conversation is gone": the backend
+      // broadcasts Deleted to every client including the one that asked, so
+      // this covers a local delete, another window's, and a partially-failed
+      // bulk delete (each success emits on its own). Reaching into the
+      // closed-tab stack here is what stops `reopen_last_closed_tab` from
+      // restoring a conversation that was closed BEFORE it was deleted — the
+      // close-time opt-out only sees tabs that are still open.
+      forgetClosedConversation(id)
       deletedIds.add(id)
       if (deletedIds.size > DELETED_TOMBSTONE_CAP) {
         // FIFO eviction — Set preserves insertion order.
@@ -357,6 +527,40 @@ export const useAppWorkspaceStore = create<AppWorkspaceStoreState>()(
       if (Object.keys(patch).length > 0) set(patch)
     },
 
+    ensureGitHead: (folderId, path) => {
+      if (!path) return
+      // Already resolved, or someone else is already asking. `gitHeads` is the
+      // authority here rather than `branches`: `branches` is pre-seeded from the
+      // folder row's `git_branch` (always null today) for EVERY folder, so it
+      // can never answer "do we know this folder's HEAD?".
+      if (get().gitHeads.has(folderId)) return
+      if (gitHeadInFlight.has(folderId)) return
+      const token = Symbol(folderId)
+      gitHeadInFlight.set(folderId, token)
+      void getGitHead(path)
+        .then((head) => {
+          // Only if this read still owns the slot. A folder removed (and maybe
+          // revived under the same id) while we were waiting has had the slot
+          // dropped by `applyFolderRemove`, and the answer we are holding is
+          // about the directory that used to be there.
+          if (gitHeadInFlight.get(folderId) !== token) return
+          get().applyGitHead(folderId, head)
+        })
+        .catch((err) => {
+          console.error("[AppWorkspace] ensureGitHead failed:", err)
+        })
+        .finally(() => {
+          // Released on failure too, so a folder that was mid-clone (or briefly
+          // unreachable) can be asked again on the next mount instead of being
+          // stuck reading "no branch" for the rest of the session. Only ever OUR
+          // slot: a newer read for a revived id owns it now and must not have it
+          // cleared out from under it.
+          if (gitHeadInFlight.get(folderId) === token) {
+            gitHeadInFlight.delete(folderId)
+          }
+        })
+    },
+
     upsertFolder: (detail) => {
       // The folder exists again (a retried task re-creating its worktree revives
       // the very same row/id) — drop any tombstone so refetches keep it.
@@ -383,7 +587,18 @@ export const useAppWorkspaceStore = create<AppWorkspaceStoreState>()(
     },
 
     applyFolderRemove: (folderId) => {
+      // Same reasoning as `applyConversationRemove`: tabs closed while the
+      // folder still existed are already on the reopen stack, and their cwd is
+      // about to stop existing.
+      forgetClosedTabsInFolder(folderId)
       rememberRemovedFolder(folderId)
+      // Disown any on-demand HEAD read still running for this folder. Dropping
+      // the slot does two things at once: the id is free to be asked about again
+      // the moment it comes back (`upsertFolder` revives the very same row id
+      // after a retried task re-creates its worktree), and the older read finds
+      // itself no longer the owner and discards its answer instead of writing
+      // the departed directory's branch onto the new one.
+      gitHeadInFlight.delete(folderId)
       const { folders, allFolders, branches, gitHeads } = get()
       const patch: Partial<AppWorkspaceStoreState> = {}
       if (folders.some((f) => f.id === folderId)) {
@@ -447,37 +662,202 @@ export const useAppWorkspaceStore = create<AppWorkspaceStoreState>()(
       void refreshConversations()
     },
 
-    reorderFolders: async (ids) => {
-      const { folders: prevFolders, allFolders: prevAllFolders } = get()
+    applySidebarLayout: async (entries) => {
+      const {
+        folders: prevFolders,
+        allFolders: prevAllFolders,
+        folderGroups: prevGroups,
+      } = get()
 
-      const reorderByIds = (prev: FolderDetail[]) => {
-        const byId = new Map(prev.map((f) => [f.id, f]))
-        const next: FolderDetail[] = []
-        ids.forEach((id, idx) => {
-          const folder = byId.get(id)
-          if (folder) {
-            next.push({ ...folder, sort_order: idx + 1 })
-            byId.delete(id)
-          }
-        })
-        // Keep folders not included in `ids` at the end, preserving relative order.
-        for (const f of prev) {
-          if (byId.has(f.id)) next.push(f)
+      // Mirror the backend's per-container counter so local state matches what
+      // was just written, without waiting for the `layout` broadcast to arrive.
+      // Positions are 1-based there, so they are here too.
+      const nextOrder = new Map<number | null, number>()
+      const folderPatch = new Map<
+        number,
+        { sort: number; group: number | null }
+      >()
+      const groupPatch = new Map<number, number>()
+      const seenFolders = new Set<number>()
+      const seenGroups = new Set<number>()
+      for (const entry of entries) {
+        if (entry.kind === "group") {
+          if (seenGroups.has(entry.id)) continue
+          seenGroups.add(entry.id)
+          const slot = (nextOrder.get(null) ?? 0) + 1
+          nextOrder.set(null, slot)
+          groupPatch.set(entry.id, slot)
+        } else {
+          if (seenFolders.has(entry.id)) continue
+          seenFolders.add(entry.id)
+          const container = entry.groupId ?? null
+          const slot = (nextOrder.get(container) ?? 0) + 1
+          nextOrder.set(container, slot)
+          folderPatch.set(entry.id, { sort: slot, group: container })
         }
-        return next
       }
 
+      // Only the named rows change; everything else keeps its position, exactly
+      // like the backend leaves unnamed rows alone. List ORDER is left as the
+      // server returned it — the sidebar derives its own order from
+      // `sort_order` / `group_id`, so re-sorting the arrays here would be a
+      // second, divergent source of truth.
+      const patchList = (prev: FolderDetail[]) =>
+        prev.map((f) => {
+          const patch = folderPatch.get(f.id)
+          if (!patch) return f
+          if (f.sort_order === patch.sort && f.group_id === patch.group)
+            return f
+          return { ...f, sort_order: patch.sort, group_id: patch.group }
+        })
+
       set({
-        folders: reorderByIds(prevFolders),
-        allFolders: reorderByIds(prevAllFolders),
+        folders: patchList(prevFolders),
+        allFolders: patchList(prevAllFolders),
+        folderGroups: prevGroups.map((g) => {
+          const sort = groupPatch.get(g.id)
+          if (sort === undefined || g.sort_order === sort) return g
+          return { ...g, sort_order: sort }
+        }),
       })
 
       try {
-        await apiReorderFolders(ids)
+        await apiApplySidebarLayout(entries)
       } catch (err) {
-        set({ folders: prevFolders, allFolders: prevAllFolders })
+        rollbackAndResync(set, get, {
+          folders: prevFolders,
+          allFolders: prevAllFolders,
+          folderGroups: prevGroups,
+        })
         throw err
       }
+    },
+
+    createFolderGroup: async (name, color) => {
+      const group = await apiCreateFolderGroup(name, color)
+      // A group with this id exists again, so an in-flight snapshot must no
+      // longer be filtered on its account.
+      forgetDeletedGroup(group.id)
+      // Insert rather than refetch: the caller may immediately move a folder
+      // into this group, and a group missing from local state would render that
+      // folder back at the top level for a frame.
+      const { folderGroups } = get()
+      if (!folderGroups.some((g) => g.id === group.id)) {
+        set({ folderGroups: [...folderGroups, group] })
+      }
+      return group
+    },
+
+    updateFolderGroup: async (groupId, patch) => {
+      const prev = get().folderGroups
+      const target = prev.find((g) => g.id === groupId)
+      if (!target) return
+      set({
+        folderGroups: prev.map((g) =>
+          g.id === groupId ? { ...g, ...patch } : g
+        ),
+      })
+      try {
+        await apiUpdateFolderGroup(groupId, patch)
+      } catch (err) {
+        rollbackAndResync(set, get, { folderGroups: prev })
+        throw err
+      }
+    },
+
+    deleteFolderGroup: async (groupId) => {
+      const {
+        folderGroups: prevGroups,
+        folders: prevFolders,
+        allFolders: prevAllFolders,
+      } = get()
+      // Members return to the top level — they are never closed or forgotten.
+      // Their exact new `sort_order` comes from the server; clearing `group_id`
+      // is enough for the sidebar to place them, and the `layout` broadcast
+      // reconciles the positions.
+      const ungroup = (list: FolderDetail[]) =>
+        list.map((f) => (f.group_id === groupId ? { ...f, group_id: null } : f))
+      // Stamped BEFORE the request: a `listFolderGroups` snapshot that was
+      // already in flight would otherwise put this band back on screen, and the
+      // `deleted` broadcast that would have taken it down has already been
+      // applied (it no-ops the second time).
+      rememberDeletedGroup(groupId)
+      set({
+        folderGroups: prevGroups.filter((g) => g.id !== groupId),
+        folders: ungroup(prevFolders),
+        allFolders: ungroup(prevAllFolders),
+      })
+      try {
+        await apiDeleteFolderGroup(groupId)
+      } catch (err) {
+        forgetDeletedGroup(groupId)
+        rollbackAndResync(set, get, {
+          folderGroups: prevGroups,
+          folders: prevFolders,
+          allFolders: prevAllFolders,
+        })
+        throw err
+      }
+    },
+
+    setFolderGroup: async (folderId, groupId) => {
+      const { folders: prevFolders, allFolders: prevAllFolders } = get()
+      const patchList = (list: FolderDetail[]) =>
+        list.map((f) => (f.id === folderId ? { ...f, group_id: groupId } : f))
+      set({
+        folders: patchList(prevFolders),
+        allFolders: patchList(prevAllFolders),
+      })
+      try {
+        await apiSetFolderGroup(folderId, groupId)
+      } catch (err) {
+        rollbackAndResync(set, get, {
+          folders: prevFolders,
+          allFolders: prevAllFolders,
+        })
+        throw err
+      }
+    },
+
+    applyFolderGroupChange: (change) => {
+      if (change.kind === "upsert") {
+        const { folderGroups } = get()
+        forgetDeletedGroup(change.group.id)
+        const idx = folderGroups.findIndex((g) => g.id === change.group.id)
+        if (idx < 0) {
+          set({ folderGroups: [...folderGroups, change.group] })
+          return
+        }
+        const next = [...folderGroups]
+        next[idx] = change.group
+        set({ folderGroups: next })
+        return
+      }
+      if (change.kind === "deleted") {
+        const {
+          folderGroups,
+          folders: prevFolders,
+          allFolders: prevAllFolders,
+        } = get()
+        // Stamped even when the group is already gone locally (our own echo):
+        // a `listFolderGroups` snapshot from before the delete may still be in
+        // flight, and this is the only record that would filter it out.
+        rememberDeletedGroup(change.id)
+        if (!folderGroups.some((g) => g.id === change.id)) return
+        const ungroup = (list: FolderDetail[]) =>
+          list.map((f) =>
+            f.group_id === change.id ? { ...f, group_id: null } : f
+          )
+        set({
+          folderGroups: folderGroups.filter((g) => g.id !== change.id),
+          folders: ungroup(prevFolders),
+          allFolders: ungroup(prevAllFolders),
+        })
+        return
+      }
+      // `layout`: membership/order changed somewhere. It carries no payload by
+      // design, so re-read both lists.
+      void get().fetchFolders()
     },
 
     refreshFolder: async (id) => {
@@ -533,7 +913,11 @@ export function resetAppWorkspaceStore() {
   // would need per-store fetch epochs. See `RemoteConnectionGate`.
   deletedIds.clear()
   removedFolderSeq.clear()
+  deletedGroupSeq.clear()
+  gitHeadInFlight.clear()
   folderMutationSeq = 0
+  folderFetchSeq = 0
+  lastAppliedFolderFetch = 0
   useAppWorkspaceStore.setState(useAppWorkspaceStore.getInitialState(), true)
 }
 

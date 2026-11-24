@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
@@ -9,13 +9,15 @@ const getMock = vi.fn()
 const getOwnMock = vi.fn()
 const setMock = vi.fn().mockResolvedValue(undefined)
 const deleteMock = vi.fn().mockResolvedValue(undefined)
+const commandsMock = vi.fn()
 
 vi.mock("@/lib/api", () => ({
+  workTaskGet: vi.fn().mockRejectedValue(new Error("not in this test")),
   workTaskSettingsGet: (...args: unknown[]) => getMock(...args),
   workTaskSettingsGetOwn: (...args: unknown[]) => getOwnMock(...args),
   workTaskSettingsSet: (...args: unknown[]) => setMock(...args),
   workTaskSettingsDelete: (...args: unknown[]) => deleteMock(...args),
-  listFolderCommands: () => Promise.resolve([]),
+  listFolderCommands: (...args: unknown[]) => commandsMock(...args),
 }))
 
 // The agent surface probes a live CLI; none of it is under test here.
@@ -30,6 +32,7 @@ vi.mock("@/components/automations/agent-config-section", () => ({
     configValues: Record<string, string>
   ) => ({ mode_id: modeId, config_values: configValues }),
   snapshotLabels: () => ({}),
+  useBooleanOptionLabels: () => ({ on: "On", off: "Off" }),
 }))
 vi.mock("@/components/automations/use-agent-options", () => ({
   useAgentOptions: () => ({
@@ -76,6 +79,7 @@ function settings(
     merge_strategy: "squash",
     auto_merge: false,
     delete_worktree_default: true,
+    auto_compact_percent: 0,
     ...overrides,
   }
 }
@@ -95,8 +99,34 @@ async function saveButton() {
   return save
 }
 
+/**
+ * Click one of the dialog's own tabs. Scoped to the top strip because the
+ * Prompts tab nests a stage strip that repeats some of the same names —
+ * "Merge" is both a tab up here and a launch stage down there.
+ */
+async function openTab(user: ReturnType<typeof userEvent.setup>, name: string) {
+  const strip = screen.getByRole("tablist", { name: "Task settings" })
+  await user.click(within(strip).getByRole("tab", { name }))
+}
+
 async function openPromptsTab(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(screen.getByRole("tab", { name: "Prompts" }))
+  await openTab(user, "Prompts")
+}
+
+/** Click a stage inside the Prompts tab's own strip. */
+async function openStage(
+  user: ReturnType<typeof userEvent.setup>,
+  name: string
+) {
+  const strip = screen.getByRole("tablist", { name: "Prompts" })
+  await user.click(within(strip).getByRole("tab", { name }))
+}
+
+function stageTab(name: string) {
+  return within(screen.getByRole("tablist", { name: "Prompts" })).getByRole(
+    "tab",
+    { name }
+  )
 }
 
 beforeEach(() => {
@@ -104,6 +134,7 @@ beforeEach(() => {
   getOwnMock.mockReset().mockResolvedValue(settings())
   setMock.mockClear()
   deleteMock.mockClear()
+  commandsMock.mockReset().mockResolvedValue([])
 })
 
 describe("TaskSettingsDialog stage prompts", () => {
@@ -113,7 +144,7 @@ describe("TaskSettingsDialog stage prompts", () => {
     const save = await saveButton()
 
     await openPromptsTab(user)
-    await user.click(screen.getByRole("tab", { name: "Merge" }))
+    await openStage(user, "Merge")
     await user.type(
       screen.getByRole("textbox", { name: "Merge" }),
       "Write the commit message in Chinese."
@@ -143,16 +174,10 @@ describe("TaskSettingsDialog stage prompts", () => {
       "Reply in Chinese."
     )
     // Configured stages carry a dot; untouched ones do not.
-    expect(
-      screen
-        .getByRole("tab", { name: "Retry run" })
-        .querySelector(".bg-primary")
-    ).toBeNull()
-    expect(
-      screen.getByRole("tab", { name: "Task run" }).querySelector(".bg-primary")
-    ).not.toBeNull()
+    expect(stageTab("Retry run").querySelector(".bg-primary")).toBeNull()
+    expect(stageTab("Task run").querySelector(".bg-primary")).not.toBeNull()
 
-    await user.click(screen.getByRole("tab", { name: "Task run" }))
+    await openStage(user, "Task run")
     expect(screen.getByRole("textbox", { name: "Task run" })).toHaveValue(
       "Be brief."
     )
@@ -172,7 +197,7 @@ describe("TaskSettingsDialog stage prompts", () => {
       "Follow-up",
       "Merge",
     ]) {
-      await user.click(screen.getByRole("tab", { name: stage }))
+      await openStage(user, stage)
       const box = screen.getByRole("textbox", { name: stage })
       placeholders.push(box.getAttribute("placeholder") ?? "")
     }
@@ -196,13 +221,48 @@ describe("TaskSettingsDialog stage prompts", () => {
   })
 })
 
-describe("TaskSettingsDialog workflow", () => {
+describe("TaskSettingsDialog merge tab", () => {
+  it("keeps the landing options together, apart from the worktree ones", async () => {
+    const user = userEvent.setup()
+    renderDialog(1)
+    await saveButton()
+
+    await openTab(user, "Merge")
+    expect(
+      screen.getByRole("radiogroup", { name: "Default merge strategy" })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("switch", { name: "Merge automatically" })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("switch", { name: "Delete the worktree after merging" })
+    ).toBeInTheDocument()
+    // Where the worktree is made and what runs in it is the other tab's job.
+    expect(
+      screen.queryByRole("textbox", { name: "Worktree location" })
+    ).toBeNull()
+
+    await openTab(user, "Worktree")
+    expect(
+      screen.getByRole("textbox", { name: "Worktree location" })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("textbox", { name: "Worktree init command" })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("textbox", { name: "Preflight command" })
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("radiogroup", { name: "Default merge strategy" })
+    ).toBeNull()
+  })
+
   it("saves the auto-merge switch alongside the other landing options", async () => {
     const user = userEvent.setup()
     renderDialog(1)
     const save = await saveButton()
 
-    await user.click(screen.getByRole("tab", { name: "Workflow" }))
+    await openTab(user, "Merge")
     const toggle = screen.getByRole("switch", { name: "Merge automatically" })
     expect(toggle).toHaveAttribute("data-state", "unchecked")
     await user.click(toggle)
@@ -214,12 +274,73 @@ describe("TaskSettingsDialog workflow", () => {
     expect(saved.delete_worktree_default).toBe(true)
   })
 
+  it("seeds the auto-merge switch from the stored row", async () => {
+    getOwnMock.mockResolvedValue(settings({ auto_merge: true }))
+    const user = userEvent.setup()
+    renderDialog(1)
+    await saveButton()
+
+    await openTab(user, "Merge")
+    expect(
+      screen.getByRole("switch", { name: "Merge automatically" })
+    ).toHaveAttribute("data-state", "checked")
+  })
+})
+
+describe("TaskSettingsDialog worktree tab", () => {
+  it("carries a legacy preflight reference over as the command it names", async () => {
+    getOwnMock.mockResolvedValue(settings({ preflight_command_id: 7 }))
+    commandsMock.mockResolvedValue([
+      {
+        id: 7,
+        folder_id: 1,
+        name: "test",
+        command: "pnpm test",
+        sort_order: 0,
+        run_local: false,
+        created_at: "",
+        updated_at: "",
+      },
+    ])
+    const user = userEvent.setup()
+    renderDialog(1)
+    await saveButton()
+    await openTab(user, "Worktree")
+    expect(
+      screen.getByRole("textbox", { name: "Preflight command" })
+    ).toHaveValue("pnpm test")
+  })
+
+  it("doesn't carry over a legacy reference to a command run on the desktop", async () => {
+    // The preflight runs on the folder's host.
+    getOwnMock.mockResolvedValue(settings({ preflight_command_id: 7 }))
+    commandsMock.mockResolvedValue([
+      {
+        id: 7,
+        folder_id: 1,
+        name: "zed",
+        command: "zed .",
+        sort_order: 0,
+        run_local: true,
+        created_at: "",
+        updated_at: "",
+      },
+    ])
+    const user = userEvent.setup()
+    renderDialog(1)
+    await saveButton()
+    await openTab(user, "Worktree")
+    expect(
+      screen.getByRole("textbox", { name: "Preflight command" })
+    ).toHaveValue("")
+  })
+
   it("saves a chosen worktree directory, and blanks it back to the default", async () => {
     const user = userEvent.setup()
     renderDialog(1)
     const save = await saveButton()
 
-    await user.click(screen.getByRole("tab", { name: "Workflow" }))
+    await openTab(user, "Worktree")
     const box = screen.getByRole("textbox", { name: "Worktree location" })
     expect(box).toHaveValue("")
     await user.type(box, "  ~/codeg-worktrees  ")
@@ -249,22 +370,78 @@ describe("TaskSettingsDialog workflow", () => {
     renderDialog(1)
     await saveButton()
 
-    await user.click(screen.getByRole("tab", { name: "Workflow" }))
+    await openTab(user, "Worktree")
     expect(
       screen.getByRole("textbox", { name: "Worktree location" })
     ).toHaveValue("/var/trees")
   })
+})
 
-  it("seeds the auto-merge switch from the stored row", async () => {
-    getOwnMock.mockResolvedValue(settings({ auto_merge: true }))
+describe("TaskSettingsDialog auto-compact", () => {
+  it("saves the threshold and the command, and seeds both back", async () => {
     const user = userEvent.setup()
+    renderDialog(1)
+    const save = await saveButton()
+
+    const box = screen.getByRole("textbox", { name: "Auto-compact threshold" })
+    expect(box).toHaveValue("0")
+    await user.clear(box)
+    await user.type(box, "80")
+    await user.type(
+      screen.getByRole("textbox", { name: "Compact command" }),
+      "  /compress  "
+    )
+    await user.click(save)
+
+    await waitFor(() => expect(setMock).toHaveBeenCalled())
+    const [, saved] = setMock.mock.calls[0] as [number, WorkTaskFolderSettings]
+    expect(saved.auto_compact_percent).toBe(80)
+    // Trimmed: the value is sent to the agent as a prompt, verbatim.
+    expect(saved.compact_command).toBe("/compress")
+  })
+
+  it("seeds the threshold and the command from the stored row", async () => {
+    getOwnMock.mockResolvedValue(
+      settings({ auto_compact_percent: 80, compact_command: "/compress" })
+    )
     renderDialog(1)
     await saveButton()
 
-    await user.click(screen.getByRole("tab", { name: "Workflow" }))
     expect(
-      screen.getByRole("switch", { name: "Merge automatically" })
-    ).toHaveAttribute("data-state", "checked")
+      screen.getByRole("textbox", { name: "Auto-compact threshold" })
+    ).toHaveValue("80")
+    expect(
+      screen.getByRole("textbox", { name: "Compact command" })
+    ).toHaveValue("/compress")
+  })
+
+  it("reads a percentage it cannot honour as off", async () => {
+    const user = userEvent.setup()
+    renderDialog(1)
+    const save = await saveButton()
+
+    const box = screen.getByRole("textbox", { name: "Auto-compact threshold" })
+    // Above 100 there is no occupancy that could ever reach it — storing it
+    // would look enabled while behaving exactly like off.
+    await user.clear(box)
+    await user.type(box, "120")
+    await user.click(save)
+
+    await waitFor(() => expect(setMock).toHaveBeenCalled())
+    const [, saved] = setMock.mock.calls[0] as [number, WorkTaskFolderSettings]
+    expect(saved.auto_compact_percent).toBe(0)
+
+    // And an emptied box is off too, rather than NaN.
+    setMock.mockClear()
+    await user.clear(box)
+    await user.click(save)
+    await waitFor(() => expect(setMock).toHaveBeenCalled())
+    const [, blanked] = setMock.mock.calls[0] as [
+      number,
+      WorkTaskFolderSettings,
+    ]
+    expect(blanked.auto_compact_percent).toBe(0)
+    expect(blanked.compact_command).toBeNull()
   })
 })
 

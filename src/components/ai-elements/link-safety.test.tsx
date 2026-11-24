@@ -7,13 +7,34 @@ import {
   openLinkWithSafety,
   useStreamdownLinkSafety,
 } from "@/components/ai-elements/link-safety"
+import { setBrowserCapabilitiesForTests } from "@/lib/browser/browser-api"
+
+/** A desktop whose backend has answered: no built-in browser here. Set in
+ *  the desktop cases — until the backend has answered, a web click on the
+ *  desktop is held back rather than routed (`useOpenUrlTarget`). */
+const DESKTOP_WITHOUT_BROWSER = {
+  available: false,
+  surface: null,
+  platform: "macos",
+  channel: "degraded" as const,
+  reasons: ["child surface not compiled"],
+  isolatedStorage: false,
+  proxy: { url: null, applies: "unsupported" as const, reason: null },
+  downloadsDir: "",
+  docGuest: false,
+  profiles: false,
+  signInUserAgent: false,
+  ownedWindowControls: false,
+  remoteEgress: false,
+  policy: { enabled: true, managedRules: [], managedSource: null },
+}
 
 const mocks = vi.hoisted(() => ({
   openUrl: vi.fn(),
   openFilePreview: vi.fn(),
   toastError: vi.fn(),
   isDesktop: vi.fn(() => false),
-  getActiveRemoteConnectionId: vi.fn(() => null),
+  getActiveRemoteConnectionId: vi.fn<() => string | null>(() => null),
   activeFolderPath: "/repo",
 }))
 
@@ -34,6 +55,10 @@ vi.mock("@/lib/platform", () => ({
 vi.mock("@/lib/transport", () => ({
   isDesktop: mocks.isDesktop,
   getActiveRemoteConnectionId: mocks.getActiveRemoteConnectionId,
+  // A desktop window bound to a remote server — mirrors the real helper.
+  isRemoteDesktopMode: () =>
+    mocks.isDesktop() && mocks.getActiveRemoteConnectionId() !== null,
+  getServerBaseUrl: () => "https://dev.example.com",
 }))
 
 vi.mock("@/contexts/active-folder-context", () => ({
@@ -45,6 +70,7 @@ vi.mock("@/contexts/active-folder-context", () => ({
 }))
 
 vi.mock("@/contexts/workspace-context", () => ({
+  useOptionalWorkspaceActions: () => null,
   useWorkspaceActions: () => ({
     openFilePreview: mocks.openFilePreview,
   }),
@@ -86,6 +112,7 @@ describe("link safety direct opening", () => {
     mocks.toastError.mockReset()
     mocks.isDesktop.mockReset()
     mocks.isDesktop.mockReturnValue(false)
+    setBrowserCapabilitiesForTests(null)
     mocks.getActiveRemoteConnectionId.mockReset()
     mocks.getActiveRemoteConnectionId.mockReturnValue(null)
     mocks.openFilePreview.mockResolvedValue(undefined)
@@ -265,6 +292,7 @@ describe("link safety direct opening", () => {
     // canonicalize.
     mocks.isDesktop.mockReturnValue(true)
     mocks.openUrl.mockResolvedValue(undefined)
+    setBrowserCapabilitiesForTests(DESKTOP_WITHOUT_BROWSER)
 
     render(<LinkSafetyHarness url="//cdn.example.com/app.js" />)
 
@@ -283,6 +311,7 @@ describe("link safety direct opening", () => {
   it("routes desktop external links through the platform opener instead of streamdown", async () => {
     mocks.isDesktop.mockReturnValue(true)
     mocks.openUrl.mockResolvedValue(undefined)
+    setBrowserCapabilitiesForTests(DESKTOP_WITHOUT_BROWSER)
 
     render(<LinkSafetyHarness url="https://example.com/docs" />)
 
@@ -293,6 +322,49 @@ describe("link safety direct opening", () => {
     })
     expect(window.open).not.toHaveBeenCalled()
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument()
+  })
+
+  it("routes remote-workspace external links through the opener too", async () => {
+    // A remote-desktop window is a Tauri webview bound to a remote server. It
+    // has no local filesystem, but `window.open` is just as dead there as in a
+    // local window — handing the link to streamdown would open nothing at all.
+    mocks.isDesktop.mockReturnValue(true)
+    mocks.getActiveRemoteConnectionId.mockReturnValue("conn-7")
+    mocks.openUrl.mockResolvedValue(undefined)
+    setBrowserCapabilitiesForTests(DESKTOP_WITHOUT_BROWSER)
+
+    render(<LinkSafetyHarness url="https://example.com/docs" />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Trigger link" }))
+
+    await waitFor(() => {
+      expect(mocks.openUrl).toHaveBeenCalledWith("https://example.com/docs")
+    })
+    expect(window.open).not.toHaveBeenCalled()
+  })
+
+  it("still hands remote-workspace mailto: links to the synthetic anchor", async () => {
+    // The OS-handler branch deliberately keeps treating a remote window as a
+    // web opener: an anchor reaches the mail client from inside a webview, and
+    // it sidesteps whether the opener capability covers non-http(s) schemes.
+    mocks.isDesktop.mockReturnValue(true)
+    mocks.getActiveRemoteConnectionId.mockReturnValue("conn-7")
+    const clickedHrefs: string[] = []
+    const clickSpy = vi
+      .spyOn(HTMLElement.prototype, "click")
+      .mockImplementation(function (this: HTMLElement) {
+        if (this instanceof HTMLAnchorElement) clickedHrefs.push(this.href)
+      })
+
+    render(<LinkSafetyHarness url="mailto:hi@example.com" />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Trigger link" }))
+
+    await waitFor(() => {
+      expect(clickedHrefs).toContain("mailto:hi@example.com")
+    })
+    expect(mocks.openUrl).not.toHaveBeenCalled()
+    clickSpy.mockRestore()
   })
 
   it("opens mailto: links via a synthetic anchor click in the browser to avoid an about:blank tab", async () => {

@@ -1,22 +1,28 @@
 //! 会话级状态结构。后端权威：流式累积、in-flight tool calls、待处理 permission 等
 //! 全部住在这里。Phase 2 的 snapshot 端点直接从此处读取 live 部分。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::acp::delegation::types::{BlockedKind, BlockedOn};
-use crate::acp::event_stream::{ConnectionEventStream, RecentEventsBuffer};
+use crate::acp::delegation::types::{
+    BlockedKind, BlockedOn, DelegationProgress, StepMark, LAST_STEP_CAP, MAX_STEP_MARKS,
+};
+use crate::acp::event_stream::{
+    images_slice_size, json_str_len, json_value_size, opt_json_size, opt_str_size,
+    ConnectionEventStream, RecentEventsBuffer,
+};
 use crate::acp::feedback::{FeedbackItem, FeedbackStatus};
 use crate::acp::plan_approval::PendingPlanApprovalState;
 use crate::acp::question::PendingQuestionState;
 use crate::acp::types::{
-    AcpEvent, AvailableCommandInfo, ConfigStaleKind, ConnectionStatus, EventEnvelope,
-    GrokModelSpec, PromptCapabilitiesInfo, SessionConfigOptionInfo, SessionModeStateInfo,
-    ToolCallImageInfo,
+    AcpEvent, AsyncTaskRecord, AvailableCommandInfo, BackgroundOutstandingTask, ConfigStaleKind,
+    ConnectionStatus, EventEnvelope, GrokModelCatalog, GrokModelSpec, PromptCapabilitiesInfo,
+    RemoteControlInfo, SessionConfigOptionInfo, SessionFailureRecord, SessionModeStateInfo,
+    ToolApprovalInfo, ToolCallImageInfo,
 };
 use crate::models::agent::AgentType;
 use crate::models::message::MessageRole;
@@ -224,6 +230,12 @@ pub struct ActiveDelegationState {
     pub task_preview: String,
     #[serde(default)]
     pub task_id: String,
+    /// The assistant the child runs as, mirrored from `DelegationStarted` for
+    /// the same re-attach reason as the task label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant_id: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant_name: Option<String>,
 }
 
 /// The in-flight user prompt for the current turn. Captured from
@@ -254,6 +266,8 @@ pub struct SessionState {
     /// them as copied history and drop them.
     pub external_id_changed_at: Option<std::time::SystemTime>,
     pub agent_type: AgentType,
+    /// Counter semantics of the adapter definition used for this launch.
+    pub(crate) prompt_usage_mode: crate::acp::reported_usage::PromptUsageMode,
     pub working_dir: Option<PathBuf>,
     pub owner_window_label: String,
     pub folder_id: Option<i32>,
@@ -262,6 +276,22 @@ pub struct SessionState {
     pub status: ConnectionStatus,
     pub live_message: Option<LiveMessage>,
     pub active_tool_calls: BTreeMap<String, ToolCallState>,
+    /// The answers codeg sent back for Qoder `AskUserQuestion` calls whose
+    /// completion has not arrived yet, keyed by tool-call id: the elicitation
+    /// reply's `content` as written (`q<n>` → the chosen label, or a
+    /// multi-select's chosen labels and the user's own text as separate
+    /// entries). Qoder's completion carries the answers only flattened into a
+    /// sentence, where a multi-select can no longer be told apart from typed
+    /// text, so the live path renders the call from this instead. Written by
+    /// the elicitation handler before it replies, taken by the update that
+    /// settles the call; per-turn, like `active_tool_calls`.
+    pub qoder_ask_replies: BTreeMap<String, serde_json::Map<String, serde_json::Value>>,
+    /// The tool calls codeg matched a permission card to itself, because the
+    /// agent's request named its own id instead of the call's (MiniMax Code,
+    /// see `connection::minimax_gated_tool_call_id`). An agent asks about a
+    /// call once, so a later request with the same input is about a newer call,
+    /// whatever became of the earlier card. Per-turn, like `active_tool_calls`.
+    pub permission_matched_calls: BTreeSet<String>,
     pub pending_permission: Option<PendingPermissionState>,
 
     /// The agent's in-flight `ask_user_question` (one set of multiple-choice
@@ -294,6 +324,16 @@ pub struct SessionState {
     /// persisted DB row, not from here. See `ActiveDelegationState`.
     pub active_delegations: BTreeMap<String, ActiveDelegationState>,
 
+    /// Child connection ids of EVERY codeg delegation this connection has
+    /// running, from `DelegationChildRunning`. Lifecycle accounting, unlike
+    /// `active_delegations`, which only holds the ones bound to a card (a
+    /// delegation whose parent tool call couldn't be identified runs under a
+    /// synthetic id and never reaches it). The idle sweep spares a parent while
+    /// one of these is still a live connection, because ending the parent
+    /// cancels them (`cancel_by_parent`). On `to_snapshot()` too, so a client
+    /// that attaches mid-delegation holds the same gate.
+    pub delegated_children: BTreeSet<String>,
+
     /// Live user-feedback ("steering") notes for the current turn. Appended by
     /// `FeedbackSubmitted` (a user note while the agent works), flipped to
     /// `Delivered` by `FeedbackConsumed` (the agent read them via the
@@ -304,6 +344,15 @@ pub struct SessionState {
     /// Size is human-bounded (one entry per note the user types this turn).
     pub feedback: Vec<FeedbackItem>,
 
+    /// This connection's answered permission requests, as records about their
+    /// tool calls (`AcpEvent::ToolApproval`), oldest first, one per tool call.
+    /// NOT turn-scoped: the transcript keeps drawing a call's approval after
+    /// its turn ends, and a client attaching later has no other live source
+    /// for the ones the lifecycle worker may not have stored yet. Carried on
+    /// `to_snapshot()`; capped at [`MAX_TOOL_APPROVALS`], past which the
+    /// `tool_approval` table serves the transcript on its own.
+    pub tool_approvals: Vec<ToolApprovalInfo>,
+
     /// Launched-but-unresolved background tasks (async sub-agents + background
     /// shell tasks), mirrored from the transcript watcher's authoritative
     /// accounting via `AcpEvent::BackgroundActivity` (`apply_event` is the only
@@ -313,11 +362,24 @@ pub struct SessionState {
     /// dies with it). Carried on `to_snapshot()` so a client attaching
     /// mid-episode recovers the pending count without replaying events.
     pub background_outstanding: u32,
+    /// The same tasks one by one (`BackgroundActivity::outstanding_tasks`), so
+    /// a client attaching mid-episode can list WHICH background sub-agents
+    /// still run, not just how many. `apply_event` is the only writer.
+    pub background_outstanding_tasks: Vec<BackgroundOutstandingTask>,
     /// Instant of the most recent `BackgroundActivity` event. Bounds the sweep
     /// exemption: if the watcher stops reporting (task died, bug) the
     /// exemption lapses after `background_keepalive_max_age()` instead of
     /// pinning the connection alive forever. Backend-internal; not serialized.
     pub background_activity_at: Option<DateTime<Utc>>,
+    /// The last answer Claude Code wrote in a turn it started on its own (the
+    /// follow-up to a `<task-notification>`), with when it was read. Those
+    /// turns never reach the wire as a prompt's turn — no `TurnComplete`, no
+    /// [`Self::last_assistant_text`] — and arrive only as the watcher's
+    /// `BackgroundActivity` turns, so this is the one place an engine that
+    /// waited them out can read what the agent finally said (see
+    /// `acp::turn_end_hold`). `apply_event` is the only writer.
+    /// Backend-internal; not serialized.
+    pub last_background_reply: Option<(DateTime<Utc>, String)>,
 
     // ACP 协商出的能力
     pub modes: Option<SessionModeStateInfo>,
@@ -325,21 +387,181 @@ pub struct SessionState {
     pub config_options: Option<Vec<SessionConfigOptionInfo>>,
     /// Grok only: per-model reasoning-effort specs, parsed from the top-level
     /// `models` of the session-establishment response (guaranteed on
-    /// `session/new`; opportunistic on resume/fork). Grok never re-sends this on
+    /// `session/new`; opportunistic on resume/fork) and refreshed by each model
+    /// catalog broadcast (`_x.ai/models/update`). Grok never re-sends this on
     /// `set_model`, so it is cached here to rebuild the composer's effort
     /// selector for the target model on a mid-session model switch. `None` for
-    /// non-Grok agents and when the response carried no `models` (flat fallback).
-    /// Backend-internal — not serialized.
+    /// non-Grok agents and when the response carried no `models` (flat fallback)
+    /// and no broadcast has come in since. Backend-internal — not serialized.
     pub grok_model_specs: Option<std::collections::HashMap<String, GrokModelSpec>>,
+    /// Grok only: the latest model catalog grok broadcast on
+    /// `_x.ai/models/update` since the current session establishment began,
+    /// for that establishment to fold into the picker it emits (see
+    /// `acp::connection::emit_grok_established_picker`).
+    ///
+    /// The broadcast names no session and can land at any point of an
+    /// establishment, including after the handshake answered but before its
+    /// picker went out — and the handshake itself may predate the catalog it
+    /// brings. Every broadcast also goes straight into the picker already on
+    /// screen, if any; this slot covers the one being built. Set by every
+    /// broadcast, taken by the establishment's emit, and cleared when a fork
+    /// sends `session/fork` — so a broadcast from before an establishment began
+    /// can never overrule that establishment's fresher handshake.
+    /// Backend-internal — not serialized.
+    pub grok_catalog_broadcast: Option<GrokModelCatalog>,
+
+    /// Kiro only: the reasoning-effort state from its latest
+    /// `_kiro.dev/metadata` (which arrives on its own schedule — after
+    /// `session/new`, and again after every model or effort change). Kept here
+    /// so the effort selector can be built whether that notification lands
+    /// before or after the session's selectors are first emitted. `None` =
+    /// Kiro has said nothing yet. Backend-internal — not serialized.
+    pub kiro_reasoning: Option<crate::acp::types::KiroReasoning>,
+
+    /// pi only: the session prelude pi-acp reports as `_meta.piAcp.startupInfo`
+    /// on `session/new`, held until the matching `agent_message_chunk` arrives
+    /// so that chunk can be recognized and dropped instead of rendering as the
+    /// assistant's opening words (see `pi_take_startup_banner`).
+    ///
+    /// `Some` only between `session/new` and that first chunk: it is taken on
+    /// the match, so a later chunk that happens to repeat the text is prose and
+    /// renders. `None` for every other agent, for `session/load` / `session/fork`
+    /// (pi-acp sets the prelude in `newSession` only), and when pi's
+    /// `quietStartup` setting suppressed the prelude at the source.
+    /// Backend-internal — not serialized.
+    pub pi_startup_banner: Option<String>,
+
+    /// Config-option values codeg asserted while establishing this session
+    /// (`apply_preferred_session_options`) and the agent confirmed — the user's
+    /// saved preferences on a connect, the parent's selectors on a fork.
+    ///
+    /// Kept only until the user's first prompt, to arbitrate ONE race: an agent
+    /// may re-pin its own model AFTER answering our `set_config_option`, and the
+    /// resulting `config_option_update` push is indistinguishable from the user
+    /// picking that model themselves. Claude does exactly this on the resume
+    /// that re-establishes a forked session — the push lands ~2ms after our
+    /// apply and silently reverts it, and effort follows because a model switch
+    /// re-scopes the effort option. Before the user has said anything, such a
+    /// push can only be establishment noise, so the connection re-asserts once
+    /// (see `take_asserted_config_drift`). Once a prompt is sent, every push is
+    /// attributable to what the user asked for — `/model` typed in chat is one —
+    /// so the map is cleared and the agent wins from then on.
+    ///
+    /// Backend-internal — not serialized, not carried on `to_snapshot()`.
+    pub asserted_config_values: BTreeMap<String, String>,
+    /// Each config option's value as the agent itself picked it for this
+    /// session: the establishment's own answer (or the picker Grok's handshake
+    /// yields), read BEFORE codeg replays any saved preference over it.
+    /// Rewritten by every establishment, whether or not it had preferences to
+    /// replay.
+    ///
+    /// Only the options probe reads it (`ConnectionManager::probe_agent_options`).
+    /// The probe applies the caller's model so that options the agent derives
+    /// from it — opencode re-lists `effort` per model — answer for that model.
+    /// `config_options` then holds the caller's own model as the current one,
+    /// while what the probe must report for an applied option is what it runs
+    /// when left unset: the agent's default, kept here.
+    ///
+    /// Backend-internal — not serialized, not carried on `to_snapshot()`.
+    pub agent_chosen_config_values: BTreeMap<String, String>,
+    /// Config-option ids this launch pinned through the environment, which the
+    /// agent will therefore refuse to change for as long as the process lives.
+    ///
+    /// Cline forced this. codeg pins the provider with `CLINE_PROVIDER` — the
+    /// only way a bring-your-own provider clears cline's ACP auth gate — and
+    /// cline then answers `set_config_option("provider", …)` with `Invalid
+    /// params: Cannot change provider: CLINE_PROVIDER environment variable is
+    /// set`. It keeps advertising the selector regardless, so without this the
+    /// composer offers a dropdown whose every choice is an error, and a
+    /// preference saved from one of those clicks is replayed — and fails —
+    /// on every later connect.
+    ///
+    /// codeg is what disabled the control, so codeg is what withholds it: these
+    /// ids are dropped from what the frontend is told about and skipped when
+    /// saved preferences are replayed.
+    ///
+    /// Backend-internal — not serialized, not carried on `to_snapshot()`.
+    pub env_pinned_config_option_ids: Vec<String>,
+    /// TRAE CLI only: whether this launch carries a personal access token
+    /// (`acp::trae::pat_sign_in_requested`), so the handshake signs in with
+    /// TRAE's PAT auth method before it opens a session. TRAE CLI does not
+    /// read the token on its own. Always `false` for every other agent.
+    ///
+    /// Backend-internal — not serialized, not carried on `to_snapshot()`.
+    pub trae_pat_sign_in: bool,
+    /// Pi's native `enabledModels` scope for this launch. The ACP adapter
+    /// advertises every authenticated model, so the connection layer applies
+    /// this Pi-only preference before publishing the model selector.
+    ///
+    /// Backend-internal — not serialized, not carried on `to_snapshot()`.
+    pub pi_enabled_model_patterns: Option<Vec<String>>,
     pub prompt_capabilities: Option<PromptCapabilitiesInfo>,
     pub fork_supported: bool,
     pub available_commands: Vec<AvailableCommandInfo>,
     pub usage: Option<UsageInfo>,
+    /// The follow-up prompt the agent last predicted (`AcpEvent::PromptSuggestion`),
+    /// offered by the composer while it is empty. Cleared when a prompt starts,
+    /// as the frontend reducer clears it, and when the connection moves to
+    /// another session: it predicted what follows THAT session's last turn.
+    /// Carried on `to_snapshot()` so a client attaching between turns offers it
+    /// too.
+    pub prompt_suggestion: Option<String>,
+    /// Whether this connection's sessions ask the agent to predict the next
+    /// prompt, which costs one request after every turn: claude-agent-acp's
+    /// `promptSuggestions` (see `connection::claude_raw_sdk_session_meta`) and
+    /// codex-acp's (see `connection::apply_codex_prompt_suggestion_policy`).
+    /// Fixed at creation by [`owner_composes_prompts`]. Backend-internal — not
+    /// serialized, not carried on `to_snapshot()`.
+    pub wants_prompt_suggestions: bool,
+    /// The `--settings` a Claude launch hands every session request of its
+    /// connection (`connection::ClaudeSessionOptions::settings`): the
+    /// `/model` picker rows codeg adds. Fixed at spawn; backend-internal.
+    pub claude_settings: Option<serde_json::Value>,
+    /// Claude Code's Remote Control while it is on (`AcpEvent::RemoteControl`):
+    /// the session can be continued from claude.ai/code or a phone. It lives
+    /// in the agent CLI, so the idle sweeps leave the connection alone while
+    /// this is set (`manager::sweep_idle`). Cleared when the connection moves
+    /// to another session, since codeg closes the session a fork leaves and
+    /// its CLI with it. Carried on `to_snapshot()`.
+    pub remote_control: Option<RemoteControlInfo>,
     /// True once the agent's initial selectors handshake (modes +
     /// config_options) has finished and `SelectorsReady` has fired. Persisted
     /// on the snapshot so a frontend that reconnects after refresh can see
     /// "init complete" without waiting for an event that already fired.
     pub selectors_ready: bool,
+    /// True while a session establishment is in progress and its selectors
+    /// are not settled yet: from creation / every `SessionStarted` (new,
+    /// resumed, loaded, forked session) until the following `SelectorsReady`.
+    /// The conversation's stored selection is never written while this is set
+    /// — that is exactly when the agent's pre-application defaults are
+    /// visible (a resume emits `session.modes()` before replaying the stored
+    /// selection; a fork emits the forked session's defaults before restoring
+    /// the inherited ones). Backend-internal; not serialized.
+    pub selectors_settling: bool,
+    /// The conversation row this connection writes its selection to before
+    /// the first prompt links it (`conversation_id` is only set by
+    /// `ConversationLinked`): set by `acp_connect` for an existing
+    /// conversation (`ConnectionManager::bind_selection_conversation`).
+    /// Backend-internal; not serialized.
+    pub selection_conversation_id: Option<i32>,
+    /// A mode the user picked in a tab's composer that the tab applies at its
+    /// next send (legacy-modes picks are deferred to send time), recorded so a
+    /// close-and-reopen without sending keeps the pick. Never sent to the
+    /// agent from here. Written only by `AcpEvent::ComposerModeChanged`;
+    /// carried on `to_snapshot()`.
+    pub composer_mode_id: Option<String>,
+    /// Latched by the first EXPLICIT composer pick on this connection, never
+    /// reset. A draft's one-time hand-over of its pick (and a reconnect's
+    /// restore of the stored intent) applies only while this is false, so it
+    /// can never overwrite a pick another surface already made.
+    /// Backend-internal; not serialized.
+    pub composer_mode_touched: bool,
+    /// Set by the connection's driver once its loop has ended, right before
+    /// the final selection flush. From then on direct selection mutations
+    /// (`acp_set_composer_mode`, `bind_selection_conversation`) are refused,
+    /// so a pick is either in the flushed row or rejected, never accepted and
+    /// lost. Backend-internal; not serialized.
+    pub selection_finalized: bool,
 
     /// Most recent unresolved `AcpEvent::Error` payload. Cleared when a new
     /// prompt starts, matching the frontend reducer's live-event behavior. The
@@ -388,6 +610,13 @@ pub struct SessionState {
     /// keep round-tripping after the parent session ends.
     pub delegation_token: Option<String>,
 
+    /// Whether `delegate_to_agent` was exposed to THIS agent at launch (the
+    /// `delegation` feature was on when its companion was injected). The sole
+    /// gate on appending the `@agent` routing frame: an agent with no such tool
+    /// would just be told to route through something it cannot call. Backend-only
+    /// and fixed for the connection's lifetime.
+    pub delegation_enabled: bool,
+
     /// Whether the `check_user_feedback` MCP tool was exposed to THIS agent at
     /// launch (the `feedback` feature was on when its companion was injected).
     /// Fixed for the connection's lifetime — tool exposure can't change after
@@ -397,6 +626,41 @@ pub struct SessionState {
     /// frontend gates the feedback bar on the agent's actual capability, not the
     /// (possibly later-toggled) global setting.
     pub feedback_tool_available: bool,
+
+    /// Whether `submit_result` was exposed to THIS agent at launch: the
+    /// connection had a `cli_output_schema`, and its codeg-mcp was injected.
+    /// Fixed for the connection's lifetime. Decides how the run's prompt says
+    /// to hand the result in. Backend-only.
+    pub result_tool_available: bool,
+
+    /// Antigravity question ids (`interaction_<hex>`) whose answered card
+    /// `try_bridge_antigravity_ask` has recorded. Antigravity closes each such
+    /// id with a `tool_call_update` of its own ("Response received" /
+    /// "Interaction cancelled") that would replace the card's answer, so the
+    /// live loop drops that frame for an id in this set, removing the id as it
+    /// does. A question left on the approval card, or abandoned before an
+    /// answer, is never recorded, so its placeholder row still settles.
+    /// Backend-only.
+    pub antigravity_answered_interactions: BTreeSet<String>,
+
+    /// Whether the adapter on this connection is antigravity-acp, so that its
+    /// `interaction_<hex>` questions are bridged into the question card
+    /// (`connection.rs::try_bridge_antigravity_ask`). Always true for the
+    /// built-in Antigravity. A custom agent gets it at initialize only when
+    /// the RUNNING adapter reports `agentInfo.name == "antigravity-acp"` (a
+    /// second Antigravity account registered as a custom agent, say), because
+    /// the id prefix alone says nothing about who minted it
+    /// (`connection.rs::speaks_antigravity_interactions`). Backend-only.
+    pub antigravity_interactions: bool,
+    /// Whether a declined bridged Antigravity question stops the turn: the
+    /// running adapter reported 1.5.1 or later at initialize
+    /// (`connection.rs::antigravity_skip_cancels_turn`). Backend-only.
+    pub antigravity_skip_cancels_turn: bool,
+    /// Configured Gemini home for this launch's trajectory (backend only).
+    pub(crate) antigravity_sessions_dir: Option<std::path::PathBuf>,
+    /// A transiently unreadable task DB at the foreground boundary. Passive
+    /// releases wait for the next successful read (bounded if the DB is lost).
+    pub(crate) antigravity_reconcile_at: Option<DateTime<Utc>>,
 
     /// Whether live-feedback notes for THIS session go over the native ACP
     /// `_session/steering` push channel instead of the `check_user_feedback`
@@ -409,11 +673,119 @@ pub struct SessionState {
     /// opt-in), rerouting subsequent notes to the MCP pull path.
     pub native_steering_available: bool,
 
+    /// Which generation of codex-acp's `request_user_input` bridge this
+    /// connection is talking to — 1.12.0 swapped the question and the tab
+    /// header between a form property's `title` and `description`, and nothing
+    /// on the wire distinguishes the two. Pinned ONCE at initialize from the
+    /// RUNNING adapter's `agentInfo.version`
+    /// (`connection.rs::codex_user_input_shape`), because launch may resolve an
+    /// older PATH install or a user's custom pinned version rather than the
+    /// registry's. `None` for every non-codex agent, and for a codex adapter
+    /// that reported no `agentInfo`; the elicitation parser then dates the form
+    /// from its own markers. Backend-internal routing only: not part of the
+    /// client snapshot.
+    pub codex_user_input_shape: Option<crate::acp::question::CodexUserInputShape>,
+
+    /// Which `session_info_update` meta key carries goal snapshots for this
+    /// connection: `true` ⇒ the provider-neutral `_meta.goal` (adapter
+    /// advertised the goal extension at initialize — claude-agent-acp 0.66+,
+    /// codex-acp 1.2+, which dropped the legacy key in the same release),
+    /// `false` ⇒ the legacy `_meta.codex.goal`. Pinned ONCE at initialize
+    /// (`connection.rs::init_advertises_goal`) so a transitional adapter
+    /// double-publishing a goal transition through both namespaces — even
+    /// across separate updates — can never render two goal cards.
+    /// Backend-internal routing only: not part of the client snapshot.
+    pub neutral_goal_channel: bool,
+
+    /// Goal-control request method for this connection. Defaults to codex's
+    /// legacy bespoke `_codex/session/goal_control`; overwritten at
+    /// initialize when the adapter advertises the provider-neutral goal
+    /// extension's `controlMethod` (`_session/goal`, claude 0.66+/codex
+    /// 1.2+). Both take the same `{sessionId, action}` params, so
+    /// `send_goal_control` just uses whatever is stored here.
+    /// Backend-internal: not part of the client snapshot.
+    pub goal_control_method: String,
+
+    /// The goal-control action vocabulary this connection's adapter offers —
+    /// the advertised `_meta.goal.actions` when the neutral extension is
+    /// present (claude: ["set","clear"] — NO pause; codex 1.2+: all four),
+    /// else the legacy default ["pause","clear"] so an older codex keeps
+    /// today's affordances. Carried on the snapshot: the goal card gates its
+    /// Pause/Clear buttons on this list, so a claude session never offers a
+    /// pause the adapter would reject.
+    ///
+    /// Whether the adapter's last goal snapshot left a run OPEN — i.e. the goal
+    /// is `active` and driving work. Mirrored from the live goal state in
+    /// `emit_conversation_update`; backend-internal, not on the client
+    /// snapshot. Read by `ConnectionManager::goal_control` as the one thing
+    /// that justifies following a pause/clear with an interrupt: an active goal
+    /// means whatever is running is the goal's own work, whereas a PAUSED goal
+    /// drives nothing, so clearing it must not abort a turn the user started
+    /// themselves.
+    pub goal_active: bool,
+
+    /// `None` means NOT YET KNOWN — the initialize response hasn't been
+    /// applied. That state is real and observable: `spawn_agent` returns (and
+    /// the frontend learns the connection id, then fetches this snapshot) while
+    /// `initialize` is still in flight. Defaulting to the legacy pair at
+    /// CONSTRUCTION would hand that early reader a plausible-looking
+    /// `["pause","clear"]` it latches forever — which is exactly how a claude
+    /// session ended up offering a Pause its adapter answers with
+    /// `Invalid params: goal action must be "set" or "clear"`. The legacy
+    /// fallback is therefore decided at INITIALIZE (see `connection.rs`), not
+    /// here, so "unknown" and "legacy" stay distinguishable on the wire.
+    pub goal_actions: Option<Vec<String>>,
+
+    /// AIR typed session failures projected by `id` (see
+    /// [`SessionFailureRecord`] for the wire contract). Entries are RETAINED
+    /// for the connection's lifetime — resolved ones included — both because
+    /// the protocol keeps resolved records as history and because each entry
+    /// doubles as the per-id revision watermark: dropping an entry would let
+    /// a delayed lower-revision upsert resurrect it. Carried on
+    /// `to_snapshot()` (whole table, watermarks included) so a client
+    /// attaching mid-session applies the same monotonic merge against
+    /// subsequent live events. BTreeMap for a deterministic snapshot order.
+    pub session_failures: BTreeMap<String, SessionFailureRecord>,
+
+    /// AIR async tasks projected by task id (see [`AsyncTaskRecord`]) — the
+    /// merged form of the deltas on `AcpEvent::AsyncTask`.
+    ///
+    /// Terminal rows are RETAINED for the connection's lifetime rather than
+    /// dropped on their last state update. The adapter revises a task after it
+    /// settles (a late `outputFilePath`, and a `task_notification` that corrects
+    /// a best-effort `stopped` into the real `completed`/`failed`), so an
+    /// evicted row would be re-created by its own correction — as a fresh
+    /// "running" one, since `spawned` is what carries the identity. Presentation
+    /// decides what to show; this table decides what is true. BTreeMap for a
+    /// deterministic snapshot order.
+    pub async_tasks: BTreeMap<String, AsyncTaskRecord>,
+
+    /// When the last async-task delta of any kind landed. Bounds the keep-alive
+    /// exemption in `has_active_background_work` exactly the way
+    /// `background_activity_at` bounds the watcher's half — see
+    /// [`Self::has_live_async_task`].
+    pub async_task_activity_at: Option<DateTime<Utc>>,
+
     /// Concatenated text content of the just-completed turn's assistant
     /// message. Captured at TurnComplete (just before live_message is
     /// cleared) so the lifecycle subscriber can surface it as the
     /// `delegation_call_id`-bound child outcome. Cleared on the next prompt.
     pub last_assistant_text: Option<String>,
+
+    /// When the last turn's `TurnComplete` was applied here — the moment
+    /// [`Self::last_assistant_text`] was captured, so the two read together
+    /// say which answer came when. Stamped here rather than where a consumer
+    /// reads the event, which can lag the bus: an engine comparing this answer
+    /// with [`Self::last_background_reply`] (see `acp::turn_end_hold`) needs
+    /// both on the same clock. Backend-internal; not serialized.
+    pub last_turn_completed_at: Option<DateTime<Utc>>,
+
+    /// The just-completed turn's tool-call progress ([`Self::turn_progress`]),
+    /// captured at TurnComplete beside `last_assistant_text` — by the time the
+    /// delegation broker records a finished child's result, the turn's tool
+    /// calls are already cleared. Backend-internal, like
+    /// `last_assistant_text`.
+    pub last_turn_progress: Option<DelegationProgress>,
 
     /// The in-flight user prompt for the current turn, captured from
     /// `AcpEvent::UserMessage` and cleared on `TurnComplete` (alongside
@@ -443,6 +815,40 @@ pub struct SessionState {
     /// not part of the client-visible snapshot.
     pub turn_in_flight: bool,
 
+    /// Whether the open turn is one the AGENT started on its own (Grok's
+    /// follow-up to a background workflow), which the idle loop renders as a
+    /// turn so its content isn't dropped between turns. Such a turn never took
+    /// the `turn_in_flight` gate, so its `TurnComplete` must leave the gate
+    /// alone: a prompt the manager admitted while it ran owns it. Set only by
+    /// [`Self::begin_agent_initiated_turn`]; cleared by `TurnComplete`. Not
+    /// serialized: backend-internal, like `turn_in_flight`.
+    pub agent_initiated_turn: bool,
+
+    /// How many `TurnComplete`s this connection has applied — the turn's
+    /// IDENTITY, paired with `turn_in_flight`. `turn_in_flight` alone only says
+    /// "some turn is running"; a caller that admitted itself against turn N and
+    /// then awaited something cannot tell, on waking, whether it is still
+    /// looking at turn N or at an N+1 that started meanwhile. Comparing this
+    /// counter answers that: it moves only when a turn ends, so it is stable
+    /// for a turn's whole life and differs across turns.
+    ///
+    /// Incremented unconditionally next to the `turn_in_flight` clear below —
+    /// `TurnComplete` has three emitters and a repeat can land on an already
+    /// settled turn, so this is a monotonic marker, not an exact turn count.
+    /// Only inequality is ever read. Not serialized: backend-internal, like
+    /// `turn_in_flight`. Sole consumer today is
+    /// `ConnectionManager::submit_feedback_native`, which re-checks it across
+    /// attachment hydration so a steered note cannot ride into the next turn.
+    pub turns_completed: u64,
+
+    /// Auto-preview work scheduled by `apply_event` for the files the running
+    /// turn's tool calls name (see `crate::agent_turn_files`). `apply_event`
+    /// runs under the session lock and never touches the filesystem; the
+    /// emitter (`emit_with_state_built`) drains this after applying and runs
+    /// the jobs on a blocking thread. Bounded: a caller that applies events
+    /// without draining (tests, side paths) cannot grow it.
+    pub(crate) turn_file_jobs: Vec<crate::agent_turn_files::TurnFileJob>,
+
     /// Whether the most recently completed turn ended via a stop reason other
     /// than `"end_turn"` (cancelled, refusal, max_tokens, max_turn_requests,
     /// empty, unknown — the same "abnormal ending" bucket `connection.rs`
@@ -469,9 +875,86 @@ pub struct SessionState {
     /// Which settings surface drifted, for the banner's wording. `Some` iff
     /// `config_stale`; reset to `None` when staleness clears.
     pub config_stale_kind: Option<ConfigStaleKind>,
+
+    /// Last live ACP session title we actually emitted on this connection.
+    /// Used to skip identical `session_info_update.title` repeats (CodeBuddy
+    /// resends its fallback after every turn with no last-sent guard).
+    /// Backend-internal: not on the client snapshot. Cleared on
+    /// `ConversationLinked` so a title dropped while the row was still
+    /// unbound can be accepted on the next send.
+    pub last_native_title: Option<String>,
+    /// The title claude-agent-acp last published in `session_info_update`,
+    /// normalized, held instead of written. Claude Code's transcript is the
+    /// only title source while codeg can read it, so the transcript watcher
+    /// drops this once it reads the transcript and publishes it only while it
+    /// cannot (`session_title::accept_wire_title` and
+    /// `release_held_wire_title`). Backend-internal: not on the client
+    /// snapshot.
+    pub held_wire_title: Option<String>,
+    /// Woken whenever `held_wire_title` is set, so the transcript watcher
+    /// settles it on an immediate poll rather than its next scheduled one.
+    pub wire_title_wake: Arc<tokio::sync::Notify>,
+
+    /// The headless `codeg-cli` run this connection belongs to — its root
+    /// connection, or a delegation child that inherited the tag when it was
+    /// spawned. `None` for every other connection. Never on the snapshot.
+    pub cli_run: Option<crate::cli_run::CliRunTag>,
+
+    /// The `--output-schema` of the run whose ROOT connection this is: what
+    /// codeg-mcp's `submit_result` takes, and what the agent handed in. In
+    /// place from the moment the connection exists (`RootSeed`), so the
+    /// companion it is given carries the tool; a delegated child never has
+    /// one. Never on the snapshot.
+    pub cli_output_schema: Option<Arc<crate::cli_run::OutputSchema>>,
+
+    /// Which writer owns the conversation-status write of a `TurnComplete`,
+    /// keyed by that event's envelope `seq`. See [`Self::claim_turn_status`].
+    pub turn_status_claim: Option<(u64, TurnStatusWriter)>,
+}
+
+/// The two writers of a `TurnComplete`'s conversation status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnStatusWriter {
+    /// The lifecycle worker, which writes it for every connection.
+    Lifecycle,
+    /// A CLI run's fallback, for a turn the worker never got (bus lag).
+    CliFallback,
 }
 
 impl SessionState {
+    /// Claim the conversation-status write of the `TurnComplete` at `seq` for
+    /// `writer`. `true` when `writer` owns it — newly, or already (a retry of
+    /// its own write runs again with the same envelope); `false` when the other
+    /// writer claimed it first, which then skips the write entirely. So a
+    /// fallback write can never be overwritten by a lifecycle write that
+    /// arrives late, and neither writer is ever stopped from retrying its own.
+    pub fn claim_turn_status(&mut self, seq: u64, writer: TurnStatusWriter) -> bool {
+        match self.turn_status_claim {
+            Some((claimed, owner)) if claimed == seq => owner == writer,
+            _ => {
+                self.turn_status_claim = Some((seq, writer));
+                true
+            }
+        }
+    }
+
+    /// Give up `writer`'s claim on the `TurnComplete` at `seq`, its write
+    /// having failed for good: the other writer may still make it.
+    pub fn release_turn_status(&mut self, seq: u64, writer: TurnStatusWriter) {
+        if self.turn_status_claim == Some((seq, writer)) {
+            self.turn_status_claim = None;
+        }
+    }
+
+    /// What this connection's Claude session requests all name in
+    /// `_meta.claudeCode`.
+    pub(crate) fn claude_session_options(&self) -> crate::acp::connection::ClaudeSessionOptions {
+        crate::acp::connection::ClaudeSessionOptions {
+            prompt_suggestions: self.wants_prompt_suggestions,
+            settings: self.claude_settings.clone(),
+        }
+    }
+
     pub fn new(
         connection_id: String,
         agent_type: AgentType,
@@ -479,34 +962,59 @@ impl SessionState {
         owner_window_label: String,
         folder_id: Option<i32>,
     ) -> Self {
+        let wants_prompt_suggestions = owner_composes_prompts(&owner_window_label);
         Self {
             connection_id,
             conversation_id: None,
             external_id: None,
             external_id_changed_at: None,
             agent_type,
+            prompt_usage_mode: crate::acp::reported_usage::PromptUsageMode::default(),
             working_dir,
             owner_window_label,
             folder_id,
             status: ConnectionStatus::Connecting,
             live_message: None,
             active_tool_calls: BTreeMap::new(),
+            qoder_ask_replies: BTreeMap::new(),
+            permission_matched_calls: BTreeSet::new(),
             pending_permission: None,
             pending_question: None,
             pending_plan_approval: None,
             active_delegations: BTreeMap::new(),
+            delegated_children: BTreeSet::new(),
             feedback: Vec::new(),
+            tool_approvals: Vec::new(),
             background_outstanding: 0,
+            background_outstanding_tasks: Vec::new(),
             background_activity_at: None,
+            last_background_reply: None,
             modes: None,
             current_mode: None,
             config_options: None,
             grok_model_specs: None,
+            grok_catalog_broadcast: None,
+            kiro_reasoning: None,
+            pi_startup_banner: None,
+            asserted_config_values: BTreeMap::new(),
+            agent_chosen_config_values: BTreeMap::new(),
+            env_pinned_config_option_ids: Vec::new(),
+            trae_pat_sign_in: false,
+            pi_enabled_model_patterns: None,
             prompt_capabilities: None,
             fork_supported: false,
             available_commands: Vec::new(),
             usage: None,
+            prompt_suggestion: None,
+            wants_prompt_suggestions,
+            claude_settings: None,
+            remote_control: None,
             selectors_ready: false,
+            selectors_settling: true,
+            selection_conversation_id: None,
+            composer_mode_id: None,
+            composer_mode_touched: false,
+            selection_finalized: false,
             last_error: None,
             session_started_tx: None,
             event_seq: 0,
@@ -514,15 +1022,41 @@ impl SessionState {
             event_stream: Arc::new(ConnectionEventStream::new()),
             recent_events: RecentEventsBuffer::new(),
             delegation_token: None,
+            delegation_enabled: false,
             feedback_tool_available: false,
+            result_tool_available: false,
+            antigravity_answered_interactions: BTreeSet::new(),
+            antigravity_interactions: agent_type == AgentType::Antigravity,
+            antigravity_skip_cancels_turn: false,
+            antigravity_sessions_dir: None,
+            antigravity_reconcile_at: None,
             native_steering_available: false,
+            codex_user_input_shape: None,
+            neutral_goal_channel: false,
+            goal_control_method: crate::acp::codex_goal::LEGACY_GOAL_CONTROL_METHOD.to_string(),
+            goal_actions: None,
+            goal_active: false,
+            session_failures: BTreeMap::new(),
+            async_tasks: BTreeMap::new(),
+            async_task_activity_at: None,
             last_assistant_text: None,
+            last_turn_completed_at: None,
+            last_turn_progress: None,
             pending_user_message: None,
             pending_user_message_started_at: None,
             turn_in_flight: false,
+            agent_initiated_turn: false,
+            turns_completed: 0,
+            turn_file_jobs: Vec::new(),
             last_turn_ended_abnormally: false,
             config_stale: false,
             config_stale_kind: None,
+            last_native_title: None,
+            held_wire_title: None,
+            wire_title_wake: Arc::new(tokio::sync::Notify::new()),
+            cli_run: None,
+            cli_output_schema: None,
+            turn_status_claim: None,
         }
     }
 
@@ -537,6 +1071,11 @@ impl SessionState {
     /// snapshot). See `RecentEventsBuffer::range_after`.
     pub fn recent_events_after(&self, since_seq: u64) -> Option<Vec<Arc<EventEnvelope>>> {
         self.recent_events.range_after(since_seq)
+    }
+
+    /// What is still buffered after `since_seq`, even across a gap.
+    pub fn recent_events_retained_after(&self, since_seq: u64) -> Vec<Arc<EventEnvelope>> {
+        self.recent_events.retained_after(since_seq)
     }
 
     /// Push an envelope into the ring buffer. Must be called under the
@@ -567,13 +1106,183 @@ impl SessionState {
     /// 单一分发器：把一个 AcpEvent 应用到 self。注意此方法**不**自增 event_seq——
     /// seq 由 emit_with_state 在外层管理（这样 apply_event 可独立单元测试）。
     pub fn apply_event(&mut self, payload: &AcpEvent) {
+        let was_prompting = self.status == ConnectionStatus::Prompting;
+        // A tool call's status before this event, to spot the moment it settles.
+        let tool_call_before = match payload {
+            AcpEvent::ToolCall { tool_call_id, .. }
+            | AcpEvent::ToolCallUpdate { tool_call_id, .. } => Some(
+                self.active_tool_calls
+                    .get(tool_call_id)
+                    .map(|tc| tc.status.clone()),
+            ),
+            _ => None,
+        };
+        self.apply_event_inner(payload);
+        self.track_turn_files(payload, was_prompting, tool_call_before);
+    }
+
+    /// Keep `crate::agent_turn_files` in step with this connection: a turn
+    /// begins on the rise into `Prompting` and ends on the fall out of it (a
+    /// normal `TurnComplete` gets one final check; cancel, error and
+    /// disconnect just drop the record). Tool calls feed it the Office paths
+    /// they name, and each call that settles schedules a confirm.
+    fn track_turn_files(
+        &mut self,
+        payload: &AcpEvent,
+        was_prompting: bool,
+        tool_call_before: Option<Option<ToolCallStatus>>,
+    ) {
+        use crate::agent_turn_files as turn_files;
+        let is_prompting = self.status == ConnectionStatus::Prompting;
+        if !was_prompting && is_prompting {
+            turn_files::begin_turn(&self.connection_id, std::time::SystemTime::now());
+        }
+        if let Some(before) = &tool_call_before {
+            match payload {
+                AcpEvent::ToolCall {
+                    tool_call_id,
+                    title,
+                    raw_input,
+                    locations,
+                    ..
+                } => self.note_tool_call_files(
+                    tool_call_id,
+                    Some(title.as_str()),
+                    raw_input.as_deref(),
+                    locations.as_ref(),
+                    before.as_ref(),
+                ),
+                AcpEvent::ToolCallUpdate {
+                    tool_call_id,
+                    title,
+                    raw_input,
+                    locations,
+                    ..
+                } => self.note_tool_call_files(
+                    tool_call_id,
+                    title.as_deref(),
+                    raw_input.as_deref(),
+                    locations.as_ref(),
+                    before.as_ref(),
+                ),
+                _ => {}
+            }
+        }
+        if was_prompting && !is_prompting {
+            let normal = matches!(
+                payload,
+                AcpEvent::TurnComplete { stop_reason, .. }
+                    if matches!(stop_reason.as_str(), "end_turn" | "max_tokens" | "max_turn_requests")
+            );
+            if let Some(job) =
+                turn_files::end_turn(&self.connection_id, normal, std::time::SystemTime::now())
+            {
+                self.push_turn_file_job(job);
+            }
+        }
+    }
+
+    fn note_tool_call_files(
+        &mut self,
+        tool_call_id: &str,
+        title: Option<&str>,
+        raw_input: Option<&str>,
+        locations: Option<&serde_json::Value>,
+        before: Option<&ToolCallStatus>,
+    ) {
+        use crate::agent_turn_files::{self as turn_files, extract};
+        let Some(entry) = self.active_tool_calls.get(tool_call_id) else {
+            return;
+        };
+        let settled = |status: &ToolCallStatus| {
+            matches!(status, ToolCallStatus::Completed | ToolCallStatus::Failed)
+        };
+        let just_settled = settled(&entry.status) && !before.is_some_and(settled);
+        // Extract when this event brings a mention: new input that already
+        // parses, or a title/locations naming a path (taken as they arrive — a
+        // later update may replace them). Once more when the call settles —
+        // streamed input may only be complete then, and an extension can
+        // straddle two chunks, so that check runs on the assembled input. The
+        // cheap extension check skips the walk for the vast majority of calls.
+        let event_mentions = (entry.input.is_some()
+            && raw_input.is_some_and(extract::mentions_office_extension))
+            || title.is_some_and(extract::mentions_office_extension)
+            || locations.is_some_and(|l| extract::mentions_office_extension(&l.to_string()));
+        let assembled = just_settled.then(|| entry.raw_input_chunks.concat());
+        let settled_mentions = assembled.as_deref().is_some_and(|joined| {
+            extract::mentions_office_extension(joined)
+                || extract::mentions_office_extension(&entry.label)
+                || entry
+                    .locations
+                    .as_ref()
+                    .is_some_and(|l| extract::mentions_office_extension(&l.to_string()))
+        });
+        if event_mentions || settled_mentions {
+            let unparsed;
+            let input = match (&entry.input, assembled) {
+                (Some(value), _) => Some(value),
+                (None, Some(joined)) if !joined.is_empty() => {
+                    unparsed = serde_json::Value::String(joined);
+                    Some(&unparsed)
+                }
+                _ => None,
+            };
+            let home = dirs::home_dir();
+            let paths = extract::extract_tool_call_paths(
+                input,
+                Some(entry.label.as_str()).filter(|l| !l.is_empty()),
+                entry.locations.as_ref(),
+                self.working_dir.as_deref(),
+                home.as_deref(),
+            );
+            turn_files::mention(&self.connection_id, paths);
+        }
+        if just_settled {
+            if let Some(job) = turn_files::confirm_job(&self.connection_id) {
+                self.push_turn_file_job(job);
+            }
+        }
+    }
+
+    fn push_turn_file_job(&mut self, job: crate::agent_turn_files::TurnFileJob) {
+        // Only reached by callers that never drain (see the field doc).
+        const MAX_PENDING_TURN_FILE_JOBS: usize = 64;
+        if self.turn_file_jobs.len() >= MAX_PENDING_TURN_FILE_JOBS {
+            self.turn_file_jobs.remove(0);
+        }
+        self.turn_file_jobs.push(job);
+    }
+
+    fn apply_event_inner(&mut self, payload: &AcpEvent) {
         match payload {
             AcpEvent::SessionStarted { session_id } => {
                 if self.external_id.as_deref() != Some(session_id.as_str()) {
                     self.external_id_changed_at = Some(std::time::SystemTime::now());
+                    // The AIR task table is keyed to the session we just left.
+                    // Its rows can never settle here again: the adapter
+                    // publishes their terminal frames on the OLD session id, and
+                    // `AgentSession`'s router stops routing that id to this
+                    // connection the moment we attach to the new one. Keeping
+                    // them would leave the strip showing tasks that can never
+                    // finish and — because a live row exempts this connection
+                    // from idle reaping — pin the agent CLI alive for good. A
+                    // fork is the ordinary way here: a background task outlives
+                    // the turn that started it, and "fork from here" is only
+                    // accepted between turns.
+                    self.async_tasks.clear();
+                    self.async_task_activity_at = None;
+                    // A prediction follows the last turn of the session it was
+                    // made in; a fork starts from an earlier point of it.
+                    self.prompt_suggestion = None;
+                    // Remote Control belongs to the session left behind, whose
+                    // CLI goes when codeg closes it after the fork.
+                    self.remote_control = None;
                 }
                 self.external_id = Some(session_id.clone());
                 self.status = ConnectionStatus::Connected;
+                // A new establishment begins: its selectors are transitional
+                // until the `SelectorsReady` that follows it.
+                self.selectors_settling = true;
                 // Fire the dedup waiter (if any). Take()-and-send is
                 // single-shot: a duplicate SessionStarted (replay, agent
                 // re-init) finds None here and is a no-op, which is
@@ -602,6 +1311,29 @@ impl SessionState {
                     // new error scope, so stale recoverable errors must not be
                     // resurrected by a later snapshot attach.
                     self.last_error = None;
+                    // ...and a new turn starts from an empty live message, as
+                    // the reducer's does here. Anything in it now arrived
+                    // between turns, which no client rendered: left in place it
+                    // would open this turn's snapshot — a client attaching
+                    // mid-turn would render it twice, since a custom agent's
+                    // history already holds it as a turn of its own — and this
+                    // turn's captured result. `begin_agent_initiated_turn`
+                    // does the same for a turn the agent starts itself. The
+                    // tool-call table stays: it is cleared at `TurnComplete`,
+                    // and nothing renders an entry the live message no longer
+                    // references.
+                    self.live_message = None;
+                    // The prediction was for this prompt's place: whatever the
+                    // user sent, it is spent (the adapter clears its copy the
+                    // same way).
+                    self.prompt_suggestion = None;
+                }
+                if matches!(
+                    status,
+                    ConnectionStatus::Disconnected | ConnectionStatus::Error
+                ) {
+                    // Remote Control ran in the agent CLI, which is gone.
+                    self.remote_control = None;
                 }
                 self.status = status.clone();
             }
@@ -620,6 +1352,12 @@ impl SessionState {
                 // stream has long since corrected it.
                 if let Some(modes) = self.modes.as_mut() {
                     modes.current_mode_id = mode_id.clone();
+                }
+            }
+            AcpEvent::ComposerModeChanged { mode_id, explicit } => {
+                self.composer_mode_id = mode_id.clone();
+                if *explicit {
+                    self.composer_mode_touched = true;
                 }
             }
             AcpEvent::SessionConfigOptions { config_options } => {
@@ -646,6 +1384,12 @@ impl SessionState {
                     size: *size,
                 });
             }
+            AcpEvent::PromptSuggestion { text } => {
+                self.prompt_suggestion = text.clone();
+            }
+            AcpEvent::RemoteControl { remote_control } => {
+                self.remote_control = remote_control.clone();
+            }
             AcpEvent::ContentDelta {
                 text,
                 parent_tool_use_id,
@@ -657,6 +1401,7 @@ impl SessionState {
                 // — a snapshot would then hand that ghost to every client
                 // (the same disease the #870 held-turn work fenced off).
                 // Main-thread chunks keep today's unconditional append.
+                self.settle_retry_incidents_on_progress();
                 if parent_tool_use_id.is_none() || self.status == ConnectionStatus::Prompting {
                     self.append_text_delta(text, parent_tool_use_id.as_deref());
                 }
@@ -665,6 +1410,7 @@ impl SessionState {
                 text,
                 parent_tool_use_id,
             } => {
+                self.settle_retry_incidents_on_progress();
                 if parent_tool_use_id.is_none() || self.status == ConnectionStatus::Prompting {
                     self.append_thinking_delta(text, parent_tool_use_id.as_deref());
                 }
@@ -681,6 +1427,7 @@ impl SessionState {
                 meta,
                 images,
             } => {
+                self.settle_retry_incidents_on_progress();
                 self.upsert_tool_call(
                     tool_call_id,
                     Some(kind),
@@ -755,7 +1502,7 @@ impl SessionState {
                     pending.queued = *depth;
                 }
             }
-            AcpEvent::PermissionResolved { request_id } => {
+            AcpEvent::PermissionResolved { request_id, .. } => {
                 // Drop the snapshot's pending_permission iff the resolved
                 // request matches the current one. Without the id check, a
                 // late-arriving resolved event for an already-replaced
@@ -766,6 +1513,17 @@ impl SessionState {
                     Some(p) if p.request_id == *request_id,
                 ) {
                     self.pending_permission = None;
+                }
+            }
+            AcpEvent::ToolApproval { approval } => {
+                // One record per call: a later answer about the same call
+                // replaces the earlier one and moves to the newest end.
+                self.tool_approvals
+                    .retain(|a| a.tool_call_id != approval.tool_call_id);
+                self.tool_approvals.push(approval.clone());
+                if self.tool_approvals.len() > MAX_TOOL_APPROVALS {
+                    let excess = self.tool_approvals.len() - MAX_TOOL_APPROVALS;
+                    self.tool_approvals.drain(..excess);
                 }
             }
             AcpEvent::QuestionRequest {
@@ -831,6 +1589,32 @@ impl SessionState {
                 // other than a normal end-of-turn means this turn's content
                 // may never have reached the wire.
                 self.last_turn_ended_abnormally = stop_reason != "end_turn";
+                // AIR retry warnings resolve at the CLEAN turn boundary —
+                // adapters never publish resolution (see
+                // `SessionFailureRecord`), and a warning that ESCALATED
+                // instead was already overwritten by a higher-revision
+                // severity-"error" upsert on the same id before this event
+                // (a turn's terminal failure rides the prompt RESPONSE
+                // `_meta` and the loop emits it first — see
+                // `response_session_failure`), so this only settles genuinely
+                // recovered retry incidents. Every OTHER stop reason
+                // (cancelled / empty / refusal / …) ended a turn that did NOT
+                // recover: settling there painted a still-dead connection as
+                // a recovered warning (2026-08-15 field report), so those
+                // leave the warnings active — the `UserMessage` arm's
+                // settle-all still sweeps them at the next prompt.
+                //
+                // Incidents that recovered MID-turn were already settled by
+                // `settle_retry_incidents_on_progress`; this boundary catches
+                // the ones still in flight at the end, plus the
+                // category-"unknown" notices that progress deliberately skips.
+                if stop_reason == "end_turn" {
+                    for failure in self.session_failures.values_mut() {
+                        if failure.severity == "warning" {
+                            failure.resolved = true;
+                        }
+                    }
+                }
                 // Snapshot the just-finished turn's FINAL assistant text — what
                 // `get_delegation_status` returns as the child result. We take
                 // the Text blocks that follow the LAST tool call (the agent's
@@ -841,6 +1625,24 @@ impl SessionState {
                 // call (no concluding text) → empty, which CLEARS the field so a
                 // prior turn's text can't leak as this turn's result; the LLM
                 // reads the full result by opening the child session instead.
+                //
+                // Cleared FIRST, because a turn can end with no live message at
+                // all — cancelled before it produced anything, or one whose only
+                // chunk was an empty text delta (dropped by
+                // `append_text_delta`). Leaving the field alone there would
+                // serve the PREVIOUS turn's answer as this turn's result.
+                //
+                // Guarded on the turn actually being open, because
+                // `TurnComplete` has three emitters (stop-reason message,
+                // prompt response, and the cancel path — which deliberately
+                // does not wait for the agent, so its response can bring a
+                // second one). A repeat must not wipe the text the first one
+                // captured.
+                if self.turn_in_flight || self.live_message.is_some() {
+                    self.last_assistant_text = None;
+                    self.last_turn_progress = self.turn_progress();
+                    self.last_turn_completed_at = Some(Utc::now());
+                }
                 if let Some(live) = self.live_message.as_ref() {
                     let after_last_tool_call = live
                         .content
@@ -864,14 +1666,14 @@ impl SessionState {
                         })
                         .collect::<Vec<&str>>()
                         .join("");
-                    self.last_assistant_text = if assembled.trim().is_empty() {
-                        None
-                    } else {
-                        Some(assembled)
-                    };
+                    if !assembled.trim().is_empty() {
+                        self.last_assistant_text = Some(assembled);
+                    }
                 }
                 self.live_message = None;
                 self.active_tool_calls.clear();
+                self.qoder_ask_replies.clear();
+                self.permission_matched_calls.clear();
                 // The turn's user prompt is no longer "in flight" — the
                 // assistant reply is done and the transcript is the source of
                 // truth. Clear it so a post-turn snapshot doesn't carry a stale
@@ -882,7 +1684,16 @@ impl SessionState {
                 // is accepted. (All connection-alive turn endings — normal,
                 // cancel, stop-reason — emit TurnComplete; disconnect/error
                 // discard the state entirely, so no stale flag can outlive them.)
-                self.turn_in_flight = false;
+                // A turn the agent started itself never held the gate; a set
+                // flag then belongs to a prompt admitted while it ran.
+                if !self.agent_initiated_turn {
+                    self.turn_in_flight = false;
+                }
+                self.agent_initiated_turn = false;
+                // Same edge, the identity half: anyone holding "the turn I was
+                // admitted against" can now see that it is gone, even if a new
+                // turn sets `turn_in_flight` again before they look.
+                self.turns_completed = self.turns_completed.saturating_add(1);
                 // NOTE: `active_delegations` is intentionally NOT cleared here.
                 // A running delegation's child runs in the background long after
                 // the parent's `delegate_to_agent` tool call returns and this
@@ -892,8 +1703,10 @@ impl SessionState {
                 self.pending_permission = None;
                 // A blocked `ask_user_question` can't outlive its turn: if the
                 // turn ends (cancel / stop) the card is moot. The backend's
-                // answer one-shot is cleaned via the listener's peer-close race;
-                // this just keeps the snapshot honest.
+                // answer one-shot is declined by the connection loop right after
+                // this event (see the turn exit's question sweep) — usually the
+                // listener's peer-close got there first; this just keeps the
+                // snapshot honest.
                 self.pending_question = None;
                 // Likewise a blocked `exit_plan_mode` approval: the parked ext
                 // responder is drained by the connection's teardown/cancel path;
@@ -936,6 +1749,15 @@ impl SessionState {
                 // queued prompt sent instead of answering) must not leave a dead
                 // approval in the snapshot for a mid-turn attach to render.
                 self.pending_plan_approval = None;
+                // Starting a prompt past an active AIR failure acknowledges it
+                // — settle EVERYTHING, mirroring the frontend reducer's
+                // prompt-start settle so a client hydrating mid-turn doesn't
+                // resurrect an error the owner already acted on. Entries stay
+                // in the table as revision watermarks; a failure that is
+                // still real re-arms via a higher revision on the same id.
+                for failure in self.session_failures.values_mut() {
+                    failure.resolved = true;
+                }
             }
             AcpEvent::ConversationLinked {
                 conversation_id,
@@ -944,6 +1766,10 @@ impl SessionState {
             } => {
                 self.conversation_id = Some(*conversation_id);
                 self.folder_id = Some(*folder_id);
+                // A title published before this bind was dropped (no row yet).
+                // Forget the skip-cache so a later resend of the same string
+                // is not suppressed.
+                self.last_native_title = None;
             }
             AcpEvent::PlanUpdate { entries } => {
                 // Replace any existing Plan block, then append at end.
@@ -972,6 +1798,7 @@ impl SessionState {
                 // after browser refresh) can tell the initial handshake is
                 // already done — the event fires only once per connection.
                 self.selectors_ready = true;
+                self.selectors_settling = false;
             }
             AcpEvent::Error {
                 message,
@@ -997,6 +1824,8 @@ impl SessionState {
                 agent_type,
                 task_preview,
                 task_id,
+                assistant_id,
+                assistant_name,
                 ..
             } => {
                 // Record the running delegation so the binding is snapshot-
@@ -1014,8 +1843,20 @@ impl SessionState {
                         agent_type: *agent_type,
                         task_preview: task_preview.clone(),
                         task_id: task_id.clone(),
+                        assistant_id: *assistant_id,
+                        assistant_name: assistant_name.clone(),
                     },
                 );
+            }
+            AcpEvent::DelegationChildRunning {
+                child_connection_id,
+                running,
+            } => {
+                if *running {
+                    self.delegated_children.insert(child_connection_id.clone());
+                } else {
+                    self.delegated_children.remove(child_connection_id);
+                }
             }
             AcpEvent::DelegationCompleted {
                 parent_tool_use_id, ..
@@ -1035,7 +1876,42 @@ impl SessionState {
                 // here so snapshot replay reconstructs the same list the live
                 // node holds.
                 if !self.feedback.iter().any(|f| f.id == item.id) {
-                    self.feedback.push(item.clone());
+                    let mut item = item.clone();
+                    // Enforce the per-turn attachment budget HERE, under the
+                    // same `&mut self` that appends, because this is the only
+                    // authorized writer. Checking it at the submit site instead
+                    // would be a read followed by a write with an agent
+                    // round-trip in between: two steers admitted concurrently
+                    // would both read the same retained total, both pass, and
+                    // both retain — and a replay/attach node applying this
+                    // event would not be bounded at all. One critical section
+                    // makes the bound hold however the note got here.
+                    //
+                    // Only the RETAINED copy is trimmed. The note still
+                    // delivers and the event still carried its blocks to
+                    // whoever is attached right now; what the budget protects
+                    // is this list, which outlives the event and is rebuilt
+                    // into every snapshot.
+                    if let Some(blocks) = item.blocks.as_deref() {
+                        let retained: usize = self
+                            .feedback
+                            .iter()
+                            .filter_map(|f| f.blocks.as_deref())
+                            .map(crate::acp::feedback::attachment_bytes)
+                            .sum();
+                        let incoming = crate::acp::feedback::attachment_bytes(blocks);
+                        if retained.saturating_add(incoming)
+                            > crate::acp::feedback::MAX_FEEDBACK_ATTACHMENT_BYTES_PER_TURN
+                        {
+                            tracing::warn!(
+                                "[ACP][feedback] steer attachments exceed the per-turn \
+                                 budget (retained={retained} incoming={incoming}); \
+                                 keeping the note without them"
+                            );
+                            item.blocks = None;
+                        }
+                    }
+                    self.feedback.push(item);
                 }
             }
             AcpEvent::FeedbackConsumed { ids, delivered_at } => {
@@ -1050,19 +1926,98 @@ impl SessionState {
                     }
                 }
             }
-            AcpEvent::BackgroundActivity { outstanding, .. } => {
+            AcpEvent::BackgroundActivity {
+                turns,
+                outstanding,
+                outstanding_tasks,
+                ..
+            } => {
+                if let Some(reply) = last_assistant_reply(turns) {
+                    self.last_background_reply = Some((Utc::now(), reply));
+                }
                 // Mirror the watcher's authoritative accounting so the idle
                 // sweeps can exempt this connection while background work is
                 // pending. The turns/settled payloads are frontend-only; the
                 // trailing `last_activity_at = now` below additionally resets
                 // the backend idle timer on every batch of transcript activity.
                 self.background_outstanding = *outstanding;
+                self.background_outstanding_tasks = outstanding_tasks.clone();
                 self.background_activity_at = Some(Utc::now());
+            }
+            AcpEvent::BackgroundTaskProgress { .. } => {
+                // The card patch is frontend-only. The tick itself is the agent
+                // saying a background child is alive right now, so it refreshes
+                // the keep-alive clock the outstanding count is bounded by.
+                self.background_activity_at = Some(Utc::now());
+            }
+            AcpEvent::SessionFailure { record } => {
+                // Monotonic per-id merge — the SAME rule the frontend reducer
+                // applies, so a replayed/out-of-order upsert (claude re-sends
+                // still-active failures on session/load) is dropped
+                // identically on every consumer. Equal revisions are rejected
+                // too: an upsert is only ever re-delivered verbatim, never
+                // legitimately revised in place. A fresh (higher-revision)
+                // upsert re-arms `resolved = false` — id reuse is how codex
+                // escalates a retry warning into the turn's terminal error.
+                let accept = self
+                    .session_failures
+                    .get(&record.id)
+                    .is_none_or(|existing| record.revision > existing.revision);
+                if accept {
+                    self.session_failures
+                        .insert(record.id.clone(), record.clone());
+                }
+            }
+            AcpEvent::SessionNotice { .. } => {
+                // Deliberately keeps NOTHING. Unlike its `SessionFailure`
+                // neighbour a notice is not a record: the RFD gives it no id to
+                // merge on, no revision to reject and no history position, and
+                // says outright that an agent must not rely on one being
+                // received or seen. So there is nothing for the snapshot to
+                // carry — a client that attaches mid-session has not missed
+                // state, it has missed an event, and re-raising a past toast on
+                // every attach would be worse than silence.
+                //
+                // How a notice is presented (a toast, kept in the client's own
+                // alert list) is the client's business: storing one here
+                // would bring it back on every snapshot.
+            }
+            AcpEvent::PluginLoadFailures { .. } => {
+                // Same reasoning as a notice: an announcement, kept by the
+                // client's alert list, never re-raised by a snapshot.
+            }
+            AcpEvent::AsyncTask { delta } => {
+                // The SAME merge the frontend reducer applies, so a client
+                // seeded from the snapshot and one that watched every delta
+                // hold identical rows. Only a `spawned` frame may create:
+                // progress naming an unknown task means we failed to read its
+                // announcement, and a row we can't name or type is worse than
+                // no row (see `AsyncTaskDelta::spawned`).
+                match self.async_tasks.get_mut(&delta.task_id) {
+                    Some(existing) => delta.apply_to(existing),
+                    None if delta.spawned => {
+                        self.async_tasks
+                            .insert(delta.task_id.clone(), delta.to_record());
+                    }
+                    None => {
+                        tracing::debug!(
+                            task_id = %delta.task_id,
+                            "[ACP] ignoring async-task delta for an unannounced task"
+                        );
+                    }
+                }
+                // Stamped for EVERY delta, including one we just dropped: the
+                // adapter is demonstrably still talking about background work
+                // on this connection, which is the only thing the keep-alive
+                // window asks.
+                self.async_task_activity_at = Some(Utc::now());
             }
             AcpEvent::ClaudeSdkMessage { .. }
             | AcpEvent::ConfigOptionRejected { .. }
             | AcpEvent::SessionLoadFailed { .. }
             | AcpEvent::TurnRetrying { .. }
+            | AcpEvent::NativeSessionTitle { .. }
+            | AcpEvent::TranscriptRolledOver { .. }
             | AcpEvent::UserPromptSent { .. } => {
                 // 这些事件不直接修改 SessionState 的可见字段。
                 // UserPromptSent 是纯通知事件，仅供 chat-channel 推送消费。
@@ -1077,7 +2032,7 @@ impl SessionState {
 
     /// Whether this connection has launched background work (async sub-agent /
     /// background shell task) that hasn't settled yet — the idle sweeps must
-    /// not reap it (disconnecting drops the `sacp` connection, which
+    /// not reap it (disconnecting drops the ACP connection, which
     /// terminates the agent CLI process, which kills the background work).
     ///
     /// Bounded by `background_keepalive_max_age()`: the exemption requires a
@@ -1087,6 +2042,27 @@ impl SessionState {
     /// `background_outstanding` here — this check is the belt to that
     /// suspenders.)
     pub fn has_active_background_work(&self, now: DateTime<Utc>) -> bool {
+        // OR, not a sum. The two sources — the transcript watcher's
+        // `background_outstanding` and the AIR async-task table — observe
+        // overlapping work through different channels, so adding them would
+        // double-count the same background shell. An OR cannot: whichever
+        // source still believes work is pending keeps the connection alive,
+        // and reaping only resumes once BOTH have let go. That asymmetry is
+        // deliberate — a false "still running" costs one idle connection, a
+        // false "settled" kills the agent CLI and the work with it.
+        if self.has_live_async_task(now) {
+            return true;
+        }
+        self.watcher_counts_work(now)
+            || self
+                .antigravity_reconcile_at
+                .is_some_and(|at| now.signed_duration_since(at) < background_keepalive_max_age())
+    }
+
+    /// Whether the transcript watcher (or another `BackgroundActivity`
+    /// producer) still counts work, and reported recently enough to believe
+    /// it — the watcher's half of [`Self::has_active_background_work`].
+    fn watcher_counts_work(&self, now: DateTime<Utc>) -> bool {
         if self.background_outstanding == 0 {
             return false;
         }
@@ -1094,6 +2070,86 @@ impl SessionState {
             Some(at) => now.signed_duration_since(at) < background_keepalive_max_age(),
             None => false,
         }
+    }
+
+    /// Whether the watcher still counts a background SUB-AGENT
+    /// ([`BackgroundTaskKind::Agent`](crate::acp::types::BackgroundTaskKind)),
+    /// under the same age bound as its count. claude-agent-acp keeps every
+    /// sub-agent out of the AIR async-task table (its `isSubagentTask` filter),
+    /// so for Claude Code this is the only place a running sub-agent shows.
+    pub fn has_outstanding_background_agent(&self, now: DateTime<Utc>) -> bool {
+        self.watcher_counts_work(now)
+            && self
+                .background_outstanding_tasks
+                .iter()
+                .any(|t| t.kind == crate::acp::types::BackgroundTaskKind::Agent)
+    }
+
+    /// Whether any AIR async task is still non-terminal AND the adapter has
+    /// said something about async tasks recently enough to believe it.
+    ///
+    /// The age bound is the same belt-and-suspenders the watcher's half of
+    /// `has_active_background_work` carries, for the same reason: a row that
+    /// never reaches a terminal state would otherwise exempt this connection
+    /// from idle reaping FOREVER, and the exemption is the only thing standing
+    /// between an idle connection and being reaped. The adapter does close every
+    /// task it announced (terminal edge, superseding liveness level, and the
+    /// end-of-stream / reset / stream-error `finishAll` paths), but a row can
+    /// still strand when the terminal frame is published on a session id this
+    /// connection has already left — a fork is the ordinary way there. That case
+    /// is handled directly (`SessionStarted` clears the table on a session-id
+    /// change); this window is what catches the ones nobody predicted.
+    ///
+    /// Refreshed by ANY async-task delta, so a task that keeps reporting keeps
+    /// its exemption for as long as it runs.
+    ///
+    /// That clause is claude-only in practice. codex-acp publishes no
+    /// `async_task_progress` channel at all (only `_spawned` and
+    /// `_state_update`), so a codex background terminal stamps the clock ONCE at
+    /// its announcement and then goes quiet — its exemption expires one window
+    /// after it started, however long the process actually runs. Deliberately
+    /// left alone: before this capability was advertised a codex background
+    /// terminal had no exemption whatsoever, and inventing a refresh here would
+    /// mean pinning a connection open on a liveness claim nothing re-verifies —
+    /// the exact failure this age bound exists to prevent.
+    pub fn has_live_async_task(&self, now: DateTime<Utc>) -> bool {
+        if !self
+            .async_tasks
+            .values()
+            .any(|t| !crate::acp::types::async_task_state_is_terminal(&t.state))
+        {
+            return false;
+        }
+        match self.async_task_activity_at {
+            Some(at) => now.signed_duration_since(at) < background_keepalive_max_age(),
+            None => false,
+        }
+    }
+
+    /// Claim the next turn for one the agent is starting on its own, unless a
+    /// prompt the manager admitted already owns it. On `true` the caller
+    /// announces the turn (`StatusChanged(Prompting)`); on `false` the admitted
+    /// prompt is about to start and the agent's output streams into it.
+    ///
+    /// Decided under the same lock as the manager's admission check, so the two
+    /// can never both own a turn: a prompt admitted AFTER the claim keeps its
+    /// gate through the agent turn's `TurnComplete` (see
+    /// [`Self::agent_initiated_turn`]).
+    ///
+    /// The turn starts from an empty live message, as the frontend's does at
+    /// `Prompting`: whatever sits in `live_message` now arrived between turns
+    /// (a late frame of the turn before), which no client rendered, and would
+    /// otherwise open this turn's snapshot and its captured result.
+    pub fn begin_agent_initiated_turn(&mut self) -> bool {
+        if self.turn_in_flight {
+            return false;
+        }
+        self.agent_initiated_turn = true;
+        self.live_message = None;
+        self.active_tool_calls.clear();
+        self.qoder_ask_replies.clear();
+        self.permission_matched_calls.clear();
+        true
     }
 
     /// A single-line "what the sub-agent is doing right now" hint, used by the
@@ -1203,6 +2259,55 @@ impl SessionState {
         None
     }
 
+    /// How far the turn in flight has got, as its tool calls show: how many
+    /// finished, how the latest [`MAX_STEP_MARKS`] of them ended (in the order
+    /// the agent started them), and the latest call's title. `None` while the
+    /// turn has called no tool. Read by the delegation broker for a running
+    /// child's status report.
+    pub fn turn_progress(&self) -> Option<DelegationProgress> {
+        let live = self.live_message.as_ref()?;
+        let mut steps: u32 = 0;
+        let mut marks = std::collections::VecDeque::with_capacity(MAX_STEP_MARKS);
+        let mut latest: Option<&ToolCallState> = None;
+        for block in &live.content {
+            let LiveContentBlock::ToolCallRef { tool_call_id } = block else {
+                continue;
+            };
+            let Some(call) = self.active_tool_calls.get(tool_call_id) else {
+                continue;
+            };
+            latest = Some(call);
+            let mark = match call.status {
+                ToolCallStatus::Completed => StepMark::Ok,
+                ToolCallStatus::Failed => StepMark::Failed,
+                ToolCallStatus::Pending | ToolCallStatus::InProgress => continue,
+            };
+            steps = steps.saturating_add(1);
+            if marks.len() == MAX_STEP_MARKS {
+                marks.pop_front();
+            }
+            marks.push_back(mark);
+        }
+        let latest = latest?;
+        let label = latest.label.trim();
+        Some(DelegationProgress {
+            steps,
+            marks: marks.into(),
+            last_step: (!label.is_empty()).then(|| truncate_one_line(label, LAST_STEP_CAP)),
+        })
+    }
+
+    /// [`Self::turn_progress`] while a turn runs, else what the last turn
+    /// ended with — a delegation child's progress whichever side of its
+    /// `TurnComplete` the broker asks from.
+    pub fn delegation_progress(&self) -> Option<DelegationProgress> {
+        if self.live_message.is_some() {
+            self.turn_progress()
+        } else {
+            self.last_turn_progress.clone()
+        }
+    }
+
     /// The prompt this session is parked on, if any — a permission, an
     /// `ask_user_question`, or a plan approval. `None` means nothing is waiting
     /// on the user.
@@ -1282,7 +2387,40 @@ impl SessionState {
             .expect("live_message just initialized")
     }
 
+    /// Settle in-flight AIR retry incidents because the turn produced output
+    /// again — codex's own `completeRetryIncidentOnTurnProgress`: the warning
+    /// goes up when the upstream drops, and the next chunk is the proof it came
+    /// back. Mirrors the frontend's `"retry_incidents"` settle scope.
+    ///
+    /// Category "unknown" is deliberately left alone: it is where BOTH adapters
+    /// route non-incident notices (codex config/skill-budget warnings, claude
+    /// `model_refusal_fallback` advisories). Nothing "recovers" those, and
+    /// settling them on the next chunk would flash them away before they can be
+    /// read — they keep waiting for the turn boundary.
+    fn settle_retry_incidents_on_progress(&mut self) {
+        for failure in self.session_failures.values_mut() {
+            if !failure.resolved && failure.severity == "warning" && failure.category != "unknown" {
+                failure.resolved = true;
+            }
+        }
+    }
+
     fn append_text_delta(&mut self, text: &str, parent_tool_use_id: Option<&str>) {
+        // An empty text delta has nothing to render, so the only thing it could
+        // contribute is a block boundary — and the frontend reducer never
+        // creates one (it drops an empty `CONTENT_DELTA` outright, before it
+        // would even open a live message). Dropping it here too is what keeps
+        // the two block lists identical; otherwise a snapshot-hydrated client
+        // carries an empty `Text` block that the streaming client never had,
+        // and prose either side of it looks like two separate runs.
+        //
+        // Empty THINKING deltas are deliberately NOT dropped: there the empty
+        // block IS the signal (it renders the "Thinking…" indicator before any
+        // reasoning text arrives, and newer Claude models redact the text
+        // entirely while still emitting the block).
+        if text.is_empty() {
+            return;
+        }
         let live = self.ensure_live_message();
         // Merge only into a trailing block of the same kind AND the same
         // subagent attribution — main text → subagent text → main text must
@@ -1414,6 +2552,177 @@ impl SessionState {
         }
     }
 
+    /// Wire copy of `active_tool_calls`, with the bulky RESULT payload of
+    /// already-finished calls bounded by `MAX_SNAPSHOT_TOOL_PAYLOAD_BYTES`.
+    ///
+    /// Nothing removes a completed call from `active_tool_calls`: the map is
+    /// cleared in one place, `TurnComplete`. So a single long agentic turn
+    /// accumulates one entry per tool call it has ever made, and the snapshot
+    /// used to carry all of them whole. Issue #380 sampled a turn that had not
+    /// reached `TurnComplete`: 1814 entries / 23.6 MB, then 1983 entries (1964
+    /// completed, 18 failed, 1 running) / 26.7 MB. Each entry holds up to
+    /// `MAX_SINGLE_EMIT_BYTES` (64 KiB) of tool output plus the agent's
+    /// rendered `content` and, for image tools, base64 image data, so the
+    /// payload had no bound at all — and the desktop client that parses it on
+    /// every attach stopped responding.
+    ///
+    /// Every call still ships, in the same (id-sorted) order, with its id,
+    /// kind, label, status and meta. That is the part nothing else can supply:
+    /// `denormalizeSnapshot` resolves each `LiveContentBlock::ToolCallRef` in
+    /// `live_message.content` through this list and DROPS a block whose id is
+    /// missing, so an entry left out is a tool card missing from the middle of
+    /// the in-flight turn.
+    ///
+    /// What the budget bounds is `input` / `output` / `content` / `locations`,
+    /// and only on calls that already reached a terminal status:
+    ///
+    /// * Pending / InProgress calls are never trimmed, at any size. They are
+    ///   the ones the attaching client has to keep rendering and revising from
+    ///   live events, their partial output exists nowhere else, and their count
+    ///   tracks live concurrency rather than turn length.
+    /// * Terminal calls keep everything, newest first, until the budget is
+    ///   spent; the older ones then ship without those fields. A finished
+    ///   call's result is durable in the agent's own transcript, which is what
+    ///   the conversation reloads from.
+    ///
+    /// `images` is NOT bounded, and deliberately: dropping the bytes does not
+    /// degrade the card, it inverts it. The frontend reads an image-generation
+    /// block with `image: null` and a terminal status as a FAILED generation
+    /// (`generated-images-block.tsx`, and `isImageGenerationToolCall` still
+    /// classifies the call from the `label` this keeps), so a trimmed success
+    /// would render "image generation failed". Carrying them whole is exactly
+    /// what the snapshot does today, so nothing here is a regression; what an
+    /// image-heavy turn costs is the same as before this function existed. The
+    /// bytes are still counted below, so they push older RESULT payload out
+    /// first.
+    ///
+    /// The budget is spent, not enforced per entry, so the last entry admitted
+    /// may carry the total past it by its own size. In-flight entries and the
+    /// image data every entry keeps are counted against the budget but never
+    /// trimmed by it — which is why the floor can exceed it, and why the
+    /// accounting counts a trimmed entry's retained bytes rather than dropping
+    /// it from the tally.
+    ///
+    /// ## Assumption this rests on
+    ///
+    /// Bounding only terminal calls assumes the agent reports one. Every agent
+    /// codeg ships does (`upsert_tool_call` inserts at `Pending` and the
+    /// adapter's completion update moves it), but one that never did would
+    /// leave the table untrimmable at any length. Pinned by
+    /// `snapshot_ships_an_all_unsettled_table_whole` so a future change has to
+    /// confront the assumption rather than inherit it.
+    ///
+    /// ## Known degradation
+    ///
+    /// A trimmed entry loses `input`, which is one of the signals the client
+    /// infers a tool's identity from. `label`, `kind` and `meta` survive and
+    /// carry that identity for everything with an authoritative marker
+    /// (delegation companions, claudeCode/qoder/grok meta, the OpenCode name),
+    /// but two input-shape-only classifications fall back to a generic tool
+    /// card on a mid-turn attach of an over-budget turn: codex collab capsules
+    /// (`isCodexCollabInput`) and Kimi `TodoList` writes
+    /// (`kimiTodoWriteEntries`). Cosmetic and self-healing — the conversation
+    /// renders from the transcript on reload.
+    fn snapshot_tool_calls(&self) -> Vec<ToolCallState> {
+        // Arrival order comes from the live message: `push_tool_call_ref_if_absent`
+        // anchors exactly one `ToolCallRef` per call, in the order the agent
+        // opened them. `active_tool_calls` itself is keyed by id, which says
+        // nothing about age.
+        let mut arrival: BTreeMap<&str, usize> = BTreeMap::new();
+        if let Some(live) = self.live_message.as_ref() {
+            for (i, block) in live.content.iter().enumerate() {
+                if let LiveContentBlock::ToolCallRef { tool_call_id } = block {
+                    arrival.entry(tool_call_id.as_str()).or_insert(i);
+                }
+            }
+        }
+
+        // (arrival rank, id, trimmable bytes). An id with no anchoring ref sorts
+        // newest, so the fail-safe direction is "keep everything" — today that
+        // cannot happen, because both `ToolCall` and `ToolCallUpdate` anchor a
+        // ref for the id they upsert.
+        let mut ordered: Vec<(usize, &str, usize)> = self
+            .active_tool_calls
+            .iter()
+            .map(|(id, tc)| {
+                (
+                    arrival.get(id.as_str()).copied().unwrap_or(usize::MAX),
+                    id.as_str(),
+                    tool_call_trimmable_bytes(tc),
+                )
+            })
+            .collect();
+
+        // Both halves, because the question the early return answers is
+        // "would shipping this whole be over budget", and the image bytes are
+        // part of what ships either way.
+        let total = ordered
+            .iter()
+            .fold(0usize, |acc, (_, id, bytes)| {
+                acc.saturating_add(*bytes)
+                    .saturating_add(images_slice_size(&self.active_tool_calls[*id].images))
+            });
+        if total <= MAX_SNAPSHOT_TOOL_PAYLOAD_BYTES {
+            // The ordinary turn: nothing to trim, wire shape byte-identical.
+            return self.active_tool_calls.values().cloned().collect();
+        }
+
+        ordered.sort_unstable();
+        let mut trimmed: BTreeSet<&str> = BTreeSet::new();
+        let mut spent = 0usize;
+        for (_, id, bytes) in ordered.iter().rev() {
+            let tc = &self.active_tool_calls[*id];
+            // Counted on every entry, trimmed or not: images ship regardless
+            // (see the doc comment), so leaving them out of the tally would
+            // make the budget measure something the wire does not carry.
+            let kept = images_slice_size(&tc.images);
+            let terminal = matches!(
+                tc.status,
+                ToolCallStatus::Completed | ToolCallStatus::Failed
+            );
+            if terminal && spent >= MAX_SNAPSHOT_TOOL_PAYLOAD_BYTES {
+                trimmed.insert(*id);
+                spent = spent.saturating_add(kept);
+                continue;
+            }
+            spent = spent.saturating_add(*bytes).saturating_add(kept);
+        }
+
+        self.active_tool_calls
+            .values()
+            .map(|tc| {
+                if !trimmed.contains(tc.id.as_str()) {
+                    return tc.clone();
+                }
+                // Listed field by field (no `..tc.clone()`) so a field added to
+                // `ToolCallState` later has to be classified here as identity
+                // or as payload, instead of silently riding an unbounded value
+                // back onto the wire.
+                ToolCallState {
+                    id: tc.id.clone(),
+                    kind: tc.kind.clone(),
+                    label: tc.label.clone(),
+                    status: tc.status.clone(),
+                    input: None,
+                    output: None,
+                    content: None,
+                    locations: None,
+                    // Kept: the delegation broker writes the parent↔child
+                    // binding here (`meta["codeg.delegation"]`), which is what
+                    // re-anchors an inline sub-thread on a mid-turn attach.
+                    // Bounded by contract — a small status object, not output.
+                    meta: tc.meta.clone(),
+                    // Kept: an image-generation block whose `image` is null and
+                    // whose status is terminal renders as a FAILED generation,
+                    // so dropping these would report a success as a failure.
+                    images: tc.images.clone(),
+                    // `#[serde(skip)]` — never on the wire either way.
+                    raw_input_chunks: Vec::new(),
+                }
+            })
+            .collect()
+    }
+
     /// 拷贝出对外可见的 wire-friendly snapshot。Phase 2 snapshot 端点直接调用此方法。
     pub fn to_snapshot(&self) -> LiveSessionSnapshot {
         LiveSessionSnapshot {
@@ -1423,14 +2732,17 @@ impl SessionState {
             status: self.status.clone(),
             external_id: self.external_id.clone(),
             live_message: self.live_message.clone(),
-            active_tool_calls: self.active_tool_calls.values().cloned().collect(),
+            active_tool_calls: self.snapshot_tool_calls(),
             pending_permission: self.pending_permission.clone(),
             pending_question: self.pending_question.clone(),
             pending_plan_approval: self.pending_plan_approval.clone(),
             pending_user_message: self.pending_user_message.clone(),
             active_delegations: self.active_delegations.values().cloned().collect(),
+            delegated_children: self.delegated_children.iter().cloned().collect(),
             feedback: self.feedback.clone(),
+            tool_approvals: self.tool_approvals.clone(),
             background_outstanding: self.background_outstanding,
+            background_outstanding_tasks: self.background_outstanding_tasks.clone(),
             feedback_tool_available: self.feedback_tool_available,
             native_steering_available: self.native_steering_available,
             modes: self.modes.clone(),
@@ -1438,15 +2750,64 @@ impl SessionState {
             config_options: self.config_options.clone(),
             prompt_capabilities: self.prompt_capabilities.clone(),
             usage: self.usage.clone(),
+            prompt_suggestion: self.prompt_suggestion.clone(),
+            remote_control: self.remote_control.clone(),
             fork_supported: self.fork_supported,
             available_commands: self.available_commands.clone(),
             selectors_ready: self.selectors_ready,
+            composer_mode_id: self.composer_mode_id.clone(),
             config_stale: self.config_stale,
             config_stale_kind: self.config_stale_kind,
             last_error: self.last_error.clone(),
+            session_failures: self.session_failures.values().cloned().collect(),
+            async_tasks: self.async_tasks.values().cloned().collect(),
+            goal_actions: self.goal_actions.clone(),
             event_seq: self.event_seq,
         }
     }
+}
+
+/// Whether someone types the prompts of a connection with this owner label, so
+/// that a predicted follow-up prompt has a composer to appear in.
+///
+/// Not for the owners codeg drives without one: an automation run (owner
+/// `"automation"`, see `automation::engine`), a chat-channel bot (owners
+/// `"chat_channel:<channel>:<sender>…"`, see
+/// `chat_channel::session_commands::owner_label_for`) and a `codeg-cli` run
+/// (owner [`CLI_OWNER_LABEL`](crate::cli_run::service::CLI_OWNER_LABEL)), whose
+/// prompts arrive from a schedule, a messaging app or a command line — and a
+/// `codeg-cli` run lets its connection go as soon as its one turn has ended.
+/// Nor a one-shot generation (owner
+/// [`OWNER_LABEL`](crate::acp::one_shot::OWNER_LABEL)), which has no
+/// conversation to continue at all.
+/// For them a prediction would only be paid for.
+/// Everything else is a person's window, a work task (its session takes
+/// follow-ups once the task stops), or a delegated child (which inherits its
+/// parent's label, and whose session the user can open and continue).
+pub(crate) fn owner_composes_prompts(owner_window_label: &str) -> bool {
+    owner_window_label != "automation"
+        && owner_window_label != crate::cli_run::service::CLI_OWNER_LABEL
+        && !crate::acp::one_shot::is_one_shot_owner(owner_window_label)
+        && !owner_window_label.starts_with("chat_channel:")
+}
+
+/// The answer of the last assistant turn in `turns`: its last non-empty `Text`
+/// block, trimmed. `None` when no assistant turn in the batch has one (a turn
+/// still on its tool calls, or a batch of user turns only).
+fn last_assistant_reply(turns: &[crate::models::message::MessageTurn]) -> Option<String> {
+    use crate::models::message::{ContentBlock, TurnRole};
+    turns
+        .iter()
+        .rev()
+        .filter(|turn| matches!(turn.role, TurnRole::Assistant))
+        .find_map(|turn| {
+            turn.blocks.iter().rev().find_map(|block| match block {
+                ContentBlock::Text { text } if !text.trim().is_empty() => {
+                    Some(text.trim().to_string())
+                }
+                _ => None,
+            })
+        })
 }
 
 /// Max age of the background keep-alive: how long a connection with
@@ -1460,7 +2821,14 @@ pub(crate) fn background_keepalive_max_age() -> chrono::Duration {
         std::env::var("CODEG_ACP_BACKGROUND_KEEPALIVE_MAX_SECS")
             .ok()
             .and_then(|v| v.trim().parse::<i64>().ok())
-            .filter(|v| *v >= 0)
+            // `chrono::Duration::seconds` below is an `expect` over
+            // `try_seconds`, so it PANICS past `i64::MAX / 1000`. This value is
+            // read on the 60-second idle sweep and on every background-watch
+            // tick, so an out-of-range env value would abort the process from a
+            // timer with nobody at the keyboard, and a panic there leaves no
+            // trace of which setting caused it. Out of range is invalid input
+            // like any other, so it takes the documented default.
+            .filter(|v| *v >= 0 && chrono::Duration::try_seconds(*v).is_some())
             .unwrap_or(3600)
     });
     chrono::Duration::seconds(secs)
@@ -1503,12 +2871,24 @@ pub struct LiveSessionSnapshot {
     /// doesn't bloat every snapshot with an empty array.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub active_delegations: Vec<ActiveDelegationState>,
+    /// Every running delegation's child connection id (see
+    /// `SessionState.delegated_children`), so a client attaching mid-delegation
+    /// keeps the parent alive like one that saw it start. Absent when empty and
+    /// on older servers, like `active_delegations`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub delegated_children: Vec<String>,
     /// Live user-feedback notes for the current turn (see `SessionState.feedback`).
     /// `#[serde(default)]` so older server payloads without this field still
     /// deserialize; `skip_serializing_if` keeps the common empty case off the
     /// wire so every snapshot stays byte-identical with the pre-feature shape.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub feedback: Vec<FeedbackItem>,
+    /// The connection's recent approval records (see
+    /// `SessionState.tool_approvals`). Same `default` / `skip_serializing_if`
+    /// treatment as `feedback`: absent from older payloads, and off the wire
+    /// for a connection that has answered nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_approvals: Vec<ToolApprovalInfo>,
     /// Launched-but-unresolved background tasks (see
     /// `SessionState.background_outstanding`) — lets a client attaching
     /// mid-episode (web reconnect, new window) recover the pending count the
@@ -1517,6 +2897,10 @@ pub struct LiveSessionSnapshot {
     /// common no-background case keeps the wire shape byte-identical.
     #[serde(default, skip_serializing_if = "u32_is_zero")]
     pub background_outstanding: u32,
+    /// Those tasks one by one (see `SessionState.background_outstanding_tasks`).
+    /// Same `default` / skip-when-empty treatment as the count.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub background_outstanding_tasks: Vec<BackgroundOutstandingTask>,
     /// Whether this agent has the `check_user_feedback` tool (see
     /// `SessionState.feedback_tool_available`). `#[serde(default)]` so older
     /// payloads deserialize to `false`; the frontend gates the feedback bar on
@@ -1534,9 +2918,23 @@ pub struct LiveSessionSnapshot {
     pub config_options: Option<Vec<SessionConfigOptionInfo>>,
     pub prompt_capabilities: Option<PromptCapabilitiesInfo>,
     pub usage: Option<UsageInfo>,
+    /// The follow-up prompt the agent last predicted (see
+    /// `SessionState.prompt_suggestion`). Omitted when there is none, so the
+    /// common snapshot keeps its pre-feature wire shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_suggestion: Option<String>,
+    /// Claude Code's Remote Control while it is on (see
+    /// `SessionState.remote_control`). Omitted when it is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_control: Option<RemoteControlInfo>,
     pub fork_supported: bool,
     pub available_commands: Vec<AvailableCommandInfo>,
     pub selectors_ready: bool,
+    /// The composer's pending mode pick (see `SessionState.composer_mode_id`).
+    /// Omitted when there is none, so the common snapshot keeps its
+    /// pre-feature wire shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composer_mode_id: Option<String>,
     /// Whether the running session is on stale (launch-time) config after a
     /// later settings save (see `SessionState.config_stale`). `#[serde(default)]`
     /// so older server payloads without the field deserialize to `false`; always
@@ -1552,12 +2950,81 @@ pub struct LiveSessionSnapshot {
     /// no error has occurred so older clients and common snapshots stay small.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<SessionLastError>,
+    /// AIR typed session failure table (resolved entries and revision
+    /// watermarks included — see `SessionState.session_failures`). A client
+    /// attaching mid-session seeds its reducer from this and keeps applying
+    /// the same monotonic merge to live events. Omitted while empty (the
+    /// common case) to keep the wire shape byte-identical pre-feature.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub session_failures: Vec<SessionFailureRecord>,
+    /// AIR async tasks, merged (see `SessionState.async_tasks`). Terminal rows
+    /// included: they carry the ids the subsequent live deltas revise, so a
+    /// client seeded without them would re-create a settled task as a running
+    /// one on its next correction. Omitted while empty (the common case) to
+    /// keep the wire shape byte-identical pre-feature.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub async_tasks: Vec<AsyncTaskRecord>,
+    /// Goal-control action vocabulary the goal card gates its buttons on
+    /// (see `SessionState.goal_actions`): the advertised list for neutral-goal
+    /// adapters, the legacy ["pause","clear"] pair for the rest.
+    ///
+    /// Three-valued on purpose, and ALWAYS serialized (no `skip_serializing_if`)
+    /// so the client can tell the middle case apart:
+    /// * a list — the vocabulary is known, gate the buttons on it;
+    /// * `null` — this connection hasn't finished `initialize`, so nothing is
+    ///   known yet; the client stays fail-closed (no buttons) and re-reads;
+    /// * ABSENT — a server too old to have the field at all, which the client
+    ///   maps to the legacy pair.
+    #[serde(default)]
+    pub goal_actions: Option<Vec<String>>,
     pub event_seq: u64,
 }
 
 /// `skip_serializing_if` helper for `LiveSessionSnapshot.background_outstanding`.
 fn u32_is_zero(v: &u32) -> bool {
     *v == 0
+}
+
+/// Byte budget for the bulky tool-call payload one snapshot may carry. See
+/// [`SessionState::snapshot_tool_calls`] for what it does and does not bound.
+///
+/// 2 MiB leaves the newest ~150 finished calls of a typical read/edit/grep turn
+/// intact (and, at the 64 KiB per-call ceiling `MAX_SINGLE_EMIT_BYTES` imposes,
+/// at least the newest 32 in the worst case) — far more than a client attaching
+/// mid-turn has on screen — while holding the #380 session's snapshot at ~2.6 MB
+/// instead of 24 MB.
+///
+/// A ceiling on what is DROPPABLE, not a hard cap on the message: in-flight
+/// calls and every call's image data are counted against it but never trimmed
+/// by it, so a turn holding more of those than the budget ships more than the
+/// budget. That is the same size it ships today.
+const MAX_SNAPSHOT_TOOL_PAYLOAD_BYTES: usize = 2 * 1024 * 1024;
+
+/// How many approval records [`SessionState::tool_approvals`] keeps. A record
+/// is a few hundred bytes, and a connection that has answered more than this
+/// many permission requests has long had the older ones stored, so the cap
+/// only bounds the snapshot of a very long-lived connection.
+const MAX_TOOL_APPROVALS: usize = 256;
+
+/// The part of a `ToolCallState` a trim actually removes: the RESULT payload,
+/// which grows with what the tool did. Excludes the identity fields (id / kind /
+/// label / status / meta) and `images`, which every entry keeps whatever the
+/// budget says — see [`SessionState::snapshot_tool_calls`] for why.
+///
+/// Sized with the same escape-aware, allocation-free accounting the per-event
+/// cap uses (`event_stream`), so "this call's payload" means the same number of
+/// bytes on both paths.
+fn tool_call_trimmable_bytes(tc: &ToolCallState) -> usize {
+    let output = match tc.output.as_ref() {
+        Some(ToolCallOutput::Text { content }) => json_str_len(content),
+        Some(ToolCallOutput::Error { message }) => json_str_len(message),
+        Some(ToolCallOutput::Json { value }) => json_value_size(value),
+        None => 0,
+    };
+    opt_json_size(&tc.input)
+        .saturating_add(output)
+        .saturating_add(opt_str_size(&tc.content))
+        .saturating_add(opt_json_size(&tc.locations))
 }
 
 /// Last non-empty line of `s`, trimmed. `None` if every line is blank.
@@ -1629,7 +3096,7 @@ fn parse_tool_call_output_text(text: &str) -> ToolCallOutput {
 /// `PendingPermissionState.tool_call_id`——快查路径（match by id 时不必每次重
 /// 解析整个 tool_call value）。完整 tool_call value 由调用方另行保留，前端
 /// 依赖它做 diff / 命令 / plan 渲染。同时兼容 camelCase / snake_case。
-fn extract_tool_call_id(tool_call: &serde_json::Value) -> String {
+pub(crate) fn extract_tool_call_id(tool_call: &serde_json::Value) -> String {
     tool_call
         .as_object()
         .and_then(|o| {
@@ -1645,9 +3112,9 @@ fn extract_tool_call_id(tool_call: &serde_json::Value) -> String {
 mod tests {
     use super::*;
     use crate::acp::types::{
-        AcpEvent, ConnectionStatus, DelegationResultSummary, EventEnvelope, PromptCapabilitiesInfo,
-        SessionConfigKindInfo, SessionConfigOptionInfo, SessionConfigSelectInfo, SessionModeInfo,
-        SessionModeStateInfo, UserMessageBlock,
+        AcpEvent, AsyncTaskDelta, AsyncTaskUsage, ConnectionStatus, DelegationResultSummary,
+        EventEnvelope, PromptCapabilitiesInfo, SessionConfigKindInfo, SessionConfigOptionInfo,
+        SessionConfigSelectInfo, SessionModeInfo, SessionModeStateInfo, UserMessageBlock,
     };
 
     fn fresh_state() -> SessionState {
@@ -1658,6 +3125,32 @@ mod tests {
             "win-test".to_string(),
             None,
         )
+    }
+
+    /// `ConversationLinked` must forget the live-title skip-cache.
+    ///
+    /// Today this clear can only ever be a no-op: `emit_conversation_update`
+    /// refuses to cache a title while `conversation_id` is `None`, and both
+    /// producers of `ConversationLinked` fire only from that same unbound
+    /// state, so the cache is already empty every time this runs. It is kept —
+    /// and pinned here — because the day something rebinds a LIVE connection to
+    /// another row, a cache carried over from the old one would classify the
+    /// new row's first title as a repeat and leave it Untitled for the rest of
+    /// the connection, with no error anywhere to point at.
+    #[test]
+    fn conversation_linked_clears_the_native_title_skip_cache() {
+        let mut s = fresh_state();
+        s.last_native_title = Some("Fix the login flow".into());
+
+        s.apply_event(&AcpEvent::ConversationLinked {
+            conversation_id: 7,
+            folder_id: 1,
+            parent_conversation_id: None,
+            parent_tool_use_id: None,
+        });
+
+        assert_eq!(s.conversation_id, Some(7));
+        assert!(s.last_native_title.is_none());
     }
 
     #[test]
@@ -1687,6 +3180,506 @@ mod tests {
         });
         assert!(s.pending_plan_approval.is_none());
         assert!(s.to_snapshot().pending_plan_approval.is_none());
+    }
+
+    #[test]
+    fn session_failure_upserts_merge_monotonically_and_settle_at_turn_end() {
+        fn failure(id: &str, revision: u64, severity: &str, title: &str) -> AcpEvent {
+            AcpEvent::SessionFailure {
+                record: SessionFailureRecord {
+                    id: id.into(),
+                    revision,
+                    category: "limit".into(),
+                    severity: severity.into(),
+                    title: title.into(),
+                    details: None,
+                    actions: vec!["retry".into()],
+                    resolved: false,
+                },
+            }
+        }
+        let mut s = fresh_state();
+
+        // Upsert then revise in place: one entry, latest revision wins.
+        s.apply_event(&failure("t1:error", 1, "warning", "retrying"));
+        s.apply_event(&failure("t1:error", 2, "warning", "still retrying"));
+        assert_eq!(s.session_failures.len(), 1);
+        assert_eq!(s.session_failures["t1:error"].revision, 2);
+        assert_eq!(s.session_failures["t1:error"].title, "still retrying");
+
+        // Stale and equal-revision replays are rejected (claude re-publishes
+        // still-active failures on session/load — must not thrash state).
+        s.apply_event(&failure("t1:error", 1, "warning", "stale"));
+        s.apply_event(&failure("t1:error", 2, "warning", "replay"));
+        assert_eq!(s.session_failures["t1:error"].title, "still retrying");
+
+        // Turn boundary settles warnings — errors stay active (codex keeps
+        // terminal records active deliberately).
+        s.apply_event(&failure("s:notice", 1, "error", "auth expired"));
+        s.apply_event(&AcpEvent::TurnComplete {
+            session_id: "sid".into(),
+            stop_reason: "end_turn".into(),
+            agent_type: "codex".into(),
+        });
+        assert!(s.session_failures["t1:error"].resolved);
+        assert!(!s.session_failures["s:notice"].resolved);
+
+        // Escalation via id reuse: a HIGHER-revision upsert re-arms the entry
+        // (resolved resets) — how codex turns a retry warning into the turn's
+        // terminal error.
+        s.apply_event(&failure("t1:error", 3, "error", "gave up"));
+        let escalated = &s.session_failures["t1:error"];
+        assert!(!escalated.resolved);
+        assert_eq!(escalated.severity, "error");
+
+        // Starting a NEW prompt settles EVERYTHING — errors included — so a
+        // client hydrating mid-turn can't resurrect a failure the owner
+        // already acted past (mirrors the frontend reducer's prompt-start
+        // settle). Watermarks survive: the stale rev-2 replay stays rejected,
+        // and only a genuinely newer revision re-arms the record.
+        s.apply_event(&AcpEvent::UserMessage {
+            message_id: "m1".into(),
+            blocks: vec![],
+        });
+        assert!(s.session_failures.values().all(|f| f.resolved));
+        s.apply_event(&failure("t1:error", 2, "error", "stale replay"));
+        assert!(s.session_failures["t1:error"].resolved);
+        assert_eq!(s.session_failures["t1:error"].title, "gave up");
+        s.apply_event(&failure("t1:error", 4, "error", "it recurred"));
+        assert!(!s.session_failures["t1:error"].resolved);
+
+        // The snapshot carries the WHOLE table — resolved entries and their
+        // revision watermarks included — so an attaching client can keep
+        // rejecting stale upserts.
+        let snap = s.to_snapshot();
+        assert_eq!(snap.session_failures.len(), 2);
+        let json = serde_json::to_value(&snap).unwrap();
+        let failures = json.get("session_failures").unwrap().as_array().unwrap();
+        assert!(failures.iter().any(|f| {
+            f.get("id").and_then(|v| v.as_str()) == Some("t1:error")
+                && f.get("revision").and_then(|v| v.as_u64()) == Some(4)
+        }));
+    }
+
+    fn async_task_delta(task_id: &str, spawned: bool) -> AsyncTaskDelta {
+        AsyncTaskDelta {
+            task_id: task_id.into(),
+            spawned,
+            name: None,
+            task_type: None,
+            description: None,
+            show_in_transcript: None,
+            can_stop: None,
+            state: None,
+            summary: None,
+            last_tool_name: None,
+            usage: None,
+            output_file_path: None,
+            tool_call_id: None,
+            phase: None,
+            current_agent: None,
+        }
+    }
+
+    /// Only the spawn frame carries a task's identity, so it is the only one
+    /// allowed to create a row: a progress delta for an id we never saw
+    /// announced means codeg failed to read the announcement, and a row with a
+    /// placeholder name and no type is worse than no row at all.
+    #[test]
+    fn async_task_rows_are_created_only_by_a_spawn_delta() {
+        let mut s = fresh_state();
+        s.apply_event(&AcpEvent::AsyncTask {
+            delta: async_task_delta("ghost", false),
+        });
+        assert!(s.async_tasks.is_empty());
+
+        let spawn = AsyncTaskDelta {
+            name: Some("pnpm test".into()),
+            task_type: Some("shell".into()),
+            description: Some("pnpm test --watch".into()),
+            show_in_transcript: Some(false),
+            can_stop: Some(true),
+            ..async_task_delta("t1", true)
+        };
+        s.apply_event(&AcpEvent::AsyncTask { delta: spawn });
+        let row = &s.async_tasks["t1"];
+        assert_eq!(row.name, "pnpm test");
+        assert_eq!(row.task_type, "shell");
+        assert!(!row.show_in_transcript);
+        assert!(row.can_stop);
+        // A spawn frame carries no state field; the row starts live.
+        assert_eq!(row.state, "running");
+    }
+
+    /// Progress/state deltas are PARTIAL: an absent field must leave the stored
+    /// value alone, or the first progress tick would blank out the task's name.
+    #[test]
+    fn async_task_deltas_revise_only_the_fields_they_carry() {
+        let mut s = fresh_state();
+        s.apply_event(&AcpEvent::AsyncTask {
+            delta: AsyncTaskDelta {
+                name: Some("pnpm test".into()),
+                task_type: Some("shell".into()),
+                ..async_task_delta("t1", true)
+            },
+        });
+        s.apply_event(&AcpEvent::AsyncTask {
+            delta: AsyncTaskDelta {
+                last_tool_name: Some("Bash".into()),
+                usage: Some(AsyncTaskUsage {
+                    total_tokens: 1200,
+                    tool_uses: 3,
+                    duration_ms: 4500,
+                }),
+                output_file_path: Some("/tmp/tasks/t1.output".into()),
+                ..async_task_delta("t1", false)
+            },
+        });
+        let row = &s.async_tasks["t1"];
+        assert_eq!(row.name, "pnpm test");
+        assert_eq!(row.task_type, "shell");
+        assert_eq!(row.last_tool_name.as_deref(), Some("Bash"));
+        assert_eq!(row.usage.as_ref().unwrap().total_tokens, 1200);
+        assert_eq!(row.output_file_path.as_deref(), Some("/tmp/tasks/t1.output"));
+
+        // The adapter revises a task AFTER it settles — correcting a
+        // best-effort `stopped` into the real outcome, or attaching a late
+        // output path. Retaining the row is what lets that correction land as a
+        // revision instead of resurrecting the task as a fresh running one.
+        s.apply_event(&AcpEvent::AsyncTask {
+            delta: AsyncTaskDelta {
+                state: Some("stopped".into()),
+                ..async_task_delta("t1", false)
+            },
+        });
+        assert_eq!(s.async_tasks["t1"].state, "stopped");
+        s.apply_event(&AcpEvent::AsyncTask {
+            delta: AsyncTaskDelta {
+                state: Some("completed".into()),
+                summary: Some("all green".into()),
+                ..async_task_delta("t1", false)
+            },
+        });
+        assert_eq!(s.async_tasks["t1"].state, "completed");
+        assert_eq!(s.async_tasks["t1"].summary.as_deref(), Some("all green"));
+
+        // The whole table rides the snapshot so a client attaching mid-session
+        // merges subsequent deltas against the same rows.
+        let snap = s.to_snapshot();
+        assert_eq!(snap.async_tasks.len(), 1);
+        assert_eq!(snap.async_tasks[0].task_id, "t1");
+    }
+
+    /// Reaping an idle connection kills the agent CLI, and with it any
+    /// background work. A live async task must hold the connection open on its
+    /// own — the transcript watcher is a separate, overlapping observer, so the
+    /// two combine by OR (never a sum, which would double-count one shell).
+    #[test]
+    fn a_live_async_task_alone_defers_the_idle_sweep() {
+        let mut s = fresh_state();
+        let now = Utc::now();
+        assert!(!s.has_active_background_work(now));
+
+        s.apply_event(&AcpEvent::AsyncTask {
+            delta: AsyncTaskDelta {
+                name: Some("watch".into()),
+                ..async_task_delta("t1", true)
+            },
+        });
+        // No `BackgroundActivity` has ever arrived, so this exemption is coming
+        // from the async-task table alone.
+        assert_eq!(s.background_outstanding, 0);
+        assert!(s.has_active_background_work(now));
+
+        s.apply_event(&AcpEvent::AsyncTask {
+            delta: AsyncTaskDelta {
+                state: Some("completed".into()),
+                ..async_task_delta("t1", false)
+            },
+        });
+        assert!(!s.has_active_background_work(now));
+    }
+
+    /// The exemption is what stops the idle sweep, so a row that never reaches a
+    /// terminal state would otherwise hold the agent CLI open forever. Bounded
+    /// by the same window as the watcher's half, and refreshed by any delta —
+    /// a task that keeps reporting keeps its exemption for as long as it runs.
+    #[test]
+    fn a_silent_async_task_stops_deferring_the_sweep_after_the_keepalive_window() {
+        let mut s = fresh_state();
+        let now = Utc::now();
+        s.apply_event(&AcpEvent::AsyncTask {
+            delta: async_task_delta("t1", true),
+        });
+        assert!(s.has_active_background_work(now));
+
+        let past_window = now + background_keepalive_max_age() + chrono::Duration::seconds(1);
+        assert!(
+            !s.has_active_background_work(past_window),
+            "a row that never settles must not exempt the connection forever"
+        );
+
+        // Any delta re-arms it, terminal state notwithstanding: the adapter is
+        // demonstrably still talking about this task.
+        s.apply_event(&AcpEvent::AsyncTask {
+            delta: AsyncTaskDelta {
+                last_tool_name: Some("Bash".into()),
+                ..async_task_delta("t1", false)
+            },
+        });
+        assert!(s.has_active_background_work(Utc::now()));
+    }
+
+    /// A fork attaches to a NEW session id on the same process. The old
+    /// session's task rows can never settle here again — their terminal frames
+    /// are published on the id the `AgentSession` router has stopped routing to
+    /// this connection — so they must go, or the strip shows work that never
+    /// finishes and the keep-alive pins the CLI open.
+    #[test]
+    fn a_session_id_change_drops_the_previous_session_tasks() {
+        let mut s = fresh_state();
+        s.apply_event(&AcpEvent::SessionStarted {
+            session_id: "s1".into(),
+        });
+        s.apply_event(&AcpEvent::AsyncTask {
+            delta: async_task_delta("t1", true),
+        });
+        assert!(s.has_active_background_work(Utc::now()));
+
+        // A duplicate announcement of the SAME id is a replay, not a fork.
+        s.apply_event(&AcpEvent::SessionStarted {
+            session_id: "s1".into(),
+        });
+        assert_eq!(s.async_tasks.len(), 1);
+
+        s.apply_event(&AcpEvent::SessionStarted {
+            session_id: "s2".into(),
+        });
+        assert!(s.async_tasks.is_empty());
+        assert!(!s.has_active_background_work(Utc::now()));
+    }
+
+    /// A turn the agent started itself (Grok's follow-up to a background
+    /// workflow) never took the prompt gate, so its end must not release it: a
+    /// prompt admitted while it ran owns the flag until ITS turn completes.
+    #[test]
+    fn an_agent_initiated_turn_end_leaves_an_admitted_prompts_gate() {
+        let mut s = fresh_state();
+        s.apply_event(&AcpEvent::ContentDelta {
+            text: "a late frame of the turn before".into(),
+            parent_tool_use_id: None,
+        });
+        assert!(s.begin_agent_initiated_turn());
+        assert!(s.live_message.is_none(), "the turn starts from a clean slate");
+        s.apply_event(&AcpEvent::StatusChanged {
+            status: ConnectionStatus::Prompting,
+        });
+        s.apply_event(&AcpEvent::ContentDelta {
+            text: "report".into(),
+            parent_tool_use_id: None,
+        });
+        // The manager admits a prompt mid-way.
+        s.turn_in_flight = true;
+        s.apply_event(&AcpEvent::TurnComplete {
+            session_id: "ext".into(),
+            stop_reason: "cancelled".into(),
+            agent_type: "grok".into(),
+        });
+        assert!(s.turn_in_flight, "the admitted prompt still owns the gate");
+        assert!(!s.agent_initiated_turn);
+        assert_eq!(s.last_assistant_text.as_deref(), Some("report"));
+
+        // The prompt's own turn then releases it as always.
+        s.apply_event(&AcpEvent::StatusChanged {
+            status: ConnectionStatus::Prompting,
+        });
+        s.apply_event(&AcpEvent::TurnComplete {
+            session_id: "ext".into(),
+            stop_reason: "end_turn".into(),
+            agent_type: "grok".into(),
+        });
+        assert!(!s.turn_in_flight);
+    }
+
+    /// An admitted prompt owns the next turn: the agent's own output then
+    /// streams into it rather than into a turn of its own.
+    #[test]
+    fn an_agent_initiated_turn_yields_to_an_admitted_prompt() {
+        let mut s = fresh_state();
+        s.turn_in_flight = true;
+        assert!(!s.begin_agent_initiated_turn());
+        assert!(!s.agent_initiated_turn);
+    }
+
+    /// Text the agent sends between turns still lands in `live_message`, but a
+    /// prompted turn starts from an empty one — as every client's reducer does
+    /// at `Prompting` — so neither the snapshot a mid-turn attach renders nor
+    /// the result the turn hands a delegation parent opens with it.
+    #[test]
+    fn a_prompted_turn_starts_from_an_empty_live_message() {
+        let text = |text: &str| AcpEvent::ContentDelta {
+            text: text.into(),
+            parent_tool_use_id: None,
+        };
+        let mut s = fresh_state();
+        s.apply_event(&text("The job finished."));
+        assert!(s.live_message.is_some());
+
+        s.apply_event(&AcpEvent::StatusChanged {
+            status: ConnectionStatus::Prompting,
+        });
+        assert!(s.live_message.is_none());
+
+        s.apply_event(&text("You're welcome."));
+        let live = s
+            .to_snapshot()
+            .live_message
+            .expect("the turn's live message");
+        assert!(matches!(
+            live.content.as_slice(),
+            [LiveContentBlock::Text { text, .. }] if text == "You're welcome."
+        ));
+        s.apply_event(&AcpEvent::TurnComplete {
+            session_id: "ext".into(),
+            stop_reason: "end_turn".into(),
+            agent_type: "claude_code".into(),
+        });
+        assert_eq!(s.last_assistant_text.as_deref(), Some("You're welcome."));
+    }
+
+    #[test]
+    fn session_failure_warnings_survive_non_clean_turn_ends() {
+        fn failure(id: &str, revision: u64, severity: &str, title: &str) -> AcpEvent {
+            AcpEvent::SessionFailure {
+                record: SessionFailureRecord {
+                    id: id.into(),
+                    revision,
+                    category: "connection".into(),
+                    severity: severity.into(),
+                    title: title.into(),
+                    details: None,
+                    actions: vec!["new_session".into()],
+                    resolved: false,
+                },
+            }
+        }
+        fn turn_complete(stop_reason: &str) -> AcpEvent {
+            AcpEvent::TurnComplete {
+                session_id: "sid".into(),
+                stop_reason: stop_reason.into(),
+                agent_type: "claude_code".into(),
+            }
+        }
+        let mut s = fresh_state();
+        s.apply_event(&failure("t1:error", 5, "warning", "Reconnecting, attempt 5 of 5."));
+
+        // A cancelled/failed/empty exit is NOT recovery — the incident (e.g.
+        // reconnect attempts with the network still down) must stay active
+        // instead of collapsing into a "recovered" row (2026-08-15 field
+        // report: the banner claimed recovery while offline).
+        for reason in ["cancelled", "empty", "refusal", "unknown"] {
+            s.apply_event(&turn_complete(reason));
+            assert!(
+                !s.session_failures["t1:error"].resolved,
+                "stop_reason={reason} must not settle warnings"
+            );
+        }
+
+        // The terminal escalation rides the prompt RESPONSE and the loop
+        // applies it BEFORE `TurnComplete` (see `response_session_failure`):
+        // the same id flips to severity "error", so even the adapters'
+        // disguised clean `end_turn` carrying it cannot settle the incident.
+        s.apply_event(&failure("t1:error", 6, "error", "The connection was lost."));
+        s.apply_event(&turn_complete("end_turn"));
+        let escalated = &s.session_failures["t1:error"];
+        assert!(!escalated.resolved);
+        assert_eq!(escalated.severity, "error");
+        assert_eq!(escalated.revision, 6);
+
+        // A clean end still settles a genuine warning — and only the warning.
+        s.apply_event(&failure("w2", 1, "warning", "transient notice"));
+        s.apply_event(&turn_complete("end_turn"));
+        assert!(s.session_failures["w2"].resolved);
+        assert!(!s.session_failures["t1:error"].resolved);
+    }
+
+    /// Issue #496: a long turn that reconnects N times stacked N permanent
+    /// strips, because the only settle points were a clean `end_turn` and the
+    /// next prompt. Turn PROGRESS settles the incident instead — codex's own
+    /// `completeRetryIncidentOnTurnProgress`.
+    #[test]
+    fn session_failure_retry_incidents_settle_on_turn_progress() {
+        fn failure(id: &str, category: &str, severity: &str) -> AcpEvent {
+            AcpEvent::SessionFailure {
+                record: SessionFailureRecord {
+                    id: id.into(),
+                    revision: 1,
+                    category: category.into(),
+                    severity: severity.into(),
+                    title: format!("{id} title"),
+                    details: None,
+                    actions: vec![],
+                    resolved: false,
+                },
+            }
+        }
+        fn text(text: &str) -> AcpEvent {
+            AcpEvent::ContentDelta {
+                text: text.into(),
+                parent_tool_use_id: None,
+            }
+        }
+
+        let mut s = fresh_state();
+        s.apply_event(&AcpEvent::StatusChanged {
+            status: ConnectionStatus::Prompting,
+        });
+        s.apply_event(&failure("i1", "connection", "warning"));
+        s.apply_event(&failure("i2", "service", "warning"));
+        // Non-incident informational records: codex config/skill-budget
+        // notices and claude advisories both land on category "unknown".
+        // Nothing "recovers" those, so progress must leave them readable.
+        s.apply_event(&failure("notice", "unknown", "warning"));
+        s.apply_event(&failure("err", "connection", "error"));
+
+        s.apply_event(&text("back online"));
+        assert!(s.session_failures["i1"].resolved);
+        assert!(s.session_failures["i2"].resolved);
+        assert!(!s.session_failures["notice"].resolved);
+        assert!(!s.session_failures["err"].resolved);
+
+        // Thinking and a fresh tool call are turn output too.
+        s.apply_event(&failure("i3", "limit", "warning"));
+        s.apply_event(&AcpEvent::Thinking {
+            text: "hmm".into(),
+            parent_tool_use_id: None,
+        });
+        assert!(s.session_failures["i3"].resolved);
+
+        s.apply_event(&failure("i4", "connection", "warning"));
+        s.apply_event(&AcpEvent::ToolCall {
+            tool_call_id: "tc-1".into(),
+            title: "Read".into(),
+            kind: "read".into(),
+            status: "in_progress".into(),
+            content: None,
+            raw_input: None,
+            raw_output: None,
+            locations: None,
+            meta: None,
+            images: None,
+        });
+        assert!(s.session_failures["i4"].resolved);
+
+        // The notice still waits for the clean turn boundary; the terminal
+        // error survives it, exactly as before.
+        s.apply_event(&AcpEvent::TurnComplete {
+            session_id: "sid".into(),
+            stop_reason: "end_turn".into(),
+            agent_type: "codex".into(),
+        });
+        assert!(s.session_failures["notice"].resolved);
+        assert!(!s.session_failures["err"].resolved);
     }
 
     #[test]
@@ -1730,14 +3723,30 @@ mod tests {
         let mut s = fresh_state();
         assert!(!s.has_active_background_work(Utc::now()));
 
+        let agent = crate::acp::types::BackgroundOutstandingTask {
+            task_id: "a1".into(),
+            kind: crate::acp::types::BackgroundTaskKind::Agent,
+            tool_use_id: Some("toolu_1".into()),
+            description: Some("Run the build".into()),
+            started_at_ms: 1_000,
+        };
+        let shell = crate::acp::types::BackgroundOutstandingTask {
+            task_id: "b1".into(),
+            kind: crate::acp::types::BackgroundTaskKind::Shell,
+            tool_use_id: None,
+            description: None,
+            started_at_ms: 2_000,
+        };
         s.apply_event(&AcpEvent::BackgroundActivity {
             session_id: "sid".into(),
             turns: vec![],
             outstanding: 2,
+            outstanding_tasks: vec![agent.clone(), shell],
             settled: vec![],
             watermark: 42,
         });
         assert_eq!(s.background_outstanding, 2);
+        assert_eq!(s.background_outstanding_tasks.len(), 2);
         let now = Utc::now();
         assert!(s.has_active_background_work(now));
 
@@ -1746,15 +3755,90 @@ mod tests {
         let long_after = now + background_keepalive_max_age() + chrono::Duration::seconds(1);
         assert!(!s.has_active_background_work(long_after));
 
-        // Settled back to zero: no exemption regardless of recency.
+        // Each event is the whole set: one that lists less REPLACES it.
+        s.apply_event(&AcpEvent::BackgroundActivity {
+            session_id: "sid".into(),
+            turns: vec![],
+            outstanding: 1,
+            outstanding_tasks: vec![agent.clone()],
+            settled: vec![],
+            watermark: 43,
+        });
+        assert_eq!(s.background_outstanding_tasks, vec![agent]);
+
+        // Settled back to zero: no exemption regardless of recency, no rows.
         s.apply_event(&AcpEvent::BackgroundActivity {
             session_id: "sid".into(),
             turns: vec![],
             outstanding: 0,
+            outstanding_tasks: vec![],
             settled: vec![],
-            watermark: 43,
+            watermark: 44,
         });
         assert!(!s.has_active_background_work(Utc::now()));
+        assert!(s.background_outstanding_tasks.is_empty());
+    }
+
+    /// A turn Claude Code ran on its own only reaches codeg as the watcher's
+    /// overlay turns, so its answer is read off them: the LAST assistant turn's
+    /// last non-empty text. A batch with no such text (a turn still on its
+    /// tools, a user turn) keeps the reply already read.
+    #[test]
+    fn background_activity_records_the_last_assistant_reply() {
+        use crate::models::message::{ContentBlock, MessageTurn, TurnRole};
+        fn turn(role: TurnRole, blocks: Vec<ContentBlock>) -> MessageTurn {
+            MessageTurn {
+                id: "bg-0-0".into(),
+                role,
+                blocks,
+                timestamp: Utc::now(),
+                usage: None,
+                duration_ms: None,
+                model: None,
+                completed_at: None,
+                agent_message_id: None,
+            }
+        }
+        fn text(t: &str) -> ContentBlock {
+            ContentBlock::Text { text: t.into() }
+        }
+        fn activity(turns: Vec<MessageTurn>) -> AcpEvent {
+            AcpEvent::BackgroundActivity {
+                session_id: "sid".into(),
+                turns,
+                outstanding: 0,
+                outstanding_tasks: vec![],
+                settled: vec![],
+                watermark: 0,
+            }
+        }
+        let mut s = fresh_state();
+        assert!(s.last_background_reply.is_none());
+
+        s.apply_event(&activity(vec![
+            turn(TurnRole::Assistant, vec![text("first answer")]),
+            turn(
+                TurnRole::Assistant,
+                vec![
+                    text("checking the log"),
+                    text("  all 12 tests passed  "),
+                    text(" "),
+                ],
+            ),
+            turn(TurnRole::User, vec![text("not an answer")]),
+        ]));
+        assert_eq!(
+            s.last_background_reply.as_ref().map(|(_, t)| t.as_str()),
+            Some("all 12 tests passed")
+        );
+
+        s.apply_event(&activity(vec![turn(TurnRole::Assistant, vec![])]));
+        s.apply_event(&activity(vec![]));
+        assert_eq!(
+            s.last_background_reply.as_ref().map(|(_, t)| t.as_str()),
+            Some("all 12 tests passed"),
+            "a batch without an answer keeps the one already read"
+        );
     }
 
     #[test]
@@ -1763,22 +3847,42 @@ mod tests {
         s.apply_event(&AcpEvent::BackgroundActivity {
             session_id: "sid".into(),
             turns: vec![],
-            outstanding: 3,
+            outstanding: 1,
+            outstanding_tasks: vec![crate::acp::types::BackgroundOutstandingTask {
+                task_id: "a1".into(),
+                kind: crate::acp::types::BackgroundTaskKind::Agent,
+                tool_use_id: Some("toolu_1".into()),
+                description: None,
+                started_at_ms: 1_000,
+            }],
             settled: vec![],
             watermark: 0,
         });
-        assert_eq!(s.to_snapshot().background_outstanding, 3);
+        assert_eq!(s.to_snapshot().background_outstanding, 1);
         let json = serde_json::to_value(s.to_snapshot()).unwrap();
         assert_eq!(
             json.get("background_outstanding").and_then(|v| v.as_u64()),
-            Some(3)
+            Some(1)
         );
+        assert_eq!(
+            json.get("background_outstanding_tasks"),
+            Some(&serde_json::json!([{
+                "task_id": "a1",
+                "kind": "agent",
+                "tool_use_id": "toolu_1",
+                "started_at_ms": 1000,
+            }]))
+        );
+        // And back: a client hydrating from it gets the rows whole.
+        let back: LiveSessionSnapshot = serde_json::from_value(json).unwrap();
+        assert_eq!(back.background_outstanding_tasks, s.background_outstanding_tasks);
 
         // Zero is skipped so the common no-background snapshot stays
         // byte-identical with the pre-feature wire shape.
         let zero = fresh_state();
         let json = serde_json::to_value(zero.to_snapshot()).unwrap();
         assert!(json.get("background_outstanding").is_none());
+        assert!(json.get("background_outstanding_tasks").is_none());
     }
 
     #[test]
@@ -1927,6 +4031,173 @@ mod tests {
         );
     }
 
+    /// The predicted follow-up prompt is current state: the snapshot hands it to
+    /// a client that attaches between turns, until the adapter withdraws it, a
+    /// prompt spends it, or the connection moves to another session.
+    #[test]
+    fn snapshot_carries_the_predicted_prompt_until_it_is_spent() {
+        let mut s = fresh_state();
+        assert!(
+            !serde_json::to_string(&s.to_snapshot())
+                .expect("serialize")
+                .contains("prompt_suggestion"),
+            "no prediction: the snapshot keeps its pre-feature wire shape"
+        );
+
+        s.apply_event(&AcpEvent::PromptSuggestion {
+            text: Some("Run the tests".into()),
+        });
+        let snap = s.to_snapshot();
+        assert_eq!(snap.prompt_suggestion.as_deref(), Some("Run the tests"));
+        let back: LiveSessionSnapshot =
+            serde_json::from_str(&serde_json::to_string(&snap).expect("serialize"))
+                .expect("deserialize");
+        assert_eq!(back.prompt_suggestion.as_deref(), Some("Run the tests"));
+
+        // Withdrawn by the adapter.
+        s.apply_event(&AcpEvent::PromptSuggestion { text: None });
+        assert_eq!(s.to_snapshot().prompt_suggestion, None);
+
+        // Spent by the next prompt, whatever it says.
+        s.apply_event(&AcpEvent::PromptSuggestion {
+            text: Some("Run the tests".into()),
+        });
+        s.apply_event(&AcpEvent::StatusChanged {
+            status: ConnectionStatus::Prompting,
+        });
+        assert_eq!(s.to_snapshot().prompt_suggestion, None);
+
+        // Ending a turn keeps what arrives after it.
+        s.apply_event(&AcpEvent::StatusChanged {
+            status: ConnectionStatus::Connected,
+        });
+        s.apply_event(&AcpEvent::SessionStarted {
+            session_id: "s1".into(),
+        });
+        s.apply_event(&AcpEvent::PromptSuggestion {
+            text: Some("commit this".into()),
+        });
+        // The same session announced again keeps it; another one (a fork)
+        // drops it, since it predicted what follows the session left behind.
+        s.apply_event(&AcpEvent::SessionStarted {
+            session_id: "s1".into(),
+        });
+        assert_eq!(s.prompt_suggestion.as_deref(), Some("commit this"));
+        s.apply_event(&AcpEvent::SessionStarted {
+            session_id: "s2".into(),
+        });
+        assert_eq!(s.prompt_suggestion, None);
+    }
+
+    /// Remote Control is current state: the snapshot carries it while it is on,
+    /// and it goes when the adapter turns it off, when the connection moves to
+    /// another session (codeg closes the one a fork leaves, and its CLI with
+    /// it), and when the connection dies.
+    #[test]
+    fn snapshot_carries_remote_control_while_its_cli_runs() {
+        let on = || AcpEvent::RemoteControl {
+            remote_control: Some(RemoteControlInfo {
+                session_url: Some("https://claude.ai/code/session_01".into()),
+            }),
+        };
+        let mut s = fresh_state();
+        assert!(
+            !serde_json::to_string(&s.to_snapshot())
+                .expect("serialize")
+                .contains("remote_control"),
+            "off: the snapshot keeps its pre-feature wire shape"
+        );
+
+        s.apply_event(&AcpEvent::SessionStarted {
+            session_id: "s1".into(),
+        });
+        s.apply_event(&on());
+        let snap = s.to_snapshot();
+        let back: LiveSessionSnapshot =
+            serde_json::from_str(&serde_json::to_string(&snap).expect("serialize"))
+                .expect("deserialize");
+        assert_eq!(
+            back.remote_control
+                .as_ref()
+                .and_then(|rc| rc.session_url.as_deref()),
+            Some("https://claude.ai/code/session_01")
+        );
+
+        // Turns come and go without touching it.
+        s.apply_event(&AcpEvent::StatusChanged {
+            status: ConnectionStatus::Prompting,
+        });
+        s.apply_event(&AcpEvent::StatusChanged {
+            status: ConnectionStatus::Connected,
+        });
+        assert!(s.remote_control.is_some());
+
+        // Turned off.
+        s.apply_event(&AcpEvent::RemoteControl {
+            remote_control: None,
+        });
+        assert_eq!(s.to_snapshot().remote_control, None);
+
+        // The same session announced again keeps it; a fork drops it.
+        s.apply_event(&on());
+        s.apply_event(&AcpEvent::SessionStarted {
+            session_id: "s1".into(),
+        });
+        assert!(s.remote_control.is_some());
+        s.apply_event(&AcpEvent::SessionStarted {
+            session_id: "s2".into(),
+        });
+        assert_eq!(s.remote_control, None);
+
+        // A connection that dies takes it along.
+        for status in [ConnectionStatus::Disconnected, ConnectionStatus::Error] {
+            s.apply_event(&on());
+            s.apply_event(&AcpEvent::StatusChanged { status });
+            assert_eq!(s.remote_control, None);
+        }
+    }
+
+    /// The owners codeg drives without a composer ask for no predicted prompt;
+    /// every other one does, decided once when the state is made.
+    #[test]
+    fn only_owners_someone_types_into_ask_for_predicted_prompts() {
+        for owner in [
+            "main",
+            "workspace-2",
+            "work_task",
+            "delegation-probe",
+            "automations",
+        ] {
+            assert!(owner_composes_prompts(owner), "{owner}");
+        }
+        for owner in [
+            "automation",
+            crate::cli_run::service::CLI_OWNER_LABEL,
+            crate::acp::one_shot::OWNER_LABEL,
+            "chat_channel:4:wx-user",
+            "chat_channel:4:tg-user:thread:9",
+        ] {
+            assert!(!owner_composes_prompts(owner), "{owner}");
+        }
+        assert!(fresh_state().wants_prompt_suggestions);
+        let automation = SessionState::new(
+            "conn-auto".to_string(),
+            AgentType::ClaudeCode,
+            None,
+            "automation".to_string(),
+            None,
+        );
+        assert!(!automation.wants_prompt_suggestions);
+        let cli_run = SessionState::new(
+            "conn-cli".to_string(),
+            AgentType::ClaudeCode,
+            None,
+            crate::cli_run::service::CLI_OWNER_LABEL.to_string(),
+            None,
+        );
+        assert!(!cli_run.wants_prompt_suggestions);
+    }
+
     #[test]
     fn latest_live_reply_prefers_answer_after_last_tool_call() {
         let mut s = fresh_state();
@@ -1985,6 +4256,98 @@ mod tests {
             s.latest_live_reply(100).as_deref(),
             Some("running tool: grep files")
         );
+    }
+
+    fn tool_call(id: &str, title: &str, status: &str) -> AcpEvent {
+        AcpEvent::ToolCall {
+            tool_call_id: id.into(),
+            title: title.into(),
+            kind: "execute".into(),
+            status: status.into(),
+            content: None,
+            raw_input: None,
+            raw_output: None,
+            locations: None,
+            meta: None,
+            images: None,
+        }
+    }
+
+    fn settle(id: &str, status: &str) -> AcpEvent {
+        AcpEvent::ToolCallUpdate {
+            tool_call_id: id.into(),
+            title: None,
+            status: Some(status.into()),
+            content: None,
+            raw_input: None,
+            raw_output: None,
+            raw_output_append: None,
+            locations: None,
+            meta: None,
+            images: None,
+        }
+    }
+
+    #[test]
+    fn turn_progress_counts_finished_calls_in_the_order_they_started() {
+        let mut s = fresh_state();
+        assert_eq!(s.turn_progress(), None, "no turn, no progress");
+        s.apply_event(&AcpEvent::ContentDelta {
+            text: "on it".into(),
+            parent_tool_use_id: None,
+        });
+        assert_eq!(s.turn_progress(), None, "no tool called yet");
+        // Ids sort the other way round from the order they started in.
+        s.apply_event(&tool_call("z-1", "read a.rs", "in_progress"));
+        s.apply_event(&tool_call("a-2", "pnpm test", "in_progress"));
+        s.apply_event(&tool_call("m-3", "edit a.rs", "in_progress"));
+        s.apply_event(&settle("a-2", "failed"));
+        s.apply_event(&settle("z-1", "completed"));
+        let progress = s.turn_progress().expect("progress");
+        assert_eq!(progress.steps, 2);
+        assert_eq!(progress.marks, vec![StepMark::Ok, StepMark::Failed]);
+        // The latest call, finished or not.
+        assert_eq!(progress.last_step.as_deref(), Some("edit a.rs"));
+    }
+
+    #[test]
+    fn turn_progress_keeps_only_the_latest_marks() {
+        let mut s = fresh_state();
+        for i in 0..MAX_STEP_MARKS + 3 {
+            let id = format!("tc-{i:02}");
+            s.apply_event(&tool_call(&id, "step", "in_progress"));
+            s.apply_event(&settle(&id, if i == 0 { "failed" } else { "completed" }));
+        }
+        let progress = s.turn_progress().expect("progress");
+        assert_eq!(progress.steps as usize, MAX_STEP_MARKS + 3);
+        assert_eq!(progress.marks.len(), MAX_STEP_MARKS);
+        assert!(
+            progress.marks.iter().all(|m| *m == StepMark::Ok),
+            "the oldest (failed) mark fell off the front"
+        );
+    }
+
+    #[test]
+    fn a_finished_turn_keeps_its_progress_for_the_broker() {
+        let mut s = fresh_state();
+        s.apply_event(&tool_call("tc-1", "pnpm build", "in_progress"));
+        s.apply_event(&settle("tc-1", "completed"));
+        let live = s.delegation_progress().expect("live progress");
+        s.apply_event(&AcpEvent::TurnComplete {
+            session_id: "ext".into(),
+            stop_reason: "end_turn".into(),
+            agent_type: "codex".into(),
+        });
+        assert!(s.active_tool_calls.is_empty());
+        assert_eq!(s.turn_progress(), None);
+        assert_eq!(s.delegation_progress(), Some(live));
+        // A repeated TurnComplete (the cancel path's late response) keeps it.
+        s.apply_event(&AcpEvent::TurnComplete {
+            session_id: "ext".into(),
+            stop_reason: "end_turn".into(),
+            agent_type: "codex".into(),
+        });
+        assert!(s.delegation_progress().is_some());
     }
 
     #[test]
@@ -2278,6 +4641,49 @@ mod tests {
         }
     }
 
+    /// The frontend reducer drops an empty `CONTENT_DELTA` outright, so a
+    /// streaming client never sees an empty `Text` block. If this side kept
+    /// one, a snapshot-hydrated client would get an extra block the streaming
+    /// one lacks — and prose either side of it would render as two runs
+    /// instead of one (#494 on the snapshot path only).
+    #[test]
+    fn empty_text_delta_adds_no_block_and_never_splits_a_run() {
+        let mut s = fresh_state();
+        s.status = ConnectionStatus::Prompting;
+        s.apply_event(&AcpEvent::Thinking {
+            text: "before".into(),
+            parent_tool_use_id: None,
+        });
+        s.apply_event(&AcpEvent::ContentDelta {
+            text: String::new(),
+            parent_tool_use_id: None,
+        });
+        s.apply_event(&AcpEvent::Thinking {
+            text: " after".into(),
+            parent_tool_use_id: None,
+        });
+        let live = s.live_message.as_ref().expect("live message");
+        assert_eq!(live.content.len(), 1, "no empty Text block was inserted");
+        assert!(
+            matches!(&live.content[0], LiveContentBlock::Thinking { text, .. } if text == "before after"),
+            "the thinking run stayed one block, got {:?}",
+            live.content[0]
+        );
+    }
+
+    /// …and it must not open a live message either — same as the reducer,
+    /// which returns before `ensureLiveMessage`.
+    #[test]
+    fn empty_text_delta_does_not_open_a_live_message() {
+        let mut s = fresh_state();
+        s.status = ConnectionStatus::Prompting;
+        s.apply_event(&AcpEvent::ContentDelta {
+            text: String::new(),
+            parent_tool_use_id: None,
+        });
+        assert!(s.live_message.is_none());
+    }
+
     #[test]
     fn parented_deltas_with_same_parent_merge() {
         let mut s = fresh_state();
@@ -2468,6 +4874,265 @@ mod tests {
         assert_eq!(ids, vec!["tc-a", "tc-m", "tc-z"]);
     }
 
+    /// Open a tool call and finish it, with `output_bytes` of tool output.
+    /// `settled` false leaves it in progress (still streaming its output).
+    fn run_tool_call(s: &mut SessionState, id: &str, output_bytes: usize, settled: bool) {
+        s.apply_event(&AcpEvent::ToolCall {
+            tool_call_id: id.into(),
+            title: format!("Read src/{id}.rs"),
+            kind: "read".into(),
+            status: "in_progress".into(),
+            content: None,
+            raw_input: Some(format!("{{\"file_path\":\"src/{id}.rs\"}}")),
+            raw_output: None,
+            locations: Some(serde_json::json!([{ "path": format!("src/{id}.rs") }])),
+            meta: Some(serde_json::json!({ "codeg.delegation": { "status": "completed" } })),
+            images: None,
+        });
+        let status = if settled { "completed" } else { "in_progress" };
+        s.apply_event(&AcpEvent::ToolCallUpdate {
+            tool_call_id: id.into(),
+            title: None,
+            status: Some(status.to_string()),
+            content: None,
+            raw_input: None,
+            raw_output: Some("o".repeat(output_bytes)),
+            raw_output_append: None,
+            locations: None,
+            meta: None,
+            images: None,
+        });
+    }
+
+    /// The ordinary turn stays byte-identical: nothing is trimmed while the
+    /// table fits the budget, so the wire shape is exactly what it always was.
+    #[test]
+    fn snapshot_carries_every_tool_call_whole_while_it_fits_the_budget() {
+        let mut s = fresh_state();
+        for i in 0..20 {
+            run_tool_call(&mut s, &format!("tc-{i:03}"), 4 * 1024, true);
+        }
+
+        let snap = s.to_snapshot();
+        assert_eq!(snap.active_tool_calls.len(), 20);
+        for tc in &snap.active_tool_calls {
+            let live = &s.active_tool_calls[&tc.id];
+            assert_eq!(
+                serde_json::to_value(tc).unwrap(),
+                serde_json::to_value(live).unwrap(),
+                "{} must ship exactly as held",
+                tc.id
+            );
+        }
+    }
+
+    /// #380: `active_tool_calls` is cleared only at `TurnComplete`, so a turn
+    /// that keeps working accumulates every tool call it ever made — the
+    /// reporter sampled 1983 entries and a 26.7 MB snapshot on a turn that had
+    /// not reached one, and the client that parses that on attach stopped
+    /// responding.
+    ///
+    /// The snapshot now spends a byte budget over the finished calls' payload,
+    /// newest first, WITHOUT dropping an entry: every `ToolCallRef` in the live
+    /// message must still resolve, or the reattaching client renders the
+    /// in-flight turn with tool cards missing from the middle of it.
+    #[test]
+    fn snapshot_bounds_finished_tool_call_payload_on_a_long_turn() {
+        const CALLS: usize = 300;
+        const OUTPUT_BYTES: usize = 16 * 1024;
+        let mut s = fresh_state();
+        for i in 0..CALLS {
+            run_tool_call(&mut s, &format!("tc-{i:04}"), OUTPUT_BYTES, true);
+        }
+        // …and one still running, the call the attaching client has to keep
+        // rendering from live events.
+        run_tool_call(&mut s, "tc-running", OUTPUT_BYTES, false);
+
+        // What the state holds, and what shipping it whole would have cost.
+        assert_eq!(s.active_tool_calls.len(), CALLS + 1);
+        let held: usize = s
+            .active_tool_calls
+            .values()
+            .map(tool_call_trimmable_bytes)
+            .sum();
+        assert!(
+            held > 2 * MAX_SNAPSHOT_TOOL_PAYLOAD_BYTES,
+            "the turn must hold well past the budget for this to test anything (held {held})"
+        );
+
+        let snap = s.to_snapshot();
+        let wire = serde_json::to_string(&snap).expect("serialize snapshot");
+        assert!(
+            wire.len() < MAX_SNAPSHOT_TOOL_PAYLOAD_BYTES * 3 / 2,
+            "snapshot must stay near the budget, got {} bytes for {held} bytes held",
+            wire.len()
+        );
+
+        // Nothing is dropped: same count, same (id-sorted) order, and every
+        // `ToolCallRef` block in the live message still resolves.
+        assert_eq!(snap.active_tool_calls.len(), CALLS + 1);
+        let wire_ids: Vec<&str> = snap
+            .active_tool_calls
+            .iter()
+            .map(|tc| tc.id.as_str())
+            .collect();
+        let held_ids: Vec<&str> = s.active_tool_calls.keys().map(String::as_str).collect();
+        assert_eq!(wire_ids, held_ids);
+        let by_id: std::collections::BTreeMap<&str, &ToolCallState> = snap
+            .active_tool_calls
+            .iter()
+            .map(|tc| (tc.id.as_str(), tc))
+            .collect();
+        for block in &s.live_message.as_ref().expect("live message").content {
+            if let LiveContentBlock::ToolCallRef { tool_call_id } = block {
+                assert!(
+                    by_id.contains_key(tool_call_id.as_str()),
+                    "{tool_call_id} is anchored in the live message but missing from the snapshot"
+                );
+            }
+        }
+
+        // The running call keeps its partial output at any size — nothing else
+        // has it. So does the newest finished one.
+        assert!(by_id["tc-running"].output.is_some());
+        assert!(by_id[format!("tc-{:04}", CALLS - 1).as_str()].output.is_some());
+
+        // The oldest finished calls ship without the payload, but keep every
+        // field that identifies the card.
+        let oldest = by_id["tc-0000"];
+        assert!(oldest.output.is_none(), "oldest call must shed its output");
+        assert!(oldest.content.is_none());
+        assert!(oldest.input.is_none());
+        assert!(oldest.locations.is_none());
+        assert_eq!(oldest.label, "Read src/tc-0000.rs");
+        assert_eq!(oldest.kind, ToolKind::Read);
+        assert_eq!(oldest.status, ToolCallStatus::Completed);
+        assert!(
+            oldest.meta.is_some(),
+            "delegation meta re-anchors an inline sub-thread on attach"
+        );
+
+        // And the trimming is a tail, not a purge: the budget is actually spent
+        // on the recent calls rather than thrown away.
+        let kept = snap
+            .active_tool_calls
+            .iter()
+            .filter(|tc| tc.output.is_some())
+            .count();
+        assert!(
+            kept > 32 && kept < CALLS,
+            "expected a bounded recent window to keep its output, got {kept}"
+        );
+    }
+
+    /// The budget bounds finished work only. A single running call bigger than
+    /// the whole budget still ships whole: its output exists nowhere else yet,
+    /// and its count tracks live concurrency, not how long the turn has run.
+    #[test]
+    fn snapshot_never_trims_a_running_tool_call() {
+        let mut s = fresh_state();
+        for i in 0..200 {
+            run_tool_call(&mut s, &format!("tc-{i:04}"), 16 * 1024, true);
+        }
+        run_tool_call(&mut s, "tc-huge", MAX_SNAPSHOT_TOOL_PAYLOAD_BYTES + 1024, false);
+
+        let snap = s.to_snapshot();
+        let huge = snap
+            .active_tool_calls
+            .iter()
+            .find(|tc| tc.id == "tc-huge")
+            .expect("running call present");
+        assert_eq!(huge.status, ToolCallStatus::InProgress);
+        assert!(huge.output.is_some(), "a running call is never trimmed");
+    }
+
+    /// A generated image survives the trim, however old the call is.
+    ///
+    /// `isImageGenerationToolCall` classifies the call from the `label` the
+    /// trim keeps, and `generated-images-block.tsx` renders an
+    /// image-generation block whose `image` is null under a terminal status as
+    /// "image generation failed". So shedding the bytes would not show less,
+    /// it would report a success as a failure — and an image is exactly the
+    /// payload a user would then go looking for.
+    #[test]
+    fn snapshot_keeps_a_generated_image_on_the_oldest_trimmed_call() {
+        let mut s = fresh_state();
+        // The oldest call, and the one carrying the image.
+        s.apply_event(&AcpEvent::ToolCall {
+            tool_call_id: "tc-image".into(),
+            title: "Image generation".into(),
+            kind: "other".into(),
+            status: "in_progress".into(),
+            content: None,
+            raw_input: Some("{\"prompt\":\"a cat\"}".into()),
+            raw_output: None,
+            locations: None,
+            meta: None,
+            images: None,
+        });
+        s.apply_event(&AcpEvent::ToolCallUpdate {
+            tool_call_id: "tc-image".into(),
+            title: None,
+            status: Some("completed".into()),
+            content: None,
+            raw_input: None,
+            raw_output: Some("o".repeat(16 * 1024)),
+            raw_output_append: None,
+            locations: None,
+            meta: None,
+            images: Some(vec![ToolCallImageInfo {
+                data: "R0lGODlhAQABAAAAACw=".repeat(64),
+                mime_type: "image/png".into(),
+                uri: None,
+            }]),
+        });
+        // …then enough finished work after it to push it out of the budget.
+        for i in 0..300 {
+            run_tool_call(&mut s, &format!("tc-{i:04}"), 16 * 1024, true);
+        }
+
+        let snap = s.to_snapshot();
+        let image_call = snap
+            .active_tool_calls
+            .iter()
+            .find(|tc| tc.id == "tc-image")
+            .expect("the image call still ships");
+        assert!(
+            image_call.output.is_none(),
+            "it is old enough to be trimmed, which is what makes this a test"
+        );
+        assert_eq!(
+            image_call.images.len(),
+            1,
+            "a trimmed success must not come back as a failed generation"
+        );
+        assert_eq!(image_call.label, "Image generation");
+    }
+
+    /// The bound covers terminal calls only, so a table that never reaches one
+    /// ships whole however long it gets.
+    ///
+    /// Every agent codeg ships reports a terminal status, which is what makes
+    /// the carve-out for in-flight calls safe. This pins the assumption rather
+    /// than leaving it implicit: an agent that stopped reporting one would
+    /// turn this test red instead of silently restoring #380.
+    #[test]
+    fn snapshot_ships_an_all_unsettled_table_whole() {
+        let mut s = fresh_state();
+        for i in 0..300 {
+            run_tool_call(&mut s, &format!("tc-{i:04}"), 16 * 1024, false);
+        }
+
+        let snap = s.to_snapshot();
+        assert_eq!(snap.active_tool_calls.len(), 300);
+        assert!(
+            snap.active_tool_calls
+                .iter()
+                .all(|tc| tc.output.is_some() && tc.status == ToolCallStatus::InProgress),
+            "nothing unsettled is trimmed at any size"
+        );
+    }
+
     #[test]
     fn tool_call_content_field_is_preserved_on_state() {
         let mut s = fresh_state();
@@ -2588,6 +5253,8 @@ mod tests {
             agent_type: AgentType::Codex,
             task_preview: "run the tests".into(),
             task_id: "task-ss-1".into(),
+            assistant_id: None,
+            assistant_name: None,
         }
     }
 
@@ -2602,6 +5269,8 @@ mod tests {
                 duration_ms: 1,
                 text_preview: None,
             },
+            assistant_id: None,
+            assistant_name: None,
         }
     }
 
@@ -2627,6 +5296,45 @@ mod tests {
         assert_eq!(back.active_delegations.len(), 1);
         assert_eq!(back.active_delegations[0].parent_tool_use_id, "pt-1");
         assert_eq!(back.active_delegations[0].child_conversation_id, 99);
+    }
+
+    /// Lifecycle accounting for every delegation, card or not: running children
+    /// are tracked by connection id, outlive the parent's turn, reach the
+    /// snapshot, and a replayed frame changes nothing.
+    #[test]
+    fn delegated_children_track_every_running_delegation() {
+        let running = |child: &str, running: bool| AcpEvent::DelegationChildRunning {
+            child_connection_id: child.into(),
+            running,
+        };
+        let mut s = fresh_state();
+        s.apply_event(&running("child-a", true));
+        s.apply_event(&running("child-b", true));
+        s.apply_event(&running("child-a", true));
+        s.apply_event(&AcpEvent::TurnComplete {
+            session_id: "ext".into(),
+            stop_reason: "end_turn".into(),
+            agent_type: "claude_code".into(),
+        });
+        assert_eq!(
+            s.delegated_children.iter().collect::<Vec<_>>(),
+            vec!["child-a", "child-b"]
+        );
+        assert!(s.active_delegations.is_empty(), "neither has a card");
+
+        let json = serde_json::to_string(&s.to_snapshot()).unwrap();
+        let back: LiveSessionSnapshot = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.delegated_children, vec!["child-a", "child-b"]);
+
+        s.apply_event(&running("child-a", false));
+        s.apply_event(&running("child-a", false));
+        s.apply_event(&running("child-b", false));
+        assert!(s.delegated_children.is_empty());
+        let json = serde_json::to_string(&s.to_snapshot()).unwrap();
+        assert!(
+            !json.contains("delegated_children"),
+            "kept off the wire when empty"
+        );
     }
 
     #[test]
@@ -2898,6 +5606,90 @@ mod tests {
         assert_eq!(s.last_assistant_text, None);
     }
 
+    /// The turn's end is stamped beside its answer, once: a repeated
+    /// `TurnComplete` (the cancel path can bring a second) keeps both.
+    #[test]
+    fn turn_complete_stamps_when_the_answer_was_captured() {
+        let mut s = fresh_state();
+        assert!(s.last_turn_completed_at.is_none());
+        s.live_message = Some(LiveMessage {
+            id: "m1".into(),
+            role: MessageRole::Assistant,
+            content: vec![LiveContentBlock::Text {
+                text: "done".into(),
+                parent_tool_use_id: None,
+            }],
+            started_at: Utc::now(),
+        });
+        let complete = AcpEvent::TurnComplete {
+            session_id: "ext".into(),
+            stop_reason: "end_turn".into(),
+            agent_type: "claude_code".into(),
+        };
+        s.apply_event(&complete);
+        let stamped = s.last_turn_completed_at.expect("stamped");
+        assert_eq!(s.last_assistant_text.as_deref(), Some("done"));
+        s.apply_event(&complete);
+        assert_eq!(s.last_turn_completed_at, Some(stamped), "a repeat keeps it");
+        assert_eq!(s.last_assistant_text.as_deref(), Some("done"));
+    }
+
+    /// A turn that never opened a live message has no text of its own either.
+    /// An agent whose only output was an empty text chunk reaches exactly that
+    /// state (`append_text_delta` drops it), and the turn still ends on
+    /// `end_turn` — so without clearing, `get_delegation_status` would hand the
+    /// PREVIOUS turn's answer back as this turn's result.
+    #[test]
+    fn turn_complete_clears_stale_text_when_the_turn_produced_nothing() {
+        let mut s = fresh_state();
+        s.status = ConnectionStatus::Prompting;
+        s.turn_in_flight = true;
+        s.last_assistant_text = Some("stale text from an earlier turn".into());
+        s.apply_event(&AcpEvent::ContentDelta {
+            text: String::new(),
+            parent_tool_use_id: None,
+        });
+        assert!(s.live_message.is_none(), "empty chunk opens no live message");
+        s.apply_event(&AcpEvent::TurnComplete {
+            session_id: "ext".into(),
+            stop_reason: "end_turn".into(),
+            agent_type: "codex".into(),
+        });
+        assert_eq!(s.last_assistant_text, None);
+    }
+
+    /// `TurnComplete` is emitted from three places, and the cancel path does
+    /// not wait for the agent — so a second one can land on an already-settled
+    /// turn. It must not wipe the text the first one captured.
+    #[test]
+    fn a_repeat_turn_complete_keeps_the_captured_text() {
+        let mut s = fresh_state();
+        s.status = ConnectionStatus::Prompting;
+        s.turn_in_flight = true;
+        s.live_message = Some(LiveMessage {
+            id: "m1".into(),
+            role: MessageRole::Assistant,
+            content: vec![LiveContentBlock::Text {
+                text: "the answer".into(),
+                parent_tool_use_id: None,
+            }],
+            started_at: Utc::now(),
+        });
+        let complete = AcpEvent::TurnComplete {
+            session_id: "ext".into(),
+            stop_reason: "cancelled".into(),
+            agent_type: "codex".into(),
+        };
+        s.apply_event(&complete);
+        assert_eq!(s.last_assistant_text.as_deref(), Some("the answer"));
+        s.apply_event(&complete);
+        assert_eq!(
+            s.last_assistant_text.as_deref(),
+            Some("the answer"),
+            "the agent's late response must not erase the captured result"
+        );
+    }
+
     #[test]
     fn permission_resolved_clears_matching_request() {
         // Mirrors the pet snapshot semantics: when the user (or auto-approve)
@@ -2916,6 +5708,8 @@ mod tests {
 
         s.apply_event(&AcpEvent::PermissionResolved {
             request_id: "p-1".into(),
+            option_id: None,
+            origin: None,
         });
         assert!(
             s.pending_permission.is_none(),
@@ -2966,12 +5760,80 @@ mod tests {
 
         s.apply_event(&AcpEvent::PermissionResolved {
             request_id: "p-stale".into(),
+            option_id: None,
+            origin: None,
         });
         let p = s
             .pending_permission
             .as_ref()
             .expect("stale PermissionResolved must not clear a non-matching pending permission");
         assert_eq!(p.request_id, "p-2");
+    }
+
+    fn approval(tool_call_id: &str, option_kind: &str) -> ToolApprovalInfo {
+        ToolApprovalInfo {
+            tool_call_id: tool_call_id.into(),
+            option_kind: option_kind.into(),
+            option_name: "Allow".into(),
+            origin: "user".into(),
+            decided_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn tool_approvals_keep_one_record_per_call_across_turns() {
+        let mut s = fresh_state();
+        s.apply_event(&AcpEvent::ToolApproval {
+            approval: approval("tc-1", "allow_once"),
+        });
+        s.apply_event(&AcpEvent::ToolApproval {
+            approval: approval("tc-2", "allow_once"),
+        });
+        // A second answer about the same call replaces the first and becomes
+        // the newest.
+        let again = approval("tc-1", "reject_once");
+        s.apply_event(&AcpEvent::ToolApproval {
+            approval: again.clone(),
+        });
+        // Not turn-scoped: a finished turn keeps its approvals.
+        s.apply_event(&AcpEvent::TurnComplete {
+            session_id: "ext".into(),
+            stop_reason: "end_turn".into(),
+            agent_type: "claude_code".into(),
+        });
+        let ids: Vec<_> = s
+            .tool_approvals
+            .iter()
+            .map(|a| a.tool_call_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["tc-2", "tc-1"]);
+        assert_eq!(s.tool_approvals[1], again);
+
+        let snap = s.to_snapshot();
+        let json = serde_json::to_string(&snap).expect("serialize");
+        let back: LiveSessionSnapshot = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.tool_approvals, s.tool_approvals);
+        let empty_json = serde_json::to_string(&fresh_state().to_snapshot()).expect("serialize");
+        assert!(
+            !empty_json.contains("tool_approvals"),
+            "a connection that answered nothing keeps the field off the wire"
+        );
+    }
+
+    #[test]
+    fn tool_approvals_drop_the_oldest_past_the_cap() {
+        let mut s = fresh_state();
+        for i in 0..MAX_TOOL_APPROVALS + 3 {
+            s.apply_event(&AcpEvent::ToolApproval {
+                approval: approval(&format!("tc-{i}"), "allow_once"),
+            });
+        }
+        assert_eq!(s.tool_approvals.len(), MAX_TOOL_APPROVALS);
+        assert_eq!(s.tool_approvals[0].tool_call_id, "tc-3");
+        assert_eq!(
+            s.tool_approvals.last().map(|a| a.tool_call_id.as_str()),
+            Some(format!("tc-{}", MAX_TOOL_APPROVALS + 2).as_str())
+        );
     }
 
     #[test]
@@ -3064,6 +5926,7 @@ mod tests {
                     options: vec![],
                     groups: vec![],
                 }),
+                recommended_value: None,
             }],
         });
         s.apply_event(&AcpEvent::UsageUpdate {

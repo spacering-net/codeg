@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it } from "vitest"
 
-import { placeAnchoredPopup } from "./popup-position"
+import { placeAnchoredPopup, readViewport } from "./popup-position"
 
 const SIZE = { width: 320, height: 288 }
 const VIEWPORT = { width: 1280, height: 800 }
@@ -135,5 +135,99 @@ describe("placeAnchoredPopup", () => {
     // above: top = 600 - 10 - 288 = 302
     expect(pos.top).toBe(302)
     expect(pos.left).toBe(100)
+  })
+})
+
+// On a phone the window is not the visible box: the on-screen keyboard can
+// cover the bottom of the layout viewport without shrinking
+// `window.innerHeight`, and scrolling a focused field into view slides the
+// visible band down inside it.
+// The band is passed in as a viewport with an origin, and everything is clamped
+// against that — otherwise the panel lands behind the keyboard, which reads to
+// the user as "nothing happened".
+describe("placeAnchoredPopup with a visible band smaller than the window", () => {
+  it("flips a below-preferring panel up rather than dropping it behind the keyboard", () => {
+    const anchor = { left: 16, top: 300, bottom: 340 }
+    // Window is 800 tall; the keyboard leaves the top 400 visible.
+    const band = { width: 390, height: 400 }
+    const pos = placeAnchoredPopup(anchor, SIZE, band, { prefer: "below" })
+    // roomBelow inside the band = 400 - 340 - 8 = 52 < 292 → flips above.
+    expect(pos.placement).toBe("above")
+    expect(pos.top).toBe(8)
+    // Measured against the whole window it would have hung below, at 344 —
+    // fully underneath the keyboard.
+    const windowPos = placeAnchoredPopup(
+      anchor,
+      SIZE,
+      { width: 390, height: 800 },
+      { prefer: "below" }
+    )
+    expect(windowPos.top).toBe(344)
+  })
+
+  it("keeps the panel inside a band that starts partway down the window", () => {
+    // iOS scrolled the visual viewport 120px down inside the layout viewport,
+    // leaving client y 120–520 visible.
+    const band = { width: 390, height: 400, left: 0, top: 120 }
+    const pos = placeAnchoredPopup(
+      { left: 16, top: 200, bottom: 240 },
+      SIZE,
+      band
+    )
+    // Neither side fits (roomAbove 72, roomBelow 272) → below wins, then the
+    // clamp pulls it up to sit on the band's bottom margin: 520 - 288 - 8.
+    expect(pos.placement).toBe("below")
+    expect(pos.top).toBe(224)
+    expect(pos.top).toBeGreaterThanOrEqual(128)
+    expect(pos.top + SIZE.height).toBeLessThanOrEqual(512)
+  })
+
+  it("clamps the left edge into a horizontally offset band", () => {
+    const pos = placeAnchoredPopup({ left: 0, top: 600, bottom: 620 }, SIZE, {
+      width: 300,
+      height: 800,
+      left: 100,
+      top: 0,
+    })
+    // The panel is wider than the band, so it pins to the band's left margin.
+    expect(pos.left).toBe(108)
+  })
+
+  it("pins a null anchor to the band's corner, not the window's", () => {
+    const pos = placeAnchoredPopup(null, SIZE, {
+      width: 390,
+      height: 400,
+      left: 40,
+      top: 120,
+    })
+    expect(pos).toEqual({ left: 48, top: 128, placement: "below" })
+  })
+})
+
+describe("readViewport", () => {
+  afterEach(() => {
+    Reflect.deleteProperty(window, "visualViewport")
+  })
+
+  it("reports the visual viewport's size and origin when the platform has one", () => {
+    Object.defineProperty(window, "visualViewport", {
+      configurable: true,
+      value: { width: 390, height: 400, offsetLeft: 0, offsetTop: 120 },
+    })
+    expect(readViewport()).toEqual({
+      width: 390,
+      height: 400,
+      left: 0,
+      top: 120,
+    })
+  })
+
+  it("falls back to the window where visualViewport is missing", () => {
+    // jsdom and older WebViews: unchanged from the pre-mobile behaviour.
+    expect(window.visualViewport).toBeUndefined()
+    expect(readViewport()).toEqual({
+      width: window.innerWidth,
+      height: window.innerHeight,
+    })
   })
 })

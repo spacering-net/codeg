@@ -1,19 +1,48 @@
-import { act, fireEvent, render, screen } from "@testing-library/react"
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import { useEffect, type Ref } from "react"
 
 import { Sidebar } from "./sidebar"
+// Type-only (erased at runtime, so it does not defeat the mock below): pins the
+// stub's imperative handle to the real component's contract.
+import type { SidebarConversationListHandle } from "@/components/conversations/sidebar-conversation-list"
+import {
+  HarnessViewProvider,
+  useHarnessView,
+} from "@/contexts/harness-view-context"
 import enMessages from "@/i18n/messages/en.json"
+import type { TagFilter } from "@/lib/conversation-tags"
+import {
+  resetConversationTagsStore,
+  useConversationTagsStore,
+} from "@/stores/conversation-tags-store"
+import {
+  resetFolderTabsStore,
+  useFolderTabsStore,
+} from "@/stores/folder-tabs-store"
 
 // Stable spies + mutable active-folder, referenced from the hoisted mock
 // factories below (vi.mock is hoisted above imports).
 const spies = vi.hoisted(() => ({
   openNewConversationTab: vi.fn(),
   openChatModeTab: vi.fn(),
-  setSearchOpen: vi.fn(),
   setRoute: vi.fn(),
   openConversations: vi.fn(),
+  // The list's imperative handle, driven by the header buttons.
+  scrollToActive: vi.fn(),
+  expandAll: vi.fn(),
+  collapseAll: vi.fn(),
+  // The tag manager the tag filter's footer leads to.
+  openConversationTagsManager: vi.fn(),
   // Latest props the (stubbed) conversation list was rendered with, so tests can
   // assert what the sidebar threads down (e.g. showWorktrees / showCompleted).
   listProps: null as {
@@ -21,24 +50,46 @@ const spies = vi.hoisted(() => ({
     showCompleted?: boolean
     showRecent?: boolean
     sectionOrder?: readonly string[]
+    tagFilter?: TagFilter
   } | null,
 }))
 const mockState = vi.hoisted(() => ({
   activeFolder: { id: 7, path: "/x" } as { id: number; path: string } | null,
+  // The workbench route the sidebar is told it is on.
+  routeId: "conversations",
 }))
 
 // The conversation list is irrelevant here — stub it so the test exercises only
-// the sidebar's header + fixed New chat / Search region.
-vi.mock("@/components/conversations/sidebar-conversation-list", () => ({
-  SidebarConversationList: (props: {
-    showWorktrees?: boolean
-    showCompleted?: boolean
-    showRecent?: boolean
-    sectionOrder?: readonly string[]
-  }) => {
-    spies.listProps = props
-    return null
-  },
+// the sidebar's header + fixed nav region. The stub still fulfils the imperative
+// handle (React 19 hands `ref` to a function component as a plain prop, which is
+// how the real component takes it), so the header buttons that drive the list
+// are asserted against real calls instead of clicking into a null ref.
+vi.mock("@/components/conversations/sidebar-conversation-list", async () => {
+  const { useImperativeHandle } = await import("react")
+  return {
+    SidebarConversationList: ({
+      ref,
+      ...props
+    }: {
+      ref?: Ref<SidebarConversationListHandle>
+      showWorktrees?: boolean
+      showCompleted?: boolean
+      showRecent?: boolean
+      sectionOrder?: readonly string[]
+      tagFilter?: TagFilter
+    }) => {
+      spies.listProps = props
+      useImperativeHandle(ref, () => ({
+        scrollToActive: spies.scrollToActive,
+        expandAll: spies.expandAll,
+        collapseAll: spies.collapseAll,
+      }))
+      return null
+    },
+  }
+})
+vi.mock("@/components/conversations/conversation-tags-manager", () => ({
+  openConversationTagsManager: spies.openConversationTagsManager,
 }))
 vi.mock("@/contexts/sidebar-context", () => ({
   useSidebarContext: () => ({ isOpen: true, toggle: vi.fn() }),
@@ -51,9 +102,6 @@ vi.mock("@/contexts/tab-context", () => ({
     openNewConversationTab: spies.openNewConversationTab,
     openChatModeTab: spies.openChatModeTab,
   }),
-}))
-vi.mock("@/contexts/search-dialog-context", () => ({
-  useSearchDialog: () => ({ open: false, setOpen: spies.setSearchOpen }),
 }))
 vi.mock("@/contexts/automations-view-context", () => ({
   useAutomationsView: () => ({
@@ -71,8 +119,8 @@ vi.mock("@/contexts/tasks-view-context", () => ({
 }))
 vi.mock("@/contexts/workbench-route-context", () => ({
   useWorkbenchRoute: () => ({
-    routeId: "conversations",
-    isConversations: true,
+    routeId: mockState.routeId,
+    isConversations: mockState.routeId === "conversations",
     setRoute: spies.setRoute,
     openConversations: spies.openConversations,
   }),
@@ -88,19 +136,52 @@ vi.mock("@/hooks/use-appearance", () => ({
   useZoomLevel: () => ({ zoomLevel: 100, setZoomLevel: () => {} }),
 }))
 
-function renderSidebar() {
+/** Reports a number of available updates to the Harness provider, as the
+ *  update check will. */
+function HarnessUpdates({ count }: { count: number }) {
+  const { setUpdatesCount } = useHarnessView()
+  useEffect(() => setUpdatesCount(count), [count, setUpdatesCount])
+  return null
+}
+
+// Under the real Harness provider (unlike the contexts stubbed above, it talks
+// to no backend), so the row's badge is fed the way the app feeds it.
+function renderSidebar({ harnessUpdates = 0 } = {}) {
   return render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
-      <Sidebar />
+      <HarnessViewProvider>
+        <HarnessUpdates count={harnessUpdates} />
+        <Sidebar />
+      </HarnessViewProvider>
     </NextIntlClientProvider>
   )
 }
 
-describe("Sidebar — fixed New chat / Search region", () => {
+/**
+ * Walk into one of the view-options menu's two visibility inventories, which
+ * live behind submenus. Clicking a sub-trigger opens it synchronously; opening
+ * it by HOVER runs on a 100ms Radix timer and is asserted separately below.
+ *
+ * This — and every click on a row inside the submenu — deliberately uses the
+ * module-level `userEvent` instead of a `setup()` instance, matching the
+ * quick-actions submenu tests. A shared instance remembers where the pointer
+ * was, so the next click drags it off the sub-trigger first; Radix answers a
+ * trigger-leave with its grace-area check, which needs real element geometry,
+ * and jsdom reports every rect as 0×0. The check fails, the root menu takes
+ * focus back, and the submenu closes out from under the click. A fresh
+ * instance has no previous position, so nothing ever leaves the trigger.
+ */
+async function openViewOptionsGroup(
+  group: "Filter by tags" | "Conversation list" | "Navigation items"
+) {
+  await userEvent.click(screen.getByRole("button", { name: "View options" }))
+  await userEvent.click(screen.getByRole("menuitem", { name: group }))
+}
+
+describe("Sidebar — fixed nav region", () => {
   beforeEach(() => {
     spies.openNewConversationTab.mockClear()
     spies.openChatModeTab.mockClear()
-    spies.setSearchOpen.mockClear()
     spies.setRoute.mockClear()
     spies.openConversations.mockClear()
     mockState.activeFolder = { id: 7, path: "/x" }
@@ -124,18 +205,19 @@ describe("Sidebar — fixed New chat / Search region", () => {
     expect(spies.openNewConversationTab).toHaveBeenCalledWith(7, "/x")
   })
 
-  it("Search opens the shared search dialog", () => {
+  it("renders the New chat shortcut hint", () => {
     const { getByText } = renderSidebar()
-    fireEvent.click(getByText("Search"))
-    expect(spies.setSearchOpen).toHaveBeenCalledWith(true)
+    // isMac=false → "mod" formats as "Ctrl". The badge is opacity-0 until the
+    // row is hovered/focused but stays in the DOM, so getByText resolves it.
+    expect(getByText("Ctrl+T")).toBeTruthy()
   })
 
-  it("renders New chat and Search shortcut hints", () => {
-    const { getByText } = renderSidebar()
-    // isMac=false → "mod" formats as "Ctrl". The badges are opacity-0 until the
-    // row is hovered/focused but stay in the DOM, so getByText resolves them.
-    expect(getByText("Ctrl+T")).toBeTruthy()
-    expect(getByText("Ctrl+K")).toBeTruthy()
+  it("no longer carries a Search row — it moved to the window chrome", () => {
+    const { queryByText } = renderSidebar()
+    // The sidebar unmounts when collapsed, which left ⌘K as the only path to
+    // search; the button now lives in LeftEdgeChrome / FolderTitleBar instead.
+    expect(queryByText("Search")).toBeNull()
+    expect(queryByText("Ctrl+K")).toBeNull()
   })
 
   it("falls back to chat mode (never disabled) when no folder is active", () => {
@@ -151,14 +233,140 @@ describe("Sidebar — fixed New chat / Search region", () => {
   })
 })
 
-describe("Sidebar — Show worktree folders toggle", () => {
+describe("Sidebar — View options grouping", () => {
+  beforeEach(() => {
+    localStorage.clear()
+    mockState.activeFolder = { id: 7, path: "/x" }
+  })
+
+  it("keeps both visibility inventories out of the root menu", async () => {
+    const user = userEvent.setup()
+    renderSidebar()
+    await user.click(screen.getByRole("button", { name: "View options" }))
+
+    // Six checkboxes inline turned the root into a wall; they now sit one hop
+    // in, behind their group. Sort by / Section order stay inline — the
+    // control on the right is the proof this is about the two inventories and
+    // not the menu failing to render.
+    expect(
+      screen.queryByRole("menuitemcheckbox", { name: "Show worktree branches" })
+    ).toBeNull()
+    expect(
+      screen.queryByRole("menuitemcheckbox", { name: "Automations" })
+    ).toBeNull()
+    expect(
+      screen.getByRole("menuitemradio", { name: "Created time" })
+    ).toBeTruthy()
+
+    expect(
+      screen.getByRole("menuitem", { name: "Conversation list" })
+    ).toBeTruthy()
+    expect(
+      screen.getByRole("menuitem", { name: "Navigation items" })
+    ).toBeTruthy()
+    await user.keyboard("{Escape}")
+  })
+
+  it("opens a group on hover alone, with no click", async () => {
+    const user = userEvent.setup()
+    renderSidebar()
+    await user.click(screen.getByRole("button", { name: "View options" }))
+
+    // Load-bearing: without this the assertion below would also pass on a menu
+    // that never nested the toggles in the first place.
+    expect(
+      screen.queryByRole("menuitemcheckbox", { name: "Automations" })
+    ).toBeNull()
+
+    // Pointing at the row is the whole interaction — Radix opens the submenu on
+    // a short pointer-move timer, so this resolves without a second click.
+    await user.hover(screen.getByRole("menuitem", { name: "Navigation items" }))
+
+    expect(
+      await screen.findByRole("menuitemcheckbox", { name: "Automations" })
+    ).toBeTruthy()
+    // Escape inside a submenu closes the whole stack, root included.
+    await user.keyboard("{Escape}")
+  })
+})
+
+describe("Sidebar — Tag filter inside View options", () => {
+  beforeEach(() => {
+    localStorage.clear()
+    spies.listProps = null
+    spies.openConversationTagsManager.mockClear()
+    mockState.activeFolder = { id: 7, path: "/x" }
+    resetConversationTagsStore()
+    useConversationTagsStore.getState().applyChange({
+      kind: "upsert",
+      tag: {
+        id: 1,
+        folder_id: null,
+        name: "bug",
+        color: "#0969da",
+        sort_order: 1,
+      },
+    })
+  })
+
+  it("has no header button of its own any more", () => {
+    renderSidebar()
+    expect(screen.queryByRole("button", { name: "Filter by tags" })).toBeNull()
+    // Control: the header cluster itself rendered.
+    expect(screen.getByRole("button", { name: "View options" })).toBeTruthy()
+  })
+
+  it("leads the View options menu", async () => {
+    renderSidebar()
+    await userEvent.click(screen.getByRole("button", { name: "View options" }))
+
+    const rows = screen.getAllByRole("menuitem")
+    expect(rows[0].textContent).toBe("Filter by tags")
+    expect(rows[1].textContent).toBe("Conversation list")
+  })
+
+  it("narrows the list to a picked tag, persists it and stays open", async () => {
+    renderSidebar()
+    expect(spies.listProps?.tagFilter).toEqual({ tagIds: [], mode: "any" })
+
+    await openViewOptionsGroup("Filter by tags")
+    const panel = await screen.findByRole("dialog", { name: "Filter by tags" })
+    await userEvent.click(within(panel).getByText("bug"))
+
+    expect(spies.listProps?.tagFilter).toEqual({ tagIds: [1], mode: "any" })
+    expect(
+      JSON.parse(localStorage.getItem("workspace:sidebar-tag-filter") ?? "")
+    ).toEqual({ tagIds: [1], mode: "any" })
+    // Picking is iterative, like every option here: the panel stays up, and
+    // the row now counts the pick.
+    expect(screen.getByRole("dialog", { name: "Filter by tags" })).toBe(panel)
+    expect(
+      within(
+        screen.getByRole("menuitem", { name: "Filter by tags" })
+      ).getByText("1")
+    ).toBeTruthy()
+  })
+
+  it("closes the whole menu on the way to the tag manager", async () => {
+    renderSidebar()
+    await openViewOptionsGroup("Filter by tags")
+    const panel = await screen.findByRole("dialog", { name: "Filter by tags" })
+    await userEvent.click(within(panel).getByText("Manage tags…"))
+
+    expect(spies.openConversationTagsManager).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull())
+    expect(screen.queryByRole("dialog")).toBeNull()
+  })
+})
+
+describe("Sidebar — Show worktree branches toggle", () => {
   beforeEach(() => {
     localStorage.clear()
     spies.listProps = null
     mockState.activeFolder = { id: 7, path: "/x" }
   })
 
-  it("defaults Show worktree folders on and threads it to the conversation list", () => {
+  it("defaults Show worktree branches on and threads it to the conversation list", () => {
     renderSidebar()
     expect(spies.listProps?.showWorktrees).toBe(true)
   })
@@ -171,15 +379,14 @@ describe("Sidebar — Show worktree folders toggle", () => {
     expect(spies.listProps?.showWorktrees).toBe(false)
   })
 
-  it("toggling the funnel item off persists the choice and threads it down", async () => {
-    const user = userEvent.setup()
+  it("toggling the view-options item off persists the choice and threads it down", async () => {
     renderSidebar()
     // Default on with a cleared store.
     expect(spies.listProps?.showWorktrees).toBe(true)
 
-    await user.click(screen.getByRole("button", { name: "View options" }))
-    await user.click(
-      screen.getByRole("menuitemcheckbox", { name: "Show worktree folders" })
+    await openViewOptionsGroup("Conversation list")
+    await userEvent.click(
+      screen.getByRole("menuitemcheckbox", { name: "Show worktree branches" })
     )
 
     expect(localStorage.getItem("workspace:sidebar-show-worktrees")).toBe(
@@ -226,21 +433,340 @@ describe("Sidebar — Show Recent group toggle", () => {
     expect(spies.listProps?.showRecent).toBe(false)
   })
 
-  it("toggling the funnel item off persists the choice and keeps the menu open", async () => {
-    const user = userEvent.setup()
+  it("toggling the view-options item off persists the choice and keeps the menu open", async () => {
     renderSidebar()
 
-    await user.click(screen.getByRole("button", { name: "View options" }))
-    await user.click(
+    await openViewOptionsGroup("Conversation list")
+    await userEvent.click(
       screen.getByRole("menuitemcheckbox", { name: "Show Recent group" })
     )
 
     expect(localStorage.getItem("workspace:sidebar-show-recent")).toBe("false")
     expect(spies.listProps?.showRecent).toBe(false)
     // The view-options menu is a settings panel: flipping one option must not
-    // dismiss it, or changing two costs two trips through the trigger.
+    // dismiss it — nor the submenu it lives in — or changing two costs two
+    // trips back through the trigger.
     expect(
       screen.getByRole("menuitemcheckbox", { name: "Show Recent group" })
+    ).toBeTruthy()
+  })
+})
+
+describe("Sidebar — Tabs follow folder", () => {
+  beforeEach(() => {
+    localStorage.clear()
+    resetFolderTabsStore()
+    mockState.activeFolder = { id: 7, path: "/x" }
+  })
+
+  it("is a root row of View options that switches the mode both ways and keeps the menu open", async () => {
+    renderSidebar()
+    await userEvent.click(screen.getByRole("button", { name: "View options" }))
+    const row = () =>
+      screen.getByRole("menuitemcheckbox", { name: "Tabs follow folder" })
+    expect(row()).toHaveAttribute("aria-checked", "false")
+    // A root row, not one more checkbox behind a submenu.
+    expect(
+      screen.queryByRole("menuitemcheckbox", { name: "Show Recent group" })
+    ).toBeNull()
+
+    await userEvent.click(row())
+    expect(useFolderTabsStore.getState().enabled).toBe(true)
+    expect(localStorage.getItem("workspace:tabs-follow-folder:local")).toBe(
+      "true"
+    )
+    expect(row()).toHaveAttribute("aria-checked", "true")
+
+    await userEvent.click(row())
+    expect(useFolderTabsStore.getState().enabled).toBe(false)
+    expect(localStorage.getItem("workspace:tabs-follow-folder:local")).toBe(
+      "false"
+    )
+    expect(row()).toHaveAttribute("aria-checked", "false")
+  })
+
+  it("reflects a mode switched on elsewhere", async () => {
+    act(() => {
+      useFolderTabsStore.getState().setEnabled(true)
+    })
+    renderSidebar()
+    await userEvent.click(screen.getByRole("button", { name: "View options" }))
+    expect(
+      screen.getByRole("menuitemcheckbox", { name: "Tabs follow folder" })
+    ).toHaveAttribute("aria-checked", "true")
+  })
+})
+
+describe("Sidebar — Navigation item visibility", () => {
+  beforeEach(() => {
+    localStorage.clear()
+    mockState.activeFolder = { id: 7, path: "/x" }
+  })
+
+  // The nav rows are `button`s; the menu's toggles are `menuitemcheckbox`es, so
+  // the two never collide even while the menu is open.
+  const navRow = (name: string | RegExp) =>
+    screen.queryByRole("button", { name })
+  const FORGE_ROW = "Repository panel"
+
+  it("shows every route row by default", () => {
+    renderSidebar()
+    expect(navRow("Automations")).toBeTruthy()
+    expect(navRow("To-dos")).toBeTruthy()
+    expect(navRow(FORGE_ROW)).toBeTruthy()
+  })
+
+  it("hides a row when its menu toggle is switched off, and persists it", async () => {
+    renderSidebar()
+
+    await openViewOptionsGroup("Navigation items")
+    await userEvent.click(
+      screen.getByRole("menuitemcheckbox", { name: "Automations" })
+    )
+    // Like every other option here, flipping one must not dismiss the menu —
+    // and the submenu it lives in has to survive too.
+    expect(
+      screen.getByRole("menuitemcheckbox", { name: "Automations" })
+    ).toBeTruthy()
+    // Close it before looking at the rows: an open Radix menu is modal and
+    // aria-hides the sidebar behind it, which would make "the row is gone" true
+    // for the wrong reason. Escape inside a submenu closes the whole stack.
+    await userEvent.keyboard("{Escape}")
+
+    expect(navRow("Automations")).toBeNull()
+    // Control: the other rows are still there, so the assertion above is about
+    // this one row rather than a hidden subtree.
+    expect(navRow("To-dos")).toBeTruthy()
+    expect(
+      JSON.parse(localStorage.getItem("workspace:sidebar-nav-items") ?? "{}")
+    ).toEqual({ automations: false })
+  })
+
+  it("respects an explicitly-stored hidden row from localStorage", () => {
+    localStorage.setItem(
+      "workspace:sidebar-nav-items",
+      JSON.stringify({ forge: false })
+    )
+    renderSidebar()
+    expect(navRow(FORGE_ROW)).toBeNull()
+    expect(navRow("Automations")).toBeTruthy()
+  })
+
+  it("ignores a stored entry for a route that no longer exists", () => {
+    localStorage.setItem(
+      "workspace:sidebar-nav-items",
+      JSON.stringify({ retired: false, tasks: false })
+    )
+    renderSidebar()
+    expect(navRow("To-dos")).toBeNull()
+    expect(navRow("Automations")).toBeTruthy()
+  })
+})
+
+describe("Sidebar — Harness row", () => {
+  beforeEach(() => {
+    localStorage.clear()
+    spies.setRoute.mockClear()
+    mockState.activeFolder = { id: 7, path: "/x" }
+    mockState.routeId = "conversations"
+  })
+
+  // The fixed rows carry their label as `title`; a count badge changes a row's
+  // accessible name but not that.
+  const NAV_ROWS = [
+    "New chat",
+    "Automations",
+    "To-dos",
+    "Repository panel",
+    "Infinite Canvas",
+    "Harness Engineering",
+  ]
+  const navRowTitles = () =>
+    screen
+      .getAllByRole("button")
+      .map((el) => el.getAttribute("title") ?? "")
+      .filter((title) => NAV_ROWS.includes(title))
+  const harnessRow = () => screen.getByRole("button", { name: /^Harness/ })
+
+  it("sits after Infinite Canvas, at the end of the nav block", () => {
+    renderSidebar()
+    expect(navRowTitles()).toEqual(NAV_ROWS)
+  })
+
+  it("opens the Harness route", () => {
+    renderSidebar()
+    fireEvent.click(harnessRow())
+    expect(spies.setRoute).toHaveBeenCalledWith("harness")
+  })
+
+  it("is marked current only while its route is on screen", () => {
+    const { unmount } = renderSidebar()
+    expect(harnessRow()).not.toHaveAttribute("aria-current")
+    unmount()
+
+    mockState.routeId = "harness"
+    renderSidebar()
+    expect(harnessRow()).toHaveAttribute("aria-current", "page")
+    // Control: marking follows the route, not the row that was added last.
+    expect(
+      screen.getByRole("button", { name: "Infinite Canvas" })
+    ).not.toHaveAttribute("aria-current")
+  })
+
+  it("carries no badge while nothing has an update", () => {
+    renderSidebar()
+    expect(harnessRow().textContent).toBe("Harness EngineeringSkills · MCP")
+  })
+
+  it("names what the page holds after its label", () => {
+    renderSidebar()
+    const hint = within(harnessRow()).getByText("Skills · MCP")
+    expect(hint.className).toContain("text-muted-foreground")
+    // The title stays the label alone: the rows are told apart by it.
+    expect(harnessRow()).toHaveAttribute("title", "Harness Engineering")
+  })
+
+  it("counts the available updates in a trailing badge", () => {
+    renderSidebar({ harnessUpdates: 3 })
+
+    // Read out as a sentence, not as a bare digit after the name…
+    const row = screen.getByRole("button", {
+      name: "Harness Engineering Skills · MCP 3 updates available",
+    })
+    // …and shown as the same chip the To-dos count uses.
+    const badge = within(row).getByTitle("3 updates available")
+    expect(within(badge).getByText("3")).toHaveAttribute("aria-hidden", "true")
+    expect(badge.className).toContain("bg-primary/10")
+    expect(badge.className).toContain("ml-auto")
+  })
+
+  it("says one update in the singular", () => {
+    renderSidebar({ harnessUpdates: 1 })
+    expect(
+      screen.getByRole("button", {
+        name: "Harness Engineering Skills · MCP 1 update available",
+      })
+    ).toBeTruthy()
+  })
+
+  it("is listed last among the navigation toggles, with its icon", async () => {
+    renderSidebar()
+    await openViewOptionsGroup("Navigation items")
+
+    // The submenu's own rows: the root menu behind it has a checkbox too.
+    const menus = screen.getAllByRole("menu")
+    const toggles = within(menus[menus.length - 1]).getAllByRole(
+      "menuitemcheckbox"
+    )
+    expect(toggles.map((el) => el.textContent)).toEqual([
+      "Automations",
+      "To-dos",
+      "Repository panel",
+      "Infinite Canvas",
+      "Harness Engineering",
+    ])
+    const harness = toggles[toggles.length - 1]
+    expect(harness).toHaveAttribute("aria-checked", "true")
+    // The toggle mirrors the row it switches, glyph included.
+    expect(harness.querySelector("svg.lucide-drafting-compass")).not.toBeNull()
+    await userEvent.keyboard("{Escape}")
+  })
+
+  it("can be hidden and brought back, and remembers either", async () => {
+    renderSidebar()
+
+    await openViewOptionsGroup("Navigation items")
+    await userEvent.click(
+      screen.getByRole("menuitemcheckbox", { name: "Harness Engineering" })
+    )
+    // Close before looking at the rows: an open Radix menu aria-hides the
+    // sidebar behind it.
+    await userEvent.keyboard("{Escape}")
+
+    expect(screen.queryByRole("button", { name: /^Harness/ })).toBeNull()
+    // Control: the row before it is still there.
+    expect(screen.getByRole("button", { name: "Infinite Canvas" })).toBeTruthy()
+    expect(
+      JSON.parse(localStorage.getItem("workspace:sidebar-nav-items") ?? "{}")
+    ).toEqual({ harness: false })
+
+    await openViewOptionsGroup("Navigation items")
+    await userEvent.click(
+      screen.getByRole("menuitemcheckbox", { name: "Harness Engineering" })
+    )
+    await userEvent.keyboard("{Escape}")
+
+    expect(harnessRow()).toBeTruthy()
+    expect(
+      JSON.parse(localStorage.getItem("workspace:sidebar-nav-items") ?? "{}")
+    ).toEqual({ harness: true })
+  })
+
+  it("stays hidden for a user who hid it", () => {
+    localStorage.setItem(
+      "workspace:sidebar-nav-items",
+      JSON.stringify({ harness: false })
+    )
+    renderSidebar()
+
+    expect(screen.queryByRole("button", { name: /^Harness/ })).toBeNull()
+    expect(navRowTitles()).toEqual(NAV_ROWS.slice(0, -1))
+  })
+
+  it("shows up for a user whose stored choices predate it", () => {
+    // Written by a build that had no Harness row: only what was explicitly
+    // hidden is hidden.
+    localStorage.setItem(
+      "workspace:sidebar-nav-items",
+      JSON.stringify({ automations: false, canvas: true })
+    )
+    renderSidebar()
+
+    expect(harnessRow()).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Automations" })).toBeNull()
+  })
+})
+
+describe("Sidebar — Expand / collapse all groups", () => {
+  beforeEach(() => {
+    localStorage.clear()
+    spies.collapseAll.mockClear()
+    spies.expandAll.mockClear()
+    mockState.activeFolder = { id: 7, path: "/x" }
+  })
+
+  it("is an icon-only header button on desktop, no longer a menu row", async () => {
+    const user = userEvent.setup()
+    renderSidebar()
+
+    // Icon-only, so the accessible name comes from aria-label and names the
+    // action the click performs.
+    const toggle = screen.getByRole("button", { name: "Collapse All Groups" })
+    expect(toggle.textContent).toBe("")
+
+    await user.click(screen.getByRole("button", { name: "View options" }))
+    expect(
+      screen.queryByRole("menuitem", { name: "Collapse All Groups" })
+    ).toBeNull()
+    await user.keyboard("{Escape}")
+  })
+
+  it("drives the list from the header in one click, and flips direction", async () => {
+    const user = userEvent.setup()
+    renderSidebar()
+
+    // One click, from the header — it used to cost a trip through the menu.
+    await user.click(
+      screen.getByRole("button", { name: "Collapse All Groups" })
+    )
+    expect(spies.collapseAll).toHaveBeenCalledTimes(1)
+    expect(spies.expandAll).not.toHaveBeenCalled()
+
+    // The button now offers the opposite action, and performs it.
+    await user.click(screen.getByRole("button", { name: "Expand All Groups" }))
+    expect(spies.expandAll).toHaveBeenCalledTimes(1)
+    expect(
+      screen.getByRole("button", { name: "Collapse All Groups" })
     ).toBeTruthy()
   })
 })

@@ -26,12 +26,16 @@ pub async fn list_all_conversations(
     Ok(Json(
         conv_commands::list_all_conversations_core(
             &state.db.conn,
-            params.folder_ids,
-            params.agent_type,
-            params.search,
-            params.sort_by,
-            params.status,
-            params.include_children.unwrap_or(false),
+            &state.emitter,
+            &state.chat_channel_manager,
+            conv_commands::ListAllConversationsOptions {
+                folder_ids: params.folder_ids,
+                agent_type: params.agent_type,
+                search: params.search,
+                sort_by: params.sort_by,
+                status: params.status,
+                include_children: params.include_children.unwrap_or(false),
+            },
         )
         .await?,
     ))
@@ -95,9 +99,11 @@ pub struct ListConversationsParams {
 }
 
 pub async fn list_conversations(
+    Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<ListConversationsParams>,
 ) -> Result<Json<Vec<ConversationSummary>>, AppCommandError> {
-    let result = conv_commands::list_conversations(
+    let result = conv_commands::list_conversations_core(
+        &state.db.conn,
         params.agent_type,
         params.search,
         params.sort_by,
@@ -115,9 +121,15 @@ pub struct GetConversationParams {
 }
 
 pub async fn get_conversation(
+    Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<GetConversationParams>,
 ) -> Result<Json<ConversationDetail>, AppCommandError> {
-    let result = conv_commands::get_conversation(params.agent_type, params.conversation_id).await?;
+    let result = conv_commands::get_conversation_core(
+        &state.db.conn,
+        params.agent_type,
+        params.conversation_id,
+    )
+    .await?;
     Ok(Json(result))
 }
 
@@ -173,18 +185,44 @@ pub async fn get_folder_conversation_turns(
     Ok(Json(result))
 }
 
-pub async fn list_folders() -> Result<Json<Vec<FolderInfo>>, AppCommandError> {
-    let result = conv_commands::list_folders().await?;
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetFolderConversationOutlineParams {
+    pub conversation_id: i32,
+    pub before_index: usize,
+}
+
+pub async fn get_folder_conversation_outline(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<GetFolderConversationOutlineParams>,
+) -> Result<Json<ConversationOutline>, AppCommandError> {
+    let result = conv_commands::get_folder_conversation_outline_core(
+        &state.db.conn,
+        params.conversation_id,
+        params.before_index,
+    )
+    .await?;
     Ok(Json(result))
 }
 
-pub async fn get_stats() -> Result<Json<AgentStats>, AppCommandError> {
-    let result = conv_commands::get_stats().await?;
+pub async fn list_folders(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<Vec<FolderInfo>>, AppCommandError> {
+    let result = conv_commands::list_folders_core(&state.db.conn).await?;
     Ok(Json(result))
 }
 
-pub async fn get_sidebar_data() -> Result<Json<SidebarData>, AppCommandError> {
-    let result = conv_commands::get_sidebar_data().await?;
+pub async fn get_stats(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<AgentStats>, AppCommandError> {
+    let result = conv_commands::get_stats_core(&state.db.conn).await?;
+    Ok(Json(result))
+}
+
+pub async fn get_sidebar_data(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<SidebarData>, AppCommandError> {
+    let result = conv_commands::get_sidebar_data_core(&state.db.conn).await?;
     Ok(Json(result))
 }
 
@@ -202,6 +240,7 @@ pub async fn import_local_conversations(
         conv_commands::import_local_conversations_core(
             &state.db.conn,
             &state.emitter,
+            &state.chat_channel_manager,
             params.folder_id,
         )
         .await?,
@@ -212,7 +251,12 @@ pub async fn scan_importable_sessions(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<ScanResult>, AppCommandError> {
     Ok(Json(
-        conv_commands::scan_importable_sessions_core(&state.db.conn, &state.emitter).await?,
+        conv_commands::scan_importable_sessions_core(
+            &state.db.conn,
+            &state.emitter,
+            &state.chat_channel_manager,
+        )
+        .await?,
     ))
 }
 
@@ -382,8 +426,31 @@ pub async fn delete_conversation(
     conv_commands::delete_conversation_with_cleanup_core(
         &state.emitter,
         &state.db.conn,
+        &state.connection_manager,
         params.conversation_id,
     )
     .await?;
     Ok(Json(()))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveConversationsParams {
+    pub conversation_ids: Vec<i32>,
+    pub target_folder_id: i32,
+}
+
+pub async fn move_conversations(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<MoveConversationsParams>,
+) -> Result<Json<conv_commands::MoveConversationsResult>, AppCommandError> {
+    let result = conv_commands::move_conversations_core(
+        &state.emitter,
+        &state.db.conn,
+        &state.connection_manager,
+        params.conversation_ids,
+        params.target_folder_id,
+    )
+    .await?;
+    Ok(Json(result))
 }

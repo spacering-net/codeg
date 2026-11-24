@@ -480,7 +480,7 @@ export function GitCredentialProvider({ children }: { children: ReactNode }) {
                     )}
                   </Button>
                 </div>
-                <p className="text-[11px] text-muted-foreground">
+                <p className="text-2xs text-muted-foreground">
                   {t("githubTokenHint")}
                 </p>
               </div>
@@ -539,7 +539,7 @@ export function GitCredentialProvider({ children }: { children: ReactNode }) {
                       )}
                     </Button>
                   </div>
-                  <p className="text-[11px] text-muted-foreground">
+                  <p className="text-2xs text-muted-foreground">
                     {t("passwordHint")}
                   </p>
                 </div>

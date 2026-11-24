@@ -162,6 +162,34 @@ pub async fn validate_github_token(
     Ok(Json(result))
 }
 
+/// Same request shape, different forge: GitLab takes a personal access token
+/// (there is no `gh auth token` to lift one from) and reports its scopes on a
+/// separate endpoint.
+pub async fn validate_gitlab_token(
+    Json(params): Json<ValidateGitHubTokenParams>,
+) -> Result<Json<GitHubTokenValidation>, AppCommandError> {
+    let result = vc_commands::validate_gitlab_token(params.server_url, params.token).await?;
+    Ok(Json(result))
+}
+
+/// Same again for Gitea/Forgejo, which answers GitHub's `/user` shape behind a
+/// `token` authorization header and reports no scopes at all.
+pub async fn validate_gitea_token(
+    Json(params): Json<ValidateGitHubTokenParams>,
+) -> Result<Json<GitHubTokenValidation>, AppCommandError> {
+    let result = vc_commands::validate_gitea_token(params.server_url, params.token).await?;
+    Ok(Json(result))
+}
+
+/// CNB's OpenAPI lives on its own host and takes a `Bearer` token; the
+/// response shape is CNB's own (`username`/`nickname`/`avatar`).
+pub async fn validate_cnb_token(
+    Json(params): Json<ValidateGitHubTokenParams>,
+) -> Result<Json<GitHubTokenValidation>, AppCommandError> {
+    let result = vc_commands::validate_cnb_token(params.server_url, params.token).await?;
+    Ok(Json(result))
+}
+
 // ---------------------------------------------------------------------------
 // Keyring token management
 // ---------------------------------------------------------------------------

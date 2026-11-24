@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   ADVANCED_THEME_TOKENS,
   BASIC_THEME_TOKENS,
@@ -238,5 +238,64 @@ describe("toHexColor", () => {
   it("returns null for values it cannot resolve", () => {
     expect(toHexColor("")).toBeNull()
     expect(toHexColor("definitely-not-a-color")).toBeNull()
+  })
+})
+
+/**
+ * 现代色彩语法（本仓库 token 用的 `oklch()`、`color-mix()` 出来的 `color(srgb …)`）回读
+ * `fillStyle` 时保持原语法、拿不到十六进制，只有光栅化读回像素才能转换 —— 少了这一步，
+ * 所有默认 token 都会转失败，调用方只能退回硬编码值（终端主题因此变纯黑，见 issue #363）。
+ */
+describe("toHexColor 的光栅化兜底", () => {
+  /** 只实现 toHexColor 用到的那几件事的 2D 上下文替身。 */
+  function fakeContext(pixel: [number, number, number, number] | null) {
+    let fillStyle = "#000000"
+    return {
+      globalCompositeOperation: "source-over",
+      get fillStyle() {
+        return fillStyle
+      },
+      // 浏览器行为：不认识的语法赋值被忽略（fillStyle 原封不动），认识的原样回读。
+      set fillStyle(value: string) {
+        if (pixel || /^#[0-9a-f]{6}$/i.test(value)) fillStyle = value
+      },
+      fillRect() {},
+      getImageData() {
+        return { data: Uint8ClampedArray.from(pixel ?? [0, 0, 0, 0]) }
+      },
+    }
+  }
+
+  /** 每个用例都重新 import：模块作用域里缓存了 2D 上下文。 */
+  async function load(pixel: [number, number, number, number] | null) {
+    vi.resetModules()
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
+      () => fakeContext(pixel) as unknown as CanvasRenderingContext2D
+    )
+    return (await import("./custom-style")).toHexColor
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it("把 oklch() 光栅化成 #rrggbb", async () => {
+    const convert = await load([247, 247, 247, 255])
+    expect(convert("oklch(0.98 0 0)")).toBe("#f7f7f7")
+  })
+
+  it("补零到六位", async () => {
+    const convert = await load([1, 2, 3, 255])
+    expect(convert("color(srgb 0.004 0.008 0.012)")).toBe("#010203")
+  })
+
+  it("半透明判失败（getImageData 去预乘后会失真）", async () => {
+    const convert = await load([255, 255, 255, 77])
+    expect(convert("oklch(1 0 0 / 0.3)")).toBeNull()
+  })
+
+  it("引擎不认这个语法时判失败，不会误报成黑色", async () => {
+    const convert = await load(null)
+    expect(convert("oklch(0.98 0 0)")).toBeNull()
   })
 })

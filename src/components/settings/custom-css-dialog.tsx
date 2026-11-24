@@ -161,7 +161,7 @@ export function CustomCssDialog({
           />
         </div>
 
-        <div className="space-y-1.5 text-[11px] leading-4">
+        <div className="space-y-1.5 text-2xs leading-4">
           <p className="text-muted-foreground tabular-nums">
             {t("customStyle.css.size", {
               used: (bytes / 1024).toFixed(1),

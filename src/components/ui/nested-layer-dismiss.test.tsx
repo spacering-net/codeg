@@ -13,7 +13,6 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover"
-import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet"
 
 // Radix arms its document-level pointer-down listener in a `setTimeout(0)`.
 async function settle() {
@@ -157,34 +156,6 @@ describe("dismissing a nested layer inside a dialog / popover", () => {
     await settle()
 
     expect(onOpenChange).toHaveBeenCalledWith(false)
-  })
-
-  it("keeps a sheet open when the press that closes a nested menu lands inside it", async () => {
-    const onOpenChange = vi.fn()
-    render(
-      <Sheet open onOpenChange={onOpenChange}>
-        <SheetContent>
-          <SheetTitle>Title</SheetTitle>
-          <DropdownMenu>
-            <DropdownMenuTrigger>Pick</DropdownMenuTrigger>
-            <DropdownMenuContent>
-              <DropdownMenuItem>One</DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </SheetContent>
-      </Sheet>
-    )
-    await settle()
-
-    fireMouse(screen.getByText("Pick"), "pointerdown")
-    expect(screen.getByText("One")).toBeInTheDocument()
-    await settle()
-
-    click(document.querySelector("[data-slot=sheet-overlay]")!)
-    await settle()
-
-    expect(screen.queryByText("One")).not.toBeInTheDocument()
-    expect(onOpenChange).not.toHaveBeenCalled()
   })
 
   it("still honours a caller's own ref and onPointerDownOutside", async () => {

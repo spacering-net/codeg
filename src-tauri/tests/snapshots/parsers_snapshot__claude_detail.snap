@@ -46,7 +46,8 @@ expression: detail
       },
       "duration_ms": 2000,
       "model": "claude-sonnet-4-6",
-      "completed_at": "[ts]"
+      "completed_at": "[ts]",
+      "agent_message_id": "a1"
     }
   ],
   "session_stats": {

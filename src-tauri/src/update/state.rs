@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
+use crate::app_error::AppCommandError;
 use crate::update::runtime::UpdateCapability;
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
@@ -86,9 +87,17 @@ pub struct AppUpdateState {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capability: Option<UpdateCapability>,
     /// Raw error message (`Error` only). The frontend classifies it for
-    /// display via `normalizeAppUpdateError`.
+    /// display via `normalizeAppUpdateError` when there is no `error_info` to
+    /// go by.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// The failure behind `error` as the backend knew it (`Error` only): code,
+    /// OS detail and, for a failure the backend can explain, an i18n key with
+    /// its params (e.g. which directory could not be written). The frontend
+    /// renders that in preference to classifying `error`. Absent when all the
+    /// backend had was a string (the desktop updater's plugin errors).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_info: Option<AppCommandError>,
 }
 
 impl AppUpdateState {
@@ -103,6 +112,7 @@ impl AppUpdateState {
             trial_seconds: None,
             capability: None,
             error: None,
+            error_info: None,
         }
     }
 
@@ -117,6 +127,7 @@ impl AppUpdateState {
         self.trial_seconds = None;
         self.capability = None;
         self.error = None;
+        self.error_info = None;
     }
 }
 
@@ -289,6 +300,23 @@ pub fn set_error(
     })
 }
 
+/// The operation failed with an [`AppCommandError`]: publish its message as
+/// `error`, exactly like [`set_error`], plus the structured error itself as
+/// `error_info` — which carries the explanation (i18n key and params) the
+/// message alone would lose.
+pub fn set_command_error(
+    handle: &AppUpdateStateHandle,
+    emitter: &EventEmitter,
+    err: &AppCommandError,
+) -> AppUpdateState {
+    mutate(handle, emitter, |s| {
+        s.clear_operation_fields();
+        s.status = AppUpdateLifecycle::Error;
+        s.error = Some(err.to_string());
+        s.error_info = Some(err.clone());
+    })
+}
+
 /// Throttled writer for the per-chunk download progress. Owns the last-emit
 /// timestamp so a hot download loop updates the snapshot on every chunk but
 /// only emits a live frame every [`PROGRESS_EMIT_INTERVAL`].
@@ -411,6 +439,39 @@ mod tests {
         assert!(started);
         assert_eq!(snap2.status, AppUpdateLifecycle::Downloading);
         assert!(snap2.error.is_none());
+    }
+
+    #[test]
+    fn a_command_error_publishes_its_explanation_alongside_the_message() {
+        let h = new_handle();
+        let e = EventEmitter::Noop;
+        let err = AppCommandError::permission_denied("Update target is not writable: /opt/codeg")
+            .with_detail("Permission denied (os error 13)")
+            .with_i18n(
+                "SystemSettings.updateErrors.permissionDenied",
+                std::collections::BTreeMap::from([("path".to_string(), "/opt/codeg".to_string())]),
+            );
+
+        assert!(try_begin(&h, &e).0);
+        let snap = set_command_error(&h, &e, &err);
+
+        // The wire shape the frontend reads: `error` stays the bare message for
+        // clients that only classify strings, `errorInfo` carries the rest.
+        let wire = serde_json::to_value(&snap).unwrap();
+        assert_eq!(wire["status"], "error");
+        assert_eq!(wire["error"], "Update target is not writable: /opt/codeg");
+        assert_eq!(wire["errorInfo"]["code"], "permission_denied");
+        assert_eq!(
+            wire["errorInfo"]["i18n_key"],
+            "SystemSettings.updateErrors.permissionDenied"
+        );
+        assert_eq!(wire["errorInfo"]["i18n_params"]["path"], "/opt/codeg");
+
+        // A retry must not carry the old explanation into the new attempt.
+        let (started, retry) = try_begin(&h, &e);
+        assert!(started);
+        assert!(retry.error_info.is_none());
+        assert!(serde_json::to_value(&retry).unwrap().get("errorInfo").is_none());
     }
 
     #[test]

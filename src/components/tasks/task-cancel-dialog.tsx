@@ -6,6 +6,7 @@ import { toast } from "sonner"
 import { workTaskCancel } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -16,6 +17,7 @@ import {
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
+import { isWorktreeGone } from "./task-acceptance"
 import type { WorkTask } from "@/lib/types"
 
 interface TaskCancelDialogProps {
@@ -36,6 +38,14 @@ interface TaskCancelDialogProps {
  * confirm never waits on the textarea. Reached from the board card's cancel
  * button, and from the drawer's cancel / abandon — one backend transition, one
  * dialog.
+ *
+ * The second decision is what happens to the worktree the run was living in,
+ * offered here so a stop that is really an abandon can reclaim its disk in one
+ * gesture instead of two. Unlike the acceptances this one starts UNCHECKED and
+ * is not seeded from the folder's `delete_worktree_default`: that default is
+ * about landing finished work, whereas a cancel leaves a task that can be
+ * requeued, and the removal deletes the work branch along with the directory —
+ * everything the run produced. Opting in is the user's to make each time.
  */
 export function TaskCancelDialog({
   open,
@@ -44,13 +54,19 @@ export function TaskCancelDialog({
 }: TaskCancelDialogProps) {
   const t = useTranslations("Tasks")
   const [reason, setReason] = useState("")
+  const [deleteWorktree, setDeleteWorktree] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  // Recorded AND still on disk. One already gone has nothing to remove, and the
+  // backend's cleanup would only converge leftovers the card reports itself.
+  const hasWorktree = task != null && !isWorktreeGone(task)
 
   useEffect(() => {
     if (!open) return
-    // A fresh box per open — a reason belongs to one cancel, not to the next.
+    // A fresh box per open — a reason belongs to one cancel, not to the next,
+    // and neither does a checkbox that destroys a branch.
     /* eslint-disable react-hooks/set-state-in-effect */
     setReason("")
+    setDeleteWorktree(false)
     setSubmitting(false)
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [open, task])
@@ -59,7 +75,11 @@ export function TaskCancelDialog({
     if (!task) return
     setSubmitting(true)
     try {
-      await workTaskCancel(task.id, reason.trim() || null)
+      await workTaskCancel(
+        task.id,
+        reason.trim() || null,
+        hasWorktree && deleteWorktree
+      )
       onOpenChange(false)
     } catch (e) {
       toast.error(toErrorMessage(e))
@@ -86,6 +106,16 @@ export function TaskCancelDialog({
             autoFocus
           />
         </div>
+
+        {hasWorktree ? (
+          <Label className="text-sm font-normal">
+            <Checkbox
+              checked={deleteWorktree}
+              onCheckedChange={(v) => setDeleteWorktree(v === true)}
+            />
+            {t("cancelDeleteWorktree")}
+          </Label>
+        ) : null}
 
         <DialogFooter>
           <Button

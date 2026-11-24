@@ -1,17 +1,22 @@
 "use client"
 
-import { memo, useCallback, useState } from "react"
+import { memo, useState } from "react"
 import Image from "next/image"
 import { AlertCircle, Download, ImagePlus } from "lucide-react"
 import { useTranslations } from "next-intl"
 import type { UserImageDisplay } from "@/lib/adapters/ai-elements-adapter"
 import type { ToolCallStatus } from "@/lib/types"
 import { ImagePreviewDialog } from "@/components/ui/image-preview-dialog"
-import { downloadImage } from "@/lib/image-download"
-import { toErrorMessage } from "@/lib/app-error"
+import { ImageActions, useImageActions } from "./image-actions"
 import { cn } from "@/lib/utils"
 
 interface GeneratedImagesBlockProps {
+  /**
+   * Card heading. Codex image generation leaves this unset so the
+   * translated "Image generation" copy is used. A Read, screenshot, or
+   * fetched page passes the tool/page name instead.
+   */
+  label?: string | null
   /**
    * codex's revised prompt — what the model rewrote the user's request
    * into before passing to the image API. `null` when codex didn't echo
@@ -52,14 +57,12 @@ interface GeneratedImagesBlockProps {
  *   - narrow: image stacks below the prompt, mirroring the original
  *     vertical layout
  *
- * Distinct from regular tool-call cards so it never folds into a
- * `tool-group` collapsible.
- *
  * Download is platform-aware:
  *   - desktop: native "Save As" via Tauri command
  *   - web: blob `<a download>`
  */
 export const GeneratedImagesBlock = memo(function GeneratedImagesBlock({
+  label,
   revisedPrompt,
   image,
   status,
@@ -73,24 +76,15 @@ export const GeneratedImagesBlock = memo(function GeneratedImagesBlock({
   const isFailed =
     image === null && (status === "failed" || status === "completed")
 
-  const handleDownload = useCallback(
-    async (img: UserImageDisplay) => {
-      try {
-        await downloadImage({
-          data: img.data,
-          mime_type: img.mime_type,
-          suggestedName: img.name,
-        })
-      } catch (err) {
-        const message = toErrorMessage(err)
-        window.alert(t("downloadFailed", { message }))
-      }
-    },
-    [t]
-  )
+  const { canCopy, copy, download } = useImageActions()
 
   const trimmedPrompt =
     typeof revisedPrompt === "string" ? revisedPrompt.trim() : ""
+
+  // The heading is agent-authored now (a filename, a page slug, or a tool
+  // title) instead of one short fixed string, so it is bounded to a single
+  // ellipsized line and carries the full text as a tooltip.
+  const heading = label?.trim() || t("imageGeneration")
 
   return (
     <div
@@ -100,8 +94,10 @@ export const GeneratedImagesBlock = memo(function GeneratedImagesBlock({
       )}
     >
       <div className="flex items-center gap-1.5 text-sm font-medium text-foreground">
-        <ImagePlus className="h-3.5 w-3.5 text-primary" />
-        <span>{t("imageGeneration")}</span>
+        <ImagePlus className="h-3.5 w-3.5 shrink-0 text-primary" />
+        <span className="min-w-0 truncate" title={heading}>
+          {heading}
+        </span>
       </div>
 
       <div className="mt-2.5 flex flex-col gap-3 @[28rem]/genimg:flex-row @[28rem]/genimg:items-start">
@@ -112,7 +108,10 @@ export const GeneratedImagesBlock = memo(function GeneratedImagesBlock({
         ) : null}
 
         {image ? (
-          <div className="group relative inline-block shrink-0 overflow-hidden rounded-md border border-border/70 bg-muted/30">
+          <ImageActions
+            image={image}
+            className="group relative inline-block shrink-0 overflow-hidden rounded-md border border-border/70 bg-muted/30"
+          >
             <button
               type="button"
               onClick={() => setPreviewOpen(true)}
@@ -131,7 +130,7 @@ export const GeneratedImagesBlock = memo(function GeneratedImagesBlock({
               type="button"
               onClick={(e) => {
                 e.stopPropagation()
-                void handleDownload(image)
+                void download(image)
               }}
               className="absolute right-1 top-1 rounded-full bg-background/80 p-1 text-foreground/80 opacity-0 shadow-sm transition-opacity hover:bg-background hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100"
               aria-label={t("downloadImage")}
@@ -139,7 +138,7 @@ export const GeneratedImagesBlock = memo(function GeneratedImagesBlock({
             >
               <Download className="h-3.5 w-3.5" />
             </button>
-          </div>
+          </ImageActions>
         ) : isFailed ? (
           <div
             className="flex h-64 w-64 max-w-full shrink-0 items-center justify-center rounded-md border border-dashed border-destructive/40 bg-destructive/5 text-xs text-destructive"
@@ -170,8 +169,15 @@ export const GeneratedImagesBlock = memo(function GeneratedImagesBlock({
         alt={image?.name ?? ""}
         open={previewOpen && image !== null}
         onOpenChange={(open) => setPreviewOpen(open)}
-        onDownload={image ? () => void handleDownload(image) : undefined}
+        onDownload={image ? () => void download(image) : undefined}
         downloadLabel={t("downloadImage")}
+        onCopy={image && canCopy ? () => void copy(image) : undefined}
+        copyLabel={t("copyImage")}
+        renderImage={
+          image
+            ? (preview) => <ImageActions image={image}>{preview}</ImageActions>
+            : undefined
+        }
       />
     </div>
   )

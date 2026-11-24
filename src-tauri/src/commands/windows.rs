@@ -1,13 +1,15 @@
 use std::collections::HashMap;
 #[cfg(target_os = "macos")]
 use std::sync::atomic::AtomicU32;
+#[cfg(target_os = "macos")]
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering as AtomicOrdering};
 use std::sync::Mutex;
 
 use sea_orm::DatabaseConnection;
 use tauri::{
     window::{Effect, EffectState, EffectsBuilder},
-    AppHandle, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder,
 };
 
 use crate::app_error::AppCommandError;
@@ -109,6 +111,14 @@ pub struct SettingsWindowState {
 
 pub struct CommitWindowState {
     owner_by_commit_label: Mutex<HashMap<String, String>>,
+}
+
+/// Owner tracking for the auxiliary windows that have no state of their own:
+/// stash, push, project boot and the session importer. They share one map
+/// because their labels are already distinct namespaces, and because the
+/// restore is the same three lines for all four.
+pub struct AuxWindowState {
+    owner_by_aux_label: Mutex<HashMap<String, String>>,
 }
 
 /// Detect macOS system dark mode via `defaults read`.
@@ -329,17 +339,55 @@ impl Default for CommitWindowState {
     }
 }
 
+impl AuxWindowState {
+    pub fn new() -> Self {
+        Self {
+            owner_by_aux_label: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn set_owner(&self, aux_label: String, owner_label: String) {
+        if let Ok(mut owners) = self.owner_by_aux_label.lock() {
+            owners.insert(aux_label, owner_label);
+        }
+    }
+
+    fn take_owner(&self, aux_label: &str) -> Option<String> {
+        self.owner_by_aux_label
+            .lock()
+            .ok()
+            .and_then(|mut owners| owners.remove(aux_label))
+    }
+}
+
+impl Default for AuxWindowState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 fn resolve_settings_route(section: Option<&str>) -> &'static str {
     match section {
+        // Explicit, even though `settings/general` is where an *unspecified*
+        // section lands on the web transport: the desktop fallback below is
+        // Appearance, so a caller that wants General has to name it.
+        Some("general") => "settings/general",
         Some("appearance") => "settings/appearance",
         Some("agents") => "settings/agents",
-        Some("mcp") => "settings/mcp",
-        Some("skills") => "settings/skills",
-        Some("experts") => "settings/experts",
-        Some("science") => "settings/science",
-        Some("office-tools") => "settings/office-tools",
+        Some("collaboration") => "settings/collaboration",
+        Some("browser") => "settings/browser",
+        Some("computer-use") => "settings/computer-use",
+        Some("version-control") => "settings/version-control",
         Some("shortcuts") => "settings/shortcuts",
         Some("system") => "settings/system",
+        // Desktop only, like the page itself: the web nav hides it, so the web
+        // `open_settings_window` deliberately has no arm for it.
+        Some("web-service") => "settings/web-service",
+        // Anything else lands on Appearance, as an unnamed section does. That
+        // includes the MCP, Skills and Skill packs pages (and the Experts,
+        // Science and Office tools addresses that led to the last), which moved
+        // to the workspace's Harness page: an older window asking for one gets
+        // the Settings window rather than an error.
         _ => "settings/appearance",
     }
 }
@@ -743,11 +791,14 @@ pub async fn open_settings_window(
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn open_import_sessions_window(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     db: tauri::State<'_, AppDatabase>,
+    state: tauri::State<'_, AuxWindowState>,
     focus_path: Option<String>,
     locale: Option<crate::models::system::AppLocale>,
     remote_connection_id: Option<i32>,
 ) -> Result<(), AppCommandError> {
+    let owner_label = window.label().to_string();
     let label = match remote_connection_id {
         Some(remote_id) => format!("remote-import-sessions-{remote_id}"),
         None => "import-sessions".to_string(),
@@ -791,6 +842,7 @@ pub async fn open_import_sessions_window(
                     )
                 })?;
         }
+        state.set_owner(label.clone(), owner_label);
         let _ = existing.unminimize();
         existing.set_focus().map_err(|e| {
             AppCommandError::window("Failed to focus import sessions window", e.to_string())
@@ -819,10 +871,42 @@ pub async fn open_import_sessions_window(
     })?;
     register_remote_window_cleanup(&app, &import_window, remote_window_id.as_deref());
     post_window_setup(&import_window);
+    state.set_owner(label, owner_label);
     import_window.set_focus().map_err(|e| {
         AppCommandError::window("Failed to focus import sessions window", e.to_string())
     })?;
     Ok(())
+}
+
+/// Bring `label` to the foreground: unminimize, unhide, then focus.
+///
+/// `set_focus` on its own is not enough: tao skips it outright while the
+/// window is hidden or minimized (both the Windows and the macOS backend
+/// guard on `is_visible && !is_minimized`), and the workspace close button
+/// *hides* `main` to the tray (see the `main` `CloseRequested` arm in
+/// `lib.rs`). Settings is deliberately an independent top-level window, so
+/// the workspace can be hidden while it is still open; restoring an owner by
+/// focus alone then left the app with nothing on screen once settings was
+/// closed too.
+///
+/// Single source of truth for the sequence: the tray (`show_main_window`),
+/// Dock / second-launch activation (`workspace_windows::activate_workspace`)
+/// and the auxiliary-window owner restores must not drift apart again.
+/// `unminimize` is inert when the window isn't minimized (macOS returns early;
+/// Windows first syncs the flag from `IsIconic`, so the diff it applies is
+/// empty), and `show` preserves the maximized flag — a tray-hidden maximized
+/// workspace comes back maximized.
+pub(crate) fn show_and_focus_window(app: &AppHandle, label: &str) {
+    let Some(window) = app.get_webview_window(label) else {
+        return;
+    };
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+    // A `main` hidden to the tray is back, so the next launch reopens it too.
+    // Not left to the focus event: `set_focus` is skipped where the app is not
+    // allowed to take focus, and the window is open all the same.
+    crate::commands::workspace_windows::note_shown(app, label);
 }
 
 pub fn restore_windows_after_settings(
@@ -831,9 +915,7 @@ pub fn restore_windows_after_settings(
     settings_window_label: &str,
 ) {
     if let Some(owner_label) = state.take_owner(settings_window_label) {
-        if let Some(window) = app.get_webview_window(&owner_label) {
-            let _ = window.set_focus();
-        }
+        show_and_focus_window(app, &owner_label);
     }
 }
 
@@ -843,9 +925,17 @@ pub fn restore_window_after_commit(
     commit_window_label: &str,
 ) {
     if let Some(owner_label) = state.take_owner(commit_window_label) {
-        if let Some(window) = app.get_webview_window(&owner_label) {
-            let _ = window.set_focus();
-        }
+        show_and_focus_window(app, &owner_label);
+    }
+}
+
+/// Owner restore for the stash / push / project-boot / import windows. Called
+/// for every closing window rather than from a list of label prefixes: a
+/// window that never registered an owner has none to hand back, so the map is
+/// the only place that has to know which labels take part.
+pub fn restore_window_after_aux(app: &AppHandle, state: &AuxWindowState, aux_window_label: &str) {
+    if let Some(owner_label) = state.take_owner(aux_window_label) {
+        show_and_focus_window(app, &owner_label);
     }
 }
 
@@ -955,9 +1045,7 @@ pub fn restore_window_after_merge(
     merge_window_label: &str,
 ) {
     if let Some(owner_label) = state.take_owner(merge_window_label) {
-        if let Some(window) = app.get_webview_window(&owner_label) {
-            let _ = window.set_focus();
-        }
+        show_and_focus_window(app, &owner_label);
     }
 }
 
@@ -999,7 +1087,7 @@ pub async fn cleanup_dangling_merge(app: &AppHandle, merge_window_label: &str) {
             .output()
             .await;
 
-        let emitter = crate::web::event_bridge::EventEmitter::Tauri(app.clone());
+        let emitter = crate::web::event_bridge::EventEmitter::from_app(app);
         crate::web::event_bridge::emit_event(
             &emitter,
             "folder://merge-aborted",
@@ -1012,11 +1100,14 @@ pub async fn cleanup_dangling_merge(app: &AppHandle, merge_window_label: &str) {
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn open_stash_window(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     db: tauri::State<'_, AppDatabase>,
+    state: tauri::State<'_, AuxWindowState>,
     folder_id: i32,
     locale: Option<crate::models::system::AppLocale>,
     remote_connection_id: Option<i32>,
 ) -> Result<(), AppCommandError> {
+    let owner_label = window.label().to_string();
     let label = match remote_connection_id {
         Some(remote_id) => format!("remote-stash-{remote_id}-{folder_id}"),
         None => format!("stash-{folder_id}"),
@@ -1024,6 +1115,7 @@ pub async fn open_stash_window(
 
     if let Some(existing) = app.get_webview_window(&label) {
         post_window_setup(&existing);
+        state.set_owner(label.clone(), owner_label);
         let _ = existing.unminimize();
         existing
             .set_focus()
@@ -1057,6 +1149,7 @@ pub async fn open_stash_window(
         .map_err(|e| AppCommandError::window("Failed to open stash window", e.to_string()))?;
     register_remote_window_cleanup(&app, &stash_window, remote_window_id.as_deref());
     post_window_setup(&stash_window);
+    state.set_owner(label, owner_label);
 
     Ok(())
 }
@@ -1073,11 +1166,13 @@ pub async fn open_push_window(
     app: AppHandle,
     window: tauri::WebviewWindow,
     db: tauri::State<'_, AppDatabase>,
+    state: tauri::State<'_, AuxWindowState>,
     folder_id: i32,
     locale: Option<crate::models::system::AppLocale>,
     remote_connection_id: Option<i32>,
     branch: Option<String>,
 ) -> Result<(), AppCommandError> {
+    let owner_label = window.label().to_string();
     let label = match remote_connection_id {
         Some(remote_id) => format!("remote-push-{remote_id}-{folder_id}"),
         None => format!("push-{folder_id}"),
@@ -1086,6 +1181,7 @@ pub async fn open_push_window(
 
     if let Some(existing) = app.get_webview_window(&label) {
         post_window_setup(&existing);
+        state.set_owner(label.clone(), owner_label);
         let _ = existing.unminimize();
         existing
             .set_focus()
@@ -1152,6 +1248,7 @@ pub async fn open_push_window(
         .map_err(|e| AppCommandError::window("Failed to open push window", e.to_string()))?;
     register_remote_window_cleanup(&app, &push_window, remote_window_id.as_deref());
     post_window_setup(&push_window);
+    state.set_owner(label, owner_label);
 
     Ok(())
 }
@@ -1160,18 +1257,22 @@ pub async fn open_push_window(
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn open_project_boot_window(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     db: tauri::State<'_, AppDatabase>,
+    state: tauri::State<'_, AuxWindowState>,
     source: Option<String>,
     locale: Option<crate::models::system::AppLocale>,
     remote_connection_id: Option<i32>,
 ) -> Result<(), AppCommandError> {
     let _ = source;
+    let owner_label = window.label().to_string();
     let label = match remote_connection_id {
         Some(id) => format!("remote-project-boot-{id}"),
         None => "project-boot".to_string(),
     };
     if let Some(existing) = app.get_webview_window(&label) {
         post_window_setup(&existing);
+        state.set_owner(label.clone(), owner_label);
         let _ = existing.unminimize();
         existing.set_focus().map_err(|e| {
             AppCommandError::window("Failed to focus project boot window", e.to_string())
@@ -1188,25 +1289,26 @@ pub async fn open_project_boot_window(
         .inner_size(1400.0, 900.0)
         .min_inner_size(1100.0, 700.0)
         .center();
-    let window = apply_platform_window_style(builder).build().map_err(|e| {
+    let boot_window = apply_platform_window_style(builder).build().map_err(|e| {
         AppCommandError::window("Failed to open project boot window", e.to_string())
     })?;
-    register_remote_window_cleanup(&app, &window, remote_window_id.as_deref());
-    post_window_setup(&window);
+    register_remote_window_cleanup(&app, &boot_window, remote_window_id.as_deref());
+    post_window_setup(&boot_window);
+    state.set_owner(label, owner_label);
 
     Ok(())
 }
 
 // ─── Desktop pet window ─────────────────────────────────────────────────
 
-const PET_WINDOW_LABEL: &str = "pet";
+pub const PET_WINDOW_LABEL: &str = "pet";
 const PET_HOVER_ENTER_EVENT: &str = "pet://hover-enter";
 const PET_HOVER_LEAVE_EVENT: &str = "pet://hover-leave";
 /// Single-frame logical pixel dimensions, locked to the Codex sprite-sheet
 /// contract. The window is sized as one frame × user scale, with no extra
 /// chrome — DPR handling lives inside the webview.
-const PET_BASE_WIDTH: f64 = 192.0;
-const PET_BASE_HEIGHT: f64 = 208.0;
+pub(crate) const PET_BASE_WIDTH: f64 = 192.0;
+pub(crate) const PET_BASE_HEIGHT: f64 = 208.0;
 
 /// Process-global "cursor is currently inside the pet window" flag, owned by
 /// the hover watcher but readable/writable by the context-menu command so
@@ -1246,6 +1348,194 @@ where
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct SavedPetOrigin {
+    x: f64,
+    y: f64,
+}
+
+/// Pick the monitor a saved pet origin belongs to: the one containing the
+/// origin itself, or — only when no monitor does (an origin just off a
+/// monitor's top/left edge) — one containing the pet's center. `hit(m, center)`
+/// tests the origin (`center == false`) or the center against monitor `m`.
+/// Testing both per monitor in a single pass let an earlier monitor claim the
+/// pet through a center computed at *that* monitor's scale factor (e.g. a 350%
+/// primary claiming a pet saved on the 1× display above it).
+fn pick_pet_monitor(
+    monitors: &[(i32, i32, u32, u32, f64)],
+    hit: impl Fn((i32, i32, u32, u32, f64), bool) -> bool,
+) -> Option<(i32, i32, u32, u32, f64)> {
+    monitors
+        .iter()
+        .copied()
+        .find(|&m| hit(m, false))
+        .or_else(|| monitors.iter().copied().find(|&m| hit(m, true)))
+}
+
+/// Resolve a persisted `(x, y)` (captured from `outer_position`) into a clamped
+/// Cocoa **logical** origin on macOS.
+///
+/// On macOS, `tao` scales each monitor's origin and size by *that monitor's
+/// own* scale factor, so a 1× display placed to the right of a 2× primary
+/// display overlaps in physical coordinates (e.g. primary `[0, 3024)` vs right
+/// `[1512, 3432)`). When `saved_scale_factor` is present we first convert
+/// `(x, y)` into unambiguous Cocoa logical points and match against the
+/// non-overlapping logical monitor rects; legacy rows without a stored scale
+/// factor fall back to physical rect matching.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn resolve_saved_pet_origin_macos(
+    saved: Option<(f64, f64)>,
+    saved_scale_factor: Option<f64>,
+    pet_w: f64,
+    pet_h: f64,
+    monitors: &[(i32, i32, u32, u32, f64)],
+) -> Option<SavedPetOrigin> {
+    let (x, y) = saved?;
+    if !x.is_finite() || !y.is_finite() {
+        return None;
+    }
+
+    if let Some(saved_sf) = saved_scale_factor.filter(|sf| sf.is_finite() && *sf > 0.0) {
+        let lx = x / saved_sf;
+        let ly = y / saved_sf;
+        let (mx, my, mw, mh, msf) = pick_pet_monitor(monitors, |(mx, my, mw, mh, msf), center| {
+            if !msf.is_finite() || msf <= 0.0 || mw == 0 || mh == 0 {
+                return false;
+            }
+            let mlx = f64::from(mx) / msf;
+            let mly = f64::from(my) / msf;
+            let mlw = f64::from(mw) / msf;
+            let mlh = f64::from(mh) / msf;
+            let cx = lx + pet_w / 2.0;
+            let cy = ly + pet_h / 2.0;
+            let (px, py) = if center { (cx, cy) } else { (lx, ly) };
+            px >= mlx && px < mlx + mlw && py >= mly && py < mly + mlh
+        })?;
+        let mlx = f64::from(mx) / msf;
+        let mly = f64::from(my) / msf;
+        let mlw = f64::from(mw) / msf;
+        let mlh = f64::from(mh) / msf;
+        let max_x = (mlx + mlw - pet_w).max(mlx);
+        let max_y = (mly + mlh - pet_h).max(mly);
+        return Some(SavedPetOrigin {
+            x: lx.clamp(mlx, max_x),
+            y: ly.clamp(mly, max_y),
+        });
+    }
+
+    // Legacy row (no recorded scale factor): match raw physical monitor rect
+    // and convert into that monitor's logical coordinates.
+    let (mx, my, mw, mh, msf) = pick_pet_monitor(monitors, |(mx, my, mw, mh, msf), center| {
+        if !msf.is_finite() || msf <= 0.0 || mw == 0 || mh == 0 {
+            return false;
+        }
+        let mx = f64::from(mx);
+        let my = f64::from(my);
+        let mw = f64::from(mw);
+        let mh = f64::from(mh);
+        let cx = x + (pet_w * msf) / 2.0;
+        let cy = y + (pet_h * msf) / 2.0;
+        let (px, py) = if center { (cx, cy) } else { (x, y) };
+        px >= mx && px < mx + mw && py >= my && py < my + mh
+    })?;
+    let mlx = f64::from(mx) / msf;
+    let mly = f64::from(my) / msf;
+    let mlw = f64::from(mw) / msf;
+    let mlh = f64::from(mh) / msf;
+    let max_x = (mlx + mlw - pet_w).max(mlx);
+    let max_y = (mly + mlh - pet_h).max(mly);
+    Some(SavedPetOrigin {
+        x: (x / msf).clamp(mlx, max_x),
+        y: (y / msf).clamp(mly, max_y),
+    })
+}
+
+/// Resolve a persisted physical `(x, y)` against live monitor geometries on
+/// Windows / Linux, where physical desktop coordinates form one non-overlapping
+/// coordinate space. Returns clamped physical `(x, y)` or `None` to center.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn resolve_saved_pet_origin_physical(
+    saved: Option<(f64, f64)>,
+    pet_w: f64,
+    pet_h: f64,
+    monitors: &[(i32, i32, u32, u32, f64)],
+) -> Option<SavedPetOrigin> {
+    let (x, y) = saved?;
+    if !x.is_finite() || !y.is_finite() {
+        return None;
+    }
+
+    let (mx, my, mw, mh, sf) = pick_pet_monitor(monitors, |(mx, my, mw, mh, sf), center| {
+        if !sf.is_finite() || sf <= 0.0 || mw == 0 || mh == 0 {
+            return false;
+        }
+        let mx = f64::from(mx);
+        let my = f64::from(my);
+        let mw = f64::from(mw);
+        let mh = f64::from(mh);
+        let cx = x + (pet_w * sf) / 2.0;
+        let cy = y + (pet_h * sf) / 2.0;
+        let (px, py) = if center { (cx, cy) } else { (x, y) };
+        px >= mx && px < mx + mw && py >= my && py < my + mh
+    })?;
+
+    let mx = f64::from(mx);
+    let my = f64::from(my);
+    let mw = f64::from(mw);
+    let mh = f64::from(mh);
+    let max_x = (mx + mw - pet_w * sf).max(mx);
+    let max_y = (my + mh - pet_h * sf).max(my);
+    Some(SavedPetOrigin {
+        x: x.clamp(mx, max_x),
+        y: y.clamp(my, max_y),
+    })
+}
+
+/// The pet window's live `(outer x, outer y, scale factor)` in the same shape
+/// `pet_window_record_position` stores, for saving on quit. `None` when the
+/// window can't report it or is minimized (Windows parks minimized windows at
+/// -32000, which must not overwrite a real saved position).
+#[cfg(feature = "tauri-runtime")]
+pub(crate) fn pet_window_live_origin(
+    window: &tauri::WebviewWindow,
+) -> Option<(f64, f64, Option<f64>)> {
+    if window.is_minimized().unwrap_or(false) {
+        return None;
+    }
+    let pos = window.outer_position().ok()?;
+    let scale_factor = window
+        .scale_factor()
+        .ok()
+        .filter(|sf| sf.is_finite() && *sf > 0.0);
+    Some((f64::from(pos.x), f64::from(pos.y), scale_factor))
+}
+
+/// Physical top-left that centers a `box_w × box_h` (physical px) staging
+/// window on the monitor holding a resolved (already clamped) physical
+/// origin, for Windows / Linux where physical monitor rects do not overlap.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn pet_staging_origin(
+    origin: SavedPetOrigin,
+    monitors: &[(i32, i32, u32, u32, f64)],
+    box_w: f64,
+    box_h: f64,
+) -> Option<(i32, i32)> {
+    monitors
+        .iter()
+        .find(|&&(mx, my, mw, mh, _)| {
+            let (mx, my) = (f64::from(mx), f64::from(my));
+            origin.x >= mx
+                && origin.x < mx + f64::from(mw)
+                && origin.y >= my
+                && origin.y < my + f64::from(mh)
+        })
+        .map(|&(mx, my, mw, mh, _)| {
+            let x = f64::from(mx) + (f64::from(mw) - box_w) / 2.0;
+            let y = f64::from(my) + (f64::from(mh) - box_h) / 2.0;
+            (x.round() as i32, y.round() as i32)
+        })
+}
+
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn open_pet_window(
@@ -1267,33 +1557,57 @@ pub async fn open_pet_window(
             .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))??;
     }
 
+    let scale = config.scale.clamp(0.5, 3.0);
+    let pet_w = PET_BASE_WIDTH * scale;
+    let pet_h = PET_BASE_HEIGHT * scale;
+
     if let Some(existing) = app.get_webview_window(PET_WINDOW_LABEL) {
         let _ = existing.unminimize();
+        let _ = existing.set_size(LogicalSize::new(pet_w, pet_h));
         existing
             .set_focus()
             .map_err(|e| AppCommandError::window("Failed to focus pet window", e.to_string()))?;
         return Ok(());
     }
 
-    let scale = config.scale.clamp(0.5, 3.0);
     config.scale = scale;
     config.enabled = true;
     crate::commands::pet::pet_save_window_state_core(
         &db.conn,
         crate::models::pet::PetWindowStatePatch {
-            x: None,
-            y: None,
             scale: Some(scale),
-            always_on_top: None,
             enabled: Some(true),
+            ..Default::default()
         },
     )
     .await?;
 
+    let monitors: Vec<(i32, i32, u32, u32, f64)> = app
+        .available_monitors()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|m| {
+            let pos = m.position();
+            let size = m.size();
+            (pos.x, pos.y, size.width, size.height, m.scale_factor())
+        })
+        .collect();
+    #[cfg(target_os = "macos")]
+    let saved_origin = resolve_saved_pet_origin_macos(
+        config.x.zip(config.y),
+        config.position_scale_factor,
+        pet_w,
+        pet_h,
+        &monitors,
+    );
+    #[cfg(not(target_os = "macos"))]
+    let saved_origin =
+        resolve_saved_pet_origin_physical(config.x.zip(config.y), pet_w, pet_h, &monitors);
+
     let url = WebviewUrl::App(format!("pet?petId={pet_id}").into());
     let mut builder = WebviewWindowBuilder::new(&app, PET_WINDOW_LABEL, url)
         .title("codeg pet")
-        .inner_size(PET_BASE_WIDTH * scale, PET_BASE_HEIGHT * scale)
+        .inner_size(pet_w, pet_h)
         .min_inner_size(PET_BASE_WIDTH * 0.5, PET_BASE_HEIGHT * 0.5)
         .max_inner_size(PET_BASE_WIDTH * 3.0, PET_BASE_HEIGHT * 3.0)
         .resizable(false)
@@ -1308,11 +1622,55 @@ pub async fn open_pet_window(
         .focused(false)
         .accept_first_mouse(true);
 
-    builder = builder.center();
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(origin) = saved_origin {
+            builder = builder.position(origin.x, origin.y);
+        } else {
+            builder = builder.center();
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        if saved_origin.is_none() {
+            builder = builder.center();
+        }
+    }
 
-    apply_pet_window_style(builder)
+    let window = apply_pet_window_style(builder)
         .build()
         .map_err(|e| AppCommandError::window("Failed to open pet window", e.to_string()))?;
+
+    #[cfg(not(target_os = "macos"))]
+    if let Some(saved) = saved_origin {
+        let origin = tauri::PhysicalPosition::new(saved.x.round() as i32, saved.y.round() as i32);
+        // Stage wholly on the target monitor first. The window still has the
+        // build monitor's physical size here, and near a seam — or when the
+        // target monitor is smaller than that size — moving it straight to
+        // the saved origin can leave most of it on the build monitor, so
+        // Windows keeps that monitor's DPI and the logical resize below lands
+        // at the wrong physical size. Shrinking to the minimum logical size
+        // and centering that on the target monitor puts the whole window on
+        // it; the DPI switches, and the resize + final move (to an origin
+        // already clamped to fit) then use the target monitor's scale.
+        let (stage_w, stage_h) = (PET_BASE_WIDTH * 0.5, PET_BASE_HEIGHT * 0.5);
+        let build_sf = window
+            .scale_factor()
+            .ok()
+            .filter(|sf| sf.is_finite() && *sf > 0.0)
+            .unwrap_or(1.0);
+        let staging = pet_staging_origin(saved, &monitors, stage_w * build_sf, stage_h * build_sf)
+            .map(|(x, y)| tauri::PhysicalPosition::new(x, y))
+            .unwrap_or(origin);
+        let _ = window.set_size(LogicalSize::new(stage_w, stage_h));
+        let _ = window.set_position(staging);
+        let _ = window.set_size(LogicalSize::new(pet_w, pet_h));
+        let _ = window.set_position(origin);
+    }
+
+    // Re-assert exact logical dimensions after build/placement so mixed-DPI
+    // monitor transitions can never leave the window scaled by a stale factor.
+    let _ = window.set_size(LogicalSize::new(pet_w, pet_h));
 
     spawn_pet_hover_watcher(app.clone());
 
@@ -1401,11 +1759,8 @@ pub async fn close_pet_window(
     let _ = crate::commands::pet::pet_save_window_state_core(
         &db.conn,
         crate::models::pet::PetWindowStatePatch {
-            x: None,
-            y: None,
-            scale: None,
-            always_on_top: None,
             enabled: Some(false),
+            ..Default::default()
         },
     )
     .await?;
@@ -1417,18 +1772,22 @@ pub async fn close_pet_window(
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn pet_window_record_position(
+    app: AppHandle,
     db: tauri::State<'_, AppDatabase>,
     x: f64,
     y: f64,
 ) -> Result<(), AppCommandError> {
+    let position_scale_factor = app
+        .get_webview_window(PET_WINDOW_LABEL)
+        .and_then(|w| w.scale_factor().ok())
+        .filter(|sf| sf.is_finite() && *sf > 0.0);
     crate::commands::pet::pet_save_window_state_core(
         &db.conn,
         crate::models::pet::PetWindowStatePatch {
             x: Some(x),
             y: Some(y),
-            scale: None,
-            always_on_top: None,
-            enabled: None,
+            position_scale_factor,
+            ..Default::default()
         },
     )
     .await?;
@@ -1644,9 +2003,17 @@ fn open_pet_panel_window(app: &AppHandle) -> Result<(), AppCommandError> {
         .focused(true)
         .accept_first_mouse(true);
 
-    apply_pet_window_style(builder)
+    let panel = apply_pet_window_style(builder)
         .build()
         .map_err(|e| AppCommandError::window("Failed to open pet panel", e.to_string()))?;
+
+    // Show it here rather than waiting for the renderer's first
+    // `resize_pet_panel`: that call is scheduled from `requestAnimationFrame`,
+    // which a hidden WKWebView never runs, so a panel left hidden would stay
+    // hidden. `tauri-plugin-window-state` used to do this show + focus for us
+    // on window-ready; the panel is now on its denylist.
+    let _ = panel.show();
+    let _ = panel.set_focus();
 
     Ok(())
 }
@@ -1688,6 +2055,11 @@ pub async fn resize_pet_panel(app: AppHandle, height: f64) -> Result<(), AppComm
 /// Bring the main workspace to the foreground and ask it to focus a specific
 /// conversation. Uses an event (not a URL reload) so the in-memory tab/session
 /// state survives — `PetFocusBridge` in the main window calls `openTab`.
+///
+/// Only the pet panel calls this. A `codeg://` OS deep link cannot: the emit
+/// reaches only webviews that have *already* registered a JS listener, which
+/// on a cold start is none of them — see `deep_link::PENDING_FOCUS` for the
+/// handoff that path uses instead.
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn focus_conversation(
@@ -1696,7 +2068,6 @@ pub async fn focus_conversation(
     conversation_id: i32,
     agent: String,
 ) -> Result<(), AppCommandError> {
-    use tauri::Emitter;
     show_main_window(&app);
     let payload = serde_json::json!({
         "folderId": folder_id,
@@ -1704,9 +2075,7 @@ pub async fn focus_conversation(
         "agent": agent,
     });
     app.emit_to("main", "workspace://focus-conversation", payload)
-        .map_err(|e| {
-            AppCommandError::window("Failed to signal main window", e.to_string())
-        })?;
+        .map_err(|e| AppCommandError::window("Failed to signal main window", e.to_string()))?;
     Ok(())
 }
 
@@ -1941,18 +2310,320 @@ pub fn can_hide_to_tray() -> bool {
     TRAY_AVAILABLE.load(AtomicOrdering::Relaxed)
 }
 
+// ─── macOS native-fullscreen drain on close (issue #507) ───────────────
+//
+// Native fullscreen on macOS is a separate Space. `orderOut:` (what
+// `Window::hide` does) and process exit both leave that Space standing, as
+// a black blank with leftover toolbar chrome — so every close action that
+// hides or exits leaves fullscreen first and waits for AppKit to tear the
+// Space down.
+//
+// Two tao facts (0.34, macOS) set the shape of that wait. `is_fullscreen()`
+// reads `shared_state.fullscreen`, and exactly two things clear it:
+//
+//   * `restore_state_from_fullscreen`, called from `windowDidExitFullScreen`
+//     — the END of the animation. It is the only thing that clears the flag
+//     for an exit the *user* started (green button, ⌃⌘F, the View menu), so
+//     while their animation runs the flag is still up. Polling it is what
+//     covers a close pressed mid-animation, including the mid-transition
+//     case where tao parks our `set_fullscreen` in `target_fullscreen` and
+//     replays it at `windowDid{Enter,Exit}FullScreen`.
+//   * `set_fullscreen` itself, synchronously, BEFORE it dispatches
+//     `toggleFullScreen:` to the main queue. So on the path this code
+//     drives the flag is already down before the animation starts, and says
+//     nothing about the Space.
+//
+// Nothing in tao's public surface reports `windowDidExitFullScreen` for the
+// second case, so what follows the flag drop is a timer. Making it exact
+// would take an `NSWindowDidExitFullScreenNotification` observer via objc2.
+
+/// Whether a close action must drain native fullscreen first.
+///
+/// Other platforms treat fullscreen as a maximized window and hide/close
+/// tear it down correctly, so this is a no-op there.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn should_drain_macos_fullscreen_before_close(
+    is_macos: bool,
+    is_fullscreen: bool,
+) -> bool {
+    is_macos && is_fullscreen
+}
+
+/// How long to give AppKit's Space teardown once tao's fullscreen flag is
+/// down.
+///
+/// On the path this code drives the flag falls before `toggleFullScreen:`
+/// has even been dispatched, so this is measured from the start of the
+/// animation, not its end: ~0.5s is the system transition, 700ms is that
+/// plus slack so hide/exit does not race the last frames (issue #507;
+/// tauri-apps/tauri#10580, #12056).
+#[cfg(target_os = "macos")]
+const MACOS_FULLSCREEN_EXIT_SETTLE: std::time::Duration = std::time::Duration::from_millis(700);
+
+#[cfg(target_os = "macos")]
+const MACOS_FULLSCREEN_EXIT_POLL: std::time::Duration = std::time::Duration::from_millis(50);
+
+#[cfg(target_os = "macos")]
+const MACOS_FULLSCREEN_EXIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// How long one `is_fullscreen()` sample may take before the drain gives up
+/// on it and lets its own deadline decide. Generous next to a main thread
+/// that is merely busy, short next to one that is never coming back.
+#[cfg(target_os = "macos")]
+const MACOS_FULLSCREEN_EXIT_PROBE: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// How long an in-flight drain keeps suppressing later close presses.
+///
+/// Comfortably past the longest honest drain (poll timeout + settle), and
+/// short enough that a stalled one costs a few seconds rather than the rest
+/// of the session — same bargain as `CLOSE_PROMPT_GRACE`.
+#[cfg(target_os = "macos")]
+const MACOS_FULLSCREEN_DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The in-flight drain: which press owns it, and when it started.
+///
+/// A second press while one is in flight is dropped — the in-flight callback
+/// is the press that will be answered. Two details earn their keep:
+///
+///   * It is a timestamp, not a flag. The drain is bounded (see
+///     `wait_for_macos_fullscreen_space_release`), but a starved or panicked
+///     drain thread must still not leave the close button dead for good.
+///   * It carries a generation, because a stale claim is exactly when a
+///     later press takes over — and then the stale thread finishes and
+///     releases. Without the generation it would clear its successor's
+///     claim, and the press after THAT would act on a window whose Space is
+///     still going.
+#[cfg(target_os = "macos")]
+static MACOS_FULLSCREEN_DRAIN: Mutex<Option<(u64, std::time::Instant)>> = Mutex::new(None);
+
+#[cfg(target_os = "macos")]
+static MACOS_FULLSCREEN_DRAIN_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// `Some(generation)` when this press owns the drain, `None` when another one
+/// already does.
+#[cfg(target_os = "macos")]
+fn claim_macos_fullscreen_drain() -> Option<u64> {
+    let now = std::time::Instant::now();
+    let took_over;
+    let generation;
+    {
+        let mut drain = MACOS_FULLSCREEN_DRAIN
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        took_over = match *drain {
+            Some((_, started)) if now.duration_since(started) < MACOS_FULLSCREEN_DRAIN_GRACE => {
+                return None
+            }
+            Some(_) => true,
+            None => false,
+        };
+        generation = MACOS_FULLSCREEN_DRAIN_SEQ.fetch_add(1, AtomicOrdering::Relaxed);
+        *drain = Some((generation, now));
+    }
+    if took_over {
+        tracing::warn!("[close] previous fullscreen drain never finished; taking the press over");
+    }
+    Some(generation)
+}
+
+/// No-op unless `generation` still owns the drain, so a thread whose claim
+/// expired cannot clear the claim that replaced it.
+#[cfg(target_os = "macos")]
+fn release_macos_fullscreen_drain(generation: u64) {
+    let mut drain = MACOS_FULLSCREEN_DRAIN
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if matches!(*drain, Some((owner, _)) if owner == generation) {
+        *drain = None;
+    }
+}
+
+#[cfg(target_os = "macos")]
+type MacosDrainAction = Mutex<Option<Box<dyn FnOnce() + Send>>>;
+
+/// Take the close action out of the slot, run it, and only then hand the
+/// claim back.
+///
+/// The claim spans the action, not just the wait: handing it back first
+/// leaves a gap in which a second press sees a free drain and acts ahead of
+/// the press already being answered. `app.exit(0)` never returns, so the
+/// release is best-effort — which is what the grace on the claim is for.
+/// Every exit from a drain goes through here, and the `Option` is what makes
+/// "at most once" hold when two of those exits are reached.
+#[cfg(target_os = "macos")]
+fn finish_macos_fullscreen_drain(generation: u64, action: &std::sync::Arc<MacosDrainAction>) {
+    let action = action
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .take();
+    if let Some(action) = action {
+        action();
+    }
+    release_macos_fullscreen_drain(generation);
+}
+
+#[cfg(target_os = "macos")]
+fn macos_fullscreen_drain_in_flight() -> bool {
+    let now = std::time::Instant::now();
+    let drain = *MACOS_FULLSCREEN_DRAIN
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    drain.is_some_and(|(_, started)| now.duration_since(started) < MACOS_FULLSCREEN_DRAIN_GRACE)
+}
+
+/// Run `action` once the main window no longer owns a macOS
+/// native-fullscreen Space.
+///
+/// Off macOS, and on a window that is not fullscreen, `action` runs inline
+/// on the calling thread; otherwise it runs on the main thread once the
+/// Space is gone. Every close path that hides or exits goes through here.
+///
+/// Keyed off the `AppHandle` rather than a `Window` because the answers to
+/// the close dialog arrive on a command that has no window handle, and
+/// `Manager::get_window` is behind tauri's `unstable` feature — the webview
+/// window is the flavour every caller can reach.
+pub(crate) fn with_macos_fullscreen_drained(
+    app: &tauri::AppHandle,
+    action: impl FnOnce() + Send + 'static,
+) {
+    #[cfg(target_os = "macos")]
+    {
+        // The in-flight check is not redundant with the flag: `set_fullscreen`
+        // clears tao's flag before the animation even starts, so a second
+        // close press arriving mid-drain reads as windowed while the Space is
+        // still going. Hand it to the drain, which drops it as a duplicate of
+        // the press already being answered.
+        //
+        // The sample is the bounded one because the dialog's answer reaches
+        // here on a tokio worker, where the plain getter would park a runtime
+        // thread on the event loop indefinitely. An unanswered sample drains:
+        // being wrong that way costs a delay, being wrong the other way is
+        // the bug this whole module exists for.
+        if let Some(window) = app.get_webview_window("main") {
+            if should_drain_macos_fullscreen_before_close(
+                true,
+                sample_macos_fullscreen(&window) != Some(false),
+            ) || macos_fullscreen_drain_in_flight()
+            {
+                drain_macos_fullscreen_then(window, action);
+                return;
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
+    action();
+}
+
+/// Exit native fullscreen and wait until the Space is gone, then run `then`
+/// on the main thread.
+#[cfg(target_os = "macos")]
+fn drain_macos_fullscreen_then(
+    window: tauri::WebviewWindow,
+    then: impl FnOnce() + Send + 'static,
+) {
+    let Some(generation) = claim_macos_fullscreen_drain() else {
+        return;
+    };
+
+    let _ = window.set_fullscreen(false);
+    tracing::info!("[close] draining macOS native fullscreen before close behavior");
+
+    // Shared, and taken exactly once, so every way this can go wrong still
+    // answers the press: a close the user pressed and that this path then
+    // swallowed leaves a window nothing can dismiss, which is worse than
+    // acting on a Space that has not quite finished going.
+    let action: std::sync::Arc<MacosDrainAction> =
+        std::sync::Arc::new(Mutex::new(Some(Box::new(then) as Box<dyn FnOnce() + Send>)));
+
+    let app = window.app_handle().clone();
+    let spawned = std::thread::Builder::new()
+        .name("macos-fs-close-drain".into())
+        .spawn({
+            let action = action.clone();
+            move || {
+                wait_for_macos_fullscreen_space_release(&window);
+                let hop = {
+                    let action = action.clone();
+                    move || finish_macos_fullscreen_drain(generation, &action)
+                };
+                // `run_on_main_thread` consumes the closure either way, which
+                // is why the action lives behind the shared `Option` rather
+                // than being moved in: a rejected hop must not eat the press.
+                if let Err(err) = app.run_on_main_thread(hop) {
+                    tracing::warn!(
+                        "[close] failed to hop back to main thread after fullscreen drain: {err}"
+                    );
+                    finish_macos_fullscreen_drain(generation, &action);
+                }
+            }
+        });
+
+    if let Err(err) = spawned {
+        tracing::warn!("[close] failed to spawn fullscreen drain: {err}");
+        finish_macos_fullscreen_drain(generation, &action);
+    }
+}
+
+/// One `is_fullscreen()` sample that cannot outlive `MACOS_FULLSCREEN_EXIT_PROBE`.
+///
+/// `WebviewWindow::is_fullscreen` off the main thread posts to the event loop
+/// and then blocks on a channel with NO timeout, so a stalled or closing loop
+/// would hang the drain thread outright — a deadline around the loop cannot
+/// bound a call that never returns. Hopping the read onto the main thread
+/// (where the runtime answers it inline) and waiting on our own channel with
+/// a deadline is what makes the whole drain finite.
+///
+/// `None` is "no answer this round", never "not fullscreen": the caller's own
+/// deadline decides when to stop asking.
+#[cfg(target_os = "macos")]
+fn sample_macos_fullscreen(window: &tauri::WebviewWindow) -> Option<bool> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let probe = {
+        let window = window.clone();
+        move || {
+            let _ = tx.send(window.is_fullscreen().unwrap_or(false));
+        }
+    };
+    window.app_handle().run_on_main_thread(probe).ok()?;
+    rx.recv_timeout(MACOS_FULLSCREEN_EXIT_PROBE).ok()
+}
+
+#[cfg(target_os = "macos")]
+fn wait_for_macos_fullscreen_space_release(window: &tauri::WebviewWindow) {
+    let deadline = std::time::Instant::now() + MACOS_FULLSCREEN_EXIT_TIMEOUT;
+    while sample_macos_fullscreen(window) != Some(false) {
+        if std::time::Instant::now() >= deadline {
+            tracing::warn!(
+                "[close] timed out waiting for macOS fullscreen to drop; applying close behavior anyway"
+            );
+            break;
+        }
+        std::thread::sleep(MACOS_FULLSCREEN_EXIT_POLL);
+    }
+    // The flag is not the Space — see the module note above. Give AppKit
+    // the animation before anything calls `orderOut:` or exits.
+    std::thread::sleep(MACOS_FULLSCREEN_EXIT_SETTLE);
+}
+
 /// Bring the hidden / minimized main workspace window back to the
 /// foreground. Used by:
-///   * single-instance plugin (second launch)
+///   * "Open Local Workspace" (the macOS Window menu, `open_local_workspace`)
 ///   * tray icon left-click and "Show Workspace" menu item
-///   * macOS dock-icon reopen
+///   * explicit local-workspace and deep-link actions
 #[cfg(feature = "tauri-runtime")]
 pub fn show_main_window(app: &AppHandle) {
-    if let Some(main) = app.get_webview_window("main") {
-        let _ = main.unminimize();
-        let _ = main.show();
-        let _ = main.set_focus();
-    }
+    show_and_focus_window(app, "main");
+}
+
+/// The frontend's "Open local workspace": Quick actions in a remote workspace
+/// window, and the screens a remote window shows instead of its workspace
+/// when its connection cannot be used. Reached through the shell transport, so
+/// it needs nothing from the remote server.
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub fn open_local_workspace(app: AppHandle) {
+    show_main_window(&app);
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -2133,6 +2804,88 @@ pub async fn set_tray_locale(
 }
 
 #[cfg(test)]
+mod owner_window_tests {
+    use super::{AuxWindowState, SettingsWindowState};
+
+    // `lib.rs` runs the restore on both `CloseRequested` and `Destroyed`, so the
+    // owner has to be handed back exactly once. That mattered less while the
+    // restore was a bare `set_focus`; now that it also unhides the owner, a
+    // second pass would fight a user who re-hid the workspace in between.
+    #[test]
+    fn settings_owner_is_handed_back_once() {
+        let state = SettingsWindowState::new();
+        state.set_owner("settings".to_string(), "main".to_string());
+
+        assert_eq!(state.take_owner("settings").as_deref(), Some("main"));
+        assert_eq!(state.take_owner("settings"), None);
+    }
+
+    // Re-opening settings from a different window re-points the owner, so the
+    // restore brings back the window the user actually came from.
+    #[test]
+    fn reopening_settings_repoints_the_owner() {
+        let state = SettingsWindowState::new();
+        state.set_owner("settings".to_string(), "main".to_string());
+        state.set_owner("settings".to_string(), "remote-workspace-3".to_string());
+
+        assert_eq!(state.take_owner("settings").as_deref(), Some("remote-workspace-3"));
+    }
+
+    // Same hand-back-once contract for the shared map, which stash, push,
+    // project boot and the importer all write into.
+    #[test]
+    fn aux_owner_is_handed_back_once() {
+        let state = AuxWindowState::new();
+        state.set_owner("stash-7".to_string(), "main".to_string());
+
+        assert_eq!(state.take_owner("stash-7").as_deref(), Some("main"));
+        assert_eq!(state.take_owner("stash-7"), None);
+    }
+
+    // The four window kinds share one map, so their labels must not collide:
+    // closing the stash window has to leave the push window's owner alone.
+    #[test]
+    fn aux_owners_are_kept_per_window_label() {
+        let state = AuxWindowState::new();
+        state.set_owner("stash-7".to_string(), "main".to_string());
+        state.set_owner("push-7".to_string(), "remote-workspace-3".to_string());
+        state.set_owner("project-boot".to_string(), "main".to_string());
+        state.set_owner("import-sessions".to_string(), "main".to_string());
+
+        assert_eq!(state.take_owner("stash-7").as_deref(), Some("main"));
+        assert_eq!(state.take_owner("push-7").as_deref(), Some("remote-workspace-3"));
+        assert_eq!(state.take_owner("project-boot").as_deref(), Some("main"));
+        assert_eq!(state.take_owner("import-sessions").as_deref(), Some("main"));
+    }
+
+    // `lib.rs` runs the aux restore for EVERY closing window, so a label that
+    // never registered an owner (main, pet, settings, a commit window) must
+    // come back empty rather than pull some other window forward.
+    #[test]
+    fn aux_restore_is_inert_for_unregistered_labels() {
+        let state = AuxWindowState::new();
+        state.set_owner("stash-7".to_string(), "main".to_string());
+
+        for label in ["main", "pet", "settings", "commit-7", "merge-7"] {
+            assert_eq!(state.take_owner(label), None, "{label} owns nothing");
+        }
+        assert_eq!(state.take_owner("stash-7").as_deref(), Some("main"));
+    }
+
+    // Re-opening from another window re-points the owner here too. The stash
+    // window is reused across workspaces, so the restore has to follow the
+    // window the user last came from.
+    #[test]
+    fn reopening_an_aux_window_repoints_the_owner() {
+        let state = AuxWindowState::new();
+        state.set_owner("stash-7".to_string(), "main".to_string());
+        state.set_owner("stash-7".to_string(), "remote-workspace-3".to_string());
+
+        assert_eq!(state.take_owner("stash-7").as_deref(), Some("remote-workspace-3"));
+    }
+}
+
+#[cfg(test)]
 mod pet_panel_geometry_tests {
     use super::{compute_pet_panel_origin, PET_PANEL_GAP, PET_PANEL_WIDTH};
 
@@ -2216,5 +2969,314 @@ mod pet_panel_geometry_tests {
             380.0,
         );
         assert_eq!(y, short_mon.1, "clamped to the monitor top, not above it");
+    }
+}
+
+#[cfg(test)]
+mod settings_route_tests {
+    use super::resolve_settings_route;
+
+    /// Every section the frontend's `SettingsSection` union can send must map
+    /// to a real route. `general` is the one that looks redundant and is not:
+    /// the fallback below it is Appearance, so a caller wanting the General
+    /// page must be able to name it and land there. `collaboration` is where
+    /// the codeg-mcp tool switches live in full, and it is what the status-bar
+    /// codeg-mcp popover links to; `computer-use` is what the Computer use
+    /// popover links to; `web-service` is what the Web service popover links
+    /// to.
+    #[test]
+    fn every_named_settings_section_resolves_to_its_own_route() {
+        for section in [
+            "general",
+            "appearance",
+            "agents",
+            "collaboration",
+            "browser",
+            "computer-use",
+            "version-control",
+            "shortcuts",
+            "system",
+            "web-service",
+        ] {
+            assert_eq!(
+                resolve_settings_route(Some(section)),
+                format!("settings/{section}"),
+                "section {section} must route to its own page"
+            );
+        }
+        // An unnamed section keeps its long-standing desktop landing spot.
+        assert_eq!(resolve_settings_route(None), "settings/appearance");
+    }
+
+    /// The MCP, Skills and Skill packs pages are gone from the Settings window
+    /// (they are sections of the workspace's Harness page now), and so are the
+    /// Experts, Science and Office tools addresses that redirected to the last.
+    /// A caller that still names one — an older window, a stale link — is not
+    /// sent to a route that no longer exists: it gets the Settings window on
+    /// the page an unknown section lands on.
+    #[test]
+    fn sections_moved_to_harness_fall_back_like_unknown_ones() {
+        for section in [
+            "mcp",
+            "skills",
+            "skill-packs",
+            "experts",
+            "science",
+            "office-tools",
+            "no-such-section",
+        ] {
+            assert_eq!(
+                resolve_settings_route(Some(section)),
+                "settings/appearance",
+                "section {section} must land where an unknown section does"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod macos_fullscreen_close_tests {
+    use super::should_drain_macos_fullscreen_before_close;
+
+    /// Linux (and Windows) fullscreen is not a separate Space. Close must
+    /// not wait on it, or a maximized window would take the settle delay on
+    /// every hide/exit for nothing.
+    #[test]
+    fn non_macos_never_drains_fullscreen() {
+        assert!(!should_drain_macos_fullscreen_before_close(false, true));
+        assert!(!should_drain_macos_fullscreen_before_close(false, false));
+    }
+
+    /// The flag is up for the whole of a user-driven exit animation (tao
+    /// only clears it in `windowDidExitFullScreen`), so it is also what
+    /// covers a close pressed mid-animation. Windowed must not drain: that
+    /// would put the settle delay on every ordinary close.
+    #[test]
+    fn macos_drains_exactly_while_the_fullscreen_flag_is_up() {
+        assert!(should_drain_macos_fullscreen_before_close(true, true));
+        assert!(!should_drain_macos_fullscreen_before_close(true, false));
+    }
+
+    /// The drain is claimed once and answered once: a second press while one
+    /// is in flight is dropped rather than queueing a second hide. And while
+    /// it is in flight it stays observable, because tao's fullscreen flag is
+    /// already down by then and would otherwise read as "nothing to wait for".
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_drain_claim_is_exclusive_and_observable_until_released() {
+        use super::{
+            claim_macos_fullscreen_drain, macos_fullscreen_drain_in_flight,
+            release_macos_fullscreen_drain, MACOS_FULLSCREEN_DRAIN,
+        };
+
+        *MACOS_FULLSCREEN_DRAIN.lock().unwrap() = None;
+        assert!(!macos_fullscreen_drain_in_flight());
+
+        let first = claim_macos_fullscreen_drain().expect("first press claims the drain");
+        assert!(
+            macos_fullscreen_drain_in_flight(),
+            "a second press must be able to see the drain it should defer to"
+        );
+        assert!(
+            claim_macos_fullscreen_drain().is_none(),
+            "a press arriving mid-drain must not start a second one"
+        );
+
+        release_macos_fullscreen_drain(first);
+        assert!(!macos_fullscreen_drain_in_flight());
+        let second =
+            claim_macos_fullscreen_drain().expect("the next press is answerable once done");
+        assert_ne!(first, second);
+
+        // The wedge case the generation exists for: the thread that lost its
+        // claim to a takeover must not clear the claim that replaced it.
+        release_macos_fullscreen_drain(first);
+        assert!(
+            macos_fullscreen_drain_in_flight(),
+            "a stale release must leave the incumbent drain owning the press"
+        );
+
+        release_macos_fullscreen_drain(second);
+        assert!(!macos_fullscreen_drain_in_flight());
+    }
+}
+
+#[cfg(test)]
+mod pet_window_origin_tests {
+    use super::{
+        pet_staging_origin, resolve_saved_pet_origin_macos, resolve_saved_pet_origin_physical,
+        SavedPetOrigin, PET_BASE_HEIGHT, PET_BASE_WIDTH,
+    };
+
+    // Mixed-DPI setup: 2× primary Retina at (0, 0) + 1× external monitor to its left.
+    const MIXED_DPI_LEFT: [(i32, i32, u32, u32, f64); 2] =
+        [(0, 0, 3024, 1964, 2.0), (-1920, 0, 1920, 1080, 1.0)];
+
+    // Mixed-DPI setup where tao's physical rects overlap on macOS:
+    // 2× primary Retina `[0, 3024)` (logical `[0, 1512)`) + 1× display on its
+    // right `[1512, 3432)` (logical `[1512, 3432)`).
+    const MIXED_DPI_RIGHT: [(i32, i32, u32, u32, f64); 2] =
+        [(0, 0, 3024, 1964, 2.0), (1512, 0, 1920, 1080, 1.0)];
+
+    #[test]
+    fn macos_resolves_right_1x_monitor_without_colliding_with_2x_primary() {
+        let pet_w = PET_BASE_WIDTH * 0.75; // 144
+        let pet_h = PET_BASE_HEIGHT * 0.75; // 156
+
+        // `x = 1800` lies inside BOTH `[0, 3024)` (2× primary physical) and
+        // `[1512, 3432)` (1× right). With `saved_scale_factor = 1.0`, it must
+        // map to logical `(1800, 500)` on the right 1× monitor — not `(900, 250)`.
+        let origin = resolve_saved_pet_origin_macos(
+            Some((1800.0, 500.0)),
+            Some(1.0),
+            pet_w,
+            pet_h,
+            &MIXED_DPI_RIGHT,
+        );
+        assert_eq!(
+            origin,
+            Some(SavedPetOrigin {
+                x: 1800.0,
+                y: 500.0
+            })
+        );
+    }
+
+    #[test]
+    fn macos_resolves_left_1x_and_clamps_2x_primary_in_logical_points() {
+        let pet_w = PET_BASE_WIDTH * 0.75; // 144
+        let pet_h = PET_BASE_HEIGHT * 0.75; // 156
+
+        assert_eq!(
+            resolve_saved_pet_origin_macos(
+                Some((-215.0, 708.0)),
+                None,
+                pet_w,
+                pet_h,
+                &MIXED_DPI_LEFT,
+            ),
+            Some(SavedPetOrigin {
+                x: -215.0,
+                y: 708.0
+            })
+        );
+
+        // Near bottom-right of 2× primary (logical 1512×982): clamped in logical pts.
+        assert_eq!(
+            resolve_saved_pet_origin_macos(
+                Some((2950.0, 1900.0)),
+                Some(2.0),
+                pet_w,
+                pet_h,
+                &MIXED_DPI_LEFT,
+            ),
+            Some(SavedPetOrigin {
+                x: 1512.0 - pet_w,
+                y: 982.0 - pet_h,
+            })
+        );
+    }
+
+    #[test]
+    fn physical_origin_clamps_per_monitor_and_falls_back_when_disconnected() {
+        let pet_w = PET_BASE_WIDTH * 0.75; // 144 logical -> 288 physical at 2×
+        let pet_h = PET_BASE_HEIGHT * 0.75; // 156 logical -> 312 physical at 2×
+
+        assert_eq!(
+            resolve_saved_pet_origin_physical(
+                Some((2950.0, 1900.0)),
+                pet_w,
+                pet_h,
+                &MIXED_DPI_LEFT,
+            ),
+            Some(SavedPetOrigin {
+                x: 3024.0 - 288.0,
+                y: 1964.0 - 312.0,
+            })
+        );
+
+        let only_primary = [(0, 0, 3024, 1964, 2.0)];
+        assert_eq!(
+            resolve_saved_pet_origin_macos(
+                Some((-215.0, 708.0)),
+                Some(1.0),
+                pet_w,
+                pet_h,
+                &only_primary,
+            ),
+            None
+        );
+        assert_eq!(
+            resolve_saved_pet_origin_physical(Some((-215.0, 708.0)), pet_w, pet_h, &only_primary,),
+            None
+        );
+        assert_eq!(
+            resolve_saved_pet_origin_physical(
+                Some((f64::NAN, 100.0)),
+                pet_w,
+                pet_h,
+                &MIXED_DPI_LEFT,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn physical_restore_stages_centered_on_the_target_monitor() {
+        let pet_w = PET_BASE_WIDTH * 0.75; // 144 logical
+        let pet_h = PET_BASE_HEIGHT * 0.75; // 156 logical
+
+        // 250% primary with a 100% display directly to its left. Saved just
+        // left of the seam: fits on the 1x display (144 px wide), but a window
+        // still carrying the primary's 360 px width would straddle the seam
+        // with most of itself on the primary. The staging box (min size at
+        // the build monitor's 2.5x = 240×260) is centered on the 1x display.
+        let seam = [(0, 0, 3840, 2160, 2.5), (-1920, 0, 1920, 1080, 1.0)];
+        let origin = resolve_saved_pet_origin_physical(Some((-160.0, 500.0)), pet_w, pet_h, &seam)
+            .expect("origin on the 1x display");
+        assert_eq!(
+            origin,
+            SavedPetOrigin {
+                x: -160.0,
+                y: 500.0
+            }
+        );
+        assert_eq!(
+            pet_staging_origin(origin, &seam, 240.0, 260.0),
+            Some((-1920 + (1920 - 240) / 2, (1080 - 260) / 2))
+        );
+
+        // A target monitor smaller than the pet at the build DPI (350% 4K
+        // primary, 1280×720 at 100% above it, pet at 2×): the staging box
+        // (96×104 logical at 3.5x = 336×364) still fits wholly inside it.
+        let stacked = [(0, 0, 3840, 2160, 3.5), (0, -720, 1280, 720, 1.0)];
+        let big_w = PET_BASE_WIDTH * 2.0;
+        let big_h = PET_BASE_HEIGHT * 2.0;
+        let origin =
+            resolve_saved_pet_origin_physical(Some((100.0, -700.0)), big_w, big_h, &stacked)
+                .expect("origin on the upper display");
+        // The origin lies on the upper display; the primary must not claim it
+        // through a center computed at its own 3.5x scale.
+        assert_eq!(
+            origin,
+            SavedPetOrigin {
+                x: 100.0,
+                y: -700.0
+            }
+        );
+        let (sx, sy) = pet_staging_origin(origin, &stacked, 336.0, 364.0).expect("staging");
+        assert!(
+            sx >= 0 && sx + 336 <= 1280,
+            "staging x inside upper display"
+        );
+        assert!(
+            sy >= -720 && sy + 364 <= 0,
+            "staging y inside upper display"
+        );
+
+        assert_eq!(
+            pet_staging_origin(SavedPetOrigin { x: 5000.0, y: 10.0 }, &seam, 240.0, 260.0),
+            None
+        );
     }
 }

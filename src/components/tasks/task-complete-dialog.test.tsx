@@ -9,6 +9,7 @@ const completeMock = vi.fn().mockResolvedValue(undefined)
 const settingsMock = vi.fn()
 
 vi.mock("@/lib/api", () => ({
+  workTaskGet: vi.fn().mockRejectedValue(new Error("not in this test")),
   workTaskComplete: (...args: unknown[]) => completeMock(...args),
   workTaskSettingsEffective: (...args: unknown[]) => settingsMock(...args),
 }))
@@ -62,6 +63,7 @@ function settings(
     max_concurrent: 2,
     merge_strategy: "squash",
     auto_merge: false,
+    auto_compact_percent: 0,
     delete_worktree_default: true,
     ...overrides,
   }

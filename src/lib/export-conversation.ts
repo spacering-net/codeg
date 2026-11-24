@@ -7,24 +7,11 @@ import type {
 } from "@/lib/types"
 import { getAgentLabel } from "@/lib/custom-agents"
 import { downloadImage } from "@/lib/image-download"
-import { isDesktop } from "@/lib/platform"
+import { saveTextFile, type SaveFileResult } from "@/lib/save-file"
 import { toPng } from "html-to-image"
 
-/**
- * Outcome of an export operation.
- *
- * - `"saved"`: the file was actually written (desktop) or the browser
- *   download was kicked off (web — best effort, the browser owns the
- *   download manager from there).
- * - `"cancelled"`: the user dismissed the desktop save dialog. Only
- *   reachable on desktop; web mode never returns this.
- *
- * Real I/O failures (e.g. macOS TCC denying disk write after the user
- * picked a path) are surfaced as thrown exceptions so callers can
- * disambiguate from cancellation and render a real error toast instead
- * of a misleading success.
- */
-export type ExportResult = "saved" | "cancelled"
+/** Outcome of an export operation — see {@link SaveFileResult}. */
+export type ExportResult = SaveFileResult
 
 export interface ExportLabels {
   untitledConversation: string
@@ -44,6 +31,7 @@ export interface ExportLabels {
   system: string
   toolResult: string
   toolError: string
+  turnFailed: string
   statusLabels: Record<string, string>
 }
 
@@ -57,52 +45,6 @@ export interface ExportConversationData {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Save a UTF-8 text payload to disk.
- *
- * Desktop (Tauri): pops the system "Save As" dialog and writes via the
- * `save_text_file` Rust command — write failures (e.g. macOS TCC denial
- * after the dialog cached an earlier "Don't Allow") propagate as
- * exceptions, so the caller can show a real error toast instead of a
- * misleading success.
- *
- * Web (browser): falls back to the legacy `<a download>` Blob link;
- * the browser owns the download manager and we have no per-call status
- * channel, so this path is always reported as `"saved"`.
- */
-async function saveTextFile(opts: {
-  content: string
-  suggestedName: string
-  mimeType: string
-  filterName: string
-  ext: string
-}): Promise<ExportResult> {
-  const { content, suggestedName, mimeType, filterName, ext } = opts
-
-  if (isDesktop()) {
-    const { save } = await import("@tauri-apps/plugin-dialog")
-    const path = await save({
-      defaultPath: suggestedName,
-      filters: [{ name: filterName, extensions: [ext] }],
-    })
-    if (!path) return "cancelled"
-    const { invoke } = await import("@tauri-apps/api/core")
-    await invoke("save_text_file", { path, contents: content })
-    return "saved"
-  }
-
-  const blob = new Blob([content], { type: mimeType })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement("a")
-  link.href = url
-  link.download = suggestedName
-  document.body.append(link)
-  link.click()
-  link.remove()
-  URL.revokeObjectURL(url)
-  return "saved"
-}
 
 function makeExportFilename(title: string | null, ext: string): string {
   const date = new Date().toISOString().slice(0, 10)
@@ -276,6 +218,11 @@ function blocksToMarkdown(
           }
           return lines.join("\n\n")
         }
+        case "turn_error":
+          return `> **${labels.turnFailed}**\n>\n${block.message
+            .split("\n")
+            .map((line) => `> ${line}`)
+            .join("\n")}`
         default:
           return ""
       }
@@ -320,6 +267,8 @@ function blocksToHtml(blocks: ContentBlock[], labels: ExportLabels): string {
           parts.push("</div>")
           return parts.join("")
         }
+        case "turn_error":
+          return `<div class="turn-error"><strong>${escapeHtml(labels.turnFailed)}</strong><br>${escapeHtml(block.message).replace(/\n/g, "<br>")}</div>`
         default:
           return ""
       }
@@ -433,6 +382,8 @@ details[open]>.tool-summary::before{transform:rotate(90deg)}
 .tool-content{padding:4px 12px 8px;font-size:0.8125rem;color:#4b5563;border-top:1px solid #e5e7eb;line-height:1.5}
 .tool-result.error{border-color:#fca5a5;background:#fef2f2}
 .tool-result.error .tool-summary{color:#dc2626}
+.turn-error{color:#6b7280;font-size:0.8125rem;white-space:pre-wrap;word-break:break-word}
+.turn-error strong{color:#dc2626}
 pre{margin:0;white-space:pre-wrap;word-break:break-word;font-size:0.8125rem}
 .image-block{margin:8px 0}
 .footer{margin-top:24px;padding-top:12px;font-size:0.75rem;color:#9ca3af;text-align:center}

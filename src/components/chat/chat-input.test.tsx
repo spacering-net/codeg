@@ -1,14 +1,23 @@
-import { fireEvent, render, screen } from "@testing-library/react"
-import { describe, expect, it, vi } from "vitest"
+import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { afterEach, describe, expect, it, vi } from "vitest"
+
+import type { ComponentProps } from "react"
 
 // The composer body itself is irrelevant here — these tests are about which
-// events the wrapper lets escape to the conversation panel around it.
+// events the wrapper lets escape to the conversation panel around it, and which
+// derived props the wrapper hands down.
+const lastProps = vi.hoisted(() => ({
+  current: null as Record<string, unknown> | null,
+}))
 vi.mock("@/components/chat/message-input", () => ({
-  MessageInput: () => (
-    <button type="button" data-testid="agent-icon">
-      agent
-    </button>
-  ),
+  MessageInput: (props: Record<string, unknown>) => {
+    lastProps.current = props
+    return (
+      <button type="button" data-testid="agent-icon">
+        agent
+      </button>
+    )
+  },
 }))
 
 vi.mock("@/components/chat/message-queue-display", () => ({
@@ -82,5 +91,81 @@ describe("ChatInput event containment", () => {
 
     fireEvent.contextMenu(screen.getByTestId("agent-icon"))
     expect(onContextMenu).not.toHaveBeenCalled()
+  })
+})
+
+// The `/` panel's loading state has to span the WHOLE wait for the agent's
+// command list. The backend emits `connected` early — before session
+// resume/load/new — and only forwards the buffered commands once
+// `selectors_ready` has fired, so `connecting` alone would blank the panel again
+// for the entire session-init leg.
+describe("ChatInput slash-command loading window", () => {
+  afterEach(() => {
+    cleanup()
+    lastProps.current = null
+  })
+
+  function renderStatus(props: Partial<ComponentProps<typeof ChatInput>>) {
+    render(
+      <ChatInput
+        status="connected"
+        promptCapabilities={{
+          image: false,
+          audio: false,
+          embedded_context: false,
+        }}
+        onSend={() => {}}
+        onCancel={() => {}}
+        {...props}
+      />
+    )
+    return lastProps.current
+  }
+
+  it("loads while the connection is being established", () => {
+    expect(renderStatus({ status: "connecting" })?.commandsLoading).toBe(true)
+  })
+
+  it("keeps loading through session init (connected, selectors not ready)", () => {
+    expect(
+      renderStatus({ status: "connected", selectorsLoading: true })
+        ?.commandsLoading
+    ).toBe(true)
+  })
+
+  it("stops once the session is initialized", () => {
+    expect(
+      renderStatus({ status: "connected", selectorsLoading: false })
+        ?.commandsLoading
+    ).toBe(false)
+    // Bounded even for an agent that never advertises a single command:
+    // `selectors_ready` fires on every establishment path, so this can't hang.
+    expect(
+      renderStatus({
+        status: "connected",
+        selectorsLoading: false,
+        availableCommands: [],
+      })?.commandsLoading
+    ).toBe(false)
+  })
+
+  it("does not load on a dead connection", () => {
+    expect(renderStatus({ status: "disconnected" })?.commandsLoading).toBe(
+      false
+    )
+    expect(renderStatus({ status: "error" })?.commandsLoading).toBe(false)
+  })
+
+  // The user-visible half of issue #797: a torn-down connection is what greys
+  // the composer out, so a turn-scoped failure must never take the connection
+  // with it. `prompting` stays enabled on purpose (the draft enqueues), and
+  // `error` / `disconnected` are exactly the states the backend used to enter
+  // for a rejected `session/prompt` — the user could not send again until a
+  // full agent respawn had finished.
+  it("greys the composer out only when the connection itself is gone", () => {
+    expect(renderStatus({ status: "connected" })?.disabled).toBe(false)
+    expect(renderStatus({ status: "prompting" })?.disabled).toBe(false)
+    expect(renderStatus({ status: "error" })?.disabled).toBe(true)
+    expect(renderStatus({ status: "disconnected" })?.disabled).toBe(true)
   })
 })

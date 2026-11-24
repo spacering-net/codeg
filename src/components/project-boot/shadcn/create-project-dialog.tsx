@@ -35,6 +35,7 @@ import {
   detectPackageManager,
 } from "@/lib/api"
 import { extractAppCommandError, toErrorMessage } from "@/lib/app-error"
+import { joinFsPath } from "@/lib/path-utils"
 import { DirectoryPathInput } from "@/components/shared/directory-path-input"
 import {
   BASE_OPTIONS,
@@ -86,6 +87,7 @@ export function CreateProjectDialog({
 
   useEffect(() => {
     if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- probes the local toolchain; flips the checking flag before awaiting
       checkPackageManager(packageManager)
     }
   }, [open, packageManager, checkPackageManager])
@@ -193,7 +195,7 @@ export function CreateProjectDialog({
             {saveDirectory && projectName.trim() && (
               <p className="text-xs text-muted-foreground">
                 {t("createDialog.projectPath", {
-                  path: `${saveDirectory}/${projectName.trim()}`,
+                  path: joinFsPath(saveDirectory, projectName.trim()),
                 })}
               </p>
             )}

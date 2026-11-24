@@ -68,6 +68,53 @@ pub const BACKUP_I18N_KEY_CANCELLED: &str = "backup.error.cancelled";
 /// A restore is already staged and awaiting restart; only one at a time.
 pub const BACKUP_I18N_KEY_ALREADY_PENDING: &str = "backup.restore.error.alreadyPending";
 
+// ─── Config sync i18n keys ───────────────────────────────────────────
+//
+// Emitted by `commands::config_sync::*` and consumed by `ConfigSyncSettings`
+// on the frontend. MUST stay in lockstep with the TS constants in
+// `src/lib/config-sync.ts`.
+
+/// The snapshot declares a schema this binary cannot represent — the machine
+/// that wrote it runs a newer codeg. Params: `snapshotVersion`, `appVersion`.
+pub const CONFIG_SYNC_I18N_KEY_NEWER_SCHEMA: &str = "configSync.error.newerSchema";
+/// `config.json` did not match the size/sha256 the manifest recorded — a
+/// truncated upload or a share that was written by two machines at once.
+pub const CONFIG_SYNC_I18N_KEY_CHECKSUM: &str = "configSync.error.checksum";
+/// The file is not a codeg config snapshot, or its JSON is malformed.
+pub const CONFIG_SYNC_I18N_KEY_INVALID_SNAPSHOT: &str = "configSync.error.invalidSnapshot";
+/// The remote directory holds no snapshot yet (nothing was ever uploaded).
+pub const CONFIG_SYNC_I18N_KEY_NO_REMOTE: &str = "configSync.error.noRemoteSnapshot";
+/// WebDAV rejected the credentials (401).
+pub const CONFIG_SYNC_I18N_KEY_UNAUTHORIZED: &str = "configSync.error.unauthorized";
+/// WebDAV authenticated but refused the operation (403).
+pub const CONFIG_SYNC_I18N_KEY_FORBIDDEN: &str = "configSync.error.forbidden";
+/// The configured remote directory does not exist and could not be created.
+pub const CONFIG_SYNC_I18N_KEY_REMOTE_PATH: &str = "configSync.error.remotePath";
+/// The share is out of quota (507).
+pub const CONFIG_SYNC_I18N_KEY_QUOTA: &str = "configSync.error.quota";
+/// The request never reached the server (DNS, TLS, timeout, offline).
+pub const CONFIG_SYNC_I18N_KEY_NETWORK: &str = "configSync.error.network";
+/// The server answered with an unexpected status. Params: `status`.
+pub const CONFIG_SYNC_I18N_KEY_SERVER: &str = "configSync.error.server";
+/// The snapshot is encrypted but no passphrase is stored on this machine.
+pub const CONFIG_SYNC_I18N_KEY_PASSPHRASE_REQUIRED: &str = "configSync.error.passphraseRequired";
+/// The stored passphrase did not decrypt the snapshot (or its bytes are
+/// corrupt — GCM cannot tell those apart, and neither can we).
+pub const CONFIG_SYNC_I18N_KEY_BAD_PASSPHRASE: &str = "configSync.error.badPassphrase";
+/// A domain payload inside an otherwise well-formed snapshot does not decode.
+/// Params: `domain`.
+pub const CONFIG_SYNC_I18N_KEY_BAD_DOMAIN: &str = "configSync.error.badDomain";
+/// The named rollback snapshot is not on this machine (pruned, or a stale id
+/// from a list the UI has not refreshed).
+pub const CONFIG_SYNC_I18N_KEY_NO_ROLLBACK: &str = "configSync.error.noRollback";
+/// The OS keyring (or the server's token file) would not open, so the stored
+/// credentials can be neither read nor safely rewritten.
+pub const CONFIG_SYNC_I18N_KEY_CREDENTIALS_UNREADABLE: &str =
+    "configSync.error.credentialsUnreadable";
+/// Encryption is on locally but the remote copy is not encrypted. Accepting it
+/// would let anyone who can write to the share undo the setting.
+pub const CONFIG_SYNC_I18N_KEY_NOT_ENCRYPTED: &str = "configSync.error.notEncrypted";
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AppErrorCode {

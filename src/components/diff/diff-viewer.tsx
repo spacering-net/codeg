@@ -220,12 +220,10 @@ export function DiffViewer({
         <span className="font-medium">{modifiedLabel}</span>
         {diffChanges.length > 0 && (
           <>
-            <span className="ml-2 font-mono text-green-600 dark:text-green-400">
+            <span className="ml-2 font-mono text-tone-success">
               +{additions}
             </span>
-            <span className="font-mono text-red-600 dark:text-red-400">
-              -{deletions}
-            </span>
+            <span className="font-mono text-tone-danger">-{deletions}</span>
             <span>
               {diffChanges.length}{" "}
               {diffChanges.length === 1 ? "change" : "changes"}
@@ -235,19 +233,19 @@ export function DiffViewer({
                 type="button"
                 onClick={handlePrevChange}
                 disabled={currentChangeIndex <= 0}
-                className="rounded border border-border bg-background px-2 py-0.5 text-[10px] disabled:opacity-40 hover:bg-muted transition-colors inline-flex items-center gap-1"
+                className="rounded border border-border bg-background px-2 py-0.5 text-3xs disabled:opacity-40 hover:bg-muted transition-colors inline-flex items-center gap-1"
               >
                 <ChevronLeft className="h-3 w-3" />
                 Prev
               </button>
-              <span className="tabular-nums text-[10px]">
+              <span className="tabular-nums text-3xs">
                 {currentChangeIndex + 1} / {diffChanges.length}
               </span>
               <button
                 type="button"
                 onClick={handleNextChange}
                 disabled={currentChangeIndex >= diffChanges.length - 1}
-                className="rounded border border-border bg-background px-2 py-0.5 text-[10px] disabled:opacity-40 hover:bg-muted transition-colors inline-flex items-center gap-1"
+                className="rounded border border-border bg-background px-2 py-0.5 text-3xs disabled:opacity-40 hover:bg-muted transition-colors inline-flex items-center gap-1"
               >
                 Next
                 <ChevronRight className="h-3 w-3" />

@@ -178,6 +178,10 @@ export function TrendChart({
     return (
       <div
         className={cn(
+          // px, deliberately: this placeholder stands in for the chart, whose
+          // own `height={TREND_HEIGHT}` is px (the svg has no viewBox and every
+          // offset in it is px math). rem here would make the card change
+          // height between the empty and populated states at any zoom but 100%.
           "flex h-[224px] items-center justify-center text-sm text-muted-foreground",
           className
         )}

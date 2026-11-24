@@ -7,6 +7,7 @@ import {
   applyExpertReference,
   isComposerChromeClick,
   isComposerEmpty,
+  restampExpertNames,
   restampSkillPrefixes,
   restoreBlocksIntoEditor,
 } from "./composer-commands"
@@ -230,6 +231,55 @@ describe("restampSkillPrefixes", () => {
   })
 })
 
+describe("restampExpertNames", () => {
+  let editor: Editor
+
+  beforeEach(() => {
+    editor = new Editor({ extensions: buildComposerExtensions() })
+  })
+  afterEach(() => editor?.destroy())
+
+  /** An expert badge inserted for an agent that has it from a plugin
+   *  installed whole, under the plugin's name. */
+  function pluginExpert(prefix: "/" | "$" = "/"): ReferenceAttrs {
+    return {
+      refType: "skill",
+      id: "superpowers:brainstorming",
+      label: "Brainstorming",
+      uri: null,
+      meta: {
+        scope: "expert",
+        invocationPrefix: prefix,
+        expertId: "brainstorming",
+      },
+    }
+  }
+
+  it("re-names an expert badge for an agent that sees it by its own id", () => {
+    applyExpertReference(editor, pluginExpert("/"))
+    expect(serialized(editor).trimStart()).toMatch(
+      /^\/superpowers:brainstorming\b/
+    )
+    restampSkillPrefixes(editor, "$")
+    expect(restampExpertNames(editor, (id) => id)).toBe(true)
+    expect(serialized(editor).trimStart()).toMatch(/^\$brainstorming\b/)
+  })
+
+  it("names it back under the plugin where the agent sees it so", () => {
+    applyExpertReference(editor, { ...pluginExpert(), id: "brainstorming" })
+    expect(restampExpertNames(editor, (id) => `superpowers:${id}`)).toBe(true)
+    expect(serialized(editor)).toContain("/superpowers:brainstorming")
+  })
+
+  it("leaves a badge without its expert's id, and one already right", () => {
+    applyExpertReference(editor, expertAttrs("reviewer"))
+    expect(restampExpertNames(editor, () => "other")).toBe(false)
+    expect(serialized(editor)).toContain("/reviewer")
+    applyExpertReference(editor, pluginExpert())
+    expect(restampExpertNames(editor, (id) => `superpowers:${id}`)).toBe(false)
+  })
+})
+
 describe("restoreBlocksIntoEditor", () => {
   let editor: Editor
 
@@ -268,15 +318,48 @@ describe("restoreBlocksIntoEditor", () => {
     // docToPromptBlocks emits ONE text block with every badge serialized inline,
     // so a queue-edit has to parse them back out to show the sender's badges.
     const text = "run /review on [app.ts](file:///repo/app.ts)"
-    const attachments = restoreBlocksIntoEditor(editor, [
-      { type: "text", text },
-    ])
+    const attachments = restoreBlocksIntoEditor(
+      editor,
+      [{ type: "text", text }],
+      new Set(["/review"])
+    )
     expect(
       JSON.stringify(editor.getJSON()).match(/"type":"reference"/g)
     ).toHaveLength(2)
     // Lossless: re-serializing reproduces the block text verbatim.
     expect(serialized(editor)).toBe(text)
     expect(attachments).toEqual([])
+  })
+
+  it("restores a queued `/cmd` the agent no longer advertises as its text", () => {
+    // The message still sends the same bytes; it just stops claiming to be a
+    // command the agent would recognize.
+    const text = "run /review on [app.ts](file:///repo/app.ts)"
+    restoreBlocksIntoEditor(editor, [{ type: "text", text }], new Set())
+    expect(
+      JSON.stringify(editor.getJSON()).match(/"type":"reference"/g)
+    ).toHaveLength(1)
+    expect(serialized(editor)).toBe(text)
+  })
+
+  it("restores every serialized agent link as a badge, losslessly", () => {
+    // No badge is privileged over another: routing is derived backend-side from
+    // the VISIBLE link, so a restored draft sends exactly like the original.
+    const text =
+      "raw [@Claude](codeg://agent/claude_code) then " +
+      "genuine [@Claude](codeg://agent/claude_code)"
+    const blocks: PromptInputBlock[] = [{ type: "text", text }]
+    restoreBlocksIntoEditor(editor, blocks)
+
+    const agents: unknown[] = []
+    editor.state.doc.descendants((node) => {
+      if (node.type.name === "reference" && node.attrs.refType === "agent") {
+        agents.push(node.attrs.id)
+      }
+      return true
+    })
+    expect(agents).toEqual(["claude_code", "claude_code"])
+    expect(serializeDocToText(editor.state.doc).trim()).toBe(text)
   })
 
   it("restores a non-composer resource_link as an attachment, not a badge", () => {

@@ -14,6 +14,7 @@ import {
 import { useTranslations } from "next-intl"
 import { Virtualizer, type VirtualizerHandle } from "virtua"
 import { useImeGuard } from "@/hooks/use-ime-guard"
+import { useZoomLevel } from "@/hooks/use-appearance"
 import { isImeCompositionKey } from "@/lib/ime-composition"
 import { cn } from "@/lib/utils"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -68,10 +69,15 @@ const HEAD_OP_ID = "head"
 
 // Seeds the scroll window before the real content height is measured (see
 // `measuredHeight`); virtua measures the actual rows itself either way. The cap
-// matches cmdk's `max-h-[300px]` so swapping the list in doesn't resize the
+// matches cmdk's `max-h-[18.75rem]` so swapping the list in doesn't resize the
 // popover.
-const ROW_ESTIMATE_PX = 32
-const MAX_LIST_HEIGHT_PX = 300
+//
+// In rem, not px, because that cap is the CSS one's twin and rows are sized by
+// their own text: the zoom level scales both, and a px constant here would let
+// the two drift apart the moment the user leaves 100% (list capped at 300px
+// inside a popover cmdk would have let grow to 450px).
+const ROW_ESTIMATE_REM = 2
+const MAX_LIST_HEIGHT_REM = 18.75
 
 interface GitLogBranchFilterListProps {
   branchList: GitBranchList
@@ -107,6 +113,7 @@ export function GitLogBranchFilterList({
 }: GitLogBranchFilterListProps) {
   const ime = useImeGuard()
   const t = useTranslations("Folder.gitLogTab.branchSelector")
+  const { zoomLevel } = useZoomLevel()
 
   const [query, setQuery] = useState("")
   // Prefix groups default to COLLAPSED except along the path to the branch being
@@ -265,6 +272,12 @@ export function GitLogBranchFilterList({
     () =>
       buildBranchRows({
         operations,
+        // `null`, not `[]`: this list has no worktree section AT ALL. That one
+        // exists to switch the workspace into another worktree's directory,
+        // which filtering the log never does, and those branches are already in
+        // the local tree below. `[]` would mean "has the section, currently
+        // empty" and would render a header + empty row here.
+        worktreeNodes: null,
         localNodes,
         remoteSections,
         localCount: branchList.local.length,
@@ -367,9 +380,12 @@ export function GitLogBranchFilterList({
     }
   }
 
+  // Root font size the zoom level resolves to (AppearanceProvider writes
+  // `16 * zoom / 100` px onto <html>), which is what a rem is worth right now.
+  const remPx = (16 * zoomLevel) / 100
   const listHeight = Math.min(
-    MAX_LIST_HEIGHT_PX,
-    measuredHeight ?? Math.max(rows.length, 1) * ROW_ESTIMATE_PX
+    MAX_LIST_HEIGHT_REM * remPx,
+    measuredHeight ?? Math.max(rows.length, 1) * ROW_ESTIMATE_REM * remPx
   )
   const activeFlatIndex = navigableRowIndices[activeIndexClamped]
 
@@ -434,11 +450,13 @@ export function GitLogBranchFilterList({
 
     if (row.kind === "section" || row.kind === "group") {
       const depth = row.kind === "section" ? 0 : row.depth
+      // Only the two branch scopes reach this list — it passes no worktree
+      // leaves, so `buildBranchRows` never emits that section here.
       const label =
         row.kind === "section"
-          ? row.scope === "local"
-            ? t("localBranches")
-            : t("remoteBranches")
+          ? row.scope === "remote"
+            ? t("remoteBranches")
+            : t("localBranches")
           : row.label
       return (
         <button
@@ -493,7 +511,7 @@ export function GitLogBranchFilterList({
         <LeafIcon className="size-3.5 shrink-0 opacity-70" />
         <span className="min-w-0 flex-1 truncate">{row.label}</span>
         {row.isCurrent && (
-          <span className="shrink-0 pl-2 text-[10px] text-muted-foreground">
+          <span className="shrink-0 pl-2 text-3xs text-muted-foreground">
             {t("current")}
           </span>
         )}
@@ -503,10 +521,12 @@ export function GitLogBranchFilterList({
   }
 
   return (
-    <div className="flex min-w-0 flex-col overflow-hidden rounded-[inherit]">
+    <div className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[inherit]">
       {/* pl-4 (16px) + size-3.5 icon + gap-2 puts the icon and input text at the
-          same x as the rows below (listbox p-1 + 0.75rem row padding). */}
-      <div className="flex items-center gap-2 border-b py-2 pl-4 pr-2.5">
+          same x as the rows below (listbox p-1 + 0.75rem row padding).
+          `shrink-0`: when the popover is capped to the room it has, the rows
+          below give way — the search box never does. */}
+      <div className="flex shrink-0 items-center gap-2 border-b py-2 pl-4 pr-2.5">
         <Search className="size-3.5 shrink-0 text-muted-foreground" />
         <input
           ref={inputRef}
@@ -538,8 +558,16 @@ export function GitLogBranchFilterList({
           {t("noBranches")}
         </div>
       ) : (
-        <div style={{ height: listHeight }}>
-          <ScrollArea onViewportRef={handleViewportRef} className="h-full">
+        // `height` is the *wanted* height; the column below it distributes the
+        // height it actually gets. `min-h-0` lets this box shrink past that
+        // wanted height when the popover is capped to the available room, and
+        // the ScrollArea takes the shrunken height through `flex-1` rather than
+        // a percentage (`h-full` would resolve against the unshrunken value).
+        <div className="flex min-h-0 flex-col" style={{ height: listHeight }}>
+          <ScrollArea
+            onViewportRef={handleViewportRef}
+            className="min-h-0 flex-1"
+          >
             <div
               ref={listboxRef}
               role="listbox"

@@ -31,6 +31,7 @@ import {
 import { useTranslations } from "next-intl"
 import { Virtualizer, type VirtualizerHandle } from "virtua"
 import { useImeGuard } from "@/hooks/use-ime-guard"
+import { useZoomLevel } from "@/hooks/use-appearance"
 import { isImeCompositionKey } from "@/lib/ime-composition"
 import { cn } from "@/lib/utils"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -42,6 +43,7 @@ import {
   type BranchLeafAction,
   type BranchOperationMeta,
   type BranchRow,
+  type BranchSectionScope,
 } from "@/lib/branch-selector-rows"
 import { collectGroupKeys } from "@/lib/branch-tree"
 import type { BranchTreeNode, RemoteBranchSection } from "@/lib/branch-tree"
@@ -49,6 +51,8 @@ import type { BranchTreeNode, RemoteBranchSection } from "@/lib/branch-tree"
 interface BranchSelectorListProps {
   /** Operations with pre-translated labels (search matches on these). */
   operations: BranchOperationMeta[]
+  /** Worktree shortcut tree; empty still renders the "(0)" section header. */
+  worktreeNodes: BranchTreeNode[]
   localNodes: BranchTreeNode[]
   remoteSections: RemoteBranchSection[]
   localCount: number
@@ -73,19 +77,30 @@ interface BranchSelectorListProps {
 // paint, before the real content height is measured (see `measuredHeight`). A
 // too-small estimate would otherwise leave a spurious scrollbar on a narrowed
 // list, a too-big one dead space; virtua measures real rows itself either way.
-const ROW_ESTIMATE_PX = 34
-const MAX_LIST_HEIGHT_PX = 480
-// Approximate width of the right-side action bubble (`w-56`) — used only to
-// decide whether to flip it to the left when the popover hugs the screen edge.
-const BUBBLE_WIDTH_PX = 224
-// Coarse per-action height + container padding, used to clamp the bubble's top
-// so a leaf near the bottom doesn't push its last actions past the list root.
-// Slightly over-estimated on purpose so the whole bubble always fits.
-const BUBBLE_ITEM_PX = 34
-const BUBBLE_PAD_PX = 8
+// All of these mirror CSS that is sized in rem, so they are kept in rem and
+// multiplied by the live root font size (`remPx` below). Pinned at their 100%
+// pixel values they would under-measure at every higher zoom level: the bubble
+// would stop flipping at the screen edge and stop clamping inside the list.
+const ROW_ESTIMATE_REM = 2.125
+const MAX_LIST_HEIGHT_REM = 30
+// The action bubble sizes to its content between these bounds, so a merge /
+// rebase label naming two long branches widens it instead of truncating the
+// target away. The max is further capped by the room on the side it opens on;
+// whichever side can host the full max width wins, else the roomier one.
+const BUBBLE_MIN_WIDTH_REM = 14
+const BUBBLE_MAX_WIDTH_REM = 26
+// Gap kept between the bubble and the window edge.
+const BUBBLE_EDGE_GAP_PX = 8
+// Coarse per-action height + container padding (`p-1`), used to clamp the
+// bubble's top so a leaf near the bottom doesn't push its last actions past the
+// list root. Slightly over-estimated on purpose so the whole bubble always fits.
+const BUBBLE_ITEM_REM = 2.125
+const BUBBLE_PAD_REM = 0.5
 // A group divider (`my-1 h-px`) between action groups — counted separately so a
-// bubble with dividers still clamps inside the list root.
-const BUBBLE_SEPARATOR_PX = 9
+// bubble with dividers still clamps inside the list root. The hairline itself is
+// a real pixel (`h-px`), so only the margins scale.
+const BUBBLE_SEPARATOR_REM = 0.5
+const BUBBLE_SEPARATOR_HAIRLINE_PX = 1
 
 const OP_ICONS: Record<string, LucideIcon> = {
   pull: CloudDownload,
@@ -95,6 +110,26 @@ const OP_ICONS: Record<string, LucideIcon> = {
   newBranch: GitBranchPlus,
   newWorktree: FolderGit2,
   init: GitBranch,
+}
+
+// Header text per section, all `({count})` messages in the same namespace.
+const SECTION_LABEL_KEYS: Record<
+  BranchSectionScope,
+  "worktreeBranches" | "localBranches" | "remoteBranches"
+> = {
+  worktree: "worktreeBranches",
+  local: "localBranches",
+  remote: "remoteBranches",
+}
+
+// …and the placeholder each shows when it has nothing to list.
+const EMPTY_LABEL_KEYS: Record<
+  BranchSectionScope,
+  "noWorktreeBranches" | "noLocalBranches" | "noRemoteBranches"
+> = {
+  worktree: "noWorktreeBranches",
+  local: "noLocalBranches",
+  remote: "noRemoteBranches",
 }
 
 const ACTION_ICONS: Record<BranchLeafAction, LucideIcon> = {
@@ -139,6 +174,38 @@ interface ActionBubble {
   top: number
   /** Flip to the left of the popover when there's no room on the right. */
   flipLeft: boolean
+  /** Max width (px): BUBBLE_MAX_WIDTH_REM capped by the room on that side. */
+  maxWidth: number
+}
+
+// Placeholder sentinels substituted for branch names when formatting a label,
+// so the translated text can be split back into literal + branch-name parts.
+const BRANCH_TOKEN_MARK = "\u0000"
+const BRANCH_TOKEN_SPLIT = /\u0000(\d+)\u0000/
+
+/**
+ * Split a translated label whose values were `branchToken(i)` sentinels into
+ * literal text and branch-name parts (in the translation's own word order).
+ */
+export function splitBranchLabel(
+  formatted: string,
+  names: readonly string[]
+): Array<{ text: string; isBranch: boolean }> {
+  const pieces = formatted.split(BRANCH_TOKEN_SPLIT)
+  const parts: Array<{ text: string; isBranch: boolean }> = []
+  pieces.forEach((piece, index) => {
+    // `split` with a capture group alternates literal, index, literal, …
+    if (index % 2 === 1) {
+      parts.push({ text: names[Number(piece)] ?? "", isBranch: true })
+    } else if (piece) {
+      parts.push({ text: piece, isBranch: false })
+    }
+  })
+  return parts
+}
+
+function branchToken(index: number): string {
+  return `${BRANCH_TOKEN_MARK}${index}${BRANCH_TOKEN_MARK}`
 }
 
 // Searchable + virtualized branch panel: operations and the local/remote branch
@@ -148,9 +215,10 @@ interface ActionBubble {
 // `overrides`/`defaultCollapsedGroups` split below); rows toggle either.
 // Clicking a leaf opens a right-side action bubble — a plain DOM element inside
 // this single Popover layer, never a nested Radix layer (that silently drops
-// selection on WKWebView; see session-selectors-panel.tsx).
+// selection on WKWebView; see session-settings-picker.tsx).
 export function BranchSelectorList({
   operations,
+  worktreeNodes,
   localNodes,
   remoteSections,
   localCount,
@@ -165,6 +233,10 @@ export function BranchSelectorList({
 }: BranchSelectorListProps) {
   const ime = useImeGuard()
   const t = useTranslations("Folder.branchDropdown")
+  // What a rem is worth right now: AppearanceProvider writes `16 * zoom / 100`
+  // px onto <html>, so every rem-sized measurement below has to go through it.
+  const { zoomLevel } = useZoomLevel()
+  const remPx = (16 * zoomLevel) / 100
 
   const [query, setQuery] = useState("")
   // Prefix groups default to COLLAPSED, sections to OPEN. That's modeled as a
@@ -274,14 +346,16 @@ export function BranchSelectorList({
 
   // Prefix groups start folded: seed the default-collapsed set with every group
   // key in the current trees (sections + multi-remote wrappers are keyed outside
-  // the tree, so they stay open).
+  // the tree, so they stay open). All three sections follow the same rule, the
+  // worktree tree included.
   const defaultCollapsedGroups = useMemo(
     () =>
       new Set([
+        ...collectGroupKeys(worktreeNodes),
         ...collectGroupKeys(localNodes),
         ...remoteSections.flatMap((s) => collectGroupKeys(s.nodes)),
       ]),
-    [localNodes, remoteSections]
+    [worktreeNodes, localNodes, remoteSections]
   )
 
   // The set fed to buildBranchRows: defaults minus force-open overrides, plus
@@ -317,6 +391,7 @@ export function BranchSelectorList({
     () =>
       buildBranchRows({
         operations,
+        worktreeNodes,
         localNodes,
         remoteSections,
         localCount,
@@ -328,6 +403,7 @@ export function BranchSelectorList({
       }),
     [
       operations,
+      worktreeNodes,
       localNodes,
       remoteSections,
       localCount,
@@ -367,6 +443,39 @@ export function BranchSelectorList({
       })
     },
     [navigableCount, navigableRowIndices]
+  )
+
+  // Merge / rebase labels name two branches. Each name truncates on its own
+  // (literal words never shrink), so a long source branch can't push the verb
+  // and the target branch out of view; the full text stays in the tooltip.
+  const leafActionLabelParts = useCallback(
+    (
+      action: BranchLeafAction,
+      fullName: string
+    ): Array<{ text: string; isBranch: boolean }> | null => {
+      const names = [fullName, branch ?? "-"]
+      switch (action) {
+        case "merge":
+          return splitBranchLabel(
+            t("mergeBranchIntoCurrent", {
+              branchName: branchToken(0),
+              currentBranch: branchToken(1),
+            }),
+            names
+          )
+        case "rebase":
+          return splitBranchLabel(
+            t("rebaseCurrentToBranch", {
+              currentBranch: branchToken(1),
+              branchName: branchToken(0),
+            }),
+            names
+          )
+        default:
+          return null
+      }
+    },
+    [t, branch]
   )
 
   const leafActionLabel = useCallback(
@@ -429,13 +538,19 @@ export function BranchSelectorList({
       (action, index) => index > 0 && BUBBLE_GROUP_STARTS.has(action)
     ).length
     const bubbleHeight =
-      actions.length * BUBBLE_ITEM_PX +
-      separatorCount * BUBBLE_SEPARATOR_PX +
-      BUBBLE_PAD_PX
+      actions.length * BUBBLE_ITEM_REM * remPx +
+      separatorCount *
+        (BUBBLE_SEPARATOR_REM * remPx + BUBBLE_SEPARATOR_HAIRLINE_PX) +
+      BUBBLE_PAD_REM * remPx
     const top = Math.min(
       rowRect.top - rootRect.top,
       Math.max(0, rootRect.height - bubbleHeight)
     )
+    const maxWidthPx = BUBBLE_MAX_WIDTH_REM * remPx
+    const roomRight = window.innerWidth - rootRect.right - BUBBLE_EDGE_GAP_PX
+    const roomLeft = rootRect.left - BUBBLE_EDGE_GAP_PX
+    const flipLeft = roomRight < maxWidthPx && roomLeft > roomRight
+    const room = flipLeft ? roomLeft : roomRight
     setBubble({
       leafKey: row.key,
       fullName: row.fullName,
@@ -443,7 +558,13 @@ export function BranchSelectorList({
       actions,
       ownerNavIndex: navIndex,
       top,
-      flipLeft: rootRect.right + 8 + BUBBLE_WIDTH_PX > window.innerWidth,
+      flipLeft,
+      // Never below the old fixed width: a cramped side keeps the old overflow
+      // behaviour rather than collapsing the bubble.
+      maxWidth: Math.max(
+        BUBBLE_MIN_WIDTH_REM * remPx,
+        Math.min(maxWidthPx, room)
+      ),
     })
     setBubbleActiveIndex(0)
     // Highlight the owner leaf (covers the keyboard path, where no hover fires).
@@ -550,8 +671,8 @@ export function BranchSelectorList({
   // Prefer the real measured content height; fall back to the coarse per-row
   // estimate only until the first measurement lands.
   const listHeight = Math.min(
-    MAX_LIST_HEIGHT_PX,
-    measuredHeight ?? Math.max(rows.length, 1) * ROW_ESTIMATE_PX
+    MAX_LIST_HEIGHT_REM * remPx,
+    measuredHeight ?? Math.max(rows.length, 1) * ROW_ESTIMATE_REM * remPx
   )
   const activeFlatIndex = navigableRowIndices[activeIndexClamped]
   const showSpinner = branchLoading && localCount === 0 && remoteCount === 0
@@ -575,7 +696,7 @@ export function BranchSelectorList({
           className="py-1.5 pr-3 text-sm text-muted-foreground/70"
           style={{ paddingLeft: branchRowPaddingLeft("dropdown", 1) }}
         >
-          {row.scope === "local" ? t("noLocalBranches") : t("noRemoteBranches")}
+          {t(EMPTY_LABEL_KEYS[row.scope])}
         </div>
       )
     }
@@ -617,9 +738,7 @@ export function BranchSelectorList({
       const depth = row.kind === "section" ? 0 : row.depth
       const label =
         row.kind === "section"
-          ? row.scope === "local"
-            ? t("localBranches", { count: row.count })
-            : t("remoteBranches", { count: row.count })
+          ? t(SECTION_LABEL_KEYS[row.scope], { count: row.count })
           : row.label
       return (
         <button
@@ -689,14 +808,16 @@ export function BranchSelectorList({
   }
 
   return (
-    <div ref={rootRef} className="relative flex min-w-0 flex-col">
+    <div ref={rootRef} className="relative flex min-h-0 min-w-0 flex-col">
       {/* Inner shell clips content to the popover rounding; the action bubble is
           a sibling of it so it can overflow past the popover's right edge (the
           PopoverContent is overflow-visible). */}
-      <div className="flex min-w-0 flex-col overflow-hidden rounded-[inherit]">
+      <div className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[inherit]">
         {/* pl-4 (16px) + size-3.5 icon + gap-2 puts the icon and input text at
-            the same x as the rows below (listbox p-1 + 0.75rem row padding). */}
-        <div className="flex items-center gap-2 border-b py-2 pl-4 pr-2.5">
+            the same x as the rows below (listbox p-1 + 0.75rem row padding).
+            `shrink-0`: when the popover is capped to the room it has, the rows
+            below give way — the search box never does. */}
+        <div className="flex shrink-0 items-center gap-2 border-b py-2 pl-4 pr-2.5">
           <Search className="size-3.5 shrink-0 text-muted-foreground" />
           <input
             ref={inputRef}
@@ -733,8 +854,16 @@ export function BranchSelectorList({
             {t("noMatches")}
           </div>
         ) : (
-          <div style={{ height: listHeight }}>
-            <ScrollArea onViewportRef={handleViewportRef} className="h-full">
+          // `height` is the *wanted* height; the column below it distributes the
+          // height it actually gets. `min-h-0` lets this box shrink past that
+          // wanted height when the popover is capped to the available room, and
+          // the ScrollArea takes the shrunken height through `flex-1` rather than
+          // a percentage (`h-full` would resolve against the unshrunken value).
+          <div className="flex min-h-0 flex-col" style={{ height: listHeight }}>
+            <ScrollArea
+              onViewportRef={handleViewportRef}
+              className="min-h-0 flex-1"
+            >
               <div
                 ref={listboxRef}
                 role="listbox"
@@ -768,9 +897,10 @@ export function BranchSelectorList({
           // leaf, so the source branch re-lights while you're over its actions.
           onMouseEnter={() => setActiveIndex(bubble.ownerNavIndex)}
           // Flush against the popup's edge (no margin) so it reads as attached.
-          className="absolute z-50 w-56 rounded-xl border bg-popover p-1 shadow-lg"
+          className="absolute z-50 w-max min-w-56 rounded-xl border bg-popover p-1 shadow-lg"
           style={{
             top: bubble.top,
+            maxWidth: bubble.maxWidth,
             ...(bubble.flipLeft ? { right: "100%" } : { left: "100%" }),
           }}
         >
@@ -779,6 +909,8 @@ export function BranchSelectorList({
             const destructive = DESTRUCTIVE_ACTIONS.has(action)
             const bubbleActive = index === bubbleActiveIndex
             const startsGroup = index > 0 && BUBBLE_GROUP_STARTS.has(action)
+            const label = leafActionLabel(action, bubble.fullName)
+            const labelParts = leafActionLabelParts(action, bubble.fullName)
             return (
               <Fragment key={action}>
                 {startsGroup && (
@@ -793,6 +925,7 @@ export function BranchSelectorList({
                   disabled={loading}
                   onMouseMove={() => setBubbleActiveIndex(index)}
                   onClick={() => selectBubbleAction(index)}
+                  title={labelParts ? label : undefined}
                   className={cn(
                     "flex w-full select-none items-center gap-2 rounded-md px-1.5 py-1.5 text-left text-sm outline-none transition-colors",
                     "disabled:pointer-events-none disabled:opacity-50",
@@ -801,9 +934,24 @@ export function BranchSelectorList({
                   )}
                 >
                   <ActionIcon className="size-3.5 shrink-0 opacity-70" />
-                  <span className="min-w-0 flex-1 truncate">
-                    {leafActionLabel(action, bubble.fullName)}
-                  </span>
+                  {labelParts ? (
+                    <span className="flex min-w-0 flex-1 overflow-hidden">
+                      {labelParts.map((part, partIndex) => (
+                        <span
+                          key={partIndex}
+                          className={
+                            part.isBranch
+                              ? "min-w-0 truncate"
+                              : "shrink-0 whitespace-pre"
+                          }
+                        >
+                          {part.text}
+                        </span>
+                      ))}
+                    </span>
+                  ) : (
+                    <span className="min-w-0 flex-1 truncate">{label}</span>
+                  )}
                 </button>
               </Fragment>
             )

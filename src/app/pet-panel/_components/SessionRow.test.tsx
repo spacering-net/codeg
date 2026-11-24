@@ -85,6 +85,14 @@ describe("SessionRow", () => {
     ).toBeInTheDocument()
   })
 
+  it("leads a sub-agent row with the assistant it runs as", () => {
+    renderRow({ ...subAgentSession(), assistantName: "Reviewer" })
+    expect(screen.getByText("Reviewer · Run the tests")).toBeInTheDocument()
+    cleanup()
+    renderRow({ ...subAgentSession(), assistantName: "Reviewer", title: "" })
+    expect(screen.getByText("Reviewer")).toBeInTheDocument()
+  })
+
   it("jumps to the PARENT conversation from a sub-agent row", async () => {
     // The child is not openable as a tab, so the row must navigate to whoever
     // delegated it — never to the child's own ids.

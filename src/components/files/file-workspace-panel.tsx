@@ -15,27 +15,27 @@ import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useTabStore } from "@/contexts/tab-context"
 import { emitAttachFileToSession } from "@/lib/session-attachment-events"
 import { formatFileRangeLabel } from "@/lib/reference-link"
-import {
-  findOwningFolder,
-  isUncPath,
-  normalizeAbsPath,
-  splitAbsPath,
-} from "@/lib/file-open-target"
-import {
-  buildMonacoModelPath,
-  collectLiveModelPaths,
-} from "@/lib/monaco-model-path"
+import { findOwningFolder, splitAbsPath } from "@/lib/file-open-target"
+import { buildMonacoModelPath } from "@/lib/monaco-model-path"
+import { useTrackMonacoModel } from "@/contexts/monaco-model-context"
 import { parseFileTabId } from "@/lib/file-tab-id"
 import {
   useWorkspaceActions,
   useWorkspaceFileTabs,
   type FileWorkspaceTab,
 } from "@/contexts/workspace-context"
+import { BrowserTabView } from "@/components/browser/browser-tab-view"
 import { ImagePreview } from "@/components/files/image-preview"
 import { HtmlPreview } from "@/components/files/html-preview"
-import { OfficePreview } from "@/components/files/office-preview"
-import { isHtmlPreviewable, isOfficePreviewable } from "@/lib/language-detect"
+import { MarkdownDocumentPreview } from "@/components/files/markdown-document-preview"
+import {
+  KeptOfficePreviews,
+  isOfficeFileTab,
+} from "@/components/files/kept-office-previews"
+import { PdfPreview } from "@/components/files/pdf-preview"
+import { isHtmlPreviewable } from "@/lib/language-detect"
 import { DiffViewer } from "@/components/diff/diff-viewer"
+import { ImageDiffView } from "@/components/diff/image-diff-view"
 import { UnifiedDiffPreview } from "@/components/diff/unified-diff-preview"
 import {
   ContextMenu,
@@ -43,10 +43,6 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu"
-import { Streamdown } from "streamdown"
-import { readFileBase64 } from "@/lib/api"
-import { normalizeMathDelimiters } from "@/components/ai-elements/message"
-import { useStreamdownPlugins } from "@/components/ai-elements/streamdown-plugins"
 import {
   defineMonacoThemes,
   MONACO_UNICODE_HIGHLIGHT_OPTIONS,
@@ -55,285 +51,38 @@ import {
 import { useZoomLevel, useEditorFont } from "@/hooks/use-appearance"
 import { useImeSafeEditorValue } from "@/hooks/use-ime-safe-editor-value"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import {
+  getAddToChatPillPlacement,
+  type AddToChatPillPlacement,
+} from "@/lib/add-to-chat-pill-placement"
 
 import "@/lib/monaco-local"
-
-function resolveRelativePath(base: string, relative: string): string {
-  // Strip URL fragment (e.g. #gh-light-mode-only) and query string
-  const cleaned = relative.replace(/[#?].*$/, "")
-  // Preserve leading "/" for absolute paths, filter empty segments
-  const isAbsolute = base.startsWith("/")
-  const parts = base.split("/").filter(Boolean)
-  for (const seg of cleaned.split("/")) {
-    if (seg === "..") {
-      if (parts.length > 0) parts.pop()
-    } else if (seg !== "." && seg !== "") {
-      parts.push(seg)
-    }
-  }
-  return (isAbsolute ? "/" : "") + parts.join("/")
-}
-
-/**
- * Pre-resolve local paths in markdown image/link syntax before Streamdown.
- *
- * rehype-harden resolves "../foo" via `new URL("../foo", "http://example.com")`
- * which loses directory context (e.g. "../images/a.png" from "docs/readme/"
- * becomes "/images/a.png" instead of "/docs/images/a.png").
- *
- * `fileDir` is the document's ABSOLUTE directory, so relative references
- * resolve to absolute filesystem paths. Author-written root-relative
- * references ("/assets/x.png") resolve against `previewRoot` (the owning
- * workspace folder, or the document directory for files outside every
- * folder) so they also come out absolute — downstream consumers (image
- * loader, link opener) treat every local target as an absolute path.
- * The "./" prefix survives rehype-harden, which re-roots it to "/…".
- *
- * Known limitation: documents living under a Windows UNC root
- * ("//server/share/…") lose the double-slash prefix in this pipeline (the
- * "./…" → rehype-harden → "/…" round trip cannot carry an authority), so
- * their relative sub-resources fail to load — a clean broken-image /
- * failed-open, never a read of a different local file. Editing, saving,
- * and watching UNC files are unaffected.
- */
-function preprocessMarkdownPaths(
-  content: string,
-  fileDir: string,
-  previewRoot: string | null
-): string {
-  const resolveAgainst = (base: string, pathPart: string): string => {
-    const parts = base.split("/").filter(Boolean)
-    for (const seg of pathPart.split("/")) {
-      if (seg === "..") {
-        if (parts.length > 0) parts.pop()
-      } else if (seg !== "." && seg !== "") {
-        parts.push(seg)
-      }
-    }
-    return parts.join("/")
-  }
-
-  const resolveUrl = (url: string): string => {
-    // Skip remote URLs, protocol-relative URLs, and anchors
-    if (/^https?:\/\/|^data:|^blob:|^#|^\/\//.test(url)) return url
-    // Separate fragment/query from path
-    const fragIdx = url.search(/[#?]/)
-    const pathPart = fragIdx >= 0 ? url.slice(0, fragIdx) : url
-    const fragment = fragIdx >= 0 ? url.slice(fragIdx) : ""
-    if (pathPart.startsWith("/")) {
-      // Root-relative: the author means "from the project root".
-      if (!previewRoot) return url
-      return "./" + resolveAgainst(previewRoot, pathPart) + fragment
-    }
-    // Relative to the document's own (absolute) directory.
-    return "./" + resolveAgainst(fileDir, pathPart) + fragment
-  }
-
-  // Pre-resolve image paths: ![alt](url) or ![alt](url "title")
-  let result = content.replace(
-    /!\[([^\]]*)\]\(([^)\s"']+)([^)]*)\)/g,
-    (match, alt, url, rest) => {
-      const resolved = resolveUrl(url)
-      if (resolved === url) return match
-      return `![${alt}](${resolved}${rest})`
-    }
-  )
-
-  // Pre-resolve image-wrapped link paths: [![alt](img)](url)
-  result = result.replace(
-    /\[(!\[[^\]]*\]\([^)]*\))\]\(([^)\s"']+)([^)]*)\)/g,
-    (match, imgPart, url, rest) => {
-      const resolved = resolveUrl(url)
-      if (resolved === url) return match
-      return `[${imgPart}](${resolved}${rest})`
-    }
-  )
-
-  // Pre-resolve link paths: [text](url) — negative lookbehind to skip images
-  result = result.replace(
-    /(?<!!)\[([^\]]*)\]\(([^)\s"']+)([^)]*)\)/g,
-    (match, text, url, rest) => {
-      const resolved = resolveUrl(url)
-      if (resolved === url) return match
-      return `[${text}](${resolved}${rest})`
-    }
-  )
-
-  // Pre-resolve HTML <a href="..."> and <img src="..."> tags
-  result = result.replace(
-    /<(a\s[^>]*?href|img\s[^>]*?src)=(["'])([^"']+)\2/gi,
-    (match, prefix, quote, url) => {
-      const resolved = resolveUrl(url)
-      if (resolved === url) return match
-      return `<${prefix}=${quote}${resolved}${quote}`
-    }
-  )
-
-  return result
-}
-
-const MIME_BY_EXT: Record<string, string> = {
-  png: "image/png",
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  gif: "image/gif",
-  svg: "image/svg+xml",
-  webp: "image/webp",
-  bmp: "image/bmp",
-  ico: "image/x-icon",
-}
-
-function useLocalImageSrc(
-  src: string | undefined,
-  fileDir: string | null
-): string | undefined {
-  const [dataUrl, setDataUrl] = useState<string | undefined>(undefined)
-
-  // Protocol-relative "//host/…" srcs are REMOTE (the browser resolves them
-  // against the page protocol) — never route them into local file IO, where
-  // "//Users/…" would otherwise read an unintended local path.
-  const isLocal =
-    src && fileDir && !/^https?:\/\/|^data:|^blob:|^\/\//.test(src)
-
-  useEffect(() => {
-    if (!isLocal || !src || !fileDir) return
-    let cancelled = false
-    // preprocessMarkdownPaths resolved every local reference against the
-    // document's ABSOLUTE directory (or the preview root), and
-    // rehype-harden re-roots "./x" to "/x" — so a "/"-prefixed src already
-    // IS the absolute filesystem path. Anything else (raw HTML that
-    // slipped past preprocessing) resolves against the document directory.
-    const absPath = src.startsWith("/")
-      ? normalizeAbsPath(src.replace(/[#?].*$/, ""))
-      : resolveRelativePath(fileDir, src)
-    const ext = absPath.split(".").pop()?.toLowerCase() ?? ""
-    const mime = MIME_BY_EXT[ext] ?? "image/png"
-
-    readFileBase64(absPath)
-      .then((b64) => {
-        if (!cancelled) {
-          setDataUrl(`data:${mime};base64,${b64}`)
-        }
-      })
-      .catch((err) => {
-        console.error(
-          `[PreviewImage] readFileBase64 failed for "${absPath}":`,
-          typeof err === "object" ? JSON.stringify(err) : err
-        )
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [isLocal, src, fileDir])
-
-  if (!isLocal) return src
-  return dataUrl
-}
-
-function PreviewImage({
-  fileDir,
-  ...props
-}: React.ComponentProps<"img"> & {
-  fileDir: string | null
-}) {
-  const src = typeof props.src === "string" ? props.src : undefined
-  const resolvedSrc = useLocalImageSrc(src, fileDir)
-
-  // eslint-disable-next-line @next/next/no-img-element, jsx-a11y/alt-text
-  return <img {...props} src={resolvedSrc} />
-}
-
-/**
- * Markdown document preview. Extracted into its own component so the heavy
- * Streamdown plugins (shiki / katex / mermaid) load lazily via
- * `useStreamdownPlugins` only when a document is actually being previewed —
- * calling the hook here (rather than in `FileWorkspacePanel`, whose Streamdown
- * sits behind several early returns) keeps it unconditional per the rules of
- * hooks while still gating engine loads on preview mode.
- */
-function MarkdownDocumentPreview({
-  content,
-  fileDir,
-  localRefsEnabled,
-  openFilePreview,
-}: {
-  content: string
-  fileDir: string | null
-  localRefsEnabled: boolean
-  openFilePreview: (path: string) => void
-}) {
-  const plugins = useStreamdownPlugins(content)
-  return (
-    <div className="h-full overflow-auto p-6 [&_a_img]:inline [&_ol]:list-decimal [&_ul]:list-disc [&_ol]:pl-6 [&_ul]:pl-6">
-      <Streamdown
-        plugins={plugins}
-        components={{
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
-          img: ({ node, ...imgProps }) => (
-            <PreviewImage
-              {...imgProps}
-              fileDir={localRefsEnabled ? fileDir : null}
-            />
-          ),
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
-          a: ({ node, href, children, ...aProps }) => {
-            // Protocol-relative "//host/…" is a WEB url — exclude it
-            // from the local branch (^\/\/) so it opens externally
-            // instead of being collapsed into a local file path.
-            // localRefsEnabled is false for UNC docs: never route a
-            // (possibly wrongly-collapsed) local target to the opener.
-            const isRelative =
-              href && !/^[a-z][a-z0-9+.-]*:|^#|^\/\//i.test(href)
-            if (isRelative && href && localRefsEnabled) {
-              return (
-                <a
-                  {...aProps}
-                  href="#"
-                  onClick={(e) => {
-                    e.preventDefault()
-                    // After preprocessing (absolute document dir) +
-                    // rehype-harden, local hrefs ARE absolute
-                    // filesystem paths like "/repo/docs/foo.md" —
-                    // open directly; no folder involved.
-                    const target = href
-                      .replace(/[#?].*$/, "")
-                      .replace(/\/\/+/g, "/")
-                    void openFilePreview(target)
-                  }}
-                >
-                  {children}
-                </a>
-              )
-            }
-            return (
-              <a
-                {...aProps}
-                // Pin protocol-relative urls to https: the webview's
-                // own scheme (tauri://) would otherwise hijack them.
-                href={href?.startsWith("//") ? `https:${href}` : href}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                {children}
-              </a>
-            )
-          },
-        }}
-      >
-        {content}
-      </Streamdown>
-    </div>
-  )
-}
 
 const AUTO_SAVE_DELAY_MS = 5000
 
 interface AddToChatPill {
   widget: MonacoEditorNs.IContentWidget
+  isVisible: () => boolean
   setVisible: (visible: boolean, position: IPosition | null) => void
   /** Re-read the label (e.g. after a locale change) even while already shown. */
   refreshLabel: () => void
+  /**
+   * Re-read the rendered pill height now that Monaco has un-hidden the node.
+   * Returns true when the cached value changed, i.e. when the caller should lay
+   * the widget out once more so the corrected placement lands.
+   */
+  remeasure: () => boolean
 }
+
+/**
+ * Placement fallback for the very first show, before the pill has ever been
+ * measured (Monaco keeps the node at `display: none` until *after* it asks for
+ * a position, so `offsetHeight` reads 0 exactly when the placement is decided).
+ * Deliberately a slight over-estimate of the real box: over-estimating only
+ * demotes ABOVE for one extra line, while under-estimating is what puts the
+ * pill back behind the file path bar.
+ */
+const ADD_TO_CHAT_PILL_FALLBACK_HEIGHT_PX = 28
 
 /**
  * The floating "Add to Chat" pill shown next to a text selection, built as a
@@ -344,8 +93,17 @@ interface AddToChatPill {
  * returns null while hidden — Monaco unmounts the widget on a null position, so
  * visibility is driven entirely through {@link AddToChatPill.setVisible} +
  * `layoutContentWidget`.
+ *
+ * Keep `allowEditorOverflow`: dropping it moves the node inside the editor's own
+ * scrollable content, where the vertical scrollbar paints over the pill for any
+ * anchor near the right edge (reproduced against monaco 0.55.1 — a hit test on
+ * the pill's right-hand corners resolves to the scrollbar, not the button), and
+ * the node then shrink-to-fits to min-content and wraps to three lines. The cost
+ * of keeping it is that Monaco decides placement from *page* geometry, which
+ * {@link getAddToChatPillPlacement} corrects back to viewport geometry.
  */
 function createAddToChatPill(
+  editor: MonacoEditorNs.IStandaloneCodeEditor,
   monaco: Monaco,
   onActivate: () => void,
   getLabel: () => string
@@ -361,10 +119,12 @@ function createAddToChatPill(
   dom.className =
     "codeg-add-to-chat-pill rounded-md border border-border bg-popover px-2 py-0.5 text-xs font-medium text-popover-foreground shadow-md cursor-pointer select-none hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
   // Hand-written SVG (lucide "message-square-plus"): raw DOM can't host a React
-  // lucide component. `currentColor` + the blue text class echoes the file badge.
+  // lucide component. `currentColor` + the blue text class echoes the file badge;
+  // the `lucide` class gives it the same stroke weight as the React-rendered
+  // icons (the default-stroke rule in globals.css keys on it).
   dom.innerHTML =
     '<span class="inline-flex items-center gap-1">' +
-    '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="text-blue-600 dark:text-blue-400"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M9 10h6"/><path d="M12 7v6"/></svg>' +
+    '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="lucide text-blue-600 dark:text-blue-400"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M9 10h6"/><path d="M12 7v6"/></svg>' +
     '<span class="codeg-add-to-chat-label"></span>' +
     "</span>"
   const labelSpan = dom.querySelector(".codeg-add-to-chat-label")
@@ -377,26 +137,54 @@ function createAddToChatPill(
 
   let visible = false
   let position: IPosition | null = null
+  let measuredHeight = 0
+
+  const toMonacoPreference = (placement: AddToChatPillPlacement) =>
+    placement === "above"
+      ? monaco.editor.ContentWidgetPositionPreference.ABOVE
+      : monaco.editor.ContentWidgetPositionPreference.BELOW
 
   const widget: MonacoEditorNs.IContentWidget = {
     getId: () => "codeg.addToChatPill",
     getDomNode: () => dom,
-    getPosition: () =>
-      visible && position
-        ? {
-            position,
-            preference: [
-              monaco.editor.ContentWidgetPositionPreference.ABOVE,
-              monaco.editor.ContentWidgetPositionPreference.BELOW,
-            ],
-          }
-        : null,
+    getPosition: () => {
+      if (!visible || !position) return null
+
+      // Rebuild the two measurements Monaco's `_layoutBoxInViewport` works
+      // from. `getTopForPosition` is wrap-aware (it converts to a view position
+      // first) and is a layout-model lookup, not a DOM measurement, so this is
+      // safe on the scroll path. A negative return means "no model", not a real
+      // offset. `getLayoutInfo().height` is exactly Monaco's `viewportHeight`
+      // (the value it hands the scrollable), so the two agree to the pixel.
+      const anchorTop = editor.getTopForPosition(
+        position.lineNumber,
+        position.column
+      )
+      const lineHeightPx = editor.getLineHeightForPosition(position)
+      const spaceAbovePx =
+        anchorTop < 0 ? null : anchorTop - editor.getScrollTop()
+      const preference = getAddToChatPillPlacement({
+        spaceAbovePx,
+        spaceBelowPx:
+          spaceAbovePx === null
+            ? 0
+            : editor.getLayoutInfo().height - (spaceAbovePx + lineHeightPx),
+        lineHeightPx,
+        pillHeightPx: measuredHeight || ADD_TO_CHAT_PILL_FALLBACK_HEIGHT_PX,
+      }).map(toMonacoPreference)
+
+      // An empty list means "nowhere sensible" — hand Monaco a null position so
+      // it unmounts the pill, the same way {@link AddToChatPill.setVisible}
+      // hides it. It comes back on the next layout once the anchor is in view.
+      return preference.length > 0 ? { position, preference } : null
+    },
     allowEditorOverflow: true,
     suppressMouseDown: true,
   }
 
   return {
     widget,
+    isVisible: () => visible,
     setVisible: (next, pos) => {
       visible = next
       position = pos
@@ -404,6 +192,12 @@ function createAddToChatPill(
     },
     refreshLabel: () => {
       if (labelSpan) labelSpan.textContent = getLabel()
+    },
+    remeasure: () => {
+      const next = dom.offsetHeight
+      if (next <= 0 || next === measuredHeight) return false
+      measuredHeight = next
+      return true
     },
   }
 }
@@ -414,9 +208,14 @@ function createAddToChatPill(
 // matching VS Code / IntelliJ "non-destructive refresh" behaviour. Only
 // a true cold load (no content yet) falls back to the full-pane placeholder.
 function hasTabContent(tab: FileWorkspaceTab): boolean {
+  // A browser tab has no text content; its page lives in a native surface.
+  if (tab.kind === "browser") return true
   if (tab.kind === "rich-diff") {
     return (
-      tab.originalContent !== undefined || tab.modifiedContent !== undefined
+      tab.originalContent !== undefined ||
+      tab.modifiedContent !== undefined ||
+      // An image diff carries neither: its sides are bytes, not text.
+      tab.imageDiff !== undefined
     )
   }
   return tab.content !== ""
@@ -882,13 +681,13 @@ function DiffFileList({
   badge?: string | null
   description?: string | null
   onOpenDiff: (path: string) => Promise<void>
-  openFilePreview: (path: string) => Promise<void>
+  openFilePreview: (path: string) => Promise<unknown>
 }) {
   const t = useTranslations("Folder.fileWorkspacePanel")
   return (
     <div className="h-full flex flex-col min-h-0">
       <div className="border-b border-border bg-muted/25 px-3 py-2 space-y-1">
-        <div className="text-[11px] text-muted-foreground flex items-center gap-3">
+        <div className="text-2xs text-muted-foreground flex items-center gap-3">
           {badge && (
             <span className="font-medium text-foreground/80 font-mono">
               {badge}
@@ -925,7 +724,7 @@ function DiffFileList({
                   <span className="text-xs truncate flex-1 min-w-0 font-mono">
                     {file.path}
                   </span>
-                  <span className="shrink-0 flex items-center gap-2 text-[10px] font-mono">
+                  <span className="shrink-0 flex items-center gap-2 text-3xs font-mono">
                     {file.additions > 0 && (
                       <span className="text-green-600 dark:text-green-400">
                         +{file.additions}
@@ -963,9 +762,23 @@ function DiffFileList({
   )
 }
 
+/**
+ * The file column's content: the active tab's view (the body below), plus the
+ * office previews `KeptOfficePreviews` keeps mounted over the same box so that
+ * switching tabs never restarts one.
+ */
 export function FileWorkspacePanel() {
+  return (
+    <div className="relative h-full min-h-0">
+      <FileWorkspacePanelBody />
+      <KeptOfficePreviews />
+    </div>
+  )
+}
+
+function FileWorkspacePanelBody() {
   const t = useTranslations("Folder.fileWorkspacePanel")
-  const { activeFileTab, fileTabs, pendingFileReveal, previewFileTabIds } =
+  const { activeFileTab, pendingFileReveal, previewFileTabIds } =
     useWorkspaceFileTabs()
   const {
     consumePendingFileReveal,
@@ -1027,55 +840,22 @@ export function FileWorkspacePanel() {
   const selectionListenerRef = useRef<IDisposable | null>(null)
   const focusListenerRef = useRef<IDisposable | null>(null)
   const blurListenerRef = useRef<IDisposable | null>(null)
+  const scrollListenerRef = useRef<IDisposable | null>(null)
+  const layoutListenerRef = useRef<IDisposable | null>(null)
   const tRef = useRef(t)
   const monacoRef = useRef<Monaco | null>(null)
   // The loaded monaco instance, captured at editor mount. Passing it to the
-  // theme hook (instead of the hook calling useMonaco()) keeps Monaco lazy: this
-  // panel is always mounted, incl. the file-less empty state, so an internal
-  // useMonaco() would eagerly load Monaco even with no editor shown.
+  // theme hook (instead of the hook calling useMonaco()) keeps Monaco lazy:
+  // the file-less empty state should not load Monaco before an editor opens.
   const [editorMonaco, setEditorMonaco] = useState<Monaco | null>(null)
   const editorTheme = useMonacoWorkspaceTheme(editorMonaco)
-  // @monaco-editor/react creates a model per unseen `path` and never disposes
-  // it — not on path change (it setModel()s away) and, on unmount, only the
-  // currently attached one. Left alone, every file opened during a session
-  // keeps its model (full text + tokenization + undo stack) alive after its
-  // tab closes. Reconcile instead: remember each URI this panel has routed
-  // through `path`, and dispose the ones whose tab is gone. Only URIs
-  // recorded here are ever touched — models owned by others (diff editors'
-  // anonymous pairs) are invisible to this cleanup.
-  const createdModelUrisRef = useRef<Set<string>>(new Set())
+  // Keep models from the first mount: the wrapper captures this option in
+  // its mount-only cleanup. The workspace owns disposal even when mobile
+  // navigation unmounts this whole panel; hidden open buffers keep undo state.
+  const trackMonacoModel = useTrackMonacoModel()
   useEffect(() => {
-    createdModelUrisRef.current.add(editorModelPath)
-  }, [editorModelPath])
-  // Joined into one string so the disposal effect fires only when tab
-  // membership changes — fileTabs itself churns per keystroke. URI segments
-  // are %-encoded, so "\n" cannot occur inside an entry.
-  const liveModelUrisKey = useMemo(
-    () => collectLiveModelPaths(fileTabs).join("\n"),
-    [fileTabs]
-  )
-  useEffect(() => {
-    const monaco = editorMonaco
-    if (!monaco) return
-    const keep = new Set(liveModelUrisKey ? liveModelUrisKey.split("\n") : [])
-    const tracked = createdModelUrisRef.current
-    for (const uri of [...tracked]) {
-      if (keep.has(uri)) continue
-      const model = monaco.editor.getModel(monaco.Uri.parse(uri))
-      if (!model) {
-        // Never materialized, or already disposed by the library's unmount
-        // path — either way no longer ours to manage.
-        tracked.delete(uri)
-        continue
-      }
-      // The editor's own effect runs first and has normally swapped off the
-      // model by now; if it is somehow still attached, keep it and retry on
-      // the next membership change instead of disposing an in-use model.
-      if (model.isAttachedToEditor()) continue
-      model.dispose()
-      tracked.delete(uri)
-    }
-  }, [editorMonaco, liveModelUrisKey])
+    if (editorMonaco) trackMonacoModel(editorModelPath, editorMonaco)
+  }, [editorModelPath, editorMonaco, trackMonacoModel])
   const { zoomLevel } = useZoomLevel()
   const {
     editorFontStack,
@@ -1259,6 +1039,10 @@ export function FileWorkspacePanel() {
       focusListenerRef.current = null
       blurListenerRef.current?.dispose()
       blurListenerRef.current = null
+      scrollListenerRef.current?.dispose()
+      scrollListenerRef.current = null
+      layoutListenerRef.current?.dispose()
+      layoutListenerRef.current = null
       if (addToChatPillRef.current) {
         target?.removeContentWidget(addToChatPillRef.current.widget)
         addToChatPillRef.current = null
@@ -1606,12 +1390,24 @@ export function FileWorkspacePanel() {
       )
 
       const pill = createAddToChatPill(
+        editorInstance,
         monaco,
         () => addSelectionToChat(),
         () => tRef.current("addToChat")
       )
       addToChatPillRef.current = pill
       editorInstance.addContentWidget(pill.widget)
+
+      // The single way to lay the pill out. Monaco reads `getPosition()` — and
+      // so decides the placement — while the node is still `display: none`, and
+      // only flips it to `block` inside this same call, so this is the first
+      // moment the pill can be measured. Whenever that lands a height we did
+      // not have (the first-ever show, or a zoom that resized the pill), redo
+      // the layout in the same frame with the real box.
+      const layoutPill = () => {
+        editorInstance.layoutContentWidget(pill.widget)
+        if (pill.remeasure()) editorInstance.layoutContentWidget(pill.widget)
+      }
 
       const refreshPill = () => {
         const selection = editorInstance.getSelection()
@@ -1624,7 +1420,7 @@ export function FileWorkspacePanel() {
           show,
           show && selection ? selection.getStartPosition() : null
         )
-        editorInstance.layoutContentWidget(pill.widget)
+        layoutPill()
       }
       selectionListenerRef.current?.dispose()
       selectionListenerRef.current =
@@ -1635,8 +1431,27 @@ export function FileWorkspacePanel() {
       blurListenerRef.current?.dispose()
       blurListenerRef.current = editorInstance.onDidBlurEditorText(() => {
         pill.setVisible(false, null)
-        editorInstance.layoutContentWidget(pill.widget)
+        layoutPill()
       })
+      // Monaco latches a widget's placement preference when the widget is laid
+      // out and re-uses it for every later render, so a visible pill keeps a
+      // stale above/below choice until something lays it out again. Every input
+      // to that choice can change while the pill sits on screen: the room above
+      // the anchor (vertical scroll), the viewport height (the user dragging
+      // the terminal splitter up), and the pill's own height (zoom, which
+      // scales the rem-based pill and the editor font together). Refresh on
+      // each — a layout change covers zoom, because the panel feeds the zoomed
+      // font size to Monaco as an option. Nothing in the decision depends on
+      // the horizontal offset, so `scrollLeft`-only ticks are skipped.
+      const relayoutPill = () => {
+        if (pill.isVisible()) layoutPill()
+      }
+      scrollListenerRef.current?.dispose()
+      scrollListenerRef.current = editorInstance.onDidScrollChange((event) => {
+        if (event.scrollTopChanged) relayoutPill()
+      })
+      layoutListenerRef.current?.dispose()
+      layoutListenerRef.current = editorInstance.onDidLayoutChange(relayoutPill)
 
       editorInstance.onDidDispose(() => teardownAddToChat(editorInstance))
 
@@ -1881,6 +1696,12 @@ export function FileWorkspacePanel() {
     )
   }
 
+  if (activeFileTab.kind === "browser") {
+    // Keyed by tab so switching between two browser tabs remounts the surface
+    // host (which hides the old webview and shows the new one).
+    return <BrowserTabView key={activeFileTab.id} tab={activeFileTab} />
+  }
+
   if (activeFileTab.kind === "rich-diff") {
     const richDiffParts = parseFileTabId(activeFileTab.id)
     const isCommitDiff = richDiffParts?.kind === "diff-commit"
@@ -1890,11 +1711,15 @@ export function FileWorkspacePanel() {
       richDiffParts?.kind === "diff-commit"
         ? richDiffParts.commit.slice(0, 7)
         : ""
+    // A branch comparison's before side is that branch, not HEAD — naming it
+    // "HEAD" put someone else's bytes under this branch's name.
+    const compareBranch =
+      richDiffParts?.kind === "diff-branch" ? richDiffParts.branch : null
     const origLabel = isCommitDiff
       ? `${commitHash}~1`
       : isExternalConflictDiff
         ? t("disk")
-        : t("head")
+        : (compareBranch ?? t("head"))
     const modLabel = isCommitDiff
       ? commitHash
       : isExternalConflictDiff
@@ -1906,7 +1731,7 @@ export function FileWorkspacePanel() {
     return (
       <div className="h-full relative">
         {activeFileTab.loading && (
-          <div className="absolute top-2 right-3 z-10 rounded-md bg-background/70 px-2 py-1 text-[11px] text-muted-foreground backdrop-blur-sm">
+          <div className="absolute top-2 right-3 z-10 rounded-md bg-background/70 px-2 py-1 text-2xs text-muted-foreground backdrop-blur-sm">
             {t("loading")}
           </div>
         )}
@@ -1914,6 +1739,27 @@ export function FileWorkspacePanel() {
           <div className="h-full flex items-center justify-center text-xs text-muted-foreground">
             {t("loading")}
           </div>
+        ) : activeFileTab.language === "image" ? (
+          // Binary image: the loader put bytes on the tab, not text.
+          activeFileTab.imageDiff ? (
+            <ImageDiffView
+              key={activeFileTab.id}
+              original={activeFileTab.imageDiff.original}
+              modified={activeFileTab.imageDiff.modified}
+              originalLabel={origLabel}
+              modifiedLabel={modLabel}
+              loading={activeFileTab.loading}
+              className="h-full"
+            />
+          ) : (
+            // A settled image tab with no sides is a load that failed (a
+            // timeout, say) — `rejectTab` left the reason in `content`. Showing
+            // two empty panes instead would dress the failure up as a file
+            // that simply has nothing on either side.
+            <div className="h-full flex items-center justify-center px-6 text-center text-xs text-muted-foreground">
+              {activeFileTab.content || t("loading")}
+            </div>
+          )
         ) : (
           <DiffViewer
             key={activeFileTab.id}
@@ -1938,7 +1784,7 @@ export function FileWorkspacePanel() {
     return (
       <div className="h-full relative">
         {activeFileTab.loading && (
-          <div className="absolute top-2 right-3 z-10 rounded-md bg-background/70 px-2 py-1 text-[11px] text-muted-foreground backdrop-blur-sm">
+          <div className="absolute top-2 right-3 z-10 rounded-md bg-background/70 px-2 py-1 text-2xs text-muted-foreground backdrop-blur-sm">
             {t("loading")}
           </div>
         )}
@@ -2010,7 +1856,7 @@ export function FileWorkspacePanel() {
     return (
       <div className="h-full relative">
         {activeFileTab.loading && (
-          <div className="absolute top-2 right-3 z-10 rounded-md bg-background/70 px-2 py-1 text-[11px] text-muted-foreground backdrop-blur-sm">
+          <div className="absolute top-2 right-3 z-10 rounded-md bg-background/70 px-2 py-1 text-2xs text-muted-foreground backdrop-blur-sm">
             {t("loading")}
           </div>
         )}
@@ -2040,17 +1886,19 @@ export function FileWorkspacePanel() {
     return <ImagePreview key={activeFileTab.id} tab={activeFileTab} />
   }
 
-  // Office preview (.docx/.xlsx/.pptx → OfficeCLI HTML → sandboxed iframe).
+  // PDF preview (PDF.js). Preview-only like an image: the bytes are binary,
+  // there is no source view to toggle to.
+  if (isFileTab && activeFileTab && activeFileTab.language === "pdf") {
+    return <PdfPreview key={activeFileTab.id} tab={activeFileTab} />
+  }
+
+  // Office preview (.docx/.xlsx/.pptx → OfficeCLI watch → sandboxed iframe).
   // Preview-only: these are binary OpenXML files with no text editor view, so
-  // it renders unconditionally (not gated on the editor/preview toggle).
-  if (isFileTab && activeFileTab && isOfficePreviewable(activeFileTab.path)) {
-    return (
-      <OfficePreview
-        key={activeFileTab.id}
-        rootPath={activeIo?.rootPath ?? null}
-        relPath={activeIo?.ioPath ?? null}
-      />
-    )
+  // it renders unconditionally (not gated on the editor/preview toggle). It is
+  // not rendered here: `KeptOfficePreviews`, beside this body, shows it and
+  // keeps it mounted while other tabs are in front.
+  if (isOfficeFileTab(activeFileTab)) {
+    return null
   }
 
   // HTML preview (sandboxed iframe)
@@ -2065,38 +1913,21 @@ export function FileWorkspacePanel() {
         key={activeFileTab.id}
         tab={activeFileTab}
         rootPath={previewRoot}
+        // The file column already has a header of its own (FileWorkspaceHeader,
+        // directly above this panel): the preview's controls go there rather
+        // than into a second strip under it.
+        chrome="hoisted"
       />
     )
   }
 
   if (isPreviewMode && activeFileTab) {
-    // The tab path is absolute, so the document directory is too — every
-    // local reference below resolves to an absolute filesystem path.
-    const fileDir = activeIo?.rootPath ?? null
-    // A UNC-hosted document (//server/share/…) cannot have its local
-    // sub-resources resolved: the "./x" → rehype-harden → "/x" round trip
-    // drops the //server/share authority, and a collapsed single-slash
-    // path like "/Windows/win.ini" would read a DIFFERENT local file. So
-    // for UNC docs we disable local resolution entirely — relative refs
-    // stay relative (harden externalizes them harmlessly) and the image
-    // loader / link opener treat nothing as a local path.
-    const localRefsEnabled = !fileDir || !isUncPath(fileDir)
-    // Pre-resolve relative AND root-relative paths before Streamdown /
-    // rehype-harden mangles them: relative ones against the document's own
-    // directory, root-relative ones ("/assets/x.png") against the preview
-    // root (owning folder when inside the workspace, else the directory).
-    const preprocessedContent = normalizeMathDelimiters(
-      localRefsEnabled
-        ? preprocessMarkdownPaths(renderedContent, fileDir ?? "", previewRoot)
-        : renderedContent
-    )
-
     const markdownColdLoad =
       activeFileTab.loading && !hasTabContent(activeFileTab)
     return (
       <div className="h-full relative">
         {activeFileTab.loading && (
-          <div className="absolute top-2 right-3 z-10 rounded-md bg-background/70 px-2 py-1 text-[11px] text-muted-foreground backdrop-blur-sm">
+          <div className="absolute top-2 right-3 z-10 rounded-md bg-background/70 px-2 py-1 text-2xs text-muted-foreground backdrop-blur-sm">
             {t("loading")}
           </div>
         )}
@@ -2106,9 +1937,11 @@ export function FileWorkspacePanel() {
           </div>
         ) : (
           <MarkdownDocumentPreview
-            content={preprocessedContent}
-            fileDir={fileDir}
-            localRefsEnabled={localRefsEnabled}
+            content={renderedContent}
+            // The tab path is absolute, so the document directory is too —
+            // every local reference resolves to an absolute filesystem path.
+            fileDir={activeIo?.rootPath ?? null}
+            previewRoot={previewRoot}
             openFilePreview={openFilePreview}
           />
         )}
@@ -2119,14 +1952,14 @@ export function FileWorkspacePanel() {
   return (
     <div className="h-full relative">
       {activeFileTab.loading && (
-        <div className="absolute top-2 right-3 z-10 rounded-md bg-background/70 px-2 py-1 text-[11px] text-muted-foreground backdrop-blur-sm">
+        <div className="absolute top-2 right-3 z-10 rounded-md bg-background/70 px-2 py-1 text-2xs text-muted-foreground backdrop-blur-sm">
           {t("loading")}
         </div>
       )}
       <div className="h-full flex flex-col min-h-0">
         {diffOutline && (
           <div className="border-b border-border bg-muted/25">
-            <div className="px-3 py-1.5 text-[11px] text-muted-foreground flex items-center gap-3">
+            <div className="px-3 py-1.5 text-2xs text-muted-foreground flex items-center gap-3">
               <span>{t("fileCount", { count: diffOutline.files.length })}</span>
               <span className="font-mono text-green-600 dark:text-green-400">
                 +{diffOutline.totalAdditions}
@@ -2143,7 +1976,7 @@ export function FileWorkspacePanel() {
                     type="button"
                     onClick={handlePrevHunk}
                     disabled={activeHunkIndex <= 0}
-                    className="rounded border border-border bg-background px-2 py-0.5 text-[10px] disabled:opacity-40 hover:bg-muted transition-colors inline-flex items-center gap-1"
+                    className="rounded border border-border bg-background px-2 py-0.5 text-3xs disabled:opacity-40 hover:bg-muted transition-colors inline-flex items-center gap-1"
                   >
                     <ChevronRight className="h-3 w-3 rotate-180" />
                     {t("prev")}
@@ -2155,7 +1988,7 @@ export function FileWorkspacePanel() {
                       activeHunkIndex < 0 ||
                       activeHunkIndex >= allHunks.length - 1
                     }
-                    className="rounded border border-border bg-background px-2 py-0.5 text-[10px] disabled:opacity-40 hover:bg-muted transition-colors inline-flex items-center gap-1"
+                    className="rounded border border-border bg-background px-2 py-0.5 text-3xs disabled:opacity-40 hover:bg-muted transition-colors inline-flex items-center gap-1"
                   >
                     {t("next")}
                     <ChevronRight className="h-3 w-3" />
@@ -2176,7 +2009,7 @@ export function FileWorkspacePanel() {
                     <button
                       type="button"
                       onClick={() => toggleFileCollapsed(file.key)}
-                      className="w-full px-2 py-1.5 text-[11px] flex items-center gap-1 hover:bg-muted/60 transition-colors"
+                      className="w-full px-2 py-1.5 text-2xs flex items-center gap-1 hover:bg-muted/60 transition-colors"
                     >
                       <ChevronRight
                         className={`h-3 w-3 shrink-0 transition-transform ${
@@ -2193,7 +2026,7 @@ export function FileWorkspacePanel() {
                       >
                         {file.path}
                       </span>
-                      <span className="ml-auto shrink-0 flex items-center gap-2 text-[10px]">
+                      <span className="ml-auto shrink-0 flex items-center gap-2 text-3xs">
                         <span className="font-mono text-green-600 dark:text-green-400">
                           +{file.additions}
                         </span>
@@ -2216,7 +2049,7 @@ export function FileWorkspacePanel() {
                           return (
                             <div
                               key={hunk.key}
-                              className={`flex items-center gap-1 rounded border px-1.5 py-1 text-[10px] ${
+                              className={`flex items-center gap-1 rounded border px-1.5 py-1 text-3xs ${
                                 isActive
                                   ? "border-primary/50 bg-primary/10"
                                   : "border-border/70 bg-muted/30"
@@ -2256,7 +2089,7 @@ export function FileWorkspacePanel() {
                 )
               })}
               {diffOutline.files.length === 0 && (
-                <div className="text-[11px] text-muted-foreground px-1 py-0.5">
+                <div className="text-2xs text-muted-foreground px-1 py-0.5">
                   {t("noParsedDiffSections")}
                 </div>
               )}
@@ -2266,6 +2099,7 @@ export function FileWorkspacePanel() {
         <div className="flex-1 min-h-0">
           {hasTabContent(activeFileTab) || !activeFileTab.loading ? (
             <MonacoEditor
+              keepCurrentModel={true}
               beforeMount={defineMonacoThemes}
               onMount={handleEditorMount}
               path={editorModelPath}

@@ -1,6 +1,8 @@
 import { Extension } from "@tiptap/core"
 import Suggestion, { type SuggestionProps } from "@tiptap/suggestion"
 
+import { findMentionMatch } from "./mention-match"
+
 /** Live render state the plugin pushes to React while the `@` panel is open. */
 export interface MentionRenderState {
   query: string
@@ -70,11 +72,26 @@ export const MentionSuggestion = Extension.create<MentionSuggestionOptions>({
         allowSpaces: false,
         items: () => [],
         command: () => {},
-        // Don't trigger mid-IME-composition or inside code blocks.
-        allow: ({ editor, state }) => {
-          if (editor.view.composing) return false
-          return !state.selection.$from.parent.type.spec.code
-        },
+        // Only gate on structure (never inside a code block). Composition state
+        // is deliberately NOT checked here: a phone's soft keyboard types
+        // through an IME composition that stays open across the whole word —
+        // and on Android ProseMirror keeps `view.composing` true for five more
+        // seconds after the last keystroke — so gating on it means the panel
+        // never opens on mobile at all, which is exactly what it did.
+        //
+        // The plugin's own state is written for composing input on purpose
+        // (`isEditable && (empty || editor.view.composing)`, tiptap#1449), so
+        // letting it through here is the supported path, not a loophole. The
+        // IME's keys are kept away from the panel where they actually arrive:
+        // the composer's `handleKeyDown` hands every composing key straight
+        // back to the editor, and the popup's own `onKeyDown` drops anything
+        // `isImeCompositionKey` recognizes — including the WebKit case where
+        // `compositionend` beats the confirming Enter.
+        allow: ({ state }) => !state.selection.$from.parent.type.spec.code,
+        // Upstream's own matcher, minus a prefix rule only a space-separated
+        // script can satisfy — see findMentionMatch. (`allowedPrefixes` cannot
+        // express this: the array is joined raw into a character class.)
+        findSuggestionMatch: findMentionMatch,
         render: () => ({
           onStart: (props) => controller.onStart(toRenderState(props)),
           onUpdate: (props) => controller.onUpdate(toRenderState(props)),

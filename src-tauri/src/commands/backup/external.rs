@@ -6,20 +6,25 @@
 //! them to a safe side folder (SideLocation), or — only with an explicit
 //! conflict decision — write them back to their original locations
 //! (OriginalLocations), where any file that already exists is skipped unless
-//! the user authorized overwriting.
+//! the user authorized overwriting. The one exception is an append-only index
+//! ([`AppendOnlyIndex`]), which is merged into its live copy by appending.
 
+use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
-use std::io::BufReader;
+use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
+use rusqlite::{Connection, OpenFlags};
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 use zip::ZipArchive;
 
 use crate::app_error::AppCommandError;
-use crate::parsers::{external_transcript_sources, ExternalSource};
+use crate::parsers::{external_transcript_sources, AppendOnlyIndex, ExternalSource};
 
 use super::archive::{ArchiveBuilder, ProgressFn};
+use super::manifest::{DegradedSqlite, SqliteDegradation};
 use super::restore::ConflictPolicy;
 use super::{cancelled_error, unknown_format_error};
 
@@ -35,15 +40,74 @@ pub struct ExternalConflict {
     pub target_size: Option<u64>,
 }
 
-/// Pack external transcript trees into the archive. Returns whether anything
-/// was added (drives the manifest's `includes_external_transcripts`).
+/// What packing the external trees produced.
+#[derive(Debug, Default)]
+pub struct ExternalPack {
+    /// Any source contributed (drives `includes_external_transcripts`).
+    pub packed: bool,
+    /// SQLite stores that could not be snapshotted the normal way.
+    pub degraded: Vec<DegradedSqlite>,
+}
+
+/// A SQLite main database file inside a `sqlite: true` source.
+fn is_sqlite_main(name: &str) -> bool {
+    name.ends_with(".db")
+}
+
+/// Its WAL/SHM sidecars. Never archived and never published — see
+/// [`ExternalSource::sqlite`].
+fn is_sqlite_sidecar(name: &str) -> bool {
+    name.ends_with(".db-wal") || name.ends_with(".db-shm")
+}
+
+fn sidecar_of(db: &Path, suffix: &str) -> PathBuf {
+    let mut s = db.as_os_str().to_owned();
+    s.push(suffix);
+    PathBuf::from(s)
+}
+
+/// Honor a source's `include_top` allowlist, so a mixed base dir (e.g.
+/// Gemini's, which holds credentials next to transcripts) only contributes its
+/// transcript/session subtrees.
+fn top_excluded(include_top: Option<&'static [&'static str]>, rel: &Path) -> bool {
+    match include_top {
+        None => false,
+        Some(allow) => match rel.components().next() {
+            Some(std::path::Component::Normal(first)) => {
+                let first = first.to_string_lossy();
+                !allow.iter().any(|a| *a == first)
+            }
+            _ => true,
+        },
+    }
+}
+
+/// Pack external transcript trees into the archive. `scratch` is a private
+/// working directory (under the data dir) used to stage SQLite snapshots.
 pub fn add_external_sources(
     builder: &mut ArchiveBuilder,
+    scratch: &Path,
     cancel: &CancellationToken,
     progress: &mut ProgressFn<'_>,
-) -> Result<bool, AppCommandError> {
-    let mut packed = false;
-    for src in external_transcript_sources() {
+) -> Result<ExternalPack, AppCommandError> {
+    add_external_sources_with(
+        builder,
+        scratch,
+        &external_transcript_sources(),
+        cancel,
+        progress,
+    )
+}
+
+fn add_external_sources_with(
+    builder: &mut ArchiveBuilder,
+    scratch: &Path,
+    sources: &[ExternalSource],
+    cancel: &CancellationToken,
+    progress: &mut ProgressFn<'_>,
+) -> Result<ExternalPack, AppCommandError> {
+    let mut out = ExternalPack::default();
+    for src in sources {
         if cancel.is_cancelled() {
             return Err(cancelled_error());
         }
@@ -57,28 +121,337 @@ pub fn add_external_sources(
                 .file_name()
                 .and_then(|s| s.to_str())
                 .unwrap_or("data");
-            builder.add_file(&format!("{prefix}/{name}"), &src.root, cancel, progress)?;
-            packed = true;
+            let entry = format!("{prefix}/{name}");
+            if src.sqlite && is_sqlite_main(name) {
+                pack_sqlite_store(
+                    builder,
+                    src.agent,
+                    &entry,
+                    &src.root,
+                    scratch,
+                    cancel,
+                    progress,
+                    &mut out.degraded,
+                )?;
+            } else {
+                builder.add_file(&entry, &src.root, cancel, progress)?;
+            }
+        } else if src.sqlite {
+            add_sqlite_dir(
+                builder,
+                &prefix,
+                src,
+                scratch,
+                cancel,
+                progress,
+                &mut out.degraded,
+            )?;
         } else {
-            // Honor the per-source allowlist so a mixed base dir (e.g. Gemini's,
-            // which holds credentials next to transcripts) only contributes its
-            // transcript/session subtrees.
             let include_top = src.include_top;
-            let exclude = move |rel: &Path| match include_top {
-                None => false,
-                Some(allow) => match rel.components().next() {
-                    Some(std::path::Component::Normal(first)) => {
-                        let first = first.to_string_lossy();
-                        !allow.iter().any(|a| *a == first)
-                    }
-                    _ => true,
-                },
-            };
+            let exclude = move |rel: &Path| top_excluded(include_top, rel);
             builder.add_dir(&prefix, &src.root, &exclude, cancel, progress)?;
-            packed = true;
+        }
+        out.packed = true;
+    }
+    Ok(out)
+}
+
+/// Plaintext bytes the external sources will contribute, for the progress
+/// bar's denominator. Stat-only, and an estimate: a SQLite store is archived
+/// as a page-copied snapshot whose size differs from the live file's.
+pub fn estimated_source_bytes() -> u64 {
+    let mut total = 0u64;
+    for src in external_transcript_sources() {
+        if !src.root.exists() {
+            continue;
+        }
+        if src.is_file {
+            total += std::fs::metadata(&src.root).map(|m| m.len()).unwrap_or(0);
+            continue;
+        }
+        for entry in walkdir::WalkDir::new(&src.root)
+            .follow_links(false)
+            .into_iter()
+            .flatten()
+        {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let Ok(rel) = entry.path().strip_prefix(&src.root) else {
+                continue;
+            };
+            if top_excluded(src.include_top, rel) {
+                continue;
+            }
+            if src.sqlite && is_sqlite_sidecar(&entry.file_name().to_string_lossy()) {
+                continue;
+            }
+            total += entry.metadata().map(|m| m.len()).unwrap_or(0);
         }
     }
-    Ok(packed)
+    total
+}
+
+/// Walk a directory source that holds SQLite stores (Cursor's per-chat
+/// `store.db`, Antigravity's per-session `<id>.db`), snapshotting each `.db`
+/// and dropping every sidecar. Non-database siblings (`.meta`, `meta.json`)
+/// are archived verbatim.
+fn add_sqlite_dir(
+    builder: &mut ArchiveBuilder,
+    prefix: &str,
+    src: &ExternalSource,
+    scratch: &Path,
+    cancel: &CancellationToken,
+    progress: &mut ProgressFn<'_>,
+    degraded: &mut Vec<DegradedSqlite>,
+) -> Result<(), AppCommandError> {
+    for entry in walkdir::WalkDir::new(&src.root).follow_links(false) {
+        if cancel.is_cancelled() {
+            return Err(cancelled_error());
+        }
+        let entry = entry.map_err(|e| {
+            AppCommandError::io_error("Failed to walk directory").with_detail(e.to_string())
+        })?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let Ok(rel) = entry.path().strip_prefix(&src.root) else {
+            continue;
+        };
+        if top_excluded(src.include_top, rel) {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        // The invariant the whole restore path leans on: one archive entry per
+        // database, so "new db next to a stale wal" is not a state the archive
+        // can even describe.
+        if is_sqlite_sidecar(&name) {
+            continue;
+        }
+        let entry_name = format!("{prefix}/{}", to_slash(rel));
+        if is_sqlite_main(&name) {
+            pack_sqlite_store(
+                builder,
+                src.agent,
+                &entry_name,
+                entry.path(),
+                scratch,
+                cancel,
+                progress,
+                degraded,
+            )?;
+        } else {
+            builder.add_file(&entry_name, entry.path(), cancel, progress)?;
+        }
+    }
+    Ok(())
+}
+
+/// Add one SQLite store to the archive as a single self-contained file.
+#[allow(clippy::too_many_arguments)]
+fn pack_sqlite_store(
+    builder: &mut ArchiveBuilder,
+    agent: &str,
+    entry_name: &str,
+    live_db: &Path,
+    scratch: &Path,
+    cancel: &CancellationToken,
+    progress: &mut ProgressFn<'_>,
+    degraded: &mut Vec<DegradedSqlite>,
+) -> Result<(), AppCommandError> {
+    // A zero-byte `.db` is a placeholder the agent has not written yet; there
+    // is nothing for SQLite to copy, so take the bytes as they are.
+    if std::fs::metadata(live_db).map(|m| m.len()).unwrap_or(0) == 0 {
+        return builder.add_file(entry_name, live_db, cancel, progress);
+    }
+
+    let snap = scratch.join(format!("{}.db", uuid::Uuid::new_v4().simple()));
+
+    // (a) The normal path: a read-only page copy. Page copy, not `VACUUM` —
+    //     VACUUM may renumber the ROWID of any table without an explicit
+    //     INTEGER PRIMARY KEY, and we cannot audit a third-party schema for
+    //     tables that use rowid as a key. Read-only, not read-write — opening
+    //     someone else's store for writing runs hot-journal/WAL recovery
+    //     inside it.
+    match page_copy_readonly(live_db, &snap) {
+        Ok(()) => {
+            let r = builder.add_file(entry_name, &snap, cancel, progress);
+            let _ = std::fs::remove_file(&snap);
+            return r;
+        }
+        Err(e) => {
+            // Expected when the store has a live `-wal` but no `-shm` (the CLI
+            // crashed): a read-only connection may not create the shm.
+            tracing::warn!(
+                "[BACKUP] read-only snapshot of {} failed ({e}); recovering on a private copy",
+                live_db.display()
+            );
+            let _ = std::fs::remove_file(&snap);
+        }
+    }
+
+    // (b) Degraded: copy the whole group into our own scratch, prove it is
+    //     coherent, and let SQLite recover it THERE.
+    match recover_on_private_copy(live_db, &snap, scratch) {
+        Ok(level) => {
+            let r = builder.add_file(entry_name, &snap, cancel, progress);
+            let _ = std::fs::remove_file(&snap);
+            degraded.push(DegradedSqlite {
+                agent: agent.to_string(),
+                archive_path: entry_name.to_string(),
+                level,
+            });
+            r
+        }
+        Err(reason) => {
+            let _ = std::fs::remove_file(&snap);
+            tracing::error!(
+                "[BACKUP] {} not archived: {reason}",
+                live_db.display()
+            );
+            degraded.push(DegradedSqlite {
+                agent: agent.to_string(),
+                archive_path: entry_name.to_string(),
+                level: SqliteDegradation::NotArchived,
+            });
+            Ok(())
+        }
+    }
+}
+
+/// Page-copy `src` into `dest` through a read-only connection.
+fn page_copy_readonly(src: &Path, dest: &Path) -> Result<(), rusqlite::Error> {
+    let _ = std::fs::remove_file(dest);
+    let conn = Connection::open_with_flags(
+        src,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    conn.backup(rusqlite::DatabaseName::Main, dest, None)
+}
+
+/// Byte-level identity of a store *group*, used to prove the main file and its
+/// WAL were copied from the same instant. The first 100 bytes are the SQLite
+/// header, which carries the change counter and page count — a running
+/// checkpoint moves them.
+#[derive(Debug, PartialEq, Eq)]
+struct StoreFingerprint {
+    db: (u64, Option<SystemTime>),
+    header: Vec<u8>,
+    wal: Option<(u64, Option<SystemTime>)>,
+}
+
+fn fingerprint(db: &Path) -> Option<StoreFingerprint> {
+    let meta = std::fs::metadata(db).ok()?;
+    let mut header = Vec::new();
+    File::open(db)
+        .ok()?
+        .take(100)
+        .read_to_end(&mut header)
+        .ok()?;
+    let wal = std::fs::metadata(sidecar_of(db, "-wal"))
+        .ok()
+        .map(|m| (m.len(), m.modified().ok()));
+    Some(StoreFingerprint {
+        db: (meta.len(), meta.modified().ok()),
+        header,
+        wal,
+    })
+}
+
+/// Copy the store and its sidecars into our own scratch, prove the group is
+/// coherent, then let SQLite recover it **there** and page-copy one
+/// self-contained file out. The source is never opened for writing.
+///
+/// The coherence proof is the point. A main file copied while a checkpoint is
+/// running is a mixture of pre- and post-checkpoint pages, and if the
+/// checkpoint completes (resetting the WAL) before we copy the WAL, the WAL we
+/// get belongs to a later generation. SQLite applies it *successfully* and
+/// produces a structurally valid database holding half of some atomic
+/// transaction — `integrity_check` and the backup API both stay silent. A
+/// per-file checksum proves byte integrity, not cross-file coherence, so the
+/// only available proof is "the source did not move between the two reads".
+fn recover_on_private_copy(
+    live_db: &Path,
+    snap: &Path,
+    scratch: &Path,
+) -> Result<SqliteDegradation, String> {
+    const ATTEMPTS: usize = 3;
+    let work = scratch.join(format!("recover-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
+    let copy_db = work.join("store.db");
+
+    let mut coherent = false;
+    // A WAL that exists but could not be read (permissions, a Windows sharing
+    // lock). Recovering without it would produce a snapshot that is missing
+    // committed frames while `RecoveredOnCopy` claims it is complete, so the
+    // outcome has to be downgraded instead.
+    let mut wal_unreadable = false;
+    for _ in 0..ATTEMPTS {
+        let Some(before) = fingerprint(live_db) else {
+            break;
+        };
+        for sc in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(sidecar_of(&copy_db, sc));
+        }
+        // Main file first: a WAL read afterwards is a superset of it, which is
+        // the only ordering a cold copy of a live store can justify.
+        if std::fs::copy(live_db, &copy_db).is_err() {
+            continue;
+        }
+        let mut wal_failed = false;
+        for sc in ["-wal", "-shm"] {
+            let s = sidecar_of(live_db, sc);
+            if s.exists() && std::fs::copy(&s, sidecar_of(&copy_db, sc)).is_err() {
+                // `-shm` is a rebuildable index, but a missing `-wal` means
+                // lost commits; only that one downgrades the result.
+                wal_failed |= sc == "-wal";
+            }
+        }
+        if fingerprint(live_db).as_ref() == Some(&before) {
+            coherent = true;
+            wal_unreadable = wal_failed;
+            break;
+        }
+    }
+    if !coherent {
+        let _ = std::fs::remove_dir_all(&work);
+        return Err("store kept changing while it was being copied".to_string());
+    }
+
+    // Read-write here is on OUR copy, so the recovery has no effect outside
+    // this scratch dir. It is skipped entirely when the WAL never made it:
+    // SQLite would happily "recover" the main file alone and report success.
+    let recovered = if wal_unreadable {
+        tracing::warn!(
+            "[BACKUP] the WAL beside {} could not be read; archiving the main file alone",
+            live_db.display()
+        );
+        Err("write-ahead log could not be copied".to_string())
+    } else {
+        recover_and_page_copy(&copy_db, snap).map_err(|e| e.to_string())
+    };
+    let level = match recovered {
+        Ok(()) => SqliteDegradation::RecoveredOnCopy,
+        Err(e) => {
+            tracing::warn!(
+                "[BACKUP] no complete snapshot of {} ({e}); archiving the bare file",
+                live_db.display()
+            );
+            // The copy is a *stable* at-rest database: a source that did not
+            // move is not mid-checkpoint. It is simply missing whatever the
+            // WAL held.
+            std::fs::copy(&copy_db, snap).map_err(|e| e.to_string())?;
+            SqliteDegradation::BareFileOnly
+        }
+    };
+    let _ = std::fs::remove_dir_all(&work);
+    Ok(level)
+}
+
+fn recover_and_page_copy(copy_db: &Path, dest: &Path) -> Result<(), rusqlite::Error> {
+    let _ = std::fs::remove_file(dest);
+    let conn = Connection::open(copy_db)?;
+    conn.backup(rusqlite::DatabaseName::Main, dest, None)
 }
 
 /// Scan a (plaintext) backup ZIP for external entries whose live target already
@@ -106,9 +479,18 @@ fn scan_external_conflicts_with_sources(
             continue;
         };
         let rel_str = to_slash(&rel);
-        let Some((agent, _base, target)) = map_external_to_target(&rel_str, sources) else {
+        let Some((agent, base, target)) = map_external_to_target(&rel_str, sources) else {
             continue;
         };
+        // An index is merged into its live copy rather than skipped or
+        // replaced, so a live one is not a conflict — unless what sits at its
+        // path is not a file, which `merge_index` leaves to the ordinary
+        // conflict handling.
+        if index_at(sources, &agent, &base, &target).is_some()
+            && std::fs::symlink_metadata(&target).map_or(true, |meta| meta.file_type().is_file())
+        {
+            continue;
+        }
         // `symlink_metadata` matches the restore-side conflict test exactly, so
         // the preview reports dangling symlinks too (they are conflicts on
         // restore).
@@ -124,15 +506,44 @@ fn scan_external_conflicts_with_sources(
     Ok(conflicts)
 }
 
+/// Why an archive entry was refused outright (never a user-visible conflict —
+/// the live file is left exactly as it was).
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum RefusalReason {
+    /// A pre-fix archive that packed a `.db` and its `-wal` as two entries.
+    /// Their coherence cannot be proven, so nothing is written.
+    LegacyUnprovableSqlitePair,
+}
+
+/// One refused entry, reported so the UI can point at the side location.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefusedExternal {
+    pub archive_path: String,
+    pub target_path: String,
+    pub reason: RefusalReason,
+}
+
+/// Outcome of writing external transcripts back to their original locations.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalRestoreReport {
+    /// Live paths left alone because they already existed and overwriting was
+    /// not authorized.
+    pub skipped_conflicts: Vec<String>,
+    /// Entries we declined to publish for a structural reason.
+    pub refused: Vec<RefusedExternal>,
+}
+
 /// Write already-extracted `external/<agent>/…` files from `staged_external`
-/// back to their original CLI locations, honoring `policy`. Returns the live
-/// paths that were skipped because they already existed and overwrite was not
-/// authorized. Never overwrites a conflicting file under `SkipExisting`.
+/// back to their original CLI locations, honoring `policy`. Never overwrites a
+/// conflicting file under `SkipExisting`.
 pub fn restore_external_from_staging(
     staged_external: &Path,
     policy: ConflictPolicy,
     cancel: &CancellationToken,
-) -> Result<Vec<String>, AppCommandError> {
+) -> Result<ExternalRestoreReport, AppCommandError> {
     restore_external_with_sources(staged_external, &external_transcript_sources(), policy, cancel)
 }
 
@@ -141,8 +552,8 @@ fn restore_external_with_sources(
     sources: &[ExternalSource],
     policy: ConflictPolicy,
     cancel: &CancellationToken,
-) -> Result<Vec<String>, AppCommandError> {
-    let mut skipped = Vec::new();
+) -> Result<ExternalRestoreReport, AppCommandError> {
+    let mut report = ExternalRestoreReport::default();
 
     for entry in walkdir::WalkDir::new(staged_external).follow_links(false) {
         if cancel.is_cancelled() {
@@ -164,16 +575,50 @@ fn restore_external_with_sources(
         // constraints, so a crafted archive entry (e.g. `external/gemini/
         // oauth_creds.json`) is dropped here rather than written to a live
         // config path.
-        let Some((_agent, base, target)) = map_external_to_target(&archive_path, sources) else {
+        let Some((agent, base, target)) = map_external_to_target(&archive_path, sources) else {
             continue;
         };
-        match restore_one(entry.path(), &base, &target, policy) {
+        let sqlite_store = sources.iter().any(|s| s.agent == agent && s.sqlite)
+            && target
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(is_sqlite_main);
+
+        // An archive made before this fix packed directory-source stores as
+        // `<x>.db` PLUS `<x>.db-wal`. Whether those two belong to the same WAL
+        // generation is not provable: `add_dir` may have read the main file
+        // mid-checkpoint (a mixture of pre- and post-checkpoint pages), the
+        // checkpoint may then have completed and reset the WAL, and the
+        // `-wal` we archived may belong to the generation after it. SQLite
+        // would apply it without complaint and produce a structurally valid
+        // database containing half of some atomic transaction; neither
+        // `integrity_check` nor the backup API would report anything. The
+        // archive carries no anchor that could settle it (the main file's
+        // header does not record the current WAL's salt), so refuse: the live
+        // store keeps its own good copy, and SideLocation hands the raw files
+        // over for the user to decide about.
+        if sqlite_store && sidecar_of(entry.path(), "-wal").exists() {
+            report.refused.push(RefusedExternal {
+                archive_path,
+                target_path: target.to_string_lossy().into_owned(),
+                reason: RefusalReason::LegacyUnprovableSqlitePair,
+            });
+            continue;
+        }
+
+        let outcome = match index_at(sources, &agent, &base, &target) {
+            Some(index) => merge_index(entry.path(), &base, &target, index, policy),
+            None => restore_one(entry.path(), &base, &target, policy, sqlite_store),
+        };
+        match outcome {
             FileOutcome::Written => {}
-            FileOutcome::Skipped => skipped.push(target.to_string_lossy().into_owned()),
+            FileOutcome::Skipped => report
+                .skipped_conflicts
+                .push(target.to_string_lossy().into_owned()),
             FileOutcome::Failed => { /* logged in restore_one; non-fatal */ }
         }
     }
-    Ok(skipped)
+    Ok(report)
 }
 
 enum FileOutcome {
@@ -186,9 +631,17 @@ enum FileOutcome {
 /// leaving a partial file at the final path, never clobbering an existing file
 /// under `SkipExisting`, and never following a symlinked parent component out
 /// of `base`.
-fn restore_one(src: &Path, base: &Path, target: &Path, policy: ConflictPolicy) -> FileOutcome {
+fn restore_one(
+    src: &Path,
+    base: &Path,
+    target: &Path,
+    policy: ConflictPolicy,
+    sqlite_store: bool,
+) -> FileOutcome {
     let exists = std::fs::symlink_metadata(target).is_ok();
     if exists && policy == ConflictPolicy::SkipExisting {
+        // We are not replacing this store, so its sidecars are none of our
+        // business either.
         return FileOutcome::Skipped;
     }
     let Some(parent) = target.parent() else {
@@ -204,6 +657,17 @@ fn restore_one(src: &Path, base: &Path, target: &Path, policy: ConflictPolicy) -
     if let Err(e) = std::fs::create_dir_all(parent) {
         tracing::error!("[RESTORE] external: mkdir {} failed: {e}", parent.display());
         return FileOutcome::Failed;
+    }
+
+    // A SQLite store always goes through the sidecar-clearing publication,
+    // under either policy: even when the target is absent, a leftover `-wal`
+    // beside it would be recovered into the database we are about to create.
+    // (The `create_new` race guard the plain `SkipExisting` path gets is given
+    // up here; the window is between the existence check above and the rename,
+    // and the only writer that could hit it is the very CLI whose store is
+    // being replaced.)
+    if sqlite_store {
+        return publish_sqlite(src, target, parent);
     }
 
     match policy {
@@ -258,6 +722,252 @@ fn restore_one(src: &Path, base: &Path, target: &Path, policy: ConflictPolicy) -
     }
 }
 
+/// The append-only index `target` is, if its source declares one there.
+fn index_at<'a>(
+    sources: &'a [ExternalSource],
+    agent: &str,
+    base: &Path,
+    target: &Path,
+) -> Option<&'a AppendOnlyIndex> {
+    let src = sources.iter().find(|s| s.agent == agent)?;
+    let rel = to_slash(target.strip_prefix(base).ok()?);
+    src.indexes.iter().find(|index| index.path == rel)
+}
+
+/// Restore an [`AppendOnlyIndex`] by appending to the live copy.
+///
+/// The backup's lines are appended for every key the live copy has no line
+/// for. Under `Overwrite` they are also appended for every key whose newest
+/// line differs: landing last, they win, just as the transcript they describe
+/// replaced the live one. Under `SkipExisting` such a key keeps its live line,
+/// as its transcript was kept. Only lines the reader uses count (see
+/// [`keyed_lines`]); any other line is neither compared nor appended.
+///
+/// The live bytes are never rewritten. Appending is how the CLI itself writes
+/// the file, so one that is running, or holds the file open, loses nothing;
+/// a rewrite-and-rename would discard whatever it appended meanwhile.
+fn merge_index(
+    src: &Path,
+    base: &Path,
+    target: &Path,
+    index: &AppendOnlyIndex,
+    policy: ConflictPolicy,
+) -> FileOutcome {
+    match std::fs::symlink_metadata(target) {
+        Ok(meta) if meta.file_type().is_file() => {}
+        // Absent: an ordinary restore. Anything else at that path (a
+        // symlink, a directory) is not ours to append to, and gets the
+        // ordinary conflict handling.
+        _ => return restore_one(src, base, target, policy, false),
+    }
+    if !target
+        .parent()
+        .is_some_and(|parent| parent_chain_is_safe(base, parent))
+    {
+        tracing::warn!(
+            "[RESTORE] external: symlinked parent under {}, skipping {}",
+            base.display(),
+            target.display()
+        );
+        return FileOutcome::Failed;
+    }
+    let (live, staged) = match (std::fs::read(target), std::fs::read(src)) {
+        (Ok(live), Ok(staged)) => (live, staged),
+        (Err(e), _) | (_, Err(e)) => {
+            tracing::error!(
+                "[RESTORE] external: read index for {} failed: {e}",
+                target.display()
+            );
+            return FileOutcome::Failed;
+        }
+    };
+
+    // Collecting keeps each key's LAST line: the one that wins.
+    let newest_live: HashMap<String, &[u8]> = keyed_lines(&live, index).collect();
+    let newest_staged: HashMap<String, &[u8]> = keyed_lines(&staged, index).collect();
+    let appended: HashSet<&String> = newest_staged
+        .iter()
+        .filter(|(k, line)| match newest_live.get(*k) {
+            None => true,
+            Some(live_line) => policy == ConflictPolicy::Overwrite && live_line != *line,
+        })
+        .map(|(k, _)| k)
+        .collect();
+
+    let mut chunk = Vec::new();
+    for (k, line) in keyed_lines(&staged, index) {
+        if appended.contains(&k) {
+            chunk.extend_from_slice(line);
+            chunk.push(b'\n');
+        }
+    }
+    if chunk.is_empty() {
+        return FileOutcome::Written;
+    }
+    // Never glue the first appended line onto an unterminated last one.
+    if live.last().is_some_and(|byte| *byte != b'\n') {
+        chunk.insert(0, b'\n');
+    }
+    let append = OpenOptions::new()
+        .append(true)
+        .open(target)
+        .and_then(|mut out| out.write_all(&chunk).and_then(|_| out.sync_all()));
+    match append {
+        Ok(()) => FileOutcome::Written,
+        Err(e) => {
+            tracing::error!(
+                "[RESTORE] external: append to index {} failed: {e}",
+                target.display()
+            );
+            FileOutcome::Failed
+        }
+    }
+}
+
+/// Each usable line of a JSONL index, as `(key, line)` in file order, the line
+/// trimmed of surrounding whitespace: one naming its record with a string
+/// `key` and setting a `value` its reader acts on (`AppendOnlyIndex::usable`,
+/// the reader's own test).
+fn keyed_lines<'a>(
+    bytes: &'a [u8],
+    index: &'a AppendOnlyIndex,
+) -> impl Iterator<Item = (String, &'a [u8])> {
+    bytes.split(|byte| *byte == b'\n').filter_map(move |line| {
+        let line = line.trim_ascii();
+        let record: serde_json::Value = serde_json::from_slice(line).ok()?;
+        let k = record.get(index.key)?.as_str()?.to_string();
+        let value = record.get(index.value)?.as_str()?;
+        (index.usable)(value).then_some((k, line))
+    })
+}
+
+/// Publish a SQLite store, deleting the live `-wal`/`-shm` **before** the new
+/// main file lands.
+///
+/// Order matters, and so does the barrier. If the rename came first, a crash
+/// before the sidecars were removed would leave "new db + old wal", which
+/// SQLite replays into corruption on the next open — and external restore is a
+/// one-shot action with no journal to resume from. Removing them first means
+/// every crash point leaves either "old db, no wal" or "new db, no wal", both
+/// of which are legal and unreplayable.
+///
+/// But syscall order is not power-loss order: unlink and rename each only
+/// mutate the parent directory's metadata, so without a barrier a crash can
+/// persist the rename while losing the earlier unlinks and hand back exactly
+/// the state we set out to make impossible. Ordered-journal filesystems
+/// (ext4 / APFS / XFS) do preserve it in practice, but POSIX does not, and
+/// `data=writeback`, `nobarrier`, non-journalling filesystems and some network
+/// mounts do not either. One `fsync` on the directory settles it.
+///
+/// Windows offers no directory handle to fsync; there `remove_file` and
+/// `MoveFileEx` are ordered, journalled NTFS metadata transactions, so the
+/// barrier is compiled out.
+fn publish_sqlite(src: &Path, target: &Path, parent: &Path) -> FileOutcome {
+    let tmp = parent.join(format!(".codeg-ext-{}.part", uuid::Uuid::new_v4().simple()));
+    // 1. The replacement is fully on disk before anything live is touched.
+    let staged = (|| -> std::io::Result<()> {
+        let mut out = OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+        let mut input = File::open(src)?;
+        std::io::copy(&mut input, &mut out)?;
+        out.sync_all()
+    })();
+    if let Err(e) = staged {
+        tracing::error!(
+            "[RESTORE] external: stage temp for {} failed: {e}",
+            target.display()
+        );
+        let _ = std::fs::remove_file(&tmp);
+        return FileOutcome::Failed;
+    }
+
+    // 2-4. Sidecars, then the database itself (Windows cannot rename over an
+    //      existing file). Once ANY of these succeeds the live store is
+    //      partly dismantled, and the staged replacement becomes the only
+    //      copy of what should be there — see `fail_publication`.
+    let mut dismantled = false;
+    for victim in [
+        sidecar_of(target, "-wal"),
+        sidecar_of(target, "-shm"),
+        target.to_path_buf(),
+    ] {
+        match std::fs::remove_file(&victim) {
+            Ok(()) => dismantled = true,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                tracing::error!("[RESTORE] external: remove {} failed: {e}", victim.display());
+                return fail_publication(&tmp, target, dismantled);
+            }
+        }
+    }
+    // The barrier is the whole reason the removals come first, so a failure
+    // here means the ordering is unproven — stop before the rename rather than
+    // publish a database that a crash could pair with a resurrected WAL. The
+    // live store is left as "old db, no wal": legal, unreplayable, and only
+    // missing frames the archive was going to replace anyway.
+    if let Err(e) = sync_dir(parent) {
+        tracing::error!(
+            "[RESTORE] external: durability barrier for {} failed: {e}",
+            parent.display()
+        );
+        return fail_publication(&tmp, target, dismantled);
+    }
+
+    // 5. Single rename — the archive holds exactly one file per store, so
+    //    there is no multi-file publication to be interrupted halfway.
+    if let Err(e) = std::fs::rename(&tmp, target) {
+        tracing::error!("[RESTORE] external: publish {} failed: {e}", target.display());
+        return fail_publication(&tmp, target, dismantled);
+    }
+    // Past the point of no return: the new database is in place, so a failure
+    // to flush the directory entry costs durability, not correctness. Reporting
+    // failure here would be a lie about what is on disk.
+    if let Err(e) = sync_dir(parent) {
+        tracing::warn!(
+            "[RESTORE] external: post-publish sync of {} failed: {e}",
+            parent.display()
+        );
+    }
+    FileOutcome::Written
+}
+
+/// Report a failed publication, keeping the staged replacement only when
+/// something was already destroyed.
+///
+/// If nothing has been removed yet the live store is whole, and the temp is
+/// just litter. But once a sidecar or the database itself is gone, the temp
+/// holds the only complete copy of what the store should contain — deleting it
+/// too would leave the user with no store at all, which is far worse than the
+/// bounded truncation this ordering trades for. Its path is logged so the
+/// bytes can be recovered by hand.
+fn fail_publication(tmp: &Path, target: &Path, dismantled: bool) -> FileOutcome {
+    if dismantled {
+        tracing::error!(
+            "[RESTORE] external: {} was left incomplete; its replacement is preserved at {}",
+            target.display(),
+            tmp.display()
+        );
+    } else {
+        let _ = std::fs::remove_file(tmp);
+    }
+    FileOutcome::Failed
+}
+
+/// Flush a directory's entries so a rename/unlink ordering actually survives a
+/// power loss.
+///
+/// Windows offers no directory handle to fsync; there `remove_file` and
+/// `MoveFileEx` are ordered, journalled NTFS metadata transactions, so this is
+/// a no-op.
+#[cfg(unix)]
+fn sync_dir(dir: &Path) -> std::io::Result<()> {
+    File::open(dir)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_dir(_dir: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
 /// Map an `external/<agent>/<rest>` archive path to `(agent, base, live_target)`,
 /// re-applying the SAME constraints used at backup time so a crafted archive
 /// can't smuggle a non-transcript path into a live config location:
@@ -276,6 +986,14 @@ fn map_external_to_target(
     // Reject traversal / non-normal components up front.
     let segs: Vec<&str> = sub.split('/').collect();
     if segs.iter().any(|s| s.is_empty() || *s == "." || *s == "..") {
+        return None;
+    }
+
+    // Backstop for the one-file-per-store invariant: whatever an archive
+    // claims, a `-wal`/`-shm` never resolves to a live path. Together with the
+    // legacy-pair refusal in `restore_external_with_sources`, no restore path
+    // can put a sidecar next to a store.
+    if src.sqlite && segs.last().is_some_and(|last| is_sqlite_sidecar(last)) {
         return None;
     }
 
@@ -345,8 +1063,107 @@ mod tests {
             agent,
             root,
             is_file: false,
+            sqlite: false,
             include_top: None,
+            indexes: &[],
         }
+    }
+
+    /// `map_external_to_target` resolves an archive entry by
+    /// `find(|s| s.agent == agent)`, so a duplicated name silently routes the
+    /// SECOND source's entries into the FIRST source's root on restore. That is
+    /// invisible in a backup and only shows up as misplaced files on someone
+    /// else's machine, so pin the invariant here rather than trusting review.
+    /// An agent that owns two independently-relocatable trees (DeepSeek: its
+    /// session logs and its attachment store) needs two distinct names.
+    #[test]
+    fn external_source_agent_names_are_unique() {
+        let sources = external_transcript_sources();
+        let mut seen = std::collections::HashSet::new();
+        for src in &sources {
+            assert!(
+                seen.insert(src.agent),
+                "duplicate external source agent name: {}",
+                src.agent
+            );
+        }
+    }
+
+    /// deepseek-acp 0.6.0 puts prompt images in a content-addressed store that
+    /// is NOT under the session-log root, and the log keeps only a `sha256:`
+    /// reference. If the store is not archived, restoring on a clean machine
+    /// degrades every image to the parser's `[image …]` placeholder with the
+    /// bytes gone for good — so both trees must be registered, must restore to
+    /// their own roots, and the store's non-conversation siblings must stay out.
+    #[test]
+    fn deepseek_attachment_objects_restore_into_the_attachment_store() {
+        let sources = external_transcript_sources();
+        let logs = sources
+            .iter()
+            .find(|s| s.agent == "deepseek")
+            .expect("deepseek session logs are not registered for backup");
+        let store = sources
+            .iter()
+            .find(|s| s.agent == "deepseek-attachments")
+            .expect("deepseek attachment store is not registered for backup");
+        // Two roots, resolved independently — `DEEPSEEK_ACP_SESSIONS_ROOT` moves
+        // the logs without moving the store.
+        assert_ne!(logs.root, store.root);
+        assert!(store.root.ends_with("attachments/v1"), "{:?}", store.root);
+
+        // Scoped to `objects/`: `tmp/` is upload staging and `request-images/`
+        // holds per-provider re-encodings the agent rebuilds on demand.
+        let store_only = std::slice::from_ref(store);
+        let hex = "a".repeat(64);
+        let object = format!("external/deepseek-attachments/objects/aa/{hex}");
+        let (_, base, target) =
+            map_external_to_target(&object, store_only).expect("object entry must map");
+        assert_eq!(base, store.root);
+        assert_eq!(target, store.root.join("objects").join("aa").join(&hex));
+        assert!(
+            map_external_to_target("external/deepseek-attachments/tmp/staged", store_only).is_none()
+        );
+        assert!(map_external_to_target(
+            "external/deepseek-attachments/request-images/aa/bb",
+            store_only
+        )
+        .is_none());
+
+        // And the bytes actually land there on restore — at exactly the path
+        // `parsers::deepseek::attachment_image_block` reads back.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("attachments").join("v1");
+        let staged = dir.path().join("external");
+        std::fs::create_dir_all(staged.join("deepseek-attachments/objects/aa")).unwrap();
+        std::fs::create_dir_all(staged.join("deepseek-attachments/tmp")).unwrap();
+        std::fs::write(
+            staged.join("deepseek-attachments/objects/aa").join(&hex),
+            b"\x89PNG\r\n\x1a\n",
+        )
+        .unwrap();
+        std::fs::write(staged.join("deepseek-attachments/tmp/staged"), b"junk").unwrap();
+
+        let restored = vec![ExternalSource {
+            agent: "deepseek-attachments",
+            root: root.clone(),
+            is_file: false,
+            sqlite: false,
+            include_top: Some(&["objects"]),
+            indexes: &[],
+        }];
+        let report = restore_external_with_sources(
+            &staged,
+            &restored,
+            ConflictPolicy::SkipExisting,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        assert!(report.skipped_conflicts.is_empty(), "{report:?}");
+        assert_eq!(
+            std::fs::read(root.join("objects").join("aa").join(&hex)).unwrap(),
+            b"\x89PNG\r\n\x1a\n"
+        );
+        assert!(!root.join("tmp").join("staged").exists());
     }
 
     /// Restore-to-original-locations must never silently overwrite an existing
@@ -368,15 +1185,15 @@ mod tests {
         let cancel = CancellationToken::new();
 
         // SkipExisting: conflict reported + untouched; fresh file restored.
-        let skipped = restore_external_with_sources(
+        let report = restore_external_with_sources(
             &staged,
             &sources,
             ConflictPolicy::SkipExisting,
             &cancel,
         )
         .unwrap();
-        assert_eq!(skipped.len(), 1);
-        assert!(skipped[0].ends_with("exists.jsonl"));
+        assert_eq!(report.skipped_conflicts.len(), 1);
+        assert!(report.skipped_conflicts[0].ends_with("exists.jsonl"));
         assert_eq!(
             std::fs::read(target_base.join("projects/exists.jsonl")).unwrap(),
             b"OLD"
@@ -387,10 +1204,10 @@ mod tests {
         );
 
         // Overwrite: the conflict is replaced, nothing reported skipped.
-        let skipped =
+        let report =
             restore_external_with_sources(&staged, &sources, ConflictPolicy::Overwrite, &cancel)
                 .unwrap();
-        assert!(skipped.is_empty());
+        assert!(report.skipped_conflicts.is_empty());
         assert_eq!(
             std::fs::read(target_base.join("projects/exists.jsonl")).unwrap(),
             b"NEW"
@@ -459,7 +1276,9 @@ mod tests {
             agent: "gemini",
             root: PathBuf::from("/tmp/gemini"),
             is_file: false,
+            sqlite: false,
             include_top: Some(&["tmp", "history"]),
+            indexes: &[],
         };
         // A crafted credential path is rejected.
         let gemini = std::slice::from_ref(&gemini);
@@ -471,7 +1290,9 @@ mod tests {
             agent: "opencode",
             root: PathBuf::from("/tmp/oc/opencode.db"),
             is_file: true,
+            sqlite: true,
             include_top: None,
+            indexes: &[],
         };
         let opencode = std::slice::from_ref(&opencode);
         assert!(map_external_to_target("external/opencode/evil.sh", opencode).is_none());
@@ -483,6 +1304,911 @@ mod tests {
                 PathBuf::from("/tmp/oc/opencode.db"),
             ))
         );
+    }
+
+    // ── append-only indexes ──────────────────────────────────────────────
+
+    fn index_line(id: &str, name: &str) -> String {
+        format!(
+            r#"{{"id":"{id}","thread_name":"{name}","updated_at":"2026-10-10T04:47:19.375134Z"}}"#
+        )
+    }
+
+    fn codex_index_source(root: PathBuf) -> ExternalSource {
+        ExternalSource {
+            agent: "codex-session-index",
+            root,
+            is_file: true,
+            sqlite: false,
+            include_top: None,
+            indexes: &[AppendOnlyIndex {
+                path: "session_index.jsonl",
+                key: "id",
+                value: "thread_name",
+                usable: crate::parsers::codex::is_usable_thread_name,
+            }],
+        }
+    }
+
+    /// A thread's name (a `/rename`, a generated title) lives only in
+    /// `~/.codex/session_index.jsonl`, never in its rollout, so the index is
+    /// archived as a source of its own BESIDE the rollouts: the `codex` source
+    /// keeps its `sessions/` root, and an archive made before the index was
+    /// one still restores its rollouts exactly where it always did.
+    #[test]
+    fn codex_thread_names_are_backed_up_beside_the_rollouts() {
+        let sources = external_transcript_sources();
+        let rollouts = sources.iter().find(|s| s.agent == "codex").unwrap();
+        let index = sources
+            .iter()
+            .find(|s| s.agent == "codex-session-index")
+            .expect("codex's thread-name index is not registered for backup");
+        assert!(index.is_file);
+        assert_eq!(index.root.parent(), rollouts.root.parent());
+        assert_eq!(index.root.file_name().unwrap(), "session_index.jsonl");
+        assert_eq!(rollouts.root.file_name().unwrap(), "sessions");
+
+        let (agent, base, target) =
+            map_external_to_target("external/codex-session-index/session_index.jsonl", &sources)
+                .expect("index entry must map");
+        assert_eq!(target, index.root);
+        assert!(index_at(&sources, &agent, &base, &target).is_some());
+        // The index itself only — never a sibling like `auth.json`.
+        assert!(
+            map_external_to_target("external/codex-session-index/auth.json", &sources).is_none()
+        );
+
+        let (_, _, rollout) =
+            map_external_to_target("external/codex/2026/10/10/rollout-x.jsonl", &sources)
+                .expect("an existing archive's rollout must still map");
+        assert_eq!(
+            rollout,
+            rollouts
+                .root
+                .join("2026")
+                .join("10")
+                .join("10")
+                .join("rollout-x.jsonl")
+        );
+    }
+
+    /// It packs as the one entry the mapping above restores.
+    #[test]
+    fn codex_thread_name_index_packs_as_its_own_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("codex-home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(
+            home.join("session_index.jsonl"),
+            index_line("a", "A") + "\n",
+        )
+        .unwrap();
+        std::fs::write(home.join("auth.json"), b"{}").unwrap();
+        let (entries, _) = pack_one(
+            &codex_index_source(home.join("session_index.jsonl")),
+            dir.path(),
+        );
+        assert_eq!(
+            entries,
+            ["external/codex-session-index/session_index.jsonl"]
+        );
+    }
+
+    /// The live index holds every session created since the backup, so the
+    /// archived one is merged into it: its lines are appended for each key
+    /// the live copy lacks, and the live bytes stay exactly as they were. A
+    /// key both know keeps its live line under `SkipExisting` (its rollout was
+    /// kept) and takes the backup's under `Overwrite` (its rollout was
+    /// replaced). Restoring the same archive again changes nothing.
+    #[test]
+    fn an_index_restores_by_appending_what_the_live_copy_lacks() {
+        for policy in [ConflictPolicy::SkipExisting, ConflictPolicy::Overwrite] {
+            let dir = tempfile::tempdir().unwrap();
+            let home = dir.path().join("codex-home");
+            std::fs::create_dir_all(home.join("sessions")).unwrap();
+            let staged = dir.path().join("external");
+            std::fs::create_dir_all(staged.join("codex-session-index")).unwrap();
+            let backup = [
+                index_line("a", "A as backed up"),
+                index_line("b", "B"),
+                "not json".to_string(),
+                r#"{"thread_name":"no id"}"#.to_string(),
+                index_line("b", "B renamed"),
+            ]
+            .join("\n");
+            std::fs::write(
+                staged.join("codex-session-index/session_index.jsonl"),
+                backup + "\n",
+            )
+            .unwrap();
+            // Its last line unterminated, as an interrupted writer leaves it.
+            let live = format!(
+                "{}\n{}",
+                index_line("a", "A renamed since"),
+                index_line("c", "C")
+            );
+            std::fs::write(home.join("session_index.jsonl"), &live).unwrap();
+
+            let sources = vec![codex_index_source(home.join("session_index.jsonl"))];
+            let cancel = CancellationToken::new();
+            let report = restore_external_with_sources(&staged, &sources, policy, &cancel).unwrap();
+            assert!(report.skipped_conflicts.is_empty(), "{report:?}");
+
+            let merged = std::fs::read_to_string(home.join("session_index.jsonl")).unwrap();
+            let mut appended = Vec::new();
+            if policy == ConflictPolicy::Overwrite {
+                appended.push(index_line("a", "A as backed up"));
+            }
+            appended.push(index_line("b", "B"));
+            appended.push(index_line("b", "B renamed"));
+            assert_eq!(
+                merged,
+                format!("{live}\n{}\n", appended.join("\n")),
+                "{policy:?}"
+            );
+
+            let names = crate::parsers::codex::CodexParser::with_base_dir(home.join("sessions"))
+                .load_thread_name_index();
+            let a = match policy {
+                ConflictPolicy::SkipExisting => "A renamed since",
+                ConflictPolicy::Overwrite => "A as backed up",
+            };
+            assert_eq!(names["a"], a);
+            assert_eq!(names["b"], "B renamed");
+            assert_eq!(names["c"], "C");
+
+            restore_external_with_sources(&staged, &sources, policy, &cancel).unwrap();
+            assert_eq!(
+                std::fs::read_to_string(home.join("session_index.jsonl")).unwrap(),
+                merged,
+                "{policy:?}"
+            );
+        }
+    }
+
+    /// Only a line the readers act on counts: one with a blank value (an
+    /// empty name) is skipped by `load_thread_name_index`, so it can neither
+    /// stand for a key's newest line nor be worth appending. Compared by raw
+    /// last line, a trailing blank line on both sides hid a real difference
+    /// under `Overwrite`, and a blank-only live key blocked a real archived
+    /// name under `SkipExisting`.
+    #[test]
+    fn an_index_counts_only_the_lines_its_readers_use() {
+        let blank = |id: &str| format!(r#"{{"id":"{id}","thread_name":""}}"#);
+        for (policy, expected_a) in [
+            (ConflictPolicy::SkipExisting, "A live"),
+            (ConflictPolicy::Overwrite, "A backed up"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let home = dir.path().join("codex-home");
+            std::fs::create_dir_all(home.join("sessions")).unwrap();
+            let staged = dir.path().join("external");
+            std::fs::create_dir_all(staged.join("codex-session-index")).unwrap();
+            let backup = [
+                index_line("a", "A backed up"),
+                blank("a"),
+                index_line("b", "B backed up"),
+                index_line("c", "C backed up"),
+            ]
+            .join("\n");
+            std::fs::write(
+                staged.join("codex-session-index/session_index.jsonl"),
+                backup + "\n",
+            )
+            .unwrap();
+            // `c`'s name is a lone BOM: blank to codex-acp's whitespace (and so
+            // to the reader), though not to Rust's `trim`.
+            let live = [
+                index_line("a", "A live"),
+                blank("a"),
+                blank("b"),
+                "{\"id\":\"c\",\"thread_name\":\"\u{FEFF}\"}".to_string(),
+            ]
+            .join("\n")
+                + "\n";
+            std::fs::write(home.join("session_index.jsonl"), &live).unwrap();
+
+            let sources = vec![codex_index_source(home.join("session_index.jsonl"))];
+            restore_external_with_sources(&staged, &sources, policy, &CancellationToken::new())
+                .unwrap();
+
+            let names = crate::parsers::codex::CodexParser::with_base_dir(home.join("sessions"))
+                .load_thread_name_index();
+            assert_eq!(names["a"], expected_a, "{policy:?}");
+            assert_eq!(names["b"], "B backed up", "{policy:?}");
+            assert_eq!(names["c"], "C backed up", "{policy:?}");
+            let merged = std::fs::read_to_string(home.join("session_index.jsonl")).unwrap();
+            assert!(merged.starts_with(&live), "{policy:?}");
+            assert!(
+                !merged[live.len()..].contains(r#""thread_name":"""#),
+                "{merged}"
+            );
+        }
+    }
+
+    /// Something other than a file at the index's path is left to the
+    /// ordinary conflict handling, so the preview lists it like any conflict.
+    #[test]
+    fn the_conflict_scan_lists_an_index_path_that_is_not_a_file() {
+        use std::io::Write as _;
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = dir.path().join("b.zip");
+        {
+            let mut w = zip::ZipWriter::new(File::create(&zip_path).unwrap());
+            w.start_file(
+                "external/codex-session-index/session_index.jsonl",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+            w.write_all(b"{}\n").unwrap();
+            w.finish().unwrap();
+        }
+        let home = dir.path().join("codex-home");
+        std::fs::create_dir_all(home.join("session_index.jsonl")).unwrap();
+
+        let sources = vec![codex_index_source(home.join("session_index.jsonl"))];
+        let conflicts = scan_external_conflicts_with_sources(&zip_path, &sources).unwrap();
+        assert_eq!(conflicts.len(), 1, "{conflicts:?}");
+    }
+
+    /// With no live copy the archived index is restored whole, byte for byte.
+    #[test]
+    fn an_index_without_a_live_copy_restores_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("codex-home");
+        std::fs::create_dir_all(&home).unwrap();
+        let staged = dir.path().join("external");
+        std::fs::create_dir_all(staged.join("codex-session-index")).unwrap();
+        let backup = format!("{}\nnot json\n", index_line("a", "A"));
+        std::fs::write(
+            staged.join("codex-session-index/session_index.jsonl"),
+            &backup,
+        )
+        .unwrap();
+
+        let sources = vec![codex_index_source(home.join("session_index.jsonl"))];
+        let report = restore_external_with_sources(
+            &staged,
+            &sources,
+            ConflictPolicy::SkipExisting,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        assert!(report.skipped_conflicts.is_empty(), "{report:?}");
+        assert_eq!(
+            std::fs::read_to_string(home.join("session_index.jsonl")).unwrap(),
+            backup
+        );
+    }
+
+    /// The conflict preview leaves an index out: it is merged under either
+    /// policy, so listing it would ask a question whose answer cannot change
+    /// what happens to the file.
+    #[test]
+    fn the_conflict_scan_leaves_an_index_out() {
+        use std::io::Write as _;
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = dir.path().join("b.zip");
+        {
+            let mut w = zip::ZipWriter::new(File::create(&zip_path).unwrap());
+            for name in [
+                "external/codex-session-index/session_index.jsonl",
+                "external/codex/2026/10/10/rollout-x.jsonl",
+            ] {
+                w.start_file(name, zip::write::SimpleFileOptions::default())
+                    .unwrap();
+                w.write_all(b"{}\n").unwrap();
+            }
+            w.finish().unwrap();
+        }
+        let home = dir.path().join("codex-home");
+        std::fs::create_dir_all(home.join("sessions/2026/10/10")).unwrap();
+        std::fs::write(home.join("session_index.jsonl"), b"{}\n").unwrap();
+        std::fs::write(home.join("sessions/2026/10/10/rollout-x.jsonl"), b"{}\n").unwrap();
+
+        let sources = vec![
+            dir_source("codex", home.join("sessions")),
+            codex_index_source(home.join("session_index.jsonl")),
+        ];
+        let conflicts = scan_external_conflicts_with_sources(&zip_path, &sources).unwrap();
+        assert_eq!(conflicts.len(), 1, "{conflicts:?}");
+        assert!(conflicts[0].archive_path.ends_with("rollout-x.jsonl"));
+    }
+
+    /// Kimi's index is the only record of a session's working directory, so a
+    /// restored session needs its line even where kimi has been used since the
+    /// backup; the session files beside it restore as before.
+    #[test]
+    fn kimi_restores_its_session_index_by_merging() {
+        let sources = external_transcript_sources();
+        let kimi = sources.iter().find(|s| s.agent == "kimi-code").unwrap();
+        assert!(
+            kimi.indexes
+                .iter()
+                .any(|index| index.path == "session_index.jsonl" && index.key == "sessionId"),
+            "{:?}",
+            kimi.indexes
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("kimi-home");
+        std::fs::create_dir_all(&home).unwrap();
+        let staged = dir.path().join("external");
+        std::fs::create_dir_all(staged.join("kimi-code/sessions/s1")).unwrap();
+        let restored_line = r#"{"sessionId":"s1","sessionDir":"sessions/s1","workDir":"/w1"}"#;
+        std::fs::write(
+            staged.join("kimi-code/session_index.jsonl"),
+            format!("{restored_line}\n"),
+        )
+        .unwrap();
+        std::fs::write(staged.join("kimi-code/sessions/s1/wire.jsonl"), b"{}\n").unwrap();
+        let live =
+            r#"{"sessionId":"s2","sessionDir":"sessions/s2","workDir":"/w2"}"#.to_string() + "\n";
+        std::fs::write(home.join("session_index.jsonl"), &live).unwrap();
+
+        let source = ExternalSource {
+            agent: "kimi-code",
+            root: home.clone(),
+            is_file: false,
+            sqlite: false,
+            include_top: kimi.include_top,
+            indexes: kimi.indexes,
+        };
+        let report = restore_external_with_sources(
+            &staged,
+            std::slice::from_ref(&source),
+            ConflictPolicy::SkipExisting,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        assert!(report.skipped_conflicts.is_empty(), "{report:?}");
+        assert_eq!(
+            std::fs::read_to_string(home.join("session_index.jsonl")).unwrap(),
+            format!("{live}{restored_line}\n")
+        );
+        assert_eq!(
+            std::fs::read(home.join("sessions/s1/wire.jsonl")).unwrap(),
+            b"{}\n"
+        );
+    }
+
+    // ── third-party SQLite stores ────────────────────────────────────────
+
+    fn sqlite_file_source(agent: &'static str, db: PathBuf) -> ExternalSource {
+        ExternalSource {
+            agent,
+            root: db,
+            is_file: true,
+            sqlite: true,
+            include_top: None,
+            indexes: &[],
+        }
+    }
+
+    fn sqlite_dir_source(agent: &'static str, root: PathBuf) -> ExternalSource {
+        ExternalSource {
+            agent,
+            root,
+            is_file: false,
+            sqlite: true,
+            include_top: None,
+            indexes: &[],
+        }
+    }
+
+    /// A WAL-mode store with two committed rows. The returned connection is
+    /// deliberately kept alive so nothing checkpoints — the rows exist only in
+    /// the `-wal`, which is the case a naive file copy loses.
+    fn seed_store(path: &Path) -> Connection {
+        let conn = Connection::open(path).unwrap();
+        conn.pragma_update(None, "journal_mode", "WAL").unwrap();
+        conn.execute_batch("CREATE TABLE t(v TEXT); INSERT INTO t VALUES('a'),('b');")
+            .unwrap();
+        conn
+    }
+
+    /// Read-write open: a WAL-mode database always needs its `-shm`, and a
+    /// self-contained snapshot has none until someone writable opens it.
+    fn count_rows(db: &Path) -> rusqlite::Result<i64> {
+        Connection::open(db)?.query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0))
+    }
+
+    fn pack_one(source: &ExternalSource, dir: &Path) -> (Vec<String>, Vec<DegradedSqlite>) {
+        let scratch = dir.join("scratch");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let zip = dir.join(format!("a-{}.zip", uuid::Uuid::new_v4().simple()));
+        let mut b = ArchiveBuilder::create(&zip).unwrap();
+        let mut prog = crate::commands::backup::archive::null_progress();
+        let pack = add_external_sources_with(
+            &mut b,
+            &scratch,
+            std::slice::from_ref(source),
+            &CancellationToken::new(),
+            &mut prog,
+        )
+        .unwrap();
+        let manifest = b
+            .finish(crate::commands::backup::manifest::BackupManifest {
+                format_version: 1,
+                kind: "codeg-backup".to_string(),
+                created_at: String::new(),
+                app_version: String::new(),
+                latest_migration: String::new(),
+                runtime: "server".to_string(),
+                includes_external_transcripts: pack.packed,
+                includes_secrets: false,
+                managed_sections: None,
+                degraded_sqlite: pack.degraded.clone(),
+                entries: Vec::new(),
+            })
+            .unwrap();
+        (
+            manifest.entries.into_iter().map(|e| e.path).collect(),
+            pack.degraded,
+        )
+    }
+
+    /// The invariant everything else leans on: one archive entry per database.
+    /// Sidecars in the archive are what would let a restore reconstruct
+    /// "new db + stale wal", so they must not be representable.
+    #[test]
+    fn sqlite_source_is_always_exactly_one_archive_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("chats").join("abc");
+        std::fs::create_dir_all(&root).unwrap();
+        let conn = seed_store(&root.join("store.db"));
+        std::fs::write(root.join("meta.json"), b"{}").unwrap();
+        assert!(
+            sidecar_of(&root.join("store.db"), "-wal").exists(),
+            "the fixture needs a live WAL to be meaningful"
+        );
+
+        let (mut entries, _) = pack_one(
+            &sqlite_dir_source("cursor", dir.path().join("chats")),
+            dir.path(),
+        );
+        entries.sort();
+        assert_eq!(
+            entries,
+            vec![
+                "external/cursor/abc/meta.json".to_string(),
+                "external/cursor/abc/store.db".to_string(),
+            ]
+        );
+        drop(conn);
+    }
+
+    /// The frames that live only in the WAL have to survive, and the archived
+    /// file has to stand on its own afterwards.
+    #[test]
+    fn sqlite_source_is_snapshotted_without_wal_dependency() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("opencode.db");
+        let conn = seed_store(&db);
+
+        // A plain file copy of the main database sees nothing: the schema and
+        // the rows are still in the WAL.
+        let raw = dir.path().join("raw.db");
+        std::fs::copy(&db, &raw).unwrap();
+        assert!(count_rows(&raw).is_err());
+
+        let snap = dir.path().join("snap.db");
+        page_copy_readonly(&db, &snap).expect("read-only page copy");
+        assert_eq!(count_rows(&snap).unwrap(), 2);
+        drop(conn);
+    }
+
+    /// `VACUUM` may renumber the ROWID of any table without an explicit
+    /// INTEGER PRIMARY KEY. A page copy must not — we cannot audit a
+    /// third-party schema for tables that use rowid as a key, and the damage
+    /// would be silent and permanent (the archive would hold the broken copy).
+    #[test]
+    fn page_copy_preserves_implicit_rowids() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("store.db");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE t(v TEXT);
+             INSERT INTO t VALUES('a'),('b'),('c'),('d'),('e');
+             DELETE FROM t WHERE v IN ('b','d');",
+        )
+        .unwrap();
+        let source_rowids: Vec<i64> = conn
+            .prepare("SELECT rowid FROM t ORDER BY rowid")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(source_rowids, vec![1, 3, 5], "fixture must have holes");
+        drop(conn);
+
+        let snap = dir.path().join("snap.db");
+        page_copy_readonly(&db, &snap).unwrap();
+        let snap_conn = Connection::open(&snap).unwrap();
+        let snap_rowids: Vec<i64> = snap_conn
+            .prepare("SELECT rowid FROM t ORDER BY rowid")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(snap_rowids, source_rowids);
+    }
+
+    /// Backing up must not write into a store codeg does not own — not the
+    /// database, and not a `-wal`/`-shm` created as a side effect of opening
+    /// it for writing.
+    #[cfg(unix)]
+    #[test]
+    fn backup_never_opens_a_third_party_store_read_write() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("state.db");
+        {
+            let conn = Connection::open(&db).unwrap();
+            conn.execute_batch("CREATE TABLE t(v TEXT); INSERT INTO t VALUES('a'),('b');")
+                .unwrap();
+        } // cleanly closed: no sidecars
+        std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o444)).unwrap();
+        let before = std::fs::metadata(&db).unwrap();
+
+        let (entries, degraded) = pack_one(&sqlite_file_source("hermes", db.clone()), dir.path());
+        assert_eq!(entries, vec!["external/hermes/state.db".to_string()]);
+        assert!(degraded.is_empty(), "{degraded:?}");
+
+        let after = std::fs::metadata(&db).unwrap();
+        assert_eq!(before.len(), after.len());
+        assert_eq!(before.modified().unwrap(), after.modified().unwrap());
+        assert!(!sidecar_of(&db, "-wal").exists());
+        assert!(!sidecar_of(&db, "-shm").exists());
+    }
+
+    /// A store the CLI crashed on: a live `-wal` with no `-shm`, in a
+    /// directory SQLite may not write to, so the read-only open cannot
+    /// succeed. The frames must still be recovered — on OUR copy — and the
+    /// degradation must be reported rather than logged and forgotten.
+    #[cfg(unix)]
+    #[test]
+    fn readonly_open_failure_recovers_on_a_private_copy_and_is_reported() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("live");
+        std::fs::create_dir_all(&live).unwrap();
+
+        // Build the store elsewhere, then move db + wal over WITHOUT the shm.
+        let build = dir.path().join("build");
+        std::fs::create_dir_all(&build).unwrap();
+        let src_db = build.join("opencode.db");
+        let conn = seed_store(&src_db);
+        let db = live.join("opencode.db");
+        std::fs::copy(&src_db, &db).unwrap();
+        std::fs::copy(sidecar_of(&src_db, "-wal"), sidecar_of(&db, "-wal")).unwrap();
+        drop(conn);
+
+        std::fs::set_permissions(&live, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let (entries, degraded) = pack_one(&sqlite_file_source("opencode", db.clone()), dir.path());
+        std::fs::set_permissions(&live, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_eq!(
+            entries,
+            vec!["external/opencode/opencode.db".to_string()],
+            "still exactly one entry, even degraded"
+        );
+        assert_eq!(degraded.len(), 1, "{degraded:?}");
+        assert_eq!(degraded[0].agent, "opencode");
+        assert_eq!(degraded[0].level, SqliteDegradation::RecoveredOnCopy);
+    }
+
+    /// The coherence proof behind the degraded path: a main file and a WAL read
+    /// at two instants are only usable together if the source did not move
+    /// between them.
+    #[test]
+    fn fingerprint_notices_the_store_moving() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("store.db");
+        let conn = seed_store(&db);
+        let before = fingerprint(&db).unwrap();
+        assert_eq!(fingerprint(&db).as_ref(), Some(&before));
+
+        conn.execute_batch("INSERT INTO t VALUES('c');").unwrap();
+        assert_ne!(
+            fingerprint(&db).as_ref(),
+            Some(&before),
+            "a commit grows the WAL, which must break the fingerprint"
+        );
+        drop(conn);
+        assert_ne!(
+            fingerprint(&db).as_ref(),
+            Some(&before),
+            "a checkpoint rewrites the main file, which must break it too"
+        );
+    }
+
+    /// When the store cannot be copied at all, archive nothing for it and say
+    /// so — rather than a torn copy `integrity_check` would call healthy.
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_store_is_reported_as_not_archived() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("state.db");
+        {
+            let conn = Connection::open(&db).unwrap();
+            conn.execute_batch("CREATE TABLE t(v TEXT);").unwrap();
+        }
+        std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let (entries, degraded) = pack_one(&sqlite_file_source("hermes", db.clone()), dir.path());
+        std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert!(entries.is_empty(), "{entries:?}");
+        assert_eq!(degraded.len(), 1);
+        assert_eq!(degraded[0].level, SqliteDegradation::NotArchived);
+    }
+
+    /// Publishing a store must clear the sidecars that belong to the database
+    /// it replaces; otherwise the next open replays a foreign WAL into it.
+    #[test]
+    fn restore_drops_stale_sidecars_next_to_replaced_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let staged = dir.path().join("external");
+        std::fs::create_dir_all(staged.join("opencode")).unwrap();
+        std::fs::write(staged.join("opencode/opencode.db"), b"NEW-DB").unwrap();
+
+        let live_dir = dir.path().join("live");
+        std::fs::create_dir_all(&live_dir).unwrap();
+        let live_db = live_dir.join("opencode.db");
+        std::fs::write(&live_db, b"OLD-DB").unwrap();
+        std::fs::write(sidecar_of(&live_db, "-wal"), b"OLD-WAL").unwrap();
+        std::fs::write(sidecar_of(&live_db, "-shm"), b"OLD-SHM").unwrap();
+
+        let sources = vec![sqlite_file_source("opencode", live_db.clone())];
+        let report = restore_external_with_sources(
+            &staged,
+            &sources,
+            ConflictPolicy::Overwrite,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        assert!(report.skipped_conflicts.is_empty() && report.refused.is_empty());
+        assert_eq!(std::fs::read(&live_db).unwrap(), b"NEW-DB");
+        assert!(!sidecar_of(&live_db, "-wal").exists());
+        assert!(!sidecar_of(&live_db, "-shm").exists());
+    }
+
+    /// We did not replace that store, so its sidecars are not ours to remove.
+    #[test]
+    fn skip_existing_touches_neither_db_nor_sidecars() {
+        let dir = tempfile::tempdir().unwrap();
+        let staged = dir.path().join("external");
+        std::fs::create_dir_all(staged.join("opencode")).unwrap();
+        std::fs::write(staged.join("opencode/opencode.db"), b"NEW-DB").unwrap();
+
+        let live_dir = dir.path().join("live");
+        std::fs::create_dir_all(&live_dir).unwrap();
+        let live_db = live_dir.join("opencode.db");
+        std::fs::write(&live_db, b"OLD-DB").unwrap();
+        std::fs::write(sidecar_of(&live_db, "-wal"), b"OLD-WAL").unwrap();
+
+        let sources = vec![sqlite_file_source("opencode", live_db.clone())];
+        let report = restore_external_with_sources(
+            &staged,
+            &sources,
+            ConflictPolicy::SkipExisting,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        assert_eq!(report.skipped_conflicts.len(), 1);
+        assert_eq!(std::fs::read(&live_db).unwrap(), b"OLD-DB");
+        assert_eq!(
+            std::fs::read(sidecar_of(&live_db, "-wal")).unwrap(),
+            b"OLD-WAL"
+        );
+    }
+
+    /// An IO failure part-way through the sidecar sweep must leave the live
+    /// database byte-identical — never half-published. (A directory named
+    /// `…-wal` makes `remove_file` fail deterministically.)
+    #[test]
+    fn sidecar_removal_failure_leaves_the_db_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let staged = dir.path().join("external");
+        std::fs::create_dir_all(staged.join("opencode")).unwrap();
+        std::fs::write(staged.join("opencode/opencode.db"), b"NEW-DB").unwrap();
+
+        let live_dir = dir.path().join("live");
+        std::fs::create_dir_all(&live_dir).unwrap();
+        let live_db = live_dir.join("opencode.db");
+        std::fs::write(&live_db, b"OLD-DB").unwrap();
+        std::fs::create_dir_all(sidecar_of(&live_db, "-wal")).unwrap();
+
+        let sources = vec![sqlite_file_source("opencode", live_db.clone())];
+        restore_external_with_sources(
+            &staged,
+            &sources,
+            ConflictPolicy::Overwrite,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&live_db).unwrap(), b"OLD-DB");
+        // Nothing had been removed yet, so the live store is whole and the
+        // temp is pure litter.
+        let leftover = std::fs::read_dir(&live_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| e.file_name().to_string_lossy().ends_with(".part"));
+        assert!(!leftover, "the staged temp must be cleaned up on failure");
+    }
+
+    /// Once a sidecar is gone the live store is incomplete, and the staged
+    /// replacement is the only whole copy. Deleting it too would leave the
+    /// user with no store at all.
+    #[test]
+    fn replacement_is_preserved_when_publication_fails_after_destroying_something() {
+        let dir = tempfile::tempdir().unwrap();
+        let staged = dir.path().join("external");
+        std::fs::create_dir_all(staged.join("opencode")).unwrap();
+        std::fs::write(staged.join("opencode/opencode.db"), b"NEW-DB").unwrap();
+
+        let live_dir = dir.path().join("live");
+        std::fs::create_dir_all(&live_dir).unwrap();
+        let live_db = live_dir.join("opencode.db");
+        // A directory in the database's place: the `-wal` beside it removes
+        // cleanly, then removing the "database" fails deterministically.
+        std::fs::create_dir_all(&live_db).unwrap();
+        std::fs::write(sidecar_of(&live_db, "-wal"), b"OLD-WAL").unwrap();
+
+        let sources = vec![sqlite_file_source("opencode", live_db.clone())];
+        restore_external_with_sources(
+            &staged,
+            &sources,
+            ConflictPolicy::Overwrite,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+
+        assert!(!sidecar_of(&live_db, "-wal").exists(), "the wal was removed");
+        let preserved: Vec<PathBuf> = std::fs::read_dir(&live_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.to_string_lossy().ends_with(".part"))
+            .collect();
+        assert_eq!(preserved.len(), 1, "{preserved:?}");
+        assert_eq!(std::fs::read(&preserved[0]).unwrap(), b"NEW-DB");
+    }
+
+    /// A WAL that exists but cannot be read means committed frames are
+    /// missing. Recovering the main file alone would still succeed, so the
+    /// result must be labelled `BareFileOnly` rather than complete.
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_wal_downgrades_below_recovered_on_copy() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("live");
+        std::fs::create_dir_all(&live).unwrap();
+
+        let build = dir.path().join("build");
+        std::fs::create_dir_all(&build).unwrap();
+        let src_db = build.join("opencode.db");
+        let conn = seed_store(&src_db);
+        let db = live.join("opencode.db");
+        std::fs::copy(&src_db, &db).unwrap();
+        let wal = sidecar_of(&db, "-wal");
+        std::fs::copy(sidecar_of(&src_db, "-wal"), &wal).unwrap();
+        drop(conn);
+
+        // Present but unreadable, and the directory is read-only so the
+        // read-only open cannot create a `-shm` either.
+        std::fs::set_permissions(&wal, std::fs::Permissions::from_mode(0o000)).unwrap();
+        std::fs::set_permissions(&live, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let (entries, degraded) = pack_one(&sqlite_file_source("opencode", db.clone()), dir.path());
+        std::fs::set_permissions(&live, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(&wal, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert_eq!(entries, vec!["external/opencode/opencode.db".to_string()]);
+        assert_eq!(degraded.len(), 1, "{degraded:?}");
+        assert_eq!(
+            degraded[0].level,
+            SqliteDegradation::BareFileOnly,
+            "an unreadable WAL must not be reported as a complete snapshot"
+        );
+    }
+
+    /// A pre-fix archive packed `<x>.db` and `<x>.db-wal` as separate entries.
+    /// Nothing in the archive can prove they belong to the same WAL
+    /// generation, and SQLite would apply a mismatched pair without
+    /// complaining, so refuse the entry outright and leave the live store as
+    /// it is.
+    #[test]
+    fn legacy_pair_is_refused_and_live_store_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let staged = dir.path().join("external");
+        let chats = staged.join("cursor").join("abc");
+        std::fs::create_dir_all(&chats).unwrap();
+        std::fs::write(chats.join("store.db"), b"ARCHIVE-DB").unwrap();
+        std::fs::write(chats.join("store.db-wal"), b"ARCHIVE-WAL").unwrap();
+
+        let live_root = dir.path().join("live");
+        let live_db = live_root.join("abc").join("store.db");
+        std::fs::create_dir_all(live_db.parent().unwrap()).unwrap();
+        std::fs::write(&live_db, b"MINE").unwrap();
+
+        let sources = vec![sqlite_dir_source("cursor", live_root.clone())];
+        let report = restore_external_with_sources(
+            &staged,
+            &sources,
+            ConflictPolicy::Overwrite,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+
+        assert_eq!(std::fs::read(&live_db).unwrap(), b"MINE");
+        assert!(!sidecar_of(&live_db, "-wal").exists());
+        assert_eq!(report.refused.len(), 1, "{report:?}");
+        assert_eq!(
+            report.refused[0].reason,
+            RefusalReason::LegacyUnprovableSqlitePair
+        );
+        assert!(report.refused[0].archive_path.ends_with("store.db"));
+    }
+
+    /// The refusal is per entry, not per source: a store in the same legacy
+    /// archive that has no `-wal` beside it is provably self-contained and
+    /// restores normally.
+    #[test]
+    fn legacy_single_file_store_still_restores() {
+        let dir = tempfile::tempdir().unwrap();
+        let staged = dir.path().join("external");
+        std::fs::create_dir_all(staged.join("cursor").join("torn")).unwrap();
+        std::fs::create_dir_all(staged.join("cursor").join("clean")).unwrap();
+        std::fs::write(staged.join("cursor/torn/store.db"), b"A").unwrap();
+        std::fs::write(staged.join("cursor/torn/store.db-wal"), b"W").unwrap();
+        std::fs::write(staged.join("cursor/clean/store.db"), b"CLEAN").unwrap();
+
+        let live_root = dir.path().join("live");
+        std::fs::create_dir_all(&live_root).unwrap();
+        let sources = vec![sqlite_dir_source("cursor", live_root.clone())];
+        let report = restore_external_with_sources(
+            &staged,
+            &sources,
+            ConflictPolicy::Overwrite,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+
+        assert_eq!(report.refused.len(), 1);
+        assert_eq!(
+            std::fs::read(live_root.join("clean").join("store.db")).unwrap(),
+            b"CLEAN"
+        );
+        assert!(!live_root.join("torn").join("store.db").exists());
+        // And no path ever writes a sidecar next to a store.
+        assert!(!live_root.join("clean").join("store.db-wal").exists());
+    }
+
+    /// Backstop for the same invariant one layer down: whatever an archive
+    /// claims, a sidecar entry never resolves to a live path.
+    #[test]
+    fn sidecar_entries_are_refused_by_the_mapper() {
+        let sources = vec![
+            sqlite_dir_source("cursor", PathBuf::from("/tmp/cursor")),
+            sqlite_file_source("opencode", PathBuf::from("/tmp/oc/opencode.db")),
+        ];
+        for path in [
+            "external/cursor/abc/store.db-wal",
+            "external/cursor/abc/store.db-shm",
+            "external/opencode/opencode.db-wal",
+            "external/opencode/opencode.db-shm",
+        ] {
+            assert!(
+                map_external_to_target(path, &sources).is_none(),
+                "sidecar must not map: {path}"
+            );
+        }
+        assert!(map_external_to_target("external/cursor/abc/store.db", &sources).is_some());
     }
 
     #[cfg(unix)]
@@ -503,11 +2229,11 @@ mod tests {
 
         let sources = vec![dir_source("claude", base)];
         let cancel = CancellationToken::new();
-        let skipped =
+        let report =
             restore_external_with_sources(&staged, &sources, ConflictPolicy::Overwrite, &cancel)
                 .unwrap();
         // Nothing was written through the symlink into the escape dir.
         assert!(!escape.join("x.jsonl").exists());
-        assert!(skipped.is_empty());
+        assert!(report.skipped_conflicts.is_empty());
     }
 }

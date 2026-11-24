@@ -124,7 +124,7 @@ function PetActionPreviewCell({
         }}
       />
       <div
-        className="mt-0.5 truncate text-center text-[10px] leading-tight text-muted-foreground"
+        className="mt-0.5 truncate text-center text-3xs leading-tight text-muted-foreground"
         title={actionName}
       >
         {actionName}

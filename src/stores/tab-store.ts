@@ -1,3 +1,9 @@
+import { useMemo } from "react"
+import {
+  folderScope,
+  useFolderTabsStore,
+  type TabScope,
+} from "@/stores/folder-tabs-store"
 import { create } from "zustand"
 import { useShallow } from "zustand/react/shallow"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
@@ -32,9 +38,17 @@ import {
 import {
   buildNewConversationDraftStorageKey,
   clearMessageInputDraftV2,
+  hasLiveComposerContent,
+  loadMessageInputDraftV2,
   moveMessageInputDraft,
   sweepOrphanDraftKeys,
 } from "@/lib/message-input-draft"
+import { discardAskSelectionPrompts } from "@/lib/ask-selection-handoff"
+import {
+  batchCloseSlots,
+  pushClosedTab,
+  snapshotConversationTab,
+} from "@/lib/closed-tab-stack"
 import type {
   AgentType,
   ConversationChange,
@@ -91,13 +105,15 @@ export interface TabItemInternal {
    */
   agentTypeProvisional?: boolean
   /**
-   * Marks a draft tab as "chat mode" (folderless). Set by `openChatModeTab`,
-   * cleared implicitly once the draft binds to a real conversation (whose hidden
-   * hidden chat folder then drives chat-mode chrome via `useIsActiveChatMode`).
-   * **Internal-only and never persisted** — drafts (`conversationId == null`) are
-   * not written to opened_tabs, so this flag only ever lives in memory for the
-   * pre-send draft. While set, the draft has no resolvable folder, so the
-   * composer hides the branch picker and shows the "no-folder" chip.
+   * Marks a tab as "chat mode" (folderless). Set by `openChatModeTab`. It
+   * survives the draft binding to its conversation (`bindConversationTab`
+   * spreads the tab), alongside the hidden chat folder that then also drives
+   * chat-mode chrome via `useIsActiveChatMode`; it is cleared when that
+   * conversation is moved into a project (`alignConversationTabFolders`).
+   * **Internal-only and never persisted** — opened_tabs does not carry it, so a
+   * tab restored from the server never has it. While set on a draft, the draft
+   * has no resolvable folder, so the composer hides the branch picker and shows
+   * the "no-folder" chip.
    */
   isChat?: boolean
 }
@@ -111,6 +127,24 @@ interface DraftRetargetRequest {
   workingDir: string
   agentType: AgentType
   provisional: boolean
+}
+
+/**
+ * What a "new conversation" open resolved to: the draft tab that ended up
+ * serving the request — the freshly created one, or the target group's existing
+ * draft it reused — and the identity that tab will be carrying once the open has
+ * fully settled.
+ *
+ * `agentType`/`folderId` are a PROMISE, not necessarily the tab's state right
+ * now: reusing a draft that belongs to another folder or agent retargets it
+ * asynchronously (see `consumeDraftRetargets`), so the tab only takes on this
+ * identity after its stale ACP session has been torn down. Callers that hand
+ * work to the tab must gate on it rather than acting the moment they get the id.
+ */
+export interface OpenedDraftTarget {
+  tabId: string
+  agentType: AgentType
+  folderId: number
 }
 
 /** i18n strings the store needs for seed titles, injected from `TabProvider`
@@ -143,6 +177,14 @@ export interface TabStoreState {
   groupOf: Record<string, string>
   groupSelection: Record<string, string>
   tileByGroup: Record<string, boolean>
+  /**
+   * The group state of every tab view not on screen, by view key. While tabs
+   * follow the folder each folder has its own view — its own split layout,
+   * assignments, selection and tile flags — and the normal-mode view waits
+   * here under "all"; the fields above always belong to the view on screen.
+   * Device-local and persisted with them (see `persistGroupState`).
+   */
+  groupViews: Record<string, GroupView>
   /**
    * Transient cross-group tab drag (never persisted): the dragged tab, the
    * live pointer position, and the FOREIGN group currently under the pointer
@@ -177,9 +219,22 @@ export interface TabStoreState {
     conversationId: number,
     agentType: AgentType,
     pin?: boolean,
-    title?: string
+    title?: string,
+    opts?: {
+      /** rawTabs slot for a tab that needs a NEW slot (clamped); omitted =
+       *  append. Reopening a closed tab passes the slot it was closed from. A
+       *  conversation that is already open is focused where it is, and a
+       *  preview still replaces the group's current preview in place. */
+      index?: number
+    }
   ) => void
-  closeTab: (tabId: string) => void
+  /**
+   * `recordForReopen: false` closes without offering the tab to
+   * `reopen_last_closed_tab`. Pass it whenever the tab is going away because
+   * its conversation no longer exists — resurrecting it would mint a tab (and
+   * an `opened_tabs` row) pointing at a deleted conversation.
+   */
+  closeTab: (tabId: string, options?: { recordForReopen?: boolean }) => void
   closeConversationTab: (
     folderId: number,
     conversationId: number,
@@ -223,9 +278,30 @@ export interface TabStoreState {
       inheritFromActive?: boolean
       folderDefaultAgent?: AgentType | null
       targetGroup?: string
+      /** Pin the draft to this agent, outranking BOTH the folder default and
+       *  the inherit/fallback chain. For callers that must reproduce a specific
+       *  agent (e.g. "ask about this selection" continues the conversation the
+       *  text came from), not merely suggest one. */
+      forceAgent?: AgentType
+      /** rawTabs slot for the draft (clamped); omitted = append / leave put.
+       *  Reopening a closed draft passes the slot it was closed from — and
+       *  since the per-group singleton may hand it the group's EXISTING draft
+       *  instead of a new tab, that draft is moved to the slot. */
+      index?: number
+      /** Move THIS unbound draft to the folder (the composer's folder picker)
+       *  rather than resolving the target group's draft. Matters while tabs
+       *  follow the folder, where the target folder may have a draft of its
+       *  own. */
+      retargetTabId?: string
     }
-  ) => void
-  openChatModeTab: (options?: { targetGroup?: string }) => void
+  ) => OpenedDraftTarget
+  openChatModeTab: (options?: {
+    targetGroup?: string
+    /** See `openNewConversationTab`'s `forceAgent`. */
+    forceAgent?: AgentType
+    /** See `openNewConversationTab`'s `retargetTabId`. */
+    retargetTabId?: string
+  }) => OpenedDraftTarget
   setChatDraftWorkingDir: (tabId: string, workingDir: string) => void
   confirmDraftAgent: (tabId: string, agentType: AgentType) => void
   setDraftAgentFromFallback: (tabId: string, agentType: AgentType) => void
@@ -379,23 +455,33 @@ function makeNewConversationTabId(): string {
   return `new-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
-/** Sync identity of a persisted tab — the canonical tab id, which is exactly the
- *  (folder, agent, conversation) triple the persisted row is keyed by. A bound
- *  draft keeps its volatile `new-*` id, so this is deliberately derived from the
+/** Identity of a conversation for tab sync: agent + conversation, deliberately
+ *  WITHOUT the folder. A conversation has one tab at most, and the folder is a
+ *  property of the conversation that can change under the tab (it was moved to
+ *  another project): keyed by folder, the three-way merge would read a moved
+ *  conversation's tab as "closed in one folder, opened in another" — and a
+ *  close this client hadn't pushed yet would come back as a remote open. */
+function conversationSyncKey(
+  agentType: AgentType,
+  conversationId: number
+): string {
+  return `${agentType}:${conversationId}`
+}
+
+/** Sync identity of a persisted tab (see `conversationSyncKey`). A bound draft
+ *  keeps its volatile `new-*` id, so this is deliberately derived from the
  *  fields rather than read off `tab.id`. Drafts have no sync identity (they are
  *  device-local and never persisted) → `null`. */
 function tabSyncKey(tab: TabItemInternal): string | null {
   if (tab.conversationId == null) return null
-  return makeConversationTabId(tab.folderId, tab.agentType, tab.conversationId)
+  return conversationSyncKey(tab.agentType, tab.conversationId)
 }
 
 function snapshotSyncKeys(items: OpenedTab[]): Set<string> {
   const keys = new Set<string>()
   for (const it of items) {
     if (it.conversation_id == null) continue
-    keys.add(
-      makeConversationTabId(it.folder_id, it.agent_type, it.conversation_id)
-    )
+    keys.add(conversationSyncKey(it.agent_type, it.conversation_id))
   }
   return keys
 }
@@ -415,6 +501,78 @@ function findTabIndexForConversation(
       t.conversationId === conversationId &&
       t.agentType === agentType
   )
+}
+
+/** A requested slot clamped to a strip of `length`. */
+function clampSlot(index: number, length: number): number {
+  return Math.max(0, Math.min(index, length))
+}
+
+/** `tabs` with `tab` inserted at `index`, clamped to the array, or appended
+ *  when no index is given. Reopening a closed tab passes the slot it was
+ *  closed from, so it goes back where it was rather than to the end. */
+function insertTab(
+  tabs: TabItemInternal[],
+  tab: TabItemInternal,
+  index: number | undefined
+): TabItemInternal[] {
+  const at = index == null ? tabs.length : clampSlot(index, tabs.length)
+  return [...tabs.slice(0, at), tab, ...tabs.slice(at)]
+}
+
+/** `tabs` with the tab already at `tabId` moved to `index` (clamped) — the same
+ *  array back when it is absent or already there, so callers can skip the write.
+ *  Reopening a closed DRAFT lands here: the per-group draft singleton hands the
+ *  reopen an existing draft instead of a new tab, and that draft still has to
+ *  take the closed one's slot. */
+function moveTabToSlot(
+  tabs: TabItemInternal[],
+  tabId: string,
+  index: number
+): TabItemInternal[] {
+  const from = tabs.findIndex((t) => t.id === tabId)
+  if (from < 0) return tabs
+  const without = tabs.filter((t) => t.id !== tabId)
+  if (clampSlot(index, without.length) === from) return tabs
+  return insertTab(without, tabs[from], index)
+}
+
+/**
+ * `raw` with the tabs sitting at `slots` rearranged into the order a reorder
+ * callback asked for, or `null` when that list is not a permutation of exactly
+ * those slots (and so must be ignored).
+ *
+ * A reorder callback is a request to MOVE tabs, never a new tab set. The
+ * distinction matters because `Reorder.Group` emits the order it has measured
+ * since its own last render and then drops, by reference, whatever is missing
+ * from its current `values` — so mid-drag it can legitimately hand back a list
+ * that is short, repeats an id, or carries a tab object from an earlier derive.
+ * Resolving every entry back to the live `rawTabs` item by id keeps a drag
+ * unable to close a tab, resurrect a closed one, or write a stale copy of a
+ * tab's fields over the current one (a draft that bound to a conversation
+ * mid-drag would otherwise go back to being an unbound draft).
+ */
+function permuteSlots(
+  raw: TabItemInternal[],
+  slots: number[],
+  orderedTabs: TabItem[]
+): TabItemInternal[] | null {
+  if (orderedTabs.length !== slots.length) return null
+  const slotIds = new Set(slots.map((i) => raw[i].id))
+  const seen = new Set<string>()
+  const ordered: TabItemInternal[] = []
+  for (const tab of orderedTabs) {
+    if (!slotIds.has(tab.id) || seen.has(tab.id)) return null
+    seen.add(tab.id)
+    const item = raw.find((t) => t.id === tab.id)
+    if (!item) return null
+    ordered.push(item)
+  }
+  const next = [...raw]
+  slots.forEach((slot, k) => {
+    next[slot] = ordered[k]
+  })
+  return next.every((tab, i) => tab === raw[i]) ? null : next
 }
 
 /** Field-wise equality for derived tab items. Backs the cross-derive reuse in
@@ -488,16 +646,67 @@ export function selectIsSplit(s: TabStoreState): boolean {
  * (mobile conversation→file pane switch, workbench route overlay), and those
  * must still disconnect — the idle sweep skips viewers, so a viewer left
  * attached leaks its subscription. Since group shells are flat siblings keyed
- * by group id, a surviving tab leaves its shell if and only if its group
- * assignment changed, which is exactly what this compares.
+ * by group id, a surviving tab leaves its shell if and only if its shell group
+ * (`shellGroupOfTab`) changed, which is exactly what this compares.
  */
 export function isReparentUnmount(
-  state: Pick<TabStoreState, "rawTabs" | "groupOf" | "groupLayout">,
+  state: GroupResolutionState,
   tabId: string,
   renderedGroupId: string
 ): boolean {
   if (!state.rawTabs.some((tab) => tab.id === tabId)) return false
-  return groupOfTab(state.groupOf, state.groupLayout, tabId) !== renderedGroupId
+  return shellGroupOfTab(state, tabId) !== renderedGroupId
+}
+
+/** The conversation view each tab has mounted: the group it rendered under and
+ *  the runtime session key it mounted on. Module scope rather than store state
+ *  because it tracks React mounts, which nothing renders from. */
+const mountedConversationViews = new Map<
+  string,
+  { groupId: string; runtimeConversationId: number }
+>()
+
+/** Record the conversation view `tabId` just mounted. The returned release
+ *  drops only its own entry, so it can never unregister a successor. */
+export function trackConversationView(
+  tabId: string,
+  groupId: string,
+  runtimeConversationId: number
+): () => void {
+  const entry = { groupId, runtimeConversationId }
+  mountedConversationViews.set(tabId, entry)
+  return () => {
+    if (mountedConversationViews.get(tabId) === entry) {
+      mountedConversationViews.delete(tabId)
+    }
+  }
+}
+
+/**
+ * Mount-side counterpart of `isReparentUnmount`: the runtime session key a
+ * conversation view arriving for `tabId` must inherit from the view it
+ * replaces, or null when a fresh key is right.
+ *
+ * React renders the arriving view BEFORE the departing one's cleanup runs, so
+ * at this view's first render its predecessor is still registered, and that
+ * cleanup is about to ask `isReparentUnmount` about its own group. This asks the
+ * same question first. Yes means the session is kept, and the arriving view has
+ * to carry on with it rather than key itself by the tab's row id — a tab that
+ * started as a draft keeps its transcript under a virtual key for good. No
+ * means the session is about to be removed (the desktop/mobile layout swap
+ * remounts every view in one commit without moving any), so inheriting it
+ * would strand the view on a key with nothing behind it; a virtual key never
+ * fetches.
+ */
+export function reparentedViewRuntimeConversationId(
+  state: GroupResolutionState,
+  tabId: string
+): number | null {
+  const predecessor = mountedConversationViews.get(tabId)
+  if (!predecessor) return null
+  return isReparentUnmount(state, tabId, predecessor.groupId)
+    ? predecessor.runtimeConversationId
+    : null
 }
 
 /** Where a new tab should land: the explicit target when it's a live group,
@@ -528,6 +737,27 @@ function sanitizeBoolRecord(value: unknown): Record<string, boolean> {
   if (typeof value !== "object" || value === null) return out
   for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
     if (typeof v === "boolean") out[k] = v
+  }
+  return out
+}
+
+/** The blob's folder views (written while tabs follow the folder), parked
+ *  until the mode is restored — or dropped if it comes back off. */
+function sanitizeGroupViews(value: unknown): Record<string, GroupView> {
+  const out: Record<string, GroupView> = {}
+  if (typeof value !== "object" || value === null) return out
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (!key.startsWith(FOLDER_GROUP_VIEW_PREFIX)) continue
+    if (typeof raw !== "object" || raw === null) continue
+    const view = raw as Record<string, unknown>
+    if (!isLayoutNode(view.layout)) continue
+    out[key] = {
+      layout: view.layout,
+      groupOf: sanitizeStringRecord(view.assignments),
+      selection: sanitizeStringRecord(view.selection),
+      tileByGroup: sanitizeBoolRecord(view.tileByGroup),
+      active: null,
+    }
   }
   return out
 }
@@ -596,6 +826,7 @@ function readPersistedGroupState(): {
   groupOf: Record<string, string>
   groupSelection: Record<string, string>
   tileByGroup: Record<string, boolean>
+  groupViews: Record<string, GroupView>
 } {
   pendingRestoreDrafts = []
   pendingRestoreActiveDraft = null
@@ -604,6 +835,7 @@ function readPersistedGroupState(): {
     groupOf: {} as Record<string, string>,
     groupSelection: {} as Record<string, string>,
     tileByGroup: {} as Record<string, boolean>,
+    groupViews: {} as Record<string, GroupView>,
   })
   if (typeof window === "undefined") return fallback()
   try {
@@ -620,6 +852,7 @@ function readPersistedGroupState(): {
           groupOf: sanitizeStringRecord(parsed.assignments),
           groupSelection: sanitizeStringRecord(parsed.selection),
           tileByGroup: sanitizeBoolRecord(parsed.tileByGroup),
+          groupViews: sanitizeGroupViews(parsed.views),
         }
       }
     }
@@ -645,14 +878,32 @@ function persistGroupState() {
   // hydration it is missing every conversation tab — writing either would
   // replace the good blob with a collapsed layout.
   if (!st.tabsHydrated || !tabsSnapshotLoaded) return
+  // The top level is always the normal-mode view, as a session with the mode
+  // off reads it; folder views (while tabs follow the folder, or parked from
+  // the last session until the stored mode is known) ride in `views`.
+  const views: Record<string, GroupView> = {
+    ...st.groupViews,
+    [groupViewKey(useFolderTabsStore.getState())]: groupViewOnScreen(st),
+  }
+  const normal = views[ALL_GROUP_VIEW] ?? groupViewOnScreen(st)
+  const canonicalId = (tab: TabItemInternal) =>
+    tab.conversationId != null
+      ? makeConversationTabId(tab.folderId, tab.agentType, tab.conversationId)
+      : tab.id
+  const canonicalSelection = (selection: Record<string, string>) => {
+    const out: Record<string, string> = {}
+    for (const [groupId, tabId] of Object.entries(selection)) {
+      const tab = st.rawTabs.find((t) => t.id === tabId)
+      if (tab) out[groupId] = canonicalId(tab)
+    }
+    return out
+  }
   const assignments: Record<string, string> = {}
   const drafts: PersistedDraft[] = []
   st.rawTabs.forEach((tab, index) => {
-    const group = groupOfTab(st.groupOf, st.groupLayout, tab.id)
+    const group = groupOfTab(normal.groupOf, normal.layout, tab.id)
     if (tab.conversationId != null) {
-      assignments[
-        makeConversationTabId(tab.folderId, tab.agentType, tab.conversationId)
-      ] = group
+      assignments[canonicalId(tab)] = group
       return
     }
     drafts.push({
@@ -669,26 +920,41 @@ function persistGroupState() {
       ...(tab.agentTypeProvisional ? {} : { agentType: tab.agentType }),
     })
   })
-  const selection: Record<string, string> = {}
-  for (const [groupId, tabId] of Object.entries(st.groupSelection)) {
-    const tab = st.rawTabs.find((t) => t.id === tabId)
-    if (!tab) continue
-    selection[groupId] =
-      tab.conversationId != null
-        ? makeConversationTabId(tab.folderId, tab.agentType, tab.conversationId)
-        : tab.id
+  // Each folder view lists only its own folder's tabs (drafts by their own
+  // ids — the draft entries above carry the normal-mode group). A folder with
+  // no tabs left has nothing to restore: it starts afresh like any new one.
+  const folderViews: Record<string, unknown> = {}
+  for (const [key, view] of Object.entries(views)) {
+    if (key === ALL_GROUP_VIEW) continue
+    const viewAssignments: Record<string, string> = {}
+    for (const tab of st.rawTabs) {
+      if (folderGroupViewKey(tab) !== key) continue
+      viewAssignments[canonicalId(tab)] = groupOfTab(
+        view.groupOf,
+        view.layout,
+        tab.id
+      )
+    }
+    if (Object.keys(viewAssignments).length === 0) continue
+    folderViews[key] = {
+      layout: view.layout,
+      assignments: viewAssignments,
+      selection: canonicalSelection(view.selection),
+      tileByGroup: view.tileByGroup,
+    }
   }
   const activeTab = st.rawTabs.find((t) => t.id === st.activeTabId)
   const blob = JSON.stringify({
-    layout: st.groupLayout,
+    layout: normal.layout,
     assignments,
-    selection,
-    tileByGroup: st.tileByGroup,
+    selection: canonicalSelection(normal.selection),
+    tileByGroup: normal.tileByGroup,
     drafts,
     // Only a DRAFT focus needs restoring here; conversation focus rides the
     // synced `opened_tabs.is_active`.
     activeDraft:
       activeTab && activeTab.conversationId == null ? activeTab.id : null,
+    ...(Object.keys(folderViews).length > 0 ? { views: folderViews } : {}),
   })
   if (blob === lastGroupBlob) return
   lastGroupBlob = blob
@@ -763,9 +1029,157 @@ function shallowRecordEqual(
   return ak.every((k) => a[k] === (b as Record<string, unknown>)[k])
 }
 
+/** View filtering is deliberately separate from rawTabs and the CAS payload. */
+export function isTabInScope(tab: Pick<TabItem, "folderId">) {
+  const state = useFolderTabsStore.getState()
+  return !state.enabled || folderScope(tab.folderId) === state.scope
+}
+
+export function useVisibleConversationTabs() {
+  const enabled = useFolderTabsStore((s) => s.enabled)
+  const scope = useFolderTabsStore((s) => s.scope)
+  return useTabStore(
+    useShallow((s) =>
+      enabled
+        ? s.tabs.filter((tab) => folderScope(tab.folderId) === scope)
+        : s.tabs
+    )
+  )
+}
+
+/** The on-screen view's layout. While tabs follow the folder that is the
+ *  folder's own layout, already narrowed to its tabs once the tab set is
+ *  known; narrowing here as well covers the moments before that. */
+export function useVisibleConversationLayout() {
+  const enabled = useFolderTabsStore((s) => s.enabled)
+  const tabs = useVisibleConversationTabs()
+  const layout = useTabStore((s) => s.groupLayout)
+  const groupOf = useTabStore((s) => s.groupOf)
+  return useMemo(
+    () =>
+      enabled
+        ? normalizeTree(
+            layout,
+            new Set(tabs.map((tab) => groupOfTab(groupOf, layout, tab.id)))
+          )
+        : layout,
+    [enabled, tabs, groupOf, layout]
+  )
+}
+
 /**
- * Re-establish the group invariants after any tab/group write:
- *   1. assignments only for open tabs, pointing at live leaves;
+ * Split-group state of a tab view that is not on screen. A view is the tabs
+ * one layout arranges: every tab in normal mode, or one folder's while tabs
+ * follow the folder — so splitting, resizing or unsplitting in one folder
+ * leaves every other folder's layout alone. The view on screen lives in the
+ * store's own group fields; a switch parks it here and loads the next one.
+ */
+export interface GroupView {
+  layout: LayoutNode
+  groupOf: Record<string, string>
+  selection: Record<string, string>
+  tileByGroup: Record<string, boolean>
+  /** Its active tab when it was left, offered back on a folder switch. */
+  active: string | null
+}
+
+/** Key of the normal-mode view (parked while tabs follow the folder). */
+const ALL_GROUP_VIEW = "all"
+const FOLDER_GROUP_VIEW_PREFIX = "scope:"
+
+function groupViewKey(state: { enabled: boolean; scope: TabScope }): string {
+  return state.enabled
+    ? `${FOLDER_GROUP_VIEW_PREFIX}${state.scope}`
+    : ALL_GROUP_VIEW
+}
+
+/** The folder view a tab belongs to while tabs follow the folder. */
+function folderGroupViewKey(tab: Pick<TabItem, "folderId">): string {
+  return `${FOLDER_GROUP_VIEW_PREFIX}${folderScope(tab.folderId)}`
+}
+
+function groupViewOnScreen(st: TabStoreState): GroupView {
+  return {
+    layout: st.groupLayout,
+    groupOf: st.groupOf,
+    selection: st.groupSelection,
+    tileByGroup: st.tileByGroup,
+    active: st.activeTabId,
+  }
+}
+
+type GroupResolutionState = Pick<
+  TabStoreState,
+  "rawTabs" | "groupOf" | "groupLayout"
+> &
+  Partial<Pick<TabStoreState, "groupViews">>
+
+/** What a tab's group resolves against: the view on screen for a tab it
+ *  shows, else the tab's own folder view — parked, or not built yet and so
+ *  still the normal-mode one it will be narrowed from. */
+function groupViewOfTab(
+  state: GroupResolutionState,
+  tab: Pick<TabItem, "folderId">
+): Pick<GroupView, "groupOf" | "layout"> {
+  const onScreen = { groupOf: state.groupOf, layout: state.groupLayout }
+  if (isTabInScope(tab)) return onScreen
+  const views = state.groupViews ?? {}
+  return views[folderGroupViewKey(tab)] ?? views[ALL_GROUP_VIEW] ?? onScreen
+}
+
+/**
+ * The group shell a tab's conversation view renders in, whichever view is on
+ * screen. A hidden tab stays in its own view's group, so switching folders
+ * never moves a live conversation to another shell (which would remount it).
+ */
+export function shellGroupOfTab(
+  state: GroupResolutionState,
+  tabId: string
+): string {
+  const tab = state.rawTabs.find((t) => t.id === tabId)
+  const view = tab
+    ? groupViewOfTab(state, tab)
+    : { groupOf: state.groupOf, layout: state.groupLayout }
+  return groupOfTab(view.groupOf, view.layout, tabId)
+}
+
+/**
+ * A folder's first view: the normal-mode arrangement narrowed to the folder's
+ * tabs, keeping the group ids, so turning the mode on moves no tab. Until the
+ * tab set is known nothing is narrowed — the conversations not loaded yet
+ * still need their assignments — and the invariant pass narrows the copy once
+ * the set arrives.
+ */
+function projectGroupView(
+  base: GroupView,
+  tabs: TabItemInternal[],
+  tabSetKnown: boolean
+): GroupView {
+  if (!tabSetKnown) return { ...base, active: null }
+  const groupOf: Record<string, string> = {}
+  const live = new Set<string>()
+  for (const tab of tabs) {
+    const group = groupOfTab(base.groupOf, base.layout, tab.id)
+    live.add(group)
+    if (base.groupOf[tab.id] === group) groupOf[tab.id] = group
+  }
+  const layout = normalizeTree(base.layout, live)
+  const leaves = new Set(leafIds(layout))
+  const selection: Record<string, string> = {}
+  for (const [groupId, tabId] of Object.entries(base.selection)) {
+    if (leaves.has(groupId)) selection[groupId] = tabId
+  }
+  const tileByGroup: Record<string, boolean> = {}
+  for (const [groupId, tiled] of Object.entries(base.tileByGroup)) {
+    if (leaves.has(groupId)) tileByGroup[groupId] = tiled
+  }
+  return { layout, groupOf, selection, tileByGroup, active: null }
+}
+
+/**
+ * Re-establish the group invariants of the view on screen after any tab/group
+ * write (parked views are repaired when they are loaded):
+ *   1. assignments only for the view's open tabs, pointing at live leaves;
  *   2. every leaf has ≥ 1 tab (normalizeTree collapses the rest);
  *   3. each group's selection is one of its members, and the focused group's
  *      selection IS the active tab;
@@ -778,7 +1192,19 @@ function shallowRecordEqual(
  */
 function applyGroupInvariants() {
   const st = useTabStore.getState()
+  const visibleTabs = st.rawTabs.filter(isTabInScope)
+  if (
+    useFolderTabsStore.getState().enabled &&
+    st.activeTabId != null &&
+    !visibleTabs.some((t) => t.id === st.activeTabId)
+  ) {
+    useTabStore.setState({ activeTabId: visibleTabs[0]?.id ?? null })
+    applyGroupInvariants()
+    return
+  }
   const openIds = new Set(st.rawTabs.map((t) => t.id))
+  // The view's own tabs: all of them in normal mode, the folder's otherwise.
+  const viewIds = new Set(visibleTabs.map((t) => t.id))
   const tabSetKnown = st.tabsHydrated && tabsSnapshotLoaded
 
   let groupOf = st.groupOf
@@ -788,7 +1214,7 @@ function applyGroupInvariants() {
     let pruned: Record<string, string> | null = null
     const layoutLeaves = new Set(leafIds(layout))
     for (const [tabId, groupId] of Object.entries(groupOf)) {
-      if (!openIds.has(tabId) || !layoutLeaves.has(groupId)) {
+      if (!viewIds.has(tabId) || !layoutLeaves.has(groupId)) {
         pruned = pruned ?? { ...groupOf }
         delete pruned[tabId]
       }
@@ -797,7 +1223,7 @@ function applyGroupInvariants() {
 
     const firstLeaf = firstLeafId(layout)
     const liveGroups = new Set<string>()
-    for (const tab of st.rawTabs) {
+    for (const tab of visibleTabs) {
       liveGroups.add(groupOf[tab.id] ?? firstLeaf)
     }
     layout = normalizeTree(layout, liveGroups)
@@ -825,7 +1251,7 @@ function applyGroupInvariants() {
 
   const selection: Record<string, string> = {}
   for (const groupId of leaves) {
-    const members = st.rawTabs.filter(
+    const members = visibleTabs.filter(
       (t) => groupOfTab(groupOf, layout, t.id) === groupId
     )
     if (members.length === 0) {
@@ -885,13 +1311,201 @@ function focusTab(tabId: string) {
   applyGroupInvariants()
 }
 
+/** A draft holding nothing to lose: no saved text, and its composer reports
+ *  no unsaved typing or image attachment either. */
+function isBlankDraft(tab: TabItemInternal): boolean {
+  if (tab.conversationId != null) return false
+  const key = buildNewConversationDraftStorageKey(tab.id)
+  return loadMessageInputDraftV2(key) == null && !hasLiveComposerContent(key)
+}
+
+/**
+ * One draft per group: close the blank drafts that share a group with
+ * `keepId` in its own folder view (parked or on screen). While tabs follow
+ * the folder, a draft moved into a folder can land beside that folder's own
+ * draft; the moved one is what the user is typing in, so it stays. A draft
+ * with content is kept too — two drafts beat a lost prompt — and so is the
+ * one on screen, which the user may have just switched to.
+ */
+function closeBlankDraftsBeside(keepId: string) {
+  const st = useTabStore.getState()
+  const kept = st.rawTabs.find((t) => t.id === keepId)
+  if (!kept || kept.conversationId != null) return
+  const scope = folderScope(kept.folderId)
+  const group = shellGroupOfTab(st, keepId)
+  for (const tab of st.rawTabs) {
+    if (
+      tab.id !== keepId &&
+      tab.id !== st.activeTabId &&
+      isBlankDraft(tab) &&
+      folderScope(tab.folderId) === scope &&
+      shellGroupOfTab(st, tab.id) === group
+    ) {
+      useTabStore.getState().closeTab(tab.id, { recordForReopen: false })
+    }
+  }
+}
+
+/**
+ * Turning the mode off puts every folder's drafts back in one layout, where a
+ * group carries one draft: per group keep the active draft, else one with
+ * content, else the first, and close the other blank ones (never one with
+ * content).
+ */
+function closeBlankDraftsPerGroup() {
+  const st = useTabStore.getState()
+  const draftsByGroup = new Map<string, TabItemInternal[]>()
+  for (const tab of st.rawTabs) {
+    if (tab.conversationId != null) continue
+    const group = groupOfTab(st.groupOf, st.groupLayout, tab.id)
+    draftsByGroup.set(group, [...(draftsByGroup.get(group) ?? []), tab])
+  }
+  for (const drafts of draftsByGroup.values()) {
+    if (drafts.length < 2) continue
+    const keep =
+      drafts.find((draft) => draft.id === st.activeTabId) ??
+      drafts.find((draft) => !isBlankDraft(draft)) ??
+      drafts[0]
+    for (const draft of drafts) {
+      if (draft !== keep && isBlankDraft(draft)) {
+        useTabStore.getState().closeTab(draft.id, { recordForReopen: false })
+      }
+    }
+  }
+}
+
 /**
  * Recompute the decorated `tabs` from `rawTabs` × `conversations` ×
  * `childSummaries`, reusing prior-derive references so an update touching no open
  * tab keeps the array identity stable (no consumer re-render). Called after every
  * rawTabs/childSummaries write, on `conversations` change, and when labels change.
  */
+/**
+ * The conversation row a tab of `conversationId` shows, when this client knows
+ * it: a root from the sidebar list, or a sub-session's seeded summary.
+ */
+function knownConversationRow(
+  conversationId: number,
+  agentType: AgentType
+): DbConversationSummary | undefined {
+  const root = useAppWorkspaceStore
+    .getState()
+    .conversations.find((c) => c.id === conversationId)
+  const row = root ?? useTabStore.getState().childSummaries.get(conversationId)
+  return row && row.agent_type === agentType ? row : undefined
+}
+
+/**
+ * The folder a conversation tab must be opened in: the folder its row is in
+ * NOW when this client knows the row, else the one the caller named. Callers
+ * often carry a folder id from an older snapshot — an automation run's
+ * worktree, the closed-tab stack — and a conversation may have been moved to
+ * another project since.
+ */
+function canonicalConversationFolder(
+  folderId: number,
+  conversationId: number,
+  agentType: AgentType
+): number {
+  return knownConversationRow(conversationId, agentType)?.folder_id ?? folderId
+}
+
+/**
+ * Invariant: a conversation tab lives in the folder its conversation row is in.
+ *
+ * The tab's folder is where the agent works (its connection's cwd is the
+ * folder's path) and part of the tab's sync key, so a conversation moved to
+ * another project — from this client, another one, or while this one was
+ * offline — must take its open tabs along. Run on every derive, so it covers a
+ * row upsert, the full refetch after a reconnect, an applied remote snapshot
+ * (including a rejected save's reconcile) and hydration alike. Each tab is
+ * re-pointed in place: same id, position, pin, group and focus; its working
+ * dir is dropped so the connection re-derives it from the new folder (the
+ * connection lifecycle reconnects on a working-dir change). A bound chat tab
+ * whose row has become a regular project conversation also leaves chat mode.
+ * A second tab for the same conversation goes.
+ *
+ * Tabs whose row this client doesn't know are left alone, and so are drafts;
+ * nothing moves while the conversation list is being refetched.
+ * The three-way merge in `applyRemoteSnapshot` keys tabs by conversation, not
+ * folder (`conversationSyncKey`), so a re-pointed tab is the same tab to it
+ * whether or not the server has re-pointed its own copy yet, and a close this
+ * client has not pushed yet survives a move made elsewhere. A worktree removal
+ * closes its tabs on the server before the conversations are refetched, so
+ * nothing is "rescued" here.
+ */
+function alignConversationTabFolders() {
+  const st = useTabStore.getState()
+  const { conversations, conversationsLoading, allFolders } =
+    useAppWorkspaceStore.getState()
+  // Mid-refetch the rows may be older than the tab set — after a reconnect the
+  // tab snapshot can land first, already showing a move this list predates —
+  // and pointing tabs back at a stale folder would push that back to the
+  // server. Wait for the refetch; its settling re-runs the derive.
+  if (conversationsLoading) return
+  if (conversations.length === 0 && st.childSummaries.size === 0) return
+  if (!st.rawTabs.some((t) => t.conversationId != null)) return
+  // Runs on every derive (status ticks included): one pass over the list, not
+  // one per tab.
+  const roots = new Map(conversations.map((c) => [c.id, c]))
+  const rowOf = (tab: TabItemInternal) => {
+    const id = tab.conversationId as number
+    const row = roots.get(id) ?? st.childSummaries.get(id)
+    return row && row.agent_type === tab.agentType ? row : undefined
+  }
+  let changed = false
+  let activeTabId = st.activeTabId
+  const next: TabItemInternal[] = []
+  const keys = new Set<string>()
+  for (const tab of st.rawTabs) {
+    let item = tab
+    if (tab.conversationId != null) {
+      const row = rowOf(tab)
+      if (row) {
+        const rowFolderKind = allFolders.find(
+          (f) => f.id === row.folder_id
+        )?.kind
+        const leavesChat =
+          tab.isChat === true &&
+          row.kind !== "chat" &&
+          rowFolderKind != null &&
+          rowFolderKind !== "chat"
+        if (row.folder_id !== tab.folderId || leavesChat) {
+          item = {
+            ...tab,
+            folderId: row.folder_id,
+            ...(row.folder_id !== tab.folderId
+              ? { workingDir: undefined }
+              : {}),
+            ...(leavesChat ? { isChat: false } : {}),
+          }
+          changed = true
+        }
+      }
+      const key = tabSyncKey(item)
+      if (key != null) {
+        if (keys.has(key)) {
+          // The conversation is already open in another tab: keep that one.
+          const kept = next.find((t) => tabSyncKey(t) === key)
+          if (activeTabId === tab.id) activeTabId = kept?.id ?? null
+          changed = true
+          continue
+        }
+        keys.add(key)
+      }
+    }
+    next.push(item)
+  }
+  if (!changed) return
+  // A remote apply may have armed the echo guard for the set it just
+  // committed; this correction is ours and has to be pushed.
+  applyingRemote = false
+  lastSavedPayload = null
+  useTabStore.setState({ rawTabs: next, activeTabId })
+}
+
 function recomputeTabs() {
+  alignConversationTabFolders()
   const st = useTabStore.getState()
   const { rawTabs, childSummaries } = st
   const conversations = useAppWorkspaceStore.getState().conversations
@@ -1026,7 +1640,20 @@ function initialTabState() {
 export const useTabStore = create<TabStoreState>()((set, get) => ({
   ...initialTabState(),
 
-  openTab: (folderId, conversationId, agentType, pin = false, title) => {
+  openTab: (
+    requestedFolderId,
+    conversationId,
+    agentType,
+    pin = false,
+    title,
+    opts
+  ) => {
+    const folderId = canonicalConversationFolder(
+      requestedFolderId,
+      conversationId,
+      agentType
+    )
+    useFolderTabsStore.getState().activateScope(folderScope(folderId))
     const prevState = get()
     const existingIndex = findTabIndexForConversation(
       prevState.rawTabs,
@@ -1082,7 +1709,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
 
     if (pin) {
       set({
-        rawTabs: [...prevState.rawTabs, newTab],
+        rawTabs: insertTab(prevState.rawTabs, newTab, opts?.index),
         activeTabId: tabId,
         groupOf: { ...prevState.groupOf, [tabId]: targetGroup },
       })
@@ -1092,10 +1719,11 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     }
 
     // Preview replacement stays within the focused group — a preview parked in
-    // another group is left alone (the new tab appends instead).
+    // another group is left alone (the new tab gets a slot of its own instead).
     const previewIndex = prevState.rawTabs.findIndex(
       (t) =>
         !t.isPinned &&
+        isTabInScope(t) &&
         groupOfTab(prevState.groupOf, prevState.groupLayout, t.id) ===
           targetGroup
     )
@@ -1118,7 +1746,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     }
 
     set({
-      rawTabs: [...prevState.rawTabs, newTab],
+      rawTabs: insertTab(prevState.rawTabs, newTab, opts?.index),
       activeTabId: tabId,
       groupOf: { ...prevState.groupOf, [tabId]: targetGroup },
     })
@@ -1126,13 +1754,16 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     runtime.activateConversationPane()
   },
 
-  closeTab: (tabId) => {
+  closeTab: (tabId, options) => {
     const shouldActivateConversation = tabId === get().activeTabId
 
     const prevState = get()
     const index = prevState.rawTabs.findIndex((t) => t.id === tabId)
     if (index >= 0) {
       const closingTab = prevState.rawTabs[index]
+      if (options?.recordForReopen !== false) {
+        pushClosedTab(snapshotConversationTab(closingTab, index))
+      }
       const next = prevState.rawTabs.filter((t) => t.id !== tabId)
       // A closing draft's composer text is scoped to that tab's key. Drop it —
       // unless this close spawns the replacement draft, which continues the same
@@ -1141,10 +1772,17 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
         closingTab.conversationId == null
           ? buildNewConversationDraftStorageKey(closingTab.id)
           : null
+      // An "ask about this selection" prompt parked for this tab has no panel
+      // left to drain it. Drop it rather than leave it in the module buffer for
+      // the rest of the session — the tab id is never reused, so it could only
+      // sit there.
+      discardAskSelectionPrompts(closingTab.id)
 
       let draftKeyHandedOver = false
 
-      if (next.length === 0) {
+      if (useFolderTabsStore.getState().enabled && !next.some(isTabInScope)) {
+        set({ rawTabs: next, activeTabId: null })
+      } else if (next.length === 0) {
         if (useAppWorkspaceStore.getState().folders.length === 0) {
           set({ rawTabs: [], activeTabId: null })
         } else {
@@ -1160,10 +1798,16 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
         }
       } else if (tabId === prevState.activeTabId) {
         // Pick the neighbor within the closed tab's group; when the group
-        // emptied, fall to the neighboring group's selected tab.
+        // emptied, fall to the neighboring group's selected tab. While tabs
+        // follow the folder only the folder's tabs and groups count: a hidden
+        // neighbor would be replaced by the folder's first tab. (The layout is
+        // the folder's own, narrowed to its tabs once the tab set is known —
+        // narrowed here too for the moments before.)
         const { groupOf, groupLayout, groupSelection } = prevState
+        const followsFolder = useFolderTabsStore.getState().enabled
         const closedGroup = groupOfTab(groupOf, groupLayout, tabId)
         const inGroup = (t: TabItemInternal) =>
+          isTabInScope(t) &&
           groupOfTab(groupOf, groupLayout, t.id) === closedGroup
         const indexInGroup = prevState.rawTabs
           .filter(inGroup)
@@ -1174,15 +1818,25 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
           newActiveId =
             groupAfter[Math.min(indexInGroup, groupAfter.length - 1)].id
         } else {
-          const neighbor = neighborGroupId(groupLayout, closedGroup)
+          const layout = followsFolder
+            ? normalizeTree(
+                groupLayout,
+                new Set(
+                  prevState.rawTabs
+                    .filter(isTabInScope)
+                    .map((t) => groupOfTab(groupOf, groupLayout, t.id))
+                )
+              )
+            : groupLayout
+          const neighbor = neighborGroupId(layout, closedGroup)
           const neighborSelection = neighbor
             ? groupSelection[neighbor]
             : undefined
           newActiveId =
             neighborSelection != null &&
-            next.some((t) => t.id === neighborSelection)
+            next.some((t) => t.id === neighborSelection && isTabInScope(t))
               ? neighborSelection
-              : next[0].id
+              : (next.find(isTabInScope) ?? next[0]).id
         }
         set({ rawTabs: next, activeTabId: newActiveId })
       } else {
@@ -1207,7 +1861,9 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
         tab.agentType === agentType
     )
     if (!target) return
-    get().closeTab(target.id)
+    // Every caller reaches here right after `deleteConversation` — the row is
+    // gone, so the tab must not be offered back by "reopen closed tab".
+    get().closeTab(target.id, { recordForReopen: false })
   },
 
   closeOtherTabs: (tabId) => {
@@ -1220,10 +1876,13 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     const targetGroup = groupOfTab(groupOf, groupLayout, tabId)
     const keep =
       groupLayout.type === "group"
-        ? [target]
+        ? prevState.rawTabs.filter(
+            (tab) => tab.id === tabId || !isTabInScope(tab)
+          )
         : prevState.rawTabs.filter(
             (tab) =>
               tab.id === tabId ||
+              !isTabInScope(tab) ||
               groupOfTab(groupOf, groupLayout, tab.id) !== targetGroup
           )
     if (keep.length === prevState.rawTabs.length) {
@@ -1231,15 +1890,38 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       focusTab(tabId)
       return
     }
+    const keepIds = new Set(keep.map((tab) => tab.id))
+    const closing = batchCloseSlots(
+      prevState.rawTabs,
+      (tab) => !keepIds.has(tab.id)
+    )
+    for (const [tab, slot] of closing) {
+      pushClosedTab(snapshotConversationTab(tab, slot))
+    }
     set({ rawTabs: keep, activeTabId: tabId })
     recomputeTabs()
   },
 
   closeAllTabs: () => {
+    if (useFolderTabsStore.getState().enabled) {
+      const st = get()
+      for (const [tab, slot] of batchCloseSlots(st.rawTabs, isTabInScope)) {
+        pushClosedTab(snapshotConversationTab(tab, slot))
+      }
+      set({
+        rawTabs: st.rawTabs.filter((tab) => !isTabInScope(tab)),
+        activeTabId: null,
+      })
+      recomputeTabs()
+      return
+    }
     if (useAppWorkspaceStore.getState().folders.length === 0) {
       const prevState = get()
       if (prevState.rawTabs.length === 0 && prevState.activeTabId == null) {
         return
+      }
+      for (const [tab, slot] of batchCloseSlots(prevState.rawTabs)) {
+        pushClosedTab(snapshotConversationTab(tab, slot))
       }
       set({ rawTabs: [], activeTabId: null })
       recomputeTabs()
@@ -1252,6 +1934,9 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       prevState.rawTabs.find((t) => t.id === prevState.activeTabId) ??
       prevState.rawTabs[0]
     const replacementTab = makeReplacementDraftTab(seedTab)
+    for (const [tab, slot] of batchCloseSlots(prevState.rawTabs)) {
+      pushClosedTab(snapshotConversationTab(tab, slot))
+    }
     set({ rawTabs: [replacementTab], activeTabId: replacementTab.id })
     recomputeTabs()
     runtime.activateConversationPane()
@@ -1261,6 +1946,9 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     const prevState = get()
     const remaining = prevState.rawTabs.filter((t) => t.folderId !== folderId)
     if (remaining.length === prevState.rawTabs.length) return
+    // Deliberately not recorded for reopen: this runs when the folder itself
+    // stops existing (a removed worktree, or the sidebar's "remove folder"),
+    // so every tab it drops points at a cwd that is gone.
 
     const currentActive = prevState.activeTabId
     const stillActive =
@@ -1275,6 +1963,8 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
 
   switchTab: (tabId) => {
     if (!get().rawTabs.some((t) => t.id === tabId)) return
+    const tab = get().rawTabs.find((t) => t.id === tabId)!
+    useFolderTabsStore.getState().activateScope(folderScope(tab.folderId))
     focusTab(tabId)
     runtime.activateConversationPane()
   },
@@ -1311,7 +2001,9 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       if (tab.conversationId == null) return
       // Moving the group's only tab would just shift the group — pointless.
       const groupSize = st.rawTabs.filter(
-        (t) => groupOfTab(st.groupOf, st.groupLayout, t.id) === sourceGroup
+        (t) =>
+          isTabInScope(t) &&
+          groupOfTab(st.groupOf, st.groupLayout, t.id) === sourceGroup
       ).length
       if (groupSize < 2) return
       const newGroupId = makeGroupId()
@@ -1421,14 +2113,18 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     }
 
     // Drag drop: land at `index` within the target group. Splice the tab out,
-    // then insert it before the target group's k-th member (after its last
-    // member when k = member count) — a partition insert, so every OTHER
-    // group's relative order is untouched. rawTabs order changes, which
+    // then insert it before the target group's k-th visible member (after
+    // its last visible member when k = member count). Hidden members do not
+    // have drop slots. This partition insert preserves every OTHER
+    // group's relative order. rawTabs order changes, which
     // syncs like any user reorder.
     const without = st.rawTabs.filter((t) => t.id !== tabId)
     const memberSlots: number[] = []
     without.forEach((t, i) => {
-      if (groupOfTab(st.groupOf, st.groupLayout, t.id) === targetGroupId) {
+      if (
+        groupOfTab(st.groupOf, st.groupLayout, t.id) === targetGroupId &&
+        isTabInScope(t)
+      ) {
         memberSlots.push(i)
       }
     })
@@ -1487,7 +2183,10 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     if (!target) return
     const groupOf = { ...st.groupOf }
     for (const tab of st.rawTabs) {
-      if (groupOfTab(st.groupOf, st.groupLayout, tab.id) === groupId) {
+      if (
+        isTabInScope(tab) &&
+        groupOfTab(st.groupOf, st.groupLayout, tab.id) === groupId
+      ) {
         groupOf[tab.id] = target
       }
     }
@@ -1499,7 +2198,8 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     const st = get()
     if (st.groupLayout.type === "group") return
     // Everyone falls back to the (kept) first leaf; rawTabs order is already
-    // the merged display order, so the synced payload doesn't change.
+    // the merged display order, so the synced payload doesn't change. Only
+    // the view on screen unsplits: its assignments are its own.
     set({
       groupLayout: singleGroupLayout(firstLeafId(st.groupLayout)),
       groupOf: {},
@@ -1512,28 +2212,17 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     const raw = st.rawTabs
     const slots: number[] = []
     raw.forEach((tab, i) => {
-      if (groupOfTab(st.groupOf, st.groupLayout, tab.id) === groupId) {
+      if (
+        isTabInScope(tab) &&
+        groupOfTab(st.groupOf, st.groupLayout, tab.id) === groupId
+      ) {
         slots.push(i)
       }
     })
-    if (orderedTabs.length !== slots.length) return
-    const slotIds = new Set(slots.map((i) => raw[i].id))
-    const seen = new Set<string>()
-    const ordered: TabItemInternal[] = []
-    for (const tab of orderedTabs) {
-      if (!slotIds.has(tab.id) || seen.has(tab.id)) return
-      seen.add(tab.id)
-      const item = raw.find((t) => t.id === tab.id)
-      if (!item) return
-      ordered.push(item)
-    }
     // Partition permutation: only this group's slots move, so the other
     // groups' persisted positions stay byte-stable.
-    const next = [...raw]
-    slots.forEach((slot, k) => {
-      next[slot] = ordered[k]
-    })
-    if (next.every((tab, i) => tab === raw[i])) return
+    const next = permuteSlots(raw, slots, orderedTabs)
+    if (!next) return
     set({ rawTabs: next })
     recomputeTabs()
   },
@@ -1552,7 +2241,16 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
   },
 
   reorderTabs: (reorderedTabs) => {
-    set({ rawTabs: reorderedTabs })
+    // The unsplit strip shows every tab, so its slots are the whole array —
+    // otherwise identical to a group reorder, guards included.
+    const raw = get().rawTabs
+    const next = permuteSlots(
+      raw,
+      raw.flatMap((tab, i) => (isTabInScope(tab) ? [i] : [])),
+      reorderedTabs
+    )
+    if (!next) return
+    set({ rawTabs: next })
     recomputeTabs()
   },
 
@@ -1565,13 +2263,17 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       useAppWorkspaceStore.getState().allFolders.find((f) => f.id === folderId)
         ?.kind === "chat"
     ) {
-      get().openChatModeTab(
-        options?.targetGroup != null
+      return get().openChatModeTab({
+        ...(options?.targetGroup != null
           ? { targetGroup: options.targetGroup }
-          : undefined
-      )
-      return
+          : {}),
+        ...(options?.forceAgent != null
+          ? { forceAgent: options.forceAgent }
+          : {}),
+      })
     }
+    // Read before any folder scope switch: "inherit from active" means the
+    // tab the user is on, not whatever the target folder had selected.
     const inheritFromActive = options?.inheritFromActive === true
     let inherit: AgentType | null = null
     if (inheritFromActive) {
@@ -1584,23 +2286,45 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
         inherit = activeTab.agentType
       }
     }
-    const { agentType: targetAgent, provisional } = resolveAgentForFolder(
-      folderId,
-      inherit,
-      options?.folderDefaultAgent
-    )
+    // A draft MOVED to this folder (the composer's folder picker) stays the
+    // same tab, so its composer and typed prompt come along. While tabs
+    // follow the folder it keeps its scope until the queued retarget lands
+    // and the scope follows it (`consumeDraftRetargets`); switching first
+    // would hide it and hand the user the target folder's own draft instead.
+    const movingDraft =
+      options?.retargetTabId != null
+        ? get().rawTabs.find(
+            (t) => t.id === options.retargetTabId && t.conversationId == null
+          )
+        : undefined
+    if (!movingDraft) {
+      useFolderTabsStore.getState().activateScope(folderScope(folderId))
+    }
+    // A forced agent short-circuits resolution entirely (it outranks the folder
+    // default, which `inherit` would lose to) and is never provisional — it is
+    // explicit caller intent, not a guess to be corrected once the agent list
+    // goes fresh.
+    const { agentType: targetAgent, provisional } =
+      options?.forceAgent != null
+        ? { agentType: options.forceAgent, provisional: false }
+        : resolveAgentForFolder(folderId, inherit, options?.folderDefaultAgent)
 
     const tabId = makeNewConversationTabId()
     const prevState = get()
     // Per-group draft singleton: reuse the target group's existing draft tab
     // (regardless of folder), so each group carries at most one draft.
-    const targetGroup = resolveTargetGroup(prevState, options?.targetGroup)
-    const existingTab = prevState.rawTabs.find(
-      (t) =>
-        t.conversationId == null &&
-        groupOfTab(prevState.groupOf, prevState.groupLayout, t.id) ===
-          targetGroup
-    )
+    const targetGroup = movingDraft
+      ? groupOfTab(prevState.groupOf, prevState.groupLayout, movingDraft.id)
+      : resolveTargetGroup(prevState, options?.targetGroup)
+    const existingTab =
+      movingDraft ??
+      prevState.rawTabs.find(
+        (t) =>
+          t.conversationId == null &&
+          isTabInScope(t) &&
+          groupOfTab(prevState.groupOf, prevState.groupLayout, t.id) ===
+            targetGroup
+      )
 
     if (!existingTab) {
       const newTab: TabItemInternal = {
@@ -1615,13 +2339,13 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
         agentTypeProvisional: provisional,
       }
       set({
-        rawTabs: [...prevState.rawTabs, newTab],
+        rawTabs: insertTab(prevState.rawTabs, newTab, options?.index),
         activeTabId: tabId,
         groupOf: { ...prevState.groupOf, [tabId]: targetGroup },
       })
       recomputeTabs()
       runtime.activateConversationPane()
-      return
+      return { tabId, agentType: targetAgent, folderId }
     }
 
     const folderChanged = existingTab.folderId !== folderId
@@ -1630,8 +2354,20 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     const provisionalChanged =
       (existingTab.agentTypeProvisional ?? false) !== provisional
 
+    // The singleton means a reopened draft resolves to THIS draft rather than a
+    // tab of its own, so the slot it was closed from has to move this one — a
+    // close-all walked back would otherwise leave the draft shunted to the end
+    // of the strip it is meant to rebuild. Only the reopen path passes an
+    // index, and drafts never reach `buildPersistItems`, so no save fires.
+    const nextRawTabs =
+      options?.index == null
+        ? prevState.rawTabs
+        : moveTabToSlot(prevState.rawTabs, existingTab.id, options.index)
+    const moved = nextRawTabs !== prevState.rawTabs
+
     if (folderChanged || agentChanged) {
       set({
+        ...(moved ? { rawTabs: nextRawTabs } : {}),
         draftRetargetRequests: [
           ...prevState.draftRetargetRequests,
           {
@@ -1645,9 +2381,10 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
         ],
       })
       focusTab(existingTab.id)
+      if (moved) recomputeTabs()
     } else if (workingDirChanged || provisionalChanged) {
       set({
-        rawTabs: prevState.rawTabs.map((tab) =>
+        rawTabs: nextRawTabs.map((tab) =>
           tab.id === existingTab.id
             ? { ...tab, workingDir, agentTypeProvisional: provisional }
             : tab
@@ -1655,45 +2392,67 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
         activeTabId: existingTab.id,
       })
       recomputeTabs()
+    } else if (moved) {
+      set({ rawTabs: nextRawTabs, activeTabId: existingTab.id })
+      recomputeTabs()
     } else {
       focusTab(existingTab.id)
     }
     runtime.activateConversationPane()
+    // Every branch above leaves the tab on `targetAgent` in `folderId` — either
+    // already there, or once its queued retarget lands.
+    return { tabId: existingTab.id, agentType: targetAgent, folderId }
   },
 
   openChatModeTab: (options) => {
-    const st = get()
-    // Inherit the agent like openNewConversationTab's inherit path.
-    const activeTab = st.rawTabs.find((x) => x.id === st.activeTabId)
+    // Inherit the agent like openNewConversationTab's inherit path — read
+    // before the folder-tabs switch to the global scope, from the tab the user
+    // is on.
+    const before = get()
+    const activeTab = before.rawTabs.find((x) => x.id === before.activeTabId)
     const inherit =
       activeTab &&
       (activeTab.conversationId != null || !activeTab.agentTypeProvisional)
         ? activeTab.agentType
         : null
-    const { agentType: targetAgent, provisional } = resolveAgentForFolder(
-      0,
-      inherit,
-      null
-    )
+    // A draft MOVED into chat mode (the composer's picker) stays the same tab,
+    // prompt and all. It is flipped synchronously below, so the global scope
+    // shows it straight away.
+    const movingDraft =
+      options?.retargetTabId != null
+        ? before.rawTabs.find(
+            (t) => t.id === options.retargetTabId && t.conversationId == null
+          )
+        : undefined
+    useFolderTabsStore.getState().activateScope("global")
+    const st = get()
+    // Same short-circuit as openNewConversationTab: an explicitly forced agent
+    // is caller intent and skips resolution.
+    const { agentType: targetAgent, provisional } =
+      options?.forceAgent != null
+        ? { agentType: options.forceAgent, provisional: false }
+        : resolveAgentForFolder(0, inherit, null)
 
     // Per-group draft singleton — all draft handling below is scoped to the
     // target group. Capture its existing draft (if any) up front so a stale
     // ACP session can be torn down after we flip it to chat mode.
-    const targetGroup = resolveTargetGroup(st, options?.targetGroup)
+    const targetGroup = movingDraft
+      ? groupOfTab(st.groupOf, st.groupLayout, movingDraft.id)
+      : resolveTargetGroup(st, options?.targetGroup)
     const inTargetGroup = (t: TabItemInternal) =>
       groupOfTab(st.groupOf, st.groupLayout, t.id) === targetGroup
-    const existingDraft = st.rawTabs.find(
-      (t) => t.conversationId == null && inTargetGroup(t)
-    )
+    const isTargetDraft = (t: TabItemInternal) =>
+      movingDraft
+        ? t.id === movingDraft.id
+        : t.conversationId == null && isTabInScope(t) && inTargetGroup(t)
+    const existingDraft = st.rawTabs.find(isTargetDraft)
     const needsDisconnect =
       existingDraft != null &&
       !(existingDraft.isChat && existingDraft.folderId === 0)
 
     const tabId = makeNewConversationTabId()
     const prevState = get()
-    const existingTab = prevState.rawTabs.find(
-      (t) => t.conversationId == null && inTargetGroup(t)
-    )
+    const existingTab = prevState.rawTabs.find(isTargetDraft)
 
     if (!existingTab) {
       const newTab: TabItemInternal = {
@@ -1715,8 +2474,34 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       })
       recomputeTabs()
     } else if (existingTab.isChat && existingTab.folderId === 0) {
-      // Already a chat-mode draft — just focus it.
-      focusTab(existingTab.id)
+      // Already a chat-mode draft. Normally there is nothing to do but focus it
+      // — it keeps whatever agent it was on, because `inherit` is only ever a
+      // suggestion. A FORCED agent is not: the caller needs this draft to run on
+      // that agent (an "ask about this selection" continuing a chat
+      // conversation), so re-point it. No explicit disconnect: the connection
+      // lifecycle is keyed on the agent and tears the old one down itself, the
+      // same way the agent picker's `confirmDraftAgent` relies on.
+      if (
+        options?.forceAgent != null &&
+        (existingTab.agentType !== targetAgent ||
+          (existingTab.agentTypeProvisional ?? false) !== provisional)
+      ) {
+        set({
+          activeTabId: existingTab.id,
+          rawTabs: prevState.rawTabs.map((tab) =>
+            tab.id === existingTab.id
+              ? {
+                  ...tab,
+                  agentType: targetAgent,
+                  agentTypeProvisional: provisional,
+                }
+              : tab
+          ),
+        })
+        recomputeTabs()
+      } else {
+        focusTab(existingTab.id)
+      }
     } else {
       // Existing draft on a real folder: flip it to chat mode SYNCHRONOUSLY
       // (folderId + isChat together), so a send issued before any async teardown
@@ -1738,6 +2523,10 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
         ),
       })
       recomputeTabs()
+      // A draft moved in from a folder can land beside the chat view's own.
+      if (movingDraft && useFolderTabsStore.getState().enabled) {
+        closeBlankDraftsBeside(existingTab.id)
+      }
     }
 
     if (needsDisconnect && existingDraft) {
@@ -1746,6 +2535,19 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       })
     }
     runtime.activateConversationPane()
+    // A reused chat draft that was NOT force-agented keeps its own agent (the
+    // focus-only branch above), so report that rather than the resolved one.
+    const settledAgent =
+      existingTab && existingTab.isChat && existingTab.folderId === 0
+        ? options?.forceAgent != null
+          ? targetAgent
+          : existingTab.agentType
+        : targetAgent
+    return {
+      tabId: existingTab ? existingTab.id : tabId,
+      agentType: settledAgent,
+      folderId: 0,
+    }
   },
 
   setChatDraftWorkingDir: (tabId, workingDir) => {
@@ -2117,7 +2919,15 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       if (childSummaryInFlight.has(id)) continue
       childSummaryInFlight.add(id)
       const epoch = seedEpoch
-      void getFolderConversation(id)
+      // Only the SUMMARY is used below, so ask for the smallest window the
+      // backend accepts instead of the legacy full detail. Without a window the
+      // response carries every turn of the child session — for a long child
+      // that is megabytes of transcript transferred and re-parsed purely to
+      // read `detail.summary`. `tailTurns: 1` is the smallest window the
+      // backend accepts (it still widens back to the last user turn). The
+      // summary describes the whole transcript whatever the window, and it is
+      // all the tab label and status read.
+      void getFolderConversation(id, { tailTurns: 1 })
         .then((detail) => {
           if (seedEpoch !== epoch) return
           const buffered = childSeedBuffer.get(id)
@@ -2389,6 +3199,13 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
         ) {
           return
         }
+        // Tabs follow the folder: a draft the user is still on carries the
+        // view into its new folder, instead of vanishing from the scope it
+        // leaves.
+        const followScope =
+          useFolderTabsStore.getState().enabled &&
+          get().activeTabId === request.tabId &&
+          folderScope(request.folderId) !== folderScope(target.folderId)
         set({
           rawTabs: rawTabs.map((tab) =>
             tab.id === request.tabId
@@ -2404,13 +3221,35 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
           ),
         })
         recomputeTabs()
+        if (followScope) {
+          useFolderTabsStore
+            .getState()
+            .activateScope(folderScope(request.folderId))
+          focusTab(request.tabId)
+        }
+        if (useFolderTabsStore.getState().enabled) {
+          closeBlankDraftsBeside(request.tabId)
+        }
       })()
     }
   },
 
   syncActiveFolderId: () => {
     const st = get()
+    const folderTabs = useFolderTabsStore.getState()
     const activeTab = st.rawTabs.find((t) => t.id === st.activeTabId) ?? null
+    if (folderTabs.enabled && (activeTab == null || !isTabInScope(activeTab))) {
+      // An empty scope still owns the folder chrome (file tree, terminal).
+      useAppWorkspaceStore
+        .getState()
+        .setActiveFolderId(
+          folderTabs.scope === "global" ? null : folderTabs.scope
+        )
+      return
+    }
+    // Otherwise the active tab decides, exactly as in normal mode: a chat
+    // conversation in the global scope keeps its hidden chat folder, which is
+    // how chat mode is recognised (`useIsActiveChatMode`).
     useAppWorkspaceStore
       .getState()
       .setActiveFolderId(activeTab?.folderId ?? null)
@@ -2459,7 +3298,7 @@ export function runCorrectionOnce() {
 }
 
 export function runRecoveryOnce() {
-  if (recoveryRan) return
+  if (recoveryRan || useFolderTabsStore.getState().enabled) return
   recoveryRan = true
   useTabStore.getState().recoverActiveContext()
 }
@@ -2501,10 +3340,14 @@ export function pruneOrphanDraftsOnce() {
 // Recompute `tabs` whenever the app-workspace `conversations` list changes (any
 // agent's turn start/stop): titles/status decorate from it. Reference reuse in
 // recomputeTabs keeps the array stable when no open tab is affected.
-useAppWorkspaceStore.subscribe(() => {
-  const c = useAppWorkspaceStore.getState().conversations
+useAppWorkspaceStore.subscribe((next, previous) => {
+  const c = next.conversations
   if (c !== lastConversations) {
     lastConversations = c
+    recomputeTabs()
+  } else if (previous.conversationsLoading && !next.conversationsLoading) {
+    // A refetch just settled. Its rows landed while it still read as loading,
+    // when `alignConversationTabFolders` holds off; run it now.
     recomputeTabs()
   }
 })
@@ -2628,11 +3471,7 @@ function applyRemoteSnapshot(change: TabsChanged) {
   // rejected). The local close is the newer intent: keep it closed. Anything
   // else on the server is adopted — including tabs opened on another client.
   const convItems = snapshotItems.filter((it) => {
-    const key = makeConversationTabId(
-      it.folder_id,
-      it.agent_type,
-      it.conversation_id as number
-    )
+    const key = conversationSyncKey(it.agent_type, it.conversation_id as number)
     return localKeys.has(key) || !ancestorKeys.has(key)
   })
   // Open here, absent from the snapshot, and never acknowledged by the server →
@@ -2657,6 +3496,7 @@ function applyRemoteSnapshot(change: TabsChanged) {
   applyingRemote = !diverged
 
   const prevById = new Map(prev.rawTabs.map((tb) => [tb.id, tb]))
+  const claimedIds = new Set<string>()
   const remoteTabs: TabItemInternal[] = convItems.map((it) => {
     const canonicalId = makeConversationTabId(
       it.folder_id,
@@ -2665,15 +3505,19 @@ function applyRemoteSnapshot(change: TabsChanged) {
     )
     // Prefer an already-open local tab for this conversation (including a draft
     // that just bound to it and still carries its `new-*` id) so we keep that
-    // stable id and its live runtime session.
-    const existing =
+    // stable id and its live runtime session — in whichever folder it is open
+    // here: the conversation may have been moved to another project, and the
+    // snapshot's folder is then the newer one.
+    const found =
       prevById.get(canonicalId) ??
       prev.rawTabs.find(
         (tb) =>
           tb.conversationId === it.conversation_id &&
-          tb.folderId === it.folder_id &&
           tb.agentType === it.agent_type
       )
+    const existing = found && !claimedIds.has(found.id) ? found : undefined
+    if (existing) claimedIds.add(existing.id)
+    const sameFolder = existing?.folderId === it.folder_id
     return {
       id: existing?.id ?? canonicalId,
       kind: "conversation",
@@ -2686,8 +3530,9 @@ function applyRemoteSnapshot(change: TabsChanged) {
       status: existing?.status,
       // Device-local per-tab fields the payload doesn't carry. Rebuilding the
       // tab from the snapshot must not blank them (a bound chat tab would lose
-      // the scratch working dir it is connected in).
-      workingDir: existing?.workingDir,
+      // the scratch working dir it is connected in) — unless the folder
+      // changed, when the working dir is re-derived from the new one.
+      workingDir: sameFolder ? existing?.workingDir : undefined,
       isChat: existing?.isChat,
     }
   })
@@ -2709,7 +3554,7 @@ function applyRemoteSnapshot(change: TabsChanged) {
 
   // Never leave the workspace blank: synthesize a draft when empty.
   if (nextTabs.length === 0) {
-    if (folders.length === 0) {
+    if (folders.length === 0 || useFolderTabsStore.getState().enabled) {
       lastSavedPayload = diverged ? null : JSON.stringify([])
       useTabStore.setState({ rawTabs: [], activeTabId: null })
       recomputeTabs()
@@ -2763,6 +3608,15 @@ function applyRemoteSnapshot(change: TabsChanged) {
     nextActiveId = nextTabs[0].id
   }
 
+  if (useFolderTabsStore.getState().enabled) {
+    // Remote clients synchronize open membership, but cannot move this client's
+    // explicit folder scope or steal its current local selection.
+    const visible = nextTabs.filter(isTabInScope)
+    nextActiveId = visible.some((tab) => tab.id === prev.activeTabId)
+      ? prev.activeTabId
+      : (visible[0]?.id ?? null)
+  }
+
   // A focus change driven by the remote snapshot must not trip the route-sync
   // chokepoint into the conversations route.
   if (nextActiveId !== prev.activeTabId) {
@@ -2779,3 +3633,107 @@ function applyRemoteSnapshot(change: TabsChanged) {
   useTabStore.setState({ rawTabs: nextTabs, activeTabId: nextActiveId })
   recomputeTabs()
 }
+
+// A scope change swaps the view on screen: the leaving view's group state is
+// parked, the arriving one's loaded, and the selection repaired. Membership and
+// server persistence always keep the complete tab set, including live
+// background sessions.
+useFolderTabsStore.subscribe((next, previous) => {
+  if (next.scope === previous.scope && next.enabled === previous.enabled) return
+  const st = useTabStore.getState()
+  const leavingKey = groupViewKey(previous)
+  const arrivingKey = groupViewKey(next)
+  // Only a folder SWITCH offers the folder's last tab back. Turning the mode on
+  // starts from the tab (and per-group picks) the user is looking at.
+  let remembered: string | null = null
+  if (leavingKey !== arrivingKey) {
+    const leaving = groupViewOnScreen(st)
+    let views: Record<string, GroupView>
+    let arriving: GroupView
+    if (next.enabled) {
+      views = { ...st.groupViews, [leavingKey]: leaving }
+      arriving =
+        views[arrivingKey] ??
+        projectGroupView(
+          views[ALL_GROUP_VIEW] ?? leaving,
+          st.rawTabs.filter(isTabInScope),
+          st.tabsHydrated && tabsSnapshotLoaded
+        )
+      delete views[arrivingKey]
+      if (previous.enabled) remembered = arriving.active
+    } else {
+      // One layout for every tab again: the normal-mode one as it was left.
+      // Folder views go with the mode; next time each starts from that one.
+      arriving = st.groupViews[ALL_GROUP_VIEW] ?? leaving
+      views = {}
+    }
+    useTabStore.setState({
+      groupLayout: arriving.layout,
+      groupOf: arriving.groupOf,
+      groupSelection: arriving.selection,
+      tileByGroup: arriving.tileByGroup,
+      groupViews: views,
+      tabDrag: null,
+    })
+  }
+  const after = useTabStore.getState()
+  if (next.enabled) {
+    const visible = after.rawTabs.filter(isTabInScope)
+    const active = remembered ?? after.activeTabId
+    useTabStore.setState({
+      activeTabId: visible.some((t) => t.id === active)
+        ? active
+        : (visible[0]?.id ?? null),
+    })
+  } else if (!after.rawTabs.some((tab) => tab.id === after.activeTabId)) {
+    useTabStore.setState({ activeTabId: after.rawTabs[0]?.id ?? null })
+  }
+  applyGroupInvariants()
+  if (previous.enabled && !next.enabled) closeBlankDraftsPerGroup()
+  useTabStore.getState().syncActiveFolderId()
+})
+
+/** The stored mode came back off at hydration: folder views parked from the
+ *  last session's blob are stale by now, so they go (turning the mode on later
+ *  starts every folder from the normal-mode layout). */
+export function dropParkedFolderGroupViews() {
+  const st = useTabStore.getState()
+  if (useFolderTabsStore.getState().enabled) return
+  if (Object.keys(st.groupViews).length === 0) return
+  useTabStore.setState({ groupViews: {} })
+  persistGroupState()
+}
+
+// A scope whose folder left the workspace (its worktree was deleted, or the
+// folder was removed from the sidebar) would keep the folder chrome — file
+// tree, terminal, search — pointed at it. `closeTabsByFolder` cannot catch
+// this: it returns early for a folder with no tabs. Move to the parent repo
+// when it is still open, else to a remaining tab's scope, else the first
+// open folder.
+useAppWorkspaceStore.subscribe((next, previous) => {
+  if (
+    next.folders === previous.folders &&
+    next.foldersHydrated === previous.foldersHydrated
+  ) {
+    return
+  }
+  const folderTabs = useFolderTabsStore.getState()
+  const scope = folderTabs.scope
+  if (!folderTabs.enabled || scope === "global" || !next.foldersHydrated) return
+  const isOpen = (id: number | null | undefined) =>
+    id != null && next.folders.some((f) => f.id === id)
+  if (isOpen(scope)) return
+  const parentId = (
+    previous.allFolders.find((f) => f.id === scope) ??
+    next.allFolders.find((f) => f.id === scope)
+  )?.parent_id
+  const fromTabs = useTabStore
+    .getState()
+    .rawTabs.map((tab) => folderScope(tab.folderId))
+    .find((s) => s !== scope && (s === "global" || isOpen(s)))
+  const target: TabScope =
+    parentId != null && isOpen(parentId)
+      ? parentId
+      : (fromTabs ?? next.folders[0]?.id ?? "global")
+  folderTabs.activateScope(target)
+})

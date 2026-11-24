@@ -6,6 +6,7 @@ import {
   SAFE_STYLE_QUERY_PARAM,
   TOKEN_VALUE_PATTERN_SOURCE,
 } from "./custom-style"
+import { THEME_COLOR_DARK, THEME_COLOR_LIGHT } from "./theme-color"
 
 /**
  * Storage keys for appearance preferences.
@@ -17,6 +18,16 @@ export const STORAGE_KEY_ZOOM_LEVEL = "codeg-zoom-level"
 // 新会话欢迎页「模式选择区域」（代码开发 / 日常办公 快捷卡片）是否显示。
 // 缺省即回退为开启（保持历史行为）；仅在欢迎态客户端渲染，无需预水合。
 export const STORAGE_KEY_WELCOME_QUICK_ACTIONS = "codeg-welcome-quick-actions"
+
+// 聊天区域动画（新消息滚动、折叠展开、工具调用、工作状态等）总开关。
+// 缺省即开启；"0" 时给 <html> 打 data-chat-animations="off"，由 globals.css 在
+// .chat-motion-scope 内禁用动画。需预水合，避免会话首屏先播一遍动画。
+export const STORAGE_KEY_CHAT_ANIMATIONS = "codeg-chat-animations"
+
+// 聊天内容宽度（100% 缩放下的 px，写到 CSS 时换成 rem，随缩放变化）。用户拖拽
+// 会话区域左右把手或在外观设置里调整后写入；缺省/非法值即回退到内置默认
+// （48rem）。需预水合，避免会话首屏先按默认宽度排版再跳变。
+export const STORAGE_KEY_CHAT_CONTENT_WIDTH = "codeg-chat-content-width"
 
 // 字体偏好（界面 / 编辑器 / 终端）。
 // 只有界面字体需要 *_STACK（已解析的 CSS font-family 栈），供 inline 脚本零依赖地
@@ -48,6 +59,16 @@ export const STORAGE_KEY_WORKSPACE_BG_PANEL_OPACITY =
 // 写/换/删图后 bump，让 workspace 窗口经 storage 事件重新读盘。不需预水合。
 export const STORAGE_KEY_WORKSPACE_BG_IMAGE_VERSION =
   "codeg-workspace-bg-image-version"
+// 壁纸市场：当前背景的来源页（https://wallhaven.cc/w/<id>），仅用于市场卡片的
+// 「使用中」标记。本地选图 / 移除背景时清除；不参与渲染，丢了也只是标记失灵。
+//
+// 它和图片本身是两份状态，只在同一次操作里前后脚写，并非事务。同一个界面里
+// 换图是单飞的（市场对话框全网格禁用，本地选图有 busy 闸），但两个窗口/标签页
+// 同时换图时，最后落盘的图和最后写的标记可能来自不同的那一次 —— 图仍然是完整
+// 的一张（后端按写者独立暂存 + 原子 rename），错的只是「使用中」指向谁。要根治
+// 得把来源页跟图一起存到磁盘上，那是后端的形状改动，不在本次范围内。
+export const STORAGE_KEY_WORKSPACE_BG_SOURCE_URL =
+  "codeg-workspace-bg-source-url"
 
 // 自定义样式（外观设置页）。全部需要预水合 —— 少一帧就会看到「基底预设 → 用户配色」
 // 的跳变，比没有这个功能更糟。
@@ -83,7 +104,7 @@ const SCRIPT = `
 (function() {
   try {
     var VALID_COLORS = ["neutral","zinc","slate","stone","gray","red","rose","orange","green","blue","yellow","violet"];
-    var VALID_ZOOMS = [80, 90, 100, 110, 125, 150];
+    var VALID_ZOOMS = [80, 90, 100, 110, 125, 150, 175, 200, 250, 300];
 
     var storedColor = localStorage.getItem("${STORAGE_KEY_THEME_COLOR}");
     var color = VALID_COLORS.indexOf(storedColor) >= 0 ? storedColor : "neutral";
@@ -92,6 +113,19 @@ const SCRIPT = `
     var storedZoom = parseInt(localStorage.getItem("${STORAGE_KEY_ZOOM_LEVEL}") || "", 10);
     var zoom = VALID_ZOOMS.indexOf(storedZoom) >= 0 ? storedZoom : 100;
     document.documentElement.style.fontSize = (16 * zoom / 100) + "px";
+
+    // 聊天区域动画开关：仅显式关闭（"0"）时打属性，缺省保持开启。
+    if (localStorage.getItem("${STORAGE_KEY_CHAT_ANIMATIONS}") === "0") {
+      document.documentElement.setAttribute("data-chat-animations", "off");
+    }
+
+    // 聊天内容宽度：非法/缺省则不写变量，样式回退到默认 48rem。
+    // 存的是 100% 缩放下的 px，按 rem 写出（/16），随缩放一起变，与默认值同理
+    // （见 chat-content-width.ts 的 chatContentWidthCss）。
+    var chatWidth = Number(localStorage.getItem("${STORAGE_KEY_CHAT_CONTENT_WIDTH}"));
+    if (isFinite(chatWidth) && chatWidth > 0 && chatWidth <= 10000) {
+      document.documentElement.style.setProperty("--chat-content-width", (chatWidth / 16) + "rem");
+    }
 
     // 界面字体：预水合写入 --font-sans（普通组件与会话消息区都跟随它）。
     // stack 只是「显式选择」的缓存，不是偏好本身：仅当存在显式 id（codeg-ui-font）
@@ -129,6 +163,19 @@ const SCRIPT = `
     } else {
       document.documentElement.style.colorScheme = "light";
       document.documentElement.style.backgroundColor = "";
+    }
+
+    // theme-color（浏览器界面 / 安卓已安装应用的状态栏与导航栏）：layout 按
+    // prefers-color-scheme 各出一个 <meta>，跟随系统时无需处理；用户在应用内选了
+    // 明/暗时两个都改成该模式的颜色，否则系统偏好会盖过应用内的选择。
+    // 首帧之后由 ThemeProvider 接管，含 Next 导航重建 <head> 之后的重新写入。
+    if (storedMode === "dark" || storedMode === "light") {
+      try {
+        var metaThemes = document.querySelectorAll('meta[name="theme-color"]');
+        for (var m = 0; m < metaThemes.length; m++) {
+          metaThemes[m].setAttribute("content", isDark ? "${THEME_COLOR_DARK}" : "${THEME_COLOR_LIGHT}");
+        }
+      } catch (e) {}
     }
 
     // ── 自定义样式 ──────────────────────────────────────────────────────

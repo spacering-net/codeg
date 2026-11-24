@@ -74,10 +74,15 @@ describe("ReplyArtifacts — view diff action", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "viewDiff" }))
 
+    // The 4th argument is the opener's folder option, forwarded verbatim —
+    // `undefined` means "resolve against the active folder", exactly what the
+    // 3-argument call meant before this action started routing through
+    // `useOpenFileTarget`.
     expect(mockOpenDiff).toHaveBeenCalledWith(
       "src/a.ts",
       MODIFIED_DIFF,
-      "reply-turn-1"
+      "reply-turn-1",
+      { folderId: undefined }
     )
   })
 
@@ -92,7 +97,8 @@ describe("ReplyArtifacts — view diff action", () => {
     expect(mockOpenDiff).toHaveBeenCalledWith(
       "src/b.ts",
       "noDiffDataAvailable",
-      "reply-turn-1"
+      "reply-turn-1",
+      { folderId: undefined }
     )
   })
 

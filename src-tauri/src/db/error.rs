@@ -10,6 +10,13 @@ pub enum DbError {
     NotFound(String),
     #[error("validation error: {0}")]
     Validation(String),
+    /// A write that another row's claim on a unique key makes impossible, and
+    /// that no retry can resolve — as opposed to the transient contention
+    /// `Database` usually carries. Distinct because the caller's correct
+    /// response differs: it must ABANDON the operation rather than retry it or
+    /// treat it as a benign no-op.
+    #[error("conflict: {0}")]
+    Conflict(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }

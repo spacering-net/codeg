@@ -3,14 +3,38 @@
 //! (mirroring `commands::folders`), composed by the task engine which owns the
 //! per-folder git mutex.
 
-use crate::app_error::AppCommandError;
-use crate::commands::folders::{detect_conflicts, git_command_error};
-use crate::models::WorkTaskChangedFile;
+use crate::app_error::{AppCommandError, AppErrorCode};
+use crate::commands::folders::{
+    detect_conflicts, git_command_error, numstat_rename_sides, to_git_literal_pathspec,
+};
+use crate::models::{WorkTaskChangedFile, WorkTaskUncommittedFile};
 
 async fn run_git(path: &str, args: &[&str]) -> Result<std::process::Output, AppCommandError> {
     crate::process::tokio_command("git")
         .args(args)
         .current_dir(path)
+        .output()
+        .await
+        .map_err(AppCommandError::io)
+}
+
+/// As [`run_git`], against a git index of our choosing instead of the
+/// worktree's own — see [`ScratchIndex`].
+///
+/// `core.splitIndex=false` because a throwaway index must stay in ONE file:
+/// with splitting on, writing it deposits a fresh `sharedindex.*` beside it in
+/// the git directory, which outlives the scratch (git only prunes those on a
+/// later `gc`).
+pub(crate) async fn run_git_with_index(
+    path: &str,
+    index: &std::path::Path,
+    args: &[&str],
+) -> Result<std::process::Output, AppCommandError> {
+    crate::process::tokio_command("git")
+        .args(["-c", "core.splitIndex=false"])
+        .args(args)
+        .current_dir(path)
+        .env("GIT_INDEX_FILE", index)
         .output()
         .await
         .map_err(AppCommandError::io)
@@ -64,6 +88,60 @@ pub async fn has_changes(path: &str) -> Result<bool, AppCommandError> {
         return Err(git_command_error("status", &out.stderr));
     }
     Ok(!out.stdout.iter().all(|b| b.is_ascii_whitespace()))
+}
+
+/// What [`commit_all`] would commit, file by file — what the delivery dialog
+/// shows before the user agrees to commit it. Every untracked file is listed
+/// on its own (`-uall`), not folded into its directory, because those are
+/// exactly the ones that may be scratch the agent never meant to keep.
+pub async fn uncommitted_files(
+    path: &str,
+) -> Result<Vec<WorkTaskUncommittedFile>, AppCommandError> {
+    let out = run_git(path, &["status", "--porcelain=v1", "-z", "-uall"]).await?;
+    if !out.status.success() {
+        return Err(git_command_error("status", &out.stderr));
+    }
+    Ok(parse_porcelain_z(&out.stdout))
+}
+
+/// `git status --porcelain=v1 -z` → one entry per path. A rename or copy
+/// carries its source as the NEXT NUL-separated field, which is skipped.
+fn parse_porcelain_z(raw: &[u8]) -> Vec<WorkTaskUncommittedFile> {
+    let mut files = Vec::new();
+    let mut fields = raw.split(|b| *b == 0);
+    while let Some(entry) = fields.next() {
+        if entry.len() < 4 {
+            continue;
+        }
+        let (x, y) = (entry[0], entry[1]);
+        let file = String::from_utf8_lossy(&entry[3..]).into_owned();
+        let status = if x == b'?' {
+            "A"
+        } else if x == b'R' || x == b'C' {
+            fields.next();
+            "R"
+        } else if x == b'D' || y == b'D' {
+            "D"
+        } else if x == b'A' {
+            "A"
+        } else {
+            "M"
+        };
+        files.push(WorkTaskUncommittedFile {
+            file,
+            status: status.to_string(),
+        });
+    }
+    files
+}
+
+/// Whether the checkout at `path` is attached to the local branch `branch`.
+/// The FULL ref, as [`worktree_add_existing_branch`] compares it: a same-name
+/// tag cannot answer for the branch. A detached `HEAD` is `false`.
+pub async fn head_is_branch(path: &str, branch: &str) -> Result<bool, AppCommandError> {
+    let head = run_git(path, &["symbolic-ref", "--quiet", "HEAD"]).await?;
+    Ok(head.status.success()
+        && String::from_utf8_lossy(&head.stdout).trim() == format!("refs/heads/{branch}"))
 }
 
 /// Stage everything and commit with the user's resolved author. Returns
@@ -197,6 +275,99 @@ pub async fn is_ancestor(
     }
 }
 
+/// Best common ancestor of two revisions — the point a pull request's diff is
+/// taken from. Using the base branch's TIP instead would hide every change the
+/// base gained since the pull request was opened behind a false conflict, and
+/// using the head would hide the pull request's own changes entirely.
+pub async fn merge_base(path: &str, a: &str, b: &str) -> Result<String, AppCommandError> {
+    let out = run_git(path, &["merge-base", a, b]).await?;
+    if !out.status.success() {
+        return Err(git_command_error("merge-base", &out.stderr));
+    }
+    let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if sha.is_empty() {
+        return Err(AppCommandError::external_command(
+            "git merge-base returned nothing",
+            format!("{a}..{b}"),
+        ));
+    }
+    Ok(sha)
+}
+
+/// Whether an object is present in this repository AND is a commit. The probe
+/// a pinned sha needs after a fetch: a force-pushed pull request leaves the
+/// recorded head unreachable, and `worktree add` on it would fail with git's
+/// own wording instead of an explanation.
+pub async fn commit_present(path: &str, rev: &str) -> Result<bool, AppCommandError> {
+    let out = run_git(path, &["cat-file", "-e", &format!("{rev}^{{commit}}")]).await?;
+    Ok(out.status.success())
+}
+
+/// The newest commit under `tip` (and not under `stop`) that carries the same
+/// change as one of `commit`'s own commits — where `commit` ended up after a
+/// rebase gave its changes new parents and new shas. "The same change" is
+/// git's patch-id equivalence (`--cherry-mark`, what `git cherry` and `rebase`
+/// use to skip a commit already applied). `None` when there is no such copy,
+/// and when git can't say.
+pub async fn rebased_copy(path: &str, commit: &str, tip: &str, stop: &str) -> Option<String> {
+    let range = format!("{commit}...{tip}");
+    let not_stop = format!("^{stop}");
+    let out = run_git(
+        path,
+        &[
+            "rev-list",
+            "--cherry-mark",
+            "--right-only",
+            "--no-merges",
+            "--topo-order",
+            &range,
+            &not_stop,
+        ],
+    )
+    .await
+    .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find_map(|line| line.strip_prefix('=').map(str::to_string))
+}
+
+/// `git fetch <remote> +<remote_ref>:<local_ref>` → the fetched tip.
+///
+/// Two deliberate choices:
+///
+/// - The folder's OWN remote, not an explicit URL with an injected token: this
+///   reads with whatever credentials the user's git already has for that
+///   repository (ssh key, helper, whatever they cloned with). Pushing is the
+///   opposite case and has its own path — that one must run as the account the
+///   task was triggered with.
+/// - A NAMED destination ref instead of `FETCH_HEAD`. `FETCH_HEAD` is
+///   per-worktree, and these fetches run in the shared project folder, where
+///   two task setups in the same folder would overwrite each other's — and
+///   read back the other one's commit.
+pub async fn fetch_into_ref(
+    path: &str,
+    remote: &str,
+    remote_ref: &str,
+    local_ref: &str,
+) -> Result<String, AppCommandError> {
+    let refspec = format!("+{remote_ref}:{local_ref}");
+    let out = run_git(path, &["fetch", "--quiet", remote, &refspec]).await?;
+    if !out.status.success() {
+        return Err(git_command_error("fetch", &out.stderr));
+    }
+    rev_parse(path, local_ref).await
+}
+
+/// Drop a ref this module created. Best-effort by design: the commits that
+/// matter are held by the task's own branch, so a leftover here is untidy
+/// rather than dangerous.
+pub async fn delete_ref(path: &str, local_ref: &str) {
+    let _ = run_git(path, &["update-ref", "-d", local_ref]).await;
+}
+
 /// Whether two revisions point at identical trees (`git diff --quiet a b`) —
 /// how a squash landing is recognized without knowing the commit message.
 pub async fn trees_equal(path: &str, a: &str, b: &str) -> Result<bool, AppCommandError> {
@@ -210,16 +381,50 @@ pub async fn trees_equal(path: &str, a: &str, b: &str) -> Result<bool, AppComman
 
 /// `git diff --numstat <base>` — the task's change set vs its recorded base.
 /// Binary files report `-` counts; they are counted as a changed file with 0/0.
+///
+/// Blind to UNTRACKED files by construction (git enumerates the diff from the
+/// index) — [`diff_numstat_with_untracked`] is the one to reach for when the
+/// answer decides something; this one stays the plain primitive.
 pub async fn diff_numstat(
     path: &str,
     base: &str,
 ) -> Result<Vec<WorkTaskChangedFile>, AppCommandError> {
-    let out = run_git(path, &["diff", "--numstat", base]).await?;
+    let out = run_git(
+        path,
+        &["-c", "core.quotePath=false", "diff", "--numstat", base],
+    )
+    .await?;
     if !out.status.success() {
         return Err(git_command_error("diff --numstat", &out.stderr));
     }
+    Ok(parse_numstat(&out.stdout))
+}
+
+/// `git diff --numstat <from> <to>` — the change between two commits, with
+/// nothing from the worktree in it.
+pub async fn diff_numstat_between(
+    path: &str,
+    from: &str,
+    to: &str,
+) -> Result<Vec<WorkTaskChangedFile>, AppCommandError> {
+    let out = run_git(
+        path,
+        &["-c", "core.quotePath=false", "diff", "--numstat", from, to],
+    )
+    .await?;
+    if !out.status.success() {
+        return Err(git_command_error("diff --numstat", &out.stderr));
+    }
+    Ok(parse_numstat(&out.stdout))
+}
+
+/// Reads `--numstat` run with `core.quotePath=false`. Without it git prints a
+/// non-ASCII path C-quoted and octal-escaped (`"\351\234\200\346\261\202.md"`):
+/// unreadable in the task drawer, and a pathspec that matches nothing when the
+/// drawer asks [`diff_patch_with_untracked`] for that file.
+fn parse_numstat(stdout: &[u8]) -> Vec<WorkTaskChangedFile> {
     let mut files = Vec::new();
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
+    for line in String::from_utf8_lossy(stdout).lines() {
         let mut parts = line.splitn(3, '\t');
         let (Some(adds), Some(dels), Some(file)) = (parts.next(), parts.next(), parts.next())
         else {
@@ -231,7 +436,236 @@ pub async fn diff_numstat(
             deletions: dels.parse().unwrap_or(0),
         });
     }
-    Ok(files)
+    files
+}
+
+/// A THROWAWAY git index, seeded from a commit and then told about every
+/// untracked, non-ignored file (`add -A -N`, intent-to-add: names only, no
+/// content). Deleted when dropped.
+///
+/// This is what lets a diff see work the agent left UNCOMMITTED — new files
+/// included. A task is not guaranteed to have committed when it lands in
+/// review (the merge generation's own prompt begins by committing whatever is
+/// left over), and a plain `git diff <commit>` walks the index to decide which
+/// paths exist: uncommitted edits to tracked files show up, a brand-new file
+/// nobody ran `git add` on does not. Reporting that task as having changed
+/// nothing is the difference between "merge it" and "complete it".
+///
+/// The worktree's REAL index is never touched — `git add -N` on it would leave
+/// the agent's next round, and any `git stash` / `git commit -a` the user runs,
+/// looking at an index this feature quietly edited.
+///
+/// [`ScratchIndex::copy_of`] is the same throwaway copy without the
+/// intent-to-add pass, for a caller that stages into it what it wants to look
+/// at (the commit message generator's "what would this commit contain").
+pub(crate) struct ScratchIndex {
+    pub(crate) path: std::path::PathBuf,
+}
+
+impl Drop for ScratchIndex {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+impl ScratchIndex {
+    /// Build one for `wt_path`: a COPY of the worktree's own index, plus
+    /// intent-to-add entries for everything untracked.
+    ///
+    /// Copied rather than built from `anchor` with `read-tree`, because the
+    /// real index carries per-entry flags a tree does not. A SPARSE checkout is
+    /// the case that decides it: its skip-worktree entries have no file on
+    /// disk, so an index rebuilt from a tree reports every path outside the
+    /// cone as DELETED — a task that changed nothing would show hundreds of
+    /// deletions, which is the exact class of wrong answer this measure exists
+    /// to prevent. `anchor` is only the fallback seed for a checkout that has
+    /// no index to copy at all.
+    async fn build(wt_path: &str, anchor: &str) -> Result<Self, AppCommandError> {
+        let scratch = Self::copy_of(wt_path, Some(anchor)).await?;
+        // git runs with the worktree root as its cwd, so a bare `-A` covers the
+        // whole tree; `-N` records names only — nothing is staged, and the
+        // content the diff reports is read from the working tree either way.
+        let add = run_git_with_index(wt_path, &scratch.path, &["add", "-A", "-N"]).await?;
+        if !add.status.success() {
+            return Err(git_command_error("add -A -N", &add.stderr));
+        }
+        Ok(scratch)
+    }
+
+    /// A copy of the worktree's own index and nothing more (see the type docs
+    /// for why a copy). With no index to copy, `anchor` seeds it with
+    /// `read-tree`; without an anchor either it is left EMPTY, which is what a
+    /// repository nothing was ever staged in has.
+    pub(crate) async fn copy_of(
+        wt_path: &str,
+        anchor: Option<&str>,
+    ) -> Result<Self, AppCommandError> {
+        // Inside the worktree's own git directory: never visible to
+        // `git status`, never committable, and on the same filesystem as the
+        // index it copies. The name carries the process id and a counter
+        // because two probes of the same worktree can overlap (a board refresh
+        // next to a settle).
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let git_dir = git_dir(wt_path).await?;
+        let path = git_dir.join(format!("codeg-diff-index-{}-{seq}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let scratch = Self { path };
+        // The copy keeps `assume-unchanged` entries as they are, deliberately.
+        // Clearing them would surface edits to a file the user promised git not
+        // to look at — and nothing in the acceptance path can land such an
+        // edit: `git add -A` skips it and `git commit -a` reports a clean tree,
+        // so the merge generation would commit nothing and the task would
+        // settle as landed with the edit still sitting there. (Landing it would
+        // take a `--no-assume-unchanged` before staging, which no acceptance
+        // does.) A measure that promises work an acceptance cannot take is the
+        // same failure as one that hides work, pointed the other way.
+        //
+        // Git replaces the index by renaming `index.lock` over it, so a copy
+        // racing an agent's own `git add` reads one whole version or the
+        // other — never a half-written file.
+        let index = git_dir.join("index");
+        let copied = std::fs::File::open(&index).and_then(|mut source| {
+            let metadata = source.metadata()?;
+            let mut destination = std::fs::File::create(&scratch.path)?;
+            std::io::copy(&mut source, &mut destination)?;
+            destination.set_permissions(metadata.permissions())?;
+            // Git rehashes an entry whose timestamp is at least the index's
+            // timestamp (a "racily clean" entry). A fresh mtime on the copy
+            // would disable that check and hide same-size edits made within
+            // the filesystem's timestamp resolution. Read both the contents
+            // and metadata from one handle, even if git replaces the source.
+            destination.set_modified(metadata.modified()?)
+        });
+        if let Err(e) = copied {
+            match anchor {
+                Some(anchor) => {
+                    let read =
+                        run_git_with_index(wt_path, &scratch.path, &["read-tree", anchor]).await?;
+                    if !read.status.success() {
+                        return Err(git_command_error("read-tree", &read.stderr));
+                    }
+                }
+                // An index that is there but could not be copied is not an
+                // empty one: left empty, the copy would read as every tracked
+                // file deleted.
+                None if index.exists() => return Err(AppCommandError::io(e)),
+                None => {}
+            }
+        }
+        Ok(scratch)
+    }
+}
+
+/// `git diff --numstat <anchor>` that also sees uncommitted work — the measure
+/// every ACCEPTANCE decision uses (see [`ScratchIndex`] for why the plain diff
+/// is not enough).
+pub async fn diff_numstat_with_untracked(
+    path: &str,
+    anchor: &str,
+) -> Result<Vec<WorkTaskChangedFile>, AppCommandError> {
+    let scratch = ScratchIndex::build(path, anchor).await?;
+    let out = run_git_with_index(
+        path,
+        &scratch.path,
+        &["-c", "core.quotePath=false", "diff", "--numstat", anchor],
+    )
+    .await?;
+    if !out.status.success() {
+        return Err(git_command_error("diff --numstat", &out.stderr));
+    }
+    Ok(parse_numstat(&out.stdout))
+}
+
+/// The patch behind [`diff_numstat_with_untracked`] — whole change set, or one
+/// file. An uncommitted new file renders as a normal `new file mode` hunk
+/// rather than as an empty diff nobody can explain.
+///
+/// `file` is a name as that list gives it, and a renamed file is listed in
+/// numstat's notation (`docs/{sub => }/moved.txt`, `old.txt => new.txt`),
+/// which names no path. When the name itself finds nothing, both sides of the
+/// rename are asked for instead, so git pairs them into the rename the list
+/// counted.
+pub async fn diff_patch_with_untracked(
+    path: &str,
+    anchor: &str,
+    file: Option<&str>,
+) -> Result<String, AppCommandError> {
+    let scratch = ScratchIndex::build(path, anchor).await?;
+    let patch = diff_patch_against(path, &scratch, anchor, file.as_slice()).await?;
+    if patch.trim().is_empty() {
+        if let Some((old, new)) = file.and_then(numstat_rename_sides) {
+            return diff_patch_against(path, &scratch, anchor, &[&old, &new]).await;
+        }
+    }
+    Ok(patch)
+}
+
+/// `git diff <anchor>` against `scratch`: the whole change set, or only the
+/// sections about `files` (see [`sections_about`]).
+async fn diff_patch_against(
+    path: &str,
+    scratch: &ScratchIndex,
+    anchor: &str,
+    files: &[&str],
+) -> Result<String, AppCommandError> {
+    let literals: Vec<String> = files.iter().map(|f| to_git_literal_pathspec(f)).collect();
+    // Unquoted like the file list, so the preview names a non-ASCII file as
+    // itself rather than by its octal escapes. Git's own patch with fixed
+    // prefixes and a submodule as its gitlink, whatever the user's diff
+    // config says, so each section is told apart by its header.
+    let mut args = vec![
+        "-c",
+        "core.quotePath=false",
+        "diff",
+        "--no-color",
+        "--no-ext-diff",
+        "--submodule=short",
+        "--src-prefix=a/",
+        "--dst-prefix=b/",
+        anchor,
+    ];
+    if !literals.is_empty() {
+        args.push("--");
+        args.extend(literals.iter().map(String::as_str));
+    }
+    let out = run_git_with_index(path, &scratch.path, &args).await?;
+    if !out.status.success() {
+        return Err(git_command_error("diff", &out.stderr));
+    }
+    let patch = String::from_utf8_lossy(&out.stdout);
+    Ok(if files.is_empty() {
+        patch.into_owned()
+    } else {
+        sections_about(&patch, files)
+    })
+}
+
+/// The sections of `patch` whose `diff --git` header has one of `files` on
+/// either side. A pathspec also matches everything below a directory of its
+/// name, so asking for `old.txt` brings along `old.txt/child.txt` when the
+/// worktree has a directory where the anchor had that file. (Excluding
+/// `old.txt/` from the pathspec instead would hide a file moved into a
+/// directory of its own name, `tool => tool/main`, and a submodule, whose
+/// gitlink a trailing `/` matches as well.)
+fn sections_about(patch: &str, files: &[&str]) -> String {
+    let about = |header: &str| {
+        files.iter().any(|f| {
+            header.starts_with(&format!("diff --git a/{f} b/"))
+                || header.ends_with(&format!(" b/{f}"))
+        })
+    };
+    let mut kept = String::with_capacity(patch.len());
+    let mut keep = true;
+    for line in patch.split_inclusive('\n') {
+        if line.starts_with("diff --git ") {
+            keep = about(line.trim_end_matches('\n'));
+        }
+        if keep {
+            kept.push_str(line);
+        }
+    }
+    kept
 }
 
 /// Tip commit of a LOCAL branch (`refs/heads/<name>`), or `None` when no such
@@ -355,28 +789,172 @@ pub async fn branch_holds_unlanded_work(
     }
 }
 
+/// A Windows path that names a drive without rooting on it — `C:trees`, as
+/// opposed to `C:\trees`. Windows finishes such a path from the current
+/// directory OF THAT DRIVE, which a process keeps per drive and does not pass
+/// to a child the way it passes its working directory, so the same string can
+/// name two directories on one machine. `Path::join` reads it as a fresh base
+/// and drops whatever it was joined onto, which is what makes it dangerous to a
+/// caller that thought it had scoped a path to a repository.
+///
+/// Unix has no such form: it has no prefixes, so this is `false` for every path
+/// there, relative ones included.
+fn is_drive_relative(path: &std::path::Path) -> bool {
+    let mut components = path.components();
+    matches!(components.next(), Some(std::path::Component::Prefix(_)))
+        && !matches!(components.next(), Some(std::path::Component::RootDir))
+}
+
+/// Which of the two refusals to report once git has declined a removal AND the
+/// leftover directory could not be consumed either.
+///
+/// A checkout git still speaks for keeps git's established reporting — stderr
+/// in `detail`, exactly as every other git failure in this function does it.
+/// A DETACHED shell has no such thing to keep: git's only word about it is a
+/// stock sentence naming a `.git` the user never heard of, and the removal that
+/// actually failed was OURS. So this path owns its message, and it says the two
+/// things a user can act on — which directory, and what is still in it.
+///
+/// That has to travel in `message`, because the caller stringifies this into
+/// the task's `cleanup_failed` timeline event, which the detail sheet renders
+/// verbatim, and `AppCommandError`'s `Display` is its `message` alone —
+/// `detail` never reaches that line. `AppCommandError::io` would leave "I/O
+/// operation failed" there and nothing else, the same dead end this path exists
+/// to get users out of. Takes the RESOLVED path, so the sentence names the
+/// directory the call actually touched rather than the argument it started
+/// from.
+fn removal_refused(
+    target: &std::path::Path,
+    git_stderr: &[u8],
+    err: &std::io::Error,
+) -> AppCommandError {
+    // An unreadable marker counts as detached: this only picks a message, and
+    // whatever stopped the read is the more useful of the two either way.
+    if std::fs::symlink_metadata(target.join(".git")).is_ok() {
+        return git_command_error("worktree remove", git_stderr);
+    }
+    // The same kinds `AppCommandError::io` distinguishes, so replacing it costs
+    // only the message. `AlreadyExists` is in the list because POSIX lets
+    // `rmdir` report a non-empty directory as `EEXIST` rather than `ENOTEMPTY`.
+    let code = match err.kind() {
+        std::io::ErrorKind::NotFound => AppErrorCode::NotFound,
+        std::io::ErrorKind::PermissionDenied => AppErrorCode::PermissionDenied,
+        std::io::ErrorKind::AlreadyExists => AppErrorCode::AlreadyExists,
+        _ => AppErrorCode::IoError,
+    };
+    AppCommandError::new(
+        code,
+        format!(
+            "the worktree directory '{}' could not be removed: {err}",
+            target.display()
+        ),
+    )
+}
+
 /// Remove a task worktree directory + its branch. Runs from the project repo.
-/// Tolerant of a directory already gone (prunes the stale registration) and of
-/// a branch already deleted; `-D` is required because a squash-landed branch is
-/// unmerged in git's eyes.
+/// Tolerant of a directory already gone (prunes the stale registration), an
+/// empty directory shell left by a partially successful removal, and a branch
+/// already deleted; `-D` is required because a squash-landed branch is unmerged
+/// in git's eyes.
+///
+/// `expected_tip` turns the branch delete into a COMPARE-AND-DELETE: the ref
+/// goes only if it still points at that commit, and a branch that moved is an
+/// error rather than a silent loss. Callers that have proved where the work
+/// went — a delivery knows the exact OID it published — pass it, because the
+/// only thing making `-D` safe for them is that the tip is that OID, and every
+/// read-then-delete leaves a window for it to stop being true. `None` keeps the
+/// unconditional delete the local-merge paths settle from git truth for.
 pub async fn remove_worktree_and_branch(
     repo_path: &str,
     worktree_path: &str,
     work_branch: Option<&str>,
+    expected_tip: Option<&str>,
 ) -> Result<(), AppCommandError> {
-    let removed = run_git(repo_path, &["worktree", "remove", "--force", worktree_path]).await?;
-    if !removed.status.success() {
-        if std::path::Path::new(worktree_path).exists() {
-            return Err(git_command_error("worktree remove", &removed.stderr));
+    // ONE resolved directory, shared by both halves of this function, and it
+    // has to be ABSOLUTE before git sees it. Git resolves a `<worktree>`
+    // argument by unique path SUFFIX first and only then as a path, so a
+    // relative name reaches a registered worktree anywhere on disk and
+    // `--force` deletes it: with a checkout registered at
+    // `/tmp/elsewhere/repo-task-7`, `git worktree remove --force repo-task-7`
+    // run from an unrelated repo deletes THAT one, uncommitted files included
+    // (measured; `a_relative_path_cannot_reach_a_worktree_somewhere_else`
+    // pins it). An absolute path suffix-matches nothing but itself.
+    //
+    // A drive-relative path on EITHER side is refused before anything resolves
+    // it. It is the one form whose meaning depends on a per-drive current
+    // directory, which this process and the git child do not share, so the two
+    // halves would resolve it apart — and the half that runs second deletes a
+    // directory. Whichever side carries it, the answer is the same: this does
+    // not name one directory, so nothing here may act on it.
+    for (label, path) in [("project", repo_path), ("worktree", worktree_path)] {
+        if is_drive_relative(std::path::Path::new(path)) {
+            return Err(AppCommandError::new(
+                AppErrorCode::InvalidInput,
+                format!(
+                    "the {label} path '{path}' is relative to a drive rather than rooted on \
+                     one, so it does not name a single directory"
+                ),
+            ));
         }
-        // Directory already gone — drop the stale registration so the branch
-        // delete below isn't blocked by a phantom checkout.
+    }
+    // Joining from `repo_path` is what git does with a relative path — that is
+    // `run_git`'s working directory — and `std::path::absolute` then applies
+    // the same process working directory the child would inherit. So the git
+    // call and the `std::fs` call below cannot land on different directories,
+    // which for the one destructive call here is the whole point. Folder paths
+    // are stored exactly as they were given, so none of this is hypothetical.
+    let target = std::path::absolute(std::path::Path::new(repo_path).join(worktree_path))
+        .map_err(AppCommandError::io)?;
+    // Refused rather than made lossy: a `\u{FFFD}` substituted into an absolute
+    // path is still an absolute path, and git would go delete THAT one while
+    // every removal below still used the bytes in `target`. Handing git a
+    // different directory than the one we probed is the single thing this
+    // resolution exists to prevent.
+    let Some(target_arg) = target.to_str() else {
+        return Err(AppCommandError::new(
+            AppErrorCode::InvalidInput,
+            format!("the worktree path '{worktree_path}' does not resolve to valid UTF-8"),
+        ));
+    };
+    // Git first, always — including for a directory it will refuse. Refusing is
+    // ALL it does: `worktree remove` validates the `.git` marker before it
+    // deletes anything, so a shell git will not speak for arrives at the
+    // recovery below exactly as it was. Asking it first is therefore free of
+    // risk, and it leaves ONE removal path here instead of a pre-check that
+    // has to re-derive what git is about to say.
+    let removed = run_git(repo_path, &["worktree", "remove", "--force", target_arg]).await?;
+    let needs_prune = if removed.status.success() {
+        false
+    } else {
+        // Every shape of leftover recovers the same way, so they share a line:
+        // a directory already gone, the empty shell that outlives a detached
+        // registration (#642), and the one Windows leaves when a process holds
+        // the directory open through git's final rmdir.
+        //
+        // `remove_dir` is what makes that safe to say. It is non-recursive, so
+        // it can only ever succeed on an EMPTY directory: an ignored artifact,
+        // or a file that appeared after the engine's own check, fails closed
+        // and keeps both the file and the branch below.
+        match std::fs::remove_dir(&target) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(removal_refused(&target, &removed.stderr, &e)),
+        }
+        true
+    };
+    if needs_prune {
+        // Directory already gone (or its empty shell removed) — drop any stale
+        // registration so the branch delete below isn't blocked by a phantom
+        // checkout.
         let prune = run_git(repo_path, &["worktree", "prune"]).await?;
         if !prune.status.success() {
             return Err(git_command_error("worktree prune", &prune.stderr));
         }
     }
-    if let Some(branch) = work_branch {
+    let Some(branch) = work_branch else {
+        return Ok(());
+    };
+    let Some(tip) = expected_tip else {
         let del = run_git(repo_path, &["branch", "-D", branch]).await?;
         if !del.status.success() {
             let msg = String::from_utf8_lossy(&del.stderr).to_lowercase();
@@ -384,6 +962,23 @@ pub async fn remove_worktree_and_branch(
                 return Err(git_command_error("branch -D", &del.stderr));
             }
         }
+        return Ok(());
+    };
+    // Asked for first, because `update-ref -d` cannot tell "already deleted"
+    // (fine — the caller's goal is met) from "moved" (must not be deleted)
+    // through its exit status alone. A branch that disappears between this
+    // read and the delete below still fails closed: the delete refuses, the
+    // caller flags a retryable cleanup, and the retry finds nothing to do.
+    let full_ref = format!("refs/heads/{branch}");
+    let exists = run_git(repo_path, &["rev-parse", "--verify", "--quiet", &full_ref]).await?;
+    if !exists.status.success() {
+        return Ok(());
+    }
+    // The compare and the delete in ONE git operation: no window between them
+    // for the ref to move, which is the whole reason a caller passes a tip.
+    let del = run_git(repo_path, &["update-ref", "-d", &full_ref, tip]).await?;
+    if !del.status.success() {
+        return Err(git_command_error("update-ref -d", &del.stderr));
     }
     Ok(())
 }
@@ -391,6 +986,29 @@ pub async fn remove_worktree_and_branch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One entry per path from `git status -z`: a rename's source (the next
+    /// NUL field) is skipped rather than read as a file of its own, and a name
+    /// with spaces or non-ASCII comes through as-is (no quoting under `-z`).
+    #[test]
+    fn porcelain_z_reads_one_entry_per_path() {
+        let raw = b"?? new file.txt\0 M src/a.rs\0R  to.rs\0from.rs\0D  gone.rs\0 D gone2.rs\0A  added.rs\0MM \xc3\xa9.rs\0";
+        let got: Vec<_> = parse_porcelain_z(raw)
+            .into_iter()
+            .map(|f| (f.file, f.status))
+            .collect();
+        let want = [
+            ("new file.txt", "A"),
+            ("src/a.rs", "M"),
+            ("to.rs", "R"),
+            ("gone.rs", "D"),
+            ("gone2.rs", "D"),
+            ("added.rs", "A"),
+            ("é.rs", "M"),
+        ]
+        .map(|(f, s)| (f.to_string(), s.to_string()));
+        assert_eq!(got, want);
+    }
 
     /// Run a git command in `dir`, supplying identity via env so the test does
     /// not depend on (or mutate) the developer's global git config.
@@ -410,6 +1028,76 @@ mod tests {
             out.status.success(),
             "git {args:?} failed: {}",
             String::from_utf8_lossy(&out.stderr)
+        );
+        // The env above only reaches the commands THIS helper runs; the
+        // functions under test spawn their own git through `crate::process`,
+        // which inherits the real environment — and Git for Windows ships
+        // `core.autocrlf=true` in its system config. A fixture whose bytes mean
+        // one thing to the test and another to the code it exercises measures
+        // the harness, not the behaviour. Repo-LOCAL config is the one layer
+        // both sides read.
+        if args.first() == Some(&"init") {
+            git_run(dir, &["config", "core.autocrlf", "false"]);
+        }
+    }
+
+    /// Copying an index must keep Git's racy-clean check: a same-size edit
+    /// whose stat data still matches the cached entry needs to be rehashed.
+    #[tokio::test]
+    async fn a_copied_index_still_stages_a_racily_clean_edit() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let path = root.to_str().expect("utf-8 path");
+        git_run(root, &["init", "-q"]);
+        git_run(root, &["config", "core.trustctime", "false"]);
+        git_run(root, &["config", "core.checkStat", "minimal"]);
+        let file = root.join("Cargo.lock");
+        // Whole seconds model a filesystem whose timestamp resolution cannot
+        // distinguish the two writes, independently of how fast this runs.
+        let timestamp = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        std::fs::write(&file, "a\n").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(timestamp)
+            .unwrap();
+        git_run(root, &["add", "Cargo.lock"]);
+        git_run(root, &["commit", "-q", "-m", "base"]);
+
+        std::fs::write(&file, "b\n").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(timestamp)
+            .unwrap();
+        let index = root.join(".git/index");
+        std::fs::File::options()
+            .write(true)
+            .open(&index)
+            .unwrap()
+            .set_modified(timestamp)
+            .unwrap();
+        let original = std::fs::read(&index).unwrap();
+        let original_mtime = std::fs::metadata(&index).unwrap().modified().unwrap();
+
+        let scratch = ScratchIndex::copy_of(path, None).await.unwrap();
+        let add = run_git_with_index(path, &scratch.path, &["add", "--", "Cargo.lock"])
+            .await
+            .unwrap();
+        assert!(add.status.success(), "{:?}", add.stderr);
+        let diff = run_git_with_index(path, &scratch.path, &["diff", "--cached"])
+            .await
+            .unwrap();
+        assert!(diff.status.success(), "{:?}", diff.stderr);
+        let patch = String::from_utf8(diff.stdout).unwrap();
+        assert!(patch.contains("-a\n+b\n"), "same-size edit lost: {patch}");
+        assert_eq!(std::fs::read(&index).unwrap(), original);
+        assert_eq!(
+            std::fs::metadata(&index).unwrap().modified().unwrap(),
+            original_mtime,
+            "the real index's contents and timestamp stay untouched"
         );
     }
 
@@ -452,6 +1140,334 @@ mod tests {
             "untracked files are invisible to the base diff"
         );
         assert!(has_changes(path).await.expect("status"));
+    }
+
+    /// The measure every acceptance decision runs on has to see work the agent
+    /// never committed — a task is not required to commit before it lands in
+    /// review, and the merge generation's own prompt starts by committing
+    /// whatever is left over. Uncommitted edits to tracked files were always
+    /// visible; a brand-new file nobody added is the case a plain diff misses,
+    /// and reporting that task as "changed nothing" is what puts the wrong
+    /// acceptance on its card.
+    #[tokio::test]
+    async fn the_acceptance_measure_sees_work_that_was_never_committed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().to_str().expect("utf-8 path");
+        git_run(dir.path(), &["init", "-q", "-b", "main"]);
+        std::fs::write(dir.path().join(".gitignore"), "*.log\n").expect("write");
+        std::fs::write(dir.path().join("a.txt"), "one\n").expect("write");
+        git_run(dir.path(), &["add", "-A"]);
+        git_run(dir.path(), &["commit", "-q", "-m", "base"]);
+        let base = rev_parse(path, "HEAD").await.expect("base sha");
+
+        // The agent's round: one tracked file edited, one new file written,
+        // neither committed — plus a build artifact the repository ignores.
+        std::fs::write(dir.path().join("a.txt"), "one\ntwo\n").expect("write");
+        std::fs::write(dir.path().join("new.txt"), "x\ny\nz\n").expect("write");
+        std::fs::write(dir.path().join("build.log"), "noise\n").expect("write");
+
+        let plain = diff_numstat(path, &base).await.expect("plain diff");
+        assert_eq!(
+            plain.iter().map(|f| f.file.as_str()).collect::<Vec<_>>(),
+            ["a.txt"],
+            "the plain diff is blind to the new file — this is why the acceptance \
+             measure cannot use it"
+        );
+
+        let seen = diff_numstat_with_untracked(path, &base)
+            .await
+            .expect("acceptance diff");
+        let names: Vec<&str> = seen.iter().map(|f| f.file.as_str()).collect();
+        assert_eq!(names, ["a.txt", "new.txt"], "ignored files stay out: {seen:?}");
+        let new_file = seen.iter().find(|f| f.file == "new.txt").expect("new file");
+        assert_eq!(
+            (new_file.additions, new_file.deletions),
+            (3, 0),
+            "counted like any other addition"
+        );
+
+        // …and the patch behind it renders that file instead of nothing.
+        let patch = diff_patch_with_untracked(path, &base, Some("new.txt"))
+            .await
+            .expect("patch");
+        assert!(patch.contains("new file mode"), "{patch}");
+        assert!(patch.contains("+x"), "{patch}");
+
+        // The worktree's own index is left exactly as it was: nothing staged,
+        // the new file still untracked, and no scratch file left behind.
+        let staged = std::process::Command::new("git")
+            .args(["diff", "--cached", "--name-only"])
+            .current_dir(dir.path())
+            .output()
+            .expect("spawn git");
+        assert!(
+            staged.stdout.is_empty(),
+            "the real index was written to: {}",
+            String::from_utf8_lossy(&staged.stdout)
+        );
+        assert!(has_changes(path).await.expect("status"));
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path().join(".git"))
+            .expect("read .git")
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("codeg-diff-index"))
+            .collect();
+        assert!(leftovers.is_empty(), "scratch index left behind: {leftovers:?}");
+    }
+
+    /// A file the ignore rules exclude but that is TRACKED anyway (`git add
+    /// -f`, then committed) is the task's work like any other. Only the index
+    /// knows it: an index rebuilt from the anchor would not carry it, and
+    /// `add -A -N` will not put it back — the ignore rules see to that — so it
+    /// would drop out of the measure entirely, and the plain diff that DOES
+    /// see it would be the more accurate one. Completing the task would then
+    /// `branch -D` committed work.
+    #[tokio::test]
+    async fn a_tracked_file_the_ignore_rules_exclude_stays_in_the_measure() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().to_str().expect("utf-8 path");
+        git_run(dir.path(), &["init", "-q", "-b", "main"]);
+        std::fs::write(dir.path().join(".gitignore"), "*.log\n").expect("write");
+        std::fs::write(dir.path().join("a.txt"), "one\n").expect("write");
+        git_run(dir.path(), &["add", "-A"]);
+        git_run(dir.path(), &["commit", "-q", "-m", "base"]);
+        let base = rev_parse(path, "HEAD").await.expect("base sha");
+
+        std::fs::write(dir.path().join("kept.log"), "one\ntwo\n").expect("write");
+        git_run(dir.path(), &["add", "-f", "kept.log"]);
+        git_run(dir.path(), &["commit", "-q", "-m", "the task's work"]);
+
+        let seen = diff_numstat_with_untracked(path, &base)
+            .await
+            .expect("acceptance diff");
+        assert_eq!(
+            seen.iter().map(|f| f.file.as_str()).collect::<Vec<_>>(),
+            ["kept.log"],
+            "committed work must not vanish because a pattern would have ignored it: {seen:?}"
+        );
+    }
+
+    /// The task drawer lists a file by the name numstat gives it, then asks for
+    /// that file's patch by the same name. By default git prints a non-ASCII
+    /// path C-quoted and octal-escaped, so the drawer showed
+    /// `"\351\234\200\346\261\202.md"` and the patch it asked for came back
+    /// empty.
+    #[tokio::test]
+    async fn a_non_ascii_path_is_listed_and_diffed_by_its_own_name() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().to_str().expect("utf-8 path");
+        git_run(dir.path(), &["init", "-q", "-b", "main"]);
+        // Git's default, set repo-local so the git the code under test runs
+        // reads it too: a developer's global `core.quotePath=false` must not
+        // hide the bug.
+        git_run(dir.path(), &["config", "core.quotePath", "true"]);
+        std::fs::write(dir.path().join("需求.md"), "one\n").expect("write");
+        git_run(dir.path(), &["add", "-A"]);
+        git_run(dir.path(), &["commit", "-q", "-m", "base"]);
+        let base = rev_parse(path, "HEAD").await.expect("base sha");
+
+        std::fs::write(dir.path().join("需求.md"), "one\ntwo\n").expect("write");
+        std::fs::write(dir.path().join("新文件.txt"), "x\n").expect("write");
+
+        let plain = diff_numstat(path, &base).await.expect("plain diff");
+        assert_eq!(
+            plain.iter().map(|f| f.file.as_str()).collect::<Vec<_>>(),
+            ["需求.md"]
+        );
+        let seen = diff_numstat_with_untracked(path, &base)
+            .await
+            .expect("acceptance diff");
+        assert_eq!(
+            seen.iter().map(|f| f.file.as_str()).collect::<Vec<_>>(),
+            ["新文件.txt", "需求.md"]
+        );
+        let patch = diff_patch_with_untracked(path, &base, Some("需求.md"))
+            .await
+            .expect("patch");
+        assert!(patch.contains("+++ b/需求.md"), "{patch}");
+        assert!(patch.contains("+two"), "{patch}");
+
+        git_run(dir.path(), &["add", "-A"]);
+        git_run(dir.path(), &["commit", "-q", "-m", "the task's work"]);
+        let head = rev_parse(path, "HEAD").await.expect("head sha");
+        let committed = diff_numstat_between(path, &base, &head)
+            .await
+            .expect("commit diff");
+        assert_eq!(
+            committed
+                .iter()
+                .map(|f| f.file.as_str())
+                .collect::<Vec<_>>(),
+            ["新文件.txt", "需求.md"]
+        );
+    }
+
+    /// A renamed file is listed in numstat's notation, which names no path:
+    /// asked for by that name, its patch came back empty and the drawer said
+    /// "No changes vs the base yet" for a file it had just listed. A move the
+    /// agent never ran `git mv` for is listed the same way (the scratch index
+    /// pairs the deleted path with the intent-to-add one).
+    ///
+    /// Each file's patch holds that file alone, also where the worktree has a
+    /// directory named like a path the anchor had as a file (a pathspec
+    /// matches everything below a directory of its name), including a file
+    /// moved into a directory of its own name, and a submodule.
+    #[tokio::test]
+    async fn a_renamed_file_is_diffed_by_the_name_the_list_gives_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let path = root.to_str().expect("utf-8 path");
+        git_run(root, &["init", "-q", "-b", "main"]);
+        // Git's default, repo-local so a developer's global config cannot
+        // turn rename detection off for the code under test.
+        git_run(root, &["config", "diff.renames", "true"]);
+        // Not git's defaults: what a user may configure — other prefixes
+        // (`c/`, `w/`), a submodule shown as its own files' diffs — must not
+        // change which sections a file's patch keeps.
+        git_run(root, &["config", "diff.mnemonicPrefix", "true"]);
+        git_run(root, &["config", "diff.submodule", "diff"]);
+        // Distinct contents, so each rename has exactly one possible pairing.
+        std::fs::create_dir_all(root.join("docs").join("sub")).expect("mkdir");
+        std::fs::write(root.join("docs/sub/moved.txt"), "a\nb\nc\nd\ne\n").expect("write");
+        std::fs::write(root.join("old.txt"), "1\n2\n3\n4\n5\n").expect("write");
+        std::fs::write(root.join("tool"), "t1\nt2\nt3\nt4\nt5\n").expect("write");
+        std::fs::write(root.join("gone"), "x\n").expect("write");
+        let module = root.join("module");
+        std::fs::create_dir(&module).expect("mkdir");
+        git_run(&module, &["init", "-q", "-b", "main"]);
+        std::fs::write(module.join("inside.txt"), "m\n").expect("write");
+        git_run(&module, &["add", "-A"]);
+        git_run(&module, &["commit", "-q", "-m", "m1"]);
+        git_run(root, &["add", "-A"]);
+        git_run(root, &["commit", "-q", "-m", "base"]);
+        let base = rev_parse(path, "HEAD").await.expect("base sha");
+
+        // Committed: a move up a directory, with an edit.
+        git_run(root, &["mv", "docs/sub/moved.txt", "docs/moved.txt"]);
+        std::fs::write(root.join("docs/moved.txt"), "a\nb\nc\nd\ne\nf\n").expect("write");
+        git_run(root, &["commit", "-q", "-am", "move"]);
+        // Uncommitted, and never `git mv`ed — then a directory where the file
+        // was. Likewise a deleted file with a directory in its place, and a
+        // file moved into a directory of its own name next to a new file.
+        std::fs::rename(root.join("old.txt"), root.join("new.txt")).expect("rename");
+        std::fs::create_dir(root.join("old.txt")).expect("mkdir");
+        std::fs::write(root.join("old.txt/child.txt"), "c\n").expect("write");
+        std::fs::remove_file(root.join("gone")).expect("remove");
+        std::fs::create_dir(root.join("gone")).expect("mkdir");
+        std::fs::write(root.join("gone/inner.txt"), "d\n").expect("write");
+        std::fs::rename(root.join("tool"), root.join("tool.tmp")).expect("rename");
+        std::fs::create_dir(root.join("tool")).expect("mkdir");
+        std::fs::rename(root.join("tool.tmp"), root.join("tool/main")).expect("rename");
+        std::fs::write(root.join("tool/other"), "o\n").expect("write");
+        // The submodule moves on to a new commit.
+        std::fs::write(module.join("inside.txt"), "m\nm2\n").expect("write");
+        git_run(&module, &["commit", "-q", "-am", "m2"]);
+
+        let mut listed: Vec<String> = diff_numstat_with_untracked(path, &base)
+            .await
+            .expect("list")
+            .into_iter()
+            .map(|f| f.file)
+            .collect();
+        listed.sort();
+        assert_eq!(
+            listed,
+            [
+                "docs/{sub => }/moved.txt",
+                "gone",
+                "gone/inner.txt",
+                "module",
+                "old.txt => new.txt",
+                "old.txt/child.txt",
+                "tool => tool/main",
+                "tool/other",
+            ]
+        );
+
+        let gone = diff_patch_with_untracked(path, &base, Some("gone"))
+            .await
+            .expect("patch");
+        assert!(gone.contains("deleted file mode"), "{gone}");
+        assert_eq!(gone.matches("diff --git ").count(), 1, "{gone}");
+        let module = diff_patch_with_untracked(path, &base, Some("module"))
+            .await
+            .expect("patch");
+        assert!(module.contains("+Subproject commit "), "{module}");
+        assert_eq!(module.matches("diff --git ").count(), 1, "{module}");
+        for (name, from, to) in [
+            (
+                "docs/{sub => }/moved.txt",
+                "docs/sub/moved.txt",
+                "docs/moved.txt",
+            ),
+            ("old.txt => new.txt", "old.txt", "new.txt"),
+            ("tool => tool/main", "tool", "tool/main"),
+        ] {
+            let patch = diff_patch_with_untracked(path, &base, Some(name))
+                .await
+                .expect("patch");
+            assert!(patch.contains(&format!("rename from {from}\n")), "{patch}");
+            assert!(patch.contains(&format!("rename to {to}\n")), "{patch}");
+            assert_eq!(patch.matches("diff --git ").count(), 1, "{patch}");
+        }
+        let moved = diff_patch_with_untracked(path, &base, Some("docs/{sub => }/moved.txt"))
+            .await
+            .expect("patch");
+        assert!(
+            moved.contains("\n+f\n"),
+            "the move's edit is in it: {moved}"
+        );
+    }
+
+    /// A SPARSE checkout has tracked files with no file on disk, and they must
+    /// not read as deletions: that would report a task that changed nothing as
+    /// having removed everything outside the cone. What keeps them out is the
+    /// scratch index being a COPY of the worktree's own (skip-worktree flags
+    /// and all) rather than a tree read back from the anchor.
+    ///
+    /// Set up through `core.sparseCheckout` + `info/sparse-checkout` +
+    /// `read-tree -mu`, which is how sparse checkouts worked long before the
+    /// `git sparse-checkout` command existed — the test should not depend on
+    /// the git version the developer happens to run.
+    #[tokio::test]
+    async fn a_sparse_checkout_reports_no_phantom_deletions() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().to_str().expect("utf-8 path");
+        git_run(dir.path(), &["init", "-q", "-b", "main"]);
+        std::fs::create_dir_all(dir.path().join("kept")).expect("mkdir");
+        std::fs::create_dir_all(dir.path().join("sparse")).expect("mkdir");
+        std::fs::write(dir.path().join("kept/a.txt"), "one\n").expect("write");
+        std::fs::write(dir.path().join("sparse/b.txt"), "two\n").expect("write");
+        git_run(dir.path(), &["add", "-A"]);
+        git_run(dir.path(), &["commit", "-q", "-m", "base"]);
+        let base = rev_parse(path, "HEAD").await.expect("base sha");
+
+        git_run(dir.path(), &["config", "core.sparseCheckout", "true"]);
+        std::fs::write(dir.path().join(".git/info/sparse-checkout"), "kept/\n").expect("write");
+        git_run(dir.path(), &["read-tree", "-mu", "HEAD"]);
+        assert!(
+            !dir.path().join("sparse/b.txt").exists(),
+            "the fixture must actually be sparse"
+        );
+
+        assert!(
+            diff_numstat_with_untracked(path, &base)
+                .await
+                .expect("acceptance diff")
+                .is_empty(),
+            "a checked-out subset is not a change"
+        );
+
+        // …and real work in the cone is still seen.
+        std::fs::write(dir.path().join("kept/new.txt"), "x\n").expect("write");
+        let seen = diff_numstat_with_untracked(path, &base)
+            .await
+            .expect("acceptance diff");
+        assert_eq!(
+            seen.iter().map(|f| f.file.as_str()).collect::<Vec<_>>(),
+            ["kept/new.txt"],
+            "{seen:?}"
+        );
     }
 
     /// The branch guard behind converging a missing worktree: unlanded commits
@@ -615,6 +1631,293 @@ mod tests {
                 .await
                 .expect("head"),
             base
+        );
+    }
+
+    /// Both answers of the compare-and-delete, on one repository.
+    ///
+    /// A caller that passes `expected_tip` has PROVED where the work went —
+    /// a delivery knows the exact OID it pushed — and the branch is expendable
+    /// for exactly as long as it still points there. Checking that separately
+    /// and then running `branch -D` leaves a window; this is the pair fused
+    /// into one git operation, so a branch that moved keeps its commit and
+    /// says so instead.
+    #[tokio::test]
+    async fn a_branch_is_deleted_only_while_it_still_holds_the_expected_tip() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(&repo).expect("mkdir");
+        let repo_path = repo.to_str().expect("utf-8 path");
+        git_run(&repo, &["init", "-q", "-b", "main"]);
+        std::fs::write(repo.join("a.txt"), "one\n").expect("write");
+        git_run(&repo, &["add", "-A"]);
+        git_run(&repo, &["commit", "-q", "-m", "base"]);
+
+        // ── the tip moved: the branch (and its commit) must survive ──
+        let moved = dir.path().join("wt-moved");
+        let moved_path = moved.to_str().expect("utf-8 path");
+        git_run(&repo, &["worktree", "add", "-q", "-b", "task/moved", moved_path]);
+        std::fs::write(moved.join("a.txt"), "one\ntwo\n").expect("write");
+        git_run(&moved, &["commit", "-qam", "published"]);
+        let published = rev_parse(moved_path, "HEAD").await.expect("published tip");
+        std::fs::write(moved.join("a.txt"), "one\ntwo\nthree\n").expect("write");
+        git_run(&moved, &["commit", "-qam", "never pushed"]);
+        let outran = rev_parse(moved_path, "HEAD").await.expect("later tip");
+        assert_ne!(published, outran);
+
+        remove_worktree_and_branch(repo_path, moved_path, Some("task/moved"), Some(&published))
+            .await
+            .expect_err("a branch that outran the published tip is not deletable");
+        assert_eq!(
+            rev_parse(repo_path, "refs/heads/task/moved").await.expect("branch alive"),
+            outran,
+            "the commit nobody published is still reachable"
+        );
+
+        // ── the tip is exactly what was published: the branch goes ──
+        let same = dir.path().join("wt-same");
+        let same_path = same.to_str().expect("utf-8 path");
+        git_run(&repo, &["worktree", "add", "-q", "-b", "task/same", same_path]);
+        std::fs::write(same.join("a.txt"), "one\nagain\n").expect("write");
+        git_run(&same, &["commit", "-qam", "published"]);
+        let tip = rev_parse(same_path, "HEAD").await.expect("tip");
+
+        remove_worktree_and_branch(repo_path, same_path, Some("task/same"), Some(&tip))
+            .await
+            .expect("removal");
+        assert!(!same.exists(), "the checkout is gone");
+        assert!(
+            rev_parse(repo_path, "refs/heads/task/same").await.is_err(),
+            "and so is its branch"
+        );
+
+        // ── an expected tip for a branch already gone is not an error ──
+        // The caller's goal is met, and a retried cleanup must be able to
+        // finish rather than flag the same failure forever.
+        let gone = dir.path().join("wt-gone");
+        let gone_path = gone.to_str().expect("utf-8 path");
+        git_run(&repo, &["worktree", "add", "-q", "-b", "task/gone", gone_path]);
+        let gone_tip = rev_parse(gone_path, "HEAD").await.expect("tip");
+        remove_worktree_and_branch(repo_path, gone_path, Some("task/gone"), Some(&gone_tip))
+            .await
+            .expect("first removal");
+        remove_worktree_and_branch(repo_path, gone_path, Some("task/gone"), Some(&gone_tip))
+            .await
+            .expect("a second pass finds nothing to do and says so quietly");
+    }
+
+    /// The engine normally catches contents before calling this layer, but a
+    /// file can appear after git has removed the checkout marker and before the
+    /// task retries. Git is not the risk here — it validates the `.git` marker
+    /// and refuses the removal outright, contents untouched. The risk is the
+    /// marker-less path this function grew FOR empty shells, which is the only
+    /// code that will delete such a directory at all: it must stay
+    /// non-recursive, so that a file makes it fail closed and keep the branch.
+    #[tokio::test]
+    async fn registered_worktree_without_git_marker_never_takes_a_sentinel() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let repo = dir.path().join("repo");
+        std::fs::create_dir(&repo).expect("mkdir");
+        let repo_path = repo.to_str().expect("utf-8 path");
+        git_run(&repo, &["init", "-q", "-b", "main"]);
+        std::fs::write(repo.join("a.txt"), "one\n").expect("write");
+        git_run(&repo, &["add", "-A"]);
+        git_run(&repo, &["commit", "-q", "-m", "base"]);
+
+        let worktree = dir.path().join("wt-sentinel");
+        let worktree_path = worktree.to_str().expect("utf-8 worktree");
+        git_run(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "task/sentinel",
+                worktree_path,
+            ],
+        );
+        std::fs::remove_file(worktree.join(".git")).expect("remove worktree marker");
+        std::fs::remove_file(worktree.join("a.txt")).expect("remove tracked contents");
+        std::fs::write(worktree.join("sentinel.txt"), "keep me\n").expect("sentinel");
+
+        let err = remove_worktree_and_branch(repo_path, worktree_path, Some("task/sentinel"), None)
+            .await
+            .expect_err("a non-empty detached shell must fail closed");
+
+        assert_eq!(
+            std::fs::read_to_string(worktree.join("sentinel.txt")).expect("read sentinel"),
+            "keep me\n"
+        );
+        assert!(
+            rev_parse(repo_path, "refs/heads/task/sentinel")
+                .await
+                .is_ok(),
+            "the branch is not deleted after the directory refusal"
+        );
+        // `Display` is `message` alone, and this is the string the cleanup
+        // event shows. Git's own attempt failed first, but with a sentence
+        // about a missing `.git` — the reason cleanup actually stopped is that
+        // OUR removal found something in the directory, so that is what has to
+        // come out the other end.
+        let msg = err.to_string();
+        assert!(
+            msg.contains(worktree_path) && msg.contains("could not be removed"),
+            "the refusal names the directory and its reason: {msg}"
+        );
+    }
+
+    /// The predicate the refusal is built on, asked of whichever platform is
+    /// running rather than of the one that happened to write the test.
+    ///
+    /// `C:repo` is the whole reason it exists, and it is the case that cannot
+    /// be stated platform-blind: Windows reads a drive prefix there and has to
+    /// refuse it, while a platform without path prefixes reads the same bytes
+    /// as an ordinary filename and must not. Everything else names a single
+    /// directory on BOTH — a rooted drive, a UNC share, a verbatim path, and
+    /// every Unix shape a folder row actually holds — so a refusal there would
+    /// break cleanup for real users.
+    #[test]
+    fn only_a_drive_relative_path_is_refused() {
+        for ordinary in [
+            "/Users/x/work/repo",
+            "/Users/x/work/repo/",
+            "repo",
+            "rel/proj",
+            "./rel/proj",
+            "../sibling/repo",
+            "/",
+            "",
+            // Windows forms that ARE rooted, and so are not this.
+            r"C:\repo",
+            r"\\server\share\repo",
+            r"\\?\C:\repo",
+            // Rooted on the current drive rather than naming one.
+            r"\wt",
+        ] {
+            assert!(
+                !is_drive_relative(std::path::Path::new(ordinary)),
+                "{ordinary:?} names one directory, so nothing may refuse it"
+            );
+        }
+        // A drive with a path that is not rooted on it, a drive with nothing
+        // after it at all, and the shape that walks back out of the directory
+        // it names — each finished by a per-drive current directory on Windows,
+        // each an ordinary filename anywhere without prefixes.
+        for drive_relative in ["C:repo", "C:", r"C:repo\..\victim"] {
+            assert_eq!(
+                is_drive_relative(std::path::Path::new(drive_relative)),
+                cfg!(windows),
+                "{drive_relative:?} is drive-relative on Windows and a plain name off it"
+            );
+        }
+    }
+
+    /// Git looks a `<worktree>` argument up by unique path SUFFIX before it
+    /// resolves it as a path, so a RELATIVE name is not scoped to the
+    /// repository it is handed to — it reaches a registered checkout anywhere
+    /// on disk, and `--force` deletes that one, uncommitted files included.
+    /// Folder paths are stored exactly as they were given, so the argument is
+    /// only as absolute as whoever created the folder made it. This is the one
+    /// call in this file that can destroy a checkout, so it resolves the path
+    /// itself rather than trusting git to scope it.
+    #[tokio::test]
+    async fn a_relative_path_cannot_reach_a_worktree_somewhere_else() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let repo = dir.path().join("repo");
+        std::fs::create_dir(&repo).expect("mkdir");
+        let repo_path = repo.to_str().expect("utf-8 path");
+        git_run(&repo, &["init", "-q", "-b", "main"]);
+        std::fs::write(repo.join("a.txt"), "one\n").expect("write");
+        git_run(&repo, &["add", "-A"]);
+        git_run(&repo, &["commit", "-q", "-m", "base"]);
+
+        // A real, registered checkout that shares only its LAST path component
+        // with the directory the caller names.
+        let elsewhere = dir.path().join("elsewhere").join("repo-task-7");
+        std::fs::create_dir_all(elsewhere.parent().expect("parent")).expect("mkdir");
+        let elsewhere_path = elsewhere.to_str().expect("utf-8 path");
+        git_run(
+            &repo,
+            &["worktree", "add", "-q", "-b", "task/7", elsewhere_path],
+        );
+        std::fs::write(elsewhere.join("precious.txt"), "not yours\n").expect("precious");
+
+        // The caller names `repo-task-7` beside the project — which does not
+        // exist. Nothing here may travel to the checkout that does.
+        remove_worktree_and_branch(repo_path, "repo-task-7", None, None)
+            .await
+            .expect("a path that is not a worktree is nothing to do");
+
+        assert_eq!(
+            std::fs::read_to_string(elsewhere.join("precious.txt")).expect("read precious"),
+            "not yours\n",
+            "the unrelated checkout keeps its uncommitted work"
+        );
+        assert!(
+            elsewhere.join("a.txt").exists(),
+            "and the rest of its tree"
+        );
+        // Asked OF git rather than matched against `worktree list`: that
+        // listing prints forward slashes on Windows while the fixture path
+        // holds backslashes, and a temp directory can come back short-named,
+        // so comparing the two strings tests the platform rather than the
+        // code. Running git inside the checkout answers the same question
+        // without comparing anything — a swept worktree leaves its `.git`
+        // file pointing at an administrative directory that is gone, and
+        // every git command in it fails.
+        assert!(
+            rev_parse(elsewhere_path, "HEAD").await.is_ok(),
+            "and its registration: the prune must not have swept it either"
+        );
+    }
+
+    /// The other side of that choice: a worktree git still speaks for is git's
+    /// to refuse, and its refusal must not be overwritten by ours. The
+    /// `remove_dir` recovery still runs here and still fails — a live checkout
+    /// is not empty — so this pins that failing SECOND does not make it the
+    /// story. A lock is the cleanest way to make git decline a healthy
+    /// checkout, and it is exactly the case where git's own text carries
+    /// something no filesystem error could ("use 'remove -f -f' to override").
+    #[tokio::test]
+    async fn a_locked_worktree_keeps_gits_own_refusal() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let repo = dir.path().join("repo");
+        std::fs::create_dir(&repo).expect("mkdir");
+        let repo_path = repo.to_str().expect("utf-8 path");
+        git_run(&repo, &["init", "-q", "-b", "main"]);
+        std::fs::write(repo.join("a.txt"), "one\n").expect("write");
+        git_run(&repo, &["add", "-A"]);
+        git_run(&repo, &["commit", "-q", "-m", "base"]);
+
+        let worktree = dir.path().join("wt-locked");
+        let worktree_path = worktree.to_str().expect("utf-8 worktree");
+        git_run(
+            &repo,
+            &["worktree", "add", "-q", "-b", "task/locked", worktree_path],
+        );
+        git_run(&repo, &["worktree", "lock", worktree_path]);
+
+        let err = remove_worktree_and_branch(repo_path, worktree_path, Some("task/locked"), None)
+            .await
+            .expect_err("a locked worktree is not removed");
+
+        assert_eq!(
+            err.message, "git worktree remove failed",
+            "git's refusal is reported as git's, not as a directory we failed to remove"
+        );
+        assert!(
+            err.detail.as_deref().unwrap_or_default().contains("locked"),
+            "git's reason is kept where this file always puts it: {:?}",
+            err.detail
+        );
+        assert!(
+            worktree.join("a.txt").exists(),
+            "the locked checkout is left standing"
+        );
+        assert!(
+            rev_parse(repo_path, "refs/heads/task/locked").await.is_ok(),
+            "and so is its branch"
         );
     }
 

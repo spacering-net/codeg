@@ -1,5 +1,5 @@
-import { useMemo, type ReactNode } from "react"
-import { useTranslations } from "next-intl"
+import type { ConversationFolderPickerOverride } from "@/components/chat/conversation-context-bar"
+import type { ReactNode } from "react"
 import type {
   AgentType,
   ConnectionStatus,
@@ -11,29 +11,53 @@ import type {
   PromptInputBlock,
   QuestionAnswer,
   SessionConfigOptionInfo,
+  SessionFailureRecord,
   SessionModeInfo,
   AvailableCommandInfo,
+  RemoteControlInfo,
 } from "@/lib/types"
+import { ComposerStatusStrips } from "@/components/chat/composer-status-strips"
+import { RemoteControlStrip } from "@/components/chat/remote-control-strip"
 import type {
   PendingPermission,
   PendingQuestion,
   ClaudeApiRetryState,
 } from "@/contexts/acp-connections-context"
 import type { QueuedMessage } from "@/hooks/use-message-queue"
-import { Loader2 } from "lucide-react"
 import { ChatInput } from "@/components/chat/chat-input"
+import { ChatWidthHandles } from "@/components/chat/chat-width-handles"
+import { chatGutterStyle } from "@/lib/chat-content-width"
+import { cn } from "@/lib/utils"
+import type { ComposerInjectContent } from "@/components/chat/message-input"
 import { PermissionDialog } from "@/components/chat/permission-dialog"
 import { QuestionDialog } from "@/components/chat/question-dialog"
 import { AskQuestionCard } from "@/components/chat/ask-question-card"
 import { PlanApprovalCard } from "@/components/chat/plan-approval-card"
+import { MarkdownImageProvider } from "@/components/ai-elements/markdown-local-image"
 
 interface ConversationShellProps {
   status: ConnectionStatus | null
   promptCapabilities: PromptCapabilitiesInfo
   defaultPath?: string
   agentName?: string
-  error: string | null
+  /** The in-flight retry line under the composer (see
+   *  `ComposerStatusStrips`). The session's errors are notifications, raised by
+   *  the connections provider — none is drawn here. */
   claudeApiRetry: ClaudeApiRetryState | null
+  /** AIR typed session failures for this connection (active + resolved); the
+   *  dock draws only the in-flight retry incidents. Omit/empty renders
+   *  nothing. */
+  sessionFailures?: SessionFailureRecord[]
+  /** Closes an incident strip, taking every record it stands for. Passed for
+   *  every surface with a live store — dismissing is client-local, so viewers
+   *  get it too. */
+  onSessionFailureDismiss?: (ids: string[]) => void
+  /** Claude Code's Remote Control while it is on; its strip shows the
+   *  session's link and QR code. Omit/`null` renders nothing. */
+  remoteControl?: RemoteControlInfo | null
+  /** Turns Remote Control off (sends `/remote-control off`). Omitted for
+   *  surfaces without a connection of their own — the button is then hidden. */
+  onRemoteControlOff?: () => void
   pendingPermission: PendingPermission | null
   pendingQuestion: PendingQuestion | null
   /** Awaiting-answer multiple-choice `ask_user_question`. */
@@ -64,8 +88,15 @@ interface ConversationShellProps {
   onConfigOptionChange?: (configId: string, valueId: string) => void
   agentType?: AgentType | null
   availableCommands?: AvailableCommandInfo[] | null
+  /** The prompt the agent predicts the user will send next; the empty
+   *  composer offers it (see `MessageInput.promptSuggestion`). */
+  promptSuggestion?: string | null
   attachmentTabId?: string | null
+  /** Pass-through: see `MessageInput`. */
+  folderPickerOverride?: ConversationFolderPickerOverride
   draftStorageKey?: string | null
+  /** Pass-through: see `MessageInput.getSentHistory`. */
+  getSentHistory?: () => string[]
   hideInput?: boolean
   /** Optional banner rendered in the composer dock, where the input sits.
    *  Used with `hideInput` to explain WHY the composer is unavailable (e.g.
@@ -90,21 +121,43 @@ interface ConversationShellProps {
   onQueueReorder?: (items: QueuedMessage[]) => void
   onQueueEdit?: (id: string) => void
   onQueueDelete?: (id: string) => void
+  /** Insert one queued item into the RUNNING turn over the session's
+   *  live-feedback channel; threaded straight through to the composer's
+   *  queue list. See `ChatInputProps.onQueueSteer`. */
+  onQueueSteer?: (id: string) => Promise<void> | void
   editingItemId?: string | null
   editingDraftText?: string | null
   editingDraftBlocks?: PromptInputBlock[] | null
   isEditingQueueItem?: boolean
   onSaveQueueEdit?: (draft: PromptDraft) => void
   onCancelQueueEdit?: () => void
-  onForkSend?: (draft: PromptDraft, modeId?: string | null) => void
-  /** Inject the draft's text into the RUNNING turn (native live-feedback
-   *  steering). Present only for sessions on the native channel; threaded
-   *  straight through to the composer. */
-  onSteer?: (text: string) => Promise<void>
+  /** Send the draft into the RUNNING turn over the session's live-feedback
+   *  channel. Present only for sessions with a working delivery channel;
+   *  threaded straight through to the composer. `blocks` carries the full
+   *  draft when it holds more than plain text (image attachments, file
+   *  badges); `text` stays the recorded/display form. Must stay in sync with
+   *  `MessageInputProps.onSteer` — the optional second parameter makes a
+   *  stale one-arg declaration here assignable, so tsc would NOT catch a
+   *  wrapper that silently drops the blocks. */
+  onSteer?: (text: string, blocks?: PromptInputBlock[]) => Promise<void>
+  /** Which channel `onSteer` rides (picks the composer's honest copy);
+   *  threaded straight through. See `MessageInput`. */
+  steerChannel?: "native" | "pull"
   /** Optional banner pinned to the top of the panel, above the message area
    *  (e.g. the "restart to apply" config-stale banner). Renders nothing when
    *  omitted. */
   topBanner?: ReactNode
+  /** Content pushed into the docked composer from outside it — currently a
+   *  quoted transcript selection. Cleared by the host via `onInjectConsumed`
+   *  once the composer has taken it. */
+  injectContent?: ComposerInjectContent | null
+  onInjectConsumed?: () => void
+  /** Give the chat column drag handles on its edges (`ChatWidthHandles`) and
+   *  the window-edge gutter they need. Only for the conversation tab: a canvas
+   *  card renders this shell inside the board's zoom transform, where the
+   *  handles' layout maths would be off by the zoom factor, and a card has no
+   *  window edge to keep clear. */
+  resizableWidth?: boolean
 }
 
 export function ConversationShell({
@@ -112,8 +165,11 @@ export function ConversationShell({
   promptCapabilities,
   defaultPath,
   agentName,
-  error,
   claudeApiRetry,
+  sessionFailures,
+  onSessionFailureDismiss,
+  remoteControl,
+  onRemoteControlOff,
   pendingPermission,
   pendingQuestion,
   pendingAskQuestion,
@@ -136,8 +192,11 @@ export function ConversationShell({
   onConfigOptionChange,
   agentType,
   availableCommands,
+  promptSuggestion,
   attachmentTabId,
+  folderPickerOverride,
   draftStorageKey,
+  getSentHistory,
   hideInput = false,
   composerBanner,
   feedbackList,
@@ -150,81 +209,59 @@ export function ConversationShell({
   onQueueReorder,
   onQueueEdit,
   onQueueDelete,
+  onQueueSteer,
   editingItemId,
   editingDraftText,
   editingDraftBlocks,
   isEditingQueueItem,
   onSaveQueueEdit,
   onCancelQueueEdit,
-  onForkSend,
   onSteer,
+  steerChannel,
   topBanner,
+  injectContent,
+  onInjectConsumed,
+  resizableWidth = false,
 }: ConversationShellProps) {
-  const tAcp = useTranslations("Folder.chat.acpConnections")
-  const retryLineText = useMemo(() => {
-    const retry = claudeApiRetry
-    if (!retry) return null
-
-    const retryAttempt =
-      retry.attempt !== null && retry.attempt !== undefined
-        ? Math.trunc(retry.attempt)
-        : null
-    const retryMax =
-      retry.maxRetries !== null && retry.maxRetries !== undefined
-        ? Math.trunc(retry.maxRetries)
-        : null
-    const retryDelaySeconds =
-      retry.retryDelayMs !== null && retry.retryDelayMs !== undefined
-        ? (retry.retryDelayMs / 1000).toFixed(1)
-        : null
-    const errorLabel = retry.error ?? tAcp("claudeApiRetry.fallbackError")
-    const statusLabel =
-      retry.errorStatus !== null && retry.errorStatus !== undefined
-        ? tAcp("claudeApiRetry.httpStatus", {
-            status: Math.trunc(retry.errorStatus),
-          })
-        : ""
-    const retryLabel =
-      retryAttempt !== null && retryMax !== null
-        ? tAcp("claudeApiRetry.retryingWithMax", {
-            attempt: retryAttempt,
-            max: retryMax,
-          })
-        : retryAttempt !== null
-          ? tAcp("claudeApiRetry.retryingAttempt", {
-              attempt: retryAttempt,
-            })
-          : tAcp("claudeApiRetry.retrying")
-    const delayLabel =
-      retryDelaySeconds !== null
-        ? tAcp("claudeApiRetry.nextRetryIn", {
-            seconds: retryDelaySeconds,
-          })
-        : null
-
-    return delayLabel !== null
-      ? tAcp("claudeApiRetry.lineWithDelay", {
-          error: errorLabel,
-          status: statusLabel,
-          retry: retryLabel,
-          delay: delayLabel,
-        })
-      : tAcp("claudeApiRetry.line", {
-          error: errorLabel,
-          status: statusLabel,
-          retry: retryLabel,
-        })
-  }, [claudeApiRetry, tAcp])
-
   return (
-    <div className="relative flex h-full min-h-0 flex-col">
+    // The gutter keeps the chat column (transcript and composer alike) off
+    // the window edge, so its width handles stay grabbable at any width.
+    <div
+      className="relative flex h-full min-h-0 flex-col"
+      style={resizableWidth ? chatGutterStyle : undefined}
+    >
       {topBanner}
-      <div className="flex-1 min-h-0">{children}</div>
 
-      <PermissionDialog
-        permission={pendingPermission}
-        onRespond={onRespondPermission}
-      />
+      {/* Above the transcript, not down in the composer dock: Remote Control
+          is the session's standing state, and pinning it here keeps it still
+          while the messages scroll under it. The dock below is for things that
+          come and go with the turn or the connection
+          (`ComposerStatusStrips`). Work running past a turn — background
+          tasks, sub-agents, delegations — is the transcript's live activity
+          row's "N running" (`MessageListView`'s `liveRuns`). */}
+      {remoteControl && (
+        <RemoteControlStrip
+          remoteControl={remoteControl}
+          onTurnOff={onRemoteControlOff}
+          canTurnOff={status === "connected"}
+        />
+      )}
+
+      <div className={cn("flex-1 min-h-0", resizableWidth && "relative")}>
+        {children}
+        {resizableWidth && <ChatWidthHandles />}
+      </div>
+
+      {/* Below the transcript, so outside its image scope: a request or a
+          plan names local images the way a reply does, against the same
+          folder. */}
+      <MarkdownImageProvider rootPath={defaultPath ?? null}>
+        <PermissionDialog
+          permission={pendingPermission}
+          onRespond={onRespondPermission}
+          agentType={agentType}
+        />
+      </MarkdownImageProvider>
 
       <QuestionDialog question={pendingQuestion} onAnswer={onAnswerQuestion} />
 
@@ -234,7 +271,7 @@ export function ConversationShell({
           to the input width. */}
       <div>
         {pendingAskQuestion && pendingAskQuestion.questions.length > 0 && (
-          <div className="mx-auto w-full max-w-3xl px-4">
+          <div className="mx-auto w-full chat-content-w px-4">
             <AskQuestionCard
               question={pendingAskQuestion}
               onAnswer={onAnswerAskQuestion}
@@ -242,29 +279,33 @@ export function ConversationShell({
           </div>
         )}
         {pendingPlanApproval && (
-          <div className="mx-auto w-full max-w-3xl px-4">
+          <div className="mx-auto w-full chat-content-w px-4">
             {/* key on approval_id so the card always remounts (fresh in-flight /
                 feedback state) if the slot is ever reused for a new approval. */}
-            <PlanApprovalCard
-              key={pendingPlanApproval.approval_id}
-              approval={pendingPlanApproval}
-              onAnswer={onAnswerPlanApproval}
-            />
+            <MarkdownImageProvider rootPath={defaultPath ?? null}>
+              <PlanApprovalCard
+                key={pendingPlanApproval.approval_id}
+                approval={pendingPlanApproval}
+                onAnswer={onAnswerPlanApproval}
+              />
+            </MarkdownImageProvider>
           </div>
         )}
 
         {composerBanner && (
-          <div className="mx-auto w-full max-w-3xl px-4 pb-2">
+          <div className="mx-auto w-full chat-content-w px-4 pb-2">
             {composerBanner}
           </div>
         )}
 
         {!hideInput && feedbackList && (
-          <div className="mx-auto w-full max-w-3xl px-4">{feedbackList}</div>
+          <div className="mx-auto w-full chat-content-w px-4">
+            {feedbackList}
+          </div>
         )}
 
         {!hideInput && (
-          <div className="mx-auto w-full max-w-3xl">
+          <div className="mx-auto w-full chat-content-w">
             <ChatInput
               status={status}
               promptCapabilities={promptCapabilities}
@@ -283,8 +324,11 @@ export function ConversationShell({
               onConfigOptionChange={onConfigOptionChange}
               agentType={agentType}
               availableCommands={availableCommands}
+              promptSuggestion={promptSuggestion}
               attachmentTabId={attachmentTabId}
+              folderPickerOverride={folderPickerOverride}
               draftStorageKey={draftStorageKey}
+              getSentHistory={getSentHistory}
               isActive={isActive}
               showActiveFlow={showActiveFlow}
               queue={queue}
@@ -292,37 +336,30 @@ export function ConversationShell({
               onQueueReorder={onQueueReorder}
               onQueueEdit={onQueueEdit}
               onQueueDelete={onQueueDelete}
+              onQueueSteer={onQueueSteer}
               editingItemId={editingItemId}
               editingDraftText={editingDraftText}
               editingDraftBlocks={editingDraftBlocks}
               isEditingQueueItem={isEditingQueueItem}
               onSaveQueueEdit={onSaveQueueEdit}
               onCancelQueueEdit={onCancelQueueEdit}
-              onForkSend={onForkSend}
               onSteer={onSteer}
+              steerChannel={steerChannel}
               onAddFeedback={onAddFeedback}
               feedbackAddDisabled={feedbackAddDisabled}
+              injectContent={injectContent}
+              onInjectConsumed={onInjectConsumed}
             />
           </div>
         )}
       </div>
 
-      {retryLineText && (
-        <div className="border-t border-destructive/20 bg-destructive/5 px-4 py-2 text-xs text-destructive">
-          <div className="flex items-center gap-2 font-medium">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">
-              {retryLineText}
-            </span>
-          </div>
-        </div>
-      )}
-
-      {error && (
-        <div className="px-4 py-2 text-xs text-destructive bg-destructive/5 border-t border-destructive/20">
-          {error}
-        </div>
-      )}
+      <ComposerStatusStrips
+        status={status}
+        claudeApiRetry={claudeApiRetry}
+        sessionFailures={sessionFailures}
+        onSessionFailureDismiss={onSessionFailureDismiss}
+      />
     </div>
   )
 }

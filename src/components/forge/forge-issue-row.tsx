@@ -1,0 +1,680 @@
+"use client"
+
+import { useTranslations } from "next-intl"
+import {
+  Check,
+  Circle,
+  CircleCheck,
+  CircleDot,
+  CirclePlay,
+  GitMerge,
+  GitPullRequestArrow,
+  GitPullRequestClosed,
+  GitPullRequestDraft,
+  Layers,
+  ListTodo,
+  MessageSquare,
+  Minus,
+  RotateCcw,
+  ShieldAlert,
+  X,
+  type LucideIcon,
+} from "lucide-react"
+import { Badge } from "@/components/ui/badge"
+import { BrowserLink } from "@/components/ui/browser-link"
+import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
+import { statusLabelKey } from "@/components/tasks/task-card"
+import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
+import { formatRelative } from "@/components/conversations/sidebar-conversation-grouping"
+import { cn } from "@/lib/utils"
+import { labelSwatch } from "@/lib/forge-label-color"
+import { chipStateForLink, isDeferredLink } from "@/lib/forge-task-chip"
+import type {
+  ForgeCheckSummary,
+  ForgeIssueRow,
+  ForgeLabel,
+  ForgeTaskLink,
+} from "@/lib/types"
+
+/** Render-time "now" is fine here: the list re-renders on every refresh. */
+function relative(iso: string): string {
+  return formatRelative(iso, Date.now())
+}
+
+/** The four words a row's state can be. `stateOpen` / `stateClosed` are the
+ *  toolbar filter's own labels — one vocabulary for the whole page, and two
+ *  fewer strings to keep in step across ten locales. Deliberately
+ *  provider-neutral: the same glyph set serves GitLab's merge requests. */
+type StateLabelKey = "stateOpen" | "stateClosed" | "stateMerged" | "stateDraft"
+
+/**
+ * The row's leading glyph. A pull request has four outcomes worth telling
+ * apart at a glance and an issue has two, and colour alone cannot carry that —
+ * hence a distinct SHAPE per state plus a translated label, so the state
+ * survives both a colour-blind reader and a screen reader.
+ *
+ * Draft outranks the state on purpose: an open draft is not ready for review,
+ * which is the thing a triage list is scanning for.
+ *
+ * Exported for the detail panel, which spells the same state out in words next
+ * to the same glyph in the same colour — one vocabulary across both surfaces
+ * (the same reason `task-card` hands `StatusChip` to the task detail sheet).
+ */
+export function stateGlyph(row: ForgeIssueRow): {
+  Icon: LucideIcon
+  className: string
+  labelKey: StateLabelKey
+} {
+  if (!row.is_pr) {
+    return row.state === "open"
+      ? {
+          Icon: CircleDot,
+          className: "text-emerald-600",
+          labelKey: "stateOpen",
+        }
+      : {
+          Icon: CircleCheck,
+          className: "text-violet-500",
+          labelKey: "stateClosed",
+        }
+  }
+  if (row.draft) {
+    return {
+      Icon: GitPullRequestDraft,
+      className: "text-muted-foreground",
+      labelKey: "stateDraft",
+    }
+  }
+  switch (row.state) {
+    case "merged":
+      return {
+        Icon: GitMerge,
+        className: "text-violet-500",
+        labelKey: "stateMerged",
+      }
+    case "open":
+      return {
+        Icon: GitPullRequestArrow,
+        className: "text-emerald-600",
+        labelKey: "stateOpen",
+      }
+    default:
+      return {
+        Icon: GitPullRequestClosed,
+        className: "text-rose-600",
+        labelKey: "stateClosed",
+      }
+  }
+}
+
+/** Labels drawn before the rest are dropped. A phone-width row has no space
+ *  for four of them next to a title that also wants to be readable. */
+const LABEL_CAP_COMPACT = 1
+const LABEL_CAP = 4
+
+/**
+ * One label, in the project's own colour.
+ *
+ * Shared with the detail panel — which is where the labels the row had to drop
+ * finally show — so that WHICH treatment a colour gets is decided once. The
+ * project's colour arrives raw from the forge and only `labelSwatch` knows how
+ * to make it survive both themes; a label the forge gave no usable colour keeps
+ * the neutral chip rather than an invented one. Size is the caller's, because
+ * the row and the panel are set at different scales.
+ */
+export function ForgeLabelChip({
+  label,
+  className,
+}: {
+  label: ForgeLabel
+  className?: string
+}) {
+  const swatch = labelSwatch(label.color)
+  return (
+    <Badge
+      variant="outline"
+      style={swatch}
+      title={label.name}
+      className={cn(
+        "shrink-0 rounded-full font-normal",
+        swatch == null ? "text-muted-foreground" : "forge-label border",
+        className
+      )}
+    >
+      {label.name}
+    </Badge>
+  )
+}
+
+/**
+ * ONE shape for the row's action, whichever of the two it is showing. "Start"
+ * and the status chip occupy the same slot on successive rows, so a difference
+ * in height or radius between them reads down the list as a ragged column;
+ * BACKGROUND is what separates them — an offer to act, versus a task already
+ * under way. Same reason the geometry is a constant and not two class strings
+ * that happen to agree today.
+ *
+ * The detail panel's footer borrows it too: it offers the same two actions on
+ * the same item, and a pill that changed shape on the way into the panel would
+ * read as a different control.
+ */
+export const ROW_ACTION =
+  "h-7 shrink-0 gap-1.5 rounded-full px-3 text-xs font-medium"
+
+/** Both actions' glyph. Spelled out on the icon rather than folded into
+ *  `ROW_ACTION`: `Button`'s own `[&_svg:not([class*='size-'])]:size-4` carries
+ *  a `:not()` and so outranks a plain `[&_svg]:` rule — an explicit class on
+ *  the icon is the escape hatch that variant is written around. */
+export const ROW_ACTION_GLYPH = "size-3.5"
+
+/** The live task chip's two fills, shared with the detail panel's footer: an
+ *  accent for a task still under way, neutral once it has settled. */
+export const CHIP_FILL = {
+  active:
+    "bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary dark:hover:bg-primary/15",
+  settled:
+    "bg-muted text-muted-foreground hover:bg-muted/80 dark:hover:bg-muted/80",
+} as const
+
+/**
+ * Whether a work task can be started from this item at all.
+ *
+ * A MERGED change cannot: the trigger refuses it whatever the scenario, since
+ * there is no branch left to work on and nowhere to deliver to (see
+ * `pull_is_workable` in src-tauri/src/forge/deliver.rs). Offering "Start" on
+ * one was a button whose only outcome is an error in the dialog it opens. The
+ * row and the detail panel ask the same question so they cannot disagree.
+ */
+export function canStartTask(row: ForgeIssueRow): boolean {
+  return !(row.is_pr && row.state === "merged")
+}
+
+/** The other items a linked task handles, when it handles more than this one
+ *  — a task made from several related issues. Empty for every other task. */
+export function togetherWith(
+  link: ForgeTaskLink | null,
+  row: ForgeIssueRow
+): number[] {
+  const items = link?.items ?? []
+  return items.length > 1 ? items.filter((n) => n !== row.number) : []
+}
+
+/** `#5, #9` — the numbers a combined chip names. */
+export function numberList(numbers: number[]): string {
+  return numbers.map((n) => `#${n}`).join(", ")
+}
+
+/** What a row's CI mark says — one of these, or nothing. */
+export type ChecksMark =
+  | "failure"
+  | "approval"
+  | "running"
+  | "success"
+  | "neutral"
+
+/**
+ * The ONE thing a row's CI mark says, or `null` for no mark at all.
+ *
+ * A failure outranks everything — it is the verdict on the code. Workflows
+ * held for approval come next: nothing will run until somebody acts, which is
+ * what a maintainer scanning the list is looking for, and a held fork change
+ * usually has no checks at all to show instead. Then a run still going, then
+ * a clean sweep; a list of checks that all ended without a verdict is the
+ * quietest mark there is.
+ *
+ * `null` for a summary that is missing (unknown) and for a change the forge
+ * says has no checks — a repository without CI looks exactly as it did before
+ * this mark existed.
+ */
+export function checksMark(
+  summary: ForgeCheckSummary | null | undefined
+): ChecksMark | null {
+  if (summary == null) return null
+  if (summary.verdict === "failure") return "failure"
+  if (summary.awaiting_approval > 0) return "approval"
+  return summary.verdict
+}
+
+/**
+ * Each mark's glyph, in the forge's own list's vocabulary: bare strokes with
+ * no ring around them — a check, a cross, a dot — so the mark reads as small
+ * as the meta text it sits in. `box` is for a glyph drawn smaller than the
+ * others (the dot), which keeps its full-size cell so the count after it does
+ * not shift between rows.
+ */
+const CHECKS_MARK_STYLE: Record<
+  ChecksMark,
+  { Icon: LucideIcon; glyph: string }
+> = {
+  failure: { Icon: X, glyph: "size-3.5 text-rose-600 dark:text-rose-400" },
+  approval: {
+    Icon: ShieldAlert,
+    glyph: "size-3.5 text-amber-600 dark:text-amber-400",
+  },
+  // Static, unlike the panel's spinner: thirty rows spinning at once would
+  // pull the eye down the list for the least urgent of the states.
+  running: {
+    Icon: Circle,
+    glyph: "size-2 fill-current text-amber-500 dark:text-amber-400",
+  },
+  success: {
+    Icon: Check,
+    glyph: "size-3.5 text-emerald-600 dark:text-emerald-400",
+  },
+  neutral: { Icon: Minus, glyph: "size-3.5 text-muted-foreground" },
+}
+
+/**
+ * `passing/total`, the way the forge's own list counts a change's checks — or
+ * `null` where the forge gave a verdict without a breakdown, or counted
+ * nothing. Only a PASS counts toward the numerator: a skipped or cancelled
+ * check is not one, so a green sweep with a skipped job reads `9/10`, and the
+ * tooltip says what the missing one is.
+ */
+export function checksFraction(
+  summary: ForgeCheckSummary | null | undefined
+): string | null {
+  const counts = summary?.counts
+  if (counts == null || counts.total <= 0) return null
+  return `${counts.passing}/${counts.total}`
+}
+
+/**
+ * The row's CI, closing the meta line after the update time: the glyph, the
+ * `passing/total` count the forge's own pull request list shows, and — for
+ * workflows held for approval — a word. A button, because the full story —
+ * every check, and the approval itself — is one click away on the panel's
+ * Checks tab. Its words (counts where the forge gave them, the verdict where
+ * it gave only that) are the tooltip and the accessible name both.
+ */
+function RowChecksMark({
+  summary,
+  loading,
+  onOpen,
+}: {
+  summary: ForgeCheckSummary | null | undefined
+  loading: boolean
+  onOpen?: () => void
+}) {
+  const t = useTranslations("Forge")
+  const mark = checksMark(summary)
+  if (summary == null && loading) {
+    // The first answer is still on its way: hold the place the mark will
+    // take — glyph and a `n/n` — so the line does not jump when it lands. A
+    // mark already on screen stays instead while it is re-read.
+    return (
+      <span
+        className="inline-flex shrink-0 items-center gap-1"
+        data-forge-checks-loading=""
+        aria-hidden
+      >
+        <span>·</span>
+        <span className="h-3 w-9 animate-pulse rounded-sm bg-muted" />
+      </span>
+    )
+  }
+  if (mark == null || summary == null) return null
+  const { Icon, glyph } = CHECKS_MARK_STYLE[mark]
+  const fraction = checksFraction(summary)
+
+  const parts: string[] = []
+  if (summary.awaiting_approval > 0) {
+    parts.push(
+      t("checksAwaitingApproval", { count: summary.awaiting_approval })
+    )
+  }
+  const counts = summary.counts
+  if (counts != null) {
+    if (counts.failing > 0) {
+      parts.push(t("checksFailing", { count: counts.failing }))
+    }
+    if (counts.pending > 0) {
+      parts.push(t("checksPending", { count: counts.pending }))
+    }
+    if (counts.passing > 0) {
+      parts.push(t("checksPassing", { count: counts.passing }))
+    }
+    if (counts.neutral > 0) {
+      parts.push(t("checksNeutralCount", { count: counts.neutral }))
+    }
+  }
+  if (parts.length === 0 || (counts == null && summary.verdict != null)) {
+    // No breakdown to give: the verdict's own word.
+    const word =
+      summary.verdict === "failure"
+        ? t("checkFailure")
+        : summary.verdict === "running"
+          ? t("checkRunning")
+          : summary.verdict === "success"
+            ? t("checkSuccess")
+            : summary.verdict === "neutral"
+              ? t("checkNeutral")
+              : null
+    if (word != null) parts.push(word)
+  }
+  const label = parts.join(" · ")
+  // Held workflows are the one state that asks somebody to act, so they get a
+  // word as well as a glyph — on every width, the side panel's included.
+  const approval = mark === "approval"
+
+  return (
+    // The separator is outside the button, like the author's and the time's
+    // sit outside their text: it is punctuation, not part of the control, and
+    // so takes no underline on hover.
+    <span className="inline-flex shrink-0 items-center gap-1">
+      <span aria-hidden>·</span>
+      <button
+        type="button"
+        onClick={onOpen}
+        title={label}
+        aria-label={label}
+        data-forge-checks={mark}
+        // The glyph sits outside the underline: only the words take it on
+        // hover, the way the forge's own list does.
+        className="group/checks inline-flex items-center gap-1 rounded-sm tabular-nums outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <span className="grid size-3.5 shrink-0 place-items-center">
+          <Icon className={glyph} strokeWidth={2.5} aria-hidden />
+        </span>
+        {fraction != null || approval ? (
+          <span
+            className={cn(
+              "underline-offset-2 transition-colors group-hover/checks:underline",
+              approval
+                ? "text-amber-700 dark:text-amber-400"
+                : "group-hover/checks:text-foreground"
+            )}
+          >
+            {approval ? t("checksApprovalShort") : fraction}
+          </span>
+        ) : null}
+      </button>
+    </span>
+  )
+}
+
+/**
+ * How this row takes part in the page's selection — the issues the page can
+ * hand to ONE task together. Absent on rows that cannot be picked at all
+ * (proposed changes), so their layout stays exactly as it was.
+ */
+export interface RowSelection {
+  checked: boolean
+  /** Why the box is greyed out, or `null` when it can be ticked. */
+  blockedReason: string | null
+  /** `range` = the Shift key was held: extend from the last row toggled. */
+  onToggle: (range: boolean) => void
+}
+
+/**
+ * One workbench row: `#number title labels · author · updated` plus the
+ * three-state action — start (no task), a live status chip (active task,
+ * click-through to the board), or done/canceled with a re-trigger.
+ */
+export function ForgeIssueRowItem({
+  row,
+  link,
+  compact = false,
+  selection,
+  checks,
+  checksLoading = false,
+  onOpenDetail,
+  onOpenChecks,
+  onStart,
+}: {
+  row: ForgeIssueRow
+  link: ForgeTaskLink | null
+  /** This change's CI, once the page has it. Absent = draw nothing. */
+  checks?: ForgeCheckSummary | null
+  /** The first read of this change's CI is in flight: hold its place. */
+  checksLoading?: boolean
+  /** Opens the detail panel straight on its Checks tab. */
+  onOpenChecks?: () => void
+  /** Phone width: fewer labels, since the title has to stay readable. */
+  compact?: boolean
+  /** The row's tick box, when it has one (issues only). */
+  selection?: RowSelection
+  /** Opens the right-side detail panel on this item. */
+  onOpenDetail: () => void
+  onStart: () => void
+}) {
+  const t = useTranslations("Forge")
+  const tTasks = useTranslations("Tasks")
+  const { setRoute } = useWorkbenchRoute()
+
+  const chip = chipStateForLink(link)
+  const active = chip === "active"
+  const terminal = chip === "terminal"
+  const startable = canStartTask(row)
+  const others = togetherWith(link, row)
+  const { Icon, className: glyphClass, labelKey } = stateGlyph(row)
+  const stateLabel = t(labelKey)
+
+  return (
+    // `items-start`, not `items-center`: the row is two lines and the glyph
+    // belongs to the TITLE, so centring it against the whole block floats it
+    // between the two. The h-5 box is the title's own line height (text-sm),
+    // which puts the glyph on that line's centre wherever the block grows.
+    // The TRAILING cluster is the opposite case — it belongs to the row, not to
+    // a line of it — so it centres against the whole block via `self-center`.
+    <div
+      className={cn(
+        "group group/row flex min-w-0 items-start gap-3 px-4 py-2.5 transition-colors hover:bg-muted/40",
+        selection?.checked && "bg-primary/5 hover:bg-primary/10"
+      )}
+    >
+      {selection ? (
+        // The tick box and the state glyph share ONE h-5 cell, stacked in the
+        // same grid area: the glyph shows at rest, the box takes its place
+        // while the row is hovered, while the box has keyboard focus, and for
+        // as long as the row is ticked. A fixed column of empty boxes down
+        // the list was noise for the common case of not selecting anything.
+        //
+        // The box is faded out with opacity rather than `invisible`, so it
+        // stays in the tab order (and under a tap on touch screens, which
+        // have no hover); `peer-focus-visible` brings it back for the
+        // keyboard. The title attribute rides on the wrapper: a disabled
+        // control receives no pointer events, so a tooltip on it would never
+        // show.
+        <span
+          className="grid h-5 w-4 shrink-0 place-items-center"
+          title={selection.blockedReason ?? undefined}
+          data-forge-select=""
+        >
+          <Checkbox
+            checked={selection.checked}
+            disabled={selection.blockedReason != null}
+            aria-label={t("selectItem", { number: row.number })}
+            className={cn(
+              "[grid-area:1/1]",
+              selection.checked
+                ? "opacity-100"
+                : selection.blockedReason != null
+                  ? // A greyed-out box: the base `disabled:opacity-50` would
+                    // otherwise outrank the resting `opacity-0` and leave a
+                    // faint box on every row with a task under way.
+                    "disabled:opacity-0 group-hover/row:disabled:opacity-50"
+                  : "opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100"
+            )}
+            // The click is handled here rather than through
+            // `onCheckedChange`, because only the event says whether Shift
+            // was held. Preventing the default keeps Radix from toggling on
+            // its own as well — the box is controlled, the page decides.
+            onClick={(e) => {
+              e.preventDefault()
+              selection.onToggle(e.shiftKey)
+            }}
+          />
+          <Icon
+            role="img"
+            aria-label={stateLabel}
+            className={cn(
+              "pointer-events-none h-3.5 w-3.5 [grid-area:1/1]",
+              glyphClass,
+              selection.checked
+                ? "invisible"
+                : "group-hover/row:invisible peer-focus-visible:invisible"
+            )}
+          />
+        </span>
+      ) : (
+        <span className="flex h-5 shrink-0 items-center">
+          <Icon
+            role="img"
+            aria-label={stateLabel}
+            className={cn("h-3.5 w-3.5", glyphClass)}
+          />
+        </span>
+      )}
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 items-center gap-1.5">
+          {/* The title opens the panel on the right rather than the forge's
+              own web page. Reading an issue used to mean leaving the app for a
+              browser and coming back to find your place in the list again; the
+              panel keeps the list, the filters and the scroll position exactly
+              where they were, and the way out to the forge stays one click
+              away on the number below and in the panel's footer.
+
+              A `<button>`, not a clickable div: Enter and Space, the focus
+              ring and the role all come with it. `text-start` because a button
+              centres its text by default, which would break the column the
+              titles line up in. */}
+          <button
+            type="button"
+            onClick={onOpenDetail}
+            title={row.title}
+            className="truncate text-start text-sm font-medium hover:underline"
+          >
+            {row.title}
+          </button>
+          {row.labels
+            .slice(0, compact ? LABEL_CAP_COMPACT : LABEL_CAP)
+            .map((label) => (
+              <ForgeLabelChip
+                key={label.name}
+                label={label}
+                className="h-4 px-2 text-[0.625rem]"
+              />
+            ))}
+        </div>
+        <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
+          {/* Where the title's old link went. The number is the item's name on
+              the forge — both forges render it as the link to the item — so it
+              is the natural place for the trip out, and putting it here keeps
+              the affordance on the row for anyone who wants the real page. */}
+          <BrowserLink
+            href={row.html_url}
+            title={t("openItem")}
+            className="shrink-0 font-mono transition-colors hover:text-foreground hover:underline"
+          >
+            #{row.number}
+          </BrowserLink>
+          {row.author ? (
+            <span className="min-w-0 truncate">· {row.author}</span>
+          ) : null}
+          {row.updated_at ? (
+            <span className="shrink-0">· {relative(row.updated_at)}</span>
+          ) : null}
+          {/* Last, after the time: a status rather than a fact about the
+              item, so it closes the line instead of pushing the author and
+              time apart. */}
+          <RowChecksMark
+            summary={checks}
+            loading={checksLoading}
+            onOpen={onOpenChecks}
+          />
+        </div>
+      </div>
+
+      {/* Comment count and action, centred on the row as one cluster. The wider
+          gap once there is room to spare keeps a two-digit count from reading
+          as part of the button next to it. */}
+      <div className="flex shrink-0 items-center gap-2 self-center sm:gap-4">
+        {row.comments > 0 ? (
+          // Only when there IS a discussion: a column of zeroes is noise, and
+          // both forges' own lists hide it the same way.
+          <span
+            className="flex items-center gap-1 text-[0.6875rem] tabular-nums text-muted-foreground"
+            title={t("commentCount", { count: row.comments })}
+          >
+            <MessageSquare className="size-3.5" aria-hidden />
+            {row.comments}
+          </span>
+        ) : null}
+
+        {link == null ? (
+          startable ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              className={ROW_ACTION}
+              onClick={onStart}
+            >
+              {/* Outline, like every other glyph on the row — a solid triangle
+                  was the one filled shape in the list and pulled the eye off
+                  the titles it sits beside. */}
+              <CirclePlay className={ROW_ACTION_GLYPH} aria-hidden />
+              {t("start")}
+            </Button>
+          ) : null
+        ) : (
+          // Two sibling controls, never one nested in the other: an interactive
+          // element inside a button folds its text into the outer button's
+          // accessible name, and keyboard activation of the inner one is left
+          // to whatever the browser decides. Siblings also drop the
+          // stopPropagation / manual Enter-and-Space handling a real button
+          // gives for free.
+          <div className="flex items-center gap-1.5">
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={() => setRoute("tasks")}
+              title={
+                others.length > 0
+                  ? `${t("viewTask")} · ${t("combinedWith", { numbers: numberList(others) })}`
+                  : t("viewTask")
+              }
+              className={cn(
+                ROW_ACTION,
+                active ? CHIP_FILL.active : CHIP_FILL.settled
+              )}
+            >
+              {/* The sidebar's own to-do glyph, so "Running" reads as the
+                  status of a WORK TASK rather than of the issue itself — and so
+                  the chip looks like the place it navigates to. Decoration:
+                  the accessible name stays the status word. A task handling
+                  several issues swaps it for a stack, and says so in words
+                  for anyone who cannot see the glyph. */}
+              {others.length > 0 ? (
+                <Layers className={ROW_ACTION_GLYPH} aria-hidden />
+              ) : (
+                <ListTodo className={ROW_ACTION_GLYPH} aria-hidden />
+              )}
+              {isDeferredLink(link)
+                ? tTasks("statusDeferred")
+                : tTasks(statusLabelKey(link.status))}
+              {others.length > 0 ? (
+                <span className="sr-only">
+                  {t("combinedWith", { numbers: numberList(others) })}
+                </span>
+              ) : null}
+            </Button>
+            {terminal && startable ? (
+              <button
+                type="button"
+                onClick={onStart}
+                className="inline-flex items-center gap-1 text-[0.6875rem] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+              >
+                <RotateCcw className="size-3" aria-hidden />
+                {t("retrigger")}
+              </button>
+            ) : null}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}

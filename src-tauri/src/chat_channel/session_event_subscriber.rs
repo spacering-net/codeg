@@ -13,13 +13,15 @@ use super::types::{ChannelMessageTarget, MessageLevel, RichMessage};
 use crate::acp::internal_bus::InternalEventBus;
 use crate::acp::manager::ConnectionManager;
 use crate::acp::types::{
-    AcpEvent, ConnectionStatus, DelegationResultSummary, EventEnvelope, PromptInputBlock,
+    AcpEvent, ConnectionStatus, DelegationResultSummary, EventEnvelope, PermissionAnswerOrigin,
+    PermissionOptionInfo, PromptInputBlock,
 };
 
 use crate::db::service::{
     app_metadata_service, conversation_service, sender_context_service, thread_binding_service,
 };
 use crate::logging::throttle::{LagLogThrottle, LAG_LOG_WINDOW};
+use crate::web::event_bridge::EventEmitter;
 
 use super::manager::ChatChannelManager;
 
@@ -30,12 +32,21 @@ const MESSAGE_LANGUAGE_KEY: &str = "chat_message_language";
 const COMMAND_PREFIX_KEY: &str = "chat_command_prefix";
 const DEFAULT_COMMAND_PREFIX: &str = "/";
 
+/// `emitter` must be the process-wide, long-lived emitter — NOT one looked up
+/// per connection. This subscriber consumes `SessionStarted` asynchronously off
+/// the broadcast bus, and connection cleanup removes the manager entry right
+/// after queuing its terminal events, so a per-`connection_id` lookup can
+/// legitimately come back empty by the time an event is handled. That would
+/// leave a preserved conversation row created but never broadcast — invisible
+/// to the user, which is the very failure being fixed (see
+/// `emit_preserved_conversation`).
 pub fn spawn_session_event_subscriber(
     bus: Arc<InternalEventBus>,
     bridge: Arc<Mutex<SessionBridge>>,
     manager: ChatChannelManager,
     conn_mgr: ConnectionManager,
     db_conn: DatabaseConnection,
+    emitter: EventEmitter,
 ) -> JoinHandle<()> {
     let mut rx = bus.subscribe();
     let metrics = Arc::clone(bus.metrics());
@@ -71,6 +82,7 @@ pub fn spawn_session_event_subscriber(
                         &manager,
                         &conn_mgr,
                         &db_conn,
+                        &emitter,
                     )
                     .await;
                 }
@@ -112,6 +124,7 @@ async fn handle_acp_envelope(
     manager: &ChatChannelManager,
     conn_mgr: &ConnectionManager,
     db: &DatabaseConnection,
+    emitter: &EventEmitter,
 ) {
     let connection_id = envelope.connection_id.as_str();
 
@@ -119,12 +132,143 @@ async fn handle_acp_envelope(
         AcpEvent::SessionStarted { session_id } => {
             let mut guard = bridge.lock().await;
             if let Some(session) = guard.get_mut(connection_id) {
-                let _ = conversation_service::update_external_id(
+                // Guarded bind — the bridge registers `conversation_id` up
+                // front, so this writes onto an ALREADY-bound row and would
+                // otherwise overwrite the id its history hangs off if the
+                // session was re-minted (codeg#500). Whichever of this
+                // subscriber and the lifecycle one wins the race, the loser
+                // gets `None` and the row is preserved exactly once.
+                let continues =
+                    crate::acp::continued_session_ids(session.agent_type, session_id);
+                match conversation_service::bind_external_id(
                     db,
                     session.conversation_id,
-                    session_id.clone(),
+                    session_id,
+                    &continues,
                 )
-                .await;
+                .await
+                {
+                    Ok(preserved) => {
+                        crate::commands::conversations::emit_preserved_conversation(
+                            emitter, db, preserved,
+                        )
+                        .await;
+                    }
+                    // A CONFLICT is permanent and disqualifying: the session
+                    // belongs to a different conversation row, so this route
+                    // will never be able to hold it. Dispatching the kickoff
+                    // would file the task's opening turn into the HOLDER row's
+                    // transcript while every event named this one.
+                    //
+                    // The ROUTE is torn down, not just this one prompt.
+                    // Withholding the kickoff alone would be illusory in two
+                    // ways: `pending_prompt` is picked up again by the
+                    // `TurnComplete` arm below, which re-sends a deferred
+                    // kickoff WITHOUT re-checking ownership; and the bridge
+                    // entry would survive, so the remote user's NEXT message
+                    // finds it and dispatches through `send_prompt` just the
+                    // same. Either way the turn lands in the holder row's
+                    // transcript.
+                    //
+                    // So this takes the file's established terminal path,
+                    // identical to a terminal `AcpEvent::Error`: drop the
+                    // bridge entry, tell the requester, mark the conversation
+                    // `Cancelled`, and clear the persisted channel→session
+                    // route. The connection itself is deliberately NOT
+                    // cancelled — the terminal-error path does not either, and
+                    // another surface may legitimately own it.
+                    //
+                    // Every OTHER error keeps the previous behaviour and falls
+                    // through to the send. Those are dominated by transient
+                    // SQLite contention, and `pending_prompt` is consumed by
+                    // `.take()` below — tearing the route down for one would
+                    // kill a session that was about to work.
+                    //
+                    // GATED ON THE EVENT STILL BEING CURRENT. A `Conflict`
+                    // proves the session in THIS envelope belongs elsewhere; it
+                    // does NOT prove the route is bad, because the envelope may
+                    // be stale. This subscriber and the lifecycle one drain the
+                    // bus independently, so after a fork advances the row from
+                    // S1 to S2 (leaving a sibling holding S1) a backed-up
+                    // `SessionStarted{S1}` still arrives here and conflicts
+                    // against that sibling — while the route itself is happily
+                    // on S2. Tearing down on that would destroy a healthy
+                    // session, which is strictly worse than the misfiling this
+                    // arm exists to prevent. Only act when the connection's
+                    // live session is still the one that just failed to bind;
+                    // anything else (including a connection that has already
+                    // gone away, where we cannot tell) falls back to the old
+                    // log-and-continue.
+                    Err(crate::db::error::DbError::Conflict(detail)) => {
+                        let channel_id = session.channel_id;
+                        let sender_id = session.sender_id.clone();
+                        let target = session.target.clone();
+                        let conv_id = session.conversation_id;
+
+                        let is_current = match conn_mgr.get_state(connection_id).await {
+                            Some(state) => {
+                                state.read().await.external_id.as_deref() == Some(session_id.as_str())
+                            }
+                            None => false,
+                        };
+                        if !is_current {
+                            tracing::warn!(
+                                conversation_id = conv_id,
+                                detail,
+                                stale_session = %session_id,
+                                "[SessionEventSub] stale SessionStarted conflicts; leaving the \
+                                 route alone because the connection has moved on"
+                            );
+                            return;
+                        }
+
+                        tracing::warn!(
+                            conversation_id = conv_id,
+                            detail,
+                            "[SessionEventSub] session belongs to another conversation; \
+                             tearing down the chat route rather than misfiling into it"
+                        );
+                        guard.remove(connection_id);
+                        drop(guard);
+
+                        // Persisted route cleared BEFORE the notification await.
+                        // `clear_session_route` deletes by (channel, sender,
+                        // target) with no compare-and-swap, so any await ahead
+                        // of it widens a window in which a REPLACEMENT route for
+                        // the same chat thread gets created and then wiped by
+                        // this handler. Nothing here needs the send to have
+                        // happened first.
+                        let _ = conversation_service::update_status(
+                            db,
+                            conv_id,
+                            crate::db::entities::conversation::ConversationStatus::Cancelled,
+                        )
+                        .await;
+                        clear_session_route(db, channel_id, &sender_id, &target).await;
+
+                        let lang = get_lang(db).await;
+                        let _ = manager
+                            .send_to_target(
+                                &target,
+                                &RichMessage::error(match lang {
+                                    Lang::ZhCn | Lang::ZhTw => {
+                                        "无法启动任务：该智能体会话已归属于另一个对话。"
+                                            .to_string()
+                                    }
+                                    _ => "Could not start the task: this agent session \
+                                          already belongs to another conversation."
+                                        .to_string(),
+                                }),
+                            )
+                            .await;
+                        return;
+                    }
+                    Err(e) => tracing::warn!(
+                        conversation_id = session.conversation_id,
+                        error = %e,
+                        "[SessionEventSub] failed to bind the session id"
+                    ),
+                }
 
                 if let Some(prompt_text) = session.pending_prompt.take() {
                     // Clone so the prompt can be RESTORED (not dropped) if a turn
@@ -265,11 +409,11 @@ async fn handle_acp_envelope(
                         || session
                             .tool_call_inputs
                             .get(tool_call_id)
-                            .map(|s| extract_agent_type(s).is_some())
+                            .map(|s| names_delegation_target(s))
                             .unwrap_or(false)
                         || raw_input
                             .as_deref()
-                            .map(|s| extract_agent_type(s).is_some())
+                            .map(names_delegation_target)
                             .unwrap_or(false);
                     let target = session.target.clone();
                     if is_delegation {
@@ -285,13 +429,15 @@ async fn handle_acp_envelope(
                             // and it no-ops when the completion event already
                             // rendered first.
                             if !already_rendered {
-                                let agent = session
-                                    .tool_call_inputs
-                                    .get(tool_call_id)
-                                    .map(String::as_str)
-                                    .or(raw_input.as_deref())
-                                    .and_then(extract_agent_type)
-                                    .unwrap_or_else(|| "agent".to_string());
+                                let agent = delegation_target_label(
+                                    session
+                                        .tool_call_inputs
+                                        .get(tool_call_id)
+                                        .map(String::as_str)
+                                        .or(raw_input.as_deref()),
+                                    report.as_ref().and_then(|r| r.assistant_name.as_deref()),
+                                )
+                                .unwrap_or_else(|| "agent".to_string());
                                 let body =
                                     format_delegation_terminal(&agent, report.as_ref().unwrap());
                                 session.delegation_rendered.insert(tool_call_id.clone());
@@ -306,13 +452,15 @@ async fn handle_acp_envelope(
                             // `DelegationCompleted` render needs the agent_type.
                             // Suppressed once the result has rendered, so a late
                             // re-emitted ack can't appear after the result.
-                            let agent = session
-                                .tool_call_inputs
-                                .get(tool_call_id)
-                                .map(String::as_str)
-                                .or(raw_input.as_deref())
-                                .and_then(extract_agent_type)
-                                .unwrap_or_else(|| "agent".to_string());
+                            let agent = delegation_target_label(
+                                session
+                                    .tool_call_inputs
+                                    .get(tool_call_id)
+                                    .map(String::as_str)
+                                    .or(raw_input.as_deref()),
+                                report.as_ref().and_then(|r| r.assistant_name.as_deref()),
+                            )
+                            .unwrap_or_else(|| "agent".to_string());
                             drop(guard);
                             let msg = RichMessage::info(format_delegation_ack(&agent));
                             let _ = manager.send_to_target(&target, &msg).await;
@@ -340,6 +488,7 @@ async fn handle_acp_envelope(
         AcpEvent::DelegationCompleted {
             parent_tool_use_id,
             result,
+            assistant_name,
             ..
         } => {
             let mut guard = bridge.lock().await;
@@ -350,12 +499,10 @@ async fn handle_acp_envelope(
                 // here at all, so this arm naturally no-ops for synthetic ids —
                 // the terminal `ToolCallUpdate` is their surface.)
                 if !session.delegation_rendered.contains(parent_tool_use_id) {
-                    let agent = session
-                        .tool_call_inputs
-                        .remove(parent_tool_use_id)
-                        .as_deref()
-                        .and_then(extract_agent_type)
-                        .unwrap_or_else(|| "sub-agent".to_string());
+                    let stored_input = session.tool_call_inputs.remove(parent_tool_use_id);
+                    let agent =
+                        delegation_target_label(stored_input.as_deref(), assistant_name.as_deref())
+                            .unwrap_or_else(|| "sub-agent".to_string());
                     session
                         .delegation_rendered
                         .insert(parent_tool_use_id.clone());
@@ -387,20 +534,24 @@ async fn handle_acp_envelope(
                         .map(|ctx| ctx.auto_approve)
                         .unwrap_or(false);
 
-                if auto_approve {
-                    let option_id = options
-                        .iter()
-                        .find(|o| o.kind == "allow" || o.kind == "allowForSession")
-                        .or_else(|| options.first())
-                        .map(|o| o.option_id.clone());
-
+                // Auto-approve answers one call at a time, with the allow-once
+                // option (see `allow_once_in`). A request without one goes to
+                // the chat like any other, for the sender to answer.
+                let auto_option = if auto_approve {
+                    PermissionOptionInfo::allow_once_in(options).map(|o| o.option_id.clone())
+                } else {
+                    None
+                };
+                if let Some(oid) = auto_option {
                     drop(guard);
-
-                    if let Some(oid) = option_id {
-                        let _ = conn_mgr
-                            .respond_permission(connection_id, request_id, &oid)
-                            .await;
-                    }
+                    let _ = conn_mgr
+                        .respond_permission_from(
+                            connection_id,
+                            request_id,
+                            &oid,
+                            PermissionAnswerOrigin::ChatChannel,
+                        )
+                        .await;
                     return;
                 }
 
@@ -432,7 +583,7 @@ async fn handle_acp_envelope(
 
                 let lang = get_lang(db).await;
                 let prefix = get_prefix(db).await;
-                let body = match lang {
+                let mut body = match lang {
                     Lang::ZhCn | Lang::ZhTw => {
                         format!("Agent 请求权限: {tool_desc}\n\n{prefix}approve 批准 | {prefix}deny 拒绝 | {prefix}approve always 自动批准")
                     }
@@ -440,6 +591,15 @@ async fn handle_acp_envelope(
                         format!("Agent requests permission: {tool_desc}\n\n{prefix}approve | {prefix}deny | {prefix}approve always")
                     }
                 };
+                // Auto-approve is on, yet this request reached the chat.
+                if auto_approve {
+                    body.push_str(match lang {
+                        Lang::ZhCn | Lang::ZhTw => {
+                            "\n\n自动批准跳过了这个请求：它没有「只允许这一次」的选项。"
+                        }
+                        _ => "\n\nAuto-approve skipped this request: it has no allow-once option.",
+                    });
+                }
 
                 let msg = RichMessage {
                     title: Some(match lang {
@@ -824,6 +984,40 @@ fn extract_agent_type(raw_input: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// The `assistant_id` a `delegate_to_agent` raw_input names, by the same
+/// parser the listener dispatches with.
+fn extract_assistant_id(raw_input: &str) -> Option<i32> {
+    let parsed: serde_json::Value = serde_json::from_str(raw_input).ok()?;
+    match crate::acp::delegation::types::delegation_target_from_args(&parsed) {
+        Ok(crate::acp::delegation::types::DelegationTarget::Assistant(id)) => Some(id),
+        _ => None,
+    }
+}
+
+/// Whether a raw_input looks like `delegate_to_agent` arguments: an agent
+/// slug, or a task for an assistant.
+fn names_delegation_target(raw_input: &str) -> bool {
+    extract_agent_type(raw_input).is_some()
+        || (extract_assistant_id(raw_input).is_some()
+            && serde_json::from_str::<serde_json::Value>(raw_input)
+                .ok()
+                .is_some_and(|v| v.get("task").is_some()))
+}
+
+/// Who a delegation went to, for the relay's lines: the assistant's name when
+/// the report or event carried it, `assistant #<id>` when only the arguments
+/// named one, otherwise the agent slug the caller supplied.
+fn delegation_target_label(raw_input: Option<&str>, assistant_name: Option<&str>) -> Option<String> {
+    if let Some(name) = assistant_name.map(str::trim).filter(|n| !n.is_empty()) {
+        return Some(name.to_string());
+    }
+    let raw_input = raw_input?;
+    if let Some(id) = extract_assistant_id(raw_input) {
+        return Some(format!("assistant #{id}"));
+    }
+    extract_agent_type(raw_input)
+}
+
 /// Ack line for a `delegate_to_agent` call: under async delegation the tool
 /// output is just a task id, so the channel shows that the sub-agent started
 /// and is running in the background. The result lands later via
@@ -839,6 +1033,8 @@ struct DelegationReportView {
     error_code: Option<String>,
     message: Option<String>,
     text: Option<String>,
+    /// The assistant the task ran as, when it ran as one.
+    assistant_name: Option<String>,
 }
 
 impl DelegationReportView {
@@ -874,6 +1070,10 @@ fn parse_delegation_report(raw_output: Option<&str>) -> Option<DelegationReportV
             .map(str::to_string),
         text: report
             .get("text")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        assistant_name: report
+            .get("assistant_name")
             .and_then(|v| v.as_str())
             .map(str::to_string),
     })
@@ -977,6 +1177,34 @@ mod delegation_relay_tests {
         );
         assert_eq!(extract_agent_type(r#"{"task":"x"}"#), None);
         assert_eq!(extract_agent_type("not json"), None);
+    }
+
+    #[test]
+    fn an_assistant_delegation_is_labeled_by_the_assistant() {
+        // The report's name wins; the arguments alone give `assistant #<id>`.
+        assert_eq!(
+            delegation_target_label(Some(r#"{"assistant_id":3,"task":"x"}"#), Some("Reviewer")),
+            Some("Reviewer".into())
+        );
+        assert_eq!(
+            delegation_target_label(
+                Some(r#"{"assistant_id":"3","agent_type":"codex","task":"x"}"#),
+                None
+            ),
+            Some("assistant #3".into())
+        );
+        assert_eq!(
+            delegation_target_label(Some(r#"{"agent_type":"codex","task":"x"}"#), None),
+            Some("codex".into())
+        );
+        assert_eq!(delegation_target_label(None, Some("  ")), None);
+        assert!(names_delegation_target(r#"{"assistant_id":3,"task":"x"}"#));
+        assert!(!names_delegation_target(r#"{"assistant_id":3}"#));
+        let report = parse_delegation_report(Some(
+            r#"{"structuredContent":{"status":"running","assistant_name":"Reviewer"}}"#,
+        ))
+        .unwrap();
+        assert_eq!(report.assistant_name.as_deref(), Some("Reviewer"));
     }
 
     #[test]
@@ -1242,6 +1470,8 @@ mod async_relay_dedup_tests {
                     duration_ms: 3,
                     text_preview: Some("done".into()),
                 },
+                assistant_id: None,
+                assistant_name: None,
             },
         }
     }
@@ -1267,6 +1497,7 @@ mod async_relay_dedup_tests {
             &chat,
             &conn,
             &db.conn,
+            &EventEmitter::Noop,
         )
         .await;
         let msgs = sent(&rec).await;
@@ -1282,7 +1513,7 @@ mod async_relay_dedup_tests {
         let (bridge, chat, rec) = harness().await;
         let conn = ConnectionManager::new();
         let db = test_helpers::fresh_in_memory_db().await;
-        handle_acp_envelope(&delegation_completed_ok(), &bridge, &chat, &conn, &db.conn).await;
+        handle_acp_envelope(&delegation_completed_ok(), &bridge, &chat, &conn, &db.conn, &EventEmitter::Noop).await;
         // The later terminal update carries raw_input (re-creating the old
         // input-map token) AND terminal output.
         handle_acp_envelope(
@@ -1291,6 +1522,7 @@ mod async_relay_dedup_tests {
             &chat,
             &conn,
             &db.conn,
+            &EventEmitter::Noop,
         )
         .await;
         let msgs = sent(&rec).await;
@@ -1315,9 +1547,10 @@ mod async_relay_dedup_tests {
             &chat,
             &conn,
             &db.conn,
+            &EventEmitter::Noop,
         )
         .await;
-        handle_acp_envelope(&delegation_completed_ok(), &bridge, &chat, &conn, &db.conn).await;
+        handle_acp_envelope(&delegation_completed_ok(), &bridge, &chat, &conn, &db.conn, &EventEmitter::Noop).await;
         let msgs = sent(&rec).await;
         assert_eq!(msgs.len(), 2, "ack + result, got {msgs:?}");
         assert!(msgs[0].contains("running in background"));
@@ -1331,7 +1564,7 @@ mod async_relay_dedup_tests {
         let (bridge, chat, rec) = harness().await;
         let conn = ConnectionManager::new();
         let db = test_helpers::fresh_in_memory_db().await;
-        handle_acp_envelope(&delegation_completed_ok(), &bridge, &chat, &conn, &db.conn).await;
+        handle_acp_envelope(&delegation_completed_ok(), &bridge, &chat, &conn, &db.conn, &EventEmitter::Noop).await;
         // Host re-emits the running ack after completion, with raw_input.
         handle_acp_envelope(
             &completed_update(ACK, true),
@@ -1339,6 +1572,7 @@ mod async_relay_dedup_tests {
             &chat,
             &conn,
             &db.conn,
+            &EventEmitter::Noop,
         )
         .await;
         let msgs = sent(&rec).await;
@@ -1360,6 +1594,7 @@ mod async_relay_dedup_tests {
             &chat,
             &conn,
             &db.conn,
+            &EventEmitter::Noop,
         )
         .await;
         let msgs = sent(&rec).await;
@@ -1402,7 +1637,7 @@ mod async_relay_dedup_tests {
                 session_id: "S1".into(),
             },
         };
-        handle_acp_envelope(&started, &bridge, &chat, &conn, &db.conn).await;
+        handle_acp_envelope(&started, &bridge, &chat, &conn, &db.conn, &EventEmitter::Noop).await;
 
         assert_eq!(
             bridge
@@ -1443,7 +1678,7 @@ mod async_relay_dedup_tests {
                 agent_type: "claude".into(),
             },
         };
-        handle_acp_envelope(&complete, &bridge, &chat, &conn, &db.conn).await;
+        handle_acp_envelope(&complete, &bridge, &chat, &conn, &db.conn, &EventEmitter::Noop).await;
 
         assert!(
             bridge
@@ -1531,6 +1766,329 @@ mod error_terminal_gate_tests {
     }
 
     #[tokio::test]
+    async fn session_started_preserves_history_and_broadcasts_it_without_a_manager_entry() {
+        // Two things at once, because they are the same bug seen from two
+        // angles (codeg#500).
+        //
+        // 1. This subscriber writes onto an ALREADY-bound `conversation_id`
+        //    (the bridge registers it up front), so a re-minted session would
+        //    silently overwrite the id the row's history hangs off. The guarded
+        //    bind must split that history onto its own row instead.
+        //
+        // 2. Creating that row is only half the fix: the sidebar inserts a
+        //    conversation it has never seen ONLY on a `conversation://changed`
+        //    upsert. A preserved row that is never broadcast still looks, to
+        //    the user, exactly like the conversation vanishing.
+        //
+        // The manager entry is deliberately ABSENT here. That is a REACHABLE
+        // state, not a contrivance: this subscriber consumes `SessionStarted`
+        // asynchronously off the broadcast bus, while connection cleanup
+        // removes the entry right after queuing its terminal events. So an
+        // emitter resolved per-`connection_id` would come back empty exactly
+        // here and drop the broadcast — which is why the emitter is injected
+        // for the subscriber's whole lifetime instead. Reverting to a lookup
+        // must fail this test.
+        use crate::acp::internal_bus::InternalEventBus;
+        use crate::db::entities::conversation;
+        use crate::web::event_bridge::{WebEventBroadcaster, CONVERSATION_CHANGED_EVENT};
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
+        let db = test_helpers::fresh_in_memory_db().await;
+        let (bridge, conv_id) = seed_session(&db, "c-reminted").await;
+        conversation_service::bind_external_id(&db.conn, conv_id, "S1", &[])
+            .await
+            .expect("seed the original session");
+
+        let broadcaster = Arc::new(WebEventBroadcaster::new());
+        let mut rx = broadcaster.subscribe();
+        let emitter = EventEmitter::web_only(
+            broadcaster,
+            Arc::new(InternalEventBus::new(Default::default())),
+        );
+
+        let chat_mgr = ChatChannelManager::new();
+        // Empty on purpose — see above.
+        let conn_mgr = ConnectionManager::new();
+        let envelope = EventEnvelope {
+            seq: 1,
+            connection_id: "c-reminted".to_string(),
+            payload: AcpEvent::SessionStarted {
+                session_id: "S2".to_string(),
+            },
+        };
+        handle_acp_envelope(&envelope, &bridge, &chat_mgr, &conn_mgr, &db.conn, &emitter).await;
+
+        // The bound row advanced; the old session kept a row of its own.
+        let rows = conversation::Entity::find()
+            .filter(conversation::Column::DeletedAt.is_null())
+            .all(&db.conn)
+            .await
+            .expect("list rows");
+        assert_eq!(rows.len(), 2, "the old session must keep a row, got {rows:?}");
+        let preserved = rows
+            .iter()
+            .find(|r| r.external_id.as_deref() == Some("S1"))
+            .expect("S1 must still be indexed");
+        assert_ne!(preserved.id, conv_id);
+        assert_eq!(
+            rows.iter()
+                .find(|r| r.id == conv_id)
+                .and_then(|r| r.external_id.as_deref()),
+            Some("S2")
+        );
+
+        // ...and the sidebar was actually told about it.
+        let mut saw_preserved = false;
+        while let Ok(event) = rx.try_recv() {
+            let payload = serde_json::to_string(&event).unwrap_or_default();
+            if payload.contains(CONVERSATION_CHANGED_EVENT)
+                && payload.contains(&format!("\"id\":{}", preserved.id))
+            {
+                saw_preserved = true;
+            }
+        }
+        assert!(
+            saw_preserved,
+            "the preserved conversation must be broadcast — a row the sidebar \
+             never hears about is indistinguishable from the bug being fixed"
+        );
+    }
+
+    #[tokio::test]
+    async fn session_started_tears_down_the_route_when_the_session_belongs_elsewhere() {
+        // A `Conflict` means the session is owned by a DIFFERENT conversation
+        // row, permanently — no retry changes that. Anything dispatched through
+        // this route lands in the HOLDER row's transcript while every event
+        // names this session's row.
+        //
+        // The teardown is asserted as hard as the not-sending, because two
+        // weaker remedies both fail. Leaving `pending_prompt` in place: the
+        // `TurnComplete` arm re-sends a deferred kickoff with no ownership
+        // re-check. Clearing the prompt but keeping the bridge entry: the
+        // remote user's next message finds the route and dispatches through it
+        // anyway. The second half of this test drives the first of those.
+        //
+        // The bail-out is narrowed to `Conflict` on purpose — every other bind
+        // error is dominated by transient SQLite contention, where tearing the
+        // route down would kill a session that was about to work.
+        use crate::acp::connection::ConnectionCommand;
+
+        let db = test_helpers::fresh_in_memory_db().await;
+        let (bridge, conv_id) = seed_session(&db, "conn-owned-elsewhere").await;
+
+        // Another row already owns the session this connection is about to
+        // announce. Same agent_type as the seeded session — that is what the
+        // unique index, and the guard, key on.
+        let other_folder = test_helpers::seed_folder(&db, "/tmp/chat-conflict-holder").await;
+        let holder = conversation_service::create(
+            &db.conn,
+            other_folder,
+            AgentType::ClaudeCode,
+            Some("owns S_SHARED".into()),
+            None,
+        )
+        .await
+        .expect("holder");
+        conversation_service::bind_external_id(&db.conn, holder.id, "S_SHARED", &[])
+            .await
+            .expect("seed holder");
+
+        let conn_mgr = ConnectionManager::new();
+        // LIVE (receiver kept) so a send would actually reach the gate — a
+        // dropped receiver would fail earlier for the wrong reason and the test
+        // would pass without proving anything.
+        let mut cmd_rx = conn_mgr
+            .insert_test_connection_live(
+                "conn-owned-elsewhere",
+                AgentType::ClaudeCode,
+                None,
+                EventEmitter::Noop,
+            )
+            .await;
+        // The connection's LIVE session is the one that is about to fail to
+        // bind — i.e. this envelope is current, not a straggler. The teardown is
+        // gated on exactly this.
+        conn_mgr
+            .get_state("conn-owned-elsewhere")
+            .await
+            .unwrap()
+            .write()
+            .await
+            .external_id = Some("S_SHARED".into());
+        bridge
+            .lock()
+            .await
+            .get_mut("conn-owned-elsewhere")
+            .unwrap()
+            .pending_prompt = Some("do the task".into());
+
+        let envelope = EventEnvelope {
+            seq: 1,
+            connection_id: "conn-owned-elsewhere".to_string(),
+            payload: AcpEvent::SessionStarted {
+                session_id: "S_SHARED".to_string(),
+            },
+        };
+        handle_acp_envelope(
+            &envelope,
+            &bridge,
+            &ChatChannelManager::new(),
+            &conn_mgr,
+            &db.conn,
+            &EventEmitter::Noop,
+        )
+        .await;
+
+        assert!(
+            !matches!(cmd_rx.try_recv(), Ok(ConnectionCommand::Prompt { .. })),
+            "a kickoff must not be dispatched into a session this row does not own"
+        );
+        assert!(
+            bridge.lock().await.get("conn-owned-elsewhere").is_none(),
+            "the bridge route must be GONE — a surviving entry is what the \
+             remote user's next message would dispatch through"
+        );
+        assert_eq!(
+            read_row_status(&db, conv_id).await,
+            ConversationStatus::Cancelled,
+            "the conversation the route pointed at must settle, not sit InProgress"
+        );
+
+        // The follow-up that makes the teardown load-bearing: a TurnComplete
+        // for another client's turn on the same connection picks up any
+        // deferred kickoff and sends it blind, and flips the row to Completed.
+        // With the route gone it must find nothing at all.
+        handle_acp_envelope(
+            &EventEnvelope {
+                seq: 2,
+                connection_id: "conn-owned-elsewhere".to_string(),
+                payload: AcpEvent::TurnComplete {
+                    session_id: "S_SHARED".to_string(),
+                    stop_reason: "end_turn".to_string(),
+                    agent_type: "claude_code".to_string(),
+                },
+            },
+            &bridge,
+            &ChatChannelManager::new(),
+            &conn_mgr,
+            &db.conn,
+            &EventEmitter::Noop,
+        )
+        .await;
+        assert!(
+            !matches!(cmd_rx.try_recv(), Ok(ConnectionCommand::Prompt { .. })),
+            "TurnComplete must have no abandoned kickoff left to dispatch"
+        );
+        assert_eq!(
+            read_row_status(&db, conv_id).await,
+            ConversationStatus::Cancelled,
+            "a foreign TurnComplete must not mutate a row whose route is gone"
+        );
+
+        // Neither row moved.
+        assert_eq!(
+            conversation_service::get_by_id(&db.conn, conv_id)
+                .await
+                .expect("session row")
+                .external_id,
+            None
+        );
+        assert_eq!(
+            conversation_service::get_by_id(&db.conn, holder.id)
+                .await
+                .expect("holder")
+                .external_id
+                .as_deref(),
+            Some("S_SHARED")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stale_conflicting_session_started_leaves_a_healthy_route_alone() {
+        // The counterweight to the teardown above, and the reason it is gated.
+        //
+        // A `Conflict` proves the session in THIS envelope belongs to another
+        // row. It does NOT prove the route is bad. This subscriber and the
+        // lifecycle one drain the bus independently, so a fork that advanced
+        // the connection S1 → S2 (leaving a sibling row holding S1) can be
+        // followed by a backed-up `SessionStarted{S1}` landing here. That binds
+        // S1 onto a row that has moved on, hits the sibling, and returns
+        // Conflict — while the route is perfectly healthy on S2.
+        //
+        // Tearing down there would kill a working session to prevent a
+        // misfiling that cannot happen, which is a worse outcome than the bug.
+        let db = test_helpers::fresh_in_memory_db().await;
+        let (bridge, conv_id) = seed_session(&db, "conn-moved-on").await;
+
+        // The sibling left behind by the fork, holding the OLD session.
+        let sibling_folder = test_helpers::seed_folder(&db, "/tmp/chat-stale-sibling").await;
+        let sibling = conversation_service::create(
+            &db.conn,
+            sibling_folder,
+            AgentType::ClaudeCode,
+            Some("preserved S1".into()),
+            None,
+        )
+        .await
+        .expect("sibling");
+        conversation_service::bind_external_id(&db.conn, sibling.id, "S1", &[])
+            .await
+            .expect("seed sibling");
+        // The route's own row already advanced to S2.
+        conversation_service::bind_external_id(&db.conn, conv_id, "S2", &[])
+            .await
+            .expect("advance to S2");
+
+        let conn_mgr = ConnectionManager::new();
+        let _cmd_rx = conn_mgr
+            .insert_test_connection_live("conn-moved-on", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        // The LIVE session is S2 — S1 is a straggler.
+        conn_mgr
+            .get_state("conn-moved-on")
+            .await
+            .unwrap()
+            .write()
+            .await
+            .external_id = Some("S2".into());
+
+        handle_acp_envelope(
+            &EventEnvelope {
+                seq: 1,
+                connection_id: "conn-moved-on".to_string(),
+                payload: AcpEvent::SessionStarted {
+                    session_id: "S1".to_string(),
+                },
+            },
+            &bridge,
+            &ChatChannelManager::new(),
+            &conn_mgr,
+            &db.conn,
+            &EventEmitter::Noop,
+        )
+        .await;
+
+        assert!(
+            bridge.lock().await.get("conn-moved-on").is_some(),
+            "a stale conflicting event must NOT tear down a healthy route"
+        );
+        assert_ne!(
+            read_row_status(&db, conv_id).await,
+            ConversationStatus::Cancelled,
+            "a stale conflicting event must not cancel a live conversation"
+        );
+        assert_eq!(
+            conversation_service::get_by_id(&db.conn, conv_id)
+                .await
+                .expect("route row")
+                .external_id
+                .as_deref(),
+            Some("S2"),
+            "the route's row keeps the session it actually moved to"
+        );
+    }
+
+    #[tokio::test]
     async fn non_terminal_error_keeps_session_and_conversation_intact() {
         let db = test_helpers::fresh_in_memory_db().await;
         let (bridge, conv_id) = seed_session(&db, "c-nonterm").await;
@@ -1548,7 +2106,7 @@ mod error_terminal_gate_tests {
                 terminal: false,
             },
         };
-        handle_acp_envelope(&envelope, &bridge, &chat_mgr, &conn_mgr, &db.conn).await;
+        handle_acp_envelope(&envelope, &bridge, &chat_mgr, &conn_mgr, &db.conn, &EventEmitter::Noop).await;
 
         // Session bridge entry is preserved — the next user message on the
         // same connection can still flow through it.
@@ -1581,7 +2139,7 @@ mod error_terminal_gate_tests {
                 terminal: true,
             },
         };
-        handle_acp_envelope(&envelope, &bridge, &chat_mgr, &conn_mgr, &db.conn).await;
+        handle_acp_envelope(&envelope, &bridge, &chat_mgr, &conn_mgr, &db.conn, &EventEmitter::Noop).await;
 
         assert!(
             bridge.lock().await.get("c-term").is_none(),
@@ -1591,5 +2149,193 @@ mod error_terminal_gate_tests {
             read_row_status(&db, conv_id).await,
             ConversationStatus::Cancelled
         );
+    }
+}
+
+#[cfg(test)]
+mod auto_approve_tests {
+    //! A sender who turned on auto-approve (`/approve always`) has codeg answer
+    //! each permission request for them. The answer is the allow-once option,
+    //! found by its kind — never the first option, which an adapter may well
+    //! have made the rejection, and never one that leaves a rule behind in the
+    //! agent's settings.
+    use super::*;
+    use crate::acp::connection::ConnectionCommand;
+    use crate::chat_channel::session_bridge::ActiveSession;
+    use crate::db::service::chat_channel_service;
+    use crate::db::test_helpers;
+    use crate::models::agent::AgentType;
+
+    fn permission_option(option_id: &str, name: &str, kind: &str) -> PermissionOptionInfo {
+        PermissionOptionInfo {
+            option_id: option_id.into(),
+            name: name.into(),
+            kind: kind.into(),
+            meta: None,
+        }
+    }
+
+    /// A sender with auto-approve on and a live session. Returns the receiving
+    /// end of the session's commands.
+    async fn auto_approving_session(
+        db: &crate::db::AppDatabase,
+    ) -> (
+        Arc<Mutex<SessionBridge>>,
+        ConnectionManager,
+        tokio::sync::mpsc::Receiver<ConnectionCommand>,
+    ) {
+        let channel_id = chat_channel_service::create(
+            &db.conn,
+            "Telegram test".to_string(),
+            "telegram".to_string(),
+            serde_json::json!({ "chat_id": "-100123" }).to_string(),
+            true,
+            false,
+            None,
+        )
+        .await
+        .expect("seed chat channel")
+        .id;
+        sender_context_service::update_auto_approve(&db.conn, channel_id, "u1", true)
+            .await
+            .expect("auto-approve on");
+        let folder_id = test_helpers::seed_folder(db, "/tmp/chat-auto-approve").await;
+        let conv_id = test_helpers::seed_conversation(db, folder_id, AgentType::ClaudeCode).await;
+        let conn_mgr = ConnectionManager::new();
+        let rx = conn_mgr
+            .insert_test_connection_live(
+                "conn-auto",
+                AgentType::ClaudeCode,
+                None,
+                EventEmitter::Noop,
+            )
+            .await;
+        let bridge = Arc::new(Mutex::new(SessionBridge::new()));
+        bridge.lock().await.register(
+            "conn-auto".to_string(),
+            ActiveSession {
+                channel_id,
+                sender_id: "u1".into(),
+                target: ChannelMessageTarget::channel(channel_id),
+                conversation_id: conv_id,
+                connection_id: "conn-auto".to_string(),
+                agent_type: AgentType::ClaudeCode,
+                content_buffer: String::new(),
+                tool_calls: Vec::new(),
+                tool_call_inputs: std::collections::HashMap::new(),
+                delegation_rendered: std::collections::HashSet::new(),
+                last_flushed: Instant::now(),
+                pending_prompt: None,
+                permission_pending: None,
+            },
+        );
+        (bridge, conn_mgr, rx)
+    }
+
+    async fn request_permission(
+        db: &crate::db::AppDatabase,
+        bridge: &Arc<Mutex<SessionBridge>>,
+        conn_mgr: &ConnectionManager,
+        options: Vec<PermissionOptionInfo>,
+    ) {
+        let envelope = EventEnvelope {
+            seq: 1,
+            connection_id: "conn-auto".to_string(),
+            payload: AcpEvent::PermissionRequest {
+                request_id: "req-1".to_string(),
+                tool_call: serde_json::json!({ "title": "Bash" }),
+                options,
+                queued: 0,
+            },
+        };
+        handle_acp_envelope(
+            &envelope,
+            bridge,
+            &ChatChannelManager::new(),
+            conn_mgr,
+            &db.conn,
+            &EventEmitter::Noop,
+        )
+        .await;
+    }
+
+    fn answered_option(rx: &mut tokio::sync::mpsc::Receiver<ConnectionCommand>) -> Option<String> {
+        match rx.try_recv() {
+            Ok(ConnectionCommand::RespondPermission {
+                request_id,
+                option_id,
+                origin,
+            }) => {
+                assert_eq!(origin, PermissionAnswerOrigin::ChatChannel);
+                assert_eq!(request_id, "req-1");
+                Some(option_id)
+            }
+            Ok(_) => panic!("expected a permission response"),
+            Err(_) => None,
+        }
+    }
+
+    async fn pending_request_id(bridge: &Arc<Mutex<SessionBridge>>) -> Option<String> {
+        bridge
+            .lock()
+            .await
+            .get("conn-auto")
+            .and_then(|s| s.permission_pending.as_ref())
+            .map(|p| p.request_id.clone())
+    }
+
+    #[tokio::test]
+    async fn auto_approve_allows_once_when_the_rejection_leads() {
+        // claude-agent-acp 0.91.0 leads with the rejection for a call the
+        // Claude CLI marks `defaultToNo`; picked by position, auto-approve
+        // turned down exactly the calls it was there to let through.
+        let db = test_helpers::fresh_in_memory_db().await;
+        let (bridge, conn_mgr, mut rx) = auto_approving_session(&db).await;
+
+        request_permission(
+            &db,
+            &bridge,
+            &conn_mgr,
+            vec![
+                permission_option("reject", "No", "reject_once"),
+                permission_option("allow-once", "Yes", "allow_once"),
+                permission_option(
+                    "allow-with-updates",
+                    "Yes, and don't ask again",
+                    "allow_always",
+                ),
+            ],
+        )
+        .await;
+
+        assert_eq!(answered_option(&mut rx).as_deref(), Some("allow-once"));
+        assert_eq!(pending_request_id(&bridge).await, None);
+    }
+
+    #[tokio::test]
+    async fn auto_approve_leaves_a_request_without_an_allow_once_option_to_the_sender() {
+        // Auto-approve answers for the sender one call at a time; a standing
+        // allow in the agent's own settings is not its to grant. The request
+        // goes to the chat like any other, for the sender to answer.
+        let db = test_helpers::fresh_in_memory_db().await;
+        let (bridge, conn_mgr, mut rx) = auto_approving_session(&db).await;
+
+        request_permission(
+            &db,
+            &bridge,
+            &conn_mgr,
+            vec![
+                permission_option(
+                    "allow-with-updates",
+                    "Yes, and don't ask again",
+                    "allow_always",
+                ),
+                permission_option("reject", "No", "reject_once"),
+            ],
+        )
+        .await;
+
+        assert_eq!(answered_option(&mut rx), None);
+        assert_eq!(pending_request_id(&bridge).await.as_deref(), Some("req-1"));
     }
 }

@@ -16,9 +16,13 @@ vi.mock("sonner", () => ({
   },
 }))
 
+const setWritebackMock = vi.fn().mockResolvedValue(undefined)
+
 vi.mock("@/lib/api", () => ({
+  workTaskGet: vi.fn().mockRejectedValue(new Error("not in this test")),
   workTaskMerge: (...args: unknown[]) => mergeMock(...args),
   workTaskSettingsEffective: (...args: unknown[]) => settingsMock(...args),
+  workTaskSetWriteback: (...args: unknown[]) => setWritebackMock(...args),
 }))
 
 import { TaskMergeDialog } from "./task-merge-dialog"
@@ -69,13 +73,14 @@ function settings(
     max_concurrent: 2,
     merge_strategy: "squash",
     auto_merge: false,
+    auto_compact_percent: 0,
     delete_worktree_default: true,
     ...overrides,
   }
 }
 
 function renderDialog(props?: {
-  folderMerging?: boolean
+  anotherMerging?: boolean
   alreadyQueued?: boolean
   onOpenChange?: (open: boolean) => void
 }) {
@@ -85,7 +90,7 @@ function renderDialog(props?: {
         open
         onOpenChange={props?.onOpenChange ?? (() => {})}
         task={task()}
-        folderMerging={props?.folderMerging}
+        anotherMerging={props?.anotherMerging}
         alreadyQueued={props?.alreadyQueued}
       />
     </NextIntlClientProvider>
@@ -116,7 +121,9 @@ describe("TaskMergeDialog", () => {
     )
 
     await userEvent.click(screen.getByRole("button", { name: "Merge" }))
-    await waitFor(() => expect(mergeMock).toHaveBeenCalledWith(7, null, true))
+    await waitFor(() =>
+      expect(mergeMock).toHaveBeenCalledWith(7, null, true, null)
+    )
   })
 
   it("unchecking auto reveals the title-prefilled message and sends it", async () => {
@@ -136,7 +143,29 @@ describe("TaskMergeDialog", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Merge" }))
     await waitFor(() =>
-      expect(mergeMock).toHaveBeenCalledWith(7, "Fix login", false)
+      expect(mergeMock).toHaveBeenCalledWith(7, "Fix login", false, null)
+    )
+  })
+
+  // Optional in both directions: typing goes through verbatim, and leaving it
+  // alone must not start gating the button the way the commit message does.
+  it("sends extra instructions when typed, and never blocks on them", async () => {
+    settingsMock.mockResolvedValue(settings())
+    renderDialog()
+
+    const extra = await screen.findByLabelText(/Extra instructions/)
+    expect((extra as HTMLTextAreaElement).value).toBe("")
+    expect(screen.getByRole("button", { name: "Merge" })).toBeEnabled()
+
+    await userEvent.type(extra, "  prefer ours on conflict  ")
+    await userEvent.click(screen.getByRole("button", { name: "Merge" }))
+    await waitFor(() =>
+      expect(mergeMock).toHaveBeenCalledWith(
+        7,
+        null,
+        true,
+        "prefer ours on conflict"
+      )
     )
   })
 
@@ -174,13 +203,15 @@ describe("TaskMergeDialog", () => {
     settingsMock.mockResolvedValue(settings())
     mergeMock.mockResolvedValue(true)
     const onOpenChange = vi.fn()
-    renderDialog({ folderMerging: true, onOpenChange })
+    renderDialog({ anotherMerging: true, onOpenChange })
 
     expect(screen.getByText(/joins the queue/)).toBeInTheDocument()
     await userEvent.click(
       screen.getByRole("button", { name: "Add to merge queue" })
     )
-    await waitFor(() => expect(mergeMock).toHaveBeenCalledWith(7, null, true))
+    await waitFor(() =>
+      expect(mergeMock).toHaveBeenCalledWith(7, null, true, null)
+    )
     // Closed, and the queued outcome is announced where it can be read.
     expect(onOpenChange).toHaveBeenCalledWith(false)
     expect(toastSuccess).toHaveBeenCalledTimes(1)
@@ -192,6 +223,51 @@ describe("TaskMergeDialog", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Merge" }))
     await waitFor(() => expect(mergeMock).toHaveBeenCalled())
+    expect(toastSuccess).not.toHaveBeenCalled()
+  })
+
+  // The reported bug: a plain merge flashed "this project is landing another
+  // task" for the seconds its dispatch took. The engine broadcasts
+  // review→merging as soon as it begins — before the call returns — so the
+  // board recomputes and the still-open dialog gets told its own project is
+  // busy. What the button promised when it was pressed has to hold until the
+  // call answers.
+  it("keeps its promise while the dispatch is in flight", async () => {
+    settingsMock.mockResolvedValue(settings())
+    let settle: (queued: boolean) => void = () => {}
+    mergeMock.mockReturnValue(
+      new Promise<boolean>((resolve) => {
+        settle = resolve
+      })
+    )
+    const onOpenChange = vi.fn()
+    const view = (anotherMerging: boolean) => (
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <TaskMergeDialog
+          open
+          onOpenChange={onOpenChange}
+          task={task()}
+          anotherMerging={anotherMerging}
+        />
+      </NextIntlClientProvider>
+    )
+    const { rerender } = render(view(false))
+
+    await userEvent.click(screen.getByRole("button", { name: "Merge" }))
+    await waitFor(() => expect(mergeMock).toHaveBeenCalled())
+
+    rerender(view(true))
+    expect(screen.queryByText(/joins the queue/)).toBeNull()
+    // The button says what it is doing rather than going quietly disabled: the
+    // dispatch is short but not instant (it waits for the agent to come up).
+    expect(
+      screen.getByRole("button", { name: "Starting…" })
+    ).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: /queue/ })).toBeNull()
+
+    // And the dispatch still lands as a dispatch.
+    settle(false)
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false))
     expect(toastSuccess).not.toHaveBeenCalled()
   })
 
@@ -238,6 +314,7 @@ describe("TaskMergeDialog", () => {
             merge_queued: {
               message: "fix: the login redirect",
               delete_worktree: false,
+              instructions: "prefer ours on conflict",
               queued_at: "2026-08-01T00:30:00Z",
             },
           }}
@@ -259,6 +336,9 @@ describe("TaskMergeDialog", () => {
         screen.getByRole("checkbox", { name: /Delete worktree after merge/ })
       ).not.toBeChecked()
     )
+    expect(
+      (screen.getByLabelText(/Extra instructions/) as HTMLTextAreaElement).value
+    ).toBe("prefer ours on conflict")
 
     // Submitting re-sends exactly what is on screen.
     mergeMock.mockResolvedValue(true)
@@ -269,7 +349,8 @@ describe("TaskMergeDialog", () => {
       expect(mergeMock).toHaveBeenCalledWith(
         7,
         "fix: the login redirect",
-        false
+        false,
+        "prefer ours on conflict"
       )
     )
   })

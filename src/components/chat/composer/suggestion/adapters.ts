@@ -3,6 +3,7 @@ import { formatConversationTitle } from "@/lib/conversation-title"
 import { buildFileUri } from "@/lib/reference-link"
 import {
   type AcpAgentInfo,
+  type AssistantInfo,
   type DbConversationSummary,
   type GitLogEntry,
 } from "@/lib/types"
@@ -37,9 +38,9 @@ export function fileToSuggestion(
 /**
  * ACP agent → agent reference. Carries a `codeg://agent/<agent_type>` uri as a
  * routing anchor: it serializes inline as `[@label](codeg://agent/…)` and
- * renders as a badge in the transcript. The uri is opaque to the agent (the
- * readable `@label` carries the meaning); resolving it to real routing is a
- * future, separate concern.
+ * renders as a badge in the transcript. The readable link IS the routing
+ * anchor: the backend derives the delegation reminder from it at send time, so
+ * nothing has to travel out-of-band alongside the prompt.
  */
 export function agentToSuggestion(agent: AcpAgentInfo): SuggestionItem {
   return {
@@ -52,6 +53,30 @@ export function agentToSuggestion(agent: AcpAgentInfo): SuggestionItem {
     },
     detail: agent.description || null,
     keywords: agent.agent_type,
+  }
+}
+
+/**
+ * Assistant → assistant reference, routed like an agent: it serializes inline
+ * as `[@name](codeg://assistant/<id>)`, from which the backend derives the
+ * delegation reminder at send time. The second line is the description the
+ * delegating agent also reads, or the agent it runs on when there is none; the
+ * agent's name and slug are searchable too.
+ */
+export function assistantToSuggestion(
+  assistant: AssistantInfo
+): SuggestionItem {
+  const agentLabel = getAgentLabel(assistant.agent_type)
+  return {
+    reference: {
+      refType: "assistant",
+      id: String(assistant.id),
+      label: assistant.name,
+      uri: `codeg://assistant/${assistant.id}`,
+      meta: { assistantId: assistant.id },
+    },
+    detail: assistant.description || agentLabel,
+    keywords: `${agentLabel} ${assistant.agent_type}`,
   }
 }
 

@@ -2,7 +2,7 @@
 
 /**
  * Live session viewer for a work task — the same read-only streaming surface
- * as the delegation sub-agent dialog (`LiveTranscriptView`), without opening
+ * as the delegation sub-agent viewer (`LiveTranscriptView`), without opening
  * the conversation in the workbench. Every "查看会话" affordance on the board
  * (card secondary button, detail-sheet action zone) lands here.
  *
@@ -10,11 +10,18 @@
  * headless work-task connection is invisible to the frontend until attached:
  * on desktop the global acp://event router drops envelopes with no reverse-map
  * entry, and on web there is no per-connection stream at all. So while the
- * task is in a live status this dialog owns an
+ * task is in a live status this viewer owns an
  * `attachDelegationChild`/`detachDelegationChild` pair for the task's
  * connection (identity parent mapping — there is no real parent tool call).
  * For settled tasks the DB row's connection_id is stale and the connection is
  * gone; we skip the attach and the viewer renders the persisted transcript.
+ *
+ * A side drawer, like the delegation viewer it shares `LiveTranscriptView`
+ * with: non-modal so the board stays readable behind it, no pointer dismissal
+ * so working in the board doesn't take it down, and — the reason it matters
+ * here — it STACKS. Opened from the detail sheet (itself a drawer) it mounts
+ * inside that sheet's React tree and Base UI slides it over the top; the
+ * transcript's own `delegate_to_agent` cards then open a third layer.
  */
 
 import { useCallback, useEffect, useState } from "react"
@@ -26,11 +33,12 @@ import { LiveTranscriptView } from "@/components/message/live-transcript-view"
 import { type ResolvedMessageGroup } from "@/components/message/message-list-view"
 import { StatusChip } from "./task-card"
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from "@/components/ui/dialog"
+  Drawer,
+  DrawerContent,
+  DrawerDescription,
+  DrawerTitle,
+  SIDE_PANEL_CONTENT_CLASS,
+} from "@/components/ui/drawer"
 import { useAcpActions } from "@/contexts/acp-connections-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { getFolderConversation, workTaskEvents } from "@/lib/api"
@@ -49,10 +57,20 @@ interface TaskTranscriptDialogProps {
   task: WorkTask | null
 }
 
-/** Statuses in which the engine holds a live connection worth attaching
- *  (`merging` included — the merge is an agent turn too). */
+/** Statuses in which the engine may hold a live connection worth attaching
+ *  (`merging` included — the merge is an agent turn too).
+ *
+ *  `preparing` is here because a round that RESUMES a session can spend that
+ *  status on a real agent turn: the pre-prompt context compaction runs between
+ *  the spawn and the round's own prompt, and on a full context window that is
+ *  minutes of work with nothing else to look at. The engine publishes the live
+ *  connection on the row before it starts (`mark_preparing_live`) and clears
+ *  the previous generation's dead one when the setup begins, so a
+ *  `connection_id` seen in this status is the one to stream — a fresh setup
+ *  simply has none yet, which the null check below already handles. */
 function isLive(task: WorkTask): boolean {
   return (
+    task.status === "preparing" ||
     task.status === "running" ||
     task.status === "awaiting_input" ||
     task.status === "merging"
@@ -67,20 +85,21 @@ export function TaskTranscriptDialog({
   const t = useTranslations("Tasks")
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        closeButtonClassName="top-2 right-2"
-        className="flex h-[85vh] w-full max-w-3xl flex-col gap-0 overflow-hidden rounded-2xl p-0 lg:max-w-4xl"
+    <Drawer open={open} onOpenChange={onOpenChange} swipeDirection="right">
+      {/* Exactly the detail sheet's width — it stacks directly over it. */}
+      <DrawerContent
+        closeButtonClassName="top-2.5 right-3"
+        className={SIDE_PANEL_CONTENT_CLASS}
       >
-        <DialogTitle className="sr-only">{t("transcriptTitle")}</DialogTitle>
-        <DialogDescription className="sr-only">
+        <DrawerTitle className="sr-only">{t("transcriptTitle")}</DrawerTitle>
+        <DrawerDescription className="sr-only">
           {t("transcriptDescription")}
-        </DialogDescription>
+        </DrawerDescription>
         {open && task != null && task.conversation_id != null ? (
           <TaskAgentResolver task={task} />
         ) : null}
-      </DialogContent>
-    </Dialog>
+      </DrawerContent>
+    </Drawer>
   )
 }
 
@@ -143,8 +162,15 @@ function TaskTranscriptBody({
   // Round markers → phase dividers above the matching user turns. Refetched
   // when a new generation dispatches (run_seq moves) so a merge started while
   // watching gets its divider too.
+  //
+  // …and again when the compaction flag turns over, because a generation's
+  // `run_seq` moves BEFORE its compaction exists: a viewer already open when
+  // the round dispatched refetches on the bump, lands ahead of the
+  // `context_compact` marker, and then watches the `/compact` turn stream in
+  // with no divider on it — the one turn that most needs saying whose it is.
   const [rounds, setRounds] = useState<TaskRound[]>([])
   const runSeq = task.run_seq
+  const compacting = task.compacting === true
   useEffect(() => {
     let cancelled = false
     workTaskEvents(task.id, 500)
@@ -155,7 +181,7 @@ function TaskTranscriptBody({
     return () => {
       cancelled = true
     }
-  }, [task.id, runSeq])
+  }, [task.id, runSeq, compacting])
   const userTurnHeader = useCallback(
     (group: ResolvedMessageGroup) => {
       const round = matchRound(rounds, firstTextOfParts(group.parts))
@@ -175,6 +201,11 @@ function TaskTranscriptBody({
         }
         case "merge":
           return t("phaseMerge")
+        // Not a phase of the task, but the only thing that accounts for a
+        // `/compact` the user never typed — and, now that this viewer streams
+        // `preparing`, one they may well be watching arrive.
+        case "compact":
+          return t("phaseCompact")
         default:
           return null
       }
@@ -184,7 +215,7 @@ function TaskTranscriptBody({
 
   // The connection to stream from, tracked FORWARD ONLY.
   //
-  // This used to be latched at mount, which silently downgraded the dialog to a
+  // This used to be latched at mount, which silently downgraded the viewer to a
   // persisted-transcript reader for its whole lifetime whenever the latch came
   // up empty — and then every unfinished tool call of the running turn rendered
   // as settled (a `get_delegation_status` blocking on its sub-agent showed a
@@ -196,8 +227,12 @@ function TaskTranscriptBody({
   //     "查看会话" IS offered) latched null;
   //   - `begin_merge` clears `connection_id` in the same update that sets
   //     `merging`, so opening in that interval latched null;
-  //   - a dialog held open across a generation boundary kept the previous
+  //   - a viewer held open across a generation boundary kept the previous
   //     connection, which `on_turn_complete` has already disconnected.
+  //
+  // The first of those three is now covered at the source: `preparing` is a
+  // live status here, and the engine keeps the column honest across it (see
+  // `isLive`). The other two still need the forward-only rule.
   //
   // Plain re-derivation is NOT the fix either — that was the reason for the
   // latch: the moment the provider flips the task to review we would detach and
@@ -232,7 +267,7 @@ function TaskTranscriptBody({
       hydrate: true,
     })
     // Detaches the PREVIOUS connection when the id moves to a new generation,
-    // and the current one when the dialog closes.
+    // and the current one when the viewer closes.
     return () => detachDelegationChild(attachId)
   }, [
     attachId,
@@ -244,7 +279,9 @@ function TaskTranscriptBody({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex items-center gap-3 border-b border-border px-5 py-2.5 pr-12">
+      {/* Aligned with the transcript's own 16px row inset below, as in the
+          delegation viewer. `pr-12` clears the close button. */}
+      <div className="flex items-center gap-3 border-b border-border px-4 py-2.5 pr-12">
         <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border bg-background text-foreground">
           <AgentIcon agentType={agentType} className="h-4 w-4" />
         </span>

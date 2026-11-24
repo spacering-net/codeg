@@ -280,6 +280,7 @@ export function AddCustomAgentDialog({
   useEffect(() => {
     // Edit mode never shows the registry tab, so don't fetch the catalog.
     if (!open || editing) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- catalog fetch on open; the loader flips its loading flag first
     void loadCatalog()
   }, [open, editing, loadCatalog])
 
@@ -333,10 +334,12 @@ export function AddCustomAgentDialog({
       .catch(() => {})
   }, [open, platform])
 
-  // Reset the form each time the dialog opens so a previous attempt never
-  // leaks into the next one.
+  // Reset the form each time the dialog closes so a previous attempt never
+  // leaks into the next one. `open` is driven by the parent, so this cannot
+  // live in a local handler.
   useEffect(() => {
     if (open) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- form reset when the parent closes the dialog
     setQuery("")
     setManualId("")
     setManualName("")
@@ -416,7 +419,12 @@ export function AddCustomAgentDialog({
     () => (manualJson.trim() ? parseManualSpec(manualJson) : null),
     [manualJson]
   )
-  const manualKinds = manualParsed?.spec ? specKinds(manualParsed.spec) : []
+  // Memoised so `effectiveKind` (read from this array) is a frozen value the
+  // save callback below can list as a dependency.
+  const manualKinds = useMemo(
+    () => (manualParsed?.spec ? specKinds(manualParsed.spec) : []),
+    [manualParsed]
+  )
   // A chosen kind can go stale when the JSON is edited out from under it
   // (pick "binary", then paste an npx-only spec) — honouring it would save a
   // definition whose kind names a channel the spec does not carry.
@@ -578,7 +586,7 @@ export function AddCustomAgentDialog({
                             {entry.name}
                           </span>
                           {entry.version && (
-                            <Badge variant="outline" className="text-[10px]">
+                            <Badge variant="outline" className="text-3xs">
                               {entry.version}
                             </Badge>
                           )}
@@ -586,7 +594,7 @@ export function AddCustomAgentDialog({
                             <Badge
                               key={kind}
                               variant="secondary"
-                              className="text-[10px]"
+                              className="text-3xs"
                             >
                               {kind}
                             </Badge>
@@ -596,7 +604,7 @@ export function AddCustomAgentDialog({
                           {entry.description}
                         </p>
                         {!entry.supportedOnPlatform && (
-                          <p className="text-[11px] text-amber-500 mt-1">
+                          <p className="text-2xs text-amber-500 mt-1">
                             {t("customAgentUnsupportedPlatform")}
                           </p>
                         )}
@@ -751,7 +759,7 @@ export function AddCustomAgentDialog({
                   htmlFor="custom-agent-spec"
                   control={
                     <div className="flex items-center gap-1">
-                      <span className="text-[11px] text-muted-foreground">
+                      <span className="text-2xs text-muted-foreground">
                         {t("customAgentTemplateLabel")}
                       </span>
                       {(["npx", "uvx", "binary"] as const).map((kind) => (
@@ -760,7 +768,7 @@ export function AddCustomAgentDialog({
                           type="button"
                           size="sm"
                           variant="outline"
-                          className="h-6 bg-background px-2 font-mono text-[11px]"
+                          className="h-6 bg-background px-2 font-mono text-2xs"
                           // The binary template needs the real platform key;
                           // until the backend has answered (ms after open,
                           // barring a dropped connection) there is nothing

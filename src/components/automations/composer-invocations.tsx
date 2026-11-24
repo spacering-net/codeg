@@ -14,17 +14,24 @@ import { BookOpenText } from "lucide-react"
 import type { RichComposerHandle } from "@/components/chat/composer/rich-composer"
 import {
   placeAnchoredPopup,
+  readViewport,
   type PopupPosition,
 } from "@/components/chat/composer/suggestion/popup-position"
 import {
-  commandInvocationToken,
+  buildKnownInvocations,
   commandToReference,
+  diskSkillTrigger,
+  skillMarkedCommands,
+  skillsForMenu,
   skillToReference,
+  type InvocationPrefix,
 } from "@/components/chat/composer/invocation-reference"
+import { CommandOptionLabel } from "@/components/chat/composer/command-option-label"
 import type { ReferenceAttrs } from "@/components/chat/composer/types"
 import { useAgentSkills } from "@/hooks/use-agent-skills"
 import { rankByTextMatch } from "@/lib/fuzzy-text-match"
 import { isImeCompositionKey } from "@/lib/ime-composition"
+import type { KnownInvocations } from "@/lib/invocation-token"
 import { cn } from "@/lib/utils"
 import type {
   AgentSkillItem,
@@ -41,7 +48,7 @@ const useIsomorphicLayoutEffect =
 interface UseComposerInvocationsArgs {
   editorRef: RefObject<RichComposerHandle | null>
   agentType: AgentType
-  /** Folder path for project-scoped Codex skills (global skills load regardless). */
+  /** Folder path for project-scoped disk skills (global skills load regardless). */
   folderPath: string | null
   /** Slash commands from the agent-options probe (empty if none / not yet ready). */
   availableCommands: AvailableCommandInfo[]
@@ -51,7 +58,17 @@ export interface ComposerInvocations {
   /** True only when the menu is open AND has at least one item to show. */
   isOpen: boolean
   commands: AvailableCommandInfo[]
+  /** The commands the rows show as skills (`skillMarkedCommands`), read off
+   *  the full list so the filter never moves the icon column. */
+  skillCommands: ReadonlySet<string>
   skills: AgentSkillItem[]
+  /** The trigger `skills` are listed and inserted under (`$` for Codex, `/`
+   *  for Antigravity and OpenCode), or null for an agent whose skills come as
+   *  commands. */
+  skillTrigger: InvocationPrefix | null
+  /** Every invocation this menu could offer, for the composer's `knownInvocations`
+   *  — so seeded / pasted text badges exactly what the menu would insert. */
+  knownInvocations: KnownInvocations
   /** Index into the merged [commands, skills] list. */
   activeIndex: number
   /** Re-evaluate the trigger from the editor's current caret (call on change). */
@@ -69,6 +86,8 @@ export interface ComposerInvocations {
  * untouched. It reuses the shared, pure reference builders + the composer's
  * `isExternalMenuOpen`/`onExternalMenuKeyDown` escape hatch; a selected item
  * becomes a badge that serializes to its literal `/cmd` / `$skill` token on save.
+ * Antigravity's and OpenCode's skills, which their servers never advertise,
+ * and a custom agent's declared skills join their commands under `/`.
  */
 export function useComposerInvocations({
   editorRef,
@@ -76,9 +95,10 @@ export function useComposerInvocations({
   folderPath,
   availableCommands,
 }: UseComposerInvocationsArgs): ComposerInvocations {
-  const isCodex = agentType === "codex"
-  // Codex-only `$` skills (filesystem scan — no live session needed).
-  const skills = useAgentSkills(isCodex ? "codex" : null, folderPath)
+  const skillTrigger = diskSkillTrigger(agentType)
+  // Skills from a filesystem scan (no live session needed), only for an agent
+  // that does not advertise them as commands itself.
+  const skills = useAgentSkills(skillTrigger ? agentType : null, folderPath)
   const [open, setOpen] = useState(false)
   const [triggerChar, setTriggerChar] = useState<"/" | "$" | null>(null)
   const [filter, setFilter] = useState("")
@@ -106,14 +126,15 @@ export function useComposerInvocations({
       undefined,
       " "
     )
-    const regex = isCodex ? /(^|\s)([/$])(\S*)$/ : /(^|\s)(\/)(\S*)$/
+    const regex =
+      skillTrigger === "$" ? /(^|\s)([/$])(\S*)$/ : /(^|\s)(\/)(\S*)$/
     const match = before.match(regex)
     if (!match) return close()
     setTriggerChar(match[2] as "/" | "$")
     setFilter(match[3])
     setRawActiveIndex(0)
     setOpen(true)
-  }, [editorRef, availableCommands.length, skills.length, isCodex, close])
+  }, [editorRef, availableCommands.length, skills.length, skillTrigger, close])
 
   const commands = useMemo(() => {
     if (!open || triggerChar !== "/" || availableCommands.length === 0)
@@ -122,16 +143,33 @@ export function useComposerInvocations({
   }, [open, triggerChar, availableCommands, filter])
 
   const matchedSkills = useMemo(() => {
-    // Skills autocomplete is Codex-only and triggered by `$`.
-    if (!isCodex || !open || triggerChar !== "$" || skills.length === 0)
-      return []
+    // Disk skills are listed only under the trigger their agent invokes them by.
+    if (!skillTrigger || !open || triggerChar !== skillTrigger) return []
+    if (skills.length === 0) return []
     return rankByTextMatch(
       filter,
-      skills,
+      skillsForMenu(skills, availableCommands, skillTrigger),
       (skill) => skill.name,
       (skill) => skill.id
     )
-  }, [isCodex, open, triggerChar, skills, filter])
+  }, [skillTrigger, open, triggerChar, skills, availableCommands, filter])
+
+  // Built from the FULL lists, not the filtered ones: this answers "is there
+  // such a command", which the current query has no say in.
+  const knownInvocations = useMemo(
+    () =>
+      buildKnownInvocations(
+        availableCommands,
+        skillTrigger ? skills : null,
+        skillTrigger ?? "/"
+      ),
+    [availableCommands, skillTrigger, skills]
+  )
+
+  const skillCommands = useMemo(
+    () => skillMarkedCommands(availableCommands),
+    [availableCommands]
+  )
 
   const count = commands.length + matchedSkills.length
   // Clamp on read so a shrinking filtered list never points past the end (avoids
@@ -181,8 +219,9 @@ export function useComposerInvocations({
     [replaceTrigger]
   )
   const selectSkill = useCallback(
-    (skill: AgentSkillItem) => replaceTrigger(skillToReference(skill, "$")),
-    [replaceTrigger]
+    (skill: AgentSkillItem) =>
+      replaceTrigger(skillToReference(skill, skillTrigger ?? "/")),
+    [replaceTrigger, skillTrigger]
   )
 
   const onKeyDown = useCallback(
@@ -226,7 +265,10 @@ export function useComposerInvocations({
   return {
     isOpen: open && count > 0,
     commands,
+    skillCommands,
     skills: matchedSkills,
+    skillTrigger,
+    knownInvocations,
     activeIndex,
     detect,
     onKeyDown,
@@ -295,7 +337,7 @@ export function ComposerInvocationsPopup({
         placeAnchoredPopup(
           { left: anchor.left, top: anchor.top, bottom: anchor.bottom },
           { width: anchor.width, height: rect.height },
-          { width: window.innerWidth, height: window.innerHeight },
+          readViewport(),
           { prefer: "below" }
         )
       )
@@ -303,9 +345,18 @@ export function ComposerInvocationsPopup({
     reposition()
     window.addEventListener("resize", reposition)
     window.addEventListener("scroll", reposition, true)
+    // The on-screen keyboard opening is a visual-viewport event and nothing
+    // else — it need not resize the layout viewport — so without these the
+    // panel keeps the geometry it was measured with while the band it has to
+    // fit inside shrinks underneath it.
+    const visual = window.visualViewport ?? null
+    visual?.addEventListener("resize", reposition)
+    visual?.addEventListener("scroll", reposition)
     return () => {
       window.removeEventListener("resize", reposition)
       window.removeEventListener("scroll", reposition, true)
+      visual?.removeEventListener("resize", reposition)
+      visual?.removeEventListener("scroll", reposition)
     }
   }, [inv.isOpen, itemCount, anchorWidth])
 
@@ -340,9 +391,9 @@ export function ComposerInvocationsPopup({
         // Hidden until the first measure positions it (avoids a flash at 0,0).
         visibility: pos ? "visible" : "hidden",
         zIndex: 50,
-        // The panel portals to `body`, and a modal Radix layer (the Dialog or
-        // Sheet hosting the composer) sets `pointer-events: none` on `body` —
-        // only the layer itself is re-enabled. Without this the panel is
+        // The panel portals to `body`, and a modal Radix layer (the Dialog
+        // hosting the composer) sets `pointer-events: none` on `body` — only
+        // the layer itself is re-enabled. Without this the panel is
         // click-dead there and the press lands on the document instead, which
         // the layer reads as an outside press and closes itself. Radix's
         // outside test walks the REACT tree, so a press that does reach the
@@ -368,12 +419,11 @@ export function ComposerInvocationsPopup({
               inv.selectCommand(cmd)
             }}
           >
-            <span className="shrink-0 font-mono text-primary">
-              {commandInvocationToken(cmd.name)}
-            </span>
-            <span className="truncate text-xs text-muted-foreground">
-              {cmd.description}
-            </span>
+            <CommandOptionLabel
+              command={cmd}
+              skill={inv.skillCommands.has(cmd.name)}
+              kindColumn={inv.skillCommands.size > 0}
+            />
           </button>
         ))}
         {inv.skills.map((skill, i) => {
@@ -400,7 +450,7 @@ export function ComposerInvocationsPopup({
                   className="min-w-0 flex-1 truncate text-xs text-muted-foreground"
                   title={skill.description ?? undefined}
                 >
-                  {skill.description ?? `$${skill.id}`}
+                  {skill.description ?? `${inv.skillTrigger ?? "/"}${skill.id}`}
                 </span>
               </div>
             </button>

@@ -9,13 +9,21 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type RefObject,
 } from "react"
 import { type Editor, type JSONContent } from "@tiptap/core"
+import { Selection } from "@tiptap/pm/state"
 import { EditorContent, useEditor } from "@tiptap/react"
 import { exitSuggestion } from "@tiptap/suggestion"
 
+import type { HistoryDirection } from "@/lib/composer-history"
 import { isImeCompositionKey } from "@/lib/ime-composition"
+import {
+  NO_KNOWN_INVOCATIONS,
+  type KnownInvocations,
+} from "@/lib/invocation-token"
 import { matchShortcutEvent } from "@/lib/keyboard-shortcuts"
+import { useVisibleMentionTabs } from "@/lib/mention-panel-prefs"
 import { cn } from "@/lib/utils"
 
 import { buildComposerExtensions } from "./editor-config"
@@ -146,6 +154,27 @@ export interface RichComposerProps {
    */
   tabLabels?: Record<ReferenceKind, string>
   /**
+   * Box the `@` panel lines up with: it adopts this element's width and left
+   * edge and opens above it. Point it at the composer's outer chrome so the
+   * panel matches the host's own `/` command menu; defaults to the editor's own
+   * root, which is the same box for a host that wraps nothing else around it.
+   */
+  mentionAnchorRef?: RefObject<HTMLElement | null>
+  /**
+   * The invocations the host's `/`·`$` menu can offer right now (see
+   * {@link "./invocation-reference".buildKnownInvocations}). Seeded and pasted
+   * text turns a bare `/cmd`·`$skill` token into a command badge only when it is
+   * one of these; anything else stays editable prose. Omit — or leave empty
+   * while the agent's list is still on its way — and no bare token is ever
+   * badged, which is the safe direction: text that stays text sends exactly as
+   * written.
+   *
+   * Read at event time, so a list that lands mid-compose applies to the next
+   * paste without recreating the editor. Badges already in the document are
+   * never revisited.
+   */
+  knownInvocations?: KnownInvocations
+  /**
    * Key binding (matchShortcutEvent form) that sends the message. Default
    * `"enter"`. When set to a non-Enter binding, a plain Enter inserts a newline.
    */
@@ -166,6 +195,21 @@ export interface RichComposerProps {
    * false (e.g. a letter that filters the list) to let normal editing proceed.
    */
   onExternalMenuKeyDown?: (event: KeyboardEvent) => boolean
+  /**
+   * Arrow-key prompt history (the chat composer's Up/Down recall). Called for a
+   * bare ArrowUp/ArrowDown BEFORE the caret moves, but ONLY when the collapsed
+   * selection already sits at the document's first (`"older"`) or last
+   * (`"newer"`) position — so the caret keeps moving line by line inside a
+   * multi-line entry, and only a press at an edge switches prompts. Return true
+   * to consume the key.
+   *
+   * Optional on purpose: the task and automation composers pass no handler and
+   * keep the editor's default Arrow behaviour.
+   */
+  onHistoryKeyDown?: (
+    direction: HistoryDirection,
+    event: KeyboardEvent
+  ) => boolean
   /**
    * Called on paste before the editor handles it. Return true when the paste was
    * consumed out-of-band (e.g. an image/file became an attachment) so the editor
@@ -189,6 +233,15 @@ export interface RichComposerProps {
    * clipboard read is unavailable).
    */
   onPlainPaste?: () => boolean
+  /**
+   * Text a bare Tab fills the document with while it is empty — the follow-up
+   * prompt the agent predicted, which the host shows as the placeholder. The
+   * filled text is an ordinary edit (onChange fires, nothing is sent), and the
+   * caret lands after it. Ignored once the document has content, and Tab then
+   * keeps its default meaning. Read at key time, so a new prediction needs no
+   * editor rebuild.
+   */
+  promptSuggestion?: string | null
 }
 
 /**
@@ -215,13 +268,17 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
       referenceSearch,
       mentionUiLabels,
       tabLabels,
+      mentionAnchorRef,
+      knownInvocations,
       submitShortcut,
       newlineShortcut,
       isExternalMenuOpen,
       onExternalMenuKeyDown,
+      onHistoryKeyDown,
       onPasteFiles,
       onDropFiles,
       onPlainPaste,
+      promptSuggestion,
     },
     ref
   ) {
@@ -236,16 +293,24 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
     // installed) is gated on whether mentions are currently enabled — robust to
     // the prop being added/removed after the editor is created once.
     const referenceSearchRef = useRef(referenceSearch)
+    // Read at event time (paste, seed) rather than baked into the editor, so a
+    // command list that arrives after the connection comes up applies without
+    // rebuilding the editor — and without disturbing what is already typed.
+    const knownInvocationsRef = useRef(knownInvocations)
     const submitShortcutRef = useRef(submitShortcut)
     const newlineShortcutRef = useRef(newlineShortcut)
     const isExternalMenuOpenRef = useRef(isExternalMenuOpen)
     const onExternalMenuKeyDownRef = useRef(onExternalMenuKeyDown)
+    const onHistoryKeyDownRef = useRef(onHistoryKeyDown)
     const onPasteFilesRef = useRef(onPasteFiles)
     const onDropFilesRef = useRef(onDropFiles)
     const onPlainPasteRef = useRef(onPlainPaste)
+    const promptSuggestionRef = useRef(promptSuggestion)
     // The live editor, captured for command access inside editorProps handlers
     // (which are created before `editor` is assigned in this closure).
     const editorInstanceRef = useRef<Editor | null>(null)
+    // Fallback anchor for the `@` panel when the host names no outer box.
+    const rootRef = useRef<HTMLDivElement>(null)
     useEffect(() => {
       onChangeRef.current = onChange
       onSubmitRef.current = onSubmit
@@ -253,13 +318,16 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
       onBlurRef.current = onBlur
       onReadyRef.current = onReady
       referenceSearchRef.current = referenceSearch
+      knownInvocationsRef.current = knownInvocations
       submitShortcutRef.current = submitShortcut
       newlineShortcutRef.current = newlineShortcut
       isExternalMenuOpenRef.current = isExternalMenuOpen
       onExternalMenuKeyDownRef.current = onExternalMenuKeyDown
+      onHistoryKeyDownRef.current = onHistoryKeyDown
       onPasteFilesRef.current = onPasteFiles
       onDropFilesRef.current = onDropFiles
       onPlainPasteRef.current = onPlainPaste
+      promptSuggestionRef.current = promptSuggestion
     })
 
     // ── Unified `@` mention panel state bridge ──
@@ -272,6 +340,10 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
     // (so Enter defers to the panel without waiting for a re-render).
     const mentionOpenRef = useRef(false)
     const popupRef = useRef<SuggestionPopupHandle>(null)
+    // Which `@` tabs to show and in what order — the user's preference from
+    // Settings → General, the same for every host. Read here rather than by
+    // each host so none of them can forget it; live across windows.
+    const mentionTabs = useVisibleMentionTabs()
     // Stable controller created once (refs/setState are stable), so the editor
     // is built a single time with it.
     const mentionController = useMemo<MentionController>(
@@ -303,6 +375,12 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
     const placeholderRef = useRef(placeholder)
     const getPlaceholder = useCallback(() => placeholderRef.current ?? "", [])
 
+    /** The invocations badge-able right now (see the `knownInvocations` prop). */
+    const known = useCallback(
+      () => knownInvocationsRef.current ?? NO_KNOWN_INVOCATIONS,
+      []
+    )
+
     const editor = useEditor({
       // Static export / SSR safety: never render on the server.
       immediatelyRender: false,
@@ -310,9 +388,8 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
       // it stays inert until `referenceSearch` is set (checked at runtime in the
       // controller). `mentionController` (stable, from useMemo) captures refs
       // but only dereferences them inside event-time callbacks, never during
-      // render — the React Compiler lint can't prove that. Mirrors Tiptap's own
-      // React suggestion pattern (render() → component.ref.onKeyDown).
-      // eslint-disable-next-line react-hooks/refs
+      // render. Mirrors Tiptap's own React suggestion pattern
+      // (render() → component.ref.onKeyDown).
       extensions: buildComposerExtensions({
         placeholder: getPlaceholder,
         mentionController,
@@ -321,7 +398,12 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
       autofocus: autoFocus ? "end" : false,
       editorProps: {
         attributes: {
-          class: "codeg-composer-content",
+          // `grow`: the editable node fills the scroll area (a flex column, see
+          // EditorContent below) so the blank space under a short draft is
+          // still the contenteditable and a tap there focuses it natively. Its
+          // automatic minimum size keeps it from being squeezed under its own
+          // text once the composer is at max height and scrolling.
+          class: "codeg-composer-content grow",
           role: "textbox",
           "aria-multiline": "true",
           ...(ariaLabel ? { "aria-label": ariaLabel } : {}),
@@ -343,6 +425,65 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
           // list) to let the inline token keep growing.
           if (isExternalMenuOpenRef.current) {
             return onExternalMenuKeyDownRef.current?.(event) ?? false
+          }
+          // A bare Tab in the empty composer takes the predicted follow-up
+          // prompt the placeholder shows, as AIR and Claude Code's own prompt
+          // do. It fills the document and sends nothing. Ahead of the
+          // submit/newline bindings: either one bound to Tab would act on an
+          // empty document, which sends or breaks nothing useful.
+          if (
+            event.key === "Tab" &&
+            !event.shiftKey &&
+            !event.altKey &&
+            !event.ctrlKey &&
+            !event.metaKey
+          ) {
+            const suggestion = promptSuggestionRef.current?.trim()
+            const ed = editorInstanceRef.current
+            if (suggestion && ed?.isEmpty) {
+              ed.chain()
+                .setContent(textToSeededDoc(suggestion, known()))
+                .focus("end")
+                .run()
+              return true
+            }
+          }
+          // Prompt history (chat composer only): a bare Up/Down at the
+          // document's first/last position steps through sent prompts; anywhere
+          // else the editor keeps the caret movement, which is what makes a
+          // multi-line recalled message navigable line by line. Placed after
+          // the menus so an open panel always wins, and after the IME guard
+          // above so a CJK candidate list keeps its own Arrow keys.
+          //
+          // A modifier keeps the native meaning: Shift+Arrow extends the
+          // selection (empty until it spans), and Ctrl/Alt+Arrow is a
+          // word/line jump — none of them is "recall a prompt".
+          if (
+            onHistoryKeyDownRef.current &&
+            (event.key === "ArrowUp" || event.key === "ArrowDown") &&
+            !event.shiftKey &&
+            !event.altKey &&
+            !event.ctrlKey &&
+            !event.metaKey
+          ) {
+            const { selection, doc } = view.state
+            const older = event.key === "ArrowUp"
+            // The edge that counts is the DOCUMENT's, not the current block's.
+            // The box is normally one paragraph of hard breaks, but a native
+            // paste can leave several paragraphs in it (see the quote
+            // decoration's scan) — and in one of those, the start of paragraph
+            // two is an ordinary "move up a line", not a recall.
+            const atBoundary =
+              selection.empty &&
+              (older
+                ? selection.from === Selection.atStart(doc).from
+                : selection.to === Selection.atEnd(doc).to)
+            if (atBoundary) {
+              return onHistoryKeyDownRef.current(
+                older ? "older" : "newer",
+                event
+              )
+            }
           }
           // Paste without formatting: Ctrl/⌘+Shift+V routes to the host, which
           // owns the clipboard read. Consume the key (suppressing the browser's
@@ -402,10 +543,13 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
           const editor = editorInstanceRef.current
           const clipboard = event.clipboardData
           if (!editor || !clipboard) return false
-          const inline = decidePastedContent({
-            html: clipboard.getData("text/html"),
-            text: clipboard.getData("text/plain"),
-          })
+          const inline = decidePastedContent(
+            {
+              html: clipboard.getData("text/html"),
+              text: clipboard.getData("text/plain"),
+            },
+            known()
+          )
           if (!inline) return false
           editor.chain().insertContent(inline).run()
           return true
@@ -415,7 +559,7 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
       onCreate: ({ editor }) => {
         editorInstanceRef.current = editor
         if (defaultText) {
-          editor.commands.setContent(textToSeededDoc(defaultText), {
+          editor.commands.setContent(textToSeededDoc(defaultText, known()), {
             emitUpdate: false,
           })
         }
@@ -454,7 +598,8 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
       ref,
       (): RichComposerHandle => ({
         getText: () => (editor ? serializeDocToText(editor.state.doc) : ""),
-        setText: (text) => editor?.commands.setContent(textToSeededDoc(text)),
+        setText: (text) =>
+          editor?.commands.setContent(textToSeededDoc(text, known())),
         setDoc: (doc) => editor?.commands.setContent(doc),
         clear: () => editor?.commands.clearContent(true),
         focus: () => editor?.commands.focus("end"),
@@ -500,7 +645,7 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
           editor
             ?.chain()
             .focus()
-            .insertContent(textToSeededInlineContent(text))
+            .insertContent(textToSeededInlineContent(text, known()))
             .run()
         },
         insertReference: (attrs) => {
@@ -508,7 +653,7 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
         },
         getEditor: () => editor ?? null,
       }),
-      [editor]
+      [editor, known]
     )
 
     const closeMention = useCallback(() => {
@@ -575,13 +720,32 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
 
     return (
       <div
+        ref={rootRef}
         className={cn("codeg-composer flex min-h-0 flex-col", className)}
         style={style}
         data-disabled={disabled || undefined}
       >
+        {/* `grow` (a CONTENT flex basis), never `flex-1` (a ZERO basis). The
+            box this sits in is a flex column whose height usually comes only
+            from a `min-height`, and an engine that treats such a column as
+            main-size-indefinite hands its `flex-grow` children no free space
+            at all. Off a zero basis that leaves the editable area at 0px: the
+            action row rides up to the top of the box, the rest of it is
+            untappable dead space, and the placeholder is clipped away — the
+            mobile-web report in #746. Off a content basis the editor is always
+            at least as tall as the text it holds, whatever the engine does,
+            while `min-h-0` still lets it shrink and scroll at the box's
+            max height.
+
+            The column here plus `grow` on the editable node itself (see the
+            `codeg-composer-content` class) also makes the contenteditable
+            cover the whole editable area, so a tap on the blank space under a
+            short draft lands on the editor natively instead of going through
+            the chrome's mousedown fallback — which touch has no reliable
+            equivalent for. */}
         <EditorContent
           editor={editor}
-          className="codeg-composer-scroll min-h-0 flex-1 overflow-y-auto px-3 py-2 text-base md:text-sm"
+          className="codeg-composer-scroll flex min-h-0 grow flex-col overflow-y-auto px-3 py-2 text-base md:text-sm"
         />
         {referenceSearch && mentionState && (
           <SuggestionPopup
@@ -594,6 +758,7 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
             search={referenceSearch}
             onSelect={handleReferenceSelect}
             onClose={closeMention}
+            anchorRef={mentionAnchorRef ?? rootRef}
             onActiveOptionChange={handleActiveOptionChange}
             emptyLabel={mentionUiLabels?.empty}
             loadingLabel={mentionUiLabels?.loading}
@@ -601,6 +766,7 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
             moreLabel={mentionUiLabels?.more}
             countLabel={mentionUiLabels?.count}
             tabLabels={tabLabels}
+            tabs={mentionTabs}
           />
         )}
       </div>

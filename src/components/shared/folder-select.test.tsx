@@ -95,7 +95,8 @@ describe("FolderSelect", () => {
     expect(onSelectAll).toHaveBeenCalled()
   })
 
-  it("shows the selected folder as `alias [ name ]` on the trigger", () => {
+  it("shows the selected folder as `alias [ name ]` on the trigger", async () => {
+    const user = userEvent.setup()
     render(
       <FolderSelect
         folders={FOLDERS}
@@ -107,9 +108,33 @@ describe("FolderSelect", () => {
     const trigger = screen.getByRole("button")
     expect(trigger.textContent).toContain("My Project")
     expect(trigger.textContent).toContain("[ codeg ]")
-    // The tooltip carries the untruncated label plus the path.
-    expect(trigger.getAttribute("title")).toBe(
-      "My Project [ codeg ] · /work/codeg"
+    // The hover hint is a tooltip, not a native `title`, and it carries the
+    // path — the one thing the trigger never shows. The folder's own name is
+    // NOT repeated there: it is the trigger's own text.
+    expect(trigger).not.toHaveAttribute("title")
+    await user.hover(trigger)
+    const tip = await screen.findByRole("tooltip")
+    expect(tip).toHaveTextContent("/work/codeg")
+    expect(tip).not.toHaveTextContent("My Project")
+  })
+
+  // A disabled trigger dispatches no pointer events, so Radix can never open —
+  // the native `title` (which browsers do show on a disabled control) is the
+  // only mechanism left, and the pinned-folder field in the task editor is
+  // exactly that case.
+  it("falls back to a native title while disabled", () => {
+    render(
+      <FolderSelect
+        folders={FOLDERS}
+        value={1}
+        onChange={vi.fn()}
+        title="Working folder"
+        disabled
+      />
+    )
+    expect(screen.getByRole("button")).toHaveAttribute(
+      "title",
+      "Working folder · /work/codeg"
     )
   })
 

@@ -20,7 +20,7 @@
 use async_trait::async_trait;
 use std::sync::Arc;
 
-use crate::acp::delegation::types::BlockedOn;
+use crate::acp::delegation::types::{BlockedOn, DelegationProgress};
 use crate::acp::manager::ConnectionManager;
 
 /// Char budget for the inline live-reply hint — one tidy line, not a transcript.
@@ -45,6 +45,13 @@ pub trait ChildLiveReplyLookup: Send + Sync {
     /// Defaulted to `None` so the Noop / mock impls and every test call site
     /// stay untouched; only the production lookup answers for real.
     async fn blocked_on(&self, _child_connection_id: &str) -> Option<BlockedOn> {
+        None
+    }
+
+    /// The child's tool-call progress — the turn in flight, or the one that
+    /// just ended (see [`crate::acp::SessionState::delegation_progress`]).
+    /// Defaulted to `None` like [`Self::blocked_on`].
+    async fn progress(&self, _child_connection_id: &str) -> Option<DelegationProgress> {
         None
     }
 }
@@ -86,6 +93,12 @@ impl ChildLiveReplyLookup for ConnectionManagerLiveReplyLookup {
         let guard = state.read().await;
         guard.blocking_prompt(BLOCKED_TITLE_CAP)
     }
+
+    async fn progress(&self, child_connection_id: &str) -> Option<DelegationProgress> {
+        let state = self.manager.get_state(child_connection_id).await?;
+        let guard = state.read().await;
+        guard.delegation_progress()
+    }
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -104,6 +117,7 @@ pub mod mock {
     pub struct MockChildLiveReplyLookup {
         pub reply: Option<String>,
         blocked: Mutex<Option<BlockedOn>>,
+        progress: Mutex<Option<DelegationProgress>>,
     }
 
     impl MockChildLiveReplyLookup {
@@ -111,12 +125,18 @@ pub mod mock {
             Self {
                 reply,
                 blocked: Mutex::new(None),
+                progress: Mutex::new(None),
             }
         }
 
         /// Set (or clear) what every child looks blocked on from now on.
         pub fn set_blocked(&self, blocked: Option<BlockedOn>) {
             *self.blocked.lock().unwrap() = blocked;
+        }
+
+        /// Set (or clear) every child's progress from now on.
+        pub fn set_progress(&self, progress: Option<DelegationProgress>) {
+            *self.progress.lock().unwrap() = progress;
         }
     }
 
@@ -128,6 +148,10 @@ pub mod mock {
 
         async fn blocked_on(&self, _child_connection_id: &str) -> Option<BlockedOn> {
             self.blocked.lock().unwrap().clone()
+        }
+
+        async fn progress(&self, _child_connection_id: &str) -> Option<DelegationProgress> {
+            self.progress.lock().unwrap().clone()
         }
     }
 }

@@ -51,6 +51,7 @@ export function PetImporter({ open, onClose, onDone }: PetImporterProps) {
   }, [])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- importable pet list fetch on open
     if (open) void refresh()
   }, [open, refresh])
 
@@ -149,7 +150,7 @@ export function PetImporter({ open, onClose, onDone }: PetImporterProps) {
                       </div>
                     </div>
                     {p.alreadyImported ? (
-                      <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                      <span className="rounded bg-muted px-1.5 py-0.5 text-3xs text-muted-foreground">
                         {t("alreadyImported")}
                       </span>
                     ) : null}

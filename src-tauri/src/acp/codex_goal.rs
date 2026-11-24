@@ -20,6 +20,20 @@
 
 use serde_json::{json, Value};
 
+/// codex's bespoke pre-extension goal-control request (codex-acp #293,
+/// v1.1.4) — still accepted by 1.2+ as an alias. The default
+/// `SessionState.goal_control_method` until an adapter advertises the
+/// provider-neutral `_meta.goal.controlMethod` at initialize.
+pub(crate) const LEGACY_GOAL_CONTROL_METHOD: &str = "_codex/session/goal_control";
+
+/// The action vocabulary the legacy method accepts. Resolved into
+/// `SessionState.goal_actions` at initialize when the adapter advertises no
+/// neutral goal surface, so a non-advertising (older PATH-resolved) codex keeps
+/// today's Pause/Clear affordances. NOT a construction-time default: until
+/// initialize lands the vocabulary is `None` (unknown), because a client that
+/// reads the snapshot during the handshake latches whatever it finds.
+pub(crate) const LEGACY_GOAL_ACTIONS: [&str; 2] = ["pause", "clear"];
+
 /// A Codex goal object mapped to codeg's canonical synthetic goal marker.
 ///
 /// The live path (`crate::acp::connection`) builds an `AcpEvent::ToolCall` from
@@ -190,11 +204,59 @@ mod tests {
     use super::*;
 
     #[test]
+    fn neutral_snapshot_maps_like_legacy_and_keeps_extra_fields() {
+        // The provider-neutral `_meta.goal` snapshot (claude-agent-acp 0.66+,
+        // codex-acp 1.2+): lowercase status vocabulary — usageLimited/
+        // budgetLimited collapse to "limited" adapter-side — plus Unix-ms
+        // timestamps and claude-only iterations/lastReason. Everything must
+        // ride through the same marker: status passes normalization
+        // unchanged, non-active closes the run, and the extra fields survive
+        // in the raw goal object `GoalCard.parseGoal` reads.
+        let snapshot = json!({
+            "objective": "ship the release",
+            "status": "limited",
+            "tokenBudget": 500000,
+            "tokensUsed": 500000,
+            "timeUsedSeconds": 120,
+            "createdAt": 1755200000000u64,
+            "updatedAt": 1755200120000u64,
+            "iterations": 3,
+            "lastReason": "token budget exhausted",
+            "controlMethod": "_session/goal",
+        });
+        let marker = goal_marker(&snapshot).expect("marker");
+        assert_eq!(marker.tool_name, "update_goal");
+        assert_eq!(marker.title, "Goal updated (limited): ship the release");
+        let output: Value = serde_json::from_str(&marker.output_json).unwrap();
+        let goal = output.get("goal").unwrap();
+        assert_eq!(goal.get("status").and_then(Value::as_str), Some("limited"));
+        assert_eq!(goal.get("iterations").and_then(Value::as_u64), Some(3));
+        assert_eq!(
+            goal.get("createdAt").and_then(Value::as_u64),
+            Some(1755200000000)
+        );
+
+        // An active neutral snapshot opens a run exactly like the legacy shape.
+        let mut open = None;
+        let active = json!({"objective": "ship the release", "status": "active"});
+        let opened = next_goal_marker(&mut open, &active).expect("open marker");
+        assert_eq!(opened.tool_name, "create_goal");
+        assert_eq!(open.as_deref(), Some("ship the release"));
+        // The neutral clear (`_meta.goal = null`) closes it.
+        let closed = next_goal_marker(&mut open, &Value::Null).expect("close marker");
+        assert_eq!(closed.tool_name, "update_goal");
+        assert!(open.is_none());
+    }
+
+    #[test]
     fn normalizes_camelcase_and_spaced_statuses() {
         assert_eq!(normalize_goal_status("active"), "active");
         assert_eq!(normalize_goal_status("complete"), "complete");
         assert_eq!(normalize_goal_status("blocked"), "blocked");
         assert_eq!(normalize_goal_status("paused"), "paused");
+        // Neutral-snapshot vocabulary (goal extension v1) is already
+        // lowercase; it must pass through untouched.
+        assert_eq!(normalize_goal_status("limited"), "limited");
         // camelCase (codex-acp v1.1.0 raw ThreadGoalStatus)
         assert_eq!(normalize_goal_status("budgetLimited"), "budget_limited");
         assert_eq!(normalize_goal_status("usageLimited"), "usage_limited");

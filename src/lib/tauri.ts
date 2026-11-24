@@ -18,6 +18,8 @@ import type {
   AgentSkillContent,
   FolderHistoryEntry,
   FolderDetail,
+  FolderGroupDetail,
+  SidebarLayoutEntry,
   FolderLinkDetail,
   FolderLinkPlan,
   FolderLinkRequestItem,
@@ -26,6 +28,7 @@ import type {
   OpenedTab,
   OpenedTabsSnapshot,
   SaveTabsOutcome,
+  GitBlobBase64,
   GitStatusEntry,
   GitBranchList,
   GitHeadInfo,
@@ -55,6 +58,7 @@ import type {
   SystemLanguageSettings,
   SystemProxySettings,
   SystemRenderingSettings,
+  SystemAutostartSettings,
   SystemTerminalSettings,
   GitCredentials,
   GitDetectResult,
@@ -62,6 +66,7 @@ import type {
   GitHubAccountsSettings,
   GitHubTokenValidation,
   McpAppType,
+  LocalMcpScan,
   LocalMcpServer,
   McpMarketplaceProvider,
   McpMarketplaceItem,
@@ -236,7 +241,6 @@ export async function acpUpdateAgentPreferences(
     enabled: boolean
     env: Record<string, string>
     config_json?: string | null
-    opencode_auth_json?: string | null
     codex_auth_json?: string | null
     codex_config_toml?: string | null
   }
@@ -246,7 +250,6 @@ export async function acpUpdateAgentPreferences(
     enabled: params.enabled,
     env: params.env,
     configJson: params.config_json ?? null,
-    opencodeAuthJson: params.opencode_auth_json ?? null,
     codexAuthJson: params.codex_auth_json ?? null,
     codexConfigToml: params.codex_config_toml ?? null,
   })
@@ -374,6 +377,16 @@ export async function updateSystemRenderingSettings(
   return invoke("update_system_rendering_settings", { settings })
 }
 
+export async function getSystemAutostartSettings(): Promise<SystemAutostartSettings> {
+  return invoke("get_system_autostart_settings")
+}
+
+export async function updateSystemAutostartSettings(
+  settings: SystemAutostartSettings
+): Promise<SystemAutostartSettings> {
+  return invoke("update_system_autostart_settings", { settings })
+}
+
 // --- Version Control ---
 
 export async function detectGit(): Promise<GitDetectResult> {
@@ -428,7 +441,7 @@ export async function deleteAccountToken(accountId: string): Promise<void> {
   return invoke("delete_account_token", { accountId })
 }
 
-export async function mcpScanLocal(): Promise<LocalMcpServer[]> {
+export async function mcpScanLocal(): Promise<LocalMcpScan> {
   return invoke("mcp_scan_local")
 }
 
@@ -579,8 +592,39 @@ export async function removeFolderFromWorkspace(
   return invoke("remove_folder_from_workspace", { folderId })
 }
 
-export async function reorderFolders(ids: number[]): Promise<void> {
-  return invoke("reorder_folders", { ids })
+export async function listFolderGroups(): Promise<FolderGroupDetail[]> {
+  return invoke("list_folder_groups", {})
+}
+
+export async function createFolderGroup(
+  name: string,
+  color?: string
+): Promise<FolderGroupDetail> {
+  return invoke("create_folder_group", { name, color })
+}
+
+export async function updateFolderGroup(
+  groupId: number,
+  patch: { name?: string; color?: string }
+): Promise<FolderGroupDetail> {
+  return invoke("update_folder_group", { groupId, ...patch })
+}
+
+export async function deleteFolderGroup(groupId: number): Promise<void> {
+  return invoke("delete_folder_group", { groupId })
+}
+
+export async function applySidebarLayout(
+  entries: SidebarLayoutEntry[]
+): Promise<void> {
+  return invoke("apply_sidebar_layout", { entries })
+}
+
+export async function setFolderGroup(
+  folderId: number,
+  groupId: number | null
+): Promise<void> {
+  return invoke("set_folder_group", { folderId, groupId })
 }
 
 export async function importLocalConversations(
@@ -915,6 +959,20 @@ export async function gitShowFile(
   })
 }
 
+export async function gitShowFileBase64(
+  path: string,
+  file: string,
+  refName?: string,
+  maxBytes?: number
+): Promise<GitBlobBase64> {
+  return invoke("git_show_file_base64", {
+    path,
+    file,
+    refName: refName ?? null,
+    maxBytes: maxBytes ?? null,
+  })
+}
+
 export async function gitIsTracked(
   path: string,
   file: string
@@ -1001,10 +1059,9 @@ export async function openCommitWindow(folderId: number): Promise<void> {
 }
 
 export type SettingsSection =
+  | "general"
   | "appearance"
   | "agents"
-  | "mcp"
-  | "skills"
   | "shortcuts"
   | "system"
 
@@ -1068,22 +1125,25 @@ export async function listFolderCommands(
 export async function createFolderCommand(
   folderId: number,
   name: string,
-  command: string
+  command: string,
+  runLocal: boolean
 ): Promise<FolderCommand> {
-  return invoke("create_folder_command", { folderId, name, command })
+  return invoke("create_folder_command", { folderId, name, command, runLocal })
 }
 
 export async function updateFolderCommand(
   id: number,
   name?: string,
   command?: string,
-  sortOrder?: number
+  sortOrder?: number,
+  runLocal?: boolean
 ): Promise<FolderCommand> {
   return invoke("update_folder_command", {
     id,
     name: name ?? null,
     command: command ?? null,
     sortOrder: sortOrder ?? null,
+    runLocal: runLocal ?? null,
   })
 }
 

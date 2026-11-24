@@ -21,8 +21,10 @@ use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, Set};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::Mutex;
 use tokio::time::MissedTickBehavior;
+use tokio_util::sync::CancellationToken;
 
 use crate::acp::manager::ConnectionManager;
+use crate::acp::turn_end_hold;
 use crate::acp::types::{AcpEvent, EventEnvelope, PromptInputBlock};
 use crate::acp::InternalEventBus;
 use crate::commands::acp::{build_session_runtime_env, verify_agent_installed};
@@ -32,7 +34,7 @@ use crate::commands::folders::{
     git_worktree_add, open_worktree_folder_core, resolve_worktree_folder_core,
 };
 use crate::db::entities::conversation::{self, ConversationStatus};
-use crate::db::service::automation_service;
+use crate::db::service::{automation_service, conversation_service};
 use crate::db::AppDatabase;
 use crate::logging::throttle::{LagLogThrottle, LAG_LOG_WINDOW};
 use crate::models::{
@@ -59,10 +61,34 @@ const RUN_RETENTION_DAYS: i64 = 30;
 
 static ENGINE: OnceLock<Arc<AutomationEngine>> = OnceLock::new();
 
+/// The summary of a run that queued work task `id`; the task's id has no
+/// column of its own, so [`queued_task_id`] reads it back from here.
+pub(crate) fn queued_task_summary(id: i32, title: &str) -> String {
+    format!("queued task #{id}: {title}")
+}
+
+/// The work task a run queued, from its summary.
+pub(crate) fn queued_task_id(summary: &str) -> Option<i32> {
+    let rest = summary.strip_prefix("queued task #")?;
+    rest.split(':').next()?.parse().ok()
+}
+
 /// The process-global engine, set once at boot by [`build_engine`]. Read by the
 /// manual "run now" / cancel commands (and, later, the scheduler).
 pub fn engine() -> Option<Arc<AutomationEngine>> {
     ENGINE.get().cloned()
+}
+
+/// A run held open for its agent's background work (see
+/// [`AutomationEngine::held`]).
+struct HeldRun {
+    /// Ends the wait early: a later turn on the connection that did not end
+    /// normally.
+    stop: CancellationToken,
+    /// The turns that ended on the connection after the held one.
+    later: turn_end_hold::LaterTurns,
+    /// The waiter is settling the run; later turns no longer change it.
+    settling: bool,
 }
 
 pub struct AutomationEngine {
@@ -76,6 +102,13 @@ pub struct AutomationEngine {
     /// restart — which is why boot reconcile + the conversation-status backstop
     /// exist.
     index: Arc<Mutex<HashMap<String, (i32, i32)>>>,
+    /// Connections whose run's turn ended while the agent still had work going
+    /// (a background shell, the turn Claude Code starts on its own to read it,
+    /// a delegation), held open instead of settled — settling ends the
+    /// connection and the work with it (see `acp::turn_end_hold`). The hold's
+    /// waiter settles the run once that work is done, and drops the entry only
+    /// after that settle.
+    held: Arc<Mutex<HashMap<String, HeldRun>>>,
     /// Per-automation fire lock. Serializes the overlap-check + run-row insert (and
     /// the whole launch) so a manual run-now, a scheduled fire, and a double-click
     /// can't all pass `has_active_run` and start duplicate concurrent runs.
@@ -143,6 +176,7 @@ pub fn build_engine(
         bus,
         data_dir,
         index: Arc::new(Mutex::new(HashMap::new())),
+        held: Arc::new(Mutex::new(HashMap::new())),
         automation_locks: Arc::new(Mutex::new(HashMap::new())),
         root_locks: Arc::new(Mutex::new(HashMap::new())),
         _engine_lock: engine_lock,
@@ -382,6 +416,13 @@ impl AutomationEngine {
             mode_id: cfg.mode_id.clone(),
             config_values: cfg.config_values.clone(),
             label_snapshot: cfg.label_snapshot.clone(),
+            deliverable: None,
+            // An automation's own branch never applies to an enqueued task
+            // (the editor blanks it for this mode), so the task branches from
+            // the project folder's checkout like any unspecified one.
+            base_branch: None,
+            // The automation's captured tuple is the task's own.
+            agent_config_frozen: true,
         };
         let draft = crate::models::WorkTaskDraft {
             folder_id,
@@ -400,7 +441,7 @@ impl AutomationEngine {
             AutomationRunStatus::Succeeded,
             None,
             None,
-            Some(format!("queued task #{}: {}", info.id, info.title)),
+            Some(queued_task_summary(info.id, &info.title)),
         )
         .await
         .map_err(|e| e.to_string())?;
@@ -494,7 +535,14 @@ impl AutomationEngine {
             .map_err(|e| e.to_string())?;
 
         // Create the conversation row, then adopt it in send_prompt (Branch A).
-        let title = first_chars(&cfg.display_text, 80);
+        // Named after the AUTOMATION, not its prompt — the same name the
+        // enqueue-a-task branch already gives the card it files, and the only
+        // label that says which automation this run belongs to. Locked right
+        // after, so the per-turn auto-title backfill can't swap it for whatever
+        // the agent's session file parses to (issue #495). A prompt-derived
+        // title was no more distinguishing anyway: the prompt is fixed, so
+        // every run of an automation carried the identical one.
+        let title = first_chars(&auto.name, 80);
         let conversation_id =
             match create_conversation_core(&self.db.conn, cwd.folder_id, agent_type, Some(title)).await
             {
@@ -504,6 +552,15 @@ impl AutomationEngine {
                     return Err(e.to_string());
                 }
             };
+        // Strictly before the upsert below: that broadcast is how any client
+        // first learns this id, so locking first makes a backfill on this row
+        // impossible rather than merely unlikely. Failing to lock only costs
+        // the nice title — never the run.
+        if let Err(e) = conversation_service::lock_title(&self.db.conn, conversation_id).await {
+            tracing::warn!(
+                "[automation] run {run_id}: could not lock conversation {conversation_id} title: {e}"
+            );
+        }
 
         // Surface the produced conversation in every client's sidebar the instant
         // it exists (InProgress) — independent of the implicit upsert inside
@@ -591,12 +648,13 @@ impl AutomationEngine {
                 // Fresh isolated worktree per run; names carry the automation +
                 // run id so `git worktree list` / the branch tree groups them.
                 let branch = format!("automation/{}/run-{}", auto.id, run_id);
-                let dir = format!(
-                    "{}-automation-{}-run-{}",
-                    basename(&root.path),
-                    auto.id,
-                    run_id
-                );
+                // A repo checked out at a drive / share root has no name of
+                // its own to prefix with.
+                let repo_name = match basename(&root.path) {
+                    "" => "workspace",
+                    name => name,
+                };
+                let dir = format!("{}-automation-{}-run-{}", repo_name, auto.id, run_id);
                 let mut wt_path = sibling_path(&root.path, &dir);
 
                 // Retry once with a short suffix if a leftover collides (a prior
@@ -713,7 +771,7 @@ impl AutomationEngine {
 
     // ── completion ────────────────────────────────────────────────────────────
 
-    async fn on_event(&self, env: &EventEnvelope) {
+    async fn on_event(self: &Arc<Self>, env: &EventEnvelope) {
         let AcpEvent::TurnComplete { stop_reason, .. } = &env.payload else {
             return;
         };
@@ -722,9 +780,110 @@ impl AutomationEngine {
         let Some((run_id, automation_id)) = entry else {
             return; // not an automation run
         };
-
-        let (status, status_str) = classify_stop_reason(stop_reason);
+        // A later turn on a connection already held for its agent's background
+        // work (one Grok started on its own, or a prompt sent to the session):
+        // the waiter settles the run — with this turn's answer, if it is the
+        // newest, and as this turn ended, if it did not end normally.
+        if self.held.lock().await.contains_key(&conn_id) {
+            let reply = turn_end_hold::last_turn_reply(&self.manager, &conn_id).await;
+            let mut held = self.held.lock().await;
+            if let Some(run) = held.get_mut(&conn_id).filter(|run| !run.settling) {
+                if run.later.record(stop_reason, reply) {
+                    run.stop.cancel();
+                }
+            }
+            return;
+        }
         let summary = self.capture_summary(&conn_id).await;
+        if let Some(timing) = turn_end_hold::HoldTiming::from_env() {
+            if let Some(probe) =
+                turn_end_hold::should_hold(&self.manager, &conn_id, stop_reason).await
+            {
+                self.hold_run(
+                    conn_id,
+                    (run_id, automation_id),
+                    stop_reason.clone(),
+                    summary,
+                    timing,
+                    probe.turn_ended_at(),
+                )
+                .await;
+                return;
+            }
+        }
+        self.settle_turn(&conn_id, run_id, automation_id, stop_reason, summary)
+            .await;
+    }
+
+    /// Hold a run whose turn ended with work still going (see
+    /// [`AutomationEngine::held`]), and settle it from the background once that
+    /// work is done — with the answer the agent gave after reading its result.
+    /// A cancel meanwhile settles the run itself and drops its index entry,
+    /// which tells the waiter there is nothing left to settle.
+    async fn hold_run(
+        self: &Arc<Self>,
+        conn_id: String,
+        (run_id, automation_id): (i32, i32),
+        stop_reason: String,
+        summary: Option<String>,
+        timing: turn_end_hold::HoldTiming,
+        since: chrono::DateTime<Utc>,
+    ) {
+        tracing::info!(
+            "[automation] run {run_id} turn ended with work still going; holding \
+             connection={conn_id} until it finishes"
+        );
+        let stop = CancellationToken::new();
+        self.held.lock().await.insert(
+            conn_id.clone(),
+            HeldRun {
+                stop: stop.clone(),
+                later: turn_end_hold::LaterTurns::default(),
+                settling: false,
+            },
+        );
+        let engine = Arc::clone(self);
+        tokio::spawn(async move {
+            let result =
+                turn_end_hold::wait_until_settled(&engine.manager, &conn_id, timing, &stop).await;
+            // Still marked held while it settles: the reconcile tick, seeing
+            // the connection gone, would otherwise settle the run from the
+            // conversation first, without the stop reason or the reply.
+            let later = match engine.held.lock().await.get_mut(&conn_id) {
+                Some(run) => {
+                    run.settling = true;
+                    std::mem::take(&mut run.later)
+                }
+                None => turn_end_hold::LaterTurns::default(),
+            };
+            let stop_reason = later.ended.clone().unwrap_or(stop_reason);
+            tracing::info!(
+                "[automation] run {run_id} hold on connection={conn_id} ended: {} ({stop_reason})",
+                result.outcome.as_str()
+            );
+            if engine.index.lock().await.contains_key(&conn_id) {
+                let summary = match result.latest_reply(since, &later) {
+                    Some(reply) => Some(reply),
+                    None => engine.capture_summary(&conn_id).await.or(summary),
+                };
+                engine
+                    .settle_turn(&conn_id, run_id, automation_id, &stop_reason, summary)
+                    .await;
+            } // else canceled meanwhile: the cancel settled the run
+            engine.held.lock().await.remove(&conn_id);
+        });
+    }
+
+    /// Settle a run from how its turn ended, and let its connection go.
+    async fn settle_turn(
+        &self,
+        conn_id: &str,
+        run_id: i32,
+        automation_id: i32,
+        stop_reason: &str,
+        summary: Option<String>,
+    ) {
+        let (status, status_str) = classify_stop_reason(stop_reason);
         let error = if status == AutomationRunStatus::Failed {
             Some(format!("agent stopped: {stop_reason}"))
         } else {
@@ -735,7 +894,7 @@ impl AutomationEngine {
             &self.db.conn,
             run_id,
             status,
-            Some(stop_reason.clone()),
+            Some(stop_reason.to_string()),
             error,
             summary,
         )
@@ -743,8 +902,8 @@ impl AutomationEngine {
 
         // One prompt, one turn, then disconnect (last_assistant_text is cleared
         // at the next turn start, so an automation connection is never reused).
-        self.index.lock().await.remove(&conn_id);
-        let _ = self.manager.disconnect(&conn_id).await;
+        self.index.lock().await.remove(conn_id);
+        let _ = self.manager.disconnect(conn_id).await;
 
         if let Ok(true) = settled {
             self.emit(AutomationChange::RunSettled {
@@ -794,6 +953,11 @@ impl AutomationEngine {
                 // settling here from coarse conversation status would race on_event
                 // and discard stop_reason fidelity (and could mislabel a cancel).
                 if self.manager.get_state_and_emitter(conn_id).await.is_some() {
+                    continue;
+                }
+                // Held for its background work: the waiter sees the connection
+                // go and settles the run itself.
+                if self.held.lock().await.contains_key(conn_id) {
                     continue;
                 }
                 // Connection gone but still Running: the TurnComplete can never
@@ -1036,17 +1200,78 @@ fn first_chars(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
 }
 
-fn basename(path: &str) -> &str {
-    path.trim_end_matches('/')
-        .rsplit('/')
-        .next()
-        .unwrap_or(path)
+/// The separator `path` writes its own segments with, so a derived sibling
+/// stays in the same form the folder was registered under instead of mixing
+/// `C:\work\repo` with a `/`. A bare drive designator (`C:`) carries no
+/// separator yet but is still Windows.
+fn path_separator(path: &str) -> char {
+    if path.contains('\\') {
+        '\\'
+    } else if path.contains('/') {
+        '/'
+    } else if is_drive_designator(path) {
+        '\\'
+    } else {
+        '/'
+    }
 }
 
+/// `C:` — a Windows drive, which names a root rather than a directory.
+fn is_drive_designator(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    bytes.len() == 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
+}
+
+/// True when `trimmed` (already stripped of trailing separators) is a root
+/// with no parent to hang a sibling off: a drive (`C:`), a UNC share
+/// (`\\server\share`), or the POSIX root (empty after trimming).
+fn is_root_designator(trimmed: &str) -> bool {
+    if trimmed.is_empty() || is_drive_designator(trimmed) {
+        return true;
+    }
+    // `\\server\share` (or `//server/share`) — the host and share are both
+    // part of the root designator, so a "sibling" of the share would be a
+    // DIFFERENT share, not a directory.
+    let unc = trimmed
+        .strip_prefix("\\\\")
+        .or_else(|| trimmed.strip_prefix("//"));
+    match unc {
+        Some(rest) => rest.split(['/', '\\']).filter(|s| !s.is_empty()).count() <= 2,
+        None => false,
+    }
+}
+
+/// Last segment of an OS path, accepting either separator — a `/`-only split
+/// handed back the whole of `C:\work\repo` on Windows, which then went into a
+/// directory name. Returns `""` at a root, which has no name of its own, so
+/// callers substitute their own label rather than building a directory called
+/// `C:` (a colon is not even legal in a Windows file name).
+fn basename(path: &str) -> &str {
+    let trimmed = path.trim_end_matches(['/', '\\']);
+    if is_drive_designator(trimmed) {
+        return "";
+    }
+    match trimmed.rfind(['/', '\\']) {
+        Some(idx) => &trimmed[idx + 1..],
+        None => trimmed,
+    }
+}
+
+/// `name` placed next to `root_path`.
+///
+/// At a root there is no sibling, so `name` lands INSIDE the root instead.
+/// Staying absolute is what matters: a bare relative name makes git resolve
+/// the worktree inside the repository and the run then registers that
+/// unresolved string as its working directory. `\\server\share` is a root too
+/// — a literal sibling of it addresses another share, not a directory.
 fn sibling_path(root_path: &str, name: &str) -> String {
-    let trimmed = root_path.trim_end_matches('/');
-    match trimmed.rfind('/') {
-        Some(idx) => format!("{}/{}", &trimmed[..idx], name),
+    let trimmed = root_path.trim_end_matches(['/', '\\']);
+    let separator = path_separator(root_path);
+    if is_root_designator(trimmed) {
+        return format!("{trimmed}{separator}{name}");
+    }
+    match trimmed.rfind(['/', '\\']) {
+        Some(idx) => format!("{}{}{}", &trimmed[..idx], separator, name),
         None => name.to_string(),
     }
 }
@@ -1074,6 +1299,57 @@ mod tests {
         assert_eq!(basename("/home/me/repo"), "repo");
         assert_eq!(basename("/home/me/repo/"), "repo");
         assert_eq!(sibling_path("/home/me/repo", "repo-automation-3-run-7"), "/home/me/repo-automation-3-run-7");
+    }
+
+    // Windows folders are registered with backslashes, so a `/`-only split
+    // used to yield the whole path as the "name" and a bare relative sibling
+    // — git would then have planted the worktree inside the repo.
+    #[test]
+    fn worktree_names_follow_windows_separators() {
+        assert_eq!(basename("C:\\work\\repo"), "repo");
+        assert_eq!(basename("C:\\work\\repo\\"), "repo");
+        assert_eq!(
+            sibling_path("C:\\work\\repo", "repo-automation-3-run-7"),
+            "C:\\work\\repo-automation-3-run-7"
+        );
+        // A repo directly on the drive root still gets an absolute sibling.
+        assert_eq!(sibling_path("C:\\repo", "repo-run"), "C:\\repo-run");
+        // Forward slashes typed on Windows stay forward slashes.
+        assert_eq!(sibling_path("C:/work/repo", "repo-run"), "C:/work/repo-run");
+    }
+
+    // Roots have no sibling, so the worktree lands inside them. What must
+    // never happen is a RELATIVE result: git would resolve it inside the repo
+    // and the run would then register that unresolved string as its cwd.
+    #[test]
+    fn worktree_paths_stay_absolute_at_roots() {
+        assert_eq!(sibling_path("C:\\", "workspace-run"), "C:\\workspace-run");
+        assert_eq!(sibling_path("C:", "workspace-run"), "C:\\workspace-run");
+        assert_eq!(sibling_path("/", "workspace-run"), "/workspace-run");
+        // A share root's "sibling" would be another share, not a directory.
+        assert_eq!(
+            sibling_path("\\\\server\\share", "share-run"),
+            "\\\\server\\share\\share-run"
+        );
+        assert_eq!(
+            sibling_path("//server/share", "share-run"),
+            "//server/share/share-run"
+        );
+        // A directory inside a share still gets a true sibling.
+        assert_eq!(
+            sibling_path("\\\\server\\share\\repo", "repo-run"),
+            "\\\\server\\share\\repo-run"
+        );
+    }
+
+    // `C:` is not a directory name — a colon is not legal in a Windows file
+    // name — so the root cases yield no basename and the caller labels them.
+    #[test]
+    fn basename_is_empty_at_a_drive_root() {
+        assert_eq!(basename("C:\\"), "");
+        assert_eq!(basename("C:"), "");
+        assert_eq!(basename("/"), "");
+        assert_eq!(basename("\\\\server\\share"), "share");
     }
 
     #[test]

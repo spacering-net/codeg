@@ -25,6 +25,7 @@ vi.mock("@/lib/utils", async (importOriginal) => {
 })
 
 import { getFolderConversation } from "@/lib/api"
+import { rememberModelLabels } from "@/lib/model-label-store"
 import { copyTextToClipboard } from "@/lib/utils"
 const mockGet = vi.mocked(getFolderConversation)
 const mockCopy = vi.mocked(copyTextToClipboard)
@@ -98,12 +99,46 @@ describe("SessionDetailsDialog", () => {
         stats={fullStats}
       />
     )
-    expect(getByText("Extension ID")).toBeTruthy()
+    expect(getByText("Session Index")).toBeTruthy()
     expect(getByText("ext-abc")).toBeTruthy()
     expect(getByText("50K / 200K (25.0%)")).toBeTruthy()
     // The message count field was intentionally removed.
     expect(queryByText("Messages")).toBeNull()
+    // The aux-panel tab leaves these two sections out; the dialog keeps them.
+    expect(getByText("Token Usage")).toBeTruthy()
+    expect(getByText("Timestamps")).toBeTruthy()
     expect(mockGet).not.toHaveBeenCalled()
+  })
+
+  it("names the assistant a delegation sub-session ran as", () => {
+    const { getByText, queryByText, rerender } = renderWithIntl(
+      <SessionDetailsDialog
+        open
+        onOpenChange={() => {}}
+        summary={summary({
+          parent_id: 3,
+          assistant_id: 5,
+          assistant_name: "Reviewer",
+        })}
+        stats={fullStats}
+      />
+    )
+    expect(getByText("Assistant")).toBeTruthy()
+    // Not in the store here: the name it carried.
+    expect(getByText("Reviewer")).toBeTruthy()
+
+    // A plain session has no such row.
+    rerender(
+      wrap(
+        <SessionDetailsDialog
+          open
+          onOpenChange={() => {}}
+          summary={summary()}
+          stats={fullStats}
+        />
+      )
+    )
+    expect(queryByText("Assistant")).toBeNull()
   })
 
   it("falls back to completed summary timestamps when stats duration is missing", () => {
@@ -298,6 +333,35 @@ describe("SessionDetailsDialog", () => {
     expect(await findByText("claude-sonnet-4-6")).toBeTruthy()
   })
 
+  it("names the model the way its agent does", async () => {
+    // qoder records an account-internal key in its transcripts (`qfmodel`) and
+    // advertises the readable name over ACP. This field used to show the key
+    // while the composer's picker showed the name.
+    rememberModelLabels("qoder", [
+      {
+        id: "model",
+        name: "Model",
+        kind: {
+          type: "select",
+          current_value: "qfmodel",
+          options: [{ value: "qfmodel", name: "Qwen3.8-Flash" }],
+          groups: [],
+        },
+      },
+    ])
+    const qoder = summary({ agent_type: "qoder", model: "qfmodel" })
+    mockGet.mockResolvedValue({
+      summary: qoder,
+      turns: [],
+      session_stats: fullStats,
+    })
+    const { findByText, queryByText } = renderWithIntl(
+      <SessionDetailsDialog open onOpenChange={() => {}} summary={qoder} />
+    )
+    expect(await findByText("Qwen3.8-Flash")).toBeTruthy()
+    expect(queryByText("qfmodel")).toBeNull()
+  })
+
   it("shows an error when the fetch fails", async () => {
     mockGet.mockRejectedValue(new Error("boom"))
     const { findByText } = renderWithIntl(
@@ -353,7 +417,7 @@ describe("SessionDetailsDialog", () => {
     )
     // Each copy button names its own field so screen-reader/keyboard users can
     // tell them apart.
-    expect(getByLabelText("Copy Extension ID")).toBeTruthy()
+    expect(getByLabelText("Copy Session Index")).toBeTruthy()
     fireEvent.click(getByLabelText("Copy Session ID"))
     expect(mockCopy).toHaveBeenCalledWith("7")
     expect(await findByLabelText("Copied Session ID")).toBeTruthy()

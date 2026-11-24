@@ -23,15 +23,21 @@ use std::time::Duration;
 
 use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, Set};
 use tokio::sync::broadcast::error::RecvError;
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::{oneshot, Mutex, Notify};
 use tokio::time::MissedTickBehavior;
+use tokio_util::sync::CancellationToken;
 
 use crate::acp::manager::ConnectionManager;
-use crate::acp::types::{AcpEvent, EventEnvelope, PromptCapabilitiesInfo, PromptInputBlock};
+use crate::acp::turn_end_hold;
+use crate::acp::types::{
+    AcpEvent, ConnectionStatus, EventEnvelope, PromptCapabilitiesInfo, PromptInputBlock,
+};
 use crate::acp::work_task_tools::{TaskReportAck, WorkTaskToolAccess};
 use crate::acp::InternalEventBus;
 use crate::commands::acp::{build_session_runtime_env, verify_agent_installed};
-use crate::commands::conversations::{create_conversation_core, emit_conversation_upsert};
+use crate::commands::conversations::{
+    create_conversation_core, emit_conversation_upsert, get_folder_conversation_core,
+};
 use crate::commands::folders::{
     emit_folder_deleted, emit_folder_upsert, get_folder_core, git_worktree_add,
     open_worktree_folder_core, resolve_git_head,
@@ -39,16 +45,28 @@ use crate::commands::folders::{
 use crate::db::entities::conversation::{self, ConversationStatus};
 use crate::db::entities::work_task::WorkTaskStatus;
 use crate::db::entities::{folder, folder_command};
-use crate::db::service::{conversation_service, tab_service, work_task_service};
+use crate::db::service::work_task_service::DeliveryRecord;
+use crate::db::service::{conversation_service, work_task_service};
 use crate::db::AppDatabase;
+use crate::forge::deliver::{
+    adopt_pull_request, issues_pull_request_body, local_pull_request_body, pull_request_body,
+    writeback_comment_body, DeliveryCtx, ForgeDeliveryApi, ForgePr, NewPullRequest, PrAdoption,
+    TaskOutcome,
+};
+use crate::forge::{
+    DeliveryTarget, ForgeItemKind, ForgeProvider, ForgeSourceMeta, WorkTaskDelivery,
+    SOURCE_KIND_ISSUE, SOURCE_KIND_PR,
+};
 use crate::logging::throttle::{LagLogThrottle, LAG_LOG_WINDOW};
 use crate::models::{
-    AgentType, FollowUpIntent, WorkTaskConfig, WorkTaskFolderSettings, WorkTaskMergeState,
-    WorkTaskPreflight, WorkTaskQueuedMerge, STAGE_PROMPT_ALL,
+    AgentType, FollowUpIntent, WorkTaskConfig, WorkTaskFolderSettings, WorkTaskMergeOp,
+    WorkTaskMergeState, WorkTaskPreflight, WorkTaskQueuedMerge, DELIVERABLE_REPORT,
+    STAGE_PROMPT_ALL,
 };
 use crate::web::event_bridge::{
     emit_event, EventEmitter, WorkTaskChange, WORK_TASK_CHANGED_EVENT,
 };
+use crate::work_task::compact;
 use crate::work_task::git as task_git;
 
 /// Reconcile sweep cadence.
@@ -62,12 +80,157 @@ const SCHEDULE_INTERVAL_SECS: u64 = 15;
 /// Cap on the preflight output tail persisted with a red light.
 const PREFLIGHT_TAIL_CHARS: usize = 4000;
 
+/// Cap on an agent-reported error kept for a failed turn's `last_error` — the
+/// same budget as the init and preflight output tails. A failed tool call can
+/// carry a whole command log, and the row is rebroadcast on every upsert; the
+/// tail is where such a log usually says what went wrong.
+const TURN_ERROR_TAIL_CHARS: usize = PREFLIGHT_TAIL_CHARS;
+
+/// How often a waiting pre-prompt compaction re-checks that its connection is
+/// still alive. NOT a deadline on the turn — see `await_compaction_turn`, which
+/// only ever ends the wait on evidence the turn is over or the connection is
+/// gone. Loose enough to cost nothing on a turn that runs for minutes.
+const COMPACTION_LIVENESS_TICK: Duration = Duration::from_secs(5);
+
+/// Why a worktree removal declined to run, as one clause. Every surface that
+/// can decline one composes its message from THIS — `complete_task`'s checkbox,
+/// `cleanup_task`, the delivered-PR keep reason, and the task delete — so the
+/// card, the toast and the timeline cannot drift into describing the same
+/// condition differently. Only the remedy changes, because only the remedy
+/// depends on what the user was doing.
+const WORKTREE_HOLDS_UNCOMMITTED: &str = "it still holds uncommitted files";
+
+/// The reason plus the way out of it.
+pub(crate) fn worktree_kept(remedy: &str) -> String {
+    format!("the worktree was kept: {WORKTREE_HOLDS_UNCOMMITTED}. {remedy}")
+}
+
+/// The remedy for the surfaces whose retry IS the cleanup itself.
+pub(crate) const RETRY_THE_CLEANUP: &str = "Remove them, then retry the cleanup.";
+
+/// The probe every worktree-removal gate shares: does this checkout still hold
+/// work (tracked edits or files git has never seen)?
+///
+/// FAILS CLOSED. Only two reasons for git being unable to answer are safe to
+/// read as "clean": the checkout is already off disk, or git removed its
+/// registration and contents but left a readable, strictly empty directory
+/// behind. Any entry in that shell (ignored and hidden files included), a
+/// corrupt index, a permission error, or another transient filesystem failure
+/// means we could not prove the directory is safe to destroy. The operation
+/// waiting on this answer is `git worktree remove --force`, so guessing "clean"
+/// there trades a recoverable stall for unrecoverable files.
+///
+/// The `.git` marker is checked FIRST, and not as an optimization: `has_changes`
+/// runs `git status` with the path as its working directory, and git walks UP
+/// from there. A shell with no marker left is not a checkout git can speak for,
+/// so whatever it answers is about the repository that ENCLOSES the shell — the
+/// project itself whenever the folder's worktree root is a path inside it. That
+/// answer is a clean `Ok(false)` or a dirty `Ok(true)` about somebody else's
+/// files, and neither is this path's; only the directory probe below is.
+async fn path_holds_uncommitted(path: &str) -> bool {
+    match std::fs::symlink_metadata(Path::new(path).join(".git")) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return shell_holds_entries(path),
+        // Could not even look at the marker — no proof of anything. Fail closed.
+        Err(_) => return true,
+    }
+    match task_git::has_changes(path).await {
+        Ok(dirty) => dirty,
+        Err(_) => shell_holds_entries(path),
+    }
+}
+
+/// The one thing left to ask about a directory git has stopped speaking for: is
+/// it strictly empty? Anything else — an entry of any kind, or a failure to read
+/// the directory at all — is "holds work", because a `--force` removal is what
+/// waits on the answer. Only a path that is gone reads as nothing to lose.
+fn shell_holds_entries(path: &str) -> bool {
+    match std::fs::read_dir(path) {
+        // `Some(Err(_))` is deliberately still "holds work": even learning
+        // whether an entry exists has to succeed before removal is safe.
+        Ok(mut entries) => entries.next().is_some(),
+        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+    }
+}
+
+/// Why [`TaskEngine::cleanup_task`] did not remove a worktree.
+///
+/// The two answers are not interchangeable to `work_task_delete_core`, which
+/// tombstones the task immediately afterwards. A cleanup that TRIED AND FAILED
+/// leaves stale bookkeeping behind and the delete may proceed over it. A
+/// cleanup that was REFUSED to protect work must stop it: the tombstone takes
+/// the card, its `cleanup_state` and its retry entry all at once, stranding a
+/// directory the user was told would be deleted with nothing left anywhere to
+/// say why — the failure mode a plain `Err` swallowed by a `warn!` produces.
+#[derive(Debug)]
+pub struct CleanupBlocked {
+    pub message: String,
+    /// The worktree was left standing deliberately, and still holds work.
+    pub holds_work: bool,
+}
+
+impl CleanupBlocked {
+    /// Tried, could not finish. Callers may proceed past it.
+    fn failed(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            holds_work: false,
+        }
+    }
+}
+
 static ENGINE: OnceLock<Arc<TaskEngine>> = OnceLock::new();
 
 /// The process-global engine, set once at boot by [`build_task_engine`]. Read
 /// by the start/cancel/merge/cleanup commands.
 pub fn engine() -> Option<Arc<TaskEngine>> {
     ENGINE.get().cloned()
+}
+
+/// One live task turn, keyed by its connection id and dropped with it.
+///
+/// `baselined` is false when the entry exists only to remember an error.
+/// Unit tests seed `index` directly and never launch, so they have no
+/// prompt-time diff; "no change" then means the settle-time snapshot is
+/// empty. A real launch stores the snapshot from before the prompt, so a
+/// later round on a worktree that already has edits still counts as empty
+/// when this round added nothing (#538).
+#[derive(Default)]
+struct TurnSignal {
+    error: Option<String>,
+    baselined: bool,
+    baseline: Option<(i32, i32, i32)>,
+}
+
+/// A generation whose turn ended (`end_turn`) while its agent still had work
+/// going — a background shell or monitor, the turn Claude Code starts on its
+/// own to read their results, a delegation — held open instead of settled,
+/// because settling ends the connection and the work with it (see
+/// `acp::turn_end_hold`). The connection stays in `index`, so `task_complete`,
+/// progress and permissions keep working while the agent finishes.
+///
+/// Whoever CLAIMS the entry owns the generation's end: the waiter when the
+/// work is done ([`TaskEngine::run_hold`]), which marks it `settling` and
+/// removes it only once the generation is settled, or a cancel, which takes
+/// an entry not yet settling and stops the waiter without settling. While the
+/// entry is there — settling included — the reconcile tick and merge recovery
+/// leave the generation to its holder, even with the connection already gone.
+struct TurnEndHold {
+    task_id: i32,
+    run_seq: i32,
+    stop_reason: String,
+    /// The turn's own last answer, captured when it ended.
+    summary: Option<String>,
+    signal: Option<TurnSignal>,
+    since: chrono::DateTime<chrono::Utc>,
+    stop: CancellationToken,
+    /// The turns that ended on the connection after the held one — see
+    /// [`TaskEngine::on_held_turn_complete`].
+    later: turn_end_hold::LaterTurns,
+    /// The waiter is settling the generation: the wait is over, and a cancel
+    /// arriving now is decided by the settle's CAS like any other race with a
+    /// turn's end.
+    settling: bool,
 }
 
 pub struct TaskEngine {
@@ -108,9 +271,56 @@ pub struct TaskEngine {
     /// process TREE so a long `pnpm install` stops with the task instead of
     /// running to completion in the background.
     setup_children: Arc<Mutex<HashMap<i32, SetupChild>>>,
-    /// Tasks whose merge/cleanup is executing in THIS process — the reconcile
-    /// tick must not run crash recovery against them.
-    merging: Arc<Mutex<HashSet<i32>>>,
+    /// Tasks whose launch is currently waiting out a pre-prompt compaction
+    /// turn, and the connection running it. Serves the same role
+    /// `setup_children` does for a long init command: the launch holds the task
+    /// lock across the whole compaction, so a cancel has to be able to reach
+    /// the turn WITHOUT that lock — otherwise "stop" would sit behind the very
+    /// turn it is trying to stop. The compaction connection is deliberately NOT
+    /// in `index`: its `TurnComplete` is the launch's own signal, and an
+    /// indexed one would settle the task into review before its work ever
+    /// started.
+    compacting: Arc<Mutex<HashMap<i32, CompactRun>>>,
+    /// `connection_id -> event seq` of a compaction `TurnComplete` the launch
+    /// has already consumed as its own signal.
+    ///
+    /// The bus is a BROADCAST: this engine's own receiver and the launch's
+    /// waiter each get their own copy of that envelope. The waiter is awaiting
+    /// exactly it, so it always reacts first; the engine's loop awaits DB work
+    /// per event and can be arbitrarily far behind. "The connection was not in
+    /// `index` when this was emitted" is therefore something `on_event` cannot
+    /// observe — by the time it dequeues, the launch may have indexed the
+    /// connection and sent the round's real prompt, and the compaction's
+    /// completion would settle THAT turn (and disconnect the agent mid-round).
+    /// The seq is the discriminator: per-connection and monotonic (assigned
+    /// under the state write lock in `emit_with_state_gated`), so it names one
+    /// exact envelope rather than "a turn on this connection".
+    compaction_turns: Arc<Mutex<HashMap<String, u64>>>,
+    /// Agent error and prompt-time diff for the connection's current turn.
+    /// See [`TurnSignal`].
+    turn_signals: Arc<Mutex<HashMap<String, TurnSignal>>>,
+    /// Runs whose turn ended while their agent still had work going, keyed by
+    /// connection id. See [`TurnEndHold`].
+    holds: Arc<Mutex<HashMap<String, TurnEndHold>>>,
+    /// The clock those holds run on; `None` turns holding off (see
+    /// `turn_end_hold::HoldTiming::from_env`). Tests shorten it.
+    hold_timing: Option<turn_end_hold::HoldTiming>,
+    /// Tasks whose merge/delivery is executing in THIS process — the reconcile
+    /// tick must not run crash recovery against them. A merge only needs it
+    /// for the dispatch window (a live agent connection covers the rest); a
+    /// delivery has no connection, so it stays in here for its whole run.
+    ///
+    /// Entries carry an ownership TOKEN, for the same reason `launching` does:
+    /// a losing attempt that is still unwinding must not drop the entry the
+    /// winner now depends on — that would hand a live delivery to the
+    /// reconcile sweep, which would bounce it mid-push.
+    merging: Arc<Mutex<HashMap<i32, u64>>>,
+    /// Source of `merging` ownership tokens.
+    in_flight_token: Arc<std::sync::atomic::AtomicU64>,
+    /// Push + pull-request calls, behind a trait so engine tests can drive the
+    /// delivery state machine — including every failure point and both
+    /// recovery branches — without a network or the OS keyring.
+    forge: Arc<dyn ForgeDeliveryApi>,
     /// Per-task lock serializing launch vs cancel teardown (same role as the
     /// automation engine's fire lock).
     task_locks: Arc<Mutex<HashMap<i32, Arc<Mutex<()>>>>>,
@@ -165,7 +375,14 @@ pub fn build_task_engine(
         launching: Arc::new(Mutex::new(HashMap::new())),
         launch_token: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         setup_children: Arc::new(Mutex::new(HashMap::new())),
-        merging: Arc::new(Mutex::new(HashSet::new())),
+        compacting: Arc::new(Mutex::new(HashMap::new())),
+        compaction_turns: Arc::new(Mutex::new(HashMap::new())),
+        turn_signals: Arc::new(Mutex::new(HashMap::new())),
+        holds: Arc::new(Mutex::new(HashMap::new())),
+        hold_timing: turn_end_hold::HoldTiming::from_env(),
+        merging: Arc::new(Mutex::new(HashMap::new())),
+        in_flight_token: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        forge: Arc::new(crate::forge::deliver::ForgeDelivery),
         task_locks: Arc::new(Mutex::new(HashMap::new())),
         folder_locks: Arc::new(Mutex::new(HashMap::new())),
         pump_locks: Arc::new(Mutex::new(HashMap::new())),
@@ -187,10 +404,30 @@ const MAX_DELEGATION_CHAIN_HOPS: usize = 16;
 /// tests feed `on_event` themselves.
 #[cfg(test)]
 fn test_engine(db: AppDatabase) -> Arc<TaskEngine> {
+    test_engine_with_forge(db, Arc::new(crate::forge::deliver::ForgeDelivery))
+}
+
+/// As [`test_engine`], with the forge write path replaced — delivery tests
+/// drive push/find/create from a fake so no test ever reaches the network or
+/// the credential store.
+#[cfg(test)]
+fn test_engine_with_forge(db: AppDatabase, forge: Arc<dyn ForgeDeliveryApi>) -> Arc<TaskEngine> {
+    test_engine_full(db, forge, EventEmitter::Noop)
+}
+
+/// As [`test_engine_with_forge`], with the emitter chosen by the caller — the
+/// broadcast-ordering tests need a real `WebEventBroadcaster` behind it to read
+/// back what the engine announced, and in what order.
+#[cfg(test)]
+fn test_engine_full(
+    db: AppDatabase,
+    forge: Arc<dyn ForgeDeliveryApi>,
+    emitter: EventEmitter,
+) -> Arc<TaskEngine> {
     Arc::new(TaskEngine {
         db,
         manager: ConnectionManager::new(),
-        emitter: EventEmitter::Noop,
+        emitter,
         bus: Arc::new(InternalEventBus::new(Default::default())),
         // An anonymous temp file, not a handle on `data_dir`: opening a
         // DIRECTORY as a File succeeds on Unix but fails on Windows.
@@ -202,7 +439,20 @@ fn test_engine(db: AppDatabase) -> Arc<TaskEngine> {
         launching: Arc::new(Mutex::new(HashMap::new())),
         launch_token: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         setup_children: Arc::new(Mutex::new(HashMap::new())),
-        merging: Arc::new(Mutex::new(HashSet::new())),
+        compacting: Arc::new(Mutex::new(HashMap::new())),
+        compaction_turns: Arc::new(Mutex::new(HashMap::new())),
+        turn_signals: Arc::new(Mutex::new(HashMap::new())),
+        holds: Arc::new(Mutex::new(HashMap::new())),
+        // Fast enough that a test sees a hold end in milliseconds of real
+        // time; the database's own timers rule out pausing the clock instead.
+        hold_timing: Some(turn_end_hold::HoldTiming {
+            poll: Duration::from_millis(10),
+            quiet: Duration::from_millis(60),
+            cap: Duration::from_secs(30),
+        }),
+        merging: Arc::new(Mutex::new(HashMap::new())),
+        in_flight_token: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        forge,
         task_locks: Arc::new(Mutex::new(HashMap::new())),
         folder_locks: Arc::new(Mutex::new(HashMap::new())),
         pump_locks: Arc::new(Mutex::new(HashMap::new())),
@@ -249,12 +499,26 @@ fn acquire_engine_ownership(data_dir: &Path) -> Ownership {
 /// Long-running driver: boot recovery, then a select loop over the event bus +
 /// the reconcile tick. Spawn once per process in each boot path.
 pub async fn run_task_engine(engine: Arc<TaskEngine>) {
+    // Subscribed BEFORE the boot work below, not after it: a broadcast receiver
+    // only ever sees what is published after it subscribes, and the boot work
+    // is not instant (a git probe per merging row, a re-measure per review
+    // row). A task the user starts inside that window would emit its events
+    // into a bus nobody is listening to, and a missed `TurnComplete` leaves it
+    // running forever — the reconcile sweep deliberately leaves rows whose
+    // connection is still live to `on_event`. Anything that piles up while boot
+    // finishes is processed right after, which is safe by construction: every
+    // settle is a CAS on `(connection_id, run_seq)`, so an event for a
+    // generation boot already failed is a no-op. A backlog past the channel's
+    // capacity surfaces as `Lagged`, which the loop already handles.
+    let mut rx = engine.bus.subscribe();
+
     // Boot recovery: no connections (and no setup child processes) survive a
     // restart, so queued / preparing / running / awaiting_input are
     // interruptions → failed(interrupted); retry is idempotent (the worktree is
     // reused, and an init command that never finished re-runs — see the setup
     // marker). merging is exempt — it recovers from git truth below, never from
     // connection liveness.
+    engine.settle_interrupted_holds().await;
     match work_task_service::boot_reconcile_interrupted(&engine.db.conn).await {
         Ok(n) if n > 0 => {
             tracing::info!("[work_task] boot reconcile failed {n} interrupted task(s)");
@@ -271,8 +535,8 @@ pub async fn run_task_engine(engine: Arc<TaskEngine>) {
         }
         Err(e) => tracing::warn!("[work_task] boot merging scan error: {e}"),
     }
+    engine.refresh_review_diff_stats().await;
 
-    let mut rx = engine.bus.subscribe();
     let mut reconcile = {
         let mut i = tokio::time::interval(Duration::from_secs(RECONCILE_INTERVAL_SECS));
         i.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -323,6 +587,18 @@ pub enum MergeDispatch {
     Queued,
 }
 
+/// How a task finished, carried to the (spawned) forge write-back. Owned
+/// strings because it outlives the settle that produced it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WritebackOutcome {
+    /// Landed on the local base branch — the commit it became.
+    Merged(String),
+    /// Published as a pull request — its URL.
+    Delivered(String),
+    /// Accepted without landing anything — see `TaskOutcome::Accepted`.
+    Accepted { nothing_to_land: bool },
+}
+
 impl MergeDispatch {
     pub fn is_queued(self) -> bool {
         matches!(self, MergeDispatch::Queued)
@@ -364,6 +640,20 @@ enum DrainOutcome {
 /// concurrent change, so this only bounds a pathological click loop.
 const MERGE_QUEUE_DRAIN_ATTEMPTS: usize = 3;
 
+/// What [`TaskEngine::refresh_review_task`] did to a review task's row.
+/// `wrote` is set only once the CAS landed; everything else describes that
+/// write.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct ContentRefresh {
+    wrote: bool,
+    /// The generation the write was bound to — what the post-review step it
+    /// triggers must bind to as well.
+    run_seq: i32,
+    stats: (i32, i32, i32),
+    stats_changed: bool,
+    light_cleared: bool,
+}
+
 /// How a launch composes its prompt.
 enum LaunchMode {
     /// First run: the task's own prompt blocks.
@@ -389,6 +679,16 @@ enum LaunchMode {
         strategy: String,
         /// `None` → the agent writes the commit message itself.
         message: Option<String>,
+        /// Whatever the user added in the merge dialog, verbatim. `None` when
+        /// they left it empty — which is every merge dispatched before this
+        /// existed, and the auto-merge sweep's every landing.
+        instructions: Option<String>,
+        /// Whether codeg removes the worktree and its branch once the landing
+        /// is verified — the merge dialog's checkbox, the queued intent's copy
+        /// of it, or the folder default for an unattended landing. The agent
+        /// is told, so its closing line describes the end state codeg is about
+        /// to produce rather than the one its own "do not delete" rule implies.
+        delete_worktree: bool,
     },
 }
 
@@ -443,6 +743,86 @@ impl LaunchMode {
                 ..
             }
         )
+    }
+}
+
+/// Text of an agent-reported failure on this event, if it is one.
+///
+/// ACP `Error`, a terminal AIR `SessionFailure` (severity `error` — the
+/// shape Codex and Claude use for an upstream 400 that still ends
+/// `end_turn`; severity `warning` is a retry), plus a tool call (or
+/// update) whose status is `failed`. The message is the error string, the
+/// failure title / details, or the tool's content / raw output — whichever
+/// is non-empty. Anything else is not a turn failure by itself, and neither
+/// is an error the turn then moves on from (see [`is_turn_progress`]): only
+/// what a turn ENDED in can fail it.
+fn reported_agent_error(payload: &AcpEvent) -> Option<String> {
+    match payload {
+        AcpEvent::Error { message, .. } => first_nonempty([Some(message.as_str())]),
+        AcpEvent::SessionFailure { record }
+            if record.severity == "error" && !record.resolved =>
+        {
+            first_nonempty([Some(record.title.as_str()), record.details.as_deref()])
+        }
+        AcpEvent::ToolCall {
+            status,
+            content,
+            raw_output,
+            ..
+        } if status == "failed" => first_nonempty([content.as_deref(), raw_output.as_deref()]),
+        AcpEvent::ToolCallUpdate {
+            status,
+            content,
+            raw_output,
+            ..
+        } if status.as_deref() == Some("failed") => {
+            first_nonempty([content.as_deref(), raw_output.as_deref()])
+        }
+        _ => None,
+    }
+}
+
+/// Whether the agent moved on in this event: new text, new thinking, or a new
+/// tool call — the edge `SessionState` settles an AIR retry incident on. An
+/// error noted before it was recovered from (a failed edit retried, a failed
+/// lookup followed by the answer), so it is not what the turn ended in. A
+/// failed tool call is an error, not progress: `on_event` asks
+/// [`reported_agent_error`] first.
+fn is_turn_progress(payload: &AcpEvent) -> bool {
+    matches!(
+        payload,
+        AcpEvent::ContentDelta { .. } | AcpEvent::Thinking { .. } | AcpEvent::ToolCall { .. }
+    )
+}
+
+fn first_nonempty<'a>(parts: impl IntoIterator<Item = Option<&'a str>>) -> Option<String> {
+    parts
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|text| !text.is_empty())
+        .map(str::to_string)
+}
+
+/// Whether this turn added no diff the engine can prove.
+///
+/// Unbaselined (unit tests, which never launch) means the settle-time
+/// snapshot is empty or missing. Baselined means the two triples are equal.
+/// A missing side on a baselined turn is an unreadable git snapshot, not
+/// evidence of a new diff, so a recorded error is not dropped (#538).
+///
+/// The triples are counts, so an edit that leaves all three unchanged (a line
+/// already changed, changed again) reads as no diff. That can only fail a turn
+/// that ENDED in the error it reported — one it moved on from is cleared (see
+/// [`is_turn_progress`]) — and failing such a turn with that error, its edits
+/// still in the worktree, is the truthful outcome anyway.
+fn turn_added_no_diff(signal: Option<&TurnSignal>, after: Option<(i32, i32, i32)>) -> bool {
+    let Some(signal) = signal.filter(|signal| signal.baselined) else {
+        return after.unwrap_or((0, 0, 0)) == (0, 0, 0);
+    };
+    match (signal.baseline, after) {
+        (Some(before), Some(now)) => before == now,
+        _ => true,
     }
 }
 
@@ -527,6 +907,7 @@ impl TaskEngine {
         task_id: i32,
         note: Option<String>,
         attachments: Vec<serde_json::Value>,
+        allow_duplicate_source: bool,
     ) -> Result<(), String> {
         let task = work_task_service::get_model(&self.db.conn, task_id)
             .await
@@ -549,6 +930,7 @@ impl TaskEngine {
             WorkTaskStatus::Failed,
             "user",
             action,
+            allow_duplicate_source,
         )
         .await
         .map_err(|e| e.to_string())?
@@ -590,6 +972,7 @@ impl TaskEngine {
                 "feedback": feedback,
                 "blocks": attachments,
             })),
+            false,
         )
         .await
         .map_err(|e| e.to_string())?
@@ -609,10 +992,14 @@ impl TaskEngine {
         Ok(())
     }
 
-    /// Cancel a task from any non-terminal state except merging. Worktree is
-    /// kept (the card offers cleanup separately). `reason` is the user's own
-    /// note for the timeline; internal cancels (a conversation the user stopped
-    /// from the chat UI, a delete) pass None.
+    /// Cancel a task from any non-terminal state except merging. The worktree
+    /// is kept — removing it is a separate call the callers chain on when the
+    /// user asked for it (`work_task_cancel_core`'s checkbox, the delete path),
+    /// and it has to come after this one returns: the removal refuses while a
+    /// live agent connection is still on the task, and shedding that connection
+    /// is the last thing we do below. `reason` is the user's own note for the
+    /// timeline; internal cancels (a conversation the user stopped from the
+    /// chat UI, a delete) pass None.
     pub async fn cancel(
         self: &Arc<Self>,
         task_id: i32,
@@ -626,13 +1013,15 @@ impl TaskEngine {
         }
         self.emit_upsert(task_id);
 
-        // Kill a running init command BEFORE waiting on the task lock: the
-        // launch holds that lock for its whole setup, so waiting first would
-        // mean waiting out the very `pnpm install` we are trying to stop. The
-        // run_seq we just canceled scopes the kill to this generation (cancel
-        // does not bump it, so the row still carries it).
+        // Stop a running init command / pre-prompt compaction BEFORE waiting on
+        // the task lock: the launch holds that lock for its whole setup, so
+        // waiting first would mean waiting out the very `pnpm install` — or the
+        // very compaction turn — we are trying to stop. The run_seq we just
+        // canceled scopes both to this generation (cancel does not bump it, so
+        // the row still carries it).
         if let Ok(task) = work_task_service::get_model(&self.db.conn, task_id).await {
             self.kill_setup_child(task_id, task.run_seq).await;
+            self.abort_compaction(task_id, task.run_seq).await;
         }
 
         // Serialize the teardown with a possibly in-flight launch: the launch
@@ -652,8 +1041,34 @@ impl TaskEngine {
                 .map(|(c, _)| c.clone())
         };
         if let Some(conn_id) = conn_id {
+            // A generation held for its background work: take the hold, which
+            // stops its waiter without settling — this cancel is the end. One
+            // its waiter is already settling stays the waiter's; the cancel
+            // has won the row above, so that settle finds nothing to change.
+            let held = {
+                let mut holds = self.holds.lock().await;
+                match holds.get(&conn_id) {
+                    Some(hold) if !hold.settling => holds.remove(&conn_id),
+                    _ => None,
+                }
+            };
+            if let Some(hold) = held {
+                hold.stop.cancel();
+                let _ = work_task_service::record_event(
+                    &self.db.conn,
+                    task_id,
+                    "background_wait_end",
+                    "engine",
+                    Some(serde_json::json!({
+                        "run_seq": hold.run_seq,
+                        "outcome": "canceled",
+                        "waited_secs": (chrono::Utc::now() - hold.since).num_seconds().max(0),
+                    })),
+                )
+                .await;
+            }
             let _ = self.manager.cancel(&self.db.conn, &conn_id).await;
-            self.index.lock().await.remove(&conn_id);
+            self.forget_connection(&conn_id).await;
             self.forget_delegation_children_of(&conn_id).await;
             let _ = self.manager.disconnect(&conn_id).await;
         }
@@ -840,7 +1255,7 @@ impl TaskEngine {
             // while a slow setup is still unwinding, and failing the row by its
             // *current* sequence would kill the fresh run instead.
             let launched_seq = LaunchSeq::default();
-            let result = engine.launch(task_id, mode, &launched_seq).await;
+            let result = engine.launch(task_id, mode, &launched_seq, None).await;
             let errored = result.is_err();
             if let Err(e) = result {
                 tracing::info!("[work_task] launch {task_id}: {e}");
@@ -875,11 +1290,18 @@ impl TaskEngine {
 
     // ── launch ──────────────────────────────────────────────────────────────
 
+    /// `dispatched` is fired once the generation is LIVE — the agent answered,
+    /// the conversation is bound and the row carries both coordinates — which
+    /// is the point a caller that only wanted to start the run can stop
+    /// waiting. Everything after it (the pre-prompt compaction turn, the
+    /// prompt itself) belongs to the run, not to the click that asked for it.
+    /// See [`DispatchSignal`]; `None` for the launches nobody awaits.
     async fn launch(
         self: &Arc<Self>,
         task_id: i32,
         mode: LaunchMode,
         launched_seq: &LaunchSeq,
+        dispatched: Option<&DispatchSignal>,
     ) -> Result<(), String> {
         let lock = self.task_lock(task_id).await;
         let _guard = lock.lock().await;
@@ -896,14 +1318,26 @@ impl TaskEngine {
             .await
             .map_err(|e| e.to_string())?;
 
-        // Effective agent + config: task override > folder task settings >
-        // folder default agent. Audited via a config_effective event (values
-        // are inherited live, never frozen).
-        let cfg: WorkTaskConfig =
-            serde_json::from_str(&task.config).unwrap_or_default();
+        // Effective agent + config: the task's own tuple, fixed when it was
+        // created or explicitly edited (codeg#1179). A task from before that
+        // (`agent_config_frozen == false`) is resolved once here — task
+        // override > folder task settings > folder default agent — and
+        // written back frozen under a generation guard; losing that write to a
+        // concurrent cancel / edit abandons this launch (the next claim
+        // re-reads). Audited via a config_effective event.
         let settings = work_task_service::settings_get_effective(&self.db.conn, task.folder_id)
             .await
             .unwrap_or_default();
+        let cfg: WorkTaskConfig = match work_task_service::backfill_frozen_config(
+            &self.db.conn,
+            &task,
+        )
+        .await
+        .map_err(|e| e.to_string())?
+        {
+            Some(cfg) => cfg,
+            None => return Ok(()),
+        };
         let (agent_str, mode_id, config_values) = effective_agent_config(&cfg, &settings, &root);
         let agent_str = agent_str.ok_or_else(|| {
             "no agent configured: set a task agent or a folder default".to_string()
@@ -993,8 +1427,12 @@ impl TaskEngine {
             emit_folder_upsert(&self.emitter, detail);
         }
 
-        // Resume the previous session for retry/return/merge when we have one.
-        let resume_session_id = match mode {
+        // Resume the previous session for retry/return/merge when we have one
+        // — only when it runs the task's agent: a legacy task whose agent was
+        // changed while bound keeps its launch mode but starts a new
+        // conversation (the `resumed = false` fallback composes the full
+        // prompt), leaving the old one intact.
+        let previous_conversation = match mode {
             LaunchMode::Fresh => None,
             LaunchMode::Retry | LaunchMode::Return { .. } | LaunchMode::Merge { .. } => {
                 match task.conversation_id {
@@ -1002,11 +1440,53 @@ impl TaskEngine {
                         .one(&self.db.conn)
                         .await
                         .ok()
-                        .flatten()
-                        .and_then(|c| c.external_id),
+                        .flatten(),
                     None => None,
                 }
             }
+        };
+        let agent_matches_previous = previous_conversation
+            .as_ref()
+            .is_some_and(|c| c.agent_type == agent_str);
+        if let Some(prev) = previous_conversation.as_ref().filter(|_| !agent_matches_previous) {
+            // Replacing it: never under a turn the user can see running in a
+            // tab. Retryable — the user stops it, then retries.
+            if let Some(live) = self.manager.find_connection_by_conversation_id(prev.id).await {
+                if let Some(state) = self.manager.get_state(&live).await {
+                    if state.read().await.turn_in_flight {
+                        return Err("the task's previous conversation is still running in a \
+                                    tab — stop it, then retry"
+                            .to_string());
+                    }
+                }
+            }
+        }
+        let resume_session_id = previous_conversation
+            .as_ref()
+            .filter(|_| agent_matches_previous)
+            .and_then(|c| c.external_id.clone());
+        // A rerun continues the SAME conversation with the conversation's own
+        // selection — the task's starting tuple plus every pick made in it
+        // since (a legacy row with none falls back to the task's tuple). A
+        // reused live connection already runs it and is left as is.
+        let resume_selection = match previous_conversation.as_ref().filter(|_| agent_matches_previous) {
+            Some(prev) => Some(
+                crate::commands::acp::resolve_connect_selection(
+                    &self.db.conn,
+                    &self.manager,
+                    agent_type,
+                    Some(prev.id),
+                    resume_session_id.as_deref(),
+                    mode_id.clone(),
+                    config_values.clone(),
+                )
+                .await,
+            ),
+            None => None,
+        };
+        let (spawn_mode_id, spawn_config_values) = match resume_selection.as_ref() {
+            Some(sel) => (sel.mode_id.clone(), sel.config_values.clone()),
+            None => (mode_id.clone(), config_values.clone()),
         };
 
         let runtime_env =
@@ -1032,8 +1512,8 @@ impl TaskEngine {
                 runtime_env.clone(),
                 "work_task".to_string(),
                 self.emitter.clone(),
-                mode_id.clone(),
-                config_values.clone(),
+                spawn_mode_id.clone(),
+                spawn_config_values.clone(),
             )
             .await
         {
@@ -1052,6 +1532,9 @@ impl TaskEngine {
                 )
                 .await;
                 resumed = false;
+                // The new conversation starts from the old one's selection
+                // (its stored one, else the task's tuple — what
+                // `resume_selection` resolved).
                 self.manager
                     .spawn_agent(
                         agent_type,
@@ -1060,8 +1543,8 @@ impl TaskEngine {
                         runtime_env,
                         "work_task".to_string(),
                         self.emitter.clone(),
-                        mode_id.clone(),
-                        config_values.clone(),
+                        spawn_mode_id.clone(),
+                        spawn_config_values.clone(),
                     )
                     .await
                     .map_err(|e| e.to_string())?
@@ -1072,23 +1555,139 @@ impl TaskEngine {
         // Conversation row: reuse when resuming the same session; otherwise a
         // fresh row (fresh runs and resume fallbacks).
         let conversation_id = if resumed {
-            task.conversation_id.expect("resumed implies conversation")
-        } else {
-            let title = first_chars(task.title.trim(), 80);
-            match create_conversation_core(&self.db.conn, wt.folder_id, agent_type, Some(title))
+            let cid = task.conversation_id.expect("resumed implies conversation");
+            // Persist this connection's selection onto the row from now on
+            // (idempotent for a reused connection that already owns it).
+            let composer = resume_selection.as_ref().and_then(|s| s.composer_mode_id.clone());
+            if let Err(e) = self
+                .manager
+                .bind_selection_conversation(&conn_id, cid, composer)
                 .await
+            {
+                tracing::warn!(
+                    "[work_task] task {task_id}: could not bind conversation {cid} selection: {e}"
+                );
+            }
+            cid
+        } else {
+            let title = conversation_title_for_task(&task.title);
+            let id = match create_conversation_core(
+                &self.db.conn,
+                wt.folder_id,
+                agent_type,
+                Some(title),
+            )
+            .await
             {
                 Ok(id) => id,
                 Err(e) => {
                     let _ = self.manager.disconnect(&conn_id).await;
                     return Err(e.to_string());
                 }
+            };
+            // The card's name IS this session's identity — freeze it the way a
+            // manual rename would, or the per-turn auto-title backfill replaces
+            // it with whatever the agent's session file parses to (for agents
+            // with no title of their own: the first line of the composed
+            // prompt, e.g. "项目：/Users/…"). Issue #495.
+            //
+            // Strictly before the upsert below: that broadcast is how any
+            // client first learns this id, so locking first makes a backfill on
+            // this row impossible rather than merely unlikely. A failure here
+            // only costs the nice title — never the launch.
+            if let Err(e) = conversation_service::lock_title(&self.db.conn, id).await {
+                tracing::warn!(
+                    "[work_task] task {task_id}: could not lock conversation {id} title: {e}"
+                );
             }
+            id
         };
         emit_conversation_upsert(&self.emitter, &self.db.conn, conversation_id).await;
 
+        // Publish the run's live coordinates NOW, while the status stays what
+        // it was (`preparing`, or `merging` for a merge round).
+        //
+        // A resumed launch may spend minutes on the pre-prompt compaction just
+        // below, and until this write the row named the previous generation's
+        // dead connection or nothing at all — so every surface that streams a
+        // task's session (the board's 查看会话 drawer above all) showed the
+        // LAST round's finished transcript while this one's agent was visibly
+        // working. Only for a resume: a fresh session cannot compact, reaches
+        // `mark_running` in the next breath, and would only gain a row pointing
+        // at a conversation its own failure path may still cancel.
+        //
+        // Losing the CAS means a cancel or a newer generation got here first,
+        // and the rest of this launch is that generation's to skip — unwound
+        // exactly like the `mark_running` loss below.
+        if resumed {
+            let bound = if matches!(mode, LaunchMode::Merge { .. }) {
+                work_task_service::mark_merging_live(
+                    &self.db.conn,
+                    task_id,
+                    run_seq,
+                    conversation_id,
+                    &conn_id,
+                )
+                .await
+            } else {
+                work_task_service::mark_preparing_live(
+                    &self.db.conn,
+                    task_id,
+                    run_seq,
+                    conversation_id,
+                    &conn_id,
+                )
+                .await
+            };
+            match bound {
+                Ok(true) => self.emit_upsert(task_id),
+                Ok(false) => {
+                    let _ = self.manager.disconnect(&conn_id).await;
+                    return Ok(());
+                }
+                Err(e) => {
+                    let _ = self.manager.disconnect(&conn_id).await;
+                    return Err(e.to_string());
+                }
+            }
+        }
+
+        // The generation is live: whoever was only waiting for the dispatch to
+        // START (the merge click) is released here, before the compaction turn
+        // that would otherwise hold their dialog open for its whole duration.
+        if let Some(dispatched) = dispatched {
+            dispatched.fire(Ok(()));
+        }
+
+        // A resumed session carries every earlier round's context. Give the
+        // folder's threshold (when set) a chance to shrink it BEFORE this
+        // round's prompt goes in — see `compact_before_prompt` for why this
+        // sits ahead of the index insert.
+        if resumed {
+            self.compact_before_prompt(CompactRequest {
+                task_id,
+                run_seq,
+                conn_id: &conn_id,
+                agent_type,
+                settings: &settings,
+                folder_id: wt.folder_id,
+                conversation_id,
+                in_flight: mode.in_flight_status(),
+            })
+            .await;
+        }
+
         let mut blocks =
-            compose_prompt(&cfg, &task, &mode, &settings, resumed, &self.db.conn).await?;
+            match compose_prompt(&cfg, &task, &mode, &settings, resumed, &self.db.conn).await {
+                Ok(blocks) => blocks,
+                // The one path that abandons the connection without a teardown
+                // (it always has). A compaction just fenced this connection's
+                // completion, and nothing downstream would ever lift that fence.
+                Err(e) => {
+                    self.compaction_turns.lock().await.remove(&conn_id);
+                    return Err(e);
+                }
+            };
         // Re-encode attached images for the agent that actually answered the
         // handshake. A task's blocks are STORED — the composer picked their
         // encoding from a transient probe that may not have landed, possibly
@@ -1113,6 +1712,20 @@ impl TaskEngine {
             }
         }
 
+        // Measured BEFORE the connection is indexed, so a turn that ends
+        // the moment the prompt is sent already has something to compare
+        // against. See [`TurnSignal`]. Replacing the entry also drops any
+        // error latched before this prompt: the work turn starts clean.
+        let baseline = self.snapshot_diff_stats(task_id).await;
+        self.turn_signals.lock().await.insert(
+            conn_id.clone(),
+            TurnSignal {
+                error: None,
+                baselined: true,
+                baseline,
+            },
+        );
+
         // Register for completion correlation BEFORE prompting so a fast
         // TurnComplete can't race ahead of the index entry.
         self.index
@@ -1132,7 +1745,6 @@ impl TaskEngine {
                 &conn_id,
             )
             .await
-            .map_err(|e| e.to_string())?
         } else {
             work_task_service::mark_running(
                 &self.db.conn,
@@ -1142,10 +1754,26 @@ impl TaskEngine {
                 &conn_id,
             )
             .await
-            .map_err(|e| e.to_string())?
+        };
+        // A write that FAILED (a busy database, say) leaves this generation in
+        // exactly the state a lost CAS does — never marked live, no prompt
+        // sent — so it unwinds the same way instead of propagating out with the
+        // connection still registered. `launch`'s caller fails the row on an
+        // `Err`, and a failed row holding an index entry for a live connection
+        // is the stale-binding hazard the run_seq CAS exists to prevent.
+        let marked = match marked {
+            Ok(marked) => marked,
+            Err(e) => {
+                self.forget_connection(&conn_id).await;
+                let _ = self.manager.disconnect(&conn_id).await;
+                if !resumed {
+                    self.cancel_conversation(conversation_id).await;
+                }
+                return Err(e.to_string());
+            }
         };
         if !marked {
-            self.index.lock().await.remove(&conn_id);
+            self.forget_connection(&conn_id).await;
             let _ = self.manager.disconnect(&conn_id).await;
             if !resumed {
                 self.cancel_conversation(conversation_id).await;
@@ -1186,8 +1814,24 @@ impl TaskEngine {
                 .await;
                 Ok(())
             }
+            // A MERGE generation refused because another prompt holds the
+            // connection's turn: a resumed session's connection is shared with
+            // the conversation it belongs to, and someone sent it a turn after
+            // the dispatch's last check (a reply queued in the conversation
+            // view, say). That turn is theirs — tearing the connection down
+            // would kill it. Let go of the connection and fail this launch
+            // only: the merge launcher puts the task back in review, and the
+            // turn's end is an ordinary turn outside the task again. Only a
+            // merge: the other modes have already marked the row `running` on
+            // this connection, and their failure path is the teardown below.
+            Err(crate::acp::error::AcpError::TurnInProgress)
+                if resumed && matches!(mode, LaunchMode::Merge { .. }) =>
+            {
+                self.forget_connection(&conn_id).await;
+                Err(crate::acp::error::AcpError::TurnInProgress.to_string())
+            }
             Err(e) => {
-                self.index.lock().await.remove(&conn_id);
+                self.forget_connection(&conn_id).await;
                 let _ = self.manager.disconnect(&conn_id).await;
                 if !resumed {
                     self.cancel_conversation(conversation_id).await;
@@ -1228,13 +1872,48 @@ impl TaskEngine {
             return Ok(wt);
         }
 
-        let head = resolve_git_head(&root.path).await.map_err(|e| e.to_string())?;
-        let base_branch = head
-            .branch
-            .ok_or_else(|| "project folder is not on a branch (detached HEAD?)".to_string())?;
-        let base_sha = task_git::rev_parse(&root.path, "HEAD")
-            .await
-            .map_err(|e| e.to_string())?;
+        // Where the task's branch starts, and what its diff is measured
+        // against. Normally both are the project folder's current HEAD; a task
+        // created FOR a particular branch starts at that branch's tip instead,
+        // and a task that IS a pull request starts at that pull request's head
+        // and measures against the merge base (see `pr_checkout_point`).
+        let (base_branch, base_sha, start_at) = match self.pr_checkout_point(task, root).await? {
+            Some(point) => point,
+            None => match chosen_base_branch(task) {
+                Some(branch) => {
+                    // A branch that is gone by the time the task is claimed
+                    // FAILS the setup: the choice exists so the work lands
+                    // somewhere specific, and quietly branching from the
+                    // checkout instead would be the wrong answer delivered
+                    // without a word. The LOCAL branch specifically — the
+                    // merge lands into the project checkout, which can only be
+                    // on a local branch — and looking it up this way is also
+                    // what keeps an arbitrary string out of the git commands
+                    // (and out of the merge prompt) downstream: only a name
+                    // git itself resolved under `refs/heads/` gets through.
+                    let tip = task_git::local_branch_tip(&root.path, &branch)
+                        .await
+                        .map_err(|e| e.to_string())?
+                        .ok_or_else(|| {
+                            format!(
+                                "the task's base branch '{branch}' does not exist in the \
+                                 project folder"
+                            )
+                        })?;
+                    (branch, tip.clone(), tip)
+                }
+                None => {
+                    let head = resolve_git_head(&root.path).await.map_err(|e| e.to_string())?;
+                    let base_branch = head.branch.ok_or_else(|| {
+                        "project folder is not on a branch (detached HEAD?)".to_string()
+                    })?;
+                    let base_sha = task_git::rev_parse(&root.path, "HEAD")
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    (base_branch, base_sha.clone(), base_sha)
+                }
+            },
+        };
 
         let branch = format!("task/{}", task.id);
         let dir = format!("{}-task-{}", basename(&root.path), task.id);
@@ -1248,7 +1927,7 @@ impl TaskEngine {
             root.path.clone(),
             branch.clone(),
             wt_path.clone(),
-            Some(base_sha.clone()),
+            Some(start_at.clone()),
         )
         .await
         {
@@ -1265,11 +1944,15 @@ impl TaskEngine {
                 root.path.clone(),
                 branch_used.clone(),
                 wt_path.clone(),
-                Some(base_sha.clone()),
+                Some(start_at.clone()),
             )
             .await
             .map_err(|_| format!("worktree add failed: {e}"))?;
         }
+
+        // Whatever a pull-request checkout fetched is now held by the task's
+        // own branch, so the names it was fetched under can go.
+        self.drop_pr_fetch_refs(task, root).await;
 
         let wt = open_worktree_folder_core(&self.db, wt_path, task.folder_id)
             .await
@@ -1288,6 +1971,140 @@ impl TaskEngine {
             folder_id: wt.id,
             path: wt.path,
         })
+    }
+
+    /// `(base branch, base sha, start commit)` for a task triggered from a
+    /// pull request; `None` for every other task, which starts at the project
+    /// folder's HEAD.
+    ///
+    /// Three decisions live here:
+    ///
+    /// - **Start at the pull request's head**, fetched through `pull/{n}/head`
+    ///   — a ref GitHub keeps even after the head branch is deleted, and the
+    ///   only one that works without write access to it.
+    /// - **Pin to the OID recorded at trigger time**, not to whatever the ref
+    ///   points at now: the user triggered a specific state, and a push landing
+    ///   while the task sat in the queue must not silently change the subject.
+    ///   When that commit is no longer on the server (a force-push), this
+    ///   fails with an explanation instead of checking out a stranger.
+    /// - **Measure the diff from the MERGE BASE**, not from the head. The task
+    ///   is reviewed as "the pull request plus whatever the agent did", so the
+    ///   pull request's own changes have to be inside the diff; anchoring at
+    ///   the head would hide exactly what is under review. Anchoring at the
+    ///   base branch's tip would be wrong the other way — every commit the base
+    ///   gained since would show up as this task's work.
+    async fn pr_checkout_point(
+        &self,
+        task: &crate::db::entities::work_task::Model,
+        root: &crate::models::FolderDetail,
+    ) -> Result<Option<(String, String, String)>, String> {
+        if task.source_kind.as_deref() != Some(SOURCE_KIND_PR) {
+            return Ok(None);
+        }
+        let meta = task
+            .source_meta
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<ForgeSourceMeta>(s).ok())
+            .ok_or_else(|| "the task's source information is unreadable".to_string())?;
+        let (Some(base_ref), Some(head_sha)) = (meta.base_ref.as_deref(), meta.head_sha.as_deref())
+        else {
+            return Err(
+                "this pull request task is missing its branch information — trigger it again"
+                    .to_string(),
+            );
+        };
+
+        // Per-task ref names: these fetches run in the shared project folder,
+        // where `FETCH_HEAD` belongs to whoever wrote it last.
+        let base_ref_local = format!("refs/codeg/task-{}/pr-base", task.id);
+        let head_ref_local = format!("refs/codeg/task-{}/pr-head", task.id);
+        // Fetched with the account the task was triggered by, over an explicit
+        // URL — NOT through the folder's `origin`. This is the engine's only
+        // setup step that touches the network, and a private repository's
+        // origin may be SSH or may have no cached credential at all; going
+        // through the pinned identity is what makes a private repository work
+        // here at all, and it is the same identity the delivery will push as.
+        let ctx = DeliveryCtx {
+            conn: &self.db.conn,
+            data_dir: &self.data_dir,
+            provider: meta.provider,
+            server_host: &meta.server_host,
+            account_id: &meta.account_id,
+            owner_repo: &meta.owner_repo,
+        };
+        let base_tip = self
+            .forge
+            .fetch_ref(
+                &ctx,
+                &root.path,
+                &format!("refs/heads/{base_ref}"),
+                &base_ref_local,
+            )
+            .await
+            .map_err(|e| {
+                format!("could not fetch '{base_ref}', the pull request's base branch: {e}")
+            })?;
+        // Both forges publish a proposed change's head under a server-side ref
+        // — that is what makes it fetchable without adding the contributor's
+        // remote — but they spell it differently, and the wrong spelling is
+        // simply a ref that does not exist.
+        let fetched_head = self
+            .forge
+            .fetch_ref(
+                &ctx,
+                &root.path,
+                &meta.provider.change_head_ref(meta.number),
+                &head_ref_local,
+            )
+            .await
+            .map_err(|e| {
+                format!(
+                    "could not fetch {} #{}: {e}",
+                    meta.provider.change_noun(),
+                    meta.number
+                )
+            })?;
+
+        if !fetched_head.eq_ignore_ascii_case(head_sha)
+            && !task_git::commit_present(&root.path, head_sha)
+                .await
+                .unwrap_or(false)
+        {
+            return Err(format!(
+                "pull request #{} was force-pushed since this task was created, and the commit \
+                 it was triggered on ({}) is no longer there — trigger it again from the \
+                 workbench to work on the current head",
+                meta.number,
+                first_chars(head_sha, 7)
+            ));
+        }
+        let base_sha = task_git::merge_base(&root.path, &base_tip, head_sha)
+            .await
+            .map_err(|e| {
+                format!("could not find where pull request #{} branched off: {e}", meta.number)
+            })?;
+        // The refs stay for now — see `drop_pr_fetch_refs`: until the task's
+        // branch exists, they are the only thing keeping what we just fetched
+        // reachable. A failed setup leaves them behind, which costs nothing:
+        // the next attempt force-updates the same two names.
+        Ok(Some((base_ref.to_string(), base_sha, head_sha.to_string())))
+    }
+
+    /// Drop the refs `pr_checkout_point` fetched under. Called only once the
+    /// task's branch exists: those refs are what keeps the fetched commits
+    /// reachable until then, and deleting them earlier would leave a window in
+    /// which a concurrent `git gc` could prune what we are about to check out.
+    async fn drop_pr_fetch_refs(
+        &self,
+        task: &crate::db::entities::work_task::Model,
+        root: &crate::models::FolderDetail,
+    ) {
+        if task.source_kind.as_deref() != Some(SOURCE_KIND_PR) {
+            return;
+        }
+        for suffix in ["pr-base", "pr-head"] {
+            task_git::delete_ref(&root.path, &format!("refs/codeg/task-{}/{suffix}", task.id)).await;
+        }
     }
 
     /// Try to re-create the task's worktree from its still-existing work
@@ -1536,6 +2353,551 @@ impl TaskEngine {
         wake.notify_one();
     }
 
+    /// Compact the resumed session's context before this round's prompt, when
+    /// the folder's settings ask for it (`auto_compact_percent`).
+    ///
+    /// Placement is the whole design. It runs AFTER the spawn (only a live
+    /// session can be compacted, and only a live session can say how full it
+    /// is) and BEFORE the `index` insert and `mark_running`, so:
+    /// - the compaction turn's `TurnComplete` reaches `on_event` with no index
+    ///   entry behind it and is dropped — an indexed one would settle the task
+    ///   into review before its actual work started;
+    /// - the round's own prompt is sent only once this turn has landed, which
+    ///   is the point of the feature.
+    ///
+    /// The cost of staying out of `index` is that a compaction turn which
+    /// somehow blocked on a permission would not flip the card to
+    /// `awaiting_input` — it would sit in `preparing` until the user cancels.
+    /// Accepted deliberately: compaction is a self-contained summarisation
+    /// turn, and the alternative (indexing it) trades a rare stall for a
+    /// systematic mis-settle of every task that compacts.
+    ///
+    /// Out of `index` is NOT out of sight, though. The launch publishes the
+    /// run's connection on the row before calling this (see `mark_preparing_live`
+    /// / `mark_merging_live`), and this records a `started` timeline entry once
+    /// the turn is away, so a wait that can run for minutes is watchable rather
+    /// than a card that has apparently stopped.
+    ///
+    /// Never fails the launch. A compaction that could not be measured, has no
+    /// command to run, or ends badly records itself on the timeline and lets
+    /// the round proceed: an over-full context makes the next prompt likely to
+    /// fail, but refusing to send it makes it certain.
+    ///
+    /// Only called for a launch that RESUMED — a fresh session's context is
+    /// empty by construction.
+    async fn compact_before_prompt(&self, req: CompactRequest<'_>) {
+        let CompactRequest {
+            task_id,
+            run_seq,
+            conn_id,
+            agent_type,
+            settings,
+            folder_id,
+            conversation_id,
+            in_flight,
+        } = req;
+        let threshold = settings.auto_compact_percent;
+        if threshold <= 0 {
+            return;
+        }
+        let Some(before) = self.context_reading(conn_id, conversation_id).await else {
+            // The agent reports no usable occupancy (no live `usage_update`, and
+            // a transcript that carries no window either). Recorded rather than
+            // silent: with the threshold switched on, "nothing happened" is a
+            // result the user needs an explanation for.
+            self.record_compact_event(
+                task_id,
+                run_seq,
+                serde_json::json!({
+                    "status": "skipped",
+                    "reason": "usage_unknown",
+                    "threshold_percent": threshold,
+                }),
+            )
+            .await;
+            return;
+        };
+        if !compact::trips_threshold(before.percent, threshold) {
+            return;
+        }
+
+        let advertised = match self.manager.get_state(conn_id).await {
+            Some(state) => state.read().await.available_commands.clone(),
+            None => Vec::new(),
+        };
+        let Some(command) = compact::resolve_compact_command(
+            settings.compact_command.as_deref(),
+            agent_type,
+            &advertised,
+        ) else {
+            self.record_compact_event(
+                task_id,
+                run_seq,
+                serde_json::json!({
+                    "status": "skipped",
+                    "reason": "no_command",
+                    "threshold_percent": threshold,
+                    "before_percent": round1(before.percent),
+                }),
+            )
+            .await;
+            return;
+        };
+
+        // Cancel gate, then the kill slot, then the gate AGAIN — the same
+        // ordering `reserve_setup_slot` uses for the init command. A cancel
+        // that lands before the slot exists is caught by the re-check (it flips
+        // the row first); one that lands after finds the slot and aborts the
+        // turn. Without the re-check, a cancel in between would fall through to
+        // the task lock, which this launch holds until the compaction it is
+        // trying to stop has finished.
+        if !still_expected(&self.db.conn, task_id, run_seq, in_flight).await {
+            return;
+        }
+        self.compacting.lock().await.insert(
+            task_id,
+            CompactRun {
+                run_seq,
+                conn_id: conn_id.to_string(),
+            },
+        );
+        if !still_expected(&self.db.conn, task_id, run_seq, in_flight).await {
+            self.release_compact_slot(task_id, run_seq).await;
+            return;
+        }
+
+        // Subscribed BEFORE the send: the turn can complete the instant it is
+        // enqueued, and a receiver only ever sees what is published after it
+        // subscribes.
+        let mut rx = self.bus.subscribe();
+        let sent = self
+            .manager
+            .send_prompt_linked_with_message_id(
+                &self.db,
+                conn_id,
+                vec![PromptInputBlock::Text {
+                    text: command.clone(),
+                }],
+                Some(folder_id),
+                Some(conversation_id),
+                None,
+                None,
+            )
+            .await;
+        if let Err(e) = sent {
+            self.release_compact_slot(task_id, run_seq).await;
+            self.record_compact_event(
+                task_id,
+                run_seq,
+                serde_json::json!({
+                    "status": "failed",
+                    "command": command,
+                    "threshold_percent": threshold,
+                    "before_percent": round1(before.percent),
+                    "error": e.to_string(),
+                }),
+            )
+            .await;
+            return;
+        }
+        // The turn is away and the wait below is unbounded, so this is the only
+        // thing that can explain the gap while it runs: a round that sits for
+        // minutes between its dispatch and its prompt is otherwise a timeline
+        // with nothing in it, and a compaction that never returns leaves no
+        // trace at all. Recorded AFTER the send so it never claims a turn that
+        // was refused, and paired with the outcome event below.
+        self.record_compact_event(
+            task_id,
+            run_seq,
+            serde_json::json!({
+                "status": "started",
+                "command": command,
+                "threshold_percent": threshold,
+                "before_percent": round1(before.percent),
+                "before_source": before.source,
+            }),
+        )
+        .await;
+        self.emit_upsert(task_id);
+
+        let outcome = self.await_compaction_turn(&mut rx, conn_id).await;
+        self.release_compact_slot(task_id, run_seq).await;
+
+        // Read the occupancy back from the LIVE session only. The transcript
+        // fallback is write-behind, so re-parsing here would report the
+        // pre-compaction figure as the result of the compaction.
+        let after = self.live_context_reading(conn_id).await;
+        let mut payload = serde_json::json!({
+            "status": outcome.status,
+            "command": command,
+            "threshold_percent": threshold,
+            "before_percent": round1(before.percent),
+            "before_source": before.source,
+        });
+        if let Some(map) = payload.as_object_mut() {
+            if let Some(used) = before.used {
+                map.insert("before_used_tokens".into(), used.into());
+            }
+            if let Some(size) = before.size {
+                map.insert("before_size_tokens".into(), size.into());
+            }
+            if let Some(after) = after.as_ref() {
+                map.insert("after_percent".into(), round1(after.percent).into());
+                if let Some(used) = after.used {
+                    map.insert("after_used_tokens".into(), used.into());
+                }
+            }
+            if let Some(detail) = outcome.detail {
+                map.insert("detail".into(), detail.into());
+            }
+        }
+        self.record_compact_event(task_id, run_seq, payload).await;
+    }
+
+    /// Wait out the compaction turn on `conn_id`.
+    ///
+    /// Deliberately unbounded in TIME — compacting a full context is a real
+    /// model turn, and a deadline here would just send the round's prompt into
+    /// the very context we were told to shrink. What ends the wait is evidence:
+    /// the turn completing, the connection dying, or a cancel (which aborts the
+    /// turn through [`Self::abort_compaction`], producing a
+    /// `TurnComplete{cancelled}` of its own).
+    ///
+    /// The bus alone is not enough evidence, which is why the wait also polls
+    /// liveness. `apply_event` clears `turn_in_flight` on `TurnComplete` but
+    /// NOT on a terminal `Error` or `StatusChanged{Disconnected}` — and a
+    /// receiver that lags drops whichever of those arrived. Blocking purely on
+    /// `recv()` would then park forever on a connection that is already gone,
+    /// holding the task lock and taking any later cancel down with it. The tick
+    /// never shortens a live turn; it only notices a dead one.
+    ///
+    /// Records the completing envelope's seq in `compaction_turns` BEFORE
+    /// returning, so the engine's own (possibly lagging) receiver can still
+    /// recognise it later and refuse to settle the round with it.
+    async fn await_compaction_turn(
+        &self,
+        rx: &mut tokio::sync::broadcast::Receiver<Arc<EventEnvelope>>,
+        conn_id: &str,
+    ) -> CompactOutcome {
+        loop {
+            let event = tokio::select! {
+                received = rx.recv() => received,
+                _ = tokio::time::sleep(COMPACTION_LIVENESS_TICK) => {
+                    match self.compaction_still_running(conn_id).await {
+                        Some(outcome) => return outcome,
+                        None => continue,
+                    }
+                }
+            };
+            match event {
+                Ok(env) if env.connection_id == conn_id => match &env.payload {
+                    AcpEvent::TurnComplete { stop_reason, .. } => {
+                        self.mark_compaction_turn(conn_id, env.seq).await;
+                        return match stop_reason.as_str() {
+                            "cancelled" | "canceled" => CompactOutcome::new("canceled", None),
+                            "end_turn" | "" => CompactOutcome::new("ok", None),
+                            // The agent REFUSED to run the compaction prompt —
+                            // nothing was compacted, so this is not an "ok" with
+                            // a footnote. It reaches this arm at all only because
+                            // a prompt rejection stopped tearing the connection
+                            // down (it used to arrive as the terminal `Error`
+                            // below, and settled as `failed`); mapping it
+                            // anywhere else would silently promote a failed
+                            // compaction to a successful one.
+                            "rejected" => CompactOutcome::new(
+                                "failed",
+                                Some("the agent rejected the compaction prompt".into()),
+                            ),
+                            // The agent REFUSED to run the compaction prompt —
+                            // nothing was compacted, so this is not an "ok" with
+                            // a footnote. It reaches this arm at all only because
+                            // a prompt rejection stopped tearing the connection
+                            // down (it used to arrive as the terminal `Error`
+                            // below, and settled as `failed`); mapping it
+                            // anywhere else would silently promote a failed
+                            // compaction to a successful one.
+                            other => CompactOutcome::new("ok", Some(other.to_string())),
+                        };
+                    }
+                    // A terminal error tears the connection down without a
+                    // `TurnComplete` (the state is discarded, not settled), so
+                    // it has to end the wait itself. Fenced on the way out for
+                    // the same reason the liveness exit is: in-order delivery
+                    // proves no completion is queued on THIS receiver, but not
+                    // that the dying connection emits none after this event.
+                    AcpEvent::Error {
+                        message,
+                        terminal: true,
+                        ..
+                    } => {
+                        self.fence_completed_turns(conn_id).await;
+                        return CompactOutcome::new("failed", Some(message.clone()));
+                    }
+                    AcpEvent::StatusChanged {
+                        status: ConnectionStatus::Disconnected | ConnectionStatus::Error,
+                    } => {
+                        self.fence_completed_turns(conn_id).await;
+                        return CompactOutcome::new("failed", Some("connection lost".into()));
+                    }
+                    _ => {}
+                },
+                Ok(_) => {}
+                // Whatever ended this turn may be among the events the lag
+                // dropped, so ask the connection directly instead of waiting
+                // for a message that may never come again. Only OUR receiver
+                // dropped them — the engine's own copy may still be pending,
+                // which is why the probe fences before ending the wait.
+                Err(RecvError::Lagged(_)) => {
+                    if let Some(outcome) = self.compaction_still_running(conn_id).await {
+                        return outcome;
+                    }
+                }
+                Err(RecvError::Closed) => {
+                    return CompactOutcome::new("failed", Some("event bus closed".into()))
+                }
+            }
+        }
+    }
+
+    /// Liveness probe for a compaction turn: `None` means "still running, keep
+    /// waiting", `Some(outcome)` means the wait is over.
+    ///
+    /// Reads the same flag the send gate itself owns. `send_prompt_inner` sets
+    /// `turn_in_flight` synchronously before the send returns, so by the time
+    /// this can run, `false` means this turn has already ended and its event
+    /// was missed. A connection the manager no longer knows is gone for good —
+    /// its state (and any flag on it) was discarded, not settled.
+    ///
+    /// Ending the wait WITHOUT having seen the completion still has to fence
+    /// that completion off, because it may be sitting in the engine's own
+    /// receiver right now: the flag is cleared by `apply_event` BEFORE the
+    /// envelope is broadcast, so this can observe a finished turn whose event
+    /// nobody has delivered yet. The watermark is the connection's current
+    /// `event_seq` — every event already emitted is at or below it, and the
+    /// round's own completion, which cannot even be prompted until this
+    /// function has returned, is necessarily above it.
+    async fn compaction_still_running(&self, conn_id: &str) -> Option<CompactOutcome> {
+        let Some(state) = self.manager.get_state(conn_id).await else {
+            self.fence_completed_turns(conn_id).await;
+            return Some(CompactOutcome::new("failed", Some("connection lost".into())));
+        };
+        let seq = {
+            let s = state.read().await;
+            if s.turn_in_flight {
+                return None;
+            }
+            s.event_seq
+        };
+        self.mark_compaction_turn(conn_id, seq).await;
+        Some(CompactOutcome::new("ok", Some("turn end not observed".into())))
+    }
+
+    /// Fence every `TurnComplete` this connection has emitted so far, for a
+    /// wait that is ending without having read one.
+    ///
+    /// The watermark is the connection's current `event_seq`: everything
+    /// already emitted is at or below it, and the round's own completion —
+    /// which cannot be prompted until this wait returns — is above it. A
+    /// connection the manager has already dropped can report no seq, so its
+    /// whole id is fenced; ids are per-launch UUIDs and never reused.
+    async fn fence_completed_turns(&self, conn_id: &str) {
+        let seq = match self.manager.get_state(conn_id).await {
+            Some(state) => state.read().await.event_seq,
+            None => u64::MAX,
+        };
+        self.mark_compaction_turn(conn_id, seq).await;
+    }
+
+    /// Fence off every `TurnComplete` up to `seq` on this connection: they
+    /// belong to the launch's pre-prompt compaction, not to the round.
+    async fn mark_compaction_turn(&self, conn_id: &str, seq: u64) {
+        self.compaction_turns
+            .lock()
+            .await
+            .insert(conn_id.to_string(), seq);
+    }
+
+    /// Whether this `TurnComplete` is fenced off as a launch's own compaction
+    /// signal — in which case `on_event` must not treat it as the round's turn.
+    ///
+    /// A watermark rather than an exact seq: the wait can end without ever
+    /// seeing the completion (see `compaction_still_running`), and it must
+    /// still be able to fence one it never read. Self-cleaning — a seq ABOVE
+    /// the watermark can only be the round's own turn, which both lets it
+    /// through and retires the mark. A connection that never completes another
+    /// turn is cleared by `retire_connection` / `forget_connection`.
+    async fn claim_compaction_turn(&self, conn_id: &str, seq: u64) -> bool {
+        let claimed = {
+            let mut marks = self.compaction_turns.lock().await;
+            match marks.get(conn_id).copied() {
+                Some(marked) if marked >= seq => true,
+                Some(_) => {
+                    marks.remove(conn_id);
+                    false
+                }
+                None => false,
+            }
+        };
+        if claimed {
+            // A compaction error can be noted only after launch has indexed
+            // this connection. It is not the work turn's error (#538).
+            if let Some(signal) = self.turn_signals.lock().await.get_mut(conn_id) {
+                signal.error = None;
+            }
+        }
+        claimed
+    }
+
+    /// Drop the in-memory traces of a connection this engine is done with: its
+    /// run binding and its compaction fence. Paired with the `disconnect` calls
+    /// on the launch's teardown paths, which — unlike `retire_connection` —
+    /// unwind a generation that never became live.
+    async fn forget_connection(&self, conn_id: &str) {
+        self.index.lock().await.remove(conn_id);
+        self.compaction_turns.lock().await.remove(conn_id);
+        self.turn_signals.lock().await.remove(conn_id);
+    }
+
+    /// Abort a pre-prompt compaction this task's launch is waiting on. Called
+    /// by `cancel` BEFORE it takes the task lock, for the same reason
+    /// [`Self::kill_setup_child`] is: the launch holds that lock across the
+    /// whole compaction turn.
+    ///
+    /// Only cancels the turn — the launch's own teardown (disconnect, and the
+    /// conversation when it was not resumed) happens where it always has, on
+    /// the `mark_running` CAS it is about to lose.
+    async fn abort_compaction(&self, task_id: i32, run_seq: i32) {
+        let conn_id = {
+            let compacting = self.compacting.lock().await;
+            match compacting.get(&task_id) {
+                Some(run) if run.run_seq == run_seq => run.conn_id.clone(),
+                _ => return,
+            }
+        };
+        let _ = self.manager.cancel(&self.db.conn, &conn_id).await;
+    }
+
+    /// Drop this generation's compaction slot. Generation-checked so a slow
+    /// unwind can never drop a newer launch's slot.
+    async fn release_compact_slot(&self, task_id: i32, run_seq: i32) {
+        let mut compacting = self.compacting.lock().await;
+        if matches!(compacting.get(&task_id), Some(run) if run.run_seq == run_seq) {
+            compacting.remove(&task_id);
+        }
+    }
+
+    /// Record one step of a compaction on the timeline, stamped with the
+    /// generation it belongs to.
+    ///
+    /// The stamp is load-bearing, not decoration: the board decides "this card
+    /// is compacting right now" from the LAST `context_compact` of the current
+    /// generation being a `started` with no outcome after it, and an unstamped
+    /// event from an earlier round would answer for a round that has moved on.
+    async fn record_compact_event(
+        &self,
+        task_id: i32,
+        run_seq: i32,
+        mut payload: serde_json::Value,
+    ) {
+        if let Some(map) = payload.as_object_mut() {
+            map.insert("run_seq".into(), run_seq.into());
+        }
+        let _ = work_task_service::record_event(
+            &self.db.conn,
+            task_id,
+            "context_compact",
+            "engine",
+            Some(payload),
+        )
+        .await;
+    }
+
+    /// Context-window occupancy of the session about to be prompted: the live
+    /// connection first, the parsed transcript second.
+    ///
+    /// The live reading is the agent's own accounting of the session it just
+    /// loaded, and costs a lock. The transcript is what the Session Details
+    /// dialog shows and covers every agent that reports usage in its own files
+    /// but publishes no ACP `usage_update` — at the price of a full parse,
+    /// which is why it only runs when the threshold is switched on and the live
+    /// value is missing.
+    async fn context_reading(&self, conn_id: &str, conversation_id: i32) -> Option<ContextReading> {
+        if let Some(live) = self.live_context_reading(conn_id).await {
+            return Some(live);
+        }
+        // The transcript belongs to the session the ROW names; the compaction
+        // goes to the one the CONNECTION holds. Those are the same session on
+        // an ordinary resume — but not when a `session/load` failure the
+        // adapter swallowed fell through to `session/new`, which `spawn_agent`
+        // still reports as success, so the launch still reads as `resumed`
+        // (see the codeg#500 note in `send_prompt_linked_with_message_id`).
+        // Measuring the old session and compacting the new one would spend a
+        // whole turn shrinking a context that is already empty, so the fallback
+        // is only trusted when the two ids match exactly.
+        //
+        // Exactly, not through `continued_session_ids`: that relation answers
+        // "is this the same CONVERSATION", and a continuation is precisely the
+        // case where the agent restarted and its context was rebuilt — the old
+        // transcript's occupancy would not describe the new session.
+        let live_session = self
+            .manager
+            .get_state(conn_id)
+            .await?
+            .read()
+            .await
+            .external_id
+            .clone()?;
+        let row = conversation_service::get_by_id(&self.db.conn, conversation_id)
+            .await
+            .ok()?;
+        if !compact::transcript_describes_live_session(
+            row.external_id.as_deref(),
+            Some(live_session.as_str()),
+        ) {
+            tracing::info!(
+                conversation_id,
+                row_session = row.external_id.as_deref().unwrap_or("<none>"),
+                live_session = %live_session,
+                "[work_task] transcript occupancy refused: the connection holds a \
+                 different session than the row"
+            );
+            return None;
+        }
+        let (detail, _) = get_folder_conversation_core(&self.db.conn, conversation_id)
+            .await
+            .ok()?;
+        let stats = detail.session_stats?;
+        let percent = stats
+            .context_window_usage_percent
+            .filter(|p| p.is_finite() && *p > 0.0)
+            .or_else(|| {
+                compact::occupancy_percent(
+                    stats.context_window_used_tokens,
+                    stats.context_window_max_tokens,
+                )
+            })?;
+        Some(ContextReading {
+            percent,
+            used: stats.context_window_used_tokens,
+            size: stats.context_window_max_tokens,
+            source: "transcript",
+        })
+    }
+
+    /// The live connection's own `usage_update` reading, if it has published
+    /// one.
+    async fn live_context_reading(&self, conn_id: &str) -> Option<ContextReading> {
+        let state = self.manager.get_state(conn_id).await?;
+        let usage = state.read().await.usage.clone()?;
+        let percent = compact::occupancy_percent(Some(usage.used), Some(usage.size))?;
+        Some(ContextReading {
+            percent,
+            used: Some(usage.used),
+            size: Some(usage.size),
+            source: "live",
+        })
+    }
+
     /// Start preflight: the target folder must exist, be live, and be a
     /// project root (not a worktree).
     async fn preflight_folder(&self, folder_id: i32) -> Result<(), String> {
@@ -1553,9 +2915,72 @@ impl TaskEngine {
 
     // ── event settlement ────────────────────────────────────────────────────
 
+    /// Remember an agent-reported failure for this task connection's turn.
+    ///
+    /// Chat sessions are not in `index`, so their errors never accumulate.
+    /// Pre-prompt compaction uses this same connection. Its watermark is set
+    /// before the connection is indexed, and this loop can dequeue the
+    /// compaction's `Error` only afterwards — events at or below that
+    /// watermark are the compaction's, not the work turn's (#538).
+    async fn note_turn_agent_error(&self, conn_id: &str, seq: u64, message: String) {
+        if !self.index.lock().await.contains_key(conn_id) {
+            return;
+        }
+        if self
+            .compaction_turns
+            .lock()
+            .await
+            .get(conn_id)
+            .is_some_and(|marked| *marked >= seq)
+        {
+            return;
+        }
+        self.turn_signals
+            .lock()
+            .await
+            .entry(conn_id.to_string())
+            .or_default()
+            .error = Some(tail_chars(&message, TURN_ERROR_TAIL_CHARS));
+    }
+
+    /// Forget the error noted for this connection's turn, keeping its
+    /// baseline. Two edges call it, so that the error left at `TurnComplete`
+    /// is one the turn ended in (#538):
+    ///
+    /// - `Prompting`, where `SessionState` and the live reducer open a new
+    ///   error scope too. The connection emits it before anything of the
+    ///   prompt's turn, so an error noted earlier came from before the work
+    ///   prompt — a `session/load` that fell back to a new session, say, which
+    ///   this loop can dequeue only after the launch has indexed the connection
+    ///   (it awaits git and the database per event, so it can run well behind
+    ///   the bus).
+    /// - turn progress ([`is_turn_progress`]): the agent recovered from it.
+    async fn clear_turn_agent_error(&self, conn_id: &str) {
+        if let Some(signal) = self.turn_signals.lock().await.get_mut(conn_id) {
+            signal.error = None;
+        }
+    }
+
     async fn on_event(self: &Arc<Self>, env: &EventEnvelope) {
+        if let Some(message) = reported_agent_error(&env.payload) {
+            self.note_turn_agent_error(&env.connection_id, env.seq, message)
+                .await;
+        } else if is_turn_progress(&env.payload) {
+            self.clear_turn_agent_error(&env.connection_id).await;
+        }
         match &env.payload {
+            AcpEvent::StatusChanged {
+                status: ConnectionStatus::Prompting,
+            } => {
+                self.clear_turn_agent_error(&env.connection_id).await;
+            }
             AcpEvent::TurnComplete { stop_reason, .. } => {
+                // A pre-prompt compaction's completion is the LAUNCH's signal,
+                // never the round's — see `compaction_turns` for why the index
+                // alone cannot tell them apart from in here.
+                if self.claim_compaction_turn(&env.connection_id, env.seq).await {
+                    return;
+                }
                 self.on_turn_complete(&env.connection_id, stop_reason).await;
             }
             AcpEvent::QuestionRequest { question_id, .. } => {
@@ -1570,7 +2995,7 @@ impl TaskEngine {
                 self.track_request(&env.connection_id, format!("p:{request_id}"), true)
                     .await;
             }
-            AcpEvent::PermissionResolved { request_id } => {
+            AcpEvent::PermissionResolved { request_id, .. } => {
                 self.track_request(&env.connection_id, format!("p:{request_id}"), false)
                     .await;
             }
@@ -1715,12 +3140,123 @@ impl TaskEngine {
         }
     }
 
-    /// Drop every delegation-child mapping belonging to a retired run. Called
-    /// wherever a run leaves `index`; the run's outstanding-request set is
-    /// cleared wholesale by those same call sites.
-    async fn forget_delegation_children_of(&self, parent_conn_id: &str) {
+    /// Drop every delegation-child mapping belonging to a retired run, and
+    /// return the connection ids that were detached — their outstanding
+    /// requests are now unanswerable, so whoever does not clear the task's set
+    /// wholesale has to retract those keys by hand (see
+    /// [`Self::retire_connection`]).
+    async fn forget_delegation_children_of(&self, parent_conn_id: &str) -> Vec<String> {
         // `parent_conn_id` is a run connection, never a key in this map.
-        self.detach_delegation_subtree(parent_conn_id, false).await;
+        self.detach_delegation_subtree(parent_conn_id, false).await
+    }
+
+    /// Drop every engine-side trace of a run connection: its `index` entry, the
+    /// task's outstanding-request set, and its delegation children.
+    ///
+    /// `index` is what attributes an incoming event to a task, so an entry that
+    /// outlives its connection keeps answering for a row that has moved on —
+    /// and `remove_worktree_locked` reads the same map as "a live agent is
+    /// working in there". Whoever takes over from a settle that will never
+    /// arrive calls this; the entry has no other way out (`reconcile_once`
+    /// only ever looks at `running` / `awaiting_input` rows).
+    async fn retire_connection(&self, conn_id: &str, task_id: i32) {
+        // A connection that is being retired will never complete another turn,
+        // so an unspent compaction marker on it would linger for the life of
+        // the process. (`claim_compaction_turn` clears every marker whose
+        // connection does complete one.)
+        self.compaction_turns.lock().await.remove(conn_id);
+        self.turn_signals.lock().await.remove(conn_id);
+
+        // Unmap this run's delegation children FIRST: the purge below needs
+        // their ids, and a child that is already detached can no longer publish
+        // a fresh key (`track_request` resolves a child through
+        // `delegation_parents`, and an unmapped one resolves to nothing).
+        let orphaned: Vec<String> = self
+            .forget_delegation_children_of(conn_id)
+            .await
+            .iter()
+            .map(|child| format!("{child}#"))
+            .collect();
+
+        // The outstanding-request set is keyed by TASK, not by connection, so
+        // clearing it while another generation still owns the row would drop
+        // ITS pending permissions — resolving one of the survivors then empties
+        // an already-empty set and flips the card back to `running` with the
+        // agent still parked. Hence "was this the last connection on the task",
+        // and hence the `index` guard held ACROSS the clear rather than just
+        // the test: a launch registers its generation in `index` before it can
+        // publish any request (and a delegation child's keys only exist while
+        // its parent is indexed), so holding it is what keeps the answer true
+        // until the set is gone. Lock order is index → awaiting; every other
+        // `awaiting` critical section is a leaf, so it cannot invert.
+        let emptied_for = {
+            let mut index = self.index.lock().await;
+            index.remove(conn_id);
+            let survivor = index
+                .values()
+                .find(|(tid, _)| *tid == task_id)
+                .map(|(_, run_seq)| *run_seq);
+            let mut awaiting = self.awaiting.lock().await;
+            match survivor {
+                // Last one out, so the whole set goes — orphans included. A set
+                // inherited by the next generation would never flip the row to
+                // `awaiting_input` again.
+                None => {
+                    awaiting.remove(&task_id);
+                    None
+                }
+                // Someone else still owns the row: keep THEIR requests, but
+                // retract this run's children's. Sparing those is the opposite
+                // error and the worse one — the chain that named them is gone,
+                // so neither `track_request` nor `forget_delegation_child` can
+                // resolve them any more, and one key stuck in a shared set pins
+                // the survivor on the wrong side of the `running` ⇄
+                // `awaiting_input` edge until something clears the set
+                // wholesale. Only a LATER retirement that is the last one out
+                // (or a cancel) does that, so it outlasts every generation the
+                // orphan is actually lying about.
+                Some(run_seq) => Self::retract_keys(&mut awaiting, task_id, &orphaned)
+                    .then_some(run_seq),
+            }
+        };
+
+        // Emptied by the retraction alone: the row is parked on requests that
+        // just became unanswerable, so return it to the survivor's `running`
+        // through the same flip `track_request` would have used.
+        if let Some(run_seq) = emptied_for {
+            let flipped = work_task_service::flip_awaiting(&self.db.conn, task_id, run_seq, false)
+                .await
+                .unwrap_or(false);
+            if flipped {
+                self.emit_upsert(task_id);
+            }
+        }
+    }
+
+    /// Drop every key under `prefixes` from the task's outstanding set,
+    /// reporting whether that is what emptied it (and so owes a flip back to
+    /// `running`). An untouched set never reports `true`, however empty.
+    fn retract_keys(
+        awaiting: &mut HashMap<i32, HashSet<String>>,
+        task_id: i32,
+        prefixes: &[String],
+    ) -> bool {
+        if prefixes.is_empty() {
+            return false;
+        }
+        let Some(set) = awaiting.get_mut(&task_id) else {
+            return false;
+        };
+        let before = set.len();
+        set.retain(|k| !prefixes.iter().any(|p| k.starts_with(p.as_str())));
+        if set.len() == before {
+            return false; // nothing of this subtree's was outstanding
+        }
+        if set.is_empty() {
+            awaiting.remove(&task_id);
+            return true;
+        }
+        false
     }
 
     /// Drop a finished delegation child (and anything it delegated in turn) plus
@@ -1742,20 +3278,7 @@ impl TaskEngine {
         let prefixes: Vec<String> = detached.iter().map(|c| format!("{c}#")).collect();
         let emptied = {
             let mut awaiting = self.awaiting.lock().await;
-            let Some(set) = awaiting.get_mut(&task_id) else {
-                return;
-            };
-            let before = set.len();
-            set.retain(|k| !prefixes.iter().any(|p| k.starts_with(p.as_str())));
-            if set.len() == before {
-                return; // nothing of this subtree's was outstanding
-            }
-            if set.is_empty() {
-                awaiting.remove(&task_id);
-                true
-            } else {
-                false
-            }
+            Self::retract_keys(&mut awaiting, task_id, &prefixes)
         };
         if emptied {
             let flipped = work_task_service::flip_awaiting(&self.db.conn, task_id, run_seq, false)
@@ -1770,15 +3293,305 @@ impl TaskEngine {
     async fn on_turn_complete(self: &Arc<Self>, conn_id: &str, stop_reason: &str) {
         let entry = { self.index.lock().await.get(conn_id).copied() };
         let Some((task_id, run_seq)) = entry else {
-            return; // not a task run
+            // Not a task run — but it may have changed a reviewed task's
+            // worktree all the same.
+            self.spawn_foreign_turn_refresh(conn_id).await;
+            return;
         };
+        // A later turn on a connection already held for its agent's background
+        // work — one Grok started on its own, or a prompt someone sent the
+        // task's session meanwhile. The hold's waiter settles the generation.
+        if self.holds.lock().await.contains_key(conn_id) {
+            self.on_held_turn_complete(conn_id, stop_reason).await;
+            return;
+        }
 
         let summary = self.capture_summary(conn_id).await;
-        self.index.lock().await.remove(conn_id);
-        self.awaiting.lock().await.remove(&task_id);
-        self.forget_delegation_children_of(conn_id).await;
-        let _ = self.manager.disconnect(conn_id).await;
+        // Taken before retire, which drops the same entry.
+        let signal = self.turn_signals.lock().await.remove(conn_id);
+        if let Some((timing, probe)) = self
+            .turn_end_hold_probe(conn_id, task_id, run_seq, stop_reason)
+            .await
+        {
+            let hold = TurnEndHold {
+                task_id,
+                run_seq,
+                stop_reason: stop_reason.to_string(),
+                summary,
+                signal,
+                since: probe.turn_ended_at(),
+                stop: CancellationToken::new(),
+                later: turn_end_hold::LaterTurns::default(),
+                settling: false,
+            };
+            self.begin_hold(conn_id, hold, timing, probe).await;
+            return;
+        }
+        self.finish_generation(conn_id, task_id, run_seq, stop_reason, summary, signal)
+            .await;
+    }
 
+    /// A later turn ended on a connection held for its agent's background
+    /// work. Its answer (as the session stamped it) and the error it reported
+    /// are now the latest on the generation, for the waiter's settle; and a
+    /// turn that did not end normally — stopped, refused, failed — ends the
+    /// wait, the generation settling as that turn ended, as it would have for
+    /// the held turn itself. Nothing changes once the waiter is settling: that
+    /// settle is under way with what it had.
+    async fn on_held_turn_complete(&self, conn_id: &str, stop_reason: &str) {
+        let reply = turn_end_hold::last_turn_reply(&self.manager, conn_id).await;
+        let signal = self.turn_signals.lock().await.remove(conn_id);
+        let mut holds = self.holds.lock().await;
+        let Some(hold) = holds.get_mut(conn_id).filter(|hold| !hold.settling) else {
+            return;
+        };
+        // The baseline stays the held turn's: "did this round change
+        // anything" is measured from the round's prompt.
+        if let Some(later) = signal {
+            match hold.signal.as_mut() {
+                Some(held) => held.error = later.error,
+                None => hold.signal = Some(later),
+            }
+        }
+        if hold.later.record(stop_reason, reply) {
+            tracing::info!(
+                "[work_task] task {} held connection={conn_id}: a later turn ended \
+                 ({stop_reason}); settling now",
+                hold.task_id
+            );
+            hold.stop.cancel();
+        }
+    }
+
+    /// Whether the generation whose turn on `conn_id` just ended must be held
+    /// open for its agent's background work, and what that work is (see
+    /// [`TurnEndHold`]). On top of `turn_end_hold::should_hold`: the row is
+    /// still this generation's and live, and — for a work round — the agent
+    /// has not closed it with `task_complete` already. A verdict is the agent
+    /// saying it is done, so whatever it left running (a dev server, a
+    /// watcher) is a leftover, not work to wait for. A merge generation has no
+    /// verdict; it settles from git, which is only more right once the agent
+    /// has finished checking what it landed.
+    async fn turn_end_hold_probe(
+        &self,
+        conn_id: &str,
+        task_id: i32,
+        run_seq: i32,
+        stop_reason: &str,
+    ) -> Option<(turn_end_hold::HoldTiming, turn_end_hold::TurnEndProbe)> {
+        let timing = self.hold_timing?;
+        let probe = turn_end_hold::should_hold(&self.manager, conn_id, stop_reason).await?;
+        let task = work_task_service::get_model(&self.db.conn, task_id)
+            .await
+            .ok()?;
+        if task.run_seq != run_seq {
+            return None;
+        }
+        match task.status {
+            WorkTaskStatus::Merging => Some((timing, probe)),
+            WorkTaskStatus::Running | WorkTaskStatus::AwaitingInput if task.verdict.is_none() => {
+                Some((timing, probe))
+            }
+            _ => None,
+        }
+    }
+
+    /// Hold the generation open (see [`TurnEndHold`]): record the wait on the
+    /// timeline — the card reads it from there — and start its waiter.
+    async fn begin_hold(
+        self: &Arc<Self>,
+        conn_id: &str,
+        hold: TurnEndHold,
+        timing: turn_end_hold::HoldTiming,
+        probe: turn_end_hold::TurnEndProbe,
+    ) {
+        let (task_id, run_seq) = (hold.task_id, hold.run_seq);
+        let stop = hold.stop.clone();
+        let reason = probe.blocker.map(turn_end_hold::busy_label);
+        tracing::info!(
+            "[work_task] task {task_id} turn ended with work still going ({}); holding              connection={conn_id} until it finishes",
+            reason.unwrap_or("unknown")
+        );
+        let _ = work_task_service::record_event(
+            &self.db.conn,
+            task_id,
+            "background_wait",
+            "engine",
+            Some(serde_json::json!({
+                "run_seq": run_seq,
+                "reason": reason,
+                "tasks": probe.running,
+                // What the turn said when it ended: the summary a restart
+                // falls back on, since the hold itself is lost with the
+                // process (see `settle_interrupted_holds`).
+                "summary": hold.summary,
+            })),
+        )
+        .await;
+        self.holds.lock().await.insert(conn_id.to_string(), hold);
+        self.emit_upsert(task_id);
+        let engine = Arc::clone(self);
+        let conn_id = conn_id.to_string();
+        tokio::spawn(async move { engine.run_hold(conn_id, timing, stop).await });
+    }
+
+    /// The waiter of a held generation: wait out its agent's work, then settle
+    /// it as its turn's end would have — unless a cancel took the hold first.
+    async fn run_hold(
+        self: Arc<Self>,
+        conn_id: String,
+        timing: turn_end_hold::HoldTiming,
+        stop: CancellationToken,
+    ) {
+        let result =
+            turn_end_hold::wait_until_settled(&self.manager, &conn_id, timing, &stop).await;
+        // Claimed, not removed: the entry keeps the reconcile tick and merge
+        // recovery off this generation until it is settled below.
+        let claimed = {
+            let mut holds = self.holds.lock().await;
+            holds.get_mut(&conn_id).map(|hold| {
+                hold.settling = true;
+                (
+                    hold.task_id,
+                    hold.run_seq,
+                    hold.stop_reason.clone(),
+                    hold.summary.take(),
+                    hold.signal.take(),
+                    hold.since,
+                    std::mem::take(&mut hold.later),
+                )
+            })
+        };
+        let Some((task_id, run_seq, held_stop_reason, held_summary, signal, since, later)) = claimed
+        else {
+            return; // canceled: the cancel owns the teardown
+        };
+        // A later turn that ended otherwise than normally decides how the
+        // generation ends, and names how the wait did.
+        let stop_reason = later.ended.clone().unwrap_or(held_stop_reason);
+        let outcome = later
+            .ended
+            .as_deref()
+            .unwrap_or(result.outcome.as_str());
+        tracing::info!("[work_task] task {task_id} hold on connection={conn_id} ended: {outcome}");
+        let mut payload = serde_json::json!({
+            "run_seq": run_seq,
+            "outcome": outcome,
+            "waited_secs": (chrono::Utc::now() - since).num_seconds().max(0),
+        });
+        if !result.leftover().is_empty() {
+            payload["leftover"] = serde_json::json!(result.leftover());
+        }
+        let _ = work_task_service::record_event(
+            &self.db.conn,
+            task_id,
+            "background_wait_end",
+            "engine",
+            Some(payload),
+        )
+        .await;
+        // The newest answer since the hold began — from a turn the agent ran on
+        // its own once its work finished, or from a later turn on the
+        // connection — else the answer the held turn ended on.
+        let summary = match result.latest_reply(since, &later) {
+            Some(reply) => Some(reply),
+            None => self.capture_summary(&conn_id).await.or(held_summary),
+        };
+        self.finish_generation(&conn_id, task_id, run_seq, &stop_reason, summary, signal)
+            .await;
+        self.holds.lock().await.remove(&conn_id);
+    }
+
+    /// Stop waiting for a held generation's background work and settle it now
+    /// — the work still running ends with the connection. For an agent that
+    /// left something running that never finishes on its own (a dev server, a
+    /// watcher).
+    pub async fn stop_background_wait(&self, task_id: i32) -> Result<(), String> {
+        let holds = self.holds.lock().await;
+        match holds.values().find(|hold| hold.task_id == task_id) {
+            Some(hold) => {
+                hold.stop.cancel();
+                Ok(())
+            }
+            None => Err("this task is not waiting for background work".to_string()),
+        }
+    }
+
+    /// Settle a run whose holder went away with the process: a generation that
+    /// was held for its background work when codeg quit or crashed. Its turn
+    /// had ended normally, so it settles as that turn's end would have
+    /// (review, or failed on a `blocked` verdict) rather than failing as
+    /// interrupted — the work it was waiting on died with the old process
+    /// either way. Runs before the boot reconcile, which would otherwise fail
+    /// it, and does not pump the queue: that reconcile has yet to clear the
+    /// rows the pump would trip over. A held merge generation only has its wait
+    /// closed here: the reconcile's merge recovery settles it from git.
+    async fn settle_interrupted_holds(self: &Arc<Self>) {
+        let rows = work_task_service::list_by_status(
+            &self.db.conn,
+            &[
+                WorkTaskStatus::Running,
+                WorkTaskStatus::AwaitingInput,
+                WorkTaskStatus::Merging,
+            ],
+        )
+        .await
+        .unwrap_or_default();
+        for task in rows {
+            let Ok(Some(wait)) =
+                work_task_service::open_background_wait(&self.db.conn, task.id, task.run_seq).await
+            else {
+                continue;
+            };
+            let _ = work_task_service::record_event(
+                &self.db.conn,
+                task.id,
+                "background_wait_end",
+                "engine",
+                Some(serde_json::json!({ "run_seq": task.run_seq, "outcome": "interrupted" })),
+            )
+            .await;
+            if task.status == WorkTaskStatus::Merging {
+                continue;
+            }
+            let summary = wait
+                .get("summary")
+                .and_then(|s| s.as_str())
+                .map(str::to_string);
+            self.settle_generation(task.id, task.run_seq, "end_turn", summary, None, false)
+                .await;
+        }
+    }
+
+    /// End a generation at its turn's end: let the connection go, then settle
+    /// the row from the stop reason (see [`Self::settle_generation`]).
+    async fn finish_generation(
+        self: &Arc<Self>,
+        conn_id: &str,
+        task_id: i32,
+        run_seq: i32,
+        stop_reason: &str,
+        summary: Option<String>,
+        signal: Option<TurnSignal>,
+    ) {
+        self.retire_connection(conn_id, task_id).await;
+        let _ = self.manager.disconnect(conn_id).await;
+        self.settle_generation(task_id, run_seq, stop_reason, summary, signal, true)
+            .await;
+    }
+
+    /// Settle generation `run_seq` from how its turn ended. `pump` refills the
+    /// folder's freed slot (and merge slot) afterwards — every caller but the
+    /// boot pass wants that.
+    async fn settle_generation(
+        self: &Arc<Self>,
+        task_id: i32,
+        run_seq: i32,
+        stop_reason: &str,
+        summary: Option<String>,
+        signal: Option<TurnSignal>,
+        pump: bool,
+    ) {
         let task = work_task_service::get_model(&self.db.conn, task_id).await.ok();
 
         // A merge generation settles from git truth whatever the stop reason —
@@ -1789,10 +3602,12 @@ impl TaskEngine {
         {
             self.settle_merge_generation(t, stop_reason, summary.as_deref())
                 .await;
-            self.pump_folder(t.folder_id).await;
-            // The folder's one merge slot just freed — the next merge the user
-            // queued (or the auto-merge train) can land now.
-            self.spawn_merge_pump(t.folder_id);
+            if pump {
+                self.pump_folder(t.folder_id).await;
+                // The folder's one merge slot just freed — the next merge the
+                // user queued (or the auto-merge train) can land now.
+                self.spawn_merge_pump(t.folder_id);
+            }
             return;
         }
 
@@ -1830,35 +3645,67 @@ impl TaskEngine {
                         None
                     };
                     let stats = self.snapshot_diff_stats(task_id).await;
-                    let settled = work_task_service::settle_review(
-                        &self.db.conn,
-                        task_id,
-                        run_seq,
-                        own_summary.or(summary),
-                        stats,
-                    )
-                    .await
-                    .unwrap_or(false);
-                    if settled {
-                        self.spawn_post_review(task_id, run_seq);
+                    // #538: Codex still ends with `end_turn` after an upstream
+                    // 400. No assistant text and no diff added this turn, but
+                    // the agent already reported an error — fail with that
+                    // message instead of settling into a silent review. A
+                    // verdict (other than `blocked`, handled above) is the
+                    // agent closing the task on purpose, so it still reviews.
+                    let empty_error = verdict.is_none()
+                        && summary.is_none()
+                        && turn_added_no_diff(signal.as_ref(), stats)
+                        && signal.as_ref().is_some_and(|s| s.error.is_some());
+                    if empty_error {
+                        let error = signal.and_then(|s| s.error);
+                        work_task_service::fail(
+                            &self.db.conn,
+                            task_id,
+                            &[WorkTaskStatus::Running, WorkTaskStatus::AwaitingInput],
+                            Some(run_seq),
+                            "agent_error",
+                            error,
+                        )
+                        .await
+                        .unwrap_or(false)
+                    } else {
+                        let settled = work_task_service::settle_review(
+                            &self.db.conn,
+                            task_id,
+                            run_seq,
+                            own_summary.or(summary),
+                            stats,
+                        )
+                        .await
+                        .unwrap_or(false);
+                        if settled {
+                            self.spawn_post_review(task_id, run_seq);
+                        }
+                        settled
                     }
-                    settled
                 }
             }
             "cancelled" => {
-                // The user stopped the agent from the conversation UI — that is
-                // a task cancel, not an agent failure.
-                work_task_service::cancel(&self.db.conn, task_id, None)
+                // A cancelled task generation is a cancellation, not an agent
+                // failure. Keep it generation-scoped: a delayed event must not
+                // cancel a task that already reached review or was requeued.
+                work_task_service::cancel_running_generation(&self.db.conn, task_id, run_seq)
                     .await
                     .unwrap_or(false)
             }
+            // What the agent reported for this turn (a rejected prompt's own
+            // message, codeg's reading of an empty turn) says more than the
+            // bare stop reason, which is all a turn that reported nothing has.
             other => work_task_service::fail(
                 &self.db.conn,
                 task_id,
                 &[WorkTaskStatus::Running, WorkTaskStatus::AwaitingInput],
                 Some(run_seq),
                 "agent_error",
-                Some(format!("agent stopped: {other}")),
+                Some(
+                    signal
+                        .and_then(|s| s.error)
+                        .unwrap_or_else(|| format!("agent stopped: {other}")),
+                ),
             )
             .await
             .unwrap_or(false),
@@ -1867,8 +3714,10 @@ impl TaskEngine {
             self.emit_upsert(task_id);
         }
         // A slot freed up — keep the queue draining.
-        if let Ok(task) = work_task_service::get_model(&self.db.conn, task_id).await {
-            self.pump_folder(task.folder_id).await;
+        if pump {
+            if let Ok(task) = work_task_service::get_model(&self.db.conn, task_id).await {
+                self.pump_folder(task.folder_id).await;
+            }
         }
     }
 
@@ -1937,7 +3786,11 @@ impl TaskEngine {
             task_id,
             "agent_progress",
             "agent",
-            Some(serde_json::json!({ "message": message })),
+            // Stamped with the generation that reported it: the card's progress
+            // line is a claim about what the run is doing NOW, and a merge (or
+            // a retry, or a follow-up) that inherited the previous round's last
+            // milestone was narrating work it is not doing.
+            Some(serde_json::json!({ "message": message, "run_seq": run_seq })),
         )
         .await
         {
@@ -1948,19 +3801,35 @@ impl TaskEngine {
     }
 
     /// `task_complete`: stash the verdict + summary on the current generation;
-    /// the TurnComplete settle reads them to decide review vs failed.
+    /// the TurnComplete settle reads them to decide review vs failed. Thread
+    /// replies ride along as drafts — kept only for the items a forge-sourced
+    /// task handles, sanitized before anyone sees them (see
+    /// `forge::thread_reply`).
     pub async fn record_complete(
         &self,
         conn_id: &str,
         verdict: &str,
         summary: Option<&str>,
+        thread_replies: &[crate::acp::delegation::transport::ThreadReply],
     ) -> TaskReportAck {
         let entry = { self.index.lock().await.get(conn_id).copied() };
         let Some((task_id, run_seq)) = entry else {
             return TaskReportAck::rejected("this session is not executing a work task");
         };
-        match work_task_service::set_verdict(&self.db.conn, task_id, run_seq, verdict, summary)
-            .await
+        let drafts = if thread_replies.is_empty() {
+            None
+        } else {
+            self.thread_reply_drafts(task_id, thread_replies).await
+        };
+        match work_task_service::set_verdict_with_drafts(
+            &self.db.conn,
+            task_id,
+            run_seq,
+            verdict,
+            summary,
+            drafts.as_deref(),
+        )
+        .await
         {
             Ok(true) => {
                 self.emit_upsert(task_id);
@@ -1969,6 +3838,35 @@ impl TaskEngine {
             Ok(false) => TaskReportAck::rejected("the task is not running anymore"),
             Err(e) => TaskReportAck::rejected(&format!("could not record verdict: {e}")),
         }
+    }
+
+    /// The agent's thread replies as `work_task.writeback_drafts` JSON: only
+    /// for a forge-sourced task, only for its own items, with this machine's
+    /// paths made relative to the checkout and anything credential-shaped
+    /// masked. `None` = nothing worth keeping.
+    async fn thread_reply_drafts(
+        &self,
+        task_id: i32,
+        replies: &[crate::acp::delegation::transport::ThreadReply],
+    ) -> Option<String> {
+        let task = work_task_service::get_model(&self.db.conn, task_id).await.ok()?;
+        let (_, meta) = forge_thread(&task)?;
+        let mut roots: Vec<String> = Vec::new();
+        if let Some(wt_id) = task.worktree_folder_id {
+            if let Ok(wt) = get_folder_core(&self.db, wt_id).await {
+                roots.push(wt.path);
+            }
+        }
+        if let Ok(root) = get_folder_core(&self.db, task.folder_id).await {
+            roots.push(root.path);
+        }
+        let roots: Vec<&str> = roots.iter().map(String::as_str).collect();
+        let home = dirs::home_dir().map(|h| h.to_string_lossy().into_owned());
+        crate::forge::thread_reply::drafts_json(
+            replies.iter().map(|r| (r.number, r.body.clone())),
+            &meta.item_numbers(),
+            |body| crate::forge::thread_reply::sanitize_agent_reply(body, &roots, home.as_deref()),
+        )
     }
 
     // ── preflight (acceptance red/green light) ──────────────────────────────
@@ -2004,7 +3902,7 @@ impl TaskEngine {
             .map(str::trim)
             .filter(|c| !c.is_empty());
         let (display_name, command_line) = match custom {
-            Some(cmd) => (cmd.to_string(), cmd.to_string()),
+            Some(cmd) => (cmd.to_string(), Ok(cmd.to_string())),
             None => {
                 let Some(command_id) = settings.preflight_command_id else {
                     return;
@@ -2018,7 +3916,14 @@ impl TaskEngine {
                 if command.folder_id != task.folder_id {
                     return;
                 }
-                (command.name, command.command)
+                // One the desktop app runs on its own machine is never run
+                // here, on the folder's host: its light goes red saying so.
+                let line = if command.run_local {
+                    Err("it is set to run on the desktop's own computer".to_string())
+                } else {
+                    Ok(command.command)
+                };
+                (command.name, line)
             }
         };
         let Some(wt_id) = task.worktree_folder_id else {
@@ -2031,18 +3936,30 @@ impl TaskEngine {
             return;
         }
 
+        // The run's own id rides on its `running` light, and the verdict below
+        // is written only while the row still holds exactly that light: a
+        // content refresh clears it and a newer run replaces it, and in both
+        // cases this run's verdict is about content the row no longer shows.
         let mut light = WorkTaskPreflight {
             status: "running".to_string(),
             command: display_name,
             exit_code: None,
             output_tail: None,
+            run_id: Some(uuid::Uuid::new_v4().to_string()),
+        };
+        let Ok(running_json) = serde_json::to_string(&light) else {
+            return;
         };
         match work_task_service::set_preflight(&self.db.conn, task_id, run_seq, &light).await {
             Ok(true) => self.emit_upsert(task_id),
             _ => return, // task already moved on
         }
 
-        match run_shell_capture(&command_line, &wt.path).await {
+        let outcome = match command_line {
+            Ok(line) => run_shell_capture(&line, &wt.path).await,
+            Err(why) => Err(why),
+        };
+        match outcome {
             Ok((code, tail)) => {
                 let passed = code == Some(0);
                 light.status = if passed { "passed" } else { "failed" }.to_string();
@@ -2055,24 +3972,224 @@ impl TaskEngine {
                 light.output_tail = Some(format!("could not run the command: {e}"));
             }
         }
-        if work_task_service::set_preflight(&self.db.conn, task_id, run_seq, &light)
-            .await
-            .unwrap_or(false)
+        if work_task_service::finish_preflight(
+            &self.db.conn,
+            task_id,
+            run_seq,
+            &running_json,
+            &light,
+        )
+        .await
+        .unwrap_or(false)
         {
             self.emit_upsert(task_id);
         }
     }
 
-    /// Best-effort diff-stat snapshot of the task worktree vs its base.
+    /// Best-effort diff-stat snapshot of what THIS TASK produced — measured
+    /// from [`own_work_anchor`], not from the review baseline (see that
+    /// function for why the two differ on a pull-request task).
     async fn snapshot_diff_stats(&self, task_id: i32) -> Option<(i32, i32, i32)> {
         let task = work_task_service::get_model(&self.db.conn, task_id).await.ok()?;
         let wt_id = task.worktree_folder_id?;
-        let base = task.base_sha.clone()?;
         let wt = get_folder_core(&self.db, wt_id).await.ok()?;
-        let files = task_git::diff_numstat(&wt.path, &base).await.ok()?;
-        let adds: i32 = files.iter().map(|f| f.additions).sum();
-        let dels: i32 = files.iter().map(|f| f.deletions).sum();
-        Some((files.len() as i32, adds, dels))
+        let anchor = own_work_anchor(&wt.path, &task).await?;
+        diff_stats_from(&wt.path, &anchor).await
+    }
+
+    /// Boot pass: re-measure the counters of every task sitting in review.
+    ///
+    /// While the app runs, a settle writes them and a turn outside the engine
+    /// or a refused completion corrects them; nothing does while it is closed,
+    /// so a row can outlive the state it describes — a worktree the user
+    /// committed to (or reverted) in the meantime, and rows written before
+    /// [`own_work_anchor`] existed, which credited a pull-request task with the
+    /// pull request's own change set and cost it the "complete" button. The
+    /// counters decide which acceptance the board offers, so the correction has
+    /// to reach the row itself; recomputing per card is not an option (the list
+    /// endpoint would run one `git diff` per task, per refresh).
+    ///
+    /// Best-effort throughout: an unreadable worktree keeps whatever the row
+    /// already says, which is exactly the pre-existing behaviour.
+    async fn refresh_review_diff_stats(self: &Arc<Self>) {
+        let Ok(rows) = work_task_service::list_by_status(&self.db.conn, &[WorkTaskStatus::Review])
+            .await
+        else {
+            return;
+        };
+        // The post-review passes wait until EVERY row is re-measured: each
+        // ends in a folder-wide merge pump, and a pump started mid-scan could
+        // land a later row on the counters and light it had before the app
+        // closed — once it is merging, this scan skips it.
+        let mut refreshed = Vec::new();
+        for task in rows {
+            let refresh = self.refresh_review_task(task.id, false).await;
+            if refresh.stats_changed {
+                tracing::info!(
+                    "[work_task] task {}: diff stat corrected to {} file(s), +{}/-{}",
+                    task.id,
+                    refresh.stats.0,
+                    refresh.stats.1,
+                    refresh.stats.2
+                );
+            }
+            refreshed.push((task.id, refresh));
+        }
+        for (task_id, refresh) in refreshed {
+            self.after_content_refresh(task_id, refresh);
+        }
+    }
+
+    /// Re-measure one review task's worktree and write what changed — the
+    /// shared step behind the boot pass, a turn that ran outside the engine
+    /// ([`Self::refresh_after_foreign_turn`]) and a refused completion
+    /// ([`Self::complete_task`]). Takes the folder lock: the counters and the
+    /// acceptance light are what the auto-merge sweep re-checks under that
+    /// same lock (see [`Self::merge_task_inner`]), so a landing can never be
+    /// dispatched on a light this write is about to clear.
+    async fn refresh_review_task(
+        &self,
+        task_id: i32,
+        content_may_have_changed: bool,
+    ) -> ContentRefresh {
+        let Ok(task) = work_task_service::get_model(&self.db.conn, task_id).await else {
+            return ContentRefresh::default();
+        };
+        let lock = self.folder_lock(task.folder_id).await;
+        let _guard = lock.lock().await;
+        self.refresh_review_task_locked(task_id, content_may_have_changed)
+            .await
+    }
+
+    /// [`Self::refresh_review_task`] for a caller already holding the folder
+    /// lock (a tokio mutex, not re-entrant).
+    ///
+    /// The preflight light is cleared — in the same update as the counters —
+    /// whenever it may describe content the worktree no longer holds: when
+    /// the counters moved, and when `content_may_have_changed` says a change
+    /// could hide behind identical totals (an agent turn can rewrite a line
+    /// without changing how many it touched). Only with a preflight
+    /// configured: without one there is no light to go stale.
+    ///
+    /// Best-effort throughout: an unreadable worktree keeps whatever the row
+    /// already says, and a task that left review — or started another round —
+    /// meanwhile is not written (the CAS binds status and `run_seq`).
+    async fn refresh_review_task_locked(
+        &self,
+        task_id: i32,
+        content_may_have_changed: bool,
+    ) -> ContentRefresh {
+        let none = ContentRefresh::default();
+        let Ok(task) = work_task_service::get_model(&self.db.conn, task_id).await else {
+            return none;
+        };
+        if task.status != WorkTaskStatus::Review || task.deleted_at.is_some() {
+            return none;
+        }
+        let Some(wt) = self.live_worktree(&task).await else {
+            return none;
+        };
+        let Some(anchor) = own_work_anchor(&wt.path, &task).await else {
+            return none;
+        };
+        let Some(stats) = diff_stats_from(&wt.path, &anchor).await else {
+            return none;
+        };
+        let stats_changed = (task.files_changed, task.additions, task.deletions)
+            != (Some(stats.0), Some(stats.1), Some(stats.2));
+        let settings = work_task_service::settings_get_effective(&self.db.conn, task.folder_id)
+            .await
+            .unwrap_or_default();
+        let clear_light =
+            preflight_configured(&settings) && (stats_changed || content_may_have_changed);
+        if !stats_changed && !clear_light {
+            return none;
+        }
+        match work_task_service::refresh_review_content(
+            &self.db.conn,
+            task.id,
+            task.run_seq,
+            stats,
+            clear_light,
+        )
+        .await
+        {
+            Ok(true) => {
+                self.emit_upsert(task.id);
+                ContentRefresh {
+                    wrote: true,
+                    run_seq: task.run_seq,
+                    stats,
+                    stats_changed,
+                    light_cleared: clear_light,
+                }
+            }
+            Ok(false) => none, // left review meanwhile — its own settle owns the row
+            Err(e) => {
+                tracing::warn!(
+                    "[work_task] task {}: could not refresh the diff stat: {e}",
+                    task.id
+                );
+                none
+            }
+        }
+    }
+
+    /// What a refresh owes the task afterwards, once the row says something
+    /// new: a cleared light is re-run, and a task whose content changed gets
+    /// the merge pump's look — the same post-review step a settled round runs
+    /// (see [`Self::spawn_post_review`]: preflight first, then the pump, so
+    /// the sweep never reads a light that is not there yet).
+    fn after_content_refresh(self: &Arc<Self>, task_id: i32, refresh: ContentRefresh) {
+        if refresh.wrote && (refresh.stats_changed || refresh.light_cleared) {
+            self.spawn_post_review(task_id, refresh.run_seq);
+        }
+    }
+
+    /// A turn ended on a connection that is not a task run — someone replied
+    /// to a task's session from the conversation list, say, or worked in its
+    /// worktree from another conversation (#1166). Such a turn can commit
+    /// work the review counters never saw, and those counters decide whether
+    /// the board offers "merge" or "complete"; re-measure every review task
+    /// the session could have touched. Spawned: `on_event` runs serially, and
+    /// git must not hold up the bus.
+    async fn spawn_foreign_turn_refresh(self: &Arc<Self>, conn_id: &str) {
+        let Some(state) = self.manager.get_state(conn_id).await else {
+            return;
+        };
+        let (conversation_id, folder_id) = {
+            let state = state.read().await;
+            (state.conversation_id, state.folder_id)
+        };
+        if conversation_id.is_none() && folder_id.is_none() {
+            return;
+        }
+        let engine = self.clone();
+        tokio::spawn(async move {
+            engine
+                .refresh_after_foreign_turn(conversation_id, folder_id)
+                .await;
+        });
+    }
+
+    async fn refresh_after_foreign_turn(
+        self: &Arc<Self>,
+        conversation_id: Option<i32>,
+        folder_id: Option<i32>,
+    ) {
+        let Ok(tasks) = work_task_service::list_review_tasks_for_session(
+            &self.db.conn,
+            conversation_id,
+            folder_id,
+        )
+        .await
+        else {
+            return;
+        };
+        for task in tasks {
+            let refresh = self.refresh_review_task(task.id, true).await;
+            self.after_content_refresh(task.id, refresh);
+        }
     }
 
     /// Best-effort: the turn's final assistant text (cleared at next turn
@@ -2104,11 +4221,18 @@ impl TaskEngine {
     /// cleared it and the `branch -D` that would take it away.
     ///
     /// Two probes on the live-worktree path, because neither alone sees
-    /// everything the removal destroys: a commit made on the work branch is
-    /// invisible to `git status` but shows up in the diff against the base, and
-    /// an untracked file is the reverse. Anything either one finds keeps the
-    /// worktree on disk.
-    pub async fn complete_task(&self, task_id: i32, delete_worktree: bool) -> Result<(), String> {
+    /// everything the removal destroys. The anchor diff
+    /// ([`Self::has_landable_changes`]) covers commits made on the branch after
+    /// the run settled — invisible to `git status` — as well as uncommitted
+    /// files, untracked ones included. What it cannot see is a worktree that
+    /// differs from its own HEAD while matching the anchor: work committed and
+    /// then edited back out is a `git status` finding and an empty diff.
+    /// Anything either one finds keeps the worktree on disk.
+    pub async fn complete_task(
+        self: &Arc<Self>,
+        task_id: i32,
+        delete_worktree: bool,
+    ) -> Result<(), String> {
         let task = work_task_service::get_model(&self.db.conn, task_id)
             .await
             .map_err(|e| e.to_string())?;
@@ -2123,9 +4247,19 @@ impl TaskEngine {
         let _guard = lock.lock().await;
 
         let live_wt = self.live_worktree(&task).await;
+        // Which of the two acceptances this is. The second one's branch may
+        // still hold commits nobody landed, so the comment must not say
+        // "nothing to land" about it.
+        let nothing_to_land = live_wt.is_some();
         let reason = match &live_wt {
             Some(wt) => {
                 if self.has_landable_changes(&task, &wt.path).await? {
+                    // The board offered "complete" off counters that no longer
+                    // describe the worktree (#1166). Correct them before
+                    // refusing, so the card trades this button for "merge"
+                    // instead of offering the refusal again.
+                    let refresh = self.refresh_review_task_locked(task_id, true).await;
+                    self.after_content_refresh(task_id, refresh);
                     return Err(
                         "this task changed files after all — merge it instead of completing it"
                             .to_string(),
@@ -2142,6 +4276,13 @@ impl TaskEngine {
             return Err("task left review before it could be completed".to_string());
         }
         self.emit_upsert(task_id);
+        // The third settlement gets a comment too: the setting promises one
+        // whenever a forge task finishes, and a task that landed nothing is an
+        // outcome the thread's readers want as much as the other two — told as
+        // what did not happen to their item, never as "accepted" (see
+        // `writeback_comment_body`). The CAS above is what makes it one comment
+        // and not one per attempt.
+        self.spawn_forge_writeback(task_id, WritebackOutcome::Accepted { nothing_to_land });
 
         if live_wt.is_none() {
             // Nothing usable is left behind the worktree pointer — converge
@@ -2155,17 +4296,14 @@ impl TaskEngine {
                     &self.db.conn,
                     task_id,
                     true,
-                    Some(
-                        "the worktree was kept: it still holds uncommitted files. Remove them, \
-                         then retry the cleanup."
-                            .to_string(),
-                    ),
+                    Some(worktree_kept(RETRY_THE_CLEANUP)),
                 )
                 .await;
+                self.emit_upsert(task_id);
             } else {
-                self.remove_worktree_locked(task_id).await;
+                // Broadcast omitted: the removal announces its own outcome.
+                self.remove_worktree_locked(task_id, None).await;
             }
-            self.emit_upsert(task_id);
         }
         Ok(())
     }
@@ -2231,7 +4369,7 @@ impl TaskEngine {
             }
         }
         if let Err(e) =
-            task_git::remove_worktree_and_branch(&root.path, &wt.path, branch_to_delete).await
+            task_git::remove_worktree_and_branch(&root.path, &wt.path, branch_to_delete, None).await
         {
             let _ = work_task_service::set_cleanup_state(
                 &self.db.conn,
@@ -2247,9 +4385,8 @@ impl TaskEngine {
     }
 
     /// Whether the task worktree still has anything uncommitted (tracked edits
-    /// or untracked files). A git error reads as "clean": the removal path is
-    /// itself tolerant of a worktree that is already off disk, which is the
-    /// likeliest reason git could not answer here.
+    /// or untracked files). No worktree recorded and no folder row both read as
+    /// "nothing to lose" — there is no checkout for a removal to destroy.
     async fn worktree_holds_uncommitted(
         &self,
         task: &crate::db::entities::work_task::Model,
@@ -2260,24 +4397,25 @@ impl TaskEngine {
         let Ok(wt) = get_folder_core(&self.db, wt_id).await else {
             return false;
         };
-        task_git::has_changes(&wt.path).await.unwrap_or(false)
+        path_holds_uncommitted(&wt.path).await
     }
 
-    /// Live git truth for "would a merge still have something to take from this
-    /// task?" — including work committed on the branch after the run settled,
-    /// which `git status` reports as a clean worktree. Mirrors the changed-files
-    /// view the user reviewed (same base fallback), so the board's offer and
-    /// this check cannot disagree. `wt_path` is the already-verified live
-    /// worktree (see [`Self::live_worktree`]).
+    /// Live git truth for "would an acceptance still have something to take
+    /// from this task?" — work committed on the branch after the run settled
+    /// (which `git status` reports as a clean worktree) as well as work the
+    /// agent never committed, new files included. Measured from
+    /// [`own_work_anchor`], the same place the recorded diff stat is taken
+    /// from, so the board's offer and this check cannot disagree. `wt_path` is
+    /// the already-verified live worktree (see [`Self::live_worktree`]).
     async fn has_landable_changes(
         &self,
         task: &crate::db::entities::work_task::Model,
         wt_path: &str,
     ) -> Result<bool, String> {
-        let Some(base) = task.base_sha.clone().or_else(|| task.base_branch.clone()) else {
+        let Some(anchor) = own_work_anchor(wt_path, task).await else {
             return Ok(false);
         };
-        let files = task_git::diff_numstat(wt_path, &base)
+        let files = task_git::diff_numstat_with_untracked(wt_path, &anchor)
             .await
             .map_err(|e| format!("could not read the task's changes: {e}"))?;
         Ok(!files.is_empty())
@@ -2303,6 +4441,14 @@ impl TaskEngine {
     /// review column is one pass of clicks instead of a wait per landing. An
     /// unattended dispatch never queues — the sweep runs its own train.
     ///
+    /// Returns as soon as the generation is LIVE — the CAS committed and the
+    /// agent answered — not when the merge lands, and not when the round's
+    /// prompt goes in either: a resumed session may compact first, and that
+    /// turn is the run's own work (see [`Self::spawn_merge_launch`]). So the
+    /// errors this reports are the ones a caller can act on — a refusal that
+    /// left the task untouched, or a dispatch that could not get an agent up —
+    /// while anything after that reaches the user on the card.
+    ///
     /// `claim` is set only when the pump is spending a merge the user queued
     /// earlier; it binds every write here to that exact parked intent (see
     /// [`QueuedMergeClaim`]). A click passes `None` and always wins.
@@ -2311,9 +4457,10 @@ impl TaskEngine {
         task_id: i32,
         message: Option<String>,
         delete_worktree: bool,
+        instructions: Option<String>,
         auto: bool,
     ) -> Result<MergeDispatch, String> {
-        self.merge_task_inner(task_id, message, delete_worktree, auto, None)
+        self.merge_task_inner(task_id, message, delete_worktree, instructions, auto, None)
             .await
     }
 
@@ -2322,6 +4469,7 @@ impl TaskEngine {
         task_id: i32,
         message: Option<String>,
         delete_worktree: bool,
+        instructions: Option<String>,
         auto: bool,
         claim: Option<&QueuedMergeClaim>,
     ) -> Result<MergeDispatch, String> {
@@ -2331,9 +4479,28 @@ impl TaskEngine {
         if task.status != WorkTaskStatus::Review {
             return Err("task is not in review".to_string());
         }
+        // A pull-request task's work belongs on the pull request's own branch,
+        // where its author and reviewers are looking. Landing it straight onto
+        // the base here would take the pull request's changes in behind their
+        // backs — under a local commit, with the pull request left open and
+        // apparently unmerged. The gate is HERE rather than in the UI because
+        // this path is reachable by id (an old frontend, a direct API call) and
+        // because it covers queueing and the pump's later dispatch too.
+        if task.source_kind.as_deref() == Some(SOURCE_KIND_PR) {
+            return Err(
+                "this task came from a pull request — deliver it back to that pull request \
+                 instead of merging it here"
+                    .to_string(),
+            );
+        }
         let message = message
             .map(|m| m.trim().to_string())
             .filter(|m| !m.is_empty());
+        // Same normalization as the message: whitespace-only is "the user typed
+        // nothing", and nothing is what the prompt must then omit entirely.
+        let instructions = instructions
+            .map(|i| i.trim().to_string())
+            .filter(|i| !i.is_empty());
         let settings = work_task_service::settings_get_effective(&self.db.conn, task.folder_id)
             .await
             .unwrap_or_default();
@@ -2349,6 +4516,33 @@ impl TaskEngine {
         // time, with the base state validated right before the CAS.
         let lock = self.folder_lock(task.folder_id).await;
         let _guard = lock.lock().await;
+
+        // An unattended landing re-checks its eligibility here, under the lock
+        // every content refresh writes under: the sweep read the row before
+        // this lock, and a refresh in between may have cleared the green light
+        // it went by (the content changed under it — #1166). Landing on that
+        // light would merge work no preflight ever ran on.
+        if auto {
+            let fresh = work_task_service::get_model(&self.db.conn, task_id)
+                .await
+                .map_err(|e| e.to_string())?;
+            if fresh.run_seq != task.run_seq || !auto_merge_candidate(&fresh, &settings) {
+                return Err(AUTO_MERGE_NO_LONGER_ELIGIBLE.to_string());
+            }
+            // Someone is still working in the task's session or worktree — a
+            // reply sent from the conversation list, say. Landing now would
+            // take half-done work, and the merge launch would reuse that busy
+            // connection, have its prompt refused, and drop the user's session.
+            // The turn's end re-measures the task and pumps again (and the
+            // reconcile tick catches anything that leaves untouched).
+            if self
+                .manager
+                .has_turn_in_flight_for(fresh.conversation_id, fresh.worktree_folder_id)
+                .await
+            {
+                return Err(AUTO_MERGE_NO_LONGER_ELIGIBLE.to_string());
+            }
+        }
 
         let another_merging =
             work_task_service::list_by_status(&self.db.conn, &[WorkTaskStatus::Merging])
@@ -2379,6 +4573,7 @@ impl TaskEngine {
             let intent = WorkTaskQueuedMerge {
                 message,
                 delete_worktree,
+                instructions,
                 queued_at,
             };
             let queued = work_task_service::queue_merge(
@@ -2398,8 +4593,12 @@ impl TaskEngine {
         }
         let head = resolve_git_head(&root.path).await.map_err(|e| e.to_string())?;
         if head.branch.as_deref() != Some(base_branch.as_str()) {
+            // Not necessarily a branch the user wandered off: a task created
+            // FOR another branch has a base the project folder may never have
+            // been on. So the ask is "put it there", not "put it back".
             return Err(format!(
-                "project folder is on '{}', expected '{base_branch}' — switch back to merge",
+                "project folder is on '{}', expected '{base_branch}' — switch it to \
+                 '{base_branch}' to merge",
                 head.branch.as_deref().unwrap_or("detached HEAD")
             ));
         }
@@ -2418,19 +4617,33 @@ impl TaskEngine {
             .map_err(|e| e.to_string())?;
 
         let state = WorkTaskMergeState {
+            op: WorkTaskMergeOp::Land,
             pre_merge_head,
             message: message.clone().unwrap_or_default(),
             strategy: strategy.clone(),
             delete_worktree,
             auto_message: message.is_none(),
+            instructions: instructions.clone(),
+            ..Default::default()
         };
         // Keep recovery away from the dispatch window (begin → live conn).
-        self.merging.lock().await.insert(task_id);
+        // Losing the claim REFUSES the dispatch rather than continuing without
+        // ownership: the claim and the CAS are independent, so a claim-loser
+        // can still win review→merging, and the claim-holder's own CAS failure
+        // would then release the only registry entry — leaving the winning
+        // generation unowned for exactly the window this registry exists to
+        // cover. The wording keeps `is_benign_merge_race` true, so the
+        // unattended sweep skips this round instead of bannering the card.
+        let Some(in_flight) = self.claim_in_flight(task_id).await else {
+            return Err(
+                "this task is already merging — wait for the operation in flight".to_string(),
+            );
+        };
         // `task.run_seq` was read before the folder lock; the CAS binds the
         // dispatch to that exact generation, so waiting out the lock behind an
         // attempt that failed (and bannered the row) misses instead of
         // redispatching — the auto path's no-retry latch depends on this.
-        let result = match work_task_service::begin_merge(
+        let began = work_task_service::begin_merge(
             &self.db.conn,
             task_id,
             &state,
@@ -2438,8 +4651,13 @@ impl TaskEngine {
             auto,
             claim.map(|c| c.raw.as_str()),
         )
-        .await
-        {
+        .await;
+        // The folder lock covered what it is for: validating the base state and
+        // committing the CAS as one step. The row now reads `merging`, which is
+        // what makes the next dispatch queue, and the launch below wants the
+        // TASK lock — which `remove_worktree_locked` takes before this one.
+        drop(_guard);
+        let result = match began {
             Err(e) => Err(e.to_string()),
             Ok(None) => Err(match claim {
                 Some(_) => missed_queue_cas(claim),
@@ -2447,36 +4665,94 @@ impl TaskEngine {
             }),
             Ok(Some(_run_seq)) => {
                 self.emit_upsert(task_id);
-                // A merge generation never transitions out of `merging` here,
-                // so the sequence sink stays unused — the failure is handled by
-                // the match below (residue cleanup + back to review).
-                let merge_seq = LaunchSeq::default();
-                match self
-                    .launch(
+                // The claim goes with it: from here the launch owns this
+                // generation, and it is the only thing that releases it.
+                return self
+                    .spawn_merge_launch(
                         task_id,
+                        task.folder_id,
                         LaunchMode::Merge {
                             root_path: root.path.clone(),
                             base_branch: base_branch.clone(),
                             work_branch: work_branch.clone(),
                             strategy,
                             message,
+                            instructions,
+                            delete_worktree,
                         },
-                        &merge_seq,
+                        in_flight,
                     )
-                    .await
-                {
-                    Ok(()) => Ok(MergeDispatch::Dispatched),
-                    Err(e) => {
-                        self.back_to_review(task_id, format!("merge dispatch failed: {e}"), None)
-                            .await;
-                        Err(e)
-                    }
-                }
+                    .await;
             }
         };
-        self.merging.lock().await.remove(&task_id);
+        // Only a dispatch that never spent the CAS gets here, so the claim is
+        // still this call's to give back.
+        self.release_in_flight(task_id, in_flight).await;
         self.emit_upsert(task_id);
         result
+    }
+
+    /// Run a merge generation's launch off-thread and wait only for it to
+    /// become LIVE (see [`Self::launch`]'s `dispatched`).
+    ///
+    /// The caller is a click on the merge dialog's button, and everything past
+    /// the live agent — the pre-prompt context compaction above all, which is
+    /// deliberately unbounded in time — is the run's own work, reported on the
+    /// card through `task://changed` like every other round. Awaiting it here
+    /// is what used to hold that dialog open, spinner and all, for the whole
+    /// compaction of a full context window.
+    ///
+    /// Inherits the in-flight claim: it must outlive the WHOLE launch (it is
+    /// what keeps `recover_merging` off a generation that is still setting up),
+    /// so releasing it at dispatch would hand a compacting merge to the very
+    /// recovery pass this registry exists to hold back.
+    ///
+    /// A launch that fails before going live is reported to the caller AND
+    /// settled here, so the two never disagree about a merge that never ran.
+    async fn spawn_merge_launch(
+        self: &Arc<Self>,
+        task_id: i32,
+        folder_id: i32,
+        mode: LaunchMode,
+        in_flight: u64,
+    ) -> Result<MergeDispatch, String> {
+        let (dispatched, live) = DispatchSignal::new();
+        let engine = self.clone();
+        tokio::spawn(async move {
+            // A merge generation never transitions out of `merging` here, so
+            // the sequence sink stays unused — a failure goes back to review
+            // through `back_to_review` below.
+            let merge_seq = LaunchSeq::default();
+            let result = engine
+                .launch(task_id, mode, &merge_seq, Some(&dispatched))
+                .await;
+            if let Err(e) = &result {
+                engine
+                    .back_to_review(task_id, format!("merge dispatch failed: {e}"), None)
+                    .await;
+            }
+            // Settle first, THEN release, and only then let the caller go: a
+            // dispatch that returns an error has to leave a task nothing is
+            // holding — otherwise the click's next act (re-merging, say) races
+            // this generation's own teardown.
+            engine.release_in_flight(task_id, in_flight).await;
+            // Whatever happened, the caller stops waiting: `fire` is a no-op
+            // once the launch has already reported itself live, so a failure
+            // AFTER the dispatch (the round's own prompt refused, say) is left
+            // to the card rather than replayed into a dialog that has closed.
+            dispatched.fire(result.clone());
+            engine.emit_upsert(task_id);
+            if result.is_err() {
+                // The folder's merge slot never really got spent — let the next
+                // queued landing (or the auto-merge train) have it.
+                engine.spawn_merge_pump(folder_id);
+            }
+        });
+        // A sender dropped without firing means the launch returned early
+        // without dispatching (a cancel gate, a lost CAS): the row is still
+        // `merging` and nobody failed it, exactly as before this ran off-thread
+        // — `recover_merging` settles it from git truth on the next tick.
+        live.await.unwrap_or(Ok(())).map(|()| MergeDispatch::Dispatched)
     }
 
     /// Settle a finished merge generation from git truth: landed ⟺ the base
@@ -2516,8 +4792,11 @@ impl TaskEngine {
                     .unwrap_or(false);
                 if landed {
                     self.emit_upsert(task_id);
+                    // Only on the transition — `merge_landed` is a CAS, so a
+                    // second settle of the same generation posts nothing.
+                    self.spawn_forge_writeback(task_id, WritebackOutcome::Merged(commit));
                     if state.delete_worktree {
-                        self.remove_worktree_locked(task_id).await;
+                        self.remove_worktree_locked(task_id, None).await;
                     }
                 }
             }
@@ -2591,11 +4870,33 @@ impl TaskEngine {
         let _ = work_task_service::merge_back_to_review(
             &self.db.conn,
             task_id,
+            None,
             Some(error),
             conflict_files,
         )
         .await;
         self.emit_upsert(task_id);
+    }
+
+    /// merging → review for a DELIVERY, bound to the generation the caller is
+    /// acting on. Crash recovery can spend seconds at the forge before it
+    /// decides, and by then the row may already belong to a delivery someone
+    /// started since — `status = merging` alone would let the stale pass bounce
+    /// the live one.
+    async fn bounce_delivery(
+        &self,
+        task: &crate::db::entities::work_task::Model,
+        error: String,
+    ) {
+        let _ = work_task_service::merge_back_to_review(
+            &self.db.conn,
+            task.id,
+            Some(task.run_seq),
+            Some(error),
+            None,
+        )
+        .await;
+        self.emit_upsert(task.id);
     }
 
     /// Resolve (project folder, worktree folder, base branch, work branch) or
@@ -2633,6 +4934,1467 @@ impl TaskEngine {
             .clone()
             .ok_or_else(|| "task has no recorded work branch".to_string())?;
         Ok((root, wt, base_branch, work_branch))
+    }
+
+    // ── in-flight ownership (merge / delivery) ──────────────────────────────
+
+    /// Claim in-flight ownership of a task, so the reconcile sweep leaves its
+    /// `merging` row alone. `None` when another operation in this process
+    /// already holds it.
+    async fn claim_in_flight(&self, task_id: i32) -> Option<u64> {
+        let token = self
+            .in_flight_token
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        match self.merging.lock().await.entry(task_id) {
+            std::collections::hash_map::Entry::Occupied(_) => None,
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(token);
+                Some(token)
+            }
+        }
+    }
+
+    /// Release a claim — and ONLY our own. Comparing the token is what keeps a
+    /// losing attempt from freeing the winner's task.
+    async fn release_in_flight(&self, task_id: i32, token: u64) {
+        let mut held = self.merging.lock().await;
+        if held.get(&task_id) == Some(&token) {
+            held.remove(&task_id);
+        }
+    }
+
+    // ── deliver to the forge (push + pull request) ──────────────────────────
+
+    /// Accept a reviewed task by DELIVERING it: push the work branch to the
+    /// repository the work belongs in, then adopt or open the pull request
+    /// that carries it — or push into the one it already has. What it is
+    /// delivered FROM decides where it goes (see [`DeliverySource`]):
+    ///
+    /// - an ISSUE's task publishes its own branch in the issue's repository and
+    ///   opens a pull request that closes the issue;
+    /// - a PULL REQUEST's task pushes back onto that pull request's head
+    ///   branch, in the repository it lives in (a fork, when it came from one);
+    /// - a task WITHOUT forge provenance publishes its own branch in the
+    ///   repository its project's `origin` names — when that lives on a forge
+    ///   codeg speaks — as the account that speaks for that host.
+    ///
+    /// The third way to `done`, alongside a local merge and an acceptance with
+    /// nothing to land — unless `mark_done` is off. Then the delivery settles
+    /// back to review with its pull request recorded and the worktree kept,
+    /// and the task's next delivery pushes INTO that pull request (see
+    /// [`PullTarget`]) instead of opening another.
+    ///
+    /// Unlike a merge this needs no agent — there are no conflicts to resolve,
+    /// just a push and two REST calls — so the engine runs it itself and
+    /// settles from the forge's answer instead of from an agent's word.
+    ///
+    /// Every precondition is checked BEFORE the review→merging CAS, so a
+    /// refused delivery leaves the task exactly as it was. After the CAS, any
+    /// failure returns the task to review with the reason on the card; every
+    /// step is idempotent, so the retry is just another click.
+    ///
+    /// `delete_worktree` is the same offer the other two acceptances make, and
+    /// it rides on the delivery rather than gating it — see
+    /// [`Self::remove_delivered_worktree`]. It only ever applies to a delivery
+    /// that finishes the task: one that keeps it in review keeps the checkout
+    /// its next round runs in, whatever the flag says.
+    pub async fn deliver_pr(
+        self: &Arc<Self>,
+        task_id: i32,
+        pr_title: Option<String>,
+        draft: bool,
+        delete_worktree: bool,
+        mark_done: bool,
+    ) -> Result<String, String> {
+        self.deliver_pr_closing(
+            task_id,
+            pr_title,
+            draft,
+            delete_worktree,
+            mark_done,
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// [`Self::deliver_pr`], saying which issues the pull request closes —
+    /// for a task made from several related issues only (see
+    /// [`closing_list`]); `None` keeps the list already fixed for the task,
+    /// or closes every issue on its first delivery.
+    ///
+    /// `commit_message` is the user's answer to a worktree the agent left
+    /// uncommitted: with one, those files are committed onto the task branch
+    /// (under the delivery's claim, after every read-only gate passed) and
+    /// delivered with the rest; without one, a dirty worktree is refused as
+    /// before — so a client that never showed the user those files cannot
+    /// publish them.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn deliver_pr_closing(
+        self: &Arc<Self>,
+        task_id: i32,
+        pr_title: Option<String>,
+        draft: bool,
+        delete_worktree: bool,
+        mark_done: bool,
+        closes: Option<Vec<i64>>,
+        commit_message: Option<String>,
+    ) -> Result<String, String> {
+        let task = work_task_service::get_model(&self.db.conn, task_id)
+            .await
+            .map_err(|e| e.to_string())?;
+        if task.status != WorkTaskStatus::Review {
+            return Err("task is not in review".to_string());
+        }
+        // The gate lives HERE, not in the UI: this command is reachable by id
+        // from an old frontend or a direct web API call.
+        let source = self.delivery_source(&task).await?;
+        let (source, pin_source_meta) = closing_list(source, closes)?;
+
+        let (_root, wt, base_branch, work_branch) = self.merge_coordinates(&task).await?;
+        // Whether the push goes INTO a pull request that already exists, and
+        // which one. A pull request's task pushes back to the branch that pull
+        // request tracks, so its author sees the work in the review they
+        // opened rather than in a second one. An issue's or a local task does
+        // the same once an earlier delivery of it opened one and it stayed in
+        // review. Anything else publishes its own branch and opens (or adopts,
+        // by that branch) the pull request that carries it.
+        let into = match &source {
+            DeliverySource::Pull(meta) => {
+                let head_ref = meta
+                    .head_ref
+                    .clone()
+                    .filter(|r| !r.trim().is_empty())
+                    .ok_or_else(|| {
+                        "this pull request task does not know which branch to push back to — \
+                         trigger it again"
+                            .to_string()
+                    })?;
+                // The push lands in the recorded HEAD repository — the fork,
+                // when the pull request comes from one. Resolvability is
+                // re-checked here, before the CAS, so a row whose fork codeg
+                // cannot name (written by an older build, or hydrated while the
+                // fork was already gone) is refused with the task left exactly
+                // as it was.
+                pull_push_repo(meta)?;
+                Some(PullTarget::own_pull_request(meta, &head_ref))
+            }
+            _ => source
+                .recorded_pull()
+                .map(|number| PullTarget::recorded(&source, number, &work_branch, &base_branch)),
+        };
+        let from_pull = matches!(source, DeliverySource::Pull(_));
+        let remote_branch = into
+            .as_ref()
+            .map_or_else(|| work_branch.clone(), |target| target.head_ref.clone());
+        // A FAILING clean check, deliberately not `worktree_holds_uncommitted`:
+        // that one reads a git error as "clean" because its caller (worktree
+        // removal) is tolerant of a worktree already off disk. Publishing a
+        // branch on the strength of a question git refused to answer is a very
+        // different bet.
+        //
+        // A dirty worktree goes ahead only with a commit message: that is the
+        // user, having seen the files, saying "commit these too". The commit
+        // itself waits until every read-only gate below has passed and the
+        // claim is held, so a refused delivery still leaves the worktree
+        // exactly as it was.
+        let commit_message = commit_message
+            .map(|m| m.trim().to_string())
+            .filter(|m| !m.is_empty());
+        let commit_leftovers = match task_git::has_changes(&wt.path).await {
+            Ok(false) => None,
+            Ok(true) => match commit_message {
+                Some(message) => Some(message),
+                None => {
+                    return Err("the task worktree still has uncommitted changes — commit them \
+                                from the delivery dialog, or send it back for one more round so \
+                                the agent commits them, then deliver"
+                        .to_string())
+                }
+            },
+            Err(e) => return Err(format!("could not read the task worktree's state: {e}")),
+        };
+        // GitHub answers an empty pull request with a 422, and a push back that
+        // carries nothing leaves the pull request untouched while the task
+        // records a delivery. Refuse before the CAS and point at the button that
+        // actually applies — the likeliest task here is a review-only one,
+        // whose worktree holds the pull request and nothing else.
+        //
+        // Not asked of a delivery INTO the pull request an earlier round
+        // opened: that pull request already carries the work, and finishing
+        // the task on it is exactly what a delivery with nothing new is for —
+        // including once it merged and the local base took the same commits
+        // in, which leaves nothing "landable" here at all. Whether it still
+        // holds the work is what the settle checks.
+        let into_recorded = into.is_some() && !from_pull;
+        if !into_recorded && !self.has_landable_changes(&task, &wt.path).await? {
+            return Err(if from_pull {
+                "this task added nothing to the pull request — complete it instead of pushing back"
+            } else {
+                "this task has nothing to deliver — complete it instead of opening a pull request"
+            }
+            .to_string());
+        }
+        // The pull request is diffed against the base branch AS THE REMOTE HAS
+        // IT, not against the local one the task branched from. If those have
+        // drifted apart — unpushed commits on the local base — the pull request
+        // would carry work the review never showed, and merging it would land
+        // that work too.
+        //
+        // This gate FAILS CLOSED. Being unable to read the remote base is not
+        // reassurance: a base branch that does not exist there fails the same
+        // way, and the push that follows would still publish the branch (it is
+        // only the pull request that needs the base to exist), so nothing
+        // downstream re-asks this question. Refusing costs a retry; guessing
+        // costs published work nobody reviewed.
+        let ctx = source.ctx(&self.db.conn, &self.data_dir);
+        if let Some(base_sha) = task.base_sha.as_deref() {
+            let Some(remote_tip) = self
+                .forge
+                .remote_base_tip(&ctx, &wt.path, &base_branch)
+                .await
+            else {
+                return Err(format!(
+                    "could not read '{base_branch}' from the source repository, so there is no \
+                     way to tell whether this task's starting point is published — check that \
+                     the branch exists there and that you are online, then deliver"
+                ));
+            };
+            if !task_git::is_ancestor(&wt.path, base_sha, &remote_tip)
+                .await
+                .unwrap_or(false)
+            {
+                return Err(format!(
+                    "'{base_branch}' has commits here that are not on the remote yet, so the \
+                     pull request would carry more than this task's own work — push \
+                     '{base_branch}' first, then deliver"
+                ));
+            }
+        }
+
+        // Ownership BEFORE the CAS and held across the whole delivery — not
+        // just the dispatch, the way a merge does it. A merge hands off to its
+        // agent session and `recover_merging` then sees a live connection; a
+        // delivery has no session at all, so this claim is the only thing
+        // telling the reconcile tick that the row's `merging` is alive and not
+        // orphaned. It doubles as mutual exclusion: two clients clicking
+        // deliver on the same task must not both run the push — nor both
+        // commit the leftovers below.
+        let Some(token) = self.claim_in_flight(task_id).await else {
+            return Err(
+                "this task is already merging — wait for the operation in flight".to_string(),
+            );
+        };
+        let expected_head = match self
+            .commit_leftovers_and_resolve(task_id, &wt.path, &work_branch, commit_leftovers)
+            .await
+        {
+            Ok(head) => head,
+            Err(e) => {
+                self.release_in_flight(task_id, token).await;
+                return Err(e);
+            }
+        };
+        let title = pr_title
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| task.title.clone());
+
+        let state = WorkTaskMergeState {
+            op: WorkTaskMergeOp::DeliverPr,
+            remote_branch: Some(remote_branch.clone()),
+            expected_head: Some(expected_head.clone()),
+            pr_title: Some(title.clone()),
+            draft,
+            delete_worktree: delete_worktree && mark_done,
+            keep_in_review: !mark_done,
+            target: source.local_target().cloned(),
+            // A pull-request task's number is its own identity, which recovery
+            // already reads off the row; recorded only for a push into the
+            // pull request an earlier delivery opened.
+            pull_number: if into_recorded {
+                into.as_ref().map(|target| target.number)
+            } else {
+                None
+            },
+            ..Default::default()
+        };
+
+        let outcome = self
+            .deliver_guarded(
+                &task,
+                &source,
+                into.as_ref(),
+                &wt.path,
+                &base_branch,
+                &work_branch,
+                &state,
+                pin_source_meta.as_deref(),
+            )
+            .await;
+        // Only after the delivery SUCCEEDED and finished the task: one that
+        // bounced back to review still needs its checkout for the retry, and
+        // one kept in review for its next round. Still inside the claim, so a
+        // second click cannot start a delivery on a task whose worktree is
+        // half removed. `expected_head` is the OID the push published, and the
+        // cleanup is allowed to destroy the branch only while it is still that.
+        if outcome.is_ok() && state.delete_worktree {
+            self.remove_delivered_worktree(task_id, task.folder_id, &expected_head)
+                .await;
+        }
+        self.release_in_flight(task_id, token).await;
+        self.emit_upsert(task_id);
+        outcome
+    }
+
+    /// The OID a delivery publishes — after committing what the agent left
+    /// uncommitted, when the user asked for that (`commit` is the message).
+    /// Runs under the delivery's claim; the row is read again first, because
+    /// the status gate above was read before the claim and a run or a merge
+    /// generation started since owns the worktree now. A commit that git
+    /// refuses (a hook, say) is the delivery's refusal, worded with git's own
+    /// reason — nothing has moved yet.
+    async fn commit_leftovers_and_resolve(
+        &self,
+        task_id: i32,
+        wt_path: &str,
+        work_branch: &str,
+        commit: Option<String>,
+    ) -> Result<String, String> {
+        if let Some(message) = commit {
+            let task = work_task_service::get_model(&self.db.conn, task_id)
+                .await
+                .map_err(|e| e.to_string())?;
+            if task.status != WorkTaskStatus::Review {
+                return Err("task is not in review".to_string());
+            }
+            // `commit_all` commits onto whatever is checked out, while the
+            // push publishes `work_branch` — a checkout switched to another
+            // branch (or detached) would take the leftovers somewhere the
+            // delivery never looks, and the task would finish without them.
+            let attached = task_git::head_is_branch(wt_path, work_branch)
+                .await
+                .map_err(|e| format!("could not read the task worktree's state: {e}"))?;
+            if !attached {
+                return Err(format!(
+                    "the task worktree is not on its branch '{work_branch}', so its uncommitted \
+                     changes would not be part of the delivery — check out '{work_branch}' there, \
+                     then deliver"
+                ));
+            }
+            task_git::commit_all(&self.db.conn, wt_path, &message)
+                .await
+                .map_err(|e| match e.detail.as_deref().filter(|d| !d.is_empty()) {
+                    // git's own words — a hook's complaint is the reason.
+                    Some(detail) => {
+                        format!("could not commit the worktree's changes: {e}: {detail}")
+                    }
+                    None => format!("could not commit the worktree's changes: {e}"),
+                })?;
+        }
+        task_git::rev_parse(wt_path, work_branch)
+            .await
+            .map_err(|e| format!("could not resolve the task branch: {e}"))
+    }
+
+    /// What `task` is delivered from — the gate for delivering it at all. A
+    /// task triggered from a forge issue or pull request carries its own
+    /// coordinates; one without provenance delivers to its project's `origin`,
+    /// pinned on the row from its first delivery on (see [`DeliveryTarget`]).
+    async fn delivery_source(
+        &self,
+        task: &crate::db::entities::work_task::Model,
+    ) -> Result<DeliverySource, String> {
+        let forge_meta = || {
+            task.source_meta
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<ForgeSourceMeta>(s).ok())
+                .ok_or_else(|| "the task's source information is unreadable".to_string())
+        };
+        match task.source_kind.as_deref() {
+            Some(SOURCE_KIND_ISSUE) => Ok(DeliverySource::Issue(forge_meta()?)),
+            Some(SOURCE_KIND_PR) => Ok(DeliverySource::Pull(forge_meta()?)),
+            None => {
+                // Pinned once a delivery reached a pull request. An unreadable
+                // record is no pin at all: the checkout answers again, and the
+                // pull request is found by its branch, as on a first delivery.
+                if let Some(record) = task
+                    .delivery
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str::<WorkTaskDelivery>(s).ok())
+                {
+                    return Ok(DeliverySource::Local {
+                        target: record.target,
+                        recorded: Some(record.pr_number),
+                    });
+                }
+                let project = get_folder_core(&self.db, task.folder_id)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let target = self
+                    .forge
+                    .local_target(&self.db.conn, &project.path)
+                    .await?;
+                Ok(DeliverySource::Local {
+                    target,
+                    recorded: None,
+                })
+            }
+            Some(other) => Err(format!("a task from '{other}' cannot be delivered")),
+        }
+    }
+
+    /// Take a delivered task's worktree with it, the way the merge and the
+    /// no-merge acceptances do. Runs AFTER the settle, on a task that is
+    /// already `done`, and deliberately returns nothing: the delivery is what
+    /// the button promised and it has happened — a removal that fails flags
+    /// `cleanup_state` and stays retryable from the card, which must not
+    /// re-read as "the push failed".
+    ///
+    /// TWO probes, because each is blind to exactly what the other sees — the
+    /// pairing `complete_task` documents, aimed at what a DELIVERY publishes
+    /// rather than at what a merge lands:
+    ///
+    /// - `deliver_pr` refused (or committed) a dirty worktree before the CAS,
+    ///   but that was before the push and the REST calls. `worktree remove
+    ///   --force` drops whatever appeared since without a word, and a file that
+    ///   was never committed is on no forge at all;
+    /// - a COMMIT made in that same window leaves `git status` spotless and is
+    ///   just as unpublished — the delivery pushed `published_head`, not it. So
+    ///   the branch tip is checked against the OID that actually reached the
+    ///   forge, which is the only thing that ever made `branch -D` safe here.
+    ///   `has_landable_changes` cannot serve as that probe: it is true of every
+    ///   delivery by construction.
+    ///
+    /// Either probe keeps the worktree, says why, and leaves the retry on the
+    /// card. The tip then rides along to the removal itself, so the read above
+    /// and the delete cannot straddle a ref that moves in between.
+    ///
+    /// Takes the folder git lock, so no caller may already hold it.
+    async fn remove_delivered_worktree(
+        self: &Arc<Self>,
+        task_id: i32,
+        folder_id: i32,
+        published_head: &str,
+    ) {
+        let lock = self.folder_lock(folder_id).await;
+        let _guard = lock.lock().await;
+        let Ok(task) = work_task_service::get_model(&self.db.conn, task_id).await else {
+            return;
+        };
+        if let Some(reason) = self.delivered_worktree_keep_reason(&task, published_head).await {
+            let _ =
+                work_task_service::set_cleanup_state(&self.db.conn, task_id, true, Some(reason))
+                    .await;
+            self.emit_upsert(task_id);
+            return;
+        }
+        // Broadcast omitted: the removal announces its own outcome.
+        self.remove_worktree_locked(task_id, Some(published_head)).await;
+    }
+
+    /// Why a delivered task's checkout must outlive the cleanup its user asked
+    /// for, or `None` when nothing objects. See
+    /// [`Self::remove_delivered_worktree`] for what the two answers protect.
+    ///
+    /// The tip half FAILS CLOSED: a branch git declines to resolve is not a
+    /// branch anyone may `-D`. The `None`s above it are the opposite case and
+    /// deliberately so — no worktree recorded, no folder row, no work branch
+    /// means there is nothing here for the removal to destroy, and it already
+    /// handles each of those itself.
+    async fn delivered_worktree_keep_reason(
+        &self,
+        task: &crate::db::entities::work_task::Model,
+        published_head: &str,
+    ) -> Option<String> {
+        let wt_id = task.worktree_folder_id?;
+        let wt = get_folder_core(&self.db, wt_id).await.ok()?;
+        if path_holds_uncommitted(&wt.path).await {
+            return Some(worktree_kept(RETRY_THE_CLEANUP));
+        }
+        let branch = task.work_branch.as_deref()?;
+        match task_git::rev_parse(&wt.path, branch).await {
+            Ok(tip) if tip.eq_ignore_ascii_case(published_head) => None,
+            Ok(_) => Some(format!(
+                "the worktree was kept: '{branch}' moved on after the delivery, so it holds \
+                 commits that were never pushed. Deliver again to publish them, or remove the \
+                 worktree by hand once they are safe."
+            )),
+            Err(e) => Some(format!(
+                "the worktree was kept: '{branch}' could not be read, so there is no telling \
+                 whether it still holds only the delivered work ({e})"
+            )),
+        }
+    }
+
+    /// `pin_source_meta` is the task's snapshot with the closing list its
+    /// first delivery fixes (see [`closing_list`]), written in the same
+    /// transaction the delivery begins in — so the list is on the row before
+    /// anything is published, and never after a refusal that published nothing.
+    #[allow(clippy::too_many_arguments)]
+    async fn deliver_guarded(
+        self: &Arc<Self>,
+        task: &crate::db::entities::work_task::Model,
+        source: &DeliverySource,
+        into: Option<&PullTarget>,
+        wt_path: &str,
+        base_branch: &str,
+        work_branch: &str,
+        state: &WorkTaskMergeState,
+        pin_source_meta: Option<&str>,
+    ) -> Result<String, String> {
+        let task_id = task.id;
+        let run_seq = match work_task_service::begin_delivery_recording(
+            &self.db.conn,
+            task_id,
+            state,
+            task.run_seq,
+            pin_source_meta.map(|meta| (task.source_meta.as_deref(), meta)),
+        )
+        .await
+        {
+                Err(e) => return Err(e.to_string()),
+                Ok(None) => return Err("task left review before the delivery began".to_string()),
+                Ok(Some(seq)) => seq,
+            };
+        self.emit_upsert(task_id);
+
+        let ctx = source.ctx(&self.db.conn, &self.data_dir);
+        let expected_head = state.expected_head.clone().unwrap_or_default();
+        let title = state.pr_title.clone().unwrap_or_else(|| task.title.clone());
+        let open = || {
+            self.push_and_open(
+                &ctx,
+                wt_path,
+                base_branch,
+                work_branch,
+                &expected_head,
+                &title,
+                state.draft,
+                source.pull_request_body(task_id),
+            )
+        };
+        let attempt = match into {
+            None => open().await,
+            Some(target) => match self
+                .push_into_pull(task_id, run_seq, &ctx, target, wt_path, &expected_head)
+                .await
+            {
+                Ok(IntoPull::Delivered(pr)) => Ok(pr),
+                Ok(IntoPull::NoLongerOpen(pr)) => match source {
+                    DeliverySource::Pull(_) => Err(format!(
+                        "{} #{} is no longer open — reopen it, then deliver",
+                        target.provider.change_noun(),
+                        pr.number
+                    )),
+                    // The pull request an earlier round opened was closed or
+                    // merged since, and this round carries commits it does not
+                    // have. They go in a new one — exactly what a first
+                    // delivery of this branch would do, and with the same
+                    // guard against an empty one the first delivery had.
+                    _ => match self.has_landable_changes(task, wt_path).await {
+                        Ok(true) => open().await,
+                        Ok(false) => Err(format!(
+                            "{} #{} is no longer open, and this task has nothing of its own to \
+                             put in a new one — complete it instead",
+                            target.provider.change_noun(),
+                            pr.number
+                        )),
+                        Err(e) => Err(e),
+                    },
+                },
+                Err(e) => Err(e),
+            },
+        };
+        match attempt {
+            Ok(pr) => match self
+                .settle_delivery(task_id, source, run_seq, &pr, state.keep_in_review)
+                .await
+            {
+                Ok(url) => Ok(url),
+                Err(e) => {
+                    self.back_to_review(task_id, e.clone(), None).await;
+                    Err(e)
+                }
+            },
+            Err(e) => {
+                self.back_to_review(task_id, e.clone(), None).await;
+                Err(e)
+            }
+        }
+    }
+
+    /// Publish the task's own branch and adopt or open the pull request that
+    /// carries it, in `ctx`'s repository — an issue's task's first delivery,
+    /// a local task's, and either one's once the pull request an earlier
+    /// round opened is gone.
+    #[allow(clippy::too_many_arguments)]
+    async fn push_and_open(
+        &self,
+        ctx: &DeliveryCtx<'_>,
+        wt_path: &str,
+        base_branch: &str,
+        work_branch: &str,
+        expected_head: &str,
+        title: &str,
+        draft: bool,
+        body: String,
+    ) -> Result<ForgePr, String> {
+        // Fast-forward push of the same commits is a no-op, so a retry after a
+        // later step failed costs nothing and changes nothing. What is pushed
+        // is the snapshot, not the branch (see `push_refspec`).
+        self.forge
+            .push_branch(ctx, wt_path, ctx.owner_repo, expected_head, work_branch)
+            .await
+            .map_err(|e| format!("could not push the task branch: {e}"))?;
+
+        // Look before creating: the previous attempt may have opened the pull
+        // request and died on the way to settling it.
+        let existing = self
+            .forge
+            .find_pulls(ctx, work_branch)
+            .await
+            .map_err(|e| format!("could not check for an existing pull request: {e}"))?;
+        match adopt_pull_request(
+            existing,
+            expected_head,
+            work_branch,
+            base_branch,
+            ctx.owner_repo,
+        ) {
+            PrAdoption::Merged(pr) | PrAdoption::Open(pr) => Ok(pr),
+            PrAdoption::ClosedUnmerged(pr) => Err(format!(
+                "pull request #{} for this branch was closed without merging — reopen it, or \
+                 send the task back for another round to deliver a new commit",
+                pr.number
+            )),
+            // Someone moved the branch out from under us. Creating is not an
+            // option (GitHub allows one open pull request per head/base pair),
+            // and adopting would settle this task against a commit it never
+            // produced.
+            PrAdoption::StaleHead(pr) => Err(format!(
+                "pull request #{} already covers this branch but points at a different commit — \
+                 someone else pushed to it. Check that branch before delivering again",
+                pr.number
+            )),
+            PrAdoption::NoMatch => {
+                let pr = self
+                    .forge
+                    .create_pull(
+                        ctx,
+                        &NewPullRequest {
+                            title,
+                            head: work_branch,
+                            base: base_branch,
+                            body: &body,
+                            draft,
+                        },
+                    )
+                    .await
+                    .map_err(|e| format!("could not open the pull request: {e}"))?;
+                // The push published exactly `expected_head`, so a pull request
+                // opened at anything else means someone pushed to the branch in
+                // the instant between — work this task must not claim. A forge
+                // that reports no head yet is taken at the push's word.
+                if !pr.head_sha.trim().is_empty()
+                    && !pr.head_sha.eq_ignore_ascii_case(expected_head)
+                {
+                    return Err(format!(
+                        "pull request #{} was opened, but at a commit this task did not push — \
+                         someone pushed to '{work_branch}' meanwhile. Check that branch before \
+                         delivering again",
+                        pr.number
+                    ));
+                }
+                Ok(pr)
+            }
+        }
+    }
+
+    /// Deliver INTO a pull request that exists — a pull-request task's own, or
+    /// the one an earlier delivery of an issue's or a local task opened: push
+    /// the work onto its head branch. Nothing is created.
+    ///
+    /// The push is fast-forward only (as everywhere here), and that is what
+    /// makes the check afterwards a lookup rather than a race: a push that
+    /// succeeded proves our commits are on that branch, so the pull request is
+    /// re-read only to confirm it is still the open pull request for it. Its
+    /// head OID is deliberately NOT required to equal ours — someone pushing
+    /// on top of our work a second later has not undone the delivery, the
+    /// forge may still be catching up with our own push, and demanding
+    /// equality would bounce a task whose work is safely published.
+    ///
+    /// A pull request that is no longer open before anything was pushed comes
+    /// back as [`IntoPull::NoLongerOpen`], with nothing published: whether
+    /// that refuses the delivery or opens a new pull request is the caller's
+    /// to say. One that already sits at our commit settles without a push —
+    /// a retry whose push landed before something interrupted the settle, or
+    /// a task finished on the pull request after it merged.
+    ///
+    /// A push into a pull-request task's own pull request also records what it
+    /// learned: the head the pull request had right before it — under ours, as
+    /// the push was a fast-forward — as the snapshot's `pushed_onto`, and what
+    /// the push added on top of that head over the row's counters. That is
+    /// exact where the counters a run's settle took can only measure from what
+    /// is local: a pull request force-pushed while the task was out, or grown
+    /// commits of its author's, leaves no local commit that says where it ends
+    /// — until this one. It is recorded as soon as the push lands, not at the
+    /// settle: a settle that fails after it leaves a retry that pushes nothing,
+    /// and the comment that retry posts should still say what was pushed; the
+    /// counters measured before that retry (the boot pass) measure from
+    /// `pushed_onto` too. `run_seq` is the delivery's own.
+    async fn push_into_pull(
+        &self,
+        task_id: i32,
+        run_seq: i32,
+        ctx: &DeliveryCtx<'_>,
+        target: &PullTarget,
+        wt_path: &str,
+        expected_head: &str,
+    ) -> Result<IntoPull, String> {
+        let noun = target.provider.change_noun();
+        // Read BEFORE pushing: a pull request that is already closed or merged
+        // must not receive commits nobody is going to look at.
+        let before = self
+            .forge
+            .get_pull(ctx, target.number)
+            .await
+            .map_err(|e| format!("could not read {noun} #{}: {e}", target.number))?;
+        self.check_pull_target(&before, target)?;
+
+        let mut pushed = !before.head_sha.eq_ignore_ascii_case(expected_head);
+        // Merged at a different head: when that merge carries this task's
+        // commit — its author built on the work and merged that, after an
+        // earlier round of this task pushed it — the delivery already happened,
+        // and there is nothing to push. A merge without it is a pull request
+        // gone for this work, like a closed one.
+        if pushed
+            && before.merged
+            && self
+                .merge_carries_our_work(
+                    task_id,
+                    ctx,
+                    wt_path,
+                    target.number,
+                    expected_head,
+                    &before.head_sha,
+                )
+                .await
+        {
+            pushed = false;
+        }
+        let after = if !pushed {
+            // The pull request already sits at — or merged past — the commit
+            // this task would push: a retry of a delivery whose push landed
+            // before something interrupted the settle, or a task finished on a
+            // pull request it already filled. There is nothing left to
+            // publish, so nothing is pushed — which is also what lets such a
+            // retry finish on a fork the account cannot write to. A
+            // pull-request task with nothing of its own never reaches this
+            // branch; `has_landable_changes` refuses it in favour of
+            // completing. It is why the closed/merged refusal below does not
+            // run here, too: a merged pull request that carries this task's
+            // commit IS the delivery, and `settle_pull_target` says so.
+            before.clone()
+        } else {
+            if before.merged || before.state != "open" {
+                return Ok(IntoPull::NoLongerOpen(before));
+            }
+            let remote_branch = &target.head_ref;
+            // The snapshot, not the branch (see `push_refspec`).
+            self.forge
+                .push_branch(
+                    ctx,
+                    wt_path,
+                    &target.push_repo,
+                    expected_head,
+                    remote_branch,
+                )
+                .await
+                .map_err(|e| {
+                    let own_repo = crate::forge::same_repo(&target.push_repo, &target.owner_repo);
+                    let where_ = if own_repo {
+                        format!("could not push back to '{remote_branch}'")
+                    } else {
+                        format!(
+                            "could not push back to '{remote_branch}' on {}",
+                            target.push_repo
+                        )
+                    };
+                    // A hint is only added when git actually said something we
+                    // recognise. The fork case used to carry the permission
+                    // hint unconditionally, which reads as a finding rather
+                    // than the guess it was: a push refused for being out of
+                    // date came back advising the reader to go change a
+                    // setting on the pull request that was already correct.
+                    match classify_push_refusal(&e) {
+                        PushRefusal::Permission if !own_repo => format!(
+                            "{where_}: {e} — pushing to a fork needs its author to allow edits \
+                             from maintainers on the {noun}"
+                        ),
+                        PushRefusal::BranchMoved => format!(
+                            "{where_}: {e} — that branch has commits this task does not have, so \
+                             the push is not a fast-forward. Bring them into the task's branch, \
+                             then deliver again"
+                        ),
+                        _ => format!("{where_}: {e}"),
+                    }
+                })?;
+
+            if target.record_push {
+                if let Some(added) = stats_between(wt_path, &before.head_sha, expected_head).await {
+                    self.record_pushed_onto(task_id, run_seq, &before.head_sha, added)
+                        .await;
+                }
+            }
+
+            // Re-read so the settled row links the pull request as it is now
+            // (and so a pull request closed during the push is not reported
+            // as open).
+            self.forge.get_pull(ctx, target.number).await.map_err(|e| {
+                format!(
+                    "the work was pushed to '{remote_branch}', but {noun} #{} could not be read \
+                     back: {e}",
+                    target.number
+                )
+            })?
+        };
+        self.settle_pull_target(task_id, ctx, wt_path, &after, target, expected_head, pushed)
+            .await?;
+        Ok(IntoPull::Delivered(after))
+    }
+
+    /// Record, on a pull-request task, the head its push went onto and what
+    /// the push added (see [`Self::push_into_pull`]). Reads the provenance
+    /// snapshot as the row has it NOW rather than taking the one the delivery
+    /// started from — this delivery holds the task, so nothing else writes it
+    /// meanwhile, and the CAS binds the write to this delivery's generation.
+    /// Best-effort: a counter that cannot be written leaves the old one, which
+    /// is still a measurement, and the delivery itself is unaffected.
+    async fn record_pushed_onto(
+        &self,
+        task_id: i32,
+        run_seq: i32,
+        pushed_onto: &str,
+        added: (i32, i32, i32),
+    ) {
+        let recorded = async {
+            let task = work_task_service::get_model(&self.db.conn, task_id)
+                .await
+                .map_err(|e| e.to_string())?;
+            let mut meta = task
+                .source_meta
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<ForgeSourceMeta>(s).ok())
+                .ok_or_else(|| "the task's source information is unreadable".to_string())?;
+            meta.pushed_onto = Some(pushed_onto.to_string());
+            let meta_json = serde_json::to_string(&meta).map_err(|e| e.to_string())?;
+            work_task_service::record_push_back(&self.db.conn, task_id, run_seq, added, &meta_json)
+                .await
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        }
+        .await;
+        if let Err(e) = recorded {
+            tracing::warn!("[work_task] task {task_id}: could not record what the push added: {e}");
+        }
+    }
+
+    /// The pull request a push INTO it may push into: same repository, same
+    /// head branch as the delivery expects. Anything else means the pull
+    /// request was retargeted under us, and the task goes back to a human.
+    fn check_pull_target(&self, pr: &ForgePr, target: &PullTarget) -> Result<(), String> {
+        let noun = target.provider.change_noun();
+        // Compared against the head repository the target RECORDS (the fork,
+        // when the pull request comes from one), not against the source
+        // repository: a fork's pull request legitimately lives elsewhere, and
+        // the thing being caught here is the head moving since the task last
+        // looked.
+        if !crate::forge::same_repo(&pr.head_repo, &target.head_repo) {
+            return Err(format!(
+                "{noun} #{} now comes from {}, not {} — check it before delivering again",
+                target.number, pr.head_repo, target.head_repo
+            ));
+        }
+        if pr.head_ref != target.head_ref {
+            return Err(format!(
+                "{noun} #{} now tracks branch '{}', not '{}' — check it before delivering again",
+                target.number, pr.head_ref, target.head_ref
+            ));
+        }
+        Ok(())
+    }
+
+    /// The pull request a push INTO it may SETTLE against — a stricter
+    /// question than where it may push, and asked after any pushing is behind
+    /// us.
+    ///
+    /// Everything [`Self::check_pull_target`] asks, plus two things that can
+    /// change underneath a push and would otherwise be recorded as a delivery:
+    ///
+    /// - the BASE must still be the one the task was reviewed against. A
+    ///   retargeted pull request shows a different diff than the one a human
+    ///   approved, so calling that "delivered" would put this task's name on a
+    ///   review nobody did.
+    /// - it must still be OPEN, or MERGED. Merged is a success — our commits
+    ///   landed, which is exactly what delivery means. Closed-without-merging
+    ///   is not: the work sits on a branch whose review someone shut, and the
+    ///   card must say so rather than claim it is done.
+    ///
+    /// `pushed` is only wording: whether this attempt actually published
+    /// anything ("the work was pushed, but…") or found the head already there
+    /// and skipped the push — an error must not claim a push that never ran.
+    #[allow(clippy::too_many_arguments)]
+    async fn settle_pull_target(
+        &self,
+        task_id: i32,
+        ctx: &DeliveryCtx<'_>,
+        repo_path: &str,
+        pr: &ForgePr,
+        target: &PullTarget,
+        expected_head: &str,
+        pushed: bool,
+    ) -> Result<(), String> {
+        self.check_pull_target(pr, target)?;
+        let noun = target.provider.change_noun();
+        let remote_branch = &target.head_ref;
+        let done = if pushed {
+            format!("the work was pushed to '{remote_branch}'")
+        } else {
+            format!("'{remote_branch}' already holds this task's work")
+        };
+        if let Some(base) = target.base_ref.as_deref() {
+            if pr.base_ref != base {
+                return Err(format!(
+                    "{done}, but {noun} #{} now targets '{}' instead of '{base}' — it was \
+                     retargeted, so check the diff there before delivering again",
+                    target.number, pr.base_ref
+                ));
+            }
+        }
+        if pr.merged {
+            // Merged is a success only if the merge CONTAINS what we pushed.
+            // Both losing orders are real: someone merges the old head while
+            // we are pushing (our commits are not in it), and someone
+            // fast-forwards on top of our commits and merges that (they are).
+            // Equality answers only the second; git answers both.
+            if !self
+                .merge_carries_our_work(
+                    task_id,
+                    ctx,
+                    repo_path,
+                    target.number,
+                    expected_head,
+                    &pr.head_sha,
+                )
+                .await
+            {
+                return Err(format!(
+                    "{done}, but {noun} #{} was merged at a commit that does not contain it — \
+                     this task's work is on that branch and NOT in that merge, so it needs a \
+                     new {noun}",
+                    target.number
+                ));
+            }
+            return Ok(());
+        }
+        if pr.state != "open" {
+            return Err(format!(
+                "{done}, but {noun} #{} was closed without merging — reopen it, then deliver",
+                target.number
+            ));
+        }
+        Ok(())
+    }
+
+    /// Whether the merge that closed change `number` carries the commit we
+    /// pushed.
+    ///
+    /// Equality is the ordinary answer and costs nothing. When the heads
+    /// differ, only git can tell "someone fast-forwarded on top of our work
+    /// and merged that" (a delivery) from "someone merged the old head while
+    /// we were pushing" (not one) — so the change's server-side head ref is
+    /// fetched and asked. Anything that cannot be PROVEN is a no: a delivery
+    /// we cannot show is not one this may record.
+    async fn merge_carries_our_work(
+        &self,
+        task_id: i32,
+        ctx: &DeliveryCtx<'_>,
+        repo_path: &str,
+        number: i64,
+        expected_head: &str,
+        merged_head: &str,
+    ) -> bool {
+        // No anchor, nothing to prove. (A delivery always records one; this is
+        // the "stored state was unreadable" case, and it must not turn into a
+        // ref name with an empty component either.)
+        if expected_head.trim().is_empty() {
+            return false;
+        }
+        if merged_head.eq_ignore_ascii_case(expected_head) {
+            return true;
+        }
+        // Scoped by TASK, like the other scratch refs this engine writes.
+        // Sibling deliveries in one folder do not share a lock and can overlap,
+        // and two of them may legitimately be about the same item or even the
+        // same commit — a shared name would let one force-update or delete the
+        // ref between another's fetch and its ancestry check.
+        let probe = format!("refs/codeg/task-{task_id}/merged-probe");
+        let fetched = self
+            .forge
+            .fetch_ref(
+                ctx,
+                repo_path,
+                &ctx.provider.change_head_ref(number),
+                &probe,
+            )
+            .await;
+        let carried = match fetched {
+            Ok(_) => task_git::is_ancestor(repo_path, expected_head, &probe)
+                .await
+                .unwrap_or(false),
+            Err(e) => {
+                tracing::info!("[forge] could not check what the merge carries: {e}");
+                false
+            }
+        };
+        task_git::delete_ref(repo_path, &probe).await;
+        carried
+    }
+
+    /// merging → done with the pull request recorded on the row — or, for a
+    /// delivery asked to keep the task in review, merging → review with the
+    /// same record. The worktree is KEPT either way: the pull request is open
+    /// against this task's branch, and another review round on it is a normal
+    /// next step. Cleanup stays where it already is — the user's, on a
+    /// finished card (or the delivery's own, for a box ticked in the dialog).
+    ///
+    /// A forge task's pull request goes into its provenance snapshot as the row
+    /// has it NOW, not as the delivery read it when it started: a push into a
+    /// pull-request task's own pull request records `pushed_onto` there as its
+    /// push lands, and writing the older snapshot back would erase it — which a
+    /// task that stays in review needs, because its next round measures its
+    /// own work from there. This delivery holds the task, so nothing else
+    /// writes the snapshot meanwhile; the CAS binds the write to its
+    /// generation.
+    async fn settle_delivery(
+        self: &Arc<Self>,
+        task_id: i32,
+        source: &DeliverySource,
+        run_seq: i32,
+        pr: &ForgePr,
+        keep_in_review: bool,
+    ) -> Result<String, String> {
+        // Serialized out here on purpose — see `complete_delivered`: its
+        // transaction must open with a write.
+        let record_json = match source {
+            DeliverySource::Issue(_) | DeliverySource::Pull(_) => {
+                // No fallback to the snapshot this delivery started from: that
+                // is exactly the write that would erase a `pushed_onto` the
+                // push already recorded. A read that fails here bounces the
+                // delivery, and its retry finds the pull request already
+                // carrying the work.
+                let row = work_task_service::get_model(&self.db.conn, task_id)
+                    .await
+                    .map_err(|e| format!("could not record the pull request: {e}"))?;
+                let mut meta = row
+                    .source_meta
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str::<ForgeSourceMeta>(s).ok())
+                    .ok_or_else(|| {
+                        "could not record the pull request: the task's source information is \
+                         unreadable"
+                            .to_string()
+                    })?;
+                meta.result_pr = Some(pr.html_url.clone());
+                meta.result_pr_number = Some(pr.number);
+                serde_json::to_string(&meta)
+            }
+            DeliverySource::Local { target, .. } => serde_json::to_string(&WorkTaskDelivery {
+                target: target.clone(),
+                pr_url: pr.html_url.clone(),
+                pr_number: pr.number,
+            }),
+        }
+        .map_err(|e| format!("could not record the pull request: {e}"))?;
+        let record = match source {
+            DeliverySource::Local { .. } => DeliveryRecord::Delivery(&record_json),
+            _ => DeliveryRecord::SourceMeta(&record_json),
+        };
+        let settled = if keep_in_review {
+            work_task_service::delivered_to_review(
+                &self.db.conn,
+                task_id,
+                run_seq,
+                &pr.html_url,
+                record,
+            )
+            .await
+        } else {
+            work_task_service::complete_delivered(
+                &self.db.conn,
+                task_id,
+                run_seq,
+                &pr.html_url,
+                record,
+            )
+            .await
+        }
+        .map_err(|e| e.to_string())?;
+        if !settled {
+            return Err(format!(
+                "the task moved on while pull request {} was being opened — it is open and \
+                 unchanged, nothing was lost",
+                pr.html_url
+            ));
+        }
+        self.emit_upsert(task_id);
+        // Behind the same CAS as the settle, so the retry of a delivery that
+        // already finished cannot comment twice. Only for a delivery that
+        // FINISHED the task: the comment reports how a task ended, and one
+        // kept in review has not — its thread hears once it does, whichever
+        // way that turns out.
+        if !keep_in_review {
+            self.spawn_forge_writeback(task_id, WritebackOutcome::Delivered(pr.html_url.clone()));
+        }
+        Ok(pr.html_url.clone())
+    }
+
+    // ── write the outcome back to the forge (best-effort) ───────────────────
+
+    /// Tell the thread a task came from that it finished — a comment carrying
+    /// the reply drafted for that thread (as the user accepted it), the
+    /// outcome, the link and the diff counters.
+    ///
+    /// SPAWNED, never awaited by the settle that triggers it. A local merge
+    /// settles inside the folder's git lock, and a REST call has no business
+    /// holding that lock; a delivery settles while the user waits on the
+    /// button. The price is honest best-effort: a process that exits right
+    /// after a settle can leave neither a comment nor a failure event, and
+    /// nothing retries. Guaranteed delivery needs a persisted outbox, which is
+    /// deliberately not this.
+    fn spawn_forge_writeback(self: &Arc<Self>, task_id: i32, outcome: WritebackOutcome) {
+        let engine = self.clone();
+        tokio::spawn(async move {
+            engine.forge_writeback(task_id, outcome).await;
+        });
+    }
+
+    async fn forge_writeback(self: &Arc<Self>, task_id: i32, outcome: WritebackOutcome) {
+        let Ok(task) = work_task_service::get_model(&self.db.conn, task_id).await else {
+            return;
+        };
+        // Only a task that HAS a thread, and only a provider we can post to.
+        // Both kinds get a comment; WHERE it goes differs by forge, which is
+        // why the item kind is carried rather than assumed (GitHub serves
+        // issue and pull-request comments from one endpoint, GitLab from two).
+        let Some((item_kind, meta)) = forge_thread(&task) else {
+            return;
+        };
+        // The answer the user gave in the trigger dialog, carried on the task
+        // itself. Absent on rows minted before the choice lived there — those
+        // stay silent, which is the posture the folder setting it replaced
+        // shipped with. This is a write to a place other people are watching,
+        // so "no recorded yes" means no.
+        if !meta.writeback.unwrap_or(false) {
+            return;
+        }
+
+        // The counters recorded when the run settled — reading git here would
+        // fail on exactly the tasks whose worktree the merge just deleted.
+        let stats = task
+            .files_changed
+            .map(|files| (files, task.additions.unwrap_or(0), task.deletions.unwrap_or(0)));
+        let base_branch = task.base_branch.clone().unwrap_or_default();
+        let outcome = match &outcome {
+            WritebackOutcome::Merged(commit) => TaskOutcome::Merged {
+                commit,
+                base_branch: &base_branch,
+            },
+            WritebackOutcome::Delivered(pr_url) => TaskOutcome::Delivered { pr_url },
+            WritebackOutcome::Accepted { nothing_to_land } => TaskOutcome::Accepted {
+                nothing_to_land: *nothing_to_land,
+            },
+        };
+        let ctx = DeliveryCtx {
+            conn: &self.db.conn,
+            data_dir: &self.data_dir,
+            provider: meta.provider,
+            server_host: &meta.server_host,
+            account_id: &meta.account_id,
+            owner_repo: &meta.owner_repo,
+        };
+        // Every item the task handles hears it, each in its own thread and on
+        // its own timeline entry — one that fails is recorded as that item's
+        // failure and leaves the others to go ahead.
+        // The replies the user saw when they accepted the task (see
+        // `forge::thread_reply`), and the footer as the settings say NOW — a
+        // presentation choice, not one frozen on the task. Settings that cannot
+        // be read keep the footer, its default.
+        let drafts = crate::forge::thread_reply::parse_drafts(task.writeback_drafts.as_deref());
+        let footer = crate::forge::settings::load_effective(&self.db.conn, task.folder_id)
+            .await
+            .map(|s| s.comment_footer)
+            .unwrap_or(true);
+        let numbers = meta.item_numbers();
+        let combined = numbers.len() > 1;
+        for &number in &numbers {
+            let others: Vec<i64> = numbers.iter().copied().filter(|n| *n != number).collect();
+            // Where it is posted shapes what it may say: a pull request's
+            // thread hears what happened to that pull request, in its forge's
+            // own noun.
+            let body = writeback_comment_body(
+                meta.provider,
+                item_kind,
+                &outcome,
+                stats,
+                &others,
+                drafts.get(&number).map(String::as_str),
+                footer,
+            );
+            let (kind, payload) = match self
+                .forge
+                .comment_issue(&ctx, item_kind, number, &body)
+                .await
+            {
+                Ok(url) if combined => (
+                    "forge_writeback",
+                    serde_json::json!({ "url": url, "number": number }),
+                ),
+                Ok(url) => ("forge_writeback", serde_json::json!({ "url": url })),
+                // Failure is recorded and dropped: the task is finished either
+                // way, and a comment nobody sees must not reopen a settled row.
+                Err(error) => (
+                    "forge_writeback_failed",
+                    serde_json::json!({ "error": error, "number": number }),
+                ),
+            };
+            let _ = work_task_service::record_event(
+                &self.db.conn,
+                task_id,
+                kind,
+                "engine",
+                Some(payload),
+            )
+            .await;
+            // The card's own fields did not change; this is what makes an
+            // open detail sheet reload its timeline.
+            self.emit_upsert(task_id);
+        }
+    }
+
+    /// Crash recovery for a delivery: the forge is the only truth about what
+    /// the dead process managed to do. No `ls-remote` probe — the four-way
+    /// match already requires the pushed OID to be the pull request's head, so
+    /// a separate branch-tip read adds a failure mode and no information.
+    ///
+    /// Every exit binds to the generation this pass READ, never just to
+    /// "the row is merging": a recovery that spent seconds at the forge must
+    /// not bounce a delivery someone started in the meantime.
+    ///
+    /// A recovered delivery settles the way the interrupted one was asked to —
+    /// `done`, or back to review with its pull request recorded — and takes
+    /// the worktree along when that was asked for and the task finished.
+    async fn recover_delivery(
+        self: &Arc<Self>,
+        task: &crate::db::entities::work_task::Model,
+        state: &WorkTaskMergeState,
+    ) {
+        let (Some(remote_branch), Some(expected_head)) =
+            (state.remote_branch.as_deref(), state.expected_head.as_deref())
+        else {
+            self.bounce_delivery(
+                task,
+                "the delivery was interrupted and its state is incomplete — deliver again"
+                    .to_string(),
+            )
+            .await;
+            return;
+        };
+        let (Ok(source), Some(base_branch)) =
+            (recovery_source(task, state), task.base_branch.as_deref())
+        else {
+            self.bounce_delivery(
+                task,
+                "the delivery was interrupted and the task's source information is unreadable — \
+                 deliver again"
+                    .to_string(),
+            )
+            .await;
+            return;
+        };
+
+        let ctx = source.ctx(&self.db.conn, &self.data_dir);
+        // A delivery INTO a pull request knows exactly which one — a
+        // pull-request task's number is part of its identity, and a push into
+        // the pull request an earlier round opened recorded that one's — so
+        // recovery looks it up instead of searching by head branch.
+        let into = match &source {
+            DeliverySource::Pull(meta) => Some(PullTarget::own_pull_request(meta, remote_branch)),
+            _ => state
+                .pull_number
+                .map(|number| PullTarget::recorded(&source, number, remote_branch, base_branch)),
+        };
+        let by_branch = || {
+            self.recover_by_branch(
+                task,
+                &ctx,
+                &source,
+                remote_branch,
+                base_branch,
+                expected_head,
+                state,
+            )
+        };
+        let outcome = match into {
+            None => by_branch().await,
+            Some(target) => {
+                match self
+                    .recover_into_pull(task, &ctx, &source, &target, expected_head, state)
+                    .await
+                {
+                    Ok(()) => Ok(()),
+                    // The pull request an earlier round opened does not show
+                    // this delivery — and for an issue's or a local task that
+                    // is not the end of it: a live attempt that found that one
+                    // closed opens a NEW pull request by branch, and may have
+                    // died right after. Whatever matches all four criteria by
+                    // branch carries exactly this commit on this branch, so it
+                    // is the delivery; only when nothing does is the reason
+                    // about the recorded one the one to tell. A pull-request
+                    // task never opens one, so its own is the only answer.
+                    Err(reason) if !matches!(source, DeliverySource::Pull(_)) => {
+                        by_branch().await.map_err(|_| reason)
+                    }
+                    Err(reason) => Err(reason),
+                }
+            }
+        };
+        match outcome {
+            // The cleanup the interrupted delivery would have run once it
+            // settled `done` (the flag is never set with `keep_in_review`).
+            Ok(()) => {
+                if state.delete_worktree {
+                    self.remove_delivered_worktree(task.id, task.folder_id, expected_head)
+                        .await;
+                }
+            }
+            Err(reason) => self.bounce_delivery(task, reason).await,
+        }
+    }
+
+    /// Recovery for a delivery that opened or adopted its pull request by
+    /// branch: whichever pull request matches all four criteria is the one it
+    /// reached. `Err` is why the task goes back to a human.
+    #[allow(clippy::too_many_arguments)]
+    async fn recover_by_branch(
+        self: &Arc<Self>,
+        task: &crate::db::entities::work_task::Model,
+        ctx: &DeliveryCtx<'_>,
+        source: &DeliverySource,
+        remote_branch: &str,
+        base_branch: &str,
+        expected_head: &str,
+        state: &WorkTaskMergeState,
+    ) -> Result<(), String> {
+        let found = self
+            .forge
+            .find_pulls(ctx, remote_branch)
+            .await
+            .map_err(|e| format!("could not check the pull request after a restart: {e}"))?;
+        // Anything short of all four criteria goes back to a human. Adopting on
+        // a partial match would settle the task against someone else's pull
+        // request that merely reused the branch name.
+        match adopt_pull_request(
+            found,
+            expected_head,
+            remote_branch,
+            base_branch,
+            ctx.owner_repo,
+        ) {
+            PrAdoption::Merged(pr) | PrAdoption::Open(pr) => self
+                .settle_delivery(task.id, source, task.run_seq, &pr, state.keep_in_review)
+                .await
+                .map(|_| ()),
+            PrAdoption::ClosedUnmerged(pr) => Err(format!(
+                "the delivery was interrupted and pull request #{} was closed without merging — \
+                 deliver again if you still want it",
+                pr.number
+            )),
+            PrAdoption::StaleHead(pr) => Err(format!(
+                "the delivery was interrupted and pull request #{} now points at a different \
+                 commit — check that branch before delivering again",
+                pr.number
+            )),
+            PrAdoption::NoMatch => Err(
+                "the delivery was interrupted before its pull request existed — deliver again"
+                    .to_string(),
+            ),
+        }
+    }
+
+    /// Crash recovery for a delivery INTO a pull request that exists: did the
+    /// dead process get the commits onto its branch? `Err` is why not.
+    ///
+    /// Only one answer settles the task — the pull request's head IS the commit
+    /// this delivery pushed. Deliberately stricter than the live path (which
+    /// takes a successful push as proof): here there is no proof, and "someone
+    /// pushed after us" and "we never pushed" look identical from the outside.
+    /// Bouncing costs one click, and the retry is a no-op push followed by the
+    /// normal settle.
+    async fn recover_into_pull(
+        self: &Arc<Self>,
+        task: &crate::db::entities::work_task::Model,
+        ctx: &DeliveryCtx<'_>,
+        source: &DeliverySource,
+        target: &PullTarget,
+        expected_head: &str,
+        state: &WorkTaskMergeState,
+    ) -> Result<(), String> {
+        let pr = self.forge.get_pull(ctx, target.number).await.map_err(|e| {
+            format!(
+                "could not read pull request #{} after a restart: {e}",
+                target.number
+            )
+        })?;
+        // The same question the live path asks after its push — with the head
+        // OID added, because a crash left no "the push succeeded" evidence and
+        // "someone else pushed" is indistinguishable from "we never did".
+        // The task's own worktree may be gone after a crash; the project
+        // folder's object store is the same one and always there.
+        let repo_path = get_folder_core(&self.db, task.folder_id)
+            .await
+            .map_err(|e| format!("the delivery was interrupted: {e}"))?
+            .path;
+        self.settle_pull_target(
+            task.id,
+            ctx,
+            &repo_path,
+            &pr,
+            target,
+            expected_head,
+            // A recovery cannot know whether the interrupted attempt got its
+            // push out; claiming one is the conservative reading.
+            true,
+        )
+        .await
+        .map_err(|reason| format!("the delivery was interrupted: {reason}"))?;
+        // For a MERGED change the check above already PROVED the merge carries
+        // this task's commit, which is strictly more than the head OID says —
+        // asking again here would reject the very case that proof exists for
+        // (someone fast-forwarded on top of our work and merged that).
+        if !pr.merged && !pr.head_sha.eq_ignore_ascii_case(expected_head) {
+            return Err(format!(
+                "the delivery was interrupted and {} #{} does not show this task's commit — \
+                 deliver again",
+                target.provider.change_noun(),
+                target.number
+            ));
+        }
+        self.settle_delivery(task.id, source, task.run_seq, &pr, state.keep_in_review)
+            .await
+            .map(|_| ())
     }
 
     // ── merge pump (the folder's one merge slot) ────────────────────────────
@@ -2723,6 +6485,7 @@ impl TaskEngine {
                     task.id,
                     intent.message.clone(),
                     intent.delete_worktree,
+                    intent.instructions.clone(),
                     false,
                     Some(&claim),
                 )
@@ -2784,8 +6547,9 @@ impl TaskEngine {
 
     // ── auto-merge (unattended landing) ─────────────────────────────────────
 
-    /// Fire-and-forget [`Self::merge_pump`] — a dispatch holds the folder's git
-    /// lock for the whole launch, which must not stall the engine's event loop.
+    /// Fire-and-forget [`Self::merge_pump`] — a dispatch takes the folder's git
+    /// lock to validate and commit its CAS, and waits on the agent coming up
+    /// after that, neither of which may stall the engine's event loop.
     fn spawn_merge_pump(self: &Arc<Self>, folder_id: i32) {
         let engine = self.clone();
         tokio::spawn(async move {
@@ -2860,13 +6624,28 @@ impl TaskEngine {
             if self.live_worktree(&task).await.is_none() {
                 continue;
             }
+            // Someone is working in this task's session or worktree: it is not
+            // ready to land, and waiting on it must not hold up the rest of the
+            // column (a turn can sit on a question for hours).
+            if self
+                .manager
+                .has_turn_in_flight_for(task.conversation_id, task.worktree_folder_id)
+                .await
+            {
+                continue;
+            }
             match self
-                .merge_task(task.id, None, settings.delete_worktree_default, true)
+                // No instructions: nobody was at the keyboard to write any.
+                .merge_task(task.id, None, settings.delete_worktree_default, None, true)
                 .await
             {
                 // An unattended dispatch never queues (see `merge_task`), so
                 // this is always the live generation.
                 Ok(_) => {}
+                // This one changed (or got busy) between the read above and the
+                // dispatch's own check under the folder lock — the next
+                // candidate may still land.
+                Err(e) if e == AUTO_MERGE_NO_LONGER_ELIGIBLE => continue,
                 Err(e) if is_benign_merge_race(&e) => {}
                 Err(e) => {
                     tracing::warn!(
@@ -2899,8 +6678,8 @@ impl TaskEngine {
     /// truth in the project folder. A merge generation with a live agent
     /// connection is not stuck — its TurnComplete settles it.
     pub async fn recover_merging(self: &Arc<Self>, task_id: i32) {
-        if self.merging.lock().await.contains(&task_id) {
-            return; // merge dispatch in flight in this process
+        if self.merging.lock().await.contains_key(&task_id) {
+            return; // merge dispatch / delivery in flight in this process
         }
         let Ok(task) = work_task_service::get_model(&self.db.conn, task_id).await else {
             return;
@@ -2912,6 +6691,18 @@ impl TaskEngine {
             if self.manager.get_state_and_emitter(conn_id).await.is_some() {
                 return; // live merge generation — on_turn_complete owns the settle
             }
+            if self.holds.lock().await.contains_key(conn_id) {
+                // Held for its agent's background work: the hold's waiter sees
+                // the connection go and settles the generation itself.
+                return;
+            }
+            // Dead: its TurnComplete is never coming, so this pass inherits the
+            // teardown that settle owed. Retire it BEFORE deciding anything —
+            // this very pass calls `remove_worktree_locked` when the merge
+            // landed, and a leftover entry reads there as "a live agent is
+            // still working in that worktree" and refuses the cleanup the user
+            // asked for. Nothing below re-reads the connection.
+            self.retire_connection(conn_id, task_id).await;
         }
         let Some(state) = task
             .merge_state
@@ -2926,6 +6717,13 @@ impl TaskEngine {
             .await;
             return;
         };
+        // A `merging` row is one of two very different things. Read the op
+        // before touching anything operation-specific: a delivery never went
+        // near the project folder, and its truth lives at the forge.
+        if state.op == WorkTaskMergeOp::DeliverPr {
+            self.recover_delivery(&task, &state).await;
+            return;
+        }
         let Ok(root) = get_folder_core(&self.db, task.folder_id).await else {
             return;
         };
@@ -2947,8 +6745,9 @@ impl TaskEngine {
                     .unwrap_or(false);
                 if landed {
                     self.emit_upsert(task_id);
+                    self.spawn_forge_writeback(task_id, WritebackOutcome::Merged(commit));
                     if state.delete_worktree {
-                        self.remove_worktree_locked(task_id).await;
+                        self.remove_worktree_locked(task_id, None).await;
                     }
                 }
             }
@@ -2970,40 +6769,146 @@ impl TaskEngine {
 
     // ── worktree cleanup ────────────────────────────────────────────────────
 
-    /// Remove a task's worktree + branch (user action from the card, or the
-    /// post-merge checkbox). Takes the per-folder git lock.
-    pub async fn cleanup_task(&self, task_id: i32) -> Result<(), String> {
+    /// Remove a task's worktree + branch (user action from the card, the
+    /// post-merge checkbox, or the cancel dialog's). Takes the task lock and
+    /// then the per-folder git lock, in that order.
+    ///
+    /// Refuses — with the reason both returned and flagged on the row — while
+    /// the worktree still holds uncommitted files. See the check itself for why
+    /// that line is drawn here and not at the confirmation.
+    ///
+    /// The TASK lock is what makes this safe against a launch, and the folder
+    /// lock cannot stand in for it: [`Self::launch`] holds the task lock across
+    /// its whole setup — `ensure_worktree` included — and takes no folder lock
+    /// at all, so a folder-scoped removal runs straight through a checkout that
+    /// is being created. Reachable whenever the row leaves a launchable state
+    /// and comes back: cancel (`canceled`) → the user requeues (`todo`, a pure
+    /// DB write that waits on nothing) → the pump claims and launches, all
+    /// while this call sits between its status read and its removal. Nothing
+    /// else about that sequence is wrong — the fresh run mints its own worktree
+    /// — but deleting the directory out from under `ensure_worktree` is.
+    ///
+    /// Hence read the status twice: once before the lock so a `running` task
+    /// fails fast instead of queueing behind its own init command (which can be
+    /// a whole `pnpm install`), and once after, because only the second read is
+    /// serialized against the launch it is trying to exclude.
+    ///
+    /// Ordering is deadlock-free by inspection: the task lock is only ever
+    /// taken here, in [`Self::cancel`], and in [`Self::launch`], and none of
+    /// those three is reachable while a folder lock is held (`launch` runs in
+    /// its own spawned task, and `cancel`'s only nested wait is the pump lock).
+    pub async fn cleanup_task(&self, task_id: i32) -> Result<(), CleanupBlocked> {
+        /// Statuses whose worktree is either in use or about to be — the launch
+        /// path owns it, not the user.
+        fn in_use(status: &WorkTaskStatus) -> bool {
+            matches!(
+                status,
+                WorkTaskStatus::Queued
+                    | WorkTaskStatus::Preparing
+                    | WorkTaskStatus::Running
+                    | WorkTaskStatus::AwaitingInput
+                    | WorkTaskStatus::Merging
+            )
+        }
+        const REFUSAL: &str = "cancel or finish the task before removing its worktree";
+
         let task = work_task_service::get_model(&self.db.conn, task_id)
             .await
-            .map_err(|e| e.to_string())?;
-        if matches!(
-            task.status,
-            WorkTaskStatus::Queued
-                | WorkTaskStatus::Preparing
-                | WorkTaskStatus::Running
-                | WorkTaskStatus::AwaitingInput
-                | WorkTaskStatus::Merging
-        ) {
-            return Err("cancel or finish the task before removing its worktree".to_string());
+            .map_err(|e| CleanupBlocked::failed(e.to_string()))?;
+        if in_use(&task.status) {
+            return Err(CleanupBlocked::failed(REFUSAL));
+        }
+        let task_guard = self.task_lock(task_id).await;
+        let _task_guard = task_guard.lock().await;
+        // Re-read under the lock: whatever claimed the row while we waited is
+        // now either fully set up (and refused here) or still blocked on this
+        // lock at the top of `launch` — where it re-reads its own status and
+        // gives up if a cancel moved the row on.
+        let task = work_task_service::get_model(&self.db.conn, task_id)
+            .await
+            .map_err(|e| CleanupBlocked::failed(e.to_string()))?;
+        if in_use(&task.status) {
+            return Err(CleanupBlocked::failed(REFUSAL));
         }
         let lock = self.folder_lock(task.folder_id).await;
         let _guard = lock.lock().await;
-        self.remove_worktree_locked(task_id).await;
-        self.emit_upsert(task_id);
+        // Uncommitted work is the one thing behind this call that git cannot
+        // give back, and nothing on the way in ever named it: the cancel
+        // dialog's checkbox promises "its worktree and work branch", the card's
+        // button says "Delete worktree", and neither mentions files the agent
+        // left unstaged. The removal underneath is `worktree remove --force`,
+        // so without this check a stop pressed mid-edit — the very moment a
+        // checkout is most likely to be dirty — takes the edits with it.
+        //
+        // The other two surfaces that remove a worktree already draw this line:
+        // `complete_task` refuses with this same sentence, and the branch
+        // dropdown's removal re-asks under an explicit "those changes cannot be
+        // recovered" confirmation. This one just took it. Committed work is a
+        // different matter and stays deletable — `branch -D` is what the
+        // checkbox spells out, and the reflog still holds those commits.
+        //
+        // Recorded AND returned, because the callers hear different channels:
+        // the direct button surfaces the `Err` as a toast, `work_task_cancel_core`
+        // swallows it and reads `cleanup_state` off the card instead, and the
+        // delete path — which would otherwise tombstone that card and the reason
+        // with it — stops on `holds_work` rather than swallowing.
+        if self.worktree_holds_uncommitted(&task).await {
+            let _ = work_task_service::set_cleanup_state(
+                &self.db.conn,
+                task_id,
+                true,
+                Some(worktree_kept(RETRY_THE_CLEANUP)),
+            )
+            .await;
+            self.emit_upsert(task_id);
+            return Err(CleanupBlocked {
+                message: worktree_kept(RETRY_THE_CLEANUP),
+                holds_work: true,
+            });
+        }
+        // No `emit_upsert` here: the removal owns that broadcast now, and only
+        // it can tell a pass that changed the row from one that found nothing
+        // to do.
+        self.remove_worktree_locked(task_id, None).await;
         Ok(())
     }
 
-    /// Git-first-then-DB worktree removal. Caller holds the folder git lock.
+    /// Git-first-then-DB worktree removal, and the `task://changed` that tells
+    /// clients about it. Caller holds the folder git lock.
+    ///
+    /// The broadcast lives HERE rather than at the call sites: this is the only
+    /// thing that knows whether the row moved, and the acceptance paths reach it
+    /// AFTER their own `emit_upsert` (`settle_merge_generation`,
+    /// `recover_merging`) — so a caller-side convention leaves the card holding
+    /// a snapshot taken before the worktree was detached, and its "worktree
+    /// removed" badge (`worktreeWasRemoved`, keyed on `worktree_folder_id`)
+    /// never appears until a full refetch. `converge_worktree_removal` owns its
+    /// folder / conversation / tab broadcasts for the same reason.
+    ///
+    /// `expected_tip` is forwarded to [`task_git::remove_worktree_and_branch`]:
+    /// `Some(oid)` deletes the work branch only while it still points there.
+    /// The local-merge paths pass `None` — they settle from git truth about the
+    /// base, not from an OID they published.
+    async fn remove_worktree_locked(&self, task_id: i32, expected_tip: Option<&str>) {
+        if self.remove_worktree_inner(task_id, expected_tip).await {
+            self.emit_upsert(task_id);
+        }
+    }
+
+    /// The removal itself. Returns whether it wrote to the task row — the
+    /// broadcast in [`Self::remove_worktree_locked`] rides that answer, so a
+    /// pass that decided there was nothing to do stays silent.
     ///
     /// Order matters: the git removal runs first; only after it succeeds does
     /// the DB transaction re-parent the worktree's conversations onto the
     /// project folder (stamping `origin_cwd`), close its tabs, and soft-delete
     /// the folder row. A git failure flags `cleanup_state='failed'` (retryable
     /// from the card) and leaves the DB untouched; a `done` task never leaves
-    /// `done` either way.
-    async fn remove_worktree_locked(&self, task_id: i32) {
+    /// `done` either way — including a branch that moved out from under an
+    /// `expected_tip`, which lands here as exactly that kind of git failure.
+    async fn remove_worktree_inner(&self, task_id: i32, expected_tip: Option<&str>) -> bool {
         let Ok(task) = work_task_service::get_model(&self.db.conn, task_id).await else {
-            return;
+            return false;
         };
         let Some(wt_id) = task.worktree_folder_id else {
             // Nothing left to remove. A cleanup flag surviving past the
@@ -3011,17 +6916,34 @@ impl TaskEngine {
             if task.cleanup_state.is_some() {
                 let _ =
                     work_task_service::set_cleanup_state(&self.db.conn, task_id, false, None).await;
+                return true;
             }
-            return;
+            return false;
         };
-        // Precondition: no live connection of ours on this task.
-        let has_conn = {
+        // Precondition: no live connection of ours on this task. `index` alone
+        // cannot answer that — it is a correlation table, not a liveness one,
+        // and an entry whose connection died stays put until something retires
+        // it. Believing such an entry costs the user a worktree they asked to
+        // remove and a `failed` flag whose retry can never clear (nothing will
+        // ever arrive to remove the entry). Ask the manager, and retire what it
+        // says is gone.
+        let mut has_conn = false;
+        let claimed: Vec<String> = {
             self.index
                 .lock()
                 .await
-                .values()
-                .any(|(tid, _)| *tid == task_id)
+                .iter()
+                .filter(|(_, (tid, _))| *tid == task_id)
+                .map(|(conn_id, _)| conn_id.clone())
+                .collect()
         };
+        for conn_id in claimed {
+            if self.manager.get_state_and_emitter(&conn_id).await.is_some() {
+                has_conn = true;
+            } else {
+                self.retire_connection(&conn_id, task_id).await;
+            }
+        }
         if has_conn {
             let _ = work_task_service::set_cleanup_state(
                 &self.db.conn,
@@ -3030,7 +6952,7 @@ impl TaskEngine {
                 Some("task still has a live agent connection".to_string()),
             )
             .await;
-            return;
+            return true;
         }
 
         let root = match get_folder_core(&self.db, task.folder_id).await {
@@ -3043,7 +6965,7 @@ impl TaskEngine {
                     Some(e.to_string()),
                 )
                 .await;
-                return;
+                return true;
             }
         };
         let Ok(wt) = get_folder_core(&self.db, wt_id).await else {
@@ -3052,13 +6974,14 @@ impl TaskEngine {
             // otherwise keep rendering a worktree no refetch would return.
             let _ = work_task_service::clear_worktree(&self.db.conn, task_id).await;
             emit_folder_deleted(&self.emitter, wt_id);
-            return;
+            return true;
         };
 
         if let Err(e) = task_git::remove_worktree_and_branch(
             &root.path,
             &wt.path,
             task.work_branch.as_deref(),
+            expected_tip,
         )
         .await
         {
@@ -3069,7 +6992,7 @@ impl TaskEngine {
                 Some(e.to_string()),
             )
             .await;
-            return;
+            return true;
         }
 
         converge_worktree_removal(
@@ -3081,6 +7004,7 @@ impl TaskEngine {
             &wt.path,
         )
         .await;
+        true
     }
 
     // ── reconcile ───────────────────────────────────────────────────────────
@@ -3100,11 +7024,14 @@ impl TaskEngine {
             if self.manager.get_state_and_emitter(&conn_id).await.is_some() {
                 continue; // live — on_event settles it authoritatively
             }
+            if self.holds.lock().await.contains_key(&conn_id) {
+                // Held for its background work: its waiter sees the connection
+                // go and settles it with what the agent last said.
+                continue;
+            }
             // Connection gone. If the produced conversation reached a terminal
             // status the TurnComplete was merely dropped — settle from it.
-            self.index.lock().await.remove(&conn_id);
-            self.awaiting.lock().await.remove(&task.id);
-            self.forget_delegation_children_of(&conn_id).await;
+            self.retire_connection(&conn_id, task.id).await;
             let conv_status = match task.conversation_id {
                 Some(cid) => self.conversation_status(cid).await,
                 None => None,
@@ -3130,9 +7057,13 @@ impl TaskEngine {
                     settled
                 }
                 Some(ConversationStatus::Cancelled) => {
-                    work_task_service::cancel(&self.db.conn, task.id, None)
-                        .await
-                        .unwrap_or(false)
+                    work_task_service::cancel_running_generation(
+                        &self.db.conn,
+                        task.id,
+                        task.run_seq,
+                    )
+                    .await
+                    .unwrap_or(false)
                 }
                 _ => work_task_service::fail(
                     &self.db.conn,
@@ -3277,14 +7208,12 @@ struct WorktreeRef {
     path: String,
 }
 
-/// Converge DB + clients once a task worktree is off disk. Split out of
-/// [`TaskEngine::remove_worktree_locked`] so the ordering contract below is
-/// unit-testable without a real git worktree.
-///
-/// Write order: conversations first (never orphaned under a vanishing folder),
-/// then its tabs, then the folder row. Each step ends in a broadcast, because a
-/// removal no client hears about is a removal no client shows: the sidebar keeps
-/// the dead worktree until the next full `fetchFolders` (i.e. a reload).
+/// Converge DB + clients once a task worktree is off disk: the shared sequence
+/// in [`crate::commands::worktree_convergence`] (the branch selector's
+/// worktree delete runs the same one), with this task's bookkeeping — detach
+/// the worktree, record the cleanup — between the writes and the announcement.
+/// Split out of [`TaskEngine::remove_worktree_locked`] so the ordering contract
+/// is unit-testable without a real git worktree.
 async fn converge_worktree_removal(
     db: &AppDatabase,
     emitter: &EventEmitter,
@@ -3293,56 +7222,10 @@ async fn converge_worktree_removal(
     project_folder_id: i32,
     wt_path: &str,
 ) {
-    let moved = conversation_service::reparent_folder_conversations(
-        &db.conn,
-        wt_id,
-        project_folder_id,
-        wt_path,
-    )
-    .await
-    .unwrap_or(0);
+    use crate::commands::worktree_convergence;
 
-    match tab_service::delete_folder_tabs_and_bump(&db.conn, wt_id).await {
-        Ok(inv) => {
-            if let Some(tabs) = inv.emit {
-                emit_event(
-                    emitter,
-                    crate::web::event_bridge::TABS_CHANGED_EVENT,
-                    crate::web::event_bridge::TabsChanged {
-                        version: inv.version,
-                        origin: "server".to_string(),
-                        tabs,
-                    },
-                );
-            }
-        }
-        Err(e) => tracing::warn!("[work_task] tab cleanup failed for folder {wt_id}: {e}"),
-    }
-
-    // Announce the folder drop only when the row really is gone, so a failed
-    // write can't leave clients disagreeing with what a refetch would return.
-    let folder_gone = match folder::Entity::find_by_id(wt_id).one(&db.conn).await {
-        Ok(Some(row)) => {
-            let now = chrono::Utc::now();
-            let mut active = row.into_active_model();
-            active.is_open = Set(false);
-            active.deleted_at = Set(Some(now));
-            active.updated_at = Set(now);
-            match active.update(&db.conn).await {
-                Ok(_) => true,
-                Err(e) => {
-                    tracing::warn!("[work_task] worktree folder {wt_id} soft-delete failed: {e}");
-                    false
-                }
-            }
-        }
-        // Already soft-deleted / never there: a client still holding it is stale.
-        Ok(None) => true,
-        Err(e) => {
-            tracing::warn!("[work_task] worktree folder {wt_id} lookup failed: {e}");
-            false
-        }
-    };
+    let outcome =
+        worktree_convergence::converge_db(db, emitter, wt_id, project_folder_id, wt_path).await;
 
     let _ = work_task_service::clear_worktree(&db.conn, task_id).await;
     let _ = work_task_service::record_event(
@@ -3350,24 +7233,222 @@ async fn converge_worktree_removal(
         task_id,
         "user_action",
         "engine",
-        Some(serde_json::json!({ "action": "cleanup", "reparented": moved })),
+        Some(serde_json::json!({ "action": "cleanup", "reparented": outcome.moved })),
     )
     .await;
 
-    // Conversations first: this starts every client's refetch, so the moved
-    // rows have the shortest possible window with no folder to render under.
-    emit_event(
-        emitter,
-        crate::web::event_bridge::CONVERSATIONS_BULK_CHANGED_EVENT,
-        crate::web::event_bridge::ConversationsBulkChanged {
-            imported: 0,
-            updated: moved as u32,
-            folder_ids: vec![project_folder_id],
-        },
-    );
-    if folder_gone {
-        emit_folder_deleted(emitter, wt_id);
+    worktree_convergence::announce(emitter, outcome, project_folder_id, wt_id);
+}
+
+/// The commit THIS TASK's own work sits on top of: the point its worktree was
+/// checked out at, which is also the point an acceptance would deliver from.
+/// The counters on the row and every "is there anything to land" probe measure
+/// from here — deliberately not from the review baseline, which answers a
+/// different question ("what is under review", pull request included).
+///
+/// For an ordinary task the two coincide: the branch was minted at the recorded
+/// base, so "diff against the base" and "what the agent did" are one set. Two
+/// things move the anchor off it:
+///
+/// - **A task triggered from a pull request starts ON that pull request's
+///   head**, while its base is the MERGE BASE — because the review is meant to
+///   show the pull request plus whatever the agent did (see
+///   [`TaskEngine::pr_checkout_point`]). Measuring the task's own work from
+///   there would credit it with every file the pull request itself changed: a
+///   review-only task that committed nothing would report a full change set,
+///   the board would offer to push it back (a delivery with nothing in it),
+///   and "complete" — the acceptance that actually applies — would never
+///   appear. Where that head sits in the branch now is
+///   [`pull_head_in_branch`]'s question.
+/// - **The branch absorbing base content** (the agent merged the base branch
+///   in, or rebased onto it) moves the merge base forward, and everything the
+///   base contributed would otherwise read as this task's work — see
+///   [`branch_base`].
+///
+/// `wt_path` is the task's worktree — where every ref here is resolved.
+async fn own_work_anchor(
+    wt_path: &str,
+    task: &crate::db::entities::work_task::Model,
+) -> Option<String> {
+    if task.source_kind.as_deref() == Some(SOURCE_KIND_PR) {
+        if let Some(head) = pull_head_in_branch(wt_path, task).await {
+            return Some(head);
+        }
     }
+    branch_base(wt_path, task).await
+}
+
+/// Where a pull-request task's pull request ends inside its branch, when the
+/// task's own work can be measured from there. Two points are known: the head
+/// the task was triggered on — the one its source snapshot records and the
+/// checkout used — and, once a push-back went out, the head it went onto
+/// (`pushed_onto`, read from the forge at the time). The latest of them that
+/// is still under the work wins. A recorded head force-pushed away upstream,
+/// with the branch rebased onto the new one, counts through its rebased copy:
+/// the commit itself is still in the object store, but no longer under the
+/// work, and diffing against it would count everything between the old base
+/// and the new one as this task's work.
+///
+/// `None` — no known point usable — hands [`own_work_anchor`] to the
+/// base-branch rule. A point is not usable when:
+///
+/// - it is not a commit here at all (a force-push can leave the row naming one
+///   this repository never had), or the branch holds neither it nor a copy;
+/// - the branch absorbed base content after it (the agent merged the base
+///   branch in, say to settle a conflict, or a later force-push moved the pull
+///   request onto a newer base). No single commit holds "the pull request plus
+///   that base", and measuring from the point would count the whole base as
+///   this task's work; the base's merge base counts the pull request's own
+///   files instead — an overcount the size of the pull request, not of how
+///   far the base moved.
+///
+/// What the author changed beyond a rebase — a rewritten commit, an added one —
+/// cannot be told apart here from the agent's own commits (an agent may amend
+/// the contributor's commit itself), so it counts as the task's: the side that
+/// never lets "complete" strand real work. The delivery measures from the pull
+/// request's real head instead — see [`TaskEngine::push_back_to_pull`].
+async fn pull_head_in_branch(
+    wt_path: &str,
+    task: &crate::db::entities::work_task::Model,
+) -> Option<String> {
+    let meta = task
+        .source_meta
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<ForgeSourceMeta>(s).ok())?;
+    let base_tip = match task.base_branch.as_deref() {
+        Some(branch) => task_git::local_branch_tip(wt_path, branch).await.ok().flatten(),
+        None => None,
+    };
+    // Every point known to be where the pull request ended below the work:
+    // the head the last push-back went onto, and the head the task was
+    // triggered on (or its rebased copy). Either can be stale — the pull
+    // request may have been force-pushed again since — so each is weighed.
+    let mut known = Vec::new();
+    if let Some(sha) = meta.pushed_onto.filter(|s| !s.trim().is_empty()) {
+        if task_git::is_ancestor(wt_path, &sha, "HEAD").await.unwrap_or(false) {
+            known.push(sha);
+        }
+    }
+    if let Some(recorded) = meta.head_sha.filter(|s| !s.trim().is_empty()) {
+        if task_git::commit_present(wt_path, &recorded).await.unwrap_or(false) {
+            if task_git::is_ancestor(wt_path, &recorded, "HEAD").await.unwrap_or(false) {
+                known.push(recorded);
+            } else if let Some(stop) = base_tip.clone().or_else(|| task.base_sha.clone()) {
+                if let Some(copy) = task_git::rebased_copy(wt_path, &recorded, "HEAD", &stop).await
+                {
+                    known.push(copy);
+                }
+            }
+        }
+    }
+    // One the base moved past is no anchor: the branch absorbed base content
+    // after it.
+    let floor = match base_tip {
+        Some(tip) => task_git::merge_base(wt_path, &tip, "HEAD").await.ok(),
+        None => None,
+    };
+    let mut best: Option<String> = None;
+    for head in known {
+        if let Some(floor) = &floor {
+            if !task_git::is_ancestor(wt_path, floor, &head).await.unwrap_or(false) {
+                continue;
+            }
+        }
+        // The latest wins: the one the other sits under.
+        best = match best {
+            Some(prev) if !task_git::is_ancestor(wt_path, &prev, &head).await.unwrap_or(false) => {
+                Some(prev)
+            }
+            _ => Some(head),
+        };
+    }
+    best
+}
+
+/// The commit the task's branch sits on in its base branch: the recorded base,
+/// moved forward to the merge base with the local base branch once the branch
+/// absorbed base content (the agent merged the base branch in, or rebased onto
+/// it). Measuring from the recorded base after that would show everything the
+/// base contributed as this task's change.
+///
+/// Taken only when it moved FORWARD from the recorded base: a base branch that
+/// is behind locally, or a same-name branch of unrelated history, must not drag
+/// it backwards and inflate the count it was meant to correct. And it moves
+/// only with the BRANCH, never with the base branch advancing on its own, so
+/// the review diff measured from here stays put while the base moves on.
+///
+/// The own-work counters fall back to it and the review diff is taken from it,
+/// so the drawer's list and the row's counters agree on what the base
+/// contributed.
+pub(crate) async fn branch_base(
+    wt_path: &str,
+    task: &crate::db::entities::work_task::Model,
+) -> Option<String> {
+    let recorded = task.base_sha.clone().or_else(|| task.base_branch.clone());
+    let Some(base_branch) = task.base_branch.as_deref() else {
+        return recorded;
+    };
+    let Ok(Some(tip)) = task_git::local_branch_tip(wt_path, base_branch).await else {
+        return recorded;
+    };
+    let Ok(merge_base) = task_git::merge_base(wt_path, &tip, "HEAD").await else {
+        return recorded;
+    };
+    match task.base_sha.as_deref() {
+        Some(sha) => task_git::is_ancestor(wt_path, sha, &merge_base)
+            .await
+            .unwrap_or(false)
+            .then_some(merge_base)
+            .or(recorded),
+        // No recorded sha to move forward from — the merge base is strictly
+        // better than the branch NAME this would otherwise diff against, which
+        // measures against its tip and calls the base's own progress a change.
+        None => Some(merge_base),
+    }
+}
+
+/// `(files, additions, deletions)` from commit `from` to commit `to` — what
+/// pushing `to` adds on top of `from`. `None` unless `from` is a commit here
+/// that `to` descends from.
+async fn stats_between(wt_path: &str, from: &str, to: &str) -> Option<(i32, i32, i32)> {
+    if from.trim().is_empty() || !task_git::is_ancestor(wt_path, from, to).await.unwrap_or(false) {
+        return None;
+    }
+    let files = task_git::diff_numstat_between(wt_path, from, to).await.ok()?;
+    let adds: i32 = files.iter().map(|f| f.additions).sum();
+    let dels: i32 = files.iter().map(|f| f.deletions).sum();
+    Some((files.len() as i32, adds, dels))
+}
+
+/// `(files, additions, deletions)` of the worktree against `anchor`,
+/// uncommitted work included — nothing forces the agent to commit before the
+/// task lands in review, and a task whose new files are still untracked has
+/// done work all the same.
+async fn diff_stats_from(wt_path: &str, anchor: &str) -> Option<(i32, i32, i32)> {
+    let files = task_git::diff_numstat_with_untracked(wt_path, anchor)
+        .await
+        .ok()?;
+    let adds: i32 = files.iter().map(|f| f.additions).sum();
+    let dels: i32 = files.iter().map(|f| f.deletions).sum();
+    Some((files.len() as i32, adds, dels))
+}
+
+/// The forge thread(s) a task came from: what kind of item, and its source
+/// snapshot. `None` for a task without forge provenance, or one whose snapshot
+/// cannot be read — neither has a thread to reply in.
+fn forge_thread(
+    task: &crate::db::entities::work_task::Model,
+) -> Option<(ForgeItemKind, ForgeSourceMeta)> {
+    let kind = match task.source_kind.as_deref() {
+        Some(SOURCE_KIND_ISSUE) => ForgeItemKind::Issue,
+        Some(SOURCE_KIND_PR) => ForgeItemKind::Change,
+        _ => return None,
+    };
+    let meta = task
+        .source_meta
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<ForgeSourceMeta>(s).ok())?;
+    Some((kind, meta))
 }
 
 /// Row-level auto-merge eligibility: everything the sweep can decide without
@@ -3391,6 +7472,20 @@ fn auto_merge_candidate(
     if task.status != WorkTaskStatus::Review {
         return false;
     }
+    // Forge-sourced tasks never auto-merge: their prompt embeds text authored
+    // by arbitrary external users, so landing without a human review would be
+    // an injection -> main-branch pipeline. A hard rule, deliberately not a
+    // setting — the user's explicit merge click on the card is unaffected.
+    if task.source_kind.is_some() {
+        return false;
+    }
+    // Delivered to a pull request it stayed in review after: its user chose
+    // to land it THROUGH that pull request, and a local landing behind its
+    // back would leave the pull request open on work that is already in the
+    // base. Their explicit merge click is unaffected, as above.
+    if task.delivery.is_some() {
+        return false;
+    }
     if task.last_error.is_some() {
         return false;
     }
@@ -3404,6 +7499,13 @@ fn auto_merge_candidate(
     // JSON, and a looser predicate here would just dispatch into a CAS that
     // misses every time — a sweep spinning on a row it can never land.
     if task.pending_merge.is_some() {
+        return false;
+    }
+    // Put aside to handle later: the user postponed exactly the decision an
+    // unattended landing would make for them. Same "column present" predicate
+    // as `begin_merge`'s authoritative `DeferredAt IS NULL`, for the same
+    // reason as the queue check above.
+    if task.deferred_at.is_some() {
         return false;
     }
     if task.files_changed == Some(0) {
@@ -3464,8 +7566,16 @@ fn is_benign_merge_race(error: &str) -> bool {
     error.contains("not in review")
         || error.contains("left review")
         || error.contains("already merging")
+        || error == AUTO_MERGE_NO_LONGER_ELIGIBLE
         || is_queued_merge_superseded(error)
 }
+
+/// An unattended landing whose row changed between the sweep's read and the
+/// folder lock (see [`TaskEngine::merge_task_inner`]) — a benign race: the
+/// sweep skips it, and the post-review step the change triggered sweeps again
+/// once the preflight has spoken.
+const AUTO_MERGE_NO_LONGER_ELIGIBLE: &str =
+    "the task changed since the auto-merge sweep read it — skipping this landing";
 
 /// The one benign race the drain cannot simply step over: the user withdrew or
 /// edited the very merge it was dispatching (see [`missed_queue_cas`]). Their
@@ -3474,9 +7584,411 @@ fn is_queued_merge_superseded(error: &str) -> bool {
     error.contains("changed or withdrawn")
 }
 
+/// What a refused push-back most likely means, read off git's own words.
+///
+/// Deliberately narrow. Whatever this returns is printed to a human as advice,
+/// so the only two shapes recognised are the ones git states plainly, and
+/// everything else is `Unknown` — which prints no advice at all. An unhelpful
+/// message costs a reader a moment; a confident wrong one sends them to change
+/// a setting that was never the problem.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PushRefusal {
+    /// The remote refused the account: no write access, or a fork whose author
+    /// did not allow maintainer edits.
+    Permission,
+    /// The branch has commits the task's branch does not, so a fast-forward
+    /// push cannot apply. Routine on a long-lived pull request: the author
+    /// pushed, or merged the base branch in, after this task was triggered.
+    BranchMoved,
+    Unknown,
+}
+
+/// Match on git's stderr, which reaches here inside the delivery error string.
+/// Permission is tested first: a forge that refuses the push outright can also
+/// mention "rejected", and being told the wrong one of these two is precisely
+/// the failure this classification exists to stop.
+fn classify_push_refusal(error: &str) -> PushRefusal {
+    let lower = error.to_lowercase();
+    // The status codes are matched in the phrasing git and curl actually
+    // print, not as bare digits: "403" on its own also matches a branch called
+    // `fix/403-page` or a repository named after an issue number, and the whole
+    // point of this function is to stop it handing out confident wrong advice.
+    let permission = [
+        "permission to",
+        "denied to",
+        "error: 403",
+        "error: 401",
+        "http 403",
+        "http 401",
+        "status code 403",
+        "status code 401",
+        "authentication failed",
+        "write access",
+        "read-only",
+        "protected branch",
+        "pre-receive hook declined",
+    ];
+    if permission.iter().any(|needle| lower.contains(needle)) {
+        return PushRefusal::Permission;
+    }
+    let moved = [
+        "non-fast-forward",
+        "fetch first",
+        "updates were rejected",
+        "[rejected]",
+        "behind its remote",
+        "stale info",
+    ];
+    if moved.iter().any(|needle| lower.contains(needle)) {
+        return PushRefusal::BranchMoved;
+    }
+    PushRefusal::Unknown
+}
+
+/// What a delivery delivers FROM — which decides where it pushes, what pull
+/// request it goes into or opens, and where it records the one it reached.
+#[derive(Debug, Clone)]
+enum DeliverySource {
+    /// Triggered from a forge issue: the task's own branch, in a pull request
+    /// that closes the issue.
+    Issue(ForgeSourceMeta),
+    /// Triggered from a pull request: pushed back onto that pull request's
+    /// head branch.
+    Pull(ForgeSourceMeta),
+    /// No forge provenance: the task's own branch, in a pull request on the
+    /// repository the project's `origin` names. `recorded` is the number of
+    /// the pull request an earlier delivery opened, if the task stayed in
+    /// review after it.
+    Local {
+        target: DeliveryTarget,
+        recorded: Option<i64>,
+    },
+}
+
+impl DeliverySource {
+    /// The forge, repository and pinned account every step of the delivery
+    /// speaks to.
+    fn ctx<'a>(
+        &'a self,
+        conn: &'a sea_orm::DatabaseConnection,
+        data_dir: &'a Path,
+    ) -> DeliveryCtx<'a> {
+        let (provider, server_host, account_id, owner_repo) = match self {
+            DeliverySource::Issue(meta) | DeliverySource::Pull(meta) => (
+                meta.provider,
+                meta.server_host.as_str(),
+                meta.account_id.as_str(),
+                meta.owner_repo.as_str(),
+            ),
+            DeliverySource::Local { target, .. } => (
+                target.provider,
+                target.server_host.as_str(),
+                target.account_id.as_str(),
+                target.owner_repo.as_str(),
+            ),
+        };
+        DeliveryCtx {
+            conn,
+            data_dir,
+            provider,
+            server_host,
+            account_id,
+            owner_repo,
+        }
+    }
+
+    fn provider(&self) -> ForgeProvider {
+        match self {
+            DeliverySource::Issue(meta) | DeliverySource::Pull(meta) => meta.provider,
+            DeliverySource::Local { target, .. } => target.provider,
+        }
+    }
+
+    fn owner_repo(&self) -> &str {
+        match self {
+            DeliverySource::Issue(meta) | DeliverySource::Pull(meta) => &meta.owner_repo,
+            DeliverySource::Local { target, .. } => &target.owner_repo,
+        }
+    }
+
+    /// The pull request an earlier delivery of this task opened, which its
+    /// next delivery pushes into. Never a pull-request task's own: that one
+    /// is the task's identity, not something it delivered.
+    fn recorded_pull(&self) -> Option<i64> {
+        match self {
+            // Both halves, or it is not a record: a row delivered before the
+            // number was kept names its pull request by URL alone, and every
+            // such row is `done`.
+            DeliverySource::Issue(meta) => meta.result_pr.as_ref().and(meta.result_pr_number),
+            DeliverySource::Pull(_) => None,
+            DeliverySource::Local { recorded, .. } => *recorded,
+        }
+    }
+
+    /// What a local task's delivery persists for crash recovery — the one
+    /// source with nothing else naming its repository and account.
+    fn local_target(&self) -> Option<&DeliveryTarget> {
+        match self {
+            DeliverySource::Local { target, .. } => Some(target),
+            _ => None,
+        }
+    }
+
+    /// Body of the pull request a delivery of this task opens.
+    fn pull_request_body(&self, task_id: i32) -> String {
+        match self {
+            // Several issues: the closing list fixed at the first delivery,
+            // which `closing_list` has always filled in by the time a body is
+            // asked for — or every issue, should a row ever lack it.
+            DeliverySource::Issue(meta) if meta.is_combined() => {
+                let items: Vec<(i64, &str)> = meta
+                    .items
+                    .iter()
+                    .map(|item| (item.number, item.url.as_str()))
+                    .collect();
+                let closes = meta.pr_closes.clone().unwrap_or_else(|| meta.item_numbers());
+                issues_pull_request_body(&items, &closes, task_id)
+            }
+            DeliverySource::Issue(meta) => pull_request_body(&meta.url, meta.number, task_id),
+            // A pull-request task never opens one; the local body is the one
+            // that claims nothing.
+            DeliverySource::Pull(_) | DeliverySource::Local { .. } => {
+                local_pull_request_body(task_id)
+            }
+        }
+    }
+}
+
+/// A pull request a delivery pushes INTO instead of opening one — a
+/// pull-request task's own, or the one an issue's or a local task's earlier
+/// delivery opened before the task stayed in review. Everything the push and
+/// the checks around it need to know, whichever of the two it is.
+#[derive(Debug, Clone)]
+struct PullTarget {
+    number: i64,
+    provider: ForgeProvider,
+    /// `owner/repo` its head branch lives in, as recorded — the fork, for a
+    /// fork's pull request. Compared with `same_repo`, never `==`.
+    head_repo: String,
+    /// Where the push lands: `head_repo`, normalized.
+    push_repo: String,
+    /// The source repository — where every API call goes, and what tells a
+    /// fork's push apart from a same-repository one in an error.
+    owner_repo: String,
+    head_ref: String,
+    /// The base it was reviewed against. `None` (a pull-request row hydrated
+    /// before the field existed) skips the retarget check.
+    base_ref: Option<String>,
+    /// Record what each push adds — a pull-request task's own-work anchor
+    /// (`pushed_onto`) and its counters, which measure from the pull request's
+    /// head. An issue's or a local task's counters measure from its base, and
+    /// already cover everything its pull request carries.
+    record_push: bool,
+}
+
+impl PullTarget {
+    /// A pull-request task's own pull request, pushed back to on `head_ref`.
+    fn own_pull_request(meta: &ForgeSourceMeta, head_ref: &str) -> Self {
+        // Rows without a recorded head repository are same-repo by
+        // construction: builds that predate the field refused forks.
+        let head_repo = meta
+            .head_repo
+            .as_deref()
+            .map(str::trim)
+            .filter(|r| !r.is_empty())
+            .unwrap_or(&meta.owner_repo)
+            .to_string();
+        PullTarget {
+            number: meta.number,
+            provider: meta.provider,
+            push_repo: pull_push_repo(meta).unwrap_or_else(|_| head_repo.clone()),
+            head_repo,
+            owner_repo: meta.owner_repo.clone(),
+            head_ref: head_ref.to_string(),
+            base_ref: meta.base_ref.clone(),
+            record_push: true,
+        }
+    }
+
+    /// The pull request `number` an earlier delivery of an issue's or a local
+    /// task opened from the task's own branch, in its own repository, against
+    /// the base it was reviewed on.
+    fn recorded(source: &DeliverySource, number: i64, head_ref: &str, base_ref: &str) -> Self {
+        let owner_repo = source.owner_repo().to_string();
+        PullTarget {
+            number,
+            provider: source.provider(),
+            head_repo: owner_repo.clone(),
+            push_repo: crate::forge::normalize_repo(&owner_repo)
+                .unwrap_or_else(|| owner_repo.clone()),
+            owner_repo,
+            head_ref: head_ref.to_string(),
+            base_ref: Some(base_ref.to_string()),
+            record_push: false,
+        }
+    }
+}
+
+/// How a delivery INTO an existing pull request came out.
+#[derive(Debug)]
+enum IntoPull {
+    /// Pushed — or already there — and checked: the pull request to settle on.
+    Delivered(ForgePr),
+    /// Closed or merged BEFORE anything was pushed, with commits still to
+    /// push. Nothing was published.
+    NoLongerOpen(ForgePr),
+}
+
+/// Which issues the pull request of a task made from several related issues
+/// closes, settled before its delivery begins — and the snapshot to record it
+/// in, when this is the delivery that fixes it.
+///
+/// The list is the user's call, taken at the task's FIRST delivery from the
+/// agent's per-issue verdicts (`requested`; `None` there closes every issue),
+/// and fixed from then on: every later delivery — into the pull request that
+/// one opened, into a new one after it was closed, or one a crash recovery
+/// settles — closes the same issues. The engine never edits a pull request it
+/// opened, and an earlier delivery may already have opened one the row does
+/// not know of yet, so a list chosen anew could contradict a description
+/// already published. A request naming a DIFFERENT list is refused, pointing
+/// at where the published one can be edited; naming the same one, or none,
+/// goes ahead.
+///
+/// Only such a task chooses. A one-issue task's pull request closes its issue,
+/// and nothing else closes anything — a list sent for either is refused rather
+/// than ignored, because it says the client believes something false.
+fn closing_list(
+    source: DeliverySource,
+    requested: Option<Vec<i64>>,
+) -> Result<(DeliverySource, Option<String>), String> {
+    let mut meta = match source {
+        DeliverySource::Issue(meta) if meta.is_combined() => meta,
+        other => {
+            return match requested {
+                None => Ok((other, None)),
+                Some(_) => Err(
+                    "only a task made from several issues chooses which of them its pull \
+                     request closes"
+                        .to_string(),
+                ),
+            }
+        }
+    };
+    let members = meta.item_numbers();
+    let requested = match requested {
+        None => None,
+        Some(numbers) => {
+            if let Some(stranger) = numbers.iter().find(|n| !members.contains(n)) {
+                return Err(format!("#{stranger} is not one of this task's issues"));
+            }
+            // In the task's own order, each once.
+            Some(
+                members
+                    .iter()
+                    .copied()
+                    .filter(|n| numbers.contains(n))
+                    .collect::<Vec<_>>(),
+            )
+        }
+    };
+    if let Some(fixed) = meta.pr_closes.clone() {
+        if let Some(asked) = requested {
+            let same = asked.len() == fixed.len() && asked.iter().all(|n| fixed.contains(n));
+            if !same {
+                let named = if fixed.is_empty() {
+                    "none of its issues".to_string()
+                } else {
+                    fixed
+                        .iter()
+                        .map(|n| format!("#{n}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                return Err(format!(
+                    "this task's pull request closes {named} — the list was fixed at its first \
+                     delivery; edit the pull request's description on the forge to change it"
+                ));
+            }
+        }
+        return Ok((DeliverySource::Issue(meta), None));
+    }
+    meta.pr_closes = Some(requested.unwrap_or(members));
+    let pinned = serde_json::to_string(&meta)
+        .map_err(|e| format!("could not record which issues the pull request closes: {e}"))?;
+    Ok((DeliverySource::Issue(meta), Some(pinned)))
+}
+
+/// What an interrupted delivery was delivering from, read back for crash
+/// recovery. A local task's repository and account come from the merge state
+/// the delivery persisted — the one record of them until it settles — and,
+/// failing that, from the pull request an earlier delivery recorded.
+fn recovery_source(
+    task: &crate::db::entities::work_task::Model,
+    state: &WorkTaskMergeState,
+) -> Result<DeliverySource, ()> {
+    let forge_meta = || {
+        task.source_meta
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<ForgeSourceMeta>(s).ok())
+            .ok_or(())
+    };
+    match task.source_kind.as_deref() {
+        Some(SOURCE_KIND_ISSUE) => Ok(DeliverySource::Issue(forge_meta()?)),
+        Some(SOURCE_KIND_PR) => Ok(DeliverySource::Pull(forge_meta()?)),
+        None => {
+            let recorded = task
+                .delivery
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<WorkTaskDelivery>(s).ok());
+            let target = state
+                .target
+                .clone()
+                .or_else(|| recorded.as_ref().map(|r| r.target.clone()))
+                .ok_or(())?;
+            Ok(DeliverySource::Local {
+                target,
+                recorded: recorded.map(|r| r.pr_number),
+            })
+        }
+        Some(_) => Err(()),
+    }
+}
+
+/// The repository a pull-request task's push-back lands in: the HEAD
+/// repository recorded at trigger time — the fork, when the pull request comes
+/// from one. A row that recorded none falls back to the source repository:
+/// builds that predate the field refused forks at trigger, so their rows are
+/// same-repo by construction. `Err` is the one head codeg cannot push to ever —
+/// a fork it cannot name (GitLab's unresolved `project-{id}` placeholder, or a
+/// fork deleted since GitHub hydrated the row).
+fn pull_push_repo(meta: &ForgeSourceMeta) -> Result<String, String> {
+    let recorded = meta
+        .head_repo
+        .as_deref()
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .unwrap_or(&meta.owner_repo);
+    crate::forge::normalize_repo(recorded).ok_or_else(|| {
+        format!(
+            "{} #{} comes from a fork whose repository codeg cannot see (it may be private or \
+             deleted), so there is nowhere to push the work back to — its commits stay on the \
+             task's local branch",
+            meta.provider.change_noun(),
+            meta.number
+        )
+    })
+}
+
 /// Pick the launch mode for a pump-driven launch from the task's history: a
-/// task with a prior conversation continues (retry semantics); a pristine one
-/// starts fresh. Explicit returns launch directly with `LaunchMode::Return`.
+/// task with a prior conversation continues (retry semantics); one with no
+/// session to continue starts fresh. Explicit returns launch directly with
+/// `LaunchMode::Return`.
+///
+/// The bound session IS the whole criterion, which is what lets a transition
+/// decide how the next start behaves: `retry` (failed → queued) keeps the link
+/// and therefore continues, while `requeue_canceled` drops it so a task the
+/// user put back on the board runs from the top. `compose_prompt` must not
+/// read `Fresh` as "this task has no history" — see its doc.
 fn launch_mode_for(task: &crate::db::entities::work_task::Model) -> LaunchMode {
     if task.conversation_id.is_some() {
         LaunchMode::Retry
@@ -3485,25 +7997,33 @@ fn launch_mode_for(task: &crate::db::entities::work_task::Model) -> LaunchMode {
     }
 }
 
+/// The branch the task was created FOR, if its config names one. A blank
+/// choice is no choice: the editor writes the empty string for "the project
+/// folder's current branch", which is also what every task predating the
+/// field carries.
+fn chosen_base_branch(task: &crate::db::entities::work_task::Model) -> Option<String> {
+    serde_json::from_str::<WorkTaskConfig>(&task.config)
+        .ok()?
+        .base_branch
+        .map(|b| b.trim().to_string())
+        .filter(|b| !b.is_empty())
+}
+
 /// Layered agent config: task override wins wholesale; else the folder's task
 /// settings; else the folder's default agent with no extra options.
+///
+/// A frozen config is the task's own and is used verbatim (possibly with no
+/// agent); only a legacy one is layered.
 fn effective_agent_config(
     cfg: &WorkTaskConfig,
     settings: &WorkTaskFolderSettings,
     root: &crate::models::FolderDetail,
-) -> (
-    Option<String>,
-    Option<String>,
-    std::collections::BTreeMap<String, String>,
-) {
-    if let Some(agent) = cfg.agent_type.clone() {
-        return (Some(agent), cfg.mode_id.clone(), cfg.config_values.clone());
-    }
-    if let Some(agent) = settings.default_agent_type.clone() {
+) -> work_task_service::AgentTuple {
+    if cfg.agent_config_frozen {
         return (
-            Some(agent),
-            settings.mode_id.clone(),
-            settings.config_values.clone(),
+            cfg.agent_type.clone(),
+            cfg.mode_id.clone(),
+            cfg.config_values.clone(),
         );
     }
     let folder_default = root
@@ -3511,11 +8031,7 @@ fn effective_agent_config(
         .as_ref()
         .and_then(|a| serde_json::to_value(a).ok())
         .and_then(|v| v.as_str().map(String::from));
-    (
-        folder_default,
-        settings.mode_id.clone(),
-        settings.config_values.clone(),
-    )
+    work_task_service::layer_agent_config(cfg, settings, folder_default)
 }
 
 /// Compose the prompt for a launch mode. Fresh runs replay the task's blocks.
@@ -3523,6 +8039,11 @@ fn effective_agent_config(
 /// already carries the task context, while a fresh fallback session needs the
 /// full original description again. Every prompt ends with the worktree guard,
 /// then with whatever the folder's settings add for this stage.
+///
+/// "Fresh" is a mode, NOT a promise that the task is pristine: `requeue_canceled`
+/// drops the session link so a re-queued task starts over, which sends a task
+/// that already ran — worktree, branch and all — back through the fresh arm. Both
+/// replaying arms therefore read the instruction log rather than the mode.
 async fn compose_prompt(
     cfg: &WorkTaskConfig,
     task: &crate::db::entities::work_task::Model,
@@ -3539,23 +8060,49 @@ async fn compose_prompt(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("bad prompt blocks: {e}"))?;
 
+    // Whether this launch is (re)doing the task's ORIGINAL work order, as
+    // opposed to follow-up work the user asked for later. The worktree guard
+    // below keys its licence on this: a report-deliverable task forbids code
+    // changes on its original order, but a returned "now apply the fix" turn
+    // is precisely a change order and must get the normal write licence.
+    let mut original_work_order = false;
+    // A replay standing in for an unanswered question: it already says "do not
+    // change any files for it", so the guard must not hand back the commit
+    // grant three blocks later.
+    let mut replayed_question = false;
+
     match mode {
         LaunchMode::Fresh => {
             if original.is_empty() {
                 return Err("prompt is empty".to_string());
             }
-            blocks.extend(original);
-            // A task can reach a fresh launch carrying a restart note: it was
-            // canceled (or failed during setup) before it ever had a session,
-            // and the user attached a note when re-queueing it. Review feedback
-            // cannot exist here — that needs a session — but match on the kind
-            // rather than assume it.
-            if let Some(outstanding) = outstanding_instruction(conn, task.id).await {
-                if matches!(outstanding.kind, OutstandingKind::Restart) {
-                    blocks.push(restart_note_block(&outstanding.text));
-                    blocks.extend(attachment_blocks(&outstanding.attachments, task.id));
-                }
+            // Read the log, not the mode. A fresh launch used to mean a task
+            // with no history at all; since a requeue drops the session link it
+            // also means "run this again from the top", and that task may owe
+            // the user an instruction its stopped generation never answered —
+            // a returned "rework this" is silently lost otherwise, and a
+            // returned question comes back as a work order with a full commit
+            // grant. Same two reads as the retry arm, for the same reasons.
+            let scan = instruction_scan(conn, task.id).await;
+            original_work_order = scan.interrupted.is_none();
+            replayed_question = matches!(scan.interrupted, Some(FollowUpIntent::Question));
+            // Only when a generation actually got as far as its own turn
+            // (`started_at` is written by `mark_running` and never cleared): a
+            // task canceled during setup has nothing in its worktree to warn
+            // about, and its prompt stays byte-identical to a first run's.
+            if task.started_at.is_some() {
+                blocks.push(PromptInputBlock::Text {
+                    text: "You are running this task again from the top: an earlier run was \
+                           stopped and the task was put back on the board, so this session \
+                           carries none of that run's context. Its worktree may still hold \
+                           that run's work — check the current state first and build on \
+                           whatever is already there instead of redoing it. The original task \
+                           was:"
+                        .to_string(),
+                });
             }
+            blocks.extend(original);
+            push_replay(&mut blocks, &scan, resumed, task.id);
         }
         LaunchMode::Retry => {
             blocks.push(PromptInputBlock::Text {
@@ -3572,25 +8119,16 @@ async fn compose_prompt(
             // Replay whatever instruction the interrupted generation still
             // owed the user, framed the way they meant it — an unanswered
             // question must not come back as a work order.
-            if let Some(outstanding) = outstanding_instruction(conn, task.id).await {
-                blocks.push(match outstanding.kind {
-                    OutstandingKind::Restart => restart_note_block(&outstanding.text),
-                    OutstandingKind::Review(FollowUpIntent::Question) => PromptInputBlock::Text {
-                        text: format!(
-                            "The user asked this question before the interruption and never \
-                             got an answer. Answer it, and do not change any files for it:\
-                             \n\n{}",
-                            outstanding.text
-                        ),
-                    },
-                    OutstandingKind::Review(_) => PromptInputBlock::Text {
-                        text: format!("Latest review feedback to address:\n{}", outstanding.text),
-                    },
-                });
-                // Whatever the user attached to that instruction follows it, so
-                // the replay carries the screenshot as well as the sentence.
-                blocks.extend(attachment_blocks(&outstanding.attachments, task.id));
-            }
+            let scan = instruction_scan(conn, task.id).await;
+            // A retry stands in for whichever turn was interrupted, and the
+            // licence follows THAT turn — `interrupted`, not the newest note:
+            // a retry/requeue note refines the turn it interrupts (a hint, a
+            // screenshot), it does not change what kind of turn it was. With
+            // no unsettled follow-up underneath, this is the original order
+            // again.
+            original_work_order = scan.interrupted.is_none();
+            replayed_question = matches!(scan.interrupted, Some(FollowUpIntent::Question));
+            push_replay(&mut blocks, &scan, resumed, task.id);
         }
         LaunchMode::Return {
             intent,
@@ -3619,6 +8157,8 @@ async fn compose_prompt(
             work_branch,
             strategy,
             message,
+            instructions,
+            delete_worktree,
         } => {
             if !resumed {
                 blocks.push(PromptInputBlock::Text {
@@ -3639,11 +8179,37 @@ async fn compose_prompt(
                      git -C \"{root_path}\" commit -m \"<message>\""
                 )
             };
+            // Indented under step 3 rather than left dangling after it: it says
+            // what to substitute for that step's `<message>`, and read as a
+            // fourth line it looked like a fourth instruction.
             let message_rule = match message {
-                Some(m) => format!("Use exactly this commit message:\n{m}"),
-                None => "Write a concise Conventional Commits message yourself, \
-                         summarizing what this task changed."
+                Some(m) => format!("   Use exactly this commit message:\n   {m}"),
+                None => "   For `<message>`, write a concise Conventional Commits \
+                         message yourself, summarizing what this task changed."
                     .to_string(),
+            };
+            // The user's own words get their own paragraph, before the closing
+            // rules — those rules stay last on purpose (same reason the standing
+            // worktree guard below is the last built-in block): whatever the
+            // user asked for, it does not license a push or a self-deletion.
+            let extra = match instructions {
+                Some(i) => format!("\nAlso follow these instructions from the user:\n{i}\n"),
+                None => String::new(),
+            };
+            // The "do not delete" rule stays either way (codeg owns the cleanup
+            // and settles from git truth); what follows it says what codeg will
+            // do afterwards, so the agent's summary matches the end state.
+            let cleanup = if *delete_worktree {
+                format!(
+                    " After it has verified the landing, codeg will remove this worktree and \
+                     the `{work_branch}` branch itself, as the user chose — leave that to it, \
+                     and do not describe them as kept."
+                )
+            } else {
+                format!(
+                    " The worktree and the `{work_branch}` branch stay after the merge, as the \
+                     user chose."
+                )
             };
             blocks.push(PromptInputBlock::Text {
                 text: format!(
@@ -3656,9 +8222,11 @@ async fn compose_prompt(
                      merge commit.\n\
                      3. Land onto the base checkout at `{root_path}`:\n   {land_command}\n\
                      {message_rule}\n\
+                     {extra}\n\
                      Do NOT push, do NOT delete this worktree or its branch, and do not \
-                     change anything else on the base branch. Finish with one short line \
-                     saying what landed."
+                     change anything else on the base branch — leave the checkout at \
+                     `{root_path}` on `{base_branch}`, never switch branches there.{cleanup} \
+                     Finish with one short line saying what landed."
                 ),
             });
         }
@@ -3668,9 +8236,10 @@ async fn compose_prompt(
     // own instructions (it exists to forbid exactly what a merge must do).
     //
     // It is the LAST built-in block, so its licence clause is the last thing
-    // the agent reads: a read-only turn has to swap that clause out, or "commit
-    // to the current branch as you like" would quietly undo the intent's own
-    // "don't touch any file" instruction several blocks earlier.
+    // the agent reads: a read-only turn — and a report-deliverable original
+    // order — has to swap that clause out, or "commit to the current branch as
+    // you like" would quietly undo the intent's own "don't touch any file"
+    // instruction several blocks earlier.
     if !matches!(mode, LaunchMode::Merge { .. }) {
         let branch = task
             .work_branch
@@ -3682,18 +8251,32 @@ async fn compose_prompt(
             .as_deref()
             .map(|b| format!(" (`{b}`)"))
             .unwrap_or_default();
-        let licence = if mode.is_read_only() {
+        let licence = if mode.is_read_only() || replayed_question {
             format!(
                 "This turn is a question, not a work order: answer it in your reply and do NOT \
                  create, edit, delete or commit any file, and do not merge into, rebase onto, or \
                  push the base branch{base}. If answering would require a change, describe the \
                  change instead of making it."
             )
+        } else if original_work_order && cfg.deliverable.as_deref() == Some(DELIVERABLE_REPORT) {
+            // Report-deliverable order (forge plan-first / review-only):
+            // the generic "commit your work" grant would quietly undo the
+            // task's own "analysis only" instruction several blocks earlier —
+            // the licence must defer to the task text, not overrule it.
+            format!(
+                "This turn delivers a report, not code changes: put the full findings in your \
+                 final reply — the user reads them from there, and may return this task for \
+                 follow-up work afterwards. Commit only what the task's instructions \
+                 explicitly allow (often nothing), and do NOT merge into, rebase onto, or \
+                 push the base branch{base}."
+            )
         } else {
             format!(
-                "Commit to the current branch as you like, but do NOT merge into, rebase onto, \
-                 or push the base branch{base} — the user lands the result after review. Finish \
-                 with a short summary of what you did."
+                "Commit your work to the current branch, and leave nothing uncommitted when you \
+                 finish — the result is delivered from the branch's commits, so a file left \
+                 uncommitted is not part of it. Do NOT merge into, rebase onto, or push the base \
+                 branch{base} — the user lands the result after review. Finish with a short \
+                 summary of what you did."
             )
         };
         blocks.push(PromptInputBlock::Text {
@@ -3705,6 +8288,19 @@ async fn compose_prompt(
                  `needs_review`, or `blocked`, plus a short summary).",
             ),
         });
+        // A task that will comment back in its thread(s) also drafts what the
+        // comment says. Every run but a merge: a send-back changes the work,
+        // so it must refresh the draft that describes it (a new run clears
+        // the old one).
+        if let Some((kind, meta)) = forge_thread(task).filter(|(_, m)| m.writeback == Some(true)) {
+            blocks.push(PromptInputBlock::Text {
+                text: crate::forge::thread_reply::reply_instruction(
+                    meta.provider,
+                    kind,
+                    &meta.item_numbers(),
+                ),
+            });
+        }
     }
 
     // Whatever the user added in task settings, always last: it refines the
@@ -3918,10 +8514,35 @@ struct Outstanding {
 /// carried out — replaying "add the tests" long after they were added. And the
 /// review barrier is what stops a note from being re-injected into every
 /// subsequent generation for the rest of the task's life.
-async fn outstanding_instruction(
+/// What a retry launch learns from the event log: the newest instruction the
+/// interrupted generation still owes the user (`outstanding`, replayed into
+/// the prompt), and the kind of turn that generation was actually running
+/// (`interrupted`, which picks the guard's licence). They differ exactly when
+/// a retry/requeue note sits on top of a failed follow-up: the note is the
+/// newer INSTRUCTION, but the turn underneath is still that follow-up — a
+/// note refines the turn it interrupts, it does not change its kind.
+struct InstructionScan {
+    outstanding: Option<Outstanding>,
+    /// The unsettled `return` intent beneath any retry/requeue notes; `None`
+    /// when the generation was (re)doing the task's original order.
+    interrupted: Option<FollowUpIntent>,
+    /// That same `return` as an INSTRUCTION, and only when a newer
+    /// retry/requeue note took the `outstanding` slot away from it.
+    ///
+    /// A resumed session already has those words in its transcript, so the
+    /// note alone is the right replay there — that is what "a note refines the
+    /// turn it interrupts" means. A session with no context (a re-queued
+    /// task's fresh launch, a resume that failed over) has nothing: replaying
+    /// only the note hands the agent "take this into account" with no account
+    /// to take it into, and for a question it pairs a read-only licence with a
+    /// question the agent was never shown.
+    interrupted_instruction: Option<Outstanding>,
+}
+
+async fn instruction_scan(
     conn: &sea_orm::DatabaseConnection,
     task_id: i32,
-) -> Option<Outstanding> {
+) -> InstructionScan {
     // Newest-first, and narrowed IN THE QUERY to the two kinds that can settle
     // the question. Scanning raw events would let a chatty run bury the answer:
     // `agent_progress` volume is up to the agent, so a few hundred milestones
@@ -3934,7 +8555,12 @@ async fn outstanding_instruction(
         200,
     )
     .await
-    .ok()?;
+    .unwrap_or_default();
+    let mut scan = InstructionScan {
+        outstanding: None,
+        interrupted: None,
+        interrupted_instruction: None,
+    };
     for event in events {
         match event.kind.as_str() {
             "status_changed" => {
@@ -3944,8 +8570,10 @@ async fn outstanding_instruction(
                     .and_then(|p| p.get("to"))
                     .and_then(|v| v.as_str())
                     == Some("review");
+                // Reaching review consumed every older instruction: whatever
+                // lies beyond was delivered and decided on.
                 if settled {
-                    return None;
+                    break;
                 }
             }
             "user_action" => {
@@ -3953,27 +8581,52 @@ async fn outstanding_instruction(
                     Some(p) => p,
                     None => continue,
                 };
-                let action = payload.get("action").and_then(|v| v.as_str())?;
+                let Some(action) = payload.get("action").and_then(|v| v.as_str()) else {
+                    break;
+                };
                 match action {
                     "return" => {
                         let intent = FollowUpIntent::from_wire(
                             payload.get("intent").and_then(|v| v.as_str()),
                         )
                         .unwrap_or_default();
-                        let text = payload.get("feedback").and_then(|v| v.as_str())?;
-                        return Some(Outstanding {
-                            kind: OutstandingKind::Review(intent),
-                            text: text.to_string(),
-                            attachments: payload_blocks(&payload),
-                        });
+                        let returned =
+                            payload.get("feedback").and_then(|v| v.as_str()).map(|text| {
+                                Outstanding {
+                                    kind: OutstandingKind::Review(intent),
+                                    text: text.to_string(),
+                                    attachments: payload_blocks(&payload),
+                                }
+                            });
+                        if scan.outstanding.is_none() {
+                            let Some(returned) = returned else {
+                                break;
+                            };
+                            scan.outstanding = Some(returned);
+                        } else {
+                            // A retry/requeue note already claimed the newest
+                            // slot. Keep the returned words too — see the field.
+                            scan.interrupted_instruction = returned;
+                        }
+                        // The newest unsettled return IS the interrupted turn
+                        // (a second return needs another review in between,
+                        // which would have settled this scan already).
+                        scan.interrupted = Some(intent);
+                        break;
                     }
                     "retry" | "requeue" => {
-                        let text = payload.get("note").and_then(|v| v.as_str())?;
-                        return Some(Outstanding {
-                            kind: OutstandingKind::Restart,
-                            text: text.to_string(),
-                            attachments: payload_blocks(&payload),
-                        });
+                        if scan.outstanding.is_none() {
+                            let Some(text) = payload.get("note").and_then(|v| v.as_str()) else {
+                                break;
+                            };
+                            scan.outstanding = Some(Outstanding {
+                                kind: OutstandingKind::Restart,
+                                text: text.to_string(),
+                                attachments: payload_blocks(&payload),
+                            });
+                        }
+                        // Keep looking: the turn this note interrupted lies
+                        // deeper in the log.
                     }
                     // Other user actions (delete, …) neither carry nor consume
                     // an instruction.
@@ -3983,7 +8636,57 @@ async fn outstanding_instruction(
             _ => continue,
         }
     }
-    None
+    scan
+}
+
+/// Replay everything the launch still owes the user, oldest first, with each
+/// instruction's own attachments right behind the sentence that framed it.
+///
+/// `resumed` is the whole difference. A resumed session carries the interrupted
+/// turn in its transcript, so the newest instruction is the entire replay — a
+/// retry/requeue note refines a turn the agent can still read. A session with
+/// no context has to be given that turn as well, or the note lands on nothing:
+/// see [`InstructionScan::interrupted_instruction`].
+///
+/// Shared by both replaying arms — a re-queued task reaches `Fresh` with
+/// exactly the same debt to the user as an interrupted one reaching `Retry`,
+/// so the two must not drift apart in what they replay or how they word it.
+fn push_replay(
+    blocks: &mut Vec<PromptInputBlock>,
+    scan: &InstructionScan,
+    resumed: bool,
+    task_id: i32,
+) {
+    let mut push = |instruction: &Outstanding| {
+        blocks.push(outstanding_block(instruction));
+        blocks.extend(attachment_blocks(&instruction.attachments, task_id));
+    };
+    if !resumed {
+        if let Some(interrupted) = &scan.interrupted_instruction {
+            push(interrupted);
+        }
+    }
+    if let Some(outstanding) = &scan.outstanding {
+        push(outstanding);
+    }
+}
+
+/// The block that replays one outstanding instruction, framed the way the user
+/// meant it: an unanswered question must not come back as a work order.
+fn outstanding_block(outstanding: &Outstanding) -> PromptInputBlock {
+    match outstanding.kind {
+        OutstandingKind::Restart => restart_note_block(&outstanding.text),
+        OutstandingKind::Review(FollowUpIntent::Question) => PromptInputBlock::Text {
+            text: format!(
+                "The user asked this question before the interruption and never got an \
+                 answer. Answer it, and do not change any files for it:\n\n{}",
+                outstanding.text
+            ),
+        },
+        OutstandingKind::Review(_) => PromptInputBlock::Text {
+            text: format!("Latest review feedback to address:\n{}", outstanding.text),
+        },
+    }
 }
 
 /// One-shot sink for the generation a launch actually operated on. The launch
@@ -3993,12 +8696,48 @@ async fn outstanding_instruction(
 struct LaunchSeq(std::sync::Mutex<Option<i32>>);
 
 impl LaunchSeq {
+    // Poison-tolerant, matching the locks in `office_watch` and
+    // `background_watch`. The guarded value is a plain `Option<i32>` that
+    // cannot be left half-written, so a panic elsewhere in the launch has
+    // nothing to corrupt here, while `expect` would turn that unrelated panic
+    // into a permanent failure of every later launch. The schedule tick reaches
+    // this with nobody at the keyboard.
     fn set(&self, run_seq: i32) {
-        *self.0.lock().expect("launch seq mutex") = Some(run_seq);
+        *self.0.lock().unwrap_or_else(|p| p.into_inner()) = Some(run_seq);
     }
 
     fn get(&self) -> Option<i32> {
-        *self.0.lock().expect("launch seq mutex")
+        *self.0.lock().unwrap_or_else(|p| p.into_inner())
+    }
+}
+
+/// One-shot "this generation is live" report from a launch to whoever asked
+/// for it — today the merge click, which must not sit on the rest of the run.
+///
+/// Fire-once by construction, and callable from either side of the launch: the
+/// launch itself fires `Ok` the moment the agent is up and the row carries its
+/// coordinates, while the task that drives it fires the launch's error for
+/// every way of failing before that point. Whichever comes first wins; the
+/// other is a no-op, so a failure AFTER a successful dispatch stays on the card
+/// instead of being reported to a caller that has already been told the merge
+/// started.
+struct DispatchSignal(std::sync::Mutex<Option<oneshot::Sender<Result<(), String>>>>);
+
+impl DispatchSignal {
+    fn new() -> (Self, oneshot::Receiver<Result<(), String>>) {
+        let (tx, rx) = oneshot::channel();
+        (Self(std::sync::Mutex::new(Some(tx))), rx)
+    }
+
+    fn fire(&self, result: Result<(), String>) {
+        // Poison-tolerant for the same reason as `LaunchSeq`: the fire-once
+        // guarantee is the `take()`, not the lock's poison flag, and refusing
+        // to fire after an unrelated panic would leave the caller waiting on a
+        // oneshot that is never sent.
+        let sender = self.0.lock().unwrap_or_else(|p| p.into_inner()).take();
+        if let Some(sender) = sender {
+            let _ = sender.send(result);
+        }
     }
 }
 
@@ -4022,6 +8761,65 @@ struct SetupChild {
     run_seq: i32,
     /// Rung by the canceller, awaited by whoever is running the child.
     wake: Arc<Notify>,
+}
+
+/// A launch's in-flight pre-prompt compaction, keyed by task in
+/// [`TaskEngine::compacting`]. Holds the connection the compaction turn runs
+/// on so a cancel can abort that turn without the task lock, and the generation
+/// that owns it so a stale cancel cannot abort a newer run's compaction.
+struct CompactRun {
+    run_seq: i32,
+    conn_id: String,
+}
+
+/// Everything [`TaskEngine::compact_before_prompt`] needs about the launch it
+/// is running inside. A struct rather than a parameter list because four of
+/// the fields are bare `i32`s in a row — named at the call site, a transposed
+/// pair is a compile error instead of a task compacting someone else's session.
+struct CompactRequest<'a> {
+    task_id: i32,
+    run_seq: i32,
+    conn_id: &'a str,
+    agent_type: AgentType,
+    settings: &'a WorkTaskFolderSettings,
+    /// The WORKTREE folder the conversation belongs to — same value the round's
+    /// own prompt is linked with.
+    folder_id: i32,
+    conversation_id: i32,
+    /// Status this generation holds for the rest of the launch, which the
+    /// cancel gates re-check (`preparing`, or `merging` for a merge round).
+    in_flight: WorkTaskStatus,
+}
+
+/// One context-window occupancy reading, plus where it came from — the source
+/// rides the timeline event because "live" and "transcript" answer slightly
+/// different questions (what the agent has loaded vs. what its last turn
+/// recorded), and a surprising percentage is only debuggable with it.
+struct ContextReading {
+    percent: f64,
+    used: Option<u64>,
+    size: Option<u64>,
+    source: &'static str,
+}
+
+/// How a compaction turn ended: `"ok"` / `"canceled"` / `"failed"`, plus the
+/// stop reason or error worth showing beside it.
+struct CompactOutcome {
+    status: &'static str,
+    detail: Option<String>,
+}
+
+impl CompactOutcome {
+    fn new(status: &'static str, detail: Option<String>) -> Self {
+        Self { status, detail }
+    }
+}
+
+/// One decimal place, for percentages written to the timeline — the same
+/// precision the composer's context ring shows, so the two never read as
+/// disagreeing about the same session.
+fn round1(percent: f64) -> f64 {
+    (percent * 10.0).round() / 10.0
 }
 
 /// Marker file (in the worktree's PRIVATE git dir, so it can never show up in
@@ -4148,6 +8946,22 @@ fn first_chars(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
 }
 
+/// Cap on a task-derived conversation title. Long enough for a real card name,
+/// short enough that the sidebar row is not one giant ellipsis.
+const CONVERSATION_TITLE_MAX_CHARS: usize = 80;
+
+/// The title the session a task produces carries: the task's own name, capped.
+/// It is LOCKED on the conversation row at launch (`conversation_service::
+/// lock_title`), so a board card and the session it spawned always read the
+/// same in the sidebar (issue #495).
+///
+/// One definition, because two callers must agree byte-for-byte: the launch-time
+/// seed here, and the rename propagation in `commands::work_task`, which
+/// recognises "still the task's name" by comparing against this exact value.
+pub(crate) fn conversation_title_for_task(task_title: &str) -> String {
+    first_chars(task_title.trim(), CONVERSATION_TITLE_MAX_CHARS)
+}
+
 /// The project folder's own name — what a task worktree directory is named
 /// after. `Path` semantics rather than a `/` split, so `C:\src\repo` yields
 /// `repo` too.
@@ -4246,12 +9060,13 @@ impl WorkTaskToolAccess for EngineWorkTaskTools {
         parent_connection_id: &str,
         verdict: &str,
         summary: Option<&str>,
+        thread_replies: &[crate::acp::delegation::transport::ThreadReply],
     ) -> TaskReportAck {
         let Some(engine) = engine() else {
             return TaskReportAck::rejected("no task engine running in this process");
         };
         engine
-            .record_complete(parent_connection_id, verdict, summary)
+            .record_complete(parent_connection_id, verdict, summary, thread_replies)
             .await
     }
 }
@@ -4267,6 +9082,73 @@ mod tests {
     const ABS_PREFIX: &str = "C:";
     #[cfg(not(windows))]
     const ABS_PREFIX: &str = "";
+
+    /// The stderr shapes below are what git and the forges actually print. A
+    /// push-back refused for being out of date used to come back advising the
+    /// reader to turn on maintainer edits — a setting that, in the report that
+    /// prompted this, was already on. So the two must never be confused.
+    #[test]
+    fn a_stale_push_back_is_not_read_as_a_permission_problem() {
+        let out_of_date = "git push failed: ! [rejected]        task/57 -> feat/x \
+             (fetch first)\nerror: failed to push some refs to \
+             'https://github.com/owner/repo.git'\nhint: Updates were rejected because the \
+             remote contains work that you do not have locally.";
+        assert_eq!(classify_push_refusal(out_of_date), PushRefusal::BranchMoved);
+        assert_eq!(
+            classify_push_refusal("git push failed: ! [rejected] a -> b (non-fast-forward)"),
+            PushRefusal::BranchMoved
+        );
+    }
+
+    #[test]
+    fn a_refused_fork_push_is_read_as_a_permission_problem() {
+        let denied = "git push: authentication failed. Configure a GitHub account in \
+             Settings → Version Control.: remote: Permission to author/repo.git denied to \
+             maintainer.\nfatal: unable to access \
+             'https://github.com/author/repo.git/': The requested URL returned error: 403";
+        assert_eq!(classify_push_refusal(denied), PushRefusal::Permission);
+        assert_eq!(
+            classify_push_refusal(
+                "remote: GitLab: You are not allowed to push code to \
+                 protected branches on this project."
+            ),
+            PushRefusal::Permission
+        );
+        // A forge that refuses outright can also say "rejected"; permission
+        // has to win, or the advice sends the reader to rebase for nothing.
+        assert_eq!(
+            classify_push_refusal(
+                "! [remote rejected] a -> b (pre-receive hook declined)\nerror: failed to push"
+            ),
+            PushRefusal::Permission
+        );
+    }
+
+    /// Anything unrecognised must stay `Unknown`, because `Unknown` is what
+    /// prints no advice — the whole point of the split.
+    #[test]
+    fn an_unrecognised_push_failure_gets_no_advice() {
+        assert_eq!(
+            classify_push_refusal("git push failed: fatal: the remote end hung up unexpectedly"),
+            PushRefusal::Unknown
+        );
+        assert_eq!(classify_push_refusal(""), PushRefusal::Unknown);
+    }
+
+    /// A status code has to be matched in the phrasing that carries it. Branch
+    /// and repository names are part of every push error, and plenty of them
+    /// are named after an issue number.
+    #[test]
+    fn a_number_in_a_branch_name_is_not_a_status_code() {
+        let stale_on_an_issue_branch = "git push failed: ! [rejected] fix/403-page -> \
+             fix/401-redirect (fetch first)\nerror: failed to push some refs to \
+             'https://github.com/owner/repo-403.git'";
+        assert_eq!(
+            classify_push_refusal(stale_on_an_issue_branch),
+            PushRefusal::BranchMoved,
+            "a 403 in a ref name must not be read as a permission refusal"
+        );
+    }
 
     #[test]
     fn worktree_names_carry_ids() {
@@ -4444,6 +9326,21 @@ mod tests {
         assert_eq!(prompt_head(&[]), "");
     }
 
+    /// #649: the pump reads nothing but the conversation link to decide
+    /// whether a launch continues or starts over, so a row that still points
+    /// at an earlier run is dispatched as `Retry` no matter how it got back to
+    /// the queue. `requeue_canceled` clears the link precisely so a task the
+    /// user put back on the board comes through here as `Fresh`.
+    #[test]
+    fn launch_mode_follows_the_conversation_link() {
+        let mut task = task_row();
+        task.conversation_id = None;
+        assert!(matches!(launch_mode_for(&task), LaunchMode::Fresh));
+
+        task.conversation_id = Some(41);
+        assert!(matches!(launch_mode_for(&task), LaunchMode::Retry));
+    }
+
     /// The sweep's row-level gate: exactly the tasks whose merge button the
     /// board would show — and whose light is green — land unattended.
     #[test]
@@ -4466,6 +9363,20 @@ mod tests {
         assert!(!auto_merge_candidate(&task, &settings));
         task.last_error = None;
 
+        // The forge red line: a task whose prompt embeds text authored by an
+        // arbitrary external user (issue body) never lands unattended, no
+        // matter what the folder's auto_merge says. Mutation check both ways —
+        // this row is a candidate on every OTHER gate (asserted just above),
+        // so flipping ONLY source_kind proves this guard is what blocks it,
+        // and clearing it proves the guard doesn't leak onto normal tasks.
+        task.source_kind = Some("forge_issue".into());
+        assert!(
+            !auto_merge_candidate(&task, &settings),
+            "forge-sourced tasks must never be unattended-merge candidates"
+        );
+        task.source_kind = None;
+        assert!(auto_merge_candidate(&task, &settings));
+
         // A merge the user queued belongs to the queue's own drain, with THEIR
         // commit message and worktree choice — the unattended dispatch has
         // neither, so it must not take this row (a drain that skipped it after
@@ -4474,6 +9385,7 @@ mod tests {
             serde_json::to_string(&WorkTaskQueuedMerge {
                 message: Some("feat: land it".into()),
                 delete_worktree: false,
+                instructions: None,
                 queued_at: chrono::DateTime::from_timestamp(1_800_000_000, 0).unwrap(),
             })
             .unwrap(),
@@ -4486,6 +9398,27 @@ mod tests {
         task.pending_merge = Some(r#"{"legacy":true}"#.into());
         assert!(!auto_merge_candidate(&task, &settings));
         task.pending_merge = None;
+
+        // Put aside to handle later: the user postponed this very decision.
+        // Flipping only the mark (the row is a candidate on every other gate)
+        // proves it is what blocks, and clearing it that nothing else does.
+        task.deferred_at = Some(chrono::Utc::now());
+        assert!(!auto_merge_candidate(&task, &settings));
+        task.deferred_at = None;
+
+        // Delivered to a pull request and kept in review: its user lands it
+        // through that pull request. Same flip-only-this-field proof.
+        task.delivery = Some(
+            r#"{"provider":"github","server_host":"github.com","account_id":"a","owner_repo":"acme/app","pr_url":"https://github.test/acme/app/pull/42","pr_number":42}"#
+                .into(),
+        );
+        assert!(
+            !auto_merge_candidate(&task, &settings),
+            "a task with an open pull request never lands locally unattended"
+        );
+        task.delivery = None;
+        assert!(auto_merge_candidate(&task, &settings));
+        assert!(auto_merge_candidate(&task, &settings));
 
         // Only review is mergeable.
         task.status = WorkTaskStatus::Running;
@@ -4515,6 +9448,84 @@ mod tests {
             preflight_command_id: Some(4),
             ..Default::default()
         }));
+    }
+
+    /// A legacy preflight that names a folder command runs it in the worktree —
+    /// unless the desktop app runs that command on its own machine, which this
+    /// host is not.
+    #[tokio::test]
+    async fn a_legacy_preflight_never_runs_a_local_command_on_the_host() {
+        use crate::db::service::folder_command_service;
+        use crate::db::test_helpers::{fresh_in_memory_db, seed_folder};
+        use sea_orm::{ActiveModelTrait, Set};
+
+        for run_local in [false, true] {
+            let dir = tempfile::tempdir().expect("temp dir");
+            let db = fresh_in_memory_db().await;
+            let project = seed_folder(&db, "/repo").await;
+            let worktree = seed_folder(&db, &dir.path().to_string_lossy()).await;
+            let command = folder_command_service::create(
+                &db.conn,
+                project,
+                "check",
+                "echo ran > ran-here",
+                run_local,
+            )
+            .await
+            .expect("command");
+            work_task_service::settings_set(
+                &db.conn,
+                project,
+                &WorkTaskFolderSettings {
+                    preflight_command_id: Some(command.id),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("settings");
+            let now = chrono::Utc::now();
+            let task_id = crate::db::entities::work_task::ActiveModel {
+                folder_id: Set(project),
+                title: Set("Fix the login flow".to_string()),
+                config: Set("{}".to_string()),
+                status: Set(WorkTaskStatus::Review),
+                run_seq: Set(1),
+                worktree_folder_id: Set(Some(worktree)),
+                sort_order: Set(0),
+                created_at: Set(now),
+                updated_at: Set(now),
+                ..Default::default()
+            }
+            .insert(&db.conn)
+            .await
+            .expect("insert task")
+            .id;
+
+            let engine = test_engine(db);
+            engine.run_preflight(task_id, 1).await;
+
+            let light: WorkTaskPreflight = serde_json::from_str(
+                &work_task_service::get_model(&engine.db.conn, task_id)
+                    .await
+                    .expect("task row")
+                    .preflight
+                    .expect("a light"),
+            )
+            .expect("light json");
+            let ran = dir.path().join("ran-here").exists();
+            if run_local {
+                assert!(!ran, "a local command ran on the host");
+                assert_eq!(light.status, "failed");
+                let tail = light.output_tail.unwrap_or_default();
+                assert!(
+                    tail.ends_with("run on the desktop's own computer"),
+                    "{tail}"
+                );
+            } else {
+                assert!(ran, "the folder command didn't run in the worktree");
+                assert_eq!(light.status, "passed");
+            }
+        }
     }
 
     /// The refusal wordings that mean "lost a race" are skipped silently by
@@ -4547,7 +9558,7 @@ mod tests {
             "another task of this project is already merging — wait for it"
         ));
         assert!(!is_benign_merge_race(
-            "project folder is on 'feature', expected 'main' — switch back to merge"
+            "project folder is on 'feature', expected 'main' — switch it to 'main' to merge"
         ));
         assert!(!is_benign_merge_race(
             "the task worktree no longer exists on disk"
@@ -4562,6 +9573,7 @@ mod tests {
         let intent = |secs: i64| WorkTaskQueuedMerge {
             message: None,
             delete_worktree: true,
+            instructions: None,
             queued_at: chrono::DateTime::from_timestamp(1_800_000_000 + secs, 0)
                 .expect("valid instant"),
         };
@@ -4611,9 +9623,16 @@ mod tests {
             additions: None,
             deletions: None,
             merge_commit: None,
+            completion_kind: None,
             preflight: None,
             archived_at: None,
             scheduled_at: None,
+            deferred_at: None,
+            source_kind: None,
+            source_key: None,
+            source_meta: None,
+            delivery: None,
+            writeback_drafts: None,
             created_at: now,
             updated_at: now,
             started_at: None,
@@ -4660,6 +9679,8 @@ mod tests {
             work_branch: "task/7".to_string(),
             strategy: "squash".to_string(),
             message: None,
+            instructions: None,
+            delete_worktree: true,
         }
     }
 
@@ -4707,6 +9728,15 @@ mod tests {
         .expect("record settle");
     }
 
+    /// The replay half of [`instruction_scan`], for the cases that assert on
+    /// the instruction alone and not on the licence it implies.
+    async fn outstanding_instruction(
+        conn: &sea_orm::DatabaseConnection,
+        task_id: i32,
+    ) -> Option<Outstanding> {
+        instruction_scan(conn, task_id).await.outstanding
+    }
+
     /// Each scenario reframes the SAME user text — that is the whole point of
     /// having scenarios, and `revise` must stay byte-identical to the wording
     /// the action had before they existed.
@@ -4748,6 +9778,66 @@ mod tests {
         }
     }
 
+    /// A forge task that will comment back asks its agent for the reply, on
+    /// every run but a merge — a send-back changes the work the reply
+    /// describes. One that stays silent, or has no thread at all, is not asked.
+    #[tokio::test]
+    async fn a_task_that_comments_back_asks_for_the_thread_reply() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let forge_row = |writeback: Option<bool>| {
+            let mut meta = serde_json::json!({
+                "provider": "github",
+                "server_host": "github.com",
+                "api_base": "https://api.github.com",
+                "account_id": "acc-1",
+                "owner_repo": "acme/app",
+                "number": 7,
+                "url": "https://github.com/acme/app/issues/7",
+                "title": "Fix the login flow",
+            });
+            if let Some(w) = writeback {
+                meta["writeback"] = serde_json::json!(w);
+            }
+            crate::db::entities::work_task::Model {
+                source_kind: Some(SOURCE_KIND_ISSUE.to_string()),
+                source_meta: Some(meta.to_string()),
+                ..task_row()
+            }
+        };
+        let compose = |task: crate::db::entities::work_task::Model, mode: LaunchMode| {
+            let conn = db.conn.clone();
+            async move {
+                let blocks = compose_prompt(
+                    &task_config(),
+                    &task,
+                    &mode,
+                    &WorkTaskFolderSettings::default(),
+                    true,
+                    &conn,
+                )
+                .await
+                .expect("compose");
+                texts(&blocks).join("\n")
+            }
+        };
+        let asks = |joined: &str| joined.contains("—— Reply for the work item's thread ——");
+
+        let on = compose(forge_row(Some(true)), LaunchMode::Fresh).await;
+        assert!(asks(&on), "{on}");
+        assert!(on.contains("the thread of issue #7"), "{on}");
+        let returned = compose(forge_row(Some(true)), return_mode(FollowUpIntent::Revise)).await;
+        assert!(asks(&returned), "a send-back refreshes the draft: {returned}");
+
+        for (what, task) in [
+            ("silent", forge_row(Some(false))),
+            ("never asked", forge_row(None)),
+            ("not forge", task_row()),
+        ] {
+            let joined = compose(task, LaunchMode::Fresh).await;
+            assert!(!asks(&joined), "{what}: {joined}");
+        }
+    }
+
     /// The standing guard licenses committing, and it is the LAST block the
     /// agent reads — so a question turn has to replace it, not merely say
     /// "don't edit" a few blocks earlier.
@@ -4768,7 +9858,7 @@ mod tests {
             .into_iter()
             .find(|t| t.starts_with("—— Work task context ——"))
             .expect("guard block");
-        assert!(!guard.contains("Commit to the current branch as you like"));
+        assert!(!guard.contains("leave nothing uncommitted when you finish"));
         assert!(guard.contains("do NOT create, edit, delete or commit any file"));
         // The base-branch rules survive the swap.
         assert!(guard.contains("push the base branch"));
@@ -4786,7 +9876,232 @@ mod tests {
         .expect("compose");
         assert!(texts(&working)
             .iter()
-            .any(|t| t.contains("Commit to the current branch as you like")));
+            .any(|t| t.contains("leave nothing uncommitted when you finish")));
+    }
+
+    /// A report-deliverable task (forge plan-first / review-only)
+    /// swaps the commit licence on its ORIGINAL order — otherwise the guard's
+    /// "commit your work", being the last block read, would quietly undo the
+    /// task's own "analysis only" instruction.
+    #[tokio::test]
+    async fn a_report_deliverable_order_swaps_the_commit_licence() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let report_cfg = WorkTaskConfig {
+            deliverable: Some(DELIVERABLE_REPORT.to_string()),
+            ..task_config()
+        };
+        let guard_of = |blocks: &[PromptInputBlock]| {
+            texts(blocks)
+                .into_iter()
+                .find(|t| t.starts_with("—— Work task context ——"))
+                .expect("guard block")
+        };
+
+        let fresh = compose_prompt(
+            &report_cfg,
+            &task_row(),
+            &LaunchMode::Fresh,
+            &WorkTaskFolderSettings::default(),
+            false,
+            &db.conn,
+        )
+        .await
+        .expect("compose");
+        let guard = guard_of(&fresh);
+        assert!(!guard.contains("leave nothing uncommitted when you finish"));
+        assert!(guard.contains("This turn delivers a report"));
+        // The base-branch rules survive the swap.
+        assert!(guard.contains("push the base branch"));
+
+        // A retry with nothing outstanding re-runs that same order.
+        let retry = compose_prompt(
+            &report_cfg,
+            &task_row(),
+            &LaunchMode::Retry,
+            &WorkTaskFolderSettings::default(),
+            true,
+            &db.conn,
+        )
+        .await
+        .expect("compose");
+        assert!(guard_of(&retry).contains("This turn delivers a report"));
+
+        // Returned for changes, the write licence comes BACK: "now apply the
+        // fix" is precisely a change order, and it is how a report task's
+        // loop is meant to close.
+        let returned = compose_prompt(
+            &report_cfg,
+            &task_row(),
+            &return_mode(FollowUpIntent::Revise),
+            &WorkTaskFolderSettings::default(),
+            true,
+            &db.conn,
+        )
+        .await
+        .expect("compose");
+        assert!(guard_of(&returned).contains("leave nothing uncommitted when you finish"));
+
+        // Same for a retry that stands in for an interrupted review follow-up:
+        // the outstanding feedback, not the original order, is the work.
+        let id = seeded_task(&db.conn).await;
+        user_action(
+            &db.conn,
+            id,
+            serde_json::json!({
+                "action": "return",
+                "intent": "revise",
+                "feedback": "apply the fix you recommended",
+            }),
+        )
+        .await;
+        let mut row = task_row();
+        row.id = id;
+        let retry_review = compose_prompt(
+            &report_cfg,
+            &row,
+            &LaunchMode::Retry,
+            &WorkTaskFolderSettings::default(),
+            true,
+            &db.conn,
+        )
+        .await
+        .expect("compose");
+        assert!(guard_of(&retry_review).contains("leave nothing uncommitted when you finish"));
+
+        // An unrecognized deliverable value reads as a normal task: a config
+        // written by a newer build must still launch, not change meaning.
+        let odd_cfg = WorkTaskConfig {
+            deliverable: Some("something-newer".to_string()),
+            ..task_config()
+        };
+        let odd = compose_prompt(
+            &odd_cfg,
+            &task_row(),
+            &LaunchMode::Fresh,
+            &WorkTaskFolderSettings::default(),
+            false,
+            &db.conn,
+        )
+        .await
+        .expect("compose");
+        assert!(guard_of(&odd).contains("leave nothing uncommitted when you finish"));
+    }
+
+    /// A retry stands in for the turn it interrupted, and a retry/requeue note
+    /// refines that turn without changing its KIND — so the guard's licence
+    /// follows the unsettled follow-up underneath the note, not the note.
+    #[tokio::test]
+    async fn a_retry_licence_follows_the_interrupted_turn_not_the_note() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let report_cfg = WorkTaskConfig {
+            deliverable: Some(DELIVERABLE_REPORT.to_string()),
+            ..task_config()
+        };
+        let guard_of = |blocks: &[PromptInputBlock]| {
+            texts(blocks)
+                .into_iter()
+                .find(|t| t.starts_with("—— Work task context ——"))
+                .expect("guard block")
+        };
+
+        // An unanswered question retried: the replay already says "do not
+        // change any files for it", so the guard must withdraw the commit
+        // grant as well — for every task, not only report ones.
+        let questioned = seeded_task(&db.conn).await;
+        user_action(
+            &db.conn,
+            questioned,
+            serde_json::json!({
+                "action": "return",
+                "intent": "question",
+                "feedback": "why is the cap 200?",
+            }),
+        )
+        .await;
+        let mut row = task_row();
+        row.id = questioned;
+        let blocks = compose_prompt(
+            &task_config(),
+            &row,
+            &LaunchMode::Retry,
+            &WorkTaskFolderSettings::default(),
+            true,
+            &db.conn,
+        )
+        .await
+        .expect("compose");
+        let guard = guard_of(&blocks);
+        assert!(guard.contains("do NOT create, edit, delete or commit any file"));
+        assert!(!guard.contains("leave nothing uncommitted when you finish"));
+
+        // A note layered over a failed "apply the fix" return on a report
+        // task: the turn underneath is a change order, so the write licence
+        // survives — while the note is still the replayed instruction.
+        let returned = seeded_task(&db.conn).await;
+        user_action(
+            &db.conn,
+            returned,
+            serde_json::json!({
+                "action": "return",
+                "intent": "revise",
+                "feedback": "apply the fix you recommended",
+            }),
+        )
+        .await;
+        user_action(
+            &db.conn,
+            returned,
+            serde_json::json!({
+                "action": "retry",
+                "note": "it failed on CI, go again",
+                "blocks": [],
+            }),
+        )
+        .await;
+        row.id = returned;
+        let blocks = compose_prompt(
+            &report_cfg,
+            &row,
+            &LaunchMode::Retry,
+            &WorkTaskFolderSettings::default(),
+            true,
+            &db.conn,
+        )
+        .await
+        .expect("compose");
+        assert!(guard_of(&blocks).contains("leave nothing uncommitted when you finish"));
+        assert!(texts(&blocks).join("\n").contains("it failed on CI, go again"));
+
+        // The same note on a run that never reached review: still the
+        // original report order.
+        let fresh_note = seeded_task(&db.conn).await;
+        user_action(
+            &db.conn,
+            fresh_note,
+            serde_json::json!({
+                "action": "retry",
+                "note": "network glitch, go again",
+                "blocks": [],
+            }),
+        )
+        .await;
+        row.id = fresh_note;
+        for (label, mode) in [("fresh", LaunchMode::Fresh), ("retry", LaunchMode::Retry)] {
+            let blocks = compose_prompt(
+                &report_cfg,
+                &row,
+                &mode,
+                &WorkTaskFolderSettings::default(),
+                true,
+                &db.conn,
+            )
+            .await
+            .expect("compose");
+            assert!(
+                guard_of(&blocks).contains("This turn delivers a report"),
+                "restart note on the original order keeps the report licence ({label})"
+            );
+        }
     }
 
     /// The one scenario that stands alone without user text.
@@ -4928,6 +10243,245 @@ mod tests {
         // The task's own brief still opens the prompt, so the transcript's
         // phase divider keeps matching on it.
         assert_eq!(prompt_head(&blocks), "Fix the login flow and add tests.");
+        // Nothing ever ran (`started_at` is unset), so nothing warns about a
+        // worktree that cannot hold an earlier run's work.
+        assert!(!joined.contains("running this task again from the top"));
+    }
+
+    /// A requeue drops the session link, so the run the user put back on the
+    /// board comes through `Fresh` — in the SAME worktree, carrying whatever
+    /// the stopped generation left there. The prompt has to say so: read as a
+    /// first run it would have the agent redo work that is already committed on
+    /// the branch.
+    #[tokio::test]
+    async fn a_requeued_run_says_its_worktree_is_not_empty() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let id = seeded_task(&db.conn).await;
+
+        let mut row = task_row();
+        row.id = id;
+        row.started_at = Some(chrono::Utc::now());
+        let blocks = compose_prompt(
+            &task_config(),
+            &row,
+            &LaunchMode::Fresh,
+            &WorkTaskFolderSettings::default(),
+            false,
+            &db.conn,
+        )
+        .await
+        .expect("compose");
+        let joined = texts(&blocks).join("\n");
+        assert!(
+            joined.contains("Its worktree may still hold that run's work"),
+            "a re-run must not read as a first run: {joined}"
+        );
+        // The brief itself still reaches the agent — the framing precedes it,
+        // exactly as the retry / return arms do when their session is new.
+        assert!(joined.contains("Fix the login flow and add tests."));
+        // The original order is still an order: the licence stays the working
+        // one (nothing was returned, so there is no follow-up underneath).
+        assert!(joined.contains("leave nothing uncommitted when you finish"));
+    }
+
+    /// #649's requeue lands on `Fresh`, and a task can be sitting on a
+    /// follow-up when the user stops it: review → "rework this" → cancel →
+    /// requeue. The feedback is the whole point of that generation, so the
+    /// arm that replaces it must replay it — dropping it sends the agent back
+    /// to the original order in a worktree where that order is already done.
+    #[tokio::test]
+    async fn a_requeued_run_replays_the_follow_up_it_interrupted() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let id = seeded_task(&db.conn).await;
+        user_action(
+            &db.conn,
+            id,
+            serde_json::json!({
+                "action": "return",
+                "intent": "revise",
+                "feedback": "the empty-state copy is still wrong",
+            }),
+        )
+        .await;
+        // A requeue with neither note nor attachment records no action at all
+        // (`requeue_canceled` writes one only when the user wrote something),
+        // so the returned feedback is still the newest instruction.
+
+        let mut row = task_row();
+        row.id = id;
+        row.started_at = Some(chrono::Utc::now());
+        let blocks = compose_prompt(
+            &task_config(),
+            &row,
+            &LaunchMode::Fresh,
+            &WorkTaskFolderSettings::default(),
+            false,
+            &db.conn,
+        )
+        .await
+        .expect("compose");
+        let joined = texts(&blocks).join("\n");
+        assert!(
+            joined.contains("the empty-state copy is still wrong"),
+            "the returned feedback must survive the requeue: {joined}"
+        );
+        assert!(joined.contains("Latest review feedback to address"));
+    }
+
+    /// And the licence follows that same turn. A question the user asked before
+    /// stopping the run is still a question after the requeue: the guard's
+    /// "commit your work" is the last thing the agent reads, so it has to be
+    /// withdrawn here just as the retry arm withdraws it.
+    #[tokio::test]
+    async fn a_requeued_question_keeps_its_read_only_licence() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let id = seeded_task(&db.conn).await;
+        user_action(
+            &db.conn,
+            id,
+            serde_json::json!({
+                "action": "return",
+                "intent": "question",
+                "feedback": "why did you pick a map here?",
+            }),
+        )
+        .await;
+
+        let mut row = task_row();
+        row.id = id;
+        row.started_at = Some(chrono::Utc::now());
+        let blocks = compose_prompt(
+            &task_config(),
+            &row,
+            &LaunchMode::Fresh,
+            &WorkTaskFolderSettings::default(),
+            false,
+            &db.conn,
+        )
+        .await
+        .expect("compose");
+        let guard = texts(&blocks)
+            .into_iter()
+            .find(|t| t.starts_with("—— Work task context ——"))
+            .expect("guard block");
+        assert!(!guard.contains("leave nothing uncommitted when you finish"));
+        assert!(guard.contains("do NOT create, edit, delete or commit any file"));
+    }
+
+    /// …and the note the user types INTO the requeue box must not bury it. The
+    /// scan stops at the newest instruction, so a note takes the `outstanding`
+    /// slot and only the returned turn's *intent* survives — fine for a resumed
+    /// session, which still has the words, and useless for the session a
+    /// requeue now starts, which would get a read-only licence for a question
+    /// it was never shown, or "take this note into account" with no account.
+    #[tokio::test]
+    async fn a_requeue_note_does_not_bury_the_turn_it_refines() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let id = seeded_task(&db.conn).await;
+        user_action(
+            &db.conn,
+            id,
+            serde_json::json!({
+                "action": "return",
+                "intent": "question",
+                "feedback": "why did you pick a map here?",
+            }),
+        )
+        .await;
+        user_action(
+            &db.conn,
+            id,
+            serde_json::json!({ "action": "requeue", "note": "check the logs first" }),
+        )
+        .await;
+
+        let mut row = task_row();
+        row.id = id;
+        row.started_at = Some(chrono::Utc::now());
+        let blocks = compose_prompt(
+            &task_config(),
+            &row,
+            &LaunchMode::Fresh,
+            &WorkTaskFolderSettings::default(),
+            false,
+            &db.conn,
+        )
+        .await
+        .expect("compose");
+        let joined = texts(&blocks).join("\n");
+        assert!(
+            joined.contains("why did you pick a map here?"),
+            "the question the note refines has to reach a context-less session: {joined}"
+        );
+        assert!(joined.contains("check the logs first"));
+        // Oldest first: the turn, then the note that refines it.
+        let question = joined.find("why did you pick a map here?").expect("question");
+        let note = joined.find("check the logs first").expect("note");
+        assert!(question < note, "the note refines the turn, so it follows it");
+        // And it is still a question, so the licence stays read-only.
+        let guard = texts(&blocks)
+            .into_iter()
+            .find(|t| t.starts_with("—— Work task context ——"))
+            .expect("guard block");
+        assert!(guard.contains("do NOT create, edit, delete or commit any file"));
+    }
+
+    /// The mirror image, and the reason the extra replay is gated on `resumed`:
+    /// a session that really did resume already holds the returned turn, and
+    /// replaying it a second time would re-ask a question the transcript above
+    /// already shows being asked.
+    #[tokio::test]
+    async fn a_resumed_retry_replays_only_the_newest_instruction() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let id = seeded_task(&db.conn).await;
+        user_action(
+            &db.conn,
+            id,
+            serde_json::json!({
+                "action": "return", "intent": "revise", "feedback": "rename the column",
+            }),
+        )
+        .await;
+        user_action(
+            &db.conn,
+            id,
+            serde_json::json!({ "action": "retry", "note": "install deps first" }),
+        )
+        .await;
+
+        let mut row = task_row();
+        row.id = id;
+        let resumed = compose_prompt(
+            &task_config(),
+            &row,
+            &LaunchMode::Retry,
+            &WorkTaskFolderSettings::default(),
+            true,
+            &db.conn,
+        )
+        .await
+        .expect("compose");
+        let joined = texts(&resumed).join("\n");
+        assert!(joined.contains("install deps first"));
+        assert!(
+            !joined.contains("rename the column"),
+            "the resumed transcript already carries it: {joined}"
+        );
+
+        // …while the fallback session that never resumed needs both.
+        let fell_back = compose_prompt(
+            &task_config(),
+            &row,
+            &LaunchMode::Retry,
+            &WorkTaskFolderSettings::default(),
+            false,
+            &db.conn,
+        )
+        .await
+        .expect("compose");
+        let joined = texts(&fell_back).join("\n");
+        assert!(joined.contains("rename the column"));
+        assert!(joined.contains("install deps first"));
     }
 
     /// A screenshot pasted into the follow-up box has to reach the agent as an
@@ -5162,6 +10716,7 @@ mod tests {
             WorkTaskStatus::Failed,
             "user",
             Some(serde_json::json!({ "action": "retry", "note": "install deps first" })),
+            false,
         )
         .await
         .expect("claim")
@@ -5181,6 +10736,7 @@ mod tests {
             WorkTaskStatus::Failed,
             "user",
             Some(serde_json::json!({ "action": "retry", "note": "orphan" })),
+            false,
         )
         .await
         .expect("claim");
@@ -5287,6 +10843,144 @@ mod tests {
             .last()
             .expect("trailing block")
             .contains("Write the commit message in Chinese."));
+    }
+
+    /// What the user typed in the merge dialog has to reach the agent — and has
+    /// to land BEFORE the closing rules, which are what keep "also do X" from
+    /// being read as licence to push or to delete the worktree.
+    #[tokio::test]
+    async fn merge_prompt_carries_the_users_instructions_ahead_of_the_rules() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let LaunchMode::Merge {
+            root_path,
+            base_branch,
+            work_branch,
+            strategy,
+            message,
+            delete_worktree,
+            ..
+        } = merge_mode()
+        else {
+            unreachable!("merge_mode is a merge")
+        };
+        let mode = LaunchMode::Merge {
+            root_path,
+            base_branch,
+            work_branch,
+            strategy,
+            message,
+            instructions: Some("Prefer this branch's side on any conflict.".to_string()),
+            delete_worktree,
+        };
+        let blocks = compose_prompt(
+            &task_config(),
+            &task_row(),
+            &mode,
+            &WorkTaskFolderSettings::default(),
+            true,
+            &db.conn,
+        )
+        .await
+        .expect("compose");
+
+        let recipe = &texts(&blocks)[0];
+        let said = recipe
+            .find("Prefer this branch's side on any conflict.")
+            .expect("the user's own words reach the agent");
+        let rules = recipe.find("Do NOT push").expect("the closing rules");
+        assert!(
+            said < rules,
+            "the rules must stay last — they are what an over-eager reading of \
+             the user's request would otherwise override"
+        );
+    }
+
+    /// #1168: the closing rule forbids the agent to delete the worktree either
+    /// way, so the prompt has to say what codeg does afterwards — otherwise the
+    /// agent's last line reports a worktree "kept" that codeg is about to
+    /// remove. Both choices are spelled out, after the rule they qualify.
+    #[tokio::test]
+    async fn merge_prompt_states_what_happens_to_the_worktree_afterwards() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        for delete in [true, false] {
+            let LaunchMode::Merge {
+                root_path,
+                base_branch,
+                work_branch,
+                strategy,
+                message,
+                instructions,
+                ..
+            } = merge_mode()
+            else {
+                unreachable!("merge_mode is a merge")
+            };
+            let mode = LaunchMode::Merge {
+                root_path,
+                base_branch,
+                work_branch,
+                strategy,
+                message,
+                instructions,
+                delete_worktree: delete,
+            };
+            let blocks = compose_prompt(
+                &task_config(),
+                &task_row(),
+                &mode,
+                &WorkTaskFolderSettings::default(),
+                true,
+                &db.conn,
+            )
+            .await
+            .expect("compose");
+            let recipe = &texts(&blocks)[0];
+            let rule = recipe
+                .find("do NOT delete this worktree or its branch")
+                .expect("the rule stays whatever the choice");
+            let removes = "codeg will remove this worktree and the `task/7` branch itself";
+            let keeps = "The worktree and the `task/7` branch stay after the merge";
+            let (said, unsaid) = if delete {
+                (removes, keeps)
+            } else {
+                (keeps, removes)
+            };
+            let at = recipe
+                .find(said)
+                .unwrap_or_else(|| panic!("{said:?} in {recipe}"));
+            assert!(
+                rule < at,
+                "the end state qualifies the rule, so it follows it"
+            );
+            assert!(
+                !recipe.contains(unsaid),
+                "only the chosen end state is stated"
+            );
+        }
+    }
+
+    /// …and an empty box adds nothing: no dangling header, no stray blank
+    /// section between the numbered steps and the rules.
+    #[tokio::test]
+    async fn merge_prompt_says_nothing_when_there_are_no_instructions() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let blocks = compose_prompt(
+            &task_config(),
+            &task_row(),
+            &merge_mode(), // `instructions: None`
+            &WorkTaskFolderSettings::default(),
+            true,
+            &db.conn,
+        )
+        .await
+        .expect("compose");
+
+        let recipe = &texts(&blocks)[0];
+        assert!(
+            !recipe.contains("instructions from the user"),
+            "no header without a body"
+        );
+        assert!(recipe.contains("land it onto the base branch"));
     }
 
     #[tokio::test]
@@ -5426,6 +11120,91 @@ mod tests {
         assert_eq!(dropped.payload["id"], 9999);
     }
 
+    /// The shared convergence keeps the order clients depend on: the closed
+    /// tabs, then the conversations' refetch, then the folder drop — and it
+    /// still closes the worktree's tabs rather than re-pointing them.
+    #[tokio::test]
+    async fn worktree_removal_closes_tabs_before_announcing_the_move() {
+        use crate::db::service::tab_service;
+        use crate::db::test_helpers::{fresh_in_memory_db, seed_folder};
+        use crate::web::event_bridge::{
+            WebEventBroadcaster, CONVERSATIONS_BULK_CHANGED_EVENT, FOLDER_CHANGED_EVENT,
+            TABS_CHANGED_EVENT,
+        };
+
+        let db = fresh_in_memory_db().await;
+        let root_id = seed_folder(&db, "/tmp/repo3").await;
+        let wt = open_worktree_folder_core(&db, "/tmp/repo3-task-1".to_string(), root_id)
+            .await
+            .expect("worktree folder");
+        let conv = conversation_service::create(&db.conn, wt.id, AgentType::ClaudeCode, None, None)
+            .await
+            .expect("conversation");
+        let kept =
+            conversation_service::create(&db.conn, root_id, AgentType::ClaudeCode, None, None)
+                .await
+                .expect("conversation");
+        let tab = |folder_id: i32, conversation_id: i32, position: i32| crate::models::OpenedTab {
+            id: 0,
+            folder_id,
+            conversation_id: Some(conversation_id),
+            agent_type: AgentType::ClaudeCode,
+            position,
+            is_active: false,
+            is_pinned: false,
+        };
+        tab_service::save_all_tabs_cas(
+            &db.conn,
+            vec![tab(wt.id, conv.id, 0), tab(root_id, kept.id, 1)],
+            0,
+        )
+        .await
+        .expect("tabs");
+        let task = work_task_service::create(
+            &db.conn,
+            crate::models::WorkTaskDraft {
+                folder_id: root_id,
+                title: "fix login".to_string(),
+                config: serde_json::json!({
+                    "display_text": "fix login",
+                    "prompt_blocks": [{ "type": "text", "text": "fix login" }],
+                }),
+            },
+        )
+        .await
+        .expect("task");
+
+        let broadcaster = Arc::new(WebEventBroadcaster::new());
+        let mut rx = broadcaster.subscribe();
+        let emitter = EventEmitter::test_web_only(broadcaster.clone());
+        converge_worktree_removal(&db, &emitter, task.id, wt.id, root_id, &wt.path).await;
+
+        let channels: Vec<String> = std::iter::from_fn(|| rx.try_recv().ok())
+            .map(|ev| ev.channel.to_string())
+            .collect();
+        assert_eq!(
+            channels,
+            vec![
+                TABS_CHANGED_EVENT.to_string(),
+                CONVERSATIONS_BULK_CHANGED_EVENT.to_string(),
+                FOLDER_CHANGED_EVENT.to_string(),
+            ]
+        );
+        let (tabs, _) = tab_service::snapshot_tabs(&db.conn).await.expect("tabs");
+        assert_eq!(
+            tabs.iter().map(|t| t.conversation_id).collect::<Vec<_>>(),
+            vec![Some(kept.id)],
+            "the worktree's tab is closed, not re-pointed"
+        );
+        let events = work_task_service::list_events(&db.conn, task.id, 10)
+            .await
+            .expect("events");
+        assert!(events
+            .iter()
+            .any(|e| e.kind == "user_action"
+                && e.payload.as_ref().is_some_and(|p| p["reparented"] == 1)));
+    }
+
     #[test]
     fn engine_lock_is_per_data_dir() {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -5510,6 +11289,1676 @@ mod tests {
             .status
     }
 
+    /// #538: Codex still ends the turn with `end_turn` after an upstream 400.
+    /// A turn with no assistant text and no diff must fail with the message
+    /// the agent reported, instead of settling silently into review.
+    #[tokio::test]
+    async fn an_empty_end_turn_with_an_agent_error_fails_with_that_message() {
+        const MESSAGE: &str = "unexpected status 502 Bad Gateway: [400] Assistant tool call \
+             function.arguments must be valid JSON.";
+        for label in ["acp error", "failed tool call", "failed tool update"] {
+            let (engine, task_id) = running_task().await;
+            let event = match label {
+                "acp error" => env(
+                    PARENT_CONN,
+                    AcpEvent::Error {
+                        message: MESSAGE.into(),
+                        agent_type: "codex".into(),
+                        code: None,
+                        details: None,
+                        terminal: false,
+                    },
+                ),
+                "failed tool call" => env(
+                    PARENT_CONN,
+                    AcpEvent::ToolCall {
+                        tool_call_id: "tc-parse".into(),
+                        title: "shell_command".into(),
+                        kind: "execute".into(),
+                        status: "failed".into(),
+                        content: Some(MESSAGE.into()),
+                        raw_input: None,
+                        raw_output: None,
+                        locations: None,
+                        meta: None,
+                        images: None,
+                    },
+                ),
+                "failed tool update" => env(
+                    PARENT_CONN,
+                    AcpEvent::ToolCallUpdate {
+                        tool_call_id: "tc-parse".into(),
+                        title: None,
+                        status: Some("failed".into()),
+                        content: None,
+                        raw_input: None,
+                        raw_output: Some(MESSAGE.into()),
+                        raw_output_append: None,
+                        locations: None,
+                        meta: None,
+                        images: None,
+                    },
+                ),
+                _ => unreachable!(),
+            };
+            engine.on_event(&event).await;
+            engine.on_turn_complete(PARENT_CONN, "end_turn").await;
+
+            let task = work_task_service::get_model(&engine.db.conn, task_id)
+                .await
+                .expect("task row");
+            assert_eq!(task.status, WorkTaskStatus::Failed, "{label}");
+            assert_eq!(
+                task.failure_reason.as_deref(),
+                Some("agent_error"),
+                "{label}"
+            );
+            let shown = task.last_error.as_deref().unwrap_or_default();
+            assert!(
+                shown.contains("function.arguments must be valid JSON"),
+                "{label}: card must show the upstream error, got {shown:?}"
+            );
+        }
+    }
+
+    /// #538: Codex and Claude report an upstream 400 as an AIR
+    /// `SessionFailure` (severity `error`) and then `end_turn`. No
+    /// `AcpEvent::Error` is synthesized for that stop reason. The title is
+    /// the upstream message, and an empty turn must fail with it.
+    #[tokio::test]
+    async fn a_session_failure_then_end_turn_fails_with_the_upstream_message() {
+        const MESSAGE: &str =
+            "Assistant tool call function.arguments must be valid JSON.";
+        let (engine, task_id) = running_task().await;
+        engine
+            .on_event(&env(
+                PARENT_CONN,
+                session_failure("error", MESSAGE, false),
+            ))
+            .await;
+        engine
+            .on_event(&turn_complete_envelope(PARENT_CONN, 1, "end_turn"))
+            .await;
+
+        let task = work_task_service::get_model(&engine.db.conn, task_id)
+            .await
+            .expect("task row");
+        assert_eq!(task.status, WorkTaskStatus::Failed);
+        assert_eq!(task.failure_reason.as_deref(), Some("agent_error"));
+        let shown = task.last_error.as_deref().unwrap_or_default();
+        assert!(
+            shown.contains("function.arguments must be valid JSON"),
+            "card must show the upstream error, got {shown:?}"
+        );
+    }
+
+    /// A severity-`warning` record is the retry banner, and a resolved
+    /// record is already over. Neither fails an otherwise empty `end_turn`.
+    #[tokio::test]
+    async fn a_non_terminal_session_failure_does_not_fail_an_empty_end_turn() {
+        for (severity, resolved) in [("warning", false), ("error", true)] {
+            let (engine, task_id) = running_task().await;
+            engine
+                .on_event(&env(
+                    PARENT_CONN,
+                    session_failure(severity, "Reconnecting to the model", resolved),
+                ))
+                .await;
+            engine
+                .on_event(&turn_complete_envelope(PARENT_CONN, 1, "end_turn"))
+                .await;
+            let task = work_task_service::get_model(&engine.db.conn, task_id)
+                .await
+                .expect("task row");
+            assert_eq!(
+                task.status,
+                WorkTaskStatus::Review,
+                "{severity} resolved={resolved}"
+            );
+            assert!(task.failure_reason.is_none(), "{severity}");
+            assert!(
+                task.last_error.is_none(),
+                "{severity}: {:?}",
+                task.last_error
+            );
+        }
+    }
+
+    // -- runs held open for their agent's background work -------------------
+
+    /// What the agent says when it ends its turn on a gate it left running —
+    /// the sentence the board used to settle on while the gate was killed.
+    const STILL_RUNNING: &str = "The full gate is still running; I'll report once it finishes.";
+
+    fn async_task(task_id: &str, task_type: &str, state: &str, spawned: bool) -> AcpEvent {
+        let delta: crate::acp::types::AsyncTaskDelta = serde_json::from_value(serde_json::json!({
+            "task_id": task_id,
+            "spawned": spawned,
+            "name": format!("{task_type} {task_id}"),
+            "task_type": task_type,
+            "description": format!("run {task_id}"),
+            "state": state,
+        }))
+        .expect("delta");
+        AcpEvent::AsyncTask { delta }
+    }
+
+    /// The overlay turn the transcript watcher emits for the turn Claude Code
+    /// starts on its own once a background task finishes.
+    fn follow_up_activity(answer: &str) -> AcpEvent {
+        use crate::models::message::{ContentBlock, MessageTurn, TurnRole};
+        AcpEvent::BackgroundActivity {
+            session_id: "sess".into(),
+            turns: vec![MessageTurn {
+                id: "bg-0-0".into(),
+                role: TurnRole::Assistant,
+                blocks: vec![ContentBlock::Text {
+                    text: answer.into(),
+                }],
+                timestamp: chrono::Utc::now(),
+                usage: None,
+                duration_ms: None,
+                model: None,
+                completed_at: None,
+                agent_message_id: None,
+            }],
+            outstanding: 0,
+            outstanding_tasks: vec![],
+            settled: vec![],
+            watermark: 0,
+        }
+    }
+
+    async fn apply_live(engine: &TaskEngine, event: AcpEvent) {
+        let state = engine
+            .manager
+            .get_state(PARENT_CONN)
+            .await
+            .expect("live connection");
+        state.write().await.apply_event(&event);
+    }
+
+    /// `running_task` on a live `agent_type` connection whose turn ends with
+    /// a background shell `b1` still running. Keep the receiver for the
+    /// test's duration.
+    async fn turn_ends_with_a_running_shell(
+        agent_type: AgentType,
+    ) -> (
+        Arc<TaskEngine>,
+        i32,
+        tokio::sync::mpsc::Receiver<crate::acp::connection::ConnectionCommand>,
+    ) {
+        let (engine, task_id) = running_task().await;
+        let rx = engine
+            .manager
+            .insert_test_connection_live(PARENT_CONN, agent_type, None, EventEmitter::Noop)
+            .await;
+        {
+            let state = engine.manager.get_state(PARENT_CONN).await.expect("state");
+            let mut s = state.write().await;
+            s.apply_event(&async_task("b1", "shell", "running", true));
+            s.last_assistant_text = Some(STILL_RUNNING.into());
+        }
+        engine
+            .on_event(&turn_complete_envelope(PARENT_CONN, 1, "end_turn"))
+            .await;
+        (engine, task_id, rx)
+    }
+
+    /// Poll until the task reaches `want` (the hold's waiter runs on its own
+    /// task, on the test engine's millisecond clock).
+    async fn settles_to(engine: &TaskEngine, task_id: i32, want: WorkTaskStatus) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let status = status_of(engine, task_id).await;
+            if status == want {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "task stayed {status:?}, expected {want:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    /// Poll until the waiter has dropped its hold — right after its settle,
+    /// which the hold guards until then.
+    async fn hold_dropped(engine: &TaskEngine) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while !engine.holds.lock().await.is_empty() {
+            assert!(tokio::time::Instant::now() < deadline, "hold never dropped");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    async fn event_payloads(
+        engine: &TaskEngine,
+        task_id: i32,
+        kind: &str,
+    ) -> Vec<serde_json::Value> {
+        work_task_service::list_events(&engine.db.conn, task_id, 500)
+            .await
+            .expect("events")
+            .into_iter()
+            .filter(|e| e.kind == kind)
+            .filter_map(|e| e.payload)
+            .collect()
+    }
+
+    /// The bug this fixes: the turn ended on "the gate is still running", the
+    /// engine ended the connection a few milliseconds later, and the gate died
+    /// with the agent CLI. The run must stay open — connection and all — and
+    /// the agent must still be able to report on it.
+    #[tokio::test]
+    async fn a_turn_that_leaves_background_work_running_is_held_open() {
+        let (engine, task_id, _rx) = turn_ends_with_a_running_shell(AgentType::ClaudeCode).await;
+
+        assert_eq!(status_of(&engine, task_id).await, WorkTaskStatus::Running);
+        assert!(
+            engine.manager.get_state(PARENT_CONN).await.is_some(),
+            "the connection — and the background work in it — must survive the turn's end"
+        );
+        assert!(engine.index.lock().await.contains_key(PARENT_CONN));
+        let waits = event_payloads(&engine, task_id, "background_wait").await;
+        assert_eq!(waits.len(), 1);
+        assert_eq!(waits[0]["reason"], "background_work");
+        assert_eq!(waits[0]["tasks"], serde_json::json!(["run b1"]));
+        assert_eq!(waits[0]["summary"], STILL_RUNNING);
+
+        // The card says what it is waiting on.
+        let row = work_task_service::list(&engine.db.conn, None)
+            .await
+            .expect("list")
+            .into_iter()
+            .find(|t| t.id == task_id)
+            .expect("row");
+        assert_eq!(
+            row.background_wait.map(|w| w.tasks),
+            Some(vec!["run b1".to_string()])
+        );
+
+        // The agent's own follow-up can still report on the task.
+        assert!(
+            engine
+                .record_progress(PARENT_CONN, "gate green")
+                .await
+                .recorded
+        );
+        assert!(
+            engine
+                .record_complete(PARENT_CONN, "success", Some("gate green, committed"), &[])
+                .await
+                .recorded
+        );
+    }
+
+    /// The whole hold: the gate finishes, Claude Code opens a turn of its own
+    /// to read it and answers, the turn closes — then, and only then, the run
+    /// settles, on that answer rather than the stale "still running".
+    #[tokio::test]
+    async fn a_held_run_settles_on_the_agents_follow_up_once_all_is_quiet() {
+        let (engine, task_id, _rx) = turn_ends_with_a_running_shell(AgentType::ClaudeCode).await;
+
+        apply_live(&engine, async_task("b1", "shell", "completed", false)).await;
+        apply_live(
+            &engine,
+            async_task("autonomous-turn-1", "turn", "running", true),
+        )
+        .await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(
+            status_of(&engine, task_id).await,
+            WorkTaskStatus::Running,
+            "the agent is still reading its result"
+        );
+
+        apply_live(
+            &engine,
+            follow_up_activity("All 12 tests passed; committed the fix."),
+        )
+        .await;
+        apply_live(
+            &engine,
+            async_task("autonomous-turn-1", "turn", "completed", false),
+        )
+        .await;
+        settles_to(&engine, task_id, WorkTaskStatus::Review).await;
+
+        let task = work_task_service::get_model(&engine.db.conn, task_id)
+            .await
+            .expect("task");
+        assert_eq!(
+            task.result_summary.as_deref(),
+            Some("All 12 tests passed; committed the fix.")
+        );
+        assert!(
+            engine.manager.get_state(PARENT_CONN).await.is_none(),
+            "settling ends the connection, as it always did"
+        );
+        hold_dropped(&engine).await;
+        let ends = event_payloads(&engine, task_id, "background_wait_end").await;
+        assert_eq!(ends.len(), 1);
+        assert_eq!(ends[0]["outcome"], "drained");
+        assert!(ends[0].get("leftover").is_none());
+        let row = work_task_service::list(&engine.db.conn, None)
+            .await
+            .expect("list")
+            .into_iter()
+            .find(|t| t.id == task_id)
+            .expect("row");
+        assert!(row.background_wait.is_none());
+    }
+
+    /// `task_complete` is the agent closing the task: what it left running is
+    /// a leftover (a dev server), not work to wait for.
+    #[tokio::test]
+    async fn a_turn_the_agent_closed_with_a_verdict_settles_at_once() {
+        let (engine, task_id) = running_task().await;
+        let _rx = engine
+            .manager
+            .insert_test_connection_live(
+                PARENT_CONN,
+                AgentType::ClaudeCode,
+                None,
+                EventEmitter::Noop,
+            )
+            .await;
+        apply_live(&engine, async_task("dev", "shell", "running", true)).await;
+        assert!(
+            engine
+                .record_complete(PARENT_CONN, "success", Some("done"), &[])
+                .await
+                .recorded
+        );
+        engine
+            .on_event(&turn_complete_envelope(PARENT_CONN, 1, "end_turn"))
+            .await;
+        assert_eq!(status_of(&engine, task_id).await, WorkTaskStatus::Review);
+        assert!(engine.manager.get_state(PARENT_CONN).await.is_none());
+        assert!(event_payloads(&engine, task_id, "background_wait")
+            .await
+            .is_empty());
+    }
+
+    /// A cancelled or failed turn is over whatever it left running.
+    #[tokio::test]
+    async fn only_a_normal_turn_end_is_held() {
+        for (stop_reason, want) in [
+            ("cancelled", WorkTaskStatus::Canceled),
+            ("refusal", WorkTaskStatus::Failed),
+        ] {
+            let (engine, task_id) = running_task().await;
+            let _rx = engine
+                .manager
+                .insert_test_connection_live(
+                    PARENT_CONN,
+                    AgentType::ClaudeCode,
+                    None,
+                    EventEmitter::Noop,
+                )
+                .await;
+            apply_live(&engine, async_task("b1", "shell", "running", true)).await;
+            engine
+                .on_event(&turn_complete_envelope(PARENT_CONN, 1, stop_reason))
+                .await;
+            assert_eq!(status_of(&engine, task_id).await, want, "{stop_reason}");
+            assert!(engine.holds.lock().await.is_empty(), "{stop_reason}");
+            assert!(engine.manager.get_state(PARENT_CONN).await.is_none());
+        }
+    }
+
+    /// Codex does not carry on by itself once a background terminal ends, so
+    /// holding would only delay the settle with nobody left to read the
+    /// result.
+    #[tokio::test]
+    async fn an_agent_that_does_not_resume_on_its_own_is_not_held() {
+        let (engine, task_id, _rx) = turn_ends_with_a_running_shell(AgentType::Codex).await;
+        assert_eq!(status_of(&engine, task_id).await, WorkTaskStatus::Review);
+        assert!(engine.holds.lock().await.is_empty());
+    }
+
+    /// The way out when what the run waits for never ends (a dev server): it
+    /// settles now, on the turn's answer, naming what was left running.
+    #[tokio::test]
+    async fn stopping_the_wait_settles_the_run_now() {
+        let (engine, task_id, _rx) = turn_ends_with_a_running_shell(AgentType::ClaudeCode).await;
+        engine.stop_background_wait(task_id).await.expect("held");
+        settles_to(&engine, task_id, WorkTaskStatus::Review).await;
+        let task = work_task_service::get_model(&engine.db.conn, task_id)
+            .await
+            .expect("task");
+        assert_eq!(task.result_summary.as_deref(), Some(STILL_RUNNING));
+        let ends = event_payloads(&engine, task_id, "background_wait_end").await;
+        assert_eq!(ends[0]["outcome"], "stopped");
+        assert_eq!(ends[0]["leftover"], serde_json::json!(["run b1"]));
+        hold_dropped(&engine).await;
+        assert!(
+            engine.stop_background_wait(task_id).await.is_err(),
+            "nothing left to stop"
+        );
+    }
+
+    /// A cancel takes the hold: the task ends canceled, and the waiter, woken
+    /// by the cancel, must not settle it into review afterwards.
+    #[tokio::test]
+    async fn canceling_a_held_run_ends_it_canceled() {
+        let (engine, task_id, _rx) = turn_ends_with_a_running_shell(AgentType::ClaudeCode).await;
+        engine.cancel(task_id, None).await.expect("cancel");
+        assert_eq!(status_of(&engine, task_id).await, WorkTaskStatus::Canceled);
+        assert!(engine.holds.lock().await.is_empty());
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(status_of(&engine, task_id).await, WorkTaskStatus::Canceled);
+        let ends = event_payloads(&engine, task_id, "background_wait_end").await;
+        assert_eq!(ends.len(), 1, "{ends:?}");
+        assert_eq!(ends[0]["outcome"], "canceled");
+    }
+
+    /// The agent's process going away by itself ends the wait too — settled
+    /// once, by the waiter, on what the agent said before it went.
+    #[tokio::test]
+    async fn a_held_run_whose_connection_goes_away_settles() {
+        let (engine, task_id, _rx) = turn_ends_with_a_running_shell(AgentType::ClaudeCode).await;
+        apply_live(
+            &engine,
+            follow_up_activity("The build failed; see the log."),
+        )
+        .await;
+        // Long enough for the waiter (10 ms poll) to have read it.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        engine.manager.disconnect(PARENT_CONN).await.expect("gone");
+        settles_to(&engine, task_id, WorkTaskStatus::Review).await;
+        let task = work_task_service::get_model(&engine.db.conn, task_id)
+            .await
+            .expect("task");
+        assert_eq!(
+            task.result_summary.as_deref(),
+            Some("The build failed; see the log.")
+        );
+        let ends = event_payloads(&engine, task_id, "background_wait_end").await;
+        assert_eq!(ends.len(), 1);
+        assert_eq!(ends[0]["outcome"], "connection_lost");
+        hold_dropped(&engine).await;
+    }
+
+    /// A cancel that lands while the waiter is settling leaves the hold to
+    /// it: the cancel wins the row, the waiter's settle then changes nothing,
+    /// and the wait's end is recorded once, by the waiter.
+    #[tokio::test]
+    async fn a_cancel_leaves_a_hold_being_settled_to_its_waiter() {
+        let (engine, task_id) = running_task().await;
+        engine.holds.lock().await.insert(
+            PARENT_CONN.into(),
+            TurnEndHold {
+                task_id,
+                run_seq: 1,
+                stop_reason: "end_turn".into(),
+                summary: None,
+                signal: None,
+                since: chrono::Utc::now(),
+                stop: CancellationToken::new(),
+                later: Default::default(),
+                settling: true,
+            },
+        );
+        engine.cancel(task_id, None).await.expect("cancel");
+        assert_eq!(status_of(&engine, task_id).await, WorkTaskStatus::Canceled);
+        assert!(
+            engine.holds.lock().await.contains_key(PARENT_CONN),
+            "still the waiter's"
+        );
+        assert!(event_payloads(&engine, task_id, "background_wait_end")
+            .await
+            .is_empty());
+    }
+
+    /// A later turn on the held connection (Grok starts its own; or a prompt
+    /// sent to the task's session) is the hold's to settle, not its own.
+    #[tokio::test]
+    async fn a_later_turn_on_a_held_connection_does_not_settle_it() {
+        let (engine, task_id, _rx) = turn_ends_with_a_running_shell(AgentType::Grok).await;
+        engine
+            .on_event(&turn_complete_envelope(PARENT_CONN, 2, "end_turn"))
+            .await;
+        assert_eq!(status_of(&engine, task_id).await, WorkTaskStatus::Running);
+        assert_eq!(
+            event_payloads(&engine, task_id, "background_wait")
+                .await
+                .len(),
+            1
+        );
+        apply_live(&engine, async_task("b1", "shell", "completed", false)).await;
+        settles_to(&engine, task_id, WorkTaskStatus::Review).await;
+    }
+
+    /// A later turn on the held connection that is stopped ends the run the
+    /// way stopping the held turn would have: canceled, now, not into review
+    /// once the background work is done.
+    #[tokio::test]
+    async fn a_later_turn_that_is_stopped_cancels_the_held_run() {
+        let (engine, task_id, _rx) = turn_ends_with_a_running_shell(AgentType::Grok).await;
+        engine
+            .on_event(&turn_complete_envelope(PARENT_CONN, 2, "cancelled"))
+            .await;
+        settles_to(&engine, task_id, WorkTaskStatus::Canceled).await;
+        let ends = event_payloads(&engine, task_id, "background_wait_end").await;
+        assert_eq!(ends.len(), 1);
+        assert_eq!(ends[0]["outcome"], "cancelled");
+        assert_eq!(ends[0]["leftover"], serde_json::json!(["run b1"]));
+        hold_dropped(&engine).await;
+    }
+
+    /// A later turn that fails ends the run failed, with the error that turn
+    /// reported rather than the held turn's clean `end_turn`.
+    #[tokio::test]
+    async fn a_later_turn_that_fails_fails_the_held_run_with_its_error() {
+        let (engine, task_id, _rx) = turn_ends_with_a_running_shell(AgentType::Grok).await;
+        engine.turn_signals.lock().await.insert(
+            PARENT_CONN.into(),
+            TurnSignal {
+                error: Some("quota exhausted".into()),
+                baselined: false,
+                baseline: None,
+            },
+        );
+        engine
+            .on_event(&turn_complete_envelope(PARENT_CONN, 2, "refusal"))
+            .await;
+        settles_to(&engine, task_id, WorkTaskStatus::Failed).await;
+        let task = work_task_service::get_model(&engine.db.conn, task_id)
+            .await
+            .expect("task");
+        assert_eq!(task.last_error.as_deref(), Some("quota exhausted"));
+    }
+
+    /// The run's result is the newest answer, whichever kind: a prompt sent
+    /// to the session during the hold answered after the agent's own report
+    /// on its background work, so that answer is the one settled on.
+    #[tokio::test]
+    async fn a_later_turns_answer_outranks_an_older_background_reply() {
+        let (engine, task_id, _rx) = turn_ends_with_a_running_shell(AgentType::ClaudeCode).await;
+        apply_live(&engine, follow_up_activity("The gate failed.")).await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        {
+            // What applying that turn's `TurnComplete` leaves in the session:
+            // its answer, stamped then.
+            let state = engine.manager.get_state(PARENT_CONN).await.expect("state");
+            let mut s = state.write().await;
+            s.last_assistant_text = Some("Fixed it; the gate passes now.".into());
+            s.last_turn_completed_at = Some(chrono::Utc::now());
+        }
+        engine
+            .on_event(&turn_complete_envelope(PARENT_CONN, 2, "end_turn"))
+            .await;
+        assert_eq!(status_of(&engine, task_id).await, WorkTaskStatus::Running);
+        apply_live(&engine, async_task("b1", "shell", "completed", false)).await;
+        settles_to(&engine, task_id, WorkTaskStatus::Review).await;
+        let task = work_task_service::get_model(&engine.db.conn, task_id)
+            .await
+            .expect("task");
+        assert_eq!(
+            task.result_summary.as_deref(),
+            Some("Fixed it; the gate passes now.")
+        );
+        let ends = event_payloads(&engine, task_id, "background_wait_end").await;
+        assert_eq!(ends[0]["outcome"], "drained");
+    }
+
+    /// A later turn's answer is the run's once the engine has read it: a
+    /// turn after it that said nothing does not erase it, nor does the
+    /// connection going away before the waiter looks again.
+    #[tokio::test]
+    async fn a_later_turns_answer_survives_an_empty_turn_and_the_connection_going() {
+        let (engine, task_id, _rx) = turn_ends_with_a_running_shell(AgentType::Grok).await;
+        let turn_ends = |answer: Option<&'static str>| {
+            let engine = engine.clone();
+            async move {
+                let state = engine.manager.get_state(PARENT_CONN).await.expect("state");
+                let mut s = state.write().await;
+                s.last_assistant_text = answer.map(str::to_string);
+                s.last_turn_completed_at = Some(chrono::Utc::now());
+            }
+        };
+        turn_ends(Some("The gate failed: 2 tests.")).await;
+        engine
+            .on_event(&turn_complete_envelope(PARENT_CONN, 2, "end_turn"))
+            .await;
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        turn_ends(None).await;
+        engine
+            .on_event(&turn_complete_envelope(PARENT_CONN, 3, "end_turn"))
+            .await;
+        engine.manager.disconnect(PARENT_CONN).await.expect("gone");
+        settles_to(&engine, task_id, WorkTaskStatus::Review).await;
+        let task = work_task_service::get_model(&engine.db.conn, task_id)
+            .await
+            .expect("task");
+        assert_eq!(
+            task.result_summary.as_deref(),
+            Some("The gate failed: 2 tests.")
+        );
+    }
+
+    /// The reconcile tick leaves a held run to its waiter, which settles it
+    /// with what the agent last said once it sees the connection gone — also
+    /// while the waiter is settling it, the connection already let go.
+    #[tokio::test]
+    async fn the_reconcile_tick_leaves_a_held_run_alone() {
+        for settling in [false, true] {
+            let (engine, task_id) = running_task().await;
+            // No connection at all, and no waiter: only the reconcile could act.
+            engine.holds.lock().await.insert(
+                PARENT_CONN.into(),
+                TurnEndHold {
+                    task_id,
+                    run_seq: 1,
+                    stop_reason: "end_turn".into(),
+                    summary: None,
+                    signal: None,
+                    since: chrono::Utc::now(),
+                    stop: CancellationToken::new(),
+                    later: Default::default(),
+                    settling,
+                },
+            );
+            engine.reconcile_once().await;
+            assert_eq!(
+                status_of(&engine, task_id).await,
+                WorkTaskStatus::Running,
+                "settling={settling}"
+            );
+        }
+    }
+
+    /// A restart loses the hold with the process. The turn had ended normally,
+    /// so the run settles as that turn's end would have — on the summary the
+    /// wait recorded — instead of failing as interrupted; a run that was not
+    /// waiting is left to the boot reconcile.
+    #[tokio::test]
+    async fn a_hold_lost_to_a_restart_settles_into_review() {
+        let (engine, task_id) = running_task().await;
+        let run_seq = work_task_service::get_model(&engine.db.conn, task_id)
+            .await
+            .expect("task")
+            .run_seq;
+        work_task_service::record_event(
+            &engine.db.conn,
+            task_id,
+            "background_wait",
+            "engine",
+            Some(serde_json::json!({
+                "run_seq": run_seq,
+                "reason": "background_work",
+                "tasks": ["run b1"],
+                "summary": STILL_RUNNING,
+            })),
+        )
+        .await
+        .expect("event");
+        let (other, other_id) = running_task().await;
+
+        engine.settle_interrupted_holds().await;
+        other.settle_interrupted_holds().await;
+
+        let task = work_task_service::get_model(&engine.db.conn, task_id)
+            .await
+            .expect("task");
+        assert_eq!(task.status, WorkTaskStatus::Review);
+        assert_eq!(task.result_summary.as_deref(), Some(STILL_RUNNING));
+        let ends = event_payloads(&engine, task_id, "background_wait_end").await;
+        assert_eq!(ends[0]["outcome"], "interrupted");
+        assert_eq!(
+            status_of(&other, other_id).await,
+            WorkTaskStatus::Running,
+            "not waiting: the boot reconcile decides"
+        );
+    }
+
+    /// #538: pre-prompt compaction runs on the same connection the work turn
+    /// then uses. Its `TurnComplete` is fenced, but a lagging `Error` (or a
+    /// failed compaction tool call) is dequeued only after launch has indexed
+    /// that connection. That error belongs to the compaction, not to an empty
+    /// work `end_turn`.
+    #[tokio::test]
+    async fn a_lagging_compaction_error_does_not_fail_the_work_turn() {
+        let (engine, task_id) = running_task().await;
+        // The launch has baselined the work turn and indexed the connection.
+        // The compaction watermark was set before either of those.
+        engine.turn_signals.lock().await.insert(
+            PARENT_CONN.into(),
+            TurnSignal {
+                error: None,
+                baselined: true,
+                baseline: Some((0, 0, 0)),
+            },
+        );
+        engine.mark_compaction_turn(PARENT_CONN, 4).await;
+
+        engine
+            .on_event(&EventEnvelope {
+                seq: 3,
+                connection_id: PARENT_CONN.into(),
+                payload: AcpEvent::Error {
+                    message: "Context compaction failed: model overloaded".into(),
+                    agent_type: "codex".into(),
+                    code: Some("compaction_failed".into()),
+                    details: None,
+                    terminal: false,
+                },
+            })
+            .await;
+        engine
+            .on_event(&turn_complete_envelope(PARENT_CONN, 4, "end_turn"))
+            .await;
+        assert_eq!(
+            status_of(&engine, task_id).await,
+            WorkTaskStatus::Running,
+            "the compaction completion must not settle the work turn"
+        );
+
+        engine
+            .on_event(&turn_complete_envelope(PARENT_CONN, 8, "end_turn"))
+            .await;
+        let task = work_task_service::get_model(&engine.db.conn, task_id)
+            .await
+            .expect("task row");
+        assert_eq!(task.status, WorkTaskStatus::Review);
+        assert!(task.failure_reason.is_none(), "{:?}", task.failure_reason);
+        assert!(
+            task.last_error.is_none(),
+            "compaction error must not become last_error, got {:?}",
+            task.last_error
+        );
+    }
+
+    /// An error that arrives after the compaction fence is the work turn's
+    /// own, and an empty `end_turn` still fails with that message.
+    #[tokio::test]
+    async fn a_work_turn_error_after_compaction_still_fails_the_task() {
+        const MESSAGE: &str =
+            "Assistant tool call function.arguments must be valid JSON.";
+        let (engine, task_id) = running_task().await;
+        engine.turn_signals.lock().await.insert(
+            PARENT_CONN.into(),
+            TurnSignal {
+                error: None,
+                baselined: true,
+                baseline: Some((0, 0, 0)),
+            },
+        );
+        engine.mark_compaction_turn(PARENT_CONN, 4).await;
+        engine
+            .on_event(&EventEnvelope {
+                seq: 3,
+                connection_id: PARENT_CONN.into(),
+                payload: AcpEvent::Error {
+                    message: "Context compaction failed: model overloaded".into(),
+                    agent_type: "codex".into(),
+                    code: Some("compaction_failed".into()),
+                    details: None,
+                    terminal: false,
+                },
+            })
+            .await;
+        engine
+            .on_event(&turn_complete_envelope(PARENT_CONN, 4, "end_turn"))
+            .await;
+
+        // Above the compaction watermark, so this is the work turn's failure.
+        engine
+            .on_event(&EventEnvelope {
+                seq: 7,
+                connection_id: PARENT_CONN.into(),
+                payload: session_failure("error", MESSAGE, false),
+            })
+            .await;
+        engine
+            .on_event(&turn_complete_envelope(PARENT_CONN, 8, "end_turn"))
+            .await;
+
+        let task = work_task_service::get_model(&engine.db.conn, task_id)
+            .await
+            .expect("task row");
+        assert_eq!(task.status, WorkTaskStatus::Failed);
+        assert_eq!(task.failure_reason.as_deref(), Some("agent_error"));
+        let shown = task.last_error.as_deref().unwrap_or_default();
+        assert!(
+            shown.contains("function.arguments must be valid JSON"),
+            "got {shown:?}"
+        );
+        assert!(
+            !shown.contains("Context compaction failed"),
+            "got {shown:?}"
+        );
+    }
+
+    /// #538: a baselined turn whose settle-time snapshot cannot be read (no
+    /// worktree, git failed) must not treat that as "a diff was added" and
+    /// drop the recorded error.
+    #[tokio::test]
+    async fn recorded_agent_error_survives_a_missing_settle_snapshot() {
+        const MESSAGE: &str =
+            "Assistant tool call function.arguments must be valid JSON.";
+        let (engine, task_id) = running_task().await;
+        assert!(
+            engine.snapshot_diff_stats(task_id).await.is_none(),
+            "this task has no worktree, so settle cannot read a diff"
+        );
+        engine.turn_signals.lock().await.insert(
+            PARENT_CONN.into(),
+            TurnSignal {
+                error: None,
+                baselined: true,
+                baseline: Some((3, 10, 1)),
+            },
+        );
+        engine
+            .on_event(&env(PARENT_CONN, session_failure("error", MESSAGE, false)))
+            .await;
+        engine
+            .on_event(&turn_complete_envelope(PARENT_CONN, 2, "end_turn"))
+            .await;
+
+        let task = work_task_service::get_model(&engine.db.conn, task_id)
+            .await
+            .expect("task row");
+        assert_eq!(task.status, WorkTaskStatus::Failed);
+        assert_eq!(task.failure_reason.as_deref(), Some("agent_error"));
+        let shown = task.last_error.as_deref().unwrap_or_default();
+        assert!(
+            shown.contains("function.arguments must be valid JSON"),
+            "got {shown:?}"
+        );
+    }
+
+    /// The other unreadable side: the prompt-time snapshot is missing and the
+    /// settle-time snapshot is a real non-zero diff. Still not proof this
+    /// turn added that diff, so the recorded error is kept.
+    #[tokio::test]
+    async fn recorded_agent_error_survives_a_missing_prompt_snapshot() {
+        const MESSAGE: &str =
+            "Assistant tool call function.arguments must be valid JSON.";
+        let (engine, task_id) = running_task().await;
+        let repo = tiny_repo().await;
+        attach_worktree(&engine, task_id, &repo).await;
+        std::fs::write(repo.path.join("b.txt"), "two\n").expect("dirty");
+        let after = engine.snapshot_diff_stats(task_id).await;
+        assert!(
+            after.is_some_and(|stats| stats != (0, 0, 0)),
+            "settle must see a non-zero diff, got {after:?}"
+        );
+        engine.turn_signals.lock().await.insert(
+            PARENT_CONN.into(),
+            TurnSignal {
+                error: None,
+                baselined: true,
+                baseline: None,
+            },
+        );
+        engine
+            .on_event(&env(PARENT_CONN, session_failure("error", MESSAGE, false)))
+            .await;
+        engine
+            .on_event(&turn_complete_envelope(PARENT_CONN, 2, "end_turn"))
+            .await;
+
+        let task = work_task_service::get_model(&engine.db.conn, task_id)
+            .await
+            .expect("task row");
+        assert_eq!(task.status, WorkTaskStatus::Failed);
+        assert_eq!(task.failure_reason.as_deref(), Some("agent_error"));
+        let shown = task.last_error.as_deref().unwrap_or_default();
+        assert!(
+            shown.contains("function.arguments must be valid JSON"),
+            "got {shown:?}"
+        );
+    }
+
+    struct TinyRepo {
+        _dir: tempfile::TempDir,
+        path: std::path::PathBuf,
+        sha: String,
+    }
+
+    async fn tiny_repo() -> TinyRepo {
+        let dir = tempfile::tempdir().expect("tempdir");
+        git_run(dir.path(), &["init", "-q", "-b", "main"]);
+        std::fs::write(dir.path().join("a.txt"), "one\n").expect("write");
+        git_run(dir.path(), &["add", "-A"]);
+        git_run(dir.path(), &["commit", "-q", "-m", "base"]);
+        let sha = task_git::rev_parse(dir.path().to_str().expect("utf8"), "HEAD")
+            .await
+            .expect("sha");
+        TinyRepo {
+            path: dir.path().to_path_buf(),
+            sha,
+            _dir: dir,
+        }
+    }
+
+    async fn attach_worktree(engine: &TaskEngine, task_id: i32, repo: &TinyRepo) {
+        let wt_id = crate::db::test_helpers::seed_folder(
+            &engine.db,
+            repo.path.to_str().expect("utf8"),
+        )
+        .await;
+        let mut update: crate::db::entities::work_task::ActiveModel =
+            work_task_service::get_model(&engine.db.conn, task_id)
+                .await
+                .expect("task")
+                .into();
+        update.worktree_folder_id = sea_orm::Set(Some(wt_id));
+        update.base_sha = sea_orm::Set(Some(repo.sha.clone()));
+        sea_orm::ActiveModelTrait::update(update, &engine.db.conn)
+            .await
+            .expect("attach worktree");
+    }
+
+    const UPSTREAM_400: &str =
+        "Assistant tool call function.arguments must be valid JSON.";
+
+    async fn fail_turn_with_upstream_error(engine: &Arc<TaskEngine>) {
+        engine
+            .on_event(&env(
+                PARENT_CONN,
+                session_failure("error", UPSTREAM_400, false),
+            ))
+            .await;
+        engine
+            .on_event(&turn_complete_envelope(PARENT_CONN, 2, "end_turn"))
+            .await;
+    }
+
+    /// A baselined turn whose diff did not change still fails with the
+    /// recorded error. A turn that added a diff still reviews.
+    #[tokio::test]
+    async fn a_baselined_diff_stat_decides_whether_an_agent_error_fails() {
+        // Equal snapshots: nothing new this turn.
+        {
+            let (engine, task_id) = running_task().await;
+            let repo = tiny_repo().await;
+            attach_worktree(&engine, task_id, &repo).await;
+            let stats = engine.snapshot_diff_stats(task_id).await;
+            assert_eq!(stats, Some((0, 0, 0)), "clean worktree, got {stats:?}");
+            engine.turn_signals.lock().await.insert(
+                PARENT_CONN.into(),
+                TurnSignal {
+                    error: None,
+                    baselined: true,
+                    baseline: stats,
+                },
+            );
+            fail_turn_with_upstream_error(&engine).await;
+            let task = work_task_service::get_model(&engine.db.conn, task_id)
+                .await
+                .expect("task row");
+            assert_eq!(task.status, WorkTaskStatus::Failed);
+            assert_eq!(task.failure_reason.as_deref(), Some("agent_error"));
+            assert!(
+                task.last_error
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains("function.arguments must be valid JSON")
+            );
+        }
+
+        // Changed snapshot: the turn produced a diff, so the error does not
+        // replace review.
+        {
+            let (engine, task_id) = running_task().await;
+            let repo = tiny_repo().await;
+            attach_worktree(&engine, task_id, &repo).await;
+            std::fs::write(repo.path.join("b.txt"), "two\n").expect("dirty");
+            let stats = engine.snapshot_diff_stats(task_id).await;
+            assert!(
+                stats.is_some_and(|s| s != (0, 0, 0)),
+                "got {stats:?}"
+            );
+            engine.turn_signals.lock().await.insert(
+                PARENT_CONN.into(),
+                TurnSignal {
+                    error: None,
+                    baselined: true,
+                    baseline: Some((0, 0, 0)),
+                },
+            );
+            fail_turn_with_upstream_error(&engine).await;
+            let task = work_task_service::get_model(&engine.db.conn, task_id)
+                .await
+                .expect("task row");
+            assert_eq!(task.status, WorkTaskStatus::Review);
+            assert!(task.failure_reason.is_none());
+            assert!(task.last_error.is_none(), "{:?}", task.last_error);
+            assert!(
+                task.files_changed.unwrap_or(0) > 0,
+                "the new diff must be what kept this in review, got {:?}",
+                task.files_changed
+            );
+        }
+    }
+
+    /// Assistant text is the existing summary. Beside a recorded error it
+    /// still settles to review with that text.
+    #[tokio::test]
+    async fn assistant_text_beside_an_agent_error_still_reviews() {
+        let (engine, task_id) = running_task().await;
+        let _rx = engine
+            .manager
+            .insert_test_connection_live(
+                PARENT_CONN,
+                AgentType::ClaudeCode,
+                None,
+                EventEmitter::Noop,
+            )
+            .await;
+        let state = engine
+            .manager
+            .get_state(PARENT_CONN)
+            .await
+            .expect("state");
+        state.write().await.last_assistant_text = Some("landed the fix".into());
+        engine.turn_signals.lock().await.insert(
+            PARENT_CONN.into(),
+            TurnSignal {
+                error: None,
+                baselined: true,
+                baseline: Some((0, 0, 0)),
+            },
+        );
+        fail_turn_with_upstream_error(&engine).await;
+        let task = work_task_service::get_model(&engine.db.conn, task_id)
+            .await
+            .expect("task row");
+        assert_eq!(task.status, WorkTaskStatus::Review);
+        assert_eq!(task.result_summary.as_deref(), Some("landed the fix"));
+        assert!(task.failure_reason.is_none());
+        assert!(task.last_error.is_none(), "{:?}", task.last_error);
+    }
+
+    /// A blocked verdict is decided before the empty-error branch.
+    #[tokio::test]
+    async fn a_blocked_verdict_beside_an_agent_error_stays_verdict_blocked() {
+        let (engine, task_id) = running_task().await;
+        let run_seq = work_task_service::get_model(&engine.db.conn, task_id)
+            .await
+            .expect("task row")
+            .run_seq;
+        assert!(
+            work_task_service::set_verdict(
+                &engine.db.conn,
+                task_id,
+                run_seq,
+                "blocked",
+                Some("gave up"),
+            )
+            .await
+            .expect("set verdict")
+        );
+        fail_turn_with_upstream_error(&engine).await;
+        let task = work_task_service::get_model(&engine.db.conn, task_id)
+            .await
+            .expect("task row");
+        assert_eq!(task.status, WorkTaskStatus::Failed);
+        assert_eq!(task.failure_reason.as_deref(), Some("verdict_blocked"));
+        assert_eq!(task.last_error.as_deref(), Some("gave up"));
+    }
+
+    fn session_failure(severity: &str, title: &str, resolved: bool) -> AcpEvent {
+        AcpEvent::SessionFailure {
+            record: crate::acp::types::SessionFailureRecord {
+                id: "sf-400".into(),
+                revision: 1,
+                category: "request".into(),
+                severity: severity.into(),
+                title: title.into(),
+                details: None,
+                actions: Vec::new(),
+                resolved,
+            },
+        }
+    }
+
+    fn envelope_at(conn_id: &str, seq: u64, payload: AcpEvent) -> EventEnvelope {
+        EventEnvelope {
+            seq,
+            connection_id: conn_id.to_string(),
+            payload,
+        }
+    }
+
+    fn prompting() -> AcpEvent {
+        AcpEvent::StatusChanged {
+            status: ConnectionStatus::Prompting,
+        }
+    }
+
+    const SESSION_LOAD_FALLBACK: &str =
+        "Failed to load session, starting new: Resource not found: session";
+
+    /// Launch the way `launch` leaves a resumed round whose `session/load`
+    /// fell back: the work turn is baselined and indexed, and the fallback's
+    /// `Error` (emitted while the session was being established) is still
+    /// queued for the engine, which reads it only now.
+    async fn task_with_a_lagging_setup_error() -> (Arc<TaskEngine>, i32) {
+        let (engine, task_id) = running_task().await;
+        engine.turn_signals.lock().await.insert(
+            PARENT_CONN.into(),
+            TurnSignal {
+                error: None,
+                baselined: true,
+                baseline: Some((0, 0, 0)),
+            },
+        );
+        engine
+            .on_event(&envelope_at(
+                PARENT_CONN,
+                2,
+                AcpEvent::Error {
+                    message: SESSION_LOAD_FALLBACK.into(),
+                    agent_type: "codex".into(),
+                    code: Some("session_load_fallback".into()),
+                    details: None,
+                    terminal: false,
+                },
+            ))
+            .await;
+        (engine, task_id)
+    }
+
+    /// #538: an error from before the work prompt started is not the turn's.
+    /// The prompt's `Prompting` edge opens the turn's own error scope, so an
+    /// empty `end_turn` that reported nothing itself still settles to review.
+    #[tokio::test]
+    async fn an_error_from_before_the_work_prompt_does_not_fail_the_turn() {
+        let (engine, task_id) = task_with_a_lagging_setup_error().await;
+        engine
+            .on_event(&envelope_at(PARENT_CONN, 3, prompting()))
+            .await;
+        {
+            // Only the error goes: the turn's baseline is what decides
+            // whether a later error of its own fails it.
+            let signals = engine.turn_signals.lock().await;
+            let signal = signals.get(PARENT_CONN).expect("the turn keeps its signal");
+            assert!(signal.error.is_none());
+            assert!(signal.baselined);
+            assert_eq!(signal.baseline, Some((0, 0, 0)));
+        }
+        engine
+            .on_event(&turn_complete_envelope(PARENT_CONN, 6, "end_turn"))
+            .await;
+
+        let task = work_task_service::get_model(&engine.db.conn, task_id)
+            .await
+            .expect("task row");
+        assert_eq!(task.status, WorkTaskStatus::Review);
+        assert!(task.failure_reason.is_none(), "{:?}", task.failure_reason);
+        assert!(
+            task.last_error.is_none(),
+            "a setup error must not become the turn's failure, got {:?}",
+            task.last_error
+        );
+    }
+
+    /// The other half of the same edge: an error AFTER `Prompting` is the work
+    /// turn's, and it is the one the card shows.
+    #[tokio::test]
+    async fn an_error_after_the_work_prompt_starts_still_fails_the_turn() {
+        let (engine, task_id) = task_with_a_lagging_setup_error().await;
+        engine
+            .on_event(&envelope_at(PARENT_CONN, 3, prompting()))
+            .await;
+        engine
+            .on_event(&envelope_at(
+                PARENT_CONN,
+                5,
+                session_failure("error", UPSTREAM_400, false),
+            ))
+            .await;
+        engine
+            .on_event(&turn_complete_envelope(PARENT_CONN, 6, "end_turn"))
+            .await;
+
+        let task = work_task_service::get_model(&engine.db.conn, task_id)
+            .await
+            .expect("task row");
+        assert_eq!(task.status, WorkTaskStatus::Failed);
+        assert_eq!(task.failure_reason.as_deref(), Some("agent_error"));
+        assert_eq!(task.last_error.as_deref(), Some(UPSTREAM_400));
+    }
+
+    fn tool_call(id: &str, kind: &str, status: &str, content: Option<&str>) -> AcpEvent {
+        AcpEvent::ToolCall {
+            tool_call_id: id.into(),
+            title: id.into(),
+            kind: kind.into(),
+            status: status.into(),
+            content: content.map(str::to_string),
+            raw_input: None,
+            raw_output: None,
+            locations: None,
+            meta: None,
+            images: None,
+        }
+    }
+
+    /// #538: only an error the turn ENDED in can fail it. One it moved on from
+    /// — a failed edit retried, a failed lookup followed by the answer, a
+    /// failure the model thought past — was recovered, even when the round
+    /// then ends on a tool call (no concluding text) with no diff proven.
+    #[tokio::test]
+    async fn an_error_the_turn_moved_on_from_does_not_fail_it() {
+        let answer = AcpEvent::ContentDelta {
+            text: "The timeout is set in config.rs, line 12.".into(),
+            parent_tool_use_id: None,
+        };
+        let thinking = AcpEvent::Thinking {
+            text: "That path does not exist; try the other one.".into(),
+            parent_tool_use_id: None,
+        };
+        let cases = [
+            (
+                "a failed edit retried",
+                vec![
+                    tool_call("edit-1", "edit", "failed", Some("patch did not apply")),
+                    tool_call("edit-2", "edit", "in_progress", None),
+                ],
+            ),
+            (
+                "an answer after a failed lookup",
+                vec![
+                    tool_call("grep-1", "search", "in_progress", None),
+                    AcpEvent::ToolCallUpdate {
+                        tool_call_id: "grep-1".into(),
+                        title: None,
+                        status: Some("failed".into()),
+                        content: Some("rg: no matches".into()),
+                        raw_input: None,
+                        raw_output: None,
+                        raw_output_append: None,
+                        locations: None,
+                        meta: None,
+                        images: None,
+                    },
+                    answer,
+                    tool_call("read-1", "read", "completed", None),
+                ],
+            ),
+            (
+                "a failure the model thought past",
+                vec![
+                    tool_call("cat-1", "read", "failed", Some("No such file")),
+                    thinking,
+                ],
+            ),
+            (
+                "a failure the model answered past",
+                vec![
+                    tool_call("ls-1", "read", "failed", Some("No such file")),
+                    AcpEvent::ContentDelta {
+                        text: "That directory is gone; nothing to change.".into(),
+                        parent_tool_use_id: None,
+                    },
+                ],
+            ),
+        ];
+        for (label, events) in cases {
+            let (engine, task_id) = running_task().await;
+            engine.turn_signals.lock().await.insert(
+                PARENT_CONN.into(),
+                TurnSignal {
+                    error: None,
+                    baselined: true,
+                    baseline: Some((1, 1, 1)),
+                },
+            );
+            engine
+                .on_event(&envelope_at(PARENT_CONN, 1, prompting()))
+                .await;
+            for (i, event) in events.into_iter().enumerate() {
+                engine
+                    .on_event(&envelope_at(PARENT_CONN, 2 + i as u64, event))
+                    .await;
+            }
+            engine
+                .on_event(&turn_complete_envelope(PARENT_CONN, 9, "end_turn"))
+                .await;
+
+            let task = work_task_service::get_model(&engine.db.conn, task_id)
+                .await
+                .expect("task row");
+            assert_eq!(task.status, WorkTaskStatus::Review, "{label}");
+            assert!(task.failure_reason.is_none(), "{label}");
+            assert!(task.last_error.is_none(), "{label}: {:?}", task.last_error);
+        }
+    }
+
+    /// The other side of that edge: progress BEFORE the error does not clear
+    /// it. A turn that worked, then ended in an upstream failure, fails.
+    #[tokio::test]
+    async fn an_error_after_the_last_progress_still_fails_the_turn() {
+        let (engine, task_id) = running_task().await;
+        let events = [
+            prompting(),
+            AcpEvent::Thinking {
+                text: "Run the tests first.".into(),
+                parent_tool_use_id: None,
+            },
+            tool_call("test-1", "execute", "completed", None),
+            session_failure("error", UPSTREAM_400, false),
+        ];
+        for (i, event) in events.into_iter().enumerate() {
+            engine
+                .on_event(&envelope_at(PARENT_CONN, 1 + i as u64, event))
+                .await;
+        }
+        engine
+            .on_event(&turn_complete_envelope(PARENT_CONN, 9, "end_turn"))
+            .await;
+
+        let task = work_task_service::get_model(&engine.db.conn, task_id)
+            .await
+            .expect("task row");
+        assert_eq!(task.status, WorkTaskStatus::Failed);
+        assert_eq!(task.failure_reason.as_deref(), Some("agent_error"));
+        assert_eq!(task.last_error.as_deref(), Some(UPSTREAM_400));
+    }
+
+    /// A failed tool call can carry a whole command log. The card keeps its
+    /// tail, capped like the init and preflight output.
+    #[tokio::test]
+    async fn a_failed_tool_log_is_kept_as_its_capped_tail() {
+        const LAST_LINE: &str = "错误：最后一行说明出了什么问题";
+        let (engine, task_id) = running_task().await;
+        let log = format!("{}\n{LAST_LINE}", "噪声 noise ".repeat(5_000));
+        let expected: String = {
+            let chars: Vec<char> = log.chars().collect();
+            chars[chars.len() - TURN_ERROR_TAIL_CHARS..]
+                .iter()
+                .collect()
+        };
+        engine
+            .on_event(&env(
+                PARENT_CONN,
+                AcpEvent::ToolCallUpdate {
+                    tool_call_id: "tc-log".into(),
+                    title: None,
+                    status: Some("failed".into()),
+                    content: Some(log),
+                    raw_input: None,
+                    raw_output: None,
+                    raw_output_append: None,
+                    locations: None,
+                    meta: None,
+                    images: None,
+                },
+            ))
+            .await;
+        engine
+            .on_event(&turn_complete_envelope(PARENT_CONN, 2, "end_turn"))
+            .await;
+
+        let task = work_task_service::get_model(&engine.db.conn, task_id)
+            .await
+            .expect("task row");
+        assert_eq!(task.status, WorkTaskStatus::Failed);
+        let shown = task.last_error.unwrap_or_default();
+        assert!(shown.ends_with(LAST_LINE), "kept the head, not the tail");
+        assert_eq!(shown, expected, "the tail is cut by characters, not bytes");
+    }
+
+    /// #538 for a turn that ends on a failed stop reason: a rejected prompt's
+    /// own message is what the card shows, not just "agent stopped: rejected".
+    /// A turn that reported nothing keeps that stop-reason line.
+    #[tokio::test]
+    async fn a_failed_stop_reason_shows_what_the_turn_reported() {
+        const REJECTION: &str = "ACP protocol error: Internal error: [400] Assistant tool call \
+             function.arguments must be valid JSON.";
+        {
+            let (engine, task_id) = running_task().await;
+            engine
+                .on_event(&envelope_at(PARENT_CONN, 1, prompting()))
+                .await;
+            engine
+                .on_event(&envelope_at(
+                    PARENT_CONN,
+                    2,
+                    AcpEvent::Error {
+                        message: REJECTION.into(),
+                        agent_type: "gemini".into(),
+                        code: None,
+                        details: None,
+                        terminal: false,
+                    },
+                ))
+                .await;
+            engine
+                .on_event(&turn_complete_envelope(PARENT_CONN, 3, "rejected"))
+                .await;
+            let task = work_task_service::get_model(&engine.db.conn, task_id)
+                .await
+                .expect("task row");
+            assert_eq!(task.status, WorkTaskStatus::Failed);
+            assert_eq!(task.failure_reason.as_deref(), Some("agent_error"));
+            assert_eq!(task.last_error.as_deref(), Some(REJECTION));
+        }
+        {
+            let (engine, task_id) = running_task().await;
+            engine
+                .on_event(&turn_complete_envelope(PARENT_CONN, 3, "rejected"))
+                .await;
+            let task = work_task_service::get_model(&engine.db.conn, task_id)
+                .await
+                .expect("task row");
+            assert_eq!(task.status, WorkTaskStatus::Failed);
+            assert_eq!(task.last_error.as_deref(), Some("agent stopped: rejected"));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_late_cancelled_event_does_not_cancel_a_task_in_review() {
+        let (engine, task_id) = running_task().await;
+        let run_seq = work_task_service::get_model(&engine.db.conn, task_id)
+            .await
+            .expect("task row")
+            .run_seq;
+        assert!(work_task_service::settle_review(
+            &engine.db.conn,
+            task_id,
+            run_seq,
+            None,
+            None,
+        )
+        .await
+        .expect("settle review"));
+
+        engine.on_turn_complete(PARENT_CONN, "cancelled").await;
+
+        assert_eq!(status_of(&engine, task_id).await, WorkTaskStatus::Review);
+    }
+
+    #[tokio::test]
+    async fn a_current_cancelled_event_cancels_the_running_task() {
+        let (engine, task_id) = running_task().await;
+
+        engine.on_turn_complete(PARENT_CONN, "cancelled").await;
+
+        assert_eq!(status_of(&engine, task_id).await, WorkTaskStatus::Canceled);
+    }
+
+    /// The other half of the CAS: the status alone would let a stale
+    /// connection's cancel land on the RUN AFTER it, which is `running` again
+    /// and so passes the status gate. Only `run_seq` tells the two apart.
+    #[tokio::test]
+    async fn a_previous_generation_cancelled_event_spares_the_current_run() {
+        let (engine, task_id) = running_task().await;
+        let row = work_task_service::get_model(&engine.db.conn, task_id)
+            .await
+            .expect("task row");
+        let (stale_seq, conv_id) = (row.run_seq, row.conversation_id.expect("conversation"));
+        // Walk the real chain into the next generation: settle, requeue, run.
+        assert!(work_task_service::settle_review(
+            &engine.db.conn,
+            task_id,
+            stale_seq,
+            None,
+            None,
+        )
+        .await
+        .expect("settle review"));
+        let next_seq = work_task_service::claim_for_run(
+            &engine.db.conn,
+            task_id,
+            WorkTaskStatus::Review,
+            "test",
+        )
+        .await
+        .expect("claim")
+        .expect("claimed");
+        assert_ne!(next_seq, stale_seq);
+        assert!(work_task_service::begin_setup(&engine.db.conn, task_id, next_seq)
+            .await
+            .expect("begin_setup"));
+        assert!(work_task_service::mark_running(
+            &engine.db.conn,
+            task_id,
+            next_seq,
+            conv_id,
+            "conn-next",
+        )
+        .await
+        .expect("mark_running"));
+
+        // The old connection's cancel finally arrives.
+        engine.on_turn_complete(PARENT_CONN, "cancelled").await;
+
+        assert_eq!(status_of(&engine, task_id).await, WorkTaskStatus::Running);
+    }
+
+    /// Walk the row on to a fresh generation running on `conn_id`, WITHOUT
+    /// retiring the previous one's `index` entry — the state a delayed
+    /// `TurnComplete` from the old connection lands in. Returns the new run_seq.
+    async fn relaunch_on(engine: &TaskEngine, task_id: i32, conn_id: &str) -> i32 {
+        let row = work_task_service::get_model(&engine.db.conn, task_id)
+            .await
+            .expect("task row");
+        let conv_id = row.conversation_id.expect("conversation");
+
+        assert!(work_task_service::settle_review(
+            &engine.db.conn,
+            task_id,
+            row.run_seq,
+            None,
+            None,
+        )
+        .await
+        .expect("settle review"));
+        let next_seq = work_task_service::claim_for_run(
+            &engine.db.conn,
+            task_id,
+            WorkTaskStatus::Review,
+            "test",
+        )
+        .await
+        .expect("claim")
+        .expect("claimed");
+        assert!(work_task_service::begin_setup(&engine.db.conn, task_id, next_seq)
+            .await
+            .expect("begin_setup"));
+        assert!(work_task_service::mark_running(
+            &engine.db.conn,
+            task_id,
+            next_seq,
+            conv_id,
+            conn_id,
+        )
+        .await
+        .expect("mark_running"));
+        engine
+            .index
+            .lock()
+            .await
+            .insert(conn_id.into(), (task_id, next_seq));
+        next_seq
+    }
+
+    #[tokio::test]
+    async fn a_previous_generation_cancel_does_not_clear_current_waits() {
+        let (engine, task_id) = running_task().await;
+        relaunch_on(&engine, task_id, "conn-next").await;
+
+        engine
+            .track_request("conn-next", "permission-a".into(), true)
+            .await;
+        engine
+            .track_request("conn-next", "permission-b".into(), true)
+            .await;
+        assert_eq!(
+            status_of(&engine, task_id).await,
+            WorkTaskStatus::AwaitingInput
+        );
+
+        engine.on_turn_complete(PARENT_CONN, "cancelled").await;
+        engine
+            .track_request("conn-next", "permission-a".into(), false)
+            .await;
+
+        assert_eq!(
+            status_of(&engine, task_id).await,
+            WorkTaskStatus::AwaitingInput,
+            "the second request in the current generation is still outstanding"
+        );
+
+        engine
+            .track_request("conn-next", "permission-b".into(), false)
+            .await;
+        assert_eq!(status_of(&engine, task_id).await, WorkTaskStatus::Running);
+    }
+
+    /// The mirror image of the case above, and the half sparing the set opens:
+    /// a retired run's DELEGATION children are namespaced by connection id, so
+    /// keeping the task's set keeps THEIR keys too — with nothing left that
+    /// could ever answer them, because the same retirement just unmapped the
+    /// chain (`track_request` and `forget_delegation_child` both resolve a
+    /// detached child to nothing). One orphan pins the set non-empty until a
+    /// wholesale clear comes along — a later retirement that IS the last one
+    /// out, or a cancel — and until then every generation's first request
+    /// misses the `len() == 1` edge: the board says `running` for a run parked
+    /// on the user, which is bug #447 all over again. Unlike the transient
+    /// over-clear, answering the request is not what gets you out of it.
+    #[tokio::test]
+    async fn retiring_a_run_takes_its_orphaned_delegation_requests_with_it() {
+        let (engine, task_id) = running_task().await;
+        engine
+            .on_event(&delegation_started(PARENT_CONN, CHILD_CONN))
+            .await;
+        engine.on_event(&permission_request(CHILD_CONN, "r1")).await;
+        assert_eq!(
+            status_of(&engine, task_id).await,
+            WorkTaskStatus::AwaitingInput
+        );
+
+        relaunch_on(&engine, task_id, "conn-next").await;
+        engine.on_turn_complete(PARENT_CONN, "cancelled").await;
+
+        assert!(
+            engine.awaiting.lock().await.get(&task_id).is_none(),
+            "a child's key cannot outlive the delegation chain that named it"
+        );
+
+        // ...and the surviving generation's own edge still swings both ways.
+        engine
+            .track_request("conn-next", "p:r9".into(), true)
+            .await;
+        assert_eq!(
+            status_of(&engine, task_id).await,
+            WorkTaskStatus::AwaitingInput
+        );
+        engine
+            .track_request("conn-next", "p:r9".into(), false)
+            .await;
+        assert_eq!(status_of(&engine, task_id).await, WorkTaskStatus::Running);
+    }
+
     fn env(conn_id: &str, payload: AcpEvent) -> EventEnvelope {
         EventEnvelope {
             seq: 0,
@@ -5529,6 +12978,8 @@ mod tests {
                 agent_type: AgentType::Codex,
                 task_preview: "run the tests".into(),
                 task_id: "task-1".into(),
+                assistant_id: None,
+                assistant_name: None,
             },
         )
     }
@@ -5546,6 +12997,8 @@ mod tests {
                     duration_ms: 0,
                     text_preview: None,
                 },
+                assistant_id: None,
+                assistant_name: None,
             },
         )
     }
@@ -5578,6 +13031,8 @@ mod tests {
                 CHILD_CONN,
                 AcpEvent::PermissionResolved {
                     request_id: "r1".into(),
+                    option_id: None,
+                    origin: None,
                 },
             ))
             .await;
@@ -5620,6 +13075,8 @@ mod tests {
                 CHILD_CONN,
                 AcpEvent::PermissionResolved {
                     request_id: "r1".into(),
+                    option_id: None,
+                    origin: None,
                 },
             ))
             .await;
@@ -5634,6 +13091,8 @@ mod tests {
                 PARENT_CONN,
                 AcpEvent::PermissionResolved {
                     request_id: "r1".into(),
+                    option_id: None,
+                    origin: None,
                 },
             ))
             .await;
@@ -5689,6 +13148,8 @@ mod tests {
                 CHILD_CONN,
                 AcpEvent::PermissionResolved {
                     request_id: "r1".into(),
+                    option_id: None,
+                    origin: None,
                 },
             ))
             .await;
@@ -5738,6 +13199,4942 @@ mod tests {
         );
     }
 
+    // ── delivery (push + pull request) ──────────────────────────────────
+
+    /// Forge write path under test control: no network, no keyring, and every
+    /// step independently failable so each failure point can be exercised.
+    #[derive(Default)]
+    struct FakeForge {
+        /// `(repository, commit, remote branch)` of every push.
+        pushes: Mutex<Vec<(String, String, String)>>,
+        created: Mutex<Vec<(String, String, String, bool)>>,
+        /// The body of every pull request opened, in `created`'s order.
+        bodies: Mutex<Vec<String>>,
+        existing: Mutex<Vec<ForgePr>>,
+        /// What the source repository's base branch points at. The fixture
+        /// seeds it with the task's own base, i.e. "nothing unpushed".
+        remote_base: Mutex<Option<String>>,
+        /// `(issue number, comment body)` of every write-back attempt.
+        comments: Mutex<Vec<(ForgeItemKind, i64, String)>>,
+        push_error: Option<String>,
+        find_error: Option<String>,
+        create_error: Option<String>,
+        comment_error: Option<String>,
+        get_pull_error: Option<String>,
+        /// What the pull request looks like once the push has happened — how
+        /// a test says "someone closed / retargeted / merged it while codeg
+        /// was pushing", which is the whole window the settle check guards.
+        after_push: Mutex<Option<ForgePr>>,
+        /// A file dropped into the worktree the moment the push runs. Opens
+        /// the other window of the same kind: the worktree was clean when
+        /// `deliver_pr` checked it and is dirty by the time the post-delivery
+        /// cleanup would run `worktree remove --force` over it.
+        dirty_on_push: Option<String>,
+        /// A file COMMITTED onto the work branch the moment the push runs —
+        /// the half `dirty_on_push` cannot reach. `git status` stays spotless,
+        /// so only a check against the OID the delivery actually published can
+        /// tell that the branch has outrun it.
+        commit_on_push: Option<String>,
+        /// Where the project's `origin` would send a task without provenance:
+        /// `None` answers like a checkout whose remote codeg cannot deliver to.
+        local: Mutex<Option<DeliveryTarget>>,
+        /// How many times the engine asked the checkout — a pinned task must
+        /// not ask again.
+        local_lookups: Mutex<u32>,
+        /// The head a newly opened pull request reports, when it is not the
+        /// commit last pushed to its branch — someone else pushed in between.
+        create_head: Option<String>,
+    }
+
+    #[async_trait::async_trait]
+    impl ForgeDeliveryApi for FakeForge {
+        async fn push_branch(
+            &self,
+            _ctx: &DeliveryCtx<'_>,
+            worktree_path: &str,
+            repo: &str,
+            commit: &str,
+            remote_branch: &str,
+        ) -> Result<(), String> {
+            if let Some(e) = &self.push_error {
+                return Err(e.clone());
+            }
+            if let Some(name) = &self.dirty_on_push {
+                std::fs::write(std::path::Path::new(worktree_path).join(name), "scratch\n")
+                    .expect("write");
+            }
+            if let Some(name) = &self.commit_on_push {
+                let dir = std::path::Path::new(worktree_path);
+                std::fs::write(dir.join(name), "landed after the push\n").expect("write");
+                git_run(dir, &["add", "-A"]);
+                git_run(dir, &["commit", "-qm", "never published"]);
+            }
+            self.pushes.lock().await.push((
+                repo.to_string(),
+                commit.to_string(),
+                remote_branch.to_string(),
+            ));
+            if let Some(changed) = self.after_push.lock().await.clone() {
+                *self.existing.lock().await = vec![changed];
+            }
+            Ok(())
+        }
+
+        async fn find_pulls(
+            &self,
+            _ctx: &DeliveryCtx<'_>,
+            _head_branch: &str,
+        ) -> Result<Vec<ForgePr>, String> {
+            if let Some(e) = &self.find_error {
+                return Err(e.clone());
+            }
+            Ok(self.existing.lock().await.clone())
+        }
+
+        async fn remote_base_tip(
+            &self,
+            _ctx: &DeliveryCtx<'_>,
+            _worktree_path: &str,
+            _base_branch: &str,
+        ) -> Option<String> {
+            self.remote_base.lock().await.clone()
+        }
+
+        /// The fixtures' "remote" is a local path on `origin`, so the fake
+        /// fetches through it — what production adds on top is the pinned
+        /// account's credentials and an explicit URL, neither of which a
+        /// temporary directory has any use for.
+        async fn fetch_ref(
+            &self,
+            _ctx: &DeliveryCtx<'_>,
+            repo_path: &str,
+            remote_ref: &str,
+            local_ref: &str,
+        ) -> Result<String, String> {
+            task_git::fetch_into_ref(repo_path, "origin", remote_ref, local_ref)
+                .await
+                .map_err(|e| e.to_string())
+        }
+
+        async fn local_target(
+            &self,
+            _conn: &sea_orm::DatabaseConnection,
+            _project_path: &str,
+        ) -> Result<DeliveryTarget, String> {
+            *self.local_lookups.lock().await += 1;
+            self.local.lock().await.clone().ok_or_else(|| {
+                "this project has no `origin` remote codeg can deliver to".to_string()
+            })
+        }
+
+        async fn get_pull(&self, _ctx: &DeliveryCtx<'_>, number: i64) -> Result<ForgePr, String> {
+            if let Some(e) = &self.get_pull_error {
+                return Err(e.clone());
+            }
+            self.existing
+                .lock()
+                .await
+                .iter()
+                .find(|pr| pr.number == number)
+                .cloned()
+                .ok_or_else(|| format!("pull request #{number} not found"))
+        }
+
+        async fn comment_issue(
+            &self,
+            _ctx: &DeliveryCtx<'_>,
+            kind: ForgeItemKind,
+            number: i64,
+            body: &str,
+        ) -> Result<String, String> {
+            if let Some(e) = &self.comment_error {
+                return Err(e.clone());
+            }
+            self.comments.lock().await.push((kind, number, body.to_string()));
+            Ok(format!("https://github.test/acme/app/issues/{number}#issuecomment-1"))
+        }
+
+        async fn create_pull(
+            &self,
+            _ctx: &DeliveryCtx<'_>,
+            req: &NewPullRequest<'_>,
+        ) -> Result<ForgePr, String> {
+            if let Some(e) = &self.create_error {
+                return Err(e.clone());
+            }
+            let mut created = self.created.lock().await;
+            created.push((
+                req.title.to_string(),
+                req.head.to_string(),
+                req.base.to_string(),
+                req.draft,
+            ));
+            self.bodies.lock().await.push(req.body.to_string());
+            // #42 first, then one up per pull request opened after it — what
+            // tells "pushed into the same one" from "opened another".
+            let number = 41 + created.len() as i64;
+            // Opened over what the branch holds: the last commit pushed to it.
+            let head_sha = match &self.create_head {
+                Some(other) => other.clone(),
+                None => self
+                    .pushes
+                    .lock()
+                    .await
+                    .iter()
+                    .rev()
+                    .find(|(_, _, branch)| branch == req.head)
+                    .map(|(_, commit, _)| commit.clone())
+                    .unwrap_or_default(),
+            };
+            Ok(ForgePr {
+                number,
+                html_url: format!("https://github.test/acme/app/pull/{number}"),
+                state: "open".to_string(),
+                merged: false,
+                head_sha,
+                head_ref: req.head.to_string(),
+                head_repo: "acme/app".to_string(),
+                base_ref: req.base.to_string(),
+            })
+        }
+    }
+
+    fn git_run(dir: &std::path::Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.com")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.com")
+            .output()
+            .expect("spawn git");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        // A fixture repository must not translate line endings, whoever's git
+        // opens it. The env above neuters the global and system config for the
+        // commands THIS helper runs — but the engine's git, spawned through
+        // `crate::process`, inherits the real environment, and Git for Windows
+        // ships `core.autocrlf=true` in its system config. The two then disagree
+        // about one worktree: the engine checks a file out as CRLF while a
+        // `git add` here stores those bytes verbatim, so a file nobody touched
+        // reads as rewritten, and a diff measured from a commit credits the task
+        // with work it never did. Repo-LOCAL config is the one layer both sides
+        // read.
+        match args.first() {
+            // `init` runs with the repository as its cwd; `clone` names the
+            // destination last.
+            Some(&"init") => git_run(dir, &["config", "core.autocrlf", "false"]),
+            Some(&"clone") => {
+                let dest = std::path::PathBuf::from(args.last().expect("clone destination"));
+                git_run(&dest, &["config", "core.autocrlf", "false"]);
+            }
+            _ => {}
+        }
+    }
+
+    struct Delivery {
+        engine: Arc<TaskEngine>,
+        forge: Arc<FakeForge>,
+        /// Everything the engine broadcast, in order — the ordering tests read
+        /// it, and holding it also keeps the sender from reporting no
+        /// receivers for every other test on this fixture.
+        events: tokio::sync::broadcast::Receiver<crate::web::event_bridge::WebEvent>,
+        task_id: i32,
+        head: String,
+        /// The commit the task branched from — a real commit that is NOT a
+        /// descendant of `head`, which is what a "merged something else" test
+        /// needs to be about.
+        base_sha: String,
+        worktree: std::path::PathBuf,
+        root: std::path::PathBuf,
+        _root: tempfile::TempDir,
+    }
+
+    /// A real repository with a real task worktree holding one committed
+    /// change, plus the board row that describes it — the exact state a task
+    /// is in when its review column offers "deliver".
+    async fn delivery_fixture(forge: FakeForge) -> Delivery {
+        use sea_orm::{ActiveModelTrait, Set};
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let root_path = root.path().to_path_buf();
+        git_run(&root_path, &["init", "-q", "-b", "main"]);
+        std::fs::write(root_path.join("a.txt"), "one\n").expect("write");
+        git_run(&root_path, &["add", "-A"]);
+        git_run(&root_path, &["commit", "-q", "-m", "base"]);
+        let base_sha = task_git::rev_parse(root_path.to_str().unwrap(), "HEAD")
+            .await
+            .expect("base sha");
+        // Its own `origin`: the fake forge fetches through it, so a test can
+        // publish a real `refs/pull/7/head` and have git answer questions
+        // about it exactly as it would against a server.
+        git_run(&root_path, &["remote", "add", "origin", root_path.to_str().unwrap()]);
+
+        let worktree = root_path.join("wt");
+        git_run(
+            &root_path,
+            &["worktree", "add", "-q", "-b", "task/7", worktree.to_str().unwrap()],
+        );
+        std::fs::write(worktree.join("a.txt"), "one\ntwo\n").expect("write");
+        git_run(&worktree, &["commit", "-qam", "the work"]);
+        let head = task_git::rev_parse(worktree.to_str().unwrap(), "task/7")
+            .await
+            .expect("work head");
+
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let folder_id =
+            crate::db::test_helpers::seed_folder(&db, root_path.to_str().unwrap()).await;
+        let wt_folder_id =
+            crate::db::test_helpers::seed_folder(&db, worktree.to_str().unwrap()).await;
+
+        let meta = serde_json::json!({
+            "provider": "github",
+            "server_host": "github.com",
+            "api_base": "https://api.github.com",
+            "account_id": "acc-1",
+            "owner_repo": "acme/app",
+            "number": 7,
+            "url": "https://github.com/acme/app/issues/7",
+            "title": "Fix the login flow",
+        });
+        let now = chrono::Utc::now();
+        let task = crate::db::entities::work_task::ActiveModel {
+            folder_id: Set(folder_id),
+            title: Set("#7 · Fix the login flow".to_string()),
+            config: Set("{}".to_string()),
+            status: Set(WorkTaskStatus::Review),
+            run_seq: Set(1),
+            sort_order: Set(0),
+            worktree_folder_id: Set(Some(wt_folder_id)),
+            base_branch: Set(Some("main".to_string())),
+            base_sha: Set(Some(base_sha.clone())),
+            work_branch: Set(Some("task/7".to_string())),
+            source_kind: Set(Some(SOURCE_KIND_ISSUE.to_string())),
+            source_key: Set(Some("github:github.com:acme/app:issue:7".to_string())),
+            source_meta: Set(Some(meta.to_string())),
+            created_at: Set(now),
+            updated_at: Set(now),
+            ..Default::default()
+        }
+        .insert(&db.conn)
+        .await
+        .expect("insert task");
+
+        let forge = Arc::new(forge);
+        // Default posture: the remote base is exactly where this task branched
+        // from, so nothing unpushed can leak into the pull request.
+        *forge.remote_base.lock().await = Some(base_sha.clone());
+        let broadcaster = Arc::new(crate::web::event_bridge::WebEventBroadcaster::new());
+        let events = broadcaster.subscribe();
+        Delivery {
+            engine: test_engine_full(
+                db,
+                forge.clone(),
+                EventEmitter::test_web_only(broadcaster),
+            ),
+            forge,
+            events,
+            task_id: task.id,
+            head,
+            base_sha,
+            worktree,
+            root: root_path,
+            _root: root,
+        }
+    }
+
+    async fn row(engine: &Arc<TaskEngine>, id: i32) -> crate::db::entities::work_task::Model {
+        work_task_service::get_model(&engine.db.conn, id)
+            .await
+            .expect("task row")
+    }
+
+    /// The happy path, end to end: the branch is pushed, a pull request is
+    /// opened against the recorded base, and the task settles into `done` with
+    /// the evidence of HOW it finished — plus the link, on the row the issue
+    /// list reads back.
+    #[tokio::test]
+    async fn delivery_opens_a_pull_request_and_settles_the_task() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        let url = f
+            .engine
+            .deliver_pr(f.task_id, Some("  Fix login  ".into()), false, false, true)
+            .await
+            .expect("delivery");
+        assert_eq!(url, "https://github.test/acme/app/pull/42");
+
+        assert_eq!(
+            f.forge.pushes.lock().await.as_slice(),
+            [("acme/app".to_string(), f.head.clone(), "task/7".to_string())],
+            "the commit the delivery snapshotted, onto the task's own branch"
+        );
+        let created = f.forge.created.lock().await.clone();
+        assert_eq!(
+            created,
+            [("Fix login".to_string(), "task/7".to_string(), "main".to_string(), false)],
+            "title trimmed, head/base taken from the task's own record"
+        );
+
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Done);
+        assert_eq!(task.completion_kind.as_deref(), Some("delivered_pr"));
+        assert!(task.merge_state.is_none(), "the in-flight intent is spent");
+        assert!(task.last_error.is_none());
+        assert!(task.finished_at.is_some());
+        let meta: serde_json::Value =
+            serde_json::from_str(task.source_meta.as_deref().unwrap()).unwrap();
+        assert_eq!(meta["result_pr"], "https://github.test/acme/app/pull/42");
+        // The worktree is kept because this caller did not ask for it to go —
+        // the pull request points at this branch and another round on it is a
+        // normal next step.
+        assert!(f.worktree.exists());
+        // Nothing is left in the in-flight set for the reconcile tick to trip on.
+        assert!(f.engine.merging.lock().await.is_empty());
+    }
+
+    /// The delivery's own version of the offer both other acceptances make:
+    /// take the checkout along. Safe here in a way a bare `branch -D` is not —
+    /// by the time this runs the commits it destroys locally are on the forge.
+    #[tokio::test]
+    async fn a_delivery_takes_the_worktree_along_when_asked() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        let url = f
+            .engine
+            .deliver_pr(f.task_id, None, false, true, true)
+            .await
+            .expect("delivery");
+        assert_eq!(url, "https://github.test/acme/app/pull/42");
+
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Done);
+        assert_eq!(task.completion_kind.as_deref(), Some("delivered_pr"));
+        assert!(!f.worktree.exists(), "the checkout is gone from disk");
+        assert!(task.worktree_folder_id.is_none(), "and the row's pointer with it");
+        assert!(task.cleanup_state.is_none(), "a removal that worked flags nothing");
+        assert!(
+            task_git::rev_parse(f.root.to_str().unwrap(), "refs/heads/task/7").await.is_err(),
+            "the local branch goes too — the push that just ran is what makes that safe"
+        );
+        assert!(f.engine.merging.lock().await.is_empty());
+    }
+
+    /// The worktree turned dirty between `deliver_pr`'s pre-flight clean check
+    /// and the removal. `worktree remove --force` would drop those files
+    /// without a word and they are on no forge, so the checkout is KEPT and
+    /// flagged for a retry from the card — while the delivery itself, which is
+    /// what the button promised, still reports success.
+    #[tokio::test]
+    async fn a_worktree_that_turned_dirty_is_kept_rather_than_forced_away() {
+        let f = delivery_fixture(FakeForge {
+            dirty_on_push: Some("scratch.txt".into()),
+            ..Default::default()
+        })
+        .await;
+        let url = f
+            .engine
+            .deliver_pr(f.task_id, None, false, true, true)
+            .await
+            .expect("delivery");
+        assert_eq!(url, "https://github.test/acme/app/pull/42");
+
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Done, "the delivery still landed");
+        assert_eq!(task.completion_kind.as_deref(), Some("delivered_pr"));
+        assert!(f.worktree.join("scratch.txt").exists(), "the stray file survives");
+        assert!(task.worktree_folder_id.is_some(), "the checkout is still the task's");
+        assert_eq!(
+            task.cleanup_state.as_deref(),
+            Some("failed"),
+            "so the card can offer the cleanup again once the file is dealt with"
+        );
+    }
+
+    /// The blind spot `git status` cannot cover: a COMMIT made in the same
+    /// window leaves the worktree spotless while putting the branch ahead of
+    /// everything the delivery published. `worktree remove --force` plus
+    /// `branch -D` would take that commit with them, and it is on no forge —
+    /// so the tip is checked against the OID that actually went out, and a
+    /// branch that outran it keeps both its checkout and its commit.
+    #[tokio::test]
+    async fn a_branch_that_outran_the_delivery_keeps_its_unpublished_commit() {
+        let f = delivery_fixture(FakeForge {
+            commit_on_push: Some("later.txt".into()),
+            ..Default::default()
+        })
+        .await;
+        let url = f
+            .engine
+            .deliver_pr(f.task_id, None, false, true, true)
+            .await
+            .expect("delivery");
+        assert_eq!(url, "https://github.test/acme/app/pull/42");
+
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Done, "the delivery still landed");
+        assert_eq!(task.completion_kind.as_deref(), Some("delivered_pr"));
+        assert!(f.worktree.exists(), "the checkout survives");
+        assert!(task.worktree_folder_id.is_some(), "and stays the task's");
+        assert_eq!(
+            task.cleanup_state.as_deref(),
+            Some("failed"),
+            "retryable once the extra commit is delivered or moved somewhere safe"
+        );
+        // Spotless — which is exactly why the other probe could not have
+        // caught this, and why the tip check has to exist.
+        assert!(!task_git::has_changes(f.worktree.to_str().unwrap()).await.expect("status"));
+        let tip = task_git::rev_parse(f.root.to_str().unwrap(), "refs/heads/task/7")
+            .await
+            .expect("the branch is still there");
+        assert_ne!(tip, f.head, "and it holds the commit nobody pushed");
+    }
+
+    /// A pull request that already matches all four criteria is ADOPTED. This
+    /// is what makes a retry after a settle-time failure safe: the second
+    /// attempt must not open a second pull request for the same commit.
+    #[tokio::test]
+    async fn an_existing_matching_pull_request_is_adopted_not_duplicated() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        f.forge.existing.lock().await.push(ForgePr {
+            number: 11,
+            html_url: "https://github.test/acme/app/pull/11".into(),
+            state: "open".into(),
+            merged: false,
+            head_sha: f.head.clone(),
+            head_ref: "task/7".into(),
+            head_repo: "Acme/App".into(), // canonical casing, as the API sends
+            base_ref: "main".into(),
+        });
+
+        let url = f
+            .engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect("delivery");
+        assert_eq!(url, "https://github.test/acme/app/pull/11");
+        assert!(
+            f.forge.created.lock().await.is_empty(),
+            "adoption must not create a duplicate"
+        );
+        assert_eq!(row(&f.engine, f.task_id).await.status, WorkTaskStatus::Done);
+    }
+
+    /// A near-miss is never adopted: same commit, different base. Without the
+    /// four-way match this would settle the task against the wrong pull
+    /// request; with it, a new one is opened for the right base.
+    #[tokio::test]
+    async fn a_pull_request_for_another_base_is_not_adopted() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        f.forge.existing.lock().await.push(ForgePr {
+            number: 12,
+            html_url: "https://github.test/acme/app/pull/12".into(),
+            state: "open".into(),
+            merged: false,
+            head_sha: f.head.clone(),
+            head_ref: "task/7".into(),
+            head_repo: "acme/app".into(),
+            base_ref: "release/1.x".into(), // ← the only difference
+        });
+
+        let url = f
+            .engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect("delivery");
+        assert_eq!(
+            url, "https://github.test/acme/app/pull/42",
+            "a new one was opened"
+        );
+        assert_eq!(f.forge.created.lock().await.len(), 1);
+    }
+
+    /// Every step after the review→merging CAS can fail, and every one of them
+    /// has to leave the task in review with a readable reason — never stranded
+    /// in `merging`, where only crash recovery could free it.
+    #[tokio::test]
+    async fn any_failed_step_returns_the_task_to_review() {
+        let cases = [
+            (
+                FakeForge { push_error: Some("remote rejected".into()), ..Default::default() },
+                "could not push",
+            ),
+            (
+                FakeForge { find_error: Some("502 bad gateway".into()), ..Default::default() },
+                "could not check for an existing pull request",
+            ),
+            (
+                FakeForge { create_error: Some("422 no commits".into()), ..Default::default() },
+                "could not open the pull request",
+            ),
+        ];
+        for (forge, expected) in cases {
+            let f = delivery_fixture(forge).await;
+            let err = f
+                .engine
+                .deliver_pr(f.task_id, None, false, false, true)
+                .await
+                .expect_err("must fail");
+            assert!(err.contains(expected), "got {err}");
+            let task = row(&f.engine, f.task_id).await;
+            assert_eq!(task.status, WorkTaskStatus::Review, "{expected}");
+            assert!(task.last_error.is_some(), "the card must explain itself");
+            assert!(task.merge_state.is_none());
+            assert!(task.completion_kind.is_none());
+            assert!(f.engine.merging.lock().await.is_empty());
+        }
+    }
+
+    /// A closed-without-merge match is a human decision. The engine neither
+    /// reopens it nor opens a duplicate — it hands the task back with the
+    /// reason.
+    #[tokio::test]
+    async fn a_closed_pull_request_stops_the_delivery() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        f.forge.existing.lock().await.push(ForgePr {
+            number: 13,
+            html_url: "https://github.test/acme/app/pull/13".into(),
+            state: "closed".into(),
+            merged: false,
+            head_sha: f.head.clone(),
+            head_ref: "task/7".into(),
+            head_repo: "acme/app".into(),
+            base_ref: "main".into(),
+        });
+        let err = f
+            .engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect_err("must stop");
+        assert!(err.contains("closed without merging"), "got {err}");
+        assert!(f.forge.created.lock().await.is_empty());
+        assert_eq!(row(&f.engine, f.task_id).await.status, WorkTaskStatus::Review);
+    }
+
+    /// Preconditions are checked BEFORE the CAS, so a refusal leaves the task
+    /// untouched — same status, same run generation, and nothing pushed.
+    #[tokio::test]
+    async fn refusals_happen_before_anything_moves() {
+        // Uncommitted work in the worktree: publishing it would push a branch
+        // that does not match what the user reviewed.
+        let dirty = delivery_fixture(FakeForge::default()).await;
+        std::fs::write(dirty.worktree.join("scratch.txt"), "junk\n").expect("write");
+        let err = dirty
+            .engine
+            .deliver_pr(dirty.task_id, None, false, false, true)
+            .await
+            .expect_err("dirty worktree");
+        assert!(err.contains("uncommitted changes"), "got {err}");
+
+        // Nothing to land: GitHub answers that with a 422, so refuse early and
+        // point at the button that does apply.
+        let empty = delivery_fixture(FakeForge::default()).await;
+        git_run(&empty.worktree, &["reset", "-q", "--hard", "HEAD~1"]);
+        let err = empty
+            .engine
+            .deliver_pr(empty.task_id, None, false, false, true)
+            .await
+            .expect_err("nothing to deliver");
+        assert!(err.contains("nothing to deliver"), "got {err}");
+
+        for f in [&dirty, &empty] {
+            let task = row(&f.engine, f.task_id).await;
+            assert_eq!(task.status, WorkTaskStatus::Review);
+            assert_eq!(task.run_seq, 1, "no generation was spent");
+            assert!(task.last_error.is_none(), "a refusal is not a card banner");
+            assert!(f.forge.pushes.lock().await.is_empty());
+        }
+    }
+
+    /// The engine's own `git commit` inherits the real environment, so a
+    /// fixture that has it commit names an identity in the repository itself.
+    fn commit_identity(f: &Delivery) {
+        git_run(&f.root, &["config", "user.name", "t"]);
+        git_run(&f.root, &["config", "user.email", "t@example.com"]);
+    }
+
+    /// What the agent left uncommitted is delivered when the user hands over a
+    /// commit message: committed onto the task branch first, and THAT commit
+    /// is what gets pushed — new files and edits alike.
+    #[tokio::test]
+    async fn a_commit_message_commits_the_leftovers_and_delivers_them() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        commit_identity(&f);
+        std::fs::write(f.worktree.join("a.txt"), "one\ntwo\nthree\n").expect("write");
+        std::fs::write(f.worktree.join("new.txt"), "fresh\n").expect("write");
+
+        let listed = task_git::uncommitted_files(f.worktree.to_str().unwrap())
+            .await
+            .expect("status");
+        let mut listed: Vec<_> = listed.into_iter().map(|u| (u.file, u.status)).collect();
+        listed.sort();
+        assert_eq!(
+            listed,
+            [("a.txt".to_string(), "M".to_string()), ("new.txt".to_string(), "A".to_string())]
+        );
+
+        f.engine
+            .deliver_pr_closing(
+                f.task_id,
+                None,
+                false,
+                false,
+                true,
+                None,
+                Some("  #7 · Fix the login flow  ".into()),
+            )
+            .await
+            .expect("delivery");
+
+        let wt = f.worktree.to_str().unwrap();
+        assert!(!task_git::has_changes(wt).await.expect("status"), "nothing left behind");
+        let tip = task_git::rev_parse(wt, "task/7").await.expect("tip");
+        assert_ne!(tip, f.head, "a new commit on the task branch");
+        assert!(task_git::is_ancestor(wt, &f.head, &tip).await.expect("ancestry"));
+        assert_eq!(
+            f.forge.pushes.lock().await.as_slice(),
+            [("acme/app".to_string(), tip.clone(), "task/7".to_string())],
+            "the commit holding the leftovers is the one published"
+        );
+        let subject = std::process::Command::new("git")
+            .args(["log", "-1", "--format=%s", "task/7"])
+            .current_dir(&f.worktree)
+            .output()
+            .expect("git log");
+        assert_eq!(String::from_utf8_lossy(&subject.stdout).trim(), "#7 · Fix the login flow");
+        assert_eq!(row(&f.engine, f.task_id).await.status, WorkTaskStatus::Done);
+    }
+
+    /// The commit waits for every read-only gate: a delivery refused by one
+    /// leaves the worktree exactly as it was, leftovers still uncommitted.
+    /// A blank message is no message at all.
+    #[tokio::test]
+    async fn a_refused_delivery_commits_nothing() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        commit_identity(&f);
+        std::fs::write(f.worktree.join("new.txt"), "fresh\n").expect("write");
+
+        let err = f
+            .engine
+            .deliver_pr_closing(f.task_id, None, false, false, true, None, Some("   ".into()))
+            .await
+            .expect_err("a blank message");
+        assert!(err.contains("uncommitted changes"), "got {err}");
+
+        *f.forge.remote_base.lock().await = None;
+        let err = f
+            .engine
+            .deliver_pr_closing(f.task_id, None, false, false, true, None, Some("wip".into()))
+            .await
+            .expect_err("the remote base is unreadable");
+        assert!(err.contains("could not read 'main'"), "got {err}");
+
+        let wt = f.worktree.to_str().unwrap();
+        assert!(task_git::has_changes(wt).await.expect("status"), "still uncommitted");
+        assert_eq!(task_git::rev_parse(wt, "task/7").await.expect("tip"), f.head);
+        assert!(f.forge.pushes.lock().await.is_empty());
+        assert_eq!(row(&f.engine, f.task_id).await.status, WorkTaskStatus::Review);
+    }
+
+    /// The leftovers are committed onto whatever is checked out, and the
+    /// delivery publishes the task branch — so a checkout on another branch,
+    /// or detached, is refused rather than committed somewhere the push never
+    /// looks: edits still uncommitted, nothing pushed, task still in review.
+    #[tokio::test]
+    async fn leftovers_off_the_task_branch_are_refused() {
+        for detach in [false, true] {
+            let f = delivery_fixture(FakeForge::default()).await;
+            commit_identity(&f);
+            if detach {
+                git_run(&f.worktree, &["checkout", "-q", "--detach"]);
+            } else {
+                git_run(&f.worktree, &["checkout", "-q", "-b", "elsewhere"]);
+            }
+            std::fs::write(f.worktree.join("new.txt"), "fresh\n").expect("write");
+
+            let err = f
+                .engine
+                .deliver_pr_closing(f.task_id, None, false, false, true, None, Some("wip".into()))
+                .await
+                .expect_err("off the task branch");
+            assert!(err.contains("not on its branch 'task/7'"), "got {err}");
+
+            let wt = f.worktree.to_str().unwrap();
+            assert!(task_git::has_changes(wt).await.expect("status"), "still uncommitted");
+            assert_eq!(task_git::rev_parse(wt, "HEAD").await.expect("head"), f.head);
+            assert!(f.forge.pushes.lock().await.is_empty());
+            assert_eq!(row(&f.engine, f.task_id).await.status, WorkTaskStatus::Review);
+        }
+    }
+
+    /// A commit git refuses — a pre-commit hook, say — is the delivery's
+    /// refusal, in git's words, with nothing moved and the claim released:
+    /// once the hook lets it through, the same click delivers.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_commit_the_hook_rejects_refuses_the_delivery() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let f = delivery_fixture(FakeForge::default()).await;
+        commit_identity(&f);
+        std::fs::write(f.worktree.join("new.txt"), "fresh\n").expect("write");
+        let hook = f.root.join(".git").join("hooks").join("pre-commit");
+        std::fs::create_dir_all(hook.parent().unwrap()).expect("hooks dir");
+        std::fs::write(&hook, "#!/bin/sh\necho 'lint failed' >&2\nexit 1\n").expect("hook");
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+        let err = f
+            .engine
+            .deliver_pr_closing(f.task_id, None, false, false, true, None, Some("wip".into()))
+            .await
+            .expect_err("the hook refuses");
+        assert!(err.contains("could not commit"), "got {err}");
+        assert!(err.contains("lint failed"), "git's own reason: {err}");
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Review);
+        assert!(task.last_error.is_none(), "a refusal is not a card banner");
+        assert!(f.forge.pushes.lock().await.is_empty());
+
+        std::fs::remove_file(&hook).expect("drop the hook");
+        f.engine
+            .deliver_pr_closing(f.task_id, None, false, false, true, None, Some("wip".into()))
+            .await
+            .expect("the retry delivers");
+    }
+
+    /// The gate lives in the engine, not the UI: this command is reachable by
+    /// id from an old frontend or a direct web API call.
+    ///
+    /// Three ways to be undeliverable, and none may push anything: a task with
+    /// no forge source whose project's `origin` is no forge codeg can deliver
+    /// to, a source this build does not know, and a pull-request task whose
+    /// branch information is missing (a row written before that was recorded)
+    /// — which must be re-triggered rather than pushed at a branch name we
+    /// would have to guess.
+    #[tokio::test]
+    async fn a_task_without_deliverable_provenance_is_refused() {
+        use sea_orm::{ActiveModelTrait, Set};
+        for (kind, needle) in [
+            (None, "no `origin` remote"),
+            (Some("automation"), "cannot be delivered"),
+            (Some(SOURCE_KIND_PR), "does not know which branch"),
+        ] {
+            let f = delivery_fixture(FakeForge::default()).await;
+            let mut update: crate::db::entities::work_task::ActiveModel =
+                row(&f.engine, f.task_id).await.into();
+            update.source_kind = Set(kind.map(str::to_string));
+            update.update(&f.engine.db.conn).await.expect("update kind");
+
+            let err = f
+                .engine
+                .deliver_pr(f.task_id, None, false, false, true)
+                .await
+                .expect_err("must refuse");
+            assert!(err.contains(needle), "got {err}");
+            assert!(f.forge.pushes.lock().await.is_empty());
+            assert_eq!(row(&f.engine, f.task_id).await.status, WorkTaskStatus::Review);
+        }
+    }
+
+    /// Crash recovery: the process died between the push and the settle. The
+    /// forge is the only truth, and a full four-way match settles the task
+    /// exactly as the live path would have.
+    #[tokio::test]
+    async fn recovery_settles_a_delivery_whose_pull_request_matches() {
+        for merged in [false, true] {
+            let f = delivery_fixture(FakeForge::default()).await;
+            f.forge.existing.lock().await.push(ForgePr {
+                number: 21,
+                html_url: "https://github.test/acme/app/pull/21".into(),
+                state: if merged { "closed".into() } else { "open".into() },
+                merged,
+                head_sha: f.head.clone(),
+                head_ref: "task/7".into(),
+                head_repo: "acme/app".into(),
+                base_ref: "main".into(),
+            });
+            interrupt_delivery(&f, "task/7").await;
+
+            f.engine.recover_merging(f.task_id).await;
+
+            let task = row(&f.engine, f.task_id).await;
+            assert_eq!(task.status, WorkTaskStatus::Done, "merged={merged}");
+            assert_eq!(task.completion_kind.as_deref(), Some("delivered_pr"));
+            assert!(f.forge.created.lock().await.is_empty(), "recovery never creates");
+        }
+    }
+
+    /// Everything short of a full match goes back to a human. Adopting a
+    /// near-miss would settle the task against a pull request that merely
+    /// reused the branch name.
+    #[tokio::test]
+    async fn recovery_bounces_anything_it_cannot_prove() {
+        let cases: Vec<(&str, Option<ForgePr>)> = vec![
+            ("no pull request at all", None),
+            (
+                "someone else's branch of the same name",
+                Some(ForgePr {
+                    number: 22,
+                    html_url: "https://github.test/acme/app/pull/22".into(),
+                    state: "open".into(),
+                    merged: false,
+                    head_sha: "0000000000000000000000000000000000000000".into(),
+                    head_ref: "task/7".into(),
+                    head_repo: "acme/app".into(),
+                    base_ref: "main".into(),
+                }),
+            ),
+        ];
+        for (label, existing) in cases {
+            let f = delivery_fixture(FakeForge::default()).await;
+            if let Some(pr) = existing {
+                f.forge.existing.lock().await.push(pr);
+            }
+            interrupt_delivery(&f, "task/7").await;
+
+            f.engine.recover_merging(f.task_id).await;
+
+            let task = row(&f.engine, f.task_id).await;
+            assert_eq!(task.status, WorkTaskStatus::Review, "{label}");
+            assert!(task.last_error.is_some(), "{label}: needs a reason");
+            assert!(task.completion_kind.is_none(), "{label}");
+        }
+    }
+
+    /// A delivery running in THIS process is not orphaned. Recovery has no
+    /// live connection to check (a delivery has no agent session), so the
+    /// in-flight set is the only thing standing between a slow push and the
+    /// reconcile tick tearing it down.
+    #[tokio::test]
+    async fn recovery_leaves_a_delivery_this_process_owns_alone() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        interrupt_delivery(&f, "task/7").await;
+        f.engine.claim_in_flight(f.task_id).await.expect("claim");
+
+        f.engine.recover_merging(f.task_id).await;
+
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Merging, "left alone");
+        assert!(task.last_error.is_none());
+    }
+
+    /// Park the task in `merging` with a delivery intent, exactly as a process
+    /// that died mid-delivery would have left it.
+    async fn interrupt_delivery(f: &Delivery, remote_branch: &str) {
+        let state = WorkTaskMergeState {
+            op: WorkTaskMergeOp::DeliverPr,
+            remote_branch: Some(remote_branch.to_string()),
+            expected_head: Some(f.head.clone()),
+            pr_title: Some("Fix login".to_string()),
+            ..Default::default()
+        };
+        let seq = row(&f.engine, f.task_id).await.run_seq;
+        work_task_service::begin_delivery(&f.engine.db.conn, f.task_id, &state, seq)
+            .await
+            .expect("begin delivery")
+            .expect("CAS");
+    }
+
+    /// The pull request would be diffed against the base branch AS THE REMOTE
+    /// HAS IT. A local base that is ahead means the review showed the task's
+    /// own commit while the pull request would carry the unpushed ones too —
+    /// refuse rather than publish work nobody looked at.
+    #[tokio::test]
+    async fn a_local_base_ahead_of_the_remote_is_refused() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        // One more commit on main, never pushed, and the task is recorded as
+        // having branched from it.
+        std::fs::write(f.root.join("b.txt"), "unpushed\n").expect("write");
+        git_run(&f.root, &["add", "-A"]);
+        git_run(&f.root, &["commit", "-q", "-m", "local only"]);
+        let local_base = task_git::rev_parse(f.root.to_str().unwrap(), "HEAD")
+            .await
+            .expect("local base");
+        let mut update: crate::db::entities::work_task::ActiveModel =
+            row(&f.engine, f.task_id).await.into();
+        update.base_sha = sea_orm::Set(Some(local_base));
+        sea_orm::ActiveModelTrait::update(update, &f.engine.db.conn)
+            .await
+            .expect("record the local base");
+
+        let err = f
+            .engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect_err("must refuse");
+        assert!(err.contains("not on the remote yet"), "got {err}");
+        assert!(f.forge.pushes.lock().await.is_empty(), "refused before the push");
+        assert_eq!(row(&f.engine, f.task_id).await.status, WorkTaskStatus::Review);
+
+        // And an unreadable remote base is NOT reassurance: a base branch that
+        // does not exist on the remote fails exactly the same way, and the push
+        // would still publish the branch. This gate fails closed.
+        *f.forge.remote_base.lock().await = None;
+        let err = f
+            .engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect_err("an unreadable base must refuse");
+        assert!(err.contains("could not read"), "got {err}");
+        assert!(f.forge.pushes.lock().await.is_empty());
+    }
+
+    /// A merge that cannot take in-flight ownership must not dispatch either.
+    /// The claim and the review→merging CAS are independent, so a claim-loser
+    /// that carried on could win the CAS and then be left unowned when the
+    /// claim-holder released the registry entry on its own way out.
+    #[tokio::test]
+    async fn a_merge_that_cannot_claim_ownership_does_not_dispatch() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        let token = f
+            .engine
+            .claim_in_flight(f.task_id)
+            .await
+            .expect("delivery claims first");
+
+        let err = f
+            .engine
+            .merge_task(f.task_id, None, false, None, false)
+            .await
+            .expect_err("must not dispatch");
+        assert!(err.contains("already merging"), "got {err}");
+        // Swallowed by the unattended sweep rather than bannered onto the card
+        // — the condition clears itself in seconds.
+        assert!(is_benign_merge_race(&err));
+
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Review, "no CAS was spent");
+        assert!(task.merge_state.is_none());
+        assert_eq!(
+            f.engine.merging.lock().await.get(&f.task_id),
+            Some(&token),
+            "the refused merge must leave the claim it never held"
+        );
+    }
+
+    /// Two clients clicking deliver at once. Only one may run the push, and —
+    /// the part that bit us — the LOSER must not release the winner's
+    /// ownership, or the reconcile sweep would bounce a live delivery.
+    #[tokio::test]
+    async fn a_second_delivery_neither_runs_nor_steals_the_claim() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        let token = f
+            .engine
+            .claim_in_flight(f.task_id)
+            .await
+            .expect("first claim wins");
+
+        let err = f
+            .engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect_err("the second must not run");
+        assert!(err.contains("already merging"), "got {err}");
+        assert!(f.forge.pushes.lock().await.is_empty());
+        assert_eq!(
+            f.engine.merging.lock().await.get(&f.task_id),
+            Some(&token),
+            "the loser must leave the winner's claim in place"
+        );
+
+        // And releasing with a foreign token is a no-op for the same reason.
+        f.engine.release_in_flight(f.task_id, token + 99).await;
+        assert_eq!(f.engine.merging.lock().await.get(&f.task_id), Some(&token));
+        f.engine.release_in_flight(f.task_id, token).await;
+        assert!(f.engine.merging.lock().await.is_empty());
+    }
+
+    /// A recovery pass that spent time at the forge must not undo a delivery
+    /// that started while it was deciding — the bounce is bound to the
+    /// generation the pass actually read.
+    #[tokio::test]
+    async fn stale_recovery_cannot_bounce_a_newer_generation() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        interrupt_delivery(&f, "task/7").await;
+        let stale = row(&f.engine, f.task_id).await;
+
+        // The row moves on (a bounce and a fresh delivery), so the snapshot the
+        // recovery pass is holding is now a generation behind.
+        f.engine.bounce_delivery(&stale, "first".into()).await;
+        interrupt_delivery(&f, "task/7").await;
+        let current = row(&f.engine, f.task_id).await;
+        assert!(current.run_seq > stale.run_seq);
+
+        f.engine.bounce_delivery(&stale, "stale bounce".into()).await;
+
+        let after = row(&f.engine, f.task_id).await;
+        assert_eq!(after.status, WorkTaskStatus::Merging, "still delivering");
+        assert_eq!(after.run_seq, current.run_seq);
+    }
+
+    /// One branch may have several open pull requests as long as each targets
+    /// its own base — but only ONE per head/base pair. So a pull request for
+    /// another base is no obstacle (create), while one for THIS base headed by
+    /// a different commit is (bounce, rather than earn a 422 from GitHub).
+    #[tokio::test]
+    async fn a_stale_head_on_this_base_bounces_instead_of_duplicating() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        f.forge.existing.lock().await.push(ForgePr {
+            number: 31,
+            html_url: "https://github.test/acme/app/pull/31".into(),
+            state: "open".into(),
+            merged: false,
+            head_sha: "0000000000000000000000000000000000000000".into(),
+            head_ref: "task/7".into(),
+            head_repo: "acme/app".into(),
+            base_ref: "main".into(),
+        });
+
+        let err = f
+            .engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect_err("must bounce");
+        assert!(err.contains("different commit"), "got {err}");
+        assert!(
+            f.forge.created.lock().await.is_empty(),
+            "GitHub would refuse a duplicate anyway — do not ask"
+        );
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Review);
+        assert!(task.last_error.is_some());
+    }
+
+    /// A delivery occupies the folder's `merging` slot, so a sibling task's
+    /// unattended merge is refused while it runs. That refusal must stay a
+    /// BENIGN race: `set_review_error` would latch auto-merge off for that card
+    /// permanently, over a condition that clears itself in seconds.
+    #[test]
+    fn a_delivery_in_flight_does_not_latch_off_a_sibling_auto_merge() {
+        assert!(is_benign_merge_race(
+            "another task of this project is already merging — wait for it"
+        ));
+    }
+
+    // ── write the outcome back to the forge ─────────────────────────────────
+
+    /// Record the trigger dialog's write-back answer on the task's own source
+    /// metadata — where the engine reads it. Call it AFTER any helper that
+    /// rewrites `source_meta` wholesale (`as_pull_request_task`), or the
+    /// rewrite drops the answer.
+    async fn set_writeback(f: &Delivery, wanted: bool) {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let task = row(&f.engine, f.task_id).await;
+        let mut meta: serde_json::Value =
+            serde_json::from_str(task.source_meta.as_deref().expect("source meta"))
+                .expect("source meta json");
+        meta["writeback"] = serde_json::json!(wanted);
+        let mut active = task.into_active_model();
+        active.source_meta = Set(Some(meta.to_string()));
+        active.update(&f.engine.db.conn).await.expect("record the write-back answer");
+    }
+
+    async fn enable_writeback(f: &Delivery) {
+        set_writeback(f, true).await;
+    }
+
+    /// The write-back is spawned off the settlement path, so an assertion about
+    /// it has to wait for it rather than read straight after the settle.
+    async fn wait_for<F, Fut>(what: &str, probe: F)
+    where
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = bool>,
+    {
+        for _ in 0..300 {
+            if probe().await {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("timed out waiting for {what}");
+    }
+
+    async fn events_of(engine: &Arc<TaskEngine>, task_id: i32) -> Vec<String> {
+        work_task_service::list_events(&engine.db.conn, task_id, 200)
+            .await
+            .expect("events")
+            .into_iter()
+            .map(|e| e.kind)
+            .collect()
+    }
+
+    /// A task that came from a proposed change gets its comment on the CHANGE,
+    /// not on an issue with the same number. GitHub serves both from one
+    /// endpoint and would not notice; GitLab has two collections, where the
+    /// wrong one lands on an unrelated issue or 404s.
+    #[tokio::test]
+    async fn a_pull_request_tasks_comment_targets_the_pull_request() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        let pr = open_pull("whatever-the-branch-points-at", "feature", "Acme/App");
+        as_pull_request_task(&f, pr.clone()).await;
+        enable_writeback(&f).await;
+        f.forge.existing.lock().await.push(pr);
+
+        f.engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect("push back");
+
+        let forge = f.forge.clone();
+        wait_for("the write-back", move || {
+            let forge = forge.clone();
+            async move { !forge.comments.lock().await.is_empty() }
+        })
+        .await;
+        let comments = f.forge.comments.lock().await.clone();
+        assert_eq!(
+            (comments[0].0, comments[0].1),
+            (ForgeItemKind::Change, 7),
+            "the comment belongs on the pull request the task came from"
+        );
+    }
+
+    /// The counters a run's settle recorded can only measure from what is
+    /// local, and a pull request force-pushed — or grown commits of its
+    /// author's — while the task was out leaves nothing local that says where
+    /// it ends. The delivery knows: it reads the pull request right before
+    /// pushing, and as the push is a fast-forward, that head is under ours. So
+    /// the row, and the done comment, carry what the push added.
+    #[tokio::test]
+    async fn a_delivered_pull_request_counts_what_the_push_added() {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let f = delivery_fixture(FakeForge::default()).await;
+        // The pull request ends where the task branched; the task's commit adds
+        // one line on top of it.
+        let pr = open_pull(&f.base_sha, "feature", "acme/app");
+        as_pull_request_task(&f, pr.clone()).await;
+        f.forge.existing.lock().await.push(pr);
+        enable_writeback(&f).await;
+        // What a settle that measured from a stale head left behind.
+        let mut active = row(&f.engine, f.task_id).await.into_active_model();
+        active.files_changed = Set(Some(345));
+        active.additions = Set(Some(31318));
+        active.deletions = Set(Some(5227));
+        active.update(&f.engine.db.conn).await.expect("stale counters");
+
+        f.engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect("push back");
+
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(
+            (task.files_changed, task.additions, task.deletions),
+            (Some(1), Some(1), Some(0)),
+            "the row carries what the push added"
+        );
+        let forge = f.forge.clone();
+        wait_for("the write-back", move || {
+            let forge = forge.clone();
+            async move { !forge.comments.lock().await.is_empty() }
+        })
+        .await;
+        let comments = f.forge.comments.lock().await.clone();
+        assert!(comments[0].2.contains("(1 file, +1/-0)"), "{}", comments[0].2);
+    }
+
+    /// What a push-back learns is recorded the moment its push lands. Here the
+    /// author grew the pull request while the task was out, and the task built
+    /// on top: the push measures from the pull request's real head; a settle
+    /// refused after it sends the task back to review; a restart re-measures
+    /// the row from the head the push went onto, not the stale one the task
+    /// was triggered on; and the retry, which finds the pull request already
+    /// at its commit and pushes nothing, still reports what was pushed.
+    #[tokio::test]
+    async fn a_retried_push_back_still_reports_what_the_first_push_added() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        // Triggered on the pull request at `base_sha`. Its author then added
+        // the fixture's commit (`f.head`), and the task one of its own on top.
+        let triggered = open_pull(&f.base_sha, "feature", "acme/app");
+        as_pull_request_task(&f, triggered.clone()).await;
+        std::fs::write(f.worktree.join("c.txt"), "the task's own\n").expect("write");
+        git_run(&f.worktree, &["add", "-A"]);
+        git_run(&f.worktree, &["commit", "-qm", "the task's own commit"]);
+        // Grown by its author, and retargeted while the task was out: the push
+        // goes through, the settle refuses.
+        let mut grown = triggered;
+        grown.head_sha = f.head.clone();
+        grown.base_ref = "develop".into();
+        f.forge.existing.lock().await.push(grown);
+        enable_writeback(&f).await;
+        let counters = |t: crate::db::entities::work_task::Model| {
+            (t.files_changed, t.additions, t.deletions)
+        };
+
+        let refused = f
+            .engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect_err("a retargeted pull request is not settled against");
+        assert!(refused.contains("retargeted"), "{refused}");
+        assert_eq!(
+            counters(row(&f.engine, f.task_id).await),
+            (Some(1), Some(1), Some(0)),
+            "the task's own commit, not the author's"
+        );
+
+        // A restart re-measures what sits in review.
+        f.engine.refresh_review_diff_stats().await;
+        assert_eq!(
+            counters(row(&f.engine, f.task_id).await),
+            (Some(1), Some(1), Some(0)),
+            "measured from the head the push went onto"
+        );
+
+        // Targeted back, and sitting at the commit the first attempt pushed.
+        let pushed = task_git::rev_parse(f.worktree.to_str().unwrap(), "HEAD")
+            .await
+            .expect("pushed head");
+        {
+            let mut existing = f.forge.existing.lock().await;
+            existing[0].base_ref = "main".into();
+            existing[0].head_sha = pushed;
+        }
+        f.engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect("the retry settles");
+        assert_eq!(f.forge.pushes.lock().await.len(), 1, "the retry pushed nothing");
+        let forge = f.forge.clone();
+        wait_for("the write-back", move || {
+            let forge = forge.clone();
+            async move { !forge.comments.lock().await.is_empty() }
+        })
+        .await;
+        let comments = f.forge.comments.lock().await.clone();
+        assert!(comments[0].2.contains("(1 file, +1/-0)"), "{}", comments[0].2);
+    }
+
+    /// Completing a pull-request task that pushed nothing — a review-only
+    /// report, or a review that stopped at an unsound approach — must not tell
+    /// the pull request's thread it was "accepted". That is codeg's word for
+    /// signing off on the TASK; on a pull request it reads as approval of the
+    /// change, which may be the opposite of what the review found. The thread
+    /// hears what happened to its pull request: nothing was pushed to it.
+    #[tokio::test]
+    async fn completing_a_pull_request_task_tells_its_thread_nothing_was_pushed() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        // The pull request's head IS the task branch's head: the task made no
+        // changes of its own, which is when the board offers "complete".
+        let pr = open_pull(&f.head, "feature", "acme/app");
+        as_pull_request_task(&f, pr).await;
+        enable_writeback(&f).await;
+
+        f.engine
+            .complete_task(f.task_id, false)
+            .await
+            .expect("completed with nothing to push");
+
+        let forge = f.forge.clone();
+        wait_for("the write-back", move || {
+            let forge = forge.clone();
+            async move { !forge.comments.lock().await.is_empty() }
+        })
+        .await;
+        let comments = f.forge.comments.lock().await.clone();
+        assert_eq!(comments.len(), 1, "one settle, one comment");
+        let (kind, number, body) = &comments[0];
+        assert_eq!((*kind, *number), (ForgeItemKind::Change, 7));
+        assert!(body.contains("nothing was pushed to this pull request"), "{body}");
+        assert!(!body.to_lowercase().contains("accept"), "reads as an approval: {body}");
+    }
+
+    // ── #1166: counters re-measured after work done outside a task round ──
+
+    /// Rewrite the fixture row as one whose counters went stale: settled with
+    /// nothing changed (the "complete" button's territory) while the worktree
+    /// holds the fixture's one-line commit. Ordinary provenance, so nothing
+    /// forge-specific (auto-merge never takes forge tasks) muddies a test.
+    async fn stale_empty_review_row(f: &Delivery, conversation_id: Option<i32>) {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let mut active = row(&f.engine, f.task_id).await.into_active_model();
+        active.source_kind = Set(None);
+        active.source_key = Set(None);
+        active.source_meta = Set(None);
+        active.conversation_id = Set(conversation_id);
+        active.files_changed = Set(Some(0));
+        active.additions = Set(Some(0));
+        active.deletions = Set(Some(0));
+        active.update(&f.engine.db.conn).await.expect("stale row");
+    }
+
+    fn counters(
+        t: &crate::db::entities::work_task::Model,
+    ) -> (Option<i32>, Option<i32>, Option<i32>) {
+        (t.files_changed, t.additions, t.deletions)
+    }
+
+    async fn with_preflight(f: &Delivery, command: &str) {
+        let folder_id = row(&f.engine, f.task_id).await.folder_id;
+        let settings = WorkTaskFolderSettings {
+            preflight_command: Some(command.to_string()),
+            ..WorkTaskFolderSettings::default()
+        };
+        work_task_service::settings_set(&f.engine.db.conn, folder_id, &settings)
+            .await
+            .expect("settings");
+    }
+
+    async fn set_light(f: &Delivery, status: &str) {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let light = WorkTaskPreflight {
+            status: status.to_string(),
+            command: "tests".to_string(),
+            exit_code: Some(0),
+            output_tail: None,
+            run_id: None,
+        };
+        let mut active = row(&f.engine, f.task_id).await.into_active_model();
+        active.preflight = Set(Some(serde_json::to_string(&light).expect("light")));
+        active.update(&f.engine.db.conn).await.expect("light");
+    }
+
+    /// A connection that is not a task run, bound to `conversation_id` /
+    /// `folder_id` the way a conversation opened from the list is.
+    async fn foreign_connection(
+        f: &Delivery,
+        id: &str,
+        conversation_id: Option<i32>,
+        folder_id: Option<i32>,
+    ) {
+        let emitter = EventEmitter::test_web_only(Arc::new(
+            crate::web::event_bridge::WebEventBroadcaster::new(),
+        ));
+        f.engine
+            .manager
+            .insert_test_connection(id, AgentType::ClaudeCode, None, emitter)
+            .await;
+        let state = f.engine.manager.get_state(id).await.expect("state");
+        let mut state = state.write().await;
+        state.conversation_id = conversation_id;
+        state.folder_id = folder_id;
+    }
+
+    /// The reported path: the task settled with nothing changed, then the user
+    /// replied to its session from the conversation list and the agent
+    /// committed. That turn is no task run, but when it ends the row has to
+    /// learn what the worktree now holds — the counters are what decide
+    /// between "merge" and "complete".
+    #[tokio::test]
+    async fn a_turn_on_the_tasks_session_outside_a_round_re_measures_it() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        stale_empty_review_row(&f, Some(41)).await;
+        foreign_connection(&f, "from-the-list", Some(41), None).await;
+
+        f.engine.on_turn_complete("from-the-list", "end_turn").await;
+
+        let engine = f.engine.clone();
+        let task_id = f.task_id;
+        wait_for("the re-measure", move || {
+            let engine = engine.clone();
+            async move { row(&engine, task_id).await.files_changed == Some(1) }
+        })
+        .await;
+        let after = row(&f.engine, f.task_id).await;
+        assert_eq!(counters(&after), (Some(1), Some(1), Some(0)));
+        assert_eq!(after.status, WorkTaskStatus::Review, "nothing else moved");
+        assert_ne!(
+            after.files_changed,
+            Some(0),
+            "the board now offers the merge"
+        );
+    }
+
+    /// …and a conversation opened INSIDE the task's worktree is the same kind
+    /// of turn: it is matched by the folder it runs in, not by the session.
+    #[tokio::test]
+    async fn a_turn_in_the_tasks_worktree_from_another_conversation_re_measures_it() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        stale_empty_review_row(&f, Some(41)).await;
+        let wt_folder = row(&f.engine, f.task_id).await.worktree_folder_id;
+
+        f.engine
+            .refresh_after_foreign_turn(Some(99), wt_folder)
+            .await;
+
+        assert_eq!(
+            counters(&row(&f.engine, f.task_id).await),
+            (Some(1), Some(1), Some(0))
+        );
+    }
+
+    /// A turn that has nothing to do with the task — another conversation,
+    /// another folder, or a connection carrying no ids at all — leaves the
+    /// row alone; so does a task that is not in review.
+    #[tokio::test]
+    async fn an_unrelated_turn_leaves_the_row_alone() {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let f = delivery_fixture(FakeForge::default()).await;
+        stale_empty_review_row(&f, Some(41)).await;
+
+        f.engine
+            .refresh_after_foreign_turn(Some(99), Some(12345))
+            .await;
+        f.engine.refresh_after_foreign_turn(None, None).await;
+        foreign_connection(&f, "no-ids", None, None).await;
+        f.engine.on_turn_complete("no-ids", "end_turn").await;
+        f.engine
+            .on_turn_complete("not-a-connection", "end_turn")
+            .await;
+        assert_eq!(
+            counters(&row(&f.engine, f.task_id).await),
+            (Some(0), Some(0), Some(0))
+        );
+
+        let mut active = row(&f.engine, f.task_id).await.into_active_model();
+        active.status = Set(WorkTaskStatus::Done);
+        active.update(&f.engine.db.conn).await.expect("done");
+        f.engine.refresh_after_foreign_turn(Some(41), None).await;
+        assert_eq!(
+            counters(&row(&f.engine, f.task_id).await),
+            (Some(0), Some(0), Some(0)),
+            "a finished task's counters are its record, not a live reading"
+        );
+    }
+
+    /// The light measured on the old content says nothing about the new one.
+    /// An agent turn can change content without changing the totals, so after
+    /// such a turn the light goes whatever the counters say — and comes back
+    /// from a fresh run of the command, never from the stale verdict.
+    #[tokio::test]
+    async fn a_turn_outside_a_round_clears_and_re_runs_the_preflight() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        stale_empty_review_row(&f, Some(41)).await;
+        // `exit 0` succeeds under both `sh -c` and `cmd.exe /C`.
+        with_preflight(&f, "exit 0").await;
+        // Counters already right: only the content could have changed.
+        f.engine.refresh_review_task(f.task_id, false).await;
+        set_light(&f, "passed").await;
+
+        let refresh = f.engine.refresh_review_task(f.task_id, true).await;
+        assert!(refresh.wrote && refresh.light_cleared && !refresh.stats_changed);
+        assert!(
+            row(&f.engine, f.task_id).await.preflight.is_none(),
+            "stale light cleared"
+        );
+
+        f.engine.after_content_refresh(f.task_id, refresh);
+        let engine = f.engine.clone();
+        let task_id = f.task_id;
+        wait_for("the re-run", move || {
+            let engine = engine.clone();
+            async move {
+                row(&engine, task_id)
+                    .await
+                    .preflight
+                    .and_then(|p| serde_json::from_str::<WorkTaskPreflight>(&p).ok())
+                    .is_some_and(|p| p.status == "passed" && p.run_id.is_some())
+            }
+        })
+        .await;
+    }
+
+    /// Without a preflight there is no light to go stale, and identical
+    /// counters are nothing to write: no write, no post-review pass.
+    #[tokio::test]
+    async fn unchanged_counters_without_a_preflight_write_nothing() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        stale_empty_review_row(&f, None).await;
+        assert!(
+            f.engine
+                .refresh_review_task(f.task_id, true)
+                .await
+                .stats_changed
+        );
+        let before = row(&f.engine, f.task_id).await.updated_at;
+
+        let again = f.engine.refresh_review_task(f.task_id, true).await;
+        assert_eq!(again, ContentRefresh::default());
+        assert_eq!(row(&f.engine, f.task_id).await.updated_at, before);
+    }
+
+    /// The boot pass corrects counters too, and a corrected row's light is
+    /// cleared with them: it was measured on content the counters now say is
+    /// gone.
+    #[tokio::test]
+    async fn the_boot_pass_clears_the_light_of_a_row_it_corrects() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        stale_empty_review_row(&f, None).await;
+        with_preflight(&f, "exit 1").await;
+        set_light(&f, "passed").await;
+
+        let refresh = f.engine.refresh_review_task(f.task_id, false).await;
+
+        assert!(refresh.stats_changed && refresh.light_cleared);
+        let after = row(&f.engine, f.task_id).await;
+        assert_eq!(counters(&after), (Some(1), Some(1), Some(0)));
+        assert!(after.preflight.is_none());
+    }
+
+    /// Anything the session hook cannot see — a commit made by hand in a
+    /// terminal — still meets the completion's own git check. The refusal
+    /// corrects the row on its way out, so the card trades "complete" for
+    /// "merge" instead of offering the same refusal again; the work itself is
+    /// untouched.
+    #[tokio::test]
+    async fn a_refused_completion_corrects_the_counters() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        stale_empty_review_row(&f, None).await;
+
+        let refused = f
+            .engine
+            .complete_task(f.task_id, true)
+            .await
+            .expect_err("the work is still sitting there");
+
+        assert!(refused.contains("changed files after all"), "{refused}");
+        let after = row(&f.engine, f.task_id).await;
+        assert_eq!(after.status, WorkTaskStatus::Review);
+        assert_eq!(counters(&after), (Some(1), Some(1), Some(0)));
+        assert!(
+            after.worktree_folder_id.is_some(),
+            "the worktree stays recorded"
+        );
+        assert!(f.worktree.join("a.txt").exists(), "…and on disk");
+        assert!(
+            task_git::local_branch_tip(f.root.to_str().unwrap(), "task/7")
+                .await
+                .expect("branch")
+                .is_some(),
+            "…and so does its branch"
+        );
+    }
+
+    /// The sweep reads the row before the folder lock; a content refresh in
+    /// between may clear the green light it went by. The dispatch re-checks
+    /// under the lock and skips — benignly — instead of landing work no
+    /// preflight ran on.
+    #[tokio::test]
+    async fn an_auto_merge_rechecks_the_light_under_the_folder_lock() {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let f = delivery_fixture(FakeForge::default()).await;
+        stale_empty_review_row(&f, None).await;
+        with_preflight(&f, "exit 0").await;
+        let mut active = row(&f.engine, f.task_id).await.into_active_model();
+        active.files_changed = Set(Some(1));
+        active.update(&f.engine.db.conn).await.expect("counters");
+        set_light(&f, "passed").await;
+        let settings = work_task_service::settings_get_effective(
+            &f.engine.db.conn,
+            row(&f.engine, f.task_id).await.folder_id,
+        )
+        .await
+        .expect("settings");
+        assert!(
+            auto_merge_candidate(&row(&f.engine, f.task_id).await, &settings),
+            "control: with its light the row is a candidate"
+        );
+        // What a refresh racing the sweep leaves behind.
+        let mut active = row(&f.engine, f.task_id).await.into_active_model();
+        active.preflight = Set(None);
+        active
+            .update(&f.engine.db.conn)
+            .await
+            .expect("cleared light");
+
+        let refused = f
+            .engine
+            .merge_task(f.task_id, None, true, None, true)
+            .await
+            .expect_err("no landing on a cleared light");
+
+        assert_eq!(refused, AUTO_MERGE_NO_LONGER_ELIGIBLE);
+        assert!(
+            is_benign_merge_race(&refused),
+            "the sweep skips it silently"
+        );
+        let after = row(&f.engine, f.task_id).await;
+        assert_eq!(after.status, WorkTaskStatus::Review);
+        assert!(after.last_error.is_none(), "no banner for a benign skip");
+    }
+
+    /// An unattended landing waits while someone is still working in the
+    /// task's session — or in its worktree from another conversation: landing
+    /// would take half-done work, and the merge launch would reuse the busy
+    /// connection and drop it when its prompt is refused. Skipped benignly;
+    /// the turn's end pumps again.
+    #[tokio::test]
+    async fn an_auto_merge_waits_for_a_turn_in_the_tasks_session_or_worktree() {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let f = delivery_fixture(FakeForge::default()).await;
+        stale_empty_review_row(&f, Some(41)).await;
+        let mut active = row(&f.engine, f.task_id).await.into_active_model();
+        active.files_changed = Set(Some(1));
+        active.update(&f.engine.db.conn).await.expect("counters");
+        let wt_folder = row(&f.engine, f.task_id).await.worktree_folder_id;
+        assert!(auto_merge_candidate(
+            &row(&f.engine, f.task_id).await,
+            &WorkTaskFolderSettings::default()
+        ));
+
+        for (conn, conversation, folder) in [
+            ("the-session", Some(41), None),
+            ("in-the-worktree", Some(99), wt_folder),
+        ] {
+            foreign_connection(&f, conn, conversation, folder).await;
+            let state = f.engine.manager.get_state(conn).await.expect("state");
+            state.write().await.turn_in_flight = true;
+
+            let refused = f
+                .engine
+                .merge_task(f.task_id, None, true, None, true)
+                .await
+                .expect_err("no landing under a live turn");
+
+            assert_eq!(refused, AUTO_MERGE_NO_LONGER_ELIGIBLE, "{conn}");
+            assert_eq!(
+                row(&f.engine, f.task_id).await.status,
+                WorkTaskStatus::Review
+            );
+            state.write().await.turn_in_flight = false;
+        }
+    }
+
+    /// The comment is the reply the user accepted, then the link and the
+    /// counters, then the footer. Nothing else the agent wrote — its result
+    /// summary above all — may reach a thread other people are reading.
+    #[tokio::test]
+    async fn a_delivered_task_comments_the_link_and_the_numbers() {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let f = delivery_fixture(FakeForge::default()).await;
+        enable_writeback(&f).await;
+        // The counters a settled run leaves on the row, plus the agent's own
+        // words — which must NOT travel.
+        let mut active = row(&f.engine, f.task_id).await.into_active_model();
+        active.files_changed = Set(Some(3));
+        active.additions = Set(Some(42));
+        active.deletions = Set(Some(7));
+        active.result_summary =
+            Set(Some("I refactored the auth module and rewrote the tests".to_string()));
+        active.writeback_drafts = Set(Some(r#"{"7":"The cause was a stale token."}"#.to_string()));
+        active.update(&f.engine.db.conn).await.expect("record the run's result");
+
+        f.engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect("delivery");
+
+        let forge = f.forge.clone();
+        wait_for("the write-back", move || {
+            let forge = forge.clone();
+            async move { !forge.comments.lock().await.is_empty() }
+        })
+        .await;
+        let comments = f.forge.comments.lock().await.clone();
+        assert_eq!(comments.len(), 1);
+        let (kind, number, body) = &comments[0];
+        assert_eq!(*number, 7, "the comment goes on the issue the task came from");
+        assert_eq!(*kind, ForgeItemKind::Issue, "…in the issue's own thread");
+        assert_eq!(
+            body,
+            &format!(
+                "The cause was a stale token.\n\n\
+                 Delivered in https://github.test/acme/app/pull/42 (3 files, +42/-7).\n\n\
+                 ---\n{}",
+                crate::forge::deliver::comment_footer()
+            )
+        );
+        assert!(!body.contains("refactored"), "agent text leaked: {body}");
+        assert!(
+            events_of(&f.engine, f.task_id).await.contains(&"forge_writeback".to_string()),
+            "the comment belongs on the timeline"
+        );
+    }
+
+    async fn first_comment(f: &Delivery) -> String {
+        let forge = f.forge.clone();
+        wait_for("the write-back", move || {
+            let forge = forge.clone();
+            async move { !forge.comments.lock().await.is_empty() }
+        })
+        .await;
+        f.forge.comments.lock().await[0].2.clone()
+    }
+
+    /// The answer given in the acceptance dialog is what reaches the thread:
+    /// it switches the comment on for a task whose trigger dialog never did,
+    /// and the reply is the user's text as typed — a mention they wrote is
+    /// theirs to make. Replies for items the task does not handle go nowhere,
+    /// and once the task has left review the answer is refused.
+    #[tokio::test]
+    async fn the_answer_given_at_acceptance_is_what_reaches_the_thread() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        let emitter = EventEmitter::test_web_only(Arc::new(
+            crate::web::event_bridge::WebEventBroadcaster::new(),
+        ));
+        let run_seq = row(&f.engine, f.task_id).await.run_seq;
+        // A dialog showing an older generation's reply signs off on nothing.
+        let stale = crate::commands::work_task::work_task_set_writeback_core(
+            &emitter,
+            &f.engine.db,
+            f.task_id,
+            run_seq - 1,
+            false,
+            Default::default(),
+        )
+        .await;
+        assert!(stale.is_err(), "an answer about another run is refused");
+        assert_eq!(source_record(&row(&f.engine, f.task_id).await).writeback, None);
+
+        crate::commands::work_task::work_task_set_writeback_core(
+            &emitter,
+            &f.engine.db,
+            f.task_id,
+            run_seq,
+            true,
+            [(7, "  Fixed, thanks @alice.\r\n".to_string()), (99, "not ours".to_string())]
+                .into_iter()
+                .collect(),
+        )
+        .await
+        .expect("record the answer");
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(source_record(&task).writeback, Some(true));
+        assert_eq!(
+            task.writeback_drafts.as_deref(),
+            Some(r#"{"7":"Fixed, thanks @alice."}"#)
+        );
+
+        f.engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect("delivery");
+        let body = first_comment(&f).await;
+        assert!(body.starts_with("Fixed, thanks @alice.\n\nDelivered in "), "{body}");
+
+        let refused = crate::commands::work_task::work_task_set_writeback_core(
+            &emitter,
+            &f.engine.db,
+            f.task_id,
+            row(&f.engine, f.task_id).await.run_seq,
+            false,
+            Default::default(),
+        )
+        .await;
+        assert!(refused.is_err(), "a finished task's comment is not editable");
+        assert_eq!(source_record(&row(&f.engine, f.task_id).await).writeback, Some(true));
+    }
+
+    /// The footer is the settings' to add, read when the comment is posted.
+    #[tokio::test]
+    async fn the_footer_follows_the_settings_at_posting_time() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        enable_writeback(&f).await;
+        crate::forge::settings::save(
+            &f.engine.db.conn,
+            None,
+            Some(crate::forge::settings::ForgePanelSettings {
+                comment_footer: false,
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("save settings");
+        f.engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect("delivery");
+        let body = first_comment(&f).await;
+        assert!(!body.contains("Generated with"), "{body}");
+        assert!(!body.contains("---"), "{body}");
+    }
+
+    /// What the agent hands in is a draft for THIS task's threads, cleaned
+    /// before anyone reads it: this machine's paths made relative to the
+    /// checkout, mentions defused. A reply for an item the task does not
+    /// handle is dropped, and a task without a thread keeps none.
+    #[tokio::test]
+    async fn the_agents_replies_are_kept_sanitized_and_only_for_its_items() {
+        use crate::acp::delegation::transport::ThreadReply;
+        let f = delivery_fixture(FakeForge::default()).await;
+        let replies = [
+            ThreadReply {
+                number: 7,
+                body: format!("Fixed in {}/a.txt, cc @bob", f.worktree.display()),
+            },
+            ThreadReply {
+                number: 8,
+                body: "someone else's".to_string(),
+            },
+        ];
+        let drafts = f.engine.thread_reply_drafts(f.task_id, &replies).await;
+        assert_eq!(drafts.as_deref(), Some(r#"{"7":"Fixed in a.txt, cc `@bob`"}"#));
+
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let mut active = row(&f.engine, f.task_id).await.into_active_model();
+        active.source_kind = Set(None);
+        active.update(&f.engine.db.conn).await.expect("no provenance");
+        assert_eq!(f.engine.thread_reply_drafts(f.task_id, &replies).await, None);
+    }
+
+    /// A reply describes the run it came from: claiming a new run drops it.
+    #[tokio::test]
+    async fn a_new_run_drops_the_previous_runs_reply() {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let f = delivery_fixture(FakeForge::default()).await;
+        let mut active = row(&f.engine, f.task_id).await.into_active_model();
+        active.writeback_drafts = Set(Some(r#"{"7":"does not hold"}"#.to_string()));
+        active.update(&f.engine.db.conn).await.expect("draft");
+        work_task_service::claim_for_run(&f.engine.db.conn, f.task_id, WorkTaskStatus::Review, "user")
+            .await
+            .expect("claim")
+            .expect("claimed");
+        assert_eq!(row(&f.engine, f.task_id).await.writeback_drafts, None);
+    }
+
+    /// A task whose trigger dialog left the box unchecked publishes nothing —
+    /// this is the one thing a task does in a place other people watch.
+    #[tokio::test]
+    async fn a_task_that_declined_the_comment_writes_nothing() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        set_writeback(&f, false).await;
+        f.engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect("delivery");
+        // The settle emitted; give a spawned write-back the same chance to run
+        // as the enabled case gets before concluding it did not.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(f.forge.comments.lock().await.is_empty());
+        assert!(!events_of(&f.engine, f.task_id).await.contains(&"forge_writeback".to_string()));
+    }
+
+    /// A row minted before the choice lived on the task carries no answer at
+    /// all. "No recorded yes" is a no: an upgrade must not start commenting on
+    /// threads for tasks whose author was never asked.
+    #[tokio::test]
+    async fn a_task_without_a_recorded_answer_writes_nothing() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        assert!(
+            !row(&f.engine, f.task_id)
+                .await
+                .source_meta
+                .unwrap_or_default()
+                .contains("writeback"),
+            "the fixture stands in for a pre-choice row"
+        );
+        f.engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect("delivery");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(f.forge.comments.lock().await.is_empty());
+        assert!(!events_of(&f.engine, f.task_id).await.contains(&"forge_writeback".to_string()));
+    }
+
+    /// Best-effort means best-effort: a comment that cannot be posted is a
+    /// timeline entry, not a status change. The task is finished either way.
+    #[tokio::test]
+    async fn a_failed_write_back_leaves_the_finished_task_alone() {
+        let f = delivery_fixture(FakeForge {
+            comment_error: Some("403 forbidden".into()),
+            ..Default::default()
+        })
+        .await;
+        enable_writeback(&f).await;
+        f.engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect("delivery");
+
+        let engine = f.engine.clone();
+        let task_id = f.task_id;
+        wait_for("the failure event", move || {
+            let engine = engine.clone();
+            async move {
+                events_of(&engine, task_id).await.contains(&"forge_writeback_failed".to_string())
+            }
+        })
+        .await;
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Done);
+        assert_eq!(task.completion_kind.as_deref(), Some("delivered_pr"));
+        assert!(task.last_error.is_none(), "a failed comment is not a task failure");
+    }
+
+    /// The OTHER settlement path: a task that landed on the base branch
+    /// locally. Its comment names the commit, not a pull request — and the
+    /// write-back is spawned from inside the folder's git lock, which it must
+    /// neither take nor be blocked by.
+    #[tokio::test]
+    async fn a_locally_merged_task_comments_the_commit() {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let f = delivery_fixture(FakeForge::default()).await;
+        enable_writeback(&f).await;
+
+        // The state a crashed merge generation leaves behind: `merging`, with
+        // the base HEAD it started from…
+        let pre_merge_head = task_git::rev_parse(f.root.to_str().unwrap(), "HEAD")
+            .await
+            .expect("base head");
+        let state = WorkTaskMergeState {
+            op: WorkTaskMergeOp::Land,
+            pre_merge_head,
+            strategy: "merge".into(),
+            ..Default::default()
+        };
+        let mut active = row(&f.engine, f.task_id).await.into_active_model();
+        active.status = Set(WorkTaskStatus::Merging);
+        active.merge_state = Set(Some(serde_json::to_string(&state).expect("state")));
+        active.files_changed = Set(Some(1));
+        active.additions = Set(Some(1));
+        active.deletions = Set(Some(0));
+        active.update(&f.engine.db.conn).await.expect("to merging");
+        // …and the landing itself, which the dead process did complete.
+        git_run(&f.root, &["merge", "--no-ff", "-q", "-m", "land", "task/7"]);
+        let landed_commit = task_git::rev_parse(f.root.to_str().unwrap(), "HEAD")
+            .await
+            .expect("landed head");
+
+        f.engine.recover_merging(f.task_id).await;
+        assert_eq!(row(&f.engine, f.task_id).await.status, WorkTaskStatus::Done);
+
+        let forge = f.forge.clone();
+        wait_for("the write-back", move || {
+            let forge = forge.clone();
+            async move { !forge.comments.lock().await.is_empty() }
+        })
+        .await;
+        let comments = f.forge.comments.lock().await.clone();
+        assert_eq!(comments.len(), 1, "one settle, one comment");
+        let (kind, number, body) = &comments[0];
+        assert_eq!((*kind, *number), (ForgeItemKind::Issue, 7));
+        assert!(body.contains(&landed_commit[..7]), "the commit that landed: {body}");
+        assert!(body.contains("`main`") && body.contains("(1 file, +1/-0)"), "{body}");
+
+        // A second recovery pass finds a `done` row and settles nothing, so the
+        // issue does not collect a comment per sweep.
+        f.engine.recover_merging(f.task_id).await;
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(f.forge.comments.lock().await.len(), 1);
+    }
+
+    // ── the dead merge generation's connection ──────────────────────────────
+
+    /// Park the fixture's task exactly where a process that died mid-merge left
+    /// it: `merging`, pointing at a connection that no longer exists, with that
+    /// connection still in the engine's correlation index.
+    async fn interrupt_merge(f: &Delivery, conn_id: &str, delete_worktree: bool) {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let state = WorkTaskMergeState {
+            op: WorkTaskMergeOp::Land,
+            pre_merge_head: task_git::rev_parse(f.root.to_str().unwrap(), "HEAD")
+                .await
+                .expect("base head"),
+            strategy: "merge".into(),
+            delete_worktree,
+            ..Default::default()
+        };
+        let task = row(&f.engine, f.task_id).await;
+        let run_seq = task.run_seq;
+        let mut active = task.into_active_model();
+        active.status = Set(WorkTaskStatus::Merging);
+        active.merge_state = Set(Some(serde_json::to_string(&state).expect("state")));
+        active.connection_id = Set(Some(conn_id.to_string()));
+        active.update(&f.engine.db.conn).await.expect("to merging");
+        // Registered at launch, and only a TurnComplete ever takes it out.
+        f.engine
+            .index
+            .lock()
+            .await
+            .insert(conn_id.into(), (f.task_id, run_seq));
+    }
+
+    /// The dead generation's index entry has no other way out — `reconcile_once`
+    /// only scans `running` / `awaiting_input`, and the TurnComplete that would
+    /// have retired it is the very thing that went missing. Recovery inherits
+    /// that teardown, and must do it before it acts: this same pass honors the
+    /// "delete the worktree" the user ticked, and worktree removal reads that
+    /// same map as "an agent is still working in there".
+    #[tokio::test]
+    async fn recovery_retires_the_dead_merge_generations_connection() {
+        const DEAD_CONN: &str = "conn-of-a-dead-merge";
+        let f = delivery_fixture(FakeForge::default()).await;
+        interrupt_merge(&f, DEAD_CONN, true).await;
+        // The landing itself, which the dead process did complete.
+        git_run(&f.root, &["merge", "--no-ff", "-q", "-m", "land", "task/7"]);
+
+        f.engine.recover_merging(f.task_id).await;
+
+        assert!(
+            !f.engine.index.lock().await.contains_key(DEAD_CONN),
+            "the dead generation must not outlive its recovery"
+        );
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Done);
+        assert_eq!(
+            task.cleanup_state, None,
+            "nothing is working in that worktree — the removal must not be refused"
+        );
+        assert_eq!(task.worktree_folder_id, None, "detached");
+        assert!(!f.worktree.exists(), "and really gone from disk");
+    }
+
+    /// The other outcome, same teardown: a recovery that cannot prove the merge
+    /// landed bounces the row to `review` — where a surviving entry would keep
+    /// attributing the dead connection's late events to a task that has moved
+    /// on, and would block the worktree cleanup offered right there on the card.
+    #[tokio::test]
+    async fn a_bounced_recovery_retires_the_dead_connection_too() {
+        const DEAD_CONN: &str = "conn-of-a-lost-merge";
+        let f = delivery_fixture(FakeForge::default()).await;
+        // No merge commit: the process died before landing anything.
+        interrupt_merge(&f, DEAD_CONN, false).await;
+
+        f.engine.recover_merging(f.task_id).await;
+
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Review);
+        assert!(task.last_error.is_some(), "bounced with a reason");
+        assert!(
+            !f.engine.index.lock().await.contains_key(DEAD_CONN),
+            "a task back in review has no run to correlate events to"
+        );
+    }
+
+    /// A merge generation held for its agent's background work belongs to the
+    /// hold's waiter even once its connection is gone: the waiter settles it
+    /// from git, with what the agent last said, and recovery must not race it.
+    #[tokio::test]
+    async fn recovery_leaves_a_held_merge_generation_to_its_waiter() {
+        const HELD_CONN: &str = "conn-of-a-held-merge";
+        let f = delivery_fixture(FakeForge::default()).await;
+        interrupt_merge(&f, HELD_CONN, false).await;
+        let run_seq = row(&f.engine, f.task_id).await.run_seq;
+        f.engine.holds.lock().await.insert(
+            HELD_CONN.into(),
+            TurnEndHold {
+                task_id: f.task_id,
+                run_seq,
+                stop_reason: "end_turn".into(),
+                summary: None,
+                signal: None,
+                since: chrono::Utc::now(),
+                stop: CancellationToken::new(),
+                later: Default::default(),
+                settling: false,
+            },
+        );
+
+        f.engine.recover_merging(f.task_id).await;
+
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Merging, "left alone");
+        assert!(f.engine.index.lock().await.contains_key(HELD_CONN));
+    }
+
+    /// A merge generation held when the process died has its wait closed at
+    /// boot like any other — its timeline must not show a wait that never
+    /// ended — but is left in `merging` for the merge recovery to settle from
+    /// git.
+    #[tokio::test]
+    async fn a_merge_hold_lost_to_a_restart_is_closed_and_left_to_recovery() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        interrupt_merge(&f, "conn-of-a-held-merge", false).await;
+        let run_seq = row(&f.engine, f.task_id).await.run_seq;
+        work_task_service::record_event(
+            &f.engine.db.conn,
+            f.task_id,
+            "background_wait",
+            "engine",
+            Some(serde_json::json!({ "run_seq": run_seq, "tasks": ["run b1"] })),
+        )
+        .await
+        .expect("event");
+
+        f.engine.settle_interrupted_holds().await;
+
+        assert_eq!(row(&f.engine, f.task_id).await.status, WorkTaskStatus::Merging);
+        let ends = event_payloads(&f.engine, f.task_id, "background_wait_end").await;
+        assert_eq!(ends.len(), 1);
+        assert_eq!(ends[0]["outcome"], "interrupted");
+        assert!(
+            work_task_service::open_background_wait(&f.engine.db.conn, f.task_id, run_seq)
+                .await
+                .expect("query")
+                .is_none()
+        );
+    }
+
+    /// Retiring one generation must not disarm another. The outstanding-request
+    /// set is keyed by task, so a stale pass that reaches a task someone else
+    /// has already relaunched would otherwise drop the live generation's
+    /// pending permissions — and the next resolution would empty a set that is
+    /// already empty and put the card back to `running` while the agent is
+    /// still parked on the request nobody answered.
+    #[tokio::test]
+    async fn retiring_a_connection_spares_the_requests_of_one_still_on_the_task() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let engine = test_engine(db);
+        {
+            let mut index = engine.index.lock().await;
+            index.insert("conn-old".into(), (7, 1));
+            index.insert("conn-new".into(), (7, 2));
+        }
+        engine
+            .awaiting
+            .lock()
+            .await
+            .insert(7, ["p:req-1".to_string()].into_iter().collect());
+
+        engine.retire_connection("conn-old", 7).await;
+
+        {
+            let index = engine.index.lock().await;
+            assert!(!index.contains_key("conn-old"), "the retired one is gone");
+            assert!(index.contains_key("conn-new"), "and only that one");
+        }
+        assert_eq!(
+            engine.awaiting.lock().await.get(&7).map(|s| s.len()),
+            Some(1),
+            "the live generation is still waiting on its permission"
+        );
+
+        // The last one out does clear it — a set inherited by the next
+        // generation would never flip the row to `awaiting_input` again.
+        engine.retire_connection("conn-new", 7).await;
+        assert!(engine.awaiting.lock().await.get(&7).is_none());
+    }
+
+    /// `index` is a correlation table, not a liveness one. Whatever leaves an
+    /// entry behind, the user's "remove worktree" must not be refused on behalf
+    /// of a connection that is gone — the refusal sets a `failed` flag whose
+    /// retry can never clear, because nothing would ever arrive to remove the
+    /// entry. The manager is the truth, and what it says is gone is retired.
+    #[tokio::test]
+    async fn worktree_removal_is_not_refused_by_a_dead_connection() {
+        const ZOMBIE: &str = "conn-nobody-holds";
+        let f = delivery_fixture(FakeForge::default()).await;
+        let run_seq = row(&f.engine, f.task_id).await.run_seq;
+        f.engine
+            .index
+            .lock()
+            .await
+            .insert(ZOMBIE.into(), (f.task_id, run_seq));
+
+        f.engine.cleanup_task(f.task_id).await.expect("cleanup");
+
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.cleanup_state, None, "not a live agent");
+        assert_eq!(task.worktree_folder_id, None, "detached");
+        assert!(!f.worktree.exists(), "and really gone from disk");
+        assert!(!f.engine.index.lock().await.contains_key(ZOMBIE), "retired");
+    }
+
+    /// Git for Windows can finish the destructive part of `worktree remove`
+    /// (registration and checkout contents) but fail to remove the now-empty
+    /// directory. That first pass leaves the task flagged for cleanup; its retry
+    /// must recognize the harmless shell, finish the branch/DB cleanup, and not
+    /// report files that do not exist.
+    #[tokio::test]
+    async fn worktree_cleanup_retry_converges_an_empty_detached_shell() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        let worktree = f.worktree.to_str().expect("utf-8 worktree");
+        git_run(&f.root, &["worktree", "remove", "--force", worktree]);
+        std::fs::create_dir(&f.worktree).expect("empty shell");
+        work_task_service::set_cleanup_state(
+            &f.engine.db.conn,
+            f.task_id,
+            true,
+            Some("the first removal stopped after git detached it".into()),
+        )
+        .await
+        .expect("flag failed cleanup");
+
+        f.engine
+            .cleanup_task(f.task_id)
+            .await
+            .expect("retry cleanup");
+
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.cleanup_state, None, "the retry is fully settled");
+        assert_eq!(
+            task.worktree_folder_id, None,
+            "folder bookkeeping converged"
+        );
+        assert!(!f.worktree.exists(), "the empty shell is gone");
+        assert!(
+            task_git::rev_parse(f.root.to_str().unwrap(), "refs/heads/task/7")
+                .await
+                .is_err(),
+            "the requested work branch goes too"
+        );
+    }
+
+    /// A missing `.git` file alone is not proof that the directory is a harmless
+    /// post-removal shell. Files may have appeared after the partial teardown,
+    /// and none of them is recoverable through git, so the retry must preserve
+    /// both the sentinel and the branch.
+    #[tokio::test]
+    async fn worktree_cleanup_retry_preserves_a_file_in_a_detached_shell() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        let worktree = f.worktree.to_str().expect("utf-8 worktree");
+        git_run(&f.root, &["worktree", "remove", "--force", worktree]);
+        std::fs::create_dir(&f.worktree).expect("empty shell");
+        std::fs::write(f.worktree.join("sentinel.txt"), "not in git\n").expect("sentinel");
+
+        let err = f
+            .engine
+            .cleanup_task(f.task_id)
+            .await
+            .expect_err("a non-empty shell is not removable");
+
+        assert!(err.holds_work, "the retry is refused as a data-safety gate");
+        assert_eq!(
+            std::fs::read_to_string(f.worktree.join("sentinel.txt")).expect("read sentinel"),
+            "not in git\n"
+        );
+        let task = row(&f.engine, f.task_id).await;
+        assert!(
+            task.worktree_folder_id.is_some(),
+            "the retry remains available"
+        );
+        assert!(
+            task_git::rev_parse(f.root.to_str().unwrap(), "refs/heads/task/7")
+                .await
+                .is_ok(),
+            "the branch survives with the sentinel"
+        );
+    }
+
+    /// A repository with `layout` applied to it, for the probe tests below:
+    /// returns `(tempdir, repo path, worktree path)`. The two tests that pass
+    /// `"sibling"` reproduce the DEFAULT worktree layout — beside the project,
+    /// with no repository of the fixture's own above it, which is the layout in
+    /// which a shell has no enclosing repository for `git status` to answer
+    /// about instead. (Nothing here can rule out a repository ABOVE the system
+    /// temp directory; in that environment the sibling pair still asserts the
+    /// right answers, but it is `an_empty_shell_inside_a_dirty_project_reads_as_clean`
+    /// — which builds its own enclosing repository — that pins the regression
+    /// unconditionally.)
+    fn probe_repo(layout: &str) -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let repo = dir.path().join("repo");
+        std::fs::create_dir(&repo).expect("mkdir");
+        git_run(&repo, &["init", "-q", "-b", "main"]);
+        std::fs::write(repo.join("a.txt"), "one\n").expect("write");
+        git_run(&repo, &["add", "-A"]);
+        git_run(&repo, &["commit", "-q", "-m", "base"]);
+        let worktree = match layout {
+            "sibling" => dir.path().join("wt"),
+            _ => repo.join("wt"),
+        };
+        (dir, repo, worktree)
+    }
+
+    /// THE probe behind issue #642's dead-end retry, exercised where the bug
+    /// actually happens. `has_changes` runs `git status` from the path itself,
+    /// so a shell in the default layout — beside the project, no repository
+    /// above it — makes git error, and reading that error as "dirty" is what
+    /// made the retry offer the same refusal forever. An empty shell has, by
+    /// definition, nothing a `--force` removal could take.
+    #[tokio::test]
+    async fn an_empty_shell_beside_a_project_reads_as_clean() {
+        let (_dir, _repo, worktree) = probe_repo("sibling");
+        std::fs::create_dir(&worktree).expect("empty shell");
+
+        assert!(
+            !path_holds_uncommitted(worktree.to_str().expect("utf-8")).await,
+            "an empty post-removal shell holds nothing"
+        );
+    }
+
+    /// The other half of the same answer: outside a repository git errors on a
+    /// shell whatever is in it, so emptiness is the ONLY thing separating a
+    /// harmless leftover from files nothing can give back.
+    #[tokio::test]
+    async fn a_file_in_a_shell_beside_a_project_still_reads_as_dirty() {
+        let (_dir, _repo, worktree) = probe_repo("sibling");
+        std::fs::create_dir(&worktree).expect("shell");
+        std::fs::write(worktree.join("sentinel.txt"), "not in git\n").expect("sentinel");
+
+        assert!(
+            path_holds_uncommitted(worktree.to_str().expect("utf-8")).await,
+            "a shell with an entry in it is not removable"
+        );
+    }
+
+    /// A worktree root configured INSIDE the project (a relative
+    /// `worktree_root`, which the setting takes at face value) puts the shell
+    /// under the project's own `.git`. `git status` then answers happily — about
+    /// the PROJECT — so a project with a stray file of its own would answer
+    /// "dirty" for a shell holding nothing, and #642's retry would still never
+    /// converge. Without a `.git` marker the path is not a checkout git speaks
+    /// for, and its answer must not be read as this path's.
+    ///
+    /// The project's dirt is an edit to a TRACKED file, not a stray untracked
+    /// one: `has_changes` spawns git through `crate::process`, which inherits
+    /// the real environment, so an untracked fixture is only as visible as the
+    /// developer's global `core.excludesFile` lets it be — and a fixture git
+    /// silently ignores would make this test pass against the very bug it
+    /// exists to pin. No ignore rule can hide a modified tracked file.
+    #[tokio::test]
+    async fn an_empty_shell_inside_a_dirty_project_reads_as_clean() {
+        let (_dir, repo, worktree) = probe_repo("nested");
+        std::fs::write(repo.join("a.txt"), "the project's own mess\n").expect("dirty project");
+        std::fs::create_dir(&worktree).expect("empty shell");
+
+        assert!(
+            !path_holds_uncommitted(worktree.to_str().expect("utf-8")).await,
+            "the project's dirt is not the shell's"
+        );
+    }
+
+    /// And the marker check must not short-circuit the case it is guarding: a
+    /// checkout that still HAS its `.git` is exactly what `git status` is for,
+    /// uncommitted work included. Tracked and modified for the reason above —
+    /// an untracked fixture would read as clean under a global ignore rule that
+    /// happens to match it, and fail this assertion on that developer's machine
+    /// alone.
+    #[tokio::test]
+    async fn an_intact_worktree_is_still_measured_by_git() {
+        let (_dir, repo, worktree) = probe_repo("sibling");
+        let worktree_path = worktree.to_str().expect("utf-8");
+        git_run(
+            &repo,
+            &["worktree", "add", "-q", "-b", "task/probe", worktree_path],
+        );
+        assert!(
+            !path_holds_uncommitted(worktree_path).await,
+            "a fresh checkout holds nothing"
+        );
+
+        std::fs::write(worktree.join("a.txt"), "unstaged\n").expect("edit");
+
+        assert!(
+            path_holds_uncommitted(worktree_path).await,
+            "an uncommitted edit in a live checkout is work"
+        );
+    }
+
+    /// The removal underneath is `worktree remove --force`, and a stop pressed
+    /// while the agent is editing is exactly when a checkout is dirty. Nothing
+    /// the user clicked named those files — the cancel dialog's checkbox offers
+    /// "its worktree and work branch" — so this has to refuse, the same line
+    /// `complete_task` draws and the branch dropdown re-asks about.
+    #[tokio::test]
+    async fn worktree_removal_refuses_to_take_uncommitted_work() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        // Both shapes `git status` reports: an edit to a tracked file, and a
+        // file git has never seen. Either one on its own is unrecoverable.
+        std::fs::write(f.worktree.join("a.txt"), "one\ntwo\nthree\n").expect("write");
+        std::fs::write(f.worktree.join("notes.md"), "half a thought\n").expect("write");
+
+        let err = f
+            .engine
+            .cleanup_task(f.task_id)
+            .await
+            .expect_err("must not take uncommitted work");
+        assert!(err.holds_work, "declined to protect work, not a failure");
+        assert!(
+            err.message.contains("uncommitted files"),
+            "and says why: {}",
+            err.message
+        );
+
+        assert!(f.worktree.exists(), "the checkout survives");
+        assert_eq!(
+            std::fs::read_to_string(f.worktree.join("notes.md")).expect("read"),
+            "half a thought\n",
+            "and so does the work inside it"
+        );
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(
+            task.cleanup_state.as_deref(),
+            Some("failed"),
+            "flagged, because the cancel and delete paths swallow the error and \
+             the card is the only place left to say it"
+        );
+        assert!(
+            task.worktree_folder_id.is_some(),
+            "still attached, so the retry has something to remove"
+        );
+    }
+
+    /// The probe fails CLOSED. `git status` can stop answering for reasons that
+    /// have nothing to do with the checkout being gone — a corrupt index, a
+    /// permission error — and the operation waiting on that answer is
+    /// `worktree remove --force`. Reading "could not ask" as "clean" would
+    /// trade a recoverable stall for unrecoverable files.
+    #[tokio::test]
+    async fn a_worktree_git_cannot_read_is_not_assumed_clean() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        // A linked worktree's `.git` is a FILE pointing back at the real gitdir.
+        // Pointing it nowhere makes every git command in here fail while the
+        // directory — and whatever the user left in it — stays on disk.
+        std::fs::write(f.worktree.join("unsaved.txt"), "not committed\n").expect("write");
+        std::fs::write(f.worktree.join(".git"), "gitdir: /nowhere/at/all\n").expect("write");
+
+        let err = f
+            .engine
+            .cleanup_task(f.task_id)
+            .await
+            .expect_err("must not force-remove a checkout it could not read");
+        assert!(err.holds_work, "unprovable is treated as unsafe");
+
+        assert!(f.worktree.exists(), "the checkout survives");
+        assert_eq!(
+            std::fs::read_to_string(f.worktree.join("unsaved.txt")).expect("read"),
+            "not committed\n"
+        );
+    }
+
+    /// The removal has to serialize against a LAUNCH, and the folder git lock
+    /// cannot do that: `launch` holds the TASK lock across its whole setup —
+    /// `ensure_worktree` included — and takes no folder lock at all.
+    ///
+    /// The sequence that gets there is ordinary board use: a cancel that was
+    /// asked to take the worktree along leaves the row `canceled`, the user
+    /// requeues it (a pure DB write that waits on no lock), and the pump
+    /// launches it — all while the removal sits between its status read and its
+    /// `git worktree remove`. Nothing about the requeue is wrong; the fresh run
+    /// would mint its own checkout. Deleting the directory out from under
+    /// `ensure_worktree` is.
+    ///
+    /// Holding the task lock here stands in for that launch: without the lock
+    /// on the removal's side, the worktree is gone before the guard is dropped.
+    #[tokio::test]
+    async fn worktree_removal_waits_for_the_task_lock() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        let engine = f.engine.clone();
+        let task_id = f.task_id;
+
+        // Stand in for a launch that has the row and is inside its setup.
+        let held = engine.task_lock(task_id).await;
+        let guard = held.lock().await;
+
+        let removal = tokio::spawn({
+            let engine = engine.clone();
+            async move { engine.cleanup_task(task_id).await }
+        });
+
+        // Long enough that an unserialized removal — a few DB reads and a
+        // `git worktree remove` — would have finished several times over.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert!(
+            f.worktree.exists(),
+            "the checkout must survive while the launch holds the task lock"
+        );
+        assert!(!removal.is_finished(), "and the removal must still be parked");
+
+        drop(guard);
+        removal.await.expect("join").expect("cleanup");
+        assert!(!f.worktree.exists(), "and go once the lock is free");
+        assert_eq!(row(&engine, task_id).await.worktree_folder_id, None);
+    }
+
+    /// Drain everything the fixture's engine has broadcast so far.
+    fn drained(f: &mut Delivery) -> Vec<crate::web::event_bridge::WebEvent> {
+        let mut out = Vec::new();
+        while let Ok(ev) = f.events.try_recv() {
+            out.push(ev);
+        }
+        out
+    }
+
+    /// An acceptance that removes the worktree has to say so on the TASK
+    /// channel, not just the folder one. Both acceptance paths broadcast the
+    /// row BEFORE the cleanup runs (`settle_merge_generation` and this one), so
+    /// a removal that stays silent leaves every open board holding the snapshot
+    /// taken while the worktree still existed: the card flips to `done` but its
+    /// "worktree removed" badge — keyed on `worktree_folder_id` going null —
+    /// never appears until someone refetches the whole table.
+    #[tokio::test]
+    async fn removing_the_worktree_announces_the_task_after_the_folder() {
+        let mut f = delivery_fixture(FakeForge::default()).await;
+        interrupt_merge(&f, "conn-of-a-dead-merge", true).await;
+        git_run(&f.root, &["merge", "--no-ff", "-q", "-m", "land", "task/7"]);
+        let _ = drained(&mut f); // everything up to the merge is setup noise
+
+        f.engine.recover_merging(f.task_id).await;
+
+        assert_eq!(
+            row(&f.engine, f.task_id).await.worktree_folder_id,
+            None,
+            "precondition: this run really did detach the worktree"
+        );
+        let events = drained(&mut f);
+        let folder_gone = events
+            .iter()
+            .position(|e| {
+                e.channel == crate::web::event_bridge::FOLDER_CHANGED_EVENT
+                    && e.payload["kind"] == "deleted"
+            })
+            .expect("the worktree folder drop is broadcast");
+        assert!(
+            events.iter().skip(folder_gone).any(|e| {
+                e.channel == WORK_TASK_CHANGED_EVENT
+                    && e.payload["kind"] == "upsert"
+                    && e.payload["id"] == f.task_id
+            }),
+            "the task must be re-announced AFTER the detach — an upsert from \
+             before it carries the worktree the client is being told to drop; \
+             saw {:?}",
+            events.iter().map(|e| &e.channel).collect::<Vec<_>>()
+        );
+    }
+
+    /// A task nobody triggered from a forge has no thread to comment on — the
+    /// write-back must never invent one from the folder's remote.
+    #[tokio::test]
+    async fn a_task_without_a_forge_source_is_never_commented() {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let f = delivery_fixture(FakeForge::default()).await;
+        enable_writeback(&f).await;
+        let mut active = row(&f.engine, f.task_id).await.into_active_model();
+        active.source_kind = Set(None);
+        active.source_meta = Set(None);
+        active.update(&f.engine.db.conn).await.expect("clear source");
+
+        f.engine
+            .forge_writeback(f.task_id, WritebackOutcome::Merged("abc1234".into()))
+            .await;
+        assert!(f.forge.comments.lock().await.is_empty());
+    }
+
+    /// The engine has to be listening to the event bus BEFORE it starts its
+    /// boot work, not after: the bus drops what it broadcasts while nobody is
+    /// subscribed, so a task the user starts during boot would emit its
+    /// `TurnComplete` into nothing and sit `running` forever — the reconcile
+    /// sweep deliberately leaves rows whose connection is still live to
+    /// `on_event`.
+    ///
+    /// Pinned without timing games. A `merging` row parks the boot pass on the
+    /// folder's git lock, which this test holds, so the engine is provably
+    /// still inside boot work when the event goes out; and the queued row
+    /// flipping to `failed` is the boot pass announcing it got that far.
+    #[tokio::test]
+    async fn boot_work_does_not_swallow_the_events_published_under_it() {
+        use crate::db::test_helpers::{fresh_in_memory_db, seed_folder};
+        use sea_orm::{ActiveModelTrait, Set};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        git_run(dir.path(), &["init", "-q", "-b", "main"]);
+        std::fs::write(dir.path().join("a.txt"), "one\n").expect("write");
+        git_run(dir.path(), &["add", "-A"]);
+        git_run(dir.path(), &["commit", "-q", "-m", "base"]);
+
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, dir.path().to_str().expect("utf-8 path")).await;
+        let draft = |title: &str| crate::models::WorkTaskDraft {
+            folder_id,
+            title: title.to_string(),
+            config: serde_json::json!({ "display_text": title }),
+        };
+
+        // Interrupted by the restart — the boot pass fails it, which is how
+        // this test learns the pass has begun.
+        let interrupted = work_task_service::create(&db.conn, draft("interrupted"))
+            .await
+            .expect("task");
+        work_task_service::claim_for_run(&db.conn, interrupted.id, WorkTaskStatus::Todo, "test")
+            .await
+            .expect("claim")
+            .expect("claimed");
+
+        // The row that parks the boot pass on the folder's git lock.
+        let now = chrono::Utc::now();
+        let merging = crate::db::entities::work_task::ActiveModel {
+            folder_id: Set(folder_id),
+            title: Set("mid-merge".to_string()),
+            config: Set("{}".to_string()),
+            status: Set(WorkTaskStatus::Merging),
+            run_seq: Set(1),
+            sort_order: Set(0),
+            base_branch: Set(Some("main".to_string())),
+            work_branch: Set(Some("task/1".to_string())),
+            merge_state: Set(Some(
+                serde_json::to_string(&WorkTaskMergeState {
+                    op: WorkTaskMergeOp::Land,
+                    strategy: "merge".into(),
+                    ..Default::default()
+                })
+                .expect("state"),
+            )),
+            created_at: Set(now),
+            updated_at: Set(now),
+            ..Default::default()
+        }
+        .insert(&db.conn)
+        .await
+        .expect("merging row");
+
+        let engine = test_engine(db);
+        let lock = engine.folder_lock(folder_id).await;
+        let guard = lock.lock().await;
+
+        let driver = engine.clone();
+        tokio::spawn(async move { run_task_engine(driver).await });
+
+        let probe = engine.clone();
+        wait_for("the boot pass to start", move || {
+            let probe = probe.clone();
+            async move { row(&probe, interrupted.id).await.status == WorkTaskStatus::Failed }
+        })
+        .await;
+
+        // A run the user starts while boot is still going. Created HERE, after
+        // the boot pass swept the interrupted rows, so nothing but the event
+        // below can settle it.
+        let live = work_task_service::create(&engine.db.conn, draft("started during boot"))
+            .await
+            .expect("task");
+        let conv = conversation_service::create(
+            &engine.db.conn,
+            folder_id,
+            AgentType::ClaudeCode,
+            None,
+            None,
+        )
+        .await
+        .expect("conversation");
+        let run_seq =
+            work_task_service::claim_for_run(&engine.db.conn, live.id, WorkTaskStatus::Todo, "test")
+                .await
+                .expect("claim")
+                .expect("claimed");
+        assert!(work_task_service::begin_setup(&engine.db.conn, live.id, run_seq)
+            .await
+            .expect("begin_setup"));
+        assert!(work_task_service::mark_running(
+            &engine.db.conn,
+            live.id,
+            run_seq,
+            conv.id,
+            PARENT_CONN
+        )
+        .await
+        .expect("mark_running"));
+        engine
+            .index
+            .lock()
+            .await
+            .insert(PARENT_CONN.into(), (live.id, run_seq));
+        // A LIVE connection, so the reconcile sweep keeps its hands off the row
+        // — which is exactly the production shape that makes a lost
+        // `TurnComplete` permanent.
+        engine
+            .manager
+            .insert_test_connection(
+                PARENT_CONN,
+                AgentType::ClaudeCode,
+                None,
+                crate::web::event_bridge::EventEmitter::Noop,
+            )
+            .await;
+
+        engine.bus.send(std::sync::Arc::new(env(
+            PARENT_CONN,
+            AcpEvent::TurnComplete {
+                session_id: "s-1".into(),
+                stop_reason: "end_turn".into(),
+                agent_type: "claude_code".into(),
+            },
+        )));
+
+        // Boot can finish now; the event has to survive it.
+        drop(guard);
+        let probe = engine.clone();
+        wait_for("the settle from an event published during boot", move || {
+            let probe = probe.clone();
+            async move { row(&probe, live.id).await.status == WorkTaskStatus::Review }
+        })
+        .await;
+        assert_eq!(
+            row(&engine, merging.id).await.status,
+            WorkTaskStatus::Review,
+            "the parked boot pass still ran to completion"
+        );
+    }
+
+    /// Nothing makes an agent commit before its task lands in review — the
+    /// merge generation's prompt starts by committing whatever is left over —
+    /// so a task whose new files are still untracked has done work all the
+    /// same. Reading it as "changed nothing" would put "complete" on the card
+    /// and let the user close a task whose work never lands.
+    #[tokio::test]
+    async fn work_the_agent_never_committed_still_counts() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        // Undo the fixture's commit, leaving its content in the worktree as an
+        // uncommitted edit, and add a new file nobody ran `git add` on.
+        git_run(&f.worktree, &["reset", "-q", "--mixed", "HEAD~1"]);
+        std::fs::write(f.worktree.join("fresh.txt"), "a\nb\n").expect("write");
+
+        let stats = f.engine.snapshot_diff_stats(f.task_id).await.expect("stats");
+        assert_eq!(stats, (2, 3, 0), "the edit and the new file both count");
+        let task = row(&f.engine, f.task_id).await;
+        assert!(
+            f.engine
+                .has_landable_changes(&task, f.worktree.to_str().unwrap())
+                .await
+                .expect("landable probe"),
+            "completing this task would strand real work"
+        );
+    }
+
+    /// Base content the branch ABSORBED is not this task's work. An agent that
+    /// merges the base branch in — or rebases onto it — brings every commit the
+    /// base gained along, and measuring from the commit the task branched off
+    /// would count all of it: a task that added one line would report the whole
+    /// week's work, and the counters decide which acceptance the board offers.
+    #[tokio::test]
+    async fn base_content_the_branch_absorbed_is_not_the_tasks_work() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        // The task's own contribution, as the fixture left it.
+        assert_eq!(
+            f.engine.snapshot_diff_stats(f.task_id).await,
+            Some((1, 1, 0))
+        );
+
+        // The base branch moves on, and the worktree takes it in.
+        git_run(&f.root, &["checkout", "-q", "main"]);
+        std::fs::write(f.root.join("later.txt"), "one\ntwo\nthree\n").expect("write");
+        git_run(&f.root, &["add", "-A"]);
+        git_run(&f.root, &["commit", "-qm", "the base moves on"]);
+        git_run(&f.worktree, &["merge", "-q", "--no-edit", "main"]);
+
+        assert_eq!(
+            f.engine.snapshot_diff_stats(f.task_id).await,
+            Some((1, 1, 0)),
+            "the merged-in base branch is not this task's change set"
+        );
+        let task = row(&f.engine, f.task_id).await;
+        assert!(
+            f.engine
+                .has_landable_changes(&task, f.worktree.to_str().unwrap())
+                .await
+                .expect("landable probe"),
+            "…and its own commit is still there to land"
+        );
+        // The review drawer measures from the same place, so it does not list
+        // the merged-in base as the task's change either.
+        let listed =
+            crate::commands::work_task::work_task_changed_files_core(&f.engine.db, f.task_id)
+                .await
+                .expect("changed files");
+        let files: Vec<&str> = listed.iter().map(|c| c.file.as_str()).collect();
+        assert_eq!(files, ["a.txt"], "the drawer agrees with the counters");
+    }
+
+    // ── tasks without provenance, and deliveries that keep the task ─────────
+
+    /// Re-stamp the delivery fixture's task as an ordinary board task — no
+    /// forge provenance at all — in a project whose `origin` the fake forge
+    /// answers with `acme/app` on GitHub. Returns that target.
+    async fn as_local_task(f: &Delivery) -> DeliveryTarget {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let target = DeliveryTarget {
+            provider: ForgeProvider::GitHub,
+            server_host: "github.com".into(),
+            account_id: "acc-default".into(),
+            owner_repo: "acme/app".into(),
+        };
+        *f.forge.local.lock().await = Some(target.clone());
+        let mut active = row(&f.engine, f.task_id).await.into_active_model();
+        active.title = Set("Tidy the login form".to_string());
+        active.source_kind = Set(None);
+        active.source_key = Set(None);
+        active.source_meta = Set(None);
+        active
+            .update(&f.engine.db.conn)
+            .await
+            .expect("as a local task");
+        target
+    }
+
+    fn delivery_record(task: &crate::db::entities::work_task::Model) -> Option<WorkTaskDelivery> {
+        task.delivery
+            .as_deref()
+            .map(|s| serde_json::from_str(s).expect("delivery record json"))
+    }
+
+    fn source_record(task: &crate::db::entities::work_task::Model) -> ForgeSourceMeta {
+        serde_json::from_str(task.source_meta.as_deref().expect("source meta"))
+            .expect("source meta json")
+    }
+
+    /// The pull request the fake opened first (#42), as the forge reports it
+    /// once the push that preceded it landed.
+    fn opened_pull(head_sha: &str) -> ForgePr {
+        ForgePr {
+            number: 42,
+            html_url: "https://github.test/acme/app/pull/42".into(),
+            state: "open".into(),
+            merged: false,
+            head_sha: head_sha.into(),
+            head_ref: "task/7".into(),
+            head_repo: "acme/app".into(),
+            base_ref: "main".into(),
+        }
+    }
+
+    /// Another round's commit on the task branch — what a follow-up leaves
+    /// behind before the next delivery.
+    async fn commit_another_round(f: &Delivery) -> String {
+        std::fs::write(f.worktree.join("a.txt"), "one\ntwo\nthree\n").expect("write");
+        git_run(&f.worktree, &["commit", "-qam", "round two"]);
+        task_git::rev_parse(f.worktree.to_str().unwrap(), "task/7")
+            .await
+            .expect("round two head")
+    }
+
+    /// Long enough for a spawned write-back to have posted, had one been
+    /// spawned — the only way to observe that none was.
+    async fn settle_spawned_work() {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    }
+
+    /// A task with no forge provenance is delivered to the repository its
+    /// project's `origin` names, as the account that speaks for that host: its
+    /// own branch, a pull request against its base, and the record of both on
+    /// the row — nothing claiming an issue, and no thread to comment on.
+    #[tokio::test]
+    async fn a_local_task_is_delivered_to_its_projects_origin() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        let target = as_local_task(&f).await;
+
+        let url = f
+            .engine
+            .deliver_pr(f.task_id, None, true, false, true)
+            .await
+            .expect("delivery");
+        assert_eq!(url, "https://github.test/acme/app/pull/42");
+        assert_eq!(
+            f.forge.pushes.lock().await.as_slice(),
+            [("acme/app".to_string(), f.head.clone(), "task/7".to_string())]
+        );
+        assert_eq!(
+            f.forge.created.lock().await.as_slice(),
+            [(
+                "Tidy the login form".to_string(),
+                "task/7".to_string(),
+                "main".to_string(),
+                true
+            )],
+            "titled after the task, against its base, as the draft asked for"
+        );
+        let body = f.forge.bodies.lock().await[0].clone();
+        assert!(
+            body.contains(&format!("work task `{}`", f.task_id)),
+            "{body}"
+        );
+        assert!(
+            !body.contains("Closes"),
+            "there is no issue to close: {body}"
+        );
+
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Done);
+        assert_eq!(task.completion_kind.as_deref(), Some("delivered_pr"));
+        assert_eq!(
+            delivery_record(&task),
+            Some(WorkTaskDelivery {
+                target,
+                pr_url: url,
+                pr_number: 42,
+            })
+        );
+        assert!(
+            task.source_kind.is_none() && task.source_meta.is_none(),
+            "a delivery mints no provenance"
+        );
+        assert_eq!(*f.forge.local_lookups.lock().await, 1);
+        settle_spawned_work().await;
+        assert!(
+            f.forge.comments.lock().await.is_empty(),
+            "no thread to write back to"
+        );
+    }
+
+    /// The fixture's issue task as one made from several related issues: #7
+    /// (the lead the fixture already names) with #9 and #12. Delivery and the
+    /// write-back read the item list off the snapshot; the item rows are the
+    /// board's business and play no part here.
+    async fn as_issues_task(f: &Delivery) {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let task = row(&f.engine, f.task_id).await;
+        let mut meta = source_record(&task);
+        meta.items = [7, 9, 12]
+            .into_iter()
+            .map(|number| crate::forge::ForgeSourceItem {
+                number,
+                url: format!("https://github.com/acme/app/issues/{number}"),
+                title: format!("issue {number}"),
+            })
+            .collect();
+        let mut active = task.into_active_model();
+        active.source_meta = Set(Some(serde_json::to_string(&meta).expect("meta json")));
+        active
+            .update(&f.engine.db.conn)
+            .await
+            .expect("as a task of several issues");
+    }
+
+    /// A task made from several issues opens ONE pull request, closing the
+    /// issues its user picked — one keyword per line, which every forge
+    /// honours — and referencing the rest. The pick is fixed at that first
+    /// delivery: the next one, into the same pull request, may repeat it or
+    /// say nothing, but a different list is refused before anything moves.
+    #[tokio::test]
+    async fn an_issues_task_closes_the_issues_picked_at_its_first_delivery() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        as_issues_task(&f).await;
+
+        let url = f
+            .engine
+            .deliver_pr_closing(
+                f.task_id,
+                None,
+                false,
+                false,
+                false,
+                Some(vec![12, 7]),
+                None,
+            )
+            .await
+            .expect("first delivery");
+        let body = f.forge.bodies.lock().await[0].clone();
+        assert!(
+            body.starts_with("Closes #7\nCloses #12\n\nRelated to #9\n"),
+            "one keyword per closed issue, the rest referenced: {body}"
+        );
+        assert!(body.contains(&format!("work task `{}`", f.task_id)), "{body}");
+        assert!(body.contains("https://github.com/acme/app/issues/9"), "{body}");
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Review);
+        let meta = source_record(&task);
+        assert_eq!(meta.pr_closes, Some(vec![7, 12]), "fixed, in the task's own order");
+        assert_eq!(meta.result_pr.as_deref(), Some(url.as_str()));
+        assert_eq!(meta.items.len(), 3, "the settle kept the item list");
+
+        // A different list: refused before anything moves.
+        f.forge.existing.lock().await.push(opened_pull(&f.head));
+        let round_two = commit_another_round(&f).await;
+        let err = f
+            .engine
+            .deliver_pr_closing(f.task_id, None, false, false, false, Some(vec![9]), None)
+            .await
+            .expect_err("the list is fixed");
+        assert!(err.contains("closes #7, #12"), "{err}");
+        assert!(err.contains("first delivery"), "{err}");
+        assert_eq!(f.forge.pushes.lock().await.len(), 1, "nothing pushed");
+        assert_eq!(row(&f.engine, f.task_id).await.status, WorkTaskStatus::Review);
+
+        // The same list, in any order, goes ahead — into the pull request the
+        // first delivery opened.
+        let again = f
+            .engine
+            .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![12, 7]), None)
+            .await
+            .expect("same list");
+        assert_eq!(again, url);
+        let pushes = f.forge.pushes.lock().await.clone();
+        assert_eq!(pushes.last().map(|p| p.1.clone()), Some(round_two));
+        assert_eq!(f.forge.created.lock().await.len(), 1, "one pull request");
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Done);
+        assert_eq!(source_record(&task).pr_closes, Some(vec![7, 12]));
+    }
+
+    /// The rules of the list, one answer each: fixed at the first delivery
+    /// (every issue when none was named), held to after it — a repeat in any
+    /// order or silence goes ahead, a different list does not — and only ever
+    /// a task-of-several's to give, among its own issues.
+    #[test]
+    fn the_closing_list_is_fixed_once_and_only_for_a_task_of_several() {
+        let issues = |pinned: Option<Vec<i64>>| {
+            let mut meta: ForgeSourceMeta = serde_json::from_value(serde_json::json!({
+                "provider": "github",
+                "server_host": "github.com",
+                "api_base": "https://api.github.com",
+                "account_id": "acc-1",
+                "owner_repo": "acme/app",
+                "number": 3,
+                "url": "https://github.com/acme/app/issues/3",
+                "title": "t",
+            }))
+            .expect("meta");
+            meta.items = [3, 5, 9]
+                .into_iter()
+                .map(|number| crate::forge::ForgeSourceItem {
+                    number,
+                    url: format!("https://github.com/acme/app/issues/{number}"),
+                    title: "t".into(),
+                })
+                .collect();
+            meta.pr_closes = pinned;
+            DeliverySource::Issue(meta)
+        };
+        let closes = |source: &DeliverySource| match source {
+            DeliverySource::Issue(meta) => meta.pr_closes.clone(),
+            _ => panic!("not an issue source"),
+        };
+        let pinned_of = |json: Option<String>| {
+            json.map(|j| {
+                serde_json::from_str::<ForgeSourceMeta>(&j)
+                    .expect("pinned meta")
+                    .pr_closes
+            })
+        };
+
+        // First delivery: what was named, in the task's order — or every issue.
+        let (source, pin) = closing_list(issues(None), Some(vec![9, 3, 9])).expect("named");
+        assert_eq!(closes(&source), Some(vec![3, 9]));
+        assert_eq!(pinned_of(pin), Some(Some(vec![3, 9])), "recorded as it is fixed");
+        let (source, pin) = closing_list(issues(None), None).expect("unnamed");
+        assert_eq!(closes(&source), Some(vec![3, 5, 9]));
+        assert!(pin.is_some());
+        let (_, pin) = closing_list(issues(None), Some(vec![])).expect("closing none");
+        assert_eq!(pinned_of(pin), Some(Some(vec![])));
+
+        // After it: repeated or unnamed goes ahead and records nothing new.
+        for asked in [None, Some(vec![9, 3])] {
+            let (source, pin) = closing_list(issues(Some(vec![3, 9])), asked).expect("held");
+            assert_eq!(closes(&source), Some(vec![3, 9]));
+            assert!(pin.is_none());
+        }
+        let err = closing_list(issues(Some(vec![3, 9])), Some(vec![3])).expect_err("changed");
+        assert!(err.contains("#3, #9") && err.contains("first delivery"), "{err}");
+        let err = closing_list(issues(Some(vec![])), Some(vec![3])).expect_err("changed");
+        assert!(err.contains("none of its issues"), "{err}");
+
+        // Only its own issues, and only a task of several.
+        let err = closing_list(issues(None), Some(vec![3, 4])).expect_err("stranger");
+        assert!(err.contains("#4 is not one of this task's issues"), "{err}");
+        let single = match issues(None) {
+            DeliverySource::Issue(mut meta) => {
+                meta.items.clear();
+                DeliverySource::Issue(meta)
+            }
+            _ => unreachable!(),
+        };
+        let (_, pin) = closing_list(single.clone(), None).expect("nothing asked");
+        assert!(pin.is_none());
+        assert!(closing_list(single, Some(vec![3])).is_err());
+    }
+
+    /// Without a list, the first delivery closes every issue.
+    #[tokio::test]
+    async fn an_issues_task_delivered_without_a_list_closes_every_issue() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        as_issues_task(&f).await;
+        f.engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect("delivery");
+        let body = f.forge.bodies.lock().await[0].clone();
+        assert!(
+            body.starts_with("Closes #7\nCloses #9\nCloses #12\n\nPrepared by"),
+            "{body}"
+        );
+        assert!(!body.contains("Related to"), "{body}");
+        assert_eq!(
+            source_record(&row(&f.engine, f.task_id).await).pr_closes,
+            Some(vec![7, 9, 12])
+        );
+    }
+
+    /// The list is only a task-of-several's to choose, and only among its own
+    /// issues; anything else is refused with the task left as it was. A
+    /// delivery refused before it began fixes nothing either — the user can
+    /// still pick again once the refusal is dealt with.
+    #[tokio::test]
+    async fn a_closing_list_is_refused_where_it_does_not_apply() {
+        let single = delivery_fixture(FakeForge::default()).await;
+        let err = single
+            .engine
+            .deliver_pr_closing(
+                single.task_id,
+                None,
+                false,
+                false,
+                true,
+                Some(vec![7]),
+                None,
+            )
+            .await
+            .expect_err("a one-issue task closes its issue");
+        assert!(err.contains("several issues"), "{err}");
+        assert!(single.forge.pushes.lock().await.is_empty());
+        assert_eq!(
+            row(&single.engine, single.task_id).await.status,
+            WorkTaskStatus::Review
+        );
+
+        let f = delivery_fixture(FakeForge::default()).await;
+        as_issues_task(&f).await;
+        let err = f
+            .engine
+            .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![7, 99]), None)
+            .await
+            .expect_err("not one of its issues");
+        assert!(err.contains("#99"), "{err}");
+
+        // Refused before the delivery began: nothing fixed.
+        std::fs::write(f.worktree.join("scratch.txt"), "wip\n").expect("write");
+        let err = f
+            .engine
+            .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![9]), None)
+            .await
+            .expect_err("uncommitted changes");
+        assert!(err.contains("uncommitted"), "{err}");
+        assert_eq!(source_record(&row(&f.engine, f.task_id).await).pr_closes, None);
+        std::fs::remove_file(f.worktree.join("scratch.txt")).expect("clean");
+        f.engine
+            .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![12]), None)
+            .await
+            .expect("delivery");
+        assert_eq!(
+            source_record(&row(&f.engine, f.task_id).await).pr_closes,
+            Some(vec![12])
+        );
+    }
+
+    /// Every issue of the task hears how it ended, in its own thread and its
+    /// own timeline entry, and each comment names the others — numbers only,
+    /// and nothing about which of them the pull request closes.
+    #[tokio::test]
+    async fn every_issue_of_a_task_of_several_hears_how_it_ended() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        as_issues_task(&f).await;
+        enable_writeback(&f).await;
+        f.engine
+            .deliver_pr_closing(f.task_id, None, false, false, true, Some(vec![7]), None)
+            .await
+            .expect("delivery");
+        let forge = f.forge.clone();
+        wait_for("three write-backs", move || {
+            let forge = forge.clone();
+            async move { forge.comments.lock().await.len() == 3 }
+        })
+        .await;
+        let comments = f.forge.comments.lock().await.clone();
+        let numbers: Vec<i64> = comments.iter().map(|c| c.1).collect();
+        assert_eq!(numbers, vec![7, 9, 12]);
+        assert!(comments.iter().all(|c| c.0 == ForgeItemKind::Issue));
+        let nine = &comments[1].2;
+        assert!(nine.contains("https://github.test/acme/app/pull/42"), "{nine}");
+        assert!(
+            nine.contains("This issue was handled together with #7 and #12."),
+            "{nine}"
+        );
+        assert!(!nine.to_lowercase().contains("close"), "{nine}");
+        let events = work_task_service::list_events(&f.engine.db.conn, f.task_id, 200)
+            .await
+            .expect("events");
+        let mut posted: Vec<i64> = events
+            .iter()
+            .filter(|e| e.kind == "forge_writeback")
+            .filter_map(|e| e.payload.as_ref()?.get("number")?.as_i64())
+            .collect();
+        posted.sort_unstable();
+        assert_eq!(posted, vec![7, 9, 12], "one timeline entry per issue");
+    }
+
+    /// Unchecking "mark done" keeps the task: back in review with its pull
+    /// request recorded, the worktree untouched even with its box ticked — the
+    /// next round runs in it — and nothing told to the issue, because nothing
+    /// ended. The delivery that does finish it pushes INTO that pull request,
+    /// and only then does the thread hear, once.
+    #[tokio::test]
+    async fn a_delivery_kept_in_review_is_finished_by_the_next_one_into_the_same_pull_request() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        enable_writeback(&f).await;
+
+        let url = f
+            .engine
+            .deliver_pr(f.task_id, Some("Fix login".into()), false, true, false)
+            .await
+            .expect("kept delivery");
+        assert_eq!(url, "https://github.test/acme/app/pull/42");
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Review);
+        assert!(task.completion_kind.is_none() && task.finished_at.is_none());
+        assert!(task.merge_state.is_none() && task.last_error.is_none());
+        let meta = source_record(&task);
+        assert_eq!(meta.result_pr.as_deref(), Some(url.as_str()));
+        assert_eq!(meta.result_pr_number, Some(42));
+        assert!(
+            f.worktree.exists(),
+            "a task kept in review keeps its checkout"
+        );
+        assert!(task.worktree_folder_id.is_some());
+        assert!(events_of(&f.engine, f.task_id)
+            .await
+            .contains(&"delivered_pr".to_string()));
+        settle_spawned_work().await;
+        assert!(
+            f.forge.comments.lock().await.is_empty(),
+            "nothing ended yet"
+        );
+
+        // Another round, then the delivery that finishes it. The forge has
+        // not caught up with the new push when it is read back — still the
+        // old head — which a push INTO the pull request must not mistake for
+        // someone else's commit.
+        f.forge.existing.lock().await.push(opened_pull(&f.head));
+        let round_two = commit_another_round(&f).await;
+        let again = f
+            .engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect("finishing delivery");
+        assert_eq!(again, url, "the same pull request");
+        assert_eq!(
+            f.forge.created.lock().await.len(),
+            1,
+            "nothing opened twice"
+        );
+        assert_eq!(
+            f.forge.pushes.lock().await.as_slice(),
+            [
+                ("acme/app".to_string(), f.head.clone(), "task/7".to_string()),
+                ("acme/app".to_string(), round_two, "task/7".to_string()),
+            ]
+        );
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Done);
+        assert_eq!(task.completion_kind.as_deref(), Some("delivered_pr"));
+        let forge = f.forge.clone();
+        wait_for("the write-back", move || {
+            let forge = forge.clone();
+            async move { !forge.comments.lock().await.is_empty() }
+        })
+        .await;
+        settle_spawned_work().await;
+        assert_eq!(
+            f.forge.comments.lock().await.len(),
+            1,
+            "one comment, when it ended"
+        );
+    }
+
+    /// The pull request a kept task opened was merged on the forge with
+    /// exactly this task's work. Finishing the task then pushes nothing — a
+    /// push would only resurrect a head branch the forge may have deleted —
+    /// and needs nothing "landable" here: the work is already where it goes.
+    #[tokio::test]
+    async fn a_kept_task_finishes_on_its_merged_pull_request_without_pushing() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        f.engine
+            .deliver_pr(f.task_id, None, false, false, false)
+            .await
+            .expect("kept delivery");
+        let mut merged = opened_pull(&f.head);
+        merged.state = "closed".into();
+        merged.merged = true;
+        f.forge.existing.lock().await.push(merged);
+
+        f.engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect("finished on the merge");
+        assert_eq!(
+            f.forge.pushes.lock().await.len(),
+            1,
+            "only the first delivery pushed"
+        );
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Done);
+        assert_eq!(task.completion_kind.as_deref(), Some("delivered_pr"));
+    }
+
+    /// The push published the snapshot; a pull request that comes back opened
+    /// at another commit means someone pushed to the branch in between, and
+    /// the task must not be recorded as delivering work it never pushed.
+    #[tokio::test]
+    async fn a_pull_request_opened_at_a_commit_the_task_did_not_push_is_not_claimed() {
+        let f = delivery_fixture(FakeForge {
+            create_head: Some("1111111111111111111111111111111111111111".into()),
+            ..Default::default()
+        })
+        .await;
+        let err = f
+            .engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect_err("someone else's commit");
+        assert!(err.contains("did not push"), "{err}");
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Review);
+        assert!(task.completion_kind.is_none());
+        assert!(source_record(&task).result_pr.is_none(), "nothing recorded");
+    }
+
+    /// A kept task's pull request was built on by its author and merged at
+    /// that newer commit. The merge carries this task's work, so finishing the
+    /// task settles on it — nothing pushed, and nothing stranded: a merged pull
+    /// request cannot be reopened, and a task with work cannot be completed.
+    #[tokio::test]
+    async fn a_kept_task_finishes_on_a_merge_that_built_on_its_work() {
+        for from_pull in [false, true] {
+            let f = delivery_fixture(FakeForge::default()).await;
+            let number = if from_pull {
+                let pr = open_pull(&f.base_sha, "feature", "acme/app");
+                as_pull_request_task(&f, pr.clone()).await;
+                f.forge.existing.lock().await.push(pr);
+                7
+            } else {
+                42
+            };
+            f.engine
+                .deliver_pr(f.task_id, None, false, false, false)
+                .await
+                .expect("kept delivery");
+            assert_eq!(
+                row(&f.engine, f.task_id).await.status,
+                WorkTaskStatus::Review
+            );
+
+            // The author adds a commit on top of the task's and merges that,
+            // published where the forge publishes a change's head.
+            git_run(
+                &f.worktree,
+                &["commit", "-q", "--allow-empty", "-m", "the author's"],
+            );
+            let built_on = task_git::rev_parse(f.worktree.to_str().unwrap(), "HEAD")
+                .await
+                .expect("author head");
+            git_run(
+                &f.root,
+                &["update-ref", &format!("refs/pull/{number}/head"), &built_on],
+            );
+            git_run(&f.worktree, &["reset", "-q", "--hard", &f.head]);
+            let mut merged = if from_pull {
+                open_pull(&built_on, "feature", "acme/app")
+            } else {
+                opened_pull(&built_on)
+            };
+            merged.state = "closed".into();
+            merged.merged = true;
+            *f.forge.existing.lock().await = vec![merged];
+
+            f.engine
+                .deliver_pr(f.task_id, None, false, false, true)
+                .await
+                .unwrap_or_else(|e| panic!("from_pull={from_pull}: {e}"));
+            assert_eq!(
+                f.forge.pushes.lock().await.len(),
+                1,
+                "from_pull={from_pull}"
+            );
+            let task = row(&f.engine, f.task_id).await;
+            assert_eq!(task.status, WorkTaskStatus::Done, "from_pull={from_pull}");
+            assert_eq!(task.completion_kind.as_deref(), Some("delivered_pr"));
+            assert_eq!(f.forge.created.lock().await.len(), usize::from(!from_pull));
+        }
+    }
+
+    /// The pull request a kept local task opened was closed since, and the
+    /// task has a new round on its branch. That round goes in a NEW pull
+    /// request — what a first delivery would do — and the pinned target is
+    /// what both deliveries push with, whatever the checkout says by now.
+    #[tokio::test]
+    async fn a_kept_local_task_opens_a_new_pull_request_once_its_old_one_closed() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        let target = as_local_task(&f).await;
+        f.engine
+            .deliver_pr(f.task_id, None, false, false, false)
+            .await
+            .expect("kept delivery");
+        assert_eq!(
+            row(&f.engine, f.task_id).await.status,
+            WorkTaskStatus::Review
+        );
+        let mut closed = opened_pull(&f.head);
+        closed.state = "closed".into();
+        f.forge.existing.lock().await.push(closed);
+        // The project's `origin` moved somewhere else meanwhile.
+        *f.forge.local.lock().await = Some(DeliveryTarget {
+            owner_repo: "elsewhere/app".into(),
+            ..target.clone()
+        });
+        commit_another_round(&f).await;
+
+        let url = f
+            .engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect("delivery into a new pull request");
+        assert_eq!(url, "https://github.test/acme/app/pull/43");
+        assert_eq!(f.forge.created.lock().await.len(), 2);
+        assert!(
+            f.forge
+                .pushes
+                .lock()
+                .await
+                .iter()
+                .all(|(repo, _, _)| repo == "acme/app"),
+            "the pinned repository, not where the checkout points now"
+        );
+        assert_eq!(
+            *f.forge.local_lookups.lock().await,
+            1,
+            "a pinned task never asks again"
+        );
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Done);
+        assert_eq!(
+            delivery_record(&task),
+            Some(WorkTaskDelivery {
+                target,
+                pr_url: url,
+                pr_number: 43,
+            })
+        );
+    }
+
+    /// A pull-request task's push back can keep the task too — and what the
+    /// push learned about where the pull request ended (`pushed_onto`) must
+    /// survive its settle, or the next round measures its own work from the
+    /// trigger-time head and counts the pushed commits again.
+    #[tokio::test]
+    async fn a_push_back_records_where_it_pushed_whether_or_not_it_finishes_the_task() {
+        for mark_done in [false, true] {
+            let f = delivery_fixture(FakeForge::default()).await;
+            let pr = open_pull(&f.base_sha, "feature", "acme/app");
+            as_pull_request_task(&f, pr.clone()).await;
+            f.forge.existing.lock().await.push(pr);
+
+            f.engine
+                .deliver_pr(f.task_id, None, false, false, mark_done)
+                .await
+                .expect("push back");
+            let task = row(&f.engine, f.task_id).await;
+            let expected = if mark_done {
+                WorkTaskStatus::Done
+            } else {
+                WorkTaskStatus::Review
+            };
+            assert_eq!(task.status, expected, "mark_done={mark_done}");
+            let meta = source_record(&task);
+            assert_eq!(
+                meta.pushed_onto.as_deref(),
+                Some(f.base_sha.as_str()),
+                "mark_done={mark_done}: the head the push went onto is kept"
+            );
+            assert_eq!(
+                meta.result_pr.as_deref(),
+                Some("https://github.test/acme/app/pull/7")
+            );
+            if mark_done {
+                continue;
+            }
+            // The forge caught up with the push. Finishing the task now
+            // pushes nothing and keeps the record.
+            f.forge.existing.lock().await[0].head_sha = f.head.clone();
+            f.engine
+                .deliver_pr(f.task_id, None, false, false, true)
+                .await
+                .expect("finish on the pull request");
+            assert_eq!(f.forge.pushes.lock().await.len(), 1);
+            let task = row(&f.engine, f.task_id).await;
+            assert_eq!(task.status, WorkTaskStatus::Done);
+            assert_eq!(
+                source_record(&task).pushed_onto.as_deref(),
+                Some(f.base_sha.as_str())
+            );
+        }
+    }
+
+    /// Park the task in `merging` with exactly `state`, as a process that died
+    /// mid-delivery would have left it.
+    async fn interrupt_with(f: &Delivery, state: WorkTaskMergeState) {
+        let seq = row(&f.engine, f.task_id).await.run_seq;
+        work_task_service::begin_delivery(&f.engine.db.conn, f.task_id, &state, seq)
+            .await
+            .expect("begin delivery")
+            .expect("CAS");
+    }
+
+    /// An interrupted delivery of a local task recovers from the target its
+    /// merge state persisted — never by asking the checkout again — and
+    /// settles the way it was asked to: finished (taking the worktree along
+    /// when that was asked for), or back in review with the pull request.
+    #[tokio::test]
+    async fn recovery_settles_a_local_delivery_the_way_it_was_asked() {
+        for keep_in_review in [false, true] {
+            let f = delivery_fixture(FakeForge::default()).await;
+            let target = as_local_task(&f).await;
+            let mut found = opened_pull(&f.head);
+            found.number = 21;
+            found.html_url = "https://github.test/acme/app/pull/21".into();
+            f.forge.existing.lock().await.push(found);
+            interrupt_with(
+                &f,
+                WorkTaskMergeState {
+                    op: WorkTaskMergeOp::DeliverPr,
+                    remote_branch: Some("task/7".into()),
+                    expected_head: Some(f.head.clone()),
+                    target: Some(target.clone()),
+                    keep_in_review,
+                    delete_worktree: !keep_in_review,
+                    ..Default::default()
+                },
+            )
+            .await;
+
+            f.engine.recover_merging(f.task_id).await;
+
+            let task = row(&f.engine, f.task_id).await;
+            let expected = if keep_in_review {
+                WorkTaskStatus::Review
+            } else {
+                WorkTaskStatus::Done
+            };
+            assert_eq!(task.status, expected, "keep={keep_in_review}");
+            assert_eq!(
+                delivery_record(&task).map(|d| (d.target, d.pr_number)),
+                Some((target, 21)),
+                "keep={keep_in_review}"
+            );
+            assert_eq!(
+                f.worktree.exists(),
+                keep_in_review,
+                "keep={keep_in_review}: the cleanup follows the finished delivery only"
+            );
+            assert_eq!(
+                *f.forge.local_lookups.lock().await,
+                0,
+                "recovery never asks the checkout"
+            );
+        }
+
+        // A local row whose interrupted state names no target cannot be
+        // recovered against anything: back to a human.
+        let f = delivery_fixture(FakeForge::default()).await;
+        as_local_task(&f).await;
+        interrupt_delivery(&f, "task/7").await;
+        f.engine.recover_merging(f.task_id).await;
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Review);
+        assert!(task
+            .last_error
+            .as_deref()
+            .unwrap_or("")
+            .contains("unreadable"));
+    }
+
+    /// An interrupted push INTO the pull request a kept task opened recovers by
+    /// that number: it settles only if the pull request shows the commit the
+    /// dead process meant to push.
+    #[tokio::test]
+    async fn recovery_of_a_push_into_a_recorded_pull_request_needs_its_commit() {
+        for landed in [true, false] {
+            let f = delivery_fixture(FakeForge::default()).await;
+            f.engine
+                .deliver_pr(f.task_id, None, false, false, false)
+                .await
+                .expect("kept delivery");
+            let next = commit_another_round(&f).await;
+            let shown = if landed { next.clone() } else { f.head.clone() };
+            f.forge.existing.lock().await.push(opened_pull(&shown));
+            interrupt_with(
+                &f,
+                WorkTaskMergeState {
+                    op: WorkTaskMergeOp::DeliverPr,
+                    remote_branch: Some("task/7".into()),
+                    expected_head: Some(next),
+                    pull_number: Some(42),
+                    ..Default::default()
+                },
+            )
+            .await;
+
+            f.engine.recover_merging(f.task_id).await;
+
+            let task = row(&f.engine, f.task_id).await;
+            if landed {
+                assert_eq!(task.status, WorkTaskStatus::Done);
+                assert_eq!(source_record(&task).result_pr_number, Some(42));
+            } else {
+                assert_eq!(task.status, WorkTaskStatus::Review);
+                assert!(
+                    task.last_error
+                        .as_deref()
+                        .unwrap_or("")
+                        .contains("does not show"),
+                    "{:?}",
+                    task.last_error
+                );
+            }
+            assert_eq!(
+                f.forge.created.lock().await.len(),
+                1,
+                "recovery never creates"
+            );
+        }
+    }
+
+    /// The pull request a kept task opened was closed, so the interrupted
+    /// attempt opened a NEW one by branch — and died before settling. The
+    /// recorded number no longer shows the delivery; the branch does, and
+    /// recovery takes it rather than telling the user to reopen the old one.
+    #[tokio::test]
+    async fn recovery_finds_the_new_pull_request_an_attempt_opened_past_a_closed_one() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        f.engine
+            .deliver_pr(f.task_id, None, false, false, false)
+            .await
+            .expect("kept delivery");
+        let next = commit_another_round(&f).await;
+        let mut closed = opened_pull(&f.head);
+        closed.state = "closed".into();
+        let mut replacement = opened_pull(&next);
+        replacement.number = 43;
+        replacement.html_url = "https://github.test/acme/app/pull/43".into();
+        f.forge.existing.lock().await.extend([closed, replacement]);
+        interrupt_with(
+            &f,
+            WorkTaskMergeState {
+                op: WorkTaskMergeOp::DeliverPr,
+                remote_branch: Some("task/7".into()),
+                expected_head: Some(next),
+                pull_number: Some(42),
+                ..Default::default()
+            },
+        )
+        .await;
+
+        f.engine.recover_merging(f.task_id).await;
+
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Done, "{:?}", task.last_error);
+        let meta = source_record(&task);
+        assert_eq!(meta.result_pr_number, Some(43));
+        assert_eq!(
+            meta.result_pr.as_deref(),
+            Some("https://github.test/acme/app/pull/43")
+        );
+    }
+
+    // ── tasks that ARE a pull request ───────────────────────────────────────
+
+    /// Re-stamp the delivery fixture's task as one triggered from a pull
+    /// request: same repository and worktree, different provenance — and a
+    /// head branch (`feature`) that is deliberately NOT the task's own branch,
+    /// so a push to the wrong one is visible.
+    async fn as_pull_request_task(f: &Delivery, pr: ForgePr) {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let meta = serde_json::json!({
+            "provider": "github",
+            "server_host": "github.com",
+            "api_base": "https://api.github.com",
+            "account_id": "acc-1",
+            "owner_repo": "acme/app",
+            "number": 7,
+            "url": "https://github.com/acme/app/pull/7",
+            "title": "Fix the login flow",
+            "base_ref": "main",
+            "head_ref": pr.head_ref,
+            "head_sha": pr.head_sha,
+            // Canonical casing, as GitHub answers it — the fork test is a
+            // comparison, and an exact one would call this a fork.
+            "head_repo": pr.head_repo,
+        });
+        let mut active = row(&f.engine, f.task_id).await.into_active_model();
+        active.source_kind = Set(Some(SOURCE_KIND_PR.to_string()));
+        active.source_key = Set(Some("github:github.com:acme/app:pr:7".to_string()));
+        active.source_meta = Set(Some(meta.to_string()));
+        active.update(&f.engine.db.conn).await.expect("as a pull request task");
+    }
+
+    fn open_pull(head_sha: &str, head_ref: &str, head_repo: &str) -> ForgePr {
+        ForgePr {
+            number: 7,
+            html_url: "https://github.test/acme/app/pull/7".into(),
+            state: "open".into(),
+            merged: false,
+            head_sha: head_sha.into(),
+            head_ref: head_ref.into(),
+            head_repo: head_repo.into(),
+            base_ref: "main".into(),
+        }
+    }
+
+    /// A repository on `main` that also carries a `feature` branch the project
+    /// checkout is NOT on. Returns `(engine, task id, home, feature tip, main
+    /// tip)`; the task's config is whatever the caller passes.
+    async fn branch_choice_fixture(
+        config: serde_json::Value,
+    ) -> (Arc<TaskEngine>, i32, tempfile::TempDir, String, String) {
+        use sea_orm::{ActiveModelTrait, Set};
+
+        let home = tempfile::tempdir().expect("tempdir");
+        let root = home.path().join("repo");
+        std::fs::create_dir_all(&root).expect("mkdir");
+        git_run(&root, &["init", "-q", "-b", "main"]);
+        std::fs::write(root.join("a.txt"), "one\n").expect("write");
+        git_run(&root, &["add", "-A"]);
+        git_run(&root, &["commit", "-q", "-m", "base"]);
+        // The branch the user wants this task to work on…
+        git_run(&root, &["checkout", "-q", "-b", "feature"]);
+        std::fs::write(root.join("feature.txt"), "the feature\n").expect("write");
+        git_run(&root, &["add", "-A"]);
+        git_run(&root, &["commit", "-q", "-m", "the feature so far"]);
+        let feature_tip = task_git::rev_parse(root.to_str().unwrap(), "HEAD")
+            .await
+            .expect("feature tip");
+        // …and the branch the project folder happens to be sitting on.
+        git_run(&root, &["checkout", "-q", "main"]);
+        std::fs::write(root.join("b.txt"), "meanwhile\n").expect("write");
+        git_run(&root, &["add", "-A"]);
+        git_run(&root, &["commit", "-q", "-m", "main moves on"]);
+        let main_tip = task_git::rev_parse(root.to_str().unwrap(), "HEAD")
+            .await
+            .expect("main tip");
+
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let folder_id = crate::db::test_helpers::seed_folder(&db, root.to_str().unwrap()).await;
+        let now = chrono::Utc::now();
+        let task = crate::db::entities::work_task::ActiveModel {
+            folder_id: Set(folder_id),
+            title: Set("Polish the feature".to_string()),
+            config: Set(config.to_string()),
+            status: Set(WorkTaskStatus::Todo),
+            run_seq: Set(1),
+            sort_order: Set(0),
+            created_at: Set(now),
+            updated_at: Set(now),
+            ..Default::default()
+        }
+        .insert(&db.conn)
+        .await
+        .expect("insert task");
+
+        (test_engine(db), task.id, home, feature_tip, main_tip)
+    }
+
+    /// The task says which branch it is for, and that is where it starts and
+    /// what it lands back onto — whatever the project folder happens to be
+    /// checked out on when the task is claimed.
+    #[tokio::test]
+    async fn a_task_starts_on_the_base_branch_it_was_created_for() {
+        let (engine, task_id, home, feature_tip, _main_tip) =
+            branch_choice_fixture(serde_json::json!({ "base_branch": "feature" })).await;
+        let task = row(&engine, task_id).await;
+        let root = get_folder_core(&engine.db, task.folder_id).await.expect("root");
+
+        let wt = engine
+            .ensure_worktree(&task, &root, &WorkTaskFolderSettings::default())
+            .await
+            .expect("worktree");
+
+        assert_eq!(
+            task_git::rev_parse(&wt.path, "HEAD").await.expect("head"),
+            feature_tip,
+            "the worktree starts at the chosen branch's tip"
+        );
+        let after = row(&engine, task_id).await;
+        assert_eq!(
+            after.base_branch.as_deref(),
+            Some("feature"),
+            "the merge lands back onto the branch the task was created for"
+        );
+        assert_eq!(after.base_sha.as_deref(), Some(feature_tip.as_str()));
+        drop(home);
+    }
+
+    /// No choice recorded — every task created before this existed, and every
+    /// task of a user who does not care — keeps branching from the project
+    /// folder's current checkout.
+    #[tokio::test]
+    async fn a_task_without_a_chosen_branch_still_follows_the_checkout() {
+        let (engine, task_id, home, _feature_tip, main_tip) =
+            branch_choice_fixture(serde_json::json!({})).await;
+        let task = row(&engine, task_id).await;
+        let root = get_folder_core(&engine.db, task.folder_id).await.expect("root");
+
+        engine
+            .ensure_worktree(&task, &root, &WorkTaskFolderSettings::default())
+            .await
+            .expect("worktree");
+
+        let after = row(&engine, task_id).await;
+        assert_eq!(after.base_branch.as_deref(), Some("main"));
+        assert_eq!(after.base_sha.as_deref(), Some(main_tip.as_str()));
+        drop(home);
+    }
+
+    /// A branch that is gone by the time the task is claimed must not quietly
+    /// fall back to the checkout: the whole point of the choice is that the
+    /// work lands somewhere specific, and starting from `main` instead would
+    /// be a wrong answer delivered silently.
+    #[tokio::test]
+    async fn a_chosen_branch_that_disappeared_refuses_instead_of_falling_back() {
+        let (engine, task_id, home, _feature_tip, _main_tip) =
+            branch_choice_fixture(serde_json::json!({ "base_branch": "gone" })).await;
+        let task = row(&engine, task_id).await;
+        let root = get_folder_core(&engine.db, task.folder_id).await.expect("root");
+
+        let err = engine
+            .ensure_worktree(&task, &root, &WorkTaskFolderSettings::default())
+            .await
+            .err()
+            .expect("must refuse");
+        assert!(err.contains("gone"), "{err}");
+        assert!(row(&engine, task_id).await.worktree_folder_id.is_none());
+        drop(home);
+    }
+
+    /// A repository that HAS a proposed change: `origin` carries `main` (moved
+    /// on since), the contributor's `feature` branch, and the server-side head
+    /// ref the forge publishes for it — `refs/pull/7/head` on GitHub,
+    /// `refs/merge_requests/7/head` on GitLab. Parameterized by forge because
+    /// that ref name is the ONE thing setup cannot guess: the wrong spelling
+    /// is simply a ref that does not exist.
+    ///
+    /// `root` is a clone — the project folder. Returns `(engine, task id, root
+    /// path, head commit, merge base)`.
+    async fn pull_checkout_fixture(
+        head_sha_recorded: Option<&str>,
+        provider: crate::forge::ForgeProvider,
+    ) -> (Arc<TaskEngine>, i32, tempfile::TempDir, String, String) {
+        use sea_orm::{ActiveModelTrait, Set};
+
+        let home = tempfile::tempdir().expect("tempdir");
+        let origin = home.path().join("origin");
+        std::fs::create_dir_all(&origin).expect("mkdir");
+        git_run(&origin, &["init", "-q", "-b", "main"]);
+        std::fs::write(origin.join("a.txt"), "one\n").expect("write");
+        git_run(&origin, &["add", "-A"]);
+        git_run(&origin, &["commit", "-q", "-m", "base"]);
+        let branch_point = task_git::rev_parse(origin.to_str().unwrap(), "HEAD")
+            .await
+            .expect("branch point");
+        // The contributor's work…
+        git_run(&origin, &["checkout", "-q", "-b", "feature"]);
+        std::fs::write(origin.join("feature.txt"), "the contribution\n").expect("write");
+        git_run(&origin, &["add", "-A"]);
+        git_run(&origin, &["commit", "-q", "-m", "the pull request"]);
+        let pull_head = task_git::rev_parse(origin.to_str().unwrap(), "HEAD")
+            .await
+            .expect("pull head");
+        git_run(&origin, &["update-ref", &provider.change_head_ref(7), &pull_head]);
+        // …and the base branch moving on underneath it, which is what makes
+        // "merge base" and "base tip" different commits.
+        git_run(&origin, &["checkout", "-q", "main"]);
+        std::fs::write(origin.join("b.txt"), "meanwhile\n").expect("write");
+        git_run(&origin, &["add", "-A"]);
+        git_run(&origin, &["commit", "-q", "-m", "main moves on"]);
+
+        let root = home.path().join("root");
+        git_run(
+            home.path(),
+            &["clone", "-q", origin.to_str().unwrap(), root.to_str().unwrap()],
+        );
+
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let folder_id = crate::db::test_helpers::seed_folder(&db, root.to_str().unwrap()).await;
+        let meta = serde_json::json!({
+            "provider": provider.as_str(),
+            "server_host": "github.com",
+            "api_base": "https://api.github.com",
+            "account_id": "acc-1",
+            "owner_repo": "acme/app",
+            "number": 7,
+            "url": "https://github.com/acme/app/pull/7",
+            "title": "The contribution",
+            "base_ref": "main",
+            "head_ref": "feature",
+            "head_sha": head_sha_recorded.unwrap_or(&pull_head),
+            "head_repo": "acme/app",
+        });
+        let now = chrono::Utc::now();
+        let task = crate::db::entities::work_task::ActiveModel {
+            folder_id: Set(folder_id),
+            title: Set("#7 · The contribution".to_string()),
+            config: Set("{}".to_string()),
+            status: Set(WorkTaskStatus::Todo),
+            run_seq: Set(1),
+            sort_order: Set(0),
+            source_kind: Set(Some(SOURCE_KIND_PR.to_string())),
+            source_key: Set(Some(format!("{}:github.com:acme/app:pr:7", provider.as_str()))),
+            source_meta: Set(Some(meta.to_string())),
+            created_at: Set(now),
+            updated_at: Set(now),
+            ..Default::default()
+        }
+        .insert(&db.conn)
+        .await
+        .expect("insert task");
+        // The fake forge, because setup now fetches through the pinned account
+        // rather than the folder's `origin` — and resolving that account for
+        // real would read the OS keyring, which a unit test must never do. The
+        // fake fetches from this fixture's local `origin` instead.
+        (
+            test_engine_with_forge(db, Arc::new(FakeForge::default())),
+            task.id,
+            home,
+            pull_head,
+            branch_point,
+        )
+    }
+
+    /// A pull-request task starts ON the pull request, and its review diff is
+    /// measured from the MERGE BASE — so the pull request's own changes are
+    /// part of what gets reviewed, and the base branch's unrelated progress is
+    /// not.
+    #[tokio::test]
+    async fn a_pull_request_task_checks_out_the_pull_request_head() {
+        let (engine, task_id, home, pull_head, branch_point) =
+            pull_checkout_fixture(None, crate::forge::ForgeProvider::GitHub).await;
+        let task = row(&engine, task_id).await;
+        let root = get_folder_core(&engine.db, task.folder_id).await.expect("root");
+
+        let wt = engine
+            .ensure_worktree(&task, &root, &WorkTaskFolderSettings::default())
+            .await
+            .expect("worktree");
+
+        assert_eq!(
+            task_git::rev_parse(&wt.path, "HEAD").await.expect("head"),
+            pull_head,
+            "the worktree starts at the pull request's head"
+        );
+        let after = row(&engine, task_id).await;
+        assert_eq!(after.base_branch.as_deref(), Some("main"));
+        assert_eq!(
+            after.base_sha.as_deref(),
+            Some(branch_point.as_str()),
+            "the diff baseline is where the pull request branched off"
+        );
+        let changed = task_git::diff_numstat(&wt.path, &branch_point)
+            .await
+            .expect("diff");
+        assert!(
+            changed.iter().any(|f| f.file == "feature.txt"),
+            "the pull request's own change must be inside the review diff: {changed:?}"
+        );
+        assert!(
+            !changed.iter().any(|f| f.file == "b.txt"),
+            "the base branch's later commits are not this task's work: {changed:?}"
+        );
+        drop(home);
+    }
+
+    /// The counters on the row are the TASK's own work, which on a
+    /// pull-request task is NOT the review diff: the worktree starts on the
+    /// pull request, so the whole contribution is already there before the
+    /// agent does anything. A review-only run — findings reported, nothing
+    /// committed — has to settle at zero, or the board hides "complete" behind
+    /// a delivery that would push an empty change.
+    #[tokio::test]
+    async fn a_pull_request_task_counts_only_what_the_agent_added() {
+        let (engine, task_id, home, _pull_head, branch_point) =
+            pull_checkout_fixture(None, crate::forge::ForgeProvider::GitHub).await;
+        let task = row(&engine, task_id).await;
+        let root = get_folder_core(&engine.db, task.folder_id).await.expect("root");
+        let wt = engine
+            .ensure_worktree(&task, &root, &WorkTaskFolderSettings::default())
+            .await
+            .expect("worktree");
+        let task = row(&engine, task_id).await;
+
+        // What the user reviews still holds the pull request itself…
+        let reviewed = task_git::diff_numstat(&wt.path, &branch_point)
+            .await
+            .expect("review diff");
+        assert!(
+            reviewed.iter().any(|f| f.file == "feature.txt"),
+            "the review diff is unchanged: {reviewed:?}"
+        );
+        // …while the task's own contribution is empty, on both the recorded
+        // stat and the live probe the acceptances re-ask.
+        assert_eq!(
+            engine.snapshot_diff_stats(task_id).await,
+            Some((0, 0, 0)),
+            "a review-only run changed nothing"
+        );
+        assert!(!engine
+            .has_landable_changes(&task, &wt.path)
+            .await
+            .expect("landable probe"));
+
+        // A round that does commit is counted — and only its own file.
+        std::fs::write(Path::new(&wt.path).join("fix.txt"), "the agent's work\n").expect("write");
+        git_run(Path::new(&wt.path), &["add", "-A"]);
+        git_run(Path::new(&wt.path), &["commit", "-qm", "the agent's fix"]);
+        assert_eq!(
+            engine.snapshot_diff_stats(task_id).await,
+            Some((1, 1, 0)),
+            "the agent's file, not the pull request's"
+        );
+        assert!(engine
+            .has_landable_changes(&task, &wt.path)
+            .await
+            .expect("landable probe"));
+        drop(home);
+    }
+
+    /// A pull request can be force-pushed while its task is out — its author
+    /// rebased it onto a newer base — and the task's branch rebased onto the
+    /// new head. The head the task was triggered on is still in the object
+    /// store, but no longer under the work: measured from there, everything the
+    /// base gained in between read as this task's work (PR #974's task reported
+    /// 345 files for 37). The pull request now ends at that head's rebased copy.
+    #[tokio::test]
+    async fn a_pull_request_rebased_after_a_force_push_counts_from_its_new_head() {
+        let (engine, task_id, home, pull_head, _branch_point) =
+            pull_checkout_fixture(None, crate::forge::ForgeProvider::GitHub).await;
+        let task = row(&engine, task_id).await;
+        let root = get_folder_core(&engine.db, task.folder_id).await.expect("root");
+        let wt = engine
+            .ensure_worktree(&task, &root, &WorkTaskFolderSettings::default())
+            .await
+            .expect("worktree");
+        let task = row(&engine, task_id).await;
+        let wt_path = Path::new(&wt.path);
+
+        // The pull request moves onto the base as it is now (`main` has gained
+        // `b.txt`), and the task's branch follows it there.
+        git_run(wt_path, &["rebase", "-q", "main"]);
+        let new_head = task_git::rev_parse(&wt.path, "HEAD").await.expect("new head");
+        assert_ne!(new_head, pull_head, "the rebase gave the head a new sha");
+        assert!(
+            task_git::commit_present(&wt.path, &pull_head).await.expect("probe"),
+            "the recorded head is still in the object store"
+        );
+        assert_eq!(
+            engine.snapshot_diff_stats(task_id).await,
+            Some((0, 0, 0)),
+            "following the pull request onto a new base is not work of the task's own"
+        );
+        assert!(!engine
+            .has_landable_changes(&task, &wt.path)
+            .await
+            .expect("landable probe"));
+
+        std::fs::write(wt_path.join("fix.txt"), "the agent's work\n").expect("write");
+        git_run(wt_path, &["add", "-A"]);
+        git_run(wt_path, &["commit", "-qm", "the agent's fix"]);
+        assert_eq!(
+            engine.snapshot_diff_stats(task_id).await,
+            Some((1, 1, 0)),
+            "the agent's file, not the base's `b.txt`"
+        );
+        assert!(engine
+            .has_landable_changes(&task, &wt.path)
+            .await
+            .expect("landable probe"));
+
+        // The review still shows the pull request with the agent's work, from
+        // where the rebased branch now leaves the base.
+        let listed = crate::commands::work_task::work_task_changed_files_core(&engine.db, task_id)
+            .await
+            .expect("changed files");
+        let mut files: Vec<&str> = listed.iter().map(|c| c.file.as_str()).collect();
+        files.sort_unstable();
+        assert_eq!(
+            files,
+            ["feature.txt", "fix.txt"],
+            "the base's own progress is not under review"
+        );
+        drop(home);
+    }
+
+    /// The head a push-back went onto can go stale as well: the pull request
+    /// was force-pushed onto a newer base after it, and the branch followed.
+    /// It is not where the pull request ends any more — the recorded head's
+    /// rebased copy is — and the count must not fall back past that copy.
+    #[tokio::test]
+    async fn a_stale_push_back_head_does_not_shadow_the_rebased_pull_request() {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let (engine, task_id, home, _pull_head, branch_point) =
+            pull_checkout_fixture(None, crate::forge::ForgeProvider::GitHub).await;
+        let task = row(&engine, task_id).await;
+        let root = get_folder_core(&engine.db, task.folder_id).await.expect("root");
+        let wt = engine
+            .ensure_worktree(&task, &root, &WorkTaskFolderSettings::default())
+            .await
+            .expect("worktree");
+        let wt_path = Path::new(&wt.path);
+
+        // An earlier push-back went onto the pull request as it stood at the
+        // branch point…
+        let task = row(&engine, task_id).await;
+        let mut meta: ForgeSourceMeta =
+            serde_json::from_str(task.source_meta.as_deref().expect("meta")).expect("decode");
+        meta.pushed_onto = Some(branch_point.clone());
+        let mut active = task.into_active_model();
+        active.source_meta = Set(Some(serde_json::to_string(&meta).expect("encode")));
+        active.update(&engine.db.conn).await.expect("pushed onto");
+        // …and the pull request has moved onto the newer base (`b.txt`) since,
+        // with the branch following it.
+        git_run(wt_path, &["rebase", "-q", "main"]);
+
+        assert_eq!(
+            engine.snapshot_diff_stats(task_id).await,
+            Some((0, 0, 0)),
+            "following the pull request is not work of the task's own"
+        );
+        std::fs::write(wt_path.join("fix.txt"), "the agent's work\n").expect("write");
+        git_run(wt_path, &["add", "-A"]);
+        git_run(wt_path, &["commit", "-qm", "the agent's fix"]);
+        assert_eq!(
+            engine.snapshot_diff_stats(task_id).await,
+            Some((1, 1, 0)),
+            "the agent's file only"
+        );
+        drop(home);
+    }
+
+    /// Of two known points still under the work, the later one is where the
+    /// pull request ends: measured from the earlier one, the pull request's own
+    /// commits in between would count as the task's.
+    #[tokio::test]
+    async fn the_later_of_two_known_pull_request_heads_wins() {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let (engine, task_id, home, _pull_head, branch_point) =
+            pull_checkout_fixture(None, crate::forge::ForgeProvider::GitHub).await;
+        let task = row(&engine, task_id).await;
+        let root = get_folder_core(&engine.db, task.folder_id).await.expect("root");
+        let wt = engine
+            .ensure_worktree(&task, &root, &WorkTaskFolderSettings::default())
+            .await
+            .expect("worktree");
+        let wt_path = Path::new(&wt.path);
+
+        // A push-back once went onto the pull request rewound to the branch
+        // point; the head the task was triggered on is back on top of it.
+        let task = row(&engine, task_id).await;
+        let mut meta: ForgeSourceMeta =
+            serde_json::from_str(task.source_meta.as_deref().expect("meta")).expect("decode");
+        meta.pushed_onto = Some(branch_point.clone());
+        let mut active = task.into_active_model();
+        active.source_meta = Set(Some(serde_json::to_string(&meta).expect("encode")));
+        active.update(&engine.db.conn).await.expect("pushed onto");
+        std::fs::write(wt_path.join("fix.txt"), "the agent's work\n").expect("write");
+        git_run(wt_path, &["add", "-A"]);
+        git_run(wt_path, &["commit", "-qm", "the agent's fix"]);
+
+        assert_eq!(
+            engine.snapshot_diff_stats(task_id).await,
+            Some((1, 1, 0)),
+            "the agent's file, not the pull request's `feature.txt`"
+        );
+        drop(home);
+    }
+
+    /// A force-push that rewrote the pull request, not just rebased it, leaves
+    /// no copy of the recorded head to find — and nothing local tells the
+    /// author's rewrite from the agent amending the contributor's commit
+    /// itself. The count falls back to the base the branch sits on, as any
+    /// task's does: the rewritten file counts as work (the side that never
+    /// lets "complete" strand real work), the base's progress still does not.
+    /// The delivery's own measure is exact — see
+    /// `a_delivered_pull_request_counts_what_the_push_added`.
+    #[tokio::test]
+    async fn a_rewritten_pull_request_head_falls_back_to_the_branch_base() {
+        let (engine, task_id, home, _pull_head, _branch_point) =
+            pull_checkout_fixture(None, crate::forge::ForgeProvider::GitHub).await;
+        let task = row(&engine, task_id).await;
+        let root = get_folder_core(&engine.db, task.folder_id).await.expect("root");
+        let wt = engine
+            .ensure_worktree(&task, &root, &WorkTaskFolderSettings::default())
+            .await
+            .expect("worktree");
+        let wt_path = Path::new(&wt.path);
+
+        git_run(wt_path, &["rebase", "-q", "main"]);
+        std::fs::write(wt_path.join("feature.txt"), "the contribution, reworked\n").expect("write");
+        git_run(wt_path, &["commit", "-qa", "--amend", "--no-edit"]);
+
+        assert_eq!(
+            engine.snapshot_diff_stats(task_id).await,
+            Some((1, 1, 0)),
+            "the rewritten file, not the base's `b.txt`"
+        );
+        let task = row(&engine, task_id).await;
+        assert!(engine
+            .has_landable_changes(&task, &wt.path)
+            .await
+            .expect("landable probe"));
+        drop(home);
+    }
+
+    /// The other way base content reaches a pull-request task's branch: the
+    /// agent merges the base branch in, say to settle a conflict. No single
+    /// commit holds "the pull request plus that base", so the count falls back
+    /// to the base the branch now sits on — the pull request's own file is
+    /// counted, everything the base gained is not.
+    #[tokio::test]
+    async fn a_pull_request_task_that_merged_its_base_does_not_count_the_base() {
+        let (engine, task_id, home, _pull_head, _branch_point) =
+            pull_checkout_fixture(None, crate::forge::ForgeProvider::GitHub).await;
+        let task = row(&engine, task_id).await;
+        let root = get_folder_core(&engine.db, task.folder_id).await.expect("root");
+        let wt = engine
+            .ensure_worktree(&task, &root, &WorkTaskFolderSettings::default())
+            .await
+            .expect("worktree");
+        let wt_path = Path::new(&wt.path);
+
+        // The base gains three more lines, and the agent merges it in on top
+        // of its own fix.
+        let root_path = Path::new(&root.path);
+        std::fs::write(root_path.join("later.txt"), "one\ntwo\nthree\n").expect("write");
+        git_run(root_path, &["add", "-A"]);
+        git_run(root_path, &["commit", "-qm", "the base moves on again"]);
+        std::fs::write(wt_path.join("fix.txt"), "the agent's work\n").expect("write");
+        git_run(wt_path, &["add", "-A"]);
+        git_run(wt_path, &["commit", "-qm", "the agent's fix"]);
+        git_run(wt_path, &["merge", "-q", "--no-edit", "main"]);
+
+        assert_eq!(
+            engine.snapshot_diff_stats(task_id).await,
+            Some((2, 2, 0)),
+            "the pull request's file and the agent's — not `b.txt` or `later.txt`"
+        );
+        drop(home);
+    }
+
+    /// The same rule on the path that made it matter: a pull-request task whose
+    /// agent wrote a file and never added it. The counters have to say the task
+    /// did something, the drawer has to list the same file the counters count,
+    /// and completing has to refuse — closing it here would leave work that
+    /// nothing is going to land (delivery cannot push an uncommitted tree
+    /// either; it says so and asks for another round). The ignore rules are
+    /// pinned where they are applied, in
+    /// `git::tests::the_acceptance_measure_sees_work_that_was_never_committed`.
+    #[tokio::test]
+    async fn an_untracked_file_keeps_a_pull_request_task_out_of_complete() {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let (engine, task_id, home, _pull_head, _branch_point) =
+            pull_checkout_fixture(None, crate::forge::ForgeProvider::GitHub).await;
+        let task = row(&engine, task_id).await;
+        let root = get_folder_core(&engine.db, task.folder_id).await.expect("root");
+        let wt = engine
+            .ensure_worktree(&task, &root, &WorkTaskFolderSettings::default())
+            .await
+            .expect("worktree");
+
+        std::fs::write(Path::new(&wt.path).join("findings.md"), "one\ntwo\n").expect("write");
+
+        assert_eq!(
+            engine.snapshot_diff_stats(task_id).await,
+            Some((1, 2, 0)),
+            "an uncommitted new file is still this task's work"
+        );
+        let listed = crate::commands::work_task::work_task_changed_files_core(&engine.db, task_id)
+            .await
+            .expect("changed files");
+        assert!(
+            listed.iter().any(|f| f.file == "findings.md"),
+            "the drawer must list what the card counts: {listed:?}"
+        );
+
+        let mut active = row(&engine, task_id).await.into_active_model();
+        active.status = Set(WorkTaskStatus::Review);
+        active.update(&engine.db.conn).await.expect("into review");
+        let refused = engine
+            .complete_task(task_id, false)
+            .await
+            .expect_err("the work is still sitting there");
+        assert!(refused.contains("changed files after all"), "{refused}");
+        assert_eq!(
+            row(&engine, task_id).await.status,
+            WorkTaskStatus::Review,
+            "a refused completion leaves the task where it was"
+        );
+        drop(home);
+    }
+
+    /// The counters are written once, when the run settles, and every board
+    /// decision reads them afterwards — so a row can outlive what it describes
+    /// (a worktree committed to since, or a pull-request task settled by a
+    /// build that credited it with the pull request's own files). The boot pass
+    /// re-measures whatever is still sitting in review.
+    #[tokio::test]
+    async fn the_boot_pass_re_measures_a_review_row() {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let (engine, task_id, home, _pull_head, _branch_point) =
+            pull_checkout_fixture(None, crate::forge::ForgeProvider::GitHub).await;
+        let task = row(&engine, task_id).await;
+        let root = get_folder_core(&engine.db, task.folder_id).await.expect("root");
+        engine
+            .ensure_worktree(&task, &root, &WorkTaskFolderSettings::default())
+            .await
+            .expect("worktree");
+
+        // The row an older build left behind: in review, carrying the pull
+        // request's change set as if the task had written it.
+        let mut active = row(&engine, task_id).await.into_active_model();
+        active.status = Set(WorkTaskStatus::Review);
+        active.files_changed = Set(Some(1));
+        active.additions = Set(Some(1));
+        active.deletions = Set(Some(0));
+        active.update(&engine.db.conn).await.expect("stale review row");
+
+        engine.refresh_review_diff_stats().await;
+
+        let after = row(&engine, task_id).await;
+        assert_eq!(
+            (after.files_changed, after.additions, after.deletions),
+            (Some(0), Some(0), Some(0)),
+            "the corrected counters are what the board reads"
+        );
+        assert_eq!(after.status, WorkTaskStatus::Review, "nothing else moved");
+        drop(home);
+    }
+
+    /// The same setup against GitLab. Everything downstream — the merge-base
+    /// baseline, the pinned OID, the review diff — is shared code; what is NOT
+    /// shared is the ref the head is published under, and fetching GitHub's
+    /// spelling from a GitLab server finds nothing at all.
+    #[tokio::test]
+    async fn a_merge_request_task_checks_out_the_gitlab_head_ref() {
+        let (engine, task_id, home, mr_head, branch_point) =
+            pull_checkout_fixture(None, crate::forge::ForgeProvider::GitLab).await;
+        let task = row(&engine, task_id).await;
+        let root = get_folder_core(&engine.db, task.folder_id).await.expect("root");
+
+        let wt = engine
+            .ensure_worktree(&task, &root, &WorkTaskFolderSettings::default())
+            .await
+            .expect("worktree");
+
+        assert_eq!(
+            task_git::rev_parse(&wt.path, "HEAD").await.expect("head"),
+            mr_head,
+            "the worktree starts at the merge request's head"
+        );
+        assert_eq!(
+            row(&engine, task_id).await.base_sha.as_deref(),
+            Some(branch_point.as_str()),
+            "the diff baseline is where the merge request branched off"
+        );
+        drop(home);
+    }
+
+    /// A pull request force-pushed since the task was created no longer has
+    /// the commit the user triggered on. Checking out the NEW head would run
+    /// the task against code nobody chose, so setup fails and says so.
+    #[tokio::test]
+    async fn a_force_pushed_pull_request_refuses_instead_of_switching_commits() {
+        let gone = "0123456789012345678901234567890123456789";
+        let (engine, task_id, home, _pull_head, _base) =
+            pull_checkout_fixture(Some(gone), crate::forge::ForgeProvider::GitHub).await;
+        let task = row(&engine, task_id).await;
+        let root = get_folder_core(&engine.db, task.folder_id).await.expect("root");
+
+        let err = engine
+            .ensure_worktree(&task, &root, &WorkTaskFolderSettings::default())
+            .await
+            .err()
+            .expect("must refuse");
+        assert!(err.contains("force-pushed"), "{err}");
+        assert!(row(&engine, task_id).await.worktree_folder_id.is_none());
+        drop(home);
+    }
+
+    /// The window between "we checked" and "we pushed" is real, and what the
+    /// pull request looks like AFTER the push is what the card will claim. A
+    /// review that was closed, or retargeted at another base, is not a
+    /// delivery — the task says so instead of recording `done`.
+    #[tokio::test]
+    async fn a_push_back_does_not_settle_against_a_review_that_moved() {
+        for (label, mutate, expect) in [
+            (
+                "closed while we pushed",
+                Box::new(|pr: &mut ForgePr| pr.state = "closed".into()) as Box<dyn Fn(&mut ForgePr)>,
+                "closed without merging",
+            ),
+            (
+                "retargeted while we pushed",
+                Box::new(|pr: &mut ForgePr| pr.base_ref = "release/1.x".into()),
+                "now targets 'release/1.x'",
+            ),
+        ] {
+            let pr = open_pull("whatever-the-branch-points-at", "feature", "Acme/App");
+            let mut moved = pr.clone();
+            mutate(&mut moved);
+            let f = delivery_fixture(FakeForge {
+                after_push: Mutex::new(Some(moved)),
+                ..Default::default()
+            })
+            .await;
+            as_pull_request_task(&f, pr.clone()).await;
+            f.forge.existing.lock().await.push(pr);
+
+            let err = f
+                .engine
+                .deliver_pr(f.task_id, None, false, false, true)
+                .await
+                .err()
+                .unwrap_or_else(|| panic!("{label}: must not settle"));
+            assert!(err.contains(expect), "{label}: {err}");
+            // The push itself DID happen — the work is safe on the branch, and
+            // the message says where it went. What is refused is calling it a
+            // finished delivery.
+            assert_eq!(f.forge.pushes.lock().await.len(), 1, "{label}");
+            let task = row(&f.engine, f.task_id).await;
+            assert_eq!(task.status, WorkTaskStatus::Review, "{label}");
+        }
+    }
+
+    /// Merged in that same window is the opposite answer — but ONLY when what
+    /// merged is what we pushed. The losing order is real: someone merges the
+    /// old head, we push on top, and the reread says "merged" about a merge
+    /// our commits are not in.
+    #[tokio::test]
+    async fn a_push_back_settles_on_a_merge_only_when_it_contains_our_commit() {
+        // Merged AT the commit this delivery pushed: the work landed.
+        let pr = open_pull("whatever-the-branch-points-at", "feature", "Acme/App");
+        let mut merged_ours = pr.clone();
+        merged_ours.state = "closed".into();
+        merged_ours.merged = true;
+        let f = delivery_fixture(FakeForge::default()).await;
+        as_pull_request_task(&f, pr.clone()).await;
+        f.forge.existing.lock().await.push(pr.clone());
+        // `f.head` is the commit the task branch points at — what the push
+        // publishes, and therefore what a merge containing our work reports.
+        merged_ours.head_sha = f.head.clone();
+        *f.forge.after_push.lock().await = Some(merged_ours);
+        f.engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect("merged at our commit is a delivery");
+        assert_eq!(row(&f.engine, f.task_id).await.status, WorkTaskStatus::Done);
+
+        // Merged at a DESCENDANT of what we pushed: someone fast-forwarded on
+        // top of this task's work and merged that. Our commits are in it, so
+        // it IS the delivery — equality alone would have rejected this.
+        let pr = open_pull("whatever-the-branch-points-at", "feature", "Acme/App");
+        let f = delivery_fixture(FakeForge::default()).await;
+        as_pull_request_task(&f, pr.clone()).await;
+        f.forge.existing.lock().await.push(pr.clone());
+        // A real child commit of the task's head, published where the forge
+        // publishes a change's head.
+        git_run(&f.worktree, &["commit", "-q", "--allow-empty", "-m", "on top of the task"]);
+        let descendant = task_git::rev_parse(f.worktree.to_str().unwrap(), "HEAD")
+            .await
+            .expect("descendant");
+        git_run(&f.root, &["update-ref", "refs/pull/7/head", &descendant]);
+        // …and the task branch put back, so what the delivery pushes is still
+        // this task's own head.
+        git_run(&f.worktree, &["reset", "-q", "--hard", &f.head]);
+        let mut merged_on_top = pr.clone();
+        merged_on_top.state = "closed".into();
+        merged_on_top.merged = true;
+        merged_on_top.head_sha = descendant;
+        *f.forge.after_push.lock().await = Some(merged_on_top);
+        f.engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect("a merge that contains our commit is a delivery");
+        assert_eq!(row(&f.engine, f.task_id).await.status, WorkTaskStatus::Done);
+        assert!(
+            probe_refs(&f.root).await.is_empty(),
+            "the ancestry probe cleans up after itself"
+        );
+
+        // Merged at SOMETHING ELSE while we were pushing: our commits are on
+        // the branch and not in that merge, and the card must not say done.
+        let pr = open_pull("whatever-the-branch-points-at", "feature", "Acme/App");
+        let f = delivery_fixture(FakeForge::default()).await;
+        as_pull_request_task(&f, pr.clone()).await;
+        f.forge.existing.lock().await.push(pr.clone());
+        // The published head is the base commit — a real commit, and NOT a
+        // descendant of this task's work.
+        git_run(&f.root, &["update-ref", "refs/pull/7/head", &f.base_sha]);
+        let mut merged_theirs = pr;
+        merged_theirs.state = "closed".into();
+        merged_theirs.merged = true;
+        merged_theirs.head_sha = f.base_sha.clone();
+        *f.forge.after_push.lock().await = Some(merged_theirs);
+        let err = f
+            .engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect_err("a merge without our commit is not a delivery");
+        assert!(err.contains("does not contain it"), "{err}");
+        assert_eq!(row(&f.engine, f.task_id).await.status, WorkTaskStatus::Review);
+        // The scratch ref is scoped to the task (siblings in one folder do not
+        // share a lock) and is gone whichever way the answer went — on this
+        // failing path as much as on the settling one above.
+        assert!(
+            probe_refs(&f.root).await.is_empty(),
+            "no scratch ref may survive a refusal either"
+        );
+    }
+
+    /// Every `refs/codeg/*` ref left in a repository — the engine's scratch
+    /// namespace, which nothing outside it may ever find.
+    async fn probe_refs(root: &std::path::Path) -> Vec<String> {
+        let out = crate::process::tokio_command("git")
+            .args(["for-each-ref", "--format=%(refname)", "refs/codeg/"])
+            .current_dir(root)
+            .output()
+            .await
+            .expect("for-each-ref");
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// The delivery of a pull-request task is a push back onto that pull
+    /// request's OWN branch. Nothing is created — the review the user is
+    /// already looking at is where the work belongs.
+    #[tokio::test]
+    async fn a_pull_request_task_is_pushed_back_to_its_own_branch() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        let pr = open_pull("whatever-the-branch-points-at", "feature", "Acme/App");
+        as_pull_request_task(&f, pr.clone()).await;
+        f.forge.existing.lock().await.push(pr);
+
+        let url = f
+            .engine
+            .deliver_pr(f.task_id, Some("ignored".into()), false, false, true)
+            .await
+            .expect("push back");
+        assert_eq!(url, "https://github.test/acme/app/pull/7");
+        assert_eq!(
+            f.forge.pushes.lock().await.as_slice(),
+            [(
+                "acme/app".to_string(),
+                f.head.clone(),
+                "feature".to_string()
+            )],
+            "the work goes to the pull request's head branch"
+        );
+        assert!(
+            f.forge.created.lock().await.is_empty(),
+            "a pull request that exists is not opened a second time"
+        );
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Done);
+        assert_eq!(task.completion_kind.as_deref(), Some("delivered_pr"));
+        assert_eq!(
+            task.source_meta
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<ForgeSourceMeta>(s).ok())
+                .and_then(|m| m.result_pr)
+                .as_deref(),
+            Some("https://github.test/acme/app/pull/7")
+        );
+    }
+
+    /// A pull request from a FORK pushes back to the fork — that is where its
+    /// branch lives, and where its author and reviewers are looking. The
+    /// repository in the push is the fork's; every API call stays on the
+    /// source repository.
+    #[tokio::test]
+    async fn a_fork_pull_request_task_pushes_back_to_the_fork() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        // Canonical casing, as the API answers it — the push URL normalizes.
+        let pr = open_pull("whatever-the-branch-points-at", "feature", "Contributor/App");
+        as_pull_request_task(&f, pr.clone()).await;
+        f.forge.existing.lock().await.push(pr);
+
+        f.engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect("fork push back");
+        assert_eq!(
+            f.forge.pushes.lock().await.as_slice(),
+            [(
+                "contributor/app".to_string(),
+                f.head.clone(),
+                "feature".to_string()
+            )],
+            "the push lands in the fork, not in the source repository"
+        );
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Done);
+        assert_eq!(task.completion_kind.as_deref(), Some("delivered_pr"));
+    }
+
+    /// A push back with nothing new is REFUSED, and the acceptance that fits
+    /// takes over. The task's branch is the pull request's own head — a review
+    /// turn that committed nothing — so a delivery would push nothing, leave
+    /// the pull request exactly as it was, and still record the task as
+    /// delivered to it. The board offers "complete" for this row (nothing of
+    /// its own to land); the backend has to agree, or the two disagree about
+    /// the same task.
+    ///
+    /// The review-only task on a fork this account cannot write to is still
+    /// accepted — completing needs no write access at all, and the fake here
+    /// would fail any push.
+    #[tokio::test]
+    async fn a_push_back_with_nothing_new_is_refused_for_completing() {
+        let forge = FakeForge {
+            push_error: Some("403: permission denied".into()),
+            ..FakeForge::default()
+        };
+        let f = delivery_fixture(forge).await;
+        // The pull request's head IS the task branch's head: nothing to push.
+        let pr = open_pull(&f.head, "feature", "contributor/app");
+        as_pull_request_task(&f, pr.clone()).await;
+        f.forge.existing.lock().await.push(pr);
+
+        let refused = f
+            .engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect_err("a delivery with nothing in it");
+        assert!(refused.contains("complete it instead"), "{refused}");
+        assert!(f.forge.pushes.lock().await.is_empty(), "no push may run");
+        assert_eq!(
+            row(&f.engine, f.task_id).await.status,
+            WorkTaskStatus::Review,
+            "a refused delivery leaves the task exactly as it was"
+        );
+
+        f.engine
+            .complete_task(f.task_id, false)
+            .await
+            .expect("accepted without touching the fork");
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Done);
+        assert_eq!(
+            task.completion_kind.as_deref(),
+            Some("accepted_without_merge"),
+            "…and recorded as what it was, not as a delivery"
+        );
+    }
+
+    /// The OTHER way a delivery finds nothing to push: its push already landed
+    /// and something interrupted the settle. The retry must recognize the pull
+    /// request as carrying this task's commit and finish — without pushing
+    /// again, which is what lets it complete on a fork this account cannot
+    /// write to (the fake here fails any push). Distinguished from the refused
+    /// case above by the task actually having work: it was triggered on the
+    /// pull request's earlier head and committed on top of it.
+    #[tokio::test]
+    async fn a_delivery_whose_push_already_landed_settles_without_pushing_again() {
+        let forge = FakeForge {
+            push_error: Some("403: permission denied".into()),
+            ..FakeForge::default()
+        };
+        let f = delivery_fixture(forge).await;
+        as_pull_request_task(&f, open_pull(&f.base_sha, "feature", "contributor/app")).await;
+        // What the forge answers today: the task's own commit is already there.
+        f.forge
+            .existing
+            .lock()
+            .await
+            .push(open_pull(&f.head, "feature", "contributor/app"));
+
+        f.engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect("settled without a push");
+        assert!(f.forge.pushes.lock().await.is_empty(), "no push may run");
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Done);
+        assert_eq!(task.completion_kind.as_deref(), Some("delivered_pr"));
+    }
+
+    /// A row recorded before the head repository was part of the meta (builds
+    /// that refused forks at trigger, so same-repo by construction) pushes
+    /// where it always did: the source repository.
+    #[tokio::test]
+    async fn a_push_back_without_a_recorded_head_repo_pushes_to_the_source_repo() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        let pr = open_pull("whatever-the-branch-points-at", "feature", "");
+        as_pull_request_task(&f, pr.clone()).await;
+        // What the forge answers TODAY still names the repository.
+        f.forge.existing.lock().await.push(open_pull(
+            "whatever-the-branch-points-at",
+            "feature",
+            "acme/app",
+        ));
+
+        f.engine
+            .deliver_pr(f.task_id, None, false, false, true)
+            .await
+            .expect("push back");
+        assert_eq!(
+            f.forge.pushes.lock().await.as_slice(),
+            [(
+                "acme/app".to_string(),
+                f.head.clone(),
+                "feature".to_string()
+            )]
+        );
+        assert_eq!(row(&f.engine, f.task_id).await.status, WorkTaskStatus::Done);
+    }
+
+    /// Everything that would make the push land somewhere it does not belong
+    /// is refused BEFORE the push, with the task untouched in review.
+    #[tokio::test]
+    async fn a_push_back_refuses_before_it_pushes_anywhere_wrong() {
+        // A closed pull request: the commits would sit on a branch nobody is
+        // reviewing any more.
+        let closed = delivery_fixture(FakeForge::default()).await;
+        let mut pr = open_pull("x", "feature", "acme/app");
+        pr.state = "closed".into();
+        as_pull_request_task(&closed, pr.clone()).await;
+        closed.forge.existing.lock().await.push(pr);
+        let err = closed
+            .engine
+            .deliver_pr(closed.task_id, None, false, false, true)
+            .await
+            .expect_err("closed");
+        assert!(err.contains("no longer open"), "{err}");
+        assert!(closed.forge.pushes.lock().await.is_empty());
+        assert_eq!(row(&closed.engine, closed.task_id).await.status, WorkTaskStatus::Review);
+
+        // A fork codeg cannot NAME — GitLab's unresolved `project-{id}`
+        // placeholder — has no push URL, ever. Refused before the CAS.
+        let fork = delivery_fixture(FakeForge::default()).await;
+        as_pull_request_task(&fork, open_pull("x", "feature", "project-4711")).await;
+        let err = fork
+            .engine
+            .deliver_pr(fork.task_id, None, false, false, true)
+            .await
+            .expect_err("unnameable fork");
+        assert!(err.contains("cannot see"), "{err}");
+        assert!(fork.forge.pushes.lock().await.is_empty());
+        assert_eq!(row(&fork.engine, fork.task_id).await.status, WorkTaskStatus::Review);
+
+        // Retargeted under us: the pull request now tracks another branch, so
+        // pushing to the recorded one delivers into nothing.
+        let moved = delivery_fixture(FakeForge::default()).await;
+        as_pull_request_task(&moved, open_pull("x", "feature", "acme/app")).await;
+        moved
+            .forge
+            .existing
+            .lock()
+            .await
+            .push(open_pull("x", "someone-elses-branch", "acme/app"));
+        let err = moved
+            .engine
+            .deliver_pr(moved.task_id, None, false, false, true)
+            .await
+            .expect_err("retargeted");
+        assert!(err.contains("now tracks branch"), "{err}");
+        assert!(moved.forge.pushes.lock().await.is_empty());
+        assert_eq!(row(&moved.engine, moved.task_id).await.status, WorkTaskStatus::Review);
+    }
+
+    /// Landing a pull request's work on the local base would take its changes
+    /// in behind the author's back and leave the review open. The refusal is
+    /// in the engine, where an old frontend or a direct API call still hits it.
+    #[tokio::test]
+    async fn a_pull_request_task_is_never_merged_locally() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        as_pull_request_task(&f, open_pull("x", "feature", "acme/app")).await;
+        let err = f
+            .engine
+            .merge_task(f.task_id, None, false, None, false)
+            .await
+            .expect_err("must refuse");
+        assert!(err.contains("deliver it back"), "{err}");
+        assert_eq!(row(&f.engine, f.task_id).await.status, WorkTaskStatus::Review);
+    }
+
+    /// The merge dispatch runs its launch off-thread so the click is not held
+    /// for the run (a resumed session may compact first — an unbounded turn).
+    /// What must NOT change with it: a launch that never gets an agent up still
+    /// reports its reason to the caller, and leaves the row settled and unowned
+    /// by the time it does. Anything less and the dialog would close on a merge
+    /// that silently never started.
+    #[tokio::test]
+    async fn a_merge_whose_launch_never_goes_live_still_reports_and_settles() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        // Neither the task nor its folder names an agent, so the launch fails
+        // where every launch checks first — before any connection exists.
+        let err = f
+            .engine
+            .merge_task(f.task_id, None, false, None, false)
+            .await
+            .expect_err("a launch that cannot start must not read as dispatched");
+        assert!(err.contains("no agent configured"), "{err}");
+
+        let task = row(&f.engine, f.task_id).await;
+        assert_eq!(task.status, WorkTaskStatus::Review, "settled before we returned");
+        assert!(
+            task.last_error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("merge dispatch failed"),
+            "{:?}",
+            task.last_error
+        );
+        assert!(
+            f.engine.merging.lock().await.is_empty(),
+            "the generation must own nothing once its failure is reported"
+        );
+    }
+
+    /// Fire-once, from either side. The launch reports itself live; the task
+    /// driving it reports every way of failing before that point. A second
+    /// report — a launch that fails AFTER going live — must not overwrite the
+    /// first, or a dispatch the user was told succeeded would come back as an
+    /// error into a dialog that has already closed.
+    #[tokio::test]
+    async fn the_dispatch_signal_reports_exactly_once() {
+        let (signal, live) = DispatchSignal::new();
+        signal.fire(Ok(()));
+        signal.fire(Err("the round's prompt was refused".to_string()));
+        assert_eq!(live.await.expect("sender fired"), Ok(()));
+
+        // …and the other way round: nothing went live, so the failure is what
+        // the caller gets.
+        let (signal, live) = DispatchSignal::new();
+        signal.fire(Err("no agent configured".to_string()));
+        signal.fire(Ok(()));
+        assert_eq!(
+            live.await.expect("sender fired"),
+            Err("no agent configured".to_string())
+        );
+
+        // A sender dropped without firing is the launch returning early without
+        // dispatching (a cancel gate, a lost CAS) — the caller has to notice
+        // rather than hang.
+        let (signal, live) = DispatchSignal::new();
+        drop(signal);
+        assert!(live.await.is_err());
+    }
+
+    /// Recovery of an interrupted push-back settles on ONE piece of evidence:
+    /// the pull request's head IS the commit this delivery was pushing.
+    #[tokio::test]
+    async fn recovery_settles_a_push_back_only_on_the_commit_it_pushed() {
+        for (head_sha, expect_done) in [("<the task head>", true), ("0000000", false)] {
+            let f = delivery_fixture(FakeForge::default()).await;
+            let sha = if expect_done { f.head.clone() } else { head_sha.to_string() };
+            as_pull_request_task(&f, open_pull(&sha, "feature", "acme/app")).await;
+            f.forge.existing.lock().await.push(open_pull(&sha, "feature", "acme/app"));
+            interrupt_delivery(&f, "feature").await;
+
+            f.engine.recover_merging(f.task_id).await;
+            let task = row(&f.engine, f.task_id).await;
+            if expect_done {
+                assert_eq!(task.status, WorkTaskStatus::Done);
+                assert_eq!(task.completion_kind.as_deref(), Some("delivered_pr"));
+            } else {
+                assert_eq!(task.status, WorkTaskStatus::Review);
+                assert!(
+                    task.last_error.as_deref().unwrap_or_default().contains("does not show"),
+                    "{:?}",
+                    task.last_error
+                );
+            }
+        }
+    }
+
+    /// Merge states written before deliveries existed carry no `op`. They are
+    /// all lands, and reading one as a delivery would send crash recovery to
+    /// the forge for a task that never had one.
+    #[test]
+    fn merge_state_without_an_op_decodes_as_a_land() {
+        let legacy = r#"{"pre_merge_head":"abc123","message":"m","strategy":"squash",
+                         "delete_worktree":true,"auto_message":false}"#;
+        let state: WorkTaskMergeState = serde_json::from_str(legacy).expect("legacy state");
+        assert_eq!(state.op, WorkTaskMergeOp::Land);
+        assert_eq!(state.pre_merge_head, "abc123");
+        assert!(state.delete_worktree);
+        assert!(state.expected_head.is_none());
+    }
+
     #[tokio::test]
     async fn delegations_from_a_non_task_connection_are_not_tracked() {
         // A delegation from an ordinary chat tab has no board row to flip; the
@@ -5745,5 +18142,482 @@ mod tests {
         let (engine, _task_id) = running_task().await;
         engine.on_event(&delegation_started("conn-chat", "conn-other-child")).await;
         assert!(engine.delegation_parents.lock().await.is_empty());
+    }
+
+    // ── pre-prompt context compaction ───────────────────────────────────────
+
+    const COMPACT_CONN: &str = "conn-compact";
+
+    /// A generation parked exactly where `compact_before_prompt` runs: claimed,
+    /// setup begun (`preparing`), agent connection live, and — as in the real
+    /// launch at this point — nothing in `index` yet.
+    struct CompactFixture {
+        engine: Arc<TaskEngine>,
+        task_id: i32,
+        run_seq: i32,
+        folder_id: i32,
+        conversation_id: i32,
+        /// The connection's command channel. Held for the test's duration: a
+        /// dropped receiver makes every send fail before it reaches the gate.
+        rx: tokio::sync::mpsc::Receiver<crate::acp::connection::ConnectionCommand>,
+    }
+
+    async fn compact_fixture(usage: Option<(u64, u64)>) -> CompactFixture {
+        use crate::db::test_helpers::{fresh_in_memory_db, seed_folder};
+
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/task-compact").await;
+        let conv =
+            conversation_service::create(&db.conn, folder_id, AgentType::ClaudeCode, None, None)
+                .await
+                .expect("conversation");
+        let task = work_task_service::create(
+            &db.conn,
+            crate::models::WorkTaskDraft {
+                folder_id,
+                title: "fix login".to_string(),
+                config: serde_json::json!({
+                    "display_text": "fix login",
+                    "prompt_blocks": [{ "type": "text", "text": "fix login" }],
+                }),
+            },
+        )
+        .await
+        .expect("task");
+        let run_seq =
+            work_task_service::claim_for_run(&db.conn, task.id, WorkTaskStatus::Todo, "test")
+                .await
+                .expect("claim")
+                .expect("claimed");
+        assert!(work_task_service::begin_setup(&db.conn, task.id, run_seq)
+            .await
+            .expect("begin_setup"));
+
+        let engine = test_engine(db);
+        let rx = engine
+            .manager
+            .insert_test_connection_live(
+                COMPACT_CONN,
+                AgentType::ClaudeCode,
+                None,
+                EventEmitter::Noop,
+            )
+            .await;
+        if let Some((used, size)) = usage {
+            let state = engine.manager.get_state(COMPACT_CONN).await.expect("state");
+            state.write().await.usage =
+                Some(crate::acp::session_state::UsageInfo { used, size });
+        }
+        CompactFixture {
+            engine,
+            task_id: task.id,
+            run_seq,
+            folder_id,
+            conversation_id: conv.id,
+            rx,
+        }
+    }
+
+    fn compact_settings(percent: i32, command: Option<&str>) -> WorkTaskFolderSettings {
+        WorkTaskFolderSettings {
+            auto_compact_percent: percent,
+            compact_command: command.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    /// Drive `compact_before_prompt` to completion, answering the compaction
+    /// turn with `stop_reason` once its prompt has actually been enqueued.
+    /// Returns the text of the prompt it sent, or `None` when it sent none.
+    async fn run_compaction(
+        f: &mut CompactFixture,
+        settings: WorkTaskFolderSettings,
+        stop_reason: &str,
+    ) -> Option<String> {
+        let engine = f.engine.clone();
+        let (task_id, run_seq, folder_id, conversation_id) =
+            (f.task_id, f.run_seq, f.folder_id, f.conversation_id);
+        let handle = tokio::spawn(async move {
+            engine
+                .compact_before_prompt(CompactRequest {
+                    task_id,
+                    run_seq,
+                    conn_id: COMPACT_CONN,
+                    agent_type: AgentType::ClaudeCode,
+                    settings: &settings,
+                    folder_id,
+                    conversation_id,
+                    in_flight: WorkTaskStatus::Preparing,
+                })
+                .await;
+        });
+
+        // Either a prompt shows up (compaction ran) or the call returns having
+        // sent nothing. Waiting on the two together is what keeps the "no
+        // compaction" assertions from depending on a sleep.
+        let sent = tokio::select! {
+            cmd = f.rx.recv() => match cmd.expect("connection alive") {
+                crate::acp::connection::ConnectionCommand::Prompt { blocks, .. } => blocks
+                    .iter()
+                    .find_map(|b| match b {
+                        PromptInputBlock::Text { text } => Some(text.clone()),
+                        _ => None,
+                    }),
+                _ => panic!("the compaction must arrive as a prompt"),
+            },
+            _ = &mut Box::pin(async {
+                while !handle.is_finished() {
+                    tokio::task::yield_now().await;
+                }
+            }) => None,
+        };
+        if sent.is_some() {
+            // The waiter subscribed before it sent, so the bus has a receiver.
+            f.engine.bus.send(Arc::new(EventEnvelope {
+                seq: 1,
+                connection_id: COMPACT_CONN.to_string(),
+                payload: AcpEvent::TurnComplete {
+                    session_id: "sess".to_string(),
+                    stop_reason: stop_reason.to_string(),
+                    agent_type: AgentType::ClaudeCode.to_string(),
+                },
+            }));
+        }
+        handle.await.expect("compaction finished");
+        sent
+    }
+
+    async fn compact_events(engine: &TaskEngine, task_id: i32) -> Vec<serde_json::Value> {
+        work_task_service::list_events(&engine.db.conn, task_id, 500)
+            .await
+            .expect("events")
+            .into_iter()
+            .filter(|e| e.kind == "context_compact")
+            .map(|e| e.payload.unwrap_or(serde_json::Value::Null))
+            .collect()
+    }
+
+    /// The feature's whole point: a nearly full session is compacted, and the
+    /// round's own prompt only goes out after that turn has landed.
+    #[tokio::test]
+    async fn a_full_context_is_compacted_before_the_round_prompt() {
+        let mut f = compact_fixture(Some((90_000, 100_000))).await;
+
+        let sent = run_compaction(&mut f, compact_settings(80, None), "end_turn").await;
+
+        assert_eq!(sent.as_deref(), Some("/compact"));
+        let events = compact_events(&f.engine, f.task_id).await;
+        // A pair: the turn is announced when it goes out (the wait after it is
+        // unbounded, and a card with nothing on its timeline is how a compaction
+        // that never returns used to look) and again when it lands.
+        assert_eq!(events.len(), 2, "{events:?}");
+        assert_eq!(events[0]["status"], "started");
+        assert_eq!(events[0]["before_percent"], 90.0);
+        assert_eq!(events[0]["command"], "/compact");
+        assert_eq!(events[1]["status"], "ok");
+        assert_eq!(events[1]["before_percent"], 90.0);
+        assert_eq!(events[1]["before_source"], "live");
+        assert_eq!(events[1]["command"], "/compact");
+        // The slot the canceller reaches through must not outlive the turn.
+        assert!(f.engine.compacting.lock().await.is_empty());
+    }
+
+    /// A compaction the agent REFUSED is a failure, not an "ok" with a
+    /// footnote. `rejected` reaches the `TurnComplete` arm at all only because
+    /// a prompt rejection stopped tearing the connection down (issue #797); it
+    /// used to arrive as the terminal `Error` the waiter settles as `failed`,
+    /// and the catch-all below it would otherwise have promoted a compaction
+    /// that never ran to a successful one.
+    #[tokio::test]
+    async fn a_rejected_compaction_prompt_is_recorded_as_a_failure() {
+        let mut f = compact_fixture(Some((90_000, 100_000))).await;
+
+        let sent = run_compaction(&mut f, compact_settings(80, None), "rejected").await;
+
+        assert_eq!(sent.as_deref(), Some("/compact"));
+        let events = compact_events(&f.engine, f.task_id).await;
+        assert_eq!(events.len(), 2, "{events:?}");
+        assert_eq!(events[1]["status"], "failed");
+        assert_eq!(
+            events[1]["detail"], "the agent rejected the compaction prompt",
+            "{events:?}"
+        );
+    }
+
+    /// Below the threshold nothing is sent and nothing is written — the
+    /// ordinary case has to stay free of both an extra turn and timeline noise.
+    #[tokio::test]
+    async fn a_session_below_the_threshold_is_left_alone() {
+        let mut f = compact_fixture(Some((50_000, 100_000))).await;
+
+        let sent = run_compaction(&mut f, compact_settings(80, None), "end_turn").await;
+
+        assert_eq!(sent, None);
+        assert!(compact_events(&f.engine, f.task_id).await.is_empty());
+    }
+
+    /// The off switch. A full context with the setting at 0 is exactly today's
+    /// behaviour — no reading, no turn, no event.
+    #[tokio::test]
+    async fn a_zero_threshold_disables_the_check() {
+        let mut f = compact_fixture(Some((99_000, 100_000))).await;
+
+        let sent = run_compaction(&mut f, compact_settings(0, None), "end_turn").await;
+
+        assert_eq!(sent, None);
+        assert!(compact_events(&f.engine, f.task_id).await.is_empty());
+    }
+
+    /// The explicit setting is what gets sent, verbatim — it exists precisely
+    /// for the agents codeg has no default for.
+    #[tokio::test]
+    async fn the_configured_command_is_sent_verbatim() {
+        let mut f = compact_fixture(Some((90_000, 100_000))).await;
+
+        let sent = run_compaction(&mut f, compact_settings(80, Some("/summarize")), "end_turn")
+            .await;
+
+        assert_eq!(sent.as_deref(), Some("/summarize"));
+    }
+
+    /// A session that reports no occupancy can't be measured against a
+    /// threshold. It must not be compacted on a guess — and the skip is
+    /// recorded, because with the setting switched on "nothing happened" needs
+    /// an explanation.
+    #[tokio::test]
+    async fn an_unmeasurable_session_is_not_compacted_but_is_recorded() {
+        let mut f = compact_fixture(None).await;
+
+        let sent = run_compaction(&mut f, compact_settings(80, None), "end_turn").await;
+
+        assert_eq!(sent, None);
+        let events = compact_events(&f.engine, f.task_id).await;
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0]["status"], "skipped");
+        assert_eq!(events[0]["reason"], "usage_unknown");
+    }
+
+    /// A cancel that lands while the compaction turn is in flight ends the
+    /// wait through the same `TurnComplete{cancelled}` the manager emits — the
+    /// launch must not sit on it, and the round is recorded as canceled rather
+    /// than compacted.
+    #[tokio::test]
+    async fn a_canceled_compaction_turn_releases_the_launch() {
+        let mut f = compact_fixture(Some((90_000, 100_000))).await;
+
+        let sent = run_compaction(&mut f, compact_settings(80, None), "cancelled").await;
+
+        assert_eq!(sent.as_deref(), Some("/compact"));
+        let events = compact_events(&f.engine, f.task_id).await;
+        assert_eq!(events[0]["status"], "started");
+        assert_eq!(events[1]["status"], "canceled");
+        assert!(f.engine.compacting.lock().await.is_empty());
+    }
+
+    fn turn_complete_envelope(conn_id: &str, seq: u64, stop_reason: &str) -> EventEnvelope {
+        EventEnvelope {
+            seq,
+            connection_id: conn_id.to_string(),
+            payload: AcpEvent::TurnComplete {
+                session_id: "sess".to_string(),
+                stop_reason: stop_reason.to_string(),
+                agent_type: AgentType::ClaudeCode.to_string(),
+            },
+        }
+    }
+
+    /// The race the `compaction_turns` marker exists for. The bus is a
+    /// broadcast: the launch's waiter reacts to the compaction's `TurnComplete`
+    /// at once, but the engine's own receiver awaits DB work per event and can
+    /// dequeue that same envelope only after the launch has indexed the
+    /// connection and sent the round's real prompt. Handled naively, the
+    /// compaction's completion would settle the round it preceded — and
+    /// disconnect the agent mid-work.
+    #[tokio::test]
+    async fn a_late_compaction_completion_does_not_settle_the_round() {
+        let mut f = compact_fixture(Some((90_000, 100_000))).await;
+        let sent = run_compaction(&mut f, compact_settings(80, None), "end_turn").await;
+        assert_eq!(sent.as_deref(), Some("/compact"));
+
+        // The launch goes on to bind the connection to the run and prompt it.
+        assert!(work_task_service::mark_running(
+            &f.engine.db.conn,
+            f.task_id,
+            f.run_seq,
+            f.conversation_id,
+            COMPACT_CONN,
+        )
+        .await
+        .expect("mark_running"));
+        f.engine
+            .index
+            .lock()
+            .await
+            .insert(COMPACT_CONN.into(), (f.task_id, f.run_seq));
+
+        // Only NOW does the engine's own loop get to the compaction's envelope
+        // (seq 1 — the one `run_compaction` published).
+        f.engine
+            .on_event(&turn_complete_envelope(COMPACT_CONN, 1, "end_turn"))
+            .await;
+
+        assert_eq!(
+            status_of(&f.engine, f.task_id).await,
+            WorkTaskStatus::Running,
+            "the compaction's completion must not settle the round it preceded"
+        );
+
+        // The other direction: the ROUND's own completion, a later seq on the
+        // same connection, still settles normally.
+        f.engine
+            .on_event(&turn_complete_envelope(COMPACT_CONN, 2, "end_turn"))
+            .await;
+        assert_eq!(
+            status_of(&f.engine, f.task_id).await,
+            WorkTaskStatus::Review
+        );
+    }
+
+    /// The fence covers everything up to its watermark — the wait can end
+    /// without ever reading the completion, and must still be able to fence one
+    /// it never saw — but nothing above it. A higher seq can only be the round's
+    /// own turn, so it passes AND retires the fence.
+    #[tokio::test]
+    async fn the_compaction_fence_stops_at_the_rounds_own_turn() {
+        let f = compact_fixture(Some((90_000, 100_000))).await;
+        f.engine.mark_compaction_turn(COMPACT_CONN, 4).await;
+
+        assert!(f.engine.claim_compaction_turn(COMPACT_CONN, 4).await);
+        assert!(
+            f.engine.claim_compaction_turn(COMPACT_CONN, 2).await,
+            "a completion emitted before the watermark is the launch's too"
+        );
+
+        assert!(!f.engine.claim_compaction_turn(COMPACT_CONN, 9).await);
+        assert!(
+            f.engine.compaction_turns.lock().await.is_empty(),
+            "the round's own turn retires the fence"
+        );
+        // Another connection's turns are never fenced by this one's mark.
+        f.engine.mark_compaction_turn(COMPACT_CONN, 4).await;
+        assert!(!f.engine.claim_compaction_turn("conn-other", 1).await);
+    }
+
+    /// Ending the wait on liveness rather than on the event itself is exactly
+    /// when the completion is most likely to still be sitting in the engine's
+    /// receiver: `apply_event` clears `turn_in_flight` BEFORE the envelope is
+    /// broadcast. The probe has to fence it on the way out, or the fix for the
+    /// settle race has a hole the size of the tick.
+    #[tokio::test]
+    async fn ending_the_wait_on_liveness_still_fences_the_completion() {
+        let f = compact_fixture(Some((90_000, 100_000))).await;
+        let state = f
+            .engine
+            .manager
+            .get_state(COMPACT_CONN)
+            .await
+            .expect("state");
+        {
+            let mut s = state.write().await;
+            s.turn_in_flight = false;
+            s.event_seq = 7;
+        }
+
+        let outcome = f
+            .engine
+            .compaction_still_running(COMPACT_CONN)
+            .await
+            .expect("the wait ends");
+        assert_eq!(outcome.status, "ok");
+        assert!(
+            f.engine.claim_compaction_turn(COMPACT_CONN, 7).await,
+            "a completion the wait never read must still be fenced"
+        );
+
+        // A connection that vanished cannot report a seq, so its whole id is
+        // fenced — ids are per-launch UUIDs, never reused.
+        let outcome = f
+            .engine
+            .compaction_still_running("conn-vanished")
+            .await
+            .expect("the wait ends");
+        assert_eq!(outcome.status, "failed");
+        assert!(f.engine.claim_compaction_turn("conn-vanished", 99).await);
+    }
+
+    /// The fence must not outlive the launch that set it. A generation torn
+    /// down before it ever went live (lost CAS, failed prompt, cancel) is
+    /// retired by `forget_connection`, not by `retire_connection`.
+    #[tokio::test]
+    async fn a_torn_down_launch_takes_its_fence_with_it() {
+        let f = compact_fixture(Some((90_000, 100_000))).await;
+        f.engine.mark_compaction_turn(COMPACT_CONN, 4).await;
+        f.engine
+            .index
+            .lock()
+            .await
+            .insert(COMPACT_CONN.into(), (f.task_id, f.run_seq));
+
+        f.engine.forget_connection(COMPACT_CONN).await;
+
+        assert!(f.engine.compaction_turns.lock().await.is_empty());
+        assert!(f.engine.index.lock().await.is_empty());
+    }
+
+    /// `apply_event` clears `turn_in_flight` on `TurnComplete` but not on a
+    /// terminal error or a disconnect — so a receiver that lagged one of those
+    /// away would block on `recv()` for a connection that is never going to
+    /// speak again, holding the task lock and taking any later cancel with it.
+    /// The liveness tick is what ends those waits.
+    #[tokio::test]
+    async fn a_wait_with_no_events_still_ends_on_liveness() {
+        let f = compact_fixture(Some((90_000, 100_000))).await;
+        // Paused only now, and never around DB work: the sqlite pool's acquire
+        // timeout runs on the same clock, so a test that freezes it before the
+        // fixture exists dies with `PoolTimedOut`. With the runtime otherwise
+        // idle, the tick's sleep auto-advances, so the wait costs no wall time.
+        tokio::time::pause();
+
+        // The connection is gone and no event is coming.
+        let mut rx = f.engine.bus.subscribe();
+        let outcome = f
+            .engine
+            .await_compaction_turn(&mut rx, "conn-never-registered")
+            .await;
+        assert_eq!(outcome.status, "failed");
+
+        // Alive, but the turn already ended and its event was missed.
+        let state = f
+            .engine
+            .manager
+            .get_state(COMPACT_CONN)
+            .await
+            .expect("state");
+        state.write().await.turn_in_flight = false;
+        let outcome = f.engine.await_compaction_turn(&mut rx, COMPACT_CONN).await;
+        assert_eq!(outcome.status, "ok");
+    }
+
+    /// The kill slot is generation-scoped like every other one on this engine:
+    /// a cancel of an older run must not abort the compaction of a newer one.
+    #[tokio::test]
+    async fn a_stale_cancel_does_not_abort_a_newer_compaction() {
+        let f = compact_fixture(Some((90_000, 100_000))).await;
+        f.engine.compacting.lock().await.insert(
+            f.task_id,
+            CompactRun {
+                run_seq: f.run_seq,
+                conn_id: COMPACT_CONN.to_string(),
+            },
+        );
+
+        f.engine.release_compact_slot(f.task_id, f.run_seq - 1).await;
+        assert!(
+            f.engine.compacting.lock().await.contains_key(&f.task_id),
+            "an older generation must not release the live slot"
+        );
+
+        f.engine.release_compact_slot(f.task_id, f.run_seq).await;
+        assert!(f.engine.compacting.lock().await.is_empty());
     }
 }

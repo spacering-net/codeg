@@ -4,6 +4,7 @@ import { useEffect, useMemo, useSyncExternalStore } from "react"
 import type { ComponentProps } from "react"
 import { cjk } from "@streamdown/cjk"
 import type { Streamdown } from "streamdown"
+import { hasInlineDollarMathCandidate } from "./inline-dollar-math"
 
 // Streamdown's `plugins` prop config: `{ code?, mermaid?, math?, cjk? }`.
 type PluginConfig = NonNullable<ComponentProps<typeof Streamdown>["plugins"]>
@@ -15,7 +16,7 @@ export type HeavyKind = "code" | "math" | "mermaid"
 // --- Why this module exists --------------------------------------------------
 //
 // The three heavy Streamdown plugins pull in the largest dependencies in the
-// whole frontend: `@streamdown/code` → shiki (+ its full grammar/theme index,
+// whole frontend: the code plugin → shiki (+ its full grammar/theme index,
 // ~3.8M), `@streamdown/math` → katex (~4.3M), `@streamdown/mermaid` → mermaid +
 // cytoscape + the entire d3 galaxy + dagre (~70M+ unpacked). Statically
 // importing them — as `message.tsx`, `reasoning.tsx`, and `file-workspace-panel`
@@ -31,15 +32,16 @@ export type HeavyKind = "code" | "math" | "mermaid"
 // when an engine resolves, upgrading the already-rendered fallback in place.
 //
 // Correctness: each engine only *affects* output when its trigger syntax is
-// present (shiki only highlights fenced code; remark-math only transforms `$…$`;
-// mermaid only replaces ```mermaid blocks). Loading exactly when the trigger
-// appears therefore reproduces the eager-plugin output byte-for-byte, save for a
-// one-time pre-load fallback render (plain code / literal `$…$` / mermaid source)
-// that upgrades once the engine arrives. Detection errs LOOSE on purpose — a
-// false positive merely pre-loads an engine that then no-ops, exactly matching
-// the previous always-loaded behavior; a false *negative* would silently drop
-// real rendering, so the math trigger is a superset (`$` OR the pre-normalized
-// `\[` / `\(` delimiters that `normalizeMathDelimiters` maps to `$`).
+// present (shiki only highlights fenced code; remark-math transforms `$$…$$`
+// and ` ```math ` fences plus normalized `$…$`; mermaid only replaces ```mermaid
+// blocks). Loading exactly when the trigger appears therefore reproduces the
+// eager-plugin output byte-for-byte, save for a one-time pre-load fallback
+// render (plain code / literal `$…$` / mermaid source) that upgrades once the
+// engine arrives. Detection errs LOOSE on purpose — a false positive merely
+// pre-loads an engine that then no-ops, exactly matching the previous
+// always-loaded behavior; a false *negative* would silently drop real
+// rendering. The math trigger is `$$` / `\(`/`\[` / a `math` fence, never a
+// lone `$` (currency and `$HOME` / `$1` are prose).
 
 const loaded: {
   code?: CodePlugin
@@ -93,6 +95,82 @@ function makeSafeCode(code: CodePlugin): CodePlugin {
   }
 }
 
+/**
+ * Zero-width space `normalizeMathDelimiters` puts in front of a `$$` that
+ * would otherwise start a line's block content and open a math FLOW fence.
+ *
+ * The pad in front of a CLOSING `$$` necessarily lands inside the formula, and
+ * KaTeX does not ignore it: it lexes as a `textord`, which changes spacing
+ * around a terminal operator or punctuation (`a+` stays `mbin` and gains
+ * 0.2222em) and warns about unrecognized Unicode. Its whole job is to survive
+ * micromark's block tokenizer, so it is removed once the tree exists — after
+ * remark-math has built the math nodes, before rehype-katex reads them.
+ */
+export const MATH_FENCE_PAD = "​"
+
+export type MdastNodeLike = {
+  type: string
+  value?: unknown
+  data?: { hChildren?: unknown }
+  children?: unknown
+}
+
+/**
+ * Remove the fence pad from every math node in `tree`. Exported so the
+ * KaTeX-equivalence regression can drive the real implementation.
+ */
+export function stripMathFencePad(node: MdastNodeLike): void {
+  if (node.type === "inlineMath" || node.type === "math") {
+    if (typeof node.value === "string" && node.value.endsWith(MATH_FENCE_PAD)) {
+      node.value = node.value.slice(0, -MATH_FENCE_PAD.length)
+    }
+    // `mdast-util-math` pre-renders the value into `data.hChildren`, and that
+    // is what `rehype-katex` actually reads.
+    const hChildren = node.data?.hChildren
+    if (Array.isArray(hChildren)) {
+      for (const child of hChildren as MdastNodeLike[]) {
+        if (
+          child?.type === "text" &&
+          typeof child.value === "string" &&
+          child.value.endsWith(MATH_FENCE_PAD)
+        ) {
+          child.value = child.value.slice(0, -MATH_FENCE_PAD.length)
+        }
+      }
+    }
+    return
+  }
+  if (Array.isArray(node.children)) {
+    for (const child of node.children as MdastNodeLike[]) {
+      stripMathFencePad(child)
+    }
+  }
+}
+
+/**
+ * Wrap the math plugin so its remark half also strips the fence pad. Doing it
+ * here rather than in each consumer's `remarkPlugins` keeps the pad's producer
+ * and its consumer paired, and covers every caller of `useStreamdownPlugins`.
+ */
+function makeFencePadStripped(math: MathPlugin): MathPlugin {
+  const declared = math.remarkPlugin
+  const [plugin, options] = (
+    Array.isArray(declared) ? declared : [declared, undefined]
+  ) as [(...args: unknown[]) => unknown, unknown]
+  function remarkMathWithoutFencePad(this: unknown) {
+    // remark-math only registers micromark/mdast extensions and returns no
+    // transformer, but chain whatever it does return rather than assume.
+    const inner = plugin.call(this, options)
+    return (tree: MdastNodeLike, file: unknown) => {
+      if (typeof inner === "function") {
+        ;(inner as (tree: unknown, file: unknown) => void)(tree, file)
+      }
+      stripMathFencePad(tree)
+    }
+  }
+  return { ...math, remarkPlugin: remarkMathWithoutFencePad } as MathPlugin
+}
+
 function ensure(kind: HeavyKind): void {
   if (loaded[kind] || inflight.has(kind)) return
   inflight.add(kind)
@@ -101,16 +179,24 @@ function ensure(kind: HeavyKind): void {
     emit()
   }
   if (kind === "code") {
-    import("@streamdown/code")
-      .then((mod) => {
-        loaded.code = makeSafeCode(mod.code)
+    import("@/lib/code-highlighter")
+      .then((mod) => mod.createCodePlugin())
+      .then((code) => {
+        loaded.code = makeSafeCode(code)
       })
       .catch(() => {})
       .finally(settle)
   } else if (kind === "math") {
     import("@streamdown/math")
       .then((mod) => {
-        loaded.math = mod.createMathPlugin({ singleDollarTextMath: true })
+        // `$x$` is deliberately literal. That reverts b23f6a5a ("enable
+        // inline math formula rendering with single dollar signs"): `$VAR`,
+        // `$1`, and `$9.99` show up in agent prose far more than `$x$`,
+        // and `false` is @streamdown/math's own default. Inline math still
+        // works via `$$x$$` (stays inline in a paragraph) and `\(...\)`.
+        loaded.math = makeFencePadStripped(
+          mod.createMathPlugin({ singleDollarTextMath: false })
+        )
       })
       .catch(() => {})
       .finally(settle)
@@ -136,6 +222,23 @@ export function prefetchHeavyPlugins(kinds: HeavyKind[]): void {
   for (const kind of kinds) ensure(kind)
 }
 
+/**
+ * The Mermaid engine, once it has finished loading — `null` until then.
+ *
+ * Used by our own diagram block (`./mermaid-block.tsx`), which renders
+ * ` ```mermaid ` fences instead of Streamdown's built-in component. Same
+ * at-most-once module-level load as everything else here: the component only
+ * mounts when a fence is actually present, so calling `ensure` from it keeps
+ * the engine exactly as lazy as `useStreamdownPlugins` makes it.
+ */
+export function useMermaidEngine(): MermaidPlugin | null {
+  useSyncExternalStore(subscribe, getVersion, getVersion)
+  useEffect(() => {
+    ensure("mermaid")
+  }, [])
+  return loaded.mermaid ?? null
+}
+
 export type HeavyPluginNeeds = Record<HeavyKind, boolean>
 
 const NO_NEEDS: HeavyPluginNeeds = { code: false, math: false, mermaid: false }
@@ -144,7 +247,7 @@ const NO_NEEDS: HeavyPluginNeeds = { code: false, math: false, mermaid: false }
  * Cheap, behavior-preserving detection of which heavy plugins a piece of
  * Markdown needs. Runs on possibly-streaming text (once per streaming batch for
  * the live message; memoized to nothing for stable historical text), so it uses
- * only native `String` scans.
+ * only native `String` / regex scans.
  */
 export function detectHeavyPlugins(text: string): HeavyPluginNeeds {
   const hasFence = text.includes("```") || text.includes("~~~")
@@ -165,11 +268,19 @@ export function detectHeavyPlugins(text: string): HeavyPluginNeeds {
   return {
     // Any fenced or indented block may want syntax highlighting.
     code: hasFence || hasIndentedCode,
-    // `$` is remark-math's only delimiter; `normalizeMathDelimiters` rewrites
-    // `\[…\]` / `\(…\)` to `$$…$$` / `$…$`, but a caller may detect on the raw
-    // pre-normalized text, so treat those escapes as math triggers too. No such
-    // token ⇒ remark-math is a no-op ⇒ katex is not needed.
-    math: text.includes("$") || text.includes("\\[") || text.includes("\\("),
+    // `normalizeInlineDollarMath` rewrites tight `$…$` formulas to `$$…$$`.
+    // Raw text is checked with its parse-free superset (a formula that only
+    // sits in code loads KaTeX early, as `$$` in code already does).
+    // `normalizeMathDelimiters` rewrites `\[…\]` / `\(...\)` to `$$…$$`.
+    // rehype-katex also renders ` ```math ` fences with no `$` anywhere, so
+    // those have to stay a trigger. Callers may detect on raw pre-normalized
+    // text, so `\(` / `\[` count too.
+    math:
+      text.includes("$$") ||
+      hasInlineDollarMathCandidate(text) ||
+      text.includes("\\[") ||
+      text.includes("\\(") ||
+      /(?:```|~~~)[^\S\r\n]*math\b/i.test(text),
     // A ```mermaid (or ~~~mermaid) fence is the only thing the diagram engine
     // renders.
     mermaid: /(?:```|~~~)[^\S\r\n]*mermaid\b/i.test(text),

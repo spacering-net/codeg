@@ -8,6 +8,7 @@ import {
   isErrorCollabStatusKind,
   classifyCollabOp,
   mergeCollabAgentStatus,
+  isCodexThreadId,
   shortAgentId,
   COLLAB_AGENT_TOOL_NAME,
   COLLAB_OP_KEY,
@@ -226,6 +227,7 @@ describe("classifyCollabOp", () => {
     expect(classifyCollabOp("wait")).toBe("wait")
     expect(classifyCollabOp("closeAgent")).toBe("close")
     expect(classifyCollabOp("resumeAgent")).toBe("resume")
+    expect(classifyCollabOp("listAgents")).toBe("list")
   })
 
   it("classifies snake_case ops (rollout / alias spelling)", () => {
@@ -233,6 +235,9 @@ describe("classifyCollabOp", () => {
     expect(classifyCollabOp("wait_agent")).toBe("wait")
     expect(classifyCollabOp("close_agent")).toBe("close")
     expect(classifyCollabOp("resume_agent")).toBe("resume")
+    // The rollout parser writes the short op, the live title is the tool name.
+    expect(classifyCollabOp("list")).toBe("list")
+    expect(classifyCollabOp("list_agents")).toBe("list")
   })
 
   it("maps sendInput / unknown / null to other", () => {
@@ -269,6 +274,29 @@ describe("mergeCollabAgentStatus", () => {
     expect(mergeCollabAgentStatus(["weird-a", "weird-b"])).toBe("weird-b")
     expect(mergeCollabAgentStatus([null, "  ", undefined])).toBeNull()
     expect(mergeCollabAgentStatus([])).toBeNull()
+  })
+})
+
+describe("isCodexThreadId", () => {
+  it("accepts a codex thread id (which is also its rollout's filename id)", () => {
+    expect(isCodexThreadId("019f07aa-f57b-7c61-9a86-c93236cee0dc")).toBe(true)
+    expect(isCodexThreadId("01A07FC2-DB62-78B3-9762-9CB2540216C2")).toBe(true)
+  })
+
+  it("rejects the agent NAMES that key a list_agents roster", () => {
+    // `build_collab_list_input` keys `agentsStates` by `agent_name`, so a
+    // session entry point built on those keys would open nothing.
+    expect(isCodexThreadId("pnpm_build")).toBe(false)
+    expect(isCodexThreadId("history_limits")).toBe(false)
+    expect(isCodexThreadId("/root")).toBe(false)
+  })
+
+  it("rejects partial / malformed ids rather than guessing", () => {
+    expect(isCodexThreadId("019f06e3-bbbb")).toBe(false)
+    expect(isCodexThreadId("")).toBe(false)
+    expect(isCodexThreadId("019f07aa-f57b-7c61-9a86-c93236cee0dc-extra")).toBe(
+      false
+    )
   })
 })
 

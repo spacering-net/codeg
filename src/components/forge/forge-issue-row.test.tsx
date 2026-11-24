@@ -1,0 +1,695 @@
+/**
+ * The workbench row's three-state action. Two rules matter beyond the plain
+ * rendering: the chip and the re-trigger are SIBLING controls (a button nested
+ * in a button folds its text into the outer one's accessible name, and leaves
+ * keyboard activation to the browser), and each does its own thing — the chip
+ * navigates to the board, the re-trigger opens the dialog.
+ */
+import { cleanup, render, screen } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
+import { NextIntlClientProvider } from "next-intl"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+
+import enMessages from "@/i18n/messages/en.json"
+import type {
+  ForgeCheckSummary,
+  ForgeIssueRow,
+  ForgeLabel,
+  ForgeTaskLink,
+  WorkTaskStatus,
+} from "@/lib/types"
+
+import {
+  checksFraction,
+  checksMark,
+  ForgeIssueRowItem,
+} from "./forge-issue-row"
+
+/** Uncoloured unless a test cares — most of them are about something else. */
+function label(name: string, color: string | null = null): ForgeLabel {
+  return { name, color }
+}
+
+const setRoute = vi.fn()
+vi.mock("@/contexts/workbench-route-context", () => ({
+  useWorkbenchRoute: () => ({
+    routeId: "forge",
+    isConversations: false,
+    setRoute,
+    openConversations: vi.fn(),
+  }),
+}))
+
+function row(overrides: Partial<ForgeIssueRow> = {}): ForgeIssueRow {
+  return {
+    number: 42,
+    title: "Login times out",
+    body: "steps to reproduce…",
+    state: "open",
+    draft: false,
+    labels: [label("bug"), label("p1")],
+    author: "octocat",
+    author_avatar: "https://avatars.githubusercontent.com/u/583231",
+    updated_at: null,
+    html_url: "https://github.com/o/r/issues/42",
+    is_pr: false,
+    comments: 0,
+    ...overrides,
+  }
+}
+
+function link(status: WorkTaskStatus): ForgeTaskLink {
+  return {
+    source_key: "github:github.com/o/r/issue/42",
+    task_id: 3,
+    status,
+    verdict: null,
+    updated_at: "2026-08-19T00:00:00Z",
+  }
+}
+
+const onOpenDetail = vi.fn()
+
+function mount(
+  item: ForgeIssueRow,
+  taskLink: ForgeTaskLink | null,
+  onStart = vi.fn(),
+  compact = false
+) {
+  render(
+    <NextIntlClientProvider locale="en" messages={enMessages}>
+      <ForgeIssueRowItem
+        row={item}
+        link={taskLink}
+        compact={compact}
+        onOpenDetail={onOpenDetail}
+        onStart={onStart}
+      />
+    </NextIntlClientProvider>
+  )
+  return onStart
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+})
+
+describe("ForgeIssueRowItem", () => {
+  it("offers Start when no task has ever handled the item", async () => {
+    const user = userEvent.setup()
+    const onStart = mount(row(), null)
+    await user.click(screen.getByRole("button", { name: "Start" }))
+    expect(onStart).toHaveBeenCalledTimes(1)
+    expect(setRoute).not.toHaveBeenCalled()
+  })
+
+  /** The trigger refuses a merged change whatever the scenario, so the row
+   *  offers nothing that could only end in that refusal — neither Start nor,
+   *  once a task on it finished, a re-trigger. */
+  it("offers no Start on a merged pull request", () => {
+    mount(row({ is_pr: true, state: "merged" }), null)
+    expect(
+      screen.queryByRole("button", { name: "Start" })
+    ).not.toBeInTheDocument()
+    cleanup()
+    mount(row({ is_pr: true, state: "merged" }), link("done"))
+    expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "re-trigger" })
+    ).not.toBeInTheDocument()
+    cleanup()
+    // A closed but unmerged one can be reopened, so it still can be started.
+    mount(row({ is_pr: true, state: "closed" }), null)
+    expect(screen.getByRole("button", { name: "Start" })).toBeInTheDocument()
+  })
+
+  /** A task made from several issues says so on each of their chips — in
+   *  words, for anyone who cannot see the glyph. */
+  it("names the other issues a combined task handles", () => {
+    mount(row({ number: 5 }), { ...link("running"), items: [3, 5, 9] })
+    expect(
+      screen.getByRole("button", {
+        name: "Running Handled together with #3, #9",
+      })
+    ).toBeInTheDocument()
+    cleanup()
+    mount(row({ number: 5 }), { ...link("running"), items: [5] })
+    expect(screen.getByRole("button", { name: "Running" })).toBeInTheDocument()
+  })
+
+  /** The tick box reports whether Shift was held, and a box the page has
+   *  blocked cannot be ticked at all — with the reason where a pointer finds
+   *  it. */
+  it("ticks through the page's selection, Shift included", async () => {
+    const user = userEvent.setup()
+    const onToggle = vi.fn()
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <ForgeIssueRowItem
+          row={row()}
+          link={null}
+          selection={{ checked: false, blockedReason: null, onToggle }}
+          onOpenDetail={onOpenDetail}
+          onStart={vi.fn()}
+        />
+      </NextIntlClientProvider>
+    )
+    const box = screen.getByRole("checkbox", { name: "Select #42" })
+    await user.click(box)
+    await user.keyboard("{Shift>}")
+    await user.click(box)
+    await user.keyboard("{/Shift}")
+    expect(onToggle.mock.calls).toEqual([[false], [true]])
+    // Controlled: the page decides, the box does not flip on its own.
+    expect(box).not.toBeChecked()
+    cleanup()
+
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <ForgeIssueRowItem
+          row={row()}
+          link={link("running")}
+          selection={{
+            checked: false,
+            blockedReason: "busy elsewhere",
+            onToggle,
+          }}
+          onOpenDetail={onOpenDetail}
+          onStart={vi.fn()}
+        />
+      </NextIntlClientProvider>
+    )
+    const blocked = screen.getByRole("checkbox", { name: "Select #42" })
+    expect(blocked).toBeDisabled()
+    expect(blocked.parentElement).toHaveAttribute("title", "busy elsewhere")
+  })
+
+  /** The box has no column of its own: it shares the state glyph's cell,
+   *  faded out at rest and shown on hover or focus, and once ticked it stays
+   *  in place of the glyph. jsdom has no hover, so the classes that carry it
+   *  are what is pinned here. */
+  it("swaps the state glyph for the tick box in one cell", () => {
+    const renderWith = (checked: boolean, blockedReason: string | null) =>
+      render(
+        <NextIntlClientProvider locale="en" messages={enMessages}>
+          <ForgeIssueRowItem
+            row={row()}
+            link={null}
+            selection={{ checked, blockedReason, onToggle: vi.fn() }}
+            onOpenDetail={onOpenDetail}
+            onStart={vi.fn()}
+          />
+        </NextIntlClientProvider>
+      )
+
+    renderWith(false, null)
+    let box = screen.getByRole("checkbox", { name: "Select #42" })
+    let glyph = screen.getByRole("img", { name: "Open" })
+    expect(glyph.parentElement).toBe(box.parentElement)
+    expect(box).toHaveClass("opacity-0", "group-hover/row:opacity-100")
+    expect(glyph).not.toHaveClass("invisible")
+    expect(glyph).toHaveClass("group-hover/row:invisible")
+    cleanup()
+
+    renderWith(true, null)
+    box = screen.getByRole("checkbox", { name: "Select #42" })
+    glyph = screen.getByRole("img", { name: "Open" })
+    expect(box).toHaveClass("opacity-100")
+    expect(box).not.toHaveClass("opacity-0")
+    expect(glyph).toHaveClass("invisible")
+    cleanup()
+
+    // A greyed-out box must not linger at the base half opacity at rest.
+    renderWith(false, "busy elsewhere")
+    box = screen.getByRole("checkbox", { name: "Select #42" })
+    expect(box).toHaveClass("disabled:opacity-0")
+    expect(box).not.toHaveClass("disabled:opacity-50")
+  })
+
+  it("shows a live status chip that goes to the board, with no re-trigger", async () => {
+    const user = userEvent.setup()
+    const onStart = mount(row(), link("running"))
+    expect(
+      screen.queryByRole("button", { name: "Start" })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "re-trigger" })
+    ).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: "Running" }))
+    expect(setRoute).toHaveBeenCalledWith("tasks")
+    // A running task is not something to trigger again.
+    expect(onStart).not.toHaveBeenCalled()
+  })
+
+  it("names a task put aside to handle later the way the board does", async () => {
+    const user = userEvent.setup()
+    // Still a live task underneath (a review), so the chip keeps going to the
+    // board and offers no re-trigger — only its word changes.
+    mount(row(), { ...link("review"), deferred: true })
+    expect(screen.queryByRole("button", { name: "To review" })).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: "re-trigger" })
+    ).not.toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Deferred" }))
+    expect(setRoute).toHaveBeenCalledWith("tasks")
+  })
+
+  it("keeps the chip and the re-trigger as separate controls on a finished task", async () => {
+    const user = userEvent.setup()
+    const onStart = mount(row(), link("done"))
+
+    // Nested, the chip's accessible name would swallow "re-trigger" and the
+    // inner control would need hand-written Enter/Space handling.
+    const chip = screen.getByRole("button", { name: "Done" })
+    const retrigger = screen.getByRole("button", { name: "re-trigger" })
+    expect(chip).not.toContainElement(retrigger)
+
+    await user.click(retrigger)
+    expect(onStart).toHaveBeenCalledTimes(1)
+    // The re-trigger opens the dialog; it does not also navigate away.
+    expect(setRoute).not.toHaveBeenCalled()
+
+    await user.click(chip)
+    expect(setRoute).toHaveBeenCalledWith("tasks")
+    expect(onStart).toHaveBeenCalledTimes(1)
+  })
+
+  it("re-triggers from the keyboard, which a plain button gives for free", async () => {
+    const user = userEvent.setup()
+    const onStart = mount(row(), link("canceled"))
+    screen.getByRole("button", { name: "re-trigger" }).focus()
+    await user.keyboard("{Enter}")
+    await user.keyboard(" ")
+    expect(onStart).toHaveBeenCalledTimes(2)
+  })
+
+  it("shows the first labels and the identity line", () => {
+    mount(row({ labels: ["a", "b", "c", "d", "e"].map((n) => label(n)) }), null)
+    // Four labels fit the row; the fifth would push the action off the edge.
+    expect(screen.getByText("d")).toBeInTheDocument()
+    expect(screen.queryByText("e")).not.toBeInTheDocument()
+    expect(screen.getByText("#42")).toBeInTheDocument()
+    expect(screen.getByText("· octocat")).toBeInTheDocument()
+  })
+
+  /** The title used to be a link OUT of the app; reading an issue meant losing
+   *  the list, its filters and its scroll position to a browser tab. It now
+   *  opens the detail panel instead — and stays a real `<button>`, so Enter and
+   *  Space work without hand-written key handling. */
+  it("opens the detail panel from the title, by click and from the keyboard", async () => {
+    const user = userEvent.setup()
+    const onStart = mount(row(), null)
+    const title = screen.getByRole("button", { name: "Login times out" })
+    expect(title).not.toHaveAttribute("href")
+
+    await user.click(title)
+    title.focus()
+    await user.keyboard("{Enter}")
+    await user.keyboard(" ")
+    expect(onOpenDetail).toHaveBeenCalledTimes(3)
+    // Opening the panel is not triggering the item.
+    expect(onStart).not.toHaveBeenCalled()
+    expect(setRoute).not.toHaveBeenCalled()
+  })
+
+  /** The way out to the forge did not disappear with the title's link — it
+   *  moved to the number, which is what both forges use as the item's own link.
+   *  `target="_blank"` is what `BrowserLink` needs to stay a real link; the
+   *  click itself is routed through `openUrl`. */
+  it("keeps a link to the forge on the item's number", () => {
+    mount(row(), null)
+    const number = screen.getByRole("link", { name: "#42" })
+    expect(number).toHaveAttribute("href", "https://github.com/o/r/issues/42")
+    expect(number).toHaveAttribute("target", "_blank")
+  })
+
+  /** A phone-width row cannot fit four label chips AND a readable title. */
+  it("keeps a single label at phone width", () => {
+    mount(
+      row({ labels: ["a", "b", "c"].map((n) => label(n)) }),
+      null,
+      vi.fn(),
+      true
+    )
+    expect(screen.getByText("a")).toBeInTheDocument()
+    expect(screen.queryByText("b")).not.toBeInTheDocument()
+  })
+
+  /** The count means "there is a discussion here", so a zero says nothing —
+   *  and a column of zeroes down the list is pure noise. Both forges' own
+   *  lists hide it the same way. */
+  it("shows the comment count only when there are comments", () => {
+    mount(row({ comments: 7 }), null)
+    expect(screen.getByText("7")).toBeInTheDocument()
+    expect(screen.getByTitle("7 comments")).toBeInTheDocument()
+
+    cleanup()
+    mount(row({ comments: 0 }), null)
+    expect(screen.queryByText("0")).not.toBeInTheDocument()
+  })
+
+  /** Every action carries a glyph, so they read as one family rather than as a
+   *  button next to a stray link. All three are OUTLINE glyphs, like the state
+   *  icon at the head of the row — the one filled shape in the list pulled the
+   *  eye off the titles. The glyph is decoration: the accessible name must stay
+   *  the word. */
+  it("marks the actions with outline glyphs without renaming them", () => {
+    const { container } = render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <ForgeIssueRowItem
+          row={row()}
+          link={null}
+          onOpenDetail={onOpenDetail}
+          onStart={vi.fn()}
+        />
+      </NextIntlClientProvider>
+    )
+    const start = screen.getByRole("button", { name: "Start" })
+    const startGlyph = container.querySelector<HTMLElement>(
+      ".lucide-circle-play"
+    )
+    expect(start).toContainElement(startGlyph)
+    // Outline: a `fill` would make this the only solid mark on the row.
+    expect(startGlyph).not.toHaveClass("fill-current")
+
+    cleanup()
+    mount(row(), link("done"))
+    const retrigger = screen.getByRole("button", { name: "re-trigger" })
+    expect(retrigger.querySelector(".lucide-rotate-ccw")).not.toBeNull()
+  })
+
+  /** The chip is the only thing on the row that talks about a WORK TASK rather
+   *  than about the issue, and it navigates to the to-do board — so it carries
+   *  the board's own glyph. Decoration, so the name stays the status word. */
+  it("marks a started item with the to-do glyph, keeping the status as its name", () => {
+    mount(row(), link("running"))
+    const chip = screen.getByRole("button", { name: "Running" })
+    expect(chip.querySelector(".lucide-list-todo")).not.toBeNull()
+  })
+
+  /** "Start" and the status chip occupy the SAME slot on successive rows, so a
+   *  difference in height or radius between them reads down the list as a
+   *  ragged column. Only the fill may differ — that is what separates an offer
+   *  to act from a task already under way. */
+  it("gives both row actions one shape, and lets only the fill differ", () => {
+    const geometry = ["h-7", "rounded-full", "px-3", "text-xs"]
+
+    mount(row(), null)
+    const start = screen.getByRole("button", { name: "Start" })
+    for (const cls of geometry) expect(start).toHaveClass(cls)
+    expect(start).toHaveClass("bg-secondary")
+
+    cleanup()
+    mount(row(), link("todo"))
+    const chip = screen.getByRole("button", { name: "To do" })
+    for (const cls of geometry) expect(chip).toHaveClass(cls)
+    // A live task is the accent fill; the shape is the one above.
+    expect(chip).toHaveClass("bg-primary/10")
+    expect(chip).not.toHaveClass("bg-secondary")
+  })
+
+  /** A triage list is scanned by label colour before it is read, so the chip
+   *  wears the project's own. Both themes' values ride along together (the
+   *  theme is a class on the root, which an inline style cannot see) — see
+   *  `forge-label-color.test.ts` for the maths. */
+  it("paints a label in the colour its project gave it", () => {
+    mount(row({ labels: [label("bug", "#d73a4a")] }), null)
+    const chip = screen.getByText("bug")
+    expect(chip).toHaveClass("forge-label")
+    expect(chip.style.getPropertyValue("--fl-bg")).toBe("#d73a4a")
+    expect(chip.style.getPropertyValue("--fl-bg-dark")).toBe(
+      "rgb(215 58 74 / 0.18)"
+    )
+  })
+
+  /** A colour the forge could not give (GitLab accepts CSS colour names, which
+   *  the backend refuses to forward) leaves the label neutral rather than
+   *  painted something invented. */
+  it("leaves an uncoloured label on the neutral chip", () => {
+    mount(row({ labels: [label("chore")] }), null)
+    const chip = screen.getByText("chore")
+    expect(chip).not.toHaveClass("forge-label")
+    expect(chip).toHaveClass("text-muted-foreground")
+    expect(chip.getAttribute("style")).toBeNull()
+  })
+
+  /**
+   * A pull request has four outcomes and an issue two, and the row has to tell
+   * them apart by SHAPE and by an accessible name — colour alone reaches
+   * neither a colour-blind reader nor a screen reader. Each case asserts the
+   * rendered `<svg>`'s own class, because that is what carries both.
+   */
+  describe("state glyph", () => {
+    function glyph(item: ForgeIssueRow, name: string) {
+      mount(item, null)
+      return screen.getByRole("img", { name })
+    }
+
+    it.each([
+      [
+        "issue, open",
+        { is_pr: false, state: "open" },
+        "Open",
+        "lucide-circle-dot",
+      ],
+      [
+        "issue, closed",
+        { is_pr: false, state: "closed" },
+        "Closed",
+        "lucide-circle-check",
+      ],
+      [
+        "pull request, open",
+        { is_pr: true, state: "open" },
+        "Open",
+        "lucide-git-pull-request-arrow",
+      ],
+      [
+        "pull request, merged",
+        { is_pr: true, state: "merged" },
+        "Merged",
+        "lucide-git-merge",
+      ],
+      [
+        "pull request, closed",
+        { is_pr: true, state: "closed" },
+        "Closed",
+        "lucide-git-pull-request-closed",
+      ],
+      [
+        "pull request, draft",
+        { is_pr: true, state: "open", draft: true },
+        "Draft",
+        "lucide-git-pull-request-draft",
+      ],
+    ])("%s", (_case, overrides, label, icon) => {
+      expect(glyph(row(overrides), label)).toHaveClass(icon)
+    })
+
+    /** Draft outranks open: a draft IS open, and "not ready for review" is the
+     *  thing a triage list is scanning for. */
+    it("prefers draft over the underlying open state", () => {
+      expect(
+        glyph(row({ is_pr: true, state: "open", draft: true }), "Draft")
+      ).toBeInTheDocument()
+      expect(
+        screen.queryByRole("img", { name: "Open" })
+      ).not.toBeInTheDocument()
+    })
+
+    /** `draft` is meaningless on an issue and must not change its glyph. */
+    it("ignores draft on an issue", () => {
+      expect(
+        glyph(row({ is_pr: false, state: "open", draft: true }), "Open")
+      ).toHaveClass("lucide-circle-dot")
+    })
+  })
+})
+
+/**
+ * The row's CI mark: absent unless the forge said something worth a mark,
+ * one mark for the worst thing in priority order, words for the tooltip and
+ * the accessible name, and a click through to the panel's Checks tab.
+ */
+describe("ForgeIssueRowItem checks mark", () => {
+  function summary(
+    overrides: Partial<ForgeCheckSummary> = {}
+  ): ForgeCheckSummary {
+    return {
+      number: 42,
+      verdict: "success",
+      counts: { passing: 10, failing: 0, pending: 0, neutral: 0, total: 10 },
+      awaiting_approval: 0,
+      ...overrides,
+    }
+  }
+
+  function mountWith(
+    checks: ForgeCheckSummary | null | undefined,
+    onOpenChecks = vi.fn(),
+    compact = false
+  ) {
+    const { container } = render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <ForgeIssueRowItem
+          row={row({ is_pr: true })}
+          link={null}
+          compact={compact}
+          checks={checks}
+          onOpenDetail={onOpenDetail}
+          onOpenChecks={onOpenChecks}
+          onStart={vi.fn()}
+        />
+      </NextIntlClientProvider>
+    )
+    return {
+      onOpenChecks,
+      mark: () => container.querySelector("[data-forge-checks]"),
+    }
+  }
+
+  it("ranks a failure over held workflows over a run still going", () => {
+    expect(checksMark(undefined)).toBeNull()
+    expect(checksMark(summary({ verdict: null }))).toBeNull()
+    expect(
+      checksMark(summary({ verdict: "failure", awaiting_approval: 2 }))
+    ).toBe("failure")
+    expect(
+      checksMark(summary({ verdict: "running", awaiting_approval: 1 }))
+    ).toBe("approval")
+    // A held fork change usually has no checks at all yet.
+    expect(checksMark(summary({ verdict: null, awaiting_approval: 1 }))).toBe(
+      "approval"
+    )
+    expect(checksMark(summary({ verdict: "running" }))).toBe("running")
+    expect(checksMark(summary({ verdict: "neutral" }))).toBe("neutral")
+  })
+
+  it("draws nothing for an unknown summary or a change with no checks", () => {
+    cleanup()
+    expect(mountWith(undefined).mark()).toBeNull()
+    cleanup()
+    expect(
+      mountWith(summary({ verdict: null, counts: null })).mark()
+    ).toBeNull()
+  })
+
+  it("draws the bare, ringless glyph for each verdict", () => {
+    const cases: [ForgeCheckSummary, string][] = [
+      [summary({ verdict: "failure" }), "lucide-x"],
+      [summary({ verdict: "running" }), "lucide-circle"],
+      [summary({ verdict: "success" }), "lucide-check"],
+      [summary({ verdict: "neutral" }), "lucide-minus"],
+    ]
+    for (const [s, cls] of cases) {
+      cleanup()
+      expect(mountWith(s).mark()!.querySelector("svg")).toHaveClass(cls)
+    }
+  })
+
+  it("says the counts and opens the Checks tab", async () => {
+    const user = userEvent.setup()
+    const { onOpenChecks } = mountWith(
+      summary({
+        verdict: "failure",
+        counts: { passing: 9, failing: 1, pending: 2, neutral: 0, total: 12 },
+      })
+    )
+    const mark = screen.getByRole("button", {
+      name: "1 failing · 2 in progress · 9 passing",
+    })
+    expect(mark).toHaveAttribute("data-forge-checks", "failure")
+    expect(mark).toHaveTextContent(/^9\/12$/)
+    await user.click(mark)
+    expect(onOpenChecks).toHaveBeenCalledTimes(1)
+    expect(onOpenDetail).not.toHaveBeenCalled()
+  })
+
+  it("names held workflows in words, compact rows (the side panel) too", () => {
+    const { mark } = mountWith(
+      summary({ verdict: null, counts: null, awaiting_approval: 2 })
+    )
+    expect(mark()).toHaveAttribute("data-forge-checks", "approval")
+    expect(
+      screen.getByRole("button", { name: "2 workflows awaiting approval" })
+    ).toHaveTextContent("Approval needed")
+    cleanup()
+    mountWith(
+      summary({ verdict: null, counts: null, awaiting_approval: 2 }),
+      vi.fn(),
+      true
+    )
+    expect(
+      screen.getByRole("button", { name: "2 workflows awaiting approval" })
+    ).toHaveTextContent("Approval needed")
+  })
+
+  it("counts passes over the total, and only a pass counts", () => {
+    expect(checksFraction(undefined)).toBeNull()
+    expect(checksFraction(summary({ counts: null }))).toBeNull()
+    expect(
+      checksFraction(
+        summary({
+          counts: { passing: 0, failing: 0, pending: 0, neutral: 0, total: 0 },
+        })
+      )
+    ).toBeNull()
+    expect(checksFraction(summary())).toBe("10/10")
+    // A skipped job is not a pass: a green sweep with one reads 9/10, and the
+    // tooltip says what the tenth is.
+    mountWith(
+      summary({
+        counts: { passing: 9, failing: 0, pending: 0, neutral: 1, total: 10 },
+      })
+    )
+    expect(
+      screen.getByRole("button", {
+        name: "9 passing · 1 without a verdict",
+      })
+    ).toHaveTextContent(/^9\/10$/)
+  })
+
+  it("closes the meta line, after the author and time", () => {
+    const { mark } = mountWith(summary())
+    const wrap = mark()!.parentElement!
+    expect(wrap.parentElement!.lastElementChild).toBe(wrap)
+    expect(wrap.previousElementSibling).toHaveTextContent(/^· /)
+  })
+
+  it("puts a separator dot before the mark, outside the button", () => {
+    const { mark } = mountWith(summary())
+    const dot = mark()!.previousElementSibling
+    expect(dot).toHaveTextContent(/^·$/)
+    expect(mark()).not.toHaveTextContent("·")
+  })
+
+  it("holds the place with a skeleton only while there is no mark yet", () => {
+    function mountLoading(checks: ForgeCheckSummary | undefined) {
+      return render(
+        <NextIntlClientProvider locale="en" messages={enMessages}>
+          <ForgeIssueRowItem
+            row={row({ is_pr: true })}
+            link={null}
+            checks={checks}
+            checksLoading
+            onOpenDetail={onOpenDetail}
+            onStart={vi.fn()}
+          />
+        </NextIntlClientProvider>
+      ).container
+    }
+    const first = mountLoading(undefined)
+    expect(first.querySelector("[data-forge-checks-loading]")).not.toBeNull()
+    expect(first.querySelector("[data-forge-checks]")).toBeNull()
+    cleanup()
+    const reread = mountLoading(summary())
+    expect(reread.querySelector("[data-forge-checks-loading]")).toBeNull()
+    expect(reread.querySelector("[data-forge-checks]")).not.toBeNull()
+  })
+
+  it("falls back to the verdict's word without a breakdown", () => {
+    mountWith(summary({ verdict: "running", counts: null }))
+    expect(screen.getByRole("button", { name: "Running" })).toBeInTheDocument()
+  })
+})

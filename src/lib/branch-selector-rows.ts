@@ -51,6 +51,13 @@ export type BranchLeafAction =
   /** Remove the worktree, the branch, and the worktree's workspace folder. */
   | "deleteWorktreeAndBranch"
 
+/**
+ * Which block a section header opens. "worktree" is the shortcut list of
+ * branches checked out in the repo's other worktrees — a flat subset shown
+ * above Local, which still lists every local branch including those.
+ */
+export type BranchSectionScope = "local" | "remote" | "worktree"
+
 export type BranchRow =
   | {
       kind: "operation"
@@ -63,7 +70,7 @@ export type BranchRow =
   | {
       kind: "section"
       key: string
-      scope: "local" | "remote"
+      scope: BranchSectionScope
       count: number
       expanded: boolean
     }
@@ -86,10 +93,25 @@ export type BranchRow =
       isTracking: boolean
       isWorktree: boolean
     }
-  | { kind: "empty"; key: string; scope: "local" | "remote" }
+  | { kind: "empty"; key: string; scope: BranchSectionScope }
 
 export interface BuildBranchRowsInput {
   operations: BranchOperationMeta[]
+  /**
+   * Branches checked out in the repo's OTHER worktrees, already ordered and
+   * prefix-grouped (see `worktreeBranchNodes`). Rendered as a shortcut section
+   * above Local, which keeps listing every local branch including these — the
+   * section is a shortcut, not a partition.
+   *
+   * Empty vs absent are DIFFERENT, and every caller has to say which it means:
+   * `[]` is "this surface has the section, the repo just has no other worktree"
+   * → the "(0)" header + empty row, exactly as the remote section behaves with
+   * no remote, so the local block never shifts position between repos. `null` is
+   * "this surface has no worktree section at all" → nothing is emitted. The
+   * git-log branch filter reuses this row model and is a `null` caller; folding
+   * the two cases together silently grew a phantom section there.
+   */
+  worktreeNodes: BranchTreeNode[] | null
   localNodes: BranchTreeNode[]
   remoteSections: RemoteBranchSection[]
   /** Total local branch count (for the section header's "(n)"). */
@@ -106,6 +128,7 @@ export interface BuildBranchRowsInput {
   query: string
 }
 
+const worktreeSectionKey = sectionKey("worktree")
 const localSectionKey = sectionKey("local")
 const remoteSectionKey = sectionKey("remote")
 
@@ -259,14 +282,16 @@ function matchAndRankLeaves(
 /**
  * Flatten operations + branch trees into a single linear row list.
  *
- * - Empty query: operations block → separator → Local section (its prefix tree,
- *   descending only expanded groups) → Remote section (single-remote strips the
- *   wrapper; multi-remote nests each remote as a group). Sections default open.
- * - Non-empty query: operations whose label matches → separator → matched local
- *   leaves then matched remote leaves, flat under their section headers and
- *   ranked by relevance (exact > prefix > "/"-segment boundary > substring, ties
- *   broken by earlier match position then name); groups dropped, collapse state
- *   ignored, empty sections omitted.
+ * - Empty query: operations block → separator → Worktree section (its own
+ *   prefix tree; absent entirely when `worktreeNodes` is null) → Local section
+ *   (its prefix tree, descending only expanded groups) → Remote section
+ *   (single-remote strips the wrapper; multi-remote nests each remote as a
+ *   group). Every section present defaults open.
+ * - Non-empty query: operations whose label matches → separator → matched
+ *   worktree, then local, then remote leaves, flat under their section headers
+ *   and ranked by relevance (exact > prefix > "/"-segment boundary > substring,
+ *   ties broken by earlier match position then name); groups dropped, collapse
+ *   state ignored, empty sections omitted.
  *
  * Indentation depth: operations flat; a section header is depth 0; its children
  * are depth 1 (and deeper per nesting).
@@ -274,6 +299,7 @@ function matchAndRankLeaves(
 export function buildBranchRows(input: BuildBranchRowsInput): BranchRow[] {
   const {
     operations,
+    worktreeNodes,
     localNodes,
     remoteSections,
     localCount,
@@ -316,6 +342,22 @@ export function buildBranchRows(input: BuildBranchRowsInput): BranchRow[] {
   const branchRows: BranchRow[] = []
 
   if (searching) {
+    const worktreeMatches = worktreeNodes
+      ? matchAndRankLeaves(collectLeaves(worktreeNodes), q)
+      : []
+    if (worktreeMatches.length > 0) {
+      branchRows.push({
+        kind: "section",
+        key: worktreeSectionKey,
+        scope: "worktree",
+        count: worktreeMatches.length,
+        expanded: true,
+      })
+      for (const leaf of worktreeMatches) {
+        emitLeaf(branchRows, leaf, 1, false, ctx)
+      }
+    }
+
     const localMatches = matchAndRankLeaves(collectLeaves(localNodes), q)
     if (localMatches.length > 0) {
       branchRows.push({
@@ -346,6 +388,31 @@ export function buildBranchRows(input: BuildBranchRowsInput): BranchRow[] {
       for (const leaf of remoteMatches) emitLeaf(branchRows, leaf, 1, true, ctx)
     }
   } else {
+    // Worktree section — only on the surfaces that asked for one (`null` skips
+    // it outright; `[]` still gets the header + empty row).
+    if (worktreeNodes) {
+      const worktreeExpanded = !collapsed.has(worktreeSectionKey)
+      branchRows.push({
+        kind: "section",
+        key: worktreeSectionKey,
+        scope: "worktree",
+        // Leaf count, not node count: a prefix group stands for its branches.
+        count: collectLeaves(worktreeNodes).length,
+        expanded: worktreeExpanded,
+      })
+      if (worktreeExpanded) {
+        if (worktreeNodes.length === 0) {
+          branchRows.push({
+            kind: "empty",
+            key: "empty:worktree",
+            scope: "worktree",
+          })
+        } else {
+          emitTree(branchRows, worktreeNodes, 1, false, ctx)
+        }
+      }
+    }
+
     // Local section
     const localExpanded = !collapsed.has(localSectionKey)
     branchRows.push({

@@ -3,15 +3,19 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import {
   CheckCircle2,
+  Cloud,
   GitBranch,
+  GitFork,
   Github,
   Globe,
   Loader2,
   Trash2,
+  Gitlab,
   XCircle,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -34,25 +38,82 @@ import {
   getGitHubAccounts,
   updateGitHubAccounts,
   validateGitHubToken,
+  validateGitLabToken,
+  validateGiteaToken,
+  validateCnbToken,
   getAccountToken,
   deleteAccountToken,
 } from "@/lib/api"
 import type {
+  ForgeProviderId,
   GitDetectResult,
   GitHubAccount,
   GitHubAccountsSettings,
 } from "@/lib/types"
 import { toErrorMessage } from "@/lib/app-error"
-import { AddGitHubAccountDialog } from "./add-github-account-dialog"
+import { AddForgeAccountDialog } from "./add-forge-account-dialog"
 import { AddGitAccountDialog } from "./add-git-account-dialog"
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Which section an account belongs in. A DECLARED provider decides it outright
+ * — that is the whole point of the field, and the only thing that can tell a
+ * self-hosted GitLab from a GitHub Enterprise by looking at it. Accounts stored
+ * before the field existed keep the rule they were filed under: github.com in
+ * the GitHub section, everything else among the plain git credentials.
+ */
 function isGitHubAccount(account: GitHubAccount): boolean {
-  const url = account.server_url.toLowerCase()
-  return url.includes("github.com")
+  if (account.provider) return account.provider === "github"
+  return account.server_url.toLowerCase().includes("github.com")
+}
+
+function isGitLabAccount(account: GitHubAccount): boolean {
+  return account.provider === "gitlab"
+}
+
+/** Gitea (and Forgejo) only ever arrive DECLARED: the section shipped after the
+ *  field existed, so there is no legacy shape to guess at the way
+ *  `isGitHubAccount` has to. */
+function isGiteaAccount(account: GitHubAccount): boolean {
+  return account.provider === "gitea"
+}
+
+/** CNB, like Gitea, only ever arrives declared. */
+function isCnbAccount(account: GitHubAccount): boolean {
+  return account.provider === "cnb"
+}
+
+/** Which "who am I" endpoint tests an account's stored token, or `null` for a
+ *  plain git credential — those validate against nothing, so the most that can
+ *  be said is that the keyring still holds the secret. */
+function validatorFor(
+  account: GitHubAccount
+): typeof validateGitHubToken | null {
+  if (isCnbAccount(account)) return validateCnbToken
+  if (isGiteaAccount(account)) return validateGiteaToken
+  if (isGitLabAccount(account)) return validateGitLabToken
+  if (isGitHubAccount(account)) return validateGitHubToken
+  return null
+}
+
+/** Which forge dialog reopens for a token rotation. The account's own
+ *  declaration decides; GitHub is the fallback because an undeclared account
+ *  only ever reaches the rotate action from the GitHub section. */
+function providerOf(account: GitHubAccount): ForgeProviderId {
+  if (isCnbAccount(account)) return "cnb"
+  if (isGiteaAccount(account)) return "gitea"
+  if (isGitLabAccount(account)) return "gitlab"
+  return "github"
+}
+
+/** First character of a username, for the avatar fallback. Split with
+ *  `Array.from` so a leading astral-plane character is not halved into a
+ *  broken surrogate. */
+function accountInitial(username: string): string {
+  return Array.from(username.trim())[0]?.toUpperCase() ?? "?"
 }
 
 // ---------------------------------------------------------------------------
@@ -63,6 +124,7 @@ function AccountRow({
   account,
   testingId,
   onTest,
+  onRotate,
   onSetDefault,
   onRemove,
   t,
@@ -70,24 +132,30 @@ function AccountRow({
   account: GitHubAccount
   testingId: string | null
   onTest: (account: GitHubAccount) => void
+  /** Replace this account's token in place. Offered only for forge accounts,
+   *  because they are the ones tasks pin by id — see the dialog's comment. */
+  onRotate?: (account: GitHubAccount) => void
   onSetDefault: (id: string) => void
   onRemove: (account: GitHubAccount) => void
   t: ReturnType<typeof useTranslations<"VersionControlSettings">>
 }) {
   return (
     <div className="flex items-center gap-3 rounded-lg border bg-muted/10 px-3 py-2.5">
-      {account.avatar_url ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={account.avatar_url}
-          alt={account.username}
-          className="h-8 w-8 rounded-full"
-        />
-      ) : (
-        <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center text-xs font-medium">
-          {account.username[0]?.toUpperCase()}
-        </div>
-      )}
+      {/* Having an avatar URL is not the same as being able to load it, so the
+          initial is a fallback the primitive keeps mounted until the image
+          actually decodes — not an else-branch for a missing URL. GitLab hands
+          out third-party gravatar.com URLs for users who never uploaded a
+          picture, and a self-hosted instance can put an avatar behind a login;
+          either one fails on the wire and used to leave a hole where the
+          account's face should be. */}
+      <Avatar>
+        {account.avatar_url && (
+          <AvatarImage src={account.avatar_url} alt={account.username} />
+        )}
+        <AvatarFallback className="text-xs font-medium">
+          {accountInitial(account.username)}
+        </AvatarFallback>
+      </Avatar>
 
       <div className="flex-1 min-w-0 space-y-1">
         <div className="flex items-center gap-2">
@@ -95,12 +163,12 @@ function AccountRow({
             {account.username}
           </span>
           {account.is_default && (
-            <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+            <Badge variant="secondary" className="text-3xs px-1.5 py-0">
               {t("defaultLabel")}
             </Badge>
           )}
         </div>
-        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+        <div className="flex items-center gap-2 text-2xs text-muted-foreground">
           <span className="truncate">{account.server_url}</span>
           {account.scopes.length > 0 && (
             <>
@@ -124,6 +192,11 @@ function AccountRow({
             t("testConnection")
           )}
         </Button>
+        {onRotate && (
+          <Button size="xs" variant="ghost" onClick={() => onRotate(account)}>
+            {t("updateToken")}
+          </Button>
+        )}
         {!account.is_default && (
           <Button
             size="xs"
@@ -163,6 +236,10 @@ export function VersionControlSettings() {
     accounts: [],
   })
   const [addGitHubOpen, setAddGitHubOpen] = useState(false)
+  const [addGitLabOpen, setAddGitLabOpen] = useState(false)
+  const [addGiteaOpen, setAddGiteaOpen] = useState(false)
+  const [addCnbOpen, setAddCnbOpen] = useState(false)
+  const [rotateTarget, setRotateTarget] = useState<GitHubAccount | null>(null)
   const [addGitOpen, setAddGitOpen] = useState(false)
   const [testingAccountId, setTestingAccountId] = useState<string | null>(null)
   const [removeTarget, setRemoveTarget] = useState<GitHubAccount | null>(null)
@@ -172,8 +249,27 @@ export function VersionControlSettings() {
     () => accounts.accounts.filter(isGitHubAccount),
     [accounts]
   )
+  const gitlabAccounts = useMemo(
+    () => accounts.accounts.filter(isGitLabAccount),
+    [accounts]
+  )
+  const giteaAccounts = useMemo(
+    () => accounts.accounts.filter(isGiteaAccount),
+    [accounts]
+  )
+  const cnbAccounts = useMemo(
+    () => accounts.accounts.filter(isCnbAccount),
+    [accounts]
+  )
   const gitAccounts = useMemo(
-    () => accounts.accounts.filter((a) => !isGitHubAccount(a)),
+    () =>
+      accounts.accounts.filter(
+        (a) =>
+          !isGitHubAccount(a) &&
+          !isGitLabAccount(a) &&
+          !isGiteaAccount(a) &&
+          !isCnbAccount(a)
+      ),
     [accounts]
   )
 
@@ -197,6 +293,7 @@ export function VersionControlSettings() {
   }, [t])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial git/settings/accounts fetch
     loadData().catch(console.error)
   }, [loadData])
 
@@ -241,13 +338,18 @@ export function VersionControlSettings() {
 
   const handleAccountAdded = useCallback(
     async (account: GitHubAccount) => {
+      // Replace in place when the id is already known: that is a token
+      // rotation, and appending would leave two rows claiming one identity.
+      const known = accounts.accounts.some((a) => a.id === account.id)
+      const others = accounts.accounts.map((a) =>
+        account.is_default && a.id !== account.id
+          ? { ...a, is_default: false }
+          : a
+      )
       const updated: GitHubAccountsSettings = {
-        accounts: [
-          ...accounts.accounts.map((a) =>
-            account.is_default ? { ...a, is_default: false } : a
-          ),
-          account,
-        ],
+        accounts: known
+          ? others.map((a) => (a.id === account.id ? account : a))
+          : [...others, account],
       }
       try {
         const saved = await updateGitHubAccounts(updated)
@@ -270,8 +372,9 @@ export function VersionControlSettings() {
           toast.error(t("connectionFailed", { message: "Token not found" }))
           return
         }
-        if (isGitHubAccount(account)) {
-          const result = await validateGitHubToken(account.server_url, token)
+        const validate = validatorFor(account)
+        if (validate) {
+          const result = await validate(account.server_url, token)
           if (result.success) {
             toast.success(t("connectionSuccess"))
           } else {
@@ -282,7 +385,7 @@ export function VersionControlSettings() {
             )
           }
         } else {
-          // For non-GitHub accounts we can't validate via API,
+          // A plain git credential has no API to validate against,
           // just confirm the token exists in keyring.
           toast.success(t("connectionSuccess"))
         }
@@ -433,7 +536,7 @@ export function VersionControlSettings() {
                   )}
                 </Button>
               </div>
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-2xs text-muted-foreground">
                 {t("customGitPathHint")}
               </p>
             </div>
@@ -462,6 +565,7 @@ export function VersionControlSettings() {
                   account={account}
                   testingId={testingAccountId}
                   onTest={handleTestConnection}
+                  onRotate={setRotateTarget}
                   onSetDefault={handleSetDefault}
                   onRemove={setRemoveTarget}
                   t={t}
@@ -477,7 +581,121 @@ export function VersionControlSettings() {
           </div>
         </section>
 
-        {/* ---- Git Accounts (non-GitHub) ---- */}
+        {/* ---- GitLab Accounts ---- */}
+        <section className="rounded-xl border bg-card p-4 space-y-4">
+          <div className="flex items-center gap-2">
+            <Gitlab className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold">{t("gitlabTitle")}</h2>
+          </div>
+          <p className="text-xs text-muted-foreground leading-5">
+            {t("gitlabDescription")}
+          </p>
+
+          {gitlabAccounts.length === 0 ? (
+            <div className="rounded-md border border-dashed bg-muted/10 px-4 py-6 text-center text-xs text-muted-foreground">
+              {t("gitlabNoAccounts")}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {gitlabAccounts.map((account) => (
+                <AccountRow
+                  key={account.id}
+                  account={account}
+                  testingId={testingAccountId}
+                  onTest={handleTestConnection}
+                  onRotate={setRotateTarget}
+                  onSetDefault={handleSetDefault}
+                  onRemove={setRemoveTarget}
+                  t={t}
+                />
+              ))}
+            </div>
+          )}
+
+          <div className="flex justify-end">
+            <Button size="sm" onClick={() => setAddGitLabOpen(true)}>
+              {t("addAccount")}
+            </Button>
+          </div>
+        </section>
+
+        {/* ---- Gitea Accounts ---- */}
+        <section className="rounded-xl border bg-card p-4 space-y-4">
+          <div className="flex items-center gap-2">
+            <GitFork className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold">{t("giteaTitle")}</h2>
+          </div>
+          <p className="text-xs text-muted-foreground leading-5">
+            {t("giteaDescription")}
+          </p>
+
+          {giteaAccounts.length === 0 ? (
+            <div className="rounded-md border border-dashed bg-muted/10 px-4 py-6 text-center text-xs text-muted-foreground">
+              {t("giteaNoAccounts")}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {giteaAccounts.map((account) => (
+                <AccountRow
+                  key={account.id}
+                  account={account}
+                  testingId={testingAccountId}
+                  onTest={handleTestConnection}
+                  onRotate={setRotateTarget}
+                  onSetDefault={handleSetDefault}
+                  onRemove={setRemoveTarget}
+                  t={t}
+                />
+              ))}
+            </div>
+          )}
+
+          <div className="flex justify-end">
+            <Button size="sm" onClick={() => setAddGiteaOpen(true)}>
+              {t("addAccount")}
+            </Button>
+          </div>
+        </section>
+
+        {/* ---- CNB Accounts ---- */}
+        <section className="rounded-xl border bg-card p-4 space-y-4">
+          <div className="flex items-center gap-2">
+            <Cloud className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold">{t("cnbTitle")}</h2>
+          </div>
+          <p className="text-xs text-muted-foreground leading-5">
+            {t("cnbDescription")}
+          </p>
+
+          {cnbAccounts.length === 0 ? (
+            <div className="rounded-md border border-dashed bg-muted/10 px-4 py-6 text-center text-xs text-muted-foreground">
+              {t("cnbNoAccounts")}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {cnbAccounts.map((account) => (
+                <AccountRow
+                  key={account.id}
+                  account={account}
+                  testingId={testingAccountId}
+                  onTest={handleTestConnection}
+                  onRotate={setRotateTarget}
+                  onSetDefault={handleSetDefault}
+                  onRemove={setRemoveTarget}
+                  t={t}
+                />
+              ))}
+            </div>
+          )}
+
+          <div className="flex justify-end">
+            <Button size="sm" onClick={() => setAddCnbOpen(true)}>
+              {t("addAccount")}
+            </Button>
+          </div>
+        </section>
+
+        {/* ---- Git Accounts (non-forge) ---- */}
         <section className="rounded-xl border bg-card p-4 space-y-4">
           <div className="flex items-center gap-2">
             <Globe className="h-4 w-4 text-muted-foreground" />
@@ -518,12 +736,45 @@ export function VersionControlSettings() {
       </div>
 
       {/* Dialogs */}
-      <AddGitHubAccountDialog
+      <AddForgeAccountDialog
+        provider="github"
         open={addGitHubOpen}
         onOpenChange={setAddGitHubOpen}
         onAccountAdded={handleAccountAdded}
         isFirstAccount={accounts.accounts.length === 0}
       />
+      <AddForgeAccountDialog
+        provider="gitlab"
+        open={addGitLabOpen}
+        onOpenChange={setAddGitLabOpen}
+        onAccountAdded={handleAccountAdded}
+        isFirstAccount={accounts.accounts.length === 0}
+      />
+      <AddForgeAccountDialog
+        provider="gitea"
+        open={addGiteaOpen}
+        onOpenChange={setAddGiteaOpen}
+        onAccountAdded={handleAccountAdded}
+        isFirstAccount={accounts.accounts.length === 0}
+      />
+      <AddForgeAccountDialog
+        provider="cnb"
+        open={addCnbOpen}
+        onOpenChange={setAddCnbOpen}
+        onAccountAdded={handleAccountAdded}
+        isFirstAccount={accounts.accounts.length === 0}
+      />
+      {rotateTarget && (
+        <AddForgeAccountDialog
+          key={rotateTarget.id}
+          provider={providerOf(rotateTarget)}
+          existing={rotateTarget}
+          open
+          onOpenChange={(open) => !open && setRotateTarget(null)}
+          onAccountAdded={handleAccountAdded}
+          isFirstAccount={false}
+        />
+      )}
       <AddGitAccountDialog
         open={addGitOpen}
         onOpenChange={setAddGitOpen}

@@ -13,12 +13,30 @@ const mocks = vi.hoisted(() => ({
   ancestorContextMenu: vi.fn(),
   ancestorPointerDown: vi.fn(),
   folderPath: "/repo" as string | undefined,
+  isWorkspaceFileApiAvailable: vi.fn(() => true),
+  downloadWorkspaceFile:
+    vi.fn<
+      (
+        root: string,
+        path: string,
+        name: string
+      ) => Promise<{ status: string; savedPath?: string }>
+    >(),
 }))
 
 vi.mock("@/lib/platform", () => ({
   isLocalDesktop: mocks.isLocalDesktop,
   revealItemInDir: mocks.revealItemInDir,
 }))
+
+vi.mock("@/lib/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/api")>()
+  return {
+    ...actual,
+    isWorkspaceFileApiAvailable: mocks.isWorkspaceFileApiAvailable,
+    downloadWorkspaceFile: mocks.downloadWorkspaceFile,
+  }
+})
 
 vi.mock("sonner", () => ({
   toast: { success: mocks.toastSuccess, error: mocks.toastError },
@@ -104,6 +122,24 @@ describe("resolveFileReferenceTarget", () => {
     })
   })
 
+  it("resolves dot segments the way the opener does before placing the file", () => {
+    // `../site/a.md` opens `/site/a.md`: outside the folder, so no relative
+    // form (and no download) even though `/repo/../site/a.md` starts with it.
+    expect(resolveFileReferenceTarget("../site/a.md", "/repo")).toEqual({
+      absolute: "/site/a.md",
+      relative: null,
+    })
+    expect(resolveFileReferenceTarget("./src/../a.md", "/repo")).toEqual({
+      absolute: "/repo/a.md",
+      relative: "a.md",
+    })
+    // …and places it against the folder resolved the same way.
+    expect(resolveFileReferenceTarget("./a.md", "/repo/../site")).toEqual({
+      absolute: "/site/a.md",
+      relative: "a.md",
+    })
+  })
+
   it("keeps a ~ path in tilde form (home only resolves through the backend)", () => {
     expect(resolveFileReferenceTarget("~/notes/todo.md", "/repo")).toEqual({
       absolute: "~/notes/todo.md",
@@ -148,6 +184,9 @@ describe("FileReferenceActions", () => {
     mocks.ancestorContextMenu.mockClear()
     mocks.ancestorPointerDown.mockClear()
     mocks.folderPath = "/repo"
+    mocks.isWorkspaceFileApiAvailable.mockReturnValue(true)
+    mocks.downloadWorkspaceFile.mockReset()
+    mocks.downloadWorkspaceFile.mockResolvedValue({ status: "started" })
   })
 
   it("passes the badge through untouched when the target has no local path", () => {
@@ -247,6 +286,107 @@ describe("FileReferenceActions", () => {
     openMenu()
 
     expect(screen.queryByRole("menuitem", { name: /^Open in/ })).toBeNull()
+    expect(item("Copy absolute path")).toBeInTheDocument()
+  })
+
+  /** In web / remote-desktop mode the file sits on a host the browser can't
+   * reach, so the download ticket is the only way to get the bytes out. */
+  it("downloads through the workspace ticket, rooted at the active folder", async () => {
+    renderActions("file:///repo/src/app.ts#L10-25")
+    openMenu()
+
+    fireEvent.click(item("Download file"))
+    await waitFor(() => {
+      expect(mocks.downloadWorkspaceFile).toHaveBeenCalledWith(
+        "/repo",
+        "src/app.ts",
+        "app.ts"
+      )
+    })
+    // The browser's own download manager reports progress; a toast on top of
+    // it would be noise.
+    expect(mocks.toastSuccess).not.toHaveBeenCalled()
+  })
+
+  it("downloads from the folder the way the opener resolves it", async () => {
+    // A click on `./a.md` under `/repo/../site` opens `/site/a.md`; the
+    // download has to fetch that same file, so it is rooted the same way.
+    mocks.folderPath = "/repo/../site"
+    renderActions("./a.md")
+    openMenu()
+
+    fireEvent.click(item("Download file"))
+    await waitFor(() => {
+      expect(mocks.downloadWorkspaceFile).toHaveBeenCalledWith(
+        "/site",
+        "a.md",
+        "a.md"
+      )
+    })
+    expect(mocks.downloadWorkspaceFile).toHaveBeenCalledTimes(1)
+  })
+
+  it("offers no relative path or download for a `../` file outside the folder", () => {
+    renderActions("../site/a.md")
+    openMenu()
+
+    expect(item("Copy relative path")).toHaveAttribute("data-disabled")
+    expect(item("Download file")).toHaveAttribute("data-disabled")
+    expect(item("Copy absolute path")).not.toHaveAttribute("data-disabled")
+  })
+
+  /** The remote-desktop path writes through a save dialog, so where the file
+   * landed is the one outcome the user cannot see for themselves. */
+  it("names the saved path when the download went through a save dialog", async () => {
+    mocks.downloadWorkspaceFile.mockResolvedValue({
+      status: "done",
+      savedPath: "/Users/me/Downloads/app.ts",
+    })
+    renderActions("file:///repo/src/app.ts")
+    openMenu()
+
+    fireEvent.click(item("Download file"))
+    await waitFor(() => {
+      expect(mocks.toastSuccess).toHaveBeenCalledWith(
+        "Downloaded app.ts",
+        expect.objectContaining({ description: "/Users/me/Downloads/app.ts" })
+      )
+    })
+  })
+
+  it("toasts when the download is refused", async () => {
+    mocks.downloadWorkspaceFile.mockRejectedValue(new Error("File not found"))
+    renderActions("file:///repo/src/app.ts")
+    openMenu()
+
+    fireEvent.click(item("Download file"))
+    await waitFor(() => {
+      expect(mocks.toastError).toHaveBeenCalledWith(
+        "Failed to download app.ts",
+        expect.objectContaining({
+          description: expect.stringMatching(/not found/),
+        })
+      )
+    })
+  })
+
+  /** The ticket is issued against the workspace root, so a file outside it has
+   * nothing to download from — same boundary as the relative-path copy. */
+  it("disables the download for a file outside the active folder", () => {
+    renderActions("file:///elsewhere/a.ts")
+    openMenu()
+
+    expect(item("Download file")).toHaveAttribute("data-disabled")
+  })
+
+  /** A local desktop window opens the file straight off its own disk; routing
+   * that through a download server would be the wrong tool. */
+  it("hides the download row on a local desktop window", () => {
+    mocks.isWorkspaceFileApiAvailable.mockReturnValue(false)
+    renderActions("file:///repo/src/app.ts")
+    openMenu()
+
+    expect(screen.queryByRole("menuitem", { name: "Download file" })).toBeNull()
     expect(item("Copy absolute path")).toBeInTheDocument()
   })
 })

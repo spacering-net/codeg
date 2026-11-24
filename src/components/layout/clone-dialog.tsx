@@ -6,6 +6,8 @@ import { toast } from "sonner"
 import { Loader2 } from "lucide-react"
 import { cloneRepository } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
+import { joinFsPath } from "@/lib/path-utils"
+import type { FolderDetail } from "@/lib/types"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useGitCredential } from "@/contexts/git-credential-context"
 import {
@@ -23,9 +25,22 @@ import { DirectoryPathInput } from "@/components/shared/directory-path-input"
 interface CloneDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
+  /**
+   * Called once the cloned repository has been opened as a workspace folder —
+   * the same hook `WorkspaceFolderDialog` offers, so a caller can act on the
+   * new folder (the sidebar files it into the group the clone started from).
+   * It is the callback of the render the Clone click happened in, so a clone
+   * still finishing after the dialog was reopened elsewhere reports to the
+   * caller that started it.
+   */
+  onFolderOpened?: (folder: FolderDetail) => void
 }
 
-export function CloneDialog({ open, onOpenChange }: CloneDialogProps) {
+export function CloneDialog({
+  open,
+  onOpenChange,
+  onFolderOpened,
+}: CloneDialogProps) {
   const t = useTranslations("Folder.cloneDialog")
   const tToasts = useTranslations("Folder.toasts")
   const openFolder = useAppWorkspaceStore((s) => s.openFolder)
@@ -35,13 +50,27 @@ export function CloneDialog({ open, onOpenChange }: CloneDialogProps) {
   const [cloning, setCloning] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Derived from the remote URL, so `/` is the right separator to split on
+  // regardless of the local OS. Trailing slashes come off before `.git` so
+  // `…/codeg.git/` still names the repo `codeg` — the same directory `git
+  // clone` would have picked on its own.
   const repoName = useMemo(
     () =>
       url
+        .replace(/\/+$/, "")
         .replace(/\.git$/, "")
         .split("/")
-        .pop() ?? "repo",
+        .filter(Boolean)
+        .pop() || "repo",
     [url]
+  )
+
+  // The target directory is an OS path the user typed or picked, so the clone
+  // target has to be joined with THAT path's separator — a hardcoded "/" left
+  // Windows previews reading `C:\work/codeg`.
+  const fullPath = useMemo(
+    () => joinFsPath(targetDir, repoName),
+    [targetDir, repoName]
   )
 
   const resetForm = () => {
@@ -52,7 +81,6 @@ export function CloneDialog({ open, onOpenChange }: CloneDialogProps) {
 
   const handleClone = async () => {
     if (!url || !targetDir) return
-    const fullPath = `${targetDir}/${repoName}`
     setCloning(true)
     setError(null)
     try {
@@ -60,7 +88,8 @@ export function CloneDialog({ open, onOpenChange }: CloneDialogProps) {
         (creds) => cloneRepository(url, fullPath, creds),
         { remoteUrl: url }
       )
-      await openFolder(fullPath)
+      const detail = await openFolder(fullPath)
+      onFolderOpened?.(detail)
       onOpenChange(false)
       resetForm()
     } catch (err) {
@@ -108,7 +137,7 @@ export function CloneDialog({ open, onOpenChange }: CloneDialogProps) {
             />
             {targetDir && url && (
               <p className="text-xs text-muted-foreground">
-                {t("clonePath", { path: `${targetDir}/${repoName}` })}
+                {t("clonePath", { path: fullPath })}
               </p>
             )}
           </div>

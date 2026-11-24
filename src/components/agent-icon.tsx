@@ -346,6 +346,33 @@ const PiColorIcon = memo(function PiColorIcon({ size = "1em" }: IconProps) {
   )
 })
 
+const DeepSeekColorIcon = memo(function DeepSeekColorIcon({
+  size = "1em",
+}: IconProps) {
+  // DeepSeek's whale mark in the official brand blue (#4D6BFE), bare — no
+  // plate behind it, so it reads at the same visual weight as the other marks
+  // (Codex fills its whole `2 2 20 20` box the same way). The glyph is the
+  // 24-box path published by simple-icons, drawn at its natural size: it spans
+  // the full width and its bounding box centers on (11.9, 12.0), so the plain
+  // 24-box viewBox already centers it — an inset transform would only shrink
+  // it relative to its neighbours.
+  return (
+    <svg
+      height={size}
+      style={baseSvgStyle}
+      viewBox="0 0 24 24"
+      width={size}
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <title>DeepSeek Harness</title>
+      <path
+        fill="#4D6BFE"
+        d="M23.748 4.651c-.254-.124-.364.113-.512.233-.051.04-.094.09-.137.137-.372.397-.806.657-1.373.626-.829-.046-1.537.214-2.163.848-.133-.782-.575-1.248-1.247-1.548-.352-.155-.708-.311-.955-.65-.172-.24-.219-.509-.305-.774-.055-.16-.11-.323-.293-.35-.2-.031-.278.136-.356.276-.313.572-.434 1.202-.422 1.84.027 1.436.633 2.58 1.838 3.393.137.094.172.187.129.323-.082.28-.18.553-.266.833-.055.179-.137.218-.328.14a5.5 5.5 0 0 1-1.737-1.179c-.857-.828-1.631-1.743-2.597-2.46a12 12 0 0 0-.689-.47c-.985-.957.13-1.743.387-1.836.27-.098.094-.433-.778-.428-.872.003-1.67.295-2.687.685a3 3 0 0 1-.465.136 9.6 9.6 0 0 0-2.883-.101c-1.885.21-3.39 1.1-4.497 2.622C.082 8.776-.231 10.854.152 13.02c.403 2.284 1.568 4.175 3.36 5.653 1.857 1.533 3.997 2.284 6.438 2.14 1.482-.085 3.132-.284 4.994-1.86.47.234.962.328 1.78.398.629.058 1.235-.031 1.705-.129.735-.155.684-.836.418-.961-2.155-1.004-1.682-.595-2.112-.926 1.095-1.295 2.768-3.598 3.284-6.733.05-.346.115-.834.108-1.114-.004-.171.035-.238.23-.257a4.2 4.2 0 0 0 1.545-.475c1.397-.763 1.96-2.016 2.093-3.517.02-.23-.004-.467-.247-.588M11.58 18.168c-2.088-1.642-3.101-2.183-3.52-2.16-.39.024-.32.472-.234.763.09.288.207.487.371.74.114.167.192.416-.113.603-.673.416-1.842-.14-1.897-.168-1.361-.801-2.5-1.86-3.301-3.306-.775-1.393-1.225-2.888-1.299-4.482-.02-.385.094-.522.477-.592a4.7 4.7 0 0 1 1.53-.038c2.131.311 3.946 1.264 5.467 2.774.868.86 1.525 1.887 2.202 2.89.72 1.066 1.494 2.082 2.48 2.915.348.291.626.513.892.677-.802.09-2.14.109-3.055-.615zm1.001-6.44a.306.306 0 0 1 .415-.287.3.3 0 0 1 .113.074.3.3 0 0 1 .086.214c0 .17-.136.307-.308.307a.303.303 0 0 1-.306-.307m3.11 1.596c-.2.081-.4.151-.591.16a1.25 1.25 0 0 1-.798-.254c-.274-.23-.47-.358-.551-.758a1.7 1.7 0 0 1 .015-.588c.07-.327-.007-.537-.238-.727-.188-.156-.426-.199-.689-.199a.6.6 0 0 1-.254-.078.253.253 0 0 1-.114-.358 1 1 0 0 1 .192-.21c.356-.202.767-.136 1.146.016.352.144.618.408 1.001.782.392.451.462.576.685.915.176.264.336.536.446.848.066.194-.02.353-.25.45"
+      />
+    </svg>
+  )
+})
+
 const GrokMonoIcon = memo(function GrokMonoIcon({ size = "1em" }: IconProps) {
   // xAI's Grok mark — the two-stroke glyph from the official favicon
   // (grok.com/images/favicon.svg). Rendered frameless (no squircle) and in
@@ -364,6 +391,94 @@ const GrokMonoIcon = memo(function GrokMonoIcon({ size = "1em" }: IconProps) {
       <title>Grok</title>
       <path d="M210.484 312.759L343.465 210.383C349.984 205.364 359.302 207.322 362.408 215.117C378.758 256.231 371.454 305.64 338.925 339.563C306.397 373.487 261.137 380.927 219.768 363.983L174.577 385.803C239.394 432.008 318.104 420.581 367.289 369.251C406.303 328.564 418.386 273.104 407.088 223.091L407.19 223.198C390.807 149.726 411.218 120.359 453.03 60.3072C454.02 58.8833 455.01 57.4595 456 56L400.978 113.382V113.204L210.45 312.794" />
       <path d="M183.042 337.641C136.519 291.294 144.54 219.567 184.236 178.203C213.59 147.59 261.683 135.096 303.666 153.464L348.755 131.75C340.632 125.627 330.221 119.042 318.275 114.414C264.277 91.2407 199.63 102.774 155.735 148.516C113.513 192.549 100.236 260.254 123.036 318.027C140.069 361.206 112.148 391.748 84.0229 422.575C74.0561 433.503 64.0553 444.431 56 456L183.007 337.677" />
+    </svg>
+  )
+})
+
+const QoderMonoIcon = memo(function QoderMonoIcon({ size = "1em" }: IconProps) {
+  // Qoder's Q mark — the official glyph from the ACP registry
+  // (cdn.agentclientprotocol.com/registry/v1/latest/qoder.svg), already
+  // authored in currentColor so it renders frameless like the other mono
+  // marks (Cursor's icon comes from the same registry CDN).
+  return (
+    <svg
+      fill="currentColor"
+      height={size}
+      style={baseSvgStyle}
+      viewBox="0 0 16 16"
+      width={size}
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <title>Qoder</title>
+      <path d="M8 1C4.134 1 1 4.134 1 8s3.134 7 7 7c1.5 0 2.9-.47 4.05-1.28l1.12 1.12a.75.75 0 1 0 1.06-1.06l-1.12-1.12A6.97 6.97 0 0 0 15 8c0-3.866-3.134-7-7-7Zm0 2c2.761 0 5 2.239 5 5s-2.239 5-5 5-5-2.239-5-5 2.239-5 5-5Z" />
+    </svg>
+  )
+})
+
+const AntigravityMonoIcon = memo(function AntigravityMonoIcon({
+  size = "1em",
+}: IconProps) {
+  // Antigravity's arch mark — the official glyph from the ACP registry
+  // (cdn.agentclientprotocol.com/registry/v1/latest/antigravity-acp.svg),
+  // already authored in currentColor so it renders frameless like the other
+  // mono marks (Qoder's and Cursor's come from the same registry CDN).
+  return (
+    <svg
+      fill="none"
+      height={size}
+      style={baseSvgStyle}
+      viewBox="0 0 16 16"
+      width={size}
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <title>Google Antigravity</title>
+      <path
+        d="M14.1452 14.6818C14.9937 15.3182 16.2664 14.894 15.0997 13.7273C11.5998 10.3333 12.3421 1 7.99366 1C3.64518 1 4.3876 10.3333 0.887603 13.7273C-0.385123 15 0.993664 15.3182 1.84215 14.6818C5.13002 12.4545 4.9179 8.5303 7.99366 8.5303C11.0694 8.5303 10.8573 12.4545 14.1452 14.6818Z"
+        fill="currentColor"
+      />
+    </svg>
+  )
+})
+
+const ZCodeColorIcon = memo(function ZCodeColorIcon({
+  size = "1em",
+}: IconProps) {
+  // ZCode's Z mark, white on a dark squircle like the official app icon
+  // (zai-org/ZCode public/logo/icons, also zcode.z.ai's favicon). The three
+  // paths are the logo inlined in zcode.z.ai's header, verbatim in its
+  // 256×218 viewBox; the transform scales the mark to the app icon's
+  // proportion (68.75% of the icon's width) and centers it in the 24-box. The
+  // plate keeps the app icon's top-to-bottom #151718 → #000000 gradient on the
+  // 5.3 corner of the other plated marks (Kimi Code, Pi).
+  const id = useId()
+  return (
+    <svg
+      height={size}
+      style={baseSvgStyle}
+      viewBox="0 0 24 24"
+      width={size}
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <title>ZCode</title>
+      <rect width="24" height="24" rx="5.3" fill={`url(#${id})`} />
+      <g fill="#FFFFFF" transform="translate(3.75 4.9831) scale(0.064453)">
+        <path d="M134.4 0.130152L116.48 25.6022C113.665 29.5699 109.054 32.0019 104.064 32.0019H6.3999V0C6.3999 0.130149 134.4 0.130152 134.4 0.130152Z" />
+        <path d="M256 0.130127L102.401 217.732H0L153.599 0.130127H256Z" />
+        <path d="M121.601 217.732L139.65 192.134C142.465 188.166 147.076 185.734 152.067 185.734H249.604V217.736H121.601V217.732Z" />
+      </g>
+      <defs>
+        <linearGradient
+          gradientUnits="userSpaceOnUse"
+          id={id}
+          x1="12"
+          x2="12"
+          y1="0"
+          y2="24"
+        >
+          <stop stopColor="#151718" />
+          <stop offset="1" stopColor="#000000" />
+        </linearGradient>
+      </defs>
     </svg>
   )
 })
@@ -389,6 +504,106 @@ const CursorMonoIcon = memo(function CursorMonoIcon({
   )
 })
 
+const KiroColorIcon = memo(function KiroColorIcon({ size = "1em" }: IconProps) {
+  // Kiro's ghost mark from the official app icon (kiro.dev/icon.svg), drawn
+  // bare in the brand purple (#9046FF) with its two eyes cut out, so it sits
+  // at the same weight as the other frameless marks instead of carrying the
+  // icon's rounded plate. The paths are the icon's own, translated so the
+  // glyph's 655×796 mask box starts at the origin.
+  return (
+    <svg
+      height={size}
+      style={baseSvgStyle}
+      viewBox="-70 0 796 796"
+      width={size}
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <title>Kiro CLI</title>
+      <g transform="translate(-272.637 -202.793)">
+        <path
+          fill="#9046FF"
+          fillRule="evenodd"
+          d="M398.554 818.914C316.315 1001.03 491.477 1046.74 620.672 940.156C658.687 1059.66 801.052 970.473 852.234 877.795C964.787 673.567 919.318 465.357 907.64 422.374C827.637 129.443 427.623 128.946 358.8 423.865C342.651 475.544 342.402 534.18 333.458 595.051C328.986 625.86 325.507 645.488 313.83 677.785C306.873 696.424 297.68 712.819 282.773 740.645C259.915 783.881 269.604 867.113 387.87 823.883L399.051 818.914H398.554ZM636.123 549.353C603.328 549.353 598.359 510.097 598.359 486.742C598.359 465.623 602.086 448.977 609.293 438.293C615.504 428.852 624.697 424.131 636.123 424.131C647.555 424.131 657.492 428.852 664.447 438.541C672.398 449.474 676.623 466.12 676.623 486.742C676.623 525.998 661.471 549.353 636.375 549.353H636.123ZM771.24 549.353C738.445 549.353 733.477 510.097 733.477 486.742C733.477 465.623 737.203 448.977 744.41 438.293C750.621 428.852 759.814 424.131 771.24 424.131C782.672 424.131 792.609 428.852 799.564 438.541C807.516 449.474 811.74 466.12 811.74 486.742C811.74 525.998 796.588 549.353 771.492 549.353H771.24Z"
+        />
+      </g>
+    </svg>
+  )
+})
+
+const TraeColorIcon = memo(function TraeColorIcon({ size = "1em" }: IconProps) {
+  // TRAE's mark — the notched frame with two diamond eyes — in the brand green
+  // (#32F08C) on a black squircle, the way TRAE's own favicon renders it (the
+  // green alone is too faint on a light background). Vector from LobeHub's
+  // MIT-licensed `trae.svg`; its 24-unit glyph spans y 3.4–20.541, so the
+  // transform scales it to 70% and centers it in the box.
+  return (
+    <svg
+      height={size}
+      style={baseSvgStyle}
+      viewBox="0 0 24 24"
+      width={size}
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <title>TRAE CLI</title>
+      <rect width="24" height="24" rx="5.3" fill="#000000" />
+      <path
+        transform="translate(3.6 3.62) scale(0.7)"
+        fill="#32F08C"
+        fillRule="evenodd"
+        d="M24 20.541H3.428v-3.426H0V3.4h24V20.54zM3.428 17.115h17.144V6.827H3.428v10.288zm8.573-5.196l-2.425 2.424-2.424-2.424 2.424-2.424 2.425 2.424zm6.857-.001l-2.424 2.423-2.425-2.423 2.425-2.425 2.424 2.425z"
+      />
+    </svg>
+  )
+})
+
+const CommandCodeColorIcon = memo(function CommandCodeColorIcon({
+  size = "1em",
+}: IconProps) {
+  // Command Code's mark — the ⌘ key glyph in a squircle — the way its app icon
+  // draws it: white on black. Both paths are the vector Command Code's own
+  // VS Code extension ships (`icons/icon-dark.svg`, bundled with the
+  // `command-code` npm package): the squircle's outer edge, filled, and the
+  // glyph unchanged.
+  return (
+    <svg
+      height={size}
+      style={baseSvgStyle}
+      viewBox="0 0 144 144"
+      width={size}
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <title>Command Code</title>
+      <path
+        fill="#000000"
+        d="M10.3193 10.3193C0 20.6387 0 37.2474 0 70.4648V73.1398C0 106.357 0 122.966 10.3193 133.285C20.6387 143.605 37.2474 143.605 70.4648 143.605H73.1398C106.357 143.605 122.966 143.605 133.285 133.285C143.605 122.966 143.605 106.357 143.605 73.1399V70.4648C143.605 37.2474 143.605 20.6387 133.285 10.3193C122.966 0 106.357 0 73.1399 0H70.4648C37.2474 0 20.6387 0 10.3193 10.3193Z"
+      />
+      <path
+        fill="#FFFFFF"
+        d="M98.8049 27.6163C89.3295 27.6163 81.6214 35.3243 81.6214 44.7997V52.1641H61.9832V44.7997C61.9832 35.3243 54.2752 27.6163 44.7997 27.6163C35.3243 27.6163 27.6163 35.3243 27.6163 44.7997C27.6163 54.2752 35.3243 61.9832 44.7997 61.9832H52.1641V81.6214H44.7997C35.3243 81.6214 27.6163 89.3295 27.6163 98.8049C27.6163 108.28 35.3243 115.988 44.7997 115.988C54.2752 115.988 61.9832 108.28 61.9832 98.8049V91.4406H81.6214V98.8049C81.6214 108.28 89.3295 115.988 98.8049 115.988C108.28 115.988 115.988 108.28 115.988 98.8049C115.988 89.3295 108.28 81.6214 98.8049 81.6214H91.4406V61.9832H98.8049C108.28 61.9832 115.988 54.2752 115.988 44.7997C115.988 35.3243 108.28 27.6163 98.8049 27.6163ZM91.4406 52.1641V44.7997C91.4406 40.7248 94.73 37.4354 98.8049 37.4354C102.88 37.4354 106.169 40.7248 106.169 44.7997C106.169 48.8747 102.88 52.1641 98.8049 52.1641H91.4406ZM44.7997 52.1641C40.7248 52.1641 37.4354 48.8747 37.4354 44.7997C37.4354 40.7248 40.7248 37.4354 44.7997 37.4354C48.8747 37.4354 52.1641 40.7248 52.1641 44.7997V52.1641H44.7997ZM61.9832 81.6214V61.9832H81.6214V81.6214H61.9832ZM98.8049 106.169C94.73 106.169 91.4406 102.88 91.4406 98.8049V91.4406H98.8049C102.88 91.4406 106.169 94.73 106.169 98.8049C106.169 102.88 102.88 106.169 98.8049 106.169ZM44.7997 106.169C40.7248 106.169 37.4354 102.88 37.4354 98.8049C37.4354 94.73 40.7248 91.4406 44.7997 91.4406H52.1641V98.8049C52.1641 102.88 48.8747 106.169 44.7997 106.169Z"
+      />
+    </svg>
+  )
+})
+
+// A compact typographic mark, not a claim to reproduce MiniMax's wordmark.
+const MiniMaxCodeColorIcon = memo(function MiniMaxCodeColorIcon({
+  size = "1em",
+}: IconProps) {
+  return (
+    <svg
+      height={size}
+      style={baseSvgStyle}
+      viewBox="0 0 24 24"
+      width={size}
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <title>MiniMax Code</title>
+      <rect width="24" height="24" rx="6" fill="#F23F5D" />
+      <path d="M5 17V7h3l4 6 4-6h3v10h-3v-5l-4 6-4-6v5H5Z" fill="#FFFFFF" />
+    </svg>
+  )
+})
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyIcon = React.ComponentType<any>
 
@@ -398,7 +613,13 @@ const COLOR_ICONS: Partial<Record<AgentType, AnyIcon>> = {
   gemini: GeminiCliColorIcon,
   open_claw: OpenClawColorIcon,
   kimi_code: KimiCodeColorIcon,
+  minimax_code: MiniMaxCodeColorIcon,
   pi: PiColorIcon,
+  deepseek: DeepSeekColorIcon,
+  kiro: KiroColorIcon,
+  zcode: ZCodeColorIcon,
+  trae: TraeColorIcon,
+  command_code: CommandCodeColorIcon,
 }
 
 const MONO_ICONS: Partial<Record<AgentType, AnyIcon>> = {
@@ -408,6 +629,8 @@ const MONO_ICONS: Partial<Record<AgentType, AnyIcon>> = {
   code_buddy: CodeBuddyMonoIcon,
   grok: GrokMonoIcon,
   cursor: CursorMonoIcon,
+  qoder: QoderMonoIcon,
+  antigravity: AntigravityMonoIcon,
 }
 
 // Per-agent color override for mono marks, layered on top of the default
@@ -416,10 +639,20 @@ const MONO_ICONS: Partial<Record<AgentType, AnyIcon>> = {
 const AGENT_TEXT_COLORS: Partial<Record<AgentType, string>> = {}
 
 export function AgentIcon({ agentType, className }: AgentIconProps) {
+  // The mark fills its box — unless the icon sits in a control that sizes
+  // every SVG without a `size-*` class itself (Button, SelectItem, menu
+  // items), which can leave it smaller or larger than the box. Centered, it
+  // still shares the box's center line with the label beside it, rather than
+  // hanging off the box's top corner.
   const ColorIcon = COLOR_ICONS[agentType]
   if (ColorIcon) {
     return (
-      <span className={cn("inline-flex shrink-0", className)}>
+      <span
+        className={cn(
+          "inline-flex shrink-0 items-center justify-center",
+          className
+        )}
+      >
         <ColorIcon size="100%" />
       </span>
     )
@@ -435,7 +668,7 @@ export function AgentIcon({ agentType, className }: AgentIconProps) {
     return (
       <span
         className={cn(
-          "inline-flex shrink-0 text-foreground",
+          "inline-flex shrink-0 items-center justify-center text-foreground",
           AGENT_TEXT_COLORS[agentType],
           className
         )}

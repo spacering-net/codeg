@@ -13,6 +13,8 @@ import {
   MessageSquarePlus,
   PackagePlus,
   ShieldCheck,
+  Shrink,
+  SquareSlash,
   Trash2,
   Zap,
 } from "lucide-react"
@@ -22,6 +24,7 @@ import {
   AgentConfigSection,
   effectiveSelections,
   snapshotLabels,
+  useBooleanOptionLabels,
 } from "@/components/automations/agent-config-section"
 import { useAgentOptions } from "@/components/automations/use-agent-options"
 import { getAgentLabel } from "@/lib/custom-agents"
@@ -33,6 +36,7 @@ import {
   workTaskSettingsSet,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
+import { isLocalCommand } from "@/lib/local-command"
 import { cn } from "@/lib/utils"
 import {
   SettingCard,
@@ -114,9 +118,10 @@ const MERGE_STRATEGIES = [
 ] as const
 
 /**
- * Shared tab body. The floor is the natural height of the Prompts tab, so it
- * and General settle at exactly the same height with no dead space under their
- * last card; only Workflow, which is genuinely taller, grows the dialog.
+ * Shared tab body. The floor is the natural height of the Prompts tab, so
+ * every tab settles at the same height instead of the dialog resizing under
+ * the pointer as you move along the strip; a tab that is genuinely taller
+ * grows past it.
  */
 const TAB_BODY_CLASS = "mt-1 flex min-h-[19.5rem] flex-col gap-3"
 
@@ -128,13 +133,14 @@ interface TaskSettingsDialogProps {
 }
 
 /**
- * Task defaults, per folder or global, grouped into three tabs: General (the
+ * Task defaults, per folder or global, grouped into four tabs: General (the
  * processing agent + its ACP-probed mode/model options, auto-process, max
- * concurrency), Workflow (how a task lands, plus the worktree init and
- * preflight commands) and Prompts (per-stage instructions appended to what the
- * engine sends the agent). The scope selector above the tabs switches which
- * settings row is being edited; the global row (folder id 0) applies wholesale
- * to folders that never saved their own.
+ * concurrency), Merge (how a finished task lands), Worktree (where the task's
+ * worktree is created and what runs inside it) and Prompts (per-stage
+ * instructions appended to what the engine sends the agent). The scope
+ * selector above the tabs switches which settings row is being edited; the
+ * global row (folder id 0) applies wholesale to folders that never saved their
+ * own.
  *
  * Every option is rendered as a `SettingRow` inside a `SettingCard`, and the
  * cards are the grouping: options that are one decision (merge strategy and
@@ -219,6 +225,8 @@ function TaskSettingsBody({
   const [deleteWorktreeDefault, setDeleteWorktreeDefault] = useState(true)
   const [worktreeRoot, setWorktreeRoot] = useState("")
   const [initCommand, setInitCommand] = useState("")
+  const [autoCompactPercent, setAutoCompactPercent] = useState("0")
+  const [compactCommand, setCompactCommand] = useState("")
   const [preflightCommand, setPreflightCommand] = useState("")
   const [stagePrompts, setStagePrompts] = useState<Record<string, string>>({})
   const [stage, setStage] = useState<string>(PROMPT_STAGES[0].key)
@@ -260,11 +268,16 @@ function TaskSettingsBody({
         setDeleteWorktreeDefault(s.delete_worktree_default)
         setWorktreeRoot(s.worktree_root ?? "")
         setInitCommand(s.init_command ?? "")
+        setAutoCompactPercent(String(s.auto_compact_percent ?? 0))
+        setCompactCommand(s.compact_command ?? "")
         setStagePrompts(s.stage_prompts ?? {})
+        // Never one the desktop app runs on its own machine: the preflight
+        // runs on the folder's host.
         const legacy =
           s.preflight_command_id != null
-            ? (commands.find((c) => c.id === s.preflight_command_id)?.command ??
-              "")
+            ? (commands.find(
+                (c) => c.id === s.preflight_command_id && !isLocalCommand(c)
+              )?.command ?? "")
             : ""
         setPreflightCommand(s.preflight_command?.trim() || legacy)
       })
@@ -284,8 +297,10 @@ function TaskSettingsBody({
   const agentOptions = useAgentOptions(
     agentType,
     folder?.path ?? null,
-    loaded != null && editing
+    loaded != null && editing,
+    configValues
   )
+  const booleanLabels = useBooleanOptionLabels()
 
   const save = async () => {
     setSaving(true)
@@ -303,13 +318,16 @@ function TaskSettingsBody({
         configValues
       )
       const parsed = Number.parseInt(maxConcurrent, 10)
+      // A percentage the box can't represent (blank, or typed past 100) reads
+      // as "off" rather than as an accidental compact-every-round.
+      const compactPercent = Number.parseInt(autoCompactPercent, 10)
       const settings: WorkTaskFolderSettings = {
         default_agent_type: agentType,
         mode_id,
         config_values,
         label_snapshot: {
           agent_label: getAgentLabel(agentType) ?? agentType,
-          ...snapshotLabels(snapshot, mode_id, config_values),
+          ...snapshotLabels(snapshot, mode_id, config_values, booleanLabels),
         },
         auto_process: autoProcess,
         max_concurrent: Number.isFinite(parsed) && parsed >= 0 ? parsed : 2,
@@ -325,6 +343,13 @@ function TaskSettingsBody({
         preflight_command_id: null,
         preflight_command: preflightCommand.trim() || null,
         init_command: initCommand.trim() || null,
+        auto_compact_percent:
+          Number.isFinite(compactPercent) &&
+          compactPercent > 0 &&
+          compactPercent <= 100
+            ? compactPercent
+            : 0,
+        compact_command: compactCommand.trim() || null,
         // Blank stages are dropped rather than stored as "" — the engine
         // trims anyway, and an empty entry would only add noise to the blob.
         stage_prompts: Object.fromEntries(
@@ -420,12 +445,19 @@ function TaskSettingsBody({
 
         {editing ? (
           <Tabs value={tab} onValueChange={setTab}>
-            <TabsList className="w-full">
+            {/* Labelled because the Prompts tab nests a second strip whose
+                stages carry some of the same words ("Merge"), and a bare
+                "tab named Merge" would otherwise be ambiguous to a screen
+                reader — and to a test. */}
+            <TabsList className="w-full" aria-label={t("settingsTitle")}>
               <TabsTrigger value="general" className="flex-1">
                 {t("settingsTabGeneral")}
               </TabsTrigger>
-              <TabsTrigger value="workflow" className="flex-1">
-                {t("settingsTabWorkflow")}
+              <TabsTrigger value="merge" className="flex-1">
+                {t("settingsTabMerge")}
+              </TabsTrigger>
+              <TabsTrigger value="worktree" className="flex-1">
+                {t("settingsTabWorktree")}
               </TabsTrigger>
               <TabsTrigger value="prompts" className="flex-1">
                 {t("settingsTabPrompts")}
@@ -448,8 +480,10 @@ function TaskSettingsBody({
                       />
                     </div>
                     <AgentConfigSection
+                      agentType={agentOptions.snapshotAgentType}
                       snapshot={agentOptions.snapshot}
                       loading={agentOptions.loading}
+                      stale={!agentOptions.current}
                       error={agentOptions.error}
                       onReload={agentOptions.reload}
                       modeId={modeId}
@@ -465,6 +499,9 @@ function TaskSettingsBody({
                         })
                       }
                     />
+                    <p className="text-xs text-muted-foreground">
+                      {t("settingsAgentFrozenHint")}
+                    </p>
                   </div>
                 </SettingRow>
               </SettingCard>
@@ -503,12 +540,55 @@ function TaskSettingsBody({
                   }
                 />
               </SettingCard>
+
+              {/* Every round after the first resumes the same session, so its
+                  context only grows. The threshold and the command that acts
+                  on it belong together: the second is unreadable without the
+                  first. */}
+              <SettingCard>
+                <SettingRow
+                  icon={Shrink}
+                  title={t("settingsAutoCompact")}
+                  description={t("settingsAutoCompactHint")}
+                  htmlFor="task-auto-compact"
+                  control={
+                    <div className="flex items-center gap-1.5">
+                      <Input
+                        id="task-auto-compact"
+                        inputMode="numeric"
+                        value={autoCompactPercent}
+                        onChange={(e) =>
+                          setAutoCompactPercent(
+                            e.target.value.replace(/[^0-9]/g, "").slice(0, 3)
+                          )
+                        }
+                        className="h-8 w-16 bg-background text-center"
+                      />
+                      <span className="text-xs text-muted-foreground">%</span>
+                    </div>
+                  }
+                />
+                <SettingRow
+                  icon={SquareSlash}
+                  title={t("settingsCompactCommand")}
+                  description={t("settingsCompactCommandHint")}
+                  htmlFor="task-compact-command"
+                >
+                  <Input
+                    id="task-compact-command"
+                    value={compactCommand}
+                    onChange={(e) => setCompactCommand(e.target.value)}
+                    placeholder={t("settingsCompactCommandPlaceholder")}
+                    className="h-8 bg-background font-mono text-xs"
+                  />
+                </SettingRow>
+              </SettingCard>
             </TabsContent>
 
-            <TabsContent value="workflow" className={TAB_BODY_CLASS}>
-              {/* Everything about landing a task lives in one card: how the
-                  commits are recorded, and what happens to the worktree right
-                  after. Plain-language options, no git jargon. */}
+            {/* Landing a task: how the commits are recorded, whether it lands
+                without you, and what happens to the worktree right after.
+                Plain-language options, no git jargon. */}
+            <TabsContent value="merge" className={TAB_BODY_CLASS}>
               <SettingCard>
                 <SettingRow
                   icon={GitMerge}
@@ -594,10 +674,17 @@ function TaskSettingsBody({
                     />
                   }
                 />
+                {/* Writing the outcome back to the issue/PR used to be a
+                    switch here. It moved into the workbench's own start
+                    dialog: it is the one thing a task does in a thread other
+                    people are reading, so it is asked per work item, in front
+                    of the item. */}
               </SettingCard>
+            </TabsContent>
 
-              {/* A worktree's life, in order: where it is created, what runs
-                  in it once it exists, and what has to pass before it lands. */}
+            {/* A worktree's life, in order: where it is created, what runs in
+                it once it exists, and what has to pass before it lands. */}
+            <TabsContent value="worktree" className={TAB_BODY_CLASS}>
               <SettingCard>
                 <SettingRow
                   icon={FolderTree}
@@ -661,7 +748,10 @@ function TaskSettingsBody({
                   what stops people from re-stating the built-ins here. */}
               <SettingNote icon={Info}>{t("settingsPromptsIntro")}</SettingNote>
               <Tabs value={stage} onValueChange={setStage}>
-                <TabsList className="w-full flex-wrap group-data-horizontal/tabs:h-auto">
+                <TabsList
+                  className="w-full flex-wrap group-data-horizontal/tabs:h-auto"
+                  aria-label={t("settingsTabPrompts")}
+                >
                   {PROMPT_STAGES.map((s) => (
                     <TabsTrigger
                       key={s.key}

@@ -1,4 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!--
+    Full-bleed on purpose: the web favicon, the Windows .ico and the Linux PNGs
+    all want the canvas filled. macOS is the exception — it needs an 824/1024
+    safe-area inset — and that inset is applied when building icon.icns:
+
+        python3 src-tauri/icons/macos-icon.gen.py
+
+    Re-run it after changing anything below, or the Dock icon keeps the old art.
+  -->
   <defs>
     <!-- 代码符号渐变 -->
     <linearGradient id="code" x1="0%" y1="0%" x2="100%" y2="100%">

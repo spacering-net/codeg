@@ -13,8 +13,17 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu"
 import { useActiveFolder } from "@/contexts/active-folder-context"
+import {
+  downloadWorkspaceFile,
+  isWorkspaceFileApiAvailable,
+  WORKSPACE_DOWNLOAD_CANCELLED,
+} from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
-import { expandHomePath, isHomeRelativePath } from "@/lib/file-open-target"
+import {
+  expandHomePath,
+  isHomeRelativePath,
+  normalizeAbsPath,
+} from "@/lib/file-open-target"
 import {
   toAbsoluteFilePath,
   toFolderRelativePath,
@@ -36,8 +45,9 @@ export interface FileReferencePaths {
 
 /**
  * Resolve a rendered file reference — a `file://` uri (user-message badge) or a
- * local path (assistant markdown link, already rewritten by
- * remark-file-uri-links) — into its absolute and folder-relative forms.
+ * local path (assistant markdown link, as remark-file-uri-links and
+ * rehype-relative-file-links leave it) — into its absolute and folder-relative
+ * forms.
  *
  * Returns null when the target isn't a local file at all (a web link, an
  * embedded `codeg://` attachment badge) or when a relative target can't be made
@@ -59,13 +69,18 @@ export function resolveFileReferenceTarget(
     return { absolute: target.path, relative: null }
   }
 
-  const absolute = toAbsoluteFilePath(target.path, folderPath ?? undefined)
-  if (!absolute) return null
+  const joined = toAbsoluteFilePath(target.path, folderPath ?? undefined)
+  if (!joined) return null
+  // Resolve `.` / `..` the way the opener does, or `../site/a.md` from `/repo`
+  // would read as `/repo/../site/a.md` — inside the folder by its prefix, when
+  // the file it opens, `/site/a.md`, is not.
+  const absolute = normalizeAbsPath(joined)
 
   // `toFolderRelativePath` returns the absolute path unchanged when the file
   // lives outside the folder — that's "no relative form", not a relative path.
+  // The folder is compared in the same resolved form as the file.
   const relative = folderPath
-    ? toFolderRelativePath(absolute, folderPath)
+    ? toFolderRelativePath(absolute, normalizeAbsPath(folderPath))
     : null
   return {
     absolute,
@@ -93,7 +108,11 @@ export function systemFileManagerLabelKey():
 function FileReferenceActionsMenu({ target }: { target: string }) {
   const t = useTranslations("Folder.chat.fileActions")
   const { activeFolder } = useActiveFolder()
+  // Resolved the way the opener resolves it, so the relative path below and
+  // the download that uses it name the file a click opens.
   const folderPath = activeFolder?.path
+    ? normalizeAbsPath(activeFolder.path)
+    : undefined
   const paths = useMemo(
     () => resolveFileReferenceTarget(target, folderPath),
     [target, folderPath]
@@ -123,6 +142,34 @@ function FileReferenceActionsMenu({ target }: { target: string }) {
     })
   }
 
+  // Same shape as the file tree's download row: the ticket is issued against
+  // the workspace root, so a file outside the active folder — the case where
+  // there is no relative form — has nothing to download from.
+  const handleDownload = () => {
+    const relative = paths?.relative
+    if (!relative || !folderPath) return
+    const name = relative.split("/").pop() || relative
+    void (async () => {
+      try {
+        const result = await downloadWorkspaceFile(folderPath, relative, name)
+        // Web hands off to the browser's download manager ("started"), which
+        // shows its own progress — a toast there would just be noise. Only the
+        // remote-desktop save-dialog path has an outcome worth reporting.
+        if (result.status === "started") return
+        if (result.status === WORKSPACE_DOWNLOAD_CANCELLED) return
+        if (result.savedPath) {
+          toast.success(t("downloadSaved", { name }), {
+            description: result.savedPath,
+          })
+        }
+      } catch (error) {
+        toast.error(t("downloadFailed", { name }), {
+          description: toErrorMessage(error),
+        })
+      }
+    })()
+  }
+
   return (
     <>
       {/* `revealItemInDir` is a no-op in web mode and for a desktop window
@@ -144,6 +191,15 @@ function FileReferenceActionsMenu({ target }: { target: string }) {
       >
         {t("copyAbsolutePath")}
       </ContextMenuItem>
+      {/* Web and remote-desktop windows have no reach into the machine that
+          holds the file, so downloading is how the byte stream gets to the
+          user — mirroring the file tree's own row. A local desktop window can
+          just open it, so the row is hidden rather than dead. */}
+      {isWorkspaceFileApiAvailable() && (
+        <ContextMenuItem disabled={!paths?.relative} onSelect={handleDownload}>
+          {t("download")}
+        </ContextMenuItem>
+      )}
     </>
   )
 }
@@ -152,8 +208,9 @@ function FileReferenceActionsMenu({ target }: { target: string }) {
  * Wraps an inline file badge in the transcript (user messages via
  * PlainTextWithBadges, assistant markdown via MarkdownLink) so that right-
  * clicking the file name opens its actions: reveal in the OS file manager, copy
- * relative path, copy absolute path. A non-file target renders its children
- * untouched, with no menu attached.
+ * relative path, copy absolute path, and — where the file lives on another host
+ * — download it. A non-file target renders its children untouched, with no menu
+ * attached.
  *
  * A context menu (not a hover popover, and not a click target of its own) is
  * what leaves the badge's own behaviour intact: a left click still opens the

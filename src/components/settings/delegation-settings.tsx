@@ -1,7 +1,7 @@
 "use client"
 
 /**
- * Multi-agent delegation settings panel. Two top-level concerns split into
+ * Multi-agent delegation settings panel. Three top-level concerns split into
  * tabs:
  *
  *   * "General" — feature kill switch + chain depth limit. Persisted as
@@ -9,20 +9,22 @@
  *   * "Agent defaults" — per-agent overrides (mode + config_values) that
  *     codeg-mcp uses when spawning a subagent for a `delegate_to_agent`
  *     call. Persisted as `delegation.agent_defaults` (one JSON blob).
+ *   * "Assistants" — the user's assistants. Each change is written at once,
+ *     so the section's save bar does not apply to (and is hidden on) it.
  *
  * Cancellation is handled out-of-band via MCP `notifications/cancelled`
  * forwarded from the parent agent CLI; there is no broker-side timeout to
  * configure here.
  *
- * Mounted under `/settings/general` next to the terminal and rendering
- * sections, because delegation is a global feature — not per-agent — and
- * doesn't belong inside the 7,800-line `acp-agent-settings.tsx` that
- * powers `/settings/agents`.
+ * Mounted under `/settings/collaboration` above the in-conversation tools,
+ * because delegation is a global feature — not per-agent — and doesn't belong
+ * inside the 7,800-line `acp-agent-settings.tsx` that powers
+ * `/settings/agents`.
  */
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
-import { Bubbles, Gauge, HardDrive, Power } from "lucide-react"
+import { AlertTriangle, Bubbles, Gauge, HardDrive, Power } from "lucide-react"
 import { toast } from "sonner"
 
 import { SettingCard, SettingRow } from "@/components/shared/setting-card"
@@ -35,13 +37,40 @@ import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
+  acpListAgents,
   type DelegationSettings,
   getDelegationSettings,
   setDelegationSettings,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
+import { subscribe } from "@/lib/platform"
+import { DELEGATION_SETTINGS_CHANGED_EVENT } from "@/lib/types"
 import type { AgentDelegationDefaults, AgentType } from "@/lib/types"
+import { AssistantsPanel } from "./assistants-panel"
 import { DelegationAgentDefaultsPanel } from "./delegation-agent-defaults"
+
+type DelegationTab = "general" | "agentDefaults" | "assistants"
+
+function sameDefaults(
+  a: Partial<Record<AgentType, AgentDelegationDefaults>>,
+  b: Partial<Record<AgentType, AgentDelegationDefaults>>
+): boolean {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]) as Set<AgentType>
+  for (const key of keys) {
+    const x = a[key]
+    const y = b[key]
+    if (!x || !y) {
+      if (x || y) return false
+      continue
+    }
+    if ((x.mode_id ?? null) !== (y.mode_id ?? null)) return false
+    const xv = x.config_values ?? {}
+    const yv = y.config_values ?? {}
+    const ids = new Set([...Object.keys(xv), ...Object.keys(yv)])
+    for (const id of ids) if (xv[id] !== yv[id]) return false
+  }
+  return true
+}
 
 const DEPTH_MIN = 1
 const DEPTH_MAX = 8
@@ -71,13 +100,40 @@ export function DelegationSettingsSection() {
     Partial<Record<AgentType, AgentDelegationDefaults>>
   >({})
   const [loadError, setLoadError] = useState<string | null>(null)
+  // Enabled agents whose per-agent sandbox switch withholds the delegation
+  // tools (see `withheldByHostTools`). Empty until the agent list loads, and
+  // left empty if it fails — this is an explanatory note, never a gate.
+  const [withheldAgents, setWithheldAgents] = useState<string[]>([])
+  /** Last value of the switch that came from the backend — a load, a save, or
+   * the broadcast below. `enabled !== baselineEnabledRef.current` is therefore
+   * "the user moved this and hasn't saved yet". */
+  const baselineEnabledRef = useRef(false)
+  /** Bumped by every broadcast, so a load or save reply can tell that a
+   * broadcast landed while it was out — and leave the switch and the saved
+   * record to it (see `persisted`). */
+  const remoteGenRef = useRef(0)
+  /** What the backend has saved, whole — from the load, a save, or a
+   * broadcast — as opposed to the form's draft. Drives the unsaved-changes
+   * dots and the assistants tab's "multi-agent is off" notice. A reply only
+   * replaces it while no broadcast has arrived since its request went out.
+   * Broadcasts arrive in commit order, so once one has, the last one received
+   * is the saved state, or is about to be followed by it — whereas a reply can
+   * land after a newer broadcast (the load read "off", another window switched
+   * it on and broadcast, then the late reply would switch it back). */
+  const [persisted, setPersisted] = useState<DelegationSettings | null>(null)
+  const [tab, setTab] = useState<DelegationTab>("general")
 
   useEffect(() => {
     let cancelled = false
+    const gen = remoteGenRef.current
     void getDelegationSettings()
       .then((s) => {
         if (cancelled) return
-        setEnabled(s.enabled)
+        if (remoteGenRef.current === gen) {
+          setEnabled(s.enabled)
+          baselineEnabledRef.current = s.enabled
+          setPersisted(s)
+        }
         setDepth(s.depth_limit)
         setCacheMb(s.completed_cache_max_mb)
         setAgentDefaults(s.agent_defaults ?? {})
@@ -96,6 +152,84 @@ export function DelegationSettingsSection() {
     }
   }, [])
 
+  // The switch above is not the only thing that decides whether an agent gets
+  // `delegate_to_agent`: the per-agent "the agent handles files and commands
+  // itself" switch withholds the delegation tool group too, because delegation
+  // routes the same work back through codeg's process. That override is
+  // invisible from here, which reads as "I turned multi-agent on and the tools
+  // are gone" — so name the agents it applies to.
+  //
+  // `host_tools_agent_mode` is the backend's RESOLVED verdict, not a re-read of
+  // `env`: the knob also resolves from codeg's own process env, and an operator
+  // who exported it there would otherwise see no warning while every agent
+  // silently lost delegation.
+  useEffect(() => {
+    let cancelled = false
+    void acpListAgents()
+      .then((agents) => {
+        if (cancelled) return
+        setWithheldAgents(
+          agents
+            .filter((a) => a.enabled && a.host_tools_agent_mode)
+            .map((a) => a.name)
+        )
+      })
+      .catch(() => {
+        // Nothing to say if we can't tell — leave the note off rather than
+        // warning about agents that may well be able to delegate.
+        if (!cancelled) setWithheldAgents([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  /**
+   * Converge on a delegation write that happened elsewhere.
+   *
+   * The status-bar codeg-mcp popover flips `enabled` on its own, while the save
+   * below submits the whole record. Without this, a form left open across such
+   * a toggle would send its stale `enabled` on the next save — changing only the
+   * depth limit would silently switch delegation back off.
+   *
+   * A switch the user has already moved keeps their pending value; only the
+   * baseline follows the remote, so their edit still wins on save.
+   */
+  useEffect(() => {
+    let disposed = false
+    let unsubscribe: (() => void) | undefined
+    void subscribe<DelegationSettings>(
+      DELEGATION_SETTINGS_CHANGED_EVENT,
+      (remote) => {
+        remoteGenRef.current += 1
+        // Snapshot the old baseline before overwriting it, rather than reading
+        // the ref from inside the updater. React usually computes an updater
+        // eagerly, which would read it before the line below — but only while
+        // the fiber has no pending work; once it defers, the updater would see
+        // the NEW baseline, conclude an untouched switch had been edited, and
+        // refuse the broadcast, which is the one case this exists for. Reading
+        // it here is correct under both schedules.
+        const previousBaseline = baselineEnabledRef.current
+        baselineEnabledRef.current = remote.enabled
+        setEnabled((current) =>
+          current === previousBaseline ? remote.enabled : current
+        )
+        setPersisted(remote)
+      }
+    )
+      .then((fn) => {
+        if (disposed) fn()
+        else unsubscribe = fn
+      })
+      // Transport not ready is not a reason to break the form; this window just
+      // keeps whatever it loaded.
+      .catch(() => {})
+    return () => {
+      disposed = true
+      unsubscribe?.()
+    }
+  }, [])
+
   const save = useCallback(async () => {
     const payload: DelegationSettings = {
       enabled,
@@ -104,11 +238,22 @@ export function DelegationSettingsSection() {
       agent_defaults: agentDefaults,
     }
     setSaving(true)
+    const gen = remoteGenRef.current
     try {
       const applied = await setDelegationSettings(payload)
+      // A broadcast that landed while the save was out owns the switch and the
+      // saved record from here: a generation cannot tell an older write (the
+      // status-bar popover's, committed just before this one) from a newer one,
+      // but every broadcast arrives in commit order, so the last one is right
+      // — the save's own included. Putting this reply's switch back instead
+      // would undo a popover flip that committed after it.
+      if (remoteGenRef.current === gen) {
+        setPersisted(applied)
+        setEnabled(applied.enabled)
+        baselineEnabledRef.current = applied.enabled
+      }
       // Mirror any server-side clamps / filter passes back into the UI so the
       // inputs reflect what was actually persisted.
-      setEnabled(applied.enabled)
       setDepth(applied.depth_limit)
       setCacheMb(applied.completed_cache_max_mb)
       setAgentDefaults(applied.agent_defaults ?? {})
@@ -122,6 +267,27 @@ export function DelegationSettingsSection() {
     }
   }, [enabled, depth, cacheMb, agentDefaults, t])
 
+  const generalDirty =
+    persisted !== null &&
+    (enabled !== persisted.enabled ||
+      clamp(depth, DEPTH_MIN, DEPTH_MAX) !== persisted.depth_limit ||
+      clampCacheMb(cacheMb) !== persisted.completed_cache_max_mb)
+  const defaultsDirty =
+    persisted !== null &&
+    !sameDefaults(agentDefaults, persisted.agent_defaults ?? {})
+  const unsavedTabs = [
+    ...(generalDirty ? [t("tabGeneral")] : []),
+    ...(defaultsDirty ? [t("tabAgentDefaults")] : []),
+  ]
+  const unsavedDot = (
+    <span
+      role="img"
+      className="size-1.5 shrink-0 rounded-full bg-amber-500"
+      aria-label={t("unsavedChanges")}
+      title={t("unsavedChanges")}
+    />
+  )
+
   return (
     <SettingsSection
       icon={Bubbles}
@@ -132,12 +298,17 @@ export function DelegationSettingsSection() {
         <SettingsError>{t("loadFailed", { detail: loadError })}</SettingsError>
       )}
 
-      <Tabs defaultValue="general">
+      <Tabs value={tab} onValueChange={(v) => setTab(v as DelegationTab)}>
         <TabsList>
-          <TabsTrigger value="general">{t("tabGeneral")}</TabsTrigger>
+          <TabsTrigger value="general">
+            {t("tabGeneral")}
+            {generalDirty ? unsavedDot : null}
+          </TabsTrigger>
           <TabsTrigger value="agentDefaults">
             {t("tabAgentDefaults")}
+            {defaultsDirty ? unsavedDot : null}
           </TabsTrigger>
+          <TabsTrigger value="assistants">{t("tabAssistants")}</TabsTrigger>
         </TabsList>
 
         {/* The kill switch and the two valves it gates are one decision, so
@@ -159,6 +330,19 @@ export function DelegationSettingsSection() {
                 />
               }
             />
+            {enabled && withheldAgents.length > 0 && (
+              // Padded like a `SettingRow` (`px-3`) so the glyph and text line
+              // up with the rows it sits between, rather than hanging a notch
+              // to their left inside the shared card.
+              <p className="flex items-start gap-1.5 px-3 py-2 text-2xs text-amber-700 dark:text-amber-400">
+                <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                <span>
+                  {t("withheldByHostTools", {
+                    agents: withheldAgents.join(", "),
+                  })}
+                </span>
+              </p>
+            )}
             <SettingRow
               icon={Gauge}
               title={t("depthLimit")}
@@ -210,17 +394,32 @@ export function DelegationSettingsSection() {
             value={agentDefaults}
             onChange={setAgentDefaults}
             disabled={loading || !enabled}
+            delegationEnabled={loading ? null : enabled}
+            onShowGeneral={() => setTab("general")}
+          />
+        </TabsContent>
+
+        <TabsContent value="assistants" className="pt-2">
+          <AssistantsPanel
+            delegationEnabled={persisted ? persisted.enabled : null}
+            unsavedTabs={unsavedTabs}
+            onShowUnsaved={() =>
+              setTab(generalDirty ? "general" : "agentDefaults")
+            }
+            onShowGeneral={() => setTab("general")}
           />
         </TabsContent>
       </Tabs>
 
-      <SettingsSaveBar
-        onSave={() => void save()}
-        saving={saving}
-        disabled={loading}
-        label={t("save")}
-        savingLabel={t("saving")}
-      />
+      {tab !== "assistants" ? (
+        <SettingsSaveBar
+          onSave={() => void save()}
+          saving={saving}
+          disabled={loading}
+          label={t("save")}
+          savingLabel={t("saving")}
+        />
+      ) : null}
     </SettingsSection>
   )
 }

@@ -14,6 +14,13 @@ vi.mock("@/components/providers/update-provider", () => ({
 const openUrl = vi.fn()
 vi.mock("@/lib/platform", () => ({ openUrl: (u: string) => openUrl(u) }))
 
+// The local desktop app (true) or a server (false, the jsdom default).
+let tauriUpdater = false
+vi.mock("@/lib/updater", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/updater")>()),
+  usesTauriUpdater: () => tauriUpdater,
+}))
+
 // The popover pulls the markdown stack in lazily; keep the test off the ESM
 // markdown pipeline (its rendering is the settings page's concern).
 vi.mock("@/components/settings/release-notes", () => ({
@@ -52,6 +59,7 @@ function makeCtx(overrides: Partial<UpdateContextValue>): UpdateContextValue {
     liveProgress: false,
     runtime: undefined,
     rollbackAvailable: false,
+    selfUpdateBlocker: null,
     canInstallInPlace: true,
     dismissedVersion: null,
     checkNow: vi.fn(async () => {}),
@@ -75,7 +83,17 @@ function renderWith(overrides: Partial<UpdateContextValue>) {
 
 const RELEASE = { version: "0.21.9", body: "## Fixes", date: "2026-07-24" }
 
+// What the server reports for an install directory it can't write.
+const UNWRITABLE_BIN = {
+  code: "permission_denied",
+  message: "Update target is not writable: /usr/local/bin",
+  detail: "Permission denied (os error 13)",
+  i18n_key: "SystemSettings.updateErrors.permissionDenied",
+  i18n_params: { path: "/usr/local/bin" },
+}
+
 beforeEach(() => {
+  tauriUpdater = false
   startUpdate.mockClear()
   restart.mockClear()
   dismissAvailable.mockClear()
@@ -182,7 +200,7 @@ describe("StatusBarUpdate — popover", () => {
     })
     fireEvent.click(link)
     expect(openUrl).toHaveBeenCalledWith(
-      "https://github.com/xintaofei/codeg/releases/latest"
+      "https://github.com/spacering-net/codeg/releases/latest"
     )
     expect(startUpdate).not.toHaveBeenCalled()
   })
@@ -204,6 +222,26 @@ describe("StatusBarUpdate — popover", () => {
     const actions = screen.getAllByRole("button", { name: /Restart to update/ })
     fireEvent.click(actions[actions.length - 1])
     expect(restart).toHaveBeenCalledTimes(1)
+  })
+
+  it("waits for a restarting server to come back", async () => {
+    renderWith({ state: { seq: 6, status: "restarting" }, restartCountdown: 0 })
+    fireEvent.click(screen.getByRole("button", { name: /Restarting/ }))
+    expect(
+      await screen.findByText("Waiting for the server to come back...")
+    ).toBeVisible()
+  })
+
+  it("has no server to wait for while the desktop app restarts", async () => {
+    // On Windows the installer runs at the restart, so the app spends a few
+    // seconds here.
+    tauriUpdater = true
+    renderWith({ state: { seq: 6, status: "restarting" }, isRestarting: true })
+    fireEvent.click(screen.getByRole("button", { name: /Restarting/ }))
+    expect(await screen.findAllByText("Restarting...")).toHaveLength(2)
+    expect(
+      screen.queryByText("Waiting for the server to come back...")
+    ).not.toBeInTheDocument()
   })
 
   it("still offers the upgrade after a dismissal, without the Later button", async () => {
@@ -241,6 +279,56 @@ describe("StatusBarUpdate — popover", () => {
     expect(await screen.findByText(/Check your network or proxy/)).toBeVisible()
     fireEvent.click(screen.getByRole("button", { name: "Retry" }))
     expect(startUpdate).toHaveBeenCalled()
+  })
+
+  it("offers the release page, and says why, when the server can't install in place", async () => {
+    // A root-owned install run by an unprivileged service: the server reports
+    // it up front, so the popover must not offer an upgrade certain to fail.
+    renderWith({
+      available: RELEASE,
+      selfUpdateBlocker: UNWRITABLE_BIN,
+      canInstallInPlace: false,
+    })
+    fireEvent.click(screen.getByRole("button", { name: /New v0\.21\.9/ }))
+
+    expect(
+      await screen.findByText(
+        "Cannot write to /usr/local/bin, so updates can't be installed in place. Update manually with administrator privileges or check installation permissions."
+      )
+    ).toBeVisible()
+    expect(
+      screen.getByRole("button", { name: /View v0\.21\.9 release/ })
+    ).toBeVisible()
+    expect(screen.queryByRole("button", { name: /Upgrade to/ })).toBeNull()
+  })
+
+  it("names the directory once when the failed install hit that wall", async () => {
+    renderWith({
+      available: RELEASE,
+      state: {
+        seq: 7,
+        status: "error",
+        error: UNWRITABLE_BIN.message,
+        errorInfo: UNWRITABLE_BIN,
+      },
+      selfUpdateBlocker: UNWRITABLE_BIN,
+      canInstallInPlace: false,
+    })
+    fireEvent.click(screen.getByRole("button", { name: /New v0\.21\.9/ }))
+
+    expect(
+      await screen.findByText(
+        /^Update error: Cannot write to \/usr\/local\/bin/
+      )
+    ).toBeVisible()
+    // Not repeated as a separate hint, and no retry that would fail again.
+    expect(
+      screen.getAllByText(/Cannot write to \/usr\/local\/bin/)
+    ).toHaveLength(1)
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull()
+    expect(
+      screen.getByRole("button", { name: /View v0\.21\.9 release/ })
+    ).toBeVisible()
   })
 
   it("reports transferred bytes while downloading", async () => {

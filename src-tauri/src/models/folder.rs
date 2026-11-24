@@ -32,6 +32,47 @@ pub struct FolderDetail {
     /// User-supplied display alias, or NULL when unset. When present the sidebar
     /// folder header and conversation header render `alias [name]`.
     pub alias: Option<String>,
+    /// Sidebar folder group this folder belongs to, or NULL for top level.
+    /// Display-only grouping — never consulted for cwd, agent or conversation
+    /// resolution. Always NULL on worktree children (they follow their repo).
+    pub group_id: Option<i32>,
+}
+
+/// A sidebar folder group. Ordered against ungrouped top-level folders by the
+/// shared `sort_order` space, so the two interleave in one list.
+#[derive(Debug, Clone, Serialize)]
+pub struct FolderGroupDetail {
+    pub id: i32,
+    pub name: String,
+    /// One of the shared theme colors, or `"inherit"`. Tints only the group's
+    /// own header row; member folders keep their own color.
+    pub color: String,
+    pub sort_order: i32,
+}
+
+/// Which kind of sidebar entry a {@link SidebarLayoutEntry} names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SidebarEntryKind {
+    Folder,
+    Group,
+}
+
+/// One row of the sidebar's desired layout, as submitted by the client after a
+/// drag. The client sends the COMPLETE visible layout — the top-level sequence
+/// followed by each group's members, in render order — and the writer assigns
+/// `sort_order` from a per-container counter, so the call is idempotent and
+/// self-healing. Rows not named here (e.g. closed folders) are left untouched.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SidebarLayoutEntry {
+    pub kind: SidebarEntryKind,
+    pub id: i32,
+    /// Only meaningful for `folder` entries: the group it lands in, or None for
+    /// top level. Ignored (and always None) for `group` entries — groups never
+    /// nest.
+    #[serde(default)]
+    pub group_id: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,6 +115,9 @@ pub struct FolderCommandInfo {
     pub name: String,
     pub command: String,
     pub sort_order: i32,
+    /// Run by the desktop app on its own machine, detached, instead of in a
+    /// terminal on the folder's host.
+    pub run_local: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

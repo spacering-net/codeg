@@ -18,6 +18,7 @@ import { BracesIcon, ChevronRightIcon, ListTreeIcon } from "lucide-react"
 import { useTranslations } from "next-intl"
 
 import { CodeBlock } from "@/components/ai-elements/code-block"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
 
 /**
@@ -297,16 +298,19 @@ export const JsonTreeView = memo(function JsonTreeView({
       {showRaw ? (
         <CodeBlock code={raw} language="json" />
       ) : (
-        <div className="overflow-x-auto p-3 pr-8 font-mono text-xs leading-relaxed">
-          <JsonRow
-            path=""
-            label={null}
-            value={value}
-            depth={0}
-            expanded={expanded}
-            onToggle={onToggle}
-          />
-        </div>
+        // Sideways on the overlay scrollbars, under the toggle that stays put.
+        <ScrollArea x="scroll" y="hidden">
+          <div className="p-3 pr-8 font-mono text-xs leading-relaxed">
+            <JsonRow
+              path=""
+              label={null}
+              value={value}
+              depth={0}
+              expanded={expanded}
+              onToggle={onToggle}
+            />
+          </div>
+        </ScrollArea>
       )}
     </div>
   )

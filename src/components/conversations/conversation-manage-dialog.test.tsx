@@ -5,28 +5,43 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ConversationManageDialog } from "./conversation-manage-dialog"
 import enMessages from "@/i18n/messages/en.json"
-import type { DbConversationSummary, FolderDetail } from "@/lib/types"
+import type {
+  AcpAgentInfo,
+  DbConversationSummary,
+  FolderDetail,
+} from "@/lib/types"
+import { setCustomAgentDisplay } from "@/lib/custom-agents"
 
 const h = vi.hoisted(() => ({
   listAll: vi.fn(),
   deleteConv: vi.fn(),
+  moveConvs: vi.fn(),
   updateStatus: vi.fn(),
   closeConversationTab: vi.fn(),
   refreshConversations: vi.fn(),
   folders: [] as FolderDetail[],
+  agents: [] as Pick<
+    AcpAgentInfo,
+    "agent_type" | "name" | "enabled" | "available"
+  >[],
+}))
+
+vi.mock("@/hooks/use-acp-agents", () => ({
+  useAcpAgents: () => ({ agents: h.agents, fresh: true, refresh: vi.fn() }),
 }))
 
 // Inline SVG with a <title> would duplicate the agent label in text queries.
 vi.mock("@/components/agent-icon", () => ({ AgentIcon: () => null }))
 
 vi.mock("sonner", () => ({
-  toast: { success: vi.fn(), error: vi.fn() },
+  toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
 }))
 
 vi.mock("@/lib/api", () => ({
   listAllConversations: h.listAll,
   deleteConversation: h.deleteConv,
   updateConversationStatus: h.updateStatus,
+  moveConversations: h.moveConvs,
 }))
 
 vi.mock("@/contexts/tab-context", () => ({
@@ -36,6 +51,9 @@ vi.mock("@/contexts/tab-context", () => ({
 vi.mock("@/stores/app-workspace-store", () => ({
   useAppWorkspaceStore: (selector: (s: unknown) => unknown) =>
     selector({
+      // The open projects (what "Move to…" offers) — chat folders are never
+      // in this list, as in the real store.
+      folders: h.folders.filter((f) => f.kind !== "chat"),
       allFolders: h.folders,
       refreshConversations: h.refreshConversations,
     }),
@@ -53,6 +71,7 @@ function folder(over: Partial<FolderDetail> & { id: number }): FolderDetail {
     parent_id: null,
     kind: "regular",
     alias: null,
+    group_id: null,
     ...over,
   }
 }
@@ -137,7 +156,97 @@ describe("ConversationManageDialog", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     h.folders = FOLDERS
+    h.agents = [
+      {
+        agent_type: "claude_code",
+        name: "Claude Code",
+        enabled: true,
+        available: true,
+      },
+      {
+        agent_type: "custom:claude-code-2",
+        name: "Claude Code 2",
+        enabled: true,
+        available: true,
+      },
+      {
+        agent_type: "custom:claude-code-3",
+        name: "Review account",
+        enabled: true,
+        available: true,
+      },
+      {
+        agent_type: "custom:codex-2",
+        name: "Codex 2",
+        enabled: false,
+        available: false,
+      },
+    ]
+    setCustomAgentDisplay(
+      h.agents.map((a) => ({ agentType: a.agent_type, name: a.name }))
+    )
     h.listAll.mockResolvedValue(ROWS)
+  })
+
+  it("offers configured custom agents by name and sends their exact filter id", async () => {
+    const user = renderDialog()
+    await screen.findByText("on main")
+    await user.click(screen.getAllByRole("combobox")[0])
+
+    expect(screen.getByRole("option", { name: "Claude Code 2" })).toBeTruthy()
+    expect(screen.getByRole("option", { name: "Review account" })).toBeTruthy()
+    expect(screen.getAllByRole("option", { name: "Claude Code" })).toHaveLength(
+      1
+    )
+    // This is a history filter: disabling an agent must not hide its chats.
+    expect(screen.getByRole("option", { name: "Codex 2" })).not.toHaveAttribute(
+      "data-disabled"
+    )
+    await user.click(screen.getByRole("option", { name: "Claude Code 2" }))
+
+    await waitFor(() =>
+      expect(h.listAll).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          agent_type: "custom:claude-code-2",
+          folder_ids: [1, 2],
+        })
+      )
+    )
+  })
+
+  it("keeps a removed agent from saved chats selectable even when its filter returns no rows", async () => {
+    h.listAll.mockResolvedValue([
+      conversation({
+        id: 4,
+        title: "old custom chat",
+        agent_type: "custom:retired-reviewer",
+      }),
+    ])
+    const user = renderDialog()
+    await screen.findByText("old custom chat")
+    await user.click(screen.getAllByRole("combobox")[0])
+    h.listAll.mockResolvedValue([])
+    await user.click(screen.getByRole("option", { name: "Retired Reviewer" }))
+
+    await waitFor(() =>
+      expect(h.listAll).toHaveBeenLastCalledWith(
+        expect.objectContaining({ agent_type: "custom:retired-reviewer" })
+      )
+    )
+    await waitFor(() =>
+      expect(screen.queryByText("old custom chat")).toBeNull()
+    )
+    const selected = screen.getAllByRole("combobox")[0]
+    await user.click(selected)
+    expect(
+      screen.getByRole("option", { name: "Retired Reviewer" })
+    ).toHaveAttribute("aria-selected", "true")
+    await user.click(screen.getByRole("option", { name: "All agents" }))
+    await waitFor(() =>
+      expect(h.listAll).toHaveBeenLastCalledWith(
+        expect.objectContaining({ agent_type: null })
+      )
+    )
   })
 
   it("shows each conversation's branch in place of its message count", async () => {
@@ -382,5 +491,33 @@ describe("ConversationManageDialog", () => {
 
     await waitFor(() => expect(h.deleteConv).toHaveBeenCalledWith(1))
     expect(h.closeConversationTab).toHaveBeenCalledWith(1, 1, "claude_code")
+  })
+
+  it("moves the selection to another folder and drops what moved from it", async () => {
+    h.moveConvs.mockResolvedValue({
+      moved: [1],
+      skipped: [{ conversationId: 2, reason: "busy" }],
+    })
+    const user = renderDialog()
+    await screen.findByText("on main")
+
+    await user.click(screen.getByText("on main"))
+    await user.click(screen.getByText("on feature"))
+    expect(screen.getByText("2 selected")).toBeTruthy()
+    const listCalls = h.listAll.mock.calls.length
+
+    await user.click(screen.getByRole("button", { name: "Move to…" }))
+    await user.click(paletteRow("beta"))
+    // The pick only asks; nothing moves before the confirmation.
+    expect(h.moveConvs).not.toHaveBeenCalled()
+    expect(screen.getByText("Move 2 conversations")).toBeTruthy()
+    await user.click(screen.getByRole("button", { name: "Move" }))
+
+    await waitFor(() => expect(h.moveConvs).toHaveBeenCalledWith([1, 2], 3))
+    // The one that stayed is still selected for another go; the list refetches.
+    await waitFor(() => expect(screen.getByText("1 selected")).toBeTruthy())
+    await waitFor(() =>
+      expect(h.listAll.mock.calls.length).toBeGreaterThan(listCalls)
+    )
   })
 })
