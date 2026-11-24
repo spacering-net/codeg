@@ -2820,6 +2820,20 @@ describe("TabProvider tab groups", () => {
   // opened conversations" (Appearance settings) turns that slot off. It is off
   // by default, so the preference is the only thing that changes any of this.
   describe("keep opened conversations", () => {
+    beforeEach(() => {
+      // These opens all belong to the same folder. The shared fixture otherwise
+      // places conversation 3 in folder 2, which owns its canonical tab id.
+      useAppWorkspaceStore.setState({
+        conversations: ["First", "Second", "Third", "Fourth", "Fifth"].map(
+          (title, index) => ({
+            ...defaultConversationsMock[0],
+            id: index + 1,
+            title,
+          })
+        ),
+      })
+    })
+
     const preferKeepingTabs = (on: boolean) => {
       if (on) localStorage.setItem(STORAGE_KEY_KEEP_OPENED_CONVERSATIONS, "1")
       else localStorage.removeItem(STORAGE_KEY_KEEP_OPENED_CONVERSATIONS)
