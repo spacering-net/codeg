@@ -1311,7 +1311,7 @@ mod tests {
         assert_eq!(info.children.len(), 1);
         assert_eq!(info.children[0].session_id, child.id);
         assert_eq!(info.children[0].task_id.as_deref(), Some("persisted-task"));
-        assert_eq!(info.children[0].status, child.status);
+        assert_eq!(info.children[0].status, "in_progress");
         assert!(!info.children_truncated);
     }
 
