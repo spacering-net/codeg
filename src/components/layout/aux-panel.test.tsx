@@ -142,7 +142,8 @@ import enMessages from "@/i18n/messages/en.json"
 import { resetAuxTabOrderCacheForTests } from "@/lib/aux-panel-tab-order"
 import { RIGHT_CHROME_CLUSTER } from "@/lib/window-chrome"
 
-import { AuxPanel, resolveAuxTabView } from "./aux-panel"
+import { AuxPanel } from "./aux-panel"
+import { resolveAuxTabView } from "./aux-panel-tab-meta"
 
 const KEY = "workspace:right-sidebar-tab-order"
 
@@ -265,6 +266,10 @@ describe("AuxPanel", () => {
   it("lists every tab on the vertical rail, in the built-in order by default", () => {
     renderPanel()
     expect(railTabs()).toEqual(BUILT_IN)
+    expect(screen.getByRole("tab", { name: "Files" })).toHaveAttribute(
+      "data-slot",
+      "aux-panel-tab-button"
+    )
     expect(rail()).toHaveAttribute("role", "tablist")
     expect(rail()).toHaveAttribute("aria-orientation", "vertical")
     expect(rail()).toBeVisible()

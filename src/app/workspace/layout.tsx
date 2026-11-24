@@ -80,6 +80,7 @@ import { FILL_MODE_STYLE } from "@/lib/workspace-background"
 import { TabBar } from "@/components/tabs/tab-bar"
 import { TerminalPanel } from "@/components/terminal/terminal-panel"
 import { AuxPanel } from "@/components/layout/aux-panel"
+import { AuxPanelCollapsedRail } from "@/components/layout/aux-panel-collapsed-rail"
 import { ChromeReserve } from "@/components/layout/chrome-reserve"
 import { LeftEdgeChrome } from "@/components/layout/left-edge-chrome"
 import { RightEdgeChrome } from "@/components/layout/right-edge-chrome"
@@ -1254,72 +1255,74 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
   )
 
   return (
-    <div
-      ref={shellContainerRef}
-      className="flex flex-1 min-h-0 overflow-hidden"
-    >
-      <ResizablePanelGroup
-        id={FOLDER_SHELL_GROUP_ID}
-        ref={shellGroupRef}
-        direction="horizontal"
-        onLayout={handleShellLayout}
-        className={shellSlideAnimating ? "panel-slide-animating" : undefined}
-      >
-        <ResizablePanel
-          id={FOLDER_SHELL_LEFT_PANEL_ID}
-          order={1}
-          defaultSize={18}
-          style={sidebarPanelStyle}
-          minSize={sidebarOpen ? sidebarSizeRange.minSize : 0}
-          maxSize={sidebarOpen ? sidebarSizeRange.maxSize : 0}
+    // The container measures the panel group's width only — NOT the folded
+    // aux rail beside it: the shell's px↔percent math (shellSides) assumes the
+    // group fills the measured box, and the fold would otherwise inflate every
+    // percent-to-px conversion by its 48px.
+    <div className="flex flex-1 min-h-0 overflow-hidden">
+      <div ref={shellContainerRef} className="flex min-w-0 flex-1">
+        <ResizablePanelGroup
+          id={FOLDER_SHELL_GROUP_ID}
+          ref={shellGroupRef}
+          direction="horizontal"
+          onLayout={handleShellLayout}
+          className={shellSlideAnimating ? "panel-slide-animating" : undefined}
         >
-          {/* `bg-sidebar` on the wrapper (not just the Sidebar surface) so the
+          <ResizablePanel
+            id={FOLDER_SHELL_LEFT_PANEL_ID}
+            order={1}
+            defaultSize={18}
+            style={sidebarPanelStyle}
+            minSize={sidebarOpen ? sidebarSizeRange.minSize : 0}
+            maxSize={sidebarOpen ? sidebarSizeRange.maxSize : 0}
+          >
+            {/* `bg-sidebar` on the wrapper (not just the Sidebar surface) so the
               collapse never flashes white: Sidebar `return null`s the instant
               it closes, but the panel keeps a shrinking width for the 240ms
               slide — an un-backed wrapper would show the root `bg-background`
               (white) through that gap. */}
-          <div className="h-full min-h-0 overflow-hidden ws-surface-sidebar">
-            {sidebarElement}
-          </div>
-        </ResizablePanel>
+            <div className="h-full min-h-0 overflow-hidden ws-surface-sidebar">
+              {sidebarElement}
+            </div>
+          </ResizablePanel>
 
-        <ResizableHandle
-          withHandle
-          disabled={!sidebarOpen}
-          className={
-            sidebarOpen ? "" : "pointer-events-none w-0 opacity-0 after:w-0"
-          }
-        />
+          <ResizableHandle
+            withHandle
+            disabled={!sidebarOpen}
+            className={
+              sidebarOpen ? "" : "pointer-events-none w-0 opacity-0 after:w-0"
+            }
+          />
 
-        <ResizablePanel
-          id={FOLDER_SHELL_MAIN_PANEL_ID}
-          order={2}
-          defaultSize={64}
-          minSize={10}
-        >
-          <main
-            ref={mainContainerRef}
-            className="flex h-full min-h-0 flex-col overflow-hidden"
+          <ResizablePanel
+            id={FOLDER_SHELL_MAIN_PANEL_ID}
+            order={2}
+            defaultSize={64}
+            minSize={10}
           >
-            <ResizablePanelGroup
-              id={FOLDER_MAIN_GROUP_ID}
-              ref={mainGroupRef}
-              direction="vertical"
-              onLayout={handleMainLayout}
-              className={
-                terminalAnimating ? "panel-slide-animating" : undefined
-              }
+            <main
+              ref={mainContainerRef}
+              className="flex h-full min-h-0 flex-col overflow-hidden"
             >
-              <ResizablePanel
-                id={FOLDER_MAIN_WORKSPACE_PANEL_ID}
-                order={1}
-                defaultSize={72}
-                minSize={15}
+              <ResizablePanelGroup
+                id={FOLDER_MAIN_GROUP_ID}
+                ref={mainGroupRef}
+                direction="vertical"
+                onLayout={handleMainLayout}
+                className={
+                  terminalAnimating ? "panel-slide-animating" : undefined
+                }
               >
-                {workspaceElement}
-              </ResizablePanel>
+                <ResizablePanel
+                  id={FOLDER_MAIN_WORKSPACE_PANEL_ID}
+                  order={1}
+                  defaultSize={72}
+                  minSize={15}
+                >
+                  {workspaceElement}
+                </ResizablePanel>
 
-              {/* Closed, the handle gives up its BOX, not just its paint — and
+                {/* Closed, the handle gives up its BOX, not just its paint — and
                   the override has to carry the same
                   `data-[panel-group-direction=vertical]` prefix the base size
                   does. A bare `h-0` is (0,1,0) against that rule's (0,2,0)
@@ -1331,60 +1334,64 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
                   their own edge). The horizontal handles' `w-0` needs no
                   prefix — their base `w-px` is unprefixed, so twMerge drops
                   it. */}
-              <ResizableHandle
-                withHandle
-                disabled={!terminalOpen}
-                className={
-                  terminalOpen
-                    ? ""
-                    : "pointer-events-none opacity-0 data-[panel-group-direction=vertical]:h-0 data-[panel-group-direction=vertical]:after:h-0"
-                }
-              />
+                <ResizableHandle
+                  withHandle
+                  disabled={!terminalOpen}
+                  className={
+                    terminalOpen
+                      ? ""
+                      : "pointer-events-none opacity-0 data-[panel-group-direction=vertical]:h-0 data-[panel-group-direction=vertical]:after:h-0"
+                  }
+                />
 
-              <ResizablePanel
-                id={FOLDER_MAIN_TERMINAL_PANEL_ID}
-                order={2}
-                defaultSize={28}
-                style={terminalPanelStyle}
-                minSize={terminalOpen ? terminalSizeRange.minSize : 0}
-                maxSize={terminalOpen ? terminalSizeRange.maxSize : 0}
-              >
-                <div className="h-full min-h-0 overflow-hidden">
-                  {terminalElement}
-                </div>
-              </ResizablePanel>
-            </ResizablePanelGroup>
-          </main>
-        </ResizablePanel>
+                <ResizablePanel
+                  id={FOLDER_MAIN_TERMINAL_PANEL_ID}
+                  order={2}
+                  defaultSize={28}
+                  style={terminalPanelStyle}
+                  minSize={terminalOpen ? terminalSizeRange.minSize : 0}
+                  maxSize={terminalOpen ? terminalSizeRange.maxSize : 0}
+                >
+                  <div className="h-full min-h-0 overflow-hidden">
+                    {terminalElement}
+                  </div>
+                </ResizablePanel>
+              </ResizablePanelGroup>
+            </main>
+          </ResizablePanel>
 
-        <ResizableHandle
-          withHandle
-          disabled={!auxOpen}
-          className={
-            auxOpen ? "" : "pointer-events-none w-0 opacity-0 after:w-0"
-          }
-        />
+          <ResizableHandle
+            withHandle
+            disabled={!auxOpen}
+            className={
+              auxOpen ? "" : "pointer-events-none w-0 opacity-0 after:w-0"
+            }
+          />
 
-        <ResizablePanel
-          id={FOLDER_SHELL_RIGHT_PANEL_ID}
-          order={3}
-          defaultSize={18}
-          style={auxPanelStyle}
-          minSize={auxOpen ? auxSizeRange.minSize : 0}
-          maxSize={auxOpen ? auxSizeRange.maxSize : 0}
-        >
-          {/* Transparent canvas so the right column reads like the middle
+          <ResizablePanel
+            id={FOLDER_SHELL_RIGHT_PANEL_ID}
+            order={3}
+            defaultSize={18}
+            style={auxPanelStyle}
+            minSize={auxOpen ? auxSizeRange.minSize : 0}
+            maxSize={auxOpen ? auxSizeRange.maxSize : 0}
+          >
+            {/* Transparent canvas so the right column reads like the middle
               conversation area (its own frosted chrome — the aux toolbar — sits
               on top): with a background image on, the file tree shows the image
               through instead of a second frosted layer over the toolbar. The
               paired `bg-background` is the off-state (image disabled): equivalent
               to the old opaque wrapper, so the 240ms collapse slide still never
               flashes white while AuxPanel `return null`s. */}
-          <div className="h-full min-h-0 overflow-hidden bg-background ws-transparent-bg">
-            {auxElement}
-          </div>
-        </ResizablePanel>
-      </ResizablePanelGroup>
+            <div className="h-full min-h-0 overflow-hidden bg-background ws-transparent-bg">
+              {auxElement}
+            </div>
+          </ResizablePanel>
+        </ResizablePanelGroup>
+      </div>
+      {/* The aux panel's rails while the panel is folded away, flush to the
+          window's right edge — see `AuxPanelCollapsedRail` for the gates. */}
+      <AuxPanelCollapsedRail />
     </div>
   )
 }

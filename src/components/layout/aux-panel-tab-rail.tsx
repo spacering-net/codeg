@@ -6,6 +6,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type ComponentProps,
   type KeyboardEvent,
 } from "react"
 import { Reorder } from "motion/react"
@@ -41,6 +42,26 @@ const TRIGGER_CLASS = cn(
   "data-[state=active]:bg-primary/10 data-[state=active]:text-primary",
   "[&_svg]:pointer-events-none [&_svg]:shrink-0"
 )
+
+export function AuxPanelTabButton({
+  icon: Icon,
+  label,
+  className,
+  ...props
+}: ComponentProps<"button"> & { icon: LucideIcon; label: string }) {
+  return (
+    <button
+      {...props}
+      type="button"
+      title={label}
+      aria-label={label}
+      data-slot="aux-panel-tab-button"
+      className={cn(TRIGGER_CLASS, className)}
+    >
+      <Icon className="size-4" />
+    </button>
+  )
+}
 
 /** Alt+↑/↓ moves the focused tab — the keyboard way to do what a drag does.
  *  Radix's roving focus ignores modified arrows, so the two never collide. */
@@ -296,16 +317,14 @@ function AuxTabRailItem({
       {/* The press that starts a drag also selects the tab (Radix activates
           on mousedown), the way a browser tab is selected by grabbing it. */}
       <TabsPrimitive.Trigger
+        asChild
         ref={triggerRef}
         value={tab}
-        title={label}
-        aria-label={label}
         aria-keyshortcuts={MOVE_KEYS}
         onKeyDown={onKeyDown}
         {...reselect.triggerProps}
-        className={TRIGGER_CLASS}
       >
-        <Icon className="size-4" />
+        <AuxPanelTabButton icon={Icon} label={label} />
       </TabsPrimitive.Trigger>
     </Reorder.Item>
   )
