@@ -51,6 +51,11 @@
           ],
           "default": "poll",
           "description": "poll (default): collect the result with get_delegation_status. deliver: Codeg queues the first completed turn back into this conversation, waking it when offline. After starting your independent tasks, finish your current turn and wait for their messages instead of polling; status/wait still work. Requires session messaging."
+        },
+        "follow": {
+          "type": "boolean",
+          "default": false,
+          "description": "Also deliver results of later turns in this child conversation, even after reconnects. This subscription does not keep its process running. Independent of notify_mode, which controls only the first turn. If reply_back and follow both target you for the same turn, Codeg sends one result. Requires session messaging."
         }
       }
     }

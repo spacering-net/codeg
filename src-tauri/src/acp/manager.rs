@@ -2023,7 +2023,7 @@ impl ConnectionManager {
                 .as_ref()
                 .and_then(|(id, _)| id.strip_prefix(super::session_messages::PROMPT_ID_PREFIX));
             let policy = state_arc.read().await.pending_delivery.clone();
-            let turn_id = crate::db::service::turn_delivery_service::begin(
+            let turn_id = crate::db::service::turn_delivery_service::admit(
                 &db.conn,
                 cid,
                 input_id,
@@ -2032,7 +2032,8 @@ impl ConnectionManager {
             .await
             .map_err(|error| AcpError::protocol(error.to_string()))?;
             let mut state = state_arc.write().await;
-            state.active_turn_id = Some(turn_id);
+            state.pending_turn_id = Some(turn_id);
+            state.turn_database = Some(db.conn.clone());
             state.pending_delivery = None;
         }
         match self
@@ -2081,7 +2082,7 @@ impl ConnectionManager {
                 Ok(conversation_id_for_status)
             }
             Err(send_err) => {
-                let rejected_turn = state_arc.write().await.active_turn_id.take();
+                let rejected_turn = state_arc.write().await.pending_turn_id.take();
                 if let Some(turn_id) = rejected_turn {
                     if let Err(error) = crate::db::service::turn_delivery_service::complete(
                         &db.conn,
@@ -3995,7 +3996,7 @@ impl ConnectionManager {
         &self,
         conn_id: &str,
         text: String,
-        message_result: super::session_messages::TurnSender,
+        message_delivery: super::session_messages::SessionMessageDelivery,
     ) -> Result<SteerOutcome, AcpError> {
         if text.chars().count() > MAX_FEEDBACK_CHARS {
             return Err(AcpError::FeedbackDisabled);
@@ -4009,9 +4010,17 @@ impl ConnectionManager {
         if !state.read().await.native_steering_available {
             return Err(AcpError::FeedbackDisabled);
         }
-        Self::submit_feedback_native(conn_id, state, cmd_tx, emitter, text, None, Some(message_result))
-            .await
-            .map(|(_, outcome)| outcome)
+        Self::submit_feedback_native(
+            conn_id,
+            state,
+            cmd_tx,
+            emitter,
+            text,
+            None,
+            Some(message_delivery),
+        )
+        .await
+        .map(|(_, outcome)| outcome)
     }
 
     async fn submit_feedback_native(
@@ -4021,7 +4030,7 @@ impl ConnectionManager {
         emitter: EventEmitter,
         text: String,
         blocks: Option<Vec<PromptInputBlock>>,
-        message_result: Option<super::session_messages::TurnSender>,
+        message_delivery: Option<super::session_messages::SessionMessageDelivery>,
     ) -> Result<(FeedbackItem, SteerOutcome), AcpError> {
         // Cheap pre-flight, NOT the authoritative check (that's the loop's
         // idle arm replying `NoActiveTurn`): skip the round-trip when no turn
@@ -4132,7 +4141,7 @@ impl ConnectionManager {
                 cmd_tx
                     .send(ConnectionCommand::Steer {
                         blocks: wire_blocks,
-                        message_result,
+                        message_delivery,
                         reply: reply_tx,
                     })
                     .await

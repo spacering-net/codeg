@@ -181,6 +181,34 @@ async fn handle_event_with_retry(
     broker: Option<&Arc<DelegationBroker>>,
     known: Option<&ConnHandle>,
 ) {
+    let durable_turn = if matches!(envelope.payload, AcpEvent::TurnComplete { .. }) {
+        match live_or_known(manager, &envelope.connection_id, known).await {
+            Some(((state, _), _)) => state
+                .read()
+                .await
+                .completed_turns
+                .contains_key(&envelope.seq),
+            None => false,
+        }
+    } else {
+        false
+    };
+    if durable_turn {
+        let mut attempts = 0u64;
+        loop {
+            match handle_event(db_conn, manager, envelope, broker, known).await {
+                Ok(()) => return,
+                Err(error) => {
+                    attempts += 1;
+                    if attempts == 1 || attempts.is_multiple_of(30) {
+                        tracing::error!(%error, attempts, connection_id = %envelope.connection_id,
+                            "turn result persistence blocked; retaining frozen result and retrying");
+                    }
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+            }
+        }
+    }
     match handle_event(db_conn, manager, envelope, broker, known).await {
         Ok(()) => return,
         Err(e) => {
@@ -457,6 +485,9 @@ pub(crate) async fn handle_event(
                     write_dropped_turn_status(db_conn, &state_arc, &emitter, cid, stop_reason)
                         .await?;
                 }
+                let mut state = state_arc.write().await;
+                state.settled_turn_seq = state.settled_turn_seq.max(envelope.seq);
+                state.completed_turns.remove(&envelope.seq);
                 return Ok(());
             }
             if claimed {
@@ -4017,6 +4048,74 @@ mod tests {
             .unwrap()
             .expect("conversation row exists")
             .status
+    }
+
+    #[tokio::test]
+    async fn durable_turn_retries_past_legacy_limit_without_losing_result() {
+        use crate::db::service::{
+            session_message_service as queue, turn_delivery_service as delivery,
+        };
+        use sea_orm::{ConnectionTrait, DbBackend, Statement};
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder = test_helpers::seed_folder(&db, "/tmp/persistent-turn-retry").await;
+        let parent = test_helpers::seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        let child = test_helpers::seed_conversation(&db, folder, AgentType::Codex).await;
+        let input_id = queue::enqueue(&db.conn, parent, child, "task".into(), "queue".into(), true)
+            .await
+            .unwrap();
+        let input = queue::queued(&db.conn).await.unwrap().remove(0);
+        queue::claim(&db.conn, &input).await.unwrap();
+        let turn = delivery::begin(&db.conn, child, Some(&input_id), None)
+            .await
+            .unwrap();
+        let manager = Arc::new(ConnectionManager::new());
+        let connection = fake_connection_with_state("durable", Some(child));
+        let state = connection.state.clone();
+        state
+            .write()
+            .await
+            .completed_turns
+            .insert(1, (turn, Some("frozen answer".into())));
+        manager
+            .connections
+            .lock()
+            .await
+            .insert("durable".into(), connection);
+        db.conn.execute(Statement::from_string(DbBackend::Sqlite,
+            "CREATE TRIGGER block_delivery BEFORE INSERT ON session_message BEGIN SELECT RAISE(ABORT, 'temporary failure'); END".to_owned())).await.unwrap();
+        let task_db = db.conn.clone();
+        let task_manager = manager.clone();
+        let task = tokio::spawn(async move {
+            let envelope = EventEnvelope {
+                seq: 1,
+                connection_id: "durable".into(),
+                payload: AcpEvent::TurnComplete {
+                    session_id: "s".into(),
+                    stop_reason: "end_turn".into(),
+                    agent_type: "codex".into(),
+                },
+            };
+            handle_event_with_retry(&task_db, &task_manager, &envelope, None, None).await;
+        });
+        // The former bounded policy has already exhausted its retries here.
+        tokio::time::sleep(Duration::from_millis(3200)).await;
+        assert!(!task.is_finished());
+        assert!(state.read().await.completed_turns.contains_key(&1));
+        db.conn
+            .execute(Statement::from_string(
+                DbBackend::Sqlite,
+                "DROP TRIGGER block_delivery".to_owned(),
+            ))
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(3), task)
+            .await
+            .unwrap()
+            .unwrap();
+        let replies = queue::queued(&db.conn).await.unwrap();
+        assert_eq!(replies.len(), 1);
+        assert!(replies[0].message.contains("frozen answer"));
+        assert!(state.read().await.completed_turns.is_empty());
     }
 
     #[tokio::test]

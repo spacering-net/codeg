@@ -1396,7 +1396,7 @@ pub enum ConnectionCommand {
     /// so the oneshot can never hang.
     Steer {
         blocks: Vec<PromptInputBlock>,
-        message_result: Option<super::session_messages::TurnSender>,
+        message_delivery: Option<super::session_messages::SessionMessageDelivery>,
         reply: tokio::sync::oneshot::Sender<Result<SteerOutcome, AcpError>>,
     },
     /// Stop one AIR async task (`_session/async_task/stop`; claude-agent-acp
@@ -2928,6 +2928,11 @@ pub async fn spawn_agent_connection(
         owner_window_label.clone(),
         None, // folder_id 由后续 prompt handler 在首次 send 时绑定 (Phase 2)
     );
+
+    initial_state.turn_database = selection
+        .as_ref()
+        .and_then(|selection| selection.db())
+        .cloned();
 
     // Install the SessionStarted dedup signal BEFORE wrapping into Arc so the
     // first event (StatusChanged{Connecting} below) doesn't race with the
@@ -15669,6 +15674,31 @@ async fn run_conversation_loop(
                     cancel_grok_agent_turn_asks(delegation_injection, conn_id).await;
                 }
 
+                {
+                    let mut state = state.write().await;
+                    if let Some(turn_id) = state.pending_turn_id.take() {
+                        if let Some(db) = &state.turn_database {
+                            let mut attempts = 0u64;
+                            loop {
+                                match crate::db::service::turn_delivery_service::activate(
+                                    db, &turn_id,
+                                )
+                                .await
+                                {
+                                    Ok(()) => break,
+                                    Err(error) => {
+                                        attempts += 1;
+                                        if attempts == 1 || attempts.is_multiple_of(30) {
+                                            tracing::error!(%error, attempts, "prompt activation blocked on persistence");
+                                        }
+                                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                                    }
+                                }
+                            }
+                        }
+                        state.active_turn_id = Some(turn_id);
+                    }
+                }
                 emit_with_state(
                     state,
                     emitter,
@@ -16495,7 +16525,7 @@ async fn run_conversation_loop(
                                         let _ = reply.send(landed);
                                     }
                                 }
-                                Some(ConnectionCommand::Steer { blocks, message_result, reply }) => {
+                                Some(ConnectionCommand::Steer { blocks, message_delivery, reply }) => {
                                     // Protocol round-trip only — the manager's
                                     // cancellation-shielded task records the
                                     // note + broadcasts `FeedbackSubmitted`
@@ -16527,31 +16557,25 @@ async fn run_conversation_loop(
                                     if let Some(inj) = delegation_injection {
                                         inj.questions.cancel_questions_by_parent(conn_id).await;
                                     }
-                                    let delivery_binding = if let Some(message) = message_result.as_ref() {
+                                    let delivery_binding = if let Some(message) = message_delivery.as_ref() {
                                         let turn_id = state.read().await.active_turn_id.clone();
                                         let Some(turn_id) = turn_id else {
                                             let _ = reply.send(Err(AcpError::NoActiveTurn));
                                             continue;
                                         };
-                                        if let Err(error) = crate::db::service::turn_delivery_service::bind(&message.db, message.message_id, &turn_id).await {
-                                            let _ = reply.send(Err(AcpError::protocol(error.to_string())));
-                                            continue;
-                                        }
-                                        Some((message.db.clone(), message.message_id))
+                                        let previous = match crate::db::service::turn_delivery_service::bind(&message.db, message.message_id, &turn_id).await {
+                                            Ok(previous) => previous,
+                                            Err(error) => {
+                                                let _ = reply.send(Err(AcpError::protocol(error.to_string())));
+                                                continue;
+                                            }
+                                        };
+                                        Some((message.db.clone(), message.message_id, previous))
                                     } else { None };
-                                    if let Some(reply) = message_result {
-                                        let mut state = state.write().await;
-                                        let turn = state.turns_completed;
-                                        state.message_turns.push(super::session_messages::TurnWaiter {
-                                            prompt_id: None,
-                                            turn: Some(turn),
-                                            reply: Some(reply),
-                                        });
-                                    }
                                     let outcome = send_steer_request(&cx, &sid, &blocks).await;
                                     if !matches!(outcome, Ok(SteerOutcome::Injected)) {
-                                        if let Some((db, message_id)) = delivery_binding {
-                                            if let Err(error) = crate::db::service::turn_delivery_service::unbind(&db, message_id).await {
+                                        if let Some((db, message_id, previous)) = delivery_binding {
+                                            if let Err(error) = crate::db::service::turn_delivery_service::unbind(&db, message_id, &previous).await {
                                                 tracing::error!(%error, "could not detach unaccepted session message from turn");
                                             }
                                         }
@@ -25799,8 +25823,38 @@ async fn open_grok_agent_turn(
     prompt_id: String,
     cb_state: &mut CodeBuddyLiveState,
 ) {
-    if !state.write().await.begin_agent_initiated_turn() {
-        return;
+    {
+        let mut state = state.write().await;
+        if !state.begin_agent_initiated_turn() {
+            return;
+        }
+        if let (Some(db), Some(conversation_id)) =
+            (state.turn_database.clone(), state.conversation_id)
+        {
+            let mut attempts = 0u64;
+            loop {
+                match crate::db::service::turn_delivery_service::begin(
+                    &db,
+                    conversation_id,
+                    None,
+                    None,
+                )
+                .await
+                {
+                    Ok(turn_id) => {
+                        state.active_turn_id = Some(turn_id);
+                        break;
+                    }
+                    Err(error) => {
+                        attempts += 1;
+                        if attempts == 1 || attempts.is_multiple_of(30) {
+                            tracing::error!(%error, attempts, "agent-initiated turn admission blocked on persistence");
+                        }
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    }
+                }
+            }
+        }
     }
     // The same one-turn scope a prompt's turn start resets (see there): a
     // prior turn's background sub-agent must not tick into this one.
@@ -50241,7 +50295,7 @@ mod tests {
             let (reply, outcome) = oneshot::channel();
             self.cmd_tx
                 .send(ConnectionCommand::Steer {
-                    message_result: None,
+                    message_delivery: None,
                     blocks: vec![PromptInputBlock::Text { text: text.into() }],
                     reply,
                 })
@@ -51672,7 +51726,7 @@ mod tests {
             let (reply, outcome) = oneshot::channel();
             self.cmd_tx
                 .send(ConnectionCommand::Steer {
-                    message_result: None,
+                    message_delivery: None,
                     blocks: vec![PromptInputBlock::Text { text: text.into() }],
                     reply,
                 })
@@ -54339,5 +54393,42 @@ mod trae_handshake_tests {
                 "{agent_type}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod durable_agent_turn_tests {
+    use super::*;
+    use crate::db::{service::turn_delivery_service as delivery, test_helpers};
+    use sea_orm::EntityTrait;
+
+    #[tokio::test]
+    async fn agent_initiated_continuation_gets_durable_identity_before_streaming() {
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder = test_helpers::seed_folder(&db, "/tmp/agent-turn-delivery").await;
+        let conversation = test_helpers::seed_conversation(&db, folder, AgentType::Grok).await;
+        let mut initial = SessionState::new(
+            "agent-turn".into(),
+            AgentType::Grok,
+            None,
+            "test".into(),
+            None,
+        );
+        initial.conversation_id = Some(conversation);
+        initial.turn_database = Some(db.conn.clone());
+        let state = Arc::new(RwLock::new(initial));
+        let mut live = CodeBuddyLiveState::default();
+        open_grok_agent_turn(&state, &EventEmitter::Noop, "native-turn".into(), &mut live).await;
+        let turn_id = state.read().await.active_turn_id.clone().unwrap();
+        let saved = crate::db::entities::conversation_turn::Entity::find_by_id(turn_id.clone())
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.conversation_id, conversation);
+        assert_eq!(saved.state, "in_flight");
+        delivery::complete(&db.conn, &turn_id, "end_turn", "background answer")
+            .await
+            .unwrap();
     }
 }

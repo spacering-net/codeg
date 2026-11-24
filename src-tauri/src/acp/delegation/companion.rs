@@ -678,6 +678,20 @@ pub async fn dispatch_line(
                 ),
                 None => all,
             };
+            if !ctx.features.session_messaging {
+                if let Some(list) = tools.as_array_mut() {
+                    for tool in list {
+                        if tool["name"] == "delegate_to_agent" {
+                            if let Some(properties) =
+                                tool["inputSchema"]["properties"].as_object_mut()
+                            {
+                                properties.remove("notify_mode");
+                                properties.remove("follow");
+                            }
+                        }
+                    }
+                }
+            }
             remove_disabled_agents_from_delegate_enum(&mut tools, &ctx.disabled_agents);
             append_custom_agents_to_creation_tools(&mut tools, &ctx.custom_agents);
             if ctx.features.allows_tool("delegate_to_agent") {
@@ -942,6 +956,16 @@ async fn build_tools_call_spawn(
             register_and_spawn(inflight, id, None, round_trip, render_agent_options_result).await
         }
         "delegate_to_agent" => {
+            if !ctx.features.session_messaging
+                && (arguments.get("notify_mode").and_then(Value::as_str) == Some("deliver")
+                    || arguments.get("follow").and_then(Value::as_bool) == Some(true))
+            {
+                return LineAction::Respond(err(
+                    id,
+                    -32602,
+                    "automatic delivery requires session messaging",
+                ));
+            }
             // MCP clients (Codex / Claude Code) generally do NOT populate
             // `_meta.tool_use_id` when calling an MCP server. We still surface it
             // when present (the most precise binding), but a missing one is
@@ -5488,6 +5512,44 @@ mod tests {
         // Empty string → nothing enabled.
         let none = CompanionFeatures::parse(Some(""));
         assert!(!none.delegation && !none.feedback && !none.ask && !none.sessions);
+    }
+
+    #[tokio::test]
+    async fn automatic_delivery_parameters_follow_session_messaging_feature() {
+        let line = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
+        let without = unwrap_respond(dispatch_for_test(line).await)
+            .result
+            .unwrap();
+        let delegate = without["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "delegate_to_agent")
+            .unwrap();
+        assert!(delegate["inputSchema"]["properties"]["notify_mode"].is_null());
+        assert!(delegate["inputSchema"]["properties"]["follow"].is_null());
+        let with = unwrap_respond(
+            dispatch_with_features(
+                CompanionFeatures {
+                    session_messaging: true,
+                    ..BOTH
+                },
+                line,
+            )
+            .await,
+        )
+        .result
+        .unwrap();
+        let delegate = with["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "delegate_to_agent")
+            .unwrap();
+        assert!(delegate["inputSchema"]["properties"]["notify_mode"].is_object());
+        assert!(delegate["inputSchema"]["properties"]["follow"].is_object());
+        let refused = unwrap_respond(dispatch_for_test(r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"delegate_to_agent","arguments":{"agent_type":"codex","task":"x","notify_mode":"deliver"}}}"#).await);
+        assert_eq!(refused.error.unwrap().code, -32602);
     }
 
     #[tokio::test]
