@@ -159,6 +159,47 @@ pub async fn resolve_forge_auth(
     })
 }
 
+/// Whether [`resolve_forge_auth`] would find an account for `host` without
+/// one pinned — read off the stored accounts only, without touching the
+/// keyring (a list of projects asks it of each).
+pub async fn has_account(
+    conn: &DatabaseConnection,
+    provider: ForgeProvider,
+    server_host: &str,
+) -> bool {
+    let host = server_host.trim().to_ascii_lowercase();
+    match load_accounts(conn).await {
+        Ok(settings) => {
+            unpinned_account(&serving_accounts(&settings.accounts, &host, provider)).is_some()
+        }
+        Err(_) => false,
+    }
+}
+
+/// The stored accounts, read once for many hosts ([`local_account_in`]):
+/// an error when they cannot be read — never taken for "none".
+pub async fn local_accounts(conn: &DatabaseConnection) -> Result<Vec<GitHubAccount>, ForgeError> {
+    Ok(load_accounts(conn).await?.accounts)
+}
+
+/// The forge an account stored for `server_host` serves it as, when one
+/// does — read off `accounts` alone: no network, no keyring. What codeg
+/// asks before spending a request on a project it only watches.
+pub fn local_account_in(server_host: &str, accounts: &[GitHubAccount]) -> Option<ForgeProvider> {
+    let host = server_host.trim().to_ascii_lowercase();
+    let provider = host_profile_in(&host, accounts).provider;
+    unpinned_account(&serving_accounts(accounts, &host, provider)).map(|_| provider)
+}
+
+/// [`local_account_in`] against the stored accounts: `Err` when they
+/// cannot be read, unlike [`has_account`].
+pub async fn local_account_for(
+    conn: &DatabaseConnection,
+    server_host: &str,
+) -> Result<Option<ForgeProvider>, ForgeError> {
+    Ok(local_account_in(server_host, &local_accounts(conn).await?))
+}
+
 /// The accounts on `host` that may be spent against `provider`, in stored
 /// order — what [`resolve_forge_auth`] chooses among.
 fn serving_accounts<'a>(

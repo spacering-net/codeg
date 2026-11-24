@@ -107,6 +107,7 @@ fn to_info(m: work_task::Model) -> WorkTaskInfo {
             .delivery
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok()),
+        personal_agent_dispatch_id: m.personal_agent_dispatch_id,
         writeback_drafts: m
             .writeback_drafts
             .as_deref()
@@ -156,6 +157,35 @@ pub async fn record_event<C: ConnectionTrait>(
     };
     active.insert(conn).await?;
     Ok(())
+}
+
+/// Who started the merge that landed generation `run_seq`: `"user"` or
+/// `"auto"`, as its `merge_attempt` recorded — `None` when no attempt is
+/// known to be that run's (an older record names no run: the task's latest
+/// attempt stands for it, a later run's never does).
+pub async fn merge_actor(
+    conn: &DatabaseConnection,
+    task_id: i32,
+    run_seq: i32,
+) -> Result<Option<String>, DbError> {
+    let Some(e) = work_task_event::Entity::find()
+        .filter(work_task_event::Column::TaskId.eq(task_id))
+        .filter(work_task_event::Column::Kind.eq("merge_attempt"))
+        .order_by_desc(work_task_event::Column::Id)
+        .one(conn)
+        .await?
+    else {
+        return Ok(None);
+    };
+    let run = e
+        .payload
+        .as_deref()
+        .and_then(|p| serde_json::from_str::<serde_json::Value>(p).ok())
+        .and_then(|p| p.get("run_seq").and_then(serde_json::Value::as_i64));
+    if run.is_some_and(|r| r != i64::from(run_seq)) {
+        return Ok(None);
+    }
+    Ok(matches!(e.actor.as_str(), "user" | "auto").then_some(e.actor))
 }
 
 /// The payload of generation `run_seq`'s `background_wait` when no
@@ -747,6 +777,29 @@ pub async fn create(
     conn: &DatabaseConnection,
     draft: WorkTaskDraft,
 ) -> Result<WorkTaskInfo, DbError> {
+    create_inner(conn, draft, None).await
+}
+
+/// Create a task on behalf of a personal-agent dispatch. The ONLY path that
+/// writes `personal_agent_dispatch_id`, in the same insert as the row itself,
+/// so the task is the dispatch's from its first moment. It lands as the
+/// board's settings say, like any other task.
+pub async fn create_for_personal_agent(
+    conn: &DatabaseConnection,
+    draft: WorkTaskDraft,
+    dispatch_id: i32,
+) -> Result<WorkTaskInfo, DbError> {
+    create_inner(conn, draft, Some(dispatch_id)).await
+}
+
+async fn create_inner(
+    conn: &DatabaseConnection,
+    draft: WorkTaskDraft,
+    dispatch_id: Option<i32>,
+) -> Result<WorkTaskInfo, DbError> {
+    // A dispatched task was written by the personal agent, not typed by the
+    // user; the timeline says so.
+    let actor = if dispatch_id.is_some() { "agent" } else { "user" };
     validate_draft(&draft)?;
     // The target folder must exist, be live, and be a project root (a task
     // bound to a worktree folder would nest worktrees at launch).
@@ -776,10 +829,87 @@ pub async fn create(
         .unwrap_or(0);
 
     let txn = conn.begin().await?;
-    let row = insert_todo_row(&txn, &draft, config_str, max_order, now, None).await?;
-    record_event(&txn, row.id, "created", "user", None).await?;
+    let row =
+        insert_todo_row(&txn, &draft, config_str, max_order, now, None, dispatch_id).await?;
+    let payload = dispatch_id.map(|id| serde_json::json!({ "personal_agent_dispatch": id }));
+    record_event(&txn, row.id, "created", actor, payload).await?;
     txn.commit().await?;
     Ok(to_info(row))
+}
+
+/// A task a personal-agent dispatch makes on a pull request (7.4): the
+/// pull request is its source, so it works on that branch and its delivery
+/// pushes back to it, exactly as a forge-triggered pull-request task does.
+/// Refused — the active task returned — when another active task already
+/// works on the same pull request: two of them pushing to one branch would
+/// undo each other.
+pub async fn create_on_pull_for_personal_agent(
+    conn: &DatabaseConnection,
+    draft: WorkTaskDraft,
+    source: crate::models::WorkTaskSource,
+    dispatch_id: i32,
+) -> Result<ForgeCreateOutcome, DbError> {
+    validate_draft(&draft)?;
+    let folder = folder::Entity::find_by_id(draft.folder_id)
+        .one(conn)
+        .await?
+        .filter(|f| f.deleted_at.is_none())
+        .ok_or_else(|| DbError::NotFound(format!("folder {}", draft.folder_id)))?;
+    if folder.parent_id.is_some() {
+        return Err(DbError::Validation(
+            "tasks must target a project folder, not a worktree".into(),
+        ));
+    }
+    // Fixed at creation, as every create path does.
+    let mut draft = draft;
+    draft.config = frozen_draft_config(conn, draft.folder_id, &draft.config).await?;
+    let config_str = serde_json::to_string(&draft.config)
+        .map_err(|e| DbError::Validation(format!("config not serializable: {e}")))?;
+    let now = Utc::now();
+    let max_order = work_task::Entity::find()
+        .filter(work_task::Column::FolderId.eq(draft.folder_id))
+        .order_by_desc(work_task::Column::SortOrder)
+        .one(conn)
+        .await?
+        .map(|m| m.sort_order)
+        .unwrap_or(0);
+    let txn = conn.begin().await?;
+    // FIRST statement: the write (see `create_from_forge_by`).
+    let row = insert_todo_row(
+        &txn,
+        &draft,
+        config_str,
+        max_order,
+        now,
+        Some(&source),
+        Some(dispatch_id),
+    )
+    .await?;
+    if let Some(existing) = other_active_with_same_source(&txn, row.id, &source.key).await? {
+        txn.rollback().await?;
+        return Ok(ForgeCreateOutcome::Duplicate(vec![SourceConflict {
+            key: source.key.clone(),
+            existing: to_info(existing),
+        }]));
+    }
+    record_event(
+        &txn,
+        row.id,
+        "created",
+        "agent",
+        Some(serde_json::json!({ "personal_agent_dispatch": dispatch_id })),
+    )
+    .await?;
+    record_event(
+        &txn,
+        row.id,
+        "forge_linked",
+        "agent",
+        Some(serde_json::json!({ "source_key": source.key, "kind": source.kind })),
+    )
+    .await?;
+    txn.commit().await?;
+    Ok(ForgeCreateOutcome::Created(Box::new(to_info(row))))
 }
 
 /// Outcome of a forge-triggered create: either the new task, or the ACTIVE
@@ -866,7 +996,8 @@ pub async fn create_from_forge_by(
 
     let txn = conn.begin().await?;
     // FIRST statement: the write. See the doc comment — this is load-bearing.
-    let row = insert_todo_row(&txn, &draft, config_str, max_order, now, Some(&source)).await?;
+    let row =
+        insert_todo_row(&txn, &draft, config_str, max_order, now, Some(&source), None).await?;
     if !force {
         let keys: Vec<String> = source.keys().cloned().collect();
         let conflicts = other_active_for_keys(&txn, row.id, &keys).await?;
@@ -1105,6 +1236,7 @@ async fn insert_todo_row<C: ConnectionTrait>(
     max_order: i32,
     now: chrono::DateTime<Utc>,
     source: Option<&crate::models::WorkTaskSource>,
+    dispatch_id: Option<i32>,
 ) -> Result<work_task::Model, DbError> {
     let source_meta = source
         .map(|s| {
@@ -1146,6 +1278,7 @@ async fn insert_todo_row<C: ConnectionTrait>(
         source_key: Set(source.map(|s| s.key.clone())),
         source_meta: Set(source_meta),
         delivery: Set(None),
+        personal_agent_dispatch_id: Set(dispatch_id),
         writeback_drafts: Set(None),
         created_at: Set(now),
         updated_at: Set(now),
@@ -1485,6 +1618,36 @@ pub async fn claim_for_run_with_action(
     allow_duplicate_source: bool,
 ) -> Result<Option<i32>, DbError> {
     claim_inner(conn, id, from, actor, action, false, allow_duplicate_source).await
+}
+
+/// The `user_action` event a claim wrote for ledger operation `op_id` (the
+/// personal agent's, carried in the action's payload), with the generation
+/// that claim started. The event commits in the claim's own transaction, so
+/// finding it proves the claim happened — and not finding it, that it did
+/// not: a task whose status or generation moved without it was moved by
+/// someone else.
+pub async fn user_action_by_op(
+    conn: &DatabaseConnection,
+    task_id: i32,
+    op_id: &str,
+) -> Result<Option<i32>, DbError> {
+    let candidates = work_task_event::Entity::find()
+        .filter(work_task_event::Column::TaskId.eq(task_id))
+        .filter(work_task_event::Column::Kind.eq("user_action"))
+        .filter(work_task_event::Column::Payload.contains(op_id))
+        .order_by_desc(work_task_event::Column::Id)
+        .all(conn)
+        .await?;
+    Ok(candidates.into_iter().find_map(|e| {
+        let payload: serde_json::Value = serde_json::from_str(e.payload.as_deref()?).ok()?;
+        (payload.get("op_id").and_then(|v| v.as_str()) == Some(op_id)).then(|| {
+            payload
+                .get("run_seq")
+                .and_then(|v| v.as_i64())
+                .and_then(|v| i32::try_from(v).ok())
+                .unwrap_or_default()
+        })
+    }))
 }
 
 /// Shared body of every user-driven claim. `only_unplanned` narrows the CAS to
@@ -2775,6 +2938,9 @@ pub async fn begin_merge(
             "strategy": state.strategy,
             "pre_merge_head": state.pre_merge_head,
             "auto": auto,
+            // The generation it merges in: who landed THIS run is read off
+            // it (the personal agent's "merged" news, A5).
+            "run_seq": run_seq,
         })),
     )
     .await?;

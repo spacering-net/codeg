@@ -64,12 +64,15 @@ const addRange = vi.fn()
 function mockSelection(
   container: Node | null,
   text: string,
-  rect: DOMRect = SELECTION_RECT
+  rect: DOMRect = SELECTION_RECT,
+  ends?: { start: Node; end: Node }
 ) {
   let cleared = false
   const getBoundingClientRect = vi.fn(() => rect)
   const range = {
     commonAncestorContainer: container,
+    startContainer: ends?.start,
+    endContainer: ends?.end,
     getBoundingClientRect,
     cloneRange: () => range,
   }
@@ -796,5 +799,71 @@ describe("SelectionActionBubble", () => {
       vi.useRealTimers()
     }
     expect(screen.getByRole("toolbar")).toBeTruthy()
+  })
+})
+
+describe("checking a selected sentence (10.3)", () => {
+  function CheckHarness({
+    onCheck,
+  }: {
+    onCheck?: (text: string, from: Element) => void
+  }) {
+    const ref = useRef<HTMLDivElement>(null)
+    return (
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <div ref={ref} data-testid="box">
+          <div data-check-key="reply-1" data-testid="reply">
+            <p data-testid="one">The build passes.</p>
+            <p data-testid="two">The tests pass.</p>
+          </div>
+          <div data-check-key="reply-2" data-testid="other">
+            <p data-testid="three">Another reply.</p>
+          </div>
+          <p data-testid="outside">Not a reply.</p>
+          <SelectionActionBubble containerRef={ref} onCheck={onCheck} />
+        </div>
+      </NextIntlClientProvider>
+    )
+  }
+
+  function select(start: string, end: string, text: string) {
+    const a = screen.getByTestId(start).firstChild as Node
+    const b = screen.getByTestId(end).firstChild as Node
+    mockSelection(screen.getByTestId("box"), text, SELECTION_RECT, {
+      start: a,
+      end: b,
+    })
+    selectionChanged()
+  }
+
+  it("is offered for a selection within one reply, and hands over that reply", () => {
+    const onCheck = vi.fn()
+    render(<CheckHarness onCheck={onCheck} />)
+    select("one", "two", "passes. The tests")
+    const button = screen.getByRole("button", { name: "Check" })
+    act(() => {
+      fireEvent.click(button)
+    })
+    expect(onCheck).toHaveBeenCalledTimes(1)
+    expect(onCheck.mock.calls[0][0]).toBe("passes. The tests")
+    expect(onCheck.mock.calls[0][1]).toBe(screen.getByTestId("reply"))
+    // The bubble is gone and the selection dropped, as for every action.
+    expect(screen.queryByRole("toolbar")).toBeNull()
+    expect(removeAllRanges).toHaveBeenCalled()
+  })
+
+  it("is not offered across two replies, outside one, or where it is not wanted", () => {
+    const onCheck = vi.fn()
+    const { unmount } = render(<CheckHarness onCheck={onCheck} />)
+    select("two", "three", "pass. Another")
+    expect(screen.getByRole("toolbar")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Check" })).toBeNull()
+    select("outside", "outside", "Not a")
+    expect(screen.queryByRole("button", { name: "Check" })).toBeNull()
+    unmount()
+    render(<CheckHarness />)
+    select("one", "one", "The build")
+    expect(screen.getByRole("toolbar")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Check" })).toBeNull()
   })
 })

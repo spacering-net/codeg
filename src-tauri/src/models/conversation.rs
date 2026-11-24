@@ -120,6 +120,10 @@ pub struct DbConversationSummary {
     /// falls back to this one when the assistant row is unknown to it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assistant_name: Option<String>,
+    /// Mirror of `conversation.bot_uid`: the owner's assistant a delegation
+    /// child or a piece of its work ran as. Absent on every other row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bot_uid: Option<String>,
     /// Mirror of `conversation.source`: `"cli"` for a conversation a
     /// `codeg-cli` run started. Absent on every other row.
     #[serde(skip_serializing_if = "Option::is_none")]

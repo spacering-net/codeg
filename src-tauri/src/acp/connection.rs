@@ -1344,6 +1344,19 @@ pub enum ConnectionCommand {
         /// broadcast and the title seed only ever read `blocks`. Empty for
         /// every other prompt.
         internal_suffix: Vec<PromptInputBlock>,
+        /// The personal agent engine's tag for this prompt: when it starts,
+        /// the connection builds the reply of its turn under this token
+        /// (`SessionState::reply_turns`). Carried on the command for the same
+        /// reason as `internal_suffix`: it can only ride the prompt it was
+        /// meant for. `None` for every other prompt.
+        reply_token: Option<String>,
+        /// The sender needs proof this prompt reached the agent (the personal
+        /// agent's follow-ups into a dispatched conversation): the loop asks
+        /// the receipt before writing the request — and writes nothing when
+        /// it refuses — and tells it when the agent answered this very
+        /// request (see [`crate::acp::prompt_receipt`]). Rides the command for
+        /// the same reason as `internal_suffix`. `None` for every other prompt.
+        receipt: Option<crate::acp::prompt_receipt::PromptReceipt>,
     },
     SetMode {
         mode_id: String,
@@ -2892,6 +2905,16 @@ async fn build_agent(
 /// into boxed sub-futures rather than raising it further.
 const ACP_CONNECTION_STACK_SIZE: usize = 8 * 1024 * 1024;
 
+/// What a connection is marked with from the moment it exists — before its
+/// agent starts, so the codeg-mcp companion it is given already knows.
+#[derive(Default)]
+pub struct SpawnSeed {
+    /// The root of a `codeg-cli` run.
+    pub cli_root: Option<crate::cli_run::RootSeed>,
+    /// The personal agent's own connection.
+    pub personal_agent: bool,
+}
+
 /// Spawn an ACP agent process and run the connection loop in a background task.
 ///
 /// On success, the newly created `AgentConnection` is inserted into
@@ -2913,7 +2936,7 @@ pub async fn spawn_agent_connection(
     preferred_config_values: BTreeMap<String, String>,
     delegation_injection: Option<DelegationInjection>,
     terminal_shell_config: TerminalShellRuntimeConfig,
-    cli_root: Option<crate::cli_run::RootSeed>,
+    seed: SpawnSeed,
     selection: Option<Arc<crate::acp::selection::SelectionPersister>>,
 ) -> Result<tokio::sync::oneshot::Receiver<()>, AcpError> {
     // Use the same cwd for launch settings, the subprocess and session/new.
@@ -2956,10 +2979,13 @@ pub async fn spawn_agent_connection(
     }
     // A `codeg-cli` run's root: marked before anything can look, the codeg-mcp
     // injection below included.
-    if let Some(seed) = cli_root {
-        initial_state.cli_run = Some(seed.tag);
-        initial_state.cli_output_schema = seed.output_schema;
+    if let Some(root) = seed.cli_root {
+        initial_state.cli_run = Some(root.tag);
+        initial_state.cli_output_schema = root.output_schema;
     }
+    // The personal agent's connection, the same way: its tool group is decided
+    // by the injection below, which reads this.
+    initial_state.personal_agent = seed.personal_agent;
     if agent_type == AgentType::Pi {
         initial_state.pi_enabled_model_patterns =
             crate::commands::acp::pi_enabled_model_patterns_for_env(&runtime_env, &launch_cwd);
@@ -8030,7 +8056,7 @@ async fn send_new_session_capturing_models(
 /// file is, and its tools reach the model. User servers still reach Cline,
 /// through that file (see [`agent_reads_own_mcp_config`]); the codeg-mcp
 /// companion, which only travels over the wire, cannot.
-fn agent_delivers_wire_mcp(agent_type: AgentType) -> bool {
+pub(crate) fn agent_delivers_wire_mcp(agent_type: AgentType) -> bool {
     !matches!(agent_type, AgentType::Pi | AgentType::Cline)
 }
 
@@ -8452,6 +8478,8 @@ struct CompanionFeatureFlags {
     automations: bool,
     /// `create_work_task`, gated by the chat-authoring setting.
     taskboard: bool,
+    /// The personal agent's tools: per-spawn, for its own connection only.
+    personal_agent: bool,
     /// `browser_list_tabs` / `browser_snapshot`, gated by the browser-tools
     /// setting AND by there being a built-in browser at all — the tabs are
     /// native webviews this process owns, which server mode has none of.
@@ -8505,6 +8533,9 @@ fn companion_features_arg(flags: CompanionFeatureFlags) -> Option<String> {
     if flags.taskboard {
         features.push("taskboard");
     }
+    if flags.personal_agent {
+        features.push("personal_agent");
+    }
     if flags.browser {
         features.push("browser");
     }
@@ -8550,6 +8581,10 @@ struct LaunchGroups {
     tasks: bool,
     /// `submit_result`: the root of a `codeg-cli` run given `--output-schema`.
     result: bool,
+    /// The personal agent's tools — and, by the same token, none of the
+    /// delegation or board-authoring ones: it hands work out only through its
+    /// own dispatch tool, which the runtime (not this connection) owns.
+    personal_agent: bool,
 }
 
 async fn inject_codeg_mcp(
@@ -8621,6 +8656,10 @@ where
     // tracks the live toggle. One indexed query, skipped outright when
     // delegation is off, and it fails open: the spawn-time disabled check is
     // the hard gate either way.
+    // The personal agent never delegates and never writes to the board
+    // directly: its work goes out through `dispatch`, owned by the runtime, so
+    // a switch of its session cannot cancel what it handed out.
+    let delegation_enabled = delegation_enabled && !groups.personal_agent;
     let disabled = if delegation_enabled {
         injection.agent_availability.disabled_agent_wire_slugs().await
     } else {
@@ -8629,13 +8668,17 @@ where
     let flags = CompanionFeatureFlags {
         delegation: delegation_enabled,
         session_messaging: config.session_messaging_enabled && host_tools.hosts_channels(),
-        feedback: feedback_enabled,
+        // The personal agent takes the owner's words only as queued messages
+        // its engine delivers; a live-feedback note has no way in, and the
+        // tool would only leave empty checks in its replies.
+        feedback: feedback_enabled && !groups.personal_agent,
         ask: injection.ask.is_enabled().await,
         sessions: injection.sessions.is_enabled().await,
         tasks: groups.tasks,
         result: groups.result,
-        automations: authoring.automations_enabled,
-        taskboard: authoring.work_tasks_enabled,
+        automations: authoring.automations_enabled && !groups.personal_agent,
+        taskboard: authoring.work_tasks_enabled && !groups.personal_agent,
+        personal_agent: groups.personal_agent,
         // `cfg!` rather than a runtime probe: a browser tab is a native
         // webview owned by this process, and the server binary has no such
         // thing — what a web user sees in a "browser tab" is an iframe their
@@ -9676,6 +9719,7 @@ async fn run_connection(
                         LaunchGroups {
                             tasks: s.owner_window_label == "work_task",
                             result: s.cli_output_schema.is_some(),
+                            personal_agent: s.personal_agent,
                         }
                     };
                     inject_codeg_mcp(
@@ -9701,6 +9745,10 @@ async fn run_connection(
                 // agents could ship it someday).
                 s.native_steering_available = native_steering_available;
                 s.codex_user_input_shape = codex_user_input_shape;
+                s.agent_info = init_resp
+                    .agent_info
+                    .as_ref()
+                    .map(|info| (info.name.clone(), info.version.clone()));
                 s.antigravity_interactions = antigravity_interactions;
                 s.antigravity_skip_cancels_turn = antigravity_skip_cancels_turn;
                 if !native_antigravity_task_store(init_resp.agent_info.as_ref()) {
@@ -14872,6 +14920,20 @@ fn is_agent_output_update(agent_type: AgentType, update: &SessionUpdate) -> bool
     )
 }
 
+/// Whether `update` is the agent echoing back a prompt that carried the
+/// operation frame of `op_id`.
+fn echoes_operation(update: &SessionUpdate, op_id: &str) -> bool {
+    match update {
+        SessionUpdate::UserMessageChunk(ContentChunk {
+            content: ContentBlock::Text(text),
+            ..
+        }) => crate::acp::agent_mentions::operation_ids_in(&text.text)
+            .iter()
+            .any(|id| id == op_id),
+        _ => false,
+    }
+}
+
 /// Handle one typed `SessionNotification` inside an active turn.
 ///
 /// Extracted from the `if_notification` closure it is called from, and
@@ -15569,6 +15631,8 @@ async fn run_conversation_loop(
                 blocks,
                 user_message,
                 internal_suffix,
+                reply_token,
+                receipt,
             }) => {
                 // Fingerprint the outgoing prompt for the background watcher's
                 // foreground/out-of-turn classifier BEFORE the blocks are
@@ -15669,13 +15733,20 @@ async fn run_conversation_loop(
                     cancel_grok_agent_turn_asks(delegation_injection, conn_id).await;
                 }
 
-                emit_with_state(
-                    state,
-                    emitter,
-                    AcpEvent::StatusChanged {
+                // The personal agent's reply to this prompt starts with this
+                // prompt's own turn — not at the command, which Grok's turn
+                // closed just above can precede — and in the same critical
+                // section, so no event of another turn falls in between.
+                emit_with_state_built(state, emitter, |s| {
+                    if let Some(token) = reply_token {
+                        if s.personal_agent {
+                            s.reply_turns.open(token);
+                        }
+                    }
+                    Some(AcpEvent::StatusChanged {
                         status: ConnectionStatus::Prompting,
-                    },
-                )
+                    })
+                })
                 .await;
 
                 // Broadcast the user's prompt to cross-client viewers BEFORE
@@ -15726,6 +15797,52 @@ async fn run_conversation_loop(
                 // its reply says whether Remote Control is on.
                 cb_state.claude_remote_control = remote_control_command(agent_type, &prompt_blocks);
                 let turn_started_at_ms = crate::acp_transcript::now_epoch_ms();
+                // A sender that must be able to prove later whether this went
+                // out records "about to write it" now; refused, the request is
+                // never written and the turn ends here — as a rejected one,
+                // so every consumer settles it the way they settle a prompt
+                // the agent refused.
+                if let Some(receipt) = receipt.as_ref() {
+                    if let Err(why) = receipt.attempted().await {
+                        tracing::warn!(
+                            "[ACP][{conn_id}] a prompt was not written: its sender withdrew it ({why})"
+                        );
+                        emit_with_state(
+                            state,
+                            emitter,
+                            AcpEvent::Error {
+                                message: format!("The message was not sent: {why}"),
+                                agent_type: agent_type.to_string(),
+                                code: None,
+                                details: None,
+                                terminal: false,
+                            },
+                        )
+                        .await;
+                        record_turn_end(
+                            agent_type,
+                            &sid.0,
+                            "rejected",
+                            turn_started_at_ms,
+                            current_session_model_id(state).await,
+                            None,
+                            None,
+                        )
+                        .await;
+                        drain_permissions_then_emit(
+                            perms,
+                            state,
+                            emitter,
+                            AcpEvent::TurnComplete {
+                                session_id: sid.0.to_string(),
+                                stop_reason: "rejected".into(),
+                                agent_type: agent_type.to_string(),
+                            },
+                        )
+                        .await;
+                        continue;
+                    }
+                }
                 let prompt_request = PromptRequest::new(sid.clone(), prompt_blocks);
                 // Snapshot the stderr write position BEFORE the request is
                 // dispatched. An agent that fails the moment the prompt lands
@@ -15987,6 +16104,18 @@ async fn run_conversation_loop(
                             } else if let Err(e) = MatchDispatch::new(dispatch)
                                 .if_notification(
                                     async |notif: SessionNotification| {
+                                        // The agent echoing this prompt back
+                                        // with its operation frame is proof
+                                        // it got it.
+                                        if let Some(receipt) = receipt.as_ref() {
+                                            if echoes_operation(&notif.update, &receipt.op_id) {
+                                                receipt
+                                                    .received(
+                                                        crate::acp::prompt_receipt::ReceiptVia::UserMessageEcho,
+                                                    )
+                                                    .await;
+                                            }
+                                        }
                                         // Body lives in a named `-> ()`
                                         // function so this closure is
                                         // infallible by construction —
@@ -16061,6 +16190,27 @@ async fn run_conversation_loop(
                             // agent's OWN words, because they are the actionable
                             // part ("The command \"/mcp\" is not supported in
                             // this mode.") and codeg has no vocabulary for them.
+                            // The agent's own answer to THIS request: proof
+                            // it got the prompt, whichever way it answered.
+                            if let Some(receipt) = receipt.as_ref() {
+                                match &prompt_result {
+                                    Ok(_) => {
+                                        receipt
+                                            .received(
+                                                crate::acp::prompt_receipt::ReceiptVia::PromptResponse,
+                                            )
+                                            .await
+                                    }
+                                    Err(e) if !lost_the_connection(e) => {
+                                        receipt
+                                            .received(
+                                                crate::acp::prompt_receipt::ReceiptVia::PromptRejected,
+                                            )
+                                            .await
+                                    }
+                                    Err(_) => {}
+                                }
+                            }
                             let response = match prompt_result {
                                 Ok(response) => response,
                                 Err(e) if !prompt_rejection_is_terminal(&e) => {
@@ -16715,10 +16865,20 @@ async fn run_conversation_loop(
                                         });
                                         answered
                                     });
+                                    let receipt = receipt.clone();
                                     tokio::spawn(async move {
-                                        let _ = prompt_response.await;
+                                        let answer = prompt_response.await;
                                         if let Some(answered) = answered {
                                             let _ = answered.send(tokio::time::Instant::now());
+                                        }
+                                        // The cancelled turn's answer is still
+                                        // the agent's answer to this request.
+                                        if let (Ok(_), Some(receipt)) = (answer, receipt) {
+                                            receipt
+                                                .received(
+                                                    crate::acp::prompt_receipt::ReceiptVia::PromptResponse,
+                                                )
+                                                .await;
                                         }
                                     });
                                     break;
@@ -38230,9 +38390,44 @@ mod tests {
                     blocks: vec![PromptInputBlock::Text { text: text.into() }],
                     user_message: None,
                     internal_suffix: Vec::new(),
+                    reply_token: None,
+                    receipt: None,
                 })
                 .await
                 .expect("the connection is running");
+        }
+
+        /// As [`Self::prompt`], with a receipt riding the prompt.
+        async fn prompt_with_receipt(
+            &self,
+            text: &str,
+            receipt: crate::acp::prompt_receipt::PromptReceipt,
+        ) {
+            self.state.write().await.turn_in_flight = true;
+            self.cmd_tx
+                .send(ConnectionCommand::Prompt {
+                    blocks: vec![PromptInputBlock::Text { text: text.into() }],
+                    user_message: None,
+                    internal_suffix: Vec::new(),
+                    reply_token: None,
+                    receipt: Some(receipt),
+                })
+                .await
+                .expect("the connection is running");
+        }
+
+        /// Wait for the turn in flight to end; its stop reason.
+        async fn turn_ended_as(&mut self) -> String {
+            loop {
+                let envelope =
+                    tokio::time::timeout(std::time::Duration::from_secs(10), self.events.recv())
+                        .await
+                        .expect("the turn ends")
+                        .expect("event stream");
+                if let AcpEvent::TurnComplete { stop_reason, .. } = &envelope.payload {
+                    return stop_reason.clone();
+                }
+            }
         }
 
         /// Wait for the turn in flight to end.
@@ -38338,6 +38533,107 @@ mod tests {
         // The agent reports the prompt before it answers, so let the answer
         // reach codeg before letting go (see `HandshakeAgent::closed`).
         run.turn_completed().await;
+        run.cmd_tx
+            .send(ConnectionCommand::Disconnect)
+            .await
+            .expect("the connection is running");
+        let (ended, _) = run.ended().await;
+        assert!(ended.is_ok(), "{ended:?}");
+        agent.closed().await;
+    }
+
+    /// A receipt that records what the connection told it, refusing the send
+    /// when `refuse`.
+    struct RecordingReceipt {
+        refuse: bool,
+        log: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::acp::prompt_receipt::PromptReceiptSink for RecordingReceipt {
+        async fn attempted(&self, op_id: &str) -> Result<(), String> {
+            self.log.lock().unwrap().push(format!("attempted {op_id}"));
+            if self.refuse {
+                Err("withdrawn".into())
+            } else {
+                Ok(())
+            }
+        }
+
+        async fn received(&self, op_id: &str, via: crate::acp::prompt_receipt::ReceiptVia) {
+            self.log
+                .lock()
+                .unwrap()
+                .push(format!("received {op_id} {}", via.as_str()));
+        }
+    }
+
+    fn recording_receipt(
+        refuse: bool,
+    ) -> (Arc<RecordingReceipt>, crate::acp::prompt_receipt::PromptReceipt) {
+        let sink = Arc::new(RecordingReceipt {
+            refuse,
+            log: std::sync::Mutex::new(Vec::new()),
+        });
+        let receipt = crate::acp::prompt_receipt::PromptReceipt {
+            op_id: "pa-op-1".into(),
+            sink: sink.clone(),
+        };
+        (sink, receipt)
+    }
+
+    /// A prompt carrying a receipt: the receipt hears "about to write it"
+    /// before the agent gets the request, and "the agent answered" from the
+    /// agent's own response to it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_receipt_hears_the_send_attempted_and_then_answered() {
+        let (client_end, agent_end) = agent_client_protocol::Channel::duplex();
+        let mut agent = HandshakeAgent::start(agent_end, HandshakeScript::default());
+        let mut run = HandshakeRun::start(client_end).await;
+        assert_eq!(agent.next_request().await, "initialize");
+        assert_eq!(agent.next_request().await, "session/new");
+        agent.open_session.notify_one();
+        let (sink, receipt) = recording_receipt(false);
+        run.prompt_with_receipt("hello", receipt).await;
+        assert_eq!(agent.next_request().await, "session/prompt: hello");
+        // The scripted agent answers with nothing said: codeg reads that as
+        // an empty turn — the agent's answer all the same.
+        assert_eq!(run.turn_ended_as().await, "empty");
+        assert_eq!(
+            *sink.log.lock().unwrap(),
+            vec![
+                "attempted pa-op-1".to_string(),
+                "received pa-op-1 prompt_response".to_string()
+            ]
+        );
+        run.cmd_tx
+            .send(ConnectionCommand::Disconnect)
+            .await
+            .expect("the connection is running");
+        let (ended, _) = run.ended().await;
+        assert!(ended.is_ok(), "{ended:?}");
+        agent.closed().await;
+    }
+
+    /// A receipt that refuses keeps the request from ever being written: the
+    /// turn ends as rejected, and the next prompt is the next thing the agent
+    /// sees.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_refusing_receipt_keeps_the_request_from_being_written() {
+        let (client_end, agent_end) = agent_client_protocol::Channel::duplex();
+        let mut agent = HandshakeAgent::start(agent_end, HandshakeScript::default());
+        let mut run = HandshakeRun::start(client_end).await;
+        assert_eq!(agent.next_request().await, "initialize");
+        assert_eq!(agent.next_request().await, "session/new");
+        agent.open_session.notify_one();
+        let (sink, receipt) = recording_receipt(true);
+        run.prompt_with_receipt("never", receipt).await;
+        assert_eq!(run.turn_ended_as().await, "rejected");
+        assert!(!run.state.read().await.turn_in_flight, "the gate is clear");
+        run.prompt("next").await;
+        assert_eq!(agent.next_request().await, "session/prompt: next");
+        run.turn_completed().await;
+        assert_eq!(*sink.log.lock().unwrap(), vec!["attempted pa-op-1".to_string()]);
         run.cmd_tx
             .send(ConnectionCommand::Disconnect)
             .await
@@ -47694,6 +47990,7 @@ mod tests {
             LaunchGroups {
                 tasks: false,
                 result: true,
+                personal_agent: false,
             },
             HostToolsPolicy::Agent,
             || Some(PathBuf::from("/opt/codeg/codeg-mcp")),
@@ -47712,6 +48009,67 @@ mod tests {
             .map(|i| server.args[i + 1].clone());
         assert_eq!(features.as_deref(), Some("result"));
         assert!(injection.tokens.lookup(&injected.token).await.is_some());
+    }
+
+    /// The personal agent's connection gets its own group whatever the
+    /// settings say — and never the delegation, board-authoring or
+    /// live-feedback ones, even with every one of them switched on: it hands
+    /// work out only through its dispatch tool, and takes the owner's words
+    /// only as queued messages.
+    #[tokio::test]
+    async fn the_personal_agent_gets_its_group_and_no_delegation_or_authoring() {
+        let injection = test_delegation_injection(
+            Arc::new(TestAllAgentsAvailable) as Arc<dyn AgentAvailabilityLookup>
+        );
+        injection
+            .feedback
+            .set(crate::acp::feedback::FeedbackConfig { enabled: true })
+            .await;
+        injection
+            .broker
+            .set_config(crate::acp::delegation::broker::DelegationConfig {
+                enabled: true,
+                ..Default::default()
+            })
+            .await;
+        injection
+            .authoring
+            .set(crate::acp::chat_authoring::ChatAuthoringConfig {
+                automations_enabled: true,
+                work_tasks_enabled: true,
+            })
+            .await;
+        let mut servers: Vec<McpServer> = Vec::new();
+        let injected = inject_codeg_mcp_with_binary_locator(
+            &mut servers,
+            &injection,
+            "personal",
+            std::path::Path::new("/tmp"),
+            LaunchGroups {
+                personal_agent: true,
+                ..Default::default()
+            },
+            HostToolsPolicy::Default,
+            || Some(PathBuf::from("/opt/codeg/codeg-mcp")),
+        )
+        .await
+        .expect("a companion for the personal agent's tools");
+        assert!(!injected.delegation_enabled);
+        let McpServer::Stdio(server) = &servers[0] else {
+            panic!("a stdio server: {servers:?}");
+        };
+        let features = server
+            .args
+            .iter()
+            .skip_while(|a| a.as_str() != "--features")
+            .nth(1)
+            .cloned()
+            .expect("a --features value");
+        let groups: Vec<&str> = features.split(',').collect();
+        assert!(groups.contains(&"personal_agent"), "{features}");
+        for withheld in ["delegation", "automations", "taskboard", "feedback"] {
+            assert!(!groups.contains(&withheld), "{withheld} leaked: {features}");
+        }
     }
 
     // ─── delegate_target_args: enable-toggle filtering ──────────
@@ -47870,6 +48228,7 @@ mod tests {
                 result: true,
                 automations: true,
                 taskboard: true,
+                personal_agent: true,
                 browser: true,
                 browser_eval: true,
                 computer: true,
@@ -47877,10 +48236,15 @@ mod tests {
                 computer_clipboard: true,
             }),
             Some(
-                "delegation,feedback,ask,sessions,tasks,result,automations,taskboard,browser,\
-                 browser_eval,computer,computer_launch,computer_clipboard"
+                "delegation,feedback,ask,sessions,tasks,result,automations,taskboard,\
+                 personal_agent,browser,browser_eval,computer,computer_launch,computer_clipboard"
                     .to_string()
             )
+        );
+        // The personal agent's group injects the companion on its own.
+        assert_eq!(
+            only(|f| f.personal_agent = true),
+            Some("personal_agent".to_string())
         );
         assert_eq!(only(|f| f.computer_clipboard = true), None);
         // Computer use alone still gets a companion.
@@ -49039,6 +49403,8 @@ mod tests {
                     blocks: vec![PromptInputBlock::Text { text: text.into() }],
                     user_message: None,
                     internal_suffix: Vec::new(),
+                    reply_token: None,
+                    receipt: None,
                 })
                 .await
                 .expect("the loop is running");
@@ -50204,6 +50570,8 @@ mod tests {
                     blocks: vec![PromptInputBlock::Text { text: text.into() }],
                     user_message: None,
                     internal_suffix: Vec::new(),
+                    reply_token: None,
+                    receipt: None,
                 })
                 .await
                 .expect("the loop is running");
@@ -50458,6 +50826,8 @@ mod tests {
                     blocks: vec![PromptInputBlock::Text { text: text.into() }],
                     user_message: None,
                     internal_suffix: Vec::new(),
+                    reply_token: None,
+                    receipt: None,
                 })
                 .await
                 .expect("the loop is running");
@@ -50842,6 +51212,8 @@ mod tests {
                     }],
                     user_message: None,
                     internal_suffix: Vec::new(),
+                    reply_token: None,
+                    receipt: None,
                 })
                 .await
                 .expect("the loop is running");
@@ -51625,6 +51997,8 @@ mod tests {
                     }],
                     user_message: None,
                     internal_suffix: Vec::new(),
+                    reply_token: None,
+                    receipt: None,
                 })
                 .await
                 .expect("the loop is running");
@@ -51939,6 +52313,8 @@ mod tests {
                         }],
                         user_message: None,
                         internal_suffix: Vec::new(),
+                        reply_token: None,
+                        receipt: None,
                     })
                     .await
                     .expect("the loop is running");
@@ -52061,6 +52437,8 @@ mod tests {
             blocks: vec![PromptInputBlock::Text { text: text.into() }],
             user_message: None,
             internal_suffix: Vec::new(),
+            reply_token: None,
+            receipt: None,
         }
     }
 

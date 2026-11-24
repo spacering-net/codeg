@@ -32,7 +32,8 @@ export function pickPetBadge(
 export function sessionStatusKind(
   session: PetSessionEntry
 ): PetSessionStatusKind {
-  if (session.pending) return "waiting"
+  // A question or a plan approval blocks the agent like a permission does.
+  if (session.pending || session.ask) return "waiting"
   if (session.status === "error") return "error"
   return "running"
 }

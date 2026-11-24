@@ -213,7 +213,7 @@ describe("Quick actions, in the status bar's account menu", () => {
     expect(trigger).toHaveAccessibleDescription("Quick actions")
     expect(screen.queryByRole("button", { name: "Quick actions" })).toBeNull()
     const rows = topRows()
-    expect(rows[0]).toBe("Automations2")
+    expect(rows[0]).toBe("Personal agent")
     expect(rows[rows.length - 1]).toBe("Sign in to SRN")
   })
 
@@ -222,6 +222,7 @@ describe("Quick actions, in the status bar's account menu", () => {
     expect(layout()).toEqual([
       "head",
       "—",
+      "Personal agent",
       "Automations2",
       "To-dos",
       FORGE_ROW,
@@ -416,6 +417,7 @@ describe("Quick actions, in the status bar's account menu", () => {
     expect(layout()).toEqual([
       "head",
       "—",
+      "Personal agent",
       "Automations2",
       "To-dos",
       FORGE_ROW,
@@ -445,6 +447,7 @@ describe("Quick actions, in the status bar's account menu", () => {
     remoteWindow = true
     await mountAndOpen()
     expect(topRows()).toEqual([
+      "Personal agent",
       "Automations2",
       "To-dos",
       FORGE_ROW,
@@ -521,6 +524,10 @@ describe("Quick actions, in the status bar's account menu", () => {
     await reopen()
     await clickItem(/^Harness Engineering/)
     expect(mocks.setRoute).toHaveBeenCalledWith("harness")
+
+    await reopen()
+    await clickItem("Personal agent")
+    expect(mocks.setRoute).toHaveBeenCalledWith("personalAgent")
 
     await reopen()
     await clickItem("Show pet")

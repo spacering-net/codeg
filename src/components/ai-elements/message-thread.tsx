@@ -334,10 +334,29 @@ export const MessageThreadEmptyState = ({
 
 export type MessageThreadScrollButtonProps = ComponentProps<typeof Button>
 
-export const MessageThreadScrollButton = ({
+/** The round way back down over a thread's bottom centre: the
+ *  conversation's, and the personal agent's (which says when it shows). */
+export const ScrollToLatestButton = ({
   className,
   ...props
-}: MessageThreadScrollButtonProps) => {
+}: MessageThreadScrollButtonProps) => (
+  <Button
+    className={cn(
+      "absolute bottom-4 left-[50%] translate-x-[-50%] rounded-full bg-background/90 hover:bg-muted/90",
+      className
+    )}
+    size="icon"
+    type="button"
+    variant="outline"
+    {...props}
+  >
+    <ArrowDownIcon className="size-4" />
+  </Button>
+)
+
+export const MessageThreadScrollButton = (
+  props: MessageThreadScrollButtonProps
+) => {
   const { isAtBottom, scrollToBottom } = useStickToBottomContext()
   const chatAnimations = useChatAnimationsEnabled()
 
@@ -347,19 +366,7 @@ export const MessageThreadScrollButton = ({
 
   return (
     !isAtBottom && (
-      <Button
-        className={cn(
-          "absolute bottom-4 left-[50%] translate-x-[-50%] rounded-full bg-background/90 hover:bg-muted/90",
-          className
-        )}
-        onClick={handleScrollToBottom}
-        size="icon"
-        type="button"
-        variant="outline"
-        {...props}
-      >
-        <ArrowDownIcon className="size-4" />
-      </Button>
+      <ScrollToLatestButton onClick={handleScrollToBottom} {...props} />
     )
   )
 }

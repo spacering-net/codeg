@@ -11,6 +11,9 @@ const AGENT_URI = /^codeg:\/\/agent\/(.+)$/i
 // Assistant ids are positive integers, never zero-padded — the shape the
 // backend's routing scan (`agent_mentions.rs`) accepts, and the adapter writes.
 const ASSISTANT_URI = /^codeg:\/\/assistant\/([1-9]\d{0,9})$/i
+// A personal assistant by its uid — the shape the backend's routing scan
+// (`agent_mentions.rs` `bot_reference_regex`) accepts.
+const BOT_URI = /^codeg:\/\/bot\/([0-9a-z_-]{1,64})$/
 const SESSION_URI = /^codeg:\/\/session\/(.+)$/i
 const COMMIT_URI = /^codeg:\/\/commit\/.*@(.+)$/i
 // command / skill / expert tokens, surfaced as badges in transcript user messages
@@ -106,6 +109,21 @@ export function parseCodegReferenceUri(
       label: (label || type).replace(/^@/, "") || type,
       uri,
       meta: { agentType: type as AgentType },
+    }
+  }
+
+  const bot = uri.match(BOT_URI)
+  if (bot) {
+    const uid = bot[1]
+    return {
+      refType: "assistant",
+      id: uid,
+      // The link text is `@name`, as for an agent: strip a single leading `@`.
+      // The label is the name the sender saw; the badge draws the current
+      // face and name from the roster by uid.
+      label: (label || uid).replace(/^@/, "") || uid,
+      uri,
+      meta: { botUid: uid },
     }
   }
 
