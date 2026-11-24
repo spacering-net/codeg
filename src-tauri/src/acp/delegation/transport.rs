@@ -1191,6 +1191,22 @@ pub async fn client_cancel(socket_path: &str, req: &BrokerCancelRequest) -> io::
     Ok(())
 }
 
+pub async fn client_session_brief_round_trip(
+    socket_path: &str,
+    token: String,
+    args: crate::db::service::conversation_context_service::BriefOperation,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::SessionBrief { token, args }).await
+}
+
+pub async fn client_session_digest_round_trip(
+    socket_path: &str,
+    token: String,
+    args: crate::db::service::session_digest_service::DigestInput,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::SessionDigest { token, args }).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1484,20 +1500,4 @@ mod tests {
         assert_eq!(resp.outcome["recorded"], true);
         server.abort();
     }
-}
-
-pub async fn client_session_brief_round_trip(
-    socket_path: &str,
-    token: String,
-    args: crate::db::service::conversation_context_service::BriefOperation,
-) -> io::Result<BrokerResponse> {
-    message_round_trip(socket_path, &BrokerMessage::SessionBrief { token, args }).await
-}
-
-pub async fn client_session_digest_round_trip(
-    socket_path: &str,
-    token: String,
-    args: crate::db::service::session_digest_service::DigestInput,
-) -> io::Result<BrokerResponse> {
-    message_round_trip(socket_path, &BrokerMessage::SessionDigest { token, args }).await
 }
