@@ -354,7 +354,12 @@ async fn resolve_session_context(
         serde_json::from_value::<AgentType>(serde_json::Value::String(row.agent_type.clone()))
             .ok()
             .map(|agent| agent.to_string());
-    let parent = match row.parent_id {
+    // Only a delegation is a sub-session: an ask conversation's parent is the
+    // conversation it was asked from, but the user drives it like any root.
+    let delegation_parent = row
+        .parent_id
+        .filter(|_| row.kind == conversation::ConversationKind::Delegate);
+    let parent = match delegation_parent {
         Some(parent_id) => Some(ParentSession {
             conversation_id: parent_id,
             title: conversation::Entity::find_by_id(parent_id)

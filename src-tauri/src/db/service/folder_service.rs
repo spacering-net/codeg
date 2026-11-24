@@ -530,6 +530,55 @@ pub async fn remove_folder(conn: &DatabaseConnection, path: &str) -> Result<(), 
     Ok(())
 }
 
+/// Soft-delete folder `folder_id` only while no live conversation is filed in
+/// it — the check and the write are ONE statement, so a conversation inserted
+/// concurrently either lands first (and keeps the folder) or finds the folder
+/// already retired (and revives it, see [`revive_chat_folder`]). Returns
+/// whether the folder was retired.
+pub async fn retire_folder_if_unused(
+    conn: &DatabaseConnection,
+    folder_id: i32,
+) -> Result<bool, DbError> {
+    use crate::db::entities::conversation;
+    use sea_orm::sea_query::{Expr, Query};
+    let now = Utc::now();
+    let in_use = Query::select()
+        .expr(Expr::val(1))
+        .from(conversation::Entity)
+        .and_where(Expr::col((conversation::Entity, conversation::Column::FolderId)).eq(folder_id))
+        .and_where(Expr::col((conversation::Entity, conversation::Column::DeletedAt)).is_null())
+        .to_owned();
+    let res = folder::Entity::update_many()
+        .col_expr(folder::Column::DeletedAt, Expr::value(Some(now)))
+        .col_expr(folder::Column::UpdatedAt, Expr::value(now))
+        .filter(folder::Column::Id.eq(folder_id))
+        .filter(folder::Column::DeletedAt.is_null())
+        .filter(Expr::exists(in_use).not())
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected > 0)
+}
+
+/// Bring a retired hidden chat folder back: something is running in its
+/// scratch directory again (an ask conversation started there while its main
+/// conversation was being moved out). Only chat folders, and a no-op for a
+/// live one. Returns whether the folder was revived.
+pub async fn revive_chat_folder(conn: &DatabaseConnection, folder_id: i32) -> Result<bool, DbError> {
+    use sea_orm::sea_query::Expr;
+    let res = folder::Entity::update_many()
+        .col_expr(
+            folder::Column::DeletedAt,
+            Expr::value(None::<chrono::DateTime<Utc>>),
+        )
+        .col_expr(folder::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(folder::Column::Id.eq(folder_id))
+        .filter(folder::Column::Kind.eq(FolderKind::Chat))
+        .filter(folder::Column::DeletedAt.is_not_null())
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected > 0)
+}
+
 /// Soft-delete a folder by id and close it — the permanent counterpart of
 /// [`set_folder_open`]`(.., false)`, used when the directory behind the row is
 /// gone for good (a removed git worktree).

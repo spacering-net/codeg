@@ -1387,6 +1387,7 @@ function NavScenario() {
             <SessionDetailsCard summary={NAV_SUMMARY} model="gpt-5.5-codex" />
             <SessionDetailsInsights
               conversationId={NAV_CONVERSATION_ID}
+              dbConversationId={null}
               active
             />
           </div>

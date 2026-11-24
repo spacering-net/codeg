@@ -1096,8 +1096,10 @@ export type ConversationStatus =
 
 /** Mirrors Rust `ConversationKind` (src-tauri/src/db/entities/conversation.rs).
  *  `loop` rows belong to the Loop Engineering workbench and never appear in
- *  the sidebar list; `delegate` rows nest under their parent's tool-call view. */
-export type ConversationKind = "regular" | "chat" | "loop" | "delegate"
+ *  the sidebar list; `delegate` rows nest under their parent's tool-call view;
+ *  `ask` rows ("ask about this selection") nest under the conversation they
+ *  were asked from (`parent_id`) and are listed in its Session Details. */
+export type ConversationKind = "regular" | "chat" | "loop" | "delegate" | "ask"
 
 /** Mirrors Rust `FolderKind` (src-tauri/src/db/entities/folder.rs).
  *  `loop_worktree` is reserved for M2+ — add it here when the variant lands. */

@@ -73,6 +73,27 @@ beforeEach(() => {
   resetAppWorkspaceStore()
 })
 
+describe("applyConversationUpsert — rows the sidebar doesn't list", () => {
+  it("keeps an ask conversation out, and takes it in once unlinked", () => {
+    const store = useAppWorkspaceStore.getState()
+    store.applyConversationUpsert(makeSummary({ id: 1 }))
+    store.applyConversationUpsert(
+      makeSummary({ id: 2, kind: "ask", parent_id: 1 })
+    )
+    expect(
+      useAppWorkspaceStore.getState().conversations.map((c) => c.id)
+    ).toEqual([1])
+
+    // "Convert to a normal conversation" broadcasts the row without its link.
+    store.applyConversationUpsert(
+      makeSummary({ id: 2, kind: "regular", parent_id: null })
+    )
+    expect(
+      useAppWorkspaceStore.getState().conversations.map((c) => c.id)
+    ).toEqual([2, 1])
+  })
+})
+
 describe("updateConversationLocal — stats reference stability", () => {
   function seedTwo() {
     const store = useAppWorkspaceStore.getState()
