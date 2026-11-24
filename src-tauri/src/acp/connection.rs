@@ -4173,6 +4173,18 @@ fn map_session_config_select_option(
         value: option.value.to_string(),
         name: option.name.clone(),
         description: option.description.clone(),
+        context_window: of_model
+            .then(|| {
+                let meta = option.meta.as_ref()?;
+                ["contextWindow", "context_window", "totalContextTokens"]
+                    .into_iter()
+                    .find_map(|key| {
+                        meta.get(key)
+                            .and_then(|value| value.as_u64())
+                            .filter(|size| *size > 0)
+                    })
+            })
+            .flatten(),
         reasoning_efforts: of_model
             .then(|| air_model_reasoning_efforts(option.meta.as_ref()))
             .flatten(),
@@ -5021,6 +5033,7 @@ fn build_grok_effort_option(
                 .clone()
                 .or_else(|| grok_effort_description(id).map(str::to_string)),
             reasoning_efforts: None,
+            context_window: None,
         })
         .collect();
     if let Some(def) = &spec.default {
@@ -5034,6 +5047,7 @@ fn build_grok_effort_option(
                     // switchable list, so it has no grok description — supply ours.
                     description: grok_effort_description(def).map(str::to_string),
                     reasoning_efforts: None,
+                    context_window: None,
                 },
             );
         }
@@ -5099,6 +5113,7 @@ const GROK_MODELS_UPDATE_METHOD: &str = "_x.ai/models/update";
 /// [`fold_grok_catalog_into_picker`].
 fn parse_grok_model_catalog(params: &serde_json::Value) -> Option<GrokModelCatalog> {
     let entries = params.get("availableModels")?.as_array()?;
+    let specs = parse_grok_model_specs(Some(params));
     let mut models: Vec<SessionConfigSelectOptionInfo> = Vec::new();
     for entry in entries {
         let Some(model_id) = entry
@@ -5121,15 +5136,13 @@ fn parse_grok_model_catalog(params: &serde_json::Value) -> Option<GrokModelCatal
             name: name.to_string(),
             description: None,
             reasoning_efforts: None,
+            context_window: specs.get(model_id).and_then(|spec| spec.context_window),
         });
     }
     if models.is_empty() {
         return None;
     }
-    Some(GrokModelCatalog {
-        models,
-        specs: parse_grok_model_specs(Some(params)),
-    })
+    Some(GrokModelCatalog { models, specs })
 }
 
 /// Fold a catalog broadcast's specs into the session's.
@@ -5253,6 +5266,7 @@ fn kept_select_row(
             name: name(),
             description: description.map(str::to_string),
             reasoning_efforts: None,
+            context_window: None,
         })
 }
 
@@ -5320,6 +5334,7 @@ fn synthesize_grok_config_options(
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
             reasoning_efforts: None,
+            context_window: None,
         });
     }
 
@@ -5331,10 +5346,15 @@ fn synthesize_grok_config_options(
                     name: id.to_string(),
                     description: None,
                     reasoning_efforts: None,
+                    context_window: None,
                 });
             }
             model_current = Some(id.to_string());
         }
+    }
+
+    for model in &mut model_opts {
+        model.context_window = specs.get(&model.value).and_then(|spec| spec.context_window);
     }
 
     let mut result: Vec<SessionConfigOptionInfo> = Vec::new();
@@ -5511,6 +5531,7 @@ fn session_model_state_option(
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_string),
                 reasoning_efforts: None,
+                context_window: None,
             })
         })
         .collect();
@@ -5601,6 +5622,7 @@ fn mode_state_option(
             name: mode.name.clone(),
             description: mode.description.clone(),
             reasoning_efforts: None,
+            context_window: None,
         })
         .collect();
     if options.is_empty() {
@@ -5678,6 +5700,7 @@ fn kiro_thinking_option(reasoning: &KiroReasoning) -> Option<SessionConfigOption
         name: value.to_string(),
         description: None,
         reasoning_efforts: None,
+        context_window: None,
     };
     Some(SessionConfigOptionInfo {
         id: KIRO_THINKING_OPTION_ID.to_string(),
@@ -5723,6 +5746,7 @@ fn kiro_effort_option(reasoning: &KiroReasoning) -> Option<SessionConfigOptionIn
                     name: level.clone(),
                     description: None,
                     reasoning_efforts: None,
+                    context_window: None,
                 })
                 .collect(),
             groups: Vec::new(),
@@ -39011,6 +39035,7 @@ mod tests {
             name: "Opus".into(),
             description: None,
             reasoning_efforts: None,
+            context_window: None,
         };
         assert_eq!(
             serde_json::to_value(&plain).unwrap(),
@@ -39460,12 +39485,14 @@ mod tests {
                         name: "Thinking: off".to_string(),
                         description: None,
                         reasoning_efforts: None,
+                        context_window: None,
                     },
                     SessionConfigSelectOptionInfo {
                         value: "high".to_string(),
                         name: "Thinking: high".to_string(),
                         description: None,
                         reasoning_efforts: None,
+                        context_window: None,
                     },
                 ],
                 groups: vec![],
@@ -40778,12 +40805,14 @@ mod tests {
                         name: "Grok 4.5".to_string(),
                         description: None,
                         reasoning_efforts: None,
+                        context_window: None,
                     },
                     SessionConfigSelectOptionInfo {
                         value: "grok-composer-2.5-fast".to_string(),
                         name: "Composer 2.5".to_string(),
                         description: None,
                         reasoning_efforts: None,
+                        context_window: None,
                     },
                 ],
                 groups: Vec::new(),
@@ -51762,6 +51791,7 @@ mod tests {
                             name: "Opus".to_string(),
                             description: None,
                             reasoning_efforts: None,
+                            context_window: None,
                         }],
                         groups: Vec::new(),
                     }),

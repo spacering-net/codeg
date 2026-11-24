@@ -7,6 +7,7 @@
 //! [`DelegationBroker`]. The listener is the boundary between the wire and
 //! the broker, plus the place where the per-launch token policy is enforced.
 
+use super::transport::BrokerListAgentOptionsRequest;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -488,6 +489,9 @@ impl DelegationListener {
             BrokerMessage::CreateSession(req) => BrokerResponse {
                 outcome: self.process_create_session(req).await,
             },
+            BrokerMessage::ListAgentOptions(req) => BrokerResponse {
+                outcome: self.process_list_agent_options(req).await,
+            },
             BrokerMessage::SessionMessage(req) => BrokerResponse {
                 outcome: self.process_session_message(req).await,
             },
@@ -868,6 +872,43 @@ impl DelegationListener {
                 external_handle: req.external_handle,
             })
             .await
+    }
+
+    async fn process_list_agent_options(&self, req: BrokerListAgentOptionsRequest) -> Value {
+        let Some(entry) = self.tokens.lookup(&req.token).await else {
+            return serde_json::json!({"error": "invalid token"});
+        };
+        if entry.agent_hosts_tools {
+            return serde_json::json!({"error": "tool is unavailable for this agent"});
+        }
+        let Some(agent_type) = crate::models::AgentType::from_wire(&req.agent_type) else {
+            return serde_json::json!({"error": "invalid agent_type"});
+        };
+
+        let config = self.broker.config_snapshot().await;
+        if !config.enabled && !config.session_messaging_enabled {
+            return serde_json::json!({"error": "delegation and session messaging are disabled"});
+        }
+        let Some(creator) = self.session_creator.get() else {
+            return serde_json::json!({"error": "session tools are unavailable"});
+        };
+        let inherited_mode_id = creator.inherited_mode_id(&entry.parent_connection_id, agent_type).await;
+        let preferences = config.agent_defaults.get(&agent_type)
+            .map(|defaults| defaults.config_values.clone()).unwrap_or_default();
+        match creator.list_agent_options(
+            agent_type,
+            Some(entry.working_dir.to_string_lossy().into_owned()),
+            preferences,
+        ).await {
+            Ok(options) => serde_json::json!({
+                "agent_type": req.agent_type,
+                "model_option_id": options.model_option_id,
+                "models": options.models,
+                "modes": options.modes,
+                "inherited_mode_id": inherited_mode_id,
+            }),
+            Err(error) => serde_json::json!({"error": error}),
+        }
     }
 
     async fn process_create_session(

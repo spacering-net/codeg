@@ -503,6 +503,7 @@ pub enum BrokerMessage {
     /// empty list when the lookup fails, so a companion never mistakes a
     /// refusal for an old listener (see `Ping`).
     ListAssistants(BrokerListAssistantsRequest),
+    ListAgentOptions(BrokerListAgentOptionsRequest),
     /// Liveness and capability probe, carrying no `token`: the answer reveals
     /// nothing beyond "the socket is being served" and what this listener
     /// understands. Sent by codeg's own service-status check
@@ -518,6 +519,12 @@ pub enum BrokerMessage {
     /// dropping the assistant's options and instructions. That is why the
     /// companion asks before it forwards one (`AssistantSupport`).
     Ping,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerListAgentOptionsRequest {
+    pub token: String,
+    pub agent_type: String,
 }
 
 /// See [`BrokerMessage::ListAssistants`].
@@ -578,18 +585,8 @@ impl BrokerCreateSessionRequest {
         {
             return Err("create_session requires mode_id");
         }
-        if !self
-            .config_values
-            .get("model")
-            .is_some_and(|model| !model.trim().is_empty())
-        {
-            return Err("create_session requires config_values.model");
-        }
-        if !["reasoning_effort", "effort", "thought_level"]
-            .iter()
-            .any(|key| self.config_values.contains_key(*key))
-        {
-            return Err("create_session requires a reasoning option in config_values");
+        if self.config_values.len() != 2 {
+            return Err("create_session requires one model and one reasoning option in config_values");
         }
         if self.config_values.values().any(|value| value.trim().is_empty()) {
             return Err("config_values must not contain empty values");
@@ -1062,6 +1059,13 @@ pub async fn client_computer_act_round_trip(
 /// it is not checked on.
 pub async fn client_ping(socket_path: &str) -> io::Result<BrokerResponse> {
     raw_round_trip(socket_path, &BrokerMessage::Ping).await
+}
+
+pub async fn client_list_agent_options_round_trip(
+    socket_path: &str,
+    req: &BrokerListAgentOptionsRequest,
+) -> std::io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::ListAgentOptions(req.clone())).await
 }
 
 /// Fetch the assistant roster (see [`BrokerMessage::ListAssistants`]).

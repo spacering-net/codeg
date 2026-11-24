@@ -48,6 +48,7 @@ use crate::acp::chat_authoring::{
     NewAutomationSpec, NewWorkTaskSpec, MAX_PROMPT_CHARS, MAX_TITLE_CHARS,
     MAX_WORK_TASK_ATTACHMENTS,
 };
+use crate::acp::delegation::transport::{client_list_agent_options_round_trip, BrokerListAgentOptionsRequest};
 use crate::acp::delegation::transport::{
     client_ask_round_trip, client_browser_act_round_trip, client_browser_capture_round_trip,
     client_browser_console_round_trip, client_browser_eval_round_trip,
@@ -320,6 +321,7 @@ impl CompanionFeatures {
             "computer_clipboard_read" | "computer_clipboard_write" => {
                 self.computer && self.computer_clipboard
             }
+            "list_agent_options" => self.delegation || self.session_messaging,
             "delegate_to_agent"
             | "get_delegation_status"
             | "cancel_delegation"
@@ -677,7 +679,7 @@ pub async fn dispatch_line(
                 None => all,
             };
             remove_disabled_agents_from_delegate_enum(&mut tools, &ctx.disabled_agents);
-            append_custom_agents_to_delegate_enum(&mut tools, &ctx.custom_agents);
+            append_custom_agents_to_creation_tools(&mut tools, &ctx.custom_agents);
             if ctx.features.allows_tool("delegate_to_agent") {
                 offer_assistants_in_delegate_schema(ctx, &mut tools).await;
             }
@@ -736,24 +738,31 @@ fn remove_disabled_agents_from_delegate_enum(tools: &mut Value, disabled_agents:
 /// schema shape change) leaves the tools untouched rather than erroring —
 /// serving the narrower built-in enum is strictly better than serving no
 /// tools at all.
-fn append_custom_agents_to_delegate_enum(tools: &mut Value, custom_agents: &[String]) {
+fn append_custom_agents_to_creation_tools(tools: &mut Value, custom_agents: &[String]) {
     if custom_agents.is_empty() {
         return;
     }
     let Some(arr) = tools.as_array_mut() else {
         return;
     };
-    let Some(variants) = arr
-        .iter_mut()
-        .find(|t| t.get("name").and_then(|v| v.as_str()) == Some("delegate_to_agent"))
-        .and_then(|t| t.pointer_mut("/inputSchema/properties/agent_type/enum"))
-        .and_then(|e| e.as_array_mut())
-    else {
-        return;
-    };
-    for slug in custom_agents {
-        if !variants.iter().any(|v| v.as_str() == Some(slug)) {
-            variants.push(Value::String(slug.clone()));
+    for tool in arr.iter_mut().filter(|tool| {
+        matches!(
+            tool.get("name").and_then(Value::as_str),
+            Some("delegate_to_agent" | "create_session")
+        )
+    }) {
+        if let Some(variants) = tool
+            .pointer_mut("/inputSchema/properties/agent_type/enum")
+            .and_then(Value::as_array_mut)
+        {
+            for slug in custom_agents {
+                if !variants
+                    .iter()
+                    .any(|variant| variant.as_str() == Some(slug))
+                {
+                    variants.push(Value::String(slug.clone()));
+                }
+            }
         }
     }
 }
@@ -904,6 +913,34 @@ async fn build_tools_call_spawn(
         return LineAction::Respond(err(id, -32602, format!("unknown tool: {name}")));
     }
     match name.as_str() {
+        "list_agent_options" => {
+            let agent_type = match arguments.get("agent_type").and_then(Value::as_str) {
+                Some(value) if !value.is_empty() => value.to_owned(),
+                _ => {
+                    return LineAction::Respond(err(
+                        id,
+                        -32602,
+                        "list_agent_options requires agent_type",
+                    ))
+                }
+            };
+            if arguments.as_object().is_some_and(|args| args.len() != 1) {
+                return LineAction::Respond(err(
+                    id,
+                    -32602,
+                    "list_agent_options accepts only agent_type",
+                ));
+            }
+            let request = BrokerListAgentOptionsRequest {
+                token: ctx.token.clone(),
+                agent_type,
+            };
+            let round_trip =
+                Box::pin(
+                    async move { client_list_agent_options_round_trip(&socket, &request).await },
+                );
+            register_and_spawn(inflight, id, None, round_trip, render_agent_options_result).await
+        }
         "delegate_to_agent" => {
             // MCP clients (Codex / Claude Code) generally do NOT populate
             // `_meta.tool_use_id` when calling an MCP server. We still surface it
@@ -1881,6 +1918,14 @@ fn normalize_status_task_ids(arguments: &Value) -> Result<Vec<String>, String> {
         }
     }
     Ok(out)
+}
+
+fn render_agent_options_result(outcome: &Value) -> Value {
+    json!({
+        "content": [{"type": "text", "text": outcome.to_string()}],
+        "structuredContent": outcome,
+        "isError": outcome.get("error").is_some(),
+    })
 }
 
 /// Render the `get_delegation_status` round-trip outcome (always a

@@ -47,6 +47,22 @@
     }
   },
   {
+    "name": "list_agent_options",
+    "description": "List the models, model-specific reasoning levels, and permission modes for a local agent in one call. Use model_option_id, model slug, reasoning_option_id, reasoning value, and mode_id as inputs to create_session. For the same agent type use inherited_mode_id. The runtime may omit some metadata. For delegate_to_agent, use the model slug and reasoning value.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["agent_type"],
+      "properties": {
+        "agent_type": {
+          "type": "string",
+          "description": "Agent slug, including a configured custom agent."
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": { "readOnlyHint": true }
+  },
+  {
     "name": "get_current_session",
     "description": "Read your own Codeg conversation information: conversation ID, title, agent type, status, folder ID and path, and parent conversation ID if present. The conversation_id can be used by another session with send_to_session.",
     "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
@@ -129,15 +145,10 @@
         },
         "config_values": {
           "type": "object",
-          "propertyNames": { "enum": ["model", "reasoning_effort", "effort", "thought_level"] },
           "additionalProperties": { "type": "string", "pattern": "\\S" },
-          "required": ["model"],
-          "anyOf": [
-            { "required": ["reasoning_effort"] },
-            { "required": ["effort"] },
-            { "required": ["thought_level"] }
-          ],
-          "description": "Specify model and the reasoning option ID offered by the target agent. For Codex, use reasoning_effort. The first message is sent only if the supplied settings take effect."
+          "minProperties": 2,
+          "maxProperties": 2,
+          "description": "Use the model_option_id and reasoning_option_id from list_agent_options as keys. Use the chosen model slug and reasoning level as their values. The first message is sent only if the settings take effect."
         }
       }
     }

@@ -6,7 +6,7 @@ use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter};
 use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 
-use super::connection::{current_config_option_values, SteerOutcome};
+use super::connection::SteerOutcome;
 use super::delegation::broker::DelegationBroker;
 use super::error::AcpError;
 use super::manager::ConnectionManager;
@@ -47,6 +47,95 @@ fn current_permission_mode(options: &[SessionConfigOptionInfo]) -> Option<&str> 
 }
 
 impl SessionCreator {
+    pub(crate) async fn inherited_mode_id(
+        &self,
+        caller: &str,
+        agent_type: crate::models::AgentType,
+    ) -> Option<String> {
+        let state = self.manager.get_state(caller).await?;
+        let state = state.read().await;
+        (state.agent_type == agent_type)
+            .then(|| {
+                current_permission_mode(state.config_options.as_deref().unwrap_or_default())
+                    .or(state.current_mode.as_deref())
+                    .map(str::to_owned)
+            })
+            .flatten()
+    }
+
+    /// Probe the same runtime selectors used by the settings UI.
+    pub async fn list_agent_options(
+        &self,
+        agent_type: crate::models::AgentType,
+        working_dir: Option<String>,
+        preferences: std::collections::BTreeMap<String, String>,
+    ) -> Result<super::delegation::models::AgentOptions, String> {
+        use super::delegation::models::{
+            current_model, is_model, is_reasoning, model_catalog, permission_modes, AgentOptions,
+        };
+        let db = AppDatabase { conn: self.db.clone() };
+        let runtime_env = crate::commands::acp::build_session_runtime_env(&db, agent_type, None, &self.data_dir)
+            .await.map_err(|error| error.to_string())?;
+        let probe = |values| self.manager.probe_agent_options(
+            agent_type, working_dir.clone(), runtime_env.clone(), values,
+        );
+        let snapshot = probe(preferences.clone())
+            .await
+            .map_err(|error| error.to_string())?;
+        let model_option_id = snapshot
+            .config_options
+            .iter()
+            .find(|option| is_model(option))
+            .map(|option| option.id.clone());
+        let applied = model_option_id
+            .as_ref()
+            .filter(|id| !snapshot.unapplied_config_ids.contains(id))
+            .and_then(|id| preferences.get(id));
+        let mut models = model_catalog(&snapshot.config_options, applied.map(String::as_str));
+        if let Some(id) = model_option_id.as_ref() {
+            let selected = applied
+                .map(String::as_str)
+                .or_else(|| current_model(&snapshot.config_options));
+            for model in &mut models {
+                if (model.reasoning.is_some() && model.reasoning_option_id.is_some())
+                    || Some(model.slug.as_str()) == selected
+                {
+                    continue;
+                }
+                let mut values = preferences.clone();
+                // Start with the target model's default effort.
+                values.retain(|key, _| {
+                    !snapshot
+                        .config_options
+                        .iter()
+                        .any(|option| option.id == *key && is_reasoning(option))
+                });
+                values.insert(id.clone(), model.slug.clone());
+                let probed = match probe(values).await {
+                    Ok(probed) if !probed.unapplied_config_ids.contains(id) => probed,
+                    Ok(_) => continue,
+                    Err(error) => {
+                        tracing::warn!(%error, model = %model.slug, "Could not probe model reasoning choices");
+                        break;
+                    }
+                };
+                if let Some(found) = model_catalog(&probed.config_options, Some(&model.slug))
+                    .into_iter()
+                    .find(|entry| entry.slug == model.slug)
+                {
+                    model.reasoning = found.reasoning;
+                    model.reasoning_option_id = found.reasoning_option_id;
+                    model.context_window = model.context_window.or(found.context_window);
+                }
+            }
+        }
+        Ok(AgentOptions {
+            model_option_id,
+            models,
+            modes: permission_modes(&snapshot),
+        })
+    }
+
     pub async fn create(
         &self,
         caller: &str,
@@ -57,14 +146,6 @@ impl SessionCreator {
         >,
         broker: &DelegationBroker,
     ) -> Result<(i32, String), String> {
-        if let Some(key) = request.config_values.keys().find(|key| {
-            !matches!(
-                key.as_str(),
-                "model" | "reasoning_effort" | "effort" | "thought_level"
-            )
-        }) {
-            return Err(format!("unsupported create_session config option: {key}"));
-        }
         let Some((caller_state, emitter)) = self.manager.get_state_and_emitter(caller).await else {
             return Err("creator connection is unavailable".into());
         };
@@ -96,7 +177,6 @@ impl SessionCreator {
             defaults.mode_id.clone_from(&mode);
             defaults.config_values.remove("mode");
         }
-        defaults.config_values.extend(request.config_values.clone());
         let source = live_conversation(&self.db, sender)
             .await
             .map_err(|error| error.to_string())?
@@ -128,6 +208,43 @@ impl SessionCreator {
             crate::commands::acp::build_session_runtime_env(&db, agent_type, None, &self.data_dir)
                 .await
                 .map_err(|error| error.to_string())?;
+        use super::delegation::models::{is_model, validate_create_option_ids};
+        let probe = |values| {
+            self.manager.probe_agent_options(
+                agent_type,
+                Some(folder.path.clone()),
+                runtime_env.clone(),
+                values,
+            )
+        };
+        let options = probe(Default::default())
+            .await
+            .map_err(|error| error.to_string())?;
+        if let Err(error) =
+            validate_create_option_ids(&options.config_options, &request.config_values)
+        {
+            // Some models add or replace the reasoning selector when selected.
+            // Send only the confirmed model key until both keys are known.
+            let (id, model) = options
+                .config_options
+                .iter()
+                .find(|option| is_model(option))
+                .and_then(|option| request.config_values.get_key_value(&option.id))
+                .ok_or(error)?;
+            let selected = probe(std::collections::BTreeMap::from([(
+                id.clone(),
+                model.clone(),
+            )]))
+            .await
+            .map_err(|error| error.to_string())?;
+            if selected.unapplied_config_ids.contains(id) {
+                return Err(format!(
+                    "could not select model {model:?}; query list_agent_options for this agent"
+                ));
+            }
+            validate_create_option_ids(&selected.config_options, &request.config_values)?;
+        }
+        defaults.config_values.extend(request.config_values.clone());
         let title = Some(request.title.clone());
         let conversation_id = if folder.kind == FolderKind::Chat {
             conversation_service::create_chat(&self.db, folder.id, agent_type, title, None)
@@ -187,14 +304,10 @@ impl SessionCreator {
                         "could not apply permission mode {mode:?} for {agent_type}"
                     ));
                 }
-                let current = current_config_option_values(&snapshot.config_options);
-                if let Some((key, value)) = request
-                    .config_values
-                    .iter()
-                    .find(|(key, value)| current.get(*key) != Some(*value))
-                {
-                    return Err(format!("could not apply {key}={value} for {agent_type}"));
-                }
+                super::delegation::models::validate_config_values(
+                    &snapshot.config_options,
+                    &request.config_values,
+                )?;
                 Ok(())
             }
             .await;
