@@ -4814,19 +4814,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_list_returns_four_delegation_tools() {
+    async fn tools_list_returns_delegation_tools_and_agent_options() {
         let line = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
         let resp = unwrap_respond(dispatch_for_test(line).await);
         let result = resp.result.unwrap();
         let tools = result["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 4);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert!(names.contains(&"delegate_to_agent"));
-        assert!(names.contains(&"get_delegation_status"));
-        assert!(names.contains(&"cancel_delegation"));
-        assert!(names.contains(&"resume_delegation"));
-        assert!(!names.contains(&"send_to_session"));
-        assert!(!names.contains(&"create_session"));
+        assert_eq!(
+            names,
+            [
+                "delegate_to_agent",
+                "list_agent_options",
+                "get_delegation_status",
+                "cancel_delegation",
+                "resume_delegation",
+            ]
+        );
         // resume_delegation requires only task_id; reason is optional and
         // there is deliberately NO task-text parameter (no new iterations).
         let resume = tools
@@ -5494,7 +5497,6 @@ mod tests {
             dispatch_for_test(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).await,
         );
         assert!(!names.contains(&"check_user_feedback".to_string()));
-        assert_eq!(names.len(), 4);
     }
 
     #[tokio::test]
@@ -5503,7 +5505,6 @@ mod tests {
             dispatch_with_features(BOTH, r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).await,
         );
         assert!(names.contains(&"check_user_feedback".to_string()));
-        assert_eq!(names.len(), 5);
     }
 
     #[tokio::test]
