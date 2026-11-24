@@ -7,6 +7,7 @@ import type {
   Loadable,
 } from "@/lib/harness/discover-state"
 import { knownKind } from "@/lib/harness/display"
+import type { HarnessPluginRelease } from "@/lib/harness/plugin-install-types"
 import type {
   HarnessInstalledMark,
   HarnessItemDetail,
@@ -28,6 +29,7 @@ import {
   ServerSection,
   VersionsSection,
 } from "./detail-sections"
+import { PluginActions, PluginBody } from "./plugin-detail"
 import {
   PromptActions,
   PromptBody,
@@ -81,6 +83,8 @@ export interface DiscoverDetailBodyProps {
   versions: Loadable<HarnessVersionSummary[]>
   /** The description's HTML fragment as text — for `ReadmeContent` only. */
   readme: Loadable<string>
+  /** A plugin's releases; idle for every other item. */
+  releases: Loadable<HarnessPluginRelease[]>
   /** Ask again for one of the parts after it failed. */
   onRetryPart: (part: DiscoverDetailLoadPart) => void
 }
@@ -182,7 +186,8 @@ const GENERIC_VIEW: DiscoverKindView = { Body: GenericBody }
  * through its own, and its agents are switched in the Skills section. A
  * prompt is copied or kept as a quick message; an assistant is only shown
  * this release (plan decision D2), so its one action is copying its
- * definition.
+ * definition. A plugin is installed through its own dialog, one mode per
+ * agent.
  */
 export const DISCOVER_KIND_VIEWS: Record<HarnessKnownKind, DiscoverKindView> = {
   // Install; or, once installed, manage — after update when there is one.
@@ -215,6 +220,13 @@ export const DISCOVER_KIND_VIEWS: Record<HarnessKnownKind, DiscoverKindView> = {
     Byline: AssistantByline,
   },
   connector: GENERIC_VIEW,
+  // Install, through the plugin install dialog. Once installed, the plugin
+  // is managed from its own section.
+  plugin: {
+    Body: PluginBody,
+    Actions: PluginActions,
+    loadingActions: () => 1,
+  },
 }
 
 /** The view for `kind`, with an answer for one this build does not know. */

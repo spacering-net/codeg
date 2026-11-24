@@ -87,12 +87,17 @@ impl HoldTiming {
 
 /// Whether this agent carries on by itself once its background work ends, so
 /// that keeping the connection up gets the work's result read. Claude Code
-/// starts a turn for every `<task-notification>`; Grok starts turns of its own
-/// on its idle loop. The others (codex's background terminals among them)
-/// wait to be prompted — keeping their connection up would only keep the run
-/// from settling, with nobody left to read what the work produced.
+/// starts a turn for every `<task-notification>`, and so does the native
+/// Antigravity CLI (the legacy 1.5.0 adapter has no task store, so its
+/// connections never count background work and never hold); Grok starts turns
+/// of its own on its idle loop. The others (codex's background terminals among
+/// them) wait to be prompted — keeping their connection up would only keep the
+/// run from settling, with nobody left to read what the work produced.
 pub(crate) fn agent_resumes_after_background_work(agent_type: AgentType) -> bool {
-    matches!(agent_type, AgentType::ClaudeCode | AgentType::Grok)
+    matches!(
+        agent_type,
+        AgentType::ClaudeCode | AgentType::Grok | AgentType::Antigravity
+    )
 }
 
 /// A wire label for a [`ConnectionBusy`] reason (timeline payloads, logs).
@@ -576,6 +581,7 @@ mod tests {
         for (agent_type, held) in [
             (AgentType::ClaudeCode, true),
             (AgentType::Grok, true),
+            (AgentType::Antigravity, true),
             (AgentType::Codex, false),
         ] {
             let manager = connection(agent_type).await;

@@ -615,7 +615,15 @@ describe("Sidebar — Harness row", () => {
 
   it("carries no badge while nothing has an update", () => {
     renderSidebar()
-    expect(harnessRow().textContent).toBe("Harness Engineering")
+    expect(harnessRow().textContent).toBe("Harness EngineeringSkills · MCP")
+  })
+
+  it("names what the page holds after its label", () => {
+    renderSidebar()
+    const hint = within(harnessRow()).getByText("Skills · MCP")
+    expect(hint.className).toContain("text-muted-foreground")
+    // The title stays the label alone: the rows are told apart by it.
+    expect(harnessRow()).toHaveAttribute("title", "Harness Engineering")
   })
 
   it("counts the available updates in a trailing badge", () => {
@@ -623,7 +631,7 @@ describe("Sidebar — Harness row", () => {
 
     // Read out as a sentence, not as a bare digit after the name…
     const row = screen.getByRole("button", {
-      name: "Harness Engineering 3 updates available",
+      name: "Harness Engineering Skills · MCP 3 updates available",
     })
     // …and shown as the same chip the To-dos count uses.
     const badge = within(row).getByTitle("3 updates available")
@@ -636,7 +644,7 @@ describe("Sidebar — Harness row", () => {
     renderSidebar({ harnessUpdates: 1 })
     expect(
       screen.getByRole("button", {
-        name: "Harness Engineering 1 update available",
+        name: "Harness Engineering Skills · MCP 1 update available",
       })
     ).toBeTruthy()
   })

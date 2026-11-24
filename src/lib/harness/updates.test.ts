@@ -98,6 +98,8 @@ describe("the answers", () => {
           { id: "item-g", revision: 1, state: "unknown" },
           // a state this build does not know says nothing
           { id: "item-h", revision: 1, state: "quarantined" },
+          // no longer on SRN: not "cannot be checked"
+          { id: "item-i", revision: 2, state: "gone", unknown: "unavailable" },
         ],
       })
     )
@@ -110,7 +112,10 @@ describe("the answers", () => {
       ["item-f", "unknown"],
       ["item-g", "unknown"],
       ["item-h", "unknown"],
+      ["item-i", "gone"],
     ])
+    expect(value.items[8].unknown).toBeNull()
+    expect(value.items[8].update_available).toBe(false)
     expect(value.items[5].unknown).toBe("unavailable")
     expect(value.items[6].unknown).toBe("not_checked")
     expect(value.items[2].update_available).toBe(true)
@@ -150,6 +155,63 @@ describe("the answers", () => {
       false,
     ])
     expect(value.count).toBe(0)
+  })
+
+  it("reads a plugin's update: its target, agreement, Codeg's switch", () => {
+    const plugin = (
+      revision: number,
+      target: number | null,
+      suspended: boolean,
+      state = "update_available"
+    ) => ({
+      id: `p-${revision}-${target}-${suspended}-${state}`,
+      revision,
+      state,
+      update_available: true,
+      latest: { revision: 5, version: "5.0.0" },
+      ref: "obra/superpowers",
+      plugin: {
+        target:
+          target === null
+            ? null
+            : { revision: target, version: `${target}.0.0` },
+        needs_consent: suspended,
+        suspended,
+      },
+    })
+    const value = normalizeHarnessUpdates(
+      rawUpdates({
+        items: [
+          // an update to the revision to install whole, not the newest
+          plugin(1, 2, false),
+          // switched off by Codeg, approved again: back on is the update
+          plugin(2, 2, true),
+          // the same revision while it runs is no update
+          plugin(2, 2, false),
+          // nothing to install whole
+          plugin(1, null, true, "unapproved"),
+          // no plugin part: not a plugin's
+          { id: "s", revision: 1, state: "latest", plugin: "x" },
+        ],
+      })
+    )
+    expect(value.items.map((entry) => entry.update_available)).toEqual([
+      true,
+      true,
+      false,
+      false,
+      false,
+    ])
+    expect(value.items[0].plugin).toEqual({
+      target: { revision: 2, version: "2.0.0" },
+      needs_consent: false,
+      suspended: false,
+    })
+    expect(value.items[1].plugin?.needs_consent).toBe(true)
+    expect(value.items[3].state).toBe("unapproved")
+    expect(value.items[3].plugin?.target).toBeNull()
+    expect(value.items[4].plugin).toBeNull()
+    expect(value.count).toBe(2)
   })
 
   it("reads the failure of the last check and the switch", () => {
@@ -215,6 +277,7 @@ describe("what the sections make of it", () => {
     latest: { revision: 3, version: "3.0.0" },
     ref: "acme/a",
     unknown: null,
+    plugin: null,
     ...over,
   })
 
@@ -228,6 +291,8 @@ describe("what the sections make of it", () => {
     expect(remoteStateOf(item({ state: "removed_by_harness" }))).toBe(
       "removedByHarness"
     )
+    expect(remoteStateOf(item({ state: "gone" }))).toBe("gone")
+    expect(remoteStateOf(item({ state: "unapproved" }))).toBe("unapproved")
     expect(remoteStateOf(item({ state: "unknown" }))).toBeNull()
     expect(remoteStateOf(undefined)).toBeNull()
   })
@@ -253,6 +318,39 @@ describe("what the sections make of it", () => {
       remote: "updateAvailable",
       updateAvailable: true,
     })
+    // an item gone or stopped is so whichever revision the listing has
+    expect(
+      remoteFor(item({ state: "gone", update_available: false }), 5)
+    ).toMatchObject({ remote: "gone", updateAvailable: false })
+    expect(
+      remoteFor(
+        item({ state: "disabled_by_author", update_available: false }),
+        5
+      )
+    ).toMatchObject({ remote: "disabledByAuthor", updateAvailable: false })
+    // a revision's own state is not
+    expect(remoteFor(item({ state: "yanked" }), 3)).toMatchObject({
+      remote: null,
+    })
+    // a plugin: its target, and its own revision once Codeg switched it off
+    const target = (revision: number, suspended: boolean) => ({
+      target: { revision, version: null },
+      needs_consent: suspended,
+      suspended,
+    })
+    expect(remoteFor(item({ plugin: target(2, false) }), 2)).toMatchObject({
+      updateAvailable: false,
+    })
+    expect(remoteFor(item({ plugin: target(2, false) }), 1)).toMatchObject({
+      remote: "updateAvailable",
+      updateAvailable: true,
+    })
+    expect(
+      remoteFor(item({ revision: 2, plugin: target(2, true) }), 2)
+    ).toMatchObject({ remote: "updateAvailable", updateAvailable: true })
+    expect(
+      remoteFor(item({ state: "unapproved", plugin: target(3, true) }), 1)
+    ).toMatchObject({ remote: "unapproved", updateAvailable: true })
     expect(remoteFor(null, 1)).toEqual({
       remote: null,
       updateAvailable: false,

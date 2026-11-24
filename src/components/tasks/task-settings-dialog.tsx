@@ -499,6 +499,9 @@ function TaskSettingsBody({
                         })
                       }
                     />
+                    <p className="text-xs text-muted-foreground">
+                      {t("settingsAgentFrozenHint")}
+                    </p>
                   </div>
                 </SettingRow>
               </SettingCard>

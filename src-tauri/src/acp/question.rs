@@ -199,6 +199,14 @@ pub trait SessionQuestionAccess: Send + Sync {
         self.register_question(parent_connection_id, questions).await
     }
 
+    /// Stop the connection's running turn the way the user's Stop does
+    /// (`ConnectionManager::cancel`: the agent's `session/cancel` and the
+    /// conversation row's `Cancelled`), for an agent that waits for the turn to
+    /// be cancelled once its question is declined (antigravity-acp 1.5.2).
+    ///
+    /// The default does nothing, for stubs.
+    async fn cancel_turn(&self, _connection_id: &str) {}
+
     /// Cancel a pending question — the companion's tool call was canceled
     /// (peer-close) or the connection is tearing down. Removes it and clears
     /// the card on every client. No-op if it was already answered / gone.
@@ -4279,6 +4287,9 @@ mod tests {
             // Right server, right words, wrong tool — the match is anchored at
             // the END so a longer name cannot borrow it.
             "mcp__codeg-mcp__ask_user_question_twice",
+            // A third-party server named `mcp` whose tool borrows the whole
+            // name: claude-agent-acp 0.109.1+ titles it `<server>: <tool>`.
+            "mcp: codeg-mcp__ask_user_question",
             // …and at the start: a server whose name only ends in codeg-mcp
             // is another one, and so is a server `codeg` whose tool is
             // `mcp_ask_user_question`.

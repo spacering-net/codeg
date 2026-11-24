@@ -40,6 +40,7 @@ import {
   acpPrompt,
   acpSetMode,
   acpSetConfigOption,
+  acpSetComposerMode,
   acpGoalControl,
   acpCancel,
   acpRespondPermission,
@@ -83,6 +84,7 @@ import type {
   PlanApprovalAnswer,
   SessionConfigKindInfo,
   SessionConfigOptionInfo,
+  SessionConfigSelectOptionInfo,
   SessionFailureRecord,
   SessionModeStateInfo,
   SessionUsageUpdateInfo,
@@ -159,7 +161,6 @@ import {
 } from "@/lib/window-attention"
 import {
   getSavedPrefsForConnect,
-  saveModePreference,
   saveConfigPreference,
 } from "@/lib/selector-prefs-storage"
 import { rememberAdvertisedCommands } from "@/lib/advertised-commands-store"
@@ -344,6 +345,20 @@ export interface ConnectionState {
   promptCapabilities: PromptCapabilitiesInfo
   supportsFork: boolean
   selectorsReady: boolean
+  /**
+   * The composer's pending mode pick on this connection (codeg#1179): a mode
+   * the user picked for a persisted conversation, which the tab applies at
+   * its next send. Recorded by the backend (`acp_set_composer_mode`), carried
+   * on the snapshot, cleared by the backend once the agent's mode reached it.
+   * Absent / `null` when there is none.
+   */
+  composerModeId?: string | null
+  /**
+   * True while a draft's first send is being admitted (`beginFirstSend` →
+   * `releaseFirstSend`): the surfaces disable the mode / option selectors so
+   * the prompt runs with exactly what was showing at submit.
+   */
+  selectorsLocked?: boolean
   sessionId: string | null
   modes: SessionModeStateInfo | null
   configOptions: SessionConfigOptionInfo[] | null
@@ -838,6 +853,12 @@ type Action =
       supported: boolean
     }
   | { type: "MODE_CHANGED"; contextKey: string; modeId: string }
+  | {
+      type: "COMPOSER_MODE_CHANGED"
+      contextKey: string
+      modeId: string | null
+    }
+  | { type: "SELECTORS_LOCKED"; contextKey: string; locked: boolean }
   | {
       type: "CONFIG_OPTION_CHANGED"
       contextKey: string
@@ -1523,6 +1544,35 @@ function samePlanEntries(a: PlanEntryInfo[], b: PlanEntryInfo[]): boolean {
   return true
 }
 
+/**
+ * One select entry against another, everything rendered included: a model
+ * entry's `reasoning_efforts` sets the effort range on its row, and an agent
+ * can change it without touching anything else (a codex catalog refresh that
+ * gives an unselected model another level) — a push swallowed here would leave
+ * the row's range stale.
+ */
+function sameSelectEntry(
+  a: SessionConfigSelectOptionInfo,
+  b: SessionConfigSelectOptionInfo
+): boolean {
+  if (
+    a.value !== b.value ||
+    a.name !== b.name ||
+    a.description !== b.description
+  ) {
+    return false
+  }
+  const left = a.reasoning_efforts ?? null
+  const right = b.reasoning_efforts ?? null
+  if (left === right) return true
+  if (!left || !right) return false
+  return (
+    (left.recommended ?? null) === (right.recommended ?? null) &&
+    left.values.length === right.values.length &&
+    left.values.every((level, index) => level === right.values[index])
+  )
+}
+
 function sameConfigOptions(
   a: SessionConfigOptionInfo[] | null,
   b: SessionConfigOptionInfo[]
@@ -1569,13 +1619,7 @@ function sameConfigOptions(
     if (leftKind.groups.length !== rightKind.groups.length) return false
 
     for (let j = 0; j < leftKind.options.length; j += 1) {
-      const lo = leftKind.options[j]
-      const ro = rightKind.options[j]
-      if (
-        lo.value !== ro.value ||
-        lo.name !== ro.name ||
-        lo.description !== ro.description
-      ) {
+      if (!sameSelectEntry(leftKind.options[j], rightKind.options[j])) {
         return false
       }
     }
@@ -1586,15 +1630,7 @@ function sameConfigOptions(
       if (lg.group !== rg.group || lg.name !== rg.name) return false
       if (lg.options.length !== rg.options.length) return false
       for (let k = 0; k < lg.options.length; k += 1) {
-        const lgo = lg.options[k]
-        const rgo = rg.options[k]
-        if (
-          lgo.value !== rgo.value ||
-          lgo.name !== rgo.name ||
-          lgo.description !== rgo.description
-        ) {
-          return false
-        }
+        if (!sameSelectEntry(lg.options[k], rg.options[k])) return false
       }
     }
   }
@@ -2294,6 +2330,8 @@ function connectionsReducer(
         pendingUserMessage: action.patch.pendingUserMessage,
         promptCapabilities: mergedPromptCapabilities,
         selectorsReady: mergedSelectorsReady,
+        // Current state like `status`: the backend's recorded composer pick.
+        composerModeId: action.patch.composerModeId,
         supportsFork: mergedSupportsFork,
         hasPrompted: mergedHasPrompted,
         // Staleness is a current-state field (like status): apply the snapshot's
@@ -3064,6 +3102,24 @@ function connectionsReducer(
       return next
     }
 
+    case "COMPOSER_MODE_CHANGED": {
+      const conn = state.get(action.contextKey)
+      if (!conn) return state
+      if ((conn.composerModeId ?? null) === action.modeId) return state
+      const next = new Map(state)
+      next.set(action.contextKey, { ...conn, composerModeId: action.modeId })
+      return next
+    }
+
+    case "SELECTORS_LOCKED": {
+      const conn = state.get(action.contextKey)
+      if (!conn) return state
+      if ((conn.selectorsLocked ?? false) === action.locked) return state
+      const next = new Map(state)
+      next.set(action.contextKey, { ...conn, selectorsLocked: action.locked })
+      return next
+    }
+
     case "MODE_CHANGED": {
       const conn = state.get(action.contextKey)
       if (!conn?.modes) return state
@@ -3536,7 +3592,7 @@ export interface AcpActionsValue {
    * reason and the agent process may still be alive. Callers that report a
    * restart to the user gate on it; fire-and-forget teardowns ignore it.
    */
-  disconnect(contextKey: string): Promise<boolean>
+  disconnect(contextKey: string, onlyIfIdle?: boolean): Promise<boolean>
   /**
    * Release a connection whose SURFACE went away on its own (a preview tab
    * replaced by the next single-click in the sidebar) — never a user-intent
@@ -3558,11 +3614,35 @@ export interface AcpActionsValue {
     }
   ): Promise<void>
   setMode(contextKey: string, modeId: string): Promise<void>
+  /**
+   * Apply a config option pick. `saveAsDefault` also records it as the
+   * new-conversation default — only an explicit pick in a DRAFT does that
+   * (codeg#1179); a pick in an existing conversation is persisted on its row
+   * by the backend and never touches the default.
+   */
   setConfigOption(
     contextKey: string,
     configId: string,
-    valueId: string
+    valueId: string,
+    opts?: { saveAsDefault?: boolean }
   ): Promise<void>
+  /**
+   * Record the composer's pending mode pick for a persisted conversation
+   * (optimistic; rolled back when the backend refuses or vetoes it).
+   * `initial` = a draft's one-time hand-over at its first send. Resolves to
+   * whether the backend applied it.
+   */
+  setComposerMode(
+    contextKey: string,
+    modeId: string | null,
+    opts?: { initial?: boolean }
+  ): Promise<boolean>
+  /** Lock the selectors at `contextKey` for a draft's first send. Returns
+   *  the token `releaseFirstSend` needs. */
+  beginFirstSend(contextKey: string): number
+  /** Release a first-send lock. Idempotent and token-specific: a stale token
+   *  never unlocks a newer attempt. */
+  releaseFirstSend(contextKey: string, token: number): void
   cancel(contextKey: string): Promise<void>
   respondPermission(
     contextKey: string,
@@ -5914,6 +5994,14 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             modeId: e.mode_id,
           })
           break
+        case "composer_mode_changed":
+          flushStreamingQueue(contextKey)
+          dispatch({
+            type: "COMPOSER_MODE_CHANGED",
+            contextKey,
+            modeId: e.mode_id ?? null,
+          })
+          break
         case "plan_update":
           flushStreamingQueue(contextKey)
           dispatch({
@@ -7144,15 +7232,25 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       }
 
       for (const { contextKey, connectionId } of toDisconnect) {
-        acpDisconnect(connectionId).catch(() => {})
-        releaseConnectionRoute(connectionId, contextKey)
-        teardownAttachSubscription(contextKey)
-        lastActivityRef.current.delete(contextKey)
-        pendingUnmappedEventsRef.current.delete(connectionId)
-        // Reclaimed for idleness, not closed: the tab is still open and its
-        // Reconnect button must resume this session, not start a new one.
-        captureIdentityBeforeRemoval(contextKey)
-        dispatch({ type: "CONNECTION_REMOVED", contextKey })
+        void acpDisconnect(connectionId, true)
+          .catch((error: unknown) => isConnectionGoneError(error))
+          .then((released) => {
+            if (
+              released === false ||
+              storeRef.current.connections.get(contextKey)?.connectionId !==
+                connectionId
+            )
+              return
+            releaseConnectionRoute(connectionId, contextKey)
+            teardownAttachSubscription(contextKey)
+            lastActivityRef.current.delete(contextKey)
+            pendingUnmappedEventsRef.current.delete(connectionId)
+            // Reclaimed for idleness, not closed: the tab is still open and its
+            // Reconnect button must resume this session, not start a new one.
+            captureIdentityBeforeRemoval(contextKey)
+            dispatch({ type: "CONNECTION_REMOVED", contextKey })
+          })
+          .catch(() => {})
       }
     }, IDLE_SWEEP_INTERVAL_MS)
 
@@ -7210,7 +7308,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           // its work settles — the same rule as a closed tab.
           if (conn && isConnectionBusy(conn)) busy = true
         }
-        if (owned && !busy) acpDisconnect(connectionId).catch(() => {})
+        if (owned && !busy) acpDisconnect(connectionId, true).catch(() => {})
       }
       for (const [, sub] of attachSubs) {
         try {
@@ -7740,9 +7838,15 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         // need this gate, but the wait is a fast no-op once the initial
         // subscribe resolves.
         await waitForListenerReady()
-        // Ship the user's saved selector preferences (mode + per-config
-        // values, persisted per agentType in localStorage) up to the backend
-        // at connect time. The backend applies them on the freshly-attached
+        // Ship the new-conversation default (mode + per-config values,
+        // persisted per agentType in localStorage) up to the backend at
+        // connect time, with the conversation's id when it is an existing one:
+        // the backend then replays that conversation's OWN stored selection
+        // instead, and uses the default only for a draft or (once) a legacy
+        // conversation that never recorded one (codeg#1179).
+        //
+        // Previously: ship the user's saved selector preferences up to the
+        // backend at connect time. The backend applies them on the freshly-attached
         // session before emitting `session_modes` / `session_config_options`,
         // so by the time the frontend sees those events (or a snapshot frame
         // on the Subscribe-with-Snapshot attach), `current_mode_id` and
@@ -7758,7 +7862,8 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           workingDir,
           sessionId,
           savedPrefs.modeId,
-          savedPrefs.configValues
+          savedPrefs.configValues,
+          conversationId != null && conversationId > 0 ? conversationId : null
         )
 
         // If disconnect was requested while connect was in flight, tear down
@@ -7976,7 +8081,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   )
 
   const disconnect = useCallback(
-    async (contextKey: string): Promise<boolean> => {
+    async (contextKey: string, onlyIfIdle = false): Promise<boolean> => {
       pendingConnectRequestsRef.current.delete(contextKey)
       // Whatever the surface does next — close, switch agent, reconnect — the
       // last attempt's failure no longer describes it.
@@ -8039,11 +8144,16 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       // the follow-up connect can re-attach to the process it believed it had
       // replaced. Report which happened and let the caller decide.
       let tornDown = true
-      await acpDisconnect(conn.connectionId).catch((error: unknown) => {
+      const released = await (
+        onlyIfIdle
+          ? acpDisconnect(conn.connectionId, true)
+          : acpDisconnect(conn.connectionId)
+      ).catch((error: unknown) => {
         if (isConnectionGoneError(error)) return
         console.warn("[Acp] backend teardown failed, releasing locally:", error)
         tornDown = false
       })
+      if (released === false) return false
       releaseConnectionRoute(conn.connectionId, contextKey)
       teardownAttachSubscription(contextKey)
       lastActivityRef.current.delete(contextKey)
@@ -8076,7 +8186,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       // acpDisconnects), and leaving one attached would leak its subscription
       // — the idle sweep skips viewers.
       if (conn && !conn.isViewer && isConnectionBusy(conn)) return
-      await disconnect(contextKey)
+      await disconnect(contextKey, true)
     },
     [disconnect]
   )
@@ -8300,6 +8410,35 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     teardownAttachSubscription,
   ])
 
+  // The newest setter still in flight per contextKey and selector. A
+  // setter's IPC returns once its command is enqueued on the connection, and
+  // the prompt goes through the same queue — so a prompt issued after the
+  // newest pick of every selector was enqueued runs with what the composer
+  // showed (codeg#1179). Only the NEWEST per selector is waited for: waiting
+  // for a superseded one too would hold the prompt until that stale request
+  // landed. Setters are issued at once, as before; the row records whatever
+  // the session ends up running with.
+  const inflightSettersRef = useRef(
+    new Map<string, Map<string, Promise<unknown>>>()
+  )
+  const trackSetter = useCallback(
+    <T,>(contextKey: string, selector: string, p: Promise<T>): Promise<T> => {
+      let bySelector = inflightSettersRef.current.get(contextKey)
+      if (!bySelector) {
+        bySelector = new Map()
+        inflightSettersRef.current.set(contextKey, bySelector)
+      }
+      const tracked = Promise.resolve(p).finally(() => {
+        const cur = inflightSettersRef.current.get(contextKey)
+        if (cur?.get(selector) === tracked) cur.delete(selector)
+        if (cur && cur.size === 0) inflightSettersRef.current.delete(contextKey)
+      })
+      bySelector.set(selector, tracked)
+      return tracked
+    },
+    []
+  )
+
   const sendPrompt = useCallback(
     async (
       contextKey: string,
@@ -8310,6 +8449,13 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         clientMessageId?: string | null
       }
     ) => {
+      // Cut-off taken synchronously: only the setters already in flight.
+      const pendingSetters = [
+        ...(inflightSettersRef.current.get(contextKey)?.values() ?? []),
+      ]
+      if (pendingSetters.length > 0) {
+        await Promise.allSettled(pendingSetters)
+      }
       const conn = storeRef.current.connections.get(contextKey)
       if (!conn) return
       lastActivityRef.current.set(contextKey, Date.now())
@@ -8335,24 +8481,30 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     [markConnectionGone]
   )
 
-  const setMode = useCallback(async (contextKey: string, modeId: string) => {
-    const conn = storeRef.current.connections.get(contextKey)
-    if (!conn) return
-    // Persist user's mode selection to localStorage
-    const modes =
-      conn.modes ?? selectorsCache.get(conn.agentType)?.modes ?? null
-    if (modes) {
-      saveModePreference(conn.agentType, {
-        ...modes,
-        current_mode_id: modeId,
-      })
-    }
-    lastActivityRef.current.set(contextKey, Date.now())
-    await acpSetMode(conn.connectionId, modeId)
-  }, [])
+  // Never writes the new-conversation default: this mostly runs as a send's
+  // catch-up for the composer's mode, and the default is the draft
+  // surfaces' to write at pick time (codeg#1179).
+  const setMode = useCallback(
+    async (contextKey: string, modeId: string) => {
+      const conn = storeRef.current.connections.get(contextKey)
+      if (!conn) return
+      lastActivityRef.current.set(contextKey, Date.now())
+      await trackSetter(
+        contextKey,
+        "mode",
+        acpSetMode(conn.connectionId, modeId)
+      )
+    },
+    [trackSetter]
+  )
 
   const setConfigOption = useCallback(
-    async (contextKey: string, configId: string, valueId: string) => {
+    async (
+      contextKey: string,
+      configId: string,
+      valueId: string,
+      opts?: { saveAsDefault?: boolean }
+    ) => {
       const conn = storeRef.current.connections.get(contextKey)
       if (!conn) return
       dispatch({
@@ -8361,11 +8513,80 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         configId,
         valueId,
       })
-      // Persist user selection to localStorage so the next `acp_connect`
-      // can ship it back to the backend as a preferred config value.
-      saveConfigPreference(conn.agentType, configId, valueId)
+      // Only an explicit pick in a draft becomes the new-conversation
+      // default; an existing conversation's pick is stored on its own row by
+      // the backend.
+      if (opts?.saveAsDefault) {
+        saveConfigPreference(conn.agentType, configId, valueId)
+      }
       lastActivityRef.current.set(contextKey, Date.now())
-      await acpSetConfigOption(conn.connectionId, configId, valueId)
+      await trackSetter(
+        contextKey,
+        `config:${configId}`,
+        acpSetConfigOption(conn.connectionId, configId, valueId)
+      )
+    },
+    [dispatch, trackSetter]
+  )
+
+  const setComposerMode = useCallback(
+    async (
+      contextKey: string,
+      modeId: string | null,
+      opts?: { initial?: boolean }
+    ): Promise<boolean> => {
+      const conn = storeRef.current.connections.get(contextKey)
+      if (!conn) return false
+      const previous = conn.composerModeId ?? null
+      dispatch({ type: "COMPOSER_MODE_CHANGED", contextKey, modeId })
+      lastActivityRef.current.set(contextKey, Date.now())
+      const rollback = () => {
+        const cur = storeRef.current.connections.get(contextKey)
+        if (
+          cur?.connectionId === conn.connectionId &&
+          (cur.composerModeId ?? null) === modeId
+        ) {
+          dispatch({
+            type: "COMPOSER_MODE_CHANGED",
+            contextKey,
+            modeId: previous,
+          })
+        }
+      }
+      try {
+        const applied = await acpSetComposerMode(
+          conn.connectionId,
+          modeId,
+          opts?.initial ?? false
+        )
+        if (!applied) rollback()
+        return applied
+      } catch (e) {
+        rollback()
+        throw e
+      }
+    },
+    [dispatch]
+  )
+
+  // First-send locks by contextKey (survives a canvas card replacement).
+  const firstSendTokenRef = useRef(new Map<string, number>())
+  const firstSendSeqRef = useRef(0)
+  const beginFirstSend = useCallback(
+    (contextKey: string) => {
+      firstSendSeqRef.current += 1
+      const token = firstSendSeqRef.current
+      firstSendTokenRef.current.set(contextKey, token)
+      dispatch({ type: "SELECTORS_LOCKED", contextKey, locked: true })
+      return token
+    },
+    [dispatch]
+  )
+  const releaseFirstSend = useCallback(
+    (contextKey: string, token: number) => {
+      if (firstSendTokenRef.current.get(contextKey) !== token) return
+      firstSendTokenRef.current.delete(contextKey)
+      dispatch({ type: "SELECTORS_LOCKED", contextKey, locked: false })
     },
     [dispatch]
   )
@@ -8643,6 +8864,9 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       sendPrompt,
       setMode,
       setConfigOption,
+      setComposerMode,
+      beginFirstSend,
+      releaseFirstSend,
       cancel,
       goalControl,
       respondPermission,
@@ -8665,6 +8889,9 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       registerSessionFailureActions,
     }),
     [
+      setComposerMode,
+      beginFirstSend,
+      releaseFirstSend,
       connect,
       disconnect,
       disconnectIfIdle,

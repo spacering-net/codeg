@@ -82,6 +82,15 @@ pub async fn harness_versions(
         .map(Json)
 }
 
+pub async fn harness_releases(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ItemRefParams>,
+) -> Result<Json<Value>, AppCommandError> {
+    harness_commands::harness_releases_core(&harness(&state), &params.item_ref)
+        .await
+        .map(Json)
+}
+
 pub async fn harness_readme(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<ItemRefParams>,

@@ -28,6 +28,7 @@ use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
+use crate::acp::npm_package;
 use crate::models::agent::AgentType;
 
 /// The command codex-acp installs (`bin` in its package.json).
@@ -36,9 +37,6 @@ const CODEX_ACP_PACKAGE: &str = "@agentclientprotocol/codex-acp";
 const CODEX_PACKAGE: &str = "@openai/codex";
 /// Upper bound on each codex subprocess the judge or the catalog reader runs.
 pub const CODEX_SUBPROCESS_TIMEOUT: Duration = Duration::from_secs(15);
-/// How far up from the command's realpath the codex-acp package.json may sit
-/// (`dist/index.js` is one level below it today).
-const PACKAGE_SEARCH_DEPTH: usize = 6;
 
 /// One codex runtime: the nested codex a launch would run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,7 +97,7 @@ impl ValidatedRuntime {
             return None;
         }
         let version = codex_package_dir_of(&codex_js)
-            .and_then(|dir| read_package_version(&dir, CODEX_PACKAGE))?;
+            .and_then(|dir| npm_package::version(&dir, CODEX_PACKAGE))?;
         Some(ValidatedRuntime {
             version,
             codex_js: self.codex_js.clone(),
@@ -151,9 +149,7 @@ fn resolve_blocking(command: Option<PathBuf>, fallback_dirs: &[PathBuf]) -> Code
     let real = command
         .as_deref()
         .and_then(|c| std::fs::canonicalize(c).ok());
-    let launched = command
-        .as_deref()
-        .and_then(|c| adapter_dir_for_command(c, real.as_deref()));
+    let launched = command.as_deref().and_then(adapter_dir_for_command);
     // A launch command whose package cannot be found (a wrapper script, a
     // version-manager shim) may run another install than the npm prefix's:
     // that one can still be asked, but is not taken for the launch's runtime.
@@ -161,7 +157,7 @@ fn resolve_blocking(command: Option<PathBuf>, fallback_dirs: &[PathBuf]) -> Code
     let adapter_dir = launched.or_else(|| {
         fallback_dirs
             .iter()
-            .find(|dir| is_package(dir, CODEX_ACP_PACKAGE))
+            .find(|dir| npm_package::is_package(dir, CODEX_ACP_PACKAGE))
             .cloned()
     });
     let key = RuntimeKey {
@@ -201,7 +197,7 @@ fn resolve_blocking(command: Option<PathBuf>, fallback_dirs: &[PathBuf]) -> Code
 }
 
 fn resolve_from_adapter(adapter_dir: &Path) -> (CodexRuntime, Option<PathBuf>) {
-    let adapter_version = read_package_version(adapter_dir, CODEX_ACP_PACKAGE);
+    let adapter_version = npm_package::version(adapter_dir, CODEX_ACP_PACKAGE);
     let Some(codex_dir) = resolve_codex_package(adapter_dir) else {
         return (
             CodexRuntime {
@@ -213,7 +209,7 @@ fn resolve_from_adapter(adapter_dir: &Path) -> (CodexRuntime, Option<PathBuf>) {
     };
     let codex_js = codex_dir.join("bin").join("codex.js");
     let manifest = codex_dir.join("package.json");
-    match read_package_version(&codex_dir, CODEX_PACKAGE) {
+    match npm_package::version(&codex_dir, CODEX_PACKAGE) {
         Some(version) if codex_js.is_file() => (
             CodexRuntime {
                 version,
@@ -236,74 +232,29 @@ fn resolve_from_adapter(adapter_dir: &Path) -> (CodexRuntime, Option<PathBuf>) {
     }
 }
 
-/// The codex-acp package directory a launch command belongs to.
-///
-/// npm's unix bin is a symlink into the package (`…/codex-acp/dist/index.js`),
-/// so walking up from the realpath finds it. Windows' bin is a `.cmd` shim
-/// next to the prefix's `node_modules`, which is where the package sits.
-fn adapter_dir_for_command(command: &Path, real: Option<&Path>) -> Option<PathBuf> {
-    let start = real.unwrap_or(command);
-    let mut dir = start.parent();
-    for _ in 0..PACKAGE_SEARCH_DEPTH {
-        let Some(d) = dir else { break };
-        if is_package(d, CODEX_ACP_PACKAGE) {
-            return Some(d.to_path_buf());
-        }
-        dir = d.parent();
-    }
-    let shim_dir = command.parent()?;
-    let beside = shim_dir
-        .join("node_modules")
-        .join("@agentclientprotocol")
-        .join("codex-acp");
-    is_package(&beside, CODEX_ACP_PACKAGE).then_some(beside)
-}
-
-/// The directories node searches for a bare specifier required from `start`,
-/// nearest first: `start/node_modules`, then each ancestor's, skipping
-/// ancestors that are themselves a `node_modules` (node's
-/// `NODE_MODULES_PATHS`). A pnpm store's sibling layout resolves through the
-/// same walk.
-fn node_modules_lookup_paths(start: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let mut current = Some(start);
-    while let Some(dir) = current {
-        if dir.file_name().is_some_and(|name| name != "node_modules") {
-            out.push(dir.join("node_modules"));
-        }
-        current = dir.parent();
-    }
-    out
+/// The codex-acp package directory a launch command belongs to (see
+/// [`npm_package::package_dir_for_command`]).
+fn adapter_dir_for_command(command: &Path) -> Option<PathBuf> {
+    npm_package::package_dir_for_command(command, CODEX_ACP_PACKAGE)
 }
 
 /// `@openai/codex` as codex-acp's own `require.resolve` finds it.
 fn resolve_codex_package(adapter_dir: &Path) -> Option<PathBuf> {
-    node_modules_lookup_paths(adapter_dir)
-        .into_iter()
-        .map(|nm| nm.join("@openai").join("codex"))
-        .find(|dir| is_package(dir, CODEX_PACKAGE))
+    npm_package::resolve_from(adapter_dir, CODEX_PACKAGE)
+}
+
+/// The version of the `@openai/codex` the codex-acp command `command` runs
+/// by itself (no `CODEX_PATH`): the launch's own lookup, read from disk,
+/// nothing run. `None` when the command's package or its codex cannot be
+/// found.
+pub(crate) fn bundled_codex_version(command: &Path) -> Option<String> {
+    let adapter = adapter_dir_for_command(command)?;
+    npm_package::version(&resolve_codex_package(&adapter)?, CODEX_PACKAGE)
 }
 
 /// `<pkg>/bin/codex.js` → `<pkg>`.
 fn codex_package_dir_of(codex_js: &Path) -> Option<PathBuf> {
     codex_js.parent()?.parent().map(Path::to_path_buf)
-}
-
-fn is_package(dir: &Path, name: &str) -> bool {
-    read_package_field(dir, "name").as_deref() == Some(name)
-}
-
-fn read_package_version(dir: &Path, name: &str) -> Option<String> {
-    if !is_package(dir, name) {
-        return None;
-    }
-    read_package_field(dir, "version").filter(|v| !v.trim().is_empty())
-}
-
-fn read_package_field(dir: &Path, field: &str) -> Option<String> {
-    let text = std::fs::read_to_string(dir.join("package.json")).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
-    value.get(field)?.as_str().map(str::to_string)
 }
 
 fn mtime(path: &Path) -> Option<SystemTime> {
@@ -599,21 +550,6 @@ pub(crate) mod tests {
         pkg
     }
 
-    #[test]
-    fn node_modules_paths_skip_node_modules_ancestors() {
-        let paths =
-            node_modules_lookup_paths(Path::new("/r/.pnpm/x@1/node_modules/@scope/codex-acp"));
-        assert_eq!(
-            paths[..3],
-            [
-                PathBuf::from("/r/.pnpm/x@1/node_modules/@scope/codex-acp/node_modules"),
-                PathBuf::from("/r/.pnpm/x@1/node_modules/@scope/node_modules"),
-                // `/r/.pnpm/x@1/node_modules` itself, not `…/node_modules/node_modules`.
-                PathBuf::from("/r/.pnpm/x@1/node_modules"),
-            ]
-        );
-    }
-
     #[cfg(unix)]
     #[test]
     fn resolves_the_nested_codex_through_the_launch_symlink() {
@@ -656,7 +592,8 @@ pub(crate) mod tests {
         std::fs::write(codex_dir.join("bin/codex.js"), "").unwrap();
         let shim = dir.path().join("codex-acp.cmd");
         std::fs::write(&shim, "@echo off").unwrap();
-        assert_eq!(adapter_dir_for_command(&shim, Some(&shim)), Some(pkg));
+        assert_eq!(adapter_dir_for_command(&shim), Some(pkg.clone()));
+        assert_eq!(bundled_codex_version(&shim).as_deref(), Some("0.160.1"));
     }
 
     /// A launch command codeg cannot trace to a package (a wrapper script, a

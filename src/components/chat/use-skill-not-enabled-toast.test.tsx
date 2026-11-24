@@ -39,7 +39,7 @@ import { useSkillNotEnabledToast } from "./use-skill-not-enabled-toast"
 const NS = "Folder.chat.welcomePanel.quickActions.notEnabled"
 
 interface ToastOptions {
-  description: string
+  description?: string
   action?: { label: string; onClick: () => void }
 }
 
@@ -104,6 +104,27 @@ describe("useSkillNotEnabledToast — inside the workspace", () => {
       })
     }
   )
+
+  it("sends a skill a plugin gives the agent to that plugin, not to Experts", () => {
+    const { result } = renderHook(useProbe, { wrapper: Workspace })
+    act(() =>
+      result.current.notify("Brainstorming", "experts", {
+        itemId: "itm_superpowers",
+      })
+    )
+    const { options } = lastToast()
+    expect(options.description).toBeUndefined()
+    expect(options.action?.label).toBe(`${NS}.showPlugin`)
+
+    act(() => lastToast().options.action?.onClick())
+
+    expect(result.current.route.routeId).toBe("harness")
+    expect(result.current.harness.section).toBe("plugins")
+    expect(result.current.harness.pendingTarget).toEqual({
+      section: "plugins",
+      itemId: "itm_superpowers",
+    })
+  })
 
   it("still opens the page once the surface that raised it is gone", () => {
     // The toast outlives the menu or card it came from: the "+" menu closes

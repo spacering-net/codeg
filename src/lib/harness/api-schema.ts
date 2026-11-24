@@ -7,9 +7,10 @@
  *     npx openapi-typescript@7.10.1 openapi.json -o src/lib/harness/api-schema.ts
  *     pnpm prettier --write src/lib/harness/api-schema.ts
  *
- * Generated on 2026-11-15 from the document the website's source builds
+ * Generated on 2026-11-23 from the document the website's source builds
  * (`harnessApi.getOpenAPI31Document` over `api/harness/routes.ts`): the live
- * document of that day, plus the `/resolve` route that was not deployed yet.
+ * document of that day, plus `/config`'s `plugins.adapters` and
+ * `PluginComponent.treeSha256`, not deployed yet.
  * Nothing here is imported at runtime: the file is types only, and
  * `./types.ts` is where the app's own names for them live.
  */
@@ -69,7 +70,13 @@ export interface paths {
       parameters: {
         query?: {
           q?: string
-          kind?: "skill" | "mcp" | "prompt" | "assistant" | "connector"
+          kind?:
+            | "skill"
+            | "mcp"
+            | "prompt"
+            | "assistant"
+            | "connector"
+            | "plugin"
           runtime?: string
           tag?: string
           publisher?: string
@@ -337,6 +344,111 @@ export interface paths {
         path: {
           publisher: string
           name: string
+        }
+        cookie?: never
+      }
+      requestBody?: never
+      responses: {
+        /** @description An HTML fragment */
+        200: {
+          headers: {
+            [name: string]: unknown
+          }
+          content: {
+            "text/html": string
+          }
+        }
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown
+          }
+          content: {
+            "application/json": components["schemas"]["Error"]
+          }
+        }
+      }
+    }
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  "/items/{publisher}/{name}/releases": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * A plugin's releases
+     * @description Plugins only: its releases as its repository published them, newest first, with the members each changed.
+     */
+    get: {
+      parameters: {
+        query?: never
+        header?: never
+        path: {
+          publisher: string
+          name: string
+        }
+        cookie?: never
+      }
+      requestBody?: never
+      responses: {
+        /** @description Newest first */
+        200: {
+          headers: {
+            [name: string]: unknown
+          }
+          content: {
+            "application/json": {
+              releases: components["schemas"]["Release"][]
+            }
+          }
+        }
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown
+          }
+          content: {
+            "application/json": components["schemas"]["Error"]
+          }
+        }
+      }
+    }
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  "/items/{publisher}/{name}/releases/{version}/notes": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * A release's notes, as HTML
+     * @description Rendered from its Markdown when it was read: no raw HTML, scripts, frames, forms or images; links marked as user content.
+     */
+    get: {
+      parameters: {
+        query?: never
+        header?: never
+        path: {
+          publisher: string
+          name: string
+          version: string
         }
         cookie?: never
       }
@@ -643,9 +755,25 @@ export interface components {
        * @enum {string}
        */
       review: "off" | "on"
+      /** @description Plugins: what clients install natively, and where. */
+      plugins: {
+        /** @description Hosts a client may install plugins into with the host's own plugin system, by `PluginHost.host`. A host missing here, or not enabled, or outside its versions, takes a plugin's skills only. */
+        adapters: {
+          [key: string]: {
+            enabled: boolean
+            /** @description The host's oldest version to install plugins into natively. */
+            minVersion: string | null
+            /** @description Its newest, when a later one changed its plugin format; null: no limit. */
+            maxVersion: string | null
+          }
+        }
+      }
     }
-    /** @enum {string} */
-    Kind: "skill" | "mcp" | "prompt" | "assistant" | "connector"
+    /**
+     * @description More kinds may come: treat one you do not know as something you cannot install.
+     * @enum {string}
+     */
+    Kind: "skill" | "mcp" | "prompt" | "assistant" | "connector" | "plugin"
     Tag: {
       id: string
       name: components["schemas"]["Localized"]
@@ -699,6 +827,7 @@ export interface components {
       }
       prompt?: components["schemas"]["PromptCard"]
       assistant?: components["schemas"]["AssistantCard"]
+      plugin?: components["schemas"]["PluginCard"]
     }
     Publisher: {
       /** @example anthropics */
@@ -776,6 +905,17 @@ export interface components {
       /** @description Its tools are not limited: every tool the agent has, MCP tools included. */
       all: boolean
     }
+    /** @description Plugins only: what their cards show. */
+    PluginCard: {
+      skills: number
+      assistants: number
+      /** @description The hosts it has a manifest for. */
+      hosts: string[]
+      /** @description Something in it runs on its own once installed whole (hooks, code, MCP servers). */
+      autorun: boolean
+      /** @description In a search: the member whose name the query matched; null otherwise. */
+      has: string | null
+    }
     ItemDetail: components["schemas"]["ItemSummary"] & {
       license: string | null
       repositoryUrl: string | null
@@ -792,6 +932,10 @@ export interface components {
           paths?: string[]
           /** @description Agent tools it asks for; an assistant that lists none may use all of them, given as ['*']. */
           tools?: string[]
+          /** @description Plugins: the hooks it brings, as 'host · event · command'. */
+          hooks?: string[]
+          /** @description Plugins: files a host loads and runs with the agent (code plugins, extensions, bin/). */
+          code?: string[]
         }
         detected: components["schemas"]["Permissions"]
       }
@@ -822,6 +966,10 @@ export interface components {
       paths: string[]
       /** @description Agent tools it asks for; an assistant that lists none may use all of them, given as ['*']. */
       tools: string[]
+      /** @description Plugins: the hooks it brings, as 'host · event · command'. */
+      hooks?: string[]
+      /** @description Plugins: files a host loads and runs with the agent (code plugins, extensions, bin/). */
+      code?: string[]
     }
     Finding: {
       check: string
@@ -873,6 +1021,7 @@ export interface components {
       }
       prompt?: components["schemas"]["PromptInfo"]
       assistant?: components["schemas"]["AssistantInfo"]
+      plugin?: components["schemas"]["PluginInfo"]
       packages?: components["schemas"]["PinnedPackage"][]
       permissions: components["schemas"]["Permissions"]
       risk: components["schemas"]["Risk"]
@@ -974,6 +1123,71 @@ export interface components {
       assistant: string | null
       /** @description Why it is handed over. */
       commentary: string | null
+    }
+    /** @description Plugins only. The package is the plugin's folder as its author wrote it, to install with each host's own plugin system. */
+    PluginInfo: {
+      /** @description As its manifests name it: what hosts call it once installed. */
+      name: string
+      /** @description The hosts it has a manifest for, and what each gets. Others take its skills only. */
+      hosts: components["schemas"]["PluginHost"][]
+      unknownManifests: string[]
+      /** @description Its skills and assistants. They are installed with it, never one by one. */
+      components: components["schemas"]["PluginComponent"][]
+      autorun: components["schemas"]["AutorunPart"][]
+      /** @description What runs on its own, with the manifests and the files its commands name. */
+      autorunFiles: string[]
+      /** @description MCP servers it brings that are not pinned to an exact version: while there are any, it is not installed whole. */
+      mcpUnpinned: string[]
+      /** @description Changes when anything but its Markdown, plain text and pictures does: ask the user again before updating. */
+      execSha256: string
+      /** @description This revision is installed whole (hooks and all) on the strength of a person having looked at it. */
+      approved: boolean
+      /** @description The revision to install whole: the latest that may be. Null: none may; install its skills only. */
+      full: {
+        revision: number
+        version: string | null
+      } | null
+      /**
+       * @description Why the latest revision is not the one to install whole: it waits for review, or an MCP server it brings is not pinned.
+       * @enum {string|null}
+       */
+      notFull: "pending_review" | "mcp_unpinned" | null
+    }
+    PluginHost: {
+      /**
+       * @description claude, codex, cursor, gemini, copilot, opencode, pi, kimi, antigravity, devin, hermes, muse or agent-plugins; more may come.
+       * @example claude
+       */
+      host: string
+      /** @description Its manifest, from the plugin's root; empty when the marketplace's entry is all there is of it. */
+      manifest: string
+      skills: number
+      agents: number
+      commands: number
+      hooks: number
+      mcp: number
+      code: number
+    }
+    PluginComponent: {
+      /** @enum {string} */
+      kind: "skill" | "assistant"
+      name: string
+      /** @description Its folder (a skill) or file (an assistant), from the plugin's root. */
+      path: string
+      summary: string | null
+      /** @description Its files' tree hash: two revisions' tell which members changed. */
+      treeSha256: string
+    }
+    /** @description Something that runs once the plugin is installed, without the user or the agent calling it. */
+    AutorunPart: {
+      host: string
+      /** @enum {string} */
+      type: "hook" | "code" | "mcp" | "lsp" | "monitor" | "bin"
+      /** @description The file that declares it, or is it. */
+      path: string
+      event?: string
+      name?: string
+      command?: string
     }
     PinnedPackage: {
       /** @example npm */
@@ -1080,6 +1294,10 @@ export interface components {
           paths?: string[]
           /** @description Agent tools it asks for; an assistant that lists none may use all of them, given as ['*']. */
           tools?: string[]
+          /** @description Plugins: the hooks it brings, as 'host · event · command'. */
+          hooks?: string[]
+          /** @description Plugins: files a host loads and runs with the agent (code plugins, extensions, bin/). */
+          code?: string[]
         }
         detected: components["schemas"]["Permissions"]
       }
@@ -1102,6 +1320,15 @@ export interface components {
         verified: "ok" | "missing" | "unchecked" | "pending"
         hasInstallScript: boolean
       }[]
+      /** @description Plugins only: whether this revision may be installed whole, and which one may now. */
+      plugin?: {
+        approved: boolean
+        full: {
+          revision: number
+          version: string | null
+        } | null
+        execSha256: string
+      }
       /** @description SHA-256 of the fields above as JSON with sorted keys. Equal on two answers means nothing a person agreed to has changed in between. */
       stateSha256: string
     } | null
@@ -1112,6 +1339,23 @@ export interface components {
         /** @description The revision that was installed. */
         revision: number
       }[]
+    }
+    Release: {
+      version: string
+      tag: string | null
+      /** @description The release on GitHub. */
+      url: string | null
+      /** @description Address of its notes, rendered to safe HTML, as its author wrote them. */
+      notes: string | null
+      publishedAt: string | null
+      /** @description The revision here that has this version; null when Harness has none. */
+      revision: number | null
+      /** @description Members changed since the revision before it, by name; null when unknown. */
+      changed: {
+        added: string[]
+        updated: string[]
+        removed: string[]
+      } | null
     }
     PublisherInfo: components["schemas"]["Publisher"] & {
       githubLogin: string | null

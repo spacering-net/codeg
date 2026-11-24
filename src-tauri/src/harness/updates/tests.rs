@@ -192,6 +192,7 @@ impl Sandbox {
             cache: store::path_in(&data_dir),
             mcp_record: dir.path().join("home/.codeg/harness/mcp.json"),
             skills_store: dir.path().join("home/.codeg/skills"),
+            plugins: crate::harness::plugins::PluginsCtx::at(&dir.path().join("home/.codeg")),
         };
         Self {
             _dir: dir,
@@ -326,7 +327,14 @@ fn answer(
             version: Some(format!("{revision}.0.0")),
         }),
         item_ref: latest.map(|_| "acme/x".to_string()),
+        plugin: None,
+        disable_advisory: false,
     }
+}
+
+/// Items that are no plugin's.
+fn derive(installed: &model::InstalledRevisions, answers: &[Answer]) -> Vec<UpdateItem> {
+    model::derive(installed, &model::PluginsModes::new(), answers)
 }
 
 fn installed(items: &[(&str, &[u64])]) -> model::InstalledRevisions {
@@ -388,13 +396,14 @@ fn each_answer_comes_to_one_state() {
             false,
             None,
         ),
+        // the item is no longer on SRN: said so, not "cannot be checked"
         (
             answer(a, 3, Unavailable, None, None),
-            UpdateState::Unknown,
+            UpdateState::Gone,
             false,
-            Some(UnknownReason::Unavailable),
+            None,
         ),
-        // the item has no such revision
+        // the item is there, without the revision asked about
         (
             answer(a, 3, Public, None, Some(3)),
             UpdateState::Unknown,
@@ -416,7 +425,7 @@ fn each_answer_comes_to_one_state() {
         ),
     ];
     for (answer, state, update, unknown) in cases {
-        let items = model::derive(&installed(&[(a, &[3])]), std::slice::from_ref(&answer));
+        let items = derive(&installed(&[(a, &[3])]), std::slice::from_ref(&answer));
         assert_eq!(items.len(), 1);
         let item = &items[0];
         assert_eq!(
@@ -429,7 +438,7 @@ fn each_answer_comes_to_one_state() {
     }
 
     // never asked
-    let items = model::derive(&installed(&[(a, &[3])]), &[]);
+    let items = derive(&installed(&[(a, &[3])]), &[]);
     assert_eq!(items[0].state, UpdateState::Unknown);
     assert_eq!(items[0].unknown, Some(UnknownReason::NotChecked));
     assert!(items[0].latest.is_none() && items[0].item_ref.is_none());
@@ -445,7 +454,7 @@ fn an_item_at_several_revisions_shows_the_most_pressing_and_updates_from_the_low
         answer(m, 3, Public, Some(Yanked), Some(5)),
         answer(m, 5, Public, Some(Ok), Some(5)),
     ];
-    let items = model::derive(&installed(&[(m, &[3, 5])]), &answers);
+    let items = derive(&installed(&[(m, &[3, 5])]), &answers);
     assert_eq!(items[0].state, UpdateState::Yanked);
     assert!(items[0].update_available);
     assert_eq!(items[0].revision, 3);
@@ -455,11 +464,29 @@ fn an_item_at_several_revisions_shows_the_most_pressing_and_updates_from_the_low
         answer(m, 4, Public, Some(Ok), Some(5)),
         answer(m, 5, Public, Some(Ok), Some(5)),
     ];
-    let items = model::derive(&installed(&[(m, &[4, 5])]), &answers);
+    let items = derive(&installed(&[(m, &[4, 5])]), &answers);
     assert_eq!(
         (items[0].state, items[0].update_available),
         (UpdateState::UpdateAvailable, true)
     );
+}
+
+#[test]
+fn gone_is_the_most_pressing_state() {
+    use ItemStatus::*;
+    use VersionStatus::*;
+    assert!(UpdateState::Gone > UpdateState::RemovedByHarness);
+    // answers kept from two checks: one revision taken down, the item since
+    // gone
+    let m = id(1);
+    let m = m.as_str();
+    let answers = [
+        answer(m, 3, Public, Some(Blocked), Some(5)),
+        answer(m, 5, Unavailable, None, None),
+    ];
+    let items = derive(&installed(&[(m, &[3, 5])]), &answers);
+    assert_eq!(items[0].state, UpdateState::Gone);
+    assert_eq!(items[0].unknown, None);
 }
 
 /// A revision recorded after the last answer (an update) is read off what
@@ -471,7 +498,7 @@ fn a_revision_installed_since_the_last_check_is_read_off_that_check() {
     let a = id(1);
     let a = a.as_str();
     let told = [answer(a, 3, Public, Some(Ok), Some(5))];
-    let at = |revision: u64| model::derive(&installed(&[(a, &[revision])]), &told)[0].clone();
+    let at = |revision: u64| derive(&installed(&[(a, &[revision])]), &told)[0].clone();
     // updated to the latest it was told
     assert_eq!(at(5).state, UpdateState::Latest);
     assert!(!at(5).update_available);
@@ -483,11 +510,29 @@ fn a_revision_installed_since_the_last_check_is_read_off_that_check() {
 
     // a stopped or taken-down item is so at every revision
     let told = [answer(a, 3, Retired, Some(Ok), None)];
-    let items = model::derive(&installed(&[(a, &[4])]), &told);
+    let items = derive(&installed(&[(a, &[4])]), &told);
     assert_eq!(items[0].state, UpdateState::DisabledByAuthor);
 
+    // and so is one no longer on SRN
+    let gone = [answer(a, 3, Unavailable, None, None)];
+    let items = derive(&installed(&[(a, &[4])]), &gone);
+    assert_eq!(
+        (items[0].state, items[0].update_available, items[0].unknown),
+        (UpdateState::Gone, false, None)
+    );
+    // beside the revision that was asked about
+    let items = derive(&installed(&[(a, &[3, 4])]), &gone);
+    assert_eq!((items[0].state, items[0].revision), (UpdateState::Gone, 3));
+    // a status this Codeg does not know says nothing of another revision
+    let told = [answer(a, 3, ItemStatus::Unknown, None, None)];
+    let items = derive(&installed(&[(a, &[4])]), &told);
+    assert_eq!(
+        (items[0].state, items[0].unknown),
+        (UpdateState::Unknown, Some(UnknownReason::NotChecked))
+    );
+
     // and an item no longer installed is not listed
-    let items = model::derive(&installed(&[]), &told);
+    let items = derive(&installed(&[]), &told);
     assert!(items.is_empty());
 }
 
@@ -507,7 +552,7 @@ fn only_what_the_api_takes_is_asked() {
         (id(1).as_str(), 2)
     );
     // the one not asked reads as not checked, not as anything the catalog said
-    let items = model::derive(&installed(&[("bad", &[1])]), &[]);
+    let items = derive(&installed(&[("bad", &[1])]), &[]);
     assert_eq!(items[0].unknown, Some(UnknownReason::NotChecked));
 }
 
@@ -700,8 +745,20 @@ async fn a_check_asks_about_each_installed_revision_and_tells_each_state() {
         state_of(&after, &removed),
         (UpdateState::RemovedByHarness, false)
     );
-    assert_eq!(state_of(&after, &gone), (UpdateState::Unknown, false));
+    // the item no longer on SRN, and the item there without the revision
+    // asked about: two things
+    assert_eq!(state_of(&after, &gone), (UpdateState::Gone, false));
     assert_eq!(state_of(&after, &norev), (UpdateState::Unknown, false));
+    let unknown_of = |id: &str| {
+        after
+            .items
+            .iter()
+            .find(|item| item.id == id)
+            .unwrap()
+            .unknown
+    };
+    assert_eq!(unknown_of(&gone), None);
+    assert_eq!(unknown_of(&norev), Some(UnknownReason::Unavailable));
     assert_eq!(after.count, 2);
     let item = after.items.iter().find(|item| item.id == update).unwrap();
     assert_eq!(item.revision, 1);
@@ -900,8 +957,9 @@ async fn switched_off_nothing_is_read_asked_or_kept() {
     assert_eq!(read, HarnessUpdates::switched_off());
     let checked = checker.check_now(true).await.unwrap();
     assert_eq!(checked, HarnessUpdates::switched_off());
-    let next = checker.turn(base()).await;
-    assert_eq!(next, base() + MAX_SLEEP);
+    let t = base();
+    let next = checker.turn(t).await;
+    assert_eq!(next, t + MAX_SLEEP);
 
     assert!(site.requests().is_empty());
     assert!(!sandbox.paths.cache.exists());
@@ -1309,7 +1367,7 @@ fn the_wire_names_are_snake_case() {
         checked_at: None,
         attempted_at: None,
         error: None,
-        items: model::derive(
+        items: derive(
             &installed(&[(&a, &[1])]),
             &[answer(
                 &a,
@@ -1332,11 +1390,294 @@ fn the_wire_names_are_snake_case() {
     for (state, name) in [
         (UpdateState::Latest, "latest"),
         (UpdateState::Yanked, "yanked"),
+        (UpdateState::Unapproved, "unapproved"),
         (UpdateState::DisabledByAuthor, "disabled_by_author"),
         (UpdateState::RemovedByHarness, "removed_by_harness"),
+        (UpdateState::Gone, "gone"),
         (UpdateState::Unknown, "unknown"),
     ] {
         assert_eq!(serde_json::to_value(state).unwrap(), json!(name));
     }
     let _: BTreeMap<String, Value> = serde_json::from_value(wire).unwrap();
+}
+
+/// A plugin's member skill carries the plugin's item id in its manifest
+/// entry: the plugin's record, not the entry, is what its update goes by.
+#[test]
+fn a_plugins_member_skill_is_not_an_installed_revision_of_its_own() {
+    let sandbox = Sandbox::new();
+    write(
+        &sandbox.paths.skills_store.join(".manifest.harness.json"),
+        &json!({ "format": 1, "skills": {
+            "pdf": { "item_id": "pdf-id", "ref": "acme/pdf", "revision": 2 },
+            "brainstorming": { "item_id": "superpowers-id", "ref": "obra/superpowers",
+                               "revision": 4, "plugin": "superpowers" } } }),
+    );
+    assert_eq!(
+        read_installed(&sandbox.paths).0,
+        installed(&[("pdf-id", &[2])])
+    );
+}
+
+// ─── Plugins ────────────────────────────────────────────────────────────
+
+/// A plugin's answer: revision `revision` (approved or not), `full` the one
+/// to install whole, `latest` the newest.
+fn plugin_answer(
+    id: &str,
+    revision: u64,
+    approved: bool,
+    full: Option<u64>,
+    latest: u64,
+) -> Answer {
+    Answer {
+        plugin: Some(model::PluginAnswer {
+            approved,
+            full: full.map(|revision| LatestRevision {
+                revision,
+                version: Some(format!("{revision}.0.0")),
+            }),
+            exec_sha256: Some("e".repeat(64)),
+        }),
+        ..answer(
+            id,
+            revision,
+            ItemStatus::Public,
+            Some(VersionStatus::Ok),
+            Some(latest),
+        )
+    }
+}
+
+fn modes(id: &str, native: bool, suspended: bool, consent: bool) -> model::PluginsModes {
+    model::PluginsModes::from([(
+        id.to_string(),
+        model::PluginModes {
+            any_native: native,
+            autorun: true,
+            consent_exec: consent.then(|| "e".repeat(64)),
+            suspended,
+        },
+    )])
+}
+
+fn plugin_item(id: &str, plugins: &model::PluginsModes, answer: Answer) -> UpdateItem {
+    model::derive(&installed(&[(id, &[1])]), plugins, &[answer])
+        .pop()
+        .unwrap()
+}
+
+#[test]
+fn a_plugin_an_agent_has_whole_is_measured_against_full() {
+    let p = id(7);
+    let native = modes(&p, true, false, true);
+    // The latest waits for review: nothing to update to.
+    let item = plugin_item(&p, &native, plugin_answer(&p, 1, true, Some(1), 2));
+    assert_eq!(
+        (item.state, item.update_available),
+        (UpdateState::Latest, false)
+    );
+    let plugin = item.plugin.unwrap();
+    assert_eq!(plugin.target.unwrap().revision, 1);
+    assert!(!plugin.needs_consent && !plugin.suspended);
+    // `full` moves on: an update, the installed revision still approved.
+    let item = plugin_item(&p, &native, plugin_answer(&p, 1, true, Some(2), 2));
+    assert_eq!(
+        (item.state, item.update_available),
+        (UpdateState::UpdateAvailable, true)
+    );
+    assert_eq!(item.plugin.unwrap().target.unwrap().revision, 2);
+    assert_eq!(
+        model::count(&[plugin_item(
+            &p,
+            &native,
+            plugin_answer(&p, 1, true, Some(2), 3)
+        )]),
+        1
+    );
+
+    // Skills only everywhere: the latest, approved or not.
+    let skills = modes(&p, false, false, false);
+    let item = plugin_item(&p, &skills, plugin_answer(&p, 1, false, Some(1), 2));
+    assert_eq!(
+        (item.state, item.update_available),
+        (UpdateState::UpdateAvailable, true)
+    );
+    let plugin = item.plugin.unwrap();
+    assert_eq!(plugin.target.unwrap().revision, 2);
+    assert!(!plugin.needs_consent);
+}
+
+#[test]
+fn approval_withdrawn_counts_only_where_it_runs_whole() {
+    let p = id(8);
+    let native = modes(&p, true, false, true);
+    let item = plugin_item(&p, &native, plugin_answer(&p, 1, false, None, 1));
+    assert_eq!(
+        (item.state, item.update_available),
+        (UpdateState::Unapproved, false)
+    );
+    assert_eq!(item.plugin.unwrap().target, None);
+    // …with a newer approved revision to move to.
+    let item = plugin_item(&p, &native, plugin_answer(&p, 1, false, Some(2), 2));
+    assert_eq!(
+        (item.state, item.update_available),
+        (UpdateState::Unapproved, true)
+    );
+    // Yanked says more.
+    let mut yanked = plugin_answer(&p, 1, false, None, 1);
+    yanked.version_status = Some(VersionStatus::Yanked);
+    assert_eq!(plugin_item(&p, &native, yanked).state, UpdateState::Yanked);
+
+    let skills = modes(&p, false, false, false);
+    let item = plugin_item(&p, &skills, plugin_answer(&p, 1, false, None, 1));
+    assert_eq!(item.state, UpdateState::Latest);
+
+    // No plugin part told: nothing to go by.
+    let mut untold = plugin_answer(&p, 1, true, Some(1), 1);
+    untold.plugin = None;
+    let item = plugin_item(&p, &native, untold);
+    assert_eq!(item.state, UpdateState::Unknown);
+    assert_eq!(item.unknown, Some(UnknownReason::Unavailable));
+}
+
+#[test]
+fn a_plugin_codeg_switched_off_is_offered_its_revision_again_with_agreement() {
+    let p = id(9);
+    let suspended = modes(&p, true, true, true);
+    // Approved again: its own revision is the update (back on).
+    let item = plugin_item(&p, &suspended, plugin_answer(&p, 1, true, Some(1), 1));
+    assert_eq!(
+        (item.state, item.update_available),
+        (UpdateState::UpdateAvailable, true)
+    );
+    let plugin = item.plugin.unwrap();
+    assert!(plugin.needs_consent && plugin.suspended);
+    // Not while an advisory still asks for it off.
+    let mut advised = plugin_answer(&p, 1, true, Some(1), 1);
+    advised.disable_advisory = true;
+    let item = plugin_item(&p, &suspended, advised);
+    assert!(!item.update_available);
+    assert!(!item.plugin.unwrap().needs_consent);
+    // Still withdrawn: nothing to offer until a newer one is approved.
+    let item = plugin_item(&p, &suspended, plugin_answer(&p, 1, false, None, 2));
+    assert_eq!(
+        (item.state, item.update_available),
+        (UpdateState::Unapproved, false)
+    );
+    let item = plugin_item(&p, &suspended, plugin_answer(&p, 1, false, Some(2), 2));
+    assert!(item.update_available);
+    assert!(item.plugin.unwrap().needs_consent);
+
+    // Nothing agreed to yet asks too; nothing that runs never does.
+    let unagreed = modes(&p, true, false, false);
+    let item = plugin_item(&p, &unagreed, plugin_answer(&p, 1, true, Some(2), 2));
+    assert!(item.plugin.unwrap().needs_consent);
+    let mut quiet = modes(&p, true, false, false);
+    quiet.get_mut(&p).unwrap().autorun = false;
+    let item = plugin_item(&p, &quiet, plugin_answer(&p, 1, true, Some(2), 2));
+    assert!(!item.plugin.unwrap().needs_consent);
+}
+
+#[test]
+fn an_answer_keeps_a_plugins_standing_and_the_advisories_that_switch_it_off() {
+    let p = id(10);
+    let resolved = |advisories: Value| -> crate::harness::types::Resolved {
+        serde_json::from_value(json!({
+            "id": p, "status": "listed", "ref": "obra/superpowers", "kind": "plugin",
+            "latest": { "revision": 3, "version": "7.0.3", "publishedAt": "p" },
+            "advisories": advisories,
+            "installed": { "revision": 2, "status": "ok",
+                           "plugin": { "approved": true, "full": { "revision": 3, "version": "7.0.3" },
+                                       "execSha256": "x" } }
+        }))
+        .unwrap()
+    };
+    let asked = crate::harness::types::Installed {
+        id: p.clone(),
+        revision: 2,
+    };
+    let advisory = |action: &str, revisions: Value| {
+        json!({ "id": "a", "severity": "high", "action": action, "revisions": revisions,
+                "publishedAt": "p" })
+    };
+    let kept = Answer::of(&asked, resolved(json!([])));
+    assert_eq!(
+        kept.plugin,
+        Some(model::PluginAnswer {
+            approved: true,
+            full: Some(LatestRevision {
+                revision: 3,
+                version: Some("7.0.3".into())
+            }),
+            exec_sha256: Some("x".into()),
+        })
+    );
+    assert!(!kept.disable_advisory);
+    for (action, revisions, disables) in [
+        ("disable", json!([2]), true),
+        ("remove", json!([]), true),
+        ("disable", json!([1, 3]), false),
+        ("notify", json!([]), false),
+        ("quarantine", json!([]), false),
+    ] {
+        let kept = Answer::of(
+            &asked,
+            resolved(json!([advisory(action, revisions.clone())])),
+        );
+        assert_eq!(kept.disable_advisory, disables, "{action} {revisions}");
+    }
+    // Kept in the file and read back alike; an older answer without them
+    // reads as none.
+    let back: Answer = serde_json::from_value(serde_json::to_value(&kept).unwrap()).unwrap();
+    assert_eq!(back, kept);
+    let old: Answer = serde_json::from_value(
+        json!({ "id": p, "revision": 2, "status": "public", "version_status": "ok" }),
+    )
+    .unwrap();
+    assert_eq!((old.plugin, old.disable_advisory), (None, false));
+}
+
+#[test]
+fn the_plugins_record_is_read_with_how_its_agents_have_each_plugin() {
+    let sandbox = Sandbox::new();
+    let p = id(11);
+    let host = |mode: &str, state: Value| json!({ "mode": mode, "state": state, "skills": [] });
+    write(
+        &sandbox.paths.plugins.record,
+        &json!({ "format": 1, "plugins": { "superpowers": {
+            "item_id": p, "ref": "obra/superpowers", "revision": 4, "exec_sha256": "x",
+            "state_sha256": "s", "installed_at": "t", "op": "o",
+            "autorun": [{ "host": "claude", "type": "hook", "path": "hooks/hooks.json" }],
+            "consent": { "exec": "x", "at": "t" },
+            "hosts": {
+                "claude_code": host("native", json!({ "suspended": { "reason": "plugin_not_approved" } })),
+                "gemini": host("skills", json!("active")) } } } }),
+    );
+    let (revisions, plugins) = read_installed(&sandbox.paths);
+    assert_eq!(revisions, installed(&[(&p, &[4])]));
+    assert_eq!(
+        plugins[&p],
+        model::PluginModes {
+            any_native: true,
+            autorun: true,
+            consent_exec: Some("x".into()),
+            suspended: true,
+        }
+    );
+}
+
+#[test]
+fn a_plugin_item_says_its_update_on_the_wire() {
+    let p = id(12);
+    let item = plugin_item(
+        &p,
+        &modes(&p, true, true, true),
+        plugin_answer(&p, 1, false, Some(2), 3),
+    );
+    assert_eq!(
+        serde_json::to_value(&item).unwrap()["plugin"],
+        json!({ "target": { "revision": 2, "version": "2.0.0" }, "needs_consent": true,
+                "suspended": true })
+    );
 }

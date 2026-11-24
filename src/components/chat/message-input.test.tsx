@@ -77,6 +77,8 @@ vi.mock("@/hooks/use-built-in-science", () => ({ useBuiltInScience: () => [] }))
 vi.mock("@/hooks/use-enabled-skill-ids", () => ({
   useEnabledSkillIds: () => ({
     enabledIds: new Set(),
+    providers: new Map(),
+    providersKnown: true,
     ready: false,
     supported: true,
   }),

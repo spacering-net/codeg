@@ -26,6 +26,8 @@
 //! - [`skills`] — installing, updating and removing skills through the
 //!   skills engine, the manifest of what was installed, and the journal
 //!   that makes each of those survive a crash (step H3);
+//! - [`plugins`] — plugins: so far the `/config` switch for installing
+//!   them natively, per host; nothing installs one yet;
 //! - [`updates`] — the update check: what `/resolve` says of what was
 //!   installed, asked daily in the background and kept in the cache; it
 //!   only tells (step H6). It builds on [`Harness`] and adds no HTTP client
@@ -38,6 +40,7 @@ pub(crate) mod client;
 mod error;
 pub mod mcp;
 pub mod origin;
+pub mod plugins;
 mod resolve;
 pub mod skills;
 pub mod types;

@@ -23,7 +23,7 @@ import type { CellKind } from "@/lib/skills/model"
 import { DiscoverMark } from "../discover/discover-card"
 import { AgentGlyph, McpDetailPart } from "../mcp/mcp-bits"
 import { SHOW_ALL_AGENTS_CLASS } from "../mcp/mcp-server-detail"
-import { rowCell, WriteNotices, type GridRow } from "./skill-grid"
+import { rowCell, rowReadyFor, WriteNotices, type GridRow } from "./skill-grid"
 import { useSkillsLabels } from "./use-skills-labels"
 import { SkillPath } from "./skill-bits"
 
@@ -96,6 +96,9 @@ function AgentRow({
   if (note !== null) notes.push(note)
   if (view.why === "notReady" && row.notReady) notes.push(row.notReady)
   if (view.why === "noDirectory") notes.push(tGrid("noDirectory"))
+  if (view.why === "plugin" && view.plugin) {
+    notes.push(tGrid("providedBy", { plugin: view.plugin }))
+  }
 
   return (
     <li className="flex min-w-0 items-start gap-3 px-4 py-2.5">
@@ -258,7 +261,13 @@ function AgentRow({
           checked={checked}
           disabled={view.toggle === null || skillBusy || pending}
           onCheckedChange={() =>
-            requestToggle(slots, links, row.id, agent.agent, row.ready)
+            requestToggle(
+              slots,
+              links,
+              row.id,
+              agent.agent,
+              rowReadyFor(row, agent.agent)
+            )
           }
           aria-label={name}
           aria-describedby={notes.length > 0 ? `${chipId} ${stateId}` : chipId}
@@ -298,7 +307,7 @@ export function SkillAgentRows({
   const [busy] = useHarnessSlot(links.busy)
   const skillBusy = isSkillBusy(busy, row.id)
   const targets = agents.map((agent) => ({ skill: row.id, agent: agent.agent }))
-  const ready = () => row.ready
+  const ready = (_skill: string, agent: string) => rowReadyFor(row, agent)
   return (
     <McpDetailPart
       title={t("agents")}

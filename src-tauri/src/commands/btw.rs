@@ -95,7 +95,7 @@ pub async fn btw_create_core(
         .with_i18n("btw.unsupportedAgent", Default::default()));
     }
 
-    let fork = manager
+    let forked_session_id = manager
         .fork_copy_session(parent_connection_id)
         .await
         .map_err(|e| AppCommandError::task_execution_failed(format!("btw copy fork failed: {e}")))?;
@@ -107,7 +107,7 @@ pub async fn btw_create_core(
         btw_title(&question),
         parent.git_branch.clone(),
         parent.model.clone(),
-        fork.forked_session_id.clone(),
+        forked_session_id.clone(),
         parent.id,
     )
     .await
@@ -123,7 +123,7 @@ pub async fn btw_create_core(
     let runtime_env = match crate::commands::acp::build_session_runtime_env(
         db,
         parent.agent_type,
-        Some(&fork.forked_session_id),
+        Some(&forked_session_id),
         data_dir,
     )
     .await
@@ -136,19 +136,21 @@ pub async fn btw_create_core(
             )));
         }
     };
-    let spawn = manager
-        .spawn_agent_with_outcome(
-            parent.agent_type,
-            launch.working_dir.map(|p| p.to_string_lossy().to_string()),
-            Some(fork.forked_session_id.clone()),
-            runtime_env,
-            launch.owner_window_label,
-            emitter.clone(),
-            launch.preferred_mode_id,
-            launch.preferred_config_values,
-        )
-        .await
-        .map_err(|e| AppCommandError::task_execution_failed(format!("btw child connection failed: {e}")));
+    let spawn = crate::commands::acp::spawn_with_conversation_selection(
+        manager,
+        &db.conn,
+        parent.agent_type,
+        launch.working_dir.map(|p| p.to_string_lossy().to_string()),
+        Some(forked_session_id),
+        runtime_env,
+        launch.owner_window_label,
+        emitter.clone(),
+        Some(row.id),
+        launch.preferred_mode_id,
+        launch.preferred_config_values,
+    )
+    .await
+    .map_err(|e| AppCommandError::task_execution_failed(format!("btw child connection failed: {e}")));
     let spawn = match spawn {
         Ok(spawn) => spawn,
         Err(e) => {
@@ -160,7 +162,7 @@ pub async fn btw_create_core(
     if let Err(e) = manager
         .send_prompt_linked_with_suffix(
             db,
-            &spawn.connection_id,
+            &spawn,
             vec![PromptInputBlock::Text { text: question }],
             Some(parent.folder_id),
             Some(row.id),
@@ -178,7 +180,7 @@ pub async fn btw_create_core(
     emit_conversation_upsert(emitter, &db.conn, row.id).await;
     Ok(BtwCreateResult {
         conversation_id: row.id,
-        connection_id: spawn.connection_id,
+        connection_id: spawn,
     })
 }
 

@@ -60,8 +60,8 @@ use crate::acp::terminal_runtime::{
 };
 use crate::acp::types::{
     AcpEvent, AsyncTaskDelta, AsyncTaskUsage, AvailableCommandInfo, ConnectionStatus,
-    GrokModelCatalog, GrokModelSpec, KiroReasoning, PermissionAnswerOrigin,
-    PermissionOptionInfo, PlanEntryInfo, PluginLoadFailure, PromptCapabilitiesInfo,
+    GrokModelCatalog, GrokModelSpec, KiroReasoning, ModelReasoningEffortsInfo,
+    PermissionAnswerOrigin, PermissionOptionInfo, PlanEntryInfo, PluginLoadFailure, PromptCapabilitiesInfo,
     PromptInputBlock, RemoteControlInfo, SessionConfigBooleanInfo, SessionConfigKindInfo,
     SessionConfigOptionInfo, SessionConfigSelectGroupInfo, SessionConfigSelectInfo,
     SessionConfigSelectOptionInfo, SessionFailureRecord, SessionModeInfo, SessionModeStateInfo,
@@ -1397,8 +1397,7 @@ pub enum ConnectionCommand {
     /// so the roundtrip helper also closes the forked session on this
     /// connection (best-effort) to leave it free for the child's load.
     ForkCopy {
-        reply:
-            tokio::sync::oneshot::Sender<Result<crate::acp::types::ForkProtocolResult, AcpError>>,
+        reply: oneshot::Sender<Result<String, AcpError>>,
     },
     /// Inject a live-feedback message into the RUNNING turn over the ACP
     /// `_session/steering` extension (native push channel — see
@@ -2089,8 +2088,9 @@ async fn record_turn_end(
 /// `preferred_config_values` (a select's value id; `"true"`/`"false"` for a
 /// boolean — see `config_option_already_holds`).
 ///
-/// Used to carry a session's selectors across a fork.
-fn current_config_option_values(
+/// Used to carry a session's selectors across a fork, and as the
+/// conversation's stored selection (`acp::selection`).
+pub(crate) fn current_config_option_values(
     opts: &[SessionConfigOptionInfo],
 ) -> BTreeMap<String, String> {
     opts.iter()
@@ -2896,6 +2896,7 @@ pub async fn spawn_agent_connection(
     delegation_injection: Option<DelegationInjection>,
     terminal_shell_config: TerminalShellRuntimeConfig,
     cli_root: Option<crate::cli_run::RootSeed>,
+    selection: Option<Arc<crate::acp::selection::SelectionPersister>>,
 ) -> Result<tokio::sync::oneshot::Receiver<()>, AcpError> {
     // Use the same cwd for launch settings, the subprocess and session/new.
     let launch_cwd = resolve_working_dir(working_dir.as_deref());
@@ -2927,6 +2928,13 @@ pub async fn spawn_agent_connection(
     if agent_type == AgentType::ClaudeCode {
         initial_state.claude_settings =
             crate::acp::claude_model_picker::launch_settings(&runtime_env);
+    }
+    if agent_type == AgentType::Antigravity {
+        initial_state.antigravity_sessions_dir = Some(
+            crate::parsers::antigravity::resolve_antigravity_sessions_dir_for_env(
+                &crate::parsers::AgentEnv::from_overrides(runtime_env.clone()),
+            ),
+        );
     }
     // A `codeg-cli` run's root: marked before anything can look, the codeg-mcp
     // injection below included.
@@ -3157,6 +3165,14 @@ pub async fn spawn_agent_connection(
             stderr_tail,
         )
         .await;
+
+        // The loop has ended and every command queued before the disconnect
+        // was applied: close the selection admission barrier and flush the
+        // conversation's final selection with the state this driver owns —
+        // not from the lifecycle worker, which may never have cached it.
+        if let Some(selection) = selection.as_ref() {
+            selection.finalize(&conn_id, &state_clone).await;
+        }
 
         // Revoke the per-launch token + cascade cancel any still-pending
         // delegations AND questions owned by this parent connection. All are
@@ -4128,18 +4144,26 @@ fn map_session_config_category(category: &SessionConfigOptionCategory) -> String
     }
 }
 
+/// One entry of a select option. `of_model` says the select is the agent's
+/// model selector, the only option whose entries name a model — and so the
+/// only one whose entries' AIR `reasoningEfforts` is read.
 fn map_session_config_select_option(
     option: &SessionConfigSelectOption,
+    of_model: bool,
 ) -> SessionConfigSelectOptionInfo {
     SessionConfigSelectOptionInfo {
         value: option.value.to_string(),
         name: option.name.clone(),
         description: option.description.clone(),
+        reasoning_efforts: of_model
+            .then(|| air_model_reasoning_efforts(option.meta.as_ref()))
+            .flatten(),
     }
 }
 
 fn map_session_config_select_group(
     group: &SessionConfigSelectGroup,
+    of_model: bool,
 ) -> SessionConfigSelectGroupInfo {
     SessionConfigSelectGroupInfo {
         group: group.group.to_string(),
@@ -4147,9 +4171,56 @@ fn map_session_config_select_group(
         options: group
             .options
             .iter()
-            .map(map_session_config_select_option)
+            .map(|option| map_session_config_select_option(option, of_model))
             .collect(),
     }
+}
+
+/// The reasoning efforts an agent names for ONE model, out of that model's
+/// entry of the `model` option: JetBrains AIR's `reasoningEfforts =
+/// {values, recommended?}` (claude-agent-acp 0.110.0, #1692; codex-acp
+/// 2.10.0, #789; sent to every AIR client, with no capability).
+///
+/// The envelope is validated as [`air_recommended_value`] validates its own
+/// (integer `version >= 1`), and so is the payload, whole: `values` must be a
+/// non-empty list of non-blank strings, or the record is dropped rather than
+/// half-read. Both adapters write the model's effort ids there in the order
+/// its effort option will list them once it is current, so a repeat can only
+/// be noise and is dropped. `recommended` is kept only when it names one of
+/// `values`: codex-acp leaves it out when the model's default effort is not in
+/// its list, and anything else could mark no level.
+fn air_model_reasoning_efforts(
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Option<ModelReasoningEffortsInfo> {
+    let air = meta?.get("jetbrains")?.get("air")?;
+    let version = air.get("version").and_then(serde_json::Value::as_i64)?;
+    if version < 1 {
+        return None;
+    }
+    let efforts = air.get("reasoningEfforts")?;
+    let mut values: Vec<String> = Vec::new();
+    for value in efforts.get("values")?.as_array()? {
+        let level = value.as_str()?.trim();
+        if level.is_empty() {
+            return None;
+        }
+        if !values.iter().any(|known| known == level) {
+            values.push(level.to_string());
+        }
+    }
+    if values.is_empty() {
+        return None;
+    }
+    let recommended = efforts
+        .get("recommended")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|level| values.iter().any(|known| known == level))
+        .map(str::to_string);
+    Some(ModelReasoningEffortsInfo {
+        values,
+        recommended,
+    })
 }
 
 /// The `recommendedValue` an agent attached to ONE config option, out of its
@@ -4184,13 +4255,14 @@ fn air_recommended_value(
 
 fn map_session_config_option(option: &SessionConfigOption) -> Option<SessionConfigOptionInfo> {
     let recommended_value = air_recommended_value(option.meta.as_ref());
+    let of_model = is_model_config_option(option);
     match &option.kind {
         SessionConfigKind::Select(select) => {
             let (flat_options, groups) = match &select.options {
                 SessionConfigSelectOptions::Ungrouped(options) => (
                     options
                         .iter()
-                        .map(map_session_config_select_option)
+                        .map(|entry| map_session_config_select_option(entry, of_model))
                         .collect::<Vec<_>>(),
                     Vec::new(),
                 ),
@@ -4198,12 +4270,15 @@ fn map_session_config_option(option: &SessionConfigOption) -> Option<SessionConf
                     grouped
                         .iter()
                         .flat_map(|group| {
-                            group.options.iter().map(map_session_config_select_option)
+                            group
+                                .options
+                                .iter()
+                                .map(|entry| map_session_config_select_option(entry, of_model))
                         })
                         .collect::<Vec<_>>(),
                     grouped
                         .iter()
-                        .map(map_session_config_select_group)
+                        .map(|group| map_session_config_select_group(group, of_model))
                         .collect::<Vec<_>>(),
                 ),
                 _ => (Vec::new(), Vec::new()),
@@ -4927,6 +5002,7 @@ fn build_grok_effort_option(
             description: desc
                 .clone()
                 .or_else(|| grok_effort_description(id).map(str::to_string)),
+            reasoning_efforts: None,
         })
         .collect();
     if let Some(def) = &spec.default {
@@ -4939,6 +5015,7 @@ fn build_grok_effort_option(
                     // The injected default (grok-4.5's `xhigh`) is absent from grok's
                     // switchable list, so it has no grok description — supply ours.
                     description: grok_effort_description(def).map(str::to_string),
+                    reasoning_efforts: None,
                 },
             );
         }
@@ -5025,6 +5102,7 @@ fn parse_grok_model_catalog(params: &serde_json::Value) -> Option<GrokModelCatal
             value: model_id.to_string(),
             name: name.to_string(),
             description: None,
+            reasoning_efforts: None,
         });
     }
     if models.is_empty() {
@@ -5156,6 +5234,7 @@ fn kept_select_row(
             value: value.to_string(),
             name: name(),
             description: description.map(str::to_string),
+            reasoning_efforts: None,
         })
 }
 
@@ -5222,6 +5301,7 @@ fn synthesize_grok_config_options(
                 .get("description")
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
+            reasoning_efforts: None,
         });
     }
 
@@ -5232,6 +5312,7 @@ fn synthesize_grok_config_options(
                     value: id.to_string(),
                     name: id.to_string(),
                     description: None,
+                    reasoning_efforts: None,
                 });
             }
             model_current = Some(id.to_string());
@@ -5411,6 +5492,7 @@ fn session_model_state_option(
                     .get("description")
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_string),
+                reasoning_efforts: None,
             })
         })
         .collect();
@@ -5500,6 +5582,7 @@ fn mode_state_option(
             value: mode.id.to_string(),
             name: mode.name.clone(),
             description: mode.description.clone(),
+            reasoning_efforts: None,
         })
         .collect();
     if options.is_empty() {
@@ -5576,6 +5659,7 @@ fn kiro_thinking_option(reasoning: &KiroReasoning) -> Option<SessionConfigOption
         value: value.to_string(),
         name: value.to_string(),
         description: None,
+        reasoning_efforts: None,
     };
     Some(SessionConfigOptionInfo {
         id: KIRO_THINKING_OPTION_ID.to_string(),
@@ -5620,6 +5704,7 @@ fn kiro_effort_option(reasoning: &KiroReasoning) -> Option<SessionConfigOptionIn
                     value: level.clone(),
                     name: level.clone(),
                     description: None,
+                    reasoning_efforts: None,
                 })
                 .collect(),
             groups: Vec::new(),
@@ -6047,10 +6132,10 @@ const HERMES_MODE_OPTION_ID: &str = "mode";
 const HERMES_SYNTHESIZED_OPTION_IDS: &[&str] = &[HERMES_MODEL_OPTION_ID, HERMES_MODE_OPTION_ID];
 
 /// Hermes lists its models in the session reply's legacy `models` (verified
-/// against 0.21.6, 0.22.2, 0.22.6, 0.22.7, 0.23.0 and 0.23.1): every signed-in provider's
-/// models and every named endpoint's (`providers:` in config.yaml, codeg's own
-/// `custom:codeg` among them), with `provider:model` ids —
-/// `openrouter:anthropic/claude-opus-5.5`, `custom:codeg:glm-5.2`. Through
+/// against 0.21.6, 0.22.2, 0.22.6, 0.22.7, 0.23.0, 0.23.1 and 0.23.3): every
+/// signed-in provider's models and every named endpoint's (`providers:` in
+/// config.yaml, codeg's own `custom:codeg` among them), with `provider:model`
+/// ids — `openrouter:anthropic/claude-opus-5.5`, `custom:codeg:glm-5.2`. Through
 /// 0.22.2 that is the only place: it sends no `configOptions`, and takes a
 /// switch only as `session/set_model`, its `session/set_config_option` storing
 /// whatever it is sent and answering an empty list. From 0.22.6 (0.23.1 is the
@@ -7898,7 +7983,7 @@ async fn send_new_session_capturing_models(
 /// state and never reads them back: the config it starts each session with
 /// carries no MCP servers, and the SDK connects only the servers in cline's own
 /// `cline_mcp_settings.json` and its plugins. Checked in the source of every
-/// release from 3.0.55 through 3.0.74, and live on 3.0.71 through 3.0.74: a
+/// release from 3.0.55 through 3.0.75, and live on 3.0.71 through 3.0.75: a
 /// stdio server sent on `session/new` is never started, while one in the settings
 /// file is, and its tools reach the model. User servers still reach Cline,
 /// through that file (see [`agent_reads_own_mcp_config`]); the codeg-mcp
@@ -9424,6 +9509,8 @@ async fn run_connection(
                 steering_policy_agent(agent_type, init_resp.agent_info.as_ref());
             let antigravity_interactions =
                 speaks_antigravity_interactions(agent_type, init_resp.agent_info.as_ref());
+            let antigravity_skip_cancels_turn = antigravity_interactions
+                && antigravity_skip_cancels_turn(init_resp.agent_info.as_ref());
             tracing::info!(
                 "[ACP][{}] steering: advertised={}, agent={:?}, agent_version={:?}, policy={}{}, native={}",
                 agent_type,
@@ -9567,6 +9654,10 @@ async fn run_connection(
                 s.native_steering_available = native_steering_available;
                 s.codex_user_input_shape = codex_user_input_shape;
                 s.antigravity_interactions = antigravity_interactions;
+                s.antigravity_skip_cancels_turn = antigravity_skip_cancels_turn;
+                if !native_antigravity_task_store(init_resp.agent_info.as_ref()) {
+                    s.antigravity_sessions_dir = None;
+                }
                 s.neutral_goal_channel = neutral_goal_channel;
                 // The vocabulary is decided HERE for every adapter, advertising
                 // or not — this assignment is what flips it from "unknown" to
@@ -10633,9 +10724,10 @@ async fn handle_grok_ask_user_question(
 ///
 /// The tool is identified by NAME, read from the two places a host puts it:
 /// `toolCall.title` (claude-agent-acp's `toolInfoFromToolUse` falls through to
-/// the raw tool name for MCP tools) and the request-level
-/// `_meta.permission.title` it pairs with (claude-agent-acp 0.73+ / codex-acp
-/// 1.7+, the same block [`hoist_request_permission_meta`] forwards to the card).
+/// the raw tool name for MCP tools, spelled `<server>: <tool>` since 0.109.1)
+/// and the request-level `_meta.permission.title` it pairs with
+/// (claude-agent-acp 0.73+ / codex-acp 1.7+, the same block
+/// [`hoist_request_permission_meta`] forwards to the card).
 /// The ACP `toolCall.name` field would be the exact answer but is UNSTABLE and
 /// dropped by the schema crate codeg pins, so it is not available here.
 ///
@@ -10933,6 +11025,16 @@ async fn try_bridge_pi_select_ask(
 /// received" update for that id is then dropped so it cannot overwrite the
 /// answer.
 ///
+/// On an adapter that reports 1.5.1 or later
+/// (`SessionState::antigravity_skip_cancels_turn`), a skipped question (or an
+/// answer that names none of the options) also stops the turn, the way the
+/// user's Stop does ([`crate::acp::question::SessionQuestionAccess::cancel_turn`]).
+/// Through 1.5.0 Antigravity took the cancelled answer as "skipped" and let the
+/// model go on; from 1.5.2 its question hook raises `AntigravityCancelledError`
+/// for it, since ACP cancels a permission request only when the turn is
+/// cancelled, and then waits for that cancel: without it the turn hangs, closed
+/// question and all, until Stop.
+///
 /// `Err(responder)` hands the request back for the ordinary permission path:
 /// every other request, an interaction the card cannot show faithfully, the
 /// ask feature switched off, or an ask already pending on the connection.
@@ -11013,6 +11115,7 @@ async fn try_bridge_antigravity_ask(
     let questions = Arc::clone(questions);
     let connection_id = connection_id.to_string();
     let question_id = registered.question_id;
+    let skip_cancels_turn = state.read().await.antigravity_skip_cancels_turn;
 
     tokio::spawn(async move {
         let answer = tokio::select! {
@@ -11036,6 +11139,7 @@ async fn try_bridge_antigravity_ask(
                 record_antigravity_answer_card(&state, &emitter, tool_call_id, &ask.spec, &recorded)
                     .await;
 
+                let skipped = option_id.is_none();
                 let response_outcome = match option_id {
                     Some(id) => {
                         RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(id))
@@ -11043,6 +11147,9 @@ async fn try_bridge_antigravity_ask(
                     None => RequestPermissionOutcome::Cancelled,
                 };
                 let _ = responder.respond(RequestPermissionResponse::new(response_outcome));
+                if skipped && skip_cancels_turn {
+                    questions.cancel_turn(&connection_id).await;
+                }
             }
             None => {
                 questions
@@ -13758,11 +13865,17 @@ async fn handle_fork_or_exit(
     // Reply protocol-level result to manager.fork_session, which will combine
     // it with the freshly-created sibling row id to produce the wire ForkResultInfo.
     let original_session_id = fork_info.original_session_id;
+    let inherited_selection = crate::models::ConversationSelection {
+        mode_id: inherited_mode_id.clone(),
+        composer_mode_id: state.read().await.composer_mode_id.clone(),
+        config_values: inherited_config_values.clone(),
+    };
     let _ = fork_info
         .reply
         .send(Ok(crate::acp::types::ForkProtocolResult {
             forked_session_id: new_sid.clone(),
             original_session_id: original_session_id.clone(),
+            inherited_selection,
         }));
 
     // Make the forked session REAL on the agent before anything prompts on it.
@@ -14045,7 +14158,7 @@ async fn fork_copy_roundtrip(
     mcp_servers: &[McpServer],
     claude: &ClaudeSessionOptions,
     supports_close: bool,
-) -> Result<crate::acp::types::ForkProtocolResult, AcpError> {
+) -> Result<String, AcpError> {
     let (fork_response, _models_raw) = crate::acp::fork::fork_session(
         cx, sid, agent_type, cwd, mcp_servers, claude, None,
     )
@@ -14066,10 +14179,7 @@ async fn fork_copy_roundtrip(
             ),
         }
     }
-    Ok(crate::acp::types::ForkProtocolResult {
-        forked_session_id: forked,
-        original_session_id: sid.0.to_string(),
-    })
+    Ok(forked)
 }
 
 /// [`fork_copy_roundtrip`] on a task the connection owns, replying on `reply`
@@ -14088,7 +14198,7 @@ fn spawn_fork_copy(
     mcp_servers: &[McpServer],
     claude: &ClaudeSessionOptions,
     supports_close: bool,
-    reply: oneshot::Sender<Result<crate::acp::types::ForkProtocolResult, AcpError>>,
+    reply: oneshot::Sender<Result<String, AcpError>>,
 ) {
     let request_cx = cx.clone();
     let cwd = cwd.to_string();
@@ -15307,6 +15417,19 @@ async fn run_conversation_loop(
     // loop ends while `read_update` holds `session`. A fork restarts this loop
     // with the new session, so it cannot go stale in here.
     let agent_turn_session_id = session.session_id().0.to_string();
+    let agy_dir = state.read().await.antigravity_sessions_dir.clone();
+    let agy_watch = match agy_dir {
+        Some(dir) => {
+            crate::parsers::antigravity::background::Watch::start(
+                dir,
+                agent_turn_session_id.clone(),
+            )
+            .await
+        }
+        None => None,
+    };
+    let mut agy_poll = tokio::time::interval(std::time::Duration::from_secs(1));
+    agy_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // Whether a prompt has run on this session in this loop — from then on the
     // idle loop records a custom agent's frames as the turn loop does (see the
     // `record_transcript_update` below). Before it, nothing the idle loop reads
@@ -15339,6 +15462,11 @@ async fn run_conversation_loop(
                     match hold_for_codebuddy_cancel(cmd, &mut codebuddy_cancel) {
                         Admitted::Run(cmd) => break cmd,
                         Admitted::Held(held) => held_prompt = Some(held),
+                    }
+                }
+                _ = agy_poll.tick(), if agy_watch.is_some() && prompted => {
+                    if let Some(watch) = &agy_watch {
+                        watch.refresh(state, emitter, false).await;
                     }
                 }
                 update = session.read_update() => {
@@ -15519,6 +15647,16 @@ async fn run_conversation_loop(
                     .await;
                     continue;
                 }
+                if agent_type == AgentType::Pi {
+                    let texts: Vec<&str> = prompt_blocks
+                        .iter()
+                        .filter_map(|block| match block {
+                            ContentBlock::Text(text) => Some(text.text.as_str()),
+                            _ => None,
+                        })
+                        .collect();
+                    cb_state.pi_prompt_title.note_prompt(&texts);
+                }
 
                 // A prompt the gate admitted while Grok ran a turn of its own
                 // (the frontend queues behind that turn; a chat channel or an
@@ -15592,6 +15730,11 @@ async fn run_conversation_loop(
                 // instantly — and awaited, so the replay gate can never see
                 // this conversation as transcript-less (see `record_prompt`).
                 record_prompt(agent_type, &sid.0, &prompt_blocks).await;
+                // Drain a native reply that finished between the last poll and
+                // this user prompt before handing the foreground to the wire.
+                if let Some(watch) = &agy_watch {
+                    watch.refresh(state, emitter, false).await;
+                }
                 prompted = true;
                 // claude-agent-acp answers a `/remote-control` prompt itself;
                 // its reply says whether Remote Control is on.
@@ -15715,6 +15858,11 @@ async fn run_conversation_loop(
                         // the turn would end `empty` and the update land on
                         // the idle loop, where a Claude chunk is dropped.
                         biased;
+                        _ = agy_poll.tick(), if agy_watch.is_some() => {
+                            if let Some(watch) = &agy_watch {
+                                watch.refresh(state, emitter, true).await;
+                            }
+                        }
                         update = session.read_update() => {
                             // An `Err` is the session's router going away, not one bad
                             // message (see `AgentSession::read_update`): the connection
@@ -16133,6 +16281,11 @@ async fn run_conversation_loop(
                                 zcode_turn.metrics(),
                             )
                             .await;
+                            // Publish task ownership BEFORE TurnComplete lets
+                            // tab cleanup and the unattended engines release us.
+                            if let Some(watch) = &agy_watch {
+                                watch.before_turn_complete(state, emitter).await;
+                            }
                             // The turn is over, so any card still parked here
                             // is moot — `TurnComplete` clears
                             // `pending_permission` from the snapshot
@@ -20574,6 +20727,15 @@ fn steering_policy_agent(
     }
 }
 
+/// The native CLI (1.5.13) and the standalone adapter (1.5.0) have
+/// different initialize identities. Only the former provides the task
+/// records and autonomous completion turns consumed by the trajectory watch.
+fn native_antigravity_task_store(
+    info: Option<&agent_client_protocol::schema::v1::Implementation>,
+) -> bool {
+    info.is_some_and(|agent| agent.name == "Antigravity ACP Server")
+}
+
 /// The `agentInfo.name` antigravity-acp reports at `initialize` (verified
 /// against 1.4.1).
 const ANTIGRAVITY_ACP_AGENT_NAME: &str = "antigravity-acp";
@@ -20602,6 +20764,18 @@ fn speaks_antigravity_interactions(
         }
         _ => false,
     }
+}
+
+/// Whether the running antigravity-acp takes a declined question as the end of
+/// the turn (see [`try_bridge_antigravity_ask`]): 1.5.2 does, 1.5.0 let the
+/// model go on, and 1.5.1 was never published. Judged by the `agentInfo.version`
+/// it reports at `initialize` (a plain version since 1.2.1), because the running
+/// adapter is not necessarily the pinned one (an older cached install, a custom
+/// agent); one that reports no parseable version keeps the old behaviour.
+fn antigravity_skip_cancels_turn(
+    agent_info: Option<&agent_client_protocol::schema::v1::Implementation>,
+) -> bool {
+    agent_info.is_some_and(|info| version_at_least(info.version.trim(), "1.5.1"))
 }
 
 /// codex-acp 1.12.0 swapped the question and the short tab header between a
@@ -21373,6 +21547,10 @@ struct CodeBuddyLiveState {
     /// session belongs to, and the background sub-agents still out (see
     /// [`OpenCodeLiveState`]).
     opencode: OpenCodeLiveState,
+    /// Pi: the name pi-acp gives a new session after its first prompt, which
+    /// is not taken for the session's title (see
+    /// [`crate::acp::session_title::PiPromptTitle`]).
+    pi_prompt_title: crate::acp::session_title::PiPromptTitle,
 }
 
 /// What [`kiro_live_tool`] remembers about one live Kiro tool call.
@@ -21552,9 +21730,9 @@ fn grok_meta_marks_ask_user(
 /// answered card the bridge recorded, and so must be dropped. Consumes the
 /// record.
 ///
-/// Measured against antigravity-acp 1.4.1, 1.4.3, 1.4.4, 1.4.5 and 1.5.0: each
-/// question opens a `tool_call` (`interaction_<hex>`, titled with the question,
-/// `rawInput: {}`, `pending`), is asked through `session/request_permission`
+/// Measured against antigravity-acp 1.4.1, 1.4.3, 1.4.4, 1.4.5, 1.5.0 and
+/// 1.5.2: each question opens a `tool_call` (`interaction_<hex>`, titled with
+/// the question, `rawInput: {}`, `pending`), is asked through `session/request_permission`
 /// under the same id, and is closed by a `tool_call_update` carrying only
 /// `status` and a fixed `rawOutput` ("Response received" / "Interaction
 /// cancelled"). The server emits no frame for the model's `ask_question` call
@@ -27372,11 +27550,19 @@ async fn emit_conversation_update(
             // only ever title a session by its first prompt. Claude Code's is
             // not written here at all: it is held for the transcript watcher,
             // which writes the transcript's own titles instead whenever it can
-            // read the transcript (`session_title::accept_wire_title`).
-            if let Some(title) = crate::acp::session_title::wire_title(
-                agent_type,
-                info.title.value().map(|s| s.as_str()),
-            ) {
+            // read the transcript (`session_title::accept_wire_title`). Nor is
+            // the name pi-acp gives a new pi session after its first prompt,
+            // which pi's history parser does not take for a name either
+            // (`session_title::PiPromptTitle`).
+            let raw_title = info.title.value().map(|s| s.as_str());
+            if let Some(title) = crate::acp::session_title::wire_title(agent_type, raw_title)
+                .filter(|_| {
+                    agent_type != AgentType::Pi
+                        || !cb_state
+                            .pi_prompt_title
+                            .is_prompt_title(raw_title.unwrap_or_default())
+                })
+            {
                 // Shared with the transcript watcher's title path so the
                 // skip-cache and the unbound-row drop have exactly one
                 // spelling — see `session_title::publish_native_title`.
@@ -30481,6 +30667,32 @@ mod tests {
         .await;
     }
 
+    /// [`drive_session_info_title_from`] through the connection's own live
+    /// state `cb`, for what it remembers between frames.
+    async fn drive_session_info_title_through(
+        state: &Arc<RwLock<SessionState>>,
+        agent_type: AgentType,
+        cb: &mut CodeBuddyLiveState,
+        title: &str,
+    ) {
+        let update: SessionUpdate = serde_json::from_value(serde_json::json!({
+            "sessionUpdate": "session_info_update",
+            "title": title,
+        }))
+        .expect("valid session_info_update wire shape");
+        let mut cache = ToolCallOutputCache::default();
+        emit_conversation_update(
+            state,
+            &EventEmitter::Noop,
+            agent_type,
+            update,
+            None,
+            &mut cache,
+            cb,
+        )
+        .await;
+    }
+
     /// Titles emitted on this connection so far, oldest first.
     async fn emitted_native_titles(state: &Arc<RwLock<SessionState>>) -> Vec<String> {
         state
@@ -30530,6 +30742,145 @@ mod tests {
                 "Fix the signup flow".to_string()
             ],
             "only a CHANGED title may reach the lifecycle worker"
+        );
+    }
+
+    /// pi-acp 0.0.35 names a new session after its first prompt and publishes
+    /// the name, untrimmed and then as pi echoes it trimmed. Neither reaches
+    /// the row: pi's history parser does not take that name for one, so
+    /// adopting it would rename the row at the first turn and back at the next
+    /// detail load. A name chosen afterwards (`/name`) does.
+    #[tokio::test]
+    async fn pi_acp_first_prompt_name_is_not_published() {
+        let state = title_test_state(Some(7));
+        let mut cb = CodeBuddyLiveState::default();
+        let prompt = format!(
+            "see [main.rs](file:///Users/demo/app/src-tauri/src/main.rs) {}",
+            "why ".repeat(10)
+        );
+        let frame = "\u{1e}{\"kind\":\"codeg_internal_assistant_brief\"}\u{1e}";
+        cb.pi_prompt_title.note_prompt(&[prompt.as_str(), frame]);
+        let auto = crate::parsers::pi::pi_acp_prompt_title([prompt.as_str(), frame])
+            .expect("prompt has text");
+        assert!(auto.ends_with(' '), "the fixture's cut ends on a space");
+
+        // pi's trimmed echo first, then pi-acp's own copy.
+        drive_session_info_title_through(&state, AgentType::Pi, &mut cb, auto.trim()).await;
+        drive_session_info_title_through(&state, AgentType::Pi, &mut cb, &auto).await;
+        assert!(emitted_native_titles(&state).await.is_empty());
+
+        // A `/name` spelling the prompt again is a name.
+        cb.pi_prompt_title
+            .note_prompt(&[format!("/name {}", auto.trim()).as_str()]);
+        drive_session_info_title_through(&state, AgentType::Pi, &mut cb, auto.trim()).await;
+        assert_eq!(
+            emitted_native_titles(&state).await,
+            vec![auto.trim().to_string()]
+        );
+
+        // A later prompt is not the one pi-acp names the session after.
+        cb.pi_prompt_title.note_prompt(&["Rename me"]);
+        drive_session_info_title_through(&state, AgentType::Pi, &mut cb, "Rename me").await;
+        assert_eq!(
+            emitted_native_titles(&state).await,
+            vec![auto.trim().to_string(), "Rename me".to_string()]
+        );
+
+        // An extension renaming the session in answer to pi's echo keeps its
+        // name: pi-acp's own copy, after it, is still left out.
+        let state = title_test_state(Some(7));
+        let mut cb = CodeBuddyLiveState::default();
+        cb.pi_prompt_title.note_prompt(&[prompt.as_str(), frame]);
+        for title in [auto.trim(), "Named by an extension", auto.as_str()] {
+            drive_session_info_title_through(&state, AgentType::Pi, &mut cb, title).await;
+        }
+        assert_eq!(
+            emitted_native_titles(&state).await,
+            vec!["Named by an extension".to_string()]
+        );
+
+        // A cut that does not end on a space is the echo's string. pi-acp
+        // skips it as a repeat, unless an extension renamed the session in
+        // answer to the echo: then it comes after that name and is left out.
+        let state = title_test_state(Some(7));
+        let mut cb = CodeBuddyLiveState::default();
+        cb.pi_prompt_title.note_prompt(&["fix the login flow"]);
+        for title in ["fix the login flow", "Login fix", "fix the login flow"] {
+            drive_session_info_title_through(&state, AgentType::Pi, &mut cb, title).await;
+        }
+        assert_eq!(
+            emitted_native_titles(&state).await,
+            vec!["Login fix".to_string()]
+        );
+        // A `/name` (a prompt of its own) spelling it again is a name.
+        cb.pi_prompt_title
+            .note_prompt(&["/name fix the login flow"]);
+        drive_session_info_title_through(&state, AgentType::Pi, &mut cb, "fix the login flow")
+            .await;
+        assert_eq!(
+            emitted_native_titles(&state).await,
+            vec!["Login fix".to_string(), "fix the login flow".to_string()],
+            "a name given after another title is a name"
+        );
+
+        // Only pi's titles are read this way.
+        let state = title_test_state(Some(7));
+        let mut cb = CodeBuddyLiveState::default();
+        cb.pi_prompt_title.note_prompt(&["fix the login flow"]);
+        drive_session_info_title_through(
+            &state,
+            AgentType::CodeBuddy,
+            &mut cb,
+            "fix the login flow",
+        )
+        .await;
+        assert_eq!(
+            emitted_native_titles(&state).await,
+            vec!["fix the login flow".to_string()]
+        );
+    }
+
+    /// The prompt pi-acp names a session after is its first turn with text:
+    /// not a prompt with no text, not a slash command (pi-acp runs some of
+    /// those itself and expands others from a prompt file, so the parser keeps
+    /// whatever name follows one), and none sent after a title has arrived.
+    #[tokio::test]
+    async fn pi_prompt_title_waits_for_the_first_prose_prompt() {
+        let state = title_test_state(Some(7));
+        let mut cb = CodeBuddyLiveState::default();
+        cb.pi_prompt_title.note_prompt(&[]);
+        cb.pi_prompt_title
+            .note_prompt(&["  /compact keep the plan"]);
+        cb.pi_prompt_title.note_prompt(&["fix the login flow"]);
+        drive_session_info_title_through(&state, AgentType::Pi, &mut cb, "fix the login flow")
+            .await;
+        assert!(emitted_native_titles(&state).await.is_empty());
+
+        // A slash command's name is the session's title.
+        let state = title_test_state(Some(7));
+        let mut cb = CodeBuddyLiveState::default();
+        cb.pi_prompt_title.note_prompt(&["/review src/app.ts"]);
+        drive_session_info_title_through(&state, AgentType::Pi, &mut cb, "/review src/app.ts")
+            .await;
+        assert_eq!(
+            emitted_native_titles(&state).await,
+            vec!["/review src/app.ts".to_string()]
+        );
+
+        // A name pi already had arrives first: no later prompt is noted.
+        let state = title_test_state(Some(7));
+        let mut cb = CodeBuddyLiveState::default();
+        drive_session_info_title_through(&state, AgentType::Pi, &mut cb, "Named by an extension")
+            .await;
+        cb.pi_prompt_title.note_prompt(&["fix the login flow"]);
+        drive_session_info_title_through(&state, AgentType::Pi, &mut cb, "fix the login flow")
+            .await;
+        assert_eq!(
+            emitted_native_titles(&state).await,
+            vec![
+                "Named by an extension".to_string(),
+                "fix the login flow".to_string()
+            ]
         );
     }
 
@@ -31347,6 +31698,18 @@ mod tests {
     }
 
     #[test]
+    fn native_antigravity_tasks_follow_the_running_adapter() {
+        use agent_client_protocol::schema::v1::Implementation;
+        assert!(native_antigravity_task_store(Some(&Implementation::new(
+            "Antigravity ACP Server", "1.5.13"
+        ))));
+        assert!(!native_antigravity_task_store(Some(&Implementation::new(
+            "antigravity-acp", "1.5.0"
+        ))));
+        assert!(!native_antigravity_task_store(None));
+    }
+
+    #[test]
     fn antigravity_interactions_follow_the_running_adapter_name() {
         use agent_client_protocol::schema::v1::Implementation;
         let agy = Implementation::new(ANTIGRAVITY_ACP_AGENT_NAME, "1.4.1");
@@ -31614,6 +31977,39 @@ mod tests {
             codeg_ask_auto_allow_option(&bare).as_deref(),
             Some("allow-once")
         );
+    }
+
+    /// claude-agent-acp 0.109.1 (#1674) titles an MCP tool `<server>: <tool>`
+    /// in the permission request's tool call AND in its
+    /// `_meta.permission.title` (live, 0.110.0), so the shortcut must read that
+    /// spelling too — and still only for codeg's own server.
+    #[test]
+    fn codeg_auto_allow_options_read_claudes_readable_mcp_titles() {
+        let ask = claude_mcp_permission_request(
+            "codeg-mcp: ask_user_question",
+            claude_permission_options(),
+        );
+        assert_eq!(
+            codeg_ask_auto_allow_option(&ask).as_deref(),
+            Some("allow-once")
+        );
+        let submit =
+            claude_mcp_permission_request("codeg-mcp: submit_result", claude_permission_options());
+        assert_eq!(
+            codeg_submit_auto_allow_option(&submit, true).as_deref(),
+            Some("allow-once")
+        );
+        for foreign in [
+            "other-server: ask_user_question",
+            "codeg-mcp: delegate_to_agent",
+            "codeg-mcp: ask_user_question_twice",
+        ] {
+            let req = claude_mcp_permission_request(foreign, claude_permission_options());
+            assert!(
+                codeg_ask_auto_allow_option(&req).is_none(),
+                "{foreign} must keep its approval card"
+            );
+        }
     }
 
     #[test]
@@ -38437,6 +38833,193 @@ mod tests {
         );
     }
 
+    /// claude-agent-acp 0.110.0 (#1692) and codex-acp 2.10.0 (#789) name each
+    /// model's reasoning efforts on its entry of the `model` option. The model
+    /// entries below are the shapes captured live off both (codex-acp 2.10.0's
+    /// GPT-6.2 Sol, which recommends low, and GPT-5.5; claude's entries always
+    /// carry `recommended`). They must reach `SessionConfigSelectOptionInfo`
+    /// intact, in grouped lists too — and only on the model option.
+    #[test]
+    fn a_model_entry_carries_its_reasoning_efforts_from_a_valid_air_envelope() {
+        let efforts_meta = |values: serde_json::Value, recommended: Option<&str>| {
+            let mut efforts = serde_json::json!({ "values": values });
+            if let Some(level) = recommended {
+                efforts["recommended"] = serde_json::json!(level);
+            }
+            serde_json::json!({"jetbrains": {"air": {"version": 1, "reasoningEfforts": efforts}}})
+        };
+        let model_option = |id: &str, category: &str, entries: serde_json::Value| {
+            serde_json::from_value::<SessionConfigOption>(serde_json::json!({
+                "id": id,
+                "name": "Model",
+                "category": category,
+                "type": "select",
+                "currentValue": "gpt-5.5",
+                "options": entries,
+            }))
+            .expect("config option fixture")
+        };
+        let entries = serde_json::json!([
+            {"value": "gpt-6.2-sol", "name": "6.2 Sol", "_meta": efforts_meta(
+                serde_json::json!(["low", "medium", "high", "xhigh", "max", "ultra"]),
+                Some("low"),
+            )},
+            {"value": "gpt-5.5", "name": "5.5", "_meta": efforts_meta(
+                serde_json::json!(["low", "medium", "high", "xhigh"]),
+                Some("medium"),
+            )},
+            // A model without efforts gets no `_meta` from either adapter.
+            {"value": "plain", "name": "Plain"},
+        ]);
+        let efforts_of = |info: &SessionConfigOptionInfo| -> Vec<Option<ModelReasoningEffortsInfo>> {
+            match &info.kind {
+                SessionConfigKindInfo::Select(select) => select
+                    .options
+                    .iter()
+                    .map(|entry| entry.reasoning_efforts.clone())
+                    .collect(),
+                SessionConfigKindInfo::Boolean(_) => unreachable!("a select"),
+            }
+        };
+        let read = efforts_of(
+            &map_session_config_option(&model_option("model", "model", entries.clone()))
+                .expect("a select always maps"),
+        );
+        assert_eq!(
+            read,
+            vec![
+                Some(ModelReasoningEffortsInfo {
+                    values: ["low", "medium", "high", "xhigh", "max", "ultra"]
+                        .map(String::from)
+                        .to_vec(),
+                    recommended: Some("low".into()),
+                }),
+                Some(ModelReasoningEffortsInfo {
+                    values: ["low", "medium", "high", "xhigh"].map(String::from).to_vec(),
+                    recommended: Some("medium".into()),
+                }),
+                None,
+            ]
+        );
+        // The model selector is known by either signal, as everywhere else.
+        assert_eq!(
+            efforts_of(
+                &map_session_config_option(&model_option("model", "other", entries.clone()))
+                    .unwrap()
+            ),
+            read
+        );
+        assert_eq!(
+            efforts_of(
+                &map_session_config_option(&model_option("llm", "model", entries.clone()))
+                    .unwrap()
+            ),
+            read
+        );
+        // Grouped lists carry it in both the flat list and the groups.
+        let grouped = map_session_config_option(&model_option(
+            "model",
+            "model",
+            serde_json::json!([{ "group": "gw", "name": "Gateway", "options": entries.clone() }]),
+        ))
+        .unwrap();
+        assert_eq!(efforts_of(&grouped), read);
+        let SessionConfigKindInfo::Select(select) = &grouped.kind else {
+            unreachable!("a select")
+        };
+        assert_eq!(
+            select.groups[0]
+                .options
+                .iter()
+                .map(|entry| entry.reasoning_efforts.clone())
+                .collect::<Vec<_>>(),
+            read
+        );
+        // Another select's entries are not models: the key is not read there.
+        assert_eq!(
+            efforts_of(
+                &map_session_config_option(&model_option(
+                    "reasoning_effort",
+                    "thought_level",
+                    entries
+                ))
+                .unwrap()
+            ),
+            vec![None, None, None]
+        );
+
+        let one = |meta: serde_json::Value| {
+            air_model_reasoning_efforts(meta.as_object())
+        };
+        // `recommended` is optional (codex-acp leaves it out when the model's
+        // default is not in its list), and kept only when it names a level.
+        assert_eq!(
+            one(efforts_meta(serde_json::json!(["low", "high"]), None)),
+            Some(ModelReasoningEffortsInfo {
+                values: vec!["low".into(), "high".into()],
+                recommended: None,
+            })
+        );
+        assert_eq!(
+            one(efforts_meta(serde_json::json!(["low", "high"]), Some("max")))
+                .and_then(|efforts| efforts.recommended),
+            None
+        );
+        // A repeated level is dropped; the order is the agent's.
+        assert_eq!(
+            one(efforts_meta(serde_json::json!(["high", "low", "high"]), Some("low")))
+                .map(|efforts| efforts.values),
+            Some(vec!["high".into(), "low".into()])
+        );
+        // Everything malformed reads as "nothing named", never half-read.
+        for bad in [
+            serde_json::json!({}),
+            serde_json::json!({"jetbrains": {"air": {"reasoningEfforts": {"values": ["low"]}}}}),
+            serde_json::json!({"jetbrains": {"air": {"version": 0, "reasoningEfforts": {"values": ["low"]}}}}),
+            serde_json::json!({"jetbrains": {"air": {"version": "1", "reasoningEfforts": {"values": ["low"]}}}}),
+            serde_json::json!({"jetbrains": {"reasoningEfforts": {"values": ["low"]}}}),
+            efforts_meta(serde_json::json!([]), None),
+            efforts_meta(serde_json::json!("low"), None),
+            efforts_meta(serde_json::json!(["low", 2]), None),
+            efforts_meta(serde_json::json!(["low", "  "]), None),
+            serde_json::json!({"jetbrains": {"air": {"version": 1, "reasoningEfforts": ["low"]}}}),
+        ] {
+            assert_eq!(one(bad.clone()), None, "unexpected read from {bad}");
+        }
+
+        // On the wire to the frontend the field is left off when absent (every
+        // other agent's entries keep their shape), and a snapshot written
+        // before it existed still reads.
+        let plain = SessionConfigSelectOptionInfo {
+            value: "opus".into(),
+            name: "Opus".into(),
+            description: None,
+            reasoning_efforts: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&plain).unwrap(),
+            serde_json::json!({"value": "opus", "name": "Opus", "description": null})
+        );
+        assert_eq!(
+            serde_json::from_value::<SessionConfigSelectOptionInfo>(serde_json::json!({
+                "value": "opus", "name": "Opus", "description": null
+            }))
+            .unwrap(),
+            plain
+        );
+        let named = SessionConfigSelectOptionInfo {
+            reasoning_efforts: Some(ModelReasoningEffortsInfo {
+                values: vec!["low".into(), "max".into()],
+                recommended: Some("low".into()),
+            }),
+            ..plain
+        };
+        assert_eq!(
+            serde_json::to_value(&named).unwrap()["reasoning_efforts"],
+            serde_json::json!({"values": ["low", "max"], "recommended": "low"})
+        );
+    }
+
     #[test]
     fn build_load_session_request_skips_meta_for_non_claude() {
         let cwd = std::path::PathBuf::from("/tmp/codeg");
@@ -38860,11 +39443,13 @@ mod tests {
                         value: "off".to_string(),
                         name: "Thinking: off".to_string(),
                         description: None,
+                        reasoning_efforts: None,
                     },
                     SessionConfigSelectOptionInfo {
                         value: "high".to_string(),
                         name: "Thinking: high".to_string(),
                         description: None,
+                        reasoning_efforts: None,
                     },
                 ],
                 groups: vec![],
@@ -40176,11 +40761,13 @@ mod tests {
                         value: "grok-4.5".to_string(),
                         name: "Grok 4.5".to_string(),
                         description: None,
+                        reasoning_efforts: None,
                     },
                     SessionConfigSelectOptionInfo {
                         value: "grok-composer-2.5-fast".to_string(),
                         name: "Composer 2.5".to_string(),
                         description: None,
+                        reasoning_efforts: None,
                     },
                 ],
                 groups: Vec::new(),
@@ -51155,6 +51742,7 @@ mod tests {
                             value: "opus".to_string(),
                             name: "Opus".to_string(),
                             description: None,
+                            reasoning_efforts: None,
                         }],
                         groups: Vec::new(),
                     }),
@@ -52198,6 +52786,19 @@ mod tests {
 
     struct AntigravityTestAnswer {
         decline: bool,
+        /// Turns stopped through [`SessionQuestionAccess::cancel_turn`].
+        stopped: Arc<std::sync::atomic::AtomicUsize>,
+        stop: Arc<tokio::sync::Notify>,
+    }
+
+    impl AntigravityTestAnswer {
+        fn new(decline: bool) -> Self {
+            Self {
+                decline,
+                stopped: Arc::default(),
+                stop: Arc::default(),
+            }
+        }
     }
 
     #[async_trait::async_trait]
@@ -52226,16 +52827,37 @@ mod tests {
         }
         async fn cancel_question(&self, _connection_id: &str, _question_id: &str) {}
         async fn cancel_questions_by_parent(&self, _connection_id: &str) {}
+        async fn cancel_turn(&self, connection_id: &str) {
+            assert_eq!(connection_id, "conn-test");
+            self.stopped
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.stop.notify_one();
+        }
+    }
+
+    #[test]
+    fn antigravity_skip_cancels_turn_from_1_5_1() {
+        use agent_client_protocol::schema::v1::Implementation;
+        let agy = |version: &str| Implementation::new(ANTIGRAVITY_ACP_AGENT_NAME, version);
+        assert!(antigravity_skip_cancels_turn(Some(&agy("1.5.2"))));
+        assert!(antigravity_skip_cancels_turn(Some(&agy("1.5.1"))));
+        assert!(antigravity_skip_cancels_turn(Some(&agy("1.6.0"))));
+        assert!(!antigravity_skip_cancels_turn(Some(&agy("1.5.0"))));
+        assert!(!antigravity_skip_cancels_turn(Some(&agy("agy_acp_server_1.1.1"))));
+        assert!(!antigravity_skip_cancels_turn(None));
     }
 
     #[tokio::test]
     async fn antigravity_interaction_round_trip_preserves_choice_and_gates() {
         use agent_client_protocol::Channel;
         // (agent, the `agentInfo.name` its adapter reported at initialize, ask
-        // feature on, user declines, bridged)
-        for (agent_type, adapter, enabled, decline, bridged) in [
-            (AgentType::Antigravity, None, true, false, true),
-            (AgentType::Antigravity, None, true, true, true),
+        // feature on, user declines, a declined question stops the turn
+        // (antigravity-acp 1.5.1+), bridged)
+        for (agent_type, adapter, enabled, decline, skip_cancels, bridged) in [
+            (AgentType::Antigravity, None, true, false, true, true),
+            (AgentType::Antigravity, None, true, true, true, true),
+            // Through 1.5.0 a declined question lets the turn go on.
+            (AgentType::Antigravity, None, true, true, false, true),
             // A custom agent running antigravity-acp (a second account, say).
             (
                 AgentType::Custom("antigravity-b"),
@@ -52243,15 +52865,16 @@ mod tests {
                 true,
                 false,
                 true,
+                true,
             ),
             // Any other custom adapter keeps its look-alike ids on the approval
             // card, as does one that reported no `agentInfo`.
-            (AgentType::Custom("acme"), Some("acme-acp"), true, false, false),
-            (AgentType::Custom("antigravity-b"), None, true, false, false),
+            (AgentType::Custom("acme"), Some("acme-acp"), true, false, false, false),
+            (AgentType::Custom("antigravity-b"), None, true, false, false, false),
             // The ask feature's kill switch keeps the approval card, as it does
             // for every other native ask bridge.
-            (AgentType::Antigravity, None, false, false, false),
-            (AgentType::Codex, None, true, false, false),
+            (AgentType::Antigravity, None, false, false, true, false),
+            (AgentType::Codex, None, true, false, false, false),
         ] {
             let (client_end, agent_end) = Channel::duplex();
             let mut session = SessionState::new(
@@ -52269,13 +52892,19 @@ mod tests {
                 session.antigravity_interactions =
                     speaks_antigravity_interactions(agent_type, adapter.as_ref());
             }
+            session.antigravity_skip_cancels_turn = skip_cancels;
             let state = Arc::new(RwLock::new(session));
             let config = crate::acp::question::QuestionRuntimeConfig::new();
             config
                 .set(crate::acp::question::QuestionConfig { enabled })
                 .await;
+            let answers = Arc::new(AntigravityTestAnswer::new(decline));
+            let (stopped, stop) = (Arc::clone(&answers.stopped), Arc::clone(&answers.stop));
             let access: Option<(Arc<dyn crate::acp::question::SessionQuestionAccess>, _)> =
-                Some((Arc::new(AntigravityTestAnswer { decline }), config));
+                Some((answers, config));
+            // A skipped question also stops the turn on antigravity-acp 1.5.1+
+            // (1.5.2 waits for that cancel); a picked one never does.
+            let expected_stops = if bridged && decline && skip_cancels { 2 } else { 0 };
             let agent = tokio::spawn(Agent.builder().connect_with(
                 agent_end,
                 async move |cx: ConnectionTo<Client>| {
@@ -52352,8 +52981,23 @@ mod tests {
                 .expect("native request must receive its answer")
                 .unwrap()
                 .unwrap();
+            // The bridge stops the turn right after it answers, so wait for
+            // the expected stops before the client goes away; aborting the
+            // client then ends every bridge task, so no stray stop can come
+            // after the count.
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                while stopped.load(std::sync::atomic::Ordering::SeqCst) < expected_stops {
+                    stop.notified().await;
+                }
+            })
+            .await
+            .expect("a declined question stops the turn");
             client.abort();
             let state = state.read().await;
+            assert_eq!(
+                stopped.load(std::sync::atomic::Ordering::SeqCst),
+                expected_stops
+            );
             let events = state.recent_events_after(0).unwrap_or_default();
             let cards: Vec<_> = events
                 .iter()

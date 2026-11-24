@@ -149,6 +149,7 @@ const TRIAGED_AFFECTED_VERSIONS: &[&str] = &[
     "2026.11.05-86047df",
     "2026.11.11-b912975",
     "2026.11.13-eacade1",
+    "2026.11.22-e9042b2",
 ];
 
 /// Cursor agent-cli versions whose bundle was inspected and found to already
@@ -1122,6 +1123,10 @@ mod tests {
     /// darwin/arm64, `9326` darwin/x64, `178` both linux, `4410`
     /// windows/arm64, `3458` windows/x64) ships b912975's statement in five
     /// archives and names the headers module `M` on darwin/x64.
+    /// `2026.11.22-e9042b2` (`206` darwin/arm64, `3222` darwin/x64, `178`
+    /// both linux, `1182` windows/arm64, `8082` windows/x64) ships one
+    /// statement byte for byte in all six archives, with the headers module
+    /// `T` and the other locals renamed (the options local is `v`).
     const REAL_ES2020_RUN_OPTIONS: &str = concat!(
         r#"f=new d.ConversationAction({action:{case:"userMessageAction",value:l}}),"#,
         r#"w={conversationId:this.agentStore.getId(),headers:(0,P.o)(this.agentStore),"#,
@@ -1147,6 +1152,8 @@ mod tests {
     /// `2026.11.05-86047df` and `2026.11.11-b912975`. `2026.11.13-eacade1`
     /// names it `U` on darwin/arm64 and `F` in the other five, darwin/x64
     /// passes its tools as `T`, and it is otherwise identical.
+    /// `2026.11.22-e9042b2` names it `O` in all six archives, passes its tools
+    /// as `I`, and is otherwise identical.
     const REAL_ES2020_RUN_CLOSURE: &str = concat!(
         r#";(0,v.sx)("cli.request.create",{length:n.length,model:h?.modelId??"#,
         r#"this.currentModel.modelId??"unknown",mode:a,conversationId:this.agentStore.getId()});"#,

@@ -439,6 +439,88 @@ describe("AskQuestionResultCard", () => {
     expect(chosen).toBeDisabled()
   })
 
+  it("shows DSH's typed Other answer instead of the no-selection fallback", () => {
+    // DSH (the `deepseek` agent) answers keyed by the question `id` with no
+    // header/question text, and puts the user's typed text in `custom` rather
+    // than `selected`. Reading only `selected` left the id unmatched AND the
+    // answer empty, so a question the user answered showed "no selection"
+    // although the model had received the text.
+    const input = JSON.stringify({
+      questions: [
+        {
+          header: "出口选择",
+          id: "free",
+          multiSelect: false,
+          question: "免费节点要不要参与自动出口池？",
+          options: [
+            { label: "排除，只走付费节点", description: "" },
+            { label: "允许免费节点参与", description: "" },
+          ],
+        },
+      ],
+    })
+    const typed = "不影响啊，规则就是：出口跟随我的节点选择，不允许直连。"
+    const output = JSON.stringify({
+      answers: [{ id: "free", selected: [], custom: typed }],
+    })
+    renderWithIntl(
+      <AskQuestionResultCard
+        input={input}
+        output={output}
+        state="output-available"
+      />
+    )
+
+    // The capsule echoes the typed answer — NOT the noSelection fallback.
+    expect(screen.getByText(typed)).toBeInTheDocument()
+    expect(screen.queryByText(result.noSelection)).toBeNull()
+    // Expanded, the id-matched answer refills the Other field, not an option.
+    expand()
+    expect(screen.getByDisplayValue(typed)).toBeInTheDocument()
+    expect(
+      screen.getByRole("radio", { name: "排除，只走付费节点" })
+    ).not.toBeChecked()
+  })
+
+  it("re-checks DSH's picked option, matched through the answer's id", () => {
+    // The same envelope for a question the user answered by picking an option:
+    // the answer carries no header/question text, so only the `id` can align it
+    // with the question asked.
+    const input = JSON.stringify({
+      questions: [
+        {
+          header: "出口选择",
+          id: "exit",
+          multiSelect: false,
+          question: "强制走代理时用哪个出口？",
+          options: [
+            { label: "跟随主选择 🚀 节点选择", description: "" },
+            { label: "只用家宽模式", description: "" },
+          ],
+        },
+      ],
+    })
+    const output = JSON.stringify({
+      answers: [{ id: "exit", selected: ["跟随主选择 🚀 节点选择"] }],
+    })
+    renderWithIntl(
+      <AskQuestionResultCard
+        input={input}
+        output={output}
+        state="output-available"
+      />
+    )
+
+    expect(screen.getByText("跟随主选择 🚀 节点选择")).toBeInTheDocument()
+    expect(screen.queryByText(result.noSelection)).toBeNull()
+    expand()
+    const chosen = screen.getByRole("radio", { name: "跟随主选择 🚀 节点选择" })
+    expect(chosen).toBeChecked()
+    expect(
+      screen.getByRole("radio", { name: "只用家宽模式" })
+    ).not.toBeChecked()
+  })
+
   it("shows the pick for pi's extension-UI select (#644)", () => {
     // pi asks through `session/request_permission`, so nothing about the answer
     // reaches the transcript on its own — the connection bridge synthesizes this

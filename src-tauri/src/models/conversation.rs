@@ -5,6 +5,47 @@ use super::agent::AgentType;
 use super::message::{MessageTurn, TurnUsage};
 use crate::db::entities::conversation::ConversationKind;
 
+/// A conversation's own selector state, stored as JSON on
+/// `conversation.selector_state` and replayed alone when the conversation
+/// reconnects (the client's new-conversation default is never mixed in).
+///
+/// `mode_id` is the mode the session actually RUNS with; `composer_mode_id`
+/// is a mode the user picked in a tab's composer that the tab applies at its
+/// next send (a legacy-modes pick is deferred to send time). They are kept
+/// apart so an engine rerun never runs a tab's unsent intent as the applied
+/// mode. `config_values` round-trips what the preference replay consumes
+/// (a select's value id; `"true"`/`"false"` for a boolean).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationSelection {
+    #[serde(default)]
+    pub mode_id: Option<String>,
+    #[serde(default)]
+    pub composer_mode_id: Option<String>,
+    #[serde(default)]
+    pub config_values: std::collections::BTreeMap<String, String>,
+}
+
+impl ConversationSelection {
+    /// Parse the stored column. Malformed JSON is treated as absent (logged):
+    /// the conversation then takes the legacy one-time fallback instead of
+    /// failing to connect.
+    pub fn parse(raw: Option<&str>) -> Option<Self> {
+        let raw = raw?;
+        match serde_json::from_str::<Self>(raw) {
+            Ok(sel) => Some(sel),
+            Err(e) => {
+                tracing::warn!("[conversation] unparsable selector_state ignored: {e}");
+                None
+            }
+        }
+    }
+
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_else(|_| "{}".to_string())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationSummary {
     pub id: String,

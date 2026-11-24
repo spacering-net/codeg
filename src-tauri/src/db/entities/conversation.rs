@@ -107,6 +107,13 @@ pub struct Model {
     /// clears the moment that prompt reaches the agent. See
     /// `m20261121_000001_conversation_btw_promoted`.
     pub btw_promoted: bool,
+    /// JSON `ConversationSelection`: this conversation's own selector state
+    /// (applied mode, pending composer mode, config option values), written
+    /// by the backend from the live session and replayed alone when the
+    /// conversation reconnects. `None` for rows from before the column (a
+    /// one-time fallback, then frozen). Never bumps `updated_at`. See
+    /// `m20261123_000001_conversation_selector_state`.
+    pub selector_state: Option<String>,
 }
 
 /// [`Model::source`] of a conversation a `codeg-cli` run started.

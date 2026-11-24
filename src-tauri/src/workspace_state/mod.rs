@@ -1395,10 +1395,58 @@ pub async fn start_workspace_state_stream_core(
         })?,
     );
 
-    let watch_result = watcher
-        .as_mut()
-        .ok_or_else(|| AppCommandError::task_execution_failed("Failed to create watcher"))?
-        .watch(&root_canonical, RecursiveMode::Recursive);
+    // Registering a recursive watch is blocking I/O: on Linux `notify`
+    // walks the whole tree to add one inotify watch per directory, and
+    // `watch()` waits for that walk to finish. On a large network mount
+    // (SSHFS) that takes minutes or never ends, so it must not run on an
+    // async worker — doing so starved the runtime and codeg-server stopped
+    // accepting connections (issue #1292).
+    let mut created_watcher = watcher
+        .take()
+        .ok_or_else(|| AppCommandError::task_execution_failed("Failed to create watcher"))?;
+    let watch_root = root_canonical.clone();
+    let watch_git_dirs = git_watch_dirs.clone();
+    let watch_root_display = root_path.clone();
+    let registered = tokio::task::spawn_blocking(move || {
+        let watch_result = created_watcher.watch(&watch_root, RecursiveMode::Recursive);
+        if watch_result.is_ok() {
+            // Root watch is live; also watch the linked worktree's external
+            // git metadata dirs (private index/HEAD + shared refs) so commit /
+            // stage / checkout / ref-move refresh git status. Best-effort per
+            // dir: a failure only loses that refresh path (working-tree edits
+            // still update), so we log and keep the stream healthy rather
+            // than degrading it. Cleanup rides on the watcher's Drop, which
+            // unwatches every registered path — no separate bookkeeping
+            // needed.
+            for dir in &watch_git_dirs {
+                if let Err(err) = created_watcher.watch(&dir.path, RecursiveMode::Recursive) {
+                    tracing::info!(
+                        "[workspace-state-watch] worktree git-dir watch failed for {} ({}): {}",
+                        watch_root_display,
+                        dir.path.display(),
+                        err
+                    );
+                }
+            }
+        }
+        (created_watcher, watch_result)
+    })
+    .await;
+    let watch_result = match registered {
+        Ok((created_watcher, watch_result)) => {
+            watcher = Some(created_watcher);
+            watch_result
+        }
+        Err(err) => {
+            if let Some(created_task) = task.take() {
+                created_task.abort();
+            }
+            return Err(AppCommandError::task_execution_failed(
+                "Failed to register workspace watcher",
+            )
+            .with_detail(err.to_string()));
+        }
+    };
 
     if let Err(err) = watch_result {
         tracing::info!(
@@ -1413,24 +1461,6 @@ pub async fn start_workspace_state_stream_core(
         }
         if let Ok(mut guard) = state.lock() {
             guard.degraded = true;
-        }
-    } else if let Some(active_watcher) = watcher.as_mut() {
-        // Root watch is live; also watch the linked worktree's external git
-        // metadata dirs (private index/HEAD + shared refs) so commit / stage /
-        // checkout / ref-move refresh git status. Best-effort per dir: a failure
-        // only loses that refresh path (working-tree edits still update), so we
-        // log and keep the stream healthy rather than degrading it. Cleanup
-        // rides on the watcher's Drop, which unwatches every registered path —
-        // no separate bookkeeping needed.
-        for dir in &git_watch_dirs {
-            if let Err(err) = active_watcher.watch(&dir.path, RecursiveMode::Recursive) {
-                tracing::info!(
-                    "[workspace-state-watch] worktree git-dir watch failed for {} ({}): {}",
-                    root_path,
-                    dir.path.display(),
-                    err
-                );
-            }
         }
     }
 
