@@ -182,7 +182,7 @@
   },
   {
     "name": "get_session_info",
-    "description": "Look up a session/conversation the user referenced in their message and return what it is: its title, which agent ran it, its status, workspace folder, git branch, model, message count, and token-usage stats — and, on request, a compact view of its most recent messages. RECOGNIZING A MENTIONED SESSION: the user can @-mention a past session directly in their message — it appears as a Markdown link `[Session title](codeg://session/<number>)`, whose text is that session's title and whose `<number>` is codeg's internal conversation id (e.g. `[Fix auth](codeg://session/214)` is the session titled 'Fix auth'). Such a mention IS the user explicitly pointing you at that session, even when they never name this tool — call it whenever what that session is about or what happened in it matters to the request (e.g. to continue its work, build on its results, answer questions about it, or summarize it). If the message mentions several sessions, make one call per session. Pass the NUMBER from the reference as `session_id` (it is codeg's internal conversation id, NOT the agent's own session id). The result is read-only and never modifies the session. A session that no longer exists returns a `found: false` result you can act on — it is not an error.",
+    "description": "Look up a session/conversation the user referenced in their message and return what it is: its title, which agent ran it, its status, workspace folder, git branch, model, message count, and token-usage stats — and, on request, a compact view of its most recent messages. RECOGNIZING A MENTIONED SESSION: the user can @-mention a past session directly in their message — it appears as a Markdown link `[Session title](codeg://session/<number>)`, whose text is that session's title and whose `<number>` is codeg's internal conversation id (e.g. `[Fix auth](codeg://session/214)` is the session titled 'Fix auth'). Such a mention IS the user explicitly pointing you at that session, even when they never name this tool — call it whenever what that session is about or what happened in it matters to the request (e.g. to continue its work, build on its results, answer questions about it, or summarize it). If the message mentions several sessions, make one call per session. Pass the NUMBER from the reference as `session_id` (it is codeg's internal conversation id, NOT the agent's own session id). Also returns up to 200 persisted direct children (session_id, task_id, conversation status); children_truncated indicates additional children. Use get_delegation_status for detailed task reports. The result is read-only and never modifies the session. A session that no longer exists returns a `found: false` result you can act on — it is not an error.",
     "inputSchema": {
       "type": "object",
       "required": [
@@ -197,6 +197,47 @@
           "type": "integer",
           "minimum": 0,
           "description": "How many of the session's most recent turns to include as compact text. Defaults to 20; pass 0 for metadata only (faster, no transcript read). Capped at 200."
+        }
+      }
+    }
+  },
+  {
+    "name": "read_session_history",
+    "description": "Read older context from a codeg session without changing it. session_id is the number from codeg://session/<id>. Returns the newest matching turns in chronological order, with original transcript IDs. Pass oldest_id as before for the next older page; before is exclusive. query is a case-insensitive literal substring over full text/thinking/errors (also tool names/input/output previews when include_tools=true). An unknown before returns an explanation instead of restarting. IDs remain usable while the underlying transcript preserves them; rewriting/compaction can invalidate them. No images or raw tool payloads are returned. The full transcript is parsed on each read, subject to the same concurrency and timeout limits as get_session_info. Use get_session_info to recover persisted child session IDs, task_ids and conversation statuses after context compaction; use get_delegation_status for detailed task reports.",
+    "inputSchema": {
+      "type": "object",
+      "required": [
+        "session_id"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "integer",
+          "description": "Codeg conversation ID."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 20,
+          "description": "Maximum returned turns, capped at 200."
+        },
+        "before": {
+          "type": "string",
+          "description": "Exclusive original turn ID from oldest_id. Omit for the newest page."
+        },
+        "query": {
+          "type": "string",
+          "description": "Optional case-insensitive literal substring. Empty matches all turns."
+        },
+        "include_tools": {
+          "type": "boolean",
+          "default": false,
+          "description": "Include tool names and recorded input/output previews; image payloads remain excluded."
+        },
+        "max_chars": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 16000,
+          "description": "Character budget for the serialized history envelope, capped at 16000. JSON escaping counts. A long newest turn may be clipped (previews omitted first); truncated marks clipping or omitted older matches. If the budget cannot fit response/turn metadata, returns no turns and a note; that fixed metadata may exceed the requested budget. This bounds returned content, not transcript parsing or the MCP protocol wrapper."
         }
       }
     }

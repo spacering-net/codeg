@@ -70,12 +70,13 @@ use crate::acp::delegation::transport::{
     BrokerComputerSnapshotRequest, BrokerComputerVerifyRequest, BrokerComputerWindowsRequest,
     BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest, BrokerFeedbackRequest,
     BrokerListAssistantsRequest, BrokerRequest, BrokerResponse, BrokerResultSchemaRequest,
-    BrokerResumeTaskRequest, BrokerSessionRequest, BrokerStatusRequest, BrokerSubmitResultRequest,
-    BrokerTaskCompleteRequest, BrokerTaskProgressRequest, ThreadReply,
+    BrokerResumeTaskRequest, BrokerSessionHistoryRequest, BrokerSessionRequest,
+    BrokerStatusRequest, BrokerSubmitResultRequest, BrokerTaskCompleteRequest,
+    BrokerTaskProgressRequest, ThreadReply,
 };
 use crate::acp::delegation::assistants::{roster_for_schema, AssistantRosterEntry};
 use crate::acp::question::parse_questions;
-use crate::acp::session_info::MAX_SESSION_MESSAGES;
+use crate::acp::session_info::{SessionHistoryOptions, MAX_SESSION_MESSAGES};
 use crate::models::AutomationAction;
 
 /// Upper bound on one broker-side cancel round-trip. Bounds both
@@ -290,7 +291,7 @@ impl CompanionFeatures {
         match name {
             "check_user_feedback" => self.feedback,
             "ask_user_question" => self.ask,
-            "get_session_info" => self.sessions,
+            "get_session_info" | "read_session_history" => self.sessions,
             "task_progress" | "task_complete" => self.tasks,
             "submit_result" => self.result,
             "create_automation" => self.automations,
@@ -1239,6 +1240,36 @@ async fn build_tools_call_spawn(
             // pending question down — no broker-side cancel to dispatch.
             let round_trip = Box::pin(async move { client_ask_round_trip(&socket, &req).await });
             register_and_spawn(inflight, id, None, round_trip, render_ask_result).await
+        }
+        "read_session_history" => {
+            let Some(session_id) = parse_session_id(&arguments) else {
+                return LineAction::Respond(err(
+                    id,
+                    -32602,
+                    "read_session_history requires an integer session_id",
+                ));
+            };
+            let options = match serde_json::from_value::<SessionHistoryOptions>(arguments.clone()) {
+                Ok(options) if options.limit > 0 => options,
+                _ => return LineAction::Respond(err(id, -32602,
+                    "History options require limit >= 1, string before/query, boolean include_tools, and non-negative integer max_chars")),
+            };
+            let req = BrokerSessionHistoryRequest {
+                token: ctx.token.clone(),
+                session_id,
+                options,
+            };
+            let round_trip = Box::pin(async move {
+                super::transport::client_session_history_round_trip(&socket, &req).await
+            });
+            register_and_spawn(
+                inflight,
+                id,
+                None,
+                round_trip,
+                render_session_history_result,
+            )
+            .await
         }
         "get_session_info" => {
             // `session_id` is the codeg conversation id the agent read out of a
@@ -2457,6 +2488,16 @@ fn parse_max_messages(arguments: &Value) -> u32 {
         Some(n) => n.min(u64::from(MAX_SESSION_MESSAGES)) as u32,
         None => DEFAULT_MAX_MESSAGES,
     }
+}
+
+/// JSON text keeps IDs, paging flags, tool previews, and truncation visible on
+/// hosts that do not surface structuredContent. Do not duplicate the history
+/// into structuredContent: max_chars covers one returned history envelope.
+pub fn render_session_history_result(outcome: &Value) -> Value {
+    json!({
+        "content": [{ "type": "text", "text": outcome.to_string() }],
+        "isError": false,
+    })
 }
 
 /// Map the `get_session_info` round-trip outcome (a serialized
@@ -4678,6 +4719,31 @@ fn render_session_summary_text(o: &Value) -> String {
     {
         out.push_str(&format!("Total tokens: {tokens}\n"));
     }
+    if let Some(children) = o
+        .get("children")
+        .and_then(Value::as_array)
+        .filter(|c| !c.is_empty())
+    {
+        out.push_str("Delegation children (persisted conversation status):\n");
+        for child in children {
+            let id = child.get("session_id").and_then(Value::as_i64).unwrap_or(0);
+            let task = child
+                .get("task_id")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let status = child
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            out.push_str(&format!(
+                "- session #{id}: task_id={task}, status={status}\n"
+            ));
+        }
+        if o.get("children_truncated").and_then(Value::as_bool) == Some(true) {
+            out.push_str("Additional children omitted (limit 200).\n");
+        }
+        out.push_str("Use get_delegation_status for detailed task reports.\n");
+    }
     if let Some(note) = s("note") {
         out.push_str(&format!("Note: {note}\n"));
     }
@@ -5889,7 +5955,7 @@ mod tests {
             dispatch_for_test(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).await,
         );
         assert!(!names.contains(&"get_session_info".to_string()));
-        // sessions feature on → exactly that one tool surfaces.
+        // The sessions feature exposes metadata and paginated history together.
         let names = list_tool_names(
             dispatch_with_features(
                 SESSIONS_ONLY,
@@ -5897,7 +5963,41 @@ mod tests {
             )
             .await,
         );
-        assert_eq!(names, vec!["get_session_info".to_string()]);
+        assert_eq!(
+            names,
+            vec![
+                "get_session_info".to_string(),
+                "read_session_history".to_string()
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn read_session_history_dispatch_and_gate() {
+        let line = json!({"jsonrpc":"2.0", "id":31, "method":"tools/call",
+            "params":{"name":"read_session_history", "arguments":{"session_id":"214", "before":"original-turn", "query":"needle", "include_tools":true}}}).to_string();
+        assert!(matches!(
+            dispatch_with_features(SESSIONS_ONLY, &line).await,
+            LineAction::Spawn(_)
+        ));
+        let error = unwrap_respond(dispatch_for_test(&line).await).error.unwrap();
+        assert_eq!(error.code, -32602);
+        assert!(error.message.contains("unknown tool"));
+        for args in [
+            json!({}),
+            json!({"session_id":1,"limit":0}),
+            json!({"session_id":1,"before":3}),
+            json!({"session_id":1,"include_tools":"true"}),
+            json!({"session_id":1,"max_chars":-1}),
+        ] {
+            let line = json!({"jsonrpc":"2.0", "id":32, "method":"tools/call",
+                "params":{"name":"read_session_history", "arguments":args}})
+            .to_string();
+            let error = unwrap_respond(dispatch_with_features(SESSIONS_ONLY, &line).await)
+                .error
+                .unwrap();
+            assert_eq!(error.code, -32602);
+        }
     }
 
     #[tokio::test]
