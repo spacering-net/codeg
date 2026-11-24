@@ -354,6 +354,9 @@ enum RoundEnd {
     /// The connection is gone and the conversation reads finished, or
     /// cancelled.
     Gone { canceled: bool },
+    /// It ended `end_turn` on a failure the agent told as its reply, which
+    /// codeg took out of that reply: the failure, in the agent's words.
+    Told(String),
 }
 
 impl RoundEnd {
@@ -382,6 +385,7 @@ impl RoundEnd {
                 Some("the work's turn ended abnormally".into()),
             ),
             RoundEnd::Gone { canceled: true } => (DispatchState::Canceled, None),
+            RoundEnd::Told(failure) => (DispatchState::Failed, Some(failure.clone())),
         }
     }
 }
@@ -1419,6 +1423,8 @@ impl PersonalAgentEngine {
     /// Open a round on `conn_id`, just before its prompt goes out.
     pub(super) async fn open_round(&self, conn_id: &str, id: i32) {
         let since = self.current_seq(conn_id).await;
+        // A failure an earlier round told and nothing settled is not this one's.
+        self.state.lock().await.round_failures.remove(conn_id);
         self.register_conn(
             conn_id,
             DispatchConn {
@@ -1634,12 +1640,28 @@ impl PersonalAgentEngine {
         match &env.payload {
             AcpEvent::TurnComplete { stop_reason, .. } => {
                 if self.close_round(&env.connection_id, Some(env.seq)).await {
-                    self.settle_conversation_turn(
-                        id,
-                        &env.connection_id,
-                        RoundEnd::Stop(stop_reason.clone()),
-                    )
-                    .await;
+                    let told = self.state.lock().await.round_failures.remove(&env.connection_id);
+                    let end = match told {
+                        Some(failure) if stop_reason == "end_turn" => RoundEnd::Told(failure),
+                        _ => RoundEnd::Stop(stop_reason.clone()),
+                    };
+                    self.settle_conversation_turn(id, &env.connection_id, end).await;
+                }
+            }
+            AcpEvent::SessionFailure { record } if record.echoed_in_reply => {
+                // Only the open round's: `session/load` replays a resumed
+                // conversation's still-active records of earlier rounds.
+                let Some(text) = crate::cli_run::events::error_text(&env.payload) else {
+                    return;
+                };
+                let mut st = self.state.lock().await;
+                let in_round = st
+                    .dispatch_conns
+                    .get(&env.connection_id)
+                    .and_then(|c| c.round_since)
+                    .is_some_and(|since| env.seq > since);
+                if in_round {
+                    st.round_failures.insert(env.connection_id.clone(), text);
                 }
             }
             AcpEvent::PermissionRequest { .. }
@@ -3535,5 +3557,9 @@ mod tests {
         assert_eq!(RoundEnd::Missed { abnormal: true }.outcome().0, DispatchState::Failed);
         assert_eq!(RoundEnd::Gone { canceled: true }.outcome().0, DispatchState::Canceled);
         assert_eq!(RoundEnd::Gone { canceled: false }.outcome().0, DispatchState::Completed);
+        assert_eq!(
+            RoundEnd::Told("Quota exhausted.".into()).outcome(),
+            (DispatchState::Failed, Some("Quota exhausted.".into()))
+        );
     }
 }

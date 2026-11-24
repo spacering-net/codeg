@@ -6732,6 +6732,50 @@ async fn a_hand_over_and_a_round_opening_take_turns_on_the_route() {
     assert!(!worker.owns_connection("c-race").await);
 }
 
+/// Antigravity tells a dead executor (a spent quota, a refused location) as
+/// its whole reply and ends `end_turn`; codeg takes those words out of the
+/// reply and marks the record `echoed_in_reply`. The dispatch's round failed,
+/// in those words — not a success with an empty excerpt. A record the reply
+/// did not carry leaves a round that ended well a success.
+#[tokio::test]
+async fn a_round_the_agent_told_failed_as_its_reply_fails_the_dispatch() {
+    let (engine, _tmp) = ready().await;
+    let failure = |echoed: bool| AcpEvent::SessionFailure {
+        record: crate::acp::types::SessionFailureRecord {
+            id: "antigravity:s1:1".into(),
+            revision: 1,
+            category: "quota".into(),
+            severity: "error".into(),
+            title: "You have exhausted your quota.".into(),
+            details: None,
+            actions: Vec::new(),
+            resolved: false,
+            echoed_in_reply: echoed,
+        },
+    };
+    let event = |conn: &str, seq: u64, payload: AcpEvent| crate::acp::types::EventEnvelope {
+        seq,
+        connection_id: conn.into(),
+        payload,
+    };
+
+    let told = session_dispatch(&engine, DispatchState::Running, "c-told").await;
+    engine.track_conn("c-told", told).await;
+    engine.open_round("c-told", told).await;
+    engine.on_event(&event("c-told", 1, failure(true))).await;
+    engine.on_event(&event("c-told", 2, turn_complete("end_turn"))).await;
+    let d = dispatch_state(&engine, told).await;
+    assert_eq!(d.state, DispatchState::Failed);
+    assert_eq!(d.error.as_deref(), Some("You have exhausted your quota."));
+
+    let fine = session_dispatch(&engine, DispatchState::Running, "c-fine").await;
+    engine.track_conn("c-fine", fine).await;
+    engine.open_round("c-fine", fine).await;
+    engine.on_event(&event("c-fine", 1, failure(false))).await;
+    engine.on_event(&event("c-fine", 2, turn_complete("end_turn"))).await;
+    assert_eq!(dispatch_state(&engine, fine).await.state, DispatchState::Completed);
+}
+
 // ── 1.7: the roster, its order and each assistant's live state ──────────────
 
 use crate::db::entities::personal_agent_notice::NoticeLevel;
