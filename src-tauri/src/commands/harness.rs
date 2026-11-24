@@ -101,6 +101,9 @@ pub async fn srn_asset_core(
     harness: &Harness,
     path: &str,
 ) -> Result<PetSpriteAsset, AppCommandError> {
+    if !crate::srn::privacy::enabled() {
+        return Err(crate::srn::error::Problem::OnlineDisabled.into());
+    }
     let asset = harness.asset(path).await?;
     Ok(PetSpriteAsset {
         mime: asset.mime,

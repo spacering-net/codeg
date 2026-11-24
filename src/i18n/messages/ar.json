@@ -13073,6 +13073,12 @@
     "expand": "عرض الكل",
     "collapse": "عرض أقل"
   },
+  "SpaceRingPrivacy": {
+    "title": "خدمات SpaceRing عبر الإنترنت",
+    "description": "السماح بتسجيل الدخول إلى SRN وتصفح الكتالوج والتحقق في الخلفية من التحديثات والعناصر المسحوبة.",
+    "managed": "تم تعطيل SpaceRing بواسطة CODEG_SRN.",
+    "retry": "إعادة المحاولة"
+  },
   "SrnAccount": {
     "name": "SRN",
     "trigger": {
@@ -13130,6 +13136,7 @@
       "webSignedOutLocally": "تم تسجيل الخروج في هذا المتصفح، لكن SRN لم يؤكّد ذلك."
     },
     "errors": {
+      "onlineDisabled": "خدمات SRN عبر الإنترنت معطلة.",
       "network": "تعذّر الوصول إلى SRN.",
       "rateLimited": "طلب SRN من Codeg الانتظار {seconds} ثانية قبل إعادة المحاولة.",
       "server": "ردّ SRN بخطأ (⁦HTTP {status}⁩).",

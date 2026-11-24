@@ -109,6 +109,13 @@ async fn account(
     headers: HeaderMap,
     RawQuery(query): RawQuery,
 ) -> Response {
+    if !crate::srn::privacy::enabled() {
+        return answer(
+            StatusCode::OK,
+            &SrnWebAccountState::Disabled,
+            &CookieChanges::default(),
+        );
+    }
     let Some(service) = handle.0 else {
         return answer(
             StatusCode::OK,
@@ -170,7 +177,7 @@ async fn callback(
         return StatusCode::METHOD_NOT_ALLOWED.into_response();
     }
     let presented = presented(&headers);
-    let completed = match handle.0 {
+    let completed = match handle.0.filter(|service| service.is_enabled()) {
         Some(service) => {
             service
                 .complete(parse_callback(query.as_deref()), &presented)

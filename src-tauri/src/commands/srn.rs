@@ -15,10 +15,36 @@ use crate::models::system::AppLocale;
 use crate::srn::desktop;
 use crate::srn::types::{CheckTrigger, SrnAccountState, SrnSignOutResult};
 
+fn ensure_online() -> Result<(), AppCommandError> {
+    if crate::srn::privacy::enabled() {
+        Ok(())
+    } else {
+        Err(crate::srn::error::Problem::OnlineDisabled.into())
+    }
+}
+
+#[tauri::command]
+pub async fn srn_online_settings() -> Result<crate::srn::privacy::OnlineSettings, AppCommandError> {
+    Ok(crate::srn::privacy::settings())
+}
+
+#[tauri::command]
+pub async fn srn_set_online_settings(
+    app: AppHandle,
+    enabled: bool,
+) -> Result<crate::srn::privacy::OnlineSettings, AppCommandError> {
+    let settings = crate::srn::privacy::set(enabled).await?;
+    desktop::privacy_changed(&app, settings);
+    Ok(settings)
+}
+
 /// The account as it is (`loading` until the keychain has been read). Never
 /// fails and never waits.
 #[tauri::command]
 pub async fn srn_account(app: AppHandle) -> Result<SrnAccountState, AppCommandError> {
+    if !crate::srn::privacy::enabled() {
+        return Ok(SrnAccountState::Disabled);
+    }
     Ok(desktop::service(&app).state())
 }
 
@@ -30,6 +56,7 @@ pub async fn srn_sign_in(
     app: AppHandle,
     locale: Option<AppLocale>,
 ) -> Result<SrnAccountState, AppCommandError> {
+    ensure_online()?;
     let language = desktop::page_language(&app, locale).await;
     Ok(desktop::service(&app).sign_in(language).await?)
 }
@@ -37,12 +64,14 @@ pub async fn srn_sign_in(
 /// Opens the pending sign-in's page again.
 #[tauri::command]
 pub async fn srn_reopen_sign_in(app: AppHandle) -> Result<SrnAccountState, AppCommandError> {
+    ensure_online()?;
     Ok(desktop::service(&app).reopen()?)
 }
 
 /// Ends the pending sign-in, if any.
 #[tauri::command]
 pub async fn srn_cancel_sign_in(app: AppHandle) -> Result<SrnAccountState, AppCommandError> {
+    ensure_online()?;
     Ok(desktop::service(&app).cancel())
 }
 
@@ -53,6 +82,7 @@ pub async fn srn_check_online(
     app: AppHandle,
     trigger: Option<CheckTrigger>,
 ) -> Result<SrnAccountState, AppCommandError> {
+    ensure_online()?;
     Ok(desktop::service(&app)
         .check(trigger.unwrap_or_default())
         .await?)
@@ -67,6 +97,7 @@ pub async fn srn_sign_out(
     expected_srn: Option<u64>,
     locale: Option<AppLocale>,
 ) -> Result<SrnSignOutResult, AppCommandError> {
+    ensure_online()?;
     let language = desktop::page_language(&app, locale).await;
     Ok(desktop::service(&app)
         .sign_out(expected_srn, language)
@@ -94,6 +125,7 @@ pub async fn srn_open_manage_connections(
     locale: Option<AppLocale>,
     page: Option<SrnConsolePage>,
 ) -> Result<(), AppCommandError> {
+    ensure_online()?;
     let language = desktop::page_language(&app, locale).await;
     let service = desktop::service(&app);
     let url = match page.unwrap_or_default() {
@@ -101,6 +133,9 @@ pub async fn srn_open_manage_connections(
         SrnConsolePage::Console => service.console_url(language),
     };
     use tauri_plugin_opener::OpenerExt;
+    let _permission = crate::srn::privacy::request()
+        .await
+        .ok_or(crate::srn::error::Problem::OnlineDisabled)?;
     app.opener()
         .open_url(url, None::<&str>)
         .map_err(|_| crate::srn::error::Problem::OpenBrowser.into())

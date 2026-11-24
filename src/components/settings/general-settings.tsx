@@ -44,6 +44,7 @@ import { relaunchApp } from "@/lib/updater"
 import { toErrorMessage } from "@/lib/app-error"
 import { CloseBehaviorSettingsSection } from "@/components/settings/close-behavior-settings"
 import { DesktopNotificationSettingsSection } from "@/components/settings/desktop-notification-settings"
+import { SpaceRingOnlineSettings } from "@/components/settings/spacering-online-settings"
 import { MentionPanelSettingsSection } from "@/components/settings/mention-panel-settings"
 import { NotificationSoundSettingsSection } from "@/components/settings/notification-sound-settings"
 import { WindowAttentionSettingsSection } from "@/components/settings/window-attention-settings"
@@ -515,6 +516,8 @@ export function GeneralSettings() {
             )}
           </SettingsSection>
         )}
+
+        <SpaceRingOnlineSettings />
 
         <MentionPanelSettingsSection />
 

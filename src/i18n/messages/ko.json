@@ -13073,6 +13073,12 @@
     "expand": "모두 보기",
     "collapse": "접기"
   },
+  "SpaceRingPrivacy": {
+    "title": "SpaceRing 온라인 서비스",
+    "description": "SRN 로그인, 카탈로그 탐색, 업데이트 및 배포 중단 항목에 대한 백그라운드 확인을 허용합니다.",
+    "managed": "CODEG_SRN 설정으로 SpaceRing이 비활성화되었습니다.",
+    "retry": "다시 시도"
+  },
   "SrnAccount": {
     "name": "SRN",
     "trigger": {
@@ -13130,6 +13136,7 @@
       "webSignedOutLocally": "이 브라우저에서 로그아웃했지만 SRN이 확인하지 않았습니다."
     },
     "errors": {
+      "onlineDisabled": "SRN 온라인 서비스가 비활성화되었습니다.",
       "network": "SRN에 연결할 수 없습니다.",
       "rateLimited": "SRN이 {seconds}초 후에 다시 시도하라고 요청했습니다.",
       "server": "SRN이 오류를 반환했습니다(HTTP {status}).",

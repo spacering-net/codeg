@@ -13073,6 +13073,12 @@
     "expand": "Ver todo",
     "collapse": "Ver menos"
   },
+  "SpaceRingPrivacy": {
+    "title": "Servicios en línea de SpaceRing",
+    "description": "Permitir el inicio de sesión en SRN, la consulta del catálogo y la comprobación en segundo plano de actualizaciones y elementos retirados.",
+    "managed": "CODEG_SRN ha desactivado SpaceRing.",
+    "retry": "Reintentar"
+  },
   "SrnAccount": {
     "name": "SRN",
     "trigger": {
@@ -13130,6 +13136,7 @@
       "webSignedOutLocally": "Sesión cerrada en este navegador, pero SRN no lo confirmó."
     },
     "errors": {
+      "onlineDisabled": "Los servicios en línea de SRN están desactivados.",
       "network": "No se pudo conectar con SRN.",
       "rateLimited": "SRN pidió a Codeg esperar {seconds} s antes de reintentar.",
       "server": "SRN respondió con un error (HTTP {status}).",

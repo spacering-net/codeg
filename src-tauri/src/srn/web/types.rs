@@ -62,6 +62,8 @@ pub struct SrnOnline {
     rename_all_fields = "camelCase"
 )]
 pub enum SrnWebAccountState {
+    /// The installation has disabled all SpaceRing services.
+    Disabled,
     /// This server has no SRN sign-in configured (or its configuration is
     /// invalid). Instance access is not affected.
     NotEnabled,

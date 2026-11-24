@@ -13073,6 +13073,12 @@
     "expand": "すべて表示",
     "collapse": "折りたたむ"
   },
+  "SpaceRingPrivacy": {
+    "title": "SpaceRing オンラインサービス",
+    "description": "SRN へのサインイン、カタログの閲覧、更新や公開停止項目のバックグラウンドチェックを許可します。",
+    "managed": "CODEG_SRN により SpaceRing は無効になっています。",
+    "retry": "再試行"
+  },
   "SrnAccount": {
     "name": "SRN",
     "trigger": {
@@ -13130,6 +13136,7 @@
       "webSignedOutLocally": "このブラウザーでサインアウトしました（SRN は未確認）。"
     },
     "errors": {
+      "onlineDisabled": "SRN オンラインサービスは無効になっています。",
       "network": "SRN に接続できませんでした。",
       "rateLimited": "SRN から {seconds} 秒待ってから再試行するよう求められました。",
       "server": "SRN がエラーを返しました（HTTP {status}）。",

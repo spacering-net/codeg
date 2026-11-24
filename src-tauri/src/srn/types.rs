@@ -85,6 +85,8 @@ pub struct SrnOnline {
     rename_all_fields = "camelCase"
 )]
 pub enum SrnAccountState {
+    /// SpaceRing online services were disabled on this installation.
+    Disabled,
     /// Codeg is still reading the keychain, just after it started.
     Loading,
     /// No sign-in on this computer. `problem` says why, when the last

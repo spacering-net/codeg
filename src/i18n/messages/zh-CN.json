@@ -13073,6 +13073,12 @@
     "expand": "展开",
     "collapse": "收起"
   },
+  "SpaceRingPrivacy": {
+    "title": "SpaceRing 在线服务",
+    "description": "允许登录 SRN、浏览目录，以及在后台检查更新和已下架的项目。",
+    "managed": "CODEG_SRN 已禁用 SpaceRing。",
+    "retry": "重试"
+  },
   "SrnAccount": {
     "name": "SRN",
     "trigger": {
@@ -13130,6 +13136,7 @@
       "webSignedOutLocally": "已在这个浏览器中退出，SRN 未确认。"
     },
     "errors": {
+      "onlineDisabled": "SRN 在线服务已禁用。",
       "network": "无法连接 SRN。",
       "rateLimited": "SRN 要求 Codeg 等 {seconds} 秒后再试。",
       "server": "SRN 返回了错误（HTTP {status}）。",

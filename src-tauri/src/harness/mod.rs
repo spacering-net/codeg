@@ -81,7 +81,7 @@ pub fn enabled() -> bool {
 /// [`enabled`], for the variable's value: on unless it says off (`off`, `0`,
 /// `false` or `no`, in any case). Anything else — unset, empty, a typo —
 /// leaves it on, as an installation without the variable is.
-fn enabled_by(value: Option<&str>) -> bool {
+pub(crate) fn enabled_by(value: Option<&str>) -> bool {
     !value.is_some_and(|value| {
         matches!(
             value.trim().to_ascii_lowercase().as_str(),
@@ -119,7 +119,7 @@ impl Harness {
 
     /// Whether the operator left the catalog on.
     pub fn enabled(&self) -> bool {
-        self.enabled
+        self.enabled && crate::srn::privacy::enabled()
     }
 
     /// The SpaceRing origin every request goes to.
@@ -128,7 +128,7 @@ impl Harness {
     }
 
     fn ensure_enabled(&self) -> Result<(), HarnessError> {
-        if self.enabled {
+        if self.enabled() {
             Ok(())
         } else {
             Err(HarnessError::Disabled)

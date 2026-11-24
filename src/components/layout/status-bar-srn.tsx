@@ -44,6 +44,7 @@ import {
   LogOut,
   RotateCcw,
   RotateCw,
+  Zap,
   X,
 } from "lucide-react"
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui"
@@ -644,6 +645,8 @@ function useAccountParts(
   const none = { footRow: null }
 
   switch (state.status) {
+    case "disabled":
+      return { head: null, footRow: null }
     case "notEnabled":
       return {
         ...none,
@@ -1010,7 +1013,8 @@ export function StatusBarSrn({ compact = false }: { compact?: boolean }) {
     remoteWindow
   )
 
-  const label = triggerLabelOf(state, tTrigger)
+  const offline = state.status === "disabled"
+  const label = offline ? tQuick("title") : triggerLabelOf(state, tTrigger)
   const signedIn = state.status === "signedIn" ? state.account : null
   const look = ringLook(state)
   // Signed in, the avatar and the name share one capsule, drawn as the
@@ -1029,9 +1033,9 @@ export function StatusBarSrn({ compact = false }: { compact?: boolean }) {
           <button
             type="button"
             aria-label={label}
-            aria-describedby={descriptionId}
+            aria-describedby={offline ? undefined : descriptionId}
             title={label}
-            data-srn-status={state.status}
+            data-srn-status={offline ? undefined : state.status}
             className={cn(
               "flex h-6 min-w-0 items-center rounded-full text-muted-foreground transition-colors outline-none hover:bg-foreground/10 hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-expanded:bg-foreground/10 aria-expanded:text-foreground",
               withName && "pe-2"
@@ -1042,10 +1046,12 @@ export function StatusBarSrn({ compact = false }: { compact?: boolean }) {
                 `status-bar.tsx`), and it centres a 0.875rem glyph in the
                 capsule's round end. */}
             <span
-              data-srn-box=""
+              data-srn-box={offline ? undefined : ""}
               className="relative flex size-6 shrink-0 items-center justify-center"
             >
-              {signedIn ? (
+              {offline ? (
+                <Zap aria-hidden="true" className="size-3.5" />
+              ) : signedIn ? (
                 <SrnAvatar
                   account={signedIn}
                   fetch={account.avatar}
@@ -1094,8 +1100,14 @@ export function StatusBarSrn({ compact = false }: { compact?: boolean }) {
         >
           {/* A group named after the account: a screen reader says whose
               notes and links these are on the way into them. */}
-          <DropdownMenuGroup aria-label={label}>{parts.head}</DropdownMenuGroup>
-          <DropdownMenuSeparator />
+          {parts.head && (
+            <>
+              <DropdownMenuGroup aria-label={label}>
+                {parts.head}
+              </DropdownMenuGroup>
+              <DropdownMenuSeparator />
+            </>
+          )}
           <QuickActionsItems actions={quick} />
           {parts.footRow && (
             <>

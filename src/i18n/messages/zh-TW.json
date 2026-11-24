@@ -13073,6 +13073,12 @@
     "expand": "展開",
     "collapse": "收起"
   },
+  "SpaceRingPrivacy": {
+    "title": "SpaceRing 線上服務",
+    "description": "允許登入 SRN、瀏覽目錄，以及在背景檢查更新與已下架的項目。",
+    "managed": "CODEG_SRN 已停用 SpaceRing。",
+    "retry": "重試"
+  },
   "SrnAccount": {
     "name": "SRN",
     "trigger": {
@@ -13130,6 +13136,7 @@
       "webSignedOutLocally": "已在這個瀏覽器中登出，SRN 未確認。"
     },
     "errors": {
+      "onlineDisabled": "SRN 線上服務已停用。",
       "network": "無法連線到 SRN。",
       "rateLimited": "SRN 要求 Codeg 等 {seconds} 秒後再試。",
       "server": "SRN 回傳了錯誤（HTTP {status}）。",

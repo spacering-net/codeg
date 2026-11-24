@@ -32,6 +32,7 @@ export interface SrnOnline {
 
 export type SrnAccountState =
   | { status: "loading" }
+  | { status: "disabled" }
   | { status: "signedOut"; problem?: AppCommandError }
   | {
       status: "pending"
