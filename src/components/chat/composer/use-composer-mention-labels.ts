@@ -1,7 +1,14 @@
 "use client"
 
+import { showSidebarAssistants } from "@/components/personal-agent/sidebar-assistants"
 import { useMemo } from "react"
 import { useTranslations } from "next-intl"
+import { toast } from "sonner"
+
+import { useOptionalWorkbenchRoute } from "@/contexts/workbench-route-context"
+import { toErrorMessage } from "@/lib/app-error"
+import { openPersonalAgentPage } from "@/lib/personal-agent-open"
+import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import type { MentionUiLabels } from "./suggestion/types"
 import type { ReferenceGroupLabels } from "./use-reference-search"
@@ -11,6 +18,9 @@ export interface ComposerMentionLabels {
   groupLabels: ReferenceGroupLabels
   /** Empty / loading / listbox name / "more results" / count announcement. */
   uiLabels: MentionUiLabels
+  /** The primary assistant's name while it has none of its own, for its
+   *  `@` option and the link it writes. */
+  primaryAssistantName: string
 }
 
 /**
@@ -26,6 +36,7 @@ export interface ComposerMentionLabels {
  */
 export function useComposerMentionLabels(): ComposerMentionLabels {
   const t = useTranslations("Folder.chat.messageInput")
+  const tPa = useTranslations("PersonalAgent")
   const groupLabels = useMemo<ReferenceGroupLabels>(
     () => ({
       file: t("mentionGroupFile"),
@@ -37,6 +48,10 @@ export function useComposerMentionLabels(): ComposerMentionLabels {
     }),
     [t]
   )
+  // The assistants are managed on the assistants page: in a workspace, that
+  // page here; elsewhere, the workspace's.
+  const route = useOptionalWorkbenchRoute()
+  const setRoute = route?.setRoute
   const uiLabels = useMemo<MentionUiLabels>(
     () => ({
       empty: t("mentionEmpty"),
@@ -44,8 +59,26 @@ export function useComposerMentionLabels(): ComposerMentionLabels {
       listbox: t("mentionListLabel"),
       more: t("mentionMore"),
       count: (count: number) => t("mentionCount", { count }),
+      manageAssistants: {
+        label: t("mentionManageAssistants"),
+        open: () => {
+          if (setRoute) {
+            // The assistants: the primary's conversation, whichever one
+            // the page showed last.
+            const ui = usePersonalAgentUi.getState()
+            ui.setViewBot(null)
+            ui.showConversation()
+            showSidebarAssistants()
+            setRoute("personalAgent")
+            return
+          }
+          void openPersonalAgentPage("assistants").catch((e) =>
+            toast.error(toErrorMessage(e))
+          )
+        },
+      },
     }),
-    [t]
+    [t, setRoute]
   )
-  return { groupLabels, uiLabels }
+  return { groupLabels, uiLabels, primaryAssistantName: tPa("title") }
 }

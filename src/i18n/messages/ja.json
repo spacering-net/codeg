@@ -247,6 +247,12 @@
         "appliedToast": "壁紙を適用しました",
         "credit": "画像提供 wallhaven.cc · SFW のみ"
       }
+    },
+    "paAccent": {
+      "title": "アシスタントのアクセントカラー",
+      "description": "アシスタントとの会話で、カードの縁取りとカードのボタンに使う色です。あなたの吹き出しは常にアシスタントの色になります。",
+      "default": "デフォルト",
+      "bot": "アシスタントの色に合わせる"
     }
   },
   "SystemSettings": {
@@ -561,6 +567,54 @@
       "zoom_reset": {
         "title": "ズームをリセット",
         "description": "ウィンドウのズームを 100% に戻します"
+      },
+      "switch_assistant_1": {
+        "title": "アシスタント 1 に切り替え",
+        "description": "アシスタントページで：一覧の 1 番目のアシスタントを開く（1 はメインアシスタント）"
+      },
+      "switch_assistant_2": {
+        "title": "アシスタント 2 に切り替え",
+        "description": "アシスタントページで：一覧の 2 番目のアシスタントを開く（1 はメインアシスタント）"
+      },
+      "switch_assistant_3": {
+        "title": "アシスタント 3 に切り替え",
+        "description": "アシスタントページで：一覧の 3 番目のアシスタントを開く（1 はメインアシスタント）"
+      },
+      "switch_assistant_4": {
+        "title": "アシスタント 4 に切り替え",
+        "description": "アシスタントページで：一覧の 4 番目のアシスタントを開く（1 はメインアシスタント）"
+      },
+      "switch_assistant_5": {
+        "title": "アシスタント 5 に切り替え",
+        "description": "アシスタントページで：一覧の 5 番目のアシスタントを開く（1 はメインアシスタント）"
+      },
+      "switch_assistant_6": {
+        "title": "アシスタント 6 に切り替え",
+        "description": "アシスタントページで：一覧の 6 番目のアシスタントを開く（1 はメインアシスタント）"
+      },
+      "switch_assistant_7": {
+        "title": "アシスタント 7 に切り替え",
+        "description": "アシスタントページで：一覧の 7 番目のアシスタントを開く（1 はメインアシスタント）"
+      },
+      "switch_assistant_8": {
+        "title": "アシスタント 8 に切り替え",
+        "description": "アシスタントページで：一覧の 8 番目のアシスタントを開く（1 はメインアシスタント）"
+      },
+      "switch_assistant_9": {
+        "title": "アシスタント 9 に切り替え",
+        "description": "アシスタントページで：一覧の 9 番目のアシスタントを開く（1 はメインアシスタント）"
+      },
+      "prev_assistant": {
+        "title": "前のアシスタント",
+        "description": "アシスタントページで：一覧でひとつ上のアシスタントを開く"
+      },
+      "next_assistant": {
+        "title": "次のアシスタント",
+        "description": "アシスタントページで：一覧でひとつ下のアシスタントを開く"
+      },
+      "cycle_assistant": {
+        "title": "アシスタントを順に切り替え",
+        "description": "アシスタントページで：最近開いたアシスタントの間で切り替える"
       }
     }
   },
@@ -816,19 +870,18 @@
       "modelNotSwitched": "エージェントが選択したモデルに切り替わらなかったため、これらのオプションは別のモデルのものである可能性があります。",
       "unsavedChanges": "未保存の変更があります",
       "assistants": {
-        "description": "アシスタントは @ で呼び出せる委任プリセットです。エージェントとそのすべてのオプション、常設の指示をまとめたもので、委任するとその設定どおりに実行されます。",
-        "create": "新しいアシスタント",
-        "delegationOff": "マルチエージェント連携がオフのため、現在アシスタントに委任できません。",
+        "create": "新しい実行設定",
+        "delegationOff": "マルチエージェント連携がオフのため、現在実行設定に委任できません。",
         "delegationOffAction": "「{tab}」を開く",
         "unsavedElsewhere": "{tabs}に未保存の変更があります。",
         "unsavedGoBack": "戻る",
-        "loadFailed": "アシスタントの読み込みに失敗しました：{detail}",
-        "emptyTitle": "アシスタントはまだありません",
+        "loadFailed": "実行設定の読み込みに失敗しました：{detail}",
+        "emptyTitle": "実行設定はまだありません",
         "empty": "作成すると、エージェントに固定の設定と常設の指示を持たせ、どの会話からでも @ で呼び出せます。",
-        "reorderFailed": "アシスタントの並べ替えに失敗しました",
-        "saveFailed": "アシスタントを保存できませんでした",
+        "reorderFailed": "実行設定の並べ替えに失敗しました",
+        "saveFailed": "実行設定を保存できませんでした",
         "duplicated": "{name} を作成しました",
-        "deleteFailed": "アシスタントを削除できませんでした",
+        "deleteFailed": "実行設定を削除できませんでした",
         "deleteTitle": "{name} を削除しますか？",
         "deleteDescription": "設定とメンションパネルから消え、委任先として使えなくなります。会話中の既存の委任カードには引き続き表示されます。",
         "cancel": "キャンセル",
@@ -840,19 +893,19 @@
         "more": "{name} のその他の操作",
         "agentNotInstalled": "未インストール",
         "agentDisabled": "無効",
-        "createTitle": "新しいアシスタント",
-        "editTitle": "アシスタントを編集",
-        "editorDescription": "このアシスタントに委任すると、ここで設定したエージェント、オプション、常設の指示のとおりに実行されます。",
+        "createTitle": "新しい実行設定",
+        "editTitle": "実行設定を編集",
+        "editorDescription": "この実行設定に委任すると、ここで設定したエージェント、オプション、常設の指示のとおりに実行されます。",
         "nameLabel": "名前",
         "namePlaceholder": "例：コードレビュアー",
         "descriptionLabel": "説明",
-        "descriptionPlaceholder": "このアシスタントを使う場面",
-        "descriptionHint": "メンションパネルに表示され、委任する側のエージェントにもいつこのアシスタントを選ぶべきかを伝えます。",
+        "descriptionPlaceholder": "この実行設定を使う場面",
+        "descriptionHint": "メンションパネルに表示され、委任する側のエージェントにもいつこの実行設定を選ぶべきかを伝えます。",
         "agentLabel": "エージェント",
         "agentPlaceholder": "エージェントを選択",
         "agentHint": "すべてのオプションを選ぶ必要があります。",
         "instructionsLabel": "常設の指示",
-        "instructionsPlaceholder": "このアシスタントがすべてのタスクで従う役割と作業ルール",
+        "instructionsPlaceholder": "エージェントがすべてのタスクで従う役割と作業ルール",
         "instructionsHint": "委任のたびにタスクと一緒にエージェントへ渡されます。サブセッションのメッセージには表示されません。",
         "charCount": "{count} / {max}",
         "save": "保存",
@@ -882,23 +935,24 @@
         "avatarUseMonogram": "文字を使う",
         "avatarEmojiPlaceholder": "絵文字を入力または貼り付け",
         "avatarEmojiUse": "使う",
-        "avatarUpload": "画像をアップロード",
-        "avatarUploadHint": "正方形に切り抜き、128×128 に縮小します。",
-        "avatarTooLarge": "縮小してもこの画像は大きすぎます。別の画像を試してください。",
-        "avatarUnreadable": "このファイルを画像として読み込めませんでした。",
         "avatarColor": "色",
         "errors": {
-          "emptyName": "アシスタントの名前を入力してください。",
+          "emptyName": "実行設定の名前を入力してください。",
           "nameTooLong": "名前は {max} 文字以内にしてください。",
-          "duplicateName": "「{name}」という名前のアシスタントは既にあります。",
+          "duplicateName": "「{name}」という名前の実行設定は既にあります。",
           "descriptionTooLong": "説明は {max} 文字以内にしてください。",
           "instructionsTooLong": "指示は {max} 文字以内にしてください。",
           "invalidAvatar": "このアバターは使用できません。別のものを選んでください。",
           "avatarTooLarge": "アバター画像が大きすぎます。",
-          "invalidAgentOptions": "エージェントのオプションが揃っていません。アシスタントを開き直して、すべての項目を選んでください。",
-          "notFound": "このアシスタントはもう存在しません。"
-        }
-      }
+          "invalidAgentOptions": "エージェントのオプションが揃っていません。実行設定を開き直して、すべての項目を選んでください。",
+          "notFound": "この実行設定はもう存在しません。"
+        },
+        "disableTitle": "{name} を無効にしますか？",
+        "disableConfirm": "無効にする"
+      },
+      "assistantsMoved": "アシスタント：サイドバーの「パーソナルエージェント」グループで管理",
+      "assistantsMovedHint": "会話で @ するのはあなたのアシスタントです。それぞれ自分の作業用エージェントと常駐指示で動きます。",
+      "assistantsMovedOpen": "開く"
     },
     "actions": {
       "saveSystemInstructions": "システム指示を保存",
@@ -2286,6 +2340,12 @@
       "sectionFolders": "フォルダ",
       "sectionChats": "チャット",
       "sectionRecent": "最近",
+      "timeGroupPriorities": "優先事項（進行中）",
+      "timeGroupToday": "今日",
+      "timeGroupYesterday": "昨日",
+      "timeGroupPrevious7Days": "過去 7 日間",
+      "timeGroupPrevious30Days": "過去 30 日間",
+      "timeGroupOlder": "それ以前",
       "noChats": "チャットがありません",
       "noRecent": "最近の会話はありません",
       "showMoreRecent": "さらに表示（{count}）",
@@ -2321,7 +2381,14 @@
       "noRecentChats": "最近のチャットはありません",
       "noRecentFolders": "最近のフォルダー会話はありません",
       "noRecentCli": "コマンドラインからの最近の会話はありません",
-      "recentFilterMenuLabel": "最近の表示"
+      "recentFilterMenuLabel": "最近の表示",
+      "personalAgent": "パーソナルエージェント",
+      "personalAgentUnreadBots": "未読のあるアシスタント {count} 人",
+      "personalAgentBadge": "パーソナルエージェントが依頼",
+      "sectionAssistants": "パーソナルエージェント",
+      "timeGroupPrioritiesTooltip": "現在実行中のセッションが含まれます",
+      "recentGroupingModeTime": "時間グループ表示に切り替え",
+      "recentGroupingModeFlat": "フラットリストに切り替え"
     },
     "conversation": {
       "reloadFailed": "会話の再読み込みに失敗しました: {message}",
@@ -2400,6 +2467,19 @@
       "copyField": "{field}をコピー",
       "copiedField": "{field}をコピーしました",
       "assistant": "アシスタント"
+    },
+    "askConversations": {
+      "title": "質問の会話",
+      "total": "{count} 件",
+      "untitled": "新しい質問",
+      "actions": "その他の操作",
+      "open": "開く",
+      "convertToRegular": "通常の会話に変換",
+      "converted": "通常の会話に変換しました",
+      "convertFailed": "通常の会話に変換できませんでした",
+      "drawerTitle": "質問の会話",
+      "drawerDescription": "この会話の選択内容から始めた質問の会話",
+      "pendingFirstMessage": "質問はエージェントの準備ができ次第送信されます。もう一度操作すると破棄されます。"
     },
     "conversationCard": {
       "untitledConversation": "無題の会話",
@@ -3564,7 +3644,8 @@
         "mentionGroupSession": "セッション",
         "mentionGroupCommit": "コミット",
         "mentionGroupSkill": "スキル",
-        "mentionGroupAssistant": "アシスタント"
+        "mentionGroupAssistant": "アシスタント",
+        "mentionManageAssistants": "アシスタントを管理…"
       },
       "messageQueue": {
         "addToQueue": "キューに追加",
@@ -3825,7 +3906,7 @@
         "selectionSaveAsNote": "メモに保存",
         "selectionAsk": "質問",
         "selectionAskPlaceholder": "選択範囲について質問…",
-        "selectionAskSubmit": "新規会話で質問する",
+        "selectionAskClose": "閉じる",
         "downloadImage": "画像をダウンロード",
         "copyImage": "画像をコピー",
         "copiedImage": "画像をコピーしました",
@@ -3907,7 +3988,7 @@
             "child_rejected": "サブエージェント: 要求拒否",
             "child_unknown": "サブエージェント: エラー",
             "unknown": "不明なタスク",
-            "assistant_not_found": "アシスタントなし",
+            "assistant_not_found": "アシスタントが見つかりません",
             "assistants_unsupported": "再起動が必要",
             "assistant_support_unknown": "応答なし"
           }
@@ -4152,7 +4233,8 @@
           "allowAlways": "常に許可",
           "rejected": "拒否",
           "viaChatChannel": "チャットチャネル経由",
-          "byPolicy": "実行の権限ポリシーによる"
+          "byPolicy": "実行の権限ポリシーによる",
+          "byAssistant": "アシスタントが代わりに回答"
         }
       },
       "messageNav": {
@@ -5127,7 +5209,9 @@
       "statusRunning": "実行中",
       "statusWaiting": "待機中",
       "statusError": "エラー",
-      "subAgentOf": "サブエージェント"
+      "subAgentOf": "サブエージェント",
+      "askQuestion": "あなたへの質問",
+      "askPlan": "承認待ちのプラン"
     },
     "menu": {
       "scale": "拡大率",
@@ -5480,7 +5564,7 @@
       "quickMessages": "クイックメッセージ {count} 件",
       "taskTemplates": "タスクテンプレート {count} 件",
       "preferences": "アプリ設定 {count} 件",
-      "assistants": "アシスタント {count} 件",
+      "assistants": "{count} 件のアシスタント",
       "appearance": "外観設定 {count} 件"
     },
     "rollbackTitle": "インポートを元に戻す",
@@ -5498,7 +5582,8 @@
     "passphraseKeep": "空のままにすると保存済みのパスフレーズを使います",
     "passphrasePlaceholder": "暗号化パスフレーズ",
     "passphraseHint": "このマシンのキーチェーンにのみ保存され、アップロードされません。他のマシンでも同じパスフレーズを入力してください。",
-    "assistantsRenamed": "このマシンに同じ名前のアシスタントがあったため、{count} 件の名前を変更しました。",
+    "assistantsRenamed": "{count} 件のアシスタントがこの端末の既存のものと同名だったため、名前を変更しました。",
+    "assistantsPersonaKept": "{count} 件のアシスタントはこの端末の人設をそのまま残しました。すでにこの端末で人設ファイルを書いているため、インポートでは上書きしません。",
     "conflictTitle": "自動アップロードを一時停止しています",
     "conflictBody": "サーバーには {device} が {time} に作成した、このマシンでまだ復元していないスナップショットがあります。アップロードするとそれを置き換え、サーバーには以前のコピーが残りません。",
     "conflictRestore": "復元する",
@@ -6580,6 +6665,8 @@
     "deliverPrBackSubmit": "push",
     "deliverPrBackDone": "プルリクエストに push しました",
     "deliverPrBackDoneMr": "マージリクエストに push しました",
+    "badgePersonalAgent": "パーソナルエージェント",
+    "badgePersonalAgentExecutor": "パーソナルエージェント · {executor}",
     "deliverPrUncommitted": "タスクのワークツリーに未コミットのファイルが {count} 件あります。先に {branch} にコミットしてから、ほかの変更と一緒に push します。",
     "deliverPrUncommittedFiles": "コミットするファイル",
     "deliverPrCommitMessageLabel": "コミットメッセージ",
@@ -10109,6 +10196,2883 @@
         "probeFailed": "内蔵ブラウザーがトンネル経由でリモートホストに届くことを確認できませんでした。しばらくしてからもう一度お試しください。"
       }
     }
+  },
+  "PersonalAgent": {
+    "title": "パーソナルエージェント",
+    "readOnly": "パーソナルエージェントはこのデータディレクトリを使う別の codeg プロセスで動作しているため、ここではこのページは読み取り専用です。",
+    "viewSession": "セッションを表示",
+    "viewSessionHint": "現在のセッションの全記録をリアルタイムで表示します。",
+    "sessionTitle": "セッション {seq} · 全記録",
+    "errors": {
+      "engineElsewhere": "パーソナルエージェントはこのデータディレクトリを使う別の codeg プロセスで動作しています。ここではこのページは読み取り専用です。"
+    },
+    "state": {
+      "queued": "待機中",
+      "running": "実行中",
+      "waiting_input": "あなたの対応待ち",
+      "review": "レビュー待ち",
+      "completed": "完了",
+      "failed": "失敗",
+      "canceled": "キャンセル済み",
+      "interrupted": "中断",
+      "handed_over": "引き継ぎ済み"
+    },
+    "mode": {
+      "task": "ボードタスク",
+      "chat": "チャット",
+      "session": "作業セッション"
+    },
+    "reason": {
+      "first": "最初のセッション",
+      "switch": "頭脳を切り替え",
+      "option_restart": "起動設定を変更",
+      "workdir": "作業ディレクトリを移動",
+      "manual": "新しいセッション",
+      "recovery": "元のセッションを再開できず",
+      "overflow": "コンテキスト超過"
+    },
+    "timeline": {
+      "loadOlder": "以前の記録を読み込む",
+      "empty": "あいさつするか、何か任せてみましょう。",
+      "newMessages": "ここから新着メッセージ",
+      "openTask": "ボードで開く",
+      "openConversation": "会話を開く",
+      "viewSession": "会話を表示",
+      "loading": "会話を読み込んでいます…"
+    },
+    "work": {
+      "taskNotStarted": "このタスクはまだ始まっていません。始まるとここに会話が表示されます。",
+      "taskGone": "このタスクが見つかりません。削除された可能性があります。"
+    },
+    "composer": {
+      "placeholder": "{name}にメッセージ…",
+      "placeholderBusy": "{name}は作業中です。メッセージはこのあとに処理されます",
+      "readOnly": "このプロセスでは読み取り専用",
+      "ariaLabel": "パーソナルエージェントへのメッセージ",
+      "send": "送信",
+      "queue": "キューに追加",
+      "waitForUpload": "画像のアップロードが終わるまでお待ちください。"
+    },
+    "aux": {
+      "rename": "クリックして名前を変更",
+      "title": "アシスタントパネル",
+      "waiting": "{count} 件があなたの対応待ち"
+    },
+    "status": {
+      "thresholdMark": "{percent}% で自動圧縮",
+      "elsewhere": "エージェントは別の codeg プロセスで動作しています。ここに表示される内容はデータベースから読み取ったものです。",
+      "model": "モデル",
+      "mode": "モード",
+      "session": "セッション",
+      "started": "開始",
+      "connection": "接続",
+      "segmentValue": "#{seq} · {reason}",
+      "noSegment": "まだ開始していません",
+      "connected": "接続中",
+      "disconnected": "未接続（次のメッセージで再接続します）",
+      "handoff": "引き継ぎカード",
+      "handoffSize": "{size} 文字",
+      "handoffTrimmed": "切り詰め済み",
+      "context": "コンテキスト",
+      "usageValue": "{percent}% 使用（{source}）",
+      "usageSource": {
+        "live": "リアルタイム",
+        "transcript": "セッションファイルから"
+      },
+      "usageUnknown": "使用量不明 — このエージェントは使用量を報告しません",
+      "threshold": "{percent}% で自動圧縮",
+      "thresholdOff": "自動圧縮オフ",
+      "noCommand": "このエージェントの圧縮コマンドが不明です",
+      "compactions": "圧縮回数",
+      "compactionCounts": "codeg {auto} · 手動 {manual} · エージェント {agent}",
+      "lastCheck": "前回のチェック",
+      "check": {
+        "below": "しきい値未満",
+        "compacted": "送信前に圧縮しました",
+        "disabled": "自動圧縮オフ",
+        "usage_unknown": "スキップ：使用量不明",
+        "no_command": "スキップ：圧縮コマンドなし",
+        "paused": "スキップ：このセッションでは一時停止中",
+        "skipped_after_attempt": "圧縮直後のため、そのまま送信"
+      },
+      "paused": "このセッションの自動圧縮は一時停止中です",
+      "resume": "再開",
+      "queued": "待機中",
+      "queuedValue": "メッセージ {messages} 件 · 進捗 {events} 件",
+      "dispatchSlots": "依頼した会話",
+      "slotsValue": "実行中 {running}/{limit} · 待機 {queued}",
+      "slotsUnlimited": "実行中 {running} · 待機 {queued}",
+      "engine": "実行場所",
+      "engineHere": "このプロセス",
+      "engineElsewhere": "別の codeg プロセス",
+      "workdir": "作業ディレクトリ",
+      "lastError": "直近のエラー",
+      "compactionStatus": {
+        "ok": "完了",
+        "failed": "失敗",
+        "canceled": "キャンセル",
+        "running": "実行中"
+      },
+      "usageUnknownOffline": "使用量不明 — 再接続後に読み取ります",
+      "copyPath": "パスをコピー",
+      "copied": "コピーしました",
+      "startedValue": "{when} に開始",
+      "pendingValue": "次のメッセージで新しいセッション：{reason}",
+      "agent": "エージェント",
+      "state": "状態"
+    },
+    "items": {
+      "waitingAnswer": "{name} の返事待ち：{text}",
+      "wroteToYou": "{name} からのメッセージ：{text}",
+      "waits": {
+        "owner": "あなたの対応待ち",
+        "agent": "エージェント待ち",
+        "external": "進行中",
+        "time": "後で",
+        "none": "その他"
+      },
+      "kind": {
+        "dispatch": "依頼",
+        "reminder": "リマインダー",
+        "followup": "フォローアップ",
+        "question": "質問",
+        "when_mentioned": "言及時",
+        "message": "メッセージ"
+      },
+      "onDone": "完了後：{text}",
+      "mention": "{words} と言ったときに知らせる · {times}/{max} 回 · {until} まで"
+    },
+    "data": {
+      "inDays": "{days} 日間で {count} 回",
+      "smallSample": "サンプルは {count} 件のみ。参考程度に",
+      "rangeMenu": "期間",
+      "interactions": "日別の会話",
+      "messages": "あなたのメッセージ",
+      "replies": "返信",
+      "dispatches": "日別の依頼",
+      "completed": "完了",
+      "other": "その他",
+      "failed": "失敗",
+      "completedHint": "{count} 件完了",
+      "tokens": "日別のトークン",
+      "agentTokens": "パーソナルエージェント",
+      "dispatchTokens": "依頼した作業",
+      "syncedAt": "トークン数は前回の使用量同期（{when}）時点のものです",
+      "notSynced": "トークン数は使用量を同期すると表示されます（トークン使用量ページ）。",
+      "usageCurve": "コンテキスト使用量",
+      "noUsage": "まだ測定値がありません。",
+      "empty": "まだデータがありません",
+      "range": "直近 {days} 日",
+      "figure": {
+        "conversation": "会話",
+        "conversationSub": "あなた {owner} · 返信 {replies}",
+        "dispatches": "依頼",
+        "dispatchesSub": "完了 {completed} · 失敗 {failed}",
+        "completion": "完了率",
+        "completionSub": "依頼した仕事のうち",
+        "tokens": "トークン",
+        "tokensSub": "エージェント {agent} · 依頼 {dispatch}",
+        "tokensUnsynced": "使用量の同期後に表示"
+      },
+      "agents": "エージェント別"
+    },
+    "settings": {
+      "setupStart": "エージェントと話す",
+      "setupAskName": "名前をつけてくれる？",
+      "setupHello": "こんにちは、{name} です！",
+      "setupRandomName": "名前をおまかせ",
+      "setupNames": "ノヴァ|ミロ|モチ|ルナ|キキ|ピクセル|アトラス|ジュノ|モモ|ポポ|ソラマメ|コロ",
+      "setupMoreAgents": "さらに表示（{count}）",
+      "setupFewerAgents": "閉じる",
+      "setupNoAgents": "使えるエージェントがまだありません。先に設定でインストールしてください。",
+      "setupMissing": "エージェントの未選択の項目があと {count} 件あります",
+      "setupBrainAgent": "頭脳に使うエージェント",
+      "tabPersona": "ペルソナとメモリ",
+      "name": "名前",
+      "nameHint": "ページとメッセージに表示される名前とアイコンです。エージェント自身もこの名前を知っています。名前が空欄なら既定の名前を使います。",
+      "namePlaceholder": "パーソナルエージェント",
+      "agentHint": "あなたと話したり考えたりするときに使うエージェント。",
+      "agentOptions": "モデルとオプション",
+      "switchNote": "別のエージェントに切り替えると、次のメッセージから新しいセッションが始まります。古いセッションは再開せず、代わりに codeg がタイムラインを新しいセッションに引き継ぎます。",
+      "autoCompact": "自動圧縮のしきい値",
+      "autoCompactHint": "コンテキストの使用率がこの値以上になると、codeg は次のメッセージの前に圧縮コマンドを送信します。0 でオフ。エージェント自身の自動圧縮が発動する値より低くしてください。",
+      "compactCommand": "圧縮コマンド",
+      "compactCommandHint": "入力したとおりに送信します。空欄ならエージェント独自のコマンド（/compact、/compress…）を使います。別のエージェントに切り替えるとクリアされます。",
+      "compactionNote": "圧縮してもセッションは変わりません。次のメッセージに、ペルソナ・ルール・未完了の案件をまとめた状態カードが付きます。2 回続けて圧縮の効果がなければ、そのセッションの自動圧縮は一時停止します。",
+      "concurrency": "依頼した会話の同時実行数",
+      "concurrencyHint": "同時に実行できるチャットと作業セッションの依頼の数です。超えた分は待機します。0 で無制限。ボードタスクはボード自体の上限に従います。",
+      "handoffBudget": "引き継ぎカードの文字数上限",
+      "handoffBudgetHint": "新しいセッションの引き継ぎカードに使える文字数です。切り詰められた部分は、エージェントがツールで読み返せます。",
+      "skill": "組み込みスキル",
+      "skillHint": "作業ディレクトリ内のスキルを使って、エージェントに決まりごと（依頼の方法、未完了の案件、メモリファイル）を教えます。",
+      "saveFile": "ファイルを保存",
+      "fileSaved": "{name} を保存しました。",
+      "cancel": "キャンセル",
+      "save": "保存",
+      "fileGroups": {
+        "persona": "ペルソナ",
+        "rules": "ルール",
+        "owner": "あなたについて",
+        "memory": "メモリ",
+        "skills": "手順スキル"
+      },
+      "byOwner": "あなたが管理",
+      "byAgent": "エージェントが管理",
+      "soulHint": "エージェントが何者で、どう話すか。あなたが書くもので、エージェントはあなたに頼まれたときだけ変更します。セッション開始のたびに全文を読み込みます。",
+      "rulesHint": "エージェントが常に守るルール。あなたが書くもので、エージェントはあなたに頼まれたときだけ変更します。セッション開始のたびに全文を読み込みます。",
+      "userHint": "エージェントが知っているあなたのこと（役割、プロジェクト、好み）。新しく分かったことはエージェントが自分で更新し、セッション開始のたびに全文を読み込みます。",
+      "memoryHint": "記憶のインデックス。1 件 1 行で、事実、参考情報、そして仕事の進め方の教訓（あなたが直したこと、認めたやり方）が並びます。各項目は memory/ 配下の個別ファイルで、種類はファイルの先頭に書かれます。どちらもアシスタントが管理します。各セッションの開始時にインデックスの先頭 200 行を読み込み、項目は必要なときに読みます。",
+      "entryHint": "1 件の項目で、エージェントが必要なときに読みます。削除すると、索引の該当行も一緒に削除されます。",
+      "entryType": {
+        "lesson": "教訓",
+        "fact": "事実",
+        "reference": "参考"
+      },
+      "deleteEntry": "削除",
+      "confirmDelete": "削除する",
+      "confirmDeleteHint": "この項目と索引の行を削除しますか？",
+      "entryDeleted": "{name} を削除しました。",
+      "saved": "保存しました。",
+      "saveFailed": "保存できませんでした",
+      "restoreDefaults": "既定に戻す",
+      "back": "会話に戻る",
+      "viewTitle": "アシスタントの設定",
+      "readOnly": "アシスタントは別の codeg プロセスで動作しているため、ここでの設定は読み取り専用です。",
+      "setUpFirst": "先にメインアシスタントを設定してください。",
+      "nav": {
+        "identity": "アイデンティティと頭脳",
+        "persona": "ペルソナとメモリ",
+        "notify": "通知",
+        "advanced": "詳細設定",
+        "communication": "コミュニケーション",
+        "proactive": "プロアクティブと通知",
+        "automation": "依頼と自動化",
+        "about": "あなたについて",
+        "projects": "あなたのプロジェクト"
+      },
+      "pages": {
+        "communicationNote": "口調や呼び方はここにはありません。各アシスタントの SOUL.md と、メインアシスタントの USER.md に書いてください。",
+        "proactiveNote": "アシスタントごとのスイッチ（通知する・ミュート・非表示）は、それぞれの「通知」ページにあります。codeg の通知のマスタースイッチと「内容を隠す」（設定 → 通知）もアシスタントに適用されます。",
+        "byKind": "種類ごとの調整",
+        "byKindHint": "知らせの種類ごとに、どこまで割り込んでよいか。緊急はすぐ届き、通常はよいタイミングを待ち、低は「今日」にだけ入ります。",
+        "automationNote": "あなたの確認を待つものは、実行する内容をそのまま載せたカードになり、クリックすると実行されます。"
+      },
+      "prefs": {
+        "default": "（既定）",
+        "reply_length": {
+          "title": "返信の長さ",
+          "hint": "アシスタントの返信の長さ。",
+          "short": "短め",
+          "medium": "普通",
+          "long": "詳しく"
+        },
+        "cards": {
+          "title": "カードで返信",
+          "hint": "アシスタントがカード（UI-render スキル）で答えるかどうか。",
+          "prefer": "役立つときはいつでも",
+          "decisions": "あなたが決めるときだけ",
+          "never": "カードを使わない"
+        },
+        "when_unsure": {
+          "title": "意図がはっきりしないとき",
+          "hint": "あなたの代わりに動くとき、アシスタントがあなたの言葉をどう解釈するか。実行者からの質問は別扱いです。",
+          "assume": "最もありそうな解釈で進め、前提を明記する",
+          "ask": "先に確認して"
+        },
+        "chat_changes": {
+          "title": "会話で頼んだ変更",
+          "hint": "アシスタントに変更するよう伝えた設定。",
+          "apply": "すぐ変更（カードで元に戻せる）",
+          "show": "先に見せて"
+        },
+        "confirm_dispatch": {
+          "title": "依頼前に確認",
+          "hint": "確認待ちの依頼は、内容をすべて載せたカードになり、クリックすると送られます。",
+          "never": "いいえ、直接依頼する",
+          "code": "コード変更は先に確認",
+          "always": "毎回"
+        },
+        "followups": {
+          "title": "自分の依頼のフォローアップと再試行",
+          "hint": "アシスタントが依頼した作業を続けたり再試行したりするとき。",
+          "auto": "直接行う",
+          "ask": "先に確認して"
+        },
+        "messages": {
+          "title": "他のアシスタントへのメッセージ",
+          "hint": "あるアシスタントが別のアシスタントに書くとき。",
+          "auto": "直接送る",
+          "ask": "先に確認して"
+        },
+        "loop_rounds": {
+          "title": "進展のないやり取りを止める往復数",
+          "hint": "2 つのアシスタントが進展なしに往復できるラウンド数（1 ラウンド＝メッセージ 2 通）。堂々巡りはすぐに止めます。0 で無制限。"
+        },
+        "automation_level": {
+          "title": "自動化レベル",
+          "standard": "標準",
+          "ask_more": "もっと確認して",
+          "custom": "カスタム",
+          "standardHint": "すべて自動で行い、カードで知らせます。",
+          "ask_moreHint": "フォローアップと再試行、再起動で中断した作業の再試行、他のアシスタントへのメッセージ、会話で頼んだ変更、コードを変更する依頼は、まずカードであなたに確認します。セッションからの質問とプラン承認はあなたに回ります。",
+          "customHint": "下の項目のいくつかを個別に設定しています。",
+          "confirmTitle": "「{level}」に切り替えますか？",
+          "confirmBody": "変更した {count} 項目が上書きされます。",
+          "confirm": "切り替える"
+        },
+        "interrupt_retry": {
+          "title": "再起動で中断した作業",
+          "hint": "アシスタントが依頼した作業の途中で codeg が再起動したとき。",
+          "auto": "自動で再試行",
+          "ask": "先に確認して"
+        },
+        "retry_rounds": {
+          "title": "同じ作業の自動再試行の回数",
+          "hint": "同じ作業を codeg が自分で再試行する回数。超えたらあなたの判断に任せます。0 で再試行しません。"
+        },
+        "exec_questions": {
+          "title": "依頼したセッションからの質問",
+          "hint": "アシスタントが依頼したセッションが止まって質問してきたとき。シークレットを求める質問は常にあなたに届きます。",
+          "assistant": "アシスタントが代わりに答え、迷うときは私に回す",
+          "owner": "常に私に回す"
+        },
+        "exec_plans": {
+          "title": "依頼したセッションからのプラン承認",
+          "hint": "アシスタントが依頼したセッションが、先へ進む前にプランの承認を求めてきたとき。",
+          "assistant": "アシスタントが代わりに答え、迷うときは私に回す",
+          "owner": "常に私に回す"
+        },
+        "time_zone": {
+          "title": "タイムゾーン",
+          "hint": "アシスタントが読み書きする時刻（リマインダー、「明日の朝」、伝えられる現在時刻）はすべてこのタイムゾーンです。",
+          "system": "システムに従う"
+        },
+        "presence": {
+          "title": "在席と生活リズムを記録",
+          "hint": "codeg で操作している分を記録し（60 日間保持）、1 日が普段何時に始まり何時に終わるかを学びます。オフにするとそれ以上記録せず、既定の時間帯を使います。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "disturb_level": {
+          "title": "割り込みの程度",
+          "quiet": "少なめ",
+          "standard": "標準",
+          "more": "多め",
+          "custom": "カスタム",
+          "quietHint": "緊急の知らせと設定したリマインダーだけ通知し、それ以外は「今日」に入ります。1 日のまとめは頼んだときだけ出ます。",
+          "standardHint": "通常の知らせは、あなたがいて入力していないときに通知します。入力中は手が止まるまで待ち、離席中は戻るまでまとめておきます。",
+          "moreHint": "通常の知らせは入力中でも通知し、低い知らせは最大 2 時間に 1 回、1 件にまとめて通知します。",
+          "customHint": "下の項目のいくつかは、あなた好みに設定されています。",
+          "confirmTitle": "「{level}」に切り替えますか？",
+          "confirmBody": "変更した {count} 項目が上書きされます。",
+          "confirm": "切り替える"
+        },
+        "level": {
+          "urgent": "緊急",
+          "normal": "通常",
+          "low": "低"
+        },
+        "proactive": {
+          "title": "プロアクティブ機能",
+          "hint": "オフにすると、話しかけたときにだけ応答します。設定したリマインダーは時間どおりに届きます。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "urgent_via": {
+          "title": "緊急の知らせ",
+          "hint": "設定したリマインダー、アシスタントが回してきた質問、アシスタントがあなたの承認待ち、セッションが 10 分以上あなたを待っている。",
+          "system_attention": "システム通知と、Dock／タスクバーでの合図",
+          "system": "システム通知のみ",
+          "in_page": "codeg の中だけ"
+        },
+        "normal_via": {
+          "title": "通常の知らせ",
+          "hint": "依頼した作業の完了、頼んだことへの返事、あなたを待つカード。",
+          "system": "システム通知",
+          "in_page": "codeg の中だけ",
+          "today": "「今日」にだけ入れる"
+        },
+        "low_via": {
+          "title": "低い知らせ",
+          "hint": "進み具合、アシスタント同士のやりとり、頼まれたとおりに変えた設定。",
+          "today": "「今日」にだけ入れる",
+          "digest": "1 件にまとめて、最大 2 時間に 1 回通知"
+        },
+        "focus_wait": {
+          "title": "入力中",
+          "hint": "入力が止まってから何分待って、通常の知らせを 1 件にまとめて送るか。0 ならいつもどおり送ります。"
+        },
+        "quiet_hours": {
+          "title": "静かな時間帯",
+          "hint": "静かな時間帯は設定したリマインダーだけ届き、それ以外は戻ってくるまで待ちます。",
+          "auto": "いつもの時間帯の外（学習するまでは 22:00～08:00）",
+          "fixed": "固定の時間帯",
+          "none": "なし"
+        },
+        "quiet_from": {
+          "title": "静かな時間帯の開始",
+          "hint": "静かな時間帯が始まる時刻。"
+        },
+        "quiet_to": {
+          "title": "静かな時間帯の終了",
+          "hint": "静かな時間帯が終わる時刻。"
+        },
+        "quiet_lets": {
+          "title": "静かな時間帯に届くもの",
+          "hint": "その間も通知するもの。",
+          "reminders": "時間になったリマインダーだけ",
+          "urgent": "リマインダーと緊急の知らせ"
+        },
+        "morning": {
+          "title": "リマインダーの「明日の朝」",
+          "hint": "リマインダーを「明日の朝」に延ばしたとき、何時にまた届くか。",
+          "hours": "いつも一日を始める時刻",
+          "fixed": "固定の時刻"
+        },
+        "morning_at": {
+          "title": "「明日の朝」の時刻",
+          "hint": "「明日の朝」が指す時刻。"
+        },
+        "projects": {
+          "title": "あなたのプロジェクト",
+          "hint": "アシスタントが見ておくプロジェクト。",
+          "all": "すべてのプロジェクト",
+          "more": "{names} ほか {rest} 件",
+          "none": "なし"
+        },
+        "level_reminder": {
+          "title": "リマインダー",
+          "hint": "設定したリマインダーの時間になった。"
+        },
+        "level_forwarded": {
+          "title": "回されてきたもの",
+          "hint": "アシスタントが依頼したセッションからの質問や計画を、あなたに回してきた。"
+        },
+        "level_approval": {
+          "title": "アシスタントが承認待ち",
+          "hint": "あなたが承認するまで、アシスタントが先へ進めない。"
+        },
+        "level_waiting": {
+          "title": "10 分待ち",
+          "hint": "セッションや依頼した作業が 10 分間あなたの回答を待っている。"
+        },
+        "level_question": {
+          "title": "アシスタントからの質問",
+          "hint": "アシスタント自身の質問や、選択カード。"
+        },
+        "level_confirm": {
+          "title": "確認待ちのカード",
+          "hint": "先に確認すると決めたことや、先に見せるよう頼んだ変更。"
+        },
+        "level_stuck": {
+          "title": "行き詰まり",
+          "hint": "できたかわからない一歩や、進展がないまま止まったアシスタント同士のやりとり。"
+        },
+        "level_done": {
+          "title": "作業の完了",
+          "hint": "アシスタントが依頼した作業が終わった、失敗した、またはあなたの確認待ち。"
+        },
+        "level_reply": {
+          "title": "返事",
+          "hint": "アシスタントが頼んだことに答えた。"
+        },
+        "level_exchange": {
+          "title": "アシスタント同士",
+          "hint": "アシスタント同士のメッセージ。"
+        },
+        "level_changed": {
+          "title": "設定の変更",
+          "hint": "アシスタントが頼まれたとおりに設定を変えた。"
+        },
+        "level_answered": {
+          "title": "代わりに回答",
+          "hint": "依頼したセッションからの質問に、アシスタントが代わりに答えた。"
+        },
+        "auto_accept": {
+          "title": "自動検収",
+          "hint": "アシスタントが渡したコード変更の作業がレビュー待ちになると、作業に使うエージェントが読み取り専用で確認し、アシスタントが受け入れ基準に照らして判断します。オフにするとあなた自身がレビューします。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "accept_revise": {
+          "title": "確認後の差し戻し",
+          "hint": "確認のあとアシスタントが修正を求めるとき。",
+          "auto": "自動で差し戻す",
+          "ask": "先に確認して（検収カードで）"
+        },
+        "accept_rounds": {
+          "title": "検収の確認の回数",
+          "hint": "この回数を確認してもまだ差し戻すなら、あなたが判断します。0 は自動で差し戻しません。"
+        },
+        "level_acceptance": {
+          "title": "検収",
+          "hint": "出した作業が検収を通ってマージできる、マージした、またはあなたの判断が必要なとき。"
+        },
+        "level_used_up": {
+          "title": "回数を使い切っても不合格",
+          "hint": "許可された回数まで差し戻してもまだ通らないとき。"
+        },
+        "forge_comment": {
+          "title": "フォージへのコメント",
+          "hint": "アシスタントが Issue や PR にコメントするとき。",
+          "auto": "そのまま投稿",
+          "ask": "先に確認する（承認カード）"
+        },
+        "issue_close": {
+          "title": "Issue のクローズ",
+          "hint": "アシスタントがフォージで Issue をクローズするとき。",
+          "auto": "そのままクローズ",
+          "ask": "先に確認する（承認カード）"
+        },
+        "pr_merge": {
+          "title": "PR のマージ",
+          "hint": "ヘッドがマージすべきバージョン（受け入れが有効なら受け入れ済みのもの）で、チェックがすべて成功したときだけマージします。リポジトリのブランチ保護はそのまま有効です。CNB はチェックを読めずヘッドも固定できないため、常に確認します。",
+          "auto": "チェック成功時にマージ",
+          "ask": "先に確認する（承認カード）"
+        },
+        "ci_failure": {
+          "title": "見守り中の PR のチェック失敗",
+          "hint": "タスクが修正します。届けたタスクがまだレビュー待ちなら続きの作業で、そうでなければこの PR 上の新しいタスクで。受け入れ後に codeg が修正を push します。回数は下で設定した分まで。",
+          "fix": "自動で修正",
+          "ask": "先に確認する（カードで）",
+          "tell": "知らせるだけ"
+        },
+        "pr_conflict": {
+          "title": "見守り中の PR にコンフリクト",
+          "hint": "タスクがベースブランチをマージしてコンフリクトを解消します（rebase ではありません。codeg は PR に強制 push しません）。",
+          "auto": "自動で解消",
+          "ask": "先に確認する（カードで）"
+        },
+        "review_feedback": {
+          "title": "書き込み権限のある人のレビュー",
+          "hint": "リポジトリに書き込める人の変更依頼や行コメントは、原文のままタスクに渡し、1 点ずつ受け入れ・説明・理由付きの反論で対応させます。",
+          "auto": "タスクに渡す",
+          "ask": "先に確認する（カードで）"
+        },
+        "outsider_comments": {
+          "title": "書き込み権限のない人のコメント",
+          "hint": "誰が何を書いたかをアシスタントが見て判断します：タスクに渡す、あなたに知らせる、放っておく（ボットなど）。",
+          "auto": "アシスタントが判断",
+          "ask": "先に確認する（カードで）"
+        },
+        "ci_rounds": {
+          "title": "1 つの PR を自動で直す回数",
+          "hint": "チェック失敗とコンフリクトをタスクをまたいで数えます。この回数を超えたら次の失敗は緊急であなたに渡し、各回の変更内容を添えます。0 は自動で直しません。"
+        },
+        "level_forge": {
+          "title": "フォージでの操作",
+          "hint": "アシスタントのコメント、Issue のクローズ、PR のマージ。"
+        },
+        "level_pr_ready": {
+          "title": "マージできる PR",
+          "hint": "見守り中の PR のチェックがすべて通りマージできる状態、または codeg が自動でマージしたとき。"
+        },
+        "level_pr": {
+          "title": "PR のその他の動き",
+          "hint": "見守り中の PR：チェック失敗・再成功、コンフリクト、マージ、クローズ。"
+        },
+        "routine_dispatch": {
+          "title": "ルーティンの作業依頼",
+          "hint": "依頼型ルーティンが実行のたびに依頼する作業。",
+          "auto": "そのまま依頼",
+          "ask": "毎回先に確認（確認カード）"
+        },
+        "level_routine": {
+          "title": "ルーティンの報告",
+          "hint": "設定したルーティンが伝えることを見つけたとき。"
+        },
+        "level_routine_paused": {
+          "title": "ルーティンの一時停止",
+          "hint": "3 回続けて失敗したか、作業に使うエージェントが使えなくなりました。"
+        },
+        "level_proposal": {
+          "title": "提案：あなた待ちのもの",
+          "hint": "失敗して誰も対応していない、レビュー待ちが長い、PR があなたのレビュー待ち。"
+        },
+        "level_proposal_low": {
+          "title": "提案：その他",
+          "hint": "未コミットの変更、動きのない事項、遅れたブランチ、繰り返しの依頼。"
+        },
+        "rule_failed": {
+          "title": "失敗して誰も対応していない",
+          "hint": "依頼した作業やボードのタスクが失敗したまま誰も対応していないとき。依頼したアシスタントのところにカードが出ます。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "rule_review": {
+          "title": "レビュー待ちが長い",
+          "hint": "レビュー待ちのボードのタスクで、この回の検収がまだのもの。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "rule_session": {
+          "title": "セッションがずっと待っている",
+          "hint": "どのセッションでも、あなたの承認や回答を待っていて、あなたがそこにいないとき。緊急。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "rule_pr_review": {
+          "title": "PR があなたのレビュー待ち",
+          "hint": "見ているプロジェクトで。codeg が依頼を最初に見たときから数えます。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "rule_uncommitted": {
+          "title": "コミットされていない変更",
+          "hint": "プロジェクトやワークツリーに誰もコミットしていない変更があるとき。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "rule_idle": {
+          "title": "長く動きのない事項",
+          "hint": "終わっていない事項に変化がないとき。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "rule_behind": {
+          "title": "ブランチの遅れ",
+          "hint": "アシスタントが依頼したタスクのブランチがターゲットより遅れ、競合するとき。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "rule_repeat": {
+          "title": "繰り返しの依頼",
+          "hint": "30 日以内に似た依頼がこの回数になったら、ルーティン化を提案します。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "rule_suggest": {
+          "title": "アシスタントからの提案",
+          "hint": "オフにするとアシスタントは提案しません。suggest 付きの呼び出しには「今は提案を受け付けない」と伝えます。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "rule_undo": {
+          "title": "取り消しの多い変更",
+          "hint": "週の振り返りで：言われたとおりに行った変更を何度も取り消したとき、先に見せるようにするか尋ねます。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "rule_idle_bot": {
+          "title": "使われていないアシスタント",
+          "hint": "週次の振り返りで：2 週間起こされていないアシスタントを、非表示にするか削除するか尋ねます。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "rule_failed_hours": {
+          "title": "失敗カードまでの時間",
+          "hint": "失敗カードまでの時間"
+        },
+        "rule_review_hours": {
+          "title": "レビュー待ちカードまでの時間",
+          "hint": "レビュー待ちカードまでの時間"
+        },
+        "rule_session_minutes": {
+          "title": "セッションカードまでの分数",
+          "hint": "セッションカードまでの分数"
+        },
+        "rule_pr_review_days": {
+          "title": "レビュー依頼カードまでの日数",
+          "hint": "レビュー依頼カードまでの日数"
+        },
+        "rule_uncommitted_hours": {
+          "title": "未コミットカードまでの時間",
+          "hint": "未コミットカードまでの時間"
+        },
+        "rule_idle_days": {
+          "title": "動きのない事項カードまでの日数",
+          "hint": "動きのない事項カードまでの日数"
+        },
+        "rule_repeat_count": {
+          "title": "ルーティン提案までの依頼回数",
+          "hint": "ルーティン提案までの依頼回数"
+        },
+        "brief": {
+          "title": "朝のまとめ",
+          "hint": "メインアシスタントが毎日、あなたが必要なこと・前回からの動き・今日の予定をまとめ、その日最初に来たときに届けます。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "brief_time": {
+          "title": "準備する時刻",
+          "hint": "どちらでも、届くのはあなたが来たときです。",
+          "hours": "いつもの開始の 15 分前",
+          "fixed": "固定の時刻"
+        },
+        "brief_at": {
+          "title": "準備する時刻",
+          "hint": "朝のまとめを準備する時刻です。"
+        },
+        "brief_needs": {
+          "title": "あなたが必要なこと",
+          "hint": "あなたを待っているすべて：どれだけ待ったか、なぜか。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "brief_night": {
+          "title": "前回からの動き",
+          "hint": "完了・失敗した作業、動きのあった PR、ルーティンの報告、アシスタントが代わりにしたこと、昨夜の作業の結果。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "brief_bots": {
+          "title": "各アシスタント",
+          "hint": "アシスタントごとに 1 行：終わったこと、取り組み中のこと、詰まっているところ。非表示のものは載せません。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "brief_schedule": {
+          "title": "今日の予定",
+          "hint": "今日これからのリマインダーとルーティン。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "brief_loose": {
+          "title": "やりかけのこと",
+          "hint": "1 週間動きのない項目、1 日以上未コミットの変更があるワークツリー、やりかけのセッション。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "brief_yesterday": {
+          "title": "昨日のあなた",
+          "hint": "昨日使ったプロジェクトとエージェント、開いたセッションの数。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "brief_suggestions": {
+          "title": "提案の上限",
+          "hint": "朝のまとめの提案数（それぞれ理由付き）。0 なら提案しません。"
+        },
+        "wrap": {
+          "title": "1 日のまとめ",
+          "hint": "終わったこと、まだ動いていること、明日あなたが必要なこと、今夜アシスタントにできること。「今日はここまで」と言えばいつでも出ます。",
+          "auto": "いつもの終業が近づいたら",
+          "ask": "「今日はここまで」と言ったときだけ",
+          "off": "オフ"
+        },
+        "wrap_tonight": {
+          "title": "「今夜できること」",
+          "hint": "まとめで今夜できる作業をカードで提案し、承認したものだけ行います。翌朝のまとめで結果を伝えます。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "keep_awake": {
+          "title": "今夜の作業中はスリープさせない",
+          "hint": "今夜やると決めた作業が動いている間、自動でスリープしません（電源接続時のみ）。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "menubar": {
+          "title": "メニューバーに作業中のアシスタント",
+          "hint": "アシスタントが作業中は、codeg のメニューバーアイコンがその顔になり、ときどきまばたきします。横には未読のあるアシスタントの数、メニューには最近の 5 人が並びます。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "dock_badge": {
+          "title": "Dock のバッジ",
+          "hint": "codeg の Dock やタスクバーのアイコンに出る数字：未読のあるアシスタントの数です（非表示・ミュート中は除く）。",
+          "on": "未読のあるアシスタント数",
+          "off": "オフ"
+        },
+        "history_sessions": {
+          "title": "すべての会話を検索",
+          "hint": "codeg のすべての会話も検索対象になります（あなたの入力と各ターン最後の回答）。オフにすると索引から削除します。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "history_tasks": {
+          "title": "ボードのタスクを検索",
+          "hint": "ボードのタスクも検索対象になります（タイトル、依頼内容、結果）。オフにすると索引から削除します。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "reactions": {
+          "title": "カードへの反応を記録",
+          "hint": "カードの種類ごとにあなたの対応を記録します。同じ提案カードを 3 回続けて閉じると 1 段階下げ、週の振り返りでお知らせします。オフにすると下げず、下げたものも元に戻します。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "weekly_review": {
+          "title": "週の振り返り",
+          "hint": "1 週間を数字で振り返ります：依頼した作業、代わりに答えた質問、日ごと・アシスタントごとの使用量、codeg が調整したこと。",
+          "brief": "週の最初の朝のブリーフィング",
+          "wrap": "金曜日のまとめ",
+          "off": "オフ"
+        },
+        "level_brief": {
+          "title": "朝のまとめと 1 日のまとめ",
+          "hint": "朝のまとめ、または 1 日のまとめができました。"
+        },
+        "flush": {
+          "title": "整理前にメモ",
+          "hint": "codeg がアシスタントのコンテキストを整理する前に、今日ここまでの要点をログに書き留めさせます。残すべきことが失われません。最長 2 分で、その後はいつもどおり整理します。",
+          "on": "オン",
+          "off": "オフ"
+        },
+        "level_memory": {
+          "title": "記憶の更新",
+          "hint": "アシスタントが記憶・ペルソナ・ルールを変えたとき。夜の整理と手順スキルも含みます。"
+        },
+        "plans": {
+          "title": "計画",
+          "hint": "アシスタントが大きな作業をステップに分けた計画。",
+          "auto": "組み立てたらすぐ開始",
+          "ask": "先に見せて（「開始」で進める）"
+        },
+        "level_plan": {
+          "title": "計画の完了",
+          "hint": "計画のステップがすべて終わりました。"
+        },
+        "level_plan_stuck": {
+          "title": "計画の停止",
+          "hint": "ステップが失敗し、そのままになっています。"
+        },
+        "tidy": {
+          "title": "記憶の整理と手順スキル",
+          "hint": "毎晩あなたが作業を終えたあと、各アシスタントが自分の記憶・ペルソナ・ルールを整理します。一連の仕事がうまくいったら、その進め方を手順スキルにまとめます。",
+          "auto": "すぐ反映（カードから元に戻せます）",
+          "draft": "先に見せて（下書きカード、承認してから反映）",
+          "off": "しない"
+        }
+      },
+      "workdir": {
+        "title": "作業ディレクトリ",
+        "hint": "ペルソナ、ルール、メモリを保存する場所で、git で管理されます。現在：{current}。移動すると新しいセッションが始まり、元のディレクトリはそのまま残ります。",
+        "placeholder": "既定：データディレクトリ内",
+        "useDefault": "既定を使う",
+        "apply": "移動",
+        "saved": "作業ディレクトリを移動しました。"
+      },
+      "changed": {
+        "on": "オン",
+        "off": "オフ",
+        "default": "既定"
+      },
+      "brain": "頭脳",
+      "about": {
+        "followSystem": "システムに従う",
+        "followSystemZone": "システムに従う（{zone}）",
+        "zoneSearch": "タイムゾーンを検索",
+        "zoneNoMatch": "一致するタイムゾーンがありません。",
+        "zoneNow": "現地は今 {time} です。",
+        "hoursTitle": "codeg が把握している生活リズム（直近 {days} 日）",
+        "workday": "平日",
+        "restday": "週末",
+        "span": "{start}–{end}",
+        "spanOvernight": "{start}–翌日 {end}",
+        "learnedFrom": "{count} 日分から",
+        "stillLearning": "学習中 — 当面は既定値",
+        "recordOff": "記録はオフ：既定の時間帯を使います。",
+        "presentNow": "今 codeg を使っています。",
+        "lastActive": "最後の操作：{time}。",
+        "notSeen": "codeg の起動以降、操作はまだありません。",
+        "note": "今いるかどうかは引き続きその場で判断します（フォーカスのあるウィンドウで直近 2 分以内に操作）。通知のタイミングを決めるためで、記録はしません。リマインダーの「明日の朝」は普段 1 日が始まる時刻です。",
+        "history": {
+          "title": "タイムマシン",
+          "hint": "これまでの発言や作業を検索できます（アシスタント名の横の検索から。アシスタント自身も検索します）。アシスタントの会話と互いのメッセージは常に対象です。",
+          "rebuild": "索引を作り直す",
+          "rebuilt": "索引を作り直しています…",
+          "reading": "会話を読み込み中：{done}/{total} 件（{documents} 項目）。",
+          "ready": "最新です：会話 {total} 件、{documents} 項目。",
+          "readyNoSessions": "{documents} 項目。"
+        },
+        "setByYou": "あなたが設定",
+        "change": "変更",
+        "backToLearned": "学習した時間に戻す（{span}）",
+        "backToLearning": "自動学習に戻す",
+        "start": "開始",
+        "end": "終了",
+        "save": "保存",
+        "cancel": "キャンセル",
+        "seen": {
+          "title": "codeg が見ていること",
+          "hint": "codeg の会話から集計します（アシスタント自身の会話は除く）。会話の中身は読みません。気にしないよう指定したプロジェクトはアシスタントに伝えず、「あなた待ち」では後ろに並びます。",
+          "projects": "プロジェクト（直近 7 / 30 日）",
+          "noProjects": "まだプロジェクトはありません。",
+          "projectCounts": "会話 {recent} / {all} 件",
+          "mind": "再び気にする",
+          "dontMind": "気にしない",
+          "agents": "エージェント（直近 30 日）"
+        },
+        "reactions": {
+          "none": "直近 30 日のカードはありません。",
+          "off": "記録しません：自動で下げることはありません。",
+          "kind": "カード",
+          "raised": "表示",
+          "acted": "対応",
+          "dismissed": "閉じた",
+          "undone": "取り消し",
+          "wait": "所要",
+          "minutes": "{n} 分",
+          "kinds": {
+            "proposal": "確認カード",
+            "uncertain": "不確かな手順",
+            "loop": "止めたやり取り",
+            "changed": "変更",
+            "choice": "選択",
+            "reminder": "リマインダー",
+            "acceptance": "受け入れ確認",
+            "forge": "フォージ操作",
+            "pr": "プルリクエスト",
+            "routine": "ルーチン",
+            "rule": "提案",
+            "memory": "メモリ",
+            "tidy": "記憶の整理",
+            "skill": "手順スキル"
+          }
+        },
+        "clear": {
+          "title": "学習内容を消去",
+          "hint": "記録した在席時間と自動で下げたカードを忘れ、プロジェクト・エージェント・カードへの反応は今から数え直します。あなたが設定したものは残ります。",
+          "clearedAt": "前回の消去：{when}。",
+          "button": "消去…",
+          "confirmTitle": "codeg の学習内容を消去しますか？",
+          "confirmBody": "作業時間は codeg が学び直すまで既定値に戻り（あなたが設定した時間は残ります）、自動で下げた提案カードは元に戻ります。元に戻せません。",
+          "cancel": "キャンセル",
+          "confirm": "消去"
+        }
+      },
+      "notifyPage": {
+        "notify": "通知する",
+        "notifyHint": "何かを終えたときや、あなたを待っているときに通知します",
+        "muted": "ミュート",
+        "mutedHint": "システム通知を出しません。発言は未読として数えます。",
+        "hidden": "非表示",
+        "hiddenHint": "これまでどおり動きますが、通知せず、名簿にも表示されず、バッジにも数えません。名簿の下の「非表示 N 人」から見られます。"
+      },
+      "grade": {
+        "firstPass": "一発合格 {rate}%（{pass}/{settled}）",
+        "average": "平均 {time}",
+        "minutes": "{n} 分",
+        "hours": "{h} 時間 {m} 分",
+        "apart": "エージェントと方法別",
+        "byBot": "アシスタント・方法別",
+        "someone": "以前の依頼",
+        "unjudged": "{count} 件依頼、まだ完了なし"
+      },
+      "processSkillHint": "アシスタントが書き留めた仕事の進め方です。頼まれたら、このとおりに進めます。ここで変えた内容は保存すると反映され、オフにすると読み込まれません。",
+      "skillOff": "オフ",
+      "skillTurnOn": "オンにする",
+      "skillTurnOff": "オフにする",
+      "skillTurnedOn": "{name} をオンにしました",
+      "skillTurnedOff": "{name} をオフにしました",
+      "deleteSkill": "スキルを削除",
+      "confirmDeleteSkillHint": "この手順スキルを削除しますか？作業ディレクトリからフォルダーごと削除されます。",
+      "skillDeleted": "{name} を削除しました",
+      "personaUnwritten": "ペルソナはまだ書かれていません。自己紹介のとき、あなたが仕事を任せたとき、毎晩の整理のときに自分で書き足します。ここで直接書くこともできます。",
+      "projects": {
+        "about": "アシスタントはこれらのプロジェクトでレビュー待ちの PR を見ておき、最初に手伝えることもここから探します。",
+        "scope": "見るプロジェクト",
+        "all": "すべてのプロジェクト",
+        "allHint": "あとで追加したものも含みます。",
+        "only": "選んだプロジェクトだけ",
+        "onlyHint": "新しいプロジェクトは自動では入りません。見るならここでチェックします。",
+        "loading": "プロジェクトを読み込み中…",
+        "empty": "codeg にはまだプロジェクトがありません。",
+        "openFolder": "プロジェクトフォルダーを開く",
+        "onForge": "{forge} 上",
+        "noAccount": "{forge} 上、アカウント未接続",
+        "noForge": "コードホスティングなし",
+        "connectAccount": "アカウントを接続",
+        "note": "閉じたプロジェクトは見ません。開き直せば自動で戻ります。"
+      },
+      "workTitle": "作業に使うエージェント",
+      "workHint": "任せた作業（コードを書く、コマンドを実行する）はこのエージェントで行います。",
+      "workSame": "頭脳と同じ",
+      "workOther": "別に選ぶ",
+      "workSameHint": "頭脳のエージェントとすべてのオプションをそのままコピーします。その後はそれぞれ独立します。",
+      "workUnavailable": "{agent} は使えません（未インストールか無効）。別のものを選んでください。",
+      "instructionsTitle": "作業時の常駐指示",
+      "instructionsHint": "作業セッションを始めるたび（仕事を渡すとき、会話で @ されたとき）に送られます。頭脳は読みません。",
+      "instructionsPlaceholder": "作業時の決まりごと、確認すること、避けること…",
+      "instructionsTooLong": "常駐指示は最大 {max} 文字です。",
+      "noBrainYet": "まだ頭脳がありません。メインアシスタントを設定すると、メインの頭脳のコピーを受け取ります。"
+    },
+    "statusWord": {
+      "idle": "待機中",
+      "replying": "返信中…",
+      "compacting": "コンテキストを整理中…",
+      "waiting": "あなたの確認待ち",
+      "elsewhere": "別のプロセスで実行中（読み取り専用）",
+      "open": "状態を表示",
+      "noting": "要点をメモ中…"
+    },
+    "menu": {
+      "more": "その他",
+      "showPanel": "サイドパネルを表示",
+      "hidePanel": "サイドパネルを隠す",
+      "settings": "パーソナルエージェントの設定",
+      "viewSession": "下層のセッションを表示",
+      "compact": "コンテキストを圧縮",
+      "compactHint": "セッションのコンテキストを今すぐ圧縮します",
+      "stopCompaction": "整理を停止",
+      "stopReply": "返信を停止",
+      "newSession": "新しいセッションを開始…",
+      "stopAll": "すべて停止",
+      "stopAllHint": "返信、送り出した作業、まだ誰も着手していないメッセージを止めます",
+      "stoppedAll": "このアシスタントの作業をすべて止めました"
+    },
+    "newSession": {
+      "title": "新しいセッションを開始しますか？",
+      "description": "次のメッセージから新しい下層セッションで続けます。人格・記憶・進行中の事項は引き継がれ、ここでの会話はそのまま残ります。",
+      "cancel": "キャンセル",
+      "confirm": "新しいセッションを開始",
+      "queued": "次のメッセージから新しいセッションで続けます。"
+    },
+    "time": {
+      "yesterday": "昨日 {time}"
+    },
+    "actions": {
+      "quote": "引用",
+      "copy": "コピー",
+      "copySelection": "選択部分をコピー",
+      "copied": "コピーしました",
+      "copyFailed": "コピーできませんでした",
+      "stop": "返信を停止",
+      "timeTook": "{time} · 所要 {took}"
+    },
+    "owner": {
+      "unread": "未読",
+      "unfinished": "未完了",
+      "resend": "再送信",
+      "resent": "再送信済み",
+      "merged": "進行中の返信に取り込まれました",
+      "received": "受け取り済み",
+      "mentioned": "「{keyword}」と言いました — リマインダー：{text}"
+    },
+    "quote": {
+      "you": "あなた",
+      "dispatch": "依頼：{title}",
+      "attachment": "[添付]",
+      "noText": "（テキストなし）",
+      "unavailable": "元のメッセージは利用できません",
+      "jump": "元のメッセージへ移動",
+      "dismiss": "引用を外す",
+      "preview": "元のメッセージ",
+      "previewHint": "引用されたメッセージ。古すぎるためここには読み込まれていません。"
+    },
+    "step": {
+      "awaiting": "確認待ち：{title}",
+      "anAction": "操作",
+      "thinking": "考え中…",
+      "compacting": "コンテキストを整理中…",
+      "plan": "計画を更新中",
+      "planNamed": "計画：{title}",
+      "own": {
+        "dispatch": "作業を依頼中",
+        "dispatch_followup": "作業をフォローアップ中",
+        "items": "進行中の事項を整理中",
+        "timeline_read": "会話をさかのぼって確認中",
+        "project_list": "プロジェクトを確認中"
+      },
+      "kind": {
+        "read": "ファイルを読み込み中",
+        "edit": "ファイルを編集中",
+        "delete": "ファイルを削除中",
+        "move": "ファイルを移動中",
+        "search": "検索中",
+        "execute": "コマンドを実行中",
+        "think": "考え中…",
+        "fetch": "Web ページを開いています",
+        "plan": "計画を更新中",
+        "compact": "コンテキストを整理中…",
+        "question": "あなたに質問中",
+        "other": "ツールを使用中"
+      }
+    },
+    "reply": {
+      "starting": "開始中",
+      "noteDispatched": "{count} 件の作業を依頼しました",
+      "noteContinued": "{count} 件の作業をフォローアップしました",
+      "noteNothing": "処理しました（テキストでの返信はありません）",
+      "answeredPermission": "あなたの選択：{option}",
+      "answeredQuestion": "あなたの回答：{answer}",
+      "answeredSkipped": "質問をスキップしました",
+      "answeredPlan": {
+        "approve": "計画を承認しました",
+        "request_changes": "計画の修正を依頼しました",
+        "abandon": "計画を取りやめました"
+      },
+      "stopped": "停止しました",
+      "errorMidway": "返信の途中でエラーが発生しました：{error}",
+      "interrupted": "この返信は完了しませんでした：{reason}",
+      "truncated": "返信が長さの上限に達し、途中で切れました",
+      "preempted": "あなたのメッセージに道を譲って止まりました",
+      "resend": "{count, plural, other {# 件のメッセージを再送信}}",
+      "why": {
+        "connection": "接続が切れました",
+        "overflow": "コンテキストがいっぱいになりました",
+        "rejected": "エージェントが拒否しました",
+        "error": "エラーが発生しました",
+        "restart": "codeg が再起動しました",
+        "unknown": "予期せず停止しました"
+      },
+      "requestInputs": "このターンは複数の件を扱っていました：{list}"
+    },
+    "dispatchCard": {
+      "continue": "続き：{title}",
+      "notSent": "送信されませんでした",
+      "more": "ほか {count} 件",
+      "doneWhen": "完了条件",
+      "check": "検収の確認",
+      "checkRound": "検収の確認 · {round} 回目"
+    },
+    "event": {
+      "acceptanceEvidence": "検収の根拠",
+      "someone": "アシスタント",
+      "replacedBy": "「{title}」が引き継ぎました",
+      "more": "すべて表示",
+      "less": "折りたたむ",
+      "source": "元のメッセージ",
+      "showText": "原文を表示",
+      "hideText": "原文を隠す",
+      "makeRoutine": "ルーティンにする…",
+      "note": {
+        "boot": "codeg が再起動しました",
+        "lost": "セッションの接続が切れました",
+        "gone": "ボードのタスクが削除されました"
+      },
+      "retry": {
+        "pending": "自動で再試行中（{max} 回中 {attempt} 回目）…",
+        "retried": "自動で再試行しました（{max} 回中 {attempt} 回目）",
+        "failed": "自動再試行に失敗しました：{error}",
+        "asked": "再試行するかあなたに確認しました",
+        "exhausted": "すでに {max} 回再試行しました。判断はあなたに任せます"
+      }
+    },
+    "overview": {
+      "editBrain": "実行するエージェントを変更",
+      "lastCompaction": "前回の整理：{when}、{outcome}{range}",
+      "runLog": "実行ログ",
+      "details": "詳細",
+      "command": "圧縮コマンド"
+    },
+    "runLog": {
+      "empty": "まだありません。",
+      "newSession": "{agent} で新しいセッションを開始（{reason}）",
+      "pendingSwitch": "次のメッセージから新しいセッション（{reason}）",
+      "reconnected": "同じセッションに再接続しました",
+      "optionsChanged": "オプションが変わりました",
+      "range": " · {before}% → {after}%",
+      "by": {
+        "auto": "（自動）",
+        "owner": "（あなた）",
+        "agent": "（エージェント自身）"
+      },
+      "compaction": {
+        "ok": "コンテキストを整理しました{who}{range}",
+        "failed": "コンテキストの整理に失敗しました{who}{range}",
+        "canceled": "コンテキストの整理を停止しました{who}{range}"
+      },
+      "compactionPaused": "2 回続けて効果がなかったため、このセッションの自動整理を一時停止しました",
+      "overflowNewSession": "整理後もコンテキストがあふれたため、新しいセッションを開始しました",
+      "overflowCompact": "コンテキストがあふれたため、自動で整理しました",
+      "turnStopped": "返信が停止されました",
+      "turnFailed": "返信に失敗しました：{error}",
+      "turnInterrupted": "返信が完了しませんでした",
+      "turnPreempted": "返信があなたのメッセージに道を譲りました",
+      "workdirChanged": "作業ディレクトリを {path} に移しました",
+      "notesFirst": "（先に要点をメモ）"
+    },
+    "matters": {
+      "noneOpen": "現在進行中のものはありません。",
+      "origin": "元のメッセージへ移動"
+    },
+    "notice": {
+      "open": "提案 · あなたの確認待ち",
+      "acted": "提案どおりに実行しました",
+      "dismissed": "この提案は見送りました",
+      "acting": "実行中…",
+      "unknown": "実行されたか不明",
+      "unknownHint": "実行の途中で中断されたため、反映されたかどうか codeg には分かりません。自動でやり直してはいません。",
+      "followupOf": "「{title}」を続ける",
+      "intent": {
+        "revise": "差し戻して修正",
+        "continue": "続けて進める",
+        "question": "質問する",
+        "verify": "セルフチェック"
+      },
+      "accept": "このとおりに実行",
+      "dismiss": "やめておく",
+      "again": "もう一度実行",
+      "failed": "実行できませんでした：{error}",
+      "uncertain": {
+        "open": "このステップが届いたか不明です",
+        "hint": "このフォローアップの送信中に中断されたため、実行者が受け取ったかどうか codeg には分かりません。再送はしていません。",
+        "look": "確認する",
+        "again": "もう一度送る",
+        "dismiss": "そのままにする",
+        "acting": "再送中…",
+        "acted": "再送しました",
+        "dismissed": "そのままにしました",
+        "resolved": "届いていました"
+      },
+      "loop": {
+        "open": "やり取りを停止 · 対応待ち",
+        "noProgress": "{a} と {b} が進展のないまま {count} 回やり取りしたため、codeg が止めました。",
+        "cycle": "{a} が {b} に送りましたが、{b} 自身もこのやり取りで返信を待っていました。堂々巡りのため codeg が止めました。",
+        "refused": "送られなかった内容：「{text}」",
+        "look": "やり取りを見る",
+        "goOn": "続けさせる",
+        "mine": "自分で対応する",
+        "continued": "続けさせました",
+        "takenOver": "あなたに任されました"
+      },
+      "stopped": {
+        "this": "停止しました（始めたことも含めて）",
+        "all": "すべて停止しました",
+        "work": "{count} 件の作業を停止",
+        "messages": "{count} 件のメッセージを取り消し",
+        "messageTo": "{name} 宛て：{text}",
+        "notStopped": "相手がすでに対応中のため停止していません：",
+        "onIt": "{name} が「{text}」に対応中",
+        "stopToo": "{name} の分も止める",
+        "alsoStopped": "こちらも停止"
+      },
+      "confirm": {
+        "open": "あなたの確認待ち",
+        "acted": "確認済み・送信しました",
+        "dismissed": "送信しませんでした",
+        "accept": "送信する",
+        "dismiss": "やめる",
+        "messageTo": "{name} へのメッセージ"
+      },
+      "changed": {
+        "applied": "指示どおりに変更しました",
+        "accepted": "変更しました",
+        "undone": "元に戻しました",
+        "dismissed": "変更しませんでした",
+        "suggested": "変更の提案",
+        "show": "指示どおりに変更予定 · あなたの確認待ち",
+        "line": "{name} が指示どおりに変更しました",
+        "quote": "あなたの発言：「{quote}」",
+        "reason": "理由：{reason}",
+        "kept": "その後また変更されたため、そのままにした項目：{items}",
+        "accept": "変更する",
+        "dismiss": "やめておく",
+        "undo": "元に戻す",
+        "seeSettings": "設定で見る",
+        "team": {
+          "of": "{name} · {field}",
+          "botField": {
+            "name": "名前",
+            "avatar": "顔",
+            "brain": "ブレイン",
+            "notify": "通知",
+            "muted": "ミュート",
+            "hidden": "非表示",
+            "persona": "ペルソナ",
+            "work_agent": "作業に使うエージェント"
+          },
+          "avatarOther": "カスタム画像",
+          "empty": "（空）",
+          "nothingSet": "未設定",
+          "personaNow": "現在",
+          "personaNew": "変更後"
+        },
+        "uncheckedQuote": "メインアシスタントはあなたの発言だとしています：「{quote}」。ただし今回あなたはこう入力していません"
+      },
+      "retryOf": "「{title}」を再試行",
+      "tonight": {
+        "open": "今夜できること",
+        "acted": "今夜やります",
+        "dismissed": "今夜はしない",
+        "accept": "今夜やる",
+        "dismiss": "やめておく",
+        "awake": "この作業が終わるまでコンピューターはスリープしません。"
+      }
+    },
+    "exchange": {
+      "sentTo": "<peer></peer> にメッセージを送信",
+      "from": "<peer></peer> からのメッセージ",
+      "exchanged": "{names} と {count} 件のやり取り",
+      "state": {
+        "stopped": "取り消し済み",
+        "looped": "堂々巡りで停止",
+        "canceled": "キャンセル済み"
+      },
+      "sheetTitle": "{a} ⇄ {b}",
+      "openPeer": "{name}の会話を開く",
+      "sheetHint": "このやり取りで 2 つのアシスタントが書いたすべてのメッセージ。",
+      "unavailable": "やり取りを読み込めませんでした：{error}"
+    },
+    "mirror": {
+      "question": "{name} からの質問",
+      "permission": "{name} が許可を求めています",
+      "answered": "回答済み",
+      "skipped": "スキップ済み",
+      "withdrawn": "不要になりました",
+      "resolved": "解決済み"
+    },
+    "bots": {
+      "new": "新しいアシスタント",
+      "copyName": "{name}（コピー）",
+      "copied": "{name} として複製しました",
+      "copy": "複製",
+      "deleteAction": "削除",
+      "face": {
+        "shape": "形",
+        "color": "色",
+        "tooLarge": "画像が大きすぎます。",
+        "unreadable": "このファイルは画像として読み込めませんでした。",
+        "shapes": {
+          "ring": "リング",
+          "terminal": "ターミナル",
+          "braces": "波かっこ",
+          "shield": "盾",
+          "chip": "チップ",
+          "bug": "虫",
+          "cursor": "マウスポインター",
+          "gear": "歯車",
+          "file": "コードファイル",
+          "magnifier": "虫めがね",
+          "package": "小包",
+          "rocket": "ロケット",
+          "mug": "マグカップ"
+        },
+        "colors": {
+          "black": "黒",
+          "brown": "茶",
+          "red": "赤",
+          "orange": "オレンジ",
+          "yellow": "黄",
+          "green": "緑",
+          "teal": "ティール",
+          "blue": "青",
+          "purple": "紫",
+          "magenta": "マゼンタ",
+          "gray": "グレー"
+        },
+        "edit": "アバターを編集",
+        "reset": "リセット",
+        "pages": {
+          "bot": "Bot",
+          "make": "テキスト",
+          "upload": "アップロード"
+        },
+        "dropHint": "画像をドラッグまたは貼り付け",
+        "or": "または",
+        "pickFile": "ローカルの画像を選択",
+        "dragHint": "ドラッグして位置を調整",
+        "zoom": "拡大縮小",
+        "zoomIn": "拡大",
+        "zoomOut": "縮小",
+        "restart": "やり直す",
+        "setAvatar": "アバターに設定",
+        "monogram": "名前の頭文字",
+        "typeOne": "文字か絵文字を入力",
+        "useIt": "使う"
+      },
+      "create": {
+        "title": "新しいアシスタント",
+        "description": "名前と、どんなアシスタントかを数行。頭脳はメインアシスタントと同じです。",
+        "name": "名前",
+        "namePlaceholder": "例：コードレビュー",
+        "cancel": "キャンセル",
+        "create": "作成",
+        "persona": "ペルソナ",
+        "personaPlaceholder": "例：コードの変更をレビューします。正しいか、テストは十分かを見ます。",
+        "personaHint": "1〜2行で：どんなアシスタントで、どんな仕事を任せるか。空欄でも構いません。まず自己紹介し、その後あなたの指示とこなした仕事から自分で書き足します。",
+        "workSameHint": "頭脳はメインと同じ。作業は頭脳をコピーし、オプションもすべて同じで、その後は独立します。どちらもそのページで変更できます。"
+      },
+      "roster": {
+        "title": "アシスタント",
+        "add": "新しいアシスタント",
+        "pinned": "ピン留め",
+        "others": "その他",
+        "muted": "ミュート中",
+        "handWork": "手持ちの作業",
+        "awaiting": "返信待ち",
+        "nothing": "手持ちの作業はありません",
+        "groupName": "グループ名",
+        "newGroupTitle": "新しいグループ",
+        "newGroupSave": "移動",
+        "collapse": "{name} を折りたたむ",
+        "expand": "{name} を展開",
+        "menu": {
+          "pin": "ピン留め",
+          "unpin": "ピン留めを解除",
+          "moveTo": "グループに移動",
+          "newGroup": "新しいグループ…",
+          "noGroup": "グループなし",
+          "hide": "非表示にする",
+          "show": "表示する",
+          "mute": "ミュート",
+          "unmute": "ミュートを解除",
+          "markUnread": "未読にする",
+          "markRead": "既読にする",
+          "notifyOn": "通知する",
+          "copy": "複製…",
+          "stopAll": "すべて停止",
+          "delete": "削除…",
+          "details": "詳細を表示"
+        },
+        "mergeable": "#{id} マージできます：{title}",
+        "prReady": "マージできます：{text}",
+        "prFailed": "#{id} チェック失敗：{title}",
+        "prStuck": "#{id} コンフリクトあり：{title}",
+        "prChecks": "#{id} チェック待ち {passed}/{total}",
+        "resize": "アシスタント一覧の幅を変更",
+        "dropNewGroup": "ここにドロップして新しいグループに",
+        "switch": "アシスタントを切り替え",
+        "addShort": "新しいアシスタント",
+        "opening": "{name} を開いています…",
+        "noBrainLine": "メインアシスタントを設定すると会話できます",
+        "hiddenMark": "非表示",
+        "setUpPrimary": "メインアシスタントを設定",
+        "filter": "フィルター",
+        "showHidden": "非表示のアシスタントを表示（{count}）"
+      },
+      "choice": {
+        "other": "その他",
+        "otherPlaceholder": "自由に入力…",
+        "send": "送信",
+        "answered": "あなたの選択：{choice}",
+        "answeredOwn": "あなたの入力：{text}",
+        "noProjects": "codeg で開いているプロジェクトはありません。",
+        "from": {
+          "given": "指示どおり",
+          "other_config": "別のアシスタントの作業設定から",
+          "agent": "エージェントの既定値"
+        },
+        "progress": "{at} / {total}",
+        "several": "複数選択可",
+        "back": "前へ",
+        "next": "次へ",
+        "submit": "送信",
+        "skip": "スキップ",
+        "noLongerAsked": "この質問はもう回答を待っていません",
+        "otherWrote": "その他：{text}"
+      },
+      "changed": {
+        "applied": "アシスタントを作成しました",
+        "show": "このアシスタントを作りますか？（この種の変更は先に見せるよう指定されています）",
+        "suggested": "提案：新しいアシスタントを作る",
+        "dismissed": "作成しませんでした",
+        "undone": "元に戻しました",
+        "open": "開く",
+        "undoOne": "元に戻す",
+        "undoneOne": "元に戻しました",
+        "quote": "あなたの発言：「{quote}」",
+        "reason": "理由：{reason}",
+        "accept": "作成する",
+        "dismiss": "やめておく",
+        "undo": "元に戻す",
+        "undoAll": "すべて元に戻す",
+        "uncheckedQuote": "メインアシスタントはあなたの発言だとしています：「{quote}」。ただし今回あなたはこう入力していません",
+        "persona": "ペルソナ",
+        "workFilled": "作業は {agent}、オプションを {count} 件補完",
+        "workOn": "作業は {agent}"
+      },
+      "delete": {
+        "title": "{name} を削除しますか？",
+        "description": "メモリと会話も一緒に削除されます。メインアシスタントは削除できません。",
+        "running": "依頼した作業 {count} 件がまだ実行中です：",
+        "handOver": "メインアシスタントに引き継いで追ってもらう（推奨）",
+        "stop": "停止する",
+        "messages": "このアシスタント宛てのメッセージ {count} 件が未返信です。送信元に戻されます。",
+        "listJoiner": "、",
+        "dropWorkdir": "作業ディレクトリも削除する",
+        "workdirCustom": "このディレクトリはあなたが選んだものなので、codeg は手を付けません。",
+        "cancel": "キャンセル",
+        "confirm": "削除",
+        "plans": "計画 {count} 件が止まります：{titles}。",
+        "planSteps": "他の計画の {count} ステップがこのアシスタントに割り当てられています：{steps}。その番が来たら、各計画のアシスタントが別の担当を選びます。"
+      },
+      "edit": {
+        "name": "名前"
+      },
+      "personaUnwritten": "ペルソナはまだ書かれていません"
+    },
+    "face": {
+      "idle": "待機中",
+      "thinking": "考え中",
+      "working": "作業中",
+      "waiting": "あなた待ち",
+      "stuck": "しばらくあなた待ち",
+      "done": "完了したばかり",
+      "failed": "問題が発生",
+      "sleeping": "おやすみ中",
+      "unread": "未読あり",
+      "stale": "今は状態を取得できません",
+      "label": "{name}、{state}",
+      "labelUnread": "{name}、{state}、未読あり"
+    },
+    "activity": {
+      "think0": "じっくり考え中",
+      "think1": "あれこれ思案中",
+      "think2": "進め方を検討中",
+      "work0": "進行中",
+      "work1": "作業中",
+      "work2": "処理中",
+      "work3": "少しずつ前進中",
+      "work4": "仕上げ中",
+      "reply": "返信を作成中",
+      "read": "{target} を読み込み中",
+      "readSome": "ファイルを読み込み中",
+      "edit": "{target} を編集中",
+      "editSome": "ファイルを編集中",
+      "search": "「{target}」を検索中",
+      "searchSome": "検索中",
+      "fetch": "下調べ中",
+      "execute": "コマンドをいくつか実行中",
+      "test": "テストを実行中",
+      "wait": "結果を待機中",
+      "commit": "コミット中",
+      "plan": "計画を作成中",
+      "compact": "コンテキストを整理中",
+      "dispatch": "{target} に依頼中",
+      "dispatchSome": "作業を依頼中",
+      "followup": "#{id} をフォローアップ中",
+      "followupSome": "フォローアップ中",
+      "message": "{target} に質問中",
+      "messageSome": "ほかのアシスタントに質問中",
+      "awaitingReply": "{name} の返信待ち",
+      "needsAnswer": "あなたの回答が必要",
+      "needsApproval": "あなたの承認が必要",
+      "workPrefix": "#{id} {title}：{activity}",
+      "notes": "整理の前に今日の要点をメモ"
+    },
+    "did": {
+      "edit": "{target} を編集しました +{added} −{removed}",
+      "editPlain": "{target} を編集しました",
+      "editSome": "ファイルを編集しました",
+      "test": "テストを実行しました（{passed} 件成功）",
+      "testFailed": "テストを実行しました（{passed} 件成功、{failed} 件失敗）",
+      "testExit": "テストを実行しました（終了コード {code}）",
+      "testBad": "テストを実行しましたが、通りませんでした",
+      "testPlain": "テストを実行しました",
+      "execute": "{target} を実行しました",
+      "executeExit": "{target} を実行しました（終了コード {code}）",
+      "executeBad": "{target} を実行しましたが、失敗しました",
+      "executeSome": "コマンドを実行しました",
+      "executeSomeBad": "コマンドを実行しましたが、失敗しました",
+      "read": "{target} を読みました",
+      "readSome": "ファイルを読みました",
+      "search": "「{target}」を検索しました",
+      "searchHits": "「{target}」を検索しました（{hits} 件）",
+      "searchSome": "検索しました",
+      "commit": "コミットしました：{target}",
+      "commitPlain": "コミットしました",
+      "dispatch": "{target} に依頼しました：#{id}",
+      "dispatchPlain": "#{id} を依頼しました",
+      "dispatchSome": "作業を依頼しました",
+      "followup": "#{id} をフォローアップしました",
+      "followupSome": "フォローアップしました",
+      "message": "{target} にメッセージを送りました",
+      "messageSome": "メッセージを送りました",
+      "think": "少し考えました",
+      "reply": "返信を書きました",
+      "plan": "計画を立てました",
+      "compact": "コンテキストを整理しました",
+      "fetch": "下調べしました",
+      "question": "あなたに質問しました：{target}",
+      "questionSome": "あなたに質問しました",
+      "other": "{target}",
+      "otherPlain": "1 ステップ進めました",
+      "notes": "今日の要点をメモした"
+    },
+    "needs": {
+      "answer": "あなたの回答が必要：{text}",
+      "approval": "あなたの承認が必要：{text}",
+      "you": "あなたの対応が必要：{text}",
+      "answerPlain": "あなたの回答が必要",
+      "approvalPlain": "あなたの承認が必要",
+      "youPlain": "あなたの対応が必要",
+      "acceptance": "検収の判断が必要：{text}",
+      "acceptancePlain": "検収の判断が必要"
+    },
+    "statusLine": {
+      "steps": "このターンのステップ",
+      "loading": "ステップを読み込み中…",
+      "empty": "まだステップはありません",
+      "fold": "ステップを折りたたむ",
+      "openWork": "この作業を開く"
+    },
+    "sending": {
+      "waking": "{name} を起こしています…",
+      "afterTurn": "このターンの終了を待っています",
+      "yielding": "道を譲っています"
+    },
+    "pills": {
+      "attention": "{count} 件があなたの対応待ち",
+      "dismissAttention": "新しい対応待ちが来るまで隠す",
+      "newMessages": "新着メッセージ",
+      "toBottom": "最新へ移動"
+    },
+    "detail": {
+      "title": "詳細",
+      "close": "詳細を隠す",
+      "tabs": {
+        "activity": "アクティビティ",
+        "output": "成果物",
+        "workspace": "ワークスペース",
+        "stats": "統計"
+      },
+      "sections": {
+        "today": "今日",
+        "matters": "事項",
+        "data": "データ",
+        "routines": "ルーティン"
+      },
+      "notify": "通知する",
+      "notifyHint": "何かを終えたときや、あなたを待っているときに通知します",
+      "item": {
+        "done": "完了",
+        "later": "後で",
+        "drop": "やめる",
+        "in15m": "15 分後",
+        "in1h": "1 時間後",
+        "tomorrow": "明日の午前",
+        "untimed": "時間を決めない",
+        "act": "時間になったら実行"
+      },
+      "output": {
+        "allTitle": "すべての成果物",
+        "clear": "すべて表示",
+        "tasksSummary": "直近のタスク {count} 件",
+        "outcomeDone": "完了",
+        "outcomeFailed": "失敗",
+        "outcomeClosed": "クローズ",
+        "outcomeOpen": "対応待ち",
+        "files": "{count} 個のファイル",
+        "moreFiles": "ほか {count} 個のファイル",
+        "all": "すべて",
+        "tasks": "タスク",
+        "reports": "レポート",
+        "docs": "ドキュメント",
+        "empty": "まだ成果物はありません",
+        "doc": "ドキュメント"
+      },
+      "workspace": {
+        "empty": "今は実行中のものはありません",
+        "open": "開く",
+        "emptyHint": "任せた作業の実行中は、そのセッションがここにライブ表示されます。",
+        "whose": "{name} のワークスペース"
+      },
+      "notifyOn": "オン",
+      "notifyOff": "オフ"
+    },
+    "ladder": {
+      "working": "作業中",
+      "waiting_you": "あなたの対応待ち",
+      "mergeable": "マージ可能",
+      "merging": "マージ中",
+      "pr_open": "PR 作成済み",
+      "merged": "マージ済み",
+      "done": "完了",
+      "failed": "失敗",
+      "paused": "保留",
+      "canceled": "キャンセル",
+      "handed_over": "引き継ぎ済み",
+      "checking": "検収中",
+      "waiting_checks": "チェック待ち",
+      "waiting_checks_n": "チェック {passed}/{total}",
+      "checks_failed": "チェック失敗",
+      "stuck": "停滞",
+      "pr_closed": "PR クローズ"
+    },
+    "taskCard": {
+      "diff": "<add>+{added}</add> <del>−{removed}</del>、{files} ファイル",
+      "diffOnly": "<add>+{added}</add> <del>−{removed}</del>",
+      "viewPr": "PR を表示",
+      "openSession": "会話を開く",
+      "stop": "停止",
+      "prOpened": "PR 作成済み",
+      "prNotTracked": "codeg は見守っていません",
+      "pastStopping": "完了済みかマージ中のため停止できません",
+      "prChecks": "チェック {passed}/{total} 成功",
+      "prChecksFailed": "{n} 件失敗",
+      "prChecksRunning": "{n} 件実行中",
+      "prChecksUnknown": "チェック状態は不明",
+      "prNoChecks": "チェックなし",
+      "prWaitsOnForge": "プラットフォームが保留中（{state}）",
+      "prNoConflict": "コンフリクトなし",
+      "prHead": "ヘッド {head}",
+      "prNotWatched": "見守りを終了",
+      "prStale": "PR の状態は古い可能性があります（最終確認 {time}）"
+    },
+    "ask": {
+      "heading": {
+        "question": "作業中の質問です",
+        "plan": "作業がプランの承認を求めています"
+      },
+      "someone": "実行者",
+      "mirror": "{name} があなたの代わりに引き受けた作業から",
+      "state": {
+        "asking": "{name} があなたの代わりに答えています…",
+        "forwarded": "あなたの回答待ち",
+        "submitting": "送信中…",
+        "withdrawn": "取り下げられました（もう回答を待っていません）"
+      },
+      "why": {
+        "assistant": "{name} が判断しきれず、あなたに回しました",
+        "settings": "設定でこの種の質問はあなたに回ります",
+        "secret": "シークレットを求める質問です",
+        "no_brain": "答えられるアシスタントが設定されていません",
+        "turn_ended": "{name} は答えずにターンを終えました",
+        "turn_failed": "{name} のターンが答える前に失敗しました",
+        "timeout": "{name} から 10 分間回答がありません",
+        "handed_over": "あなたがこの作業を引き継ぎました"
+      },
+      "suggestion": "{name} の見立て：{suggestion}",
+      "reason": "根拠：{reason}",
+      "openSession": "セッションを開く",
+      "answer": {
+        "skipped": "スキップ",
+        "empty": "回答なし",
+        "approved": "プランを承認",
+        "revised": "プランの修正を依頼",
+        "revisedWith": "修正を依頼：{feedback}",
+        "abandoned": "プランを破棄",
+        "approvedAs": "プランを承認（{option}）",
+        "sentBackAs": "プランを差し戻し（{option}）"
+      },
+      "by": {
+        "assistant": "{name} が代わりに回答：{answer}",
+        "ownerSession": "あなたがセッションで回答：{answer}",
+        "ownerPage": "あなたがアシスタントのページで回答：{answer}",
+        "owner": "あなたが回答：{answer}",
+        "channel": "チャットチャネルから回答：{answer}",
+        "policy": "実行のポリシーが回答：{answer}",
+        "someone": "回答済み：{answer}"
+      },
+      "toast": {
+        "already": "すでに回答済みです。採用された回答はカードに表示されます",
+        "withdrawn": "もう回答を待っていません"
+      },
+      "answeredForYou": "代わりに {count} 回回答"
+    },
+    "card": {
+      "stripped": "クリックなしで動くアクションを取り除きました",
+      "cancel": "キャンセル",
+      "confirm": "確認",
+      "notFound": "見つかりません",
+      "replyAssistant": "アシスタントに返信",
+      "reply": {
+        "title": "このメッセージを送信しますか？",
+        "description": "カードの「{label}」は次の内容をあなたのメッセージとして送ります：",
+        "send": "送信",
+        "toComposer": "入力欄に入れる"
+      },
+      "drop": {
+        "title": "この件を取りやめますか？",
+        "description": "「{summary}」は案件から外れます。",
+        "confirm": "取りやめる"
+      }
+    },
+    "due": {
+      "tomorrow": "明日 {time}",
+      "yesterday": "昨日 {time}",
+      "dayTime": "{day} {time}",
+      "duration": {
+        "minutes": "{n} 分",
+        "hours": "{n} 時間",
+        "hoursMinutes": "{h} 時間 {m} 分",
+        "days": "{n} 日"
+      },
+      "repeat": {
+        "daily": "毎日 {time}",
+        "weekdays": "平日毎日 {time}",
+        "weekly": "毎週{days} {time}",
+        "monthly": "毎月 {day} 日 {time}",
+        "until": "{rule}、{date} まで",
+        "sep": "・"
+      },
+      "dueAt": "{when} 期限",
+      "overdue": "期限切れ · {when} 期限",
+      "reminded": "通知済み · {when} 期限",
+      "late": "{duration} 遅れ",
+      "missed": "{count} 回逃しました"
+    },
+    "reminder": {
+      "title": "リマインダー",
+      "done": "完了",
+      "snooze15m": "15 分後",
+      "snooze1h": "1 時間後",
+      "snoozeTomorrow": "明日の午前",
+      "handOver": "アシスタントに任せる",
+      "handOverText": "リマインダー #{id} を処理して：{summary}",
+      "state": {
+        "done": "完了しました",
+        "snoozed": "{when} に延期",
+        "handed": "アシスタントに任せました",
+        "dropped": "やめました",
+        "expired": "期限切れ（次の回が来ました）",
+        "closed": "対応済み",
+        "woke": "時間になり、アシスタントを起こして対応させました"
+      }
+    },
+    "notify": {
+      "open": "開く"
+    },
+    "feed": {
+      "groups": {
+        "needs": "あなた待ち",
+        "watching": "進行中",
+        "next": "これから",
+        "done": "今日完了"
+      },
+      "empty": "あなたのやることも、実行中のものもありません。",
+      "failed": "アクティビティを今は読み込めません。",
+      "handed": "{name}に任せました",
+      "checking": "検収中 · 第 {round} ラウンド",
+      "queued": "マージ待ち",
+      "waitsAgent": "{name}の対応待ち",
+      "routineRunning": "実行中",
+      "routineLast": "前回：{outcome}",
+      "fold": "詳細を閉じる",
+      "unfold": "詳細を表示",
+      "viewReminder": "リマインダーを見る",
+      "viewCheck": "検収セッションを見る",
+      "openTask": "タスクを開く",
+      "routineDeleted": "このルーティンは削除されています。"
+    },
+    "today": {
+      "title": "今日",
+      "empty": "今日あなたが対応することはありません",
+      "yours": "あなたの",
+      "open": "開く",
+      "undo": "元に戻す",
+      "more": "あと {count} 件を表示",
+      "groups": {
+        "needs": "あなたの対応待ち",
+        "watching": "見守り中",
+        "schedule": "今日の予定",
+        "done": "今日完了"
+      },
+      "kind": {
+        "approval": "承認待ち",
+        "forwarded": "あなたに質問",
+        "question": "あなたに質問",
+        "confirm": "確認待ち",
+        "stuck": "できたか不明",
+        "waiting": "依頼した作業が待っています",
+        "proposal": "提案",
+        "failed": "失敗",
+        "reminder": "リマインダー",
+        "finished": "完了",
+        "checked": "メッセージを確認",
+        "checkCanceled": "メッセージの確認を停止",
+        "canceled": "停止",
+        "answered": "代わりに回答",
+        "changed": "代わりに変更",
+        "undone": "変更後、元に戻した",
+        "acceptance": "検収の判断が必要",
+        "forge": "フォージでの操作",
+        "pr_ready": "マージ可能",
+        "pr_merged": "PR マージ済み",
+        "pr": "見守り中の PR",
+        "memory": "覚えました",
+        "memoryUndone": "覚えたが取り消し",
+        "plan_stuck": "計画が止まっています",
+        "routine_paused": "ルーティン停止中",
+        "used_up": "差し戻してもまだ不十分"
+      },
+      "reason": {
+        "failed": "失敗",
+        "accepted_queued": "受け入れ済み・マージ待ち",
+        "merge_queued": "マージ待ち",
+        "accepted_unchecked": "未確認のまま通過しました。確認してください",
+        "needs_delivery": "受け入れ済み・PR として提出待ち",
+        "merge_ready": "受け入れ済み・マージできます",
+        "review": "レビュー待ち",
+        "looking": "うまくいかず、{name}が確認中"
+      },
+      "go": {
+        "merge": "マージへ",
+        "board": "ボードで開く",
+        "review": "レビューへ"
+      },
+      "session": {
+        "permission": "承認待ち",
+        "question": "あなたに質問",
+        "plan": "プランの承認待ち"
+      },
+      "task": {
+        "awaiting_input": "入力待ち",
+        "review": "レビュー待ち",
+        "failed": "失敗",
+        "preparing": "準備中",
+        "running": "実行中",
+        "merging": "マージ中",
+        "checking": "検収中"
+      },
+      "dispatch": {
+        "queued": "待機中",
+        "running": "実行中",
+        "waiting_input": "アシスタントが回答中",
+        "review": "レビュー待ち",
+        "handed_over": "引き継ぎ済み"
+      },
+      "item": {
+        "notify": "{time} にリマインド",
+        "act": "{time} に実行"
+      },
+      "pr": {
+        "waiting_checks": "チェック待ち",
+        "checks_failed": "チェック失敗",
+        "conflict": "コンフリクトあり",
+        "mergeable": "マージ可能",
+        "no_conflict": "コンフリクトなし・チェック不明",
+        "open": "PR オープン",
+        "merged": "マージ済み",
+        "closed": "クローズ"
+      },
+      "routine": {
+        "at": "{time} にルーティン",
+        "running": "ルーティン実行中",
+        "asked": "ルーティンが確認待ち",
+        "reported": "ルーティンの報告",
+        "silent": "ルーティン：変化なし"
+      },
+      "preparingBrief": "朝のまとめを準備しています…",
+      "preparingWrap": "1 日のまとめを準備しています…",
+      "tidy": {
+        "acted": "記憶を整理",
+        "draft": "整理の下書きが確認待ち",
+        "applied": "整理を適用",
+        "undone": "整理を元に戻した",
+        "discarded": "整理を使わず",
+        "stale": "整理の下書きが古い"
+      },
+      "skill": {
+        "acted": "手順スキル",
+        "draft": "手順スキルの下書きが確認待ち",
+        "applied": "手順スキルをインストール",
+        "undone": "手順スキルの変更を元に戻した",
+        "discarded": "手順スキルを入れず",
+        "stale": "手順スキルの下書きが古い",
+        "deleted": "手順スキルを削除"
+      },
+      "apply": "適用",
+      "install": "インストール",
+      "notThis": "使わない"
+    },
+    "meet": {
+      "name": {
+        "heading": "はじめまして",
+        "call": "何とお呼びすればいいですか？",
+        "name": "私に名前をつけますか？",
+        "systemUser": "このコンピューターでのユーザー名",
+        "currentName": "今の名前",
+        "answered": "「{call}」とお呼びします。私は「{name}」です",
+        "answeredName": "私は「{name}」です",
+        "skipped": "呼び方はスキップしました"
+      },
+      "connect": {
+        "heading": "すぐにひとつ手伝います",
+        "about": "あなたのプロジェクトはすべて見ておき、レビュー待ちの PR があればお知らせします。",
+        "aboutOnly": "選んだプロジェクトを見ておき、レビュー待ちの PR があればお知らせします。",
+        "noProjects": "codeg にはまだプロジェクトがありません。開けば見ておきます。",
+        "ask": "今すぐ手伝えることをひとつ探しましょうか？",
+        "settingsHint": "見るプロジェクトは設定でいつでも変えられます。",
+        "settings": "設定",
+        "go": "今すぐ探す",
+        "notNow": "今はいい",
+        "openFolder": "プロジェクトフォルダーを開く",
+        "accountHint": "{forge} アカウントを接続すれば、PR・CI・Issue も見られます。",
+        "connectAccount": "アカウントを接続",
+        "went": "では、探してきます。",
+        "skipped": "今は探しません。いつでも声をかけてください。",
+        "connected": "つなぎました：{projects}",
+        "joiner": "、"
+      },
+      "starter": {
+        "heading": "まずこれを手伝えます",
+        "lookingHeading": "すぐに一つ",
+        "noneHeading": "今は何もありません",
+        "looking": "すぐに手伝えることを一つ探しています…",
+        "none": "今は赤いものはありません。見ておきます。",
+        "noMore": "今はほかにありません。見ておきます。",
+        "handed": "引き受けました：{what}",
+        "dismissed": "今はいい：{what}",
+        "handIt": "任せる",
+        "next": "別のもの",
+        "notNow": "今はいい",
+        "lead": {
+          "pr_ci": "PR #{number} の CI が赤です（{checks}）— {project}：{title}",
+          "review": "PR #{number} があなたのレビュー待ちです — {project}：{title}",
+          "issue": "Issue #{number} があなたに割り当てられています — {project}：{title}",
+          "task": "ボードのタスク「{title}」が失敗し、誰も対応していません",
+          "worktree": "ワークツリー {title} に一日以上コミットされていない変更があります"
+        },
+        "hand": {
+          "pr_ci": "{project} の PR #{number} の CI を直して：{url}",
+          "review": "{project} の PR #{number} をレビューして：{url}",
+          "issue": "{project} の Issue #{number} に対応して：{url}",
+          "task": "失敗したボードのタスク「{title}」（#{task}）に対応して",
+          "worktree": "ワークツリー {path} のコミットされていない変更を見て"
+        }
+      },
+      "promises": {
+        "heading": "自分から行うこと",
+        "intro": "どのくらい積極的に動きましょうか？ 以下はすべてオンです。自分でやりたいものはオフにしてください。",
+        "items": {
+          "proactive": {
+            "title": "あなたが必要なときに知らせる",
+            "hint": "質問・承認・終わった作業・設定したリマインダーを、届いたらすぐに。"
+          },
+          "brief": {
+            "title": "毎朝ブリーフを書く",
+            "hint": "一日の始まりに：あなた待ちのこと、夜のうちに終わった作業、今日の予定。"
+          },
+          "wrap": {
+            "title": "一日の締めくくり",
+            "hint": "終える前に：終わったこと、残っていること、今夜回せること。"
+          },
+          "exec_questions": {
+            "title": "任せたセッションの質問に答える",
+            "hint": "答えられるものは答え、迷うものはあなたに回します。"
+          },
+          "exec_plans": {
+            "title": "任せたセッションのプランを承認する",
+            "hint": "依頼内容と照らして確認し、はっきりしないものはあなたに回します。"
+          },
+          "followups": {
+            "title": "任せた作業のフォローと再試行",
+            "hint": "もう一巡必要なとき、そのまま続けます。"
+          },
+          "ci_failure": {
+            "title": "見守り中の PR が赤くなったら直す",
+            "hint": "チェック失敗やコンフリクトのある PR を、そのタスクが一回ずつ直す。"
+          },
+          "interrupt_retry": {
+            "title": "再起動で中断した作業を再試行",
+            "hint": "codeg が止まったときに動いていた作業を、戻ったらやり直します。"
+          },
+          "presence": {
+            "title": "あなたの生活リズムを学ぶ",
+            "hint": "codeg にいる時間から、ちょうどよいときに連絡します。"
+          },
+          "auto_accept": {
+            "title": "出したコード変更の作業を確認して検収する",
+            "hint": "作業に使うエージェントが読み取り専用で確認し、あなたの要望に照らして私が判断します。"
+          }
+        },
+        "prefs": "設定を調整",
+        "pet": "デスクトップに出す",
+        "petFailed": "デスクトップの相棒を開けませんでした",
+        "done": "完了",
+        "folded": "自分から行うこと · 通知の多さ：{level}",
+        "collapse": "たたむ",
+        "list": "具体的な内容：{total} 件中 {on} 件がオン",
+        "listShow": "表示",
+        "listHide": "たたむ",
+        "unavailable": "アシスタントが動いている側で変更できます。"
+      }
+    },
+    "acceptance": {
+      "title": "検収 · {round} 回目",
+      "titleMax": "検収 · {round} 回目（最大 {max} 回）",
+      "check": "確認：",
+      "verdict": {
+        "pass": "合格",
+        "fail": "不合格",
+        "unverified": "確認できず"
+      },
+      "unchecked": "独立した確認なし",
+      "notVerified": "未検証",
+      "decision": {
+        "accept": "合格",
+        "revise": "差し戻し",
+        "ask_owner": "あなたに確認"
+      },
+      "assistant": "アシスタント：{decision}",
+      "assistantWhy": "アシスタント：{decision}（理由：{reason}）",
+      "fallback": "アシスタントが結論を出さなかったため、確認結果に従いました",
+      "owner": "あなたの判断：{decision}",
+      "result": "結果",
+      "why": "理由",
+      "by": {
+        "owner": "あなたの判断",
+        "assistant": "アシスタントの判断"
+      },
+      "question": "質問：{question}",
+      "usedUp": "{count} 回確認しました。許可された回数に達しています",
+      "wouldSend": "差し戻すときに送る修正内容",
+      "revise": "この内容で差し戻す",
+      "accept": "合格にする",
+      "recheck": "もう一度確認",
+      "openTask": "タスクを開く",
+      "accepted": "合格",
+      "revised": "差し戻しました",
+      "void": "確認中にワークツリーが変更されたため、この回は無効です",
+      "changed": "確認後にワークツリーが変更されたため、検収は無効になりました",
+      "changedAfterAccept": "検収後にワークツリーが変わりました",
+      "superseded": "その後に再確認しました",
+      "stale": "無効になりました。実行していません",
+      "merged": "マージ済み {commit}",
+      "delivered": "納品済み、先頭コミット {head}",
+      "history": "これまでの回",
+      "historyRevised": "{round} 回目：差し戻し「{message}」",
+      "historyAccepted": "{round} 回目：合格",
+      "historyAsked": "{round} 回目：あなたに確認",
+      "historyChanged": "{round} 回目：合格後にワークツリーが変更",
+      "historyOpen": "{round} 回目：進行中"
+    },
+    "forge": {
+      "heading": {
+        "approve": "承認待ち",
+        "suggested": "提案（承認が必要）",
+        "cnb": "CNB でのマージ：常にあなたの承認が必要",
+        "acting": "実行中…",
+        "done": "{provider} で完了",
+        "refused": "実行しませんでした",
+        "notMerged": "マージしませんでした",
+        "failed": "実行できませんでした",
+        "unknown": "完了したか不明",
+        "not_run": "実行せず：状況が変わりました",
+        "dismissed": "実行しないことにしました"
+      },
+      "title": {
+        "comment": "{target} にコメント",
+        "close": "{target} をクローズ",
+        "merge": "{target} をマージ"
+      },
+      "merge": {
+        "head": "ヘッド {head}",
+        "method": {
+          "merge": "マージコミット",
+          "squash": "スカッシュ",
+          "rebase": "リベース"
+        },
+        "checks": {
+          "green": "チェック：すべて成功",
+          "none": "チェック：設定なし",
+          "unknown": "チェック：不明（CNB はチェックを読めません）"
+        },
+        "version": {
+          "accepted": "受け入れチェックに合格したバージョン",
+          "green": "このヘッドでチェックが成功"
+        },
+        "unguaranteed": "バージョン未保証（マージ時にヘッドを指定できません）",
+        "commit": "マージコミット {commit}"
+      },
+      "code": {
+        "merged": "すでにマージ済みです",
+        "closed": "クローズされています",
+        "draft": "ドラフトです",
+        "after_acceptance": "PR に受け入れ後のコミットがあります",
+        "not_accepted": "受け入れチェックに合格していません",
+        "not_delivered": "受け入れ済みのバージョンは codeg がこの PR に渡したものではありません",
+        "checks_unreadable": "codeg はチェックを読めません",
+        "checks_partial": "一部のチェックを読めませんでした",
+        "checks_running": "チェックがまだ実行中です",
+        "checks_failing": "失敗しているチェックがあります"
+      },
+      "notRun": "実行しませんでした：{error}",
+      "failed": "フォージに拒否されました：{error}",
+      "unknown": "フォージから応答がありません：{error}。codeg が自動でやり直すことはなく、やり直す前にフォージを確認します。",
+      "reason": "理由：{reason}",
+      "approve": "承認",
+      "decline": "却下",
+      "look": "確認する",
+      "again": "もう一度実行",
+      "letBe": "そのままにする",
+      "open": "開く"
+    },
+    "pr": {
+      "event": {
+        "checks_failed": "チェックが失敗",
+        "checks_passed": "チェックが再び成功",
+        "conflict": "ベースとコンフリクト",
+        "mergeable": "マージできます",
+        "no_conflict": "コンフリクトなし、チェック状態は不明",
+        "merged": "マージされました",
+        "closed": "マージされずにクローズ",
+        "feedback": "レビューの指摘"
+      },
+      "head": "ヘッド {head}",
+      "checks": {
+        "unknown": "チェック状態は不明",
+        "none": "チェックなし",
+        "passed": "チェック {passed}/{total} 成功",
+        "running": "{n} 件実行中",
+        "partial": "一部は読めませんでした"
+      },
+      "more": "…ほか {n} 件",
+      "noConflictNote": "このプラットフォームではチェックを読めないため、codeg は「マージできます」とは言いません。",
+      "mergeState": "プラットフォームの状態：{state}",
+      "state": {
+        "later": "その後、状況が変わりました。",
+        "stopped": "見守りを終了しました。"
+      },
+      "view": "PR を見る",
+      "gotIt": "了解",
+      "unwatch": "見守りをやめる",
+      "fix": {
+        "followup": {
+          "checks": "タスクが修正中 — {n} 回目（続きの作業）。",
+          "conflict": "タスクがベースをマージ中 — {n} 回目（続きの作業）。"
+        },
+        "task": {
+          "checks": "この PR 上の新しいタスクが修正中 — {n} 回目。",
+          "conflict": "この PR 上の新しいタスクがベースをマージ中 — {n} 回目。"
+        },
+        "failed": "codeg は修正を始められませんでした：{error}",
+        "none": "codeg は自分では直せません：{why}",
+        "busy": "この PR では作業が進行中です。終わったら codeg がもう一度見ます。",
+        "ask": {
+          "checks": "タスクに修正させますか？",
+          "conflict": "タスクにベースをマージさせますか？"
+        },
+        "told": "設定どおり、お知らせのみです。",
+        "off": "codeg は自動で直しません（設定は 0 回）。",
+        "gaveUpHeading": "上限まで直してもまだ失敗",
+        "gaveUp": "codeg は {n} 回直しました。ここからはあなたの番です。各回の内容：",
+        "round": "{n} 回目",
+        "cause": {
+          "checks": "チェック失敗",
+          "conflict": "コンフリクト"
+        },
+        "lines": "{files} ファイル、+{added} −{removed}",
+        "doChecks": "修正する",
+        "doConflict": "ベースをマージ"
+      },
+      "feedback": {
+        "kind": {
+          "changes": "変更を依頼",
+          "review": "レビュー",
+          "line": "行コメント",
+          "comment": "コメント"
+        },
+        "someone": "誰か",
+        "writer": "書き込み可",
+        "outsider": "書き込み不可",
+        "forward": "タスクに渡す",
+        "skip": "不要",
+        "forwarded": "タスクに渡しました。",
+        "waiting": "進行中の作業が終わったらタスクに渡します。"
+      },
+      "round": {
+        "checks": "チェックの修正 — {n} 回目",
+        "conflict": "ベースのマージ — {n} 回目",
+        "feedback": "レビュー指摘への対応"
+      },
+      "merge": {
+        "refused": "codeg は自動でマージしませんでした：{why}",
+        "unread": "codeg はフォージを読めずマージできませんでした：{why}"
+      }
+    },
+    "routines": {
+      "zone": "（{zone}）",
+      "onEvent": "トリガー：{event}",
+      "withLabel": "ラベル {label}",
+      "mineOnly": "自分の作業のみ",
+      "event": {
+        "dispatch_ended": "依頼した作業が終わったとき",
+        "task_status": "ボードのタスクの状態が変わったとき",
+        "session_waiting": "セッションがあなたを待っているとき",
+        "pr_checks_failed": "見守り中の PR のチェックが失敗",
+        "pr_checks_passed": "見守り中の PR のチェックが再び成功",
+        "pr_conflict": "見守り中の PR にコンフリクト",
+        "pr_mergeable": "見守り中の PR がマージ可能",
+        "pr_no_conflict": "見守り中の PR にコンフリクトなし（チェック不明）",
+        "pr_merged": "見守り中の PR がマージされた",
+        "pr_closed": "見守り中の PR がクローズ",
+        "pr_review": "見守り中の PR に新しいレビュー",
+        "forge_issue": "プラットフォームに新しい issue や PR"
+      },
+      "precheck": {
+        "commits": "{branch} に新しいコミットがあるときだけ",
+        "forgeIssue": "新しい issue があるときだけ",
+        "forgePr": "新しい PR があるときだけ",
+        "itemsWaiting": "{hours} 時間以上待っている事項があるときだけ",
+        "changes": "作業ツリーが変わったときだけ"
+      },
+      "outcome": {
+        "running": "実行中",
+        "skipped": "スキップ：新しいことなし",
+        "silent": "変化なし",
+        "reported": "報告あり",
+        "failed": "失敗",
+        "missed": "見送り",
+        "asked": "確認待ち",
+        "declined": "未確認",
+        "stopped": "停止"
+      },
+      "empty": "まだルーティンはありません。会話で設定を頼んでください。",
+      "new": "新しいルーティン",
+      "kind": {
+        "brain": "アシスタントが確認",
+        "dispatch": "作業を依頼"
+      },
+      "paused": {
+        "owner": "一時停止中"
+      },
+      "row": {
+        "when": "日時",
+        "trigger": "トリガー",
+        "how": "方法",
+        "next": "次回",
+        "last": "前回",
+        "why": "理由",
+        "runs": "計 {n} 回"
+      },
+      "runNow": "今すぐ実行",
+      "pause": "一時停止",
+      "resume": "再開",
+      "edit": "編集",
+      "delete": "削除",
+      "deleteTitle": "このルーティンを削除しますか？",
+      "deleteDescription": "「{title}」は実行されなくなります。すでに依頼した作業には影響しません。",
+      "cancel": "キャンセル",
+      "reply": "ルーティン「{title}」· {seq} 回目",
+      "editor": {
+        "titleNew": "新しいルーティン",
+        "titleEdit": "ルーティンを編集",
+        "trialNote": "保存するとすぐに 1 回試しに実行し、その後は codeg が予定どおり実行します。",
+        "editNote": "変更は次回の実行から反映されます。",
+        "name": "名前",
+        "what": "やること",
+        "whatHint": "例：夜間の CI で失敗がないか見て、あれば教えて",
+        "kind": "実行のしかた",
+        "kindBrain": "アシスタントを起こす",
+        "kindDispatch": "作業を直接依頼",
+        "kindBrainHint": "確認して報告します。伝えることがなければ黙っています。",
+        "kindDispatchHint": "codeg がアシスタントを起こさずに下の作業を依頼し、結果はいつもどおり戻ります。",
+        "mode": "方法",
+        "modeTask": "ボードのタスク",
+        "modeSession": "プロジェクトの作業セッション",
+        "modeChat": "チャット",
+        "deliverable": "成果",
+        "change": "コード変更",
+        "report": "レポート",
+        "project": "プロジェクト",
+        "pickProject": "プロジェクトを選択",
+        "anyProject": "すべてのプロジェクト",
+        "when": "いつ",
+        "schedule": "スケジュール",
+        "event": "イベント発生時",
+        "presetDaily": "毎日 9:00",
+        "presetWeekdays": "平日 9:00",
+        "presetWeekly": "毎週月曜 9:00",
+        "custom": "カスタム…",
+        "timezone": "タイムゾーン",
+        "ownerZone": "あなたと同じ（{zone}）",
+        "eventKind": "イベント",
+        "issueOrPr": "issue か PR か",
+        "issues": "issue",
+        "prs": "PR",
+        "label": "ラベル",
+        "states": "状態（カンマ区切り）",
+        "mine": "自分の作業のみ",
+        "precheck": "先に確認",
+        "check": {
+          "none": "毎回実行",
+          "commits": "新しいコミットがあるときだけ",
+          "forge_new": "新しい issue や PR があるときだけ",
+          "items_waiting": "長く待っている事項があるときだけ",
+          "changes": "作業ツリーが変わったときだけ"
+        },
+        "branch": "ブランチ（既定は HEAD）",
+        "hours": "時間",
+        "needTitle": "名前を付けてください。",
+        "needWhat": "やることを書いてください。",
+        "needCron": "スケジュールを設定してください。",
+        "made": "ルーティンを作成し、試しに実行しています",
+        "saved": "ルーティンを保存しました",
+        "cancel": "キャンセル",
+        "save": "保存",
+        "saveRun": "保存して 1 回実行"
+      },
+      "card": {
+        "made": "ルーティンを作成",
+        "changed": "ルーティンを変更",
+        "proposal": "提案されたルーティン",
+        "proposalChange": "ルーティン変更の提案",
+        "repeat": "ルーティンにしますか？",
+        "paused": "ルーティンを一時停止",
+        "undone": "取り消しました",
+        "dismissed": "見送りました",
+        "resumed": "再開しました",
+        "madeNote": "作成しました。ルーティン一覧にあります。",
+        "action": {
+          "pause": "一時停止",
+          "resume": "再開",
+          "delete": "削除",
+          "run_now": "今すぐ実行",
+          "edit": "変更"
+        },
+        "repeatBody": "30 日間で {count} 回、似たことを頼んでいます。",
+        "pausedWorkAgent": "作業に使うエージェントが使えません。未インストールか無効になっています。",
+        "pausedFailures": "3 回続けて失敗しました。",
+        "trial": "試しの実行を始めました。",
+        "reason": "理由：{reason}",
+        "undo": "元に戻す",
+        "edit": "編集",
+        "accept": "作成する",
+        "acceptChange": "変更する",
+        "dismiss": "今はいい",
+        "makeIt": "ルーティンにする",
+        "resume": "再開",
+        "open": "ルーティンを開く",
+        "confirm": "確認待ちのルーチン",
+        "confirmChange": "確認待ちのルーチン変更",
+        "setWorkAgent": "作業に使うエージェントを選ぶ"
+      },
+      "more": "その他の操作"
+    },
+    "rules": {
+      "mute": "この種類は今後提案しない",
+      "muted": "この種類は今後提案されません。",
+      "mutedRestore": "設定で再びオンにする",
+      "notNow": "今はいい",
+      "failed": "できませんでした：{error}",
+      "since": "{when} から",
+      "lowered": "この種類の提案は 3 回続けて使われなかったため、通知しなくなりました。",
+      "loweredNow": "閉じました。3 回続けて使われなかったため、今後は通知しません（設定で戻せます）。",
+      "dismissed": "閉じました。1 週間は再表示しません。",
+      "expired": "もう不要です：状況が変わりました。",
+      "openPr": "PR を開く",
+      "byAuthor": "作成者 {author}",
+      "worktreeOf": "{project} のワークツリー",
+      "behindDetail": "{branch} は {base} より遅れていて、マージすると競合します。",
+      "heading": {
+        "failed": "失敗したまま誰も対応していません",
+        "review": "レビュー待ちが長くなっています",
+        "session": "セッションがあなたを待っています",
+        "pr_review": "PR があなたのレビューを待っています",
+        "uncommitted": "コミットされていない変更",
+        "idle": "しばらく動きのない事項",
+        "behind": "ブランチが遅れていて競合あり",
+        "undo": "取り消した変更",
+        "idle_bot": "使われていないアシスタント"
+      },
+      "wait": {
+        "permission": "承認待ち",
+        "question": "質問中",
+        "plan": "計画の承認待ち"
+      },
+      "step": {
+        "failed": {
+          "retry": "再試行",
+          "hand": "アシスタントに見てもらう"
+        },
+        "review": {
+          "check": "先にアシスタントに検収させる",
+          "remind": "リマインドする"
+        },
+        "session": {
+          "open": "セッションを開く"
+        },
+        "pr_review": {
+          "summary": "まずレビュー要約を作る"
+        },
+        "uncommitted": {
+          "open": "開く",
+          "hand": "アシスタントにコミットしてもらう"
+        },
+        "idle": {
+          "hand": "引き続き追う",
+          "close": "閉じる"
+        },
+        "behind": {
+          "rebase": "rebase を依頼"
+        },
+        "undo": {
+          "ask_first": "先に見せるようにする"
+        },
+        "idle_bot": {
+          "hide": "非表示にする",
+          "delete": "削除…"
+        }
+      },
+      "done": {
+        "handed": "アシスタントに渡しました。",
+        "retried": "再試行しました。",
+        "checking": "検収中です。チェック後にアシスタントが結論を出します。",
+        "reminding": "明日の朝にリマインドします。",
+        "opened": "開きました。",
+        "closed": "事項を閉じました。",
+        "rebasing": "rebase を依頼しました。",
+        "asking_first": "今後の変更はまずカードでお見せします。",
+        "hidden": "非表示にしました。非表示のアシスタントから戻せます。",
+        "deleted": "削除しました。"
+      },
+      "hand": {
+        "failed": "「{title}」が失敗したまま誰も対応していません。何が起きたか調べて、どうするか提案して。",
+        "review": "ボードのタスク「{title}」がレビュー待ちのままです。先に検収して：誰かに変更を確認してもらい、結論を教えて。",
+        "remind": "ボードのタスク「{title}」をレビューする",
+        "prReview": "{project} の PR #{number} がしばらく私のレビューを待っています。まずレビュー要約を作って：{url}",
+        "uncommitted": "{name}（{path}）にしばらくコミットされていない変更があります。確認して、まとめてコミットして。",
+        "idle": "事項「{summary}」がしばらく動いていません。また追いかけて。"
+      },
+      "prefs": {
+        "title": "提案カード",
+        "hint": "codeg がモデルを使わずに自分で見つけ、根拠と次の一歩を書いたカードを出します。それぞれオフにしたり、しきい値を変えたりできます。",
+        "mutedMark": "カードの「この種類は今後提案しない」でオフになりました。",
+        "loweredMark": "3 回続けて使われなかったため、通知しなくなりました。",
+        "putBack": "元に戻す",
+        "counts": "過去 30 日：{raised} 枚、使用 {acted}、閉じた {dismissed}",
+        "unit": {
+          "hours": "時間",
+          "minutes": "分",
+          "days": "日",
+          "times": "回目"
+        },
+        "failed": {
+          "title": "失敗して誰も対応していない",
+          "hint": "依頼した作業やボードのタスクが失敗したまま誰も対応していないとき。依頼したアシスタントのところにカードが出ます。"
+        },
+        "review": {
+          "title": "レビュー待ちが長い",
+          "hint": "レビュー待ちのボードのタスクで、この回の検収がまだのもの。"
+        },
+        "session": {
+          "title": "セッションがずっと待っている",
+          "hint": "どのセッションでも、あなたの承認や回答を待っていて、あなたがそこにいないとき。緊急。"
+        },
+        "pr_review": {
+          "title": "PR があなたのレビュー待ち",
+          "hint": "見ているプロジェクトで。codeg が依頼を最初に見たときから数えます。"
+        },
+        "uncommitted": {
+          "title": "コミットされていない変更",
+          "hint": "プロジェクトやワークツリーに誰もコミットしていない変更があるとき。"
+        },
+        "idle": {
+          "title": "長く動きのない事項",
+          "hint": "終わっていない事項に変化がないとき。"
+        },
+        "behind": {
+          "title": "ブランチの遅れ",
+          "hint": "アシスタントが依頼したタスクのブランチがターゲットより遅れ、競合するとき。"
+        },
+        "repeat": {
+          "title": "繰り返しの依頼",
+          "hint": "30 日以内に似た依頼がこの回数になったら、ルーティン化を提案します。"
+        },
+        "suggest": {
+          "title": "アシスタントからの提案",
+          "hint": "オフにするとアシスタントは提案しません。suggest 付きの呼び出しには「今は提案を受け付けない」と伝えます。"
+        },
+        "undo": {
+          "title": "取り消しの多い変更",
+          "hint": "週の振り返りで：言われたとおりに行った変更を何度も取り消したとき、先に見せるようにするか尋ねます。"
+        },
+        "idle_bot": {
+          "title": "使われていないアシスタント",
+          "hint": "週次の振り返りで：2 週間起こされていないアシスタントを、非表示にするか削除するか尋ねます。"
+        }
+      },
+      "undoDetail": "この 2 週間、言われたとおりに行った変更 {made} 件のうち {undone} 件を取り消しました。",
+      "idleBotDetail": "2 週間誰も呼んでいません。"
+    },
+    "brief": {
+      "title": "朝のまとめ",
+      "byCodeg": "アシスタントが書けなかったため、codeg が記録から作成しました。",
+      "part": {
+        "needs": "あなたが必要なこと",
+        "tonight": "昨夜の作業",
+        "night": "前回のまとめから",
+        "running": "見守り中",
+        "schedule": "今日の予定",
+        "bots": "アシスタント",
+        "loose": "やりかけのこと",
+        "yesterday": "昨日のあなた"
+      },
+      "more": "…ほか {count} 件",
+      "bot": {
+        "done": "{count} 件完了（{titles}）",
+        "idle": "完了なし",
+        "doing": "取り組み中: {what}",
+        "stuck": "{count} 件があなた待ち"
+      },
+      "loose": {
+        "item": "{days} 日間そのまま",
+        "worktree": "未コミットの変更が {days} 日",
+        "session": "やりかけ"
+      },
+      "sessions": "{count} 件のセッション",
+      "nothing": "今日あなたが必要なことはありません。",
+      "replyBrief": "朝のまとめ",
+      "replyWrap": "1 日のまとめ",
+      "message": {
+        "to": "{name} へ：",
+        "answered": "返答: {text}",
+        "open": "まだ返答なし"
+      },
+      "week": {
+        "title": "先週（{first} – {last}）",
+        "titleSoFar": "今週ここまで（{first} – {last}）",
+        "mode": {
+          "task": "ボード",
+          "chat": "チャット",
+          "session": "セッション"
+        },
+        "work": "依頼 {count} 件（{modes}）· 完了 {completed}、失敗 {failed} · 一発合格 {firstPass}/{settled}",
+        "byBot": "アシスタント別：{list}",
+        "doneForYou": "代わりにやったこと：受け入れで差し戻し {caught} · 自動再試行 {retried} · CI 自動修正 {ciFixed} · ルーチン完了 {routines} · マージ {merged}",
+        "asks": "作業からの質問：{count} 件 · アシスタントが回答 {answered} · あなたへ {forwarded}",
+        "between": "アシスタント間：メッセージ {messages} 件、{threads} スレッド · 停止 {loops}",
+        "unblock": "あなた待ちへの対応は平均 {minutes} 分（{count} 件）",
+        "unblockBefore": "あなた待ちへの対応は平均 {minutes} 分（{count} 件、前週 {before} 分）",
+        "held": "防いだ割り込み：まとめた {merged} · 後回し {deferred} · 今日だけ {kept}",
+        "proposals": "提案：{count} 件 · 採用 {taken} · 見送り {dismissed}",
+        "undone": "取り消し：変更 {changesUndone}/{changes} · メモリ {memoryUndone}/{memory}",
+        "reminders": "リマインダー：{count} 件 · 完了 {done} · 延期 {snoozed}",
+        "lowered": "codeg が下げたもの：{rules}",
+        "tokens": "トークン：{total}",
+        "botTokens": "{total}（自身 {own}、依頼した作業 {handed}）"
+      }
+    },
+    "memory": {
+      "title": "覚えました",
+      "undoneTitle": "この記憶の更新を取り消しました",
+      "added": "{count} 件追加",
+      "updated": "{count} 件更新",
+      "removed": "{count} 件削除",
+      "changedFile": "{file}を変更",
+      "sep": "・",
+      "listSep": "、",
+      "file": {
+        "index": "記憶のインデックス",
+        "user": "あなたのプロフィール",
+        "soul": "人格設定",
+        "rules": "ルール"
+      },
+      "status": {
+        "added": "追加",
+        "modified": "更新",
+        "deleted": "削除"
+      },
+      "kept": "その後また変更されたため残しました：{files}",
+      "showDiff": "差分を表示",
+      "hideDiff": "差分を隠す",
+      "diffCut": "差分の先頭だけを表示しています。",
+      "undo": "元に戻す",
+      "used": "使った記憶："
+    },
+    "history": {
+      "open": "履歴を検索",
+      "title": "タイムマシン",
+      "description": "これまでの発言や作業を検索：アシスタントの会話、互いのメッセージ、すべての会話、ボードのタスク。",
+      "placeholder": "例：なぜ X を Y に変えたのか",
+      "hint": "すべての語を含むものを探します。1〜2 文字は直近 90 日だけを検索します。",
+      "none": "見つかりませんでした。",
+      "short": "1〜2 文字のため、直近 90 日だけを検索しました。",
+      "sessionsOff": "すべての会話は対象外です（「あなたについて」で設定）。",
+      "tasksOff": "ボードのタスクは対象外です（「あなたについて」で設定）。",
+      "reading": "会話を読み込み中（{done}/{total}）：古いものはまだ見つからないことがあります。",
+      "untitled": "会話 #{id}",
+      "task": "タスク #{id}",
+      "message": "{from} → {to}",
+      "timeline": "{name} との会話",
+      "handedOut": "{name} が依頼",
+      "matches": "{count} 件一致",
+      "role": {
+        "owner": "あなた",
+        "assistant": "アシスタント",
+        "agent": "エージェント"
+      },
+      "scope": {
+        "all": "すべて",
+        "timeline": "アシスタント",
+        "sessions": "会話",
+        "tasks": "タスク",
+        "messages": "メッセージ"
+      }
+    },
+    "plan": {
+      "title": "計画",
+      "progress": "{done}/{total} ステップ",
+      "sep": "、",
+      "after": "ステップ {steps} の後",
+      "doneWhen": "完了条件：",
+      "changes": "変更",
+      "undo": "元に戻す",
+      "undone": "元に戻しました",
+      "undoneKept": "元に戻しました——ステップ {steps} は始まっていたため、この変更のままです",
+      "state": {
+        "draft": "開始待ち",
+        "running": "進行中",
+        "stuck": "止まっています",
+        "stopped": "停止中",
+        "done": "完了",
+        "canceled": "終了"
+      },
+      "step": {
+        "pending": "前のステップ待ち",
+        "ready": "まもなく開始",
+        "confirm": "確認待ち",
+        "running": "実行中",
+        "done": "完了",
+        "failed": "失敗",
+        "canceled": "キャンセル",
+        "stopped": "未開始"
+      },
+      "hint": {
+        "draft": "「開始」を押すまで何も渡しません。開始後、codeg が依存関係に沿って一つずつ渡します。",
+        "stopped": "停止中：新しいステップは渡しません。実行中のものは最後まで続きます。",
+        "stuck": "ステップ {seq}「{title}」で止まっています：失敗し、アシスタントも立て直せませんでした。これに依存しないステップは進みます。",
+        "stuckCanceled": "ステップ {seq}「{title}」はキャンセルされました：これに依存するステップは始まりません。"
+      },
+      "act": {
+        "start": "開始",
+        "change": "変更を頼む",
+        "cancel": "キャンセル",
+        "stop": "停止",
+        "resume": "再開",
+        "end": "計画を終了",
+        "open": "開く",
+        "confirm": "確認",
+        "cancelStep": "キャンセル"
+      },
+      "change": {
+        "added": "ステップ {seq}「{title}」を追加",
+        "removed": "ステップ {seq}「{title}」を削除",
+        "retry": "ステップ {seq}「{title}」をやり直し",
+        "changed": "ステップ {seq}「{title}」を変更：{fields}",
+        "title": "名前を「{title}」に変更",
+        "goal": "目標を変更"
+      },
+      "field": {
+        "title": "タイトル",
+        "who": "担当",
+        "mode": "方式",
+        "project": "プロジェクト",
+        "deliverable": "成果物",
+        "prompt": "内容",
+        "done_when": "完了条件",
+        "depends_on": "依存",
+        "kind": "仕事の種類"
+      },
+      "self": "自分"
+    },
+    "tidy": {
+      "title": {
+        "acted": "記憶を整理しました（{day}）",
+        "draft": "{day} の整理（下書き）",
+        "applied": "{day} の整理（適用済み）",
+        "undone": "{day} の整理（まとめて元に戻しました）",
+        "discarded": "{day} の整理（使いません）",
+        "stale": "{day} の整理（古くなりました）"
+      },
+      "note": {
+        "draft": "整理の結果は下書きとして保存しました。今の記憶はそのままで、「適用」すると反映されます。",
+        "applied": "適用しました。記憶はこの整理のとおりです。",
+        "discarded": "この整理は使いませんでした。記憶はそのままです。",
+        "stale": "下書きのあとで記憶が変わり、合わせられなくなりました。次の夜にもう一度整理します。",
+        "notAside": "下書きとして保存できませんでした（{why}）。すでに反映されています。「まとめて元に戻す」で戻せます。"
+      },
+      "undoAll": "まとめて元に戻す",
+      "apply": "適用",
+      "dismiss": "使わない",
+      "lines": "昨夜の整理",
+      "view": "見る",
+      "line": {
+        "done": "{name} が記憶を整理しました",
+        "draft": "{name} が記憶を整理しました（下書き）"
+      },
+      "state": {
+        "applied": "適用済み",
+        "undone": "元に戻しました",
+        "discarded": "使いません",
+        "stale": "古くなりました。今夜もう一度整理します"
+      }
+    },
+    "skill": {
+      "heading": {
+        "added": "新しい手順スキル",
+        "modified": "手順スキルを変更",
+        "deleted": "手順スキルを削除",
+        "draft": "手順スキルの下書き"
+      },
+      "line": {
+        "learned": "「{title}」を手順スキルにまとめました。次に頼まれたら、このとおりに進めます。",
+        "changed": "手順スキル「{title}」を変更しました。もう反映されています。",
+        "removed": "手順スキル「{title}」を削除しました。",
+        "draft": "手順スキル「{title}」を書きました。「インストール」すると反映されます。"
+      },
+      "when": "使う場面：{text}",
+      "note": {
+        "off": "オフ：読み込まれません。",
+        "draft": "まだ何も変わっていません。",
+        "applied": "インストールしました。",
+        "undone": "この変更を元に戻しました。",
+        "discarded": "インストールしませんでした。元のままです。",
+        "stale": "そのあと変更されたため、この下書きは使えません。",
+        "deleted": "削除しました。",
+        "notAside": "下書きとして保存できませんでした（{why}）。オフにしてあります。「オンにする」と読み込まれます。",
+        "notAsideOn": "下書きとして保存できず（{why}）、オフにもできませんでした。すでに反映されています。オフにするか元に戻してください。"
+      },
+      "show": "内容を見る",
+      "hide": "閉じる",
+      "view": "見る",
+      "disable": "オフにする",
+      "enable": "オンにする",
+      "undo": "元に戻す",
+      "delete": "削除",
+      "confirmDelete": "削除する",
+      "cancel": "キャンセル",
+      "install": "インストール",
+      "dismiss": "使わない"
+    },
+    "botPage": {
+      "primary": "メインアシスタント",
+      "worker": "アシスタント",
+      "chat": "話しかける"
+    },
+    "workRanOn": "{agent} で作業",
+    "workOff": "{agent}（作業に使うエージェント）が使えません。未インストールか無効になっているため、今は自分で作業できません。",
+    "setWork": "別のものを選ぶ",
+    "noBrain": {
+      "title": "{name} にはまだ頭脳がありません",
+      "body": "コラボレーション設定から移行したアシスタントです。メインアシスタントを設定すると、メインの頭脳のコピーを受け取り、会話できるようになります。それまでも会話で @ することはできます。",
+      "setUp": "メインアシスタントを設定"
+    }
+  },
+  "MessageCheck": {
+    "action": "アシスタントに確認してもらう",
+    "selection": "確認",
+    "verdict": {
+      "true": "正しい",
+      "false": "正しくない",
+      "partly": "一部正しい",
+      "unsure": "判断できない"
+    },
+    "checking": "確認中…",
+    "unfinished": "確認が終わっていません",
+    "mark": "アシスタントの確認：{verdict}",
+    "markQuote": "「{quote}」の確認：{verdict}",
+    "again": "もう一度確認",
+    "inAssistant": "アシスタントの会話で見る",
+    "process": "確認の様子を見る",
+    "openConversation": "元の会話を開く",
+    "sentNoName": "確認を始めました。結果はこのメッセージの下に出ます",
+    "startFailed": "確認を始められませんでした：{message}",
+    "evidence": "根拠",
+    "noEvidence": "根拠は示されていません。",
+    "checkedMessage": "確認したメッセージ",
+    "checkedSentence": "確認した一文",
+    "asked": "答えていた質問",
+    "note": {
+      "no_verdict": "確認は結論を出しませんでした。",
+      "no_evidence": "結論はあっても根拠がないため、判断できない扱いです。",
+      "restarted": "codeg の再起動で中断されました。",
+      "stopped": "停止されました。",
+      "taken_over": "あなたがそのセッションを引き継ぎました。",
+      "failed": "失敗しました：{error}"
+    },
+    "heading": {
+      "checking": "確認中",
+      "done": "確認結果",
+      "failed": "確認が終わっていません"
+    },
+    "cardLine": {
+      "checking": "{title}のメッセージを確認しています",
+      "checkingSentence": "{title}の一文を確認しています",
+      "done": "{title}のメッセージを確認しました：{verdict}",
+      "doneSentence": "{title}の一文を確認しました：{verdict}",
+      "failed": "{title}のメッセージの確認が終わりませんでした",
+      "failedSentence": "{title}の一文の確認が終わりませんでした"
+    },
+    "titleQuoted": "「{title}」",
+    "untitled": "ある会話",
+    "expand": "すべて表示",
+    "collapse": "折りたたむ"
   },
   "SrnAccount": {
     "name": "SRN",

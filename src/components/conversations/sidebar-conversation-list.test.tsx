@@ -24,12 +24,14 @@ import {
   type SidebarConversationListHandle,
 } from "./sidebar-conversation-list"
 import type { DbConversationSummary, FolderDetail } from "@/lib/types"
+import type { SidebarSectionOrder } from "@/lib/sidebar-view-mode-storage"
 import type { TagFilter } from "@/lib/conversation-tags"
 import {
   resetAppWorkspaceStore,
   useAppWorkspaceStore,
 } from "@/stores/app-workspace-store"
 import enMessages from "@/i18n/messages/en.json"
+import { RECENT_GROUPING_MODE_KEY } from "@/lib/sidebar-view-mode-storage"
 import {
   resetFolderTabsStore,
   useFolderTabsStore,
@@ -94,6 +96,17 @@ const stableTask = vi.hoisted(() => ({
 }))
 const stableTerminal = vi.hoisted(() => ({
   createTerminalInDirectory: () => {},
+}))
+
+// The assistants' section reads the personal agent's context and roster;
+// its own tests cover it — here it is an empty section.
+vi.mock("@/components/personal-agent/sidebar-assistants", () => ({
+  AssistantsSectionActions: () => null,
+  AssistantsSectionBadge: () => null,
+  SidebarAssistants: () => null,
+  useSidebarAssistantsCount: () => 0,
+  useSidebarRosterDialogs: () => ({ api: {}, node: null }),
+  SHOW_SIDEBAR_ASSISTANTS_EVENT: "codeg:sidebar-show-assistants",
 }))
 
 vi.mock("@/components/agent-icon", () => ({
@@ -342,13 +355,23 @@ function folder(
 // production, where NextIntlClientProvider sits high in the tree and stays
 // stable (so `useTranslations` returns a stable `t`) while the list re-renders
 // on each conversations change.
-const harness: { rerender: () => void } = { rerender: () => {} }
+const harness: {
+  rerender: () => void
+  /** The sections' order the list is given; its default when unset. */
+  sectionOrder?: SidebarSectionOrder
+} = { rerender: () => {} }
 function Harness() {
   const [, setTick] = useState(0)
   useEffect(() => {
     harness.rerender = () => setTick((n) => n + 1)
   }, [])
-  return <SidebarConversationList showCompleted sortMode="created" />
+  return (
+    <SidebarConversationList
+      showCompleted
+      sortMode="created"
+      sectionOrder={harness.sectionOrder}
+    />
+  )
 }
 
 function tree() {
@@ -366,6 +389,7 @@ function tree() {
 // flips the loading flags off and installs the stable action spies, and each
 // describe's own beforeEach seeds its folders/conversations fixture on top.
 beforeEach(() => {
+  harness.sectionOrder = undefined
   resetAppWorkspaceStore()
   useAppWorkspaceStore.setState({
     conversationsLoading: false,
@@ -676,6 +700,9 @@ describe("SidebarConversationList — folder drag gesture", () => {
 describe("SidebarConversationList — sticky folder header overlay", () => {
   beforeEach(() => {
     localStorage.clear() // folderExpanded persists across tests otherwise
+    // The folders on top, as the row offsets below count them (the
+    // assistants' section, first by default, last here).
+    harness.sectionOrder = ["folders", "chats", "recent", "assistants"]
     const folders = [folder(1, "Folder 1"), folder(2, "Folder 2")]
     // rows: F1(0) c11(1) c12(2) F2(3) c21(4) c22(5) c23(6)
     useAppWorkspaceStore.setState({
@@ -2374,5 +2401,82 @@ describe("SidebarConversationList — folder header and folder-tabs mode", () =>
       before === "true" ? "false" : "true"
     )
     expect(useFolderTabsStore.getState().scope).toBe(1)
+  })
+})
+
+describe("SidebarConversationList — Recent time grouping", () => {
+  const groups = () =>
+    Array.from(document.querySelectorAll("[data-recent-time-group]")).map(
+      (el) => el.getAttribute("data-recent-time-group")
+    )
+  const recent = () => (
+    <NextIntlClientProvider locale="en" messages={enMessages}>
+      <SidebarConversationList showCompleted showRecent />
+    </NextIntlClientProvider>
+  )
+
+  beforeEach(() => {
+    localStorage.clear()
+    const folders = [folder(1, "Folder 1")]
+    useAppWorkspaceStore.setState({ folders, allFolders: folders })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    localStorage.clear()
+  })
+
+  it("groups by time by default and the header toggle flattens it", () => {
+    const now = new Date(2026, 10, 21, 12).getTime()
+    vi.useFakeTimers({ now })
+    useAppWorkspaceStore.setState({
+      conversations: [
+        conv(101, 1, {
+          status: "in_progress",
+          updated_at: new Date(now - MINUTE).toISOString(),
+        }),
+        conv(102, 1, {
+          status: "completed",
+          updated_at: new Date(2026, 10, 20, 12).toISOString(),
+        }),
+      ],
+    })
+    render(recent())
+    expect(groups()).toEqual(["priorities", "yesterday"])
+
+    fireEvent.click(
+      document.querySelector(
+        `[aria-label="${enMessages.Folder.sidebar.recentGroupingModeFlat}"]`
+      )!
+    )
+    expect(groups()).toEqual([])
+    expect(localStorage.getItem(RECENT_GROUPING_MODE_KEY)).toBe("flat")
+    expect(document.querySelector('[data-conversation-id="101"]')).toBeTruthy()
+    expect(document.querySelector('[data-conversation-id="102"]')).toBeTruthy()
+  })
+
+  it("restores a saved flat mode", () => {
+    localStorage.setItem(RECENT_GROUPING_MODE_KEY, "flat")
+    useAppWorkspaceStore.setState({ conversations: [conv(101, 1)] })
+    render(recent())
+    expect(groups()).toEqual([])
+  })
+
+  it("moves Today to Yesterday at local midnight with no data change", () => {
+    vi.useFakeTimers({ now: new Date(2026, 10, 21, 23, 59, 30).getTime() })
+    useAppWorkspaceStore.setState({
+      conversations: [
+        conv(101, 1, {
+          status: "completed",
+          updated_at: new Date(2026, 10, 21, 23).toISOString(),
+        }),
+      ],
+    })
+    render(recent())
+    expect(groups()).toEqual(["today"])
+    act(() => {
+      vi.advanceTimersByTime(60_000)
+    })
+    expect(groups()).toEqual(["yesterday"])
   })
 })

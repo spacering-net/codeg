@@ -62,10 +62,16 @@ import {
   getConversationIdByExternalIdFromStore,
   useConversationRuntimeStore,
 } from "@/stores/conversation-runtime-store"
+import {
+  delegatesPermission,
+  delegatesPlan,
+  delegatesQuestion,
+} from "@/lib/ask-delegate"
 import type {
   AgentType,
   AcpAgentStatus,
   AcpEvent,
+  AskDelegate,
   ActiveDelegationState,
   AsyncTaskDelta,
   AsyncTaskRecord,
@@ -410,6 +416,12 @@ export interface ConnectionState {
    *  blocked on). Set from a `plan_approval_request` event or a snapshot's
    *  `pending_plan_approval`; cleared on `plan_approval_resolved` or turn end. */
   pendingPlanApproval: PendingPlanApprovalState | null
+  /** What the assistant that dispatched this session answers here for the
+   *  owner (personal agent 7.3.1): its questions and plan approvals are not
+   *  notified here — one forwarded to the owner (`ask_forwarded`) is the
+   *  assistant's own notification (1.13). Set from an `ask_delegate` event
+   *  or a snapshot's `ask_delegate`. */
+  askDelegate?: AskDelegate | null
   claudeApiRetry: ClaudeApiRetryState | null
   /** AIR typed session failure table (see `lib/session-failures.ts` for the
    *  merge/settle contract). Retained resolved — entries double as per-id
@@ -817,6 +829,11 @@ type Action =
        *  late `plan_approval_resolved` from wiping a freshly-raised approval). */
       approvalId?: string
     }
+  | {
+      type: "SET_ASK_DELEGATE"
+      contextKey: string
+      askDelegate: AskDelegate | null
+    }
   | { type: "SESSION_STARTED"; contextKey: string; sessionId: string }
   | {
       type: "SESSION_MODES"
@@ -887,6 +904,9 @@ type Action =
       message: string
       /** The agent's own words, as opposed to codeg's verdict. */
       fromAgent: boolean
+      /** `message` also streamed as reply text, which the line replaces
+       *  (`SessionFailureRecord.echoed_in_reply`). */
+      echoedInReply?: boolean
     }
   | {
       type: "CLAUDE_API_RETRY"
@@ -1731,6 +1751,42 @@ function ensureLiveMessage(prev: LiveMessage | null): LiveMessage {
   }
 }
 
+/**
+ * `content` without the failure account `message` a reply chunk told (see
+ * `SessionFailureRecord.echoed_in_reply`): its LAST occurrence in the last
+ * main-thread text block is cut out — anything the agent appended after it
+ * (Antigravity's citation notice) stays — and the block goes once nothing is
+ * left. Returned as is (same reference) when there is no such occurrence.
+ *
+ * The backend's `drop_echoed_failure_text` (`acp/session_state.rs`) is the
+ * same rule, so a snapshot and a watching client agree; keep them in step.
+ */
+export function dropEchoedFailureText(
+  content: LiveContentBlock[],
+  message: string
+): LiveContentBlock[] {
+  const account = message.trim()
+  if (!account) return content
+  let index = -1
+  for (let i = content.length - 1; i >= 0; i--) {
+    const block = content[i]
+    if (block.type === "text" && block.parentToolUseId === undefined) {
+      index = i
+      break
+    }
+  }
+  if (index < 0) return content
+  const block = content[index] as Extract<LiveContentBlock, { type: "text" }>
+  const at = block.text.lastIndexOf(account)
+  if (at < 0) return content
+  const before = block.text.slice(0, at).trimEnd()
+  const after = block.text.slice(at + account.length).trimStart()
+  const rest = before && after ? `${before}\n\n${after}` : before || after
+  return rest
+    ? content.map((b, i) => (i === index ? { ...block, text: rest } : b))
+    : content.filter((_, i) => i !== index)
+}
+
 /** Shared empty `steeredMessageIds`, so a turn that steers nothing (almost all
  *  of them) keeps a stable reference through `connRenderEqual`. */
 const EMPTY_STEERED_MESSAGE_IDS: string[] = []
@@ -2327,6 +2383,7 @@ function connectionsReducer(
         pendingPermission: hydratedPendingPermission,
         pendingAskQuestion: action.patch.pendingAskQuestion,
         pendingPlanApproval: action.patch.pendingPlanApproval,
+        askDelegate: action.patch.askDelegate ?? null,
         pendingUserMessage: action.patch.pendingUserMessage,
         promptCapabilities: mergedPromptCapabilities,
         selectorsReady: mergedSelectorsReady,
@@ -2955,6 +3012,17 @@ function connectionsReducer(
       return next
     }
 
+    case "SET_ASK_DELEGATE": {
+      const conn = state.get(action.contextKey)
+      if (!conn) return state
+      const next = new Map(state)
+      next.set(action.contextKey, {
+        ...conn,
+        askDelegate: action.askDelegate,
+      })
+      return next
+    }
+
     case "CLEAR_PLAN_APPROVAL": {
       const conn = state.get(action.contextKey)
       if (!conn) return state
@@ -3261,13 +3329,19 @@ function connectionsReducer(
           return state
         }
       }
+      // The account already streamed as reply text (Antigravity tells a dead
+      // executor as an ordinary reply chunk, and only its trajectory says it
+      // ended the turn): the line takes those words' place, as on reload.
+      const content = action.echoedInReply
+        ? dropEchoedFailureText(prev.content, message)
+        : prev.content
       const next = new Map(state)
       next.set(action.contextKey, {
         ...conn,
         liveMessage: {
           ...prev,
           content: [
-            ...prev.content.filter((block) => block.type !== "turn_error"),
+            ...content.filter((block) => block.type !== "turn_error"),
             {
               type: "turn_error" as const,
               message,
@@ -5572,12 +5646,14 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           })
           // A blocked agent is exactly what a notification is for — the sound
           // path had covered this one since it shipped. Body names the agent
-          // only: the question text is the agent's own prose.
+          // only: the question text is the agent's own prose. One the
+          // dispatching assistant answers for the owner waits until it is
+          // forwarded to them (`ask_forwarded`).
           {
             const nc = quiet
               ? null
               : storeRef.current.connections.get(contextKey)
-            if (nc) {
+            if (nc && !delegatesQuestion(nc.askDelegate, e.questions)) {
               void notifyDesktop(
                 "question_request",
                 sessionNotification(contextKey, {
@@ -5619,11 +5695,12 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           // asks under that event's switches rather than a row of its own,
           // and every plan approval reads the same whichever agent raised it.
           // Body names the agent only: the plan is the agent's own prose.
+          // Held back while the dispatching assistant answers it.
           {
             const nc = quiet
               ? null
               : storeRef.current.connections.get(contextKey)
-            if (nc) {
+            if (nc && !delegatesPlan(nc.askDelegate)) {
               void notifyDesktop(
                 "permission_request",
                 sessionNotification(contextKey, {
@@ -5635,6 +5712,20 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
               void requestWindowAttention("permission_request")
             }
           }
+          break
+        case "ask_delegate":
+          dispatch({
+            type: "SET_ASK_DELEGATE",
+            contextKey,
+            askDelegate: e.delegate ?? null,
+          })
+          break
+        case "ask_forwarded":
+          // A question or plan approval the dispatching assistant was
+          // answering is the owner's now. The assistant tells them itself
+          // (1.13): an urgent notification under its own name, routed by
+          // the backend (`personal-agent://notify`) — one here as well
+          // would be the same news twice. The card is already up.
           break
         case "plan_approval_resolved":
           // The approval was answered (this or another window) or canceled.
@@ -5813,12 +5904,16 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             options: e.options,
             queued: e.queued,
           })
-          // Send OS notification when permission approval is needed
+          // Send OS notification when permission approval is needed — except
+          // a plan approval the dispatching assistant answers for the owner.
           {
             const nc = quiet
               ? null
               : storeRef.current.connections.get(contextKey)
-            if (nc) {
+            if (
+              nc &&
+              !delegatesPermission(nc.askDelegate, e.tool_call, e.options)
+            ) {
               const agentLabel = getAgentLabel(nc.agentType)
               // No redacted variant: the body is a fixed localized string
               // plus the agent's name, and names nothing of the user's. (The
@@ -6043,6 +6138,8 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
                 own ||
                 tFailure(sessionFailureCategoryLabelKey(e.record.category)),
               fromAgent: own.length > 0,
+              echoedInReply:
+                own.length > 0 && e.record.echoed_in_reply === true,
             })
           }
           if (quiet || !failureConn) break

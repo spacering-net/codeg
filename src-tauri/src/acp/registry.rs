@@ -3702,9 +3702,25 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //     literals against 2.1.328's). It warns on the first turn
             //     (`settings_not_in_effect`) when a session's settings fail to
             //     validate; codeg's `modelPicker` settings raise no warning live.
+            //
+            // 0.110.1 (2026-11-23) keeps every dependency of 0.110.0 (ACP SDK
+            // 2.9.1, Claude Agent SDK 0.3.330, so Claude Code 2.1.330) and
+            // `engines.node` ">=22". Its two fixes (#1542, #1697) are in the ACP
+            // v2 code; codeg speaks v1. On the v1 path it changes three things,
+            // none of which codeg gets. AskUserQuestion forms gain a request
+            // `_meta.jetbrains.air.customAnswerFields`, but codeg does not
+            // advertise form elicitation to Claude. A subagent's hand-back report
+            // now also reaches AIR clients, live and on replay, but only when the
+            // client declares `subagents` or `nativeSubagentSessions`. The
+            // steering priority moved to its own module with the same rule.
+            // Measured live with fresh installs of both versions: `initialize`,
+            // the model list and effort switches, MCP titles, MCP over stdin,
+            // foreground bash, tools and plan options match after
+            // normalization. Fresh installs of both now pull
+            // `@anthropic-ai/sdk` 1.13.0 instead of 1.12.0, and both still work.
             distribution: AgentDistribution::Npx {
-                version: "0.110.0",
-                package: "@agentclientprotocol/claude-agent-acp@0.110.0",
+                version: "0.110.1",
+                package: "@agentclientprotocol/claude-agent-acp@0.110.1",
                 cmd: "claude-agent-acp",
                 args: &[],
                 env: &[],
@@ -5552,12 +5568,12 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             description: "The open source coding agent",
             // OpenCode 2. 2.2.0 (2026-10-27) is the first 2.x release on
             // GitHub, and the ACP registry's `opencode` entry moved to it the
-            // same day. This pin is 2.3.2 (2026-11-18), which the registry
-            // entry names too, with the same sha256s; GitHub's "latest" now
+            // same day. This pin is 2.4.1 (2026-11-23), which the registry
+            // entry names too, with the same sha256s; GitHub's "latest" still
             // marks 1.19.6 (2026-11-17). The archives keep the 1.x names and
             // layout, a single `opencode` / `opencode.exe` at the root, and the
             // darwin binaries carry the Developer ID signature 1.18.34
-            // introduced: 2.3.2's darwin-arm64 and darwin-x64 pass `codesign
+            // introduced: 2.4.1's darwin-arm64 and darwin-x64 pass `codesign
             // --verify --strict`.
             //
             // codeg no longer runs 1.x (`opencode_launch` refuses it). 2.x
@@ -5574,7 +5590,10 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // default, and not among the flags `OPENCODE_FLAGS=all` turns on),
             // so none of the 29 databases 2.2.5 and 2.2.6 wrote in testing had
             // any; the parser reads them first all the same, the way 2.2.6
-            // does (the rows, then any inline content).
+            // does (the rows, then any inline content). 2.4.0 turns
+            // `part_rows` on by default: every assistant part now goes to a
+            // row and the message's own `content` stays `[]` (measured on
+            // 2.4.1), which that order reads as it is.
             //
             // `acp` takes no options besides `--login` (an interactive `auth
             // login`). It starts a private `serve --stdio` server on an
@@ -5608,9 +5627,10 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // and a `*` bypass list, their Python and curl requests go through
             // the proxy again. And every server process, the private one `acp`
             // starts and codeg's credential helper alike, runs the automation
-            // loop (scheduled prompts until 2.3.1 renamed them). It fires only
-            // where `experimental.automations` (or the older
-            // `experimental.schedules`) is on and automations exist, from
+            // loop (scheduled prompts until 2.3.1 renamed them). Through 2.3.x
+            // it fired only where `experimental.automations` (or the older
+            // `experimental.schedules`) was on and automations existed; 2.4.0
+            // turns them on by default (see the 2.4.1 paragraph). It fires from
             // whichever process holds the 60 s `automation:leader` lease, and
             // otherwise does one kv write and delete per start (read in the
             // 2.3.2 source).
@@ -5628,8 +5648,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // gaining a note saying so; `read` in a missing folder names the
             // nearest folder that exists; and a code-mode `execute` row gets
             // one progress update fewer. With a provider that has an image
-            // model, `experimental_image_generate` (2.2.2) is offered by
-            // default. Its job, like a command moved to the background (2.2.0
+            // model, `experimental_image_generate` (2.2.2; `generate_image`
+            // since 2.4.0) is offered by default. Its job, like a command moved to the background (2.2.0
             // too), ends in a message ACP does not forward, so the call's card
             // settles only when the parser reads that message back. The new
             // `claude-agent` integration (2.2.3) offers only an external
@@ -5687,7 +5707,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // call. And the integration list no longer waits for the plugins,
             // so asked first thing it answers an empty list (22 entries on
             // 2.2.6); codeg's helper asks for the default model first, which
-            // still waits, and then gets the same 22.
+            // still waits, and then gets the same 22 (2.4.0 stopped that wait
+            // too, see the 2.4.1 paragraph).
             //
             // codeg lists `/goal` like any other command and leaves it to
             // OpenCode to make it work over ACP. It keeps the session working
@@ -5737,7 +5758,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // the frontend drops such chunks and offers to load the
             // background activity, which re-reads the session through
             // `parsers::opencode`; the parser already renders that shape (the
-            // launch, the `<subagent>` notice it settles the card with, and
+            // launch, the `<subagent>` notice it settles the card with (since
+            // 2.4.0 `<background-result kind="subagent">`), and
             // the parent's answer). Nothing marks the end of such a turn, so
             // it cannot be shown as a turn of its own the way Grok's is.
             //
@@ -5786,8 +5808,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // launch, `Command moved to the background (shell ID: …)` with
             // `metadata.status: "running"`, a `shellID` and no exit, which
             // codeg already reads as one, and the command's result arrives
-            // later in the stored `<shell>` notice the parser settles the card
-            // with. Such a command outlives Stop (read in the source). The
+            // later in the stored `<shell>` notice (`<background-result
+            // kind="shell">` since 2.4.0) the parser settles the card with. Such a command outlives Stop (read in the source). The
             // turn its end wakes is now forwarded after `end_turn`, like a
             // sub-agent's report and with no frame to mark it either (2.3.0
             // woke the model but sent nothing; measured: one chunk 4 s after
@@ -5801,40 +5823,88 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `AGENTS.md` is missing (measured: the marker reached 2.3.2's
             // model only), unless `OPENCODE_DISABLE_CLAUDE_CODE` or
             // `OPENCODE_DISABLE_CLAUDE_CODE_PROMPT` is set; codeg sets neither.
+            //
+            // 2.4.1 (2026-11-23) follows 2.4.0 the same day, which could not
+            // save assistant messages with macOS 12's SQLite. Measured over
+            // stdio with codeg's client capabilities against 2.3.2:
+            // `initialize` (`protocolVersion: 1`) and the model, effort and
+            // mode values match, the slash commands gain `/automation`, and a
+            // mode change also pushes a `config_option_update`. The scripted
+            // tool turn, the shell results (exit 0, `Exit code: 3`, `Exit
+            // code: 143 (SIGTERM)`, and a timeout moved to the background with
+            // its woken chunk after `end_turn`), `/goal` and the error texts
+            // codeg classifies match. The ACP bridge changed in one place
+            // only, no longer rebuilding diffs for `execute`. A stdio MCP
+            // server handed over on `session/new` is now first sent
+            // `server/discover` (protocol 2026-07-28); codeg-mcp answers it
+            // with -32601, gets the legacy `initialize` next, and its tools
+            // reach the model, as do a server's that knows only 2024-11-05 or
+            // 2025-06-18. Two migrations (64 in all) add a `machine` table; the
+            // session tables keep their shapes, `session/load` reads the other
+            // version's database in both directions, and 2.3.2 opens a
+            // migrated one without a warning. Three changes reached codeg:
+            //   * The image tool is now `generate_image` (also the `source` of
+            //     its notice), and `generate_video` is new, a background job
+            //     that ends the same way. The parser keys both names, and
+            //     the video job, on the notice's `jobID`
+            //     (`background_job_of_call`).
+            //   * Every background notice, a command's, an image or video
+            //     job's or a sub-agent's report, is now wrapped in
+            //     `<background-result kind="…" …>` with the old attributes
+            //     after the kind and the same metadata; the parser strips it
+            //     as it stripped `<shell>`, `<image>` and `<subagent>`, which
+            //     older sessions keep.
+            //   * No endpoint waits for the plugins any more, so the default
+            //     model answers `null` at once and the integration list, asked
+            //     first thing, held 0, 9 or 14 entries where 2.3.2 had 22, and
+            //     connecting a key answered 404 (5 of 5 fresh starts). The
+            //     credential helper now also polls the plugin list until it is
+            //     non-empty, as OpenCode's own CLI does
+            //     (`opencode_credentials`); the two lists fill together.
+            // Automations are now on unless the config says
+            // `"automations": false`, which codeg does not write: the
+            // `automation` tools and `/automation` are offered, and one the
+            // model created to run a prompt 5 s later fired into the same
+            // session and ran a turn, tools included, that sent nothing over
+            // ACP. codeg shows such a run only when it reads the session back.
+            // A plugin given as a package name that follows a version
+            // (`@latest`, a range, a git branch) now updates itself every
+            // 24 h; the plugins the Harness installs are absolute local paths,
+            // which OpenCode never updates.
             distribution: AgentDistribution::Binary {
-                version: "2.3.2",
+                version: "2.4.1",
                 cmd: "opencode",
                 args: &["acp"],
                 env: &[],
                 platforms: &[
                     PlatformBinary {
                         platform: "darwin-aarch64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v2.3.2/opencode-darwin-arm64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v2.4.1/opencode-darwin-arm64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "darwin-x86_64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v2.3.2/opencode-darwin-x64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v2.4.1/opencode-darwin-x64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "linux-aarch64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v2.3.2/opencode-linux-arm64.tar.gz",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v2.4.1/opencode-linux-arm64.tar.gz",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "linux-x86_64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v2.3.2/opencode-linux-x64.tar.gz",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v2.4.1/opencode-linux-x64.tar.gz",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "windows-aarch64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v2.3.2/opencode-windows-arm64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v2.4.1/opencode-windows-arm64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "windows-x86_64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v2.3.2/opencode-windows-x64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v2.4.1/opencode-windows-x64.zip",
                         sha256: None,
                     },
                 ],
@@ -7272,9 +7342,32 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // wrote with the same replay as 2.6.3's own. An approved or
             // dismissed plan review still settles `ExitPlanMode` `failed` with
             // `isError`, so the workaround stays.
+            //
+            // 2.7.3 is a patch release, and the mandated check passes verbatim.
+            // `package.json` changes its version and three devDependencies; the
+            // runtime dependencies and `engines.node` (`>=22.19.0`) are
+            // unchanged. 37 of the bundle's 4228 modules changed and none is in
+            // `packages/acp-server`. The fix for sessions whose model is no
+            // longer configured (#5212) lives in the `kimi web` server only:
+            // over ACP, 2.7.2 and 2.7.3 alike open such a session with the old
+            // alias as the model's current value (not among its options),
+            // answer its first prompt `end_turn` with no text (`config.invalid`
+            // in `wire.jsonl`), and work again once another model is picked;
+            // with no `default_model` at all both answer `Authentication
+            // required`. `wire.jsonl`'s `turn.ended` gains `replyModel` and
+            // `modelSteps`, which the parser does not read. A live A/B against a
+            // fresh 2.7.2 matched on `initialize` (`protocolVersion: 1`),
+            // `session/new` (the model, thinking and mode values for all four
+            // block shapes, the 14 slash commands), text, Bash, MCP
+            // (`mcp__probe__echo` reached the server), question, Edit, Skill,
+            // deny-rule and provider-error turns, a turn cancelled mid-tool, the
+            // session-lock texts and codes, and the `wire.jsonl` record types,
+            // and 2.7.3 loads and resumes a session 2.7.2 wrote with the same
+            // replay. An approved or dismissed plan review still settles
+            // `ExitPlanMode` `failed` with `isError`, so the workaround stays.
             distribution: AgentDistribution::Npx {
-                version: "2.7.2",
-                package: "@moonshot-ai/kimi-code@2.7.2",
+                version: "2.7.3",
+                package: "@moonshot-ai/kimi-code@2.7.3",
                 cmd: "kimi",
                 args: &["acp"],
                 env: &[],
@@ -8408,8 +8501,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //   `$DSH_HOME/deepseek-acp/settings.yaml`，而且只装 `llm-pi-ai` 一段。实测：
             //   同一份两条模型的 `llm-deepseek.models`，0.9.0 的模型下拉换成这两条，
             //   0.11.0 仍是内置的 `deepseek-flash` / `deepseek-v4-pro`，也没有任何环境
-            //   变量能改这份目录。所以设置页只对低于 0.10.0 的安装显示目录编辑器
-            //   （`deepseekReadsHarnessCatalog`）。0.10.0 及以后显示的是
+            //   变量能改这份目录。所以设置页对 0.10.0 与 0.11.0 不显示目录编辑器
+            //   （`deepseekReadsHarnessCatalog`；0.12.0 又读这一段，见下）。0.10.0 及以后显示的是
             //   `commands::deepseek_settings` 的**路由编辑器**：它写
             //   `$DSH_HOME/deepseek-acp/settings.yaml` 的 `llm-pi-ai.providers`，
             //   每条路由把一个 pi-ai provider 的目录加进同一个模型下拉——那是这些
@@ -8448,13 +8541,49 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //   里的模型。实测（替身 Anthropic 端点 + codeg 的客户端能力）：文本、bash、
             //   `session/new` 交来的 stdio MCP 工具三种回合都正常结束。
             //
+            // 0.12.0 的 `dsh-*` 从 0.2.2-rc.3 升到 rc.5（代码差异只有新增的
+            // `CONTENT_REFUSED`），`@agentclientprotocol/sdk` 仍是 1.4.0，
+            // `engines.node` 仍是 `>=22.19.0`；`initialize` 除版本号外逐字段相同（两版
+            // 实测），三个被镜像的 `dsh-*` 包除版本号外不变，会话日志仍是
+            // `session.v4.jsonl.zstd`，两版写出的记录类型与字段形状逐条相同，0.12.0 能
+            // `session/load` 0.11.0 的会话。codeg 这边的落点：
+            //
+            // * **`llm-deepseek` 段又生效了**（#13/#19，`mountDeepSeekProvider`）：
+            //   依次在 `$DSH_HOME/deepseek-acp/settings.yaml`、`$DSH_HOME/settings.yaml`、
+            //   `settings.yaml.imported` 里取第一份根上有这个键的（读不懂的跳过，不跨文件
+            //   合并），映射逐层叠到内置配置上，`models` 数组则整体换掉内置两项；段不合法
+            //   时退回内置配置，只在 stderr 留一行 warn。实测：codeg 目录编辑器写进
+            //   `$DSH_HOME/settings.yaml` 的两条模型，0.11.0 下拉仍是内置两项，0.12.0
+            //   换成这两条，并与 `llm-pi-ai` 路由合成同一个分组下拉。所以设置页对 0.12.0
+            //   及以后同时显示目录编辑器与路由编辑器；目录编辑器按版本（`CatalogReader`）
+            //   读写上游实际取段的那份文档，「使用智能体默认」连带清掉后面文档里的列表
+            //   （否则会落到它们身上），继承时显示的是 0.12.0 自己的 `DEEPSEEK_MODELS`
+            //   （两条都是 1,048,576 上下文，Flash 带 `toolUpdate: addition-only`，不钉
+            //   图片像素预算）。`toolUpdate` 是 DSH 0.2 的新字段，编辑器原样带着；0.9.0
+            //   的 schema 放过它、不读它。
+            // * 推理档位的 `category` 从 `model` 改成 `thought_level`，取值仍是
+            //   `off/low/high/max`；没配默认档的多档 pi-ai 路由多一个首项
+            //   `provider-default`（「由提供方决定」，请求不带档位）。codeg 的 composer
+            //   与 `codeg-cli --effort` 都按 `thought_level` 认推理选项（读代码），所以
+            //   0.11.0 被当成模型类选项的那个下拉现在归到推理档位，代码不用改。
+            // * 挂进来的 MCP server 单次工具调用期限从 60 s 改成定时器上限（约 24.8 天，
+            //   #15）：实测 75 s 的 MCP 工具在 0.11.0 第 60 秒以 `Request timed out`
+            //   失败，在 0.12.0 正常返回；`session/cancel` 仍能立刻结束卡住的调用。
+            //   codeg-mcp 的 `ask_user_question`、无限等待的 `get_delegation_status`
+            //   以前在 DeepSeek 上满 60 秒就被掐断，现在不会了。
+            // * 内容安全拒答以 `end_turn` 结算，并追加一段不带 `messageId` 的说明文字
+            //   （0.11.0 是 `-32603`）。
+            // * 新增的 `DEEPSEEK_ACP_PLUGINS` codeg 不设置。实测（替身 Anthropic 端点
+            //   + codeg 的客户端能力）：文本、bash、`session/new` 交来的 stdio MCP 工具
+            //   三种回合都正常结束，停止后立即再发也正常。
+            //
             // Keep `version` and `package` moving together: `version` is what
             // the agents list shows as the upgrade target beside the installed
             // version, so a drift leaves the Upgrade button installing one
             // version while the row keeps calling it stale.
             distribution: AgentDistribution::Npx {
-                version: "0.11.0",
-                package: "deepseek-acp@0.11.0",
+                version: "0.12.0",
+                package: "deepseek-acp@0.12.0",
                 cmd: "deepseek-acp",
                 args: &[],
                 env: &[],
@@ -10098,8 +10227,8 @@ mod tests {
     fn registry_pins_current_acp_agent_versions() {
         assert_npx_version(
             AgentType::ClaudeCode,
-            "0.110.0",
-            "@agentclientprotocol/claude-agent-acp@0.110.0",
+            "0.110.1",
+            "@agentclientprotocol/claude-agent-acp@0.110.1",
             Some("22.0.0"),
         );
         assert_npx_version(
@@ -10134,8 +10263,8 @@ mod tests {
         // range dies on the codeg-mcp stdio entry (see the registry entry).
         assert_npx_version(
             AgentType::KimiCode,
-            "2.7.2",
-            "@moonshot-ai/kimi-code@2.7.2",
+            "2.7.3",
+            "@moonshot-ai/kimi-code@2.7.3",
             Some("22.19.0"),
         );
         assert_npx_version(
@@ -10153,8 +10282,8 @@ mod tests {
         );
         assert_npx_version(
             AgentType::DeepSeek,
-            "0.11.0",
-            "deepseek-acp@0.11.0",
+            "0.12.0",
+            "deepseek-acp@0.12.0",
             Some("22.19.0"),
         );
         assert_npx_version(
@@ -10169,7 +10298,7 @@ mod tests {
             "command-code@1.93.2",
             Some("22.0.0"),
         );
-        assert_binary_version(AgentType::OpenCode, "2.3.2", "/releases/download/v2.3.2/");
+        assert_binary_version(AgentType::OpenCode, "2.4.1", "/releases/download/v2.4.1/");
         // Hermes rides the community npm bridge (upstream retired its PyPI
         // channel at 0.19.0; see the registry entry). The npm package version
         // tracks the upstream version 1:1, and the pin must stay EXACT — the

@@ -75,6 +75,13 @@ pub async fn list_issues(
         "{}/repos/{repo}/issues?state={}&type={kind}&page={page}&limit={per_page}",
         auth.api_base, req.state
     );
+    if req.review_requested_me {
+        // Only the cross-repository search filters by requested reviewer,
+        // and it cannot be narrowed to one repository.
+        return Err(ForgeError::Invalid(
+            "Gitea cannot list one repository's pull requests by requested reviewer".into(),
+        ));
+    }
     if req.assigned_me {
         // A literal login; Gitea has no `@me` shorthand on this endpoint. (The
         // cross-repository `/repos/issues/search` does take an `assigned`
@@ -327,6 +334,29 @@ pub async fn set_item_state(
     Ok(raw.into_row(kind == ForgeItemKind::Change))
 }
 
+/// `GET /repos/{o}/{r}/issues/{n}` or `/pulls/{n}` — one item's state, and
+/// the commit a merged pull request landed as.
+pub async fn item_facts(
+    auth: &ResolvedAuth,
+    owner_repo: &str,
+    kind: ForgeItemKind,
+    number: i64,
+) -> Result<super::ItemFacts, ForgeError> {
+    let repo = repo_ref(owner_repo)?;
+    require_number(number)?;
+    let collection = match kind {
+        ForgeItemKind::Issue => "issues",
+        ForgeItemKind::Change => "pulls",
+    };
+    let url = format!("{}/repos/{repo}/{collection}/{number}", auth.api_base);
+    let raw: serde_json::Value = api_get(auth, &url)
+        .await?
+        .json()
+        .await
+        .map_err(|e| ForgeError::Network(format!("bad item payload: {e}")))?;
+    Ok(super::ItemFacts::from_json(&raw))
+}
+
 /// `POST /repos/{o}/{r}/issues` — open an issue, and hand back the row for it.
 ///
 /// Labels are resolved from NAMES to IDS first, because that is what Gitea's
@@ -455,6 +485,7 @@ pub async fn change_detail(
         // `ForgeChangeDetail`.
         commits: None,
         checks,
+        updated_at: raw.updated_at.filter(|s| !s.is_empty()),
         // Only GitHub holds runs for a maintainer's approval through an API
         // this panel can act on.
         workflow_approval: None,
@@ -485,8 +516,14 @@ async fn head_checks(auth: &ResolvedAuth, repo: &str, sha: &str) -> ForgeCheckLi
     let combined: Option<RawCombinedStatus> =
         async { api_get(auth, &url).await.ok()?.json().await.ok() }.await;
     match combined {
-        Some(combined) => ForgeCheckList::available(
-            combined
+        Some(combined) => {
+            // More than one page holds: not the whole answer, so a failing
+            // status on the next page cannot read as green.
+            let more = match combined.total_count {
+                Some(n) => n > combined.statuses.len(),
+                None => combined.statuses.len() >= LABEL_PAGE_SIZE,
+            };
+            let checks = combined
                 .statuses
                 .into_iter()
                 .map(|status| ForgeCheck {
@@ -502,8 +539,13 @@ async fn head_checks(auth: &ResolvedAuth, repo: &str, sha: &str) -> ForgeCheckLi
                     // repository, not of the run.
                     allow_failure: false,
                 })
-                .collect(),
-        ),
+                .collect();
+            if more {
+                ForgeCheckList::partial(checks)
+            } else {
+                ForgeCheckList::available(checks)
+            }
+        }
         None => ForgeCheckList::unavailable(),
     }
 }
@@ -1422,6 +1464,8 @@ const UNKNOWN_HEAD_REPO: &str = "unknown-head-repository";
 #[derive(Debug, Deserialize)]
 struct RawPull {
     #[serde(default)]
+    updated_at: Option<String>,
+    #[serde(default)]
     number: i64,
     #[serde(default)]
     html_url: String,
@@ -1493,6 +1537,8 @@ struct RawPullRepo {
 struct RawCombinedStatus {
     #[serde(default)]
     statuses: Vec<RawCommitStatus>,
+    #[serde(default)]
+    total_count: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1941,6 +1987,7 @@ mod tests {
             tab,
             state: state.into(),
             assigned_me: false,
+            review_requested_me: false,
             labels: vec![],
             search: None,
             sort: super::super::ForgeSort::default(),

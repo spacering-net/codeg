@@ -43,7 +43,6 @@ import {
   moveMessageInputDraft,
   sweepOrphanDraftKeys,
 } from "@/lib/message-input-draft"
-import { discardAskSelectionPrompts } from "@/lib/ask-selection-handoff"
 import {
   batchCloseSlots,
   pushClosedTab,
@@ -1772,12 +1771,6 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
         closingTab.conversationId == null
           ? buildNewConversationDraftStorageKey(closingTab.id)
           : null
-      // An "ask about this selection" prompt parked for this tab has no panel
-      // left to drain it. Drop it rather than leave it in the module buffer for
-      // the rest of the session — the tab id is never reused, so it could only
-      // sit there.
-      discardAskSelectionPrompts(closingTab.id)
-
       let draftKeyHandedOver = false
 
       if (useFolderTabsStore.getState().enabled && !next.some(isTabInScope)) {
@@ -3287,6 +3280,23 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
 }))
 
 /**
+ * A change of this window's own making — the startup passes recovering or
+ * pruning the tab set, not anything the user did — that may move the focus.
+ * Marked as a remote snapshot's focus is (`consumeRemoteActivation`): the
+ * route-sync chokepoint takes it as no activation, so the window stays on the
+ * view it opened on (the assistants page it was left on, say). Marked only
+ * when the focus did move: a mark nothing consumes would swallow the user's
+ * next activation.
+ */
+function moveFocusPassively(change: () => void) {
+  const before = useTabStore.getState().activeTabId
+  change()
+  if (useTabStore.getState().activeTabId !== before) {
+    remoteActivationPending = true
+  }
+}
+
+/**
  * Correction / recovery are one-shot per session (module flags). `TabProvider`
  * calls these gate wrappers when their conditions flip, replacing the former
  * `correctionRanRef` / `recoveryRanRef`.
@@ -3300,7 +3310,7 @@ export function runCorrectionOnce() {
 export function runRecoveryOnce() {
   if (recoveryRan || useFolderTabsStore.getState().enabled) return
   recoveryRan = true
-  useTabStore.getState().recoverActiveContext()
+  moveFocusPassively(() => useTabStore.getState().recoverActiveContext())
 }
 
 /**
@@ -3324,17 +3334,19 @@ export function pruneOrphanDraftsOnce() {
   if (orphaned.length === 0) return
   const orphanIds = new Set(orphaned.map((tab) => tab.id))
   const next = st.rawTabs.filter((tab) => !orphanIds.has(tab.id))
-  useTabStore.setState({
-    rawTabs: next,
-    activeTabId:
-      st.activeTabId != null && orphanIds.has(st.activeTabId)
-        ? (next[0]?.id ?? null)
-        : st.activeTabId,
+  moveFocusPassively(() => {
+    useTabStore.setState({
+      rawTabs: next,
+      activeTabId:
+        st.activeTabId != null && orphanIds.has(st.activeTabId)
+          ? (next[0]?.id ?? null)
+          : st.activeTabId,
+    })
+    for (const tab of orphaned) {
+      clearMessageInputDraftV2(buildNewConversationDraftStorageKey(tab.id))
+    }
+    recomputeTabs()
   })
-  for (const tab of orphaned) {
-    clearMessageInputDraftV2(buildNewConversationDraftStorageKey(tab.id))
-  }
-  recomputeTabs()
 }
 
 // Recompute `tabs` whenever the app-workspace `conversations` list changes (any
@@ -3618,7 +3630,8 @@ function applyRemoteSnapshot(change: TabsChanged) {
   }
 
   // A focus change driven by the remote snapshot must not trip the route-sync
-  // chokepoint into the conversations route.
+  // chokepoint into the conversations route (nor must the startup passes':
+  // `moveFocusPassively`).
   if (nextActiveId !== prev.activeTabId) {
     remoteActivationPending = true
   }
