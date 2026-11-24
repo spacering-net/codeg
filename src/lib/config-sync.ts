@@ -62,6 +62,9 @@ export interface ApplyReport {
   /** Entries stored under another name than the file's, because a different
    *  one here already had it (assistants). Absent from an older backend. */
   renamed?: number
+  /** Assistants matched whose persona file here is their own and stays,
+   *  the file's another. Absent from an older backend. */
+  personaKept?: number
   /** localStorage appearance values the client that ran this apply should
    *  adopt (`adoptSyncedAppearance`). Absent when there are none. */
   appearance?: Record<string, string>

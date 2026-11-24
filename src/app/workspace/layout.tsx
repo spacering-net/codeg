@@ -24,6 +24,7 @@ import {
 import type { ImperativePanelGroupHandle } from "react-resizable-panels"
 import { FolderTitleBar } from "@/components/layout/folder-title-bar"
 import { Sidebar } from "@/components/layout/sidebar"
+import { WorkspaceDocumentTitle } from "@/components/layout/workspace-document-title"
 import { StatusBar } from "@/components/layout/status-bar"
 import {
   AppWorkspaceProvider,
@@ -32,7 +33,6 @@ import {
 import { AssistantsSync } from "@/stores/assistants-store"
 import { ConversationTagsSync } from "@/stores/conversation-tags-store"
 import { ConversationTagsManagerHost } from "@/components/conversations/conversation-tags-manager"
-import { useActiveFolder } from "@/contexts/active-folder-context"
 import { TaskProvider } from "@/contexts/task-context"
 import { AlertProvider } from "@/contexts/alert-context"
 import {
@@ -41,13 +41,15 @@ import {
 } from "@/contexts/acp-connections-context"
 import { DelegationProvider } from "@/contexts/delegation-context"
 import { ConversationRuntimeProvider } from "@/contexts/conversation-runtime-context"
-import { TabProvider, useTabStore, useTabActions } from "@/contexts/tab-context"
+import { TabProvider, useTabStore } from "@/contexts/tab-context"
 import { SidebarProvider, useSidebarContext } from "@/contexts/sidebar-context"
 import { SearchDialogProvider } from "@/contexts/search-dialog-context"
 import { AutomationsViewProvider } from "@/contexts/automations-view-context"
 import { HarnessViewHost } from "@/components/harness/harness-view-host"
 import { HarnessUpdatesSync } from "@/lib/harness/use-harness-updates"
 import { TasksViewProvider } from "@/contexts/tasks-view-context"
+import { PersonalAgentProvider } from "@/contexts/personal-agent-context"
+import { PersonalAgentViewScope } from "@/components/personal-agent/view-scope"
 import { TaskFromMessageHost } from "@/components/tasks/task-from-message-host"
 import {
   WorkbenchRouteProvider,
@@ -97,6 +99,8 @@ import {
 } from "@/components/workspace/deep-link-bootstrap"
 import { HarnessLinkBootstrap } from "@/components/workspace/harness-link-bootstrap"
 import { WorkspaceOpenFolderListener } from "@/components/workspace/workspace-open-folder-listener"
+import { WorkbenchRouteConversationSync } from "@/components/workspace/workbench-route-conversation-sync"
+import { PersonalAgentOpenBridge } from "@/components/personal-agent/open-bridge"
 import { WorkspaceRestoreNotices } from "@/components/workspace/workspace-restore-notices"
 import { HeavyPluginsWarmup } from "@/components/ai-elements/heavy-plugins-warmup"
 import {
@@ -115,16 +119,6 @@ import { useIsMobile } from "@/hooks/use-mobile"
 import { usePlatform } from "@/hooks/use-platform"
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer"
 import { OverlayHostHiddenProvider } from "@/components/ui/overlay-host-hidden"
-
-function WorkspaceDocumentTitle() {
-  const { activeFolder } = useActiveFolder()
-
-  useEffect(() => {
-    document.title = activeFolder ? `${activeFolder.name} - codeg` : "codeg"
-  }, [activeFolder])
-
-  return null
-}
 
 const TOAST_DURATION_MS = 15000
 const WORKSPACE_PANEL_GROUP_ID = "workspace-panel-group"
@@ -1252,6 +1246,19 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
     terminalMaxHeight,
     safeMainHeight
   )
+  // A panel's starting size inside the bounds it has now (none while it is
+  // closed): one outside them is what the panels library clamps anyway, and
+  // warns about in the console on every launch.
+  const startSize = (
+    open: boolean,
+    size: number,
+    range: { minSize: number; maxSize: number }
+  ) => (open ? clamp(size, range.minSize, range.maxSize) : 0)
+  // The middle takes the rest, so the starting sizes still add up to the
+  // whole (the library warns about a layout that does not, too).
+  const sidebarStart = startSize(sidebarOpen, 18, sidebarSizeRange)
+  const auxStart = startSize(auxOpen, 18, auxSizeRange)
+  const terminalStart = startSize(terminalOpen, 28, terminalSizeRange)
 
   return (
     <div
@@ -1268,7 +1275,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
         <ResizablePanel
           id={FOLDER_SHELL_LEFT_PANEL_ID}
           order={1}
-          defaultSize={18}
+          defaultSize={sidebarStart}
           style={sidebarPanelStyle}
           minSize={sidebarOpen ? sidebarSizeRange.minSize : 0}
           maxSize={sidebarOpen ? sidebarSizeRange.maxSize : 0}
@@ -1294,7 +1301,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
         <ResizablePanel
           id={FOLDER_SHELL_MAIN_PANEL_ID}
           order={2}
-          defaultSize={64}
+          defaultSize={Math.max(10, 100 - sidebarStart - auxStart)}
           minSize={10}
         >
           <main
@@ -1313,7 +1320,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
               <ResizablePanel
                 id={FOLDER_MAIN_WORKSPACE_PANEL_ID}
                 order={1}
-                defaultSize={72}
+                defaultSize={Math.max(15, 100 - terminalStart)}
                 minSize={15}
               >
                 {workspaceElement}
@@ -1344,7 +1351,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
               <ResizablePanel
                 id={FOLDER_MAIN_TERMINAL_PANEL_ID}
                 order={2}
-                defaultSize={28}
+                defaultSize={terminalStart}
                 style={terminalPanelStyle}
                 minSize={terminalOpen ? terminalSizeRange.minSize : 0}
                 maxSize={terminalOpen ? terminalSizeRange.maxSize : 0}
@@ -1368,7 +1375,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
         <ResizablePanel
           id={FOLDER_SHELL_RIGHT_PANEL_ID}
           order={3}
-          defaultSize={18}
+          defaultSize={auxStart}
           style={auxPanelStyle}
           minSize={auxOpen ? auxSizeRange.minSize : 0}
           maxSize={auxOpen ? auxSizeRange.maxSize : 0}
@@ -1480,32 +1487,6 @@ function FolderLayoutShell({ children }: { children: React.ReactNode }) {
   )
 }
 
-// Single chokepoint that keeps the workbench route honest: opening or switching
-// to a conversation from ANY entry point (sidebar, ⌘T, search, deep links, pet
-// focus, branch switch, run history …) activates a tab, so leaving a non-default
-// route whenever activeTabId changes covers every opener — present and future —
-// without patching each call site. Re-selecting the ALREADY-active tab does not
-// change activeTabId, so the interactive conversation pickers (sidebar list,
-// search dialog, run history) also call openConversations() directly.
-function WorkbenchRouteConversationSync() {
-  const activeTabId = useTabStore((s) => s.activeTabId)
-  const { consumeRemoteActivation } = useTabActions()
-  const { openConversations } = useWorkbenchRoute()
-  const prevRef = useRef(activeTabId)
-  useEffect(() => {
-    if (prevRef.current === activeTabId) return
-    prevRef.current = activeTabId
-    // A remote tab snapshot that mirrors another client's focus also changes
-    // activeTabId. That's not a local conversation activation, so don't hijack
-    // this window into the conversations route — doing so would unmount whatever
-    // non-conversation view it's on (e.g. the Automations editor + unsaved
-    // edits). Local activations leave the flag false and switch as before.
-    if (consumeRemoteActivation()) return
-    openConversations()
-  }, [activeTabId, openConversations, consumeRemoteActivation])
-  return null
-}
-
 function WorkspaceLayoutInner({ children }: { children: React.ReactNode }) {
   return (
     <AppWorkspaceProvider>
@@ -1527,7 +1508,6 @@ function WorkspaceLayoutInner({ children }: { children: React.ReactNode }) {
                 <ConversationRuntimeProvider>
                   <WorkspaceProvider>
                     <TabProvider>
-                      <WorkspaceDocumentTitle />
                       <TabKeysSync />
                       <BrowserEventsBridge />
                       {/* Beside the events bridge and not inside it: that one
@@ -1546,8 +1526,6 @@ function WorkspaceLayoutInner({ children }: { children: React.ReactNode }) {
                       <BrowserTabsPersistence />
                       <BrowserTabsSuspender />
                       <HeavyPluginsWarmup />
-                      <DeepLinkBootstrap />
-                      <PetFocusBridge />
                       <WorkspaceRestoreNotices />
                       {/* Always mounted: external-change conflicts must be
                             resolvable even with the aux file tree closed. */}
@@ -1573,28 +1551,45 @@ function WorkspaceLayoutInner({ children }: { children: React.ReactNode }) {
                                           sidebar's badge count, kept current
                                           with the page closed. */}
                                     <HarnessUpdatesSync />
-                                    <WorkbenchRouteProvider>
-                                      <WorkbenchRouteConversationSync />
-                                      {/* The task editor a message's "create
-                                            task" opens over the page it is on:
-                                            a transcript shows in a tab, a canvas
-                                            card or a drawer on any route, and
-                                            none of them keeps one of its own. */}
-                                      <TaskFromMessageHost />
-                                      {/* Inside WorkbenchRouteProvider: the
-                                            listener calls openConversations() to
-                                            surface a launcher-opened folder. */}
-                                      <WorkspaceOpenFolderListener />
-                                      {/* An "Open in Codeg" link for a Harness
-                                            item opens it here, inside the route
-                                            and the Harness view it needs: the
-                                            page's own ?harness=, or the address
-                                            PetFocusBridge claimed. */}
-                                      <HarnessLinkBootstrap />
-                                      <FolderLayoutShell>
-                                        {children}
-                                      </FolderLayoutShell>
-                                    </WorkbenchRouteProvider>
+                                    <PersonalAgentProvider>
+                                      <PersonalAgentViewScope>
+                                        <WorkbenchRouteProvider>
+                                          <WorkbenchRouteConversationSync />
+                                          {/* Inside WorkbenchRouteProvider: they
+                                              show the conversations for the one
+                                              they open, which may be the tab
+                                              already active under the view the
+                                              window opened on. */}
+                                          <DeepLinkBootstrap />
+                                          <PetFocusBridge />
+                                          {/* The task editor a message's "create
+                                              task" opens over the page it is on:
+                                              a transcript shows in a tab, a canvas
+                                              card or a drawer on any route, and
+                                              none of them keeps one of its own. */}
+                                          <TaskFromMessageHost />
+                                          {/* Inside WorkbenchRouteProvider: the
+                                              listener calls openConversations() to
+                                              surface a launcher-opened folder. */}
+                                          <WorkspaceOpenFolderListener />
+                                          {/* Another window's "open the
+                                              assistants page's settings". */}
+                                          <PersonalAgentOpenBridge />
+                                          {/* Inside the assistants' provider:
+                                              the web's title counts them. */}
+                                          <WorkspaceDocumentTitle />
+                                          {/* An "Open in Codeg" link for a Harness
+                                              item opens it here, inside the route
+                                              and the Harness view it needs: the
+                                              page's own ?harness=, or the address
+                                              PetFocusBridge claimed. */}
+                                          <HarnessLinkBootstrap />
+                                          <FolderLayoutShell>
+                                            {children}
+                                          </FolderLayoutShell>
+                                        </WorkbenchRouteProvider>
+                                      </PersonalAgentViewScope>
+                                    </PersonalAgentProvider>
                                   </HarnessViewHost>
                                 </TasksViewProvider>
                               </AutomationsViewProvider>

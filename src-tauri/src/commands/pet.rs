@@ -210,9 +210,10 @@ pub fn pet_get_current_state_core(handle: &PetStateHandle) -> PetState {
 /// Filtering happens here — before `from_entries` — so the precomputed counts
 /// and the per-row list come from the same filtered set and can never disagree
 /// (the badge and the panel share this one payload). Kept sub-agent rows always
-/// have `pending`, so they land in `waiting_count` and never in `running_count`
-/// — mirroring `compute_pet_state`, which likewise lets a child's pending
-/// permission (and only that) reach the ambient sprite.
+/// wait on the user — a permission, a question or a plan approval — so they
+/// land in `waiting_count` and never in `running_count`, mirroring
+/// `compute_pet_state`, which likewise lets a child's wait (and only that)
+/// reach the ambient sprite.
 pub async fn pet_list_active_sessions_core(
     manager: &ConnectionManager,
     db: &DatabaseConnection,
@@ -229,7 +230,7 @@ pub async fn pet_list_active_sessions_core(
                 summary.kind == crate::db::entities::conversation::ConversationKind::Delegate
             });
             if let Some(parent_id) = delegation_parent {
-                if entry.pending.is_none() {
+                if !entry.is_waiting() {
                     continue;
                 }
                 // A parent row we can't read leaves `parent` unset: the row

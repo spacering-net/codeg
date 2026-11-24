@@ -307,3 +307,26 @@ describe("TurnStats zeroed counters", () => {
     expect(screen.getByLabelText(tokenStatsLabel)).toBeInTheDocument()
   })
 })
+
+describe("TurnStats check action (10.3)", () => {
+  const checkLabel = enMessages.MessageCheck.action
+
+  it("is offered only where the surface passes a handler", () => {
+    renderStats(<TurnStats copyText="hello" />)
+    expect(screen.queryByLabelText(checkLabel)).toBeNull()
+  })
+
+  it("has the assistant check the reply when clicked", async () => {
+    const onCheck = vi.fn()
+    renderStats(<TurnStats copyText="hello" onCheck={onCheck} />)
+    await userEvent.click(screen.getByLabelText(checkLabel))
+    expect(onCheck).toHaveBeenCalledTimes(1)
+  })
+
+  it("is not offered for a reply with no words to check", () => {
+    renderStats(
+      <TurnStats copyText=" " duration_ms={5_000} onCheck={vi.fn()} />
+    )
+    expect(screen.queryByLabelText(checkLabel)).toBeNull()
+  })
+})

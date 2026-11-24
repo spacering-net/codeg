@@ -38,21 +38,32 @@ impl AgentDelegationDefaults {
     }
 }
 
-/// The assistant a `delegate_to_agent` call targets, read from the database
-/// once when the call arrives and frozen for the whole run: an edit made while
-/// the child works changes the next delegation, never this one.
+/// The assistant a `delegate_to_agent` call targets — one of the owner's
+/// personal assistants, named by its uid (`bot`) or, from an old link, by
+/// the collaboration settings' assistant it was converted from
+/// (`assistant_id`) — read from the database once when the call arrives and
+/// frozen for the whole run: an edit made while the child works changes the
+/// next delegation, never this one.
 ///
-/// `agent_options` is the assistant's complete selection. It REPLACES the
-/// per-agent `agent_defaults` for this child rather than layering over them —
-/// an assistant runs exactly as it was configured.
+/// `agent_options` is the complete selection of the agent its work runs on.
+/// It REPLACES the per-agent `agent_defaults` for this child rather than
+/// layering over them — an assistant runs exactly as it was configured;
+/// `instructions` are its work's standing instructions.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DelegationAssistant {
+    /// The assistant's row (`personal_agent.id`).
     pub id: i32,
+    /// Its uid: who the child ran as, for good.
+    #[serde(default)]
+    pub bot_uid: Option<String>,
     pub name: String,
     #[serde(default)]
     pub agent_options: AgentDelegationDefaults,
     #[serde(default)]
     pub instructions: String,
+    /// Its face, kept with the child.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<crate::models::personal_agent_bots::BotAvatar>,
 }
 
 impl DelegationAssistant {
@@ -60,6 +71,7 @@ impl DelegationAssistant {
         AssistantRef {
             id: self.id,
             name: self.name.clone(),
+            bot_uid: self.bot_uid.clone(),
         }
     }
 
@@ -69,26 +81,34 @@ impl DelegationAssistant {
             name: self.name.clone(),
             agent_options: self.agent_options.clone(),
             instructions: self.instructions.clone(),
+            avatar: self.avatar.clone(),
         }
     }
 }
 
-/// What a `delegate_to_agent` call names as its target.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// What a `delegate_to_agent` call names as its target, as its arguments
+/// name it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DelegationTarget {
     Agent(AgentType),
-    /// An assistant by id. Wins over any `agent_type` the same call carries:
-    /// the assistant decides which agent runs.
+    /// One of the owner's assistants, by uid (`bot`). Wins over everything
+    /// else the call carries: the assistant decides which agent runs.
+    Bot(String),
+    /// An old link's assistant (`assistant_id`): the collaboration settings'
+    /// assistant, now the owner's assistant converted from it. Wins over any
+    /// `agent_type`.
     Assistant(i32),
 }
 
 /// Why a call's arguments name no usable target.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DelegationTargetError {
+    /// `bot` is present but not a uid. Carries the raw value.
+    InvalidBot(String),
     /// `assistant_id` is present but not a positive 32-bit integer (or a
     /// string of digits). Carries the raw value, for the refusal message.
     InvalidAssistantId(String),
-    /// No `assistant_id`, and `agent_type` is not an agent slug.
+    /// No `bot` or `assistant_id`, and `agent_type` is not an agent slug.
     InvalidAgentType(String),
     /// Neither field is present.
     Missing,
@@ -99,13 +119,24 @@ pub enum DelegationTargetError {
 /// the call for correlation, and the companion to tell an assistant call from
 /// an agent one — so the four can never disagree about which kind a call is.
 ///
-/// A present, non-null `assistant_id` decides, valid or not: falling through to
-/// `agent_type` would quietly run a call meant for an assistant on a bare
-/// agent. It may be an integer or a string of digits (some hosts stringify
-/// every argument).
+/// `bot` first, then `assistant_id`, then `agent_type`. A present, non-null
+/// `bot` or `assistant_id` decides, valid or not: falling through would
+/// quietly run a call meant for an assistant on a bare agent. `assistant_id`
+/// may be an integer or a string of digits (some hosts stringify every
+/// argument).
 pub fn delegation_target_from_args(
     args: &serde_json::Value,
 ) -> Result<DelegationTarget, DelegationTargetError> {
+    match args.get("bot") {
+        None | Some(serde_json::Value::Null) => {}
+        Some(serde_json::Value::String(raw)) if bot_uid_ok(raw.trim()) => {
+            return Ok(DelegationTarget::Bot(raw.trim().to_string()));
+        }
+        Some(serde_json::Value::String(raw)) => {
+            return Err(DelegationTargetError::InvalidBot(raw.clone()));
+        }
+        Some(other) => return Err(DelegationTargetError::InvalidBot(other.to_string())),
+    }
     match args.get("assistant_id") {
         None | Some(serde_json::Value::Null) => {}
         Some(raw) => return assistant_id_from_value(raw).map(DelegationTarget::Assistant),
@@ -117,6 +148,16 @@ pub fn delegation_target_from_args(
             .ok_or_else(|| DelegationTargetError::InvalidAgentType(raw.clone())),
         Some(other) => Err(DelegationTargetError::InvalidAgentType(other.to_string())),
     }
+}
+
+/// An assistant's uid as codeg writes one (`[0-9a-z]`, at most 64): what a
+/// `bot` argument may be.
+fn bot_uid_ok(uid: &str) -> bool {
+    !uid.is_empty()
+        && uid.len() <= 64
+        && uid
+            .bytes()
+            .all(|b| b.is_ascii_digit() || b.is_ascii_lowercase() || b == b'-' || b == b'_')
 }
 
 fn assistant_id_from_value(raw: &serde_json::Value) -> Result<i32, DelegationTargetError> {
@@ -145,11 +186,15 @@ fn assistant_id_from_value(raw: &serde_json::Value) -> Result<i32, DelegationTar
 
 /// Who a delegation ran as, when it ran as an assistant: carried beside the
 /// `agent_type` on reports, events and card meta so the UI can draw the
-/// assistant even when its row is gone or unknown to the client.
+/// assistant even when its row is gone or unknown to the client. `bot_uid`
+/// is the owner's assistant it ran as (`id` its row); a child from before
+/// them has none, `id` then the collaboration settings' assistant.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssistantRef {
     pub id: i32,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot_uid: Option<String>,
 }
 
 /// Everything the broker needs to dispatch a single delegation call.
@@ -185,19 +230,31 @@ pub struct DelegationRequest {
     pub requested_working_dir: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external_handle: Option<String>,
-    /// Set when the call named an assistant (`assistant_id`). `agent_type` is
-    /// then the ASSISTANT's agent — the caller's own `agent_type` argument is
-    /// ignored — and the child runs on the assistant's options and brief.
+    /// Set when the call named an assistant (`bot`, or an old link's
+    /// `assistant_id`). `agent_type` is then the agent the ASSISTANT's work
+    /// runs on — the caller's own `agent_type` argument is ignored — and the
+    /// child runs on its options and brief.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assistant: Option<DelegationAssistant>,
+    /// The target exactly as the call's arguments named it — the raw `bot`,
+    /// the raw `assistant_id`, or the agent — which the lifecycle keys the
+    /// call by too: never the assistant it was resolved to.
+    #[serde(skip)]
+    pub asked: Option<DelegationTarget>,
 }
 
 impl DelegationRequest {
     /// The target this call named — what its correlation key is built from,
     /// symmetric with the lifecycle's key over the same arguments.
     pub fn target(&self) -> DelegationTarget {
+        if let Some(asked) = &self.asked {
+            return asked.clone();
+        }
         match &self.assistant {
-            Some(a) => DelegationTarget::Assistant(a.id),
+            Some(a) => match &a.bot_uid {
+                Some(uid) => DelegationTarget::Bot(uid.clone()),
+                None => DelegationTarget::Assistant(a.id),
+            },
             None => DelegationTarget::Agent(self.agent_type),
         }
     }
@@ -460,6 +517,10 @@ pub struct DelegationTaskReport {
     pub assistant_id: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assistant_name: Option<String>,
+    /// The owner's assistant it runs as (its uid); absent for a plain agent
+    /// delegation, and for one from before them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot: Option<String>,
     /// The child's tool-call progress: live on a `Running` report, as it
     /// stood at the end on a terminal one. Absent when the child called no
     /// tool, or the session it ran in is no longer in memory.
@@ -474,8 +535,15 @@ impl DelegationTaskReport {
     pub fn with_assistant(mut self, assistant: Option<&AssistantRef>) -> Self {
         if let Some(a) = assistant {
             if self.status != TaskStatus::Unknown {
-                self.assistant_id = Some(a.id);
+                // One of the owner's assistants is named by its uid; its row
+                // id is no `assistant_id` a caller could pass back — that
+                // names a collaboration settings' assistant (another one).
+                self.assistant_id = match a.bot_uid {
+                    Some(_) => None,
+                    None => Some(a.id),
+                };
                 self.assistant_name = Some(a.name.clone());
+                self.bot = a.bot_uid.clone();
             }
         }
         self

@@ -68,6 +68,7 @@ function bindingOf(overrides: Partial<DelegationBinding>): DelegationBinding {
     taskId: null,
     assistantId: null,
     assistantName: null,
+    botUid: null,
     ...overrides,
   }
 }
@@ -140,6 +141,7 @@ describe("SubAgentOverlay", () => {
     bindings["pt-1"] = bindingOf({
       assistantId: 3,
       assistantName: "Reviewer",
+      botUid: null,
       agentType: "codex",
     })
     renderWithIntl(

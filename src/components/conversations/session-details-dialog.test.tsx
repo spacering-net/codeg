@@ -127,6 +127,24 @@ describe("SessionDetailsDialog", () => {
     // Not in the store here: the name it carried.
     expect(getByText("Reviewer")).toBeTruthy()
 
+    // One of the owner's assistants, by its uid: the same row.
+    rerender(
+      wrap(
+        <SessionDetailsDialog
+          open
+          onOpenChange={() => {}}
+          summary={summary({
+            parent_id: 3,
+            bot_uid: "u-7",
+            assistant_name: "Developer",
+          })}
+          stats={fullStats}
+        />
+      )
+    )
+    expect(getByText("Assistant")).toBeTruthy()
+    expect(getByText("Developer")).toBeTruthy()
+
     // A plain session has no such row.
     rerender(
       wrap(

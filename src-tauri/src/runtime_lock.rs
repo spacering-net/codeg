@@ -144,6 +144,23 @@ pub fn hold_for_server(data_dir: &Path) -> io::Result<Option<RuntimeLock>> {
 mod tests {
     use super::*;
 
+    /// A lock let go of here can stay held a moment longer: a child another
+    /// test forks in this process (a PTY's spawn runs `pre_exec`, so it forks
+    /// rather than `posix_spawn`s) holds every open file until it execs. What
+    /// should be free is asked for again until it is, for at most 2 s.
+    fn soon<T>(mut take: impl FnMut() -> io::Result<Option<T>>) -> Option<T> {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Some(held) = take().unwrap() {
+                return Some(held);
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     #[test]
     fn runtimes_share_the_directory_and_a_private_server_wants_it_alone() {
         let dir = tempfile::tempdir().unwrap();
@@ -157,13 +174,13 @@ mod tests {
         assert!(try_exclusive(dir.path()).unwrap().is_none());
         drop(second);
 
-        let alone = try_exclusive(dir.path()).unwrap().expect("nobody left");
+        let alone = soon(|| try_exclusive(dir.path())).expect("nobody left");
         assert!(
             try_shared(dir.path()).unwrap().is_none(),
             "no runtime opens a database a private server uses"
         );
         drop(alone);
-        assert!(try_shared(dir.path()).unwrap().is_some());
+        assert!(soon(|| try_shared(dir.path())).is_some());
     }
 
     #[test]
@@ -206,7 +223,7 @@ mod tests {
         let shared = try_shared(dir.path()).unwrap().expect("shared, read-only");
         assert!(try_exclusive(dir.path()).unwrap().is_none());
         drop(shared);
-        assert!(try_exclusive(dir.path()).unwrap().is_some());
+        assert!(soon(|| try_exclusive(dir.path())).is_some());
     }
 
     #[test]

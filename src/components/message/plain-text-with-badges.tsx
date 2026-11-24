@@ -37,7 +37,7 @@ const TextRun = memo(function TextRun({ text }: { text: string }) {
               <ReferenceBadge data={segment.attrs} />
             </FileReferenceActions>
           ) : (
-            <ReferenceBadge key={index} data={segment.attrs} />
+            <ReferenceBadge key={index} data={segment.attrs} openable />
           )
         ) : (
           <span key={index}>{segment.text}</span>
