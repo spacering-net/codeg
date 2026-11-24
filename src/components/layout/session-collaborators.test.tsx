@@ -49,6 +49,7 @@ vi.mock("@/hooks/use-session-digest", () => ({
   useDigestActions: () => ({
     answer: actions.answer,
     dismiss: actions.dismiss,
+    canAnswer: true,
   }),
   useSessionBrief: () => digestState.brief,
 }))

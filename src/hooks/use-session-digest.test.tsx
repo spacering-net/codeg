@@ -1,14 +1,18 @@
 import { act, renderHook, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { useSessionDigest } from "./use-session-digest"
+import { useSessionBrief, useSessionDigest } from "./use-session-digest"
 import type { SessionDigest } from "@/lib/session-digest"
 
 const mocks = vi.hoisted(() => ({
   read: vi.fn(),
+  brief: vi.fn(),
   handlers: new Map<string, (payload: unknown) => void>(),
   off: vi.fn(),
 }))
-vi.mock("@/lib/api", () => ({ sessionDigestAction: mocks.read }))
+vi.mock("@/lib/api", () => ({
+  sessionDigestAction: mocks.read,
+  sessionBriefRead: mocks.brief,
+}))
 vi.mock("@/lib/transport", () => ({
   getTransport: () => ({
     subscribe: vi.fn(async (name, handler) => {
@@ -27,6 +31,23 @@ const digest = (revision: number): SessionDigest => ({
   suggestions: [],
   answers: {},
   dismissedSuggestions: [],
+})
+
+it("refreshes a brief on its own event and clears it when messaging is disabled", async () => {
+  mocks.brief.mockResolvedValue({ text: "Before", updatedAt: null })
+  const { result } = renderHook(() => useSessionBrief(42))
+  await waitFor(() => expect(result.current?.text).toBe("Before"))
+  mocks.brief.mockResolvedValue({ text: "After", updatedAt: null })
+  act(() =>
+    mocks.handlers.get("session-brief://changed")?.({ conversationId: 42 })
+  )
+  await waitFor(() => expect(result.current?.text).toBe("After"))
+  act(() =>
+    mocks.handlers.get("delegation-settings://changed")?.({
+      session_messaging_enabled: false,
+    })
+  )
+  expect(result.current).toBeNull()
 })
 
 describe("useSessionDigest", () => {

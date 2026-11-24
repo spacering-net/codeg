@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import en from "@/i18n/messages/en.json"
 import {
   SessionDigestPanel,
@@ -113,8 +113,13 @@ describe("SessionDigestPanel", () => {
 })
 
 describe("Digest answers through the shared hook", () => {
+  let unregister: (() => void) | undefined
+  afterEach(() => {
+    unregister?.()
+    unregister = undefined
+  })
   function show(send?: (text: string, token: string) => Promise<boolean>) {
-    registerDigestSender(42, send ? async (t, id) => send(t, id) : null)
+    if (send) unregister = registerDigestSender(42, send)
     render(
       <NextIntlClientProvider locale="en" messages={en}>
         <Probe />
@@ -122,10 +127,15 @@ describe("Digest answers through the shared hook", () => {
     )
   }
   function Probe() {
-    const { answer, dismiss } = useDigestActions(42, digest, actions.refresh)
+    const { answer, dismiss, canAnswer } = useDigestActions(
+      42,
+      digest,
+      actions.refresh
+    )
     return (
       <SessionDigestPanel
         digest={digest}
+        disabled={!canAnswer}
         onAnswer={answer}
         onDismiss={dismiss}
       />
@@ -155,9 +165,8 @@ describe("Digest answers through the shared hook", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Answer could not be sent"
     )
-    registerDigestSender(42, null)
   })
-  it("fails without a sender and never sends", async () => {
+  it("disables answers without a sender and does not reserve a question", () => {
     actions.action
       .mockReset()
       .mockImplementation(async (_id, action) =>
@@ -166,16 +175,10 @@ describe("Digest answers through the shared hook", () => {
           : null
       )
     show()
-    fireEvent.click(screen.getByRole("button", { name: "Fast" }))
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Answer could not be sent"
-    )
-    await waitFor(() =>
-      expect(actions.action).toHaveBeenCalledWith(42, {
-        operation: "release",
-        token: "tok",
-      })
-    )
+    const button = screen.getByRole("button", { name: "Fast" })
+    expect(button).toBeDisabled()
+    fireEvent.click(button)
+    expect(actions.action).not.toHaveBeenCalled()
   })
   it("surfaces a rejected reserve without sending", async () => {
     actions.action
@@ -188,7 +191,6 @@ describe("Digest answers through the shared hook", () => {
       "Question is no longer current"
     )
     expect(send).not.toHaveBeenCalled()
-    registerDigestSender(42, null)
   })
   it("shows pending questions and the current work in the title summary", () => {
     render(

@@ -150,8 +150,10 @@ export function SessionDigestPanel({
 
 export function SessionDigestSummary({
   conversationId,
+  onOpen,
 }: {
   conversationId: number | null
+  onOpen?: () => void
 }) {
   const { digest } = useSessionDigest(conversationId)
   const t = useTranslations("SessionDigest")
@@ -159,16 +161,31 @@ export function SessionDigestSummary({
   const unanswered = digest.needsYou.filter(
     (q) => !digest.answers[q.id]?.sent
   ).length
-  if (!digest.now.length && !unanswered) return null
-  return (
-    <span
-      className="block truncate text-[11px] text-muted-foreground"
-      title={digest.now.join(" · ")}
-    >
+  const content = (
+    <>
       {unanswered > 0
         ? t("pendingCount", { count: unanswered })
-        : t("inProgress")}
+        : digest.now.length
+          ? t("inProgress")
+          : t("title")}
       {digest.now[0] ? ` · ${digest.now[0]}` : ""}
+    </>
+  )
+  const className =
+    "block max-w-full truncate text-[11px] text-muted-foreground"
+  const title = digest.now.join(" · ") || t("title")
+  return onOpen ? (
+    <button
+      type="button"
+      className={`${className} text-start hover:underline`}
+      title={title}
+      onClick={onOpen}
+    >
+      {content}
+    </button>
+  ) : (
+    <span className={className} title={title}>
+      {content}
     </span>
   )
 }

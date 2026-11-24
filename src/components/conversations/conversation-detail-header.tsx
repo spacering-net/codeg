@@ -78,6 +78,7 @@ interface ConversationDetailHeaderProps {
   folderPath: string | undefined
   title: string
   status: ConversationStatus | undefined
+  onOpenProgress?: () => void
 }
 
 /**
@@ -102,6 +103,7 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
   folderPath,
   title,
   status,
+  onOpenProgress,
 }: ConversationDetailHeaderProps) {
   const t = useTranslations("Folder.conversationCard")
   const ime = useImeGuard()
@@ -283,7 +285,10 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
           title={title}
         >
           <span className="block max-w-max truncate">{displayTitle}</span>
-          <SessionDigestSummary conversationId={conversationId} />
+          <SessionDigestSummary
+            conversationId={conversationId}
+            onOpen={onOpenProgress}
+          />
         </span>
         {/* Capped at half the row so a long tag list squeezes its own chips
             (they truncate) before it squeezes the title. */}

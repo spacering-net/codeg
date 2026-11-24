@@ -34,7 +34,11 @@ export function SessionCollaborators({
   const { openTab } = useTabActions()
   const conversations = useAppWorkspaceStore((s) => s.conversations)
   const { digest, refresh } = useSessionDigest(conversationId)
-  const { answer, dismiss } = useDigestActions(conversationId, digest, refresh)
+  const { answer, dismiss, canAnswer } = useDigestActions(
+    conversationId,
+    digest,
+    refresh
+  )
   const brief = useSessionBrief(conversationId)
   const [rows, setRows] = useState<DbConversationSummary[]>([])
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -116,6 +120,7 @@ export function SessionCollaborators({
           <h4 className="px-3 text-xs text-muted-foreground">{td("title")}</h4>
           <SessionDigestPanel
             digest={digest}
+            disabled={!canAnswer}
             onAnswer={answer}
             onDismiss={dismiss}
           />

@@ -1,6 +1,12 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react"
 import { useTranslations } from "next-intl"
 import { sessionBriefRead, sessionDigestAction } from "@/lib/api"
 import { getTransport } from "@/lib/transport"
@@ -19,10 +25,21 @@ import type {
  */
 type DigestSender = (text: string, clientMessageId: string) => Promise<boolean>
 const digestSenders = new Map<number, DigestSender>()
+const senderListeners = new Set<() => void>()
 
-export function registerDigestSender(id: number, sender: DigestSender | null) {
-  if (sender) digestSenders.set(id, sender)
-  else digestSenders.delete(id)
+function subscribeSenders(listener: () => void) {
+  senderListeners.add(listener)
+  return () => senderListeners.delete(listener)
+}
+
+export function registerDigestSender(id: number, sender: DigestSender) {
+  digestSenders.set(id, sender)
+  senderListeners.forEach((listener) => listener())
+  return () => {
+    if (digestSenders.get(id) !== sender) return
+    digestSenders.delete(id)
+    senderListeners.forEach((listener) => listener())
+  }
 }
 
 /** The reserve → send → release flow behind the digest panel's buttons. */
@@ -32,9 +49,16 @@ export function useDigestActions(
   refresh: () => Promise<void>
 ) {
   const t = useTranslations("SessionDigest")
+  const canAnswer = useSyncExternalStore(
+    subscribeSenders,
+    () => digestSenders.has(conversationId),
+    () => false
+  )
   const answer = useCallback(
     async (questionId: string, option: string) => {
       if (!digest) return
+      const sender = digestSenders.get(conversationId)
+      if (!sender) throw new Error(t("sendFailed"))
       let token: string | undefined
       try {
         const claim = await sessionDigestAction<DigestAnswerClaim>(
@@ -47,8 +71,10 @@ export function useDigestActions(
           }
         )
         token = claim.token
-        const sender = digestSenders.get(conversationId)
-        if (!sender || !(await sender(claim.text, claim.token)))
+        if (
+          digestSenders.get(conversationId) !== sender ||
+          !(await sender(claim.text, claim.token))
+        )
           throw new Error(t("sendFailed"))
       } catch (error) {
         if (token)
@@ -75,14 +101,11 @@ export function useDigestActions(
     },
     [conversationId, digest, refresh]
   )
-  return { answer, dismiss }
+  return { answer, dismiss, canAnswer }
 }
 
 /**
- * The conversation's brief. Backend writes come from the agent's MCP tools
- * without a change event, so the copy refreshes on load, on transport
- * reconnect, and whenever that conversation's digest changes (an agent that
- * updated the digest just revised its bookkeeping too).
+ * The conversation's brief refreshes after agent edits and reconnects.
  */
 export function useSessionBrief(conversationId: number | null) {
   const [snapshot, setSnapshot] = useState<{
@@ -92,25 +115,46 @@ export function useSessionBrief(conversationId: number | null) {
   useEffect(() => {
     if (conversationId == null || conversationId <= 0) return
     let active = true
+    let enabled = true
+    let request = 0
+    const transport = getTransport()
     const load = () => {
+      if (!enabled) return
+      const version = ++request
       void sessionBriefRead(conversationId)
         .then((value) => {
-          if (active) setSnapshot({ id: conversationId, brief: value })
+          if (active && version === request)
+            setSnapshot({ id: conversationId, brief: value })
         })
         .catch(() => {})
     }
     load()
     const subscriptions: (() => void)[] = []
-    void getTransport()
-      .subscribe<{ conversationId: number }>(
-        "session-digest://changed",
-        (p) => {
-          if (p.conversationId === conversationId) load()
+    void transport
+      .subscribe<{ conversationId: number }>("session-brief://changed", (p) => {
+        if (p.conversationId === conversationId) load()
+      })
+      .then((off) => (active ? subscriptions.push(off) : off()))
+      .catch(() => {})
+    void transport
+      .subscribe<{ session_messaging_enabled: boolean }>(
+        "delegation-settings://changed",
+        (settings) => {
+          if (!active) return
+          enabled = settings.session_messaging_enabled
+          if (enabled) load()
+          else {
+            request += 1
+            setSnapshot({ id: conversationId, brief: null })
+          }
         }
       )
       .then((off) => (active ? subscriptions.push(off) : off()))
       .catch(() => {})
-    const reconnect = getTransport().onReconnect?.(load)
+    const reconnect = transport.onReconnect?.(() => {
+      enabled = true
+      load()
+    })
     if (reconnect) subscriptions.push(reconnect)
     return () => {
       active = false
