@@ -20,6 +20,7 @@ import { getAgentLabel } from "@/lib/custom-agents"
 interface UseConnectionLifecycleOptions {
   contextKey: string
   agentType: AgentType
+  agentAccountId?: string | null
   isActive: boolean
   workingDir?: string
   sessionId?: string
@@ -142,6 +143,7 @@ function isExpectedConnectError(error: unknown): boolean {
 export function useConnectionLifecycle({
   contextKey,
   agentType,
+  agentAccountId,
   isActive,
   workingDir,
   sessionId,
@@ -275,7 +277,8 @@ export function useConnectionLifecycle({
         agentType,
         workingDir,
         sessionIdRef.current,
-        conversationIdRef.current
+        conversationIdRef.current,
+        agentAccountId
       )
       .then(() => {
         if (!cancelled) {
@@ -297,7 +300,7 @@ export function useConnectionLifecycle({
     return () => {
       cancelled = true
     }
-  }, [isActive, workingDir, agentType])
+  }, [isActive, workingDir, agentType, agentAccountId])
 
   // Status-bar task for the two legs that precede a usable session:
   //   "preparing"  — the caller is resolving what to connect to (see `preparing`)
@@ -474,17 +477,22 @@ export function useConnectionLifecycle({
     touchActivity(contextKey)
     if (!status || status === "disconnected" || status === "error") {
       setLastAutoConnectError(null)
-      connConnect(agentType, workingDir, sessionId, conversationId).catch(
-        (e: unknown) => {
-          if (!isExpectedConnectError(e)) {
-            console.error("[ConnLifecycle] connect:", e)
-          }
+      connConnect(
+        agentType,
+        workingDir,
+        sessionId,
+        conversationId,
+        agentAccountId
+      ).catch((e: unknown) => {
+        if (!isExpectedConnectError(e)) {
+          console.error("[ConnLifecycle] connect:", e)
         }
-      )
+      })
     }
   }, [
     isActive,
     agentType,
+    agentAccountId,
     workingDir,
     sessionId,
     conversationId,

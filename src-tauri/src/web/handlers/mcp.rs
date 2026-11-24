@@ -109,6 +109,7 @@ pub async fn mcp_install_from_marketplace(
     Json(params): Json<InstallFromMarketplaceParams>,
 ) -> Result<Json<LocalMcpServer>, AppCommandError> {
     let result = mcp_commands::mcp_install_from_marketplace_core(
+        &state.db,
         &state.emitter,
         params.provider_id,
         params.server_id,
@@ -127,6 +128,7 @@ pub async fn mcp_upsert_local_server(
     Json(params): Json<UpsertLocalServerParams>,
 ) -> Result<Json<LocalMcpServer>, AppCommandError> {
     let result = mcp_commands::mcp_upsert_local_server_core(
+        &state.db,
         &state.emitter,
         params.server_id,
         params.spec,
@@ -141,9 +143,13 @@ pub async fn mcp_set_server_apps(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<SetServerAppsParams>,
 ) -> Result<Json<Option<LocalMcpServer>>, AppCommandError> {
-    let result =
-        mcp_commands::mcp_set_server_apps_core(&state.emitter, params.server_id, params.apps)
-            .await?;
+    let result = mcp_commands::mcp_set_server_apps_core(
+        &state.db,
+        &state.emitter,
+        params.server_id,
+        params.apps,
+    )
+    .await?;
     Ok(Json(result))
 }
 
@@ -151,8 +157,13 @@ pub async fn mcp_remove_server(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<RemoveServerParams>,
 ) -> Result<Json<bool>, AppCommandError> {
-    let result =
-        mcp_commands::mcp_remove_server_core(&state.emitter, params.server_id, params.apps).await?;
+    let result = mcp_commands::mcp_remove_server_core(
+        &state.db,
+        &state.emitter,
+        params.server_id,
+        params.apps,
+    )
+    .await?;
     Ok(Json(result))
 }
 

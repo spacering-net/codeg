@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest"
+import { parseCodegReferenceUri } from "../reference-uri"
+import { referenceToMarkdown } from "../reference-text"
 
 import type { FlatFileEntry } from "@/hooks/use-file-tree"
 import type {
@@ -41,6 +43,28 @@ describe("fileToSuggestion", () => {
 })
 
 describe("agentToSuggestion", () => {
+  it("keeps native identity and exact account through serialization and restore", () => {
+    const agent = {
+      agent_type: "claude_code",
+      name: "Claude Code",
+      available: true,
+    } as AcpAgentInfo
+    const reference = agentToSuggestion(agent, {
+      id: "work-account",
+      name: "Work",
+    }).reference
+    expect(reference.meta?.agentType).toBe("claude_code")
+    expect(referenceToMarkdown(reference)).toBe(
+      "[@Claude Code · Work](codeg://agent/claude_code?account=work-account)"
+    )
+    expect(
+      parseCodegReferenceUri(reference.uri!, "@Claude Code · Work")
+    ).toMatchObject({
+      id: reference.id,
+      label: reference.label,
+      meta: { agentType: "claude_code", agentAccountId: "work-account" },
+    })
+  })
   it("maps to an agent reference with a codeg://agent routing uri", () => {
     const agent = {
       agent_type: "claude_code",

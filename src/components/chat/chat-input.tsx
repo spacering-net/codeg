@@ -83,6 +83,9 @@ interface ChatInputProps {
   steerChannel?: "native" | "pull"
   onAddFeedback?: () => void
   feedbackAddDisabled?: boolean
+  /** Open the "hand off to another agent" dialog. Present only for a
+   *  persisted conversation; the composer's agent control offers it. */
+  onHandoff?: () => void
   /**
    * Keep the composer usable even while disconnected. Set for a folderless chat
    * draft: it has no working dir yet (so it never auto-connects), and the FIRST
@@ -143,6 +146,7 @@ export const ChatInput = memo(function ChatInput({
   steerChannel,
   onAddFeedback,
   feedbackAddDisabled,
+  onHandoff,
   allowOfflineCompose = false,
   injectContent,
   onInjectConsumed,
@@ -243,6 +247,7 @@ export const ChatInput = memo(function ChatInput({
         steerChannel={steerChannel}
         onAddFeedback={onAddFeedback}
         feedbackAddDisabled={feedbackAddDisabled}
+        onHandoff={onHandoff}
         injectContent={injectContent}
         onInjectConsumed={onInjectConsumed}
         placeholder={

@@ -112,6 +112,9 @@ interface ConversationShellProps {
   onAddFeedback?: () => void
   /** Grey out the live-feedback "+" entry when a note can't be sent right now. */
   feedbackAddDisabled?: boolean
+  /** Opens the handoff dialog from the composer; threaded straight through
+   *  to `ChatInput`. Omitted for drafts, which have nothing to hand off. */
+  onHandoff?: () => void
   isActive?: boolean
   /** Show the composer's flowing active-session border (tiled multi-session
    *  active tab only). Threaded straight through to the composer. */
@@ -202,6 +205,7 @@ export function ConversationShell({
   feedbackList,
   onAddFeedback,
   feedbackAddDisabled,
+  onHandoff,
   isActive,
   showActiveFlow,
   queue,
@@ -347,6 +351,7 @@ export function ConversationShell({
               steerChannel={steerChannel}
               onAddFeedback={onAddFeedback}
               feedbackAddDisabled={feedbackAddDisabled}
+              onHandoff={onHandoff}
               injectContent={injectContent}
               onInjectConsumed={onInjectConsumed}
             />

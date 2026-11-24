@@ -8,6 +8,7 @@ import {
   type FocusEvent,
 } from "react"
 import {
+  ArrowRightLeft,
   AtSign,
   Pencil,
   Trash2,
@@ -74,6 +75,7 @@ import {
   type SidebarRelativeClock,
 } from "./sidebar-relative-time"
 import { SessionDetailsDialog } from "./session-details-dialog"
+import { AgentHandoffDialog } from "./agent-handoff-dialog"
 import { SidebarConversationHoverDetails } from "./sidebar-conversation-hover-details"
 import { ConversationTagChips } from "./conversation-tag-chip"
 import {
@@ -263,9 +265,11 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
       ? "font-medium text-muted-foreground"
       : "font-normal text-muted-foreground/70"
   )
+  const tHandoff = useTranslations("Folder.chat.agentHandoff")
   const [renameOpen, setRenameOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
+  const [handoffOpen, setHandoffOpen] = useState(false)
   const [renameValue, setRenameValue] = useState("")
   const [attachTabId, setAttachTabId] = useState<string | null>(null)
   const [hoverOpen, setHoverOpen] = useState(false)
@@ -794,6 +798,10 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                 {tAsk("convertToRegular")}
               </ContextMenuItem>
             )}
+            <ContextMenuItem onSelect={() => setHandoffOpen(true)}>
+              <ArrowRightLeft className="h-4 w-4" />
+              {tHandoff("menuLabel")}
+            </ContextMenuItem>
             <ContextMenuSeparator />
             {/* Sub-sessions opt out like they do of pinning: a sub-agent run
                 is not a conversation the user files away, and the sidebar
@@ -926,6 +934,16 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
           open
           onOpenChange={setDetailsOpen}
           summary={conversation}
+        />
+      )}
+      {handoffOpen && (
+        <AgentHandoffDialog
+          open
+          onOpenChange={setHandoffOpen}
+          conversationId={conversation.id}
+          folderId={conversation.folder_id}
+          sourceAgentType={conversation.agent_type}
+          title={conversation.title}
         />
       )}
 

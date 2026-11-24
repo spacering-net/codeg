@@ -2,6 +2,7 @@
 
 import { memo, useCallback, useState } from "react"
 import {
+  ArrowRightLeft,
   ChevronRight,
   Circle,
   EllipsisVertical,
@@ -24,7 +25,10 @@ import { formatConversationTitle } from "@/lib/conversation-title"
 import { ConversationHeaderFolderPicker } from "@/components/chat/conversation-context-bar"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useTabActions } from "@/contexts/tab-context"
-import { getRuntimeSession } from "@/stores/conversation-runtime-store"
+import {
+  getRuntimeSession,
+  useConversationRuntimeStore,
+} from "@/stores/conversation-runtime-store"
 import type { ConversationStatus } from "@/lib/types"
 import { STATUS_ORDER } from "@/lib/types"
 import { ConversationStatusDot } from "@/components/conversations/conversation-status-dot"
@@ -62,8 +66,12 @@ import {
   type ActiveSessionDetails,
 } from "./active-session-details"
 import { SessionDetailsDialog } from "./session-details-dialog"
+import { AgentHandoffDialog } from "./agent-handoff-dialog"
 import { ConversationHeaderTags } from "./conversation-tag-picker"
 import { useIsMobile } from "@/hooks/use-mobile"
+import { SessionQuotaChip } from "./session-quota-chip"
+import type { AgentType } from "@/lib/types"
+import { resolveConversationAccount } from "@/lib/agent-accounts"
 
 interface ConversationDetailHeaderProps {
   tabId: string
@@ -77,6 +85,7 @@ interface ConversationDetailHeaderProps {
   folderPath: string | undefined
   title: string
   status: ConversationStatus | undefined
+  agentType: AgentType
 }
 
 /**
@@ -101,12 +110,14 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
   folderPath,
   title,
   status,
+  agentType,
 }: ConversationDetailHeaderProps) {
   const t = useTranslations("Folder.conversationCard")
   const ime = useImeGuard()
   const tConv = useTranslations("Folder.conversation")
   const tStatus = useTranslations("Folder.statusLabels")
   const tDetails = useTranslations("Folder.sessionDetails")
+  const tHandoff = useTranslations("Folder.chat.agentHandoff")
   const { closeTab, openNewConversationTab } = useTabActions()
   const updateConversationLocal = useAppWorkspaceStore(
     (s) => s.updateConversationLocal
@@ -148,6 +159,38 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
       : (s.conversations.find((c) => c.id === conversationId)?.git_branch ??
         null)
   )
+  const listedQuotaAccountId = useAppWorkspaceStore((s) => {
+    const row = s.conversations.find((c) => c.id === conversationId)
+    return row ? (row.agent_account_id ?? null) : undefined
+  })
+  const listedQuotaUpdatedAt = useAppWorkspaceStore(
+    (s) => s.conversations.find((c) => c.id === conversationId)?.updated_at
+  )
+  // Sub-sessions need not appear in the sidebar's root-conversation list.
+  // Their refreshed detail still carries the authoritative saved account.
+  const runtimeQuotaAccountId = useConversationRuntimeStore((s) => {
+    const detail =
+      runtimeId == null ? undefined : s.byConversationId.get(runtimeId)?.detail
+    return detail ? (detail.summary.agent_account_id ?? null) : undefined
+  })
+  const runtimeQuotaUpdatedAt = useConversationRuntimeStore((s) =>
+    runtimeId == null
+      ? undefined
+      : s.byConversationId.get(runtimeId)?.detail?.summary.updated_at
+  )
+  // Use the same newest-binding rule as the chat connection and account picker.
+  const quotaAccountId = resolveConversationAccount({
+    persisted: conversationId != null,
+    draft: null,
+    listed:
+      listedQuotaAccountId !== undefined && listedQuotaUpdatedAt !== undefined
+        ? { accountId: listedQuotaAccountId, updatedAt: listedQuotaUpdatedAt }
+        : undefined,
+    detail:
+      runtimeQuotaAccountId !== undefined && runtimeQuotaUpdatedAt !== undefined
+        ? { accountId: runtimeQuotaAccountId, updatedAt: runtimeQuotaUpdatedAt }
+        : undefined,
+  })
   const isMobile = useIsMobile()
 
   const [details, setDetails] = useState<ActiveSessionDetails | null>(null)
@@ -161,6 +204,13 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
     title: string
   } | null>(null)
   const [renameValue, setRenameValue] = useState("")
+  const [handoffTarget, setHandoffTarget] = useState<{
+    id: number
+    folderId: number
+    agentType: AgentType
+    title: string
+  } | null>(null)
+  const tabAgentType = agentType ?? null
   const [deleteTarget, setDeleteTarget] = useState<{
     id: number
     tabId: string
@@ -297,7 +347,14 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
           </div>
         ) : null}
       </div>
-      <div className="flex shrink-0 items-center">
+      <div className="flex shrink-0 items-center gap-0.5">
+        {conversationId != null && (
+          <SessionQuotaChip
+            agentType={agentType}
+            agentAccountId={quotaAccountId}
+            conversationId={conversationId}
+          />
+        )}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
@@ -336,6 +393,21 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
             >
               <Info className="h-4 w-4" />
               {tDetails("menuLabel")}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={!persisted || tabAgentType == null}
+              onSelect={() => {
+                if (conversationId != null && tabAgentType != null)
+                  setHandoffTarget({
+                    id: conversationId,
+                    folderId,
+                    agentType: tabAgentType,
+                    title,
+                  })
+              }}
+            >
+              <ArrowRightLeft className="h-4 w-4" />
+              {tHandoff("menuLabel")}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuSub>
@@ -420,6 +492,19 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {handoffTarget && (
+        <AgentHandoffDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setHandoffTarget(null)
+          }}
+          conversationId={handoffTarget.id}
+          folderId={handoffTarget.folderId}
+          sourceAgentType={handoffTarget.agentType}
+          title={handoffTarget.title}
+        />
+      )}
 
       {details?.summary && (
         <SessionDetailsDialog

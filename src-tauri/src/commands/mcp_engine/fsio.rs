@@ -35,6 +35,25 @@ pub(crate) fn basis_of(bytes: Option<&[u8]>) -> String {
     }
 }
 
+/// The confirmation token for a family row. With no extra accounts this is
+/// still the existing file token, including "missing". Accounts are supplied
+/// in stable path order by EngineCtx.
+pub(crate) fn family_basis(
+    primary: Option<String>,
+    mirrors: &[(String, Option<String>)],
+) -> Option<String> {
+    let primary = primary?;
+    if mirrors.is_empty() {
+        return Some(primary);
+    }
+    if mirrors.iter().any(|(_, basis)| basis.is_none()) {
+        return None;
+    }
+    serde_json::to_vec(&(primary, mirrors))
+        .ok()
+        .map(|bytes| sha256_hex(&bytes))
+}
+
 /// The file's bytes, `None` when it does not exist.
 ///
 /// The absence test is the read itself, not `Path::exists()`, which answers

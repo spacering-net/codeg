@@ -15,8 +15,12 @@ import { formatConversationTitle } from "@/lib/conversation-title"
 export function sessionKey(session: {
   agent_type: string
   external_id: string
+  agent_account_id?: string | null
 }): string {
-  return `${session.agent_type}:${session.external_id}`
+  const key = `${session.agent_type}:${session.external_id}`
+  return session.agent_account_id
+    ? `${key}:account:${session.agent_account_id}`
+    : key
 }
 
 /** Whether a scanned session can be checked for the next import run.
@@ -181,6 +185,14 @@ export const SessionRow = memo(function SessionRow({
       <span className="min-w-0 flex-1 truncate text-sm" title={title}>
         {title}
       </span>
+      {session.agent_account_name && (
+        <span
+          className="max-w-24 truncate text-xs text-muted-foreground"
+          title={session.agent_account_name}
+        >
+          {session.agent_account_name}
+        </span>
+      )}
       {session.status === "imported" && (
         <Badge variant="outline" className="shrink-0 text-3xs">
           {t("statusImported")}

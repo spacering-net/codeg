@@ -29,7 +29,7 @@ const INSERT_CHUNK: usize = 200;
 
 /// One turn's usage, ready to persist. The service assigns nothing itself —
 /// the caller (which owns the parser) fills every field.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct UsageFact {
     pub turn_key: String,
     pub occurred_at: DateTime<Utc>,

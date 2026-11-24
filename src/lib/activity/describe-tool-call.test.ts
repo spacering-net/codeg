@@ -143,6 +143,25 @@ describe("toolStepKind", () => {
       toolStepKind(call("tool", null, { meta: { contextCompaction: true } }))
     ).toBe("compaction")
   })
+
+  it("keeps an agent handoff on its own card instead of a generic tool row", () => {
+    expect(
+      toolStepKind(
+        call("agent_handoff", null, {
+          meta: {
+            "codeg.handoff": {
+              version: 1,
+              from: "claude_code",
+              to: "codex",
+              path: "summary",
+              carried: false,
+              truncated: false,
+            },
+          },
+        })
+      )
+    ).toBe("handoff")
+  })
 })
 
 describe("describeToolCall: exploration", () => {

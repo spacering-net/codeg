@@ -202,6 +202,19 @@ async function openPanel(options?: Parameters<typeof openMenu>[0]) {
 const searchBox = (panel: HTMLElement) =>
   within(panel).getByPlaceholderText("Search tags…")
 
+/** Keyboard traversal must not inherit the pointer-open helper's delayed
+ * hover callback: it can reopen a submenu after the back-arrow in jsdom. */
+async function openKeyboardPanel(options?: Parameters<typeof openMenu>[0]) {
+  const row = await openMenu(options)
+  act(() => row.focus())
+  await userEvent.keyboard(
+    options?.dir === "rtl" ? "{ArrowLeft}" : "{ArrowRight}"
+  )
+  const panel = await screen.findByRole("dialog", { name: "Filter by tags" })
+  await waitFor(() => expect(searchBox(panel)).toHaveFocus())
+  return panel
+}
+
 describe("SidebarTagFilterSubmenu options", () => {
   it("offers the scopes the sidebar can show, named even when closed", async () => {
     const panel = await openPanel()
@@ -394,9 +407,9 @@ describe("SidebarTagFilterSubmenu keyboard", () => {
   })
 
   it("keeps → for the search box in a right-to-left menu, where → goes back", async () => {
-    const panel = await openPanel({ dir: "rtl" })
+    const panel = await openKeyboardPanel({ dir: "rtl" })
     const input = searchBox(panel) as HTMLInputElement
-    await userEvent.type(input, "repo")
+    await userEvent.keyboard("repo")
     await userEvent.keyboard("{ArrowLeft}{ArrowRight}")
 
     expect(input.selectionStart).toBe(4)
@@ -409,8 +422,7 @@ describe("SidebarTagFilterSubmenu keyboard", () => {
   })
 
   it("goes back to the row on ← from an empty search box", async () => {
-    const panel = await openPanel()
-    await userEvent.click(searchBox(panel))
+    await openKeyboardPanel()
     await userEvent.keyboard("{ArrowLeft}")
 
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())

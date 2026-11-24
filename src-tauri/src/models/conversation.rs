@@ -68,6 +68,8 @@ pub struct ConversationSummary {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DbConversationSummary {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_account_id: Option<String>,
     pub id: i32,
     pub folder_id: i32,
     pub title: Option<String>,
@@ -345,6 +347,10 @@ pub enum ScanSessionStatus {
 /// One locally-discovered agent session in the import-picker scan.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScanSession {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_account_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_account_name: Option<String>,
     /// The agent's own session id (`ConversationSummary::id`).
     pub external_id: String,
     pub agent_type: AgentType,
@@ -392,6 +398,8 @@ pub struct ScanResult {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SelectedSessionKey {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_account_id: Option<String>,
     pub agent_type: AgentType,
     pub external_id: String,
 }
@@ -413,7 +421,7 @@ pub struct ImportFolderOutcome {
 }
 
 /// Aggregate result of `import_selected_sessions`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ImportSelectedResult {
     pub imported: u32,
     pub updated: u32,

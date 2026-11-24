@@ -48,6 +48,7 @@ pub mod folder_commands;
 pub mod folder_links;
 pub mod folders;
 pub mod forge;
+pub mod handoff;
 /// The `ui-render` skill and the agents it is enabled for (Skill Packs > UI).
 pub mod generative_ui;
 /// The Harness browse commands (Discover) and the SpaceRing image proxy
@@ -99,6 +100,7 @@ pub mod session_info;
 /// belongs to this app, and no Web route exposes it.
 #[cfg(feature = "tauri-runtime")]
 pub mod srn;
+pub mod subscription_quota;
 pub mod system_settings;
 pub mod terminal;
 pub mod token_usage;
@@ -114,3 +116,5 @@ pub mod workspace_windows;
 /// What a removed worktree does to the workspace — shared by the branch
 /// selector's delete and the to-do task engine's cleanup.
 pub mod worktree_convergence;
+pub mod agent_accounts;
+pub mod account_switch;
