@@ -2286,6 +2286,12 @@
       "sectionFolders": "폴더",
       "sectionChats": "채팅",
       "sectionRecent": "최근",
+      "timeGroupPriorities": "우선순위 (진행 중)",
+      "timeGroupToday": "오늘",
+      "timeGroupYesterday": "어제",
+      "timeGroupPrevious7Days": "지난 7일",
+      "timeGroupPrevious30Days": "지난 30일",
+      "timeGroupOlder": "이전",
       "noChats": "채팅 없음",
       "noRecent": "최근 대화 없음",
       "showMoreRecent": "더 보기 ({count})",
@@ -2321,7 +2327,10 @@
       "noRecentChats": "최근 채팅이 없습니다",
       "noRecentFolders": "최근 폴더 대화가 없습니다",
       "noRecentCli": "명령줄에서 시작한 최근 대화가 없습니다",
-      "recentFilterMenuLabel": "최근 항목 표시"
+      "recentFilterMenuLabel": "최근 항목 표시",
+      "timeGroupPrioritiesTooltip": "현재 실행 중인 세션이 포함됩니다",
+      "recentGroupingModeTime": "시간별 그룹으로 전환",
+      "recentGroupingModeFlat": "일반 목록으로 전환"
     },
     "conversation": {
       "reloadFailed": "대화 다시 불러오기 실패: {message}",
