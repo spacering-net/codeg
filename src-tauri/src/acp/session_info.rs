@@ -102,6 +102,10 @@ pub struct SessionInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub messages: Option<SessionMessages>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<SessionChild>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub children_truncated: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub collaborators: Vec<SessionCollaborator>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub collaborators_truncated: bool,
@@ -131,6 +135,13 @@ impl SessionInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionCollaborator {
     pub session_id: i32,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionChild {
+    pub session_id: i32,
+    pub task_id: Option<String>,
     pub status: String,
 }
 

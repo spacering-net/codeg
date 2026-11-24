@@ -21,8 +21,8 @@ use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 
 use crate::acp::session_info::{
-    SessionCollaborator, SessionHistory, SessionHistoryItem, SessionHistoryOptions, SessionHistoryTool,
-    SessionInfo, SessionInfoAccess, SessionInfoConfig, SessionInfoRuntimeConfig,
+    SessionChild, SessionCollaborator, SessionHistory, SessionHistoryItem, SessionHistoryOptions,
+    SessionHistoryTool, SessionInfo, SessionInfoAccess, SessionInfoConfig, SessionInfoRuntimeConfig,
     SessionMessageItem, SessionMessages, MAX_HISTORY_CHARS, MAX_SESSION_MESSAGES,
 };
 use crate::app_error::AppCommandError;
@@ -172,10 +172,28 @@ impl SessionInfoAccess for DbSessionInfoLookup {
             is_delegation_child: summary.parent_id.is_some(),
             stats: None,
             messages: None,
+            children: Vec::new(),
+            children_truncated: false,
             collaborators: Vec::new(),
             collaborators_truncated: false,
             note: None,
         };
+
+        match conversation_service::list_children(conn, session_id).await {
+            Ok(children) => {
+                info.children_truncated = children.len() > MAX_SESSION_MESSAGES as usize;
+                info.children = children
+                    .into_iter()
+                    .take(MAX_SESSION_MESSAGES as usize)
+                    .map(|child| SessionChild {
+                        session_id: child.id,
+                        task_id: child.delegation_call_id,
+                        status: child.status,
+                    })
+                    .collect();
+            }
+            Err(_) => info.note = Some("Delegation children could not be read.".into()),
+        }
 
         match conversation_service::list_collaborators(conn, session_id).await {
             Ok(rows) => {
@@ -1258,6 +1276,43 @@ mod tests {
                 .as_deref(),
             Some("Unrelated")
         );
+    }
+
+    #[tokio::test]
+    async fn session_info_recovers_persisted_children_without_transcript() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let folder = crate::db::test_helpers::seed_folder(&db, "/history-test").await;
+        let parent = conversation_service::create(&db.conn, folder, AgentType::Codex, None, None)
+            .await
+            .unwrap();
+        let child = conversation_service::create_with_delegation(
+            &db.conn,
+            folder,
+            AgentType::Codex,
+            None,
+            None,
+            Some(crate::acp::delegation::spawner::DelegationLink {
+                parent_conversation_id: parent.id,
+                parent_tool_use_id: "tool-use".into(),
+                delegation_call_id: "persisted-task".into(),
+                assistant: None,
+            }),
+        )
+        .await
+        .unwrap();
+        let lookup = DbSessionInfoLookup::new(
+            Arc::new(db),
+            EventEmitter::Noop,
+            SessionInfoRuntimeConfig::new(),
+        );
+        let info = lookup.resolve(parent.id, 0).await;
+        assert!(info.found);
+        assert!(info.messages.is_none());
+        assert_eq!(info.children.len(), 1);
+        assert_eq!(info.children[0].session_id, child.id);
+        assert_eq!(info.children[0].task_id.as_deref(), Some("persisted-task"));
+        assert_eq!(info.children[0].status, child.status);
+        assert!(!info.children_truncated);
     }
 
     #[tokio::test]
