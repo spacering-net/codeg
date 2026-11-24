@@ -792,6 +792,7 @@ fn find_delegation_args(
     // `assistant_id` counts whether a host sent it as a number or a string.
     if obj.get("task").and_then(|v| v.as_str()).is_some()
         || obj.get("agent_type").and_then(|v| v.as_str()).is_some()
+        || obj.get("bot").and_then(|v| v.as_str()).is_some()
         || obj.get("working_dir").and_then(|v| v.as_str()).is_some()
         || obj
             .get("assistant_id")
@@ -854,7 +855,9 @@ pub(crate) fn is_delegation_invocation(title: &str, raw_input: Option<&str>) -> 
                 let has_assistant_id = args
                     .get("assistant_id")
                     .is_some_and(|v| v.is_number() || v.is_string());
-                if has_task && (has_agent_type || has_assistant_id) {
+                // One of the owner's assistants, by uid.
+                let has_bot = args.get("bot").and_then(|b| b.as_str()).is_some();
+                if has_task && (has_agent_type || has_assistant_id || has_bot) {
                     return true;
                 }
             }
@@ -1434,16 +1437,28 @@ fn extract_code_mode_match_key(raw_input: Option<&str>) -> Option<DelegationMatc
     if !code_mode_args_transparent(code, region) {
         return None;
     }
-    // Mixed-shape guard: a present `assistant_id` resolves to Assistant(id)
-    // on the MCP side and wins over `agent_type`; guessing Agent(…) from the
-    // code text would mint a keyed entry no round-trip can ever claim.
-    // Quoted spellings (`"assistant_id": 3`) are keys too — see
+    // `bot` — one of the owner's assistants — wins over `assistant_id` and
+    // `agent_type`, as on the MCP side (`delegation_target_from_args`):
+    // keyed by it when its value can be read, never guessed.
+    let bot = match code_mode_find_key(code, region, b"bot") {
+        Some(at) => Some(object_string_value(code, at)?),
+        None => None,
+    };
+    // Mixed-shape guard: with no `bot`, a present `assistant_id` resolves to
+    // Assistant(id) on the MCP side and wins over `agent_type`; guessing
+    // Agent(…) from the code text would mint a keyed entry no round-trip can
+    // ever claim. Quoted spellings (`"assistant_id": 3`) are keys too — see
     // [`code_mode_find_key`].
-    if code_mode_find_key(code, region, b"assistant_id").is_some() {
+    if bot.is_none() && code_mode_find_key(code, region, b"assistant_id").is_some() {
         return None;
     }
-    let agent_type_at = code_mode_find_key(code, region, b"agent_type")?;
-    let agent_type = object_string_value(code, agent_type_at)?;
+    let agent_type = match bot {
+        Some(_) => None,
+        None => {
+            let at = code_mode_find_key(code, region, b"agent_type")?;
+            Some(object_string_value(code, at)?)
+        }
+    };
     // `working_dir` is OPTIONAL in the key: ABSENT yields `working_dir:
     // None`, but present-and-unreadable (backslash path, template, variable,
     // concatenation) must bail the WHOLE key — the MCP side sees Some(…),
@@ -1454,7 +1469,10 @@ fn extract_code_mode_match_key(raw_input: Option<&str>) -> Option<DelegationMatc
     };
     let task_at = code_mode_find_key(code, region, b"task")?;
     let task = object_task_value(code, task_at)?;
-    let args = serde_json::json!({ "agent_type": agent_type });
+    let args = match bot {
+        Some(bot) => serde_json::json!({ "bot": bot }),
+        None => serde_json::json!({ "agent_type": agent_type }),
+    };
     // The same parser the MCP listener dispatches the call with, so this
     // target equals `DelegationRequest::target()` for the same call.
     let target = crate::acp::delegation::types::delegation_target_from_args(&args).ok()?;
@@ -1493,7 +1511,13 @@ fn code_mode_single_object_argument(code: &str, open: usize, close: usize) -> bo
 /// SHORTHAND property (or a variable in value position): its value is the
 /// variable's runtime value, and a shorthand AFTER an explicit spelling
 /// overrides it.
-const CODE_MODE_ARG_KEYS: [&[u8]; 4] = [b"agent_type", b"task", b"working_dir", b"assistant_id"];
+const CODE_MODE_ARG_KEYS: [&[u8]; 5] = [
+    b"agent_type",
+    b"task",
+    b"working_dir",
+    b"assistant_id",
+    b"bot",
+];
 
 /// Conservative pre-pass over the argument region: `false` when the region
 /// contains syntax whose effect the scanner cannot evaluate. Spread
@@ -2312,6 +2336,28 @@ mod delegation_title_tests {
         let raw = serde_json::json!({ "code": code_ls }).to_string();
         let acp_key = extract_delegation_match_key(Some(&raw)).expect("ls acp key parses");
         assert_eq!(acp_key, request_key);
+    }
+
+    /// A call naming one of the owner's assistants is keyed by it — with an
+    /// `assistant_id` beside it too, as the MCP side runs it on the `bot`.
+    #[test]
+    fn code_mode_key_is_the_bot_with_or_without_an_assistant_id() {
+        use crate::acp::delegation::types::DelegationTarget;
+        let uid = "0123456789abcdef0123456789abcdef";
+        for args in [
+            format!(r#"{{ bot: "{uid}", task: "t" }}"#),
+            format!(r#"{{ assistant_id: 3, bot: "{uid}", agent_type: "codex", task: "t" }}"#),
+        ] {
+            let code = format!(r#"await tools["codeg-mcp"].delegate_to_agent({args})"#);
+            let raw = serde_json::json!({ "code": code }).to_string();
+            let key = extract_delegation_match_key(Some(&raw)).expect("keyed");
+            assert_eq!(key.target, DelegationTarget::Bot(uid.into()), "{args}");
+            assert_eq!(key.task, "t");
+        }
+        // An `assistant_id` alone still bails: never guessed as the agent.
+        let code = r#"await tools["codeg-mcp"].delegate_to_agent({ assistant_id: 3, agent_type: "codex", task: "t" })"#;
+        let raw = serde_json::json!({ "code": code }).to_string();
+        assert!(extract_delegation_match_key(Some(&raw)).is_none());
     }
 
     #[test]
@@ -5201,6 +5247,7 @@ mod tests {
             requested_working_dir: None,
             external_handle: None,
             assistant: None,
+            asked: None,
         }
     }
 

@@ -86,6 +86,9 @@ pub struct WorkTaskInfo {
     /// forge-sourced task — that one's pull request is `source_meta.result_pr`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delivery: Option<serde_json::Value>,
+    /// The personal-agent dispatch that created this task, when one did.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub personal_agent_dispatch_id: Option<i32>,
     /// The reply drafted for each thread of a forge-sourced task, keyed by
     /// item number — what the write-back posts once the task is accepted.
     /// `None` = no draft (the comment is then the outcome line alone).
@@ -249,6 +252,11 @@ pub struct WorkTaskConfig {
     /// editing this afterwards cannot re-base a task that already ran.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_branch: Option<String>,
+    /// The role assistant a personal-agent dispatch runs this task as — its
+    /// name as it was at dispatch, for the card. Display only; the agent and
+    /// options above are what runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executor_name: Option<String>,
     /// `true` = the selector tuple above (`agent_type` / `mode_id` /
     /// `config_values` / `label_snapshot`) is the task's own, fixed when it
     /// was created or explicitly edited, and is never re-resolved from the

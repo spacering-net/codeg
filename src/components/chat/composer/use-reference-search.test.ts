@@ -4,14 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { FlatFileEntry } from "@/hooks/use-file-tree"
 import type {
   AcpAgentInfo,
-  AssistantInfo,
+  AgentType,
   DbConversationSummary,
   GitLogEntry,
+  RosterEntry,
 } from "@/lib/types"
-import {
-  resetAssistantsStore,
-  useAssistantsStore,
-} from "@/stores/assistants-store"
 
 import type { ReferenceKind } from "./types"
 import type { SuggestionGroup } from "./suggestion/types"
@@ -52,29 +49,43 @@ function makeAgent(
   } as unknown as AcpAgentInfo
 }
 
+/** One of the owner's assistants on the roster: its work on Codex, its
+ *  persona unwritten unless one is given. */
 function makeAssistant(
   id: number,
   name: string,
-  over: Partial<AssistantInfo> = {}
-): AssistantInfo {
+  over: {
+    persona?: string
+    hidden?: boolean
+    work_agent_type?: AgentType | null
+    kind?: "primary" | "worker"
+    sort_order?: number
+  } = {}
+): RosterEntry {
   return {
     id,
+    kind: over.kind ?? "worker",
     uid: `u-${id}`,
     name,
-    description: "",
-    avatar: { kind: "monogram", color: "teal" },
-    agent_type: "codex",
-    agent_options: { config_values: {} },
-    label_snapshot: { agent: "Codex", mode: null, options: [] },
-    instructions: "",
-    enabled: true,
-    sort_order: id,
-    revision: 1,
+    avatar: { kind: "face", shape: "ring", color: "blue" },
+    hidden: over.hidden ?? false,
+    has_brain: true,
+    legacy_assistant_id: null,
+    work_agent_type:
+      over.work_agent_type === undefined ? "codex" : over.work_agent_type,
     created_at: "2026-10-16T00:00:00Z",
-    updated_at: "2026-10-16T00:00:00Z",
-    deleted_at: null,
-    ...over,
-  }
+    roster: {
+      sort_order: over.sort_order ?? id,
+      pinned_at: null,
+      section: null,
+      hidden: over.hidden ?? false,
+      muted: false,
+      unread_mark: false,
+      notify: true,
+    },
+    persona: over.persona ? `# Persona ${over.persona}` : "",
+    persona_unwritten: !over.persona,
+  } as unknown as RosterEntry
 }
 
 function makeConversation(id: number, title: string): DbConversationSummary {
@@ -146,6 +157,35 @@ describe("buildReferenceGroups", () => {
         (item) => item.reference.id
       )
     ).toEqual(["custom:claude-code-3"])
+  })
+
+  it("offers whole folders ahead of the files, each by its absolute path", () => {
+    const sources = emptySources({
+      folders: [
+        { name: "my-app", path: "/work/my-app" },
+        { name: "docs", path: "/work/docs" },
+      ],
+      files: [makeFile("MEMORY.md")],
+      workspaceRoot: "/data/pa",
+    })
+    const all = itemsOf(buildReferenceGroups("", sources), "file")
+    expect(all.map((i) => i.reference.id)).toEqual([
+      "/work/my-app",
+      "/work/docs",
+      "MEMORY.md",
+    ])
+    expect(all[0].reference).toEqual({
+      refType: "file",
+      id: "/work/my-app",
+      label: "my-app",
+      uri: "file:///work/my-app",
+      meta: { fileKind: "dir" },
+    })
+    expect(
+      itemsOf(buildReferenceGroups("app", sources), "file").map(
+        (i) => i.reference.label
+      )
+    ).toEqual(["my-app"])
   })
 
   it("returns the five groups in a fixed order (no skill group)", () => {
@@ -257,13 +297,13 @@ describe("buildReferenceGroups", () => {
     expect(agents[0].reference.id).toBe("codex")
   })
 
-  it("adapts assistants into codeg://assistant references", () => {
+  it("adapts the owner's assistants into codeg://bot references", () => {
     const groups = buildReferenceGroups(
       "",
       emptySources({
         agents: [makeAgent("codex", { name: "Codex" })],
         assistants: [
-          makeAssistant(3, "Reviewer", { description: "Reviews diffs" }),
+          makeAssistant(3, "Reviewer", { persona: "Reviews diffs" }),
           makeAssistant(4, "Planner"),
         ],
       })
@@ -272,50 +312,76 @@ describe("buildReferenceGroups", () => {
     expect(items.map((i) => i.reference)).toEqual([
       {
         refType: "assistant",
-        id: "3",
+        id: "u-3",
         label: "Reviewer",
-        uri: "codeg://assistant/3",
-        meta: { assistantId: 3 },
+        uri: "codeg://bot/u-3",
+        meta: { botUid: "u-3" },
       },
       {
         refType: "assistant",
-        id: "4",
+        id: "u-4",
         label: "Planner",
-        uri: "codeg://assistant/4",
-        meta: { assistantId: 4 },
+        uri: "codeg://bot/u-4",
+        meta: { botUid: "u-4" },
       },
     ])
-    // The description, or the agent it runs on when there is none.
-    expect(items.map((i) => i.detail)).toEqual(["Reviews diffs", "Codex"])
+    // Its persona's head, or the agent its work runs on when it has none.
+    expect(items.map((i) => i.detail)).toEqual([
+      "Persona Reviews diffs",
+      "Codex",
+    ])
   })
 
-  it("offers only the assistants that can be delegated to", () => {
+  it("offers only the assistants that can be handed work, the primary first", () => {
     const groups = buildReferenceGroups(
       "",
       emptySources({
         agents: [makeAgent("codex"), makeAgent("gemini", { enabled: false })],
         assistants: [
           makeAssistant(1, "Live"),
-          makeAssistant(2, "Switched off", { enabled: false }),
-          makeAssistant(3, "On a disabled agent", { agent_type: "gemini" }),
-          makeAssistant(4, "On an unknown agent", { agent_type: "grok" }),
-          makeAssistant(5, "Deleted", {
-            deleted_at: "2026-10-16T01:00:00Z",
+          makeAssistant(2, "Hidden", { hidden: true }),
+          makeAssistant(3, "On a disabled agent", {
+            work_agent_type: "gemini",
           }),
+          makeAssistant(4, "On an unknown agent", { work_agent_type: null }),
+          makeAssistant(5, "Primary", { kind: "primary", sort_order: 9 }),
+          makeAssistant(6, "Itself"),
         ],
+        excludeAssistantUid: "u-6",
       })
     )
     expect(itemsOf(groups, "assistant").map((i) => i.reference.label)).toEqual([
+      "Primary",
       "Live",
     ])
   })
 
-  it("finds an assistant by its name, description or agent", () => {
+  it("names one with no name of its own as its pill does: the primary by its role, the others by number", () => {
+    const sources = emptySources({
+      agents: [makeAgent("codex")],
+      assistants: [
+        makeAssistant(1, "  "),
+        makeAssistant(5, "", { kind: "primary" }),
+      ],
+      primaryAssistantName: "个人助手",
+    })
+    const items = (query: string) =>
+      itemsOf(buildReferenceGroups(query, sources), "assistant").map(
+        (i) => i.reference
+      )
+    expect(items("").map((r) => [r.label, r.uri])).toEqual([
+      ["个人助手", "codeg://bot/u-5"],
+      ["#1", "codeg://bot/u-1"],
+    ])
+    expect(items("个人").map((r) => r.id)).toEqual(["u-5"])
+  })
+
+  it("finds an assistant by its name, persona or agent", () => {
     const sources = emptySources({
       agents: [makeAgent("codex"), makeAgent("open_code")],
       assistants: [
-        makeAssistant(1, "Reviewer", { description: "Reads diffs" }),
-        makeAssistant(2, "Planner", { agent_type: "open_code" }),
+        makeAssistant(1, "Reviewer", { persona: "Reads diffs" }),
+        makeAssistant(2, "Planner", { work_agent_type: "open_code" }),
       ],
     })
     const labels = (query: string) =>
@@ -430,6 +496,28 @@ vi.mock("@/hooks/use-file-tree", () => ({
 vi.mock("@/hooks/use-acp-agents", () => ({
   useAcpAgents: () => ({ agents: mocks.agents, fresh: true, refresh: vi.fn() }),
 }))
+/** The roster the hook reads (`useRoster`), set by a test, live. */
+const roster = vi.hoisted(() => ({
+  entries: [] as unknown[],
+  listeners: new Set<() => void>(),
+  set(entries: unknown[]) {
+    roster.entries = entries
+    for (const l of roster.listeners) l()
+  },
+}))
+vi.mock("@/stores/personal-agent-roster-store", async () => {
+  const { useSyncExternalStore } = await import("react")
+  return {
+    useRoster: () =>
+      useSyncExternalStore(
+        (l: () => void) => {
+          roster.listeners.add(l)
+          return () => roster.listeners.delete(l)
+        },
+        () => roster.entries
+      ),
+  }
+})
 vi.mock("@/lib/api", () => ({
   listAllConversations: (...args: unknown[]) =>
     mocks.listAllConversations(...args),
@@ -442,7 +530,7 @@ vi.mock("@/lib/api", () => ({
 
 describe("useReferenceSearch", () => {
   beforeEach(() => {
-    resetAssistantsStore()
+    roster.set([])
     mocks.agents = []
     mocks.files = { allFiles: [], loaded: false }
     mocks.prepareWorkspaceFileSearch.mockReset().mockResolvedValue(undefined)
@@ -695,9 +783,9 @@ describe("useReferenceSearch", () => {
     ])
   })
 
-  it("reads the assistants from the store, and live", async () => {
+  it("reads the assistants from the roster, and live", async () => {
     mocks.agents = [makeAgent("codex", { name: "Codex" })]
-    useAssistantsStore.getState().merge([makeAssistant(3, "Reviewer")])
+    roster.set([makeAssistant(3, "Reviewer")])
     const { result } = renderHook(() =>
       useReferenceSearch({ defaultPath: null, enabled: true })
     )
@@ -707,13 +795,13 @@ describe("useReferenceSearch", () => {
       groups = (await search("", undefined, ["assistant"])) as SuggestionGroup[]
     })
     expect(itemsOf(groups, "assistant").map((i) => i.reference.id)).toEqual([
-      "3",
+      "u-3",
     ])
     // Only the shown tabs are adapted: the agent tab is hidden here.
     expect(itemsOf(groups, "agent")).toHaveLength(0)
 
     act(() => {
-      useAssistantsStore.getState().merge([makeAssistant(4, "Planner")])
+      roster.set([makeAssistant(3, "Reviewer"), makeAssistant(4, "Planner")])
     })
     // Same search function, fresh rows.
     expect(result.current).toBe(search)
@@ -721,8 +809,8 @@ describe("useReferenceSearch", () => {
       groups = (await search("", undefined, ["assistant"])) as SuggestionGroup[]
     })
     expect(itemsOf(groups, "assistant").map((i) => i.reference.id)).toEqual([
-      "3",
-      "4",
+      "u-3",
+      "u-4",
     ])
   })
 
@@ -776,7 +864,7 @@ describe("useReferenceSearch", () => {
 
   it("publishes ready groups while file discovery is pending and merges each source independently", async () => {
     mocks.agents = [makeAgent("codex")]
-    useAssistantsStore.getState().merge([makeAssistant(3, "Reviewer")])
+    roster.set([makeAssistant(3, "Reviewer")])
     let filesReady!: (
       files: { name: string; path: string; kind: "file" }[]
     ) => void

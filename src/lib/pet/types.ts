@@ -141,6 +141,15 @@ export interface PetPermissionSummary {
   options: PermissionOptionInfo[]
 }
 
+/** A question or plan approval a session waits on. The panel can't answer it
+ *  in place: it says what it is, and the row jumps to the conversation.
+ *  Mirrors Rust `PetAsk`. */
+export interface PetAsk {
+  kind: "question" | "plan"
+  /** The first question, or the plan's first line. */
+  text: string
+}
+
 /** Where a delegation sub-agent row belongs — set only on rows the backend kept
  *  because the sub-agent is blocked on the user. A child is never openable as a
  *  tab, so the row jumps to the conversation that delegated it and names that
@@ -161,6 +170,8 @@ export interface PetSessionEntry {
   title: string
   status: ConnectionStatus
   pending?: PetPermissionSummary
+  /** A question or plan approval it waits on; absent while none is. */
+  ask?: PetAsk
   /** Present iff this row is a delegation sub-agent (see `PetParentRef`). */
   parent?: PetParentRef
   /** The assistant a delegation sub-agent runs as, by the name it started

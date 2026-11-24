@@ -77,11 +77,13 @@ export function SidebarSectionOrderControl({
   }, [order])
 
   const label = (id: SidebarSectionId) =>
-    id === "folders"
-      ? t("sectionFolders")
-      : id === "chats"
-        ? t("sectionChats")
-        : t("sectionRecent")
+    id === "assistants"
+      ? t("sectionAssistants")
+      : id === "folders"
+        ? t("sectionFolders")
+        : id === "chats"
+          ? t("sectionChats")
+          : t("sectionRecent")
 
   const move = (id: SidebarSectionId, delta: number, viaKeyboard: boolean) => {
     if (viaKeyboard) pendingFocusRef.current = id

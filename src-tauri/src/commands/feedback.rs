@@ -147,7 +147,10 @@ pub async fn submit_session_feedback(
     blocks: Option<Vec<crate::acp::types::PromptInputBlock>>,
     manager: tauri::State<'_, crate::acp::manager::ConnectionManager>,
 ) -> Result<crate::acp::feedback::FeedbackItem, crate::acp::error::AcpError> {
-    manager.submit_feedback(&connection_id, text, blocks).await
+    let item = manager.submit_feedback(&connection_id, text, blocks).await?;
+    // A person steering a dispatched conversation has taken it over.
+    crate::personal_agent::note_owner_prompt(&connection_id, None);
+    Ok(item)
 }
 
 #[cfg(test)]

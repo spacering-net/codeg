@@ -186,6 +186,10 @@ pub struct BrokerCommitFeedbackRequest {
 pub struct BrokerAskRequest {
     pub token: String,
     pub questions: Vec<QuestionSpec>,
+    /// A personal assistant's brain names the input of its turn the
+    /// question is for (`for`), so it shows where that input came from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub for_input: Option<String>,
 }
 
 /// Resolve a session the user referenced (`codeg://session/<id>`) into its
@@ -273,6 +277,20 @@ pub struct BrokerCreateAutomationRequest {
 pub struct BrokerCreateWorkTaskRequest {
     pub token: String,
     pub spec: NewWorkTaskSpec,
+}
+
+/// One call of a personal-agent tool (`assistant_list`, `project_list`,
+/// `dispatch`, `dispatch_followup`, `item_list`, `item_read`, `item_update`,
+/// `timeline_read`). One message for the whole group: the companion only checks
+/// the call's shape, and the app — which alone knows whether the caller is the
+/// personal agent's current connection — validates and answers it. Answered
+/// with a [`crate::personal_agent::tools::ToolOutcome`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerPersonalAgentRequest {
+    pub token: String,
+    pub tool: String,
+    #[serde(default)]
+    pub arguments: serde_json::Value,
 }
 
 /// List the built-in browser's tabs as an agent may see them. Backs the
@@ -464,6 +482,7 @@ pub enum BrokerMessage {
     SubmitResult(BrokerSubmitResultRequest),
     CreateAutomation(BrokerCreateAutomationRequest),
     CreateWorkTask(BrokerCreateWorkTaskRequest),
+    PersonalAgent(BrokerPersonalAgentRequest),
     BrowserTabs(BrokerBrowserTabsRequest),
     BrowserSnapshot(BrokerBrowserSnapshotRequest),
     BrowserAct(BrokerBrowserActRequest),
@@ -506,6 +525,11 @@ pub enum BrokerMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrokerListAssistantsRequest {
     pub token: String,
+    /// The companion names assistants by uid (`bot`). One from before them
+    /// leaves it out, and is sent only the assistants it can name by
+    /// `assistant_id`.
+    #[serde(default)]
+    pub bots: bool,
 }
 
 /// The wrapped outcome the main process returns over the same socket.
@@ -795,6 +819,15 @@ pub async fn client_create_work_task_round_trip(
     req: &BrokerCreateWorkTaskRequest,
 ) -> io::Result<BrokerResponse> {
     message_round_trip(socket_path, &BrokerMessage::CreateWorkTask(req.clone())).await
+}
+
+/// Dispatch one personal-agent tool call and read back the serialized
+/// [`crate::personal_agent::tools::ToolOutcome`].
+pub async fn client_personal_agent_round_trip(
+    socket_path: &str,
+    req: &BrokerPersonalAgentRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::PersonalAgent(req.clone())).await
 }
 
 /// Dispatch a `browser_list_tabs` request and read back the serialized

@@ -2018,11 +2018,13 @@ mod permission_push_tests {
                 parent_tool_use_id: "tu-1".into(),
                 delegation_call_id: "call-1".into(),
                 assistant: Some(AssistantLink {
-                    id: 3,
+                    id: Some(3),
+                    bot_uid: None,
                     snapshot: AssistantRunSnapshot {
                         name: "Tester".into(),
                         agent_options: Default::default(),
                         instructions: String::new(),
+                        avatar: None,
                     },
                 }),
             }),

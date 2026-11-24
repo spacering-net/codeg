@@ -428,6 +428,16 @@ pub async fn create(
     conn: &DatabaseConnection,
     draft: &AssistantDraft,
 ) -> Result<AssistantInfo, AssistantError> {
+    create_as(conn, draft, &uuid::Uuid::new_v4().to_string()).await
+}
+
+/// [`create`] under a uid the caller chose beforehand — so whoever records
+/// the intent first can find the row by it afterwards.
+pub async fn create_as(
+    conn: &DatabaseConnection,
+    draft: &AssistantDraft,
+    uid: &str,
+) -> Result<AssistantInfo, AssistantError> {
     let row = normalize_draft(draft)?;
     ensure_name_free(conn, &row.name, None).await?;
     // A lost race here only means two assistants share a position, which the
@@ -442,7 +452,7 @@ pub async fn create(
     let now = Utc::now();
     let inserted = assistant::ActiveModel {
         id: NotSet,
-        uid: Set(uuid::Uuid::new_v4().to_string()),
+        uid: Set(uid.to_string()),
         name: Set(row.name.clone()),
         description: Set(row.description),
         avatar: Set(row.avatar_json),

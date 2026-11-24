@@ -31,7 +31,11 @@ vi.mock("@/stores/app-workspace-store", () => {
       { id: 1, name: "codeg", alias: null, parent_id: null, kind: "regular" },
     ],
   }
-  const useStore = (selector: (s: typeof state) => unknown) => selector(state)
+  const useStore = Object.assign(
+    (selector: (s: typeof state) => unknown) => selector(state),
+    // Read at import by stores the page pulls in (the tab store).
+    { getState: () => state, subscribe: () => () => {} }
+  )
   return { useAppWorkspaceStore: useStore }
 })
 vi.mock("@/lib/api", () => ({

@@ -165,9 +165,9 @@ const TOP_CONVERSATIONS: usize = 8;
 /// counters predate it, since a custom/BYO model has always exposed them and
 /// the parser reads every session under `~/.qoder/projects`, not just the ones
 /// codeg launched.
-const FACT_SCHEMA_VERSION: &str = "9";
+pub(crate) const FACT_SCHEMA_VERSION: &str = "9";
 
-const FACT_SCHEMA_VERSION_KEY: &str = "token_usage_fact_schema_version";
+pub(crate) const FACT_SCHEMA_VERSION_KEY: &str = "token_usage_fact_schema_version";
 
 /// Serializes syncs. `try_lock` rather than queueing: a second sync racing the
 /// first would re-parse the same files for no benefit, and the caller can just
@@ -989,10 +989,32 @@ impl Drop for RunningFlag {
     }
 }
 
+/// Something else read off each conversation the sync parses, so one parse
+/// serves both (the time machine's index, 8.2).
+#[async_trait::async_trait]
+pub trait ParsedConversation: Send + Sync {
+    async fn parsed(
+        &self,
+        conversation_id: i32,
+        updated_at: DateTime<Utc>,
+        detail: &DbConversationDetail,
+    );
+}
+
 pub async fn token_usage_sync_core(
     conn: &sea_orm::DatabaseConnection,
     emitter: &EventEmitter,
     mode: TokenUsageSyncMode,
+) -> Result<TokenUsageSyncResult, AppCommandError> {
+    token_usage_sync_core_with(conn, emitter, mode, None).await
+}
+
+/// [`token_usage_sync_core`], handing each conversation it parses to `also`.
+pub async fn token_usage_sync_core_with(
+    conn: &sea_orm::DatabaseConnection,
+    emitter: &EventEmitter,
+    mode: TokenUsageSyncMode,
+    also: Option<&dyn ParsedConversation>,
 ) -> Result<TokenUsageSyncResult, AppCommandError> {
     let _guard = SYNC_GUARD
         .try_lock()
@@ -1109,6 +1131,10 @@ pub async fn token_usage_sync_core(
                 }
             }
             Ok((detail, _)) => {
+                if let Some(also) = also {
+                    also.parsed(candidate.id, candidate.updated_at, &detail)
+                        .await;
+                }
                 let facts = facts_from_detail(&detail, candidate.updated_at);
                 match usage_service::replace_conversation_facts(
                     conn,
@@ -1419,6 +1445,7 @@ mod tests {
                 assistant_id: None,
                 source: None,
                 assistant_name: None,
+                bot_uid: None,
                 tag_ids: Vec::new(),
             },
             turns,

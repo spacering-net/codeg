@@ -31,9 +31,7 @@ use crate::app_error::{
     CONFIG_SYNC_I18N_KEY_INVALID_SNAPSHOT, CONFIG_SYNC_I18N_KEY_NEWER_SCHEMA,
     CONFIG_SYNC_I18N_KEY_NO_ROLLBACK,
 };
-use crate::web::event_bridge::{
-    emit_event, AssistantChange, EventEmitter, ASSISTANT_CHANGED_EVENT,
-};
+use crate::web::event_bridge::{emit_event, EventEmitter};
 
 /// Bump only for a change older binaries cannot read. Adding a domain does not
 /// qualify: unknown domains are ignored on read and missing domains decode as
@@ -110,6 +108,10 @@ pub struct ApplyReport {
     /// unique) — so the confirmation can say so.
     #[serde(default)]
     pub renamed: usize,
+    /// Assistants matched whose persona stays their own (`SOUL.md`, theirs
+    /// to keep) — the snapshot's another — so the confirmation can say so.
+    #[serde(default)]
+    pub persona_kept: usize,
     /// `localStorage` appearance values the client that ran this apply should
     /// adopt (see `appearance::appearance_to_adopt`). Returned to that client
     /// only — never broadcast, because every browser has its own storage.
@@ -138,7 +140,9 @@ pub async fn collect_snapshot_core(
 ///
 /// Open windows hold some of this configuration in live stores; once the
 /// transaction has committed, those that track it by broadcast are told to
-/// re-read (`assistant://changed` `Resync`).
+/// re-read — the assistants' roster (`personal-agent://bots`), after the
+/// ones written have a brain where there is a primary and their directories
+/// made (§5, §6.2).
 pub async fn apply_snapshot_core(
     conn: &DatabaseConnection,
     emitter: &EventEmitter,
@@ -165,6 +169,7 @@ pub async fn apply_snapshot_core(
             Ok(applied) => {
                 report.total += applied.written;
                 report.renamed += applied.renamed;
+                report.persona_kept += applied.persona_kept;
                 report
                     .domains
                     .insert(domain.id.to_string(), applied.written);
@@ -186,12 +191,32 @@ pub async fn apply_snapshot_core(
         .get(DOMAIN_ASSISTANTS)
         .is_some_and(|&n| n > 0)
     {
-        emit_event(emitter, ASSISTANT_CHANGED_EVENT, AssistantChange::Resync);
+        assistants_imported(conn, emitter).await;
     }
     // Only now, after the commit: a rolled-back apply must not tell the client
     // to restyle itself with values that never landed.
     report.appearance = super::appearance::appearance_to_adopt(snapshot);
     Ok(report)
+}
+
+/// After a package's assistants landed: a brain for each with none, where
+/// there is a primary (§5); a directory for each not made yet, where this
+/// process knows the data directory (§6.2 — else the one that runs them
+/// makes it when first needed); the roster read again.
+async fn assistants_imported(conn: &DatabaseConnection, emitter: &EventEmitter) {
+    let db = crate::db::AppDatabase { conn: conn.clone() };
+    crate::personal_agent::ready::fill_brains(&db, emitter).await;
+    if let Some(dir) = crate::personal_agent::host::data_dir_hint() {
+        crate::personal_agent::ready::ensure_all_ready(&db, &dir).await;
+    }
+    match crate::personal_agent::host::host() {
+        Some(host) => host.emit_roster(),
+        None => emit_event(
+            emitter,
+            crate::models::personal_agent_roster::PERSONAL_AGENT_BOTS_EVENT,
+            crate::models::personal_agent_roster::BotsChange::Roster,
+        ),
+    }
 }
 
 /// Pretty-printed on purpose: the file is the user's own configuration sitting
@@ -743,9 +768,10 @@ mod tests {
         );
     }
 
-    /// Open windows keep assistants in a live store: an apply that wrote any
-    /// tells them to re-read, once it has committed — and stays quiet when it
-    /// wrote none. A rename is reported, so the confirmation can say so.
+    /// Open windows keep the assistants' roster in a live store: an apply
+    /// that wrote any tells them to read it again, once it has committed —
+    /// and stays quiet when it wrote none. A rename is reported, so the
+    /// confirmation can say so.
     #[tokio::test]
     async fn an_apply_writing_assistants_asks_open_windows_to_re_read() {
         use crate::web::event_bridge::WebEventBroadcaster;
@@ -771,9 +797,12 @@ mod tests {
             .await
             .expect("apply");
         assert_eq!(report.domains.get(DOMAIN_ASSISTANTS), Some(&1));
-        let evt = rx.try_recv().expect("a resync broadcast");
-        assert_eq!(evt.channel, ASSISTANT_CHANGED_EVENT);
-        assert_eq!(evt.payload["kind"], "resync");
+        let evt = rx.try_recv().expect("a roster broadcast");
+        assert_eq!(
+            evt.channel,
+            crate::models::personal_agent_roster::PERSONAL_AGENT_BOTS_EVENT
+        );
+        assert_eq!(evt.payload["kind"], "roster");
         assert!(rx.try_recv().is_err(), "exactly one");
 
         // A second machine's assistant of the same name lands renamed.
@@ -783,7 +812,7 @@ mod tests {
             .await
             .expect("apply");
         assert_eq!(report.renamed, 1);
-        rx.try_recv().expect("a resync broadcast");
+        rx.try_recv().expect("a roster broadcast");
 
         apply_snapshot_core(&target.conn, &emitter, &with(serde_json::json!([])))
             .await

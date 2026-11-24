@@ -56,6 +56,54 @@ pub async fn create_chat(
     .await
 }
 
+/// Mirror of [`create`] for one session segment of the personal agent:
+/// `kind = 'personal'`, so it stays out of the sidebar's lists — the agent has
+/// its own page, and its prompts are written by codeg's engine.
+pub async fn create_personal(
+    conn: &DatabaseConnection,
+    folder_id: i32,
+    agent_type: AgentType,
+    title: Option<String>,
+) -> Result<conversation::Model, DbError> {
+    create_inner(
+        conn,
+        folder_id,
+        agent_type,
+        title,
+        None,
+        None,
+        ConversationKind::Personal,
+        None,
+    )
+    .await
+}
+
+/// Stamp a conversation an assistant dispatched: the assistant whose work it
+/// is (what the sidebar draws its avatar and name from), what the work ran
+/// on, and [`conversation::SOURCE_PERSONAL_AGENT`]. Written once, right after
+/// the row is created and before it is first broadcast.
+pub async fn set_dispatch_provenance(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    bot_uid: Option<&str>,
+    snapshot: &AssistantRunSnapshot,
+) -> Result<(), DbError> {
+    use sea_orm::sea_query::Expr;
+    let snapshot = serde_json::to_string(snapshot)
+        .map_err(|e| DbError::Validation(format!("assistant snapshot: {e}")))?;
+    conversation::Entity::update_many()
+        .col_expr(conversation::Column::BotUid, Expr::value(bot_uid))
+        .col_expr(conversation::Column::AssistantSnapshot, Expr::value(snapshot))
+        .col_expr(
+            conversation::Column::Source,
+            Expr::value(conversation::SOURCE_PERSONAL_AGENT),
+        )
+        .filter(conversation::Column::Id.eq(conversation_id))
+        .exec(conn)
+        .await?;
+    Ok(())
+}
+
 /// Mirror of [`create`] plus optional delegation linkage. Used by the
 /// multi-agent broker when spawning a child sub-session — populates
 /// `parent_id` / `parent_tool_use_id` / `delegation_call_id` so the lifecycle
@@ -191,15 +239,16 @@ async fn create_inner(
         ),
         None => (ask_parent_id, None, None, None),
     };
-    let (assistant_id, assistant_snapshot) = match assistant {
+    let (assistant_id, bot_uid, assistant_snapshot) = match assistant {
         Some(a) => (
-            Some(a.id),
+            a.id,
+            a.bot_uid,
             Some(
                 serde_json::to_string(&a.snapshot)
                     .map_err(|e| DbError::Migration(format!("assistant snapshot: {e}")))?,
             ),
         ),
-        None => (None, None),
+        None => (None, None, None),
     };
     let model = conversation::ActiveModel {
         id: NotSet,
@@ -223,6 +272,7 @@ async fn create_inner(
         origin_cwd: Set(None),
         assistant_id: Set(assistant_id),
         assistant_snapshot: Set(assistant_snapshot),
+        bot_uid: Set(bot_uid),
         source: Set(None),
         selector_state: Set(None),
     };
@@ -1029,6 +1079,7 @@ struct CarriedOverRow {
     origin_cwd: Option<String>,
     assistant_id: Option<i32>,
     assistant_snapshot: Option<String>,
+    bot_uid: Option<String>,
     source: Option<String>,
     selector_state: Option<String>,
 }
@@ -1073,6 +1124,7 @@ impl CarriedOverRow {
             // so it keeps drawing as it.
             assistant_id: row.assistant_id,
             assistant_snapshot: row.assistant_snapshot.clone(),
+            bot_uid: row.bot_uid.clone(),
             // Carried: the history was started where the conversation was.
             source: row.source.clone(),
             // Carried: the preserved history ran with this selection. A fork
@@ -1113,6 +1165,7 @@ impl CarriedOverRow {
             origin_cwd: Set(self.origin_cwd),
             assistant_id: Set(self.assistant_id),
             assistant_snapshot: Set(self.assistant_snapshot),
+            bot_uid: Set(self.bot_uid),
             source: Set(self.source),
             selector_state: Set(self.selector_state),
         }
@@ -1579,6 +1632,7 @@ fn conv_to_summary(r: conversation::Model) -> DbConversationSummary {
             .as_deref()
             .and_then(AssistantRunSnapshot::name_from_json),
         assistant_id: r.assistant_id,
+        bot_uid: r.bot_uid,
         source: r.source,
         // Backfilled by `fill_summary_extras`, like `child_count`.
         tag_ids: Vec::new(),
@@ -1787,23 +1841,25 @@ pub async fn get_by_delegation_call_id(
     Ok(conv.map(conv_to_summary))
 }
 
-/// The assistant a delegation child ran as, with the snapshot its row was
-/// written with. `None` for any row that is not an assistant child (or no
-/// row); `Some((id, None))` for an assistant child whose snapshot is missing or
-/// no longer parses — the caller must not mistake that for "no options".
+/// The snapshot an assistant delegation child's row was written with — one
+/// of the owner's assistants (`bot_uid`), or a collaboration settings'
+/// assistant from before them (`assistant_id`). `None` for any row that is
+/// not an assistant child (or no row); `Some(None)` for an assistant child
+/// whose snapshot is missing or no longer parses — the caller must not
+/// mistake that for "no options".
 pub async fn get_assistant_run(
     conn: &DatabaseConnection,
     conversation_id: i32,
-) -> Result<Option<(i32, Option<AssistantRunSnapshot>)>, DbError> {
+) -> Result<Option<Option<AssistantRunSnapshot>>, DbError> {
     let Some(row) = conversation::Entity::find_by_id(conversation_id)
         .one(conn)
         .await?
     else {
         return Ok(None);
     };
-    let Some(assistant_id) = row.assistant_id else {
+    if row.assistant_id.is_none() && row.bot_uid.is_none() {
         return Ok(None);
-    };
+    }
     let snapshot = row.assistant_snapshot.as_deref().and_then(|raw| {
         serde_json::from_str::<AssistantRunSnapshot>(raw)
             .map_err(|e| {
@@ -1814,7 +1870,7 @@ pub async fn get_assistant_run(
             })
             .ok()
     });
-    Ok(Some((assistant_id, snapshot)))
+    Ok(Some(snapshot))
 }
 
 pub async fn list_by_folder(
@@ -1889,8 +1945,10 @@ pub async fn list_all(
     let mut query = conversation::Entity::find().filter(conversation::Column::DeletedAt.is_null());
 
     // Loop-engineering runs never surface in the workspace conversation list —
-    // their entry point is the loops workbench.
+    // their entry point is the loops workbench — and neither do the personal
+    // agent's own session segments, which live on its page.
     query = query.filter(conversation::Column::Kind.ne(ConversationKind::Loop));
+    query = query.filter(conversation::Column::Kind.ne(ConversationKind::Personal));
 
     if !include_children {
         query = query.filter(conversation::Column::ParentId.is_null());

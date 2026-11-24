@@ -33,8 +33,15 @@ export type SidebarRecentFilter = (typeof SIDEBAR_RECENT_FILTERS)[number]
 export const DEFAULT_RECENT_FILTER: SidebarRecentFilter = "all"
 
 /** The reorderable top-level sidebar sections. "Pinned" is deliberately absent:
- *  it is a transient override bucket and always stays on top. */
-export const SIDEBAR_SECTION_IDS = ["folders", "chats", "recent"] as const
+ *  it is a transient override bucket and always stays on top. "Assistants" —
+ *  the owner's personal assistants — comes first by default, above the
+ *  folders. */
+export const SIDEBAR_SECTION_IDS = [
+  "assistants",
+  "folders",
+  "chats",
+  "recent",
+] as const
 
 export type SidebarSectionId = (typeof SIDEBAR_SECTION_IDS)[number]
 
@@ -56,14 +63,14 @@ export type SidebarSectionKey = (typeof SIDEBAR_SECTION_KEYS)[number]
  */
 export type SidebarSectionOrder = readonly SidebarSectionId[]
 
-/** Folders, then Chat, then Recent — the historical layout with the (newest)
- *  Recent section appended at the bottom. */
+/** The assistants, then Folders, then Chat, then Recent. */
 export const DEFAULT_SECTION_ORDER: SidebarSectionOrder = SIDEBAR_SECTION_IDS
 
 /** Collapsed state of the top-level sidebar sections. Absent key = expanded
  *  (the default), so a fresh user sees every section open. */
 export interface SidebarSectionCollapsed {
   pinned?: boolean
+  assistants?: boolean
   folders?: boolean
   chats?: boolean
   recent?: boolean
@@ -116,13 +123,16 @@ function isSectionId(value: unknown): value is SidebarSectionId {
  * - an array of section ids (the current format) — unknown entries and repeats
  *   are dropped, and any section the array omits is appended in default order.
  *   That last step is what makes adding a NEW section forward-compatible: an
- *   older store simply gets it at the bottom instead of losing it.
+ *   older store simply gets it at the bottom instead of losing it — except
+ *   the assistants, which a store from before them gets right above the
+ *   folders, where a new user has them.
  * - the legacy pre-Recent strings `"folders-first"` / `"chats-first"`, so a
  *   user's existing top/bottom choice survives the upgrade.
  * - anything else (corrupt / absent) → {@link DEFAULT_SECTION_ORDER}.
  */
 export function normalizeSectionOrder(value: unknown): SidebarSectionOrder {
-  if (value === "chats-first") return ["chats", "folders", "recent"]
+  if (value === "chats-first")
+    return ["chats", "assistants", "folders", "recent"]
   if (value === "folders-first") return DEFAULT_SECTION_ORDER
   if (!Array.isArray(value)) return DEFAULT_SECTION_ORDER
   const seen = new Set<SidebarSectionId>()
@@ -131,6 +141,14 @@ export function normalizeSectionOrder(value: unknown): SidebarSectionOrder {
     if (!isSectionId(entry) || seen.has(entry)) continue
     seen.add(entry)
     out.push(entry)
+  }
+  // A store from before the assistants' section: right above the folders —
+  // where they are; with none either, both follow in the default order,
+  // the assistants first.
+  const folders = out.indexOf("folders")
+  if (!seen.has("assistants") && folders >= 0) {
+    out.splice(folders, 0, "assistants")
+    seen.add("assistants")
   }
   for (const id of SIDEBAR_SECTION_IDS) {
     if (!seen.has(id)) out.push(id)

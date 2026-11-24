@@ -290,6 +290,18 @@ impl From<&crate::acp::session_state::PendingPermissionState> for PetPermissionS
     }
 }
 
+/// A question or a plan approval a session waits on (18 #2): the panel can't
+/// answer it in place, so it says what it is and the row jumps to the
+/// conversation, where the card is.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PetAsk {
+    /// `question` or `plan`.
+    pub kind: &'static str,
+    /// The first question, or the plan's first line.
+    pub text: String,
+}
+
 /// Where a delegation sub-agent row belongs. Present ONLY on rows whose
 /// conversation has a `parent_id` — i.e. a sub-agent the panel is showing
 /// because it is blocked on the user (see `pet_list_active_sessions_core`).
@@ -308,7 +320,8 @@ pub struct PetParentRef {
 }
 
 /// One active agent session as shown in the pet panel's list. "Active" means
-/// the connection is currently prompting, awaiting a permission, or errored —
+/// the connection is currently prompting, awaiting a permission, an answer or
+/// a plan approval, or errored —
 /// see `ConnectionManager::list_active_sessions`. `title` is resolved from the
 /// conversation row by the command layer; the manager leaves it empty.
 #[derive(Debug, Clone, Serialize)]
@@ -322,6 +335,9 @@ pub struct PetSessionEntry {
     pub status: crate::acp::types::ConnectionStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pending: Option<PetPermissionSummary>,
+    /// A question or plan approval it waits on; absent while none is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ask: Option<PetAsk>,
     /// Set iff this row is a delegation sub-agent (see [`PetParentRef`]).
     /// Absent for ordinary sessions, which are their own jump target.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -333,12 +349,19 @@ pub struct PetSessionEntry {
     pub assistant_name: Option<String>,
 }
 
+impl PetSessionEntry {
+    /// Blocked on the owner: a permission, a question or a plan approval.
+    pub fn is_waiting(&self) -> bool {
+        self.pending.is_some() || self.ask.is_some()
+    }
+}
+
 /// Aggregate payload for the `pet://sessions` event and the
 /// `pet_list_active_sessions` snapshot command. Counts are precomputed so the
 /// sprite-window badge can pick the right cue (number / clock / error) without
 /// walking the list, and they follow the same precedence as the ambient
-/// `compute_pet_state`: a session blocked on a permission counts as `waiting`,
-/// not `running`.
+/// `compute_pet_state`: a session blocked on a permission, a question or a
+/// plan approval counts as `waiting`, not `running`.
 #[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PetSessionsPayload {
@@ -358,7 +381,7 @@ impl PetSessionsPayload {
         let mut waiting_count = 0;
         let mut error_count = 0;
         for s in &sessions {
-            if s.pending.is_some() {
+            if s.is_waiting() {
                 waiting_count += 1;
             } else if s.status == ConnectionStatus::Error {
                 error_count += 1;
@@ -438,6 +461,7 @@ mod tests {
                 tool_call: serde_json::json!({}),
                 options: vec![],
             }),
+            ask: None,
             parent: None,
             assistant_name: None,
         }
@@ -456,6 +480,33 @@ mod tests {
         assert_eq!(payload.waiting_count, 1);
         assert_eq!(payload.error_count, 1);
         assert_eq!(payload.sessions.len(), 4);
+    }
+
+    /// A session waiting on the owner's answer or on their approval of a
+    /// plan is waiting, not running (18 #2).
+    #[test]
+    fn a_question_or_a_plan_waits_like_a_permission() {
+        use crate::acp::types::ConnectionStatus;
+        let asking = |kind| PetSessionEntry {
+            ask: Some(PetAsk {
+                kind,
+                text: "Which database?".into(),
+            }),
+            ..session_entry(ConnectionStatus::Prompting, false)
+        };
+        let payload = PetSessionsPayload::from_entries(vec![
+            asking("question"),
+            asking("plan"),
+            session_entry(ConnectionStatus::Prompting, false),
+        ]);
+        assert_eq!(payload.waiting_count, 2);
+        assert_eq!(payload.running_count, 1);
+        let v = serde_json::to_value(&payload.sessions[0]).unwrap();
+        assert_eq!(
+            v["ask"],
+            serde_json::json!({ "kind": "question", "text": "Which database?" })
+        );
+        assert!(v.get("pending").is_none());
     }
 
     #[test]
