@@ -23,6 +23,7 @@ const custom: AuxTabOrder = [
   "session_details",
   "changes",
   "pull_requests",
+  "project_knowledge",
   "issues",
   "tasks",
   "automations",
@@ -58,6 +59,7 @@ describe("aux panel tab order", () => {
       "git_log",
       "automations",
       "tasks",
+      "project_knowledge",
       "issues",
       "pull_requests",
     ])
@@ -92,6 +94,7 @@ describe("aux panel tab order", () => {
       "git_log",
       "automations",
       "tasks",
+      "project_knowledge",
       "issues",
       "pull_requests",
     ])
@@ -99,6 +102,7 @@ describe("aux panel tab order", () => {
       "git_log",
       "automations",
       "tasks",
+      "project_knowledge",
       "issues",
       "pull_requests",
       "session_details",
@@ -118,6 +122,7 @@ describe("aux panel tab order", () => {
       "git_log",
       "automations",
       "tasks",
+      "project_knowledge",
       "issues",
       "pull_requests",
       "changes",
@@ -136,6 +141,7 @@ describe("aux panel tab order", () => {
       "git_log",
       "automations",
       "tasks",
+      "project_knowledge",
       "issues",
       "pull_requests",
     ])
@@ -161,6 +167,7 @@ describe("aux panel tab order", () => {
       "git_log",
       "automations",
       "tasks",
+      "project_knowledge",
       "issues",
       "pull_requests",
       "changes",
@@ -189,6 +196,7 @@ describe("aux panel tab order", () => {
         "git_log",
         "automations",
         "tasks",
+        "project_knowledge",
         "issues",
         "pull_requests",
       ])
@@ -199,6 +207,7 @@ describe("aux panel tab order", () => {
         "session_details",
         "automations",
         "tasks",
+        "project_knowledge",
         "issues",
         "pull_requests",
       ])

@@ -458,6 +458,10 @@ pub enum BrokerMessage {
     CommitFeedback(BrokerCommitFeedbackRequest),
     Ask(BrokerAskRequest),
     SessionInfo(BrokerSessionRequest),
+    ProjectKnowledge {
+        token: String,
+        request: crate::commands::project_knowledge::Request,
+    },
     TaskProgress(BrokerTaskProgressRequest),
     TaskComplete(BrokerTaskCompleteRequest),
     ResultSchema(BrokerResultSchemaRequest),
@@ -594,7 +598,10 @@ const LIVENESS_CHECKS: LivenessChecks = LivenessChecks {
 /// out, say — leaves the connection queued in the socket's backlog: `connect`
 /// succeeds, and without this every tool call hung until the agent's own MCP
 /// timeout (30 minutes for Claude Code).
-async fn message_round_trip(socket_path: &str, msg: &BrokerMessage) -> io::Result<BrokerResponse> {
+pub(super) async fn message_round_trip(
+    socket_path: &str,
+    msg: &BrokerMessage,
+) -> io::Result<BrokerResponse> {
     round_trip_checking_liveness(socket_path, msg, LIVENESS_CHECKS).await
 }
 

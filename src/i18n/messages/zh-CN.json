@@ -1,4 +1,28 @@
 {
+  "ProjectKnowledge": {
+    "title": "项目知识",
+    "notes": "笔记",
+    "plans": "计划",
+    "newNote": "新建笔记",
+    "newPlan": "新建计划",
+    "searchNotes": "搜索笔记",
+    "searchPlans": "搜索计划",
+    "noNotes": "暂无笔记",
+    "noPlans": "暂无计划",
+    "noResults": "没有找到结果",
+    "untitled": "未命名",
+    "back": "返回",
+    "edit": "编辑",
+    "save": "保存",
+    "delete": "删除",
+    "cancel": "取消",
+    "planTitle": "标题（可选）",
+    "planBody": "用 Markdown 编写计划",
+    "noteBody": "记录笔记",
+    "preview": "预览",
+    "deletePrompt": "删除「{title}」？",
+    "storageError": "此浏览器无法保存更改。"
+  },
   "HtmlCodePreview": {
     "code": "代码",
     "preview": "预览",

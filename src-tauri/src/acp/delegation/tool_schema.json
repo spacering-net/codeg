@@ -181,6 +181,24 @@
     }
   },
   {
+    "name": "project_knowledge",
+    "description": "Manage shared notes and Markdown plans in the calling conversation's project, including its worktrees. List or search to find an ID, read to get the full body, save without an ID to create or with an ID to edit, and delete by ID. For an edit or deletion, pass the previous body as expected to detect concurrent changes.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": { "type": "string", "enum": ["list", "read", "save", "delete"] },
+        "kind": { "type": "string", "enum": ["note", "plan"] },
+        "query": { "type": "string", "description": "Filter by text when listing." },
+        "offset": { "type": "integer", "minimum": 0, "description": "Pass nextOffset from the previous list response." },
+        "id": { "type": "string" },
+        "body": { "type": "string", "description": "Full note text or Markdown plan. Start plans with a Markdown H1 for the title." },
+        "expected": { "type": "string", "description": "The previous body returned by read." }
+      },
+      "required": ["action", "kind"],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "get_session_info",
     "description": "Look up a session/conversation the user referenced in their message and return what it is: its title, which agent ran it, its status, workspace folder, git branch, model, message count, and token-usage stats — and, on request, a compact view of its most recent messages. RECOGNIZING A MENTIONED SESSION: the user can @-mention a past session directly in their message — it appears as a Markdown link `[Session title](codeg://session/<number>)`, whose text is that session's title and whose `<number>` is codeg's internal conversation id (e.g. `[Fix auth](codeg://session/214)` is the session titled 'Fix auth'). Such a mention IS the user explicitly pointing you at that session, even when they never name this tool — call it whenever what that session is about or what happened in it matters to the request (e.g. to continue its work, build on its results, answer questions about it, or summarize it). If the message mentions several sessions, make one call per session. Pass the NUMBER from the reference as `session_id` (it is codeg's internal conversation id, NOT the agent's own session id). The result is read-only and never modifies the session. A session that no longer exists returns a `found: false` result you can act on — it is not an error.",
     "inputSchema": {

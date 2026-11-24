@@ -1,4 +1,28 @@
 {
+  "ProjectKnowledge": {
+    "title": "Projektwissen",
+    "notes": "Notizen",
+    "plans": "Pläne",
+    "newNote": "Neue Notiz",
+    "newPlan": "Neuer Plan",
+    "searchNotes": "Notizen suchen",
+    "searchPlans": "Pläne suchen",
+    "noNotes": "Noch keine Notizen",
+    "noPlans": "Noch keine Pläne",
+    "noResults": "Keine Ergebnisse",
+    "untitled": "Ohne Titel",
+    "back": "Zurück",
+    "edit": "Bearbeiten",
+    "save": "Speichern",
+    "delete": "Löschen",
+    "cancel": "Abbrechen",
+    "planTitle": "Titel (optional)",
+    "planBody": "Plan in Markdown schreiben",
+    "noteBody": "Notiz schreiben",
+    "preview": "Vorschau",
+    "deletePrompt": "„{title}“ löschen?",
+    "storageError": "Änderungen konnten in diesem Browser nicht gespeichert werden."
+  },
   "HtmlCodePreview": {
     "code": "Code",
     "preview": "Vorschau",

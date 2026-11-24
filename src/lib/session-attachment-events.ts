@@ -101,15 +101,17 @@ export const APPEND_TEXT_TO_SESSION_EVENT = "codeg:append-text-to-session"
 export interface AppendTextToSessionDetail {
   tabId: string
   text: string
+  accepted?: boolean
 }
 
 export function emitAppendTextToSession(
   detail: AppendTextToSessionDetail
-): void {
-  if (typeof window === "undefined") return
+): boolean {
+  if (typeof window === "undefined") return false
   window.dispatchEvent(
     new CustomEvent<AppendTextToSessionDetail>(APPEND_TEXT_TO_SESSION_EVENT, {
       detail,
     })
   )
+  return detail.accepted === true
 }

@@ -905,6 +905,10 @@ pub fn build_router_with_srn(
         )
         // ─── Folder commands ───
         .route(
+            "/project_knowledge",
+            post(handlers::project_knowledge::call),
+        )
+        .route(
             "/list_folder_commands",
             post(handlers::folder_commands::list_folder_commands),
         )

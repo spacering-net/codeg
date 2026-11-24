@@ -8,6 +8,7 @@ import {
   GitCommit,
   GitPullRequestArrow,
   ListTodo,
+  NotebookPen,
   ReceiptText,
   Zap,
   type LucideIcon,
@@ -18,6 +19,7 @@ import {
   type AuxPanelTab,
 } from "@/contexts/aux-panel-context"
 import { useActiveFolder } from "@/contexts/active-folder-context"
+import { useTabStore } from "@/contexts/tab-context"
 import { useActiveProjectFolderId } from "@/hooks/use-active-project-folder"
 import { useIsActiveChatMode } from "@/hooks/use-is-active-chat-mode"
 import { useIsMobile } from "@/hooks/use-mobile"
@@ -39,6 +41,7 @@ import { GitLogTab } from "./aux-panel-git-log-tab"
 import { AutomationsAuxTab } from "./aux-panel-automations-tab"
 import { TasksAuxTab } from "./aux-panel-tasks-tab"
 import { ForgeAuxTab } from "./aux-panel-forge-tab"
+import { ProjectKnowledgeTab } from "./aux-panel-project-knowledge-tab"
 
 const LAZY_TABS: AuxPanelTab[] = [
   "file_tree",
@@ -48,6 +51,7 @@ const LAZY_TABS: AuxPanelTab[] = [
   "tasks",
   "issues",
   "pull_requests",
+  "project_knowledge",
 ]
 
 // Icon for every aux tab. The desktop rail and the mobile tab row both map the
@@ -65,6 +69,7 @@ const TAB_ICONS: Record<AuxPanelTab, LucideIcon> = {
   tasks: ListTodo,
   issues: CircleDot,
   pull_requests: GitPullRequestArrow,
+  project_knowledge: NotebookPen,
 }
 // The three folder-content tabs share one label namespace (Folder.auxPanel.tabs);
 // session details resolves from its own (Folder.sessionDetails.menuLabel), and
@@ -110,6 +115,7 @@ export function AuxPanel() {
   const tAutomations = useTranslations("Automations")
   const tTasks = useTranslations("Tasks")
   const tForge = useTranslations("Forge")
+  const tKnowledge = useTranslations("ProjectKnowledge")
   const { isOpen, activeTab, setActiveTab, setOpen } = useAuxPanelContext()
   const { activeFolderId } = useActiveFolder()
   const isChatMode = useIsActiveChatMode()
@@ -130,6 +136,15 @@ export function AuxPanel() {
   // is named for the forge the project's remote is on, as the repository
   // panel's own switcher is. Looked up only while the tab is on the rail.
   const projectFolderId = useActiveProjectFolderId()
+  const sessionTabId = useTabStore(
+    (state) =>
+      state.tabs.find(
+        (tab) =>
+          tab.id === state.activeTabId &&
+          tab.kind === "conversation" &&
+          tab.folderId === activeFolderId
+      )?.id
+  )
   const forgeProvider = useFolderForgeProvider(
     isOpen && showFolderTabs ? projectFolderId : null
   )
@@ -179,6 +194,8 @@ export function AuxPanel() {
           return tAutomations("title")
         case "tasks":
           return tTasks("title")
+        case "project_knowledge":
+          return tKnowledge("title")
         case "issues":
           return tForge("tabIssues")
         case "pull_requests":
@@ -191,7 +208,7 @@ export function AuxPanel() {
           return t(FOLDER_TAB_LABEL_KEY[tab])
       }
     },
-    [t, tDetails, tAutomations, tTasks, tForge, forgeProvider]
+    [t, tDetails, tAutomations, tTasks, tForge, tKnowledge, forgeProvider]
   )
 
   const shownTabs = showFolderTabs ? tabOrder : SESSION_DETAILS_ONLY
@@ -249,6 +266,18 @@ export function AuxPanel() {
       >
         {mountedTabs.has("issues") ? (
           <ForgeAuxTab auxTab="issues" forgeTab="issues" />
+        ) : null}
+      </TabsContent>
+      <TabsContent
+        value="project_knowledge"
+        forceMount
+        className="mt-0 flex-1 min-h-0 overflow-hidden"
+      >
+        {mountedTabs.has("project_knowledge") && projectFolderId != null ? (
+          <ProjectKnowledgeTab
+            projectKey={String(projectFolderId)}
+            sessionTabId={sessionTabId}
+          />
         ) : null}
       </TabsContent>
       <TabsContent

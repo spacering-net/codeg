@@ -1372,6 +1372,7 @@ mod tauri_app {
                             },
                         ),
                     );
+                    let _ = listener.project_knowledge.set((db_conn.clone(), effective_data_dir.clone()));
                     // Bind through the service handle rather than a bare
                     // `listener.run` spawn: it keeps the bind error and the
                     // accept-loop handle around, which is what lets the
@@ -2312,6 +2313,7 @@ mod tauri_app {
                 office_tools_commands::stop_office_watch,
                 office_tools_commands::renew_office_watch,
                 folder_commands::list_folder_commands,
+                crate::commands::project_knowledge::project_knowledge,
                 folder_commands::create_folder_command,
                 folder_commands::update_folder_command,
                 folder_commands::delete_folder_command,

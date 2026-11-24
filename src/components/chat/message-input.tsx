@@ -1555,14 +1555,15 @@ export function MessageInput({
       const appendText = customEvent.detail.text
       const editor = editorRef.current?.getEditor()
       if (!editor) return
-      // Append at the very end, separated by a space when the document isn't
-      // empty (and doesn't already end in whitespace).
+      // Separate the incoming text from an existing draft.
       const ed = editorRef.current
       const needsSpace = ed != null && !ed.isEmpty()
-      editor
+      customEvent.detail.accepted = editor
         .chain()
         .focus("end")
-        .insertContent(`${needsSpace ? " " : ""}${appendText}`)
+        .insertContent(
+          textToInlineContent(`${needsSpace ? "\n\n" : ""}${appendText}`)
+        )
         .run()
     }
 

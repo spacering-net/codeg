@@ -1,4 +1,28 @@
 {
+  "ProjectKnowledge": {
+    "title": "Conhecimento do projeto",
+    "notes": "Notas",
+    "plans": "Planos",
+    "newNote": "Nova nota",
+    "newPlan": "Novo plano",
+    "searchNotes": "Buscar notas",
+    "searchPlans": "Buscar planos",
+    "noNotes": "Ainda não há notas",
+    "noPlans": "Ainda não há planos",
+    "noResults": "Nenhum resultado",
+    "untitled": "Sem título",
+    "back": "Voltar",
+    "edit": "Editar",
+    "save": "Salvar",
+    "delete": "Excluir",
+    "cancel": "Cancelar",
+    "planTitle": "Título (opcional)",
+    "planBody": "Escreva seu plano em Markdown",
+    "noteBody": "Escreva uma nota",
+    "preview": "Prévia",
+    "deletePrompt": "Excluir “{title}”?",
+    "storageError": "Não foi possível salvar as alterações neste navegador."
+  },
   "HtmlCodePreview": {
     "code": "Código",
     "preview": "Prévia",

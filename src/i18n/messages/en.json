@@ -1,4 +1,28 @@
 {
+  "ProjectKnowledge": {
+    "title": "Project Knowledge",
+    "notes": "Notes",
+    "plans": "Plans",
+    "newNote": "New note",
+    "newPlan": "New plan",
+    "searchNotes": "Search notes",
+    "searchPlans": "Search plans",
+    "noNotes": "No notes yet",
+    "noPlans": "No plans yet",
+    "noResults": "No results",
+    "untitled": "Untitled",
+    "back": "Back",
+    "edit": "Edit",
+    "save": "Save",
+    "delete": "Delete",
+    "cancel": "Cancel",
+    "planTitle": "Title (optional)",
+    "planBody": "Write your plan in Markdown",
+    "noteBody": "Write a note",
+    "preview": "Preview",
+    "deletePrompt": "Delete “{title}”?",
+    "storageError": "Could not save changes in this browser."
+  },
   "HtmlCodePreview": {
     "code": "Code",
     "preview": "Preview",
