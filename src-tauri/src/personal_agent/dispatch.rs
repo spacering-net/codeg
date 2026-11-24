@@ -1696,10 +1696,10 @@ impl PersonalAgentEngine {
                 let Some(text) = crate::cli_run::events::error_text(&env.payload) else {
                     return;
                 };
-                let in_round = self
-                    .state
-                    .lock()
-                    .await
+                // Written under the engine's lock that the round is read
+                // under, so no settle can close the round in between.
+                let st = self.state.lock().await;
+                let in_round = st
                     .dispatch_conns
                     .get(&env.connection_id)
                     .and_then(|c| c.round_since)
@@ -1707,6 +1707,7 @@ impl PersonalAgentEngine {
                 if in_round {
                     set_round_failure(&env.connection_id, Some(text));
                 }
+                drop(st);
             }
             AcpEvent::PermissionRequest { .. }
             | AcpEvent::QuestionRequest { .. }
