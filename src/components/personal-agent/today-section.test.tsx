@@ -74,7 +74,7 @@ import {
   usePersonalAgentRoster,
 } from "@/stores/personal-agent-roster-store"
 
-import { ActivityList } from "./aux/activity/activity-tab"
+import { ActivityList } from "./aux-parts/activity/activity-tab"
 import { BriefRows } from "./today-section"
 
 function row(

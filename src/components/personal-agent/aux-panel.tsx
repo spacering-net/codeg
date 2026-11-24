@@ -44,12 +44,12 @@ import {
   type AuxTab,
 } from "@/stores/personal-agent-ui-store"
 
-import { ActivityTab } from "./aux/activity/activity-tab"
-import { AuxHead } from "./aux/aux-head"
-import { OutputTab } from "./aux/output/output-tab"
-import { StatsTab } from "./aux/stats/stats-tab"
-import { useWork } from "./aux/use-work"
-import { WorkspaceTab } from "./aux/workspace/workspace-tab"
+import { ActivityTab } from "./aux-parts/activity/activity-tab"
+import { AuxHead } from "./aux-parts/aux-head"
+import { OutputTab } from "./aux-parts/output/output-tab"
+import { StatsTab } from "./aux-parts/stats/stats-tab"
+import { useWork } from "./aux-parts/use-work"
+import { WorkspaceTab } from "./aux-parts/workspace/workspace-tab"
 
 const TABS: readonly AuxTab[] = ["activity", "output", "workspace", "stats"]
 

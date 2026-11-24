@@ -9920,7 +9920,11 @@ async fn a_failure_reaches_the_owner_only_if_it_is_still_news_after_its_assistan
         }
     };
     let now = super::clock::now();
-    let later = now + chrono::Duration::seconds(super::dispatch::FAILED_HOLD_SECS + 1);
+    // Each failure is due its hold after the real moment it failed, not
+    // after `now`: leave the rest of the test an hour to get there, or on a
+    // loaded runner a failure made a second after `now` is not yet due here
+    // and lingers on the later list.
+    let later = now + chrono::Duration::seconds(super::dispatch::FAILED_HOLD_SECS + 3600);
     // Nobody picks it up: told once its time is up, not before.
     fail("c-1").await;
     assert_eq!(host.reach.later_count(), 1);

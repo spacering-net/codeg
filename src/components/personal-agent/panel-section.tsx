@@ -60,7 +60,7 @@ import {
 import { cn } from "@/lib/utils"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
-import { Callout, type CalloutTone } from "./aux/kit/callout"
+import { Callout, type CalloutTone } from "./aux-parts/kit/callout"
 
 /** The folding parts that start folded; every other one starts open. */
 const FOLDED_AT_FIRST: ReadonlySet<string> = new Set([

@@ -20,7 +20,7 @@ import type {
 import { cn } from "@/lib/utils"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
-import { HeadName } from "../aux/aux-head"
+import { HeadName } from "../aux-parts/aux-head"
 import { BotAvatar } from "../bot-avatar"
 import { BotFacePicker } from "../bot-face-picker"
 
