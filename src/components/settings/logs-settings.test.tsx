@@ -469,9 +469,14 @@ describe("LogsSettings", () => {
       renderWithIntl()
       await waitFor(() => expect(appendedHandler).toBeDefined())
       const sentinel = "latest retained log"
-      fireEvent.change(screen.getByPlaceholderText(M.searchPlaceholder), {
-        target: { value: sentinel },
-      })
+      // The subscription is set up on mount, before the initial load renders
+      // the toolbar, so wait for the search box itself.
+      fireEvent.change(
+        await screen.findByPlaceholderText(M.searchPlaceholder),
+        {
+          target: { value: sentinel },
+        }
+      )
 
       const total = 12_000
       await act(async () => {
