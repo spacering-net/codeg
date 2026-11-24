@@ -1,4 +1,4 @@
-import { useRef } from "react"
+import { useRef, useState } from "react"
 import { act, fireEvent, render, screen } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import {
@@ -64,12 +64,16 @@ const addRange = vi.fn()
 function mockSelection(
   container: Node | null,
   text: string,
-  rect: DOMRect = SELECTION_RECT
+  rect: DOMRect = SELECTION_RECT,
+  ends?: { start: Node; end: Node }
 ) {
   let cleared = false
+  const getBoundingClientRect = vi.fn(() => rect)
   const range = {
     commonAncestorContainer: container,
-    getBoundingClientRect: () => rect,
+    startContainer: ends?.start,
+    endContainer: ends?.end,
+    getBoundingClientRect,
     cloneRange: () => range,
   }
   const selection = {
@@ -92,6 +96,7 @@ function mockSelection(
   } as unknown as Selection
   vi.spyOn(window, "getSelection").mockReturnValue(selection)
   vi.spyOn(document, "getSelection").mockReturnValue(selection)
+  return getBoundingClientRect
 }
 
 /** Fire the browser event the component listens on, inside `act`. */
@@ -121,22 +126,69 @@ function firePointer(
   })
 }
 
+/**
+ * Stand-in for the host's ask composer: a question field and a send button
+ * that hand the selection + question to `onAsk`, then close the bubble — the
+ * contract `renderAskComposer` gives the real composer.
+ */
+function StubAskComposer({
+  selection,
+  close,
+  onAsk,
+}: {
+  selection: string
+  close: () => void
+  onAsk: (selection: string, question: string) => void
+}) {
+  const [question, setQuestion] = useState("")
+  return (
+    <>
+      <input
+        aria-label="Question"
+        value={question}
+        onChange={(event) => setQuestion(event.target.value)}
+      />
+      <button
+        type="button"
+        onClick={() => {
+          onAsk(selection, question)
+          close()
+        }}
+      >
+        Send question
+      </button>
+    </>
+  )
+}
+
 function Harness({
   onQuote,
   onAsk,
+  isVisible = true,
 }: {
   onQuote?: (text: string) => void
   onAsk?: (selection: string, question: string) => void
+  isVisible?: boolean
 }) {
   const ref = useRef<HTMLDivElement>(null)
+  const renderAskComposer = onAsk
+    ? (selection: string, close: () => void) => (
+        <StubAskComposer selection={selection} close={close} onAsk={onAsk} />
+      )
+    : undefined
   return (
     <NextIntlClientProvider locale="en" messages={enMessages}>
-      <div ref={ref} data-testid="box">
+      <div
+        ref={ref}
+        data-testid="box"
+        style={isVisible ? undefined : { visibility: "hidden" }}
+      >
         <p data-testid="para">hello world</p>
         <SelectionActionBubble
           containerRef={ref}
+          isVisible={isVisible}
           onQuote={onQuote}
-          onAsk={onAsk}
+          renderAskComposer={renderAskComposer}
         />
       </div>
     </NextIntlClientProvider>
@@ -150,7 +202,7 @@ function openAskComposer(container: HTMLElement, text = "hello") {
   act(() => {
     fireEvent.click(screen.getByRole("button", { name: "Ask" }))
   })
-  return screen.getByRole("textbox", { name: "Ask about this selection…" })
+  return screen.getByRole("textbox", { name: "Question" })
 }
 
 let rectSpy: MockInstance
@@ -221,6 +273,49 @@ afterEach(() => {
 })
 
 describe("SelectionActionBubble", () => {
+  it("pauses per-frame layout reads while its mounted tab is hidden", () => {
+    vi.useFakeTimers()
+    try {
+      const { container, rerender } = render(<Harness />)
+      const readRect = mockSelection(
+        container.querySelector("[data-testid=para]"),
+        "hello"
+      )
+      selectionChanged()
+      const initialTop = screen.getByRole("toolbar").style.top
+      rerender(<Harness isVisible={false} />)
+      readRect.mockClear()
+      readRect.mockReturnValue({ ...SELECTION_RECT, top: 240, bottom: 260 })
+
+      act(() => vi.advanceTimersByTime(80))
+      expect(readRect).not.toHaveBeenCalled()
+
+      rerender(<Harness />)
+      act(() => vi.advanceTimersByTime(80))
+      expect(readRect).toHaveBeenCalled()
+      expect(screen.getByRole("toolbar").style.top).not.toBe(initialTop)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("stops scheduling frames while the ask composer owns the selection", () => {
+    vi.useFakeTimers()
+    try {
+      const requestFrame = vi.spyOn(window, "requestAnimationFrame")
+      const { container } = render(<Harness onAsk={vi.fn()} />)
+      const input = openAskComposer(container)
+      fireEvent.change(input, { target: { value: "What does this mean?" } })
+      requestFrame.mockClear()
+
+      act(() => vi.advanceTimersByTime(80))
+      expect(requestFrame).not.toHaveBeenCalled()
+      expect(input).toHaveValue("What does this mean?")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("renders nothing without a selection", () => {
     mockSelection(null, "")
     render(<Harness onQuote={vi.fn()} />)
@@ -524,7 +619,7 @@ describe("SelectionActionBubble", () => {
     expect(screen.queryByRole("button", { name: "Ask" })).toBeNull()
   })
 
-  it("swaps the buttons for a question box and asks with the selection", () => {
+  it("swaps the buttons for the host's composer, holding the selection", () => {
     const onAsk = vi.fn()
     const { container } = render(<Harness onQuote={vi.fn()} onAsk={onAsk} />)
     const input = openAskComposer(container, "first line\nsecond line")
@@ -532,81 +627,28 @@ describe("SelectionActionBubble", () => {
     // The composer replaces the actions — the toolbar can't do both at once.
     expect(screen.queryByRole("button", { name: "Copy Text" })).toBeNull()
     expect(screen.queryByRole("button", { name: "Quote" })).toBeNull()
+    expect(screen.getByRole("dialog", { name: "Ask" })).toBeTruthy()
 
     act(() => {
-      fireEvent.change(input, { target: { value: "  what does this mean?  " } })
-      fireEvent.keyDown(input, { key: "Enter" })
+      fireEvent.change(input, { target: { value: "what does this mean?" } })
+      fireEvent.click(screen.getByRole("button", { name: "Send question" }))
     })
 
-    // Selection verbatim (the host quotes it), question trimmed.
+    // The selection goes over verbatim — quoting it is the composer's job —
+    // and the composer's `close` takes the bubble and the selection down.
     expect(onAsk).toHaveBeenCalledWith(
       "first line\nsecond line",
       "what does this mean?"
     )
     expect(removeAllRanges).toHaveBeenCalled()
+    expect(screen.queryByRole("dialog")).toBeNull()
     expect(screen.queryByRole("toolbar")).toBeNull()
   })
 
-  it("asks when the submit button is clicked", () => {
-    const onAsk = vi.fn()
-    const { container } = render(<Harness onAsk={onAsk} />)
-    const input = openAskComposer(container)
-
-    act(() => {
-      fireEvent.change(input, { target: { value: "why?" } })
-      fireEvent.click(
-        screen.getByRole("button", { name: "Ask in a new conversation" })
-      )
-    })
-
-    expect(onAsk).toHaveBeenCalledWith("hello", "why?")
-  })
-
-  it("does not ask on an empty or whitespace-only question", () => {
-    const onAsk = vi.fn()
-    const { container } = render(<Harness onAsk={onAsk} />)
-    const input = openAskComposer(container)
-
-    act(() => {
-      fireEvent.keyDown(input, { key: "Enter" })
-      fireEvent.change(input, { target: { value: "   " } })
-      fireEvent.keyDown(input, { key: "Enter" })
-    })
-
-    expect(onAsk).not.toHaveBeenCalled()
-    // The composer stays up rather than dismissing — there is nothing to send,
-    // so the press simply hasn't done anything yet.
-    expect(screen.queryByRole("textbox")).not.toBeNull()
-    expect(
-      screen.getByRole("button", { name: "Ask in a new conversation" })
-    ).toHaveProperty("disabled", true)
-  })
-
-  it("ignores Enter while an IME candidate is being composed", () => {
-    // Every CJK input method commits its candidate with Enter. Submitting on
-    // that would send a half-typed question.
-    const onAsk = vi.fn()
-    const { container } = render(<Harness onAsk={onAsk} />)
-    const input = openAskComposer(container)
-
-    act(() => {
-      fireEvent.change(input, { target: { value: "这是" } })
-      fireEvent.compositionStart(input)
-      fireEvent.keyDown(input, { key: "Enter" })
-    })
-    expect(onAsk).not.toHaveBeenCalled()
-
-    act(() => {
-      fireEvent.compositionEnd(input)
-      fireEvent.keyDown(input, { key: "Enter" })
-    })
-    expect(onAsk).toHaveBeenCalledWith("hello", "这是")
-  })
-
-  it("keeps the question box up after focusing it drops the page selection", () => {
-    // Focusing the input collapses the page selection, and the frame loop /
-    // selectionchange tracker would measure nothing and unmount the box the user
-    // is typing into. Opening the composer freezes both.
+  it("keeps the composer up after focusing it drops the page selection", () => {
+    // Focusing the composer collapses the page selection, and the frame loop /
+    // selectionchange tracker would measure nothing and unmount the composer
+    // the user is typing into. Opening it freezes both.
     const onAsk = vi.fn()
     const { container } = render(<Harness onAsk={onAsk} />)
     const input = openAskComposer(container)
@@ -614,11 +656,11 @@ describe("SelectionActionBubble", () => {
     mockSelection(null, "")
     selectionChanged()
     expect(screen.queryByRole("textbox")).not.toBeNull()
-    expect(screen.getByRole("toolbar").style.top).toBe("92px")
+    expect(screen.getByRole("dialog").style.top).toBe("92px")
 
     act(() => {
       fireEvent.change(input, { target: { value: "still here?" } })
-      fireEvent.keyDown(input, { key: "Enter" })
+      fireEvent.click(screen.getByRole("button", { name: "Send question" }))
     })
     // The text was captured when the composer opened, so it survives the
     // selection going away underneath.
@@ -635,10 +677,12 @@ describe("SelectionActionBubble", () => {
       },
     ],
     [
-      "a press outside",
-      () => {
+      "a press elsewhere in the page",
+      (_input: HTMLElement, container: HTMLElement) => {
         act(() => {
-          fireEvent.pointerDown(document.body)
+          fireEvent.pointerDown(
+            container.querySelector("[data-testid=para]") as Element
+          )
         })
       },
     ],
@@ -650,13 +694,44 @@ describe("SelectionActionBubble", () => {
       fireEvent.change(input, { target: { value: "never mind" } })
     })
 
-    cancel(input)
+    cancel(input, container)
 
     expect(onAsk).not.toHaveBeenCalled()
-    expect(screen.queryByRole("toolbar")).toBeNull()
+    expect(screen.queryByRole("dialog")).toBeNull()
   })
 
-  it("opens a fresh question box after one was abandoned", () => {
+  it("stays open for a press in an overlay portalled out of the composer", () => {
+    // The composer's `@` panel, mode menu and tooltips hang off <body>, outside
+    // the bubble; picking from one is working in the composer, not leaving it.
+    const { container } = render(<Harness onAsk={vi.fn()} />)
+    openAskComposer(container)
+    const portal = document.createElement("div")
+    document.body.appendChild(portal)
+    try {
+      act(() => {
+        fireEvent.pointerDown(portal)
+      })
+      expect(screen.queryByRole("dialog")).not.toBeNull()
+    } finally {
+      portal.remove()
+    }
+  })
+
+  it("leaves an Escape the composer already handled alone", () => {
+    // Escape closing the composer's own `@` / `/` panel must not also throw
+    // the whole question away.
+    const { container } = render(<Harness onAsk={vi.fn()} />)
+    const input = openAskComposer(container)
+    input.addEventListener("keydown", (event) => event.preventDefault())
+
+    act(() => {
+      fireEvent.keyDown(input, { key: "Escape" })
+    })
+
+    expect(screen.queryByRole("dialog")).not.toBeNull()
+  })
+
+  it("opens a fresh composer after one was abandoned", () => {
     // The abandoned text must not come back with the next selection — the
     // composer is per-question, not a persistent draft.
     const { container } = render(<Harness onAsk={vi.fn()} />)
@@ -696,7 +771,7 @@ describe("SelectionActionBubble", () => {
       act(() => {
         fireEvent.click(screen.getByRole("button", { name: "Ask" }))
       })
-      expect(screen.getByRole("toolbar").style.left).toBe("158px")
+      expect(screen.getByRole("dialog").style.left).toBe("158px")
     } finally {
       restore()
     }
@@ -724,5 +799,71 @@ describe("SelectionActionBubble", () => {
       vi.useRealTimers()
     }
     expect(screen.getByRole("toolbar")).toBeTruthy()
+  })
+})
+
+describe("checking a selected sentence (10.3)", () => {
+  function CheckHarness({
+    onCheck,
+  }: {
+    onCheck?: (text: string, from: Element) => void
+  }) {
+    const ref = useRef<HTMLDivElement>(null)
+    return (
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <div ref={ref} data-testid="box">
+          <div data-check-key="reply-1" data-testid="reply">
+            <p data-testid="one">The build passes.</p>
+            <p data-testid="two">The tests pass.</p>
+          </div>
+          <div data-check-key="reply-2" data-testid="other">
+            <p data-testid="three">Another reply.</p>
+          </div>
+          <p data-testid="outside">Not a reply.</p>
+          <SelectionActionBubble containerRef={ref} onCheck={onCheck} />
+        </div>
+      </NextIntlClientProvider>
+    )
+  }
+
+  function select(start: string, end: string, text: string) {
+    const a = screen.getByTestId(start).firstChild as Node
+    const b = screen.getByTestId(end).firstChild as Node
+    mockSelection(screen.getByTestId("box"), text, SELECTION_RECT, {
+      start: a,
+      end: b,
+    })
+    selectionChanged()
+  }
+
+  it("is offered for a selection within one reply, and hands over that reply", () => {
+    const onCheck = vi.fn()
+    render(<CheckHarness onCheck={onCheck} />)
+    select("one", "two", "passes. The tests")
+    const button = screen.getByRole("button", { name: "Check" })
+    act(() => {
+      fireEvent.click(button)
+    })
+    expect(onCheck).toHaveBeenCalledTimes(1)
+    expect(onCheck.mock.calls[0][0]).toBe("passes. The tests")
+    expect(onCheck.mock.calls[0][1]).toBe(screen.getByTestId("reply"))
+    // The bubble is gone and the selection dropped, as for every action.
+    expect(screen.queryByRole("toolbar")).toBeNull()
+    expect(removeAllRanges).toHaveBeenCalled()
+  })
+
+  it("is not offered across two replies, outside one, or where it is not wanted", () => {
+    const onCheck = vi.fn()
+    const { unmount } = render(<CheckHarness onCheck={onCheck} />)
+    select("two", "three", "pass. Another")
+    expect(screen.getByRole("toolbar")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Check" })).toBeNull()
+    select("outside", "outside", "Not a")
+    expect(screen.queryByRole("button", { name: "Check" })).toBeNull()
+    unmount()
+    render(<CheckHarness />)
+    select("one", "one", "The build")
+    expect(screen.getByRole("toolbar")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Check" })).toBeNull()
   })
 })

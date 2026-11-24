@@ -330,6 +330,29 @@ mod tests {
     }
 
     #[test]
+    fn bundled_snapshot_prices_claude_fable_5_2() {
+        // Claude Code 2.1.321 (claude-agent-acp 0.102.0) makes Fable 5.2 the
+        // `fable` model, so an offline install must price it too: $8/$40 per
+        // Mtok, $0.20 cache reads and $10 cache writes, as models.dev lists it.
+        let catalog = bundled_catalog();
+        let fable = catalog
+            .iter()
+            .find(|p| p.id == "anthropic")
+            .and_then(|p| p.models.iter().find(|m| m.id == "claude-fable-5-2"))
+            .expect("snapshot must list claude-fable-5-2 under anthropic");
+        assert_eq!(
+            (
+                fable.cost_in,
+                fable.cost_out,
+                fable.cost_cache_read,
+                fable.cost_cache_write
+            ),
+            (Some(8.0), Some(40.0), Some(0.2), Some(10.0))
+        );
+        assert_eq!(fable.context, Some(1_000_000));
+    }
+
+    #[test]
     fn write_cache_replaces_the_legacy_cache() {
         let dir = tempfile::tempdir().expect("tempdir");
         let legacy = legacy_cache_path(dir.path());

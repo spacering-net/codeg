@@ -122,7 +122,7 @@ pub async fn accounts_core(db: &AppDatabase) -> Result<Vec<QuotaAccount>, AppCom
         });
     }
     for def in custom_agent_service::list_defs(&db.conn).await? {
-        if let Some(family) = custom_family(&family_isolator::spec_env_map(&def.spec)) {
+        if let Some(family) = family_isolator::manual_launch_env(&def).and_then(custom_family) {
             let Some(agent) = AgentType::from_wire(&format!("custom:{}", def.registry_id)) else {
                 continue;
             };
@@ -159,7 +159,9 @@ async fn resolve_source(
             .ok_or_else(|| error("Agent not found"))?;
         let def = custom_agent_service::def_from_model(&row)
             .ok_or_else(|| error("Agent configuration unavailable"))?;
-        let env = family_isolator::spec_env_map(&def.spec);
+        let env = family_isolator::manual_launch_env(&def)
+            .ok_or_else(|| error("Usage is unavailable for this agent"))?
+            .clone();
         let family =
             custom_family(&env).ok_or_else(|| error("Usage is unavailable for this agent"))?;
         return Ok(Source {

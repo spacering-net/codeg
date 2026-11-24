@@ -89,6 +89,17 @@ const ICON_CLASS: Record<StepStatus, string> = {
   cancelled: "text-muted-foreground/70",
 }
 
+/** The statuses whose glyph is drawn in a grey (`ICON_CLASS`). */
+const QUIET_ICON: Record<StepStatus, boolean> = {
+  succeeded: true,
+  pending: true,
+  running: true,
+  awaiting: false,
+  failed: false,
+  rejected: false,
+  cancelled: true,
+}
+
 /**
  * The status ring at the head of a row. The ring and the glyph are separate
  * layers so a running ring can turn without turning the glyph. `size="sm"`
@@ -158,6 +169,10 @@ export function RailIcon({
           <Icon
             aria-hidden="true"
             viewBox={glyphViewBox(Icon, size)}
+            // A grey glyph inks in with its row's words when the row is
+            // pointed at (`.activity-marker` in globals.css); a tone keeps its
+            // colour, as the words in one do.
+            data-quiet={QUIET_ICON[status] ? "" : undefined}
             className={cn(
               "absolute inset-0 size-full",
               ICON_CLASS[status],

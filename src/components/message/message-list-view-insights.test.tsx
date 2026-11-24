@@ -41,6 +41,14 @@ const { stableT, scrollToIndex, viewport } = vi.hoisted(() => ({
 }))
 
 vi.mock("next-intl", () => ({ useTranslations: () => stableT }))
+// No assistants' roster read here: whether a reply can be checked (10.3)
+// is not what this file is about.
+vi.mock("@/stores/personal-agent-roster-store", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/stores/personal-agent-roster-store")
+  >()),
+  useRoster: () => null,
+}))
 vi.mock("@/lib/api", () => ({
   getFolderConversation: vi.fn(),
   getFolderConversationTurns: vi.fn(),
@@ -299,6 +307,31 @@ describe("MessageListView insights", () => {
     expect(scrollToIndex).toHaveBeenCalledWith(second.threadIndex, {
       align: "start",
       smooth: false,
+    })
+  })
+
+  it("tells the navigator nothing runs while the agent is idle", () => {
+    seed()
+    renderTranscript(true)
+    expect(published()?.nav.running).toBeNull()
+  })
+
+  it("tells the navigator which message the agent is answering", () => {
+    seed()
+    render(
+      <MessageListView
+        conversationId={CID}
+        imageRoot={null}
+        agentType="claude_code"
+        availableCommands={[]}
+        connStatus="prompting"
+        insightsInSidebar
+      />
+    )
+    // No live reply yet: counted from when the message was sent.
+    expect(published()?.nav.running).toEqual({
+      turnId: "u2",
+      startedAt: Date.parse(TURNS[2].timestamp),
     })
   })
 

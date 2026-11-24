@@ -69,13 +69,17 @@ pub async fn acp_env_diagnostics(
 pub struct AcpConnectParams {
     pub agent_type: AgentType,
     pub agent_account_id: Option<String>,
-    pub conversation_id: Option<i32>,
     pub working_dir: Option<String>,
     pub session_id: Option<String>,
     #[serde(default)]
     pub preferred_mode_id: Option<String>,
     #[serde(default)]
     pub preferred_config_values: Option<BTreeMap<String, String>>,
+    /// The conversation this connect opens, when it is an existing one: its
+    /// stored selection wins over the client's default (codeg#1179). Older
+    /// clients omit it and fall back to the session-id lookup.
+    #[serde(default)]
+    pub conversation_id: Option<i32>,
 }
 
 pub async fn acp_connect(
@@ -107,40 +111,79 @@ pub async fn acp_connect(
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
 
     let emitter = state.emitter.clone();
-    let connection_id = manager
-        .spawn_agent_with_connect_barrier(
-            &connect_barrier,
-            params.agent_type,
-            params.working_dir,
-            params.session_id,
-            runtime_env,
-            "web".to_string(),
-            emitter,
-            params.preferred_mode_id,
-            params.preferred_config_values.unwrap_or_default(),
-        )
-        .await
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    let connection_id = acp_commands::spawn_with_conversation_selection(
+        manager,
+        &connect_barrier,
+        &db.conn,
+        params.agent_type,
+        params.working_dir,
+        params.session_id,
+        runtime_env,
+        "web".to_string(),
+        emitter,
+        params.conversation_id,
+        params.preferred_mode_id,
+        params.preferred_config_values.unwrap_or_default(),
+    )
+    .await
+    .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
 
     Ok(Json(connection_id))
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AcpSetComposerModeParams {
+    pub connection_id: String,
+    #[serde(default)]
+    pub mode_id: Option<String>,
+    #[serde(default)]
+    pub initial: Option<bool>,
+}
+
+pub async fn acp_set_composer_mode(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AcpSetComposerModeParams>,
+) -> Result<Json<bool>, AppCommandError> {
+    let applied = state
+        .connection_manager
+        .set_composer_mode(
+            &params.connection_id,
+            params.mode_id,
+            params.initial.unwrap_or(false),
+        )
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(applied))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AcpDisconnectParams {
     pub connection_id: String,
+    #[serde(default)]
+    pub only_if_idle: bool,
 }
 
 pub async fn acp_disconnect(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AcpDisconnectParams>,
-) -> Result<Json<()>, AppCommandError> {
+) -> Result<Json<Option<bool>>, AppCommandError> {
     let manager = &state.connection_manager;
-    manager
-        .disconnect(&params.connection_id)
-        .await
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
-    Ok(Json(()))
+    let result = if params.only_if_idle {
+        manager
+            .release_idle(&params.connection_id, chrono::Utc::now())
+            .await
+            .map(Some)
+    } else {
+        manager
+            .disconnect(&params.connection_id)
+            .await
+            .map(|()| None)
+    };
+    result
+        .map(Json)
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))
 }
 
 #[derive(Deserialize)]
@@ -193,9 +236,17 @@ pub async fn acp_prompt(
                 AcpError::TurnInProgress => {
                     AppCommandError::new(AppErrorCode::TurnInProgress, message)
                 }
+                // The conversation was moved to another folder: expected, and
+                // the client recovers by re-pointing its tab — not a fault.
+                AcpError::ConversationMoved { .. } => {
+                    AppCommandError::new(AppErrorCode::InvalidInput, message)
+                }
                 _ => AppCommandError::task_execution_failed(message),
             }
         })?;
+    // A person typed this in a codeg window: a dispatch they write in is
+    // theirs from now on.
+    crate::personal_agent::note_owner_prompt(&params.connection_id, params.conversation_id);
     Ok(Json(()))
 }
 
@@ -255,14 +306,35 @@ pub async fn acp_reclaim_leaked_temp(
 pub struct AcpListAgentSkillsParams {
     pub agent_type: AgentType,
     pub workspace_path: Option<String>,
+    /// List dangling links under a skill's name too (owner `broken`).
+    #[serde(default)]
+    pub include_broken: Option<bool>,
 }
 
 pub async fn acp_list_agent_skills(
     Json(params): Json<AcpListAgentSkillsParams>,
 ) -> Result<Json<AgentSkillsListResult>, AppCommandError> {
-    let result = acp_commands::acp_list_agent_skills(params.agent_type, params.workspace_path)
-        .await
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    let result = acp_commands::acp_list_agent_skills_with(
+        params.agent_type,
+        params.workspace_path,
+        params.include_broken.unwrap_or(false),
+    )
+    .await
+    .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(result))
+}
+
+pub async fn acp_list_agent_runtime_skills(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AcpListAgentSkillsParams>,
+) -> Result<Json<AgentSkillsListResult>, AppCommandError> {
+    let result = acp_commands::acp_list_agent_runtime_skills_core(
+        params.agent_type,
+        params.workspace_path,
+        &state.db,
+    )
+    .await
+    .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(result))
 }
 
@@ -298,21 +370,26 @@ pub struct AcpSaveAgentSkillParams {
     pub content: String,
     pub workspace_path: Option<String>,
     pub layout: Option<AgentSkillLayout>,
+    /// A new skill: refused when the id is already used (`id_taken`).
+    #[serde(default)]
+    pub create: Option<bool>,
 }
 
 pub async fn acp_save_agent_skill(
+    Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AcpSaveAgentSkillParams>,
 ) -> Result<Json<AgentSkillItem>, AppCommandError> {
-    let skill = acp_commands::acp_save_agent_skill(
+    let skill = acp_commands::acp_save_agent_skill_core(
+        &state.emitter,
         params.agent_type,
         params.scope,
         params.skill_id,
         params.content,
         params.workspace_path,
         params.layout,
+        params.create.unwrap_or(false),
     )
-    .await
-    .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    .await?;
     Ok(Json(skill))
 }
 
@@ -323,20 +400,32 @@ pub struct AcpDeleteAgentSkillParams {
     pub scope: AgentSkillScope,
     pub skill_id: String,
     pub workspace_path: Option<String>,
+    /// Say what the delete would do (who else loses the skill), do nothing.
+    #[serde(default)]
+    pub preflight: Option<bool>,
+    /// The `ack` the preflight returned, for a delete in a folder other
+    /// agents read.
+    #[serde(default)]
+    pub ack: Option<String>,
 }
 
 pub async fn acp_delete_agent_skill(
+    Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AcpDeleteAgentSkillParams>,
-) -> Result<Json<()>, AppCommandError> {
-    acp_commands::acp_delete_agent_skill(
+) -> Result<Json<acp_commands::SkillPageDeleteResult>, AppCommandError> {
+    let result = acp_commands::acp_delete_agent_skill_core(
+        &state.emitter,
         params.agent_type,
         params.scope,
         params.skill_id,
         params.workspace_path,
+        acp_commands::SkillPageDeleteConfirm {
+            preflight: params.preflight.unwrap_or(false),
+            ack: params.ack,
+        },
     )
-    .await
-    .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
-    Ok(Json(()))
+    .await?;
+    Ok(Json(result))
 }
 
 // --- Pattern C: ConnectionManager handlers ---
@@ -719,6 +808,9 @@ pub async fn acp_update_agent_env(
 pub struct AcpUpdateAgentConfigParams {
     pub agent_type: AgentType,
     pub config_json: Option<String>,
+    pub system_instructions_content: Option<String>,
+    #[serde(default)]
+    pub system_instructions_file_path: Option<String>,
     pub codex_auth_json: Option<String>,
     pub codex_config_toml: Option<String>,
     #[serde(default)]
@@ -739,6 +831,8 @@ pub async fn acp_update_agent_config(
     let affected = acp_commands::acp_update_agent_config_and_refresh(
         params.agent_type,
         params.config_json,
+        params.system_instructions_content,
+        params.system_instructions_file_path,
         params.codex_auth_json,
         params.codex_config_toml,
         params.codex_config_toml_baseline,
@@ -978,10 +1072,20 @@ pub async fn acp_list_pi_model_capabilities(
     ))
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpLoadDeepSeekModelCatalogParams {
+    /// The deepseek-acp version the settings page judges by (installed, else
+    /// pinned): it decides which document holds the catalog.
+    #[serde(default)]
+    pub version: Option<String>,
+}
+
 pub async fn acp_load_deepseek_model_catalog(
+    Json(params): Json<AcpLoadDeepSeekModelCatalogParams>,
 ) -> Result<Json<deepseek_settings_commands::DeepSeekModelCatalog>, AppCommandError> {
     Ok(Json(
-        deepseek_settings_commands::load_deepseek_model_catalog_core(),
+        deepseek_settings_commands::load_deepseek_model_catalog_core(params.version.as_deref()),
     ))
 }
 
@@ -992,6 +1096,9 @@ pub struct AcpUpdateDeepSeekModelCatalogParams {
     /// is inherited again.
     #[serde(default)]
     pub models: Option<Vec<deepseek_settings_commands::DeepSeekCatalogModel>>,
+    /// As in [`AcpLoadDeepSeekModelCatalogParams::version`].
+    #[serde(default)]
+    pub version: Option<String>,
 }
 
 pub async fn acp_update_deepseek_model_catalog(
@@ -999,7 +1106,37 @@ pub async fn acp_update_deepseek_model_catalog(
     Json(params): Json<AcpUpdateDeepSeekModelCatalogParams>,
 ) -> Result<Json<()>, AppCommandError> {
     let emitter = state.emitter.clone();
-    deepseek_settings_commands::update_deepseek_model_catalog_core(params.models, &emitter)
+    deepseek_settings_commands::update_deepseek_model_catalog_core(
+        params.models,
+        params.version.as_deref(),
+        &emitter,
+    )
+    .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(()))
+}
+
+pub async fn acp_load_deepseek_provider_routes(
+) -> Result<Json<deepseek_settings_commands::DeepSeekProviderRoutes>, AppCommandError> {
+    Ok(Json(
+        deepseek_settings_commands::load_deepseek_provider_routes_core(),
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpUpdateDeepSeekProviderRoutesParams {
+    /// Absent (or empty) clears the stored routes so only the official
+    /// DeepSeek route remains.
+    #[serde(default)]
+    pub routes: Option<Vec<deepseek_settings_commands::DeepSeekProviderRoute>>,
+}
+
+pub async fn acp_update_deepseek_provider_routes(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AcpUpdateDeepSeekProviderRoutesParams>,
+) -> Result<Json<()>, AppCommandError> {
+    let emitter = state.emitter.clone();
+    deepseek_settings_commands::update_deepseek_provider_routes_core(params.routes, &emitter)
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(()))
 }
@@ -1602,6 +1739,7 @@ mod tests {
 
     /// The editor reopens what it just saved from this response, so the web
     /// endpoint must return the saved item as the desktop command does.
+    #[cfg(not(windows))] // a home of its own: `skills::tests::with_hermetic_home`
     #[tokio::test]
     async fn skill_save_returns_the_item_the_web_editor_needs() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1614,7 +1752,17 @@ mod tests {
             "layout": "markdown_file"
         }))
         .unwrap();
-        let response = acp_save_agent_skill(Json(params)).await.unwrap();
+        // The handler announces the change through the server's emitter, and
+        // the save consults Codeg's skill store: under a home of the test's own.
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let state = Arc::new(AppState::new_for_test(db, tmp.path().join("data")));
+        let home = tempfile::tempdir().unwrap();
+        let response = crate::skills::tests::with_hermetic_home(
+            home.path(),
+            acp_save_agent_skill(Extension(state), Json(params)),
+        )
+        .await
+        .unwrap();
         let value = serde_json::to_value(response.0).unwrap();
         assert_eq!(value["id"], "web-skill");
         assert_eq!(value["scope"], "project");

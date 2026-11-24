@@ -5,6 +5,7 @@ import { ChevronRight, MessagesSquare } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
+import { cn } from "@/lib/utils"
 
 interface WorkbenchPageTitleProps {
   title: string
@@ -18,6 +19,13 @@ interface WorkbenchPageTitleProps {
   titleActionLabel?: string
   /** Further breadcrumb segments after the title. */
   trail?: ReactNode
+  /** Who the page is, drawn just before its title: the personal agent's
+   *  avatar. Not a route glyph (see below). With an empty `title`, it is
+   *  the title (the assistants page's capsule of face and name). */
+  leading?: ReactNode
+  /** For a route whose trail can outgrow the strip (Harness's section tabs):
+   *  `shrink`, so the trail gives way rather than the window's drag area. */
+  className?: string
 }
 
 /**
@@ -32,13 +40,16 @@ interface WorkbenchPageTitleProps {
  * page". Here the trail itself says it.
  *
  * No route glyph before the title: it repeated the icon on the sidebar row the
- * user just came from, and the title already names the page.
+ * user just came from, and the title already names the page. A page that is
+ * someone — the personal agent — puts their avatar there instead (`leading`).
  */
 export function WorkbenchPageTitle({
   title,
   onTitleClick,
   titleActionLabel,
   trail,
+  leading,
+  className,
 }: WorkbenchPageTitleProps) {
   const tTitleBar = useTranslations("Folder.folderTitleBar")
   const { openConversations } = useWorkbenchRoute()
@@ -46,7 +57,12 @@ export function WorkbenchPageTitle({
   return (
     // pl-3, not pl-4: the icon button carries its own optical padding, so the
     // breadcrumb's glyph lands on the same rail a bare pl-4 title used to.
-    <div className="flex h-10 min-w-0 shrink-0 items-center gap-1 pl-3">
+    <div
+      className={cn(
+        "flex h-10 min-w-0 shrink-0 items-center gap-1 pl-3",
+        className
+      )}
+    >
       <Button
         variant="ghost"
         size="icon"
@@ -61,6 +77,9 @@ export function WorkbenchPageTitle({
         className="size-3 shrink-0 text-muted-foreground/50"
         aria-hidden="true"
       />
+      {leading ? (
+        <span className="ms-0.5 inline-flex shrink-0">{leading}</span>
+      ) : null}
       {onTitleClick ? (
         // Same rail as the heading it replaces: `px-1` puts the text where the
         // heading's `pl-1` did, so going one level down doesn't shift it.
@@ -73,11 +92,11 @@ export function WorkbenchPageTitle({
         >
           {title}
         </button>
-      ) : (
+      ) : title ? (
         <h1 className="min-w-0 truncate pl-1 text-[0.8125rem] font-semibold leading-none">
           {title}
         </h1>
-      )}
+      ) : null}
       {trail}
     </div>
   )

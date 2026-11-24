@@ -34,6 +34,10 @@ supports named accounts on Windows and Linux; use Default on macOS. Kiro,
 ZCode, TRAE CLI, Command Code and MiniMax Code do not yet support named accounts. OpenClaw
 uses its configured gateway's account.
 
+**Harness > MCP** shows the account configuration files affected by a family edit.
+Pi manages its own MCP file in each account. Cursor uses its user-level MCP
+configuration on Windows and Linux.
+
 OpenCode and Cursor keep the usual home folder and GitHub CLI configuration.
 Other command-line tools that use their separate configuration folders may
 need their own configuration or sign-in in each account. Codeg does not copy

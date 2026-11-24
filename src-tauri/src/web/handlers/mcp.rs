@@ -1,15 +1,20 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
-use axum::extract::Extension;
-use crate::app_state::AppState;
-use axum::Json;
+
+use axum::{extract::Extension, Json};
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::app_error::AppCommandError;
+use crate::app_state::AppState;
 use crate::commands::mcp as mcp_commands;
 use crate::commands::mcp::{
     LocalMcpScan, LocalMcpServer, McpAppType, McpMarketplaceItem, McpMarketplaceProvider,
     McpMarketplaceServerDetail,
+};
+use crate::commands::mcp_engine;
+use crate::commands::mcp_engine::{
+    McpApplyRequest, McpApplyResult, McpInventory, McpOp, McpSnippet,
 };
 
 // ---------------------------------------------------------------------------
@@ -103,7 +108,9 @@ pub async fn mcp_install_from_marketplace(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<InstallFromMarketplaceParams>,
 ) -> Result<Json<LocalMcpServer>, AppCommandError> {
-    let result = mcp_commands::mcp_install_from_marketplace_core(&state.db,
+    let result = mcp_commands::mcp_install_from_marketplace_core(
+        &state.db,
+        &state.emitter,
         params.provider_id,
         params.server_id,
         params.apps,
@@ -120,8 +127,15 @@ pub async fn mcp_upsert_local_server(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<UpsertLocalServerParams>,
 ) -> Result<Json<LocalMcpServer>, AppCommandError> {
-    let result =
-        mcp_commands::mcp_upsert_local_server_core(&state.db, params.server_id, params.spec, params.apps, params.shown_spec).await?;
+    let result = mcp_commands::mcp_upsert_local_server_core(
+        &state.db,
+        &state.emitter,
+        params.server_id,
+        params.spec,
+        params.apps,
+        params.shown_spec,
+    )
+    .await?;
     Ok(Json(result))
 }
 
@@ -129,7 +143,13 @@ pub async fn mcp_set_server_apps(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<SetServerAppsParams>,
 ) -> Result<Json<Option<LocalMcpServer>>, AppCommandError> {
-    let result = mcp_commands::mcp_set_server_apps_core(&state.db, params.server_id, params.apps).await?;
+    let result = mcp_commands::mcp_set_server_apps_core(
+        &state.db,
+        &state.emitter,
+        params.server_id,
+        params.apps,
+    )
+    .await?;
     Ok(Json(result))
 }
 
@@ -137,6 +157,57 @@ pub async fn mcp_remove_server(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<RemoveServerParams>,
 ) -> Result<Json<bool>, AppCommandError> {
-    let result = mcp_commands::mcp_remove_server_core(&state.db, params.server_id, params.apps).await?;
+    let result = mcp_commands::mcp_remove_server_core(
+        &state.db,
+        &state.emitter,
+        params.server_id,
+        params.apps,
+    )
+    .await?;
     Ok(Json(result))
+}
+
+// ---------------------------------------------------------------------------
+// The MCP engine (`commands::mcp_engine`)
+// ---------------------------------------------------------------------------
+
+pub async fn mcp_inventory(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<McpInventory>, AppCommandError> {
+    Ok(Json(mcp_engine::mcp_inventory_core(&state.db).await?))
+}
+
+/// `mcp_apply`'s arguments, named as the desktop command names them.
+#[derive(Deserialize)]
+pub struct ApplyParams {
+    #[serde(default)]
+    pub basis: Option<BTreeMap<McpAppType, String>>,
+    pub ops: Vec<McpOp>,
+    #[serde(default)]
+    pub preflight: Option<bool>,
+}
+
+pub async fn mcp_apply(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ApplyParams>,
+) -> Result<Json<McpApplyResult>, AppCommandError> {
+    let request = McpApplyRequest {
+        basis: params.basis.unwrap_or_default(),
+        ops: params.ops,
+        preflight: params.preflight.unwrap_or(false),
+    };
+    Ok(Json(
+        mcp_engine::mcp_apply_core(&state.db, &state.emitter, request).await?,
+    ))
+}
+
+#[derive(Deserialize)]
+pub struct ParseSnippetParams {
+    pub text: String,
+}
+
+pub async fn mcp_parse_snippet(
+    Json(params): Json<ParseSnippetParams>,
+) -> Result<Json<McpSnippet>, AppCommandError> {
+    Ok(Json(mcp_engine::mcp_parse_snippet_core(&params.text)))
 }

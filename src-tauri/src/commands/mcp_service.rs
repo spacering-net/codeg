@@ -432,7 +432,7 @@ pub async fn set_codeg_mcp_tool_group(
     {
         // `app.emit` fans out to every window, so the settings window's own
         // switch for this group converges with the one just flipped here.
-        let emitter = EventEmitter::Tauri(app);
+        let emitter = EventEmitter::from_app(&app);
         set_codeg_mcp_tool_group_core(
             &db.conn,
             CodegMcpToolGroupTargets {
@@ -822,6 +822,7 @@ mod tests {
                 .register(
                     token.into(),
                     TokenEntry {
+                        agent_hosts_tools: false,
                         parent_connection_id: "conn-a".into(),
                         working_dir: std::path::PathBuf::from("/tmp"),
                     },
@@ -832,6 +833,7 @@ mod tests {
             .register(
                 "t3".into(),
                 TokenEntry {
+                    agent_hosts_tools: false,
                     parent_connection_id: "conn-b".into(),
                     working_dir: std::path::PathBuf::from("/tmp"),
                 },

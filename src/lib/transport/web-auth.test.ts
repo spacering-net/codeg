@@ -1,14 +1,28 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import {
+  __resetHarnessLinkForTests,
+  queueHarnessLink,
+  takeHarnessLinkAfterLogin,
+} from "@/lib/harness-link"
+import {
+  __resetSrnResultForTests,
+  queueSrnResult,
+  takeSrnResultAfterLogin,
+} from "@/lib/srn-account/web-result"
+import {
   codegAuthHeaders,
   hasCodegCredentials,
   isProxyAuthenticated,
   probeProxyAuthentication,
+  redirectToCodegLogin,
   unauthorizedSource,
 } from "./web-auth"
 
 afterEach(() => {
   localStorage.clear()
+  sessionStorage.clear()
+  __resetHarnessLinkForTests()
+  __resetSrnResultForTests()
   vi.unstubAllGlobals()
 })
 
@@ -128,5 +142,69 @@ describe("proxy authentication (CODEG_AUTH=proxy-jwt)", () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed")))
     await expect(probeProxyAuthentication()).resolves.toBe("unreachable")
     expect(isProxyAuthenticated()).toBe(true)
+  })
+})
+
+describe("redirectToCodegLogin", () => {
+  /** A page at `path`, whose navigation can be read back. */
+  function at(path: string) {
+    const location = { ...window.location, pathname: path, href: path }
+    vi.stubGlobal("location", location)
+    return location
+  }
+
+  it("clears the credentials and goes to the login page, as before", () => {
+    const location = at("/workspace")
+    localStorage.setItem("codeg_token", "tok")
+    localStorage.setItem("codeg_proxy_auth", "1")
+    redirectToCodegLogin()
+    expect(location.href).toBe("/login")
+    expect(localStorage.getItem("codeg_token")).toBeNull()
+    expect(localStorage.getItem("codeg_proxy_auth")).toBeNull()
+  })
+
+  // The login page is reached without the query the workspace was opened
+  // with, so a Harness item still waiting to be opened goes along this way.
+  it("keeps a Harness item the page has not opened yet for after the login", () => {
+    const location = at("/workspace")
+    queueHarnessLink("acme/pdf-tools")
+    redirectToCodegLogin()
+    expect(location.href).toBe("/login")
+    expect(takeHarnessLinkAfterLogin()).toBe("acme/pdf-tools")
+  })
+
+  // How an SRN sign-in this page came back from ended, not shown yet because
+  // the instance turned the browser away, goes along the same way.
+  it("keeps an SRN sign-in's result the page has not shown yet", () => {
+    at("/workspace")
+    queueSrnResult("access_denied")
+    redirectToCodegLogin()
+    expect(takeSrnResultAfterLogin()).toBe("access_denied")
+  })
+
+  it("leaves no item from an earlier redirect behind when none is waiting", () => {
+    at("/workspace")
+    queueHarnessLink("acme/old")
+    redirectToCodegLogin()
+    __resetHarnessLinkForTests()
+
+    at("/workspace")
+    redirectToCodegLogin()
+    expect(takeHarnessLinkAfterLogin()).toBeNull()
+  })
+
+  it("does nothing on the login page itself", () => {
+    at("/workspace")
+    queueHarnessLink("acme/pdf-tools")
+    redirectToCodegLogin()
+    __resetHarnessLinkForTests()
+
+    const location = at("/login")
+    localStorage.setItem("codeg_token", "tok")
+    redirectToCodegLogin()
+    expect(location.href).toBe("/login")
+    expect(localStorage.getItem("codeg_token")).toBe("tok")
+    // What the earlier redirect kept is still there for the login to use.
+    expect(takeHarnessLinkAfterLogin()).toBe("acme/pdf-tools")
   })
 })

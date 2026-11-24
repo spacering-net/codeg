@@ -24,7 +24,7 @@ const CHECK_USER_FEEDBACK_SUFFIX_RE = /[^a-z0-9]check_user_feedback$/
 
 /**
  * The codeg-mcp workbench companions, which own `CodegMcpToolCard` (and, for
- * `resume_delegation`, `ResumedDelegationCard`). Same bare-name-plus-suffix
+ * `resume_delegation`, `DelegationResumeRow`). Same bare-name-plus-suffix
  * treatment as the delegation tools above: the bare form is what the live path
  * produces post-`inferLiveToolName`, the suffix form is the raw
  * `mcp__<server>__<tool>` name the history parsers keep.

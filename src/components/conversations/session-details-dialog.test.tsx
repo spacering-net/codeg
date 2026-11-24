@@ -99,7 +99,7 @@ describe("SessionDetailsDialog", () => {
         stats={fullStats}
       />
     )
-    expect(getByText("Extension ID")).toBeTruthy()
+    expect(getByText("Session Index")).toBeTruthy()
     expect(getByText("ext-abc")).toBeTruthy()
     expect(getByText("50K / 200K (25.0%)")).toBeTruthy()
     // The message count field was intentionally removed.
@@ -126,6 +126,24 @@ describe("SessionDetailsDialog", () => {
     expect(getByText("Assistant")).toBeTruthy()
     // Not in the store here: the name it carried.
     expect(getByText("Reviewer")).toBeTruthy()
+
+    // One of the owner's assistants, by its uid: the same row.
+    rerender(
+      wrap(
+        <SessionDetailsDialog
+          open
+          onOpenChange={() => {}}
+          summary={summary({
+            parent_id: 3,
+            bot_uid: "u-7",
+            assistant_name: "Developer",
+          })}
+          stats={fullStats}
+        />
+      )
+    )
+    expect(getByText("Assistant")).toBeTruthy()
+    expect(getByText("Developer")).toBeTruthy()
 
     // A plain session has no such row.
     rerender(
@@ -417,7 +435,7 @@ describe("SessionDetailsDialog", () => {
     )
     // Each copy button names its own field so screen-reader/keyboard users can
     // tell them apart.
-    expect(getByLabelText("Copy Extension ID")).toBeTruthy()
+    expect(getByLabelText("Copy Session Index")).toBeTruthy()
     fireEvent.click(getByLabelText("Copy Session ID"))
     expect(mockCopy).toHaveBeenCalledWith("7")
     expect(await findByLabelText("Copied Session ID")).toBeTruthy()

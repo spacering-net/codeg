@@ -269,7 +269,7 @@ export function usesMergeRequests(
 ): boolean {
   const provider =
     task?.source_meta?.provider ?? task?.delivery?.provider ?? folderProvider
-  return provider === "gitlab"
+  return provider === "gitlab" || provider === "cnb"
 }
 
 /**

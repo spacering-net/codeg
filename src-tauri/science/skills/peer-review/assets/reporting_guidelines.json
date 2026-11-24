@@ -1,0 +1,489 @@
+{
+  "schema_version": "2.0",
+  "reviewed_on": "2026-10-01",
+  "notice": "This catalog supports reporting-guideline selection only. Verify the official source, applicable extensions, and target venue policy. Checklist coverage is not a quality or merit score.",
+  "guidelines": [
+    {
+      "id": "ARRIVE-2.0",
+      "name": "ARRIVE",
+      "version": "2.0 (2020)",
+      "status": "current",
+      "category": "reporting_guideline",
+      "study_types": [
+        "animal_in_vivo"
+      ],
+      "report_kinds": [
+        "results"
+      ],
+      "required_features": [],
+      "domains": [
+        "all"
+      ],
+      "main_item_count": 21,
+      "url": "https://arriveguidelines.org/arrive-guidelines",
+      "notes": "Use Essential 10 and Recommended Set; reporting supports appraisal but does not by itself establish rigor."
+    },
+    {
+      "id": "CARE-2013",
+      "name": "CARE",
+      "version": "2013 checklist; 2017 explanation",
+      "status": "current",
+      "category": "reporting_guideline",
+      "study_types": [
+        "case_report"
+      ],
+      "report_kinds": [
+        "results"
+      ],
+      "required_features": [],
+      "domains": [
+        "health"
+      ],
+      "main_item_count": 13,
+      "url": "https://www.care-statement.org/checklist",
+      "notes": "Confirm informed consent and privacy requirements with the target venue and applicable law."
+    },
+    {
+      "id": "CHEERS-2022",
+      "name": "CHEERS",
+      "version": "2022",
+      "status": "current",
+      "category": "reporting_guideline",
+      "study_types": [
+        "economic_evaluation"
+      ],
+      "report_kinds": [
+        "results"
+      ],
+      "required_features": [],
+      "domains": [
+        "health"
+      ],
+      "main_item_count": 28,
+      "url": "https://www.ispor.org/heor-resources/good-practices/cheers",
+      "notes": "For economic evaluations of health interventions; use the explanation and elaboration."
+    },
+    {
+      "id": "CONSORT-2025",
+      "name": "CONSORT",
+      "version": "2025",
+      "status": "current",
+      "category": "reporting_guideline",
+      "study_types": [
+        "randomized_trial"
+      ],
+      "report_kinds": [
+        "results"
+      ],
+      "required_features": [],
+      "domains": [
+        "health",
+        "all"
+      ],
+      "main_item_count": 30,
+      "url": "https://www.consort-spirit.org/",
+      "notes": "Supersedes CONSORT 2010. Check design-specific extensions; CONSORT is not a quality assessment instrument."
+    },
+    {
+      "id": "CONSORT-AI-2020",
+      "name": "CONSORT-AI",
+      "version": "2020 extension",
+      "status": "current",
+      "category": "reporting_guideline",
+      "study_types": [
+        "randomized_trial"
+      ],
+      "report_kinds": [
+        "results"
+      ],
+      "required_features": [
+        "ai_intervention"
+      ],
+      "domains": [
+        "health"
+      ],
+      "main_item_count": null,
+      "url": "https://www.equator-network.org/reporting-guidelines/consort-artificial-intelligence/",
+      "notes": "Use the 2020 extension alongside CONSORT 2025 for AI intervention trials. It was written against CONSORT 2010; map items by meaning, not inherited item numbers, and check current extension guidance."
+    },
+    {
+      "id": "COREQ-2007",
+      "name": "COREQ",
+      "version": "2007",
+      "status": "current",
+      "category": "reporting_guideline",
+      "study_types": [
+        "qualitative_interview",
+        "qualitative_focus_group"
+      ],
+      "report_kinds": [
+        "results"
+      ],
+      "required_features": [],
+      "domains": [
+        "health"
+      ],
+      "main_item_count": 32,
+      "url": "https://www.equator-network.org/reporting-guidelines/coreq/",
+      "notes": "For interviews and focus groups; consider SRQR for broader qualitative study designs."
+    },
+    {
+      "id": "PRISMA-2020",
+      "name": "PRISMA",
+      "version": "2020 (published 2021)",
+      "status": "current",
+      "category": "reporting_guideline",
+      "study_types": [
+        "systematic_review"
+      ],
+      "report_kinds": [
+        "results"
+      ],
+      "required_features": [],
+      "domains": [
+        "all"
+      ],
+      "main_item_count": 27,
+      "url": "https://www.prisma-statement.org/prisma-2020",
+      "notes": "Use the relevant extension for scoping, diagnostic, individual-participant-data, or other review types. PRISMA does not assess methodological quality."
+    },
+    {
+      "id": "PRISMA-P-2015",
+      "name": "PRISMA-P",
+      "version": "2015",
+      "status": "current",
+      "category": "reporting_guideline",
+      "study_types": [
+        "systematic_review"
+      ],
+      "report_kinds": [
+        "protocol"
+      ],
+      "required_features": [],
+      "domains": [
+        "all"
+      ],
+      "main_item_count": null,
+      "url": "https://www.equator-network.org/reporting-guidelines/prisma-protocols/",
+      "notes": "Use for systematic review protocols rather than completed review reports."
+    },
+    {
+      "id": "SPIRIT-2025",
+      "name": "SPIRIT",
+      "version": "2025",
+      "status": "current",
+      "category": "reporting_guideline",
+      "study_types": [
+        "randomized_trial"
+      ],
+      "report_kinds": [
+        "protocol"
+      ],
+      "required_features": [],
+      "domains": [
+        "health",
+        "all"
+      ],
+      "main_item_count": 34,
+      "url": "https://www.consort-spirit.org/",
+      "notes": "Supersedes SPIRIT 2013. Compare protocol, registry, statistical analysis plan, amendments, and final report for consistency."
+    },
+    {
+      "id": "SPIRIT-AI-2020",
+      "name": "SPIRIT-AI",
+      "version": "2020 extension",
+      "status": "current",
+      "category": "reporting_guideline",
+      "study_types": [
+        "randomized_trial"
+      ],
+      "report_kinds": [
+        "protocol"
+      ],
+      "required_features": [
+        "ai_intervention"
+      ],
+      "domains": [
+        "health"
+      ],
+      "main_item_count": null,
+      "url": "https://www.equator-network.org/reporting-guidelines/spirit-artificial-intelligence/",
+      "notes": "Use the 2020 AI-intervention extension alongside SPIRIT 2025. It was written against SPIRIT 2013; map items by meaning, not inherited item numbers, and check current extension guidance."
+    },
+    {
+      "id": "SQUIRE-2.0",
+      "name": "SQUIRE",
+      "version": "2.0 (2015)",
+      "status": "current",
+      "category": "reporting_guideline",
+      "study_types": [
+        "quality_improvement"
+      ],
+      "report_kinds": [
+        "results"
+      ],
+      "required_features": [],
+      "domains": [
+        "health"
+      ],
+      "main_item_count": 18,
+      "url": "https://www.squire-statement.org/index.cfm?fuseaction=page.viewPage&pageID=471&nodeID=1",
+      "notes": "For system-level work to improve healthcare; not every element is applicable to every manuscript."
+    },
+    {
+      "id": "SRQR-2014",
+      "name": "SRQR",
+      "version": "2014",
+      "status": "current",
+      "category": "reporting_guideline",
+      "study_types": [
+        "qualitative_study"
+      ],
+      "report_kinds": [
+        "results"
+      ],
+      "required_features": [],
+      "domains": [
+        "health"
+      ],
+      "main_item_count": 21,
+      "url": "https://www.equator-network.org/reporting-guidelines/srqr",
+      "notes": "Broad qualitative reporting standard; choose COREQ when interviews or focus groups are the primary methods."
+    },
+    {
+      "id": "STARD-2015",
+      "name": "STARD",
+      "version": "2015",
+      "status": "current",
+      "category": "reporting_guideline",
+      "study_types": [
+        "diagnostic_accuracy"
+      ],
+      "report_kinds": [
+        "results"
+      ],
+      "required_features": [],
+      "domains": [
+        "health"
+      ],
+      "main_item_count": 30,
+      "url": "https://www.equator-network.org/reporting-guidelines/stard/",
+      "notes": "For diagnostic accuracy studies. Use a separate risk-of-bias tool for design/conduct appraisal."
+    },
+    {
+      "id": "STARD-AI-2025",
+      "name": "STARD-AI",
+      "version": "2025",
+      "status": "current",
+      "category": "reporting_guideline",
+      "study_types": [
+        "diagnostic_accuracy"
+      ],
+      "report_kinds": [
+        "results"
+      ],
+      "required_features": [
+        "ai_based"
+      ],
+      "domains": [
+        "health"
+      ],
+      "main_item_count": 40,
+      "url": "https://www.nature.com/articles/s41591-025-03953-8",
+      "notes": "Use for AI-centered diagnostic accuracy studies and alongside the applicable base and modality guidance."
+    },
+    {
+      "id": "STROBE-2007",
+      "name": "STROBE",
+      "version": "2007",
+      "status": "current",
+      "category": "reporting_guideline",
+      "study_types": [
+        "observational_study",
+        "cohort_study",
+        "case_control_study",
+        "cross_sectional_study"
+      ],
+      "report_kinds": [
+        "results"
+      ],
+      "required_features": [],
+      "domains": [
+        "health"
+      ],
+      "main_item_count": 22,
+      "url": "https://www.strobe-statement.org/",
+      "notes": "Select the design-specific checklist and applicable extensions such as RECORD, STREGA, or STROBE-MR."
+    },
+    {
+      "id": "TRIPOD-AI-2024",
+      "name": "TRIPOD+AI",
+      "version": "2024",
+      "status": "current",
+      "category": "reporting_guideline",
+      "study_types": [
+        "prediction_model"
+      ],
+      "report_kinds": [
+        "results"
+      ],
+      "required_features": [],
+      "domains": [
+        "health"
+      ],
+      "main_item_count": 27,
+      "url": "https://www.tripod-statement.org/",
+      "notes": "Replaces TRIPOD 2015 and applies to regression or machine-learning model development and performance evaluation."
+    },
+    {
+      "id": "TRIPOD-LLM-2025",
+      "name": "TRIPOD-LLM",
+      "version": "2025",
+      "status": "current",
+      "category": "reporting_guideline",
+      "study_types": [
+        "llm_study",
+        "prediction_model"
+      ],
+      "report_kinds": [
+        "results"
+      ],
+      "required_features": [
+        "large_language_model"
+      ],
+      "domains": [
+        "health"
+      ],
+      "main_item_count": 19,
+      "url": "https://www.equator-network.org/reporting-guidelines/the-tripod-llm-reporting-guideline-for-studies-using-large-language-models/",
+      "notes": "For biomedical/healthcare studies developing, tuning, prompt engineering, or evaluating LLMs, including non-prediction tasks. Use TRIPOD+AI additionally when prediction-model reporting applies; consult the separate abstract checklist for abstracts."
+    },
+    {
+      "id": "MIAME-2001",
+      "name": "MIAME",
+      "version": "2001 content standard; repository guidance current",
+      "status": "legacy_current_qualified",
+      "category": "domain_metadata_standard",
+      "study_types": [
+        "microarray"
+      ],
+      "report_kinds": [
+        "results",
+        "data_release"
+      ],
+      "required_features": [],
+      "domains": [
+        "functional_genomics"
+      ],
+      "main_item_count": null,
+      "url": "https://www.ncbi.nlm.nih.gov/geo/info/MIAME.html",
+      "notes": "GEO guidance supports MIAME; verify current repository submission fields and required data content."
+    },
+    {
+      "id": "MIAPE-CURRENT",
+      "name": "MIAPE",
+      "version": "modular released components",
+      "status": "legacy_current_qualified",
+      "category": "domain_metadata_standard",
+      "study_types": [
+        "proteomics"
+      ],
+      "report_kinds": [
+        "results",
+        "data_release"
+      ],
+      "required_features": [],
+      "domains": [
+        "proteomics"
+      ],
+      "main_item_count": null,
+      "url": "https://www.psidev.info/miape",
+      "notes": "Select the current PSI component for the actual workflow; MIAPE is modular, not one universal checklist."
+    },
+    {
+      "id": "MIAPPE-1.2",
+      "name": "MIAPPE",
+      "version": "1.2 (October 2024)",
+      "status": "current",
+      "category": "domain_metadata_standard",
+      "study_types": [
+        "plant_phenotyping"
+      ],
+      "report_kinds": [
+        "results",
+        "data_release"
+      ],
+      "required_features": [],
+      "domains": [
+        "plant_science"
+      ],
+      "main_item_count": null,
+      "url": "https://www.miappe.org/releases",
+      "notes": "Use version 1.2; version 2.0 was still under early development at the review date."
+    },
+    {
+      "id": "MIFlowCyt-1.0",
+      "name": "MIFlowCyt",
+      "version": "1.0; ISAC recommendation current",
+      "status": "legacy_current_qualified",
+      "category": "domain_metadata_standard",
+      "study_types": [
+        "flow_cytometry"
+      ],
+      "report_kinds": [
+        "results",
+        "data_release"
+      ],
+      "required_features": [],
+      "domains": [
+        "cytometry"
+      ],
+      "main_item_count": null,
+      "url": "https://isac-net.org/miflowcyt-2/",
+      "notes": "Retained as an active ISAC recommendation; also verify FCS, gating, and repository requirements."
+    },
+    {
+      "id": "MINSEQE-CURRENT",
+      "name": "MINSEQE",
+      "version": "repository guidance current",
+      "status": "legacy_current_qualified",
+      "category": "domain_metadata_standard",
+      "study_types": [
+        "high_throughput_sequencing"
+      ],
+      "report_kinds": [
+        "results",
+        "data_release"
+      ],
+      "required_features": [],
+      "domains": [
+        "functional_genomics"
+      ],
+      "main_item_count": null,
+      "url": "https://www.ncbi.nlm.nih.gov/geo/info/MIAME.html",
+      "notes": "GEO guidance supports MINSEQE for high-throughput functional genomics experiments; verify platform-specific repository requirements."
+    },
+    {
+      "id": "MIxS-CURRENT",
+      "name": "MIxS",
+      "version": "current GSC release",
+      "status": "current",
+      "category": "domain_metadata_standard",
+      "study_types": [
+        "genome_sequence",
+        "metagenome_sequence"
+      ],
+      "report_kinds": [
+        "results",
+        "data_release"
+      ],
+      "required_features": [],
+      "domains": [
+        "genomics"
+      ],
+      "main_item_count": null,
+      "url": "https://www.gensc.org/pages/standards-intro.html",
+      "notes": "Use MIxS as the current umbrella; MIGS and MIMS are legacy checklists within the MIxS framework."
+    }
+  ]
+}

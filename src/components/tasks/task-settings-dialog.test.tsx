@@ -12,6 +12,7 @@ const deleteMock = vi.fn().mockResolvedValue(undefined)
 const commandsMock = vi.fn()
 
 vi.mock("@/lib/api", () => ({
+  workTaskGet: vi.fn().mockRejectedValue(new Error("not in this test")),
   workTaskSettingsGet: (...args: unknown[]) => getMock(...args),
   workTaskSettingsGetOwn: (...args: unknown[]) => getOwnMock(...args),
   workTaskSettingsSet: (...args: unknown[]) => setMock(...args),

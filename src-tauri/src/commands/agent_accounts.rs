@@ -339,7 +339,7 @@ pub async fn acp_create_agent_account(
         agent_type,
         &name,
         home_dir.as_deref(),
-        &EventEmitter::Tauri(app),
+        &EventEmitter::from_app(&app),
     )
     .await
 }
@@ -352,7 +352,7 @@ pub async fn acp_rename_agent_account(
     db: State<'_, AppDatabase>,
     app: tauri::AppHandle,
 ) -> Result<(), AcpError> {
-    rename_core(&db, &account_id, &name, &EventEmitter::Tauri(app)).await
+    rename_core(&db, &account_id, &name, &EventEmitter::from_app(&app)).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -362,7 +362,7 @@ pub async fn acp_remove_agent_account(
     db: State<'_, AppDatabase>,
     app: tauri::AppHandle,
 ) -> Result<(), AcpError> {
-    remove_core(&db, &account_id, &EventEmitter::Tauri(app)).await
+    remove_core(&db, &account_id, &EventEmitter::from_app(&app)).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -379,7 +379,7 @@ pub async fn acp_login_agent_account(
         &manager,
         &account_id,
         method,
-        &EventEmitter::Tauri(app),
+        &EventEmitter::from_app(&app),
     )
     .await?;
     #[cfg(not(test))]
@@ -413,7 +413,7 @@ pub async fn acp_set_agent_account_api_key(
         &data,
         &account_id,
         &api_key,
-        &EventEmitter::Tauri(app),
+        &EventEmitter::from_app(&app),
     )
     .await
 }
@@ -430,5 +430,5 @@ pub async fn acp_check_agent_account_auth(
         .app_data_dir()
         .map(|p| crate::paths::resolve_effective_data_dir(&p))
         .map_err(|_| AcpError::protocol("Could not open account settings."))?;
-    check_auth_core(&db, &data, &account_id, &EventEmitter::Tauri(app)).await
+    check_auth_core(&db, &data, &account_id, &EventEmitter::from_app(&app)).await
 }

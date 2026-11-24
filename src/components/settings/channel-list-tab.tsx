@@ -81,6 +81,7 @@ export function ChannelListTab() {
   }, [t])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial channel list fetch
     loadChannels().catch(console.error)
   }, [loadChannels])
 

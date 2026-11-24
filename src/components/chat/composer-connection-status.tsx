@@ -182,15 +182,10 @@ export function ComposerConnectionStatus({ tabId }: { tabId: string | null }) {
     reconnectInfo?.workingDir ??
     null
   const sessionId = conn?.sessionId ?? reconnectInfo?.sessionId ?? null
-  // A reconnect on a busy OWNER kills the agent CLI mid-turn; a viewer's only
-  // detaches and re-attaches, leaving the owner's agent alone — so only the
-  // former is worth warning about.
-  const destructive =
-    !conn?.isViewer &&
-    isConnectionBusy({
-      status: conn?.status ?? null,
-      backgroundOutstanding: conn?.backgroundOutstanding ?? 0,
-    })
+  // A reconnect on a busy OWNER kills the agent CLI and the work running in it;
+  // a viewer's only detaches and re-attaches, leaving the owner's agent alone —
+  // so only the former is worth warning about.
+  const destructive = conn != null && !conn.isViewer && isConnectionBusy(conn)
   const canReconnect = reconnectInfo !== null
 
   const handleReconnect = useCallback(() => {

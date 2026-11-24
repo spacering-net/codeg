@@ -29,6 +29,7 @@ const probeSelections = vi.hoisted(() => ({
 }))
 
 vi.mock("@/lib/api", () => ({
+  workTaskGet: vi.fn().mockRejectedValue(new Error("not in this test")),
   gitListAllBranches: () =>
     Promise.resolve({
       local: ["main"],
@@ -386,7 +387,7 @@ describe("TaskEditorDialog agent", () => {
     expect(config.config_values).toEqual({})
   })
 
-  it("keeps inheriting the task settings' agent while the pill shows it", async () => {
+  it("saves the task settings' agent it shows with the task (#1179)", async () => {
     inheritance.settingsAgent = "codex"
     inheritance.settingsModeId = "auto"
     registry(agent("claude_code"), agent("codex"))
@@ -396,13 +397,12 @@ describe("TaskEditorDialog agent", () => {
     expect(await screen.findByText(INHERITED_HINT)).toBeInTheDocument()
 
     const config = await saveBrief(user, onSubmit)
-    // Nothing frozen: the task follows the settings live.
-    expect(config.agent_type).toBeNull()
-    expect(config.mode_id).toBeNull()
-    expect(config.config_values).toEqual({})
+    // Frozen with what the selectors show: a later settings change never
+    // moves this task.
+    expect(config.agent_type).toBe("codex")
   })
 
-  it("keeps inheriting the task settings' agent even when the placeholder is disabled", async () => {
+  it("saves the task settings' agent even when the placeholder is disabled", async () => {
     // The placeholder is substituted before the settings answer; the settings'
     // own agent then takes over and is inherited as usual.
     inheritance.settingsAgent = "open_code"
@@ -417,10 +417,10 @@ describe("TaskEditorDialog agent", () => {
     expect(await screen.findByText(INHERITED_HINT)).toBeInTheDocument()
 
     const config = await saveBrief(user, onSubmit)
-    expect(config.agent_type).toBeNull()
+    expect(config.agent_type).toBe("open_code")
   })
 
-  it("keeps inheriting the folder's default agent while the pill shows it", async () => {
+  it("saves the folder's default agent it shows with the task", async () => {
     inheritance.folderDefault = "codex"
     registry(agent("claude_code"), agent("codex"))
     const user = userEvent.setup()
@@ -429,7 +429,7 @@ describe("TaskEditorDialog agent", () => {
     expect(await screen.findByText(INHERITED_HINT)).toBeInTheDocument()
 
     const config = await saveBrief(user, onSubmit)
-    expect(config.agent_type).toBeNull()
+    expect(config.agent_type).toBe("codex")
   })
 
   it("an explicit pick is saved as the task's own agent", async () => {

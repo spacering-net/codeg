@@ -138,16 +138,11 @@ where
 /// writing (`ETXTBSY`). Checked by `ErrorKind` *and* raw errno: the kind is the
 /// portable form, the errno covers a target whose std leaves it unmapped.
 fn is_exec_busy(err: &std::io::Error) -> bool {
-    if err.kind() == std::io::ErrorKind::ExecutableFileBusy {
-        return true;
-    }
     #[cfg(unix)]
-    {
-        if err.raw_os_error() == Some(libc::ETXTBSY) {
-            return true;
-        }
-    }
-    false
+    let errno_busy = err.raw_os_error() == Some(libc::ETXTBSY);
+    #[cfg(not(unix))]
+    let errno_busy = false;
+    err.kind() == std::io::ErrorKind::ExecutableFileBusy || errno_busy
 }
 
 /// Run a process spawn, riding out a transient `ETXTBSY` ("Text file busy").

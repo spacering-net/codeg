@@ -685,7 +685,7 @@ pub async fn acp_save_custom_agent(
     db: State<'_, AppDatabase>,
     app: tauri::AppHandle,
 ) -> Result<(), AcpError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_save_custom_agent_params_core(params, &db, &emitter).await
 }
 
@@ -697,7 +697,7 @@ pub async fn acp_delete_custom_agent(
     db: State<'_, AppDatabase>,
     app: tauri::AppHandle,
 ) -> Result<(), AcpError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_delete_custom_agent_core(registry_id, delete_transcripts, &db, &emitter).await
 }
 
@@ -723,7 +723,7 @@ pub async fn acp_add_registry_agent(
     db: State<'_, AppDatabase>,
     app: tauri::AppHandle,
 ) -> Result<(), AcpError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_add_registry_agent_core(registry_id, distribution_kind, &db, &emitter).await
 }
 

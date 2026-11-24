@@ -188,5 +188,51 @@ describe(
       expect(saved.provider.relay.models).toEqual(PICKED)
       expect(saved.providers).toBeUndefined()
     })
+
+    it.each(["models", "provider"])(
+      "keeps disabled %s out of both default model pickers before the catalog loads",
+      async (disabled) => {
+        const user = userEvent.setup()
+        vi.mocked(acpListAgents).mockResolvedValue([
+          openCodeAgent({
+            providers: {
+              relay: {
+                ...NATIVE_CONFIG.providers.relay,
+                models: {
+                  "glm-5.2": { disabled: disabled === "models" },
+                  old: { disabled: disabled === "models" },
+                },
+              },
+            },
+            ...(disabled === "provider"
+              ? {
+                  policies: [
+                    {
+                      action: "provider.use",
+                      resource: "relay",
+                      effect: "deny",
+                    },
+                  ],
+                }
+              : {}),
+          }),
+        ])
+        render(
+          <NextIntlClientProvider locale="en" messages={enMessages}>
+            <AcpAgentSettings />
+          </NextIntlClientProvider>
+        )
+        const inputs =
+          await screen.findAllByPlaceholderText("provider/model-id")
+        expect(inputs).toHaveLength(2)
+        for (const input of inputs) {
+          await user.click(input)
+          expect(
+            screen.queryAllByRole("option", { name: /relay\// })
+          ).toHaveLength(0)
+          await user.keyboard("{Escape}")
+        }
+      }
+    )
   }
 )

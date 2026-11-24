@@ -1,8 +1,15 @@
 "use client"
 
 /**
- * Persists user's selector preferences (mode & config option selections)
- * per agentType to localStorage, so they survive session restarts.
+ * The NEW-CONVERSATION DEFAULT (mode & config option selections) per
+ * agentType, in localStorage (codeg#1179). Written only by an explicit pick
+ * in a draft (the surfaces decide at pick time); read by new drafts, and once
+ * by a legacy conversation that never recorded a selection of its own. Every
+ * existing conversation keeps its own selection on its row
+ * (`conversation.selector_state`, written by the backend), which the backend
+ * replays on connect instead of this default — so picking in one
+ * conversation never changes another, and changing the default never changes
+ * an existing conversation.
  *
  * Structure hash is stored alongside values — when the saved value no
  * longer exists in the current option set (item renamed / removed) the

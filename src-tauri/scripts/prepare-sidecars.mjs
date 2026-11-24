@@ -48,7 +48,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs"
-import { dirname, join, resolve } from "node:path"
+import { dirname, isAbsolute, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import process from "node:process"
 
@@ -95,6 +95,32 @@ function resolveHostTriple() {
     return line.replace(/^host:\s*/, "").trim()
   } catch (e) {
     die(`cannot determine host triple via rustc -vV: ${e.message}`)
+  }
+}
+
+function resolveCargoTargetDirectory() {
+  try {
+    const metadata = JSON.parse(
+      execFileSync(
+        "cargo",
+        ["metadata", "--no-deps", "--format-version", "1"],
+        {
+          cwd: SRC_TAURI,
+          encoding: "utf8",
+        }
+      )
+    )
+    if (
+      typeof metadata?.target_directory !== "string" ||
+      !isAbsolute(metadata.target_directory)
+    ) {
+      throw new Error(
+        "cargo metadata did not return an absolute target_directory"
+      )
+    }
+    return metadata.target_directory
+  } catch (e) {
+    die(`cannot determine Cargo output directory: ${e.message}`)
   }
 }
 
@@ -175,9 +201,12 @@ function main() {
     { stdio: "inherit", cwd: SRC_TAURI }
   )
 
+  // Cargo resolves CARGO_TARGET_DIR and build.target-dir (including relative
+  // configuration paths). The binaries need not live under src-tauri/target.
+  const targetDirectory = resolveCargoTargetDirectory()
   mkdirSync(BINARIES_DIR, { recursive: true })
   for (const name of BIN_NAMES) {
-    const built = join(SRC_TAURI, "target", target, "release", `${name}${ext}`)
+    const built = join(targetDirectory, target, "release", `${name}${ext}`)
     if (!existsSync(built)) {
       die(`expected ${built} after cargo build, but it does not exist`)
     }

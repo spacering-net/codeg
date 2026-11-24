@@ -3,9 +3,14 @@
 import { useEffect, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
-import { workTaskDeliverPr, workTaskSettingsEffective } from "@/lib/api"
+import {
+  workTaskDeliverPr,
+  workTaskSettingsEffective,
+  workTaskUncommittedFiles,
+} from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import { useFreshFolderForgeRemote } from "@/lib/forge-provider-cache"
+import { sourceItems } from "@/lib/forge-source-items"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -24,7 +29,8 @@ import {
   mustDeliverToPr,
   usesMergeRequests,
 } from "./task-acceptance"
-import type { WorkTask } from "@/lib/types"
+import type { WorkTask, WorkTaskUncommittedFile } from "@/lib/types"
+import { ThreadCommentSection, useThreadComment } from "./task-thread-comment"
 
 interface TaskDeliverPrDialogProps {
   open: boolean
@@ -61,6 +67,22 @@ interface TaskDeliverPrDialogProps {
  * because the review it just fed is open and a second round on this branch is
  * a normal next step.
  *
+ * A task made from several related issues opens ONE pull request for all of
+ * them, and its first delivery asks which of them it closes: the agent's reply
+ * says, issue by issue, whether each report held up, and an issue the work did
+ * not resolve is referenced instead of closed. That answer is fixed from then
+ * on (the backend refuses a different one), so once the task has it the list
+ * only shows here — every later pull request the task opens closes the same
+ * issues.
+ *
+ * The agent is told to commit its work, but nothing makes it — and unlike a
+ * merge, a delivery runs no agent that could commit the leftovers. So the
+ * dialog reads what the worktree still holds uncommitted when it opens and,
+ * when that is anything, lists it and asks for a commit message (the task
+ * title to begin with): the backend commits those files onto the task branch
+ * and pushes that commit. No message, no commit — the backend refuses a dirty
+ * worktree then, so nothing the user was not shown can be published.
+ *
  * Like the complete dialog and unlike the merge dialog, this settles
  * synchronously: no agent runs, so the command returns once the task has
  * settled, and a failure belongs here rather than on the card.
@@ -87,6 +109,22 @@ export function TaskDeliverPrDialog({
   // here that destroys something.
   const worktreeChoiceMade = useRef(false)
   const [submitting, setSubmitting] = useState(false)
+  // What the worktree holds uncommitted, read when the dialog opens. `null`
+  // until (and unless) that read answers: a failed read sends no commit
+  // message, and the backend refuses the dirty worktree it could not show.
+  const [leftovers, setLeftovers] = useState<WorkTaskUncommittedFile[] | null>(
+    null
+  )
+  const [commitMessage, setCommitMessage] = useState("")
+  const comment = useThreadComment(task, open)
+  // A task of several issues: which ones the pull request closes.
+  const items =
+    task?.source_kind === "forge_issue" && task.source_meta != null
+      ? sourceItems(task.source_meta)
+      : []
+  const several = items.length > 1
+  const fixedCloses = several ? (task?.source_meta?.pr_closes ?? null) : null
+  const [closes, setCloses] = useState<ReadonlySet<number>>(() => new Set())
   // The board only offers delivery while the worktree is there, so this is
   // normally true — it guards the stale card, keeping the request honest
   // rather than asking the backend to remove something already gone.
@@ -112,6 +150,17 @@ export function TaskDeliverPrDialog({
     setMarkDone(true)
     setTitle(task.title)
     setDeleteWorktree(false)
+    setLeftovers(null)
+    setCommitMessage(task.title)
+    // The fixed list when there is one, otherwise every issue ticked.
+    setCloses(
+      new Set(
+        task.source_meta?.pr_closes ??
+          (task.source_meta ? sourceItems(task.source_meta) : []).map(
+            (item) => item.number
+          )
+      )
+    )
     worktreeChoiceMade.current = false
     // Same seed as the merge and complete dialogs: the folder's
     // worktree-cleanup default, and `true` when it cannot be read (which is
@@ -125,6 +174,13 @@ export function TaskDeliverPrDialog({
     workTaskSettingsEffective(task.folder_id)
       .then((s) => seed(s.delete_worktree_default))
       .catch(() => seed(true))
+    if (!isWorktreeGone(task)) {
+      workTaskUncommittedFiles(task.id)
+        .then((files) => {
+          if (!cancelled) setLeftovers(files)
+        })
+        .catch(() => {})
+    }
     return () => {
       cancelled = true
     }
@@ -141,22 +197,50 @@ export function TaskDeliverPrDialog({
   // The worktree goes only with a delivery that finishes the task: one kept
   // in review runs its next round right there.
   const cleanup = hasWorktree && markDone && deleteWorktree
+  // Chosen here only before the task's first delivery fixed it, and only by a
+  // delivery that opens the pull request.
+  const closesEditable = several && fixedCloses == null && opensOne
+  // The agent left work uncommitted: this delivery commits it first.
+  const commits = leftovers != null && leftovers.length > 0
+  const messageMissing = commits && commitMessage.trim() === ""
 
   const submit = async () => {
-    if (!task || remoteBlocked) return
+    if (!task || remoteBlocked || messageMissing) return
     setSubmitting(true)
     try {
       // A push into an existing pull request creates nothing, so it carries
       // neither title nor draft.
-      const url = opensOne
+      // The closing list only travels when this delivery is the one that
+      // fixes it — every other call is exactly what it always was.
+      // The comment's answer first: a delivery that finishes the task is what
+      // posts it, and it reads the answer from the task when it does.
+      await comment.persist()
+      const picked = items
+        .map((item) => item.number)
+        .filter((n) => closes.has(n))
+      // Optional trailing arguments, sent only when they apply.
+      const extra: [number[]?, string?] = commits
+        ? [closesEditable ? picked : undefined, commitMessage.trim()]
+        : closesEditable
+          ? [picked]
+          : []
+      const url = !opensOne
         ? await workTaskDeliverPr(
+            task.id,
+            null,
+            false,
+            cleanup,
+            markDone,
+            ...extra
+          )
+        : await workTaskDeliverPr(
             task.id,
             title.trim() || null,
             draft,
             cleanup,
-            markDone
+            markDone,
+            ...extra
           )
-        : await workTaskDeliverPr(task.id, null, false, cleanup, markDone)
       onOpenChange(false)
       const done = pushBack
         ? mr
@@ -213,23 +297,29 @@ export function TaskDeliverPrDialog({
       ? mr
         ? t("deliverPrUpdateDescriptionMr", { repo, branch: workBranch })
         : t("deliverPrUpdateDescription", { repo, branch: workBranch })
-      : fromIssue
+      : fromIssue && several
         ? mr
-          ? t("deliverPrDescriptionMr", { repo, base })
-          : t("deliverPrDescription", { repo, base })
-        : remoteBlocked
-          ? fresh.status === "failed"
-            ? t("deliverPrRemoteFailed")
-            : fresh.status === "ready"
-              ? t("deliverPrRemoteUnsupported")
-              : t("deliverPrRemoteLoading")
-          : mr
-            ? t("deliverPrDescriptionLocalMr", { repo, base })
-            : t("deliverPrDescriptionLocal", { repo, base })
+          ? t("deliverPrDescriptionIssuesMr", { repo, base })
+          : t("deliverPrDescriptionIssues", { repo, base })
+        : fromIssue
+          ? mr
+            ? t("deliverPrDescriptionMr", { repo, base })
+            : t("deliverPrDescription", { repo, base })
+          : remoteBlocked
+            ? fresh.status === "failed"
+              ? t("deliverPrRemoteFailed")
+              : fresh.status === "ready"
+                ? t("deliverPrRemoteUnsupported")
+                : t("deliverPrRemoteLoading")
+            : mr
+              ? t("deliverPrDescriptionLocalMr", { repo, base })
+              : t("deliverPrDescriptionLocal", { repo, base })
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[30rem]">
+      <DialogContent
+        className={comment.applies ? "sm:max-w-[34rem]" : "sm:max-w-[30rem]"}
+      >
         <DialogHeader>
           <DialogTitle>{heading}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
@@ -255,6 +345,45 @@ export function TaskDeliverPrDialog({
                 {t("deliverPrDraft")}
               </Label>
             </>
+          ) : null}
+          {several ? (
+            <fieldset className="flex min-w-0 flex-col gap-1.5">
+              <legend className="mb-1.5 text-sm">
+                {t("deliverPrClosesLabel")}
+              </legend>
+              <div className="flex max-h-40 flex-col gap-1.5 overflow-y-auto">
+                {items.map((item) => (
+                  <Label
+                    key={item.number}
+                    className="min-w-0 text-sm font-normal"
+                  >
+                    <Checkbox
+                      checked={closes.has(item.number)}
+                      onCheckedChange={(v) =>
+                        setCloses((held) => {
+                          const next = new Set(held)
+                          if (v === true) next.add(item.number)
+                          else next.delete(item.number)
+                          return next
+                        })
+                      }
+                      disabled={submitting || !closesEditable}
+                    />
+                    <span className="shrink-0 font-mono text-xs text-muted-foreground">
+                      #{item.number}
+                    </span>
+                    <span className="min-w-0 truncate" title={item.title}>
+                      {item.title}
+                    </span>
+                  </Label>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {closesEditable
+                  ? t("deliverPrClosesHint")
+                  : t(mr ? "deliverPrClosesFixedMr" : "deliverPrClosesFixed")}
+              </p>
+            </fieldset>
           ) : null}
           <div className="flex flex-col gap-2">
             <Label className="text-sm font-normal">
@@ -297,6 +426,48 @@ export function TaskDeliverPrDialog({
               </p>
             )}
           </div>
+          {commits ? (
+            <div className="flex flex-col gap-2 rounded-md border px-3 py-2.5">
+              <p className="text-sm">
+                {t("deliverPrUncommitted", {
+                  count: leftovers.length,
+                  branch: workBranch,
+                })}
+              </p>
+              <details className="text-xs">
+                <summary className="cursor-pointer text-muted-foreground select-none">
+                  {t("deliverPrUncommittedFiles")}
+                </summary>
+                <ul className="mt-1.5 flex max-h-32 flex-col gap-0.5 overflow-y-auto">
+                  {leftovers.map((f) => (
+                    <li key={f.file} className="flex min-w-0 gap-2">
+                      <span className="w-3 shrink-0 font-mono text-muted-foreground">
+                        {f.status}
+                      </span>
+                      <span
+                        className="min-w-0 truncate font-mono"
+                        title={f.file}
+                      >
+                        {f.file}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+              <Label className="flex flex-col items-start gap-1.5 text-sm font-normal">
+                {t("deliverPrCommitMessageLabel")}
+                <Input
+                  value={commitMessage}
+                  onChange={(e) => setCommitMessage(e.target.value)}
+                  disabled={submitting}
+                />
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                {t("deliverPrUncommittedHint")}
+              </p>
+            </div>
+          ) : null}
+          <ThreadCommentSection comment={comment} disabled={submitting} />
         </div>
 
         <DialogFooter>
@@ -311,15 +482,19 @@ export function TaskDeliverPrDialog({
           <Button
             type="button"
             onClick={submit}
-            disabled={submitting || remoteBlocked}
+            disabled={submitting || remoteBlocked || messageMissing}
           >
             {submitting
               ? t("deliverPrSubmitting")
-              : pushBack
-                ? t("deliverPrBackSubmit")
-                : intoOpen
-                  ? t("deliverPrUpdateSubmit")
-                  : t("deliverPrSubmit")}
+              : commits
+                ? opensOne
+                  ? t("deliverPrCommitSubmit")
+                  : t("deliverPrCommitPushSubmit")
+                : pushBack
+                  ? t("deliverPrBackSubmit")
+                  : intoOpen
+                    ? t("deliverPrUpdateSubmit")
+                    : t("deliverPrSubmit")}
           </Button>
         </DialogFooter>
       </DialogContent>

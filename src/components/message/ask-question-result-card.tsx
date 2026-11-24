@@ -78,6 +78,7 @@ export function AskQuestionResultCard({
         multi_select: q.multiSelect,
         options: q.options,
         is_secret: q.isSecret,
+        allow_other: q.allowOther,
       })),
     }
   }, [questions])
@@ -87,8 +88,9 @@ export function AskQuestionResultCard({
   const initialSelections = useMemo(() => {
     const sel: Record<string, { chosen: string[]; otherText: string }> = {}
     if (!pending || outcome?.declined) return sel
-    // codex `request_user_input` answers carry the question `id`; codeg-mcp / grok
-    // asks carry none and match on the header+question signature instead.
+    // codex `request_user_input` and DSH answers carry the question `id`;
+    // codeg-mcp / grok asks carry none and match on the header+question
+    // signature instead.
     const byId = new Map(
       (outcome?.answers ?? [])
         .filter((a) => a.id)
@@ -237,7 +239,7 @@ export function AskQuestionResultCard({
       onClick={() => setExpanded((v) => !v)}
       aria-expanded={expanded}
       data-testid="ask-question-result-card"
-      className="group/row flex w-full min-w-0 cursor-pointer items-start gap-1 rounded-sm py-0.5 text-start text-sm leading-6 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="activity-row-toggle group/row flex w-full min-w-0 cursor-pointer items-start gap-1 rounded-sm py-0.5 text-start text-sm leading-6 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <span className="min-w-0 truncate">
         <span className="me-1 font-medium text-muted-foreground">

@@ -46,6 +46,7 @@ use tokio::sync::{oneshot, Mutex};
 
 use crate::acp::chat_authoring::{
     NewAutomationSpec, NewWorkTaskSpec, MAX_PROMPT_CHARS, MAX_TITLE_CHARS,
+    MAX_WORK_TASK_ATTACHMENTS,
 };
 use crate::acp::delegation::transport::{
     client_ask_round_trip, client_browser_act_round_trip, client_browser_capture_round_trip,
@@ -70,7 +71,7 @@ use crate::acp::delegation::transport::{
     BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest, BrokerFeedbackRequest,
     BrokerListAssistantsRequest, BrokerRequest, BrokerResponse, BrokerResultSchemaRequest,
     BrokerResumeTaskRequest, BrokerSessionRequest, BrokerStatusRequest, BrokerSubmitResultRequest,
-    BrokerTaskCompleteRequest, BrokerTaskProgressRequest,
+    BrokerTaskCompleteRequest, BrokerTaskProgressRequest, ThreadReply,
 };
 use crate::acp::delegation::assistants::{roster_for_schema, AssistantRosterEntry};
 use crate::acp::question::parse_questions;
@@ -175,6 +176,11 @@ pub struct CompanionFeatures {
     pub automations: bool,
     /// `create_work_task` — queue a card on the work-task board from chat.
     pub taskboard: bool,
+    /// The personal agent's tools (`assistant_list`, `project_list`,
+    /// `dispatch`, `dispatch_followup`, `item_list`, `item_read`,
+    /// `item_update`, `timeline_read`) — injected only into the personal
+    /// agent's own connection, which the app re-checks on every call.
+    pub personal_agent: bool,
     /// The built-in browser's agent surface: `browser_list_tabs` /
     /// `browser_snapshot` / `browser_console_messages` / `browser_screenshot`,
     /// the five action tools (`browser_click`, `browser_hover`,
@@ -233,6 +239,7 @@ impl CompanionFeatures {
                 result: false,
                 automations: false,
                 taskboard: false,
+                personal_agent: false,
                 browser: false,
                 browser_eval: false,
                 computer: false,
@@ -249,6 +256,7 @@ impl CompanionFeatures {
             result: false,
             automations: false,
             taskboard: false,
+            personal_agent: false,
             browser: false,
             browser_eval: false,
             computer: false,
@@ -265,6 +273,7 @@ impl CompanionFeatures {
                 "result" => f.result = true,
                 "automations" => f.automations = true,
                 "taskboard" => f.taskboard = true,
+                "personal_agent" => f.personal_agent = true,
                 "browser" => f.browser = true,
                 "browser_eval" => f.browser_eval = true,
                 "computer" => f.computer = true,
@@ -286,10 +295,51 @@ impl CompanionFeatures {
             "submit_result" => self.result,
             "create_automation" => self.automations,
             "create_work_task" => self.taskboard,
-            "browser_list_tabs" | "browser_snapshot" | "browser_console_messages"
-            | "browser_screenshot" | "browser_click" | "browser_hover" | "browser_type"
-            | "browser_press_key" | "browser_select_option" | "browser_open_tab"
-            | "browser_navigate" | "browser_close_tab" => self.browser,
+            "project_list"
+            | "dispatch"
+            | "dispatch_followup"
+            | "dispatch_answer"
+            | "item_list"
+            | "item_read"
+            | "item_update"
+            | "timeline_read"
+            | "bot_list"
+            | "bot_message"
+            | "prefs_update"
+            | "bot_create"
+            | "overview"
+            | "board_status"
+            | "session_list"
+            | "automation_status"
+            | "pr_status"
+            | "usage_summary"
+            | "activity_summary"
+            | "acceptance_decide"
+            | "forge_comment"
+            | "issue_close"
+            | "pr_merge"
+            | "bot_update"
+            | "routine_list"
+            | "routine_create"
+            | "routine_update"
+            | "wrap_up"
+            | "history_search"
+            | "pr_feedback_forward"
+            | "plan_create"
+            | "plan_update"
+            | "plan_read" => self.personal_agent,
+            "browser_list_tabs"
+            | "browser_snapshot"
+            | "browser_console_messages"
+            | "browser_screenshot"
+            | "browser_click"
+            | "browser_hover"
+            | "browser_type"
+            | "browser_press_key"
+            | "browser_select_option"
+            | "browser_open_tab"
+            | "browser_navigate"
+            | "browser_close_tab" => self.browser,
             // Both, so a `--features browser_eval` with no `browser` — a
             // parent bug, or someone editing the agent's MCP config by hand —
             // cannot leave the strongest tool as the only one present.
@@ -444,37 +494,54 @@ const TOOLS_LIST_ASSISTANT_BUDGET: Duration = Duration::from_secs(2);
 /// process); [`AssistantSupport::Unknown`] is probed again next time.
 #[derive(Debug, Clone, Default)]
 pub struct AssistantSupportProbe {
-    known: Arc<Mutex<Option<bool>>>,
+    /// `(assistants, bots)`: whether the listener takes `assistant_id`, and
+    /// whether it takes `bot` (the owner's assistants by uid).
+    known: Arc<Mutex<Option<(bool, bool)>>>,
+}
+
+fn support_of(supported: bool) -> AssistantSupport {
+    if supported {
+        AssistantSupport::Supported
+    } else {
+        AssistantSupport::Unsupported
+    }
 }
 
 impl AssistantSupportProbe {
-    /// The current answer, probing the listener when none is known yet.
-    pub async fn resolve(&self, socket_path: &str) -> AssistantSupport {
+    /// The current answers, probing the listener when none is known yet.
+    async fn answers(&self, socket_path: &str) -> Option<(bool, bool)> {
         let mut known = self.known.lock().await;
-        if let Some(supported) = *known {
-            return if supported {
-                AssistantSupport::Supported
-            } else {
-                AssistantSupport::Unsupported
-            };
+        if let Some(answers) = *known {
+            return Some(answers);
         }
-        match probe_assistant_support(socket_path).await {
-            Some(supported) => {
-                *known = Some(supported);
-                if supported {
-                    AssistantSupport::Supported
-                } else {
-                    AssistantSupport::Unsupported
-                }
-            }
+        let answers = probe_assistant_support(socket_path).await?;
+        *known = Some(answers);
+        Some(answers)
+    }
+
+    /// Whether the listener takes `assistant_id`, probing it when none is
+    /// known yet.
+    pub async fn resolve(&self, socket_path: &str) -> AssistantSupport {
+        match self.answers(socket_path).await {
+            Some((assistants, _)) => support_of(assistants),
+            None => AssistantSupport::Unknown,
+        }
+    }
+
+    /// Whether the listener takes `bot` — one of the owner's assistants by
+    /// uid. A listener from before them reads only `assistant_id` and
+    /// `agent_type`, and would run a `bot` call on the bare agent.
+    pub async fn resolve_bots(&self, socket_path: &str) -> AssistantSupport {
+        match self.answers(socket_path).await {
+            Some((_, bots)) => support_of(bots),
             None => AssistantSupport::Unknown,
         }
     }
 }
 
-/// `Some(true/false)` for a listener that answered `Ping`, `None` for no
-/// answer at all.
-async fn probe_assistant_support(socket_path: &str) -> Option<bool> {
+/// `Some((assistants, bots))` for a listener that answered `Ping`, `None`
+/// for no answer at all.
+async fn probe_assistant_support(socket_path: &str) -> Option<(bool, bool)> {
     let resp = tokio::time::timeout(ASSISTANT_PROBE_BUDGET, client_ping(socket_path))
         .await
         .ok()?
@@ -482,7 +549,8 @@ async fn probe_assistant_support(socket_path: &str) -> Option<bool> {
     if resp.outcome.get("ok").and_then(Value::as_bool) != Some(true) {
         return None;
     }
-    Some(resp.outcome.get("assistants").and_then(Value::as_bool) == Some(true))
+    let flag = |k: &str| resp.outcome.get(k).and_then(Value::as_bool) == Some(true);
+    Some((flag("assistants"), flag("bots")))
 }
 
 /// Per-in-flight-call state. The companion stashes one of these per
@@ -667,6 +735,9 @@ pub async fn dispatch_line(
                 ),
                 None => all,
             };
+            if ctx.features.personal_agent {
+                offer_for_on_ask(&mut tools);
+            }
             remove_disabled_agents_from_delegate_enum(&mut tools, &ctx.disabled_agents);
             append_custom_agents_to_delegate_enum(&mut tools, &ctx.custom_agents);
             if ctx.features.allows_tool("delegate_to_agent") {
@@ -762,23 +833,30 @@ async fn offer_assistants_in_delegate_schema(ctx: &CompanionContext, tools: &mut
     let lookup = async {
         match ctx.assistant_support.resolve(&ctx.socket_path).await {
             AssistantSupport::Unsupported => None,
-            AssistantSupport::Unknown => Some(None),
-            AssistantSupport::Supported => Some(fetch_assistant_roster(ctx).await),
+            AssistantSupport::Unknown => Some((None, true)),
+            AssistantSupport::Supported => {
+                // `bot` only for a listener that takes it: one from before
+                // the owner's assistants keeps `assistant_id` alone.
+                let bots = ctx.assistant_support.resolve_bots(&ctx.socket_path).await
+                    != AssistantSupport::Unsupported;
+                Some((fetch_assistant_roster(ctx).await, bots))
+            }
         }
     };
-    let roster = match tokio::time::timeout(TOOLS_LIST_ASSISTANT_BUDGET, lookup).await {
+    let (roster, bots) = match tokio::time::timeout(TOOLS_LIST_ASSISTANT_BUDGET, lookup).await {
         Ok(None) => return,
-        Ok(Some(roster)) => roster,
-        // Out of time: offer the parameter without a roster — calls by id do
-        // not depend on it.
-        Err(_) => None,
+        Ok(Some(found)) => found,
+        // Out of time: offer the parameters without a roster — calls by uid
+        // do not depend on it.
+        Err(_) => (None, true),
     };
-    describe_assistants_in_delegate_schema(tools, roster.as_deref());
+    describe_assistants_in_delegate_schema(tools, roster.as_deref(), bots);
 }
 
 async fn fetch_assistant_roster(ctx: &CompanionContext) -> Option<Vec<AssistantRosterEntry>> {
     let req = BrokerListAssistantsRequest {
         token: ctx.token.clone(),
+        bots: true,
     };
     let resp = client_list_assistants_round_trip(&ctx.socket_path, &req)
         .await
@@ -789,13 +867,36 @@ async fn fetch_assistant_roster(ctx: &CompanionContext) -> Option<Vec<AssistantR
     serde_json::from_value(resp.outcome.get("assistants")?.clone()).ok()
 }
 
-/// Sentence appended to `delegate_to_agent`'s description: how an assistant
-/// mention looks, and what to do with one.
+/// Sentence appended to `delegate_to_agent`'s description (a listener from
+/// before the owner's assistants): how an assistant mention looks, and what
+/// to do with one.
 pub(crate) const ASSISTANT_MENTION_SENTENCE: &str = " A user-defined ASSISTANT is named the \
 same way — `@AssistantName` or `[@AssistantName](codeg://assistant/<number>)` — and that \
 mention is likewise an explicit instruction to delegate to it: pass `assistant_id` set to that \
 number and leave `agent_type` out. An assistant brings its own agent, options and standing \
 instructions.";
+
+/// The same, once the listener takes `bot`: the owner's assistants are named
+/// by uid, an old `codeg://assistant/<number>` link still by its number.
+pub(crate) const BOT_MENTION_SENTENCE: &str = " One of the user's ASSISTANTS is named the \
+same way — `@AssistantName` or `[@AssistantName](codeg://bot/<uid>)` — and that mention is \
+likewise an explicit instruction to delegate to it: pass `bot` set to that uid and leave \
+`agent_type` out (an older `[@Name](codeg://assistant/<number>)` link: pass `assistant_id` set \
+to that number). An assistant brings its own agent, options and standing instructions.";
+
+/// Prefix put on `agent_type`'s description once `bot` exists.
+pub(crate) const AGENT_TYPE_UNLESS_BOT: &str = "Required unless `bot` (or `assistant_id`) is given. ";
+
+/// `bot`'s description, before the roster sentence.
+pub(crate) const BOT_DESCRIPTION: &str = "Delegate to one of the user's assistants instead of \
+picking an agent yourself. Take the uid from a `codeg://bot/<uid>` link in the user's message \
+(e.g. `codeg://bot/9f2c` means \"9f2c\"). When set, `agent_type` is ignored: the assistant decides \
+which agent runs, with which options and instructions.";
+
+/// `assistant_id`'s description beside `bot`: for an old link only.
+pub(crate) const LEGACY_ASSISTANT_ID_DESCRIPTION: &str = "Only for an older \
+`codeg://assistant/<number>` link in the user's message (e.g. `codeg://assistant/3` means 3): \
+the assistant it names. Use `bot` for every other assistant.";
 
 /// Prefix put on `agent_type`'s description once `assistant_id` exists.
 pub(crate) const AGENT_TYPE_UNLESS_ASSISTANT: &str = "Required unless `assistant_id` is given. ";
@@ -816,6 +917,7 @@ assistant decides which agent runs, with which options and instructions.";
 fn describe_assistants_in_delegate_schema(
     tools: &mut Value,
     roster: Option<&[AssistantRosterEntry]>,
+    bots: bool,
 ) {
     let Some(tool) = tools.as_array_mut().and_then(|arr| {
         arr.iter_mut()
@@ -829,30 +931,61 @@ fn describe_assistants_in_delegate_schema(
     let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) else {
         return;
     };
+    let prefix = if bots {
+        AGENT_TYPE_UNLESS_BOT
+    } else {
+        AGENT_TYPE_UNLESS_ASSISTANT
+    };
     if let Some(Value::String(description)) = properties
         .get_mut("agent_type")
         .and_then(|p| p.get_mut("description"))
     {
-        if !description.starts_with(AGENT_TYPE_UNLESS_ASSISTANT) {
-            description.insert_str(0, AGENT_TYPE_UNLESS_ASSISTANT);
+        if !description.starts_with(prefix) {
+            description.insert_str(0, prefix);
         }
     }
-    let mut id_description = ASSISTANT_ID_DESCRIPTION.to_string();
-    if let Some(roster) = roster {
-        id_description.push_str(&roster_for_schema(roster));
+    if bots {
+        let mut bot_description = BOT_DESCRIPTION.to_string();
+        if let Some(roster) = roster {
+            bot_description.push_str(&roster_for_schema(roster));
+        }
+        properties.insert(
+            "bot".to_string(),
+            json!({ "type": "string", "description": bot_description }),
+        );
+        properties.insert(
+            "assistant_id".to_string(),
+            json!({
+                "type": "integer",
+                "minimum": 1,
+                "description": LEGACY_ASSISTANT_ID_DESCRIPTION,
+            }),
+        );
+    } else {
+        // A listener from before the owner's assistants: its roster is of
+        // its own assistants, by id.
+        let mut id_description = ASSISTANT_ID_DESCRIPTION.to_string();
+        if let Some(roster) = roster {
+            id_description.push_str(&roster_for_schema(roster));
+        }
+        properties.insert(
+            "assistant_id".to_string(),
+            json!({
+                "type": "integer",
+                "minimum": 1,
+                "description": id_description,
+            }),
+        );
     }
-    properties.insert(
-        "assistant_id".to_string(),
-        json!({
-            "type": "integer",
-            "minimum": 1,
-            "description": id_description,
-        }),
-    );
     schema.insert("required".to_string(), json!(["task"]));
+    let sentence = if bots {
+        BOT_MENTION_SENTENCE
+    } else {
+        ASSISTANT_MENTION_SENTENCE
+    };
     if let Some(Value::String(description)) = tool.get_mut("description") {
-        if !description.ends_with(ASSISTANT_MENTION_SENTENCE) {
-            description.push_str(ASSISTANT_MENTION_SENTENCE);
+        if !description.ends_with(sentence) {
+            description.push_str(sentence);
         }
     }
 }
@@ -911,13 +1044,23 @@ async fn build_tools_call_spawn(
             // Mint an external_handle so a `notifications/cancelled` during setup
             // tears down the just-started child via `cancel_by_external_handle`.
             let external_handle = uuid::Uuid::new_v4().to_string();
-            // Any `assistant_id` at all — even one the listener would refuse
-            // as invalid — makes this an assistant call, which is forwarded
-            // only to a parent known to understand it (see
-            // `AssistantSupport`). Agent calls are never held up by the probe.
-            let names_assistant = arguments
-                .get("assistant_id")
-                .is_some_and(|v| !v.is_null());
+            // What the call names, by the listener's own parser: a `bot` (or
+            // one the listener would refuse as invalid) is forwarded only to a
+            // parent known to take `bot`, an `assistant_id` only to one known
+            // to take that (see `AssistantSupport`) — never to one that would
+            // drop it and run the bare agent. Agent calls are never held up
+            // by the probe.
+            use crate::acp::delegation::types::{
+                delegation_target_from_args, DelegationTarget, DelegationTargetError,
+            };
+            let needs = match delegation_target_from_args(&arguments) {
+                Ok(DelegationTarget::Bot(_)) | Err(DelegationTargetError::InvalidBot(_)) => {
+                    Some(true)
+                }
+                Ok(DelegationTarget::Assistant(_))
+                | Err(DelegationTargetError::InvalidAssistantId(_)) => Some(false),
+                _ => None,
+            };
             let support = ctx.assistant_support.clone();
             let req = BrokerRequest {
                 token: ctx.token.clone(),
@@ -927,8 +1070,13 @@ async fn build_tools_call_spawn(
                 input: arguments,
             };
             let round_trip = Box::pin(async move {
-                if names_assistant {
-                    match support.resolve(&socket).await {
+                if let Some(bot) = needs {
+                    let answer = if bot {
+                        support.resolve_bots(&socket).await
+                    } else {
+                        support.resolve(&socket).await
+                    };
+                    match answer {
                         AssistantSupport::Supported => {}
                         AssistantSupport::Unsupported => {
                             return Ok(local_delegation_refusal(
@@ -1073,6 +1221,16 @@ async fn build_tools_call_spawn(
             let req = BrokerAskRequest {
                 token: ctx.token.clone(),
                 questions,
+                // Only a personal assistant's tool offers it.
+                for_input: if ctx.features.personal_agent {
+                    arguments.get("for").and_then(|v| match v {
+                        Value::String(s) if !s.trim().is_empty() => Some(s.trim().to_string()),
+                        Value::Number(n) => Some(n.to_string()),
+                        _ => None,
+                    })
+                } else {
+                    None
+                },
             };
             // No external_handle: canceling a blocking ask only suppresses its
             // response. The companion dropping the round-trip future closes the
@@ -1424,10 +1582,12 @@ async fn build_tools_call_spawn(
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .map(str::to_string);
+            let thread_replies = parse_thread_replies(&arguments);
             let req = BrokerTaskCompleteRequest {
                 token: ctx.token.clone(),
                 verdict: verdict.to_string(),
                 summary,
+                thread_replies,
             };
             let round_trip =
                 Box::pin(async move { client_task_complete_round_trip(&socket, &req).await });
@@ -1475,6 +1635,65 @@ async fn build_tools_call_spawn(
             let round_trip =
                 Box::pin(async move { client_create_work_task_round_trip(&socket, &req).await });
             register_and_spawn(inflight, id, None, round_trip, render_authoring_result).await
+        }
+        "project_list"
+        | "dispatch"
+        | "dispatch_followup"
+        | "dispatch_answer"
+        | "item_list"
+        | "item_read"
+        | "item_update"
+        | "timeline_read"
+        | "bot_list"
+        | "bot_message"
+        | "prefs_update"
+        | "bot_create"
+        | "overview"
+        | "board_status"
+        | "session_list"
+        | "automation_status"
+        | "pr_status"
+        | "usage_summary"
+        | "activity_summary"
+        | "acceptance_decide"
+        | "forge_comment"
+        | "issue_close"
+        | "pr_merge"
+        | "bot_update"
+        | "routine_list"
+        | "routine_create"
+        | "routine_update"
+        | "wrap_up"
+        | "history_search"
+        | "pr_feedback_forward"
+        | "plan_create"
+        | "plan_update"
+        | "plan_read" => {
+            // Shape only: the app owns every rule (which assistants exist,
+            // which projects may be targeted, which states allow a
+            // follow-up), so the companion forwards the arguments as given.
+            let arguments = match arguments {
+                Value::Object(_) => arguments,
+                Value::Null => json!({}),
+                _ => {
+                    return LineAction::Respond(err(
+                        id,
+                        -32602,
+                        format!("{name} takes an object of arguments"),
+                    ))
+                }
+            };
+            let req = crate::acp::delegation::transport::BrokerPersonalAgentRequest {
+                token: ctx.token.clone(),
+                tool: name.clone(),
+                arguments,
+            };
+            let round_trip = Box::pin(async move {
+                crate::acp::delegation::transport::client_personal_agent_round_trip(&socket, &req)
+                    .await
+            });
+            register_and_spawn(inflight, id, None, round_trip, render_personal_agent_result)
+                .await
         }
         other => LineAction::Respond(err(id, -32602, format!("unknown tool: {other}"))),
     }
@@ -1960,6 +2179,35 @@ fn render_feedback_result_with_streak(outcome: &Value, empty_streak: Option<u32>
     })
 }
 
+/// A personal assistant's `ask_user_question` takes `for`: the input of its
+/// turn the question is for, so the question also shows in the conversation
+/// that input came from. Not in the embedded schema: no other agent has
+/// inputs to name.
+fn offer_for_on_ask(tools: &mut Value) {
+    let Some(list) = tools.as_array_mut() else {
+        return;
+    };
+    for t in list.iter_mut() {
+        if t.get("name").and_then(|n| n.as_str()) != Some("ask_user_question") {
+            continue;
+        }
+        if let Some(props) = t
+            .pointer_mut("/inputSchema/properties")
+            .and_then(|p| p.as_object_mut())
+        {
+            props.insert(
+                "for".into(),
+                json!({
+                    "type": "string",
+                    "description": "The input of this turn the question is for — its id as the \
+                                    delivery shows it (#58, m12). Needed only when the turn carries \
+                                    inputs from more than one source."
+                }),
+            );
+        }
+    }
+}
+
 /// Map the `ask_user_question` round-trip outcome (a `{ answers, declined }`
 /// envelope from the listener) into an MCP `tools/call` result.
 ///
@@ -2122,7 +2370,38 @@ fn parse_work_task_spec(arguments: &Value) -> Result<NewWorkTaskSpec, String> {
         prompt: truncate_chars(&prompt, MAX_PROMPT_CHARS),
         agent_type: optional_string(arguments, "agent_type"),
         folder_path: optional_string(arguments, "folder_path"),
+        attachments: parse_attachment_paths(arguments)?,
     })
+}
+
+/// Read `create_work_task`'s optional `attachments`: an array of file paths.
+/// A lone string is taken as a one-item list (a common LLM slip), blanks are
+/// dropped and repeats collapse. Only the SHAPE is checked here — whether each
+/// path exists, and what it is, is decided by the main process when it reads
+/// the files, and comes back as a soft note the LLM can correct.
+fn parse_attachment_paths(arguments: &Value) -> Result<Vec<String>, String> {
+    const SHAPE: &str = "create_work_task `attachments` must be an array of file paths (strings)";
+    let raw: Vec<&Value> = match arguments.get("attachments") {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Array(items)) => items.iter().collect(),
+        Some(v @ Value::String(_)) => vec![v],
+        Some(_) => return Err(SHAPE.to_string()),
+    };
+    let mut paths: Vec<String> = Vec::new();
+    for item in raw {
+        let path = item.as_str().ok_or_else(|| SHAPE.to_string())?.trim();
+        if !path.is_empty() && !paths.iter().any(|p| p == path) {
+            paths.push(path.to_string());
+        }
+    }
+    if paths.len() > MAX_WORK_TASK_ATTACHMENTS {
+        return Err(format!(
+            "create_work_task takes at most {MAX_WORK_TASK_ATTACHMENTS} attachments (got {}); \
+             attach the ones that matter and reference the rest by path in `prompt`",
+            paths.len()
+        ));
+    }
+    Ok(paths)
 }
 
 /// Character-safe truncation shared by both spec parsers.
@@ -4201,6 +4480,32 @@ pub fn render_computer_act_result(outcome: &Value) -> Value {
     })
 }
 
+/// `task_complete`'s `thread_replies`, leniently: an entry without a number
+/// or a body is dropped rather than failing the verdict that came with it —
+/// the verdict is what settles the task, the replies are only drafts. A
+/// number sent as a string (`"7"`, `"#7"`) is still a number.
+fn parse_thread_replies(arguments: &Value) -> Vec<ThreadReply> {
+    let Some(entries) = arguments.get("thread_replies").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let number = entry.get("number").and_then(|n| {
+                n.as_i64().or_else(|| {
+                    n.as_str()
+                        .and_then(|s| s.trim().trim_start_matches('#').parse().ok())
+                })
+            })?;
+            let body = entry.get("body").and_then(|b| b.as_str())?;
+            Some(ThreadReply {
+                number,
+                body: body.to_string(),
+            })
+        })
+        .collect()
+}
+
 /// Map a `task_progress` / `task_complete` round-trip outcome (a
 /// `{ recorded, note? }` ack) into an MCP `tools/call` result. A report that
 /// could not be attributed (no active work task for this session) is readable
@@ -4300,6 +4605,25 @@ pub fn render_authoring_result(outcome: &Value) -> Value {
             .unwrap_or("Could not create it; no reason was reported.")
             .to_string()
     };
+    json!({
+        "content": [{ "type": "text", "text": text }],
+        "isError": false,
+        "structuredContent": outcome.clone(),
+    })
+}
+
+/// Map a personal-agent tool outcome (a serialized
+/// [`crate::personal_agent::tools::ToolOutcome`]) into an MCP `tools/call`
+/// result. The text rides in `content` and the whole outcome in
+/// `structuredContent`, because hosts read one or the other. A refusal is not
+/// a tool error: the model reads why and corrects the call.
+pub fn render_personal_agent_result(outcome: &Value) -> Value {
+    let text = outcome
+        .get("text")
+        .and_then(|v| v.as_str())
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or("No answer was reported.")
+        .to_string();
     json!({
         "content": [{ "type": "text", "text": text }],
         "isError": false,
@@ -4437,6 +4761,29 @@ pub fn render_task_report(report: &Value) -> Value {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn thread_replies_are_read_leniently() {
+        let args = serde_json::json!({
+            "verdict": "success",
+            "thread_replies": [
+                { "number": 7, "body": "Fixed." },
+                { "number": "#9", "body": "Same cause." },
+                { "number": 3 },
+                { "body": "no number" },
+                "junk",
+            ],
+        });
+        assert_eq!(
+            parse_thread_replies(&args),
+            vec![
+                ThreadReply { number: 7, body: "Fixed.".to_string() },
+                ThreadReply { number: 9, body: "Same cause.".to_string() },
+            ]
+        );
+        assert!(parse_thread_replies(&serde_json::json!({ "verdict": "success" })).is_empty());
+        assert!(parse_thread_replies(&serde_json::json!({ "thread_replies": "x" })).is_empty());
+    }
+
     use super::*;
 
     fn ctx() -> CompanionContext {
@@ -4451,6 +4798,7 @@ mod tests {
             result: false,
             automations: false,
             taskboard: false,
+            personal_agent: false,
             browser: false,
             browser_eval: false,
             computer: false,
@@ -5082,6 +5430,7 @@ mod tests {
         result: false,
         automations: false,
         taskboard: false,
+        personal_agent: false,
         browser: false,
         browser_eval: false,
         computer: false,
@@ -5097,6 +5446,7 @@ mod tests {
         result: false,
         automations: false,
         taskboard: false,
+        personal_agent: false,
         browser: false,
         browser_eval: false,
         computer: false,
@@ -5112,6 +5462,7 @@ mod tests {
         result: false,
         automations: false,
         taskboard: false,
+        personal_agent: false,
         browser: false,
         browser_eval: false,
         computer: false,
@@ -5127,6 +5478,7 @@ mod tests {
         result: false,
         automations: false,
         taskboard: false,
+        personal_agent: false,
         browser: false,
         browser_eval: false,
         computer: false,
@@ -5618,6 +5970,7 @@ mod tests {
         result: false,
         automations: true,
         taskboard: false,
+        personal_agent: false,
         browser: false,
         browser_eval: false,
         computer: false,
@@ -5633,6 +5986,7 @@ mod tests {
         result: false,
         automations: false,
         taskboard: true,
+        personal_agent: false,
         browser: false,
         browser_eval: false,
         computer: false,
@@ -5655,6 +6009,154 @@ mod tests {
 
         let names = list_tool_names(dispatch_with_features(TASKBOARD_ONLY, list).await);
         assert_eq!(names, vec!["create_work_task".to_string()]);
+    }
+
+    // -- personal agent: one group, only for its own connection -----------
+
+    const PERSONAL_AGENT_ONLY: CompanionFeatures = CompanionFeatures {
+        delegation: false,
+        feedback: false,
+        ask: false,
+        sessions: false,
+        tasks: false,
+        result: false,
+        automations: false,
+        taskboard: false,
+        personal_agent: true,
+        browser: false,
+        browser_eval: false,
+        computer: false,
+        computer_launch: false,
+        computer_clipboard: false,
+    };
+
+    const PERSONAL_AGENT_TOOLS: [&str; 33] = [
+        "project_list",
+        "dispatch",
+        "dispatch_followup",
+        "dispatch_answer",
+        "item_list",
+        "item_read",
+        "item_update",
+        "timeline_read",
+        "bot_list",
+        "bot_message",
+        "prefs_update",
+        "bot_create",
+        "overview",
+        "board_status",
+        "session_list",
+        "automation_status",
+        "pr_status",
+        "usage_summary",
+        "activity_summary",
+        "acceptance_decide",
+        "forge_comment",
+        "issue_close",
+        "pr_merge",
+        "bot_update",
+        "routine_list",
+        "routine_create",
+        "routine_update",
+        "wrap_up",
+        "history_search",
+        "pr_feedback_forward",
+        "plan_create",
+        "plan_update",
+        "plan_read",
+    ];
+
+    #[tokio::test]
+    async fn a_personal_assistants_ask_names_the_input_it_is_for() {
+        let list = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
+        let ask_for = |action: LineAction| {
+            unwrap_respond(action).result.unwrap()["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|t| t["name"] == "ask_user_question")
+                .and_then(|t| t.pointer("/inputSchema/properties/for").cloned())
+        };
+        // Any other agent's ask takes no `for`: it has no inputs to name.
+        let plain = CompanionFeatures {
+            ask: true,
+            personal_agent: false,
+            ..PERSONAL_AGENT_ONLY
+        };
+        assert!(ask_for(dispatch_with_features(plain, list).await).is_none());
+        let assistant = CompanionFeatures {
+            ask: true,
+            ..PERSONAL_AGENT_ONLY
+        };
+        assert!(ask_for(dispatch_with_features(assistant, list).await).is_some());
+    }
+
+    #[test]
+    fn the_personal_agent_token_parses_on_its_own() {
+        let f = CompanionFeatures::parse(Some("personal_agent"));
+        assert!(f.personal_agent);
+        assert!(!f.delegation && !f.taskboard && !f.automations);
+        assert!(!CompanionFeatures::parse(None).personal_agent);
+    }
+
+    #[tokio::test]
+    async fn tools_list_offers_the_personal_agent_group_only_when_on() {
+        let list = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
+        let names = list_tool_names(dispatch_for_test(list).await);
+        for tool in PERSONAL_AGENT_TOOLS {
+            assert!(!names.contains(&tool.to_string()), "{tool} leaked");
+        }
+        let mut names = list_tool_names(dispatch_with_features(PERSONAL_AGENT_ONLY, list).await);
+        names.sort();
+        let mut want: Vec<String> = PERSONAL_AGENT_TOOLS.iter().map(|t| t.to_string()).collect();
+        want.sort();
+        assert_eq!(names, want);
+    }
+
+    #[tokio::test]
+    async fn personal_agent_tools_are_unknown_when_the_group_is_off() {
+        for tool in PERSONAL_AGENT_TOOLS {
+            let line = json!({
+                "jsonrpc": "2.0", "id": 61, "method": "tools/call",
+                "params": { "name": tool, "arguments": {} }
+            })
+            .to_string();
+            let resp = unwrap_respond(dispatch_with_features(TASKBOARD_ONLY, &line).await);
+            let e = resp.error.expect("must be rejected");
+            assert_eq!(e.code, -32602);
+            assert!(e.message.contains("unknown tool"), "{tool}: {}", e.message);
+        }
+    }
+
+    #[tokio::test]
+    async fn personal_agent_tools_forward_objects_and_refuse_other_shapes() {
+        let ok = json!({
+            "jsonrpc": "2.0", "id": 62, "method": "tools/call",
+            "params": { "name": "dispatch", "arguments": { "mode": "chat" } }
+        })
+        .to_string();
+        assert!(matches!(
+            dispatch_with_features(PERSONAL_AGENT_ONLY, &ok).await,
+            LineAction::Spawn(_)
+        ));
+        let bad = json!({
+            "jsonrpc": "2.0", "id": 63, "method": "tools/call",
+            "params": { "name": "item_read", "arguments": [1] }
+        })
+        .to_string();
+        let resp = unwrap_respond(dispatch_with_features(PERSONAL_AGENT_ONLY, &bad).await);
+        assert_eq!(resp.error.expect("refused").code, -32602);
+    }
+
+    #[test]
+    fn a_personal_agent_outcome_renders_text_and_structure() {
+        let out = render_personal_agent_result(&json!({
+            "ok": false,
+            "text": "a chat dispatch takes no project_id",
+        }));
+        assert_eq!(out["isError"], false);
+        assert_eq!(out["content"][0]["text"], "a chat dispatch takes no project_id");
+        assert_eq!(out["structuredContent"]["ok"], false);
     }
 
     /// Calling a tool whose group is off is rejected as an unknown tool — same
@@ -5728,6 +6230,14 @@ mod tests {
         for (args, expect) in [
             (json!({ "prompt": "p" }), "title"),
             (json!({ "title": "t" }), "prompt"),
+            (
+                json!({ "title": "t", "prompt": "p", "attachments": { "a": "b" } }),
+                "attachments",
+            ),
+            (
+                json!({ "title": "t", "prompt": "p", "attachments": ["/a.png", 3] }),
+                "attachments",
+            ),
         ] {
             let line = json!({
                 "jsonrpc": "2.0", "id": 44, "method": "tools/call",
@@ -5739,6 +6249,54 @@ mod tests {
             assert_eq!(e.code, -32602);
             assert!(e.message.contains(expect), "got: {}", e.message);
         }
+    }
+
+    #[test]
+    fn parse_work_task_spec_reads_attachments() {
+        // Absent / null → none.
+        let spec = parse_work_task_spec(&json!({ "title": "t", "prompt": "p" })).unwrap();
+        assert!(spec.attachments.is_empty());
+        let spec = parse_work_task_spec(&json!({
+            "title": "t", "prompt": "p", "attachments": null
+        }))
+        .unwrap();
+        assert!(spec.attachments.is_empty());
+
+        // Trimmed, blanks dropped, repeats collapsed, order kept.
+        let spec = parse_work_task_spec(&json!({
+            "title": "t", "prompt": "p",
+            "attachments": [" /tmp/shot.png ", "", "logs/run.log", "/tmp/shot.png"]
+        }))
+        .unwrap();
+        assert_eq!(spec.attachments, vec!["/tmp/shot.png", "logs/run.log"]);
+
+        // A lone string is a one-item list.
+        let spec = parse_work_task_spec(&json!({
+            "title": "t", "prompt": "p", "attachments": "/tmp/shot.png"
+        }))
+        .unwrap();
+        assert_eq!(spec.attachments, vec!["/tmp/shot.png"]);
+    }
+
+    #[test]
+    fn parse_work_task_spec_caps_the_attachment_count() {
+        let at_cap: Vec<String> = (0..MAX_WORK_TASK_ATTACHMENTS)
+            .map(|i| format!("/tmp/{i}.png"))
+            .collect();
+        let spec = parse_work_task_spec(&json!({
+            "title": "t", "prompt": "p", "attachments": at_cap
+        }))
+        .unwrap();
+        assert_eq!(spec.attachments.len(), MAX_WORK_TASK_ATTACHMENTS);
+
+        let over: Vec<String> = (0..=MAX_WORK_TASK_ATTACHMENTS)
+            .map(|i| format!("/tmp/{i}.png"))
+            .collect();
+        let err = parse_work_task_spec(&json!({
+            "title": "t", "prompt": "p", "attachments": over
+        }))
+        .expect_err("over the cap must be rejected, not truncated");
+        assert!(err.contains("at most"), "got: {err}");
     }
 
     #[test]
@@ -6457,6 +7015,7 @@ mod tests {
         result: false,
         automations: false,
         taskboard: false,
+        personal_agent: false,
         browser: true,
         browser_eval: false,
         computer: false,
@@ -8176,13 +8735,15 @@ mod tests {
             _ => None,
         });
         let ctx = ctx_on(&sock);
-        // Unknown still offers the parameter (calls re-check), without a roster.
+        // Unknown still offers the parameters (calls re-check), without a
+        // roster: `bot`, and `assistant_id` for an old link.
         let delegate = delegate_schema(&ctx).await;
         let id_description = delegate["inputSchema"]["properties"]["assistant_id"]["description"]
             .as_str()
             .unwrap()
             .to_string();
-        assert_eq!(id_description, ASSISTANT_ID_DESCRIPTION);
+        assert_eq!(id_description, LEGACY_ASSISTANT_ID_DESCRIPTION);
+        assert!(delegate["inputSchema"]["properties"]["bot"].is_object());
         assert_eq!(
             ctx.assistant_support.resolve(&sock).await,
             AssistantSupport::Supported,

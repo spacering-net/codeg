@@ -361,6 +361,7 @@ impl ChatChannelManager {
             manager_for_events,
             db_conn.clone(),
             bridge.clone(),
+            conn_mgr.clone_ref(),
         );
 
         // Spawn session event subscriber (ACP event routing to channels)

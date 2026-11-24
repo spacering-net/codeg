@@ -7,7 +7,7 @@ use crate::app_error::{AppCommandError, AppErrorCode};
 use crate::commands::folders::{
     detect_conflicts, git_command_error, numstat_rename_sides, to_git_literal_pathspec,
 };
-use crate::models::WorkTaskChangedFile;
+use crate::models::{WorkTaskChangedFile, WorkTaskUncommittedFile};
 
 async fn run_git(path: &str, args: &[&str]) -> Result<std::process::Output, AppCommandError> {
     crate::process::tokio_command("git")
@@ -88,6 +88,60 @@ pub async fn has_changes(path: &str) -> Result<bool, AppCommandError> {
         return Err(git_command_error("status", &out.stderr));
     }
     Ok(!out.stdout.iter().all(|b| b.is_ascii_whitespace()))
+}
+
+/// What [`commit_all`] would commit, file by file — what the delivery dialog
+/// shows before the user agrees to commit it. Every untracked file is listed
+/// on its own (`-uall`), not folded into its directory, because those are
+/// exactly the ones that may be scratch the agent never meant to keep.
+pub async fn uncommitted_files(
+    path: &str,
+) -> Result<Vec<WorkTaskUncommittedFile>, AppCommandError> {
+    let out = run_git(path, &["status", "--porcelain=v1", "-z", "-uall"]).await?;
+    if !out.status.success() {
+        return Err(git_command_error("status", &out.stderr));
+    }
+    Ok(parse_porcelain_z(&out.stdout))
+}
+
+/// `git status --porcelain=v1 -z` → one entry per path. A rename or copy
+/// carries its source as the NEXT NUL-separated field, which is skipped.
+fn parse_porcelain_z(raw: &[u8]) -> Vec<WorkTaskUncommittedFile> {
+    let mut files = Vec::new();
+    let mut fields = raw.split(|b| *b == 0);
+    while let Some(entry) = fields.next() {
+        if entry.len() < 4 {
+            continue;
+        }
+        let (x, y) = (entry[0], entry[1]);
+        let file = String::from_utf8_lossy(&entry[3..]).into_owned();
+        let status = if x == b'?' {
+            "A"
+        } else if x == b'R' || x == b'C' {
+            fields.next();
+            "R"
+        } else if x == b'D' || y == b'D' {
+            "D"
+        } else if x == b'A' {
+            "A"
+        } else {
+            "M"
+        };
+        files.push(WorkTaskUncommittedFile {
+            file,
+            status: status.to_string(),
+        });
+    }
+    files
+}
+
+/// Whether the checkout at `path` is attached to the local branch `branch`.
+/// The FULL ref, as [`worktree_add_existing_branch`] compares it: a same-name
+/// tag cannot answer for the branch. A detached `HEAD` is `false`.
+pub async fn head_is_branch(path: &str, branch: &str) -> Result<bool, AppCommandError> {
+    let head = run_git(path, &["symbolic-ref", "--quiet", "HEAD"]).await?;
+    Ok(head.status.success()
+        && String::from_utf8_lossy(&head.stdout).trim() == format!("refs/heads/{branch}"))
 }
 
 /// Stage everything and commit with the user's resolved author. Returns
@@ -238,6 +292,26 @@ pub async fn merge_base(path: &str, a: &str, b: &str) -> Result<String, AppComma
         ));
     }
     Ok(sha)
+}
+
+/// Whether merging `b` into `a` would conflict, read without touching any
+/// worktree or index (`git merge-tree --write-tree`, git 2.38+). `None`
+/// when this git cannot say (too old, an unknown revision).
+pub async fn merge_conflicts(
+    path: &str,
+    a: &str,
+    b: &str,
+) -> Result<Option<bool>, AppCommandError> {
+    let out = run_git(
+        path,
+        &["merge-tree", "--write-tree", "--no-messages", "--name-only", a, b],
+    )
+    .await?;
+    Ok(match out.status.code() {
+        Some(0) => Some(false),
+        Some(1) => Some(true),
+        _ => None,
+    })
 }
 
 /// Whether an object is present in this repository AND is a commit. The probe
@@ -929,9 +1003,144 @@ pub async fn remove_worktree_and_branch(
     Ok(())
 }
 
+/// A fingerprint of everything a worktree holds that git can see — the
+/// version an acceptance round is bound to (personal agent 7.5). A task's
+/// work can sit uncommitted until it merges, new files untracked, so `HEAD`
+/// alone is not enough. One hash over three parts:
+///
+/// - `HEAD`;
+/// - every change to tracked files against it, staged or not
+///   (`git diff HEAD --binary`, git's own format whatever the user's config);
+/// - every untracked, not ignored file: its path, its permission bits and a
+///   hash of its content (a symlink: where it points). Ignored files are not
+///   counted, so build output never reads as a change.
+///
+/// Every caller computes it the same way, so two readings of the same
+/// worktree are equal and any edit — a commit, a staged or unstaged change,
+/// a new file — makes them differ.
+pub async fn worktree_fingerprint(path: &str) -> Result<String, AppCommandError> {
+    use sha2::{Digest, Sha256};
+    let head = rev_parse(path, "HEAD").await?;
+    let diff = run_git(
+        path,
+        &[
+            "-c",
+            "core.quotePath=false",
+            "diff",
+            "HEAD",
+            "--binary",
+            "--full-index",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+        ],
+    )
+    .await?;
+    if !diff.status.success() {
+        return Err(git_command_error("diff HEAD --binary", &diff.stderr));
+    }
+    let others = run_git(path, &["ls-files", "--others", "--exclude-standard", "-z"]).await?;
+    if !others.status.success() {
+        return Err(git_command_error("ls-files --others", &others.stderr));
+    }
+    let mut names: Vec<String> = others
+        .stdout
+        .split(|b| *b == 0)
+        .filter(|n| !n.is_empty())
+        .map(|n| String::from_utf8_lossy(n).into_owned())
+        .collect();
+    names.sort();
+    let root = std::path::PathBuf::from(path);
+    let untracked = tokio::task::spawn_blocking(move || {
+        let mut h = Sha256::new();
+        for name in &names {
+            h.update(name.as_bytes());
+            h.update([0]);
+            let full = root.join(name);
+            match std::fs::symlink_metadata(&full) {
+                Ok(meta) if meta.file_type().is_symlink() => {
+                    h.update(b"link\0");
+                    let target = std::fs::read_link(&full)
+                        .map(|t| t.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    h.update(target.as_bytes());
+                }
+                Ok(meta) if meta.is_file() => {
+                    h.update(format!("file {:o}\0", mode_bits(&meta)).as_bytes());
+                    let mut content = Sha256::new();
+                    match std::fs::File::open(&full) {
+                        Ok(mut f) => {
+                            if std::io::copy(&mut f, &mut content).is_err() {
+                                h.update(b"unreadable");
+                            }
+                        }
+                        Err(_) => h.update(b"unreadable"),
+                    }
+                    h.update(content.finalize());
+                }
+                // A nested repository git lists as a directory.
+                Ok(_) => h.update(b"dir"),
+                Err(_) => h.update(b"gone"),
+            }
+            h.update([0]);
+        }
+        h.finalize()
+    })
+    .await
+    .map_err(|e| AppCommandError::io(std::io::Error::other(e.to_string())))?;
+    let mut h = Sha256::new();
+    h.update(b"head\0");
+    h.update(head.as_bytes());
+    h.update(b"\0diff\0");
+    h.update(&diff.stdout);
+    h.update(b"\0untracked\0");
+    h.update(untracked);
+    Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
+#[cfg(unix)]
+fn mode_bits(meta: &std::fs::Metadata) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    meta.permissions().mode() & 0o777
+}
+
+#[cfg(not(unix))]
+fn mode_bits(meta: &std::fs::Metadata) -> u32 {
+    if meta.permissions().readonly() {
+        0o444
+    } else {
+        0o644
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One entry per path from `git status -z`: a rename's source (the next
+    /// NUL field) is skipped rather than read as a file of its own, and a name
+    /// with spaces or non-ASCII comes through as-is (no quoting under `-z`).
+    #[test]
+    fn porcelain_z_reads_one_entry_per_path() {
+        let raw = b"?? new file.txt\0 M src/a.rs\0R  to.rs\0from.rs\0D  gone.rs\0 D gone2.rs\0A  added.rs\0MM \xc3\xa9.rs\0";
+        let got: Vec<_> = parse_porcelain_z(raw)
+            .into_iter()
+            .map(|f| (f.file, f.status))
+            .collect();
+        let want = [
+            ("new file.txt", "A"),
+            ("src/a.rs", "M"),
+            ("to.rs", "R"),
+            ("gone.rs", "D"),
+            ("gone2.rs", "D"),
+            ("added.rs", "A"),
+            ("é.rs", "M"),
+        ]
+        .map(|(f, s)| (f.to_string(), s.to_string()));
+        assert_eq!(got, want);
+    }
 
     /// Run a git command in `dir`, supplying identity via env so the test does
     /// not depend on (or mutate) the developer's global git config.
@@ -1888,5 +2097,62 @@ mod tests {
             std::fs::read_to_string(wt.join("a.txt")).expect("read"),
             "one\ntwo\n"
         );
+    }
+
+    /// The acceptance fingerprint (personal agent 7.5): equal for the same
+    /// worktree, different after a commit, a staged or an unstaged edit, a
+    /// new untracked file or an edit to one, a mode change — and blind to
+    /// ignored files.
+    #[tokio::test]
+    async fn the_fingerprint_sees_every_change_but_ignored_files() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let path = root.to_str().expect("utf-8 path");
+        git_run(root, &["init", "-q"]);
+        std::fs::write(root.join("a.txt"), "one\n").unwrap();
+        std::fs::write(root.join(".gitignore"), "build/\n").unwrap();
+        git_run(root, &["add", "-A"]);
+        git_run(root, &["commit", "-q", "-m", "base"]);
+        let base = worktree_fingerprint(path).await.unwrap();
+        assert_eq!(base, worktree_fingerprint(path).await.unwrap(), "stable");
+
+        std::fs::create_dir(root.join("build")).unwrap();
+        std::fs::write(root.join("build/out.o"), "bin").unwrap();
+        assert_eq!(
+            base,
+            worktree_fingerprint(path).await.unwrap(),
+            "ignored files do not count"
+        );
+
+        std::fs::write(root.join("a.txt"), "two\n").unwrap();
+        let unstaged = worktree_fingerprint(path).await.unwrap();
+        assert_ne!(base, unstaged, "an unstaged edit");
+        git_run(root, &["add", "a.txt"]);
+        let staged = worktree_fingerprint(path).await.unwrap();
+        assert_eq!(
+            unstaged, staged,
+            "staging the same edit changes nothing it holds"
+        );
+        git_run(root, &["commit", "-q", "-m", "two"]);
+        let committed = worktree_fingerprint(path).await.unwrap();
+        assert_ne!(staged, committed, "a commit moves HEAD");
+
+        std::fs::write(root.join("new.txt"), "x").unwrap();
+        let untracked = worktree_fingerprint(path).await.unwrap();
+        assert_ne!(committed, untracked, "a new untracked file");
+        std::fs::write(root.join("new.txt"), "y").unwrap();
+        let edited = worktree_fingerprint(path).await.unwrap();
+        assert_ne!(untracked, edited, "an edit to a file never added");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(root.join("new.txt"), std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+            assert_ne!(
+                edited,
+                worktree_fingerprint(path).await.unwrap(),
+                "its mode"
+            );
+        }
     }
 }

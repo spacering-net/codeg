@@ -124,8 +124,22 @@ describe("diskSkillTrigger", () => {
     expect(diskSkillTrigger("antigravity")).toBe("/")
   })
 
+  // OpenCode 2.x advertises only its commands (2.2.5: init, review, goal,
+  // compact); unlike 1.x it never turns a skill into one (#1089).
+  it("lists OpenCode's disk skills under `/`", () => {
+    expect(diskSkillTrigger("open_code")).toBe("/")
+  })
+
+  // Custom ACP agents (e.g. user-configured Antigravity, or agents with declared
+  // skill directories) do not advertise skills as ACP commands; their skills
+  // live on disk and are invoked via `/`.
+  it("lists custom ACP agents' disk skills under `/`", () => {
+    expect(diskSkillTrigger("custom:antigravity-b")).toBe("/")
+    expect(diskSkillTrigger("custom:my-agent")).toBe("/")
+  })
+
   it("scans nothing for an agent that advertises its skills as commands", () => {
-    for (const agent of ["claude_code", "kimi_code", "gemini", "custom:x"]) {
+    for (const agent of ["claude_code", "kimi_code", "gemini"]) {
       expect(diskSkillTrigger(agent)).toBeNull()
     }
     expect(diskSkillTrigger(null)).toBeNull()

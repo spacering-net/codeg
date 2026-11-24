@@ -1,8 +1,9 @@
 import type { KnownInvocations } from "@/lib/invocation-token"
-import type {
-  AgentSkillItem,
-  AgentType,
-  AvailableCommandInfo,
+import {
+  isCustomAgentType,
+  type AgentSkillItem,
+  type AgentType,
+  type AvailableCommandInfo,
 } from "@/lib/types"
 
 import type { ReferenceAttrs } from "./types"
@@ -30,12 +31,33 @@ export type InvocationPrefix = "/" | "$"
  *   loads every skill in its skill directories and names each one to the
  *   model. A `/<skill>` the user sends reaches the model as written, next to
  *   that list.
+ * - OpenCode: `/`, the same way. OpenCode 1.x turned every skill into a
+ *   command, but 2.x keeps skills apart from commands: its ACP server
+ *   advertises only its commands (`/init`, `/review`, `/goal`, `/compact`, plus
+ *   configured and MCP-prompt ones), while it still loads every skill, names
+ *   each to the model and gives the model a `skill` tool to load one by id. A
+ *   `/<skill>` the user sends reaches the model as written.
+ * - Custom ACP agents (`custom:<id>`): `/`. codeg cannot tell whether an
+ *   arbitrary ACP server advertises its skills (Antigravity's
+ *   `agy_acp_server` run as a custom agent never does), so the scan follows the
+ *   user's own declaration instead: a custom agent that declares a dedicated
+ *   skills directory or the shared `.agents/skills` store lists those skills,
+ *   and one that declares neither gets `supported: false` and an empty list. A
+ *   declared skill the agent also advertises as a command is dropped by
+ *   {@link skillsForMenu}, so it is not listed twice.
  */
 export function diskSkillTrigger(
   agentType: AgentType | null | undefined
 ): InvocationPrefix | null {
+  if (!agentType) return null
   if (agentType === "codex") return "$"
-  if (agentType === "antigravity") return "/"
+  if (
+    agentType === "antigravity" ||
+    agentType === "open_code" ||
+    isCustomAgentType(agentType)
+  ) {
+    return "/"
+  }
   return null
 }
 
@@ -44,7 +66,8 @@ export function diskSkillTrigger(
  * with the agent's own commands, and a skill whose `/<id>` is also a command is
  * left out: sending that token runs the command, so the skill row could not do
  * what it says. Antigravity, for one, intercepts `/plan`, `/logout` and
- * `/usage` before its model sees them.
+ * `/usage` before its model sees them, and OpenCode runs any advertised
+ * command, `/review` included.
  */
 export function skillsForMenu(
   skills: readonly AgentSkillItem[],

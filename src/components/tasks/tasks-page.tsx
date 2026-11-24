@@ -24,7 +24,10 @@ import {
   loadTasksStatusFilter,
   saveTasksBoardFilter,
   saveTasksStatusFilter,
+  saveTasksTimeFilter,
+  useTasksTimeFilter,
 } from "@/lib/tasks-board-filter-storage"
+import { taskMatchesTimeRange } from "@/lib/tasks-time-filter"
 import { WorkbenchPageTitle } from "@/components/workbench/workbench-page-title"
 import { FolderSelect } from "@/components/shared/folder-select"
 import { Button } from "@/components/ui/button"
@@ -60,6 +63,7 @@ import { StatusChip, TaskCard } from "./task-card"
 import { TaskList } from "./task-list"
 import { searchTerms, taskMatchesSearch } from "./task-search"
 import { TaskSettingsDialog } from "./task-settings-dialog"
+import { TaskTimeFilter } from "./task-time-filter"
 import { OPEN_TASK_SETTINGS_EVENT } from "./tasks-chrome-actions"
 import { TasksSkeleton } from "./tasks-skeleton"
 import { useTaskDialogs } from "./use-task-dialogs"
@@ -159,6 +163,7 @@ export function TasksPage() {
   useEffect(() => {
     saveTasksStatusFilter(statusFilter)
   }, [statusFilter])
+  const timeFilter = useTasksTimeFilter()
   // Keyword search over both views. Deliberately NOT remembered across visits,
   // unlike the toggles above: a search left behind from last time silently
   // hides tasks on a board that otherwise looks normal.
@@ -238,13 +243,14 @@ export function TasksPage() {
       tasks.filter(
         (task) =>
           (folderFilter == null || task.folder_id === folderFilter) &&
+          taskMatchesTimeRange(task, timeFilter, now) &&
           taskMatchesSearch(
             task,
             terms,
             folderNames.get(task.folder_id) ?? null
           )
       ),
-    [tasks, folderFilter, terms, folderNames]
+    [tasks, folderFilter, timeFilter, now, terms, folderNames]
   )
   const columns = useMemo(
     () =>
@@ -269,11 +275,11 @@ export function TasksPage() {
     [visibleTasks, statusFilter, boardFilter]
   )
 
-  // Reordering persists the order of the column's cards — and a search shows
+  // Reordering persists the order of the column's cards — and a filter shows
   // only some of them, so a drop there would save an order for a column the
   // user is not looking at. Dragging to In-progress (start) needs no order and
   // stays available.
-  const dragEnabled = folderFilter != null && !searching
+  const dragEnabled = folderFilter != null && !searching && timeFilter === "all"
   // Optimistic order while a drag is live; server order otherwise.
   const todoTasks = useMemo(() => {
     const base = columns.todo
@@ -592,6 +598,11 @@ export function TasksPage() {
             </PopoverContent>
           </Popover>
 
+          <TaskTimeFilter
+            value={timeFilter}
+            onValueChange={saveTasksTimeFilter}
+          />
+
           {/* Status filter — list-only: the board already sorts by status into
               its four columns, so there is nothing there for it to narrow.
               One choice out of five, so a select rather than a checkbox menu;
@@ -685,6 +696,9 @@ export function TasksPage() {
           mergeQueueRanks={queueRanks}
           filtered={statusFilter != null}
           onClearFilter={() => setStatusFilter(null)}
+          onClearTimeFilter={
+            timeFilter === "all" ? undefined : () => saveTasksTimeFilter("all")
+          }
           searchQuery={searching ? searchInput.trim() : null}
           onClearSearch={() => setSearchInput("")}
           onOpen={openDetail}
@@ -784,7 +798,7 @@ export function TasksPage() {
                       <p className="text-xs text-muted-foreground">
                         {/* An empty column under a search says nothing
                             matched — not that the column has no tasks. */}
-                        {searching
+                        {searching || timeFilter !== "all"
                           ? t("searchEmptyColumn")
                           : t(EMPTY_LABEL_KEYS[col])}
                       </p>

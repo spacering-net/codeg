@@ -17,7 +17,10 @@ import {
 import { useAgentOptions } from "@/components/automations/use-agent-options"
 import { ComposerAddMenu } from "@/components/chat/composer/composer-add-menu"
 import { ComposerImageThumbnails } from "@/components/chat/composer/composer-image-thumbnails"
-import { restampSkillPrefixes } from "@/components/chat/composer/composer-commands"
+import {
+  restampExpertNames,
+  restampSkillPrefixes,
+} from "@/components/chat/composer/composer-commands"
 import { useComposerChromeFocus } from "@/components/chat/composer/use-composer-chrome-focus"
 import {
   RichComposer,
@@ -153,11 +156,14 @@ export function TaskMessageComposer({
   const containerRef = useRef<HTMLDivElement>(null)
   const chromeFocus = useComposerChromeFocus(editorRef)
 
-  const { groupLabels, uiLabels } = useComposerMentionLabels()
+  const { groupLabels, uiLabels, primaryAssistantName } =
+    useComposerMentionLabels()
   const referenceSearch = useReferenceSearch({
     defaultPath: folderPath,
     enabled: true,
     labels: groupLabels,
+
+    primaryAssistantName,
   })
 
   // One transient probe backs the `/` menu (the snapshot carries
@@ -197,10 +203,15 @@ export function TaskMessageComposer({
 
   // Keep already-inserted skill badges on the current agent's trigger (`$` is
   // Codex's; everyone else invokes skills as `/`).
+  const expertInvocation = shortcuts.expertInvocation
   useEffect(() => {
     const editor = editorRef.current?.getEditor()
-    if (editor) restampSkillPrefixes(editor, agentType === "codex" ? "$" : "/")
-  }, [agentType])
+    if (!editor) return
+    restampSkillPrefixes(editor, agentType === "codex" ? "$" : "/")
+    // And an expert's name: a Harness plugin installed whole may give it to
+    // one agent as `superpowers:<id>`.
+    restampExpertNames(editor, expertInvocation)
+  }, [agentType, expertInvocation])
 
   /** The bytes-bearing block behind every embedded badge still in the document,
    *  walked live so a deleted badge simply never emits (and an undo re-emits). */
@@ -234,16 +245,18 @@ export function TaskMessageComposer({
   // sentinel badges. The host gates its send on this, and a pasted file with no
   // path serializes to nothing in the text — counting only images would leave
   // that send disabled with a visible attachment sitting in the box.
-  const attachmentTotal = attach.attachments.length + embeddedBlocks().length
+  //
+  // Counted after each commit rather than during render: the embedded badges
+  // are read off the live editor (a ref), which render must not touch. The
+  // host only cares about the count, so it is told only when the count moves —
+  // never just because its callback got a new identity.
   const reportedTotalRef = useRef(-1)
   useEffect(() => {
+    const attachmentTotal = attach.attachments.length + embeddedBlocks().length
     if (reportedTotalRef.current === attachmentTotal) return
     reportedTotalRef.current = attachmentTotal
     onAttachmentsChange?.(attachmentTotal)
-    // The host only cares about the count; re-firing on a new callback identity
-    // would spam it on every parent render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [attachmentTotal])
+  })
 
   // Seed a stored prompt back into the box (editing a task, applying a
   // template): images return to the strip and bytes-bearing resources get fresh

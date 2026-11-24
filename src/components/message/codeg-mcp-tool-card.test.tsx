@@ -200,6 +200,25 @@ describe("CodegMcpToolCard", () => {
     ).toBeInTheDocument()
   })
 
+  it("lists the files handed to a work task", () => {
+    // The result only says how many were attached; the panel names them.
+    renderWithIntl(
+      <CodegMcpToolCard
+        tool="create_work_task"
+        input={JSON.stringify({
+          title: "fix the layout",
+          prompt: "Match the mockup.",
+          attachments: ["/tmp/mockup.png", "/repo/app/run.log"],
+        })}
+        state="input-available"
+      />
+    )
+    fireEvent.click(screen.getByRole("button"))
+    expect(screen.getByText("Attachments")).toBeInTheDocument()
+    expect(screen.getByText("/tmp/mockup.png")).toBeInTheDocument()
+    expect(screen.getByText("/repo/app/run.log")).toBeInTheDocument()
+  })
+
   it("shows the prompt above the result once both exist", () => {
     renderWithIntl(
       <CodegMcpToolCard

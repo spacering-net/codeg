@@ -8,11 +8,12 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
+use super::mcp_engine;
 use crate::app_error::AppCommandError;
+use crate::web::event_bridge::EventEmitter;
 
 const MARKETPLACE_OFFICIAL: &str = "official_registry";
 const MARKETPLACE_SMITHERY: &str = "smithery";
-static MCP_CONFIG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 static MARKETPLACE_HTTP_CLIENT: LazyLock<Result<reqwest::Client, String>> = LazyLock::new(|| {
     reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(8))
@@ -99,7 +100,7 @@ pub enum McpAppType {
 /// server come back on the next refresh. Both used to keep their own hand-typed
 /// copy of this list; one shared constant plus [`tests::all_mcp_apps_is_exhaustive`]
 /// (which fails to compile when a variant is added) is what keeps them honest.
-const ALL_MCP_APPS: [McpAppType; 20] = [
+pub(crate) const ALL_MCP_APPS: [McpAppType; 20] = [
     McpAppType::ClaudeCode,
     McpAppType::Codex,
     McpAppType::Gemini,
@@ -387,10 +388,38 @@ pub async fn mcp_get_marketplace_server_detail(
     }
 }
 
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn mcp_install_from_marketplace(
+    db: tauri::State<'_, crate::db::AppDatabase>,
+    provider_id: String,
+    server_id: String,
+    apps: Vec<McpAppType>,
+    spec_override: Option<Value>,
+    option_id: Option<String>,
+    protocol: Option<String>,
+    parameter_values: Option<Value>,
+    app: tauri::AppHandle,
+) -> Result<LocalMcpServer, AppCommandError> {
+    mcp_install_from_marketplace_core(
+        &db,
+        &EventEmitter::from_app(&app),
+        provider_id,
+        server_id,
+        apps,
+        spec_override,
+        option_id,
+        protocol,
+        parameter_values,
+    )
+    .await
+}
 
 #[allow(clippy::too_many_arguments)]
 pub async fn mcp_install_from_marketplace_core(
     db: &crate::db::AppDatabase,
+    emitter: &EventEmitter,
     provider_id: String,
     server_id: String,
     apps: Vec<McpAppType>,
@@ -399,7 +428,6 @@ pub async fn mcp_install_from_marketplace_core(
     protocol: Option<String>,
     parameter_values: Option<Value>,
 ) -> Result<LocalMcpServer, AppCommandError> {
-    let native_accounts = native_account_homes(db).await?;
     let normalized_apps = normalize_apps(apps);
     if normalized_apps.is_empty() {
         return Err(mcp_invalid_input("at least one target app is required")
@@ -438,23 +466,39 @@ pub async fn mcp_install_from_marketplace_core(
         // returning a pre-existing server with the same id). See issue #325.
         return Err(no_hostable_app_error(&normalized_apps, &canonical_spec));
     }
-    // A selected-but-excluded app can't host this transport; remove any stale entry
-    // for this id there so it can't win scan precedence and reclassify the spec.
-    with_upsert_preflight(&hostable.iter().copied().collect(), || {
-    preflight_native_account_homes(&native_accounts)?;
-    for app in excluded {
-        tracing::warn!(
-            "[MCP] {app:?} cannot host server '{server_id}' (transport unsupported); removing any stale entry"
-        );
-        let _ = remove_server_for_app(app, &server_id)?;
-        fanout_native_account_homes(&native_accounts, app, &server_id, None)?;
-    }
-    for app in hostable {
-        upsert_server_for_app(app, &server_id, &canonical_spec)?;
-        fanout_native_account_homes(&native_accounts, app, &server_id, Some(&canonical_spec))?;
-    }
-    Ok(())
-    })?;
+    // After the network round trip, and for the writes only: one writer of
+    // the agents' config files at a time (see `mcp_engine::lock`).
+    let written = {
+        let _lock = mcp_engine::lock::acquire().await?;
+        let native_accounts = native_account_homes(db).await?;
+        preflight_native_account_homes(&native_accounts)?;
+        (|| {
+            // A selected-but-excluded app can't host this transport; remove any stale
+            // entry for this id there so it can't win scan precedence and reclassify
+            // the spec.
+            for app in excluded {
+                tracing::warn!(
+                    "[MCP] {app:?} cannot host server '{server_id}' (transport unsupported); removing any stale entry"
+                );
+                let _ = remove_server_for_app(app, &server_id)?;
+                fanout_native_account_homes(&native_accounts, app, &server_id, None)?;
+            }
+            for app in hostable {
+                upsert_server_for_app(app, &server_id, &canonical_spec)?;
+                fanout_native_account_homes(
+                    &native_accounts,
+                    app,
+                    &server_id,
+                    Some(&canonical_spec),
+                )?;
+            }
+            Ok::<(), AppCommandError>(())
+        })()
+    };
+    // Announced even when the walk stopped part-way: the agents before the
+    // failure were written.
+    mcp_engine::announce_changed(emitter, &normalized_apps);
+    written?;
 
     find_local_server(&server_id).ok_or_else(|| {
         mcp_configuration_invalid(format!(
@@ -473,15 +517,35 @@ pub async fn mcp_install_from_marketplace_core(
 /// which fields the user touched. A client that sends none (a new server, or
 /// an older build) gets the scan's spec for the id as the closest stand-in,
 /// and a new server has none.
-#[allow(clippy::too_many_arguments)]
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn mcp_upsert_local_server(
+    db: tauri::State<'_, crate::db::AppDatabase>,
+    server_id: String,
+    spec: Value,
+    apps: Vec<McpAppType>,
+    shown_spec: Option<Value>,
+    app: tauri::AppHandle,
+) -> Result<LocalMcpServer, AppCommandError> {
+    mcp_upsert_local_server_core(
+        &db,
+        &EventEmitter::from_app(&app),
+        server_id,
+        spec,
+        apps,
+        shown_spec,
+    )
+    .await
+}
+
 pub async fn mcp_upsert_local_server_core(
     db: &crate::db::AppDatabase,
+    emitter: &EventEmitter,
     server_id: String,
     spec: Value,
     apps: Vec<McpAppType>,
     shown_spec: Option<Value>,
 ) -> Result<LocalMcpServer, AppCommandError> {
-    let native_accounts = native_account_homes(db).await?;
     let canonical_spec = canonicalize_spec(&spec, "local MCP save")?;
     let target_apps = normalize_apps(apps);
     if target_apps.is_empty() {
@@ -504,6 +568,11 @@ pub async fn mcp_upsert_local_server_core(
         return Err(no_hostable_app_error(&target_apps, &canonical_spec));
     }
 
+    // One writer of the agents' config files at a time, from the scan the
+    // walk is planned on to its last write (see `mcp_engine::lock`).
+    let lock = mcp_engine::lock::acquire().await?;
+    let native_accounts = native_account_homes(db).await?;
+    preflight_native_account_homes(&native_accounts)?;
     // Nothing below is reversible, and the walk REMOVES the server from every
     // non-target agent, so a target whose config cannot take it has to be
     // caught before the first write rather than halfway through.
@@ -518,8 +587,9 @@ pub async fn mcp_upsert_local_server_core(
             .find(|server| server.id == server_id)
             .map(|server| server.spec.clone()),
     };
-    with_upsert_preflight(&target_set, || {
-        preflight_native_account_homes(&native_accounts)?;
+    let mut walked = false;
+    let written = with_upsert_preflight(&target_set, || {
+        walked = true;
         for app in ALL_MCP_APPS {
             if target_set.contains(&app) {
                 match (app, shown.as_ref()) {
@@ -538,7 +608,14 @@ pub async fn mcp_upsert_local_server_core(
             }
         }
         Ok(())
-    })?;
+    });
+    drop(lock);
+    if walked {
+        // Past the preflight every agent is walked, so every agent is
+        // announced — whether or not the walk finished.
+        mcp_engine::announce_changed(emitter, &ALL_MCP_APPS);
+    }
+    written?;
 
     find_local_server(&server_id).ok_or_else(|| {
         mcp_configuration_invalid(format!(
@@ -547,15 +624,29 @@ pub async fn mcp_upsert_local_server_core(
     })
 }
 
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn mcp_set_server_apps(
+    db: tauri::State<'_, crate::db::AppDatabase>,
+    server_id: String,
+    apps: Vec<McpAppType>,
+    app: tauri::AppHandle,
+) -> Result<Option<LocalMcpServer>, AppCommandError> {
+    mcp_set_server_apps_core(&db, &EventEmitter::from_app(&app), server_id, apps).await
+}
 
-#[allow(clippy::too_many_arguments)]
 pub async fn mcp_set_server_apps_core(
     db: &crate::db::AppDatabase,
+    emitter: &EventEmitter,
     server_id: String,
     apps: Vec<McpAppType>,
 ) -> Result<Option<LocalMcpServer>, AppCommandError> {
-    let native_accounts = native_account_homes(db).await?;
     let target_apps = normalize_apps(apps);
+    // One writer of the agents' config files at a time (see
+    // `mcp_engine::lock`).
+    let lock = mcp_engine::lock::acquire().await?;
+    let native_accounts = native_account_homes(db).await?;
+    preflight_native_account_homes(&native_accounts)?;
     let scan = scan_local_servers();
     require_complete_scan(&scan)?;
     let current = scan
@@ -585,8 +676,9 @@ pub async fn mcp_set_server_apps_core(
     // config cannot take the server must stop the whole reassignment first —
     // otherwise it is dropped from its old agents and added to none.
     let added: BTreeSet<McpAppType> = target_set.difference(&current_set).copied().collect();
-    with_upsert_preflight(&added, || {
-        preflight_native_account_homes(&native_accounts)?;
+    let mut walked = false;
+    let written = with_upsert_preflight(&added, || {
+        walked = true;
         for app in current_set.difference(&target_set) {
             remove_server_for_app(*app, &server_id)?;
             fanout_native_account_homes(&native_accounts, *app, &server_id, None)?;
@@ -596,19 +688,37 @@ pub async fn mcp_set_server_apps_core(
             fanout_native_account_homes(&native_accounts, *app, &server_id, Some(&current.spec))?;
         }
         Ok(())
-    })?;
+    });
+    drop(lock);
+    if walked {
+        let touched: Vec<McpAppType> = current_set
+            .symmetric_difference(&target_set)
+            .copied()
+            .collect();
+        mcp_engine::announce_changed(emitter, &touched);
+    }
+    written?;
 
     Ok(find_local_server(&server_id))
 }
 
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn mcp_remove_server(
+    db: tauri::State<'_, crate::db::AppDatabase>,
+    server_id: String,
+    apps: Option<Vec<McpAppType>>,
+    app: tauri::AppHandle,
+) -> Result<bool, AppCommandError> {
+    mcp_remove_server_core(&db, &EventEmitter::from_app(&app), server_id, apps).await
+}
 
-#[allow(clippy::too_many_arguments)]
 pub async fn mcp_remove_server_core(
     db: &crate::db::AppDatabase,
+    emitter: &EventEmitter,
     server_id: String,
     apps: Option<Vec<McpAppType>>,
 ) -> Result<bool, AppCommandError> {
-    let native_accounts = native_account_homes(db).await?;
     let target_apps = match apps {
         Some(selected) => normalize_apps(selected),
         None => ALL_MCP_APPS.to_vec(),
@@ -618,15 +728,32 @@ pub async fn mcp_remove_server_core(
         return Ok(false);
     }
 
-    let _guard = MCP_CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
+    // One writer of the agents' config files at a time (see
+    // `mcp_engine::lock`).
+    let _lock = mcp_engine::lock::acquire().await?;
+    let native_accounts = native_account_homes(db).await?;
     preflight_native_account_homes(&native_accounts)?;
     let mut removed = false;
-    for app in target_apps {
-        removed |= remove_server_for_app(app, &server_id)?;
-        fanout_native_account_homes(&native_accounts, app, &server_id, None)?;
+    let mut failure = None;
+    for app in &target_apps {
+        match remove_server_for_app(*app, &server_id).and_then(|here| {
+            fanout_native_account_homes(&native_accounts, *app, &server_id, None)?;
+            Ok(here)
+        }) {
+            Ok(here) => removed |= here,
+            Err(error) => {
+                failure = Some(error);
+                break;
+            }
+        }
     }
-    Ok(removed)
+    if removed {
+        mcp_engine::announce_changed(emitter, &target_apps);
+    }
+    match failure {
+        Some(error) => Err(error),
+        None => Ok(removed),
+    }
 }
 
 fn normalize_apps(apps: Vec<McpAppType>) -> Vec<McpAppType> {
@@ -1001,24 +1128,6 @@ fn read_codex_root_toml_at(path: &Path) -> Result<toml::Value, AppCommandError> 
     }
 
     Ok(parsed)
-}
-
-fn write_codex_root_toml_at(path: &Path, root: &toml::Value) -> Result<(), AppCommandError> {
-    // See `write_json_file`: an unchanged config is not rewritten.
-    if toml_file_holds(path, root) {
-        return Ok(());
-    }
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(AppCommandError::io)?;
-    }
-
-    let serialized = toml::to_string_pretty(root).map_err(|e| {
-        mcp_configuration_invalid(format!(
-            "failed to serialize TOML for {}: {e}",
-            path.display()
-        ))
-    })?;
-    fs::write(path, format!("{serialized}\n")).map_err(AppCommandError::io)
 }
 
 fn obj_as_string_map(value: Option<&Value>) -> Option<Map<String, Value>> {
@@ -2125,99 +2234,17 @@ fn read_codex_servers() -> Result<BTreeMap<String, Value>, AppCommandError> {
     Ok(out)
 }
 
+/// Write `id` into Codex's `[mcp_servers]`, the way this retired command
+/// means it — the whole entry is the spec's — but through the one writer of
+/// Codex's files (`acp::codex_catalog_commit`, under its lock), which keeps
+/// the rest of config.toml as it is.
 fn upsert_codex_server(id: &str, spec: &Value) -> Result<(), AppCommandError> {
-    upsert_codex_server_at(&codex_config_toml_path(), id, spec)
-}
-
-fn upsert_codex_server_at(path: &Path, id: &str, spec: &Value) -> Result<(), AppCommandError> {
-    let mut root = read_codex_root_toml_at(path)?;
-    let table = root
-        .as_table_mut()
-        .ok_or_else(|| mcp_configuration_invalid("Codex root TOML must be a table"))?;
-
-    let codex_entry = canonical_to_codex_entry(spec)?;
-
-    if !table
-        .get("mcp_servers")
-        .map(toml::Value::is_table)
-        .unwrap_or(false)
-    {
-        table.insert(
-            "mcp_servers".to_string(),
-            toml::Value::Table(toml::map::Map::new()),
-        );
-    }
-
-    let mcp_servers = table
-        .get_mut("mcp_servers")
-        .and_then(toml::Value::as_table_mut)
-        .ok_or_else(|| mcp_configuration_invalid("Codex mcp_servers must be a TOML table"))?;
-    mcp_servers.insert(id.to_string(), codex_entry);
-
-    if let Some(legacy_mcp) = table.get_mut("mcp").and_then(toml::Value::as_table_mut) {
-        if let Some(legacy_servers) = legacy_mcp
-            .get_mut("servers")
-            .and_then(toml::Value::as_table_mut)
-        {
-            legacy_servers.remove(id);
-            if legacy_servers.is_empty() {
-                legacy_mcp.remove("servers");
-            }
-        }
-        if legacy_mcp.is_empty() {
-            table.remove("mcp");
-        }
-    }
-
-    write_codex_root_toml_at(path, &root)
+    let entry = canonical_to_codex_entry(spec)?;
+    mcp_engine::legacy_codex_replace_entry(&codex_home_dir(), id, Some(&entry)).map(|_| ())
 }
 
 fn remove_codex_server(id: &str) -> Result<bool, AppCommandError> {
-    remove_codex_server_at(&codex_config_toml_path(), id)
-}
-
-fn remove_codex_server_at(path: &Path, id: &str) -> Result<bool, AppCommandError> {
-    if !path.exists() {
-        return Ok(false);
-    }
-
-    let mut root = read_codex_root_toml_at(path)?;
-    let Some(table) = root.as_table_mut() else {
-        return Ok(false);
-    };
-
-    let mut removed = false;
-
-    if let Some(mcp_servers) = table
-        .get_mut("mcp_servers")
-        .and_then(toml::Value::as_table_mut)
-    {
-        removed |= mcp_servers.remove(id).is_some();
-        if mcp_servers.is_empty() {
-            table.remove("mcp_servers");
-        }
-    }
-
-    if let Some(legacy_mcp) = table.get_mut("mcp").and_then(toml::Value::as_table_mut) {
-        if let Some(legacy_servers) = legacy_mcp
-            .get_mut("servers")
-            .and_then(toml::Value::as_table_mut)
-        {
-            removed |= legacy_servers.remove(id).is_some();
-            if legacy_servers.is_empty() {
-                legacy_mcp.remove("servers");
-            }
-        }
-        if legacy_mcp.is_empty() {
-            table.remove("mcp");
-        }
-    }
-
-    if removed {
-        write_codex_root_toml_at(path, &root)?;
-    }
-
-    Ok(removed)
+    mcp_engine::legacy_codex_replace_entry(&codex_home_dir(), id, None)
 }
 
 // ---------------------------------------------------------------------------
@@ -2238,10 +2265,10 @@ fn remove_codex_server_at(path: &Path, id: &str) -> Result<bool, AppCommandError
 // entry is not an assignment, and nothing but saving it ON touches it.
 
 /// The keys of `mcp` that are never server ids.
-const OPENCODE_MCP_RESERVED: [&str; 2] = ["servers", "timeout"];
+pub(crate) const OPENCODE_MCP_RESERVED: [&str; 2] = ["servers", "timeout"];
 
 /// A 1.x direct server entry: an object whose `type` is `local` or `remote`.
-fn is_opencode_direct_entry(value: &Value) -> bool {
+pub(crate) fn is_opencode_direct_entry(value: &Value) -> bool {
     matches!(
         value.get("type").and_then(Value::as_str),
         Some("local" | "remote")
@@ -2527,7 +2554,10 @@ fn apply_opencode_managed_keys(entry: &jsonc_parser::cst::CstObject, managed: &M
 /// the conversion OpenCode applies when it loads one (`migrateMcp` in
 /// `core/src/v1/config/migrate.ts`): a bare-number `timeout` bounds every
 /// phase, and OAuth's camelCase fields become snake_case.
-fn opencode_legacy_extras(legacy: &Value, managed: &Map<String, Value>) -> Map<String, Value> {
+pub(crate) fn opencode_legacy_extras(
+    legacy: &Value,
+    managed: &Map<String, Value>,
+) -> Map<String, Value> {
     let mut out = Map::new();
     let Some(obj) = legacy
         .as_object()
@@ -3409,7 +3439,6 @@ fn with_upsert_preflight<T>(
     upsert_targets: &BTreeSet<McpAppType>,
     mutate: impl FnOnce() -> Result<T, AppCommandError>,
 ) -> Result<T, AppCommandError> {
-    let _guard = MCP_CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_preflight(
         || {
             preflight_antigravity_upsert(upsert_targets)?;
@@ -3794,11 +3823,14 @@ fn fanout_server_for_extra_homes(
                 }
             }
             crate::acp::family_isolator::IsolatorFamily::Codex => {
-                let path = home.join("config.toml");
                 if let Some(spec) = spec {
-                    upsert_codex_server_at(&path, id, spec)?;
+                    mcp_engine::legacy_codex_replace_entry(
+                        home,
+                        id,
+                        Some(&canonical_to_codex_entry(spec)?),
+                    )?;
                 } else {
-                    let _ = remove_codex_server_at(&path, id)?;
+                    mcp_engine::legacy_codex_replace_entry(home, id, None)?;
                 }
             }
             crate::acp::family_isolator::IsolatorFamily::Grok => {
@@ -3858,6 +3890,9 @@ fn write_native_account_mcp(
     let config = layout.config_dir(home);
     let app: McpAppType = serde_json::from_value(serde_json::json!(agent))
         .map_err(|e| mcp_invalid_input(e.to_string()))?;
+    if mcp_engine::agents::spec(app).scan_only {
+        return Ok(());
+    }
     if isolator_family_for_app(app).is_some() {
         return fanout_server_for_extra_homes(app, id, spec, &[config]);
     }
@@ -3888,44 +3923,59 @@ fn write_native_account_mcp(
     match spec { Some(spec) => write(&path, id, spec), None => remove(&path, id).map(|_| ()) }
 }
 
-pub(crate) fn sync_native_account_mcp(agent: crate::models::AgentType, home: &Path) -> Result<(), AppCommandError> {
-    let _guard = MCP_CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let servers = shared_servers_for_account(agent)?;
-    sync_native_account_mcp_from(agent, home, &servers)
+#[cfg(test)]
+fn sync_native_account_mcp(
+    agent: crate::models::AgentType,
+    home: &Path,
+) -> Result<(), AppCommandError> {
+    sync_native_account_mcp_in(agent, home, &crate::parsers::AgentEnv::inherited())
 }
 
-/// The servers assigned to `agent`, as its own config store holds them — the
-/// set a named account mirrors. `read_servers_for_agent_type` answers what to
-/// forward over ACP instead, which for pi is always nothing (pi-acp drops
-/// wire MCP); syncing to that would remove every server fanned into a pi
-/// account on each launch.
+pub(crate) fn sync_native_account_mcp_in(
+    agent: crate::models::AgentType,
+    home: &Path,
+    source_env: &crate::parsers::AgentEnv,
+) -> Result<(), AppCommandError> {
+    let _guard = mcp_engine::lock::acquire_blocking()?;
+    let shared = shared_servers_for_account(agent, source_env)?;
+    mcp_engine::accounts::sync_account(agent, home, &shared, false).map(|_| ())
+}
+
+/// A settings refresh checks the current family config without writing an
+/// account's file under a running CLI.
+pub(crate) fn account_mcp_needs_sync(
+    agent: crate::models::AgentType,
+    home: &Path,
+    source_env: &crate::parsers::AgentEnv,
+) -> Result<bool, AppCommandError> {
+    let shared = shared_servers_for_account(agent, source_env)?;
+    mcp_engine::accounts::sync_account(agent, home, &shared, true)
+}
+
 pub(crate) fn shared_servers_for_account(
     agent: crate::models::AgentType,
+    source_env: &crate::parsers::AgentEnv,
 ) -> Result<BTreeMap<String, Value>, AppCommandError> {
-    match agent {
-        crate::models::AgentType::Pi => read_pi_servers(),
-        _ => read_servers_for_agent_type(agent),
-    }
+    mcp_engine::accounts::shared(agent, source_env)
 }
 
-fn sync_native_account_mcp_from(agent: crate::models::AgentType, home: &Path, servers: &BTreeMap<String, Value>) -> Result<(), AppCommandError> {
-    if !home.is_absolute() || !home.is_dir() { return Err(mcp_configuration_invalid("Restore the missing account folder before continuing.")); }
-    preflight_native_account_homes(&[(agent, home.to_path_buf())])?;
-    let manifest_path = home.join(".codeg-mcp-servers.json");
-    let previous: Vec<String> = match read_config_to_string(&manifest_path)? {
-        Some(raw) => serde_json::from_str(&raw).map_err(|e| mcp_configuration_invalid(format!("Invalid account MCP manifest: {e}")))?,
-        None => Vec::new(),
-    };
-    for id in previous { if !servers.contains_key(&id) { write_native_account_mcp(agent, home, &id, None)?; } }
-    for (id, spec) in servers { write_native_account_mcp(agent, home, id, Some(spec))?; }
-    write_json_file(&manifest_path, &serde_json::json!(servers.keys().collect::<Vec<_>>()))
+#[cfg(test)]
+fn sync_native_account_mcp_from(
+    agent: crate::models::AgentType,
+    home: &Path,
+    servers: &BTreeMap<String, Value>,
+) -> Result<(), AppCommandError> {
+    let _guard = mcp_engine::lock::acquire_blocking()?;
+    mcp_engine::accounts::sync_account(agent, home, servers, false).map(|_| ())
 }
 
 /// The homes a shared MCP change is fanned into. An account whose folder is
 /// missing is skipped rather than blocking every MCP change: it cannot launch
 /// until the folder is back, and its next launch re-applies the full shared
 /// set (`sync_native_account_mcp`), so nothing is lost by skipping it here.
-async fn native_account_homes(db: &crate::db::AppDatabase) -> Result<Vec<(crate::models::AgentType, PathBuf)>, AppCommandError> {
+pub(crate) async fn native_account_homes(
+    db: &crate::db::AppDatabase,
+) -> Result<Vec<(crate::models::AgentType, PathBuf)>, AppCommandError> {
     let mut result = Vec::new();
     for account in crate::db::service::agent_account_service::list_all(&db.conn).await.map_err(AppCommandError::from)? {
         let Some(agent) = crate::models::AgentType::from_wire(&account.agent_type) else {
@@ -3937,7 +3987,9 @@ async fn native_account_homes(db: &crate::db::AppDatabase) -> Result<Vec<(crate:
             tracing::warn!("[MCP] skipping account {} until its folder {} is restored", account.name, home.display());
             continue;
         }
-        result.push((agent, home));
+        if mcp_engine::accounts::paths_for(agent, &home)?.is_some() {
+            result.push((agent, home));
+        }
     }
     Ok(result)
 }
@@ -4026,57 +4078,19 @@ fn upsert_server_for_app(app: McpAppType, id: &str, spec: &Value) -> Result<(), 
     fanout_live_extra_homes(app, id, Some(spec))
 }
 
+/// The servers codeg sends `agent_type` when it starts a session, read with
+/// codeg's own environment: name → `{type, command/args/env | url/headers}`.
+///
+/// A thin door onto the MCP engine's reader
+/// (`mcp_engine::session::servers_for_session`), which a launch calls with
+/// the agent's own environment instead. What it leaves out — an entry the
+/// agent's flag turns off, pi's and a custom agent's (nothing reaches them
+/// over the wire), an entry named like the built-in companion — is told
+/// there.
 pub fn read_servers_for_agent_type(
     agent_type: crate::models::agent::AgentType,
 ) -> Result<BTreeMap<String, Value>, AppCommandError> {
-    use crate::models::agent::AgentType;
-    match agent_type {
-        AgentType::ClaudeCode => read_claude_servers(),
-        AgentType::Codex => read_codex_servers(),
-        AgentType::OpenCode => read_opencode_servers(),
-        AgentType::Gemini => read_gemini_servers(),
-        AgentType::OpenClaw => read_openclaw_servers(),
-        AgentType::Cline => read_cline_servers(),
-        AgentType::Hermes => read_hermes_servers(),
-        AgentType::CodeBuddy => read_codebuddy_servers(),
-        AgentType::KimiCode => read_kimi_code_servers(),
-        AgentType::Grok => read_grok_servers(),
-        AgentType::Cursor => read_cursor_servers(),
-        // pi-acp drops ACP-wire MCP and pi has no native MCP (it needs a
-        // third-party extension). Scanning its extension config must not
-        // change the servers forwarded to a pi ACP session.
-        AgentType::Pi => Ok(BTreeMap::new()),
-        // deepseek-acp has no native MCP config file: it takes servers only
-        // as `session/new`'s `mcpServers`. `$DSH_HOME/mcp.json` is codeg's own
-        // record of what to send, and the ACP wire is the delivery path — so
-        // unlike Kimi/Grok/Cursor, DeepSeek must stay OFF the forward skip
-        // list in `connection.rs` or these servers never arrive.
-        AgentType::DeepSeek => read_deepseek_servers(),
-        AgentType::ZCode => read_zcode_servers(),
-        // Qoder reads MCP servers from its own settings.json `mcpServers`
-        // (gemini-schema settings file) at startup — see the Qoder section
-        // above for why it rides the forward skip list instead of the wire.
-        AgentType::Qoder => read_qoder_servers(),
-        // Antigravity's ACP server reads `<GEMINI_HOME>/config/mcp_config.json`
-        // itself at session setup — see the Antigravity section above for why
-        // it rides the forward skip list rather than the wire.
-        AgentType::Antigravity => read_antigravity_servers(),
-        // Kiro loads `<KIRO_HOME>/settings/mcp.json` natively — see the Kiro
-        // section below for why it rides the forward skip list.
-        AgentType::Kiro => read_kiro_servers(),
-        // TRAE CLI loads `<TRAE_HOME>/traecli.toml` natively — see the TRAE
-        // CLI section below for why it rides the forward skip list.
-        AgentType::Trae => read_trae_servers(),
-        // Command Code loads `~/.commandcode/mcp.json` natively — see the
-        // Command Code section below for why it rides the forward skip list.
-        AgentType::CommandCode => read_command_code_servers(),
-        // MiniMax Code receives client-owned assignments over the ACP wire.
-        AgentType::MiniMaxCode => read_minimax_code_servers(),
-        // Custom agents get MCP purely over the ACP wire (`session/new`'s
-        // `mcpServers`); codeg deliberately knows nothing about their native
-        // config files, so there is no per-agent store to read back here.
-        AgentType::Custom(_) => Ok(BTreeMap::new()),
-    }
+    mcp_engine::session::servers_for_session(agent_type, &crate::parsers::AgentEnv::inherited())
 }
 
 // ---------------------------------------------------------------------------
@@ -4114,10 +4128,12 @@ fn read_kimi_code_servers() -> Result<BTreeMap<String, Value>, AppCommandError> 
 /// (Kimi ignores it). `transport` is then dropped from the canonical spec so it
 /// can't leak into another agent's config on a cross-agent sync. See issue #325.
 ///
-/// Schema last checked against 2.2.0: unchanged since 0.23.3 apart from the
-/// optional `runtime_id` stdio field 0.38.0 added and 2.2.0 narrowing the stdio
-/// `executor` enum to `local` (see `is_kimi_extension_field`). 0.42.0 rewrote
-/// the agent loop but left `mcpCore/config-schema.ts` byte-identical.
+/// Schema last checked against 2.5.1: unchanged since 0.23.3 apart from the
+/// optional `runtime_id` stdio field 0.38.0 added, 2.2.0 narrowing the stdio
+/// `executor` enum to `local`, 2.5.0 renaming `runtime_id` to `environment_id`
+/// and letting `executor` name `kaos` again, and a `deferred` flag on every
+/// transport (see `is_kimi_extension_field`). 0.42.0 rewrote the agent loop but
+/// left `mcpCore/config-schema.ts` byte-identical.
 fn kimi_code_entry_to_canonical(spec: &Value, id: &str) -> Result<Value, AppCommandError> {
     let Some(obj) = spec.as_object() else {
         return canonicalize_spec(spec, "Kimi Code config");
@@ -4211,7 +4227,9 @@ fn is_kimi_timeout_ms(value: &Value) -> bool {
 /// merge leaves Kimi's value alone (see `merge_cursor_extension_fields`).
 const KIMI_OWNED_KEYS: &[&str] = &[
     "runtime_id",
+    "environment_id",
     "executor",
+    "deferred",
     "bearerTokenEnvVar",
     "startupTimeoutMs",
     "toolTimeoutMs",
@@ -4234,26 +4252,38 @@ const KIMI_SHARED_KEYS: &[&str] = &["auth"];
 /// Validation is not optional: Kimi rejects the ENTIRE `mcpServers` record when a
 /// field it knows has the wrong type, so a wrong-shaped value must be dropped
 /// rather than written back. `stdio` selects the branch of Kimi's discriminated
-/// union, since `runtime_id`/`executor` are stdio-only and `auth`/
-/// `bearerTokenEnvVar` are remote-only.
+/// union, since `runtime_id`/`environment_id`/`executor` are stdio-only and
+/// `auth`/`bearerTokenEnvVar` are remote-only.
 fn is_kimi_extension_field(key: &str, value: &Value, stdio: bool) -> bool {
     match key {
         // stdio: which runtime executes the command. `runtime_id` arrived in
-        // Kimi 0.38.0 alongside the runtime-binding rework.
+        // Kimi 0.38.0 alongside the runtime-binding rework. 2.5.0 renamed
+        // runtimes to environments: its schema no longer has the key, strips
+        // it, and starts such a server in the default `local` environment.
+        // Kept for a Kimi older than 2.5.0, which still honours it.
         "runtime_id" => stdio && is_non_empty_str(value),
-        // `local` is the only executor left. Kimi 2.2.0 deleted the
-        // never-implemented `kaos` from the enum, and one entry still naming
-        // it now fails the whole file at load ("mcp config initial load
-        // failed"), taking every other server in it down too. 2.1.1 only
-        // refused to start that one server. So codeg drops `kaos` from any
-        // entry it saves. Entries it does not touch keep it: upstream chose to
-        // fail them, and turning a `kaos` server into a local launch is not
-        // codeg's call.
+        // stdio, from 2.5.0: the environment that executes the command. One
+        // Kimi has no environment of fails that server alone ("environment
+        // <id> does not exist").
+        "environment_id" => stdio && is_non_empty_str(value),
+        // `local` is the only executor that starts. Kimi 2.2.0 deleted the
+        // never-implemented `kaos` from the enum, and through 2.4.1 one entry
+        // still naming it failed the whole file at load ("mcp config initial
+        // load failed"), taking every other server in it down too. 2.1.1
+        // only refused to start that one server, and so does 2.5.0, which
+        // takes `kaos` back into the enum but refuses it at start ("MCP stdio
+        // executor 'kaos' is not supported; use environment_id to select the
+        // execution environment"). So codeg drops `kaos` from any entry it
+        // saves. Entries it does not touch keep it: upstream chose to fail
+        // them, and turning a `kaos` server into a local launch is not codeg's
+        // call.
         "executor" => stdio && value.as_str() == Some("local"),
         // http/sse: OAuth is the only literal Kimi accepts for `auth`.
         "auth" => !stdio && value.as_str() == Some("oauth"),
         "bearerTokenEnvVar" => !stdio && is_non_empty_str(value),
-        // Common to every transport.
+        // Common to every transport. `deferred` holds a server's tools back
+        // from the model until it searches for them (seen in 2.4.1 and 2.5.1).
+        "deferred" => value.is_boolean(),
         "startupTimeoutMs" | "toolTimeoutMs" => is_kimi_timeout_ms(value),
         "enabledTools" | "disabledTools" => is_string_array(value),
         _ => false,
@@ -4287,8 +4317,8 @@ fn is_kimi_extension_field(key: &str, value: &Value, stdio: bool) -> bool {
 /// an echo left behind wins nothing.
 ///
 /// Every value must satisfy Kimi's schema for the transport the resolved spec
-/// declares: a stdio-only `runtime_id` is not folded onto a remote server, and a
-/// wrong-typed value is dropped rather than carried.
+/// declares: a stdio-only `runtime_id` or `environment_id` is not folded onto a
+/// remote server, and a wrong-typed value is dropped rather than carried.
 fn merge_kimi_extension_fields(
     canonical: &mut Value,
     kimi_spec: &Value,
@@ -4345,8 +4375,8 @@ fn canonical_to_kimi_code_entry(spec: &Value) -> Result<Value, AppCommandError> 
     // `is_kimi_extension_field` covers the keys Kimi models but codeg has no UI
     // for. They exist on disk when the user set them through Kimi's own
     // `/mcp-config`, and dropping them would quietly break that server — an
-    // OAuth'd remote losing its `auth`, or a `runtime_id` entry falling back
-    // to the local runtime. The scan folds Kimi's own copies into the spec
+    // OAuth'd remote losing its `auth`, or an `environment_id` entry falling
+    // back to the local environment. The scan folds Kimi's own copies into the spec
     // this receives (`merge_kimi_extension_fields`), so forwarding what the
     // spec carries keeps them.
     let mut out = Map::new();
@@ -4865,8 +4895,8 @@ fn remove_trae_server_at(path: &Path, id: &str) -> Result<bool, AppCommandError>
 // `transport` discriminant — `{transport: "stdio", enabled, command, args,
 // env}` or `{transport: "http", enabled, url, headers}`, plus an `oauth` block
 // for a server that signs in. The loader behind its `mcp` commands
-// (`parseStoredMcpServer`, read against 1.84.0, 1.86.3, 1.88.0, 1.88.1 and
-// 1.88.2) takes `transport` first, then `type` as an alias, and otherwise
+// (`parseStoredMcpServer`, read against 1.84.0, 1.86.3, 1.88.0, 1.88.1, 1.88.2
+// and 1.88.4) takes `transport` first, then `type` as an alias, and otherwise
 // infers stdio from `command` and http from `url`. It models no `cwd`, and an
 // entry with any other transport (`sse` included) or a non-boolean `enabled`
 // fails and is dropped while the rest of the file still loads. codeg reads
@@ -4876,8 +4906,8 @@ fn remove_trae_server_at(path: &Path, id: &str) -> Result<bool, AppCommandError>
 // non-boolean `enabled` as unset, so such a hand-written entry still starts
 // although neither list shows it. The `oauth` block is the one place codeg's
 // list sides with the session instead: `mcp list` also drops an entry whose
-// `oauth` block it cannot parse (`oauth: {}`, live on 1.86.3, 1.88.0, 1.88.1
-// and 1.88.2) or whose OAuth url is neither https nor loopback http, which the
+// `oauth` block it cannot parse (`oauth: {}`, live on 1.86.3, 1.88.0, 1.88.1,
+// 1.88.2 and 1.88.4) or whose OAuth url is neither https nor loopback http, which the
 // session still starts and codeg, reading no `oauth` rules, still lists.
 //
 // `command-code acp` loads this file itself, so `CommandCode` is on the ACP
@@ -5058,11 +5088,13 @@ fn remove_command_code_server_at(path: &Path, id: &str) -> Result<bool, AppComma
 //
 // Cursor's CLI (and IDE — the file is shared) reads its user-global MCP config
 // from `~/.cursor/mcp.json` — a JSON file with a top-level `mcpServers`
-// object. The CLI (checked against 2026.10.22-27dcf5f) parses each entry with
-// a Zod union: stdio when it has a `command` and its optional `type` is
-// `"stdio"`, otherwise remote when it has a `url` and its optional `type` is
-// `"http"` or `"sse"`. A remote entry tries streamable HTTP first and falls
-// back to SSE unless it says `type: "sse"`, which goes straight to SSE.
+// object. The CLI (checked against 2026.10.22-27dcf5f; 2026.11.05-86047df,
+// 2026.11.11-b912975, 2026.11.13-eacade1 and 2026.11.22-e9042b2 start, list
+// and reject the same entries) parses each entry with a Zod union: stdio when
+// it has a `command` and its optional `type` is `"stdio"`, otherwise remote
+// when it has a `url` and its optional `type` is `"http"` or `"sse"`. A remote entry tries
+// streamable HTTP first and falls back to SSE unless it says `type: "sse"`,
+// which goes straight to SSE.
 // Unknown keys are stripped, but an entry that fits neither branch, or a
 // field Cursor knows with the wrong shape, fails the WHOLE file, and Cursor
 // then loads none of its servers.
@@ -5166,7 +5198,7 @@ fn cursor_entry_to_canonical(spec: &Value, id: &str) -> Result<Value, AppCommand
 /// present must hold a value — `null` fails, as Zod's `optional` takes only
 /// a missing key. A bad `startupTimeoutSec` is no reason to fail: Cursor
 /// discards it.
-fn fits_cursor_stdio(entry: &Map<String, Value>) -> bool {
+pub(crate) fn fits_cursor_stdio(entry: &Map<String, Value>) -> bool {
     let absent_or = |key: &str, check: fn(&Value) -> bool| entry.get(key).is_none_or(check);
     entry.get("command").is_some_and(Value::is_string)
         && absent_or("type", |value| value.as_str() == Some("stdio"))
@@ -5179,7 +5211,7 @@ fn fits_cursor_stdio(entry: &Map<String, Value>) -> bool {
 
 /// Whether `entry` passes the remote branch of Cursor's union: a string
 /// `url`, and every other remote field it has well-formed.
-fn fits_cursor_remote(entry: &Map<String, Value>) -> bool {
+pub(crate) fn fits_cursor_remote(entry: &Map<String, Value>) -> bool {
     let absent_or = |key: &str, check: fn(&Value) -> bool| entry.get(key).is_none_or(check);
     entry.get("url").is_some_and(Value::is_string)
         && absent_or("type", |value| matches!(value.as_str(), Some("http" | "sse")))
@@ -6181,6 +6213,8 @@ struct OfficialArgument {
     _is_repeated: Option<bool>,
     #[serde(default, rename = "valueHint")]
     value_hint: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_choices")]
+    choices: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -6200,6 +6234,36 @@ struct OfficialKeyValueInput {
     is_secret: Option<bool>,
     #[serde(default, rename = "valueHint")]
     value_hint: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_choices")]
+    choices: Vec<String>,
+}
+
+/// The values an input may take (`choices`), as text. Read leniently: a
+/// number or a boolean is written as text, anything else is left out, and a
+/// `choices` that is not a list is none — never a reason to drop the input.
+fn choices_of(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| match item {
+                    Value::String(text) => Some(text.clone()),
+                    Value::Number(number) => Some(number.to_string()),
+                    Value::Bool(flag) => Some(flag.to_string()),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn deserialize_choices<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Option::<Value>::deserialize(deserializer)?;
+    Ok(choices_of(raw.as_ref()))
 }
 
 fn deserialize_official_key_value_inputs<'de, D>(
@@ -6248,6 +6312,7 @@ where
                 is_required: None,
                 is_secret: None,
                 value_hint: None,
+                choices: Vec::new(),
             };
 
             if let Some(text) = item.as_str() {
@@ -6292,6 +6357,7 @@ where
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .map(str::to_string);
+                parsed.choices = choices_of(obj.get("choices"));
             }
 
             out.push(parsed);
@@ -6705,21 +6771,17 @@ fn official_kv_default(item: &OfficialKeyValueInput) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Whether the server says this value must be given. One it calls optional is
+/// left out when the user gives none — with or without a default, and also
+/// when its value is a template (`Bearer {token}`), which is no default.
 fn official_kv_is_required(item: &OfficialKeyValueInput) -> bool {
-    if item.is_required.unwrap_or(false) {
-        return true;
-    }
-    let has_placeholder = item
-        .value
-        .as_deref()
-        .map(contains_unresolved_placeholder)
-        .unwrap_or(false)
-        || item
-            .default
-            .as_deref()
-            .map(contains_unresolved_placeholder)
-            .unwrap_or(false);
-    has_placeholder || official_kv_default(item).is_none()
+    item.is_required.unwrap_or(false)
+}
+
+/// Whether a value the server declares is to be treated as a secret: marked
+/// so, or named like one.
+fn official_kv_is_secret(item: &OfficialKeyValueInput) -> bool {
+    item.is_secret.unwrap_or(false) || key_looks_secret(item.name.trim())
 }
 
 fn append_query_param(url: &str, key: &str, value: &str) -> String {
@@ -6727,6 +6789,19 @@ fn append_query_param(url: &str, key: &str, value: &str) -> String {
     let encoded_value = urlencoding::encode(value);
     let separator = if url.contains('?') { '&' } else { '?' };
     format!("{url}{separator}{encoded_key}={encoded_value}")
+}
+
+/// Whether `placeholder` occurs in the query (or fragment) of `url`.
+fn placeholder_in_query(url: &str, placeholder: &str) -> bool {
+    url.find(['?', '#'])
+        .is_some_and(|query| url.match_indices(placeholder).any(|(at, _)| at > query))
+}
+
+fn secret_in_query_error(name: &str) -> AppCommandError {
+    mcp_invalid_input(format!(
+        "the secret '{name}' would have to go into the URL's query string"
+    ))
+    .with_i18n("errors.secretInQuery", mcp_i18n_params([("name", name)]))
 }
 
 fn apply_transport_variables(
@@ -6752,12 +6827,21 @@ fn apply_transport_variables(
             let encoded = urlencoding::encode(&text);
             let brace = format!("{{{key_name}}}");
             let moustache = format!("{{{{{key_name}}}}}");
-            if url.contains(&brace) {
-                url = url.replace(&brace, &encoded);
-            } else if url.contains(&moustache) {
-                url = url.replace(&moustache, &encoded);
-            } else {
-                url = append_query_param(&url, key_name, &text);
+            // `{{name}}` holds `{name}`: the longer spelling is looked for
+            // first, or its outer braces would be left behind.
+            let placeholder = [moustache, brace]
+                .into_iter()
+                .find(|placeholder| url.contains(placeholder));
+            // A secret goes where the template puts it, but never into the
+            // query string, where proxies and logs keep it.
+            let secret = official_kv_is_secret(item);
+            match placeholder {
+                Some(placeholder) if secret && placeholder_in_query(&url, &placeholder) => {
+                    return Err(secret_in_query_error(key_name));
+                }
+                Some(placeholder) => url = url.replace(&placeholder, &encoded),
+                None if secret => return Err(secret_in_query_error(key_name)),
+                None => url = append_query_param(&url, key_name, &text),
             }
             continue;
         }
@@ -6869,7 +6953,7 @@ fn official_remote_parameter_fields(
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .map(str::to_string),
-                enum_values: Vec::new(),
+                enum_values: item.choices.clone(),
                 location: Some("header".to_string()),
             });
         }
@@ -6903,7 +6987,7 @@ fn official_remote_parameter_fields(
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .map(str::to_string),
-                enum_values: Vec::new(),
+                enum_values: item.choices.clone(),
                 location: Some("query".to_string()),
             });
         }
@@ -7038,6 +7122,53 @@ fn resolve_official_install_spec_with_selection(
     )))
 }
 
+/// A Harness item's `server.json` (the registry's own format), read the way
+/// the official registry's servers are, with every package's version
+/// replaced by the one Harness pinned: `pin(registry_type, identifier)`.
+/// A package `pin` has no version for keeps none — never the one the
+/// server.json names, which may be `latest` or missing.
+fn pinned_official_server(
+    server: &Value,
+    pin: &dyn Fn(&str, &str) -> Option<String>,
+) -> Result<OfficialServer, AppCommandError> {
+    let mut parsed: OfficialServer = serde_json::from_value(server.clone())
+        .map_err(|e| mcp_configuration_invalid(format!("not a registry server.json: {e}")))?;
+    for package in parsed.packages.iter_mut().flatten() {
+        package.version = pin(package.registry_type.trim(), package.identifier.trim());
+    }
+    Ok(parsed)
+}
+
+/// The install options of a Harness item's server.json, one per package and
+/// per remote, with Harness's pinned versions (see `pinned_official_server`).
+/// What may be installed from Harness is decided on top of these, in
+/// `harness::mcp`.
+pub(crate) fn harness_install_options(
+    server: &Value,
+    pin: &dyn Fn(&str, &str) -> Option<String>,
+) -> Result<Vec<McpMarketplaceInstallOption>, AppCommandError> {
+    build_official_install_options(&pinned_official_server(server, pin)?)
+}
+
+/// The definition the option `option_id` of a Harness item's server.json
+/// makes with these parameter values (keys as the option's `parameters`
+/// name them), as a canonical spec (`type`, `command`/`args`/`env` or
+/// `url`/`headers`). Fails on a required value that is missing.
+pub(crate) fn harness_install_spec(
+    server: &Value,
+    pin: &dyn Fn(&str, &str) -> Option<String>,
+    option_id: &str,
+    values: Map<String, Value>,
+) -> Result<Value, AppCommandError> {
+    let server = pinned_official_server(server, pin)?;
+    let selection = InstallSelection {
+        option_id: Some(option_id.to_string()),
+        protocol: None,
+        parameter_values: values,
+    };
+    resolve_official_install_spec_with_selection(&server, &selection)
+}
+
 fn package_identifier_with_version(package: &OfficialPackage, runtime: &str) -> String {
     let identifier = package.identifier.trim();
     if identifier.is_empty() {
@@ -7055,20 +7186,35 @@ fn package_identifier_with_version(package: &OfficialPackage, runtime: &str) -> 
     };
 
     if runtime == "uvx" {
-        if package.registry_type.trim() == "pypi" {
+        if package.registry_type.trim() == "pypi" && !pypi_identifier_has_version(identifier) {
             return format!("{identifier}=={version}");
         }
         return identifier.to_string();
     }
 
     if runtime == "npx" {
-        if identifier.contains('@') || identifier.starts_with("http") {
+        if npm_identifier_has_version(identifier) || identifier.starts_with("http") {
             return identifier.to_string();
         }
         return format!("{identifier}@{version}");
     }
 
     identifier.to_string()
+}
+
+/// Whether an npm package spec already names a version or a tag:
+/// `name@1.2.3`, `@scope/name@1.2.3`, `name@latest`. The `@` a scope starts
+/// with (`@scope/name`) is not one.
+pub(crate) fn npm_identifier_has_version(identifier: &str) -> bool {
+    let name = identifier.strip_prefix('@').unwrap_or(identifier);
+    name.contains('@')
+}
+
+/// Whether a PyPI requirement already says which versions it takes:
+/// `name==1.2`, `name>=1`, `name~=1.0`, `name!=2`, `name @ <url>`, or a
+/// requirement with markers. Extras (`name[cli]`) are not a version.
+pub(crate) fn pypi_identifier_has_version(identifier: &str) -> bool {
+    identifier.contains(['=', '<', '>', '!', '~', '@', ' ', ';', ','])
 }
 
 fn argument_value(arg: &OfficialArgument) -> Option<String> {
@@ -7194,7 +7340,7 @@ fn official_stdio_parameter_fields(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_string),
-            enum_values: Vec::new(),
+            enum_values: arg.choices.clone(),
             location: Some("arg".to_string()),
         });
     }
@@ -7229,7 +7375,7 @@ fn official_stdio_parameter_fields(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_string),
-            enum_values: Vec::new(),
+            enum_values: arg.choices.clone(),
             location: Some("arg".to_string()),
         });
     }
@@ -7261,7 +7407,7 @@ fn official_stdio_parameter_fields(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_string),
-            enum_values: Vec::new(),
+            enum_values: item.choices.clone(),
             location: Some("env".to_string()),
         });
     }
@@ -7872,7 +8018,12 @@ mod tests {
     fn native_accounts_share_mcp_without_copying_auth_or_removing_local_servers() {
         use crate::models::AgentType;
         for &agent in crate::models::agent::BUILTIN_AGENT_TYPES {
-            if crate::acp::agent_accounts::layout(agent).is_none() { continue; }
+            if crate::acp::agent_accounts::unsupported_reason(agent).is_some()
+                || crate::acp::agent_accounts::layout(agent).is_none()
+                || agent == AgentType::Pi
+            {
+                continue;
+            }
             let dir = tempfile::tempdir().unwrap();
             let home = dir.path();
             fs::write(home.join("auth.json"), "account-auth-sentinel").unwrap();
@@ -7955,27 +8106,22 @@ mod tests {
             .contains("changed-command"));
     }
 
-    /// A pi account mirrors pi's own server list. The ACP forwarding view is
-    /// empty for pi by design, and syncing to it removed every server fanned
-    /// into the account again on its next launch.
+    /// Pi owns its MCP files on current builds. Account launch leaves the
+    /// account's native file untouched, even when Default has different servers.
     #[test]
-    fn a_pi_account_launch_keeps_the_servers_pi_is_assigned() {
+    fn a_pi_account_launch_preserves_its_agent_managed_mcp_file() {
         use crate::models::AgentType;
         let default_dir = tempfile::tempdir().unwrap();
         let account = tempfile::tempdir().unwrap();
-        fs::write(
-            default_dir.path().join("mcp.json"),
-            json!({"mcpServers": {"shared": {"command": "pi-shared"}}}).to_string(),
-        )
-        .unwrap();
+        let source = br#"{"mcpServers":{"default":{"command":"default-only"}}}"#;
+        let local = br#"{"mcpServers":{"work":{"command":"account-only"}}}"#;
+        fs::write(default_dir.path().join("mcp.json"), source).unwrap();
+        fs::write(account.path().join("mcp.json"), local).unwrap();
         temp_env::with_var("PI_CODING_AGENT_DIR", Some(default_dir.path()), || {
-            assert!(read_servers_for_agent_type(AgentType::Pi).unwrap().is_empty());
-            for _ in 0..2 {
-                sync_native_account_mcp(AgentType::Pi, account.path()).unwrap();
-                let synced = read_pi_servers_at(&account.path().join("mcp.json")).unwrap();
-                assert!(synced.contains_key("shared"));
-            }
+            sync_native_account_mcp(AgentType::Pi, account.path()).unwrap();
         });
+        assert_eq!(fs::read(account.path().join("mcp.json")).unwrap(), local);
+        assert!(!account.path().join(".codeg-mcp-servers.json").exists());
     }
 
     /// One account folder that went missing must not block every MCP change:
@@ -10644,8 +10790,10 @@ mod tests {
         let on_disk = json!({
             "command": "npx",
             "args": ["-y", "server"],
-            "runtime_id": "remote-box",       // Kimi 0.38.0+
+            "runtime_id": "remote-box",       // Kimi 0.38.0 through 2.4.x
+            "environment_id": "docker-dev",   // Kimi 2.5.0+
             "executor": "local",
+            "deferred": true,
             "startupTimeoutMs": 30_000,
             "toolTimeoutMs": 120_000,
             "enabledTools": ["a", "b"],
@@ -10655,7 +10803,12 @@ mod tests {
         let written = canonical_to_kimi_code_entry(&canonical).expect("write");
         let obj = written.as_object().expect("object");
         assert_eq!(obj.get("runtime_id").and_then(Value::as_str), Some("remote-box"));
+        assert_eq!(
+            obj.get("environment_id").and_then(Value::as_str),
+            Some("docker-dev")
+        );
         assert_eq!(obj.get("executor").and_then(Value::as_str), Some("local"));
+        assert_eq!(obj.get("deferred").and_then(Value::as_bool), Some(true));
         assert_eq!(obj.get("startupTimeoutMs").and_then(Value::as_i64), Some(30_000));
         assert_eq!(obj.get("toolTimeoutMs").and_then(Value::as_i64), Some(120_000));
         assert_eq!(obj.get("enabledTools"), Some(&json!(["a", "b"])));
@@ -10667,10 +10820,12 @@ mod tests {
             "url": "https://host/mcp",
             "auth": "oauth",
             "bearerTokenEnvVar": "MCP_TOKEN",
+            "deferred": false,
         }))
         .expect("http entry");
         let remote = remote.as_object().expect("object");
         assert_eq!(remote.get("auth").and_then(Value::as_str), Some("oauth"));
+        assert_eq!(remote.get("deferred").and_then(Value::as_bool), Some(false));
         assert_eq!(
             remote.get("bearerTokenEnvVar").and_then(Value::as_str),
             Some("MCP_TOKEN")
@@ -10687,7 +10842,9 @@ mod tests {
             "type": "stdio",
             "command": "npx",
             "runtime_id": "remote-box",
+            "environment_id": "docker-dev",
             "executor": "local",
+            "deferred": true,
             "toolTimeoutMs": 120_000,
             "disabledTools": ["danger"],
         });
@@ -10697,7 +10854,12 @@ mod tests {
         merge_kimi_extension_fields(&mut canonical, &kimi, &none);
         let obj = canonical.as_object().expect("object");
         assert_eq!(obj.get("runtime_id").and_then(Value::as_str), Some("remote-box"));
+        assert_eq!(
+            obj.get("environment_id").and_then(Value::as_str),
+            Some("docker-dev")
+        );
         assert_eq!(obj.get("executor").and_then(Value::as_str), Some("local"));
+        assert_eq!(obj.get("deferred").and_then(Value::as_bool), Some(true));
         assert_eq!(obj.get("toolTimeoutMs").and_then(Value::as_i64), Some(120_000));
         assert_eq!(obj.get("disabledTools"), Some(&json!(["danger"])));
         // The winning spec still owns every key it already had.
@@ -10778,8 +10940,14 @@ mod tests {
         merge_kimi_extension_fields(&mut remote, &kimi, &none);
         let remote_obj = remote.as_object().expect("object");
         assert!(!remote_obj.contains_key("runtime_id"));
+        assert!(!remote_obj.contains_key("environment_id"));
         assert!(!remote_obj.contains_key("executor"));
         assert_eq!(remote_obj.get("toolTimeoutMs").and_then(Value::as_i64), Some(120_000));
+        // `deferred` is common to every transport, so it folds onto a remote too.
+        assert_eq!(
+            remote_obj.get("deferred").and_then(Value::as_bool),
+            Some(true)
+        );
 
         let mut stdio = json!({"type": "stdio", "command": "npx"});
         merge_kimi_extension_fields(
@@ -10797,8 +10965,9 @@ mod tests {
         // `is_kimi_extension_field` would be silently erased and never restored.
         let sample = |key: &str| -> (Value, bool) {
             match key {
-                "runtime_id" => (json!("local"), true),
+                "runtime_id" | "environment_id" => (json!("local"), true),
                 "executor" => (json!("local"), true),
+                "deferred" => (json!(true), false),
                 "auth" => (json!("oauth"), false),
                 "bearerTokenEnvVar" => (json!("TOKEN"), false),
                 "startupTimeoutMs" | "toolTimeoutMs" => (json!(1_000), true),
@@ -10872,7 +11041,9 @@ mod tests {
             "type": "stdio",
             "command": "npx",
             "runtime_id": "",              // schema wants min length 1
+            "environment_id": "",          // schema wants min length 1
             "executor": "podman",          // not `local`
+            "deferred": "yes",             // string, not bool
             "startupTimeoutMs": 0,         // schema wants >= 1
             "toolTimeoutMs": "30000",      // string, not int
             "enabledTools": ["a", 7],      // not all strings
@@ -10881,7 +11052,9 @@ mod tests {
         let obj = entry.as_object().expect("object");
         for key in [
             "runtime_id",
+            "environment_id",
             "executor",
+            "deferred",
             "startupTimeoutMs",
             "toolTimeoutMs",
             "enabledTools",
@@ -10898,10 +11071,12 @@ mod tests {
 
     #[test]
     fn kimi_code_retired_kaos_executor_is_never_written_back() {
-        // Kimi 2.2.0 narrowed the stdio `executor` enum to `local`, and one
-        // entry still naming `kaos` fails the whole `mcp.json` at load — every
-        // other server in the file stops starting too. So `kaos` is dropped on
-        // every path that could write it: the writer itself...
+        // Kimi 2.2.0 narrowed the stdio `executor` enum to `local`, and
+        // through 2.4.1 one entry still naming `kaos` fails the whole
+        // `mcp.json` at load — every other server in the file stops starting
+        // too (2.5.0 takes it back into the enum and fails only that server).
+        // So `kaos` is dropped on every path that could write it: the writer
+        // itself...
         let written = canonical_to_kimi_code_entry(&json!({
             "type": "stdio", "command": "npx", "executor": "kaos",
         }))
@@ -11052,6 +11227,293 @@ mod tests {
         );
         let params = err.i18n_params.as_ref().expect("i18n params attached");
         assert_eq!(params.get("type").map(String::as_str), Some("ws"));
+    }
+
+    // ─── The conversion Harness reuses ──────────────────────────────────
+
+    fn npm_package(identifier: &str, version: Option<&str>) -> OfficialPackage {
+        serde_json::from_value(serde_json::json!({
+            "registryType": "npm",
+            "identifier": identifier,
+            "version": version,
+            "transport": { "type": "stdio" }
+        }))
+        .expect("OfficialPackage from json")
+    }
+
+    #[test]
+    fn a_scoped_npm_package_gets_its_pinned_version() {
+        let cases = [
+            ("@scope/server", Some("1.2.3"), "@scope/server@1.2.3"),
+            ("server", Some("1.2.3"), "server@1.2.3"),
+            (
+                "@scope/server",
+                Some("2.0.0-beta.1"),
+                "@scope/server@2.0.0-beta.1",
+            ),
+            // a name that already says which version it is keeps it
+            ("@scope/server@1.0.0", Some("1.2.3"), "@scope/server@1.0.0"),
+            ("server@1.0.0", Some("1.2.3"), "server@1.0.0"),
+            ("server@next", Some("1.2.3"), "server@next"),
+            // no version, or `latest`: none is added
+            ("@scope/server", None, "@scope/server"),
+            ("@scope/server", Some("latest"), "@scope/server"),
+            ("@scope/server", Some("  "), "@scope/server"),
+        ];
+        for (identifier, version, expected) in cases {
+            assert_eq!(
+                package_identifier_with_version(&npm_package(identifier, version), "npx"),
+                expected,
+                "{identifier} {version:?}"
+            );
+        }
+        assert!(!npm_identifier_has_version("@scope/server"));
+        assert!(!npm_identifier_has_version("server"));
+        assert!(npm_identifier_has_version("@scope/server@1"));
+        assert!(npm_identifier_has_version("server@1"));
+    }
+
+    #[test]
+    fn a_pypi_package_runs_with_uvx_and_double_equals() {
+        let package: OfficialPackage = serde_json::from_value(serde_json::json!({
+            "registryType": "pypi",
+            "identifier": "mcp-server-fetch",
+            "version": "2025.4.7",
+            "transport": { "type": "stdio" }
+        }))
+        .unwrap();
+        let spec = resolve_official_stdio_package(&package).unwrap();
+        assert_eq!(spec["command"], "uvx");
+        assert_eq!(
+            spec["args"],
+            serde_json::json!(["mcp-server-fetch==2025.4.7"])
+        );
+
+        for (identifier, expected) in [
+            ("notes[cli]", "notes[cli]==1.0"),
+            ("notes==0.9", "notes==0.9"),
+            ("notes>=0.9", "notes>=0.9"),
+            ("notes~=0.9", "notes~=0.9"),
+        ] {
+            let package: OfficialPackage = serde_json::from_value(serde_json::json!({
+                "registryType": "pypi", "identifier": identifier, "version": "1.0",
+                "transport": { "type": "stdio" }
+            }))
+            .unwrap();
+            assert_eq!(
+                package_identifier_with_version(&package, "uvx"),
+                expected,
+                "{identifier}"
+            );
+        }
+    }
+
+    #[test]
+    fn harness_pins_replace_the_server_json_versions() {
+        let server = serde_json::json!({
+            "name": "io.github.someone/notes",
+            "packages": [
+                { "registryType": "npm", "identifier": "@some/notes", "version": "latest",
+                  "transport": { "type": "stdio" } },
+                { "registryType": "pypi", "identifier": "notes", "version": "0.1.0",
+                  "transport": { "type": "stdio" } }
+            ]
+        });
+        let pin = |registry: &str, identifier: &str| match (registry, identifier) {
+            ("npm", "@some/notes") => Some("1.2.3".to_string()),
+            _ => None,
+        };
+        let options = harness_install_options(&server, &pin).unwrap();
+        assert_eq!(options.len(), 2);
+        assert_eq!(
+            options[0].spec["args"],
+            serde_json::json!(["-y", "@some/notes@1.2.3"])
+        );
+        // not pinned by Harness: no version at all, not the server.json's
+        assert_eq!(options[1].spec["args"], serde_json::json!(["notes"]));
+        let spec =
+            harness_install_spec(&server, &pin, "official:package:0:stdio", Map::new()).unwrap();
+        assert_eq!(spec["command"], "npx");
+        assert_eq!(spec["args"], serde_json::json!(["-y", "@some/notes@1.2.3"]));
+        assert!(harness_install_spec(&server, &pin, "official:remote:0:http", Map::new()).is_err());
+    }
+
+    #[test]
+    fn a_server_with_only_remotes_writes_its_url() {
+        let server = serde_json::json!({
+            "name": "com.example/notes",
+            "remotes": [
+                { "type": "streamable-http", "url": "https://mcp.example.com/mcp",
+                  "headers": [{ "name": "Authorization", "isRequired": true, "isSecret": true }] },
+                { "type": "sse", "url": "https://mcp.example.com/sse" }
+            ]
+        });
+        let options = harness_install_options(&server, &|_, _| None).unwrap();
+        let ids: Vec<&str> = options.iter().map(|option| option.id.as_str()).collect();
+        assert_eq!(ids, ["official:remote:0:http", "official:remote:1:sse"]);
+        assert_eq!(options[0].spec["url"], "https://mcp.example.com/mcp");
+        let header = &options[0].parameters[0];
+        assert_eq!(header.key, "headers.Authorization");
+        assert!(header.required && header.secret);
+
+        let mut values = Map::new();
+        values.insert(
+            "headers.Authorization".to_string(),
+            Value::String("Bearer t".to_string()),
+        );
+        let spec =
+            harness_install_spec(&server, &|_, _| None, "official:remote:0:http", values).unwrap();
+        assert_eq!(
+            spec,
+            serde_json::json!({ "type": "http", "url": "https://mcp.example.com/mcp",
+                                "headers": { "Authorization": "Bearer t" } })
+        );
+        // the required header, not given
+        assert!(
+            harness_install_spec(&server, &|_, _| None, "official:remote:0:http", Map::new())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn an_optional_parameter_without_a_default_is_not_required() {
+        let server = serde_json::json!({
+            "name": "com.example/notes",
+            "packages": [{
+                "registryType": "npm", "identifier": "notes", "version": "1.0.0",
+                "transport": { "type": "stdio" },
+                "environmentVariables": [
+                    { "name": "NOTES_DIR", "description": "Where the notes are" },
+                    { "name": "NOTES_TOKEN", "isRequired": true, "isSecret": true },
+                    { "name": "NOTES_MODE", "default": "fast" },
+                    { "name": "NOTES_HEADER", "value": "Bearer {token}" }
+                ],
+                "packageArguments": [
+                    { "type": "named", "name": "--verbose" },
+                    { "type": "positional", "valueHint": "root", "isRequired": true }
+                ]
+            }]
+        });
+        let pin = |_: &str, _: &str| Some("1.0.0".to_string());
+        let options = harness_install_options(&server, &pin).unwrap();
+        let required: BTreeMap<&str, bool> = options[0]
+            .parameters
+            .iter()
+            .map(|parameter| (parameter.key.as_str(), parameter.required))
+            .collect();
+        assert_eq!(
+            required,
+            BTreeMap::from([
+                ("env.NOTES_DIR", false),
+                ("env.NOTES_TOKEN", true),
+                ("env.NOTES_MODE", false),
+                ("env.NOTES_HEADER", false),
+                ("package_arguments.0", false),
+                ("package_arguments.1", true),
+            ])
+        );
+
+        let mut values = Map::new();
+        values.insert("env.NOTES_TOKEN".into(), Value::String("t".into()));
+        values.insert("package_arguments.1".into(), Value::String("/notes".into()));
+        let spec = harness_install_spec(&server, &pin, "official:package:0:stdio", values).unwrap();
+        // the optional ones without a value are simply left out
+        assert_eq!(
+            spec,
+            serde_json::json!({
+                "type": "stdio", "command": "npx", "args": ["-y", "notes@1.0.0", "/notes"],
+                "env": { "NOTES_TOKEN": "t", "NOTES_MODE": "fast" }
+            })
+        );
+    }
+
+    #[test]
+    fn a_secret_never_goes_into_the_query_string() {
+        let remote = |url: &str, variables: Value| -> OfficialTransport {
+            serde_json::from_value(serde_json::json!({
+                "type": "streamable-http", "url": url, "variables": variables
+            }))
+            .unwrap()
+        };
+        let values = |pairs: &[(&str, &str)]| -> Map<String, Value> {
+            pairs
+                .iter()
+                .map(|(key, value)| (key.to_string(), Value::String(value.to_string())))
+                .collect()
+        };
+
+        // in the path, as the template puts it
+        let path = remote(
+            "https://mcp.example.com/{tenant}/{api_key}/mcp",
+            serde_json::json!([{ "name": "tenant" }, { "name": "api_key", "isSecret": true }]),
+        );
+        let spec = remote_spec_from_transport_with_values(
+            &path,
+            &values(&[
+                ("variables.tenant", "acme"),
+                ("variables.api_key", "s3cret"),
+            ]),
+            true,
+        )
+        .unwrap();
+        assert_eq!(spec["url"], "https://mcp.example.com/acme/s3cret/mcp");
+
+        // a value that is not secret still goes to the query, as before
+        let plain = remote(
+            "https://mcp.example.com/mcp",
+            serde_json::json!([{ "name": "region" }]),
+        );
+        let spec = remote_spec_from_transport_with_values(
+            &plain,
+            &values(&[("variables.region", "eu west")]),
+            true,
+        )
+        .unwrap();
+        assert_eq!(spec["url"], "https://mcp.example.com/mcp?region=eu%20west");
+
+        // a secret is neither appended nor put into a query placeholder —
+        // also when only its name says it is one
+        for transport in [
+            remote(
+                "https://mcp.example.com/mcp",
+                serde_json::json!([{ "name": "key", "isSecret": true }]),
+            ),
+            remote(
+                "https://mcp.example.com/mcp?key={key}",
+                serde_json::json!([{ "name": "key", "isSecret": true }]),
+            ),
+            remote(
+                "https://mcp.example.com/mcp?x=1&key={{key}}",
+                serde_json::json!([{ "name": "key", "isSecret": true }]),
+            ),
+            remote(
+                "https://mcp.example.com/mcp",
+                serde_json::json!([{ "name": "access_token" }]),
+            ),
+        ] {
+            let name = transport.variables.as_ref().unwrap()[0].name.clone();
+            let err = remote_spec_from_transport_with_values(
+                &transport,
+                &values(&[(&format!("variables.{name}"), "s3cret")]),
+                true,
+            )
+            .expect_err("a secret in the query");
+            assert_eq!(err.i18n_key.as_deref(), Some("errors.secretInQuery"));
+            assert!(!err.message.contains("s3cret"));
+        }
+
+        // `{{name}}` is filled whole, braces and all
+        let moustache = remote(
+            "https://{{region}}.example.com/mcp",
+            serde_json::json!([{ "name": "region" }]),
+        );
+        let spec = remote_spec_from_transport_with_values(
+            &moustache,
+            &values(&[("variables.region", "eu")]),
+            true,
+        )
+        .unwrap();
+        assert_eq!(spec["url"], "https://eu.example.com/mcp");
     }
 
     fn make_smithery_connection(kind: &str) -> SmitheryConnection {
@@ -11431,58 +11893,6 @@ mod tests {
             r#"{ "mcp": { "servers": null } }"#
         );
     }
-}
-
-
-#[cfg(feature = "tauri-runtime")]
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-pub async fn mcp_install_from_marketplace(
-    db: tauri::State<'_, crate::db::AppDatabase>,
-    provider_id: String,
-    server_id: String,
-    apps: Vec<McpAppType>,
-    spec_override: Option<Value>,
-    option_id: Option<String>,
-    protocol: Option<String>,
-    parameter_values: Option<Value>,
-) -> Result<LocalMcpServer, AppCommandError> {
-    mcp_install_from_marketplace_core(&db, provider_id, server_id, apps, spec_override, option_id, protocol, parameter_values).await
-}
-
-#[cfg(feature = "tauri-runtime")]
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-pub async fn mcp_upsert_local_server(
-    db: tauri::State<'_, crate::db::AppDatabase>,
-    server_id: String,
-    spec: Value,
-    apps: Vec<McpAppType>,
-    shown_spec: Option<Value>,
-) -> Result<LocalMcpServer, AppCommandError> {
-    mcp_upsert_local_server_core(&db, server_id, spec, apps, shown_spec).await
-}
-
-#[cfg(feature = "tauri-runtime")]
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-pub async fn mcp_set_server_apps(
-    db: tauri::State<'_, crate::db::AppDatabase>,
-    server_id: String,
-    apps: Vec<McpAppType>,
-) -> Result<Option<LocalMcpServer>, AppCommandError> {
-    mcp_set_server_apps_core(&db, server_id, apps).await
-}
-
-#[cfg(feature = "tauri-runtime")]
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-pub async fn mcp_remove_server(
-    db: tauri::State<'_, crate::db::AppDatabase>,
-    server_id: String,
-    apps: Option<Vec<McpAppType>>,
-) -> Result<bool, AppCommandError> {
-    mcp_remove_server_core(&db, server_id, apps).await
 }
 
 #[cfg(test)]

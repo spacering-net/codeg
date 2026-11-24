@@ -276,7 +276,7 @@ export const DelegationStatusRow = memo(function DelegationStatusRow({
           aria-controls={expanded ? panelId : undefined}
           className={cn(
             headerClass,
-            "cursor-pointer rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            "activity-row-toggle cursor-pointer rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           )}
         >
           {row}

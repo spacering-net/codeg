@@ -371,9 +371,8 @@ const FILE_RESULT_LIMIT = 20
  * search dialog and the composer's `@` picker use. "Browse…" covers everything
  * outside a workspace folder.
  *
- * The walk is lazy: `useFileTree` only fetches once `enabled` goes true, which
- * happens when the submenu opens — a board that never adds a file never pays
- * for the listing.
+ * Workspace discovery starts only when the user types a query; the initial
+ * open-files listing needs no backend traversal.
  */
 function AddFileSubmenu({ onPick }: { onPick: (absPath: string) => void }) {
   const t = useTranslations("Canvas")
@@ -393,7 +392,10 @@ function AddFileSubmenu({ onPick }: { onPick: (absPath: string) => void }) {
 
   const { allFiles, loading } = useFileTree({
     folderPath: searchFolder?.path,
-    enabled: open && searchFolder != null,
+    enabled: open && searchFolder != null && query.trim().length > 0,
+    query,
+    filesOnly: true,
+    limit: FILE_RESULT_LIMIT,
   })
 
   const results = useMemo(() => {

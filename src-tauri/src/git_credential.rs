@@ -357,6 +357,27 @@ pub fn inject_credentials(
         .env("GIT_TERMINAL_PROMPT", "0");
 }
 
+/// The username git should send for a stored account.
+///
+/// Usually the account's own login. CNB is the exception: its git server
+/// takes a FIXED username, `cnb`, with the access token as the password, and
+/// documents that value as the only one to send — the account's login is not
+/// a username it authenticates by.
+pub fn git_username_for(account: &GitHubAccount) -> &str {
+    let is_cnb = account
+        .provider
+        .as_deref()
+        .is_some_and(|p| p.trim().eq_ignore_ascii_case("cnb"));
+    if is_cnb {
+        CNB_GIT_USERNAME
+    } else {
+        &account.username
+    }
+}
+
+/// See [`git_username_for`].
+pub const CNB_GIT_USERNAME: &str = "cnb";
+
 /// Get the remote URL for the "origin" remote of a repository.
 pub async fn get_remote_url(repo_path: &str) -> Option<String> {
     get_remote_url_by_name(repo_path, "origin").await
@@ -569,7 +590,7 @@ pub async fn try_inject_for_repo_remote(
         "[GIT_CRED] injecting credentials for {} (user: {})",
         remote_url, account.username
     );
-    inject_credentials(cmd, &account.username, &token, &askpass);
+    inject_credentials(cmd, git_username_for(account), &token, &askpass);
     true
 }
 
@@ -611,7 +632,7 @@ pub async fn try_inject_for_url(
         }
     };
 
-    inject_credentials(cmd, &account.username, &token, &askpass);
+    inject_credentials(cmd, git_username_for(account), &token, &askpass);
     true
 }
 
@@ -641,6 +662,24 @@ mod tests {
             extract_host("git@github.com:user/repo.git"),
             Some("github.com".to_string())
         );
+    }
+
+    #[test]
+    fn a_cnb_account_sends_the_fixed_git_username() {
+        let account = |provider: Option<&str>| GitHubAccount {
+            id: "1".into(),
+            server_url: "https://cnb.cool".into(),
+            username: "alice".into(),
+            scopes: vec![],
+            avatar_url: None,
+            is_default: true,
+            created_at: String::new(),
+            provider: provider.map(str::to_string),
+        };
+        assert_eq!(git_username_for(&account(Some("cnb"))), "cnb");
+        // Every other forge authenticates by the account's own login.
+        assert_eq!(git_username_for(&account(Some("gitea"))), "alice");
+        assert_eq!(git_username_for(&account(None)), "alice");
     }
 
     #[test]

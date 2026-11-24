@@ -86,7 +86,7 @@ const CLAUDE_MODEL_FIELDS: ReadonlyArray<{
   {
     key: "fable",
     label: "claudeFableDefaultModel",
-    placeholder: "claude-fable-5-1",
+    placeholder: "claude-fable-5-2",
   },
   {
     key: "customOption",
