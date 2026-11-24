@@ -2018,6 +2018,23 @@ impl ConnectionManager {
         // for a prompt that never reached the agent, so without this the
         // lifecycle subscriber's PendingReview write also never fires and the
         // row would be stuck until a follow-up `send_prompt_linked` re-flipped it.
+        if let Some(cid) = conversation_id_for_status {
+            let input_id = user_message
+                .as_ref()
+                .and_then(|(id, _)| id.strip_prefix(super::session_messages::PROMPT_ID_PREFIX));
+            let policy = state_arc.read().await.pending_delivery.clone();
+            let turn_id = crate::db::service::turn_delivery_service::begin(
+                &db.conn,
+                cid,
+                input_id,
+                policy.as_ref(),
+            )
+            .await
+            .map_err(|error| AcpError::protocol(error.to_string()))?;
+            let mut state = state_arc.write().await;
+            state.active_turn_id = Some(turn_id);
+            state.pending_delivery = None;
+        }
         match self
             .send_prompt_inner(conn_id, blocks, user_message, internal_suffix)
             .await
@@ -2064,6 +2081,19 @@ impl ConnectionManager {
                 Ok(conversation_id_for_status)
             }
             Err(send_err) => {
+                let rejected_turn = state_arc.write().await.active_turn_id.take();
+                if let Some(turn_id) = rejected_turn {
+                    if let Err(error) = crate::db::service::turn_delivery_service::complete(
+                        &db.conn,
+                        &turn_id,
+                        "send_failed",
+                        "",
+                    )
+                    .await
+                    {
+                        tracing::error!(%error, "could not persist rejected turn");
+                    }
+                }
                 if let Some(cid) = conversation_id_for_status {
                     match conversation_service::update_status(
                         &db.conn,

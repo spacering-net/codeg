@@ -20,6 +20,12 @@ pub struct Model {
     pub status: String,
     #[sea_orm(column_type = "Text", nullable)]
     pub error: Option<String>,
+    pub recipient_turn_id: Option<String>,
+    pub result_turn_id: Option<String>,
+    pub cause_message_id: Option<String>,
+    pub root_id: Option<String>,
+    pub source_conversation_id: Option<i32>,
+    pub hop: i32,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
 }

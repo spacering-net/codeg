@@ -421,7 +421,7 @@ pub(crate) async fn handle_event(
             else {
                 return Ok(());
             };
-            let (conversation_id, last_text, claimed) = {
+            let (conversation_id, last_text, claimed, frozen_turn) = {
                 let mut snap = state_arc.write().await;
                 // Re-entrant for this worker: a retry of this same envelope
                 // claims again and goes on. Only a CLI run's fallback that
@@ -429,8 +429,12 @@ pub(crate) async fn handle_event(
                 let claimed = snap.claim_turn_status(envelope.seq, TurnStatusWriter::Lifecycle);
                 (
                     snap.conversation_id,
-                    snap.last_assistant_text.clone(),
+                    snap.completed_turns
+                        .get(&envelope.seq)
+                        .map(|(_, text)| text.clone())
+                        .unwrap_or_else(|| snap.last_assistant_text.clone()),
                     claimed,
+                    snap.completed_turns.get(&envelope.seq).cloned(),
                 )
             };
             // No conversation row bound (defensive — should never happen in
@@ -439,6 +443,15 @@ pub(crate) async fn handle_event(
             let Some(cid) = conversation_id else {
                 return Ok(());
             };
+            if let Some((turn_id, text)) = frozen_turn {
+                crate::db::service::turn_delivery_service::complete(
+                    db_conn,
+                    &turn_id,
+                    stop_reason,
+                    text.as_deref().unwrap_or_default(),
+                )
+                .await?;
+            }
             if !live {
                 if claimed {
                     write_dropped_turn_status(db_conn, &state_arc, &emitter, cid, stop_reason)
@@ -465,6 +478,7 @@ pub(crate) async fn handle_event(
             }
             let mut state = state_arc.write().await;
             state.settled_turn_seq = state.settled_turn_seq.max(envelope.seq);
+            state.completed_turns.remove(&envelope.seq);
             Ok(())
         }
         AcpEvent::NativeSessionTitle { title } => {

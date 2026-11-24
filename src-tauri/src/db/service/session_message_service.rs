@@ -24,7 +24,7 @@ pub async fn enqueue(
     txn.execute_unprepared("UPDATE session_message SET id = id WHERE 0").await?;
     ensure_live(&txn, sender).await?;
     ensure_live(&txn, recipient).await?;
-    let id = insert(&txn, sender, recipient, message, mode, reply).await?;
+    let id = insert_in_tx(&txn, sender, recipient, message, mode, reply, None).await?;
     txn.commit().await?;
     Ok(id)
 }
@@ -42,13 +42,14 @@ async fn ensure_live<C: ConnectionTrait>(db: &C, id: i32) -> Result<(), DbErr> {
     Ok(())
 }
 
-async fn insert<C: ConnectionTrait>(
+pub(crate) async fn insert_in_tx<C: ConnectionTrait>(
     db: &C,
     sender: i32,
     recipient: i32,
     message: String,
     mode: String,
     reply: bool,
+    provenance: Option<&super::turn_delivery_service::MessageProvenance>,
 ) -> Result<String, DbErr> {
     let id = uuid::Uuid::new_v4().to_string();
     let now = Utc::now();
@@ -59,7 +60,21 @@ async fn insert<C: ConnectionTrait>(
         message: Set(message),
         mode: Set(mode),
         reply_back: Set(reply),
-        status: Set("queued".into()),
+        status: Set(if provenance.is_some_and(|p| p.hop > 8) {
+            "failed"
+        } else {
+            "queued"
+        }
+        .into()),
+        error: Set(provenance
+            .filter(|p| p.hop > 8)
+            .map(|_| "hop_limit_exceeded".into())),
+        recipient_turn_id: Set(None),
+        result_turn_id: Set(provenance.and_then(|p| p.result_turn_id.clone())),
+        cause_message_id: Set(provenance.and_then(|p| p.cause_message_id.clone())),
+        root_id: Set(provenance.map(|p| p.root_id.clone())),
+        source_conversation_id: Set(provenance.map(|p| p.source_conversation_id)),
+        hop: Set(provenance.map_or(0, |p| p.hop)),
         created_at: Set(now),
         updated_at: Set(now),
         ..Default::default()
@@ -209,7 +224,7 @@ pub async fn settle(
         .exec(&txn)
         .await?;
     if updated.rows_affected == 1 && reply && reason.is_none() {
-        insert(
+        insert_in_tx(
             &txn,
             row.conversation_id,
             row.sender_conversation_id,
@@ -221,6 +236,7 @@ pub async fn settle(
             ),
             "queue".into(),
             false,
+            None,
         )
         .await?;
     }

@@ -22,7 +22,20 @@ use crate::web::event_bridge::EventEmitter;
 
 pub(crate) const PROMPT_ID_PREFIX: &str = "session-message-";
 type TurnResult = Result<Option<String>, String>;
-pub(crate) type TurnSender = oneshot::Sender<TurnResult>;
+#[derive(Debug)]
+pub(crate) struct TurnSender {
+    pub db: DatabaseConnection,
+    pub message_id: i32,
+    pub sender: oneshot::Sender<TurnResult>,
+}
+impl TurnSender {
+    pub fn is_closed(&self) -> bool {
+        self.sender.is_closed()
+    }
+    pub fn send(self, result: TurnResult) -> Result<(), TurnResult> {
+        self.sender.send(result)
+    }
+}
 
 #[derive(Debug)]
 pub(crate) struct TurnWaiter {
@@ -378,7 +391,7 @@ pub async fn start(
     data_dir: std::path::PathBuf,
     emitter: EventEmitter,
 ) {
-    while let Err(error) = queue::interrupt_in_flight(&db).await {
+    while let Err(error) = crate::db::service::turn_delivery_service::recover(&db).await {
         tracing::warn!(%error, "could not recover session messages");
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
@@ -539,7 +552,15 @@ async fn dispatch(
     let prompt_id = format!("{PROMPT_ID_PREFIX}{}", row.message_id);
     let open_prompt = if busy {
         match manager
-            .steer_session_message(&connection, text.clone(), reply)
+            .steer_session_message(
+                &connection,
+                text.clone(),
+                TurnSender {
+                    db: db.clone(),
+                    message_id: row.id,
+                    sender: reply,
+                },
+            )
             .await
         {
             Ok(SteerOutcome::Injected) => None,
@@ -572,7 +593,11 @@ async fn dispatch(
             state.message_turns.push(TurnWaiter {
                 prompt_id: Some(prompt_id.clone()),
                 turn: None,
-                reply: Some(reply),
+                reply: Some(TurnSender {
+                    db: db.clone(),
+                    message_id: row.id,
+                    sender: reply,
+                }),
             });
         }
         manager
@@ -592,15 +617,9 @@ async fn dispatch(
     };
     match sent {
         Ok(()) => {
-            let db = db.clone();
-            tokio::spawn(async move {
-                let outcome = result
-                    .await
-                    .unwrap_or_else(|_| Err("recipient disconnected before its turn ended".into()));
-                if let Err(error) = finish(&db, &row, outcome).await {
-                    tracing::error!(message_id = %row.message_id, %error, "could not settle session message");
-                }
-            });
+            // TurnComplete persists result and reply in one transaction. The
+            // transient oneshot is only a wakeup hint, never a settlement owner.
+            drop(result);
         }
         Err(AcpError::TurnInProgress) if busy => {
             queue::defer_as_queue(db, row.id).await?;

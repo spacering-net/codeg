@@ -16527,6 +16527,18 @@ async fn run_conversation_loop(
                                     if let Some(inj) = delegation_injection {
                                         inj.questions.cancel_questions_by_parent(conn_id).await;
                                     }
+                                    let delivery_binding = if let Some(message) = message_result.as_ref() {
+                                        let turn_id = state.read().await.active_turn_id.clone();
+                                        let Some(turn_id) = turn_id else {
+                                            let _ = reply.send(Err(AcpError::NoActiveTurn));
+                                            continue;
+                                        };
+                                        if let Err(error) = crate::db::service::turn_delivery_service::bind(&message.db, message.message_id, &turn_id).await {
+                                            let _ = reply.send(Err(AcpError::protocol(error.to_string())));
+                                            continue;
+                                        }
+                                        Some((message.db.clone(), message.message_id))
+                                    } else { None };
                                     if let Some(reply) = message_result {
                                         let mut state = state.write().await;
                                         let turn = state.turns_completed;
@@ -16537,6 +16549,13 @@ async fn run_conversation_loop(
                                         });
                                     }
                                     let outcome = send_steer_request(&cx, &sid, &blocks).await;
+                                    if !matches!(outcome, Ok(SteerOutcome::Injected)) {
+                                        if let Some((db, message_id)) = delivery_binding {
+                                            if let Err(error) = crate::db::service::turn_delivery_service::unbind(&db, message_id).await {
+                                                tracing::error!(%error, "could not detach unaccepted session message from turn");
+                                            }
+                                        }
+                                    }
                                     // A steered message still lands in the
                                     // agent's OWN transcript: as a user record
                                     // when it runs as a turn of its own, and as
