@@ -3197,10 +3197,9 @@ pub async fn spawn_agent_connection(
             selection.finalize(&conn_id, &state_clone).await;
         }
 
-        // Revoke the per-launch token + cascade cancel any still-pending
-        // delegations AND questions owned by this parent connection. All are
-        // best-effort: a missing token entry is a no-op, and both
-        // `cancel_by_parent` calls are safe on an empty pending map.
+        // Revoke per-launch access and forget this driver's tool identities.
+        // Delegation tasks and results belong to the conversation and keep
+        // running after an ordinary disconnect; parked questions are declined.
         if let Some(inj) = delegation_for_cleanup {
             let token = {
                 let snap = state_clone.read().await;
@@ -3209,7 +3208,7 @@ pub async fn spawn_agent_connection(
             if let Some(tok) = token {
                 inj.tokens.revoke(&tok).await;
             }
-            inj.broker.cancel_by_parent(&conn_id).await;
+            inj.broker.detach_parent(&conn_id).await;
             // Reclaim a parked `ask_user_question` instead of waiting for the
             // companion's ask socket to close (which a reparented/hard-killed
             // agent may never do); the dropped sender declines the tool cleanly.
@@ -16191,7 +16190,13 @@ async fn run_conversation_loop(
                                     // result. Turn-scoped — the connection is
                                     // still alive.
                                     if let Some(inj) = delegation_injection {
-                                        inj.broker.cancel_by_parent_turn(conn_id).await;
+                                        let parent_conversation_id = {
+                                            let state = state.read().await;
+                                            state.conversation_id.or(state.selection_conversation_id)
+                                        };
+                                        inj.broker
+                                            .cancel_by_parent_turn_for_conversation(conn_id, parent_conversation_id)
+                                            .await;
                                     }
                                     break;
                                 }
@@ -16388,7 +16393,13 @@ async fn run_conversation_loop(
                             // race-double-drain.
                             if reason_str != "end_turn" {
                                 if let Some(inj) = delegation_injection {
-                                    inj.broker.cancel_by_parent_turn(conn_id).await;
+                                    let parent_conversation_id = {
+                                        let state = state.read().await;
+                                        state.conversation_id.or(state.selection_conversation_id)
+                                    };
+                                    inj.broker
+                                        .cancel_by_parent_turn_for_conversation(conn_id, parent_conversation_id)
+                                        .await;
                                 }
                             }
                             break;
@@ -16718,7 +16729,13 @@ async fn run_conversation_loop(
                                     // drain-first lock guarantees no double
                                     // DelegationCompleted emit.
                                     if let Some(inj) = delegation_injection {
-                                        inj.broker.cancel_by_parent_turn(conn_id).await;
+                                        let parent_conversation_id = {
+                                            let state = state.read().await;
+                                            state.conversation_id.or(state.selection_conversation_id)
+                                        };
+                                        inj.broker
+                                            .cancel_by_parent_turn_for_conversation(conn_id, parent_conversation_id)
+                                            .await;
                                         // Reclaim any parked `ask_user_question` /
                                         // Grok `exit_plan_mode` approval owned by this
                                         // connection. Unlike `perms` (drained inline
@@ -16976,7 +16993,13 @@ async fn run_conversation_loop(
                 // backgrounds the slow child teardown): see inner Cancel
                 // handler above for rationale.
                 if let Some(inj) = delegation_injection {
-                    inj.broker.cancel_by_parent_turn(conn_id).await;
+                    let parent_conversation_id = {
+                        let state = state.read().await;
+                        state.conversation_id.or(state.selection_conversation_id)
+                    };
+                    inj.broker
+                        .cancel_by_parent_turn_for_conversation(conn_id, parent_conversation_id)
+                        .await;
                 }
                 if closed_agent_turn {
                     cancel_grok_agent_turn_asks(delegation_injection, conn_id).await;
