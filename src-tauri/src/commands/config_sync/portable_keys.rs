@@ -27,6 +27,7 @@ pub const PORTABLE_PREFERENCE_KEYS: &[&str] = &[
     "delegation.depth_limit",
     "delegation.agent_defaults",
     "delegation.completed_cache_max_mb",
+    "delegation.allow_self_initiate",
     // Agent-facing tool toggles.
     "feedback.enabled",
     "question.enabled",

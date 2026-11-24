@@ -349,6 +349,7 @@ mod tests {
         let broker = make_broker();
         let desired = DelegationSettings {
             enabled: false,
+            allow_self_initiate: false,
             depth_limit: 3,
             ..DelegationSettings::default()
         };
@@ -360,6 +361,8 @@ mod tests {
 
         let loaded = load_delegation_settings(&db.conn).await;
         assert_eq!(loaded.enabled, saved.enabled);
+        assert!(!loaded.allow_self_initiate);
+        assert!(!broker.allow_self_initiate());
         assert_eq!(loaded.depth_limit, saved.depth_limit);
 
         let cfg = broker.config_snapshot().await;
