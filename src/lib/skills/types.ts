@@ -118,6 +118,10 @@ export interface SkillCell {
   copy_current: boolean | null
   /** Other agents that see this same entry (it is in a shared directory). */
   shared_with: AgentType[]
+  /** The deciding entry is a Harness plugin's member skill: that plugin's
+   *  install name (it gives the agent the name). Absent otherwise, and from
+   *  a backend older than plugins. */
+  plugin?: string
   /** Everything under the name, in the agent's reading order. */
   entries: CellEntry[]
 }
@@ -141,6 +145,10 @@ export interface StoreSkill {
   harness: HarnessSkillInfo | null
   /** How many backups it has. */
   backups: number
+  /** A Harness plugin's member skill, in that plugin's own store: the
+   *  plugin's install name. It has no actions of its own — the plugin is
+   *  managed as a whole. Absent for every other skill. */
+  plugin?: string
   /** One per agent in `agents`, in the same order. */
   cells: SkillCell[]
 }
@@ -169,6 +177,10 @@ export interface SkillsInventory {
   agents: SkillsAgent[]
   /** Every skill in the store, by id. */
   skills: StoreSkill[]
+  /** The member skills of the plugins installed as skills only, each with
+   *  its `plugin` — apart from `skills`, whose ids they may share. Absent
+   *  when there are none (and from a backend older than plugins). */
+  plugin_skills?: StoreSkill[]
   name_taken: NameTaken[]
   broken_links: BrokenLink[]
   problems: SkillsIssue[]

@@ -70,6 +70,13 @@ export interface ReferenceMeta {
    * `/` when absent.
    */
   invocationPrefix?: "/" | "$"
+  /**
+   * skill (an expert): the expert's own id. `id` is then the name the agent
+   * the badge was last stamped for sees it under — `superpowers:<id>` where a
+   * Harness plugin installed whole gives it — and is re-stamped from this one
+   * when the agent changes ({@link restampExpertNames}).
+   */
+  expertId?: string
 }
 
 /**

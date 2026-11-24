@@ -744,7 +744,7 @@ describe("AcpConnectionsProvider preview-tab release (disconnectIfIdle)", () => 
     await act(async () => {
       await h.actions!.disconnectIfIdle(TAB)
     })
-    expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn")
+    expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn", true)
   })
 
   it("keeps an owner alive while Remote Control is on", async () => {
@@ -796,7 +796,7 @@ describe("AcpConnectionsProvider preview-tab release (disconnectIfIdle)", () => 
     await act(async () => {
       await h.actions!.disconnectIfIdle(TAB)
     })
-    expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn")
+    expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn", true)
   })
 
   // A client that attaches mid-delegation (a reload, a second window) never
@@ -833,7 +833,7 @@ describe("AcpConnectionsProvider preview-tab release (disconnectIfIdle)", () => 
       await h.actions!.disconnectIfIdle(TAB)
     })
 
-    expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn")
+    expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn", true)
     expect(h.store!.getConnection(TAB)).toBeUndefined()
   })
 
@@ -945,7 +945,7 @@ describe("AcpConnectionsProvider unmount teardown (desktop)", () => {
 
     unmount()
 
-    expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn")
+    expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn", true)
   })
 })
 
@@ -1032,7 +1032,7 @@ describe("AcpConnectionsProvider active key across a view's lifetime", () => {
           CONNECTION_IDLE_TIMEOUT_MS + IDLE_SWEEP_INTERVAL_MS + 1000
         )
       })
-      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn")
+      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn", true)
     } finally {
       vi.useRealTimers()
     }
@@ -1081,7 +1081,7 @@ describe("AcpConnectionsProvider active key across a view's lifetime", () => {
           CONNECTION_IDLE_TIMEOUT_MS + IDLE_SWEEP_INTERVAL_MS + 1000
         )
       })
-      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn")
+      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn", true)
     } finally {
       vi.useRealTimers()
     }
@@ -1836,7 +1836,8 @@ describe("AcpConnectionsProvider reconnect (status-icon button)", () => {
       "/tmp/x",
       "sess-1",
       undefined,
-      {}
+      {},
+      42
     )
     expect(h.store!.getConnection(TAB)?.connectionId).toBe("respawned-conn")
   })
@@ -1860,7 +1861,8 @@ describe("AcpConnectionsProvider reconnect (status-icon button)", () => {
       "/tmp/x",
       "sess-1",
       undefined,
-      {}
+      {},
+      42
     )
     expect(h.store!.getConnection(TAB)?.connectionId).toBe("respawned-conn")
   })
@@ -1887,7 +1889,8 @@ describe("AcpConnectionsProvider reconnect (status-icon button)", () => {
       "/tmp/x",
       "sess-1",
       undefined,
-      {}
+      {},
+      42
     )
   })
 
@@ -1933,7 +1936,8 @@ describe("AcpConnectionsProvider reconnect (status-icon button)", () => {
       "/tmp/x",
       "sess-1",
       undefined,
-      {}
+      {},
+      42
     )
   })
 
@@ -2052,7 +2056,8 @@ describe("AcpConnectionsProvider reconnect (status-icon button)", () => {
       "/tmp/x",
       "sess-1",
       undefined,
-      {}
+      {},
+      42
     )
     expect(h.store!.getConnection(TAB)?.connectionId).toBe("respawned-conn")
   })
@@ -2142,7 +2147,8 @@ describe("AcpConnectionsProvider reconnect (status-icon button)", () => {
       "/tmp/x",
       "snapshot-session",
       undefined,
-      {}
+      {},
+      42
     )
   })
 
@@ -2182,7 +2188,8 @@ describe("AcpConnectionsProvider reconnect (status-icon button)", () => {
       "/tmp/x",
       "minted-1",
       undefined,
-      {}
+      {},
+      42
     )
   })
 })
@@ -2239,7 +2246,8 @@ describe("AcpConnectionsProvider disconnect teardown confirmation", () => {
       "/tmp/x",
       "sess-1",
       undefined,
-      {}
+      {},
+      null
     )
     // ...but the caller must not show an "applied" confirmation for a restart
     // that may have landed right back on the process it meant to replace.
@@ -5075,7 +5083,10 @@ describe("AcpConnectionsProvider Grok cross-agent-type model switch", () => {
     // User optimistically switches to the cross-agent-type Composer model.
     vi.mocked(saveConfigPreference).mockClear()
     await act(async () => {
-      await h.actions!.setConfigOption(TAB, "model", "grok-composer-2.5-fast")
+      // A draft's pick: it is also the new-conversation default.
+      await h.actions!.setConfigOption(TAB, "model", "grok-composer-2.5-fast", {
+        saveAsDefault: true,
+      })
     })
     // Optimistic: the selector shows the pick and the preference is persisted.
     expect(
@@ -5510,7 +5521,9 @@ describe("AcpConnectionsProvider boolean config option (cline auto-approve)", ()
     expect(autoApproveValue()).toBe(false)
 
     await act(async () => {
-      await h.actions!.setConfigOption(TAB, "auto_approve", "true")
+      await h.actions!.setConfigOption(TAB, "auto_approve", "true", {
+        saveAsDefault: true,
+      })
     })
 
     expect(autoApproveValue()).toBe(true)
@@ -5519,6 +5532,24 @@ describe("AcpConnectionsProvider boolean config option (cline auto-approve)", ()
       "auto_approve",
       "true"
     )
+  })
+
+  it("never writes the new-conversation default for an existing conversation's pick (#1179)", async () => {
+    const handlers = await connectClineOwner()
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "session_config_options",
+      config_options: clineOptions(false),
+    })
+    vi.mocked(saveConfigPreference).mockClear()
+
+    await act(async () => {
+      await h.actions!.setConfigOption(TAB, "auto_approve", "true")
+    })
+
+    expect(autoApproveValue()).toBe(true)
+    expect(saveConfigPreference).not.toHaveBeenCalled()
   })
 
   it("applies the agent's own flip of a boolean option", async () => {
@@ -5588,6 +5619,72 @@ describe("AcpConnectionsProvider boolean config option (cline auto-approve)", ()
     })
 
     expect(autoApproveValue()).toBe(true)
+  })
+})
+
+describe("config option pushes that change only a model's efforts", () => {
+  // claude-agent-acp 0.110.0 / codex-acp 2.10.0 name each model's efforts on
+  // its entry of the model option, and the model list shows them as a range.
+  // A push that changes nothing else (an unselected model gains a level) must
+  // still land, or the row keeps its old range.
+  function modelOptions(lunaTop: string): SessionConfigOptionInfo[] {
+    return [
+      {
+        id: "model",
+        name: "Model",
+        description: null,
+        category: "model",
+        kind: {
+          type: "select",
+          current_value: "gpt-5.5",
+          options: [
+            {
+              value: "gpt-6-luna",
+              name: "6 Luna",
+              description: null,
+              reasoning_efforts: {
+                values: ["low", "medium", lunaTop],
+                recommended: "medium",
+              },
+            },
+            { value: "gpt-5.5", name: "5.5", description: null },
+          ],
+          groups: [],
+        },
+      },
+    ]
+  }
+
+  function lunaEfforts(): string[] | undefined {
+    const model = h
+      .store!.getConnection(TAB)!
+      .configOptions?.find((o) => o.id === "model")
+    if (model?.kind.type !== "select") return undefined
+    return model.kind.options.find((o) => o.value === "gpt-6-luna")
+      ?.reasoning_efforts?.values
+  }
+
+  it("applies the push", async () => {
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "codex", "/tmp/x", "sess-1")
+    })
+    const handlers = latestAttachHandlers()
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "session_config_options",
+      config_options: modelOptions("max"),
+    })
+    expect(lunaEfforts()).toEqual(["low", "medium", "max"])
+
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "session_config_options",
+      config_options: modelOptions("ultra"),
+    })
+    expect(lunaEfforts()).toEqual(["low", "medium", "ultra"])
   })
 })
 
@@ -6519,7 +6616,7 @@ describe("Claude Code's Remote Control (claude-agent-acp 0.93.0)", () => {
           CONNECTION_IDLE_TIMEOUT_MS + IDLE_SWEEP_INTERVAL_MS + 1000
         )
       })
-      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn")
+      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn", true)
     } finally {
       vi.useRealTimers()
     }
@@ -8564,7 +8661,23 @@ describe("live surfaces that are not tabs", () => {
       await connectOwner()
       h.actions!.setActiveKey("some-other-surface")
       await sweepPastIdleTimeout()
-      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn")
+      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn", true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("retains the route when the backend found work after the client's last frame", async () => {
+    vi.useFakeTimers()
+    try {
+      await connectOwner()
+      h.actions!.setActiveKey("some-other-surface")
+      h.acpDisconnect.mockResolvedValue(false)
+      await sweepPastIdleTimeout()
+      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn", true)
+      h.acpDisconnect.mockClear()
+      await sweepPastIdleTimeout()
+      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn", true)
     } finally {
       vi.useRealTimers()
     }
@@ -8584,7 +8697,7 @@ describe("live surfaces that are not tabs", () => {
       // the connection goes back to being sweepable.
       h.actions!.registerLiveSurfaceKeys("canvas", new Set())
       await sweepPastIdleTimeout()
-      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn")
+      expect(h.acpDisconnect).toHaveBeenCalledWith("spawned-conn", true)
     } finally {
       vi.useRealTimers()
     }

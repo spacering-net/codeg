@@ -55,7 +55,6 @@ import { affectedAgents, isApplied, reachesOthers } from "@/lib/skills/ops"
 import type { SkillsApplyResult } from "@/lib/skills/types"
 import { cn } from "@/lib/utils"
 import { Code } from "../discover/detail-sections"
-import { DiscoverMark } from "../discover/discover-card"
 import { useDiscoverLabels } from "../discover/use-discover-labels"
 import { MachineText } from "../machine-text"
 import { AgentGlyph } from "../mcp/mcp-bits"
@@ -71,6 +70,7 @@ import {
   InstallChangeList,
   InstallFailureNotice,
   InstallItemLine,
+  InstallPackagePart,
   InstallPart,
   InstallReasonList,
   InstallSnapshot,
@@ -115,85 +115,33 @@ function PathList({ paths }: { paths: readonly string[] }) {
  *  files themselves. */
 function PackagePart({ plan }: { plan: HarnessSkillPlan }) {
   const t = useTranslations("Harness.skillInstall.package")
-  const labels = useSkillInstallLabels()
   const { skill } = plan
-  const pkg = plan.package
   return (
-    <InstallPart
-      title={t("title")}
-      aside={t("size", {
-        count: pkg.files.length,
-        size: labels.bytes(pkg.total_bytes),
-      })}
-    >
-      <div className="min-w-0 space-y-2 rounded-lg border px-3 py-2.5 text-xs">
-        <p className="flex min-w-0 flex-wrap items-baseline gap-x-2">
-          <bdi dir="ltr" className="font-mono text-sm font-medium">
-            <MachineText>{skill.name || plan.install_name.name}</MachineText>
-          </bdi>
+    <InstallPackagePart pkg={plan.package}>
+      <p className="flex min-w-0 flex-wrap items-baseline gap-x-2">
+        <bdi dir="ltr" className="font-mono text-sm font-medium">
+          <MachineText>{skill.name || plan.install_name.name}</MachineText>
+        </bdi>
+      </p>
+      {skill.description && (
+        <p dir="auto" className="break-words text-muted-foreground">
+          {skill.description}
         </p>
-        {skill.description && (
-          <p dir="auto" className="break-words text-muted-foreground">
-            {skill.description}
-          </p>
-        )}
-        {(skill.license || skill.compatibility) && (
-          <p className="text-muted-foreground">
-            {skill.license && (
-              <span dir="auto">{t("license", { license: skill.license })}</span>
-            )}
-            {skill.license && skill.compatibility && " · "}
-            {skill.compatibility && (
-              <span dir="auto">
-                {t("compatibility", { compatibility: skill.compatibility })}
-              </span>
-            )}
-          </p>
-        )}
+      )}
+      {(skill.license || skill.compatibility) && (
         <p className="text-muted-foreground">
-          {pkg.archive
-            ? t.rich("archive", {
-                hash: pkg.archive.sha256.slice(0, 16),
-                code: machine,
-              })
-            : pkg.source
-              ? t.rich("source", {
-                  repository: pkg.source.repository,
-                  commit: pkg.source.commit.slice(0, 12),
-                  path: pkg.source.path || "/",
-                  code: machine,
-                })
-              : t("noSource")}
+          {skill.license && (
+            <span dir="auto">{t("license", { license: skill.license })}</span>
+          )}
+          {skill.license && skill.compatibility && " · "}
+          {skill.compatibility && (
+            <span dir="auto">
+              {t("compatibility", { compatibility: skill.compatibility })}
+            </span>
+          )}
         </p>
-        {pkg.files.length > 0 && (
-          <details className="group min-w-0">
-            <summary className="cursor-pointer text-muted-foreground select-none hover:text-foreground">
-              {t("files", { count: pkg.files.length })}
-            </summary>
-            <ul className="mt-1.5 min-w-0 space-y-0.5">
-              {pkg.files.map((file) => (
-                <li
-                  key={file.path}
-                  className="flex min-w-0 flex-wrap items-baseline gap-x-2"
-                >
-                  <bdi dir="ltr" className="min-w-0 font-mono">
-                    <MachineText>{file.path}</MachineText>
-                  </bdi>
-                  <span className="shrink-0 text-muted-foreground tabular-nums">
-                    {labels.bytes(file.size)}
-                  </span>
-                  {file.executable && (
-                    <DiscoverMark tone="warning">
-                      {t("executable")}
-                    </DiscoverMark>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </details>
-        )}
-      </div>
-    </InstallPart>
+      )}
+    </InstallPackagePart>
   )
 }
 

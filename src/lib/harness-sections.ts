@@ -4,8 +4,8 @@
  * The Harness page's sections, and what can be asked of them from outside.
  *
  * Harness is the workbench route that holds what an agent is extended with:
- * the SpaceRing Harness catalog ("Discover"), and the three things codeg
- * manages on the workspace's own host — MCP servers, skills and skill packs.
+ * the SpaceRing Harness catalog ("Discover"), and what codeg manages on the
+ * workspace's own host — MCP servers, skills, plugins and skill packs.
  * This module is the part of it with no React in it: which sections exist,
  * which one the page lands on, and the shape of a request to open one.
  */
@@ -18,6 +18,7 @@ export const HARNESS_SECTION_IDS = [
   "discover",
   "mcp",
   "skills",
+  "plugins",
   "packs",
 ] as const
 
@@ -137,6 +138,11 @@ export type HarnessOpenRequest =
       skillId?: string
     }
   | {
+      section: "plugins"
+      /** An installed plugin's Harness item id. */
+      itemId?: string
+    }
+  | {
       section: "packs"
       tab?: HarnessPackTab
     }
@@ -150,6 +156,7 @@ export type HarnessOpenTarget =
   | { section: "discover"; itemRef: string; intent?: HarnessOpenIntent }
   | { section: "mcp"; serverKey: string }
   | { section: "skills"; skillId: string }
+  | { section: "plugins"; itemId: string }
   | { section: "packs"; tab: HarnessPackTab }
 
 /** The kind of target one section takes. */
@@ -182,6 +189,10 @@ export function harnessTargetOf(
     case "skills":
       return request.skillId
         ? { section: "skills", skillId: request.skillId }
+        : null
+    case "plugins":
+      return request.itemId
+        ? { section: "plugins", itemId: request.itemId }
         : null
     case "packs":
       if (isHarnessPackTab(request.tab)) {

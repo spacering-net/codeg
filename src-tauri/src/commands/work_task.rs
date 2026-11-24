@@ -69,7 +69,53 @@ pub async fn work_task_get_core(db: &AppDatabase, id: i32) -> Result<WorkTaskInf
     let mut infos = vec![work_task_service::get(&db.conn, id).await?];
     annotate_worktree_missing(db, &mut infos).await?;
     annotate_agent_type(db, &mut infos).await?;
-    Ok(infos.pop().expect("annotated the one row"))
+    let mut info = infos.pop().expect("annotated the one row");
+    info.conversation_selection = conversation_selection_of(db, &info).await?;
+    Ok(info)
+}
+
+/// The bound conversation's own model / options (codeg#1179), read
+/// server-side for the task editor and detail sheet. A legacy conversation
+/// with no stored selection reports the baseline its next connect replays:
+/// the task's tuple when it names the conversation's agent, else nothing.
+async fn conversation_selection_of(
+    db: &AppDatabase,
+    info: &WorkTaskInfo,
+) -> Result<Option<crate::models::work_task::WorkTaskConversationSelection>, DbError> {
+    use crate::db::entities::conversation;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
+    let Some(cid) = info.conversation_id else {
+        return Ok(None);
+    };
+    let Some(row) = conversation::Entity::find_by_id(cid)
+        .filter(conversation::Column::DeletedAt.is_null())
+        .one(&db.conn)
+        .await?
+    else {
+        return Ok(None);
+    };
+    let cfg: crate::models::WorkTaskConfig =
+        serde_json::from_value(info.config.clone()).unwrap_or_default();
+    let (task_agent, _, task_values) =
+        work_task_service::resolve_agent_config(&db.conn, info.folder_id, &cfg).await?;
+    let replaces_conversation =
+        task_agent.is_some() && task_agent.as_deref() != Some(row.agent_type.as_str());
+    let stored = crate::models::ConversationSelection::parse(row.selector_state.as_deref());
+    let legacy = stored.is_none();
+    let config_values = match stored {
+        Some(sel) => sel.config_values,
+        None if task_agent.as_deref() == Some(row.agent_type.as_str()) => task_values,
+        None => Default::default(),
+    };
+    Ok(Some(crate::models::work_task::WorkTaskConversationSelection {
+        conversation_id: cid,
+        folder_id: row.folder_id,
+        agent_type: row.agent_type,
+        config_values,
+        legacy,
+        replaces_conversation,
+    }))
 }
 
 /// Stamp `worktree_missing` on every row whose recorded worktree can no longer
@@ -200,10 +246,21 @@ async fn annotate_agent_type(db: &AppDatabase, infos: &mut [WorkTaskInfo]) -> Re
             .or_else(|| settings_agents.get(&GLOBAL_SETTINGS_FOLDER_ID))
             .cloned()
             .flatten();
-        info.agent_type = from_conversation
-            .or(own_override)
-            .or(from_settings)
-            .or_else(|| folder_defaults.get(&info.folder_id).cloned());
+        // A frozen task runs its own tuple (or none) — never the folder's
+        // settings; only a legacy task still resolves them at its launch.
+        let frozen = info
+            .config
+            .get("agent_config_frozen")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        info.agent_type = if frozen {
+            from_conversation.or(own_override)
+        } else {
+            from_conversation
+                .or(own_override)
+                .or(from_settings)
+                .or_else(|| folder_defaults.get(&info.folder_id).cloned())
+        };
     }
     Ok(())
 }
@@ -241,13 +298,14 @@ pub async fn work_task_update_core(
     chat_channel_manager: &crate::chat_channel::manager::ChatChannelManager,
     id: i32,
     draft: WorkTaskDraft,
+    flags: work_task_service::WorkTaskUpdateFlags,
 ) -> Result<WorkTaskInfo, DbError> {
     // Read the pre-edit name first: a session this card already produced was
     // named after it (and locked), so a rename here should carry over — but only
     // while the two are still in sync, which only the OLD name can attest.
     let before = work_task_service::get_model(&db.conn, id).await.ok();
 
-    let info = work_task_service::update(&db.conn, id, draft).await?;
+    let info = work_task_service::update_with(&db.conn, id, draft, flags).await?;
     emit_event(
         emitter,
         WORK_TASK_CHANGED_EVENT,
@@ -1028,12 +1086,16 @@ pub async fn work_task_create(
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
+#[allow(clippy::too_many_arguments)]
 pub async fn work_task_update(
     app: tauri::AppHandle,
     db: tauri::State<'_, AppDatabase>,
     chat_channel_manager: tauri::State<'_, crate::chat_channel::manager::ChatChannelManager>,
     id: i32,
     draft: WorkTaskDraft,
+    selection_untouched: Option<bool>,
+    selection_reset: Option<bool>,
+    selector_only: Option<bool>,
 ) -> Result<WorkTaskInfo, DbError> {
     work_task_update_core(
         &EventEmitter::from_app(&app),
@@ -1041,6 +1103,11 @@ pub async fn work_task_update(
         &chat_channel_manager,
         id,
         draft,
+        work_task_service::WorkTaskUpdateFlags {
+            selection_untouched: selection_untouched.unwrap_or(false),
+            selection_reset: selection_reset.unwrap_or(false),
+            selector_only: selector_only.unwrap_or(false),
+        },
     )
     .await
 }
@@ -1380,7 +1447,8 @@ mod tests {
 
     /// The list must name each task's agent the way the ENGINE would pick it
     /// (`effective_agent_config`), or the views draw a mark for an agent that
-    /// never runs. Walks the layering from the outside in.
+    /// never runs. A task keeps the agent it was created with (codeg#1179):
+    /// later task settings never move it.
     #[tokio::test]
     async fn agent_type_is_stamped_with_the_engines_own_layering() {
         let db = fresh_in_memory_db().await;
@@ -1407,8 +1475,8 @@ mod tests {
             Some("claude_code")
         );
 
-        // The folder's task settings sit between the two — and only the
-        // inheriting task feels them.
+        // Task settings saved afterwards move neither: both were frozen with
+        // what they were created with.
         let settings = WorkTaskFolderSettings {
             default_agent_type: Some("grok".to_string()),
             ..Default::default()
@@ -1417,7 +1485,15 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(agent_of(&db, overridden.id).await.as_deref(), Some("codex"));
-        assert_eq!(agent_of(&db, inheriting.id).await.as_deref(), Some("grok"));
+        assert_eq!(
+            agent_of(&db, inheriting.id).await.as_deref(),
+            Some("claude_code")
+        );
+        // A task created now takes them.
+        let later = work_task_service::create(&db.conn, draft(folder_id, "c", None))
+            .await
+            .unwrap();
+        assert_eq!(agent_of(&db, later.id).await.as_deref(), Some("grok"));
 
         // Once the task has actually run, the agent that ran it wins over
         // every configured layer — including the task's own override.
@@ -1445,7 +1521,8 @@ mod tests {
 
     /// A folder with no default and no settings anywhere leaves the field
     /// empty rather than guessing — the same state the engine refuses to
-    /// launch, which both views draw as a placeholder.
+    /// launch, which both views draw as a placeholder. Settings added later
+    /// do not configure it silently (it was frozen with no agent).
     #[tokio::test]
     async fn agent_type_is_none_when_nothing_is_configured() {
         let db = fresh_in_memory_db().await;
@@ -1467,7 +1544,11 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(agent_of(&db, task.id).await.as_deref(), Some("cursor"));
+        assert_eq!(agent_of(&db, task.id).await, None);
+        let later = work_task_service::create(&db.conn, draft(folder_id, "b", None))
+            .await
+            .unwrap();
+        assert_eq!(agent_of(&db, later.id).await.as_deref(), Some("cursor"));
     }
 
     fn test_emitter() -> EventEmitter {
@@ -1528,6 +1609,7 @@ mod tests {
             &test_channels(),
             task.id,
             draft(folder_id, "Fix logout too", None),
+            Default::default(),
         )
         .await
         .unwrap();
@@ -1564,6 +1646,7 @@ mod tests {
             &test_channels(),
             task.id,
             draft(folder_id, "Fix logout too", None),
+            Default::default(),
         )
         .await
         .unwrap();
@@ -1653,6 +1736,7 @@ mod tests {
             &test_channels(),
             task.id,
             draft(folder_id, "Fix logout too", None),
+            Default::default(),
         )
         .await
         .unwrap();
@@ -1687,6 +1771,7 @@ mod tests {
             &test_channels(),
             task.id,
             draft(folder_id, "Renamed", None),
+            Default::default(),
         )
         .await
         .unwrap();

@@ -13,6 +13,11 @@ import {
   modelOf as skillsModelOf,
   reloadInventory,
 } from "@/lib/harness/skill-links"
+import {
+  HARNESS_INSTALLED,
+  reloadHarnessInstalled,
+} from "@/lib/harness/mcp-install-state"
+import { pluginSectionCount } from "@/lib/harness/plugin-list"
 import { SKILLS_LINKS } from "@/lib/harness/skills-state"
 import { listenSkillsChanged } from "@/lib/skills/changes"
 import { onMcpChanged } from "@/lib/mcp/api"
@@ -24,8 +29,9 @@ export type HarnessSectionCounts = Partial<Record<HarnessSectionId, number>>
 
 /**
  * How much each local section holds: the MCP servers configured in any agent,
- * the skills Codeg manages (Custom and SRN Harness), and the skill packs with
- * at least one skill in the store.
+ * the skills Codeg manages (Custom and SRN Harness), the plugins installed
+ * from SRN Harness, and the skill packs with at least one skill in the
+ * store.
  *
  * Read from the same slots the sections fill, so a section's own reads keep
  * the tab up to date. Something has to read them before their section is
@@ -40,6 +46,7 @@ export function useHarnessSectionCounts(
   const { slots } = useHarnessView()
   const [mcp] = useHarnessSlot(MCP_INVENTORY)
   const [skills] = useHarnessSlot(SKILLS_LINKS.inventory)
+  const [installed] = useHarnessSlot(HARNESS_INSTALLED)
 
   useEffect(() => {
     if (slots.get(MCP_INVENTORY).phase === "idle") {
@@ -47,6 +54,11 @@ export function useHarnessSectionCounts(
     }
     if (slots.get(SKILLS_LINKS.inventory).phase === "idle") {
       void reloadInventory(slots, SKILLS_LINKS)
+    }
+    // Every section keeps the installed listing current while it is on
+    // screen (`useHarnessInstalledSync`); before the first, it is read here.
+    if (slots.get(HARNESS_INSTALLED).phase === "idle") {
+      void reloadHarnessInstalled(slots)
     }
   }, [slots])
 
@@ -91,6 +103,8 @@ export function useHarnessSectionCounts(
         (pack) => model.packSkills(pack).size > 0
       ).length
     }
+    const plugins = pluginSectionCount(installed.value)
+    if (plugins !== undefined) counts.plugins = plugins
     return counts
-  }, [mcp.inventory, skills.inventory])
+  }, [mcp.inventory, skills.inventory, installed.value])
 }

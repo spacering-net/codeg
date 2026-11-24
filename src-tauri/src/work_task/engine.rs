@@ -640,6 +640,20 @@ enum DrainOutcome {
 /// concurrent change, so this only bounds a pathological click loop.
 const MERGE_QUEUE_DRAIN_ATTEMPTS: usize = 3;
 
+/// What [`TaskEngine::refresh_review_task`] did to a review task's row.
+/// `wrote` is set only once the CAS landed; everything else describes that
+/// write.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct ContentRefresh {
+    wrote: bool,
+    /// The generation the write was bound to — what the post-review step it
+    /// triggers must bind to as well.
+    run_seq: i32,
+    stats: (i32, i32, i32),
+    stats_changed: bool,
+    light_cleared: bool,
+}
+
 /// How a launch composes its prompt.
 enum LaunchMode {
     /// First run: the task's own prompt blocks.
@@ -669,6 +683,12 @@ enum LaunchMode {
         /// they left it empty — which is every merge dispatched before this
         /// existed, and the auto-merge sweep's every landing.
         instructions: Option<String>,
+        /// Whether codeg removes the worktree and its branch once the landing
+        /// is verified — the merge dialog's checkbox, the queued intent's copy
+        /// of it, or the folder default for an unattended landing. The agent
+        /// is told, so its closing line describes the end state codeg is about
+        /// to produce rather than the one its own "do not delete" rule implies.
+        delete_worktree: bool,
     },
 }
 
@@ -1298,14 +1318,26 @@ impl TaskEngine {
             .await
             .map_err(|e| e.to_string())?;
 
-        // Effective agent + config: task override > folder task settings >
-        // folder default agent. Audited via a config_effective event (values
-        // are inherited live, never frozen).
-        let cfg: WorkTaskConfig =
-            serde_json::from_str(&task.config).unwrap_or_default();
+        // Effective agent + config: the task's own tuple, fixed when it was
+        // created or explicitly edited (codeg#1179). A task from before that
+        // (`agent_config_frozen == false`) is resolved once here — task
+        // override > folder task settings > folder default agent — and
+        // written back frozen under a generation guard; losing that write to a
+        // concurrent cancel / edit abandons this launch (the next claim
+        // re-reads). Audited via a config_effective event.
         let settings = work_task_service::settings_get_effective(&self.db.conn, task.folder_id)
             .await
             .unwrap_or_default();
+        let cfg: WorkTaskConfig = match work_task_service::backfill_frozen_config(
+            &self.db.conn,
+            &task,
+        )
+        .await
+        .map_err(|e| e.to_string())?
+        {
+            Some(cfg) => cfg,
+            None => return Ok(()),
+        };
         let (agent_str, mode_id, config_values) = effective_agent_config(&cfg, &settings, &root);
         let agent_str = agent_str.ok_or_else(|| {
             "no agent configured: set a task agent or a folder default".to_string()
@@ -1395,8 +1427,12 @@ impl TaskEngine {
             emit_folder_upsert(&self.emitter, detail);
         }
 
-        // Resume the previous session for retry/return/merge when we have one.
-        let resume_session_id = match mode {
+        // Resume the previous session for retry/return/merge when we have one
+        // — only when it runs the task's agent: a legacy task whose agent was
+        // changed while bound keeps its launch mode but starts a new
+        // conversation (the `resumed = false` fallback composes the full
+        // prompt), leaving the old one intact.
+        let previous_conversation = match mode {
             LaunchMode::Fresh => None,
             LaunchMode::Retry | LaunchMode::Return { .. } | LaunchMode::Merge { .. } => {
                 match task.conversation_id {
@@ -1404,11 +1440,53 @@ impl TaskEngine {
                         .one(&self.db.conn)
                         .await
                         .ok()
-                        .flatten()
-                        .and_then(|c| c.external_id),
+                        .flatten(),
                     None => None,
                 }
             }
+        };
+        let agent_matches_previous = previous_conversation
+            .as_ref()
+            .is_some_and(|c| c.agent_type == agent_str);
+        if let Some(prev) = previous_conversation.as_ref().filter(|_| !agent_matches_previous) {
+            // Replacing it: never under a turn the user can see running in a
+            // tab. Retryable — the user stops it, then retries.
+            if let Some(live) = self.manager.find_connection_by_conversation_id(prev.id).await {
+                if let Some(state) = self.manager.get_state(&live).await {
+                    if state.read().await.turn_in_flight {
+                        return Err("the task's previous conversation is still running in a \
+                                    tab — stop it, then retry"
+                            .to_string());
+                    }
+                }
+            }
+        }
+        let resume_session_id = previous_conversation
+            .as_ref()
+            .filter(|_| agent_matches_previous)
+            .and_then(|c| c.external_id.clone());
+        // A rerun continues the SAME conversation with the conversation's own
+        // selection — the task's starting tuple plus every pick made in it
+        // since (a legacy row with none falls back to the task's tuple). A
+        // reused live connection already runs it and is left as is.
+        let resume_selection = match previous_conversation.as_ref().filter(|_| agent_matches_previous) {
+            Some(prev) => Some(
+                crate::commands::acp::resolve_connect_selection(
+                    &self.db.conn,
+                    &self.manager,
+                    agent_type,
+                    Some(prev.id),
+                    resume_session_id.as_deref(),
+                    mode_id.clone(),
+                    config_values.clone(),
+                )
+                .await,
+            ),
+            None => None,
+        };
+        let (spawn_mode_id, spawn_config_values) = match resume_selection.as_ref() {
+            Some(sel) => (sel.mode_id.clone(), sel.config_values.clone()),
+            None => (mode_id.clone(), config_values.clone()),
         };
 
         let runtime_env =
@@ -1434,8 +1512,8 @@ impl TaskEngine {
                 runtime_env.clone(),
                 "work_task".to_string(),
                 self.emitter.clone(),
-                mode_id.clone(),
-                config_values.clone(),
+                spawn_mode_id.clone(),
+                spawn_config_values.clone(),
             )
             .await
         {
@@ -1454,6 +1532,9 @@ impl TaskEngine {
                 )
                 .await;
                 resumed = false;
+                // The new conversation starts from the old one's selection
+                // (its stored one, else the task's tuple — what
+                // `resume_selection` resolved).
                 self.manager
                     .spawn_agent(
                         agent_type,
@@ -1462,8 +1543,8 @@ impl TaskEngine {
                         runtime_env,
                         "work_task".to_string(),
                         self.emitter.clone(),
-                        mode_id.clone(),
-                        config_values.clone(),
+                        spawn_mode_id.clone(),
+                        spawn_config_values.clone(),
                     )
                     .await
                     .map_err(|e| e.to_string())?
@@ -1474,7 +1555,20 @@ impl TaskEngine {
         // Conversation row: reuse when resuming the same session; otherwise a
         // fresh row (fresh runs and resume fallbacks).
         let conversation_id = if resumed {
-            task.conversation_id.expect("resumed implies conversation")
+            let cid = task.conversation_id.expect("resumed implies conversation");
+            // Persist this connection's selection onto the row from now on
+            // (idempotent for a reused connection that already owns it).
+            let composer = resume_selection.as_ref().and_then(|s| s.composer_mode_id.clone());
+            if let Err(e) = self
+                .manager
+                .bind_selection_conversation(&conn_id, cid, composer)
+                .await
+            {
+                tracing::warn!(
+                    "[work_task] task {task_id}: could not bind conversation {cid} selection: {e}"
+                );
+            }
+            cid
         } else {
             let title = conversation_title_for_task(&task.title);
             let id = match create_conversation_core(
@@ -1719,6 +1813,22 @@ impl TaskEngine {
                 )
                 .await;
                 Ok(())
+            }
+            // A MERGE generation refused because another prompt holds the
+            // connection's turn: a resumed session's connection is shared with
+            // the conversation it belongs to, and someone sent it a turn after
+            // the dispatch's last check (a reply queued in the conversation
+            // view, say). That turn is theirs — tearing the connection down
+            // would kill it. Let go of the connection and fail this launch
+            // only: the merge launcher puts the task back in review, and the
+            // turn's end is an ordinary turn outside the task again. Only a
+            // merge: the other modes have already marked the row `running` on
+            // this connection, and their failure path is the teardown below.
+            Err(crate::acp::error::AcpError::TurnInProgress)
+                if resumed && matches!(mode, LaunchMode::Merge { .. }) =>
+            {
+                self.forget_connection(&conn_id).await;
+                Err(crate::acp::error::AcpError::TurnInProgress.to_string())
             }
             Err(e) => {
                 self.forget_connection(&conn_id).await;
@@ -3183,7 +3293,10 @@ impl TaskEngine {
     async fn on_turn_complete(self: &Arc<Self>, conn_id: &str, stop_reason: &str) {
         let entry = { self.index.lock().await.get(conn_id).copied() };
         let Some((task_id, run_seq)) = entry else {
-            return; // not a task run
+            // Not a task run — but it may have changed a reviewed task's
+            // worktree all the same.
+            self.spawn_foreign_turn_refresh(conn_id).await;
+            return;
         };
         // A later turn on a connection already held for its agent's background
         // work — one Grok started on its own, or a prompt someone sent the
@@ -3823,11 +3936,19 @@ impl TaskEngine {
             return;
         }
 
+        // The run's own id rides on its `running` light, and the verdict below
+        // is written only while the row still holds exactly that light: a
+        // content refresh clears it and a newer run replaces it, and in both
+        // cases this run's verdict is about content the row no longer shows.
         let mut light = WorkTaskPreflight {
             status: "running".to_string(),
             command: display_name,
             exit_code: None,
             output_tail: None,
+            run_id: Some(uuid::Uuid::new_v4().to_string()),
+        };
+        let Ok(running_json) = serde_json::to_string(&light) else {
+            return;
         };
         match work_task_service::set_preflight(&self.db.conn, task_id, run_seq, &light).await {
             Ok(true) => self.emit_upsert(task_id),
@@ -3851,9 +3972,15 @@ impl TaskEngine {
                 light.output_tail = Some(format!("could not run the command: {e}"));
             }
         }
-        if work_task_service::set_preflight(&self.db.conn, task_id, run_seq, &light)
-            .await
-            .unwrap_or(false)
+        if work_task_service::finish_preflight(
+            &self.db.conn,
+            task_id,
+            run_seq,
+            &running_json,
+            &light,
+        )
+        .await
+        .unwrap_or(false)
         {
             self.emit_upsert(task_id);
         }
@@ -3872,9 +3999,10 @@ impl TaskEngine {
 
     /// Boot pass: re-measure the counters of every task sitting in review.
     ///
-    /// They were snapshotted when the run settled and nothing rewrites them
-    /// afterwards, so a row can outlive the state it describes — a worktree the
-    /// user committed to (or reverted) in the meantime, and rows written before
+    /// While the app runs, a settle writes them and a turn outside the engine
+    /// or a refused completion corrects them; nothing does while it is closed,
+    /// so a row can outlive the state it describes — a worktree the user
+    /// committed to (or reverted) in the meantime, and rows written before
     /// [`own_work_anchor`] existed, which credited a pull-request task with the
     /// pull request's own change set and cost it the "complete" button. The
     /// counters decide which acceptance the board offers, so the correction has
@@ -3889,45 +4017,178 @@ impl TaskEngine {
         else {
             return;
         };
+        // The post-review passes wait until EVERY row is re-measured: each
+        // ends in a folder-wide merge pump, and a pump started mid-scan could
+        // land a later row on the counters and light it had before the app
+        // closed — once it is merging, this scan skips it.
+        let mut refreshed = Vec::new();
         for task in rows {
-            let Some(wt) = self.live_worktree(&task).await else {
-                continue;
-            };
-            let Some(anchor) = own_work_anchor(&wt.path, &task).await else {
-                continue;
-            };
-            let Some(stats) = diff_stats_from(&wt.path, &anchor).await else {
-                continue;
-            };
-            if (task.files_changed, task.additions, task.deletions)
-                == (Some(stats.0), Some(stats.1), Some(stats.2))
-            {
-                continue;
+            let refresh = self.refresh_review_task(task.id, false).await;
+            if refresh.stats_changed {
+                tracing::info!(
+                    "[work_task] task {}: diff stat corrected to {} file(s), +{}/-{}",
+                    task.id,
+                    refresh.stats.0,
+                    refresh.stats.1,
+                    refresh.stats.2
+                );
             }
-            match work_task_service::refresh_diff_stats(
-                &self.db.conn,
-                task.id,
-                task.run_seq,
-                stats,
-            )
+            refreshed.push((task.id, refresh));
+        }
+        for (task_id, refresh) in refreshed {
+            self.after_content_refresh(task_id, refresh);
+        }
+    }
+
+    /// Re-measure one review task's worktree and write what changed — the
+    /// shared step behind the boot pass, a turn that ran outside the engine
+    /// ([`Self::refresh_after_foreign_turn`]) and a refused completion
+    /// ([`Self::complete_task`]). Takes the folder lock: the counters and the
+    /// acceptance light are what the auto-merge sweep re-checks under that
+    /// same lock (see [`Self::merge_task_inner`]), so a landing can never be
+    /// dispatched on a light this write is about to clear.
+    async fn refresh_review_task(
+        &self,
+        task_id: i32,
+        content_may_have_changed: bool,
+    ) -> ContentRefresh {
+        let Ok(task) = work_task_service::get_model(&self.db.conn, task_id).await else {
+            return ContentRefresh::default();
+        };
+        let lock = self.folder_lock(task.folder_id).await;
+        let _guard = lock.lock().await;
+        self.refresh_review_task_locked(task_id, content_may_have_changed)
             .await
-            {
-                Ok(true) => {
-                    tracing::info!(
-                        "[work_task] task {}: diff stat corrected to {} file(s), +{}/-{}",
-                        task.id,
-                        stats.0,
-                        stats.1,
-                        stats.2
-                    );
-                    self.emit_upsert(task.id);
+    }
+
+    /// [`Self::refresh_review_task`] for a caller already holding the folder
+    /// lock (a tokio mutex, not re-entrant).
+    ///
+    /// The preflight light is cleared — in the same update as the counters —
+    /// whenever it may describe content the worktree no longer holds: when
+    /// the counters moved, and when `content_may_have_changed` says a change
+    /// could hide behind identical totals (an agent turn can rewrite a line
+    /// without changing how many it touched). Only with a preflight
+    /// configured: without one there is no light to go stale.
+    ///
+    /// Best-effort throughout: an unreadable worktree keeps whatever the row
+    /// already says, and a task that left review — or started another round —
+    /// meanwhile is not written (the CAS binds status and `run_seq`).
+    async fn refresh_review_task_locked(
+        &self,
+        task_id: i32,
+        content_may_have_changed: bool,
+    ) -> ContentRefresh {
+        let none = ContentRefresh::default();
+        let Ok(task) = work_task_service::get_model(&self.db.conn, task_id).await else {
+            return none;
+        };
+        if task.status != WorkTaskStatus::Review || task.deleted_at.is_some() {
+            return none;
+        }
+        let Some(wt) = self.live_worktree(&task).await else {
+            return none;
+        };
+        let Some(anchor) = own_work_anchor(&wt.path, &task).await else {
+            return none;
+        };
+        let Some(stats) = diff_stats_from(&wt.path, &anchor).await else {
+            return none;
+        };
+        let stats_changed = (task.files_changed, task.additions, task.deletions)
+            != (Some(stats.0), Some(stats.1), Some(stats.2));
+        let settings = work_task_service::settings_get_effective(&self.db.conn, task.folder_id)
+            .await
+            .unwrap_or_default();
+        let clear_light =
+            preflight_configured(&settings) && (stats_changed || content_may_have_changed);
+        if !stats_changed && !clear_light {
+            return none;
+        }
+        match work_task_service::refresh_review_content(
+            &self.db.conn,
+            task.id,
+            task.run_seq,
+            stats,
+            clear_light,
+        )
+        .await
+        {
+            Ok(true) => {
+                self.emit_upsert(task.id);
+                ContentRefresh {
+                    wrote: true,
+                    run_seq: task.run_seq,
+                    stats,
+                    stats_changed,
+                    light_cleared: clear_light,
                 }
-                Ok(false) => {} // left review meanwhile — its own settle owns the row
-                Err(e) => tracing::warn!(
+            }
+            Ok(false) => none, // left review meanwhile — its own settle owns the row
+            Err(e) => {
+                tracing::warn!(
                     "[work_task] task {}: could not refresh the diff stat: {e}",
                     task.id
-                ),
+                );
+                none
             }
+        }
+    }
+
+    /// What a refresh owes the task afterwards, once the row says something
+    /// new: a cleared light is re-run, and a task whose content changed gets
+    /// the merge pump's look — the same post-review step a settled round runs
+    /// (see [`Self::spawn_post_review`]: preflight first, then the pump, so
+    /// the sweep never reads a light that is not there yet).
+    fn after_content_refresh(self: &Arc<Self>, task_id: i32, refresh: ContentRefresh) {
+        if refresh.wrote && (refresh.stats_changed || refresh.light_cleared) {
+            self.spawn_post_review(task_id, refresh.run_seq);
+        }
+    }
+
+    /// A turn ended on a connection that is not a task run — someone replied
+    /// to a task's session from the conversation list, say, or worked in its
+    /// worktree from another conversation (#1166). Such a turn can commit
+    /// work the review counters never saw, and those counters decide whether
+    /// the board offers "merge" or "complete"; re-measure every review task
+    /// the session could have touched. Spawned: `on_event` runs serially, and
+    /// git must not hold up the bus.
+    async fn spawn_foreign_turn_refresh(self: &Arc<Self>, conn_id: &str) {
+        let Some(state) = self.manager.get_state(conn_id).await else {
+            return;
+        };
+        let (conversation_id, folder_id) = {
+            let state = state.read().await;
+            (state.conversation_id, state.folder_id)
+        };
+        if conversation_id.is_none() && folder_id.is_none() {
+            return;
+        }
+        let engine = self.clone();
+        tokio::spawn(async move {
+            engine
+                .refresh_after_foreign_turn(conversation_id, folder_id)
+                .await;
+        });
+    }
+
+    async fn refresh_after_foreign_turn(
+        self: &Arc<Self>,
+        conversation_id: Option<i32>,
+        folder_id: Option<i32>,
+    ) {
+        let Ok(tasks) = work_task_service::list_review_tasks_for_session(
+            &self.db.conn,
+            conversation_id,
+            folder_id,
+        )
+        .await
+        else {
+            return;
+        };
+        for task in tasks {
+            let refresh = self.refresh_review_task(task.id, true).await;
+            self.after_content_refresh(task.id, refresh);
         }
     }
 
@@ -3993,6 +4254,12 @@ impl TaskEngine {
         let reason = match &live_wt {
             Some(wt) => {
                 if self.has_landable_changes(&task, &wt.path).await? {
+                    // The board offered "complete" off counters that no longer
+                    // describe the worktree (#1166). Correct them before
+                    // refusing, so the card trades this button for "merge"
+                    // instead of offering the refusal again.
+                    let refresh = self.refresh_review_task_locked(task_id, true).await;
+                    self.after_content_refresh(task_id, refresh);
                     return Err(
                         "this task changed files after all — merge it instead of completing it"
                             .to_string(),
@@ -4250,6 +4517,33 @@ impl TaskEngine {
         let lock = self.folder_lock(task.folder_id).await;
         let _guard = lock.lock().await;
 
+        // An unattended landing re-checks its eligibility here, under the lock
+        // every content refresh writes under: the sweep read the row before
+        // this lock, and a refresh in between may have cleared the green light
+        // it went by (the content changed under it — #1166). Landing on that
+        // light would merge work no preflight ever ran on.
+        if auto {
+            let fresh = work_task_service::get_model(&self.db.conn, task_id)
+                .await
+                .map_err(|e| e.to_string())?;
+            if fresh.run_seq != task.run_seq || !auto_merge_candidate(&fresh, &settings) {
+                return Err(AUTO_MERGE_NO_LONGER_ELIGIBLE.to_string());
+            }
+            // Someone is still working in the task's session or worktree — a
+            // reply sent from the conversation list, say. Landing now would
+            // take half-done work, and the merge launch would reuse that busy
+            // connection, have its prompt refused, and drop the user's session.
+            // The turn's end re-measures the task and pumps again (and the
+            // reconcile tick catches anything that leaves untouched).
+            if self
+                .manager
+                .has_turn_in_flight_for(fresh.conversation_id, fresh.worktree_folder_id)
+                .await
+            {
+                return Err(AUTO_MERGE_NO_LONGER_ELIGIBLE.to_string());
+            }
+        }
+
         let another_merging =
             work_task_service::list_by_status(&self.db.conn, &[WorkTaskStatus::Merging])
                 .await
@@ -4384,6 +4678,7 @@ impl TaskEngine {
                             strategy,
                             message,
                             instructions,
+                            delete_worktree,
                         },
                         in_flight,
                     )
@@ -6329,6 +6624,16 @@ impl TaskEngine {
             if self.live_worktree(&task).await.is_none() {
                 continue;
             }
+            // Someone is working in this task's session or worktree: it is not
+            // ready to land, and waiting on it must not hold up the rest of the
+            // column (a turn can sit on a question for hours).
+            if self
+                .manager
+                .has_turn_in_flight_for(task.conversation_id, task.worktree_folder_id)
+                .await
+            {
+                continue;
+            }
             match self
                 // No instructions: nobody was at the keyboard to write any.
                 .merge_task(task.id, None, settings.delete_worktree_default, None, true)
@@ -6337,6 +6642,10 @@ impl TaskEngine {
                 // An unattended dispatch never queues (see `merge_task`), so
                 // this is always the live generation.
                 Ok(_) => {}
+                // This one changed (or got busy) between the read above and the
+                // dispatch's own check under the folder lock — the next
+                // candidate may still land.
+                Err(e) if e == AUTO_MERGE_NO_LONGER_ELIGIBLE => continue,
                 Err(e) if is_benign_merge_race(&e) => {}
                 Err(e) => {
                     tracing::warn!(
@@ -7257,8 +7566,16 @@ fn is_benign_merge_race(error: &str) -> bool {
     error.contains("not in review")
         || error.contains("left review")
         || error.contains("already merging")
+        || error == AUTO_MERGE_NO_LONGER_ELIGIBLE
         || is_queued_merge_superseded(error)
 }
+
+/// An unattended landing whose row changed between the sweep's read and the
+/// folder lock (see [`TaskEngine::merge_task_inner`]) — a benign race: the
+/// sweep skips it, and the post-review step the change triggered sweeps again
+/// once the preflight has spoken.
+const AUTO_MERGE_NO_LONGER_ELIGIBLE: &str =
+    "the task changed since the auto-merge sweep read it — skipping this landing";
 
 /// The one benign race the drain cannot simply step over: the user withdrew or
 /// edited the very merge it was dispatching (see [`missed_queue_cas`]). Their
@@ -7694,23 +8011,19 @@ fn chosen_base_branch(task: &crate::db::entities::work_task::Model) -> Option<St
 
 /// Layered agent config: task override wins wholesale; else the folder's task
 /// settings; else the folder's default agent with no extra options.
+///
+/// A frozen config is the task's own and is used verbatim (possibly with no
+/// agent); only a legacy one is layered.
 fn effective_agent_config(
     cfg: &WorkTaskConfig,
     settings: &WorkTaskFolderSettings,
     root: &crate::models::FolderDetail,
-) -> (
-    Option<String>,
-    Option<String>,
-    std::collections::BTreeMap<String, String>,
-) {
-    if let Some(agent) = cfg.agent_type.clone() {
-        return (Some(agent), cfg.mode_id.clone(), cfg.config_values.clone());
-    }
-    if let Some(agent) = settings.default_agent_type.clone() {
+) -> work_task_service::AgentTuple {
+    if cfg.agent_config_frozen {
         return (
-            Some(agent),
-            settings.mode_id.clone(),
-            settings.config_values.clone(),
+            cfg.agent_type.clone(),
+            cfg.mode_id.clone(),
+            cfg.config_values.clone(),
         );
     }
     let folder_default = root
@@ -7718,11 +8031,7 @@ fn effective_agent_config(
         .as_ref()
         .and_then(|a| serde_json::to_value(a).ok())
         .and_then(|v| v.as_str().map(String::from));
-    (
-        folder_default,
-        settings.mode_id.clone(),
-        settings.config_values.clone(),
-    )
+    work_task_service::layer_agent_config(cfg, settings, folder_default)
 }
 
 /// Compose the prompt for a launch mode. Fresh runs replay the task's blocks.
@@ -7849,6 +8158,7 @@ async fn compose_prompt(
             strategy,
             message,
             instructions,
+            delete_worktree,
         } => {
             if !resumed {
                 blocks.push(PromptInputBlock::Text {
@@ -7886,6 +8196,21 @@ async fn compose_prompt(
                 Some(i) => format!("\nAlso follow these instructions from the user:\n{i}\n"),
                 None => String::new(),
             };
+            // The "do not delete" rule stays either way (codeg owns the cleanup
+            // and settles from git truth); what follows it says what codeg will
+            // do afterwards, so the agent's summary matches the end state.
+            let cleanup = if *delete_worktree {
+                format!(
+                    " After it has verified the landing, codeg will remove this worktree and \
+                     the `{work_branch}` branch itself, as the user chose — leave that to it, \
+                     and do not describe them as kept."
+                )
+            } else {
+                format!(
+                    " The worktree and the `{work_branch}` branch stay after the merge, as the \
+                     user chose."
+                )
+            };
             blocks.push(PromptInputBlock::Text {
                 text: format!(
                     "The user accepted this task — land it onto the base branch \
@@ -7900,7 +8225,7 @@ async fn compose_prompt(
                      {extra}\n\
                      Do NOT push, do NOT delete this worktree or its branch, and do not \
                      change anything else on the base branch — leave the checkout at \
-                     `{root_path}` on `{base_branch}`, never switch branches there. \
+                     `{root_path}` on `{base_branch}`, never switch branches there.{cleanup} \
                      Finish with one short line saying what landed."
                 ),
             });
@@ -9355,6 +9680,7 @@ mod tests {
             strategy: "squash".to_string(),
             message: None,
             instructions: None,
+            delete_worktree: true,
         }
     }
 
@@ -10531,6 +10857,7 @@ mod tests {
             work_branch,
             strategy,
             message,
+            delete_worktree,
             ..
         } = merge_mode()
         else {
@@ -10543,6 +10870,7 @@ mod tests {
             strategy,
             message,
             instructions: Some("Prefer this branch's side on any conflict.".to_string()),
+            delete_worktree,
         };
         let blocks = compose_prompt(
             &task_config(),
@@ -10565,6 +10893,70 @@ mod tests {
             "the rules must stay last — they are what an over-eager reading of \
              the user's request would otherwise override"
         );
+    }
+
+    /// #1168: the closing rule forbids the agent to delete the worktree either
+    /// way, so the prompt has to say what codeg does afterwards — otherwise the
+    /// agent's last line reports a worktree "kept" that codeg is about to
+    /// remove. Both choices are spelled out, after the rule they qualify.
+    #[tokio::test]
+    async fn merge_prompt_states_what_happens_to_the_worktree_afterwards() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        for delete in [true, false] {
+            let LaunchMode::Merge {
+                root_path,
+                base_branch,
+                work_branch,
+                strategy,
+                message,
+                instructions,
+                ..
+            } = merge_mode()
+            else {
+                unreachable!("merge_mode is a merge")
+            };
+            let mode = LaunchMode::Merge {
+                root_path,
+                base_branch,
+                work_branch,
+                strategy,
+                message,
+                instructions,
+                delete_worktree: delete,
+            };
+            let blocks = compose_prompt(
+                &task_config(),
+                &task_row(),
+                &mode,
+                &WorkTaskFolderSettings::default(),
+                true,
+                &db.conn,
+            )
+            .await
+            .expect("compose");
+            let recipe = &texts(&blocks)[0];
+            let rule = recipe
+                .find("do NOT delete this worktree or its branch")
+                .expect("the rule stays whatever the choice");
+            let removes = "codeg will remove this worktree and the `task/7` branch itself";
+            let keeps = "The worktree and the `task/7` branch stay after the merge";
+            let (said, unsaid) = if delete {
+                (removes, keeps)
+            } else {
+                (keeps, removes)
+            };
+            let at = recipe
+                .find(said)
+                .unwrap_or_else(|| panic!("{said:?} in {recipe}"));
+            assert!(
+                rule < at,
+                "the end state qualifies the rule, so it follows it"
+            );
+            assert!(
+                !recipe.contains(unsaid),
+                "only the chosen end state is stated"
+            );
+        }
     }
 
     /// …and an empty box adds nothing: no dangling header, no stray blank
@@ -14149,6 +14541,357 @@ mod tests {
         assert_eq!((*kind, *number), (ForgeItemKind::Change, 7));
         assert!(body.contains("nothing was pushed to this pull request"), "{body}");
         assert!(!body.to_lowercase().contains("accept"), "reads as an approval: {body}");
+    }
+
+    // ── #1166: counters re-measured after work done outside a task round ──
+
+    /// Rewrite the fixture row as one whose counters went stale: settled with
+    /// nothing changed (the "complete" button's territory) while the worktree
+    /// holds the fixture's one-line commit. Ordinary provenance, so nothing
+    /// forge-specific (auto-merge never takes forge tasks) muddies a test.
+    async fn stale_empty_review_row(f: &Delivery, conversation_id: Option<i32>) {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let mut active = row(&f.engine, f.task_id).await.into_active_model();
+        active.source_kind = Set(None);
+        active.source_key = Set(None);
+        active.source_meta = Set(None);
+        active.conversation_id = Set(conversation_id);
+        active.files_changed = Set(Some(0));
+        active.additions = Set(Some(0));
+        active.deletions = Set(Some(0));
+        active.update(&f.engine.db.conn).await.expect("stale row");
+    }
+
+    fn counters(
+        t: &crate::db::entities::work_task::Model,
+    ) -> (Option<i32>, Option<i32>, Option<i32>) {
+        (t.files_changed, t.additions, t.deletions)
+    }
+
+    async fn with_preflight(f: &Delivery, command: &str) {
+        let folder_id = row(&f.engine, f.task_id).await.folder_id;
+        let settings = WorkTaskFolderSettings {
+            preflight_command: Some(command.to_string()),
+            ..WorkTaskFolderSettings::default()
+        };
+        work_task_service::settings_set(&f.engine.db.conn, folder_id, &settings)
+            .await
+            .expect("settings");
+    }
+
+    async fn set_light(f: &Delivery, status: &str) {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let light = WorkTaskPreflight {
+            status: status.to_string(),
+            command: "tests".to_string(),
+            exit_code: Some(0),
+            output_tail: None,
+            run_id: None,
+        };
+        let mut active = row(&f.engine, f.task_id).await.into_active_model();
+        active.preflight = Set(Some(serde_json::to_string(&light).expect("light")));
+        active.update(&f.engine.db.conn).await.expect("light");
+    }
+
+    /// A connection that is not a task run, bound to `conversation_id` /
+    /// `folder_id` the way a conversation opened from the list is.
+    async fn foreign_connection(
+        f: &Delivery,
+        id: &str,
+        conversation_id: Option<i32>,
+        folder_id: Option<i32>,
+    ) {
+        let emitter = EventEmitter::test_web_only(Arc::new(
+            crate::web::event_bridge::WebEventBroadcaster::new(),
+        ));
+        f.engine
+            .manager
+            .insert_test_connection(id, AgentType::ClaudeCode, None, emitter)
+            .await;
+        let state = f.engine.manager.get_state(id).await.expect("state");
+        let mut state = state.write().await;
+        state.conversation_id = conversation_id;
+        state.folder_id = folder_id;
+    }
+
+    /// The reported path: the task settled with nothing changed, then the user
+    /// replied to its session from the conversation list and the agent
+    /// committed. That turn is no task run, but when it ends the row has to
+    /// learn what the worktree now holds — the counters are what decide
+    /// between "merge" and "complete".
+    #[tokio::test]
+    async fn a_turn_on_the_tasks_session_outside_a_round_re_measures_it() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        stale_empty_review_row(&f, Some(41)).await;
+        foreign_connection(&f, "from-the-list", Some(41), None).await;
+
+        f.engine.on_turn_complete("from-the-list", "end_turn").await;
+
+        let engine = f.engine.clone();
+        let task_id = f.task_id;
+        wait_for("the re-measure", move || {
+            let engine = engine.clone();
+            async move { row(&engine, task_id).await.files_changed == Some(1) }
+        })
+        .await;
+        let after = row(&f.engine, f.task_id).await;
+        assert_eq!(counters(&after), (Some(1), Some(1), Some(0)));
+        assert_eq!(after.status, WorkTaskStatus::Review, "nothing else moved");
+        assert_ne!(
+            after.files_changed,
+            Some(0),
+            "the board now offers the merge"
+        );
+    }
+
+    /// …and a conversation opened INSIDE the task's worktree is the same kind
+    /// of turn: it is matched by the folder it runs in, not by the session.
+    #[tokio::test]
+    async fn a_turn_in_the_tasks_worktree_from_another_conversation_re_measures_it() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        stale_empty_review_row(&f, Some(41)).await;
+        let wt_folder = row(&f.engine, f.task_id).await.worktree_folder_id;
+
+        f.engine
+            .refresh_after_foreign_turn(Some(99), wt_folder)
+            .await;
+
+        assert_eq!(
+            counters(&row(&f.engine, f.task_id).await),
+            (Some(1), Some(1), Some(0))
+        );
+    }
+
+    /// A turn that has nothing to do with the task — another conversation,
+    /// another folder, or a connection carrying no ids at all — leaves the
+    /// row alone; so does a task that is not in review.
+    #[tokio::test]
+    async fn an_unrelated_turn_leaves_the_row_alone() {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let f = delivery_fixture(FakeForge::default()).await;
+        stale_empty_review_row(&f, Some(41)).await;
+
+        f.engine
+            .refresh_after_foreign_turn(Some(99), Some(12345))
+            .await;
+        f.engine.refresh_after_foreign_turn(None, None).await;
+        foreign_connection(&f, "no-ids", None, None).await;
+        f.engine.on_turn_complete("no-ids", "end_turn").await;
+        f.engine
+            .on_turn_complete("not-a-connection", "end_turn")
+            .await;
+        assert_eq!(
+            counters(&row(&f.engine, f.task_id).await),
+            (Some(0), Some(0), Some(0))
+        );
+
+        let mut active = row(&f.engine, f.task_id).await.into_active_model();
+        active.status = Set(WorkTaskStatus::Done);
+        active.update(&f.engine.db.conn).await.expect("done");
+        f.engine.refresh_after_foreign_turn(Some(41), None).await;
+        assert_eq!(
+            counters(&row(&f.engine, f.task_id).await),
+            (Some(0), Some(0), Some(0)),
+            "a finished task's counters are its record, not a live reading"
+        );
+    }
+
+    /// The light measured on the old content says nothing about the new one.
+    /// An agent turn can change content without changing the totals, so after
+    /// such a turn the light goes whatever the counters say — and comes back
+    /// from a fresh run of the command, never from the stale verdict.
+    #[tokio::test]
+    async fn a_turn_outside_a_round_clears_and_re_runs_the_preflight() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        stale_empty_review_row(&f, Some(41)).await;
+        // `exit 0` succeeds under both `sh -c` and `cmd.exe /C`.
+        with_preflight(&f, "exit 0").await;
+        // Counters already right: only the content could have changed.
+        f.engine.refresh_review_task(f.task_id, false).await;
+        set_light(&f, "passed").await;
+
+        let refresh = f.engine.refresh_review_task(f.task_id, true).await;
+        assert!(refresh.wrote && refresh.light_cleared && !refresh.stats_changed);
+        assert!(
+            row(&f.engine, f.task_id).await.preflight.is_none(),
+            "stale light cleared"
+        );
+
+        f.engine.after_content_refresh(f.task_id, refresh);
+        let engine = f.engine.clone();
+        let task_id = f.task_id;
+        wait_for("the re-run", move || {
+            let engine = engine.clone();
+            async move {
+                row(&engine, task_id)
+                    .await
+                    .preflight
+                    .and_then(|p| serde_json::from_str::<WorkTaskPreflight>(&p).ok())
+                    .is_some_and(|p| p.status == "passed" && p.run_id.is_some())
+            }
+        })
+        .await;
+    }
+
+    /// Without a preflight there is no light to go stale, and identical
+    /// counters are nothing to write: no write, no post-review pass.
+    #[tokio::test]
+    async fn unchanged_counters_without_a_preflight_write_nothing() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        stale_empty_review_row(&f, None).await;
+        assert!(
+            f.engine
+                .refresh_review_task(f.task_id, true)
+                .await
+                .stats_changed
+        );
+        let before = row(&f.engine, f.task_id).await.updated_at;
+
+        let again = f.engine.refresh_review_task(f.task_id, true).await;
+        assert_eq!(again, ContentRefresh::default());
+        assert_eq!(row(&f.engine, f.task_id).await.updated_at, before);
+    }
+
+    /// The boot pass corrects counters too, and a corrected row's light is
+    /// cleared with them: it was measured on content the counters now say is
+    /// gone.
+    #[tokio::test]
+    async fn the_boot_pass_clears_the_light_of_a_row_it_corrects() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        stale_empty_review_row(&f, None).await;
+        with_preflight(&f, "exit 1").await;
+        set_light(&f, "passed").await;
+
+        let refresh = f.engine.refresh_review_task(f.task_id, false).await;
+
+        assert!(refresh.stats_changed && refresh.light_cleared);
+        let after = row(&f.engine, f.task_id).await;
+        assert_eq!(counters(&after), (Some(1), Some(1), Some(0)));
+        assert!(after.preflight.is_none());
+    }
+
+    /// Anything the session hook cannot see — a commit made by hand in a
+    /// terminal — still meets the completion's own git check. The refusal
+    /// corrects the row on its way out, so the card trades "complete" for
+    /// "merge" instead of offering the same refusal again; the work itself is
+    /// untouched.
+    #[tokio::test]
+    async fn a_refused_completion_corrects_the_counters() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        stale_empty_review_row(&f, None).await;
+
+        let refused = f
+            .engine
+            .complete_task(f.task_id, true)
+            .await
+            .expect_err("the work is still sitting there");
+
+        assert!(refused.contains("changed files after all"), "{refused}");
+        let after = row(&f.engine, f.task_id).await;
+        assert_eq!(after.status, WorkTaskStatus::Review);
+        assert_eq!(counters(&after), (Some(1), Some(1), Some(0)));
+        assert!(
+            after.worktree_folder_id.is_some(),
+            "the worktree stays recorded"
+        );
+        assert!(f.worktree.join("a.txt").exists(), "…and on disk");
+        assert!(
+            task_git::local_branch_tip(f.root.to_str().unwrap(), "task/7")
+                .await
+                .expect("branch")
+                .is_some(),
+            "…and so does its branch"
+        );
+    }
+
+    /// The sweep reads the row before the folder lock; a content refresh in
+    /// between may clear the green light it went by. The dispatch re-checks
+    /// under the lock and skips — benignly — instead of landing work no
+    /// preflight ran on.
+    #[tokio::test]
+    async fn an_auto_merge_rechecks_the_light_under_the_folder_lock() {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let f = delivery_fixture(FakeForge::default()).await;
+        stale_empty_review_row(&f, None).await;
+        with_preflight(&f, "exit 0").await;
+        let mut active = row(&f.engine, f.task_id).await.into_active_model();
+        active.files_changed = Set(Some(1));
+        active.update(&f.engine.db.conn).await.expect("counters");
+        set_light(&f, "passed").await;
+        let settings = work_task_service::settings_get_effective(
+            &f.engine.db.conn,
+            row(&f.engine, f.task_id).await.folder_id,
+        )
+        .await
+        .expect("settings");
+        assert!(
+            auto_merge_candidate(&row(&f.engine, f.task_id).await, &settings),
+            "control: with its light the row is a candidate"
+        );
+        // What a refresh racing the sweep leaves behind.
+        let mut active = row(&f.engine, f.task_id).await.into_active_model();
+        active.preflight = Set(None);
+        active
+            .update(&f.engine.db.conn)
+            .await
+            .expect("cleared light");
+
+        let refused = f
+            .engine
+            .merge_task(f.task_id, None, true, None, true)
+            .await
+            .expect_err("no landing on a cleared light");
+
+        assert_eq!(refused, AUTO_MERGE_NO_LONGER_ELIGIBLE);
+        assert!(
+            is_benign_merge_race(&refused),
+            "the sweep skips it silently"
+        );
+        let after = row(&f.engine, f.task_id).await;
+        assert_eq!(after.status, WorkTaskStatus::Review);
+        assert!(after.last_error.is_none(), "no banner for a benign skip");
+    }
+
+    /// An unattended landing waits while someone is still working in the
+    /// task's session — or in its worktree from another conversation: landing
+    /// would take half-done work, and the merge launch would reuse the busy
+    /// connection and drop it when its prompt is refused. Skipped benignly;
+    /// the turn's end pumps again.
+    #[tokio::test]
+    async fn an_auto_merge_waits_for_a_turn_in_the_tasks_session_or_worktree() {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let f = delivery_fixture(FakeForge::default()).await;
+        stale_empty_review_row(&f, Some(41)).await;
+        let mut active = row(&f.engine, f.task_id).await.into_active_model();
+        active.files_changed = Set(Some(1));
+        active.update(&f.engine.db.conn).await.expect("counters");
+        let wt_folder = row(&f.engine, f.task_id).await.worktree_folder_id;
+        assert!(auto_merge_candidate(
+            &row(&f.engine, f.task_id).await,
+            &WorkTaskFolderSettings::default()
+        ));
+
+        for (conn, conversation, folder) in [
+            ("the-session", Some(41), None),
+            ("in-the-worktree", Some(99), wt_folder),
+        ] {
+            foreign_connection(&f, conn, conversation, folder).await;
+            let state = f.engine.manager.get_state(conn).await.expect("state");
+            state.write().await.turn_in_flight = true;
+
+            let refused = f
+                .engine
+                .merge_task(f.task_id, None, true, None, true)
+                .await
+                .expect_err("no landing under a live turn");
+
+            assert_eq!(refused, AUTO_MERGE_NO_LONGER_ELIGIBLE, "{conn}");
+            assert_eq!(
+                row(&f.engine, f.task_id).await.status,
+                WorkTaskStatus::Review
+            );
+            state.write().await.turn_in_flight = false;
+        }
     }
 
     /// The comment is the reply the user accepted, then the link and the

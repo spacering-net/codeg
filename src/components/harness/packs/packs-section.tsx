@@ -73,7 +73,14 @@ import {
   UI_INFO,
   updatePackView,
 } from "@/lib/harness/packs-state"
+import { HARNESS_INSTALLED } from "@/lib/harness/mcp-install-state"
+import {
+  pluginProvidersOf,
+  providersBySkill,
+  providersWithReaders,
+} from "@/lib/harness/plugin-list"
 import { modelOf, reloadInventory } from "@/lib/harness/skill-links"
+import { useHarnessInstalledSync } from "@/lib/harness/use-harness-installed"
 import {
   openBackupDeleteDialog,
   openCopyDialog,
@@ -98,6 +105,7 @@ import {
 import { HarnessScroller } from "../harness-scroller"
 import { SHOW_ALL_AGENTS_CLASS } from "../mcp/mcp-server-detail"
 import { DiscoverMark } from "../discover/discover-card"
+import { HarnessRecordProblem } from "../install/install-parts"
 import { SkillEffectsDialog } from "../skills/effects-dialog"
 import {
   EmptyState,
@@ -182,6 +190,25 @@ function usePackRows(
   const [office] = useHarnessSlot(OFFICE_LIST)
   const [officeInfo] = useHarnessSlot(OFFICE_INFO)
   const [ui] = useHarnessSlot(UI_INFO)
+  const tGrid = useTranslations("Harness.skills.grid")
+  const [installed] = useHarnessSlot(HARNESS_INSTALLED)
+  const plugins = installed.value?.plugins
+  // Which plugin gives which agent an expert's name (the Experts pack is
+  // superpowers, and so is a plugin): off there, and not to be switched on.
+  // Nor for an agent whose link folder such an agent also reads. Until the
+  // host has said what it installed, no expert is switched on: a plugin it
+  // has whole is not to be found on disk. Nor while the plugin record cannot
+  // be read, or the last read failed (what is kept may be out of date). A
+  // Codeg that has no such listing at all installs no plugins.
+  const providers = useMemo(() => pluginProvidersOf(plugins ?? []), [plugins])
+  const listingKnown =
+    (installed.value !== null &&
+      installed.phase !== "error" &&
+      installed.failure === null &&
+      !installed.value.plugins_problem) ||
+    (installed.value === null &&
+      installed.phase === "error" &&
+      installed.failure?.kind === "unsupported")
   return useMemo(() => {
     const state =
       tab === "experts"
@@ -224,14 +251,17 @@ function usePackRows(
           const id = item.metadata.id
           const nameTaken = item.name_taken === true || model.nameTaken.has(id)
           const skill = nameTaken ? null : (store.get(id) ?? null)
+          const direct = providersBySkill(providers, id)
+          const givers = [...new Set(Object.values(direct))]
           return {
+            providers: providersWithReaders(direct, model.agents),
             id,
             skill,
             name: pickLocalized(item.metadata.display_name, locale) || id,
             description: pickLocalized(item.metadata.description, locale),
             icon: getExpertIcon(item.metadata.icon),
             category: item.metadata.category,
-            ready: skill !== null,
+            ready: skill !== null && listingKnown,
             notReady: nameTaken
               ? takenWords(id)
               : skill
@@ -242,6 +272,11 @@ function usePackRows(
                 {nameTaken && nameTakenMark}
                 {(item.user_modified || skill?.pending_user_review) &&
                   userModified}
+                {givers.map((plugin) => (
+                  <DiscoverMark key={plugin} tone="info">
+                    {tGrid("providedBy", { plugin })}
+                  </DiscoverMark>
+                ))}
               </>
             ),
           }
@@ -367,6 +402,9 @@ function usePackRows(
     tScience,
     tOffice,
     tUi,
+    tGrid,
+    providers,
+    listingKnown,
   ])
 }
 
@@ -461,6 +499,7 @@ function PackBody({
   const [showAll, setShowAll] = useHarnessSlot(PACKS_SHOW_ALL_AGENTS)
   const [inventory] = useHarnessSlot(PACKS_LINKS.inventory)
   const [skillsInventory] = useHarnessSlot(SKILLS_LINKS.inventory)
+  const [installedListing] = useHarnessSlot(HARNESS_INSTALLED)
   const zoom = useContext(AppearanceContext)?.zoomLevel ?? 100
   const rem = (16 * zoom) / 100
   const listRef = useRef<HTMLDivElement>(null)
@@ -514,8 +553,11 @@ function PackBody({
           },
         }
 
+  const pluginsProblem = installedListing.value?.plugins_problem ?? null
   const extra =
-    tab === "office" ? (
+    tab === "experts" && pluginsProblem ? (
+      <HarnessRecordProblem part="plugins" problem={pluginsProblem} />
+    ) : tab === "office" ? (
       <OfficeCard />
     ) : tab === "ui" ? (
       <div className="space-y-2">
@@ -748,6 +790,7 @@ export function PacksSection() {
   const [inventory] = useHarnessSlot(PACKS_LINKS.inventory)
   const isMobile = useIsMobile()
   const [rootRef, width] = useElementWidth<HTMLDivElement>()
+  useHarnessInstalledSync()
   // `openHarness({ section: "packs", tab })`: shown from the first frame, then
   // kept as the remembered tab.
   const target = useConsumeHarnessTarget("packs", (requested) =>

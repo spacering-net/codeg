@@ -106,6 +106,52 @@ describe("useAgentSkills", () => {
     })
     expect(ids(result.current)).toEqual(["two"])
   })
+
+  it("releases old closed folders while keeping active and recently closed lists", async () => {
+    mockListSkills.mockImplementation(async ({ workspacePath }) =>
+      listing(workspacePath ?? "default")
+    )
+    const active = renderHook(() => useAgentSkills("codex", "/ws/active"))
+    await waitFor(() =>
+      expect(ids(active.result.current)).toEqual(["/ws/active"])
+    )
+    const visiting = renderHook(({ path }) => useAgentSkills("codex", path), {
+      initialProps: { path: "/ws/0" },
+    })
+    await waitFor(() => expect(ids(visiting.result.current)).toEqual(["/ws/0"]))
+
+    for (let index = 1; index <= 32; index += 1) {
+      const path = `/ws/${index}`
+      await act(async () => {
+        visiting.rerender({ path })
+      })
+      expect(ids(visiting.result.current)).toEqual([path])
+    }
+    visiting.unmount()
+
+    const recent = renderHook(() => useAgentSkills("codex", "/ws/32"))
+    expect(ids(recent.result.current)).toEqual(["/ws/32"])
+    // Exactly 32 closed lists stay: the second-oldest is still served.
+    const boundary = renderHook(() => useAgentSkills("codex", "/ws/1"))
+    expect(ids(boundary.result.current)).toEqual(["/ws/1"])
+    const activeReader = renderHook(() => useAgentSkills("codex", "/ws/active"))
+    expect(activeReader.result.current).toBe(active.result.current)
+    expect(mockListSkills).toHaveBeenCalledTimes(34)
+
+    const pending = deferred<AgentSkillsListResult>()
+    mockListSkills.mockReturnValueOnce(pending.promise)
+    const oldest = renderHook(() => useAgentSkills("codex", "/ws/0"))
+    expect(oldest.result.current).toEqual([])
+    expect(mockListSkills).toHaveBeenLastCalledWith({
+      agentType: "codex",
+      workspacePath: "/ws/0",
+    })
+    await act(async () => {
+      pending.resolve(listing("reloaded"))
+      await pending.promise
+    })
+    expect(ids(oldest.result.current)).toEqual(["reloaded"])
+  })
 })
 
 describe("useAgentSkills window-focus refresh", () => {

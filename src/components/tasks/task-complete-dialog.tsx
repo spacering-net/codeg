@@ -24,6 +24,13 @@ interface TaskCompleteDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   task: WorkTask | null
+  /**
+   * Whether the task still has nothing to merge, judged from its LIVE row
+   * (`task` is the copy captured when the dialog opened). When it flips to
+   * false — the task turned out to hold changes after all — the dialog closes:
+   * completing would only be refused, and the card now offers the merge.
+   */
+  stillApplies?: boolean
 }
 
 /**
@@ -40,6 +47,7 @@ export function TaskCompleteDialog({
   open,
   onOpenChange,
   task,
+  stillApplies = true,
 }: TaskCompleteDialogProps) {
   const t = useTranslations("Tasks")
   const [deleteWorktree, setDeleteWorktree] = useState(true)
@@ -68,6 +76,10 @@ export function TaskCompleteDialog({
     }
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [open, task])
+
+  useEffect(() => {
+    if (open && !stillApplies) onOpenChange(false)
+  }, [open, stillApplies, onOpenChange])
 
   const submit = async () => {
     if (!task) return

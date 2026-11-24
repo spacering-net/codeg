@@ -2298,6 +2298,7 @@
       "forge": "Repository-Panel",
       "canvas": "Unendlicher Canvas",
       "harness": "Harness Engineering",
+      "harnessHint": "Skills · MCP",
       "folderGroup": {
         "newGroup": "Neue Gruppe",
         "newGroupTitle": "Neue Ordnergruppe",
@@ -3525,6 +3526,7 @@
         "modelListLabel": "Modelle",
         "recommendedBadge": "Empfohlen",
         "recommendedValue": "Empfohlen: {value}",
+        "effortRange": "Denkaufwand: {range}",
         "searchOptions": "Optionen suchen...",
         "searchOptionsAria": "Optionen suchen",
         "noOptions": "Keine Optionen gefunden",
@@ -3688,7 +3690,8 @@
             "title": "Skill „{skill}“ ist für {agent} noch nicht aktiviert",
             "description": "Aktiviere ihn unter Harness Engineering › Skill-Pakete, um ihn hier zu nutzen.",
             "action": "Aktivieren",
-            "hint": "Skill nicht aktiviert"
+            "hint": "Skill nicht aktiviert",
+            "showPlugin": "Plugin zeigen"
           },
           "scrollPrev": "Vorherige Skills anzeigen",
           "scrollNext": "Weitere Skills anzeigen"
@@ -6374,7 +6377,7 @@
     "baseBranch": "Basis-Branch",
     "baseBranchDefault": "Aktueller Branch beim Start der Aufgabe",
     "baseBranchHint": "Die Aufgabe zweigt von diesem Branch ab und wird beim Mergen wieder dorthin übernommen.",
-    "agentInheritedHint": "Aus den Aufgaben-Einstellungen geerbt — Änderungen gelten nur für diese Aufgabe",
+    "agentInheritedHint": "Aus den Aufgabeneinstellungen — wird mit dieser Aufgabe gespeichert",
     "agentNoDefaultHint": "Kein Standard-Agent in den Aufgaben-Einstellungen — der ausgewählte Agent wird mit der Aufgabe gespeichert",
     "agentInheritedUnavailableHint": "{agent} aus den Aufgaben-Einstellungen ist nicht verfügbar — der ausgewählte Agent wird mit der Aufgabe gespeichert",
     "agentOverrideReset": "Wieder erben",
@@ -6581,7 +6584,20 @@
     "deliverPrCommitMessageLabel": "Commit-Nachricht",
     "deliverPrUncommittedHint": "Soll der Agent sie selbst committen, brich ab und schick die Aufgabe für eine weitere Runde zurück.",
     "deliverPrCommitSubmit": "Committen, pushen und öffnen",
-    "deliverPrCommitPushSubmit": "Committen und pushen"
+    "deliverPrCommitPushSubmit": "Committen und pushen",
+    "agentLockedHint": "Diese Aufgabe hat bereits eine Unterhaltung — ihr Agent kann nicht geändert werden",
+    "conversationSelectionTitle": "Modell und Optionen dieser Unterhaltung",
+    "conversationSelectionHint": "Ändere sie in der Unterhaltung; der nächste Neuversuch, die Rückgabe oder das Mergen setzt sie damit fort.",
+    "conversationSelectionOpen": "Unterhaltung zum Ändern öffnen",
+    "conversationSelectionLoading": "Wird geladen…",
+    "conversationSelectionUnavailable": "Von diesem Server nicht verfügbar",
+    "conversationSelectionEmpty": "Standardwerte des Agenten",
+    "conversationSelectionLegacy": "Noch nicht gespeichert — die Unterhaltung übernimmt diese ab ihrer nächsten Verbindung",
+    "conversationSelectionStarting": "Die Aufgabe startet gerade — versuche es erneut, sobald sie läuft",
+    "conversationSelectionReplaced": "Der Agent dieser Aufgabe unterscheidet sich von dem ihrer Unterhaltung: Der nächste Lauf startet eine neue Unterhaltung mit den Einstellungen unten.",
+    "settingsAgentFrozenHint": "Aufgaben behalten den Agenten und die Optionen, mit denen sie erstellt wurden — eine Änderung hier gilt für danach erstellte Aufgaben.",
+    "actionEditTaskConfig": "Aufgabenkonfiguration bearbeiten",
+    "selectorOnlyHint": "In der Prüfung lassen sich nur die Agentenoptionen ändern; Beschreibung und Titel bleiben unverändert."
   },
   "CustomSkillsSettings": {
     "loading": "Benutzerdefinierte Skills werden geladen…",
@@ -7564,6 +7580,7 @@
       "discover": "Entdecken",
       "mcp": "MCP",
       "skills": "Skills",
+      "plugins": "Plugins",
       "packs": "Skill-Pakete"
     },
     "updatesAvailable": "{count, plural, one {# Update verfügbar} other {# Updates verfügbar}}",
@@ -7599,7 +7616,8 @@
         "skill": "Skills",
         "mcp": "MCP",
         "prompt": "Prompts",
-        "assistant": "Assistenten"
+        "assistant": "Assistenten",
+        "plugin": "Plugins"
       },
       "kind": {
         "skill": "Skill",
@@ -7607,6 +7625,7 @@
         "prompt": "Prompt",
         "assistant": "Assistent",
         "connector": "Konnektor",
+        "plugin": "Plugin",
         "unknown": "Unbekannte Art"
       },
       "filters": {
@@ -7874,10 +7893,21 @@
           "unsupportedWeb": "Der Codeg-Server kann noch keine Definitionen kopieren. Aktualisiere den Server, um sie zu kopieren."
         }
       },
+      "plugin": {
+        "hosts": "Hosts",
+        "members": "Bestandteile",
+        "autorun": "Läuft von selbst",
+        "releases": "Releases",
+        "added": "Neu",
+        "updated": "Geändert",
+        "removed": "Entfernt",
+        "unpinned": "MCP-Server ohne feste Version",
+        "noAutorun": "Nichts"
+      },
       "hero": {
         "title": "Finde <accent>neue Fähigkeiten</accent> für deine Agenten",
-        "subtitle": "{count, number} Community-Skills, MCP-Server, Prompts und Assistenten – einmal installieren, in mehreren Agenten nutzen",
-        "subtitleNoCount": "Community-Skills, MCP-Server, Prompts und Assistenten – einmal installieren, in mehreren Agenten nutzen"
+        "subtitle": "{count, number} Community-Skills, Plugins, MCP-Server, Prompts und Assistenten – einmal installieren, in mehreren Agenten nutzen",
+        "subtitleNoCount": "Community-Skills, Plugins, MCP-Server, Prompts und Assistenten – einmal installieren, in mehreren Agenten nutzen"
       },
       "layout": {
         "label": "Ansicht",
@@ -8067,8 +8097,10 @@
           "latest": "Aktuell",
           "updateAvailable": "Update verfügbar",
           "yanked": "Version zurückgezogen",
+          "unapproved": "Freigabe zurückgezogen",
           "disabledByAuthor": "Vom Autor deaktiviert",
-          "removedByHarness": "Aus SRN Harness entfernt"
+          "removedByHarness": "Aus SRN Harness entfernt",
+          "gone": "Nicht mehr auf SRN"
         },
         "editDefinition": "Definition bearbeiten",
         "editDefinitionLetter": "Definition {letter} bearbeiten",
@@ -8422,7 +8454,11 @@
         "permissionsNotStated": "SRN Harness hat nicht gesagt, was er verlangt.",
         "noPermissions": "Nichts Besonderes.",
         "undeclared": "gefunden, nicht angegeben",
-        "declaredOnly": "angegeben, nicht gefunden"
+        "declaredOnly": "angegeben, nicht gefunden",
+        "undeclaredCount": "{count, plural, other {# nicht angegeben}}",
+        "moreValues": "{count, plural, other {# weitere}}",
+        "fewerValues": "Weniger anzeigen",
+        "noneDeclared": "Der Herausgeber hat nichts davon angegeben; alles wurde von den Prüfungen gefunden."
       },
       "blocked": {
         "title": "Das kann nicht installiert werden",
@@ -8728,18 +8764,22 @@
         "clearFilters": "Suche und Filter leeren",
         "deleteTicked": "Löschen…",
         "orphans": "Defekte Links zu Skills, die es nicht mehr gibt",
-        "problems": "Codeg hat in seinem Skill-Speicher etwas gefunden, das du dir ansehen solltest"
+        "problems": "Codeg hat in seinem Skill-Speicher etwas gefunden, das du dir ansehen solltest",
+        "pluginSkills": "Plugin-Skills"
       },
       "marks": {
         "harnessVersion": "SRN Harness {version}",
-        "problem": "Braucht Aufmerksamkeit"
+        "problem": "Braucht Aufmerksamkeit",
+        "belongsTo": "Teil von {plugin}"
       },
       "harnessStates": {
         "latest": "Aktuell",
         "updateAvailable": "Update verfügbar",
         "yanked": "Version zurückgezogen",
+        "unapproved": "Freigabe zurückgezogen",
         "disabledByAuthor": "Vom Autor deaktiviert",
         "removedByHarness": "Aus SRN Harness entfernt",
+        "gone": "Nicht mehr auf SRN",
         "changedLocally": "Hier geändert",
         "filesMissing": "Dateien fehlen"
       },
@@ -8886,7 +8926,8 @@
         "forSome": "{count, plural, one {# Agent} other {# Agenten}}",
         "batchOn": "Einschalten",
         "batchOff": "Ausschalten",
-        "clear": "Leeren"
+        "clear": "Leeren",
+        "providedBy": "Bereitgestellt von {plugin}"
       },
       "write": {
         "notOn": "<code>{skill}</code> wurde für {agent} nicht eingeschaltet.",
@@ -9074,7 +9115,8 @@
           "brokenCodeg": "Ein Link von Codeg, der nirgendwohin führt. Er lässt sich reparieren oder entfernen.",
           "brokenOther": "Ein Link, der nirgendwohin führt und nicht von Codeg stammt. Er lässt sich entfernen.",
           "unknown": "Dieses Codeg hat nicht gesagt, wem dieser Skill gehört."
-        }
+        },
+        "showPlugin": "Plugin zeigen"
       },
       "editor": {
         "newCustom": "Neuer eigener Skill",
@@ -9277,8 +9319,9 @@
         "archive": "Aus der Kopie von SRN Harness geladen, gegen deren SHA-256-Hash <code>{hash}</code>… geprüft, dann Datei für Datei.",
         "source": "Von GitHub geholt: <code>{repository}</code> bei Commit <code>{commit}</code>, Ordner <code>{path}</code>. Jede Datei wird gegen ihren SHA-256-Hash geprüft.",
         "noSource": "SRN Harness bietet weder eine Kopie der Dateien noch eine Quelle, um sie zu holen.",
-        "files": "{count, plural, one {Die Datei anzeigen} other {Die # Dateien anzeigen}}",
-        "executable": "ausführbar"
+        "executable": "ausführbar",
+        "fileList": "Dateiliste",
+        "executableCount": "{count, plural, other {# ausführbar}}"
       },
       "name": {
         "title": "Installationsname",
@@ -9504,9 +9547,245 @@
       },
       "ownershipUnresolved": "Codeg konnte seine Aufzeichnung der aus SRN Harness installierten Skills nicht lesen und kann daher nicht sagen, ob dieser aus SRN Harness stammt. Er bleibt genau, wie er ist, bis sie sich lesen lässt."
     },
+    "pluginInstall": {
+      "actions": {
+        "install": "Installieren"
+      },
+      "versions": {
+        "behindPending": "Vollständige Installation: <code>{full}</code> (<code>{latest}</code> wartet auf Prüfung)",
+        "behindUnpinned": "Vollständige Installation: <code>{full}</code> (<code>{latest}</code>: MCP-Server ohne feste Version)",
+        "pending": "Vollständige Installation wartet auf Prüfung",
+        "unpinned": "Vollständige Installation: MCP-Server ohne feste Version"
+      },
+      "members": {
+        "title": "Bestandteile",
+        "none": "Keine",
+        "kinds": {
+          "assistant": "Assistent",
+          "unknown": "Unbekannt"
+        }
+      },
+      "hostParts": {
+        "skills": "{count, plural, one {# Skill} other {# Skills}}",
+        "agents": "{count, plural, one {# Assistent} other {# Assistenten}}",
+        "commands": "{count, plural, one {# Befehl} other {# Befehle}}",
+        "hooks": "{count, plural, one {# Hook} other {# Hooks}}",
+        "mcp": "{count, plural, one {# MCP-Server} other {# MCP-Server}}",
+        "code": "{count, plural, one {# Code-Plugin} other {# Code-Plugins}}",
+        "nothing": "Nichts"
+      },
+      "autorun": {
+        "title": "Läuft von selbst",
+        "consent": "Dem automatischen Ausführen zustimmen",
+        "show": "Ganz anzeigen",
+        "hide": "Ausblenden",
+        "reading": "Wird gelesen…",
+        "types": {
+          "hook": "Hook",
+          "code": "Code-Plugin",
+          "mcp": "MCP-Server",
+          "lsp": "Sprachserver",
+          "monitor": "Monitor",
+          "bin": "Befehl",
+          "unknown": "Sonstiges"
+        },
+        "consentNote": "Mit dem Haken stimmst du zu, dass {count, plural, one {der obige Eintrag} other {die # obigen Einträge}} in den Agenten, die es als Plugin haben, automatisch ausgeführt {count, plural, one {wird} other {werden}}.",
+        "consentNoteNoList": "Mit dem Haken stimmst du zu, dass das, was dieses Plugin mitbringt, in den Agenten, die es als Plugin haben, automatisch ausgeführt wird."
+      },
+      "modes": {
+        "native": "Als Plugin",
+        "skills": "Nur Skills",
+        "none": "Nicht installieren",
+        "unknown": "Unbekannt"
+      },
+      "hosts": {
+        "title": "Agenten",
+        "none": "Keine Agenten gefunden",
+        "codexTrust": "Hooks in Codex vertrauen",
+        "experts": "Übernimmt Experten-Skills {count, number}",
+        "held": "Namen vergeben {count, number}",
+        "copiesToTake": "In die Sicherungen verschobene Kopien:",
+        "noPreview": "Auswirkungen der Verlinkung nicht lesbar",
+        "setAll": "Alle"
+      },
+      "missing": {
+        "noHosts": "Wähle für mindestens einen Agenten eine Installationsart.",
+        "name": "SRN Harness hat keinen Installationsnamen angegeben.",
+        "consent": "Dem automatischen Ausführen zustimmen.",
+        "agentBlocked": "{agent}: Die Skills lassen sich nicht einfügen.",
+        "agentNoPreview": "{agent}: Die Auswirkungen der Verlinkung sind nicht lesbar."
+      },
+      "notices": {
+        "effectsChanged": "Die Vorschau ist veraltet. Nichts wurde geschrieben.",
+        "stateMoved": "Die Angaben auf SRN Harness haben sich geändert."
+      },
+      "outcome": {
+        "installed": "Installiert.",
+        "busy": "Eine andere Änderung läuft gerade. Nichts wurde geschrieben.",
+        "failed": "Die Installation ist fehlgeschlagen.",
+        "unknown": "Dieses Codeg kann das Ergebnis der Installation nicht beurteilen.",
+        "needsRepair": "Reparatur nötig: {agents}",
+        "problems": "Nicht abgeschlossene Aufräumarbeiten:",
+        "status": {
+          "done": "Erledigt",
+          "failed": "Fehlgeschlagen",
+          "undone": "Rückgängig gemacht",
+          "needs_repair": "Reparatur nötig",
+          "unknown": "Unbekannt"
+        }
+      },
+      "reasons": {
+        "not_a_plugin": "Das ist kein Plugin (sondern: {kind}).",
+        "plugin_info_missing": "SRN Harness hat nichts vom Plugin selbst angegeben.",
+        "plugin_install_name_invalid": "<code>{name}</code> kann nicht der Installationsname eines Plugins sein.",
+        "plugin_install_name_mismatch": "Der Installationsname <code>{name}</code> ist nicht der dieser Version (<code>{expected}</code>).",
+        "plugin_install_name_taken": "<code>{name}</code> ist von einem anderen Plugin belegt (<code>{ref}</code>).",
+        "plugin_already_installed": "Bereits installiert, als <code>{name}</code>.",
+        "plugin_no_hosts": "Kein Agent soll es erhalten.",
+        "plugin_no_adapter": "{agent} kann es nicht als Plugin installieren.",
+        "plugin_native_unavailable": "{agent} kann es nicht als Plugin installieren:",
+        "plugin_revision_not_target": "Revision #{revision} lässt sich so nicht installieren.",
+        "plugin_revision_not_target_native": "Revision #{revision} ist nicht die vollständig installierbare (#{expected}).",
+        "plugin_revision_not_target_skills": "Revision #{revision} ist nicht die neueste (#{expected}).",
+        "plugin_no_full": "Noch keine Revision ist vollständig installierbar (wartet auf Prüfung).",
+        "plugin_no_full_unpinned": "Keine Revision ist vollständig installierbar (MCP-Server ohne feste Version).",
+        "plugin_not_approved": "Revision #{revision} ist nicht für die vollständige Installation freigegeben.",
+        "plugin_mcp_unpinned": "MCP-Server ohne feste Version: <code>{servers}</code>.",
+        "plugin_consent_required": "Was von selbst läuft, braucht deine Zustimmung.",
+        "plugin_consent_stale": "Was von selbst läuft, hat sich geändert: Stimme erneut zu.",
+        "plugin_host_step_failed": "{agent}: „{step}“ ist fehlgeschlagen.",
+        "plugin_needs_repair": "Reparatur nötig: {agents}.",
+        "plugin_up_to_date": "Bereits auf Revision #{revision}.",
+        "plugin_record_changed": "Codegs Plugin-Verzeichnis hat sich geändert.",
+        "plugin_not_on_agent": "{agent} hat dieses Plugin nicht.",
+        "plugin_last_host": "{agent} ist der einzige Agent, der es hat.",
+        "plugin_unchanged": "{agent} hat es bereits so.",
+        "plugin_suspended": "Codeg hat es für {agent} ausgeschaltet.",
+        "plugin_no_repair_needed": "{agent} braucht keine Reparatur.",
+        "plugin_reinstall_required": "{agent}: Deinstalliere es und installiere es neu.",
+        "plugin_revision_modified": "Die Dateien von Revision #{revision} wurden verändert.",
+        "plugin_unverified": "SRN konnte zu dieser Revision nicht befragt werden.",
+        "plugin_advisory_disable": "Ein Hinweis verlangt, diese Revision auszuschalten.",
+        "plugin_launch_env_unreadable": "Die Starteinstellungen von {agent} sind nicht lesbar.",
+        "plugin_host_not_found": "Host nicht gefunden.",
+        "plugin_host_version_unknown": "Die Version des Hosts ist nicht lesbar.",
+        "plugin_host_home_relative": "{variable} ist ein relativer Pfad: <code>{path}</code>.",
+        "plugin_adapter_off": "Für diesen Host noch nicht als Plugin verfügbar.",
+        "plugin_host_version_unsupported": "Host-Version <code>{version}</code> wird nicht unterstützt.",
+        "plugin_host_command_failed": "<code>{command}</code> ist fehlgeschlagen ({status}).",
+        "plugin_host_command_timed_out": "<code>{command}</code> wurde nicht in {seconds, number} s fertig.",
+        "plugin_host_command_not_started": "<code>{command}</code> ließ sich nicht starten.",
+        "plugin_marketplace_unreadable": "Codegs Marketplace-Datei ist nicht lesbar.",
+        "plugin_host_name_taken": "Der Host hat ein anderes Plugin namens <code>{name}</code> (<code>{plugin}</code>).",
+        "plugin_host_name_changed": "Sein Name im Host hat sich von <code>{from}</code> zu <code>{to}</code> geändert.",
+        "plugin_revision_missing": "Revision #{revision} ist nicht im Plugin-Speicher.",
+        "plugin_host_files": "Die Dateien des Hosts lassen sich nicht schreiben.",
+        "plugin_host_not_listed": "Das Plugin hat kein Manifest für diesen Host.",
+        "plugin_entry_missing": "Das Plugin hat keinen Code, den dieser Host laden kann.",
+        "plugin_host_settings_unreadable": "Die Einstellungen des Hosts sind nicht lesbar.",
+        "plugin_host_not_installed": "Im Host ist <code>{name}</code> nicht installiert.",
+        "plugin_marketplace_not_added": "Der Host kennt Codegs Marketplace nicht.",
+        "plugin_marketplace_elsewhere": "Der Marketplace dieses Namens im Host liegt woanders: <code>{path}</code>.",
+        "plugin_marketplace_elsewhere_unknown": "Der Marketplace dieses Namens im Host liegt woanders.",
+        "plugin_marketplace_entry_missing": "Codegs Marketplace hat keinen Eintrag dafür.",
+        "plugin_marketplace_source_mismatch": "Der Marketplace zeigt auf <code>{found}</code>, nicht auf <code>{expected}</code>.",
+        "plugin_host_entry_mismatch": "Die Konfiguration des Hosts nennt <code>{found}</code>, nicht <code>{expected}</code>.",
+        "plugin_host_cache_missing": "Die Kopie des Plugins im Host fehlt.",
+        "plugin_hooks_unreadable": "Das Vertrauen in die Hooks ist nicht lesbar.",
+        "experts_linked": "Experten-Skills noch verlinkt: <code>{names}</code>.",
+        "owned_set_differs": "Ein anderer Agent hat einen anderen Satz seiner Skills: Aktualisiere zuerst.",
+        "owned_by_other": "<code>{name}</code> gehört zu einem anderen Plugin (<code>{plugin}</code>).",
+        "copies_not_refreshed": "Die Kopien von <code>{name}</code> ließen sich nicht aktualisieren.",
+        "member_duplicate": "Zwei Bestandteile heißen <code>{name}</code>.",
+        "member_file_mismatch": "<code>{path}</code> von <code>{name}</code> entspricht nicht der Liste.",
+        "plugin_owned": "<code>{name}</code> gehört zu einem Plugin und wird nur mit ihm verwaltet."
+      }
+    },
+    "plugins": {
+      "refresh": "Plugins neu einlesen",
+      "listLabel": "Installierte Plugins",
+      "none": "Keine Plugins installiert",
+      "browse": "In Entdecken stöbern",
+      "retry": "Erneut versuchen",
+      "version": "Version {version}",
+      "revision": "Revision #{revision}",
+      "installed": "Installiert: {version}",
+      "states": {
+        "disabled": "Aus",
+        "suspended": "Von SRN abgeschaltet",
+        "needsRepair": "Reparatur nötig",
+        "unknown": "Unbekannter Zustand"
+      },
+      "actions": {
+        "update": "Aktualisieren",
+        "repair": "Reparieren",
+        "uninstall": "Deinstallieren",
+        "disable": "Ausschalten",
+        "enable": "Einschalten",
+        "changeMode": "Installationsart ändern",
+        "hookTrust": "Hook-Vertrauen",
+        "manage": "Verwalten"
+      },
+      "hooks": {
+        "again": "Erneut lesen",
+        "none": "Keine Hooks",
+        "trusted": "Hooks vertraut",
+        "untrusted": "Hooks in Codex vertrauen",
+        "modified": "Hooks geändert: in Codex erneut vertrauen",
+        "unknown": "Hook-Vertrauen nicht lesbar"
+      },
+      "dialog": {
+        "checking": "Wird geprüft…",
+        "writing": "Wird geschrieben…",
+        "refused": "Nicht ausgeführt:",
+        "failed": "Der Vorgang ist fehlgeschlagen.",
+        "giveBack": "Gibt Experten-Skills zurück {count, number}",
+        "fromTo": "<code>{from}</code> → <code>{to}</code>",
+        "upToDate": "Aktuell.",
+        "changedMembers": "Geänderte Mitglieder",
+        "memberChanges": {
+          "added": "Hinzugefügt",
+          "removed": "Entfernt",
+          "changed": "Aktualisiert"
+        },
+        "actions": {
+          "update": "Aktualisieren",
+          "resume": "Aktualisieren und einschalten",
+          "to_skills": "Zu „Nur Skills“",
+          "record_only": "Bleibt aus",
+          "none": "Unverändert",
+          "needs_repair": "Reparatur nötig: nicht aktualisiert",
+          "unknown": "Unbekannt"
+        },
+        "title": {
+          "mode": "<code>{name}</code> · {agent}: {mode}",
+          "enable": "<code>{name}</code> einschalten · {agent}",
+          "disable": "<code>{name}</code> ausschalten · {agent}",
+          "repair": "<code>{name}</code> reparieren"
+        },
+        "confirm": {
+          "mode": "Ändern",
+          "enable": "Einschalten",
+          "disable": "Ausschalten",
+          "repair": "Reparieren"
+        },
+        "outcome": {
+          "updated": "Aktualisiert.",
+          "changed": "Geändert.",
+          "repaired": "Repariert."
+        },
+        "missing": {
+          "title": "Bevor er aktualisiert werden kann:",
+          "titleChange": "Noch nötig:",
+          "target": "Es gibt keine Revision zum Aktualisieren.",
+          "yanked": "Aktualisierung auf eine zurückgezogene Version bestätigen."
+        }
+      }
+    },
     "record": {
       "mcp": "Codeg konnte seine Aufzeichnung der aus SRN Harness installierten MCP-Server nicht lesen, daher ist hier keiner als aus SRN Harness markiert. Bis sie sich lesen lässt, wird nichts aus SRN Harness installiert oder deinstalliert.",
-      "skills": "Codeg konnte seine Aufzeichnung der aus SRN Harness installierten Skills nicht lesen, daher ist hier keiner als aus SRN Harness markiert. Bis sie sich lesen lässt, wird nichts aus SRN Harness installiert oder deinstalliert, und Skills, die aus SRN Harness stammen könnten, bleiben genau, wie sie sind."
+      "skills": "Codeg konnte seine Aufzeichnung der aus SRN Harness installierten Skills nicht lesen, daher ist hier keiner als aus SRN Harness markiert. Bis sie sich lesen lässt, wird nichts aus SRN Harness installiert oder deinstalliert, und Skills, die aus SRN Harness stammen könnten, bleiben genau, wie sie sind.",
+      "plugins": "Codeg kann seinen Plugin-Eintrag nicht lesen."
     },
     "errors": {
       "disabled": "„Entdecken“ ist in diesem Codeg ausgeschaltet.",

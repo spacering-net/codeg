@@ -15,6 +15,7 @@ import { useTranscriptRoot } from "@/components/ai-elements/markdown-local-image
 import { TaskDetailSheet } from "./task-detail-sheet"
 
 vi.mock("@/lib/api", () => ({
+  workTaskGet: vi.fn().mockRejectedValue(new Error("not in this test")),
   readFileBase64: vi.fn(),
   readWorkspaceFileBase64: vi.fn(),
   getFolderConversation: vi.fn().mockRejectedValue(new Error("no transcript")),

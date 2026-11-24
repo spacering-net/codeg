@@ -35,6 +35,7 @@ vi.mock("@/stores/app-workspace-store", () => {
 const workTaskArchive = vi.fn(async () => {})
 const workTaskDefer = vi.fn(async () => {})
 vi.mock("@/lib/api", () => ({
+  workTaskGet: vi.fn().mockRejectedValue(new Error("not in this test")),
   workTaskArchive: (...args: unknown[]) => workTaskArchive(...(args as [])),
   workTaskCreate: vi.fn(),
   workTaskDefer: (...args: unknown[]) => workTaskDefer(...(args as [])),

@@ -92,6 +92,13 @@ pub struct Model {
     /// value from a newer build never stops an older one decoding the row.
     /// See `m20261017_000002_conversation_source`.
     pub source: Option<String>,
+    /// JSON `ConversationSelection`: this conversation's own selector state
+    /// (applied mode, pending composer mode, config option values), written
+    /// by the backend from the live session and replayed alone when the
+    /// conversation reconnects. `None` for rows from before the column (a
+    /// one-time fallback, then frozen). Never bumps `updated_at`. See
+    /// `m20261123_000001_conversation_selector_state`.
+    pub selector_state: Option<String>,
 }
 
 /// [`Model::source`] of a conversation a `codeg-cli` run started.

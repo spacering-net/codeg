@@ -2,6 +2,7 @@ import { act, renderHook } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 
 import {
+  browserDownloadsCachedTabCountForTests,
   dismissAllBrowserDownloads,
   dismissBrowserDownload,
   getBrowserDownloads,
@@ -59,6 +60,30 @@ describe("browser downloads store", () => {
     act(() => setBrowserDownload(download({ state: "completed" })))
     expect(result.current).not.toBe(first)
     expect(result.current[0].state).toBe("completed")
+  })
+
+  // Tabs without downloads are not memoised (a closed tab's id would stay in
+  // the cache until the next change), so their stability rests on sharing
+  // one empty array.
+  it("gives tabs without downloads one stable empty list and no cache entry", () => {
+    setBrowserDownload(download())
+    const populated = renderHook(() => useBrowserTabDownloads("browser:abc"))
+    const before = populated.result.current
+
+    const empties = Array.from({ length: 8 }, (_, i) =>
+      renderHook(() => useBrowserTabDownloads(`browser:empty-${i}`))
+    )
+    const empty = empties[0].result.current
+    expect(empty).toHaveLength(0)
+    for (const hook of empties) {
+      hook.rerender()
+      expect(hook.result.current).toBe(empty)
+      hook.unmount()
+    }
+
+    expect(browserDownloadsCachedTabCountForTests()).toBe(1)
+    populated.rerender()
+    expect(populated.result.current).toBe(before)
   })
 
   it("hides dismissed records without touching the list", () => {

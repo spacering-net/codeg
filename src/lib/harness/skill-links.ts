@@ -837,7 +837,7 @@ export function requestBatch(
   links: Links,
   targets: readonly CellTarget[],
   on: boolean,
-  ready: (skill: string) => boolean = () => true
+  ready: (skill: string, agent: AgentType) => boolean = () => true
 ): void {
   const model = currentModel(slots, links)
   if (!model) return

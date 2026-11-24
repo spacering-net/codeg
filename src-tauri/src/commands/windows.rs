@@ -1301,14 +1301,14 @@ pub async fn open_project_boot_window(
 
 // ─── Desktop pet window ─────────────────────────────────────────────────
 
-const PET_WINDOW_LABEL: &str = "pet";
+pub const PET_WINDOW_LABEL: &str = "pet";
 const PET_HOVER_ENTER_EVENT: &str = "pet://hover-enter";
 const PET_HOVER_LEAVE_EVENT: &str = "pet://hover-leave";
 /// Single-frame logical pixel dimensions, locked to the Codex sprite-sheet
 /// contract. The window is sized as one frame × user scale, with no extra
 /// chrome — DPR handling lives inside the webview.
-const PET_BASE_WIDTH: f64 = 192.0;
-const PET_BASE_HEIGHT: f64 = 208.0;
+pub(crate) const PET_BASE_WIDTH: f64 = 192.0;
+pub(crate) const PET_BASE_HEIGHT: f64 = 208.0;
 
 /// Process-global "cursor is currently inside the pet window" flag, owned by
 /// the hover watcher but readable/writable by the context-menu command so
@@ -1348,6 +1348,194 @@ where
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct SavedPetOrigin {
+    x: f64,
+    y: f64,
+}
+
+/// Pick the monitor a saved pet origin belongs to: the one containing the
+/// origin itself, or — only when no monitor does (an origin just off a
+/// monitor's top/left edge) — one containing the pet's center. `hit(m, center)`
+/// tests the origin (`center == false`) or the center against monitor `m`.
+/// Testing both per monitor in a single pass let an earlier monitor claim the
+/// pet through a center computed at *that* monitor's scale factor (e.g. a 350%
+/// primary claiming a pet saved on the 1× display above it).
+fn pick_pet_monitor(
+    monitors: &[(i32, i32, u32, u32, f64)],
+    hit: impl Fn((i32, i32, u32, u32, f64), bool) -> bool,
+) -> Option<(i32, i32, u32, u32, f64)> {
+    monitors
+        .iter()
+        .copied()
+        .find(|&m| hit(m, false))
+        .or_else(|| monitors.iter().copied().find(|&m| hit(m, true)))
+}
+
+/// Resolve a persisted `(x, y)` (captured from `outer_position`) into a clamped
+/// Cocoa **logical** origin on macOS.
+///
+/// On macOS, `tao` scales each monitor's origin and size by *that monitor's
+/// own* scale factor, so a 1× display placed to the right of a 2× primary
+/// display overlaps in physical coordinates (e.g. primary `[0, 3024)` vs right
+/// `[1512, 3432)`). When `saved_scale_factor` is present we first convert
+/// `(x, y)` into unambiguous Cocoa logical points and match against the
+/// non-overlapping logical monitor rects; legacy rows without a stored scale
+/// factor fall back to physical rect matching.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn resolve_saved_pet_origin_macos(
+    saved: Option<(f64, f64)>,
+    saved_scale_factor: Option<f64>,
+    pet_w: f64,
+    pet_h: f64,
+    monitors: &[(i32, i32, u32, u32, f64)],
+) -> Option<SavedPetOrigin> {
+    let (x, y) = saved?;
+    if !x.is_finite() || !y.is_finite() {
+        return None;
+    }
+
+    if let Some(saved_sf) = saved_scale_factor.filter(|sf| sf.is_finite() && *sf > 0.0) {
+        let lx = x / saved_sf;
+        let ly = y / saved_sf;
+        let (mx, my, mw, mh, msf) = pick_pet_monitor(monitors, |(mx, my, mw, mh, msf), center| {
+            if !msf.is_finite() || msf <= 0.0 || mw == 0 || mh == 0 {
+                return false;
+            }
+            let mlx = f64::from(mx) / msf;
+            let mly = f64::from(my) / msf;
+            let mlw = f64::from(mw) / msf;
+            let mlh = f64::from(mh) / msf;
+            let cx = lx + pet_w / 2.0;
+            let cy = ly + pet_h / 2.0;
+            let (px, py) = if center { (cx, cy) } else { (lx, ly) };
+            px >= mlx && px < mlx + mlw && py >= mly && py < mly + mlh
+        })?;
+        let mlx = f64::from(mx) / msf;
+        let mly = f64::from(my) / msf;
+        let mlw = f64::from(mw) / msf;
+        let mlh = f64::from(mh) / msf;
+        let max_x = (mlx + mlw - pet_w).max(mlx);
+        let max_y = (mly + mlh - pet_h).max(mly);
+        return Some(SavedPetOrigin {
+            x: lx.clamp(mlx, max_x),
+            y: ly.clamp(mly, max_y),
+        });
+    }
+
+    // Legacy row (no recorded scale factor): match raw physical monitor rect
+    // and convert into that monitor's logical coordinates.
+    let (mx, my, mw, mh, msf) = pick_pet_monitor(monitors, |(mx, my, mw, mh, msf), center| {
+        if !msf.is_finite() || msf <= 0.0 || mw == 0 || mh == 0 {
+            return false;
+        }
+        let mx = f64::from(mx);
+        let my = f64::from(my);
+        let mw = f64::from(mw);
+        let mh = f64::from(mh);
+        let cx = x + (pet_w * msf) / 2.0;
+        let cy = y + (pet_h * msf) / 2.0;
+        let (px, py) = if center { (cx, cy) } else { (x, y) };
+        px >= mx && px < mx + mw && py >= my && py < my + mh
+    })?;
+    let mlx = f64::from(mx) / msf;
+    let mly = f64::from(my) / msf;
+    let mlw = f64::from(mw) / msf;
+    let mlh = f64::from(mh) / msf;
+    let max_x = (mlx + mlw - pet_w).max(mlx);
+    let max_y = (mly + mlh - pet_h).max(mly);
+    Some(SavedPetOrigin {
+        x: (x / msf).clamp(mlx, max_x),
+        y: (y / msf).clamp(mly, max_y),
+    })
+}
+
+/// Resolve a persisted physical `(x, y)` against live monitor geometries on
+/// Windows / Linux, where physical desktop coordinates form one non-overlapping
+/// coordinate space. Returns clamped physical `(x, y)` or `None` to center.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn resolve_saved_pet_origin_physical(
+    saved: Option<(f64, f64)>,
+    pet_w: f64,
+    pet_h: f64,
+    monitors: &[(i32, i32, u32, u32, f64)],
+) -> Option<SavedPetOrigin> {
+    let (x, y) = saved?;
+    if !x.is_finite() || !y.is_finite() {
+        return None;
+    }
+
+    let (mx, my, mw, mh, sf) = pick_pet_monitor(monitors, |(mx, my, mw, mh, sf), center| {
+        if !sf.is_finite() || sf <= 0.0 || mw == 0 || mh == 0 {
+            return false;
+        }
+        let mx = f64::from(mx);
+        let my = f64::from(my);
+        let mw = f64::from(mw);
+        let mh = f64::from(mh);
+        let cx = x + (pet_w * sf) / 2.0;
+        let cy = y + (pet_h * sf) / 2.0;
+        let (px, py) = if center { (cx, cy) } else { (x, y) };
+        px >= mx && px < mx + mw && py >= my && py < my + mh
+    })?;
+
+    let mx = f64::from(mx);
+    let my = f64::from(my);
+    let mw = f64::from(mw);
+    let mh = f64::from(mh);
+    let max_x = (mx + mw - pet_w * sf).max(mx);
+    let max_y = (my + mh - pet_h * sf).max(my);
+    Some(SavedPetOrigin {
+        x: x.clamp(mx, max_x),
+        y: y.clamp(my, max_y),
+    })
+}
+
+/// The pet window's live `(outer x, outer y, scale factor)` in the same shape
+/// `pet_window_record_position` stores, for saving on quit. `None` when the
+/// window can't report it or is minimized (Windows parks minimized windows at
+/// -32000, which must not overwrite a real saved position).
+#[cfg(feature = "tauri-runtime")]
+pub(crate) fn pet_window_live_origin(
+    window: &tauri::WebviewWindow,
+) -> Option<(f64, f64, Option<f64>)> {
+    if window.is_minimized().unwrap_or(false) {
+        return None;
+    }
+    let pos = window.outer_position().ok()?;
+    let scale_factor = window
+        .scale_factor()
+        .ok()
+        .filter(|sf| sf.is_finite() && *sf > 0.0);
+    Some((f64::from(pos.x), f64::from(pos.y), scale_factor))
+}
+
+/// Physical top-left that centers a `box_w × box_h` (physical px) staging
+/// window on the monitor holding a resolved (already clamped) physical
+/// origin, for Windows / Linux where physical monitor rects do not overlap.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn pet_staging_origin(
+    origin: SavedPetOrigin,
+    monitors: &[(i32, i32, u32, u32, f64)],
+    box_w: f64,
+    box_h: f64,
+) -> Option<(i32, i32)> {
+    monitors
+        .iter()
+        .find(|&&(mx, my, mw, mh, _)| {
+            let (mx, my) = (f64::from(mx), f64::from(my));
+            origin.x >= mx
+                && origin.x < mx + f64::from(mw)
+                && origin.y >= my
+                && origin.y < my + f64::from(mh)
+        })
+        .map(|&(mx, my, mw, mh, _)| {
+            let x = f64::from(mx) + (f64::from(mw) - box_w) / 2.0;
+            let y = f64::from(my) + (f64::from(mh) - box_h) / 2.0;
+            (x.round() as i32, y.round() as i32)
+        })
+}
+
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn open_pet_window(
@@ -1369,33 +1557,57 @@ pub async fn open_pet_window(
             .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))??;
     }
 
+    let scale = config.scale.clamp(0.5, 3.0);
+    let pet_w = PET_BASE_WIDTH * scale;
+    let pet_h = PET_BASE_HEIGHT * scale;
+
     if let Some(existing) = app.get_webview_window(PET_WINDOW_LABEL) {
         let _ = existing.unminimize();
+        let _ = existing.set_size(LogicalSize::new(pet_w, pet_h));
         existing
             .set_focus()
             .map_err(|e| AppCommandError::window("Failed to focus pet window", e.to_string()))?;
         return Ok(());
     }
 
-    let scale = config.scale.clamp(0.5, 3.0);
     config.scale = scale;
     config.enabled = true;
     crate::commands::pet::pet_save_window_state_core(
         &db.conn,
         crate::models::pet::PetWindowStatePatch {
-            x: None,
-            y: None,
             scale: Some(scale),
-            always_on_top: None,
             enabled: Some(true),
+            ..Default::default()
         },
     )
     .await?;
 
+    let monitors: Vec<(i32, i32, u32, u32, f64)> = app
+        .available_monitors()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|m| {
+            let pos = m.position();
+            let size = m.size();
+            (pos.x, pos.y, size.width, size.height, m.scale_factor())
+        })
+        .collect();
+    #[cfg(target_os = "macos")]
+    let saved_origin = resolve_saved_pet_origin_macos(
+        config.x.zip(config.y),
+        config.position_scale_factor,
+        pet_w,
+        pet_h,
+        &monitors,
+    );
+    #[cfg(not(target_os = "macos"))]
+    let saved_origin =
+        resolve_saved_pet_origin_physical(config.x.zip(config.y), pet_w, pet_h, &monitors);
+
     let url = WebviewUrl::App(format!("pet?petId={pet_id}").into());
     let mut builder = WebviewWindowBuilder::new(&app, PET_WINDOW_LABEL, url)
         .title("codeg pet")
-        .inner_size(PET_BASE_WIDTH * scale, PET_BASE_HEIGHT * scale)
+        .inner_size(pet_w, pet_h)
         .min_inner_size(PET_BASE_WIDTH * 0.5, PET_BASE_HEIGHT * 0.5)
         .max_inner_size(PET_BASE_WIDTH * 3.0, PET_BASE_HEIGHT * 3.0)
         .resizable(false)
@@ -1410,11 +1622,55 @@ pub async fn open_pet_window(
         .focused(false)
         .accept_first_mouse(true);
 
-    builder = builder.center();
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(origin) = saved_origin {
+            builder = builder.position(origin.x, origin.y);
+        } else {
+            builder = builder.center();
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        if saved_origin.is_none() {
+            builder = builder.center();
+        }
+    }
 
-    apply_pet_window_style(builder)
+    let window = apply_pet_window_style(builder)
         .build()
         .map_err(|e| AppCommandError::window("Failed to open pet window", e.to_string()))?;
+
+    #[cfg(not(target_os = "macos"))]
+    if let Some(saved) = saved_origin {
+        let origin = tauri::PhysicalPosition::new(saved.x.round() as i32, saved.y.round() as i32);
+        // Stage wholly on the target monitor first. The window still has the
+        // build monitor's physical size here, and near a seam — or when the
+        // target monitor is smaller than that size — moving it straight to
+        // the saved origin can leave most of it on the build monitor, so
+        // Windows keeps that monitor's DPI and the logical resize below lands
+        // at the wrong physical size. Shrinking to the minimum logical size
+        // and centering that on the target monitor puts the whole window on
+        // it; the DPI switches, and the resize + final move (to an origin
+        // already clamped to fit) then use the target monitor's scale.
+        let (stage_w, stage_h) = (PET_BASE_WIDTH * 0.5, PET_BASE_HEIGHT * 0.5);
+        let build_sf = window
+            .scale_factor()
+            .ok()
+            .filter(|sf| sf.is_finite() && *sf > 0.0)
+            .unwrap_or(1.0);
+        let staging = pet_staging_origin(saved, &monitors, stage_w * build_sf, stage_h * build_sf)
+            .map(|(x, y)| tauri::PhysicalPosition::new(x, y))
+            .unwrap_or(origin);
+        let _ = window.set_size(LogicalSize::new(stage_w, stage_h));
+        let _ = window.set_position(staging);
+        let _ = window.set_size(LogicalSize::new(pet_w, pet_h));
+        let _ = window.set_position(origin);
+    }
+
+    // Re-assert exact logical dimensions after build/placement so mixed-DPI
+    // monitor transitions can never leave the window scaled by a stale factor.
+    let _ = window.set_size(LogicalSize::new(pet_w, pet_h));
 
     spawn_pet_hover_watcher(app.clone());
 
@@ -1503,11 +1759,8 @@ pub async fn close_pet_window(
     let _ = crate::commands::pet::pet_save_window_state_core(
         &db.conn,
         crate::models::pet::PetWindowStatePatch {
-            x: None,
-            y: None,
-            scale: None,
-            always_on_top: None,
             enabled: Some(false),
+            ..Default::default()
         },
     )
     .await?;
@@ -1519,18 +1772,22 @@ pub async fn close_pet_window(
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn pet_window_record_position(
+    app: AppHandle,
     db: tauri::State<'_, AppDatabase>,
     x: f64,
     y: f64,
 ) -> Result<(), AppCommandError> {
+    let position_scale_factor = app
+        .get_webview_window(PET_WINDOW_LABEL)
+        .and_then(|w| w.scale_factor().ok())
+        .filter(|sf| sf.is_finite() && *sf > 0.0);
     crate::commands::pet::pet_save_window_state_core(
         &db.conn,
         crate::models::pet::PetWindowStatePatch {
             x: Some(x),
             y: Some(y),
-            scale: None,
-            always_on_top: None,
-            enabled: None,
+            position_scale_factor,
+            ..Default::default()
         },
     )
     .await?;
@@ -1746,9 +2003,17 @@ fn open_pet_panel_window(app: &AppHandle) -> Result<(), AppCommandError> {
         .focused(true)
         .accept_first_mouse(true);
 
-    apply_pet_window_style(builder)
+    let panel = apply_pet_window_style(builder)
         .build()
         .map_err(|e| AppCommandError::window("Failed to open pet panel", e.to_string()))?;
+
+    // Show it here rather than waiting for the renderer's first
+    // `resize_pet_panel`: that call is scheduled from `requestAnimationFrame`,
+    // which a hidden WKWebView never runs, so a panel left hidden would stay
+    // hidden. `tauri-plugin-window-state` used to do this show + focus for us
+    // on window-ready; the panel is now on its denylist.
+    let _ = panel.show();
+    let _ = panel.set_focus();
 
     Ok(())
 }
@@ -2833,5 +3098,185 @@ mod macos_fullscreen_close_tests {
 
         release_macos_fullscreen_drain(second);
         assert!(!macos_fullscreen_drain_in_flight());
+    }
+}
+
+#[cfg(test)]
+mod pet_window_origin_tests {
+    use super::{
+        pet_staging_origin, resolve_saved_pet_origin_macos, resolve_saved_pet_origin_physical,
+        SavedPetOrigin, PET_BASE_HEIGHT, PET_BASE_WIDTH,
+    };
+
+    // Mixed-DPI setup: 2× primary Retina at (0, 0) + 1× external monitor to its left.
+    const MIXED_DPI_LEFT: [(i32, i32, u32, u32, f64); 2] =
+        [(0, 0, 3024, 1964, 2.0), (-1920, 0, 1920, 1080, 1.0)];
+
+    // Mixed-DPI setup where tao's physical rects overlap on macOS:
+    // 2× primary Retina `[0, 3024)` (logical `[0, 1512)`) + 1× display on its
+    // right `[1512, 3432)` (logical `[1512, 3432)`).
+    const MIXED_DPI_RIGHT: [(i32, i32, u32, u32, f64); 2] =
+        [(0, 0, 3024, 1964, 2.0), (1512, 0, 1920, 1080, 1.0)];
+
+    #[test]
+    fn macos_resolves_right_1x_monitor_without_colliding_with_2x_primary() {
+        let pet_w = PET_BASE_WIDTH * 0.75; // 144
+        let pet_h = PET_BASE_HEIGHT * 0.75; // 156
+
+        // `x = 1800` lies inside BOTH `[0, 3024)` (2× primary physical) and
+        // `[1512, 3432)` (1× right). With `saved_scale_factor = 1.0`, it must
+        // map to logical `(1800, 500)` on the right 1× monitor — not `(900, 250)`.
+        let origin = resolve_saved_pet_origin_macos(
+            Some((1800.0, 500.0)),
+            Some(1.0),
+            pet_w,
+            pet_h,
+            &MIXED_DPI_RIGHT,
+        );
+        assert_eq!(
+            origin,
+            Some(SavedPetOrigin {
+                x: 1800.0,
+                y: 500.0
+            })
+        );
+    }
+
+    #[test]
+    fn macos_resolves_left_1x_and_clamps_2x_primary_in_logical_points() {
+        let pet_w = PET_BASE_WIDTH * 0.75; // 144
+        let pet_h = PET_BASE_HEIGHT * 0.75; // 156
+
+        assert_eq!(
+            resolve_saved_pet_origin_macos(
+                Some((-215.0, 708.0)),
+                None,
+                pet_w,
+                pet_h,
+                &MIXED_DPI_LEFT,
+            ),
+            Some(SavedPetOrigin {
+                x: -215.0,
+                y: 708.0
+            })
+        );
+
+        // Near bottom-right of 2× primary (logical 1512×982): clamped in logical pts.
+        assert_eq!(
+            resolve_saved_pet_origin_macos(
+                Some((2950.0, 1900.0)),
+                Some(2.0),
+                pet_w,
+                pet_h,
+                &MIXED_DPI_LEFT,
+            ),
+            Some(SavedPetOrigin {
+                x: 1512.0 - pet_w,
+                y: 982.0 - pet_h,
+            })
+        );
+    }
+
+    #[test]
+    fn physical_origin_clamps_per_monitor_and_falls_back_when_disconnected() {
+        let pet_w = PET_BASE_WIDTH * 0.75; // 144 logical -> 288 physical at 2×
+        let pet_h = PET_BASE_HEIGHT * 0.75; // 156 logical -> 312 physical at 2×
+
+        assert_eq!(
+            resolve_saved_pet_origin_physical(
+                Some((2950.0, 1900.0)),
+                pet_w,
+                pet_h,
+                &MIXED_DPI_LEFT,
+            ),
+            Some(SavedPetOrigin {
+                x: 3024.0 - 288.0,
+                y: 1964.0 - 312.0,
+            })
+        );
+
+        let only_primary = [(0, 0, 3024, 1964, 2.0)];
+        assert_eq!(
+            resolve_saved_pet_origin_macos(
+                Some((-215.0, 708.0)),
+                Some(1.0),
+                pet_w,
+                pet_h,
+                &only_primary,
+            ),
+            None
+        );
+        assert_eq!(
+            resolve_saved_pet_origin_physical(Some((-215.0, 708.0)), pet_w, pet_h, &only_primary,),
+            None
+        );
+        assert_eq!(
+            resolve_saved_pet_origin_physical(
+                Some((f64::NAN, 100.0)),
+                pet_w,
+                pet_h,
+                &MIXED_DPI_LEFT,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn physical_restore_stages_centered_on_the_target_monitor() {
+        let pet_w = PET_BASE_WIDTH * 0.75; // 144 logical
+        let pet_h = PET_BASE_HEIGHT * 0.75; // 156 logical
+
+        // 250% primary with a 100% display directly to its left. Saved just
+        // left of the seam: fits on the 1x display (144 px wide), but a window
+        // still carrying the primary's 360 px width would straddle the seam
+        // with most of itself on the primary. The staging box (min size at
+        // the build monitor's 2.5x = 240×260) is centered on the 1x display.
+        let seam = [(0, 0, 3840, 2160, 2.5), (-1920, 0, 1920, 1080, 1.0)];
+        let origin = resolve_saved_pet_origin_physical(Some((-160.0, 500.0)), pet_w, pet_h, &seam)
+            .expect("origin on the 1x display");
+        assert_eq!(
+            origin,
+            SavedPetOrigin {
+                x: -160.0,
+                y: 500.0
+            }
+        );
+        assert_eq!(
+            pet_staging_origin(origin, &seam, 240.0, 260.0),
+            Some((-1920 + (1920 - 240) / 2, (1080 - 260) / 2))
+        );
+
+        // A target monitor smaller than the pet at the build DPI (350% 4K
+        // primary, 1280×720 at 100% above it, pet at 2×): the staging box
+        // (96×104 logical at 3.5x = 336×364) still fits wholly inside it.
+        let stacked = [(0, 0, 3840, 2160, 3.5), (0, -720, 1280, 720, 1.0)];
+        let big_w = PET_BASE_WIDTH * 2.0;
+        let big_h = PET_BASE_HEIGHT * 2.0;
+        let origin =
+            resolve_saved_pet_origin_physical(Some((100.0, -700.0)), big_w, big_h, &stacked)
+                .expect("origin on the upper display");
+        // The origin lies on the upper display; the primary must not claim it
+        // through a center computed at its own 3.5x scale.
+        assert_eq!(
+            origin,
+            SavedPetOrigin {
+                x: 100.0,
+                y: -700.0
+            }
+        );
+        let (sx, sy) = pet_staging_origin(origin, &stacked, 336.0, 364.0).expect("staging");
+        assert!(
+            sx >= 0 && sx + 336 <= 1280,
+            "staging x inside upper display"
+        );
+        assert!(
+            sy >= -720 && sy + 364 <= 0,
+            "staging y inside upper display"
+        );
+
+        assert_eq!(
+            pet_staging_origin(SavedPetOrigin { x: 5000.0, y: 10.0 }, &seam, 240.0, 260.0),
+            None
+        );
     }
 }

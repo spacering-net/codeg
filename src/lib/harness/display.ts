@@ -67,6 +67,7 @@ const KNOWN_KINDS: readonly HarnessKnownKind[] = [
   "prompt",
   "assistant",
   "connector",
+  "plugin",
 ]
 
 /** `kind` if this build has a name for it, else `null` ("unknown"). */

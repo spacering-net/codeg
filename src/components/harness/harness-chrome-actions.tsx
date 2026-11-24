@@ -11,6 +11,10 @@ import {
   DISCOVER_LIST,
   refreshDiscover,
 } from "@/lib/harness/discover-state"
+import {
+  HARNESS_INSTALLED,
+  reloadHarnessInstalled,
+} from "@/lib/harness/mcp-install-state"
 import { MCP_INVENTORY, reloadMcpInventory } from "@/lib/harness/mcp-state"
 import { PACKS_LINKS, PACKS_TAB, reloadPacks } from "@/lib/harness/packs-state"
 import {
@@ -29,6 +33,7 @@ function useSectionRefresh() {
   const [skills] = useHarnessSlot(SKILLS_LINKS.inventory)
   const [agentList] = useHarnessSlot(SKILLS_AGENT_LIST)
   const [packs] = useHarnessSlot(PACKS_LINKS.inventory)
+  const [installed] = useHarnessSlot(HARNESS_INSTALLED)
   switch (section) {
     case "discover":
       return {
@@ -44,6 +49,11 @@ function useSectionRefresh() {
       return {
         busy: skills.phase === "loading" || agentList.phase === "loading",
         run: () => void reloadSkills(slots),
+      }
+    case "plugins":
+      return {
+        busy: installed.phase === "loading",
+        run: () => void reloadHarnessInstalled(slots),
       }
     case "packs":
       return {
