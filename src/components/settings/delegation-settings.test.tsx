@@ -365,7 +365,9 @@ describe("DelegationSettingsSection — tabs and the saved record", () => {
     )
     await waitFor(() => expect(dotOn(/^General/)).toBeNull())
     act(() =>
-      delegationHandler?.(settings({ enabled: true, allow_self_initiate: true }))
+      delegationHandler?.(
+        settings({ enabled: true, allow_self_initiate: true })
+      )
     )
     expect(toggle).toHaveAttribute("data-state", "checked")
   })
