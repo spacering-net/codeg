@@ -23,7 +23,7 @@ use crate::web::event_bridge::EventEmitter;
 pub(crate) const PROMPT_ID_PREFIX: &str = "session-message-";
 type TurnResult = Result<Option<String>, String>;
 #[derive(Debug)]
-pub(crate) struct SessionMessageDelivery {
+pub struct SessionMessageDelivery {
     pub db: DatabaseConnection,
     pub message_id: i32,
 }
