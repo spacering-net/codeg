@@ -1,0 +1,70 @@
+{
+  "schema_version": "2.0",
+  "process_id": "PROCESS-SYNTHETIC-001",
+  "purpose": "developmental_review_of_scholarly_work",
+  "unit_of_assessment": "scholarly_work",
+  "data_classification": "synthetic",
+  "high_impact_use": false,
+  "committee": {
+    "qualified_members_confirmed": false,
+    "training_completed": false,
+    "accountable_owner_role": "",
+    "training_record_ref": ""
+  },
+  "conflicts": {
+    "disclosure_process_confirmed": false,
+    "recusal_process_confirmed": false,
+    "record_ref": ""
+  },
+  "appeals": {
+    "process_confirmed": false,
+    "process_ref": "",
+    "notice_ref": ""
+  },
+  "accessibility": {
+    "accommodations_process_confirmed": false,
+    "accessible_materials_confirmed": false,
+    "process_ref": ""
+  },
+  "data_protection": {
+    "purpose_limitation_confirmed": false,
+    "data_minimisation_confirmed": false,
+    "access_controls_confirmed": false,
+    "retention_schedule_confirmed": false,
+    "raw_private_documents_excluded_from_tool_outputs": false,
+    "review_ref": ""
+  },
+  "rubric_quality": {
+    "construct_documented": false,
+    "rubric_provenance_documented": false,
+    "content_validity_documented": false,
+    "rater_training_documented": false,
+    "agreement_reviewed": false,
+    "inter_rater_reliability_reviewed": false,
+    "uncertainty_recorded": false,
+    "missing_and_not_applicable_supported": false,
+    "evidence_traceability_checked": false,
+    "weight_sensitivity_reviewed": false,
+    "quality_record_ref": ""
+  },
+  "fairness": {
+    "stakeholder_review_completed": false,
+    "disciplinary_context_reviewed": false,
+    "subgroup_bias_review_completed": false,
+    "protected_attributes_excluded_from_scoring": false,
+    "bias_review_ref": ""
+  },
+  "decision_controls": {
+    "no_automated_decision": false,
+    "no_person_ranking": false,
+    "no_decision_recommendation": false,
+    "qualified_human_accountability": false
+  },
+  "monitoring": {
+    "rater_drift_reviewed": false,
+    "unintended_consequences_reviewed": false,
+    "periodic_revision_scheduled": false,
+    "review_record_ref": "",
+    "revision_owner_role": ""
+  }
+}

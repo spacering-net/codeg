@@ -1,8 +1,8 @@
 "use client"
 
-import { memo, useCallback, useMemo, useState } from "react"
+import { memo, useCallback, useMemo, useState, type ReactNode } from "react"
 import { useTranslations } from "next-intl"
-import { ActivityIcon, BanIcon } from "lucide-react"
+import { ActivityIcon, BanIcon, RotateCcwIcon } from "lucide-react"
 
 import {
   DelegationIdentityGlyph,
@@ -15,12 +15,17 @@ import {
 import { DelegationStatusRow } from "@/components/message/delegation-status-row"
 import { useSessionViewerHost } from "@/components/message/session-viewer-host-context"
 import { SubAgentSessionDialog } from "@/components/message/sub-agent-session-dialog"
-import { useDelegationCardModel } from "@/hooks/use-delegation-card-model"
+import {
+  useDelegationCardModel,
+  type DelegationCardModel,
+  type DelegationCardSource,
+} from "@/hooks/use-delegation-card-model"
 import { useTruncation } from "@/hooks/use-truncation"
 import { previewLine } from "@/lib/activity/format"
 import type { ActivityStep, StepStatus } from "@/lib/activity/types"
 import type { AdaptedToolCallPart } from "@/lib/adapters/ai-elements-adapter"
-import { delegateCallTaskId } from "@/lib/delegation-card"
+import { parseCodegMcpToolCall } from "@/lib/codeg-mcp-tool"
+import { delegateCallTaskId, isRefusedResume } from "@/lib/delegation-card"
 import {
   buildDelegationTaskRows,
   deriveBadge,
@@ -28,6 +33,7 @@ import {
   parseTaskId,
   type DelegationTaskRow,
 } from "@/lib/delegation-status"
+import { cn } from "@/lib/utils"
 import { useActivityRender } from "../activity-context"
 import { ActivityRow } from "../activity-row"
 import { DetailBox } from "../detail-box"
@@ -47,6 +53,17 @@ import { GenericRow } from "./generic-row"
 /** Longest result line shown under a finished delegation. */
 const RESULT_PREVIEW_CHARS = 240
 
+/** The newest report on a task among the checks handed to its step. */
+function useLatestTaskRow(
+  polls: AdaptedToolCallPart[] | undefined,
+  taskId: string | null
+): DelegationTaskRow | undefined {
+  return useMemo(() => {
+    const rows = polls ? buildDelegationTaskRows(polls) : []
+    return rows.find((row) => row.taskId === taskId) ?? rows[rows.length - 1]
+  }, [polls, taskId])
+}
+
 /**
  * One delegation, start to finish: `Codex  #14be49e7  Update the stale
  * snapshot…  done · 1m 34s` — the task it was handed on the title line — and,
@@ -61,18 +78,12 @@ export const DelegationRow = memo(function DelegationRow({
 }: {
   step: ToolStep
 }) {
-  const t = useTranslations("Folder.chat.activity")
-  const statusText = useStatusText()
   const { pinnedOnly } = useActivityRender()
   const { part } = step
   // The newest report on its task: what its step bar and result read once it
   // is no longer working — and, with nothing live or stored to go by, how it
   // ended. The polls were handed over by this call's own task id.
-  const latest = useMemo(() => {
-    const rows = step.laterPolls ? buildDelegationTaskRows(step.laterPolls) : []
-    const taskId = delegateCallTaskId(part)
-    return rows.find((row) => row.taskId === taskId) ?? rows[rows.length - 1]
-  }, [step.laterPolls, part])
+  const latest = useLatestTaskRow(step.laterPolls, delegateCallTaskId(part))
   const source = useMemo(
     () => ({
       parentToolUseId: part.toolCallId,
@@ -86,6 +97,101 @@ export const DelegationRow = memo(function DelegationRow({
     [part, latest]
   )
   const model = useDelegationCardModel(source)
+  if (!model.hasModel) return pinnedOnly ? null : <GenericRow step={step} />
+  return (
+    <DelegationStepRow
+      step={step}
+      source={source}
+      model={model}
+      latest={latest}
+    />
+  )
+})
+
+/**
+ * `resume_delegation`: the interrupted sub-agent running again, drawn as the
+ * delegation row itself — a ⟳ on its ring says it came back, and the panel
+ * adds why it was resumed. Its own call id is never a binding key (the broker
+ * re-binds the child to the original `delegate_to_agent` call), so the
+ * sub-agent is found by the task id in its arguments.
+ *
+ * A refused resume (`not_resumable`, an unknown task) revived nothing: it
+ * draws `fallback`, the workbench row that states the reason.
+ */
+export const DelegationResumeRow = memo(function DelegationResumeRow({
+  step,
+  fallback,
+}: {
+  step: ToolStep
+  fallback: ReactNode
+}) {
+  const { pinnedOnly } = useActivityRender()
+  const { part } = step
+  const call = useMemo(
+    () =>
+      parseCodegMcpToolCall({
+        tool: "resume_delegation",
+        input: part.input,
+        output: part.output,
+        errorText: part.errorText,
+        state: part.state,
+      }),
+    [part.input, part.output, part.errorText, part.state]
+  )
+  const latest = useLatestTaskRow(step.laterPolls, call.detail)
+  // `input` stays out: a resume's `{task_id, reason}` carries none of what
+  // the model parses from a delegate call's arguments.
+  const source = useMemo(
+    () => ({
+      parentToolUseId: part.toolCallId,
+      taskIdHint: call.detail,
+      output: part.output ?? null,
+      errorText: part.errorText ?? null,
+      state: part.state,
+      meta: part.meta ?? null,
+      laterReport: latest?.report ?? null,
+    }),
+    [part, call.detail, latest]
+  )
+  const model = useDelegationCardModel(source)
+  // A refusal still names the task's agent and child (with its real status),
+  // which would pass for a sub-agent that came back — and bury the reason.
+  if (!model.hasModel || isRefusedResume(part.output, part.errorText)) {
+    return pinnedOnly ? null : <>{fallback}</>
+  }
+  return (
+    <DelegationStepRow
+      step={step}
+      source={source}
+      model={model}
+      latest={latest}
+      resumed
+      reason={call.reason?.trim() || null}
+    />
+  )
+})
+
+function DelegationStepRow({
+  step,
+  source,
+  model,
+  latest,
+  resumed = false,
+  reason = null,
+}: {
+  step: ToolStep
+  source: DelegationCardSource
+  model: DelegationCardModel
+  latest: DelegationTaskRow | undefined
+  /** A `resume_delegation`: the sub-agent came back. */
+  resumed?: boolean
+  /** Why it was resumed, as the agent passed it on. */
+  reason?: string | null
+}) {
+  const t = useTranslations("Folder.chat.activity")
+  const tDelegation = useTranslations("Folder.chat.delegation")
+  const statusText = useStatusText()
+  const { pinnedOnly } = useActivityRender()
   const viewerHost = useSessionViewerHost()
   const [dialogOpen, setDialogOpen] = useState(false)
   const status = delegationStepStatus(model.status)
@@ -105,7 +211,6 @@ export const DelegationRow = memo(function DelegationRow({
     useTruncation<HTMLSpanElement>(taskLine)
   const elapsed = useLiveElapsed(step.key, status === "running")
 
-  if (!model.hasModel) return pinnedOnly ? null : <GenericRow step={step} />
   if (pinnedOnly && status !== "running" && status !== "awaiting") return null
 
   const result =
@@ -122,6 +227,7 @@ export const DelegationRow = memo(function DelegationRow({
             ? viewerHost.open({ kind: "delegation", source })
             : setDialogOpen(true)
       : null
+  const resumedWord = tDelegation("resumed")
 
   return (
     <>
@@ -130,13 +236,29 @@ export const DelegationRow = memo(function DelegationRow({
         approval={step.tool.approval}
         status={status}
         marker={
-          <RailIcon
-            glyph={<DelegationIdentityGlyph identity={model.identity} />}
-            status={status}
-            label={`${t("kind.delegation")}, ${statusText(status)}`}
-          />
+          <>
+            <RailIcon
+              glyph={<DelegationIdentityGlyph identity={model.identity} />}
+              status={status}
+              label={
+                resumed
+                  ? `${t("kind.delegation")}, ${resumedWord}, ${statusText(status)}`
+                  : `${t("kind.delegation")}, ${statusText(status)}`
+              }
+            />
+            {resumed ? (
+              <span
+                aria-hidden="true"
+                title={resumedWord}
+                data-testid="delegation-resumed-mark"
+                className="absolute -bottom-1 -end-1.5 flex size-3 items-center justify-center rounded-full border border-activity-ring-done bg-background"
+              >
+                <RotateCcwIcon className="size-2 text-muted-foreground" />
+              </span>
+            ) : null}
+          </>
         }
-        expandable={taskLine !== null && (taskCut || open)}
+        expandable={(taskLine !== null && (taskCut || open)) || !!reason}
         expanded={open}
         onExpandedChange={setOpen}
         trailing={
@@ -162,12 +284,33 @@ export const DelegationRow = memo(function DelegationRow({
         }
         detail={() => (
           <DetailBox tone="neutral">
-            <p
-              dir="auto"
-              className="whitespace-pre-wrap break-words px-4 py-3 text-sm text-foreground/90"
-            >
-              {model.task}
-            </p>
+            {model.task ? (
+              <p
+                dir="auto"
+                className="whitespace-pre-wrap break-words px-4 py-3 text-sm text-foreground/90"
+              >
+                {model.task}
+              </p>
+            ) : null}
+            {reason ? (
+              // The interruption context the agent passed into the child's
+              // continuation prompt, exactly as sent — an argument being
+              // audited, so plain text and not Markdown.
+              <div
+                className={cn("px-4 py-3", model.task && "border-t")}
+                data-testid="delegation-resume-reason"
+              >
+                <div className="mb-1 text-xs text-activity-secondary">
+                  {tDelegation("resumeReasonLabel")}
+                </div>
+                <p
+                  dir="auto"
+                  className="whitespace-pre-wrap break-words text-sm text-foreground/90"
+                >
+                  {reason}
+                </p>
+              </div>
+            ) : null}
           </DetailBox>
         )}
       >
@@ -218,7 +361,7 @@ export const DelegationRow = memo(function DelegationRow({
       ) : null}
     </>
   )
-})
+}
 
 type BadgeStatus = DelegationTaskRow["badge"]["status"]
 
@@ -415,7 +558,7 @@ function PollsLi({
       data-step-key={stepKey}
       data-body={open ? "" : undefined}
     >
-      <span className="absolute start-0 top-1 flex size-5 items-center justify-center">
+      <span className="activity-marker absolute start-0 top-1 flex size-5 items-center justify-center">
         {marker}
       </span>
       <div className="min-w-0">{body}</div>

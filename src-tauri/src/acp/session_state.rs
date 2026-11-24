@@ -19,10 +19,10 @@ use crate::acp::feedback::{FeedbackItem, FeedbackStatus};
 use crate::acp::plan_approval::PendingPlanApprovalState;
 use crate::acp::question::PendingQuestionState;
 use crate::acp::types::{
-    AcpEvent, AsyncTaskRecord, AvailableCommandInfo, ConfigStaleKind, ConnectionStatus,
-    EventEnvelope, GrokModelCatalog, GrokModelSpec, PromptCapabilitiesInfo, RemoteControlInfo,
-    SessionConfigOptionInfo, SessionFailureRecord, SessionModeStateInfo, ToolApprovalInfo,
-    ToolCallImageInfo,
+    AcpEvent, AsyncTaskRecord, AvailableCommandInfo, BackgroundOutstandingTask, ConfigStaleKind,
+    ConnectionStatus, EventEnvelope, GrokModelCatalog, GrokModelSpec, PromptCapabilitiesInfo,
+    RemoteControlInfo, SessionConfigOptionInfo, SessionFailureRecord, SessionModeStateInfo,
+    ToolApprovalInfo, ToolCallImageInfo,
 };
 use crate::models::agent::AgentType;
 use crate::models::message::MessageRole;
@@ -34,6 +34,14 @@ pub struct LiveMessage {
     pub role: MessageRole,
     pub content: Vec<LiveContentBlock>,
     pub started_at: DateTime<Utc>,
+    /// The turn FAILED, in the agent's words: a terminal `SessionFailure`
+    /// applied while it ran. Kept so a snapshot taken before `TurnComplete`
+    /// closes the turn on the same failure line the watching clients drew
+    /// from the event (the frontend's closing `turn_error` block). A field
+    /// rather than a content block so a client that predates it ignores it
+    /// instead of meeting a block kind it cannot decode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_error: Option<String>,
 }
 
 /// 流式 turn 的内容块。事件按到达顺序追加。
@@ -236,6 +244,8 @@ pub struct ActiveDelegationState {
     pub assistant_id: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assistant_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot_uid: Option<String>,
 }
 
 /// The in-flight user prompt for the current turn. Captured from
@@ -326,6 +336,11 @@ pub struct SessionState {
     /// by `approval_id`.
     pub pending_plan_approval: Option<PendingPlanApprovalState>,
 
+    /// What the assistant that dispatched this session answers for the owner
+    /// (7.3.1): a window holds back its notification of those until one is
+    /// forwarded. Set by `AskDelegate`; outlives turns.
+    pub ask_delegate: Option<crate::acp::types::AskDelegate>,
+
     /// In-flight (running) sub-agent delegations keyed by `parent_tool_use_id`.
     /// `DelegationStarted` inserts; `DelegationCompleted` removes. UNLIKE
     /// `active_tool_calls`, NOT cleared on `TurnComplete` (an async delegation
@@ -336,6 +351,16 @@ pub struct SessionState {
     /// cumulative growth; completed delegations are recovered from the child's
     /// persisted DB row, not from here. See `ActiveDelegationState`.
     pub active_delegations: BTreeMap<String, ActiveDelegationState>,
+
+    /// Child connection ids of EVERY codeg delegation this connection has
+    /// running, from `DelegationChildRunning`. Lifecycle accounting, unlike
+    /// `active_delegations`, which only holds the ones bound to a card (a
+    /// delegation whose parent tool call couldn't be identified runs under a
+    /// synthetic id and never reaches it). The idle sweep spares a parent while
+    /// one of these is still a live connection, because ending the parent
+    /// cancels them (`cancel_by_parent`). On `to_snapshot()` too, so a client
+    /// that attaches mid-delegation holds the same gate.
+    pub delegated_children: BTreeSet<String>,
 
     /// Live user-feedback ("steering") notes for the current turn. Appended by
     /// `FeedbackSubmitted` (a user note while the agent works), flipped to
@@ -365,11 +390,24 @@ pub struct SessionState {
     /// dies with it). Carried on `to_snapshot()` so a client attaching
     /// mid-episode recovers the pending count without replaying events.
     pub background_outstanding: u32,
+    /// The same tasks one by one (`BackgroundActivity::outstanding_tasks`), so
+    /// a client attaching mid-episode can list WHICH background sub-agents
+    /// still run, not just how many. `apply_event` is the only writer.
+    pub background_outstanding_tasks: Vec<BackgroundOutstandingTask>,
     /// Instant of the most recent `BackgroundActivity` event. Bounds the sweep
     /// exemption: if the watcher stops reporting (task died, bug) the
     /// exemption lapses after `background_keepalive_max_age()` instead of
     /// pinning the connection alive forever. Backend-internal; not serialized.
     pub background_activity_at: Option<DateTime<Utc>>,
+    /// The last answer Claude Code wrote in a turn it started on its own (the
+    /// follow-up to a `<task-notification>`), with when it was read. Those
+    /// turns never reach the wire as a prompt's turn — no `TurnComplete`, no
+    /// [`Self::last_assistant_text`] — and arrive only as the watcher's
+    /// `BackgroundActivity` turns, so this is the one place an engine that
+    /// waited them out can read what the agent finally said (see
+    /// `acp::turn_end_hold`). `apply_event` is the only writer.
+    /// Backend-internal; not serialized.
+    pub last_background_reply: Option<(DateTime<Utc>, String)>,
 
     // ACP 协商出的能力
     pub modes: Option<SessionModeStateInfo>,
@@ -519,6 +557,39 @@ pub struct SessionState {
     /// on the snapshot so a frontend that reconnects after refresh can see
     /// "init complete" without waiting for an event that already fired.
     pub selectors_ready: bool,
+    /// True while a session establishment is in progress and its selectors
+    /// are not settled yet: from creation / every `SessionStarted` (new,
+    /// resumed, loaded, forked session) until the following `SelectorsReady`.
+    /// The conversation's stored selection is never written while this is set
+    /// — that is exactly when the agent's pre-application defaults are
+    /// visible (a resume emits `session.modes()` before replaying the stored
+    /// selection; a fork emits the forked session's defaults before restoring
+    /// the inherited ones). Backend-internal; not serialized.
+    pub selectors_settling: bool,
+    /// The conversation row this connection writes its selection to before
+    /// the first prompt links it (`conversation_id` is only set by
+    /// `ConversationLinked`): set by `acp_connect` for an existing
+    /// conversation (`ConnectionManager::bind_selection_conversation`).
+    /// Backend-internal; not serialized.
+    pub selection_conversation_id: Option<i32>,
+    /// A mode the user picked in a tab's composer that the tab applies at its
+    /// next send (legacy-modes picks are deferred to send time), recorded so a
+    /// close-and-reopen without sending keeps the pick. Never sent to the
+    /// agent from here. Written only by `AcpEvent::ComposerModeChanged`;
+    /// carried on `to_snapshot()`.
+    pub composer_mode_id: Option<String>,
+    /// Latched by the first EXPLICIT composer pick on this connection, never
+    /// reset. A draft's one-time hand-over of its pick (and a reconnect's
+    /// restore of the stored intent) applies only while this is false, so it
+    /// can never overwrite a pick another surface already made.
+    /// Backend-internal; not serialized.
+    pub composer_mode_touched: bool,
+    /// Set by the connection's driver once its loop has ended, right before
+    /// the final selection flush. From then on direct selection mutations
+    /// (`acp_set_composer_mode`, `bind_selection_conversation`) are refused,
+    /// so a pick is either in the flushed row or rejected, never accepted and
+    /// lost. Backend-internal; not serialized.
+    pub selection_finalized: bool,
 
     /// Most recent unresolved `AcpEvent::Error` payload. Cleared when a new
     /// prompt starts, matching the frontend reducer's live-event behavior. The
@@ -600,6 +671,25 @@ pub struct SessionState {
     /// Backend-only.
     pub antigravity_answered_interactions: BTreeSet<String>,
 
+    /// Whether the adapter on this connection is antigravity-acp, so that its
+    /// `interaction_<hex>` questions are bridged into the question card
+    /// (`connection.rs::try_bridge_antigravity_ask`). Always true for the
+    /// built-in Antigravity. A custom agent gets it at initialize only when
+    /// the RUNNING adapter reports `agentInfo.name == "antigravity-acp"` (a
+    /// second Antigravity account registered as a custom agent, say), because
+    /// the id prefix alone says nothing about who minted it
+    /// (`connection.rs::speaks_antigravity_interactions`). Backend-only.
+    pub antigravity_interactions: bool,
+    /// Whether a declined bridged Antigravity question stops the turn: the
+    /// running adapter reported 1.5.1 or later at initialize
+    /// (`connection.rs::antigravity_skip_cancels_turn`). Backend-only.
+    pub antigravity_skip_cancels_turn: bool,
+    /// Configured Gemini home for this launch's trajectory (backend only).
+    pub(crate) antigravity_sessions_dir: Option<std::path::PathBuf>,
+    /// A transiently unreadable task DB at the foreground boundary. Passive
+    /// releases wait for the next successful read (bounded if the DB is lost).
+    pub(crate) antigravity_reconcile_at: Option<DateTime<Utc>>,
+
     /// Whether live-feedback notes for THIS session go over the native ACP
     /// `_session/steering` push channel instead of the `check_user_feedback`
     /// pull tool. Synthesized ONCE at initialize from three gates (extension
@@ -623,6 +713,13 @@ pub struct SessionState {
     /// from its own markers. Backend-internal routing only: not part of the
     /// client snapshot.
     pub codex_user_input_shape: Option<crate::acp::question::CodexUserInputShape>,
+
+    /// What the RUNNING adapter said it is at initialize: `agentInfo`'s
+    /// `(name, version)`, when it sent one. The personal agent reads it to
+    /// decide whether a message can be folded into a turn in flight
+    /// (claude-agent-acp 0.86.0 and earlier never answer a folded prompt).
+    /// Backend-only: not part of the client snapshot.
+    pub agent_info: Option<(String, String)>,
 
     /// Which `session_info_update` meta key carries goal snapshots for this
     /// connection: `true` ⇒ the provider-neutral `_meta.goal` (adapter
@@ -710,6 +807,14 @@ pub struct SessionState {
     /// `delegation_call_id`-bound child outcome. Cleared on the next prompt.
     pub last_assistant_text: Option<String>,
 
+    /// When the last turn's `TurnComplete` was applied here — the moment
+    /// [`Self::last_assistant_text`] was captured, so the two read together
+    /// say which answer came when. Stamped here rather than where a consumer
+    /// reads the event, which can lag the bus: an engine comparing this answer
+    /// with [`Self::last_background_reply`] (see `acp::turn_end_hold`) needs
+    /// both on the same clock. Backend-internal; not serialized.
+    pub last_turn_completed_at: Option<DateTime<Utc>>,
+
     /// The just-completed turn's tool-call progress ([`Self::turn_progress`]),
     /// captured at TurnComplete beside `last_assistant_text` — by the time the
     /// delegation broker records a finished child's result, the turn's tool
@@ -771,6 +876,14 @@ pub struct SessionState {
     /// attachment hydration so a steered note cannot ride into the next turn.
     pub turns_completed: u64,
 
+    /// Auto-preview work scheduled by `apply_event` for the files the running
+    /// turn's tool calls name (see `crate::agent_turn_files`). `apply_event`
+    /// runs under the session lock and never touches the filesystem; the
+    /// emitter (`emit_with_state_built`) drains this after applying and runs
+    /// the jobs on a blocking thread. Bounded: a caller that applies events
+    /// without draining (tests, side paths) cannot grow it.
+    pub(crate) turn_file_jobs: Vec<crate::agent_turn_files::TurnFileJob>,
+
     /// Whether the most recently completed turn ended via a stop reason other
     /// than `"end_turn"` (cancelled, refusal, max_tokens, max_turn_requests,
     /// empty, unknown — the same "abnormal ending" bucket `connection.rs`
@@ -828,6 +941,18 @@ pub struct SessionState {
     /// companion it is given carries the tool; a delegated child never has
     /// one. Never on the snapshot.
     pub cli_output_schema: Option<Arc<crate::cli_run::OutputSchema>>,
+
+    /// The personal agent's own connection: given the personal-agent tool
+    /// group and never the delegation or board-authoring ones. Set from the
+    /// spawn seed before anything can read it, never inherited by a
+    /// delegation child. Never on the snapshot.
+    pub personal_agent: bool,
+
+    /// The personal agent's replies, built from the events of the prompts its
+    /// engine tagged (see [`crate::acp::reply_turn`]). Opened when such a
+    /// prompt starts, fed by [`Self::apply_event`] under the write lock,
+    /// released by the engine. Never on the snapshot.
+    pub reply_turns: crate::acp::reply_turn::ReplyTurns,
 
     /// Which writer owns the conversation-status write of a `TurnComplete`,
     /// keyed by that event's envelope `seq`. See [`Self::claim_turn_status`].
@@ -947,11 +1072,15 @@ impl SessionState {
             pending_permission: None,
             pending_question: None,
             pending_plan_approval: None,
+            ask_delegate: None,
             active_delegations: BTreeMap::new(),
+            delegated_children: BTreeSet::new(),
             feedback: Vec::new(),
             tool_approvals: Vec::new(),
             background_outstanding: 0,
+            background_outstanding_tasks: Vec::new(),
             background_activity_at: None,
+            last_background_reply: None,
             modes: None,
             current_mode: None,
             config_options: None,
@@ -973,6 +1102,11 @@ impl SessionState {
             claude_settings: None,
             remote_control: None,
             selectors_ready: false,
+            selectors_settling: true,
+            selection_conversation_id: None,
+            composer_mode_id: None,
+            composer_mode_touched: false,
+            selection_finalized: false,
             last_error: None,
             session_started_tx: None,
             event_seq: 0,
@@ -984,8 +1118,13 @@ impl SessionState {
             feedback_tool_available: false,
             result_tool_available: false,
             antigravity_answered_interactions: BTreeSet::new(),
+            antigravity_interactions: agent_type == AgentType::Antigravity,
+            antigravity_skip_cancels_turn: false,
+            antigravity_sessions_dir: None,
+            antigravity_reconcile_at: None,
             native_steering_available: false,
             codex_user_input_shape: None,
+            agent_info: None,
             neutral_goal_channel: false,
             goal_control_method: crate::acp::codex_goal::LEGACY_GOAL_CONTROL_METHOD.to_string(),
             goal_actions: None,
@@ -994,12 +1133,14 @@ impl SessionState {
             async_tasks: BTreeMap::new(),
             async_task_activity_at: None,
             last_assistant_text: None,
+            last_turn_completed_at: None,
             last_turn_progress: None,
             pending_user_message: None,
             pending_user_message_started_at: None,
             turn_in_flight: false,
             agent_initiated_turn: false,
             turns_completed: 0,
+            turn_file_jobs: Vec::new(),
             last_turn_ended_abnormally: false,
             config_stale: false,
             config_stale_kind: None,
@@ -1008,6 +1149,8 @@ impl SessionState {
             wire_title_wake: Arc::new(tokio::sync::Notify::new()),
             cli_run: None,
             cli_output_schema: None,
+            personal_agent: false,
+            reply_turns: Default::default(),
             turn_status_claim: None,
         }
     }
@@ -1058,6 +1201,163 @@ impl SessionState {
     /// 单一分发器：把一个 AcpEvent 应用到 self。注意此方法**不**自增 event_seq——
     /// seq 由 emit_with_state 在外层管理（这样 apply_event 可独立单元测试）。
     pub fn apply_event(&mut self, payload: &AcpEvent) {
+        // The personal agent's reply in the making sees every event, before
+        // anything below changes the state it reads. `event_seq` is bumped
+        // right after this applies (`emit_with_state_built`), so the event's
+        // envelope seq is the next one.
+        if self.reply_turns.is_active() {
+            let turn_open = self.turn_in_flight || self.live_message.is_some();
+            self.reply_turns
+                .apply(payload, self.event_seq + 1, turn_open);
+        }
+        let was_prompting = self.status == ConnectionStatus::Prompting;
+        // A tool call's status before this event, to spot the moment it settles.
+        let tool_call_before = match payload {
+            AcpEvent::ToolCall { tool_call_id, .. }
+            | AcpEvent::ToolCallUpdate { tool_call_id, .. } => Some(
+                self.active_tool_calls
+                    .get(tool_call_id)
+                    .map(|tc| tc.status.clone()),
+            ),
+            _ => None,
+        };
+        self.apply_event_inner(payload);
+        self.track_turn_files(payload, was_prompting, tool_call_before);
+    }
+
+    /// Keep `crate::agent_turn_files` in step with this connection: a turn
+    /// begins on the rise into `Prompting` and ends on the fall out of it (a
+    /// normal `TurnComplete` gets one final check; cancel, error and
+    /// disconnect just drop the record). Tool calls feed it the Office paths
+    /// they name, and each call that settles schedules a confirm.
+    fn track_turn_files(
+        &mut self,
+        payload: &AcpEvent,
+        was_prompting: bool,
+        tool_call_before: Option<Option<ToolCallStatus>>,
+    ) {
+        use crate::agent_turn_files as turn_files;
+        let is_prompting = self.status == ConnectionStatus::Prompting;
+        if !was_prompting && is_prompting {
+            turn_files::begin_turn(&self.connection_id, std::time::SystemTime::now());
+        }
+        if let Some(before) = &tool_call_before {
+            match payload {
+                AcpEvent::ToolCall {
+                    tool_call_id,
+                    title,
+                    raw_input,
+                    locations,
+                    ..
+                } => self.note_tool_call_files(
+                    tool_call_id,
+                    Some(title.as_str()),
+                    raw_input.as_deref(),
+                    locations.as_ref(),
+                    before.as_ref(),
+                ),
+                AcpEvent::ToolCallUpdate {
+                    tool_call_id,
+                    title,
+                    raw_input,
+                    locations,
+                    ..
+                } => self.note_tool_call_files(
+                    tool_call_id,
+                    title.as_deref(),
+                    raw_input.as_deref(),
+                    locations.as_ref(),
+                    before.as_ref(),
+                ),
+                _ => {}
+            }
+        }
+        if was_prompting && !is_prompting {
+            let normal = matches!(
+                payload,
+                AcpEvent::TurnComplete { stop_reason, .. }
+                    if matches!(stop_reason.as_str(), "end_turn" | "max_tokens" | "max_turn_requests")
+            );
+            if let Some(job) =
+                turn_files::end_turn(&self.connection_id, normal, std::time::SystemTime::now())
+            {
+                self.push_turn_file_job(job);
+            }
+        }
+    }
+
+    fn note_tool_call_files(
+        &mut self,
+        tool_call_id: &str,
+        title: Option<&str>,
+        raw_input: Option<&str>,
+        locations: Option<&serde_json::Value>,
+        before: Option<&ToolCallStatus>,
+    ) {
+        use crate::agent_turn_files::{self as turn_files, extract};
+        let Some(entry) = self.active_tool_calls.get(tool_call_id) else {
+            return;
+        };
+        let settled = |status: &ToolCallStatus| {
+            matches!(status, ToolCallStatus::Completed | ToolCallStatus::Failed)
+        };
+        let just_settled = settled(&entry.status) && !before.is_some_and(settled);
+        // Extract when this event brings a mention: new input that already
+        // parses, or a title/locations naming a path (taken as they arrive — a
+        // later update may replace them). Once more when the call settles —
+        // streamed input may only be complete then, and an extension can
+        // straddle two chunks, so that check runs on the assembled input. The
+        // cheap extension check skips the walk for the vast majority of calls.
+        let event_mentions = (entry.input.is_some()
+            && raw_input.is_some_and(extract::mentions_office_extension))
+            || title.is_some_and(extract::mentions_office_extension)
+            || locations.is_some_and(|l| extract::mentions_office_extension(&l.to_string()));
+        let assembled = just_settled.then(|| entry.raw_input_chunks.concat());
+        let settled_mentions = assembled.as_deref().is_some_and(|joined| {
+            extract::mentions_office_extension(joined)
+                || extract::mentions_office_extension(&entry.label)
+                || entry
+                    .locations
+                    .as_ref()
+                    .is_some_and(|l| extract::mentions_office_extension(&l.to_string()))
+        });
+        if event_mentions || settled_mentions {
+            let unparsed;
+            let input = match (&entry.input, assembled) {
+                (Some(value), _) => Some(value),
+                (None, Some(joined)) if !joined.is_empty() => {
+                    unparsed = serde_json::Value::String(joined);
+                    Some(&unparsed)
+                }
+                _ => None,
+            };
+            let home = dirs::home_dir();
+            let paths = extract::extract_tool_call_paths(
+                input,
+                Some(entry.label.as_str()).filter(|l| !l.is_empty()),
+                entry.locations.as_ref(),
+                self.working_dir.as_deref(),
+                home.as_deref(),
+            );
+            turn_files::mention(&self.connection_id, paths);
+        }
+        if just_settled {
+            if let Some(job) = turn_files::confirm_job(&self.connection_id) {
+                self.push_turn_file_job(job);
+            }
+        }
+    }
+
+    fn push_turn_file_job(&mut self, job: crate::agent_turn_files::TurnFileJob) {
+        // Only reached by callers that never drain (see the field doc).
+        const MAX_PENDING_TURN_FILE_JOBS: usize = 64;
+        if self.turn_file_jobs.len() >= MAX_PENDING_TURN_FILE_JOBS {
+            self.turn_file_jobs.remove(0);
+        }
+        self.turn_file_jobs.push(job);
+    }
+
+    fn apply_event_inner(&mut self, payload: &AcpEvent) {
         match payload {
             AcpEvent::SessionStarted { session_id } => {
                 if self.external_id.as_deref() != Some(session_id.as_str()) {
@@ -1084,6 +1384,9 @@ impl SessionState {
                 }
                 self.external_id = Some(session_id.clone());
                 self.status = ConnectionStatus::Connected;
+                // A new establishment begins: its selectors are transitional
+                // until the `SelectorsReady` that follows it.
+                self.selectors_settling = true;
                 // Fire the dedup waiter (if any). Take()-and-send is
                 // single-shot: a duplicate SessionStarted (replay, agent
                 // re-init) finds None here and is a no-op, which is
@@ -1153,6 +1456,12 @@ impl SessionState {
                 // stream has long since corrected it.
                 if let Some(modes) = self.modes.as_mut() {
                     modes.current_mode_id = mode_id.clone();
+                }
+            }
+            AcpEvent::ComposerModeChanged { mode_id, explicit } => {
+                self.composer_mode_id = mode_id.clone();
+                if *explicit {
+                    self.composer_mode_touched = true;
                 }
             }
             AcpEvent::SessionConfigOptions { config_options } => {
@@ -1331,7 +1640,7 @@ impl SessionState {
                     created_at: Utc::now(),
                 });
             }
-            AcpEvent::QuestionResolved { question_id } => {
+            AcpEvent::QuestionResolved { question_id, .. } => {
                 // Mirror `PermissionResolved`: only clear when the resolved id
                 // matches the current one, so a late event for an already-
                 // replaced question can't wipe a live card from under the user.
@@ -1354,7 +1663,12 @@ impl SessionState {
                     created_at: Utc::now(),
                 });
             }
-            AcpEvent::PlanApprovalResolved { approval_id } => {
+            AcpEvent::AskDelegate { delegate } => {
+                self.ask_delegate = *delegate;
+            }
+            // A notification for the windows; nothing to keep.
+            AcpEvent::AskForwarded { .. } => {}
+            AcpEvent::PlanApprovalResolved { approval_id, .. } => {
                 // Mirror `QuestionResolved`: only clear when the resolved id
                 // matches the current one, so a late event for an already-
                 // replaced approval can't wipe a live card from under the user.
@@ -1436,6 +1750,7 @@ impl SessionState {
                 if self.turn_in_flight || self.live_message.is_some() {
                     self.last_assistant_text = None;
                     self.last_turn_progress = self.turn_progress();
+                    self.last_turn_completed_at = Some(Utc::now());
                 }
                 if let Some(live) = self.live_message.as_ref() {
                     let after_last_tool_call = live
@@ -1592,6 +1907,7 @@ impl SessionState {
                 // after browser refresh) can tell the initial handshake is
                 // already done — the event fires only once per connection.
                 self.selectors_ready = true;
+                self.selectors_settling = false;
             }
             AcpEvent::Error {
                 message,
@@ -1619,6 +1935,7 @@ impl SessionState {
                 task_id,
                 assistant_id,
                 assistant_name,
+                bot_uid,
                 ..
             } => {
                 // Record the running delegation so the binding is snapshot-
@@ -1638,8 +1955,19 @@ impl SessionState {
                         task_id: task_id.clone(),
                         assistant_id: *assistant_id,
                         assistant_name: assistant_name.clone(),
+                        bot_uid: bot_uid.clone(),
                     },
                 );
+            }
+            AcpEvent::DelegationChildRunning {
+                child_connection_id,
+                running,
+            } => {
+                if *running {
+                    self.delegated_children.insert(child_connection_id.clone());
+                } else {
+                    self.delegated_children.remove(child_connection_id);
+                }
             }
             AcpEvent::DelegationCompleted {
                 parent_tool_use_id, ..
@@ -1709,13 +2037,28 @@ impl SessionState {
                     }
                 }
             }
-            AcpEvent::BackgroundActivity { outstanding, .. } => {
+            AcpEvent::BackgroundActivity {
+                turns,
+                outstanding,
+                outstanding_tasks,
+                ..
+            } => {
+                if let Some(reply) = last_assistant_reply(turns) {
+                    self.last_background_reply = Some((Utc::now(), reply));
+                }
                 // Mirror the watcher's authoritative accounting so the idle
                 // sweeps can exempt this connection while background work is
                 // pending. The turns/settled payloads are frontend-only; the
                 // trailing `last_activity_at = now` below additionally resets
                 // the backend idle timer on every batch of transcript activity.
                 self.background_outstanding = *outstanding;
+                self.background_outstanding_tasks = outstanding_tasks.clone();
+                self.background_activity_at = Some(Utc::now());
+            }
+            AcpEvent::BackgroundTaskProgress { .. } => {
+                // The card patch is frontend-only. The tick itself is the agent
+                // saying a background child is alive right now, so it refreshes
+                // the keep-alive clock the outstanding count is bounded by.
                 self.background_activity_at = Some(Utc::now());
             }
             AcpEvent::SessionFailure { record } => {
@@ -1732,6 +2075,24 @@ impl SessionState {
                     .get(&record.id)
                     .is_none_or(|existing| record.revision > existing.revision);
                 if accept {
+                    // The reply chunk that told this failure is no reply: a
+                    // snapshot taken before `TurnComplete` must not hand it to
+                    // an attaching client as one (the frontend reducer drops it
+                    // the same way for the clients already watching).
+                    if record.echoed_in_reply && record.severity == "error" {
+                        if let Some(live) = self.live_message.as_mut() {
+                            drop_echoed_failure_text(&mut live.content, &record.title);
+                        }
+                    }
+                    // A terminal record told during the turn closes it: the
+                    // snapshot keeps the line, as a watching client's reducer
+                    // does (`TURN_FAILED`), so an attach before `TurnComplete`
+                    // does not lose it. A blank title is left to the clients,
+                    // which word it from the category.
+                    let title = record.title.trim();
+                    if record.severity == "error" && self.turn_in_flight && !title.is_empty() {
+                        self.ensure_live_message().turn_error = Some(title.to_string());
+                    }
                     self.session_failures
                         .insert(record.id.clone(), record.clone());
                 }
@@ -1821,6 +2182,16 @@ impl SessionState {
         if self.has_live_async_task(now) {
             return true;
         }
+        self.watcher_counts_work(now)
+            || self
+                .antigravity_reconcile_at
+                .is_some_and(|at| now.signed_duration_since(at) < background_keepalive_max_age())
+    }
+
+    /// Whether the transcript watcher (or another `BackgroundActivity`
+    /// producer) still counts work, and reported recently enough to believe
+    /// it — the watcher's half of [`Self::has_active_background_work`].
+    fn watcher_counts_work(&self, now: DateTime<Utc>) -> bool {
         if self.background_outstanding == 0 {
             return false;
         }
@@ -1828,6 +2199,19 @@ impl SessionState {
             Some(at) => now.signed_duration_since(at) < background_keepalive_max_age(),
             None => false,
         }
+    }
+
+    /// Whether the watcher still counts a background SUB-AGENT
+    /// ([`BackgroundTaskKind::Agent`](crate::acp::types::BackgroundTaskKind)),
+    /// under the same age bound as its count. claude-agent-acp keeps every
+    /// sub-agent out of the AIR async-task table (its `isSubagentTask` filter),
+    /// so for Claude Code this is the only place a running sub-agent shows.
+    pub fn has_outstanding_background_agent(&self, now: DateTime<Utc>) -> bool {
+        self.watcher_counts_work(now)
+            && self
+                .background_outstanding_tasks
+                .iter()
+                .any(|t| t.kind == crate::acp::types::BackgroundTaskKind::Agent)
     }
 
     /// Whether any AIR async task is still non-terminal AND the adapter has
@@ -2125,6 +2509,7 @@ impl SessionState {
                 role: MessageRole::Assistant,
                 content: Vec::new(),
                 started_at: Utc::now(),
+                turn_error: None,
             });
         }
         self.live_message
@@ -2481,11 +2866,14 @@ impl SessionState {
             pending_permission: self.pending_permission.clone(),
             pending_question: self.pending_question.clone(),
             pending_plan_approval: self.pending_plan_approval.clone(),
+            ask_delegate: self.ask_delegate,
             pending_user_message: self.pending_user_message.clone(),
             active_delegations: self.active_delegations.values().cloned().collect(),
+            delegated_children: self.delegated_children.iter().cloned().collect(),
             feedback: self.feedback.clone(),
             tool_approvals: self.tool_approvals.clone(),
             background_outstanding: self.background_outstanding,
+            background_outstanding_tasks: self.background_outstanding_tasks.clone(),
             feedback_tool_available: self.feedback_tool_available,
             native_steering_available: self.native_steering_available,
             modes: self.modes.clone(),
@@ -2498,6 +2886,7 @@ impl SessionState {
             fork_supported: self.fork_supported,
             available_commands: self.available_commands.clone(),
             selectors_ready: self.selectors_ready,
+            composer_mode_id: self.composer_mode_id.clone(),
             config_stale: self.config_stale,
             config_stale_kind: self.config_stale_kind,
             last_error: self.last_error.clone(),
@@ -2521,16 +2910,82 @@ impl SessionState {
 /// `codeg-cli` run lets its connection go as soon as its one turn has ended.
 /// Nor a one-shot generation (owner
 /// [`OWNER_LABEL`](crate::acp::one_shot::OWNER_LABEL)), which has no
-/// conversation to continue at all.
+/// conversation to continue at all. Nor the personal agent and the work it
+/// dispatches ([`crate::personal_agent::is_personal_agent_owner`]): codeg's
+/// own engine writes their prompts.
 /// For them a prediction would only be paid for.
 /// Everything else is a person's window, a work task (its session takes
 /// follow-ups once the task stops), or a delegated child (which inherits its
 /// parent's label, and whose session the user can open and continue).
 pub(crate) fn owner_composes_prompts(owner_window_label: &str) -> bool {
     owner_window_label != "automation"
+        && !crate::personal_agent::is_personal_agent_owner(owner_window_label)
         && owner_window_label != crate::cli_run::service::CLI_OWNER_LABEL
         && !crate::acp::one_shot::is_one_shot_owner(owner_window_label)
         && !owner_window_label.starts_with("chat_channel:")
+}
+
+/// `content` without the failure account `title` a reply chunk told (see
+/// `SessionFailureRecord::echoed_in_reply`): its LAST occurrence in the last
+/// main-thread text block is cut out — anything the agent appended after it
+/// (Antigravity's citation notice) stays — and the block goes once nothing is
+/// left. `false` when no such occurrence exists.
+///
+/// The frontend's `dropEchoedFailureText` is the same rule; keep them in step.
+fn drop_echoed_failure_text(content: &mut Vec<LiveContentBlock>, title: &str) -> bool {
+    let title = title.trim();
+    if title.is_empty() {
+        return false;
+    }
+    let Some(index) = content.iter().rposition(|block| {
+        matches!(
+            block,
+            LiveContentBlock::Text {
+                parent_tool_use_id: None,
+                ..
+            }
+        )
+    }) else {
+        return false;
+    };
+    let LiveContentBlock::Text { text, .. } = &mut content[index] else {
+        return false;
+    };
+    let Some(at) = text.rfind(title) else {
+        return false;
+    };
+    let before = text[..at].trim_end();
+    let after = text[at + title.len()..].trim_start();
+    let rest = match (before.is_empty(), after.is_empty()) {
+        (true, _) => after.to_string(),
+        (false, true) => before.to_string(),
+        (false, false) => format!("{before}\n\n{after}"),
+    };
+    if rest.is_empty() {
+        content.remove(index);
+    } else {
+        *text = rest;
+    }
+    true
+}
+
+/// The answer of the last assistant turn in `turns`: its last non-empty `Text`
+/// block, trimmed. `None` when no assistant turn in the batch has one (a turn
+/// still on its tool calls, or a batch of user turns only).
+fn last_assistant_reply(turns: &[crate::models::message::MessageTurn]) -> Option<String> {
+    use crate::models::message::{ContentBlock, TurnRole};
+    turns
+        .iter()
+        .rev()
+        .filter(|turn| matches!(turn.role, TurnRole::Assistant))
+        .find_map(|turn| {
+            turn.blocks.iter().rev().find_map(|block| match block {
+                ContentBlock::Text { text } if !text.trim().is_empty() => {
+                    Some(text.trim().to_string())
+                }
+                _ => None,
+            })
+        })
 }
 
 /// Max age of the background keep-alive: how long a connection with
@@ -2581,6 +3036,10 @@ pub struct LiveSessionSnapshot {
     /// pre-feature shape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_plan_approval: Option<PendingPlanApprovalState>,
+    /// See `SessionState.ask_delegate`; off the wire when nobody answers for
+    /// the owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ask_delegate: Option<crate::acp::types::AskDelegate>,
     /// The in-flight user prompt for the current turn (see
     /// `SessionState.pending_user_message`). `#[serde(default)]` so older
     /// payloads still deserialize; `skip_serializing_if` so the no-pending case
@@ -2594,6 +3053,12 @@ pub struct LiveSessionSnapshot {
     /// doesn't bloat every snapshot with an empty array.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub active_delegations: Vec<ActiveDelegationState>,
+    /// Every running delegation's child connection id (see
+    /// `SessionState.delegated_children`), so a client attaching mid-delegation
+    /// keeps the parent alive like one that saw it start. Absent when empty and
+    /// on older servers, like `active_delegations`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub delegated_children: Vec<String>,
     /// Live user-feedback notes for the current turn (see `SessionState.feedback`).
     /// `#[serde(default)]` so older server payloads without this field still
     /// deserialize; `skip_serializing_if` keeps the common empty case off the
@@ -2614,6 +3079,10 @@ pub struct LiveSessionSnapshot {
     /// common no-background case keeps the wire shape byte-identical.
     #[serde(default, skip_serializing_if = "u32_is_zero")]
     pub background_outstanding: u32,
+    /// Those tasks one by one (see `SessionState.background_outstanding_tasks`).
+    /// Same `default` / skip-when-empty treatment as the count.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub background_outstanding_tasks: Vec<BackgroundOutstandingTask>,
     /// Whether this agent has the `check_user_feedback` tool (see
     /// `SessionState.feedback_tool_available`). `#[serde(default)]` so older
     /// payloads deserialize to `false`; the frontend gates the feedback bar on
@@ -2643,6 +3112,11 @@ pub struct LiveSessionSnapshot {
     pub fork_supported: bool,
     pub available_commands: Vec<AvailableCommandInfo>,
     pub selectors_ready: bool,
+    /// The composer's pending mode pick (see `SessionState.composer_mode_id`).
+    /// Omitted when there is none, so the common snapshot keeps its
+    /// pre-feature wire shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composer_mode_id: Option<String>,
     /// Whether the running session is on stale (launch-time) config after a
     /// later settings save (see `SessionState.config_stale`). `#[serde(default)]`
     /// so older server payloads without the field deserialize to `false`; always
@@ -2898,12 +3372,14 @@ mod tests {
         // A resolve for a DIFFERENT id must not wipe the live approval.
         s.apply_event(&AcpEvent::PlanApprovalResolved {
             approval_id: "other".into(),
+            resolution: None,
         });
         assert!(s.pending_plan_approval.is_some());
 
         // Matching resolve clears it (and the snapshot).
         s.apply_event(&AcpEvent::PlanApprovalResolved {
             approval_id: "ap-1".into(),
+            resolution: None,
         });
         assert!(s.pending_plan_approval.is_none());
         assert!(s.to_snapshot().pending_plan_approval.is_none());
@@ -2922,6 +3398,7 @@ mod tests {
                     details: None,
                     actions: vec!["retry".into()],
                     resolved: false,
+                    echoed_in_reply: false,
                 },
             }
         }
@@ -3290,6 +3767,85 @@ mod tests {
         assert_eq!(s.last_assistant_text.as_deref(), Some("You're welcome."));
     }
 
+    /// Antigravity streams a dead executor's account as a reply chunk; the
+    /// terminal record marked `echoed_in_reply` takes those words out of the
+    /// live message, so a snapshot taken before `TurnComplete` does not hand
+    /// them to an attaching client as the reply — and closes the turn on the
+    /// failure line instead. A record without the mark (an AIR adapter's)
+    /// leaves matching prose alone, but still closes the turn.
+    #[test]
+    fn an_echoed_terminal_failure_leaves_the_reply() {
+        let text = |text: &str| AcpEvent::ContentDelta {
+            text: text.into(),
+            parent_tool_use_id: None,
+        };
+        let failure = |id: &str, echoed: bool| AcpEvent::SessionFailure {
+            record: SessionFailureRecord {
+                id: id.into(),
+                revision: 1,
+                category: "access".into(),
+                severity: "error".into(),
+                title: "Not eligible.".into(),
+                details: None,
+                actions: Vec::new(),
+                resolved: false,
+                echoed_in_reply: echoed,
+            },
+        };
+        let texts = |s: &SessionState| -> Vec<String> {
+            s.live_message
+                .as_ref()
+                .map(|live| {
+                    live.content
+                        .iter()
+                        .filter_map(|block| match block {
+                            LiveContentBlock::Text { text, .. } => Some(text.clone()),
+                            _ => None,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+
+        let lines = |s: &SessionState| -> Vec<String> {
+            s.to_snapshot()
+                .live_message
+                .and_then(|live| live.turn_error)
+                .into_iter()
+                .collect()
+        };
+
+        let mut s = fresh_state();
+        s.apply_event(&AcpEvent::StatusChanged {
+            status: ConnectionStatus::Prompting,
+        });
+        s.turn_in_flight = true;
+        s.apply_event(&text("Not eligible."));
+        s.apply_event(&failure("a:1", false));
+        assert_eq!(texts(&s), vec!["Not eligible.".to_string()]);
+        // The snapshot closes the turn on the line, once.
+        assert_eq!(lines(&s), vec!["Not eligible.".to_string()]);
+        s.apply_event(&failure("a:2", true));
+        assert!(texts(&s).is_empty(), "{:?}", texts(&s));
+        assert_eq!(lines(&s), vec!["Not eligible.".to_string()]);
+
+        // Outside a turn (a `session/load` replay of an earlier turn's record)
+        // nothing is drawn.
+        let mut idle = fresh_state();
+        idle.apply_event(&failure("a:9", false));
+        assert!(lines(&idle).is_empty());
+
+        // Fused onto the model's words, with a citation notice after it.
+        let mut s = fresh_state();
+        s.apply_event(&AcpEvent::StatusChanged {
+            status: ConnectionStatus::Prompting,
+        });
+        s.turn_in_flight = true;
+        s.apply_event(&text("Let me look.Not eligible.\n\nSources: x"));
+        s.apply_event(&failure("a:3", true));
+        assert_eq!(texts(&s), vec!["Let me look.\n\nSources: x".to_string()]);
+    }
+
     #[test]
     fn session_failure_warnings_survive_non_clean_turn_ends() {
         fn failure(id: &str, revision: u64, severity: &str, title: &str) -> AcpEvent {
@@ -3303,6 +3859,7 @@ mod tests {
                     details: None,
                     actions: vec!["new_session".into()],
                     resolved: false,
+                    echoed_in_reply: false,
                 },
             }
         }
@@ -3363,6 +3920,7 @@ mod tests {
                     details: None,
                     actions: vec![],
                     resolved: false,
+                    echoed_in_reply: false,
                 },
             }
         }
@@ -3466,14 +4024,30 @@ mod tests {
         let mut s = fresh_state();
         assert!(!s.has_active_background_work(Utc::now()));
 
+        let agent = crate::acp::types::BackgroundOutstandingTask {
+            task_id: "a1".into(),
+            kind: crate::acp::types::BackgroundTaskKind::Agent,
+            tool_use_id: Some("toolu_1".into()),
+            description: Some("Run the build".into()),
+            started_at_ms: 1_000,
+        };
+        let shell = crate::acp::types::BackgroundOutstandingTask {
+            task_id: "b1".into(),
+            kind: crate::acp::types::BackgroundTaskKind::Shell,
+            tool_use_id: None,
+            description: None,
+            started_at_ms: 2_000,
+        };
         s.apply_event(&AcpEvent::BackgroundActivity {
             session_id: "sid".into(),
             turns: vec![],
             outstanding: 2,
+            outstanding_tasks: vec![agent.clone(), shell],
             settled: vec![],
             watermark: 42,
         });
         assert_eq!(s.background_outstanding, 2);
+        assert_eq!(s.background_outstanding_tasks.len(), 2);
         let now = Utc::now();
         assert!(s.has_active_background_work(now));
 
@@ -3482,15 +4056,90 @@ mod tests {
         let long_after = now + background_keepalive_max_age() + chrono::Duration::seconds(1);
         assert!(!s.has_active_background_work(long_after));
 
-        // Settled back to zero: no exemption regardless of recency.
+        // Each event is the whole set: one that lists less REPLACES it.
+        s.apply_event(&AcpEvent::BackgroundActivity {
+            session_id: "sid".into(),
+            turns: vec![],
+            outstanding: 1,
+            outstanding_tasks: vec![agent.clone()],
+            settled: vec![],
+            watermark: 43,
+        });
+        assert_eq!(s.background_outstanding_tasks, vec![agent]);
+
+        // Settled back to zero: no exemption regardless of recency, no rows.
         s.apply_event(&AcpEvent::BackgroundActivity {
             session_id: "sid".into(),
             turns: vec![],
             outstanding: 0,
+            outstanding_tasks: vec![],
             settled: vec![],
-            watermark: 43,
+            watermark: 44,
         });
         assert!(!s.has_active_background_work(Utc::now()));
+        assert!(s.background_outstanding_tasks.is_empty());
+    }
+
+    /// A turn Claude Code ran on its own only reaches codeg as the watcher's
+    /// overlay turns, so its answer is read off them: the LAST assistant turn's
+    /// last non-empty text. A batch with no such text (a turn still on its
+    /// tools, a user turn) keeps the reply already read.
+    #[test]
+    fn background_activity_records_the_last_assistant_reply() {
+        use crate::models::message::{ContentBlock, MessageTurn, TurnRole};
+        fn turn(role: TurnRole, blocks: Vec<ContentBlock>) -> MessageTurn {
+            MessageTurn {
+                id: "bg-0-0".into(),
+                role,
+                blocks,
+                timestamp: Utc::now(),
+                usage: None,
+                duration_ms: None,
+                model: None,
+                completed_at: None,
+                agent_message_id: None,
+            }
+        }
+        fn text(t: &str) -> ContentBlock {
+            ContentBlock::Text { text: t.into() }
+        }
+        fn activity(turns: Vec<MessageTurn>) -> AcpEvent {
+            AcpEvent::BackgroundActivity {
+                session_id: "sid".into(),
+                turns,
+                outstanding: 0,
+                outstanding_tasks: vec![],
+                settled: vec![],
+                watermark: 0,
+            }
+        }
+        let mut s = fresh_state();
+        assert!(s.last_background_reply.is_none());
+
+        s.apply_event(&activity(vec![
+            turn(TurnRole::Assistant, vec![text("first answer")]),
+            turn(
+                TurnRole::Assistant,
+                vec![
+                    text("checking the log"),
+                    text("  all 12 tests passed  "),
+                    text(" "),
+                ],
+            ),
+            turn(TurnRole::User, vec![text("not an answer")]),
+        ]));
+        assert_eq!(
+            s.last_background_reply.as_ref().map(|(_, t)| t.as_str()),
+            Some("all 12 tests passed")
+        );
+
+        s.apply_event(&activity(vec![turn(TurnRole::Assistant, vec![])]));
+        s.apply_event(&activity(vec![]));
+        assert_eq!(
+            s.last_background_reply.as_ref().map(|(_, t)| t.as_str()),
+            Some("all 12 tests passed"),
+            "a batch without an answer keeps the one already read"
+        );
     }
 
     #[test]
@@ -3499,22 +4148,42 @@ mod tests {
         s.apply_event(&AcpEvent::BackgroundActivity {
             session_id: "sid".into(),
             turns: vec![],
-            outstanding: 3,
+            outstanding: 1,
+            outstanding_tasks: vec![crate::acp::types::BackgroundOutstandingTask {
+                task_id: "a1".into(),
+                kind: crate::acp::types::BackgroundTaskKind::Agent,
+                tool_use_id: Some("toolu_1".into()),
+                description: None,
+                started_at_ms: 1_000,
+            }],
             settled: vec![],
             watermark: 0,
         });
-        assert_eq!(s.to_snapshot().background_outstanding, 3);
+        assert_eq!(s.to_snapshot().background_outstanding, 1);
         let json = serde_json::to_value(s.to_snapshot()).unwrap();
         assert_eq!(
             json.get("background_outstanding").and_then(|v| v.as_u64()),
-            Some(3)
+            Some(1)
         );
+        assert_eq!(
+            json.get("background_outstanding_tasks"),
+            Some(&serde_json::json!([{
+                "task_id": "a1",
+                "kind": "agent",
+                "tool_use_id": "toolu_1",
+                "started_at_ms": 1000,
+            }]))
+        );
+        // And back: a client hydrating from it gets the rows whole.
+        let back: LiveSessionSnapshot = serde_json::from_value(json).unwrap();
+        assert_eq!(back.background_outstanding_tasks, s.background_outstanding_tasks);
 
         // Zero is skipped so the common no-background snapshot stays
         // byte-identical with the pre-feature wire shape.
         let zero = fresh_state();
         let json = serde_json::to_value(zero.to_snapshot()).unwrap();
         assert!(json.get("background_outstanding").is_none());
+        assert!(json.get("background_outstanding_tasks").is_none());
     }
 
     #[test]
@@ -4887,6 +5556,7 @@ mod tests {
             task_id: "task-ss-1".into(),
             assistant_id: None,
             assistant_name: None,
+            bot_uid: None,
         }
     }
 
@@ -4903,6 +5573,7 @@ mod tests {
             },
             assistant_id: None,
             assistant_name: None,
+            bot_uid: None,
         }
     }
 
@@ -4928,6 +5599,45 @@ mod tests {
         assert_eq!(back.active_delegations.len(), 1);
         assert_eq!(back.active_delegations[0].parent_tool_use_id, "pt-1");
         assert_eq!(back.active_delegations[0].child_conversation_id, 99);
+    }
+
+    /// Lifecycle accounting for every delegation, card or not: running children
+    /// are tracked by connection id, outlive the parent's turn, reach the
+    /// snapshot, and a replayed frame changes nothing.
+    #[test]
+    fn delegated_children_track_every_running_delegation() {
+        let running = |child: &str, running: bool| AcpEvent::DelegationChildRunning {
+            child_connection_id: child.into(),
+            running,
+        };
+        let mut s = fresh_state();
+        s.apply_event(&running("child-a", true));
+        s.apply_event(&running("child-b", true));
+        s.apply_event(&running("child-a", true));
+        s.apply_event(&AcpEvent::TurnComplete {
+            session_id: "ext".into(),
+            stop_reason: "end_turn".into(),
+            agent_type: "claude_code".into(),
+        });
+        assert_eq!(
+            s.delegated_children.iter().collect::<Vec<_>>(),
+            vec!["child-a", "child-b"]
+        );
+        assert!(s.active_delegations.is_empty(), "neither has a card");
+
+        let json = serde_json::to_string(&s.to_snapshot()).unwrap();
+        let back: LiveSessionSnapshot = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.delegated_children, vec!["child-a", "child-b"]);
+
+        s.apply_event(&running("child-a", false));
+        s.apply_event(&running("child-a", false));
+        s.apply_event(&running("child-b", false));
+        assert!(s.delegated_children.is_empty());
+        let json = serde_json::to_string(&s.to_snapshot()).unwrap();
+        assert!(
+            !json.contains("delegated_children"),
+            "kept off the wire when empty"
+        );
     }
 
     #[test]
@@ -5073,6 +5783,7 @@ mod tests {
                 },
             ],
             started_at: Utc::now(),
+            turn_error: None,
         });
         s.apply_event(&AcpEvent::TurnComplete {
             session_id: "ext".into(),
@@ -5100,6 +5811,7 @@ mod tests {
                 },
             ],
             started_at: Utc::now(),
+            turn_error: None,
         });
         s.apply_event(&AcpEvent::TurnComplete {
             session_id: "ext".into(),
@@ -5127,6 +5839,7 @@ mod tests {
                 },
             ],
             started_at: Utc::now(),
+            turn_error: None,
         });
         s.apply_event(&AcpEvent::TurnComplete {
             session_id: "ext".into(),
@@ -5162,6 +5875,7 @@ mod tests {
                 },
             ],
             started_at: Utc::now(),
+            turn_error: None,
         });
         s.apply_event(&AcpEvent::TurnComplete {
             session_id: "ext".into(),
@@ -5190,6 +5904,7 @@ mod tests {
                 },
             ],
             started_at: Utc::now(),
+            turn_error: None,
         });
         s.apply_event(&AcpEvent::TurnComplete {
             session_id: "ext".into(),
@@ -5197,6 +5912,35 @@ mod tests {
             agent_type: "codex".into(),
         });
         assert_eq!(s.last_assistant_text, None);
+    }
+
+    /// The turn's end is stamped beside its answer, once: a repeated
+    /// `TurnComplete` (the cancel path can bring a second) keeps both.
+    #[test]
+    fn turn_complete_stamps_when_the_answer_was_captured() {
+        let mut s = fresh_state();
+        assert!(s.last_turn_completed_at.is_none());
+        s.live_message = Some(LiveMessage {
+            id: "m1".into(),
+            role: MessageRole::Assistant,
+            content: vec![LiveContentBlock::Text {
+                text: "done".into(),
+                parent_tool_use_id: None,
+            }],
+            started_at: Utc::now(),
+            turn_error: None,
+        });
+        let complete = AcpEvent::TurnComplete {
+            session_id: "ext".into(),
+            stop_reason: "end_turn".into(),
+            agent_type: "claude_code".into(),
+        };
+        s.apply_event(&complete);
+        let stamped = s.last_turn_completed_at.expect("stamped");
+        assert_eq!(s.last_assistant_text.as_deref(), Some("done"));
+        s.apply_event(&complete);
+        assert_eq!(s.last_turn_completed_at, Some(stamped), "a repeat keeps it");
+        assert_eq!(s.last_assistant_text.as_deref(), Some("done"));
     }
 
     /// A turn that never opened a live message has no text of its own either.
@@ -5239,6 +5983,7 @@ mod tests {
                 parent_tool_use_id: None,
             }],
             started_at: Utc::now(),
+            turn_error: None,
         });
         let complete = AcpEvent::TurnComplete {
             session_id: "ext".into(),

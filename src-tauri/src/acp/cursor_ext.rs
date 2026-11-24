@@ -187,6 +187,7 @@ pub fn parse_cursor_ask_questions(params: &Value) -> Result<Vec<CursorAskQuestio
                 multi_select,
                 options,
                 is_secret: false,
+                allow_other: true,
             },
             cursor_id,
             option_ids,

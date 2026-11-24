@@ -9,17 +9,16 @@ import {
   type RefObject,
 } from "react"
 import { useLocale, useTranslations } from "next-intl"
-import { toast } from "sonner"
 
-import { openSettingsWindow, quickMessagesList } from "@/lib/api"
-import type { SettingsSection } from "@/lib/api"
-import { getAgentLabel } from "@/lib/custom-agents"
+import { useSkillNotEnabledToast } from "@/components/chat/use-skill-not-enabled-toast"
+import { quickMessagesList } from "@/lib/api"
 import { getExpertIcon, pickLocalized } from "@/lib/expert-presentation"
 import { getScienceIcon } from "@/lib/science-presentation"
 import { OFFICE_ACTIONS, type OfficeAction } from "@/lib/office-actions"
 import { useBuiltInExperts } from "@/hooks/use-built-in-experts"
 import { useBuiltInScience } from "@/hooks/use-built-in-science"
 import { useEnabledSkillIds } from "@/hooks/use-enabled-skill-ids"
+import { lockedSkillPlugin, skillInvocationOf } from "@/lib/harness/plugin-list"
 import type {
   AgentType,
   AvailableCommandInfo,
@@ -64,6 +63,10 @@ export interface ComposerShortcuts {
    *  does not) — when false the skill families are hidden entirely. */
   skillManagementSupported: boolean
   isSkillLocked: (id: string) => boolean
+  /** The name the agent sees an expert under (`superpowers:<id>` where a
+   *  Harness plugin installed whole gives it; its own id otherwise) — `null`
+   *  until what the agent has is known: a badge is then left as it is. */
+  expertInvocation: (expertId: string) => string | null
   expertLabel: (item: ExpertListItem) => string
   scienceLabel: (item: ScienceListItem) => string
   officeLabel: (action: OfficeAction) => string
@@ -98,6 +101,8 @@ export function useComposerShortcuts({
   const science = useBuiltInScience()
   const {
     enabledIds,
+    providers,
+    providersKnown,
     ready: skillStatusReady,
     supported: skillManagementSupported,
   } = useEnabledSkillIds(agentType ?? null)
@@ -181,26 +186,9 @@ export function useComposerShortcuts({
     [agentType, skillStatusReady, enabledIds]
   )
 
-  const notifySkillNotEnabled = useCallback(
-    (skillLabel: string, section: SettingsSection) => {
-      const agentLabel = agentType ? getAgentLabel(agentType) : ""
-      toast.warning(
-        tQa("notEnabled.title", { skill: skillLabel, agent: agentLabel }),
-        {
-          description: tQa("notEnabled.description"),
-          action: {
-            label: tQa("notEnabled.action"),
-            onClick: () => {
-              void openSettingsWindow(section).catch((err) =>
-                console.error(`[${logLabel}] failed to open settings:`, err)
-              )
-            },
-          },
-        }
-      )
-    },
-    [agentType, logLabel, tQa]
-  )
+  // A locked skill opens its pack on the Harness page — the same warning the
+  // welcome page's quick actions give.
+  const notifySkillNotEnabled = useSkillNotEnabledToast(agentType ?? null)
 
   // Insert a skill shortcut: seed the template only into an *empty* composer
   // (never clobber an in-progress draft), then prepend the skill as the leading
@@ -208,7 +196,10 @@ export function useComposerShortcuts({
   // React NodeView rendered with a synchronous flushSync(), which warns if run
   // during React's commit phase (same pattern as the inject/hydration effects).
   const insertSkillShortcut = useCallback(
-    (skill: { id: string; label: string }, template: string) => {
+    (
+      skill: { id: string; label: string; expertId?: string },
+      template: string
+    ) => {
       requestAnimationFrame(() => {
         const handle = editorRef.current
         const editor = handle?.getEditor()
@@ -221,13 +212,25 @@ export function useComposerShortcuts({
           id: skill.id,
           label: skill.label,
           uri: null,
-          meta: { invocationPrefix: skillPrefix, scope: "expert" },
+          meta: {
+            invocationPrefix: skillPrefix,
+            scope: "expert",
+            ...(skill.expertId ? { expertId: skill.expertId } : {}),
+          },
         })
         onAfterInsertRef.current?.()
         handle.focus()
       })
     },
     [editorRef, skillPrefix]
+  )
+
+  const expertInvocation = useCallback(
+    (expertId: string) =>
+      skillStatusReady && providersKnown
+        ? skillInvocationOf(expertId, providers)
+        : null,
+    [providers, skillStatusReady, providersKnown]
   )
 
   const expertLabel = useCallback(
@@ -250,14 +253,30 @@ export function useComposerShortcuts({
   const insertExpert = useCallback(
     (item: ExpertListItem) => {
       const label = expertLabel(item)
-      if (isSkillLocked(item.metadata.id)) {
-        notifySkillNotEnabled(label, "experts")
+      const id = item.metadata.id
+      if (isSkillLocked(id)) {
+        notifySkillNotEnabled(
+          label,
+          "experts",
+          lockedSkillPlugin(id, providers)
+        )
         return
       }
-      // Experts are open-ended: just the leading badge, no canned template.
-      insertSkillShortcut({ id: item.metadata.id, label }, "")
+      // Experts are open-ended: just the leading badge, no canned template —
+      // under the name the agent sees it by (`superpowers:<id>` from a
+      // plugin installed whole where the host namespaces its skills).
+      insertSkillShortcut(
+        { id: skillInvocationOf(id, providers), label, expertId: id },
+        ""
+      )
     },
-    [expertLabel, isSkillLocked, notifySkillNotEnabled, insertSkillShortcut]
+    [
+      expertLabel,
+      isSkillLocked,
+      notifySkillNotEnabled,
+      insertSkillShortcut,
+      providers,
+    ]
   )
 
   const insertScience = useCallback(
@@ -278,7 +297,7 @@ export function useComposerShortcuts({
     (action: OfficeAction) => {
       const label = officeLabel(action)
       if (isSkillLocked(action.skillId)) {
-        notifySkillNotEnabled(label, "office-tools")
+        notifySkillNotEnabled(label, "office")
         return
       }
       insertSkillShortcut(
@@ -306,6 +325,7 @@ export function useComposerShortcuts({
     officeActions: OFFICE_ACTIONS,
     skillManagementSupported,
     isSkillLocked,
+    expertInvocation,
     expertLabel,
     scienceLabel,
     officeLabel,

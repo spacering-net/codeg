@@ -80,6 +80,20 @@ function measure(root: HTMLElement): Layout {
   return layout
 }
 
+/** These animations are never replayed. Release their callbacks and timeline
+ *  on either terminal event so WebKit cannot keep a removed reply through a
+ *  finished animation's native pending activity. */
+function releaseOnAnimationEnd(animation: Animation, onRelease?: () => void) {
+  const release = () => {
+    animation.removeEventListener("finish", release)
+    animation.removeEventListener("cancel", release)
+    onRelease?.()
+    animation.timeline = null
+  }
+  animation.addEventListener("finish", release)
+  animation.addEventListener("cancel", release)
+}
+
 function glide(element: Element, dx: number, dy: number) {
   if (typeof element.animate !== "function") return
   const animation = element.animate(
@@ -87,7 +101,7 @@ function glide(element: Element, dx: number, dy: number) {
     CHAT_MOTION.move
   )
   gliding.set(element, animation)
-  animation.addEventListener("finish", () => {
+  releaseOnAnimationEnd(animation, () => {
     if (gliding.get(element) === animation) gliding.delete(element)
   })
 }
@@ -95,13 +109,14 @@ function glide(element: Element, dx: number, dy: number) {
 function fadeIn(element: Element) {
   if (typeof element.animate !== "function") return
   const { duration, easing, rise } = CHAT_MOTION.enter
-  element.animate(
+  const animation = element.animate(
     [
       { opacity: 0, transform: `translateY(${rise}px)` },
       { opacity: 1, transform: "none" },
     ],
     { duration, easing }
   )
+  releaseOnAnimationEnd(animation)
 }
 
 /** Move everything keyed in `root` from `before` to where it is now. */

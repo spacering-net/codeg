@@ -40,24 +40,6 @@ export function buildQuotedMarkdown(text: string): string {
 }
 
 /**
- * The prompt "ask about this selection" sends: the quoted selection, then the
- * user's question under it.
- *
- * The blank line between them is structural, not cosmetic — without it the
- * question would be a lazy continuation of the blockquote and get absorbed
- * into it, so the agent would receive one quoted blob with no visible question.
- * (It is also the boundary {@link parseQuoteBlocks} consumes when the sent
- * message is rendered back into the transcript.)
- *
- * A selection with no visible content quotes to "" — the question then stands
- * alone rather than being prefixed with an empty quote.
- */
-export function buildAskPrompt(selection: string, question: string): string {
-  const quoted = buildQuotedMarkdown(selection)
-  return quoted ? `${quoted}\n\n${question}` : question
-}
-
-/**
  * One level of CommonMark blockquote marker at the start of a line: up to three
  * leading spaces, a `>`, and one optional space after it. A tab is deliberately
  * NOT accepted — {@link buildQuotedMarkdown} never emits one, and swallowing a

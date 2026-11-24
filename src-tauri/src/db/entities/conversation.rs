@@ -20,8 +20,19 @@ pub enum ConversationStatus {
 /// flat "Chat" section; `loop` belongs to the Loop Engineering workbench and is
 /// excluded from the sidebar list entirely (no write path yet — reserved for
 /// the loop engine); `delegate` is a delegation child nested under its
-/// parent's tool-call view. Invariant: `kind == Delegate` ⟺ `parent_id IS NOT
-/// NULL`. Written once at insert, never updated.
+/// parent's tool-call view; `personal` is one session segment of the personal
+/// agent, which has its own page and stays out of the sidebar list too; `ask`
+/// is an "ask about this selection" conversation, nested under the
+/// conversation it was asked from (its `parent_id`) in the sidebar and listed
+/// in that conversation's Session Details. Invariant: `kind ∈ {Delegate, Ask}`
+/// ⟺ `parent_id IS NOT NULL`, and only a `Delegate` row carries the
+/// delegation columns (`parent_tool_use_id`, `delegation_call_id`,
+/// `assistant_*`). Written once at insert, with two exceptions: a chat
+/// conversation the user moves into a project becomes `regular`
+/// (`conversation_service::relocate_conversations`) — it is an ordinary
+/// project conversation from then on — and an ask the user converts into an
+/// ordinary conversation becomes `regular` / `chat` with no `parent_id`
+/// (`conversation_service::detach_ask`).
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
 #[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
 #[serde(rename_all = "snake_case")]
@@ -34,6 +45,10 @@ pub enum ConversationKind {
     Loop,
     #[sea_orm(string_value = "delegate")]
     Delegate,
+    #[sea_orm(string_value = "personal")]
+    Personal,
+    #[sea_orm(string_value = "ask")]
+    Ask,
 }
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
@@ -68,11 +83,14 @@ pub struct Model {
     /// the sidebar's "Pinned" section (sorted by this timestamp descending).
     /// Pinning never bumps `updated_at` — it is a view preference, not activity.
     pub pinned_at: Option<DateTimeUtc>,
-    /// The working directory this conversation actually ran in, when that
-    /// differs from its (current) folder's path — written when a deleted task
-    /// worktree's conversations are re-parented to the project folder. The
+    /// The working directory this conversation's session was recorded in, when
+    /// that differs from its (current) folder's path — written when a deleted
+    /// task worktree's conversations are re-parented to the project folder, or
+    /// when the user moves a conversation to another project (see
+    /// `conversation_service::effective_origin_after_move`). The
     /// Gemini/Cline/OpenClaw stale-external-id fallback matches on
-    /// `origin_cwd ?? folder.path`. Always NULL for ordinary conversations.
+    /// `origin_cwd ?? folder.path`, and the chat scratch-dir GC keeps a dir a
+    /// live row remembers. NULL for conversations that never moved.
     pub origin_cwd: Option<String>,
     /// The assistant a delegation child ran as; `None` for every other row.
     /// Written once with the child, never updated, and deliberately not a
@@ -83,15 +101,33 @@ pub struct Model {
     /// instructions as they were when the delegation started. A resume replays
     /// this, never the assistant's current row.
     pub assistant_snapshot: Option<String>,
+    /// The owner's assistant (`personal_agent.uid`) a delegation child or a
+    /// piece of an assistant's work ran as; `None` for every other row, and
+    /// for the children of the collaboration settings' assistants from
+    /// before (`assistant_id`). Written once, never updated, no foreign key,
+    /// like `assistant_id`. See `m20261125_000001_personal_agent`.
+    #[sea_orm(column_type = "Text", nullable)]
+    pub bot_uid: Option<String>,
     /// Where the conversation was started from, when not the window:
     /// [`SOURCE_CLI`] for a `codeg-cli` run. `None` otherwise. Text, so a
     /// value from a newer build never stops an older one decoding the row.
     /// See `m20261017_000002_conversation_source`.
     pub source: Option<String>,
+    /// JSON `ConversationSelection`: this conversation's own selector state
+    /// (applied mode, pending composer mode, config option values), written
+    /// by the backend from the live session and replayed alone when the
+    /// conversation reconnects. `None` for rows from before the column (a
+    /// one-time fallback, then frozen). Never bumps `updated_at`. See
+    /// `m20261123_000001_conversation_selector_state`.
+    pub selector_state: Option<String>,
 }
 
 /// [`Model::source`] of a conversation a `codeg-cli` run started.
 pub const SOURCE_CLI: &str = "cli";
+
+/// [`Model::source`] of a conversation the personal agent dispatched to a role
+/// assistant (a chat or a work conversation).
+pub const SOURCE_PERSONAL_AGENT: &str = "personal_agent";
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {

@@ -88,6 +88,7 @@ pub async fn connection_account(
         return Ok(requested);
     };
     let row = crate::db::entities::conversation::Entity::find_by_id(id)
+        .filter(crate::db::entities::conversation::Column::DeletedAt.is_null())
         .one(conn)
         .await?
         .ok_or_else(|| DbError::NotFound("Conversation not found".into()))?;
@@ -631,8 +632,8 @@ mod tests {
             .collect();
         let position = |name: &str| names.iter().position(|n| n == name).expect(name);
         assert!(
-            position("m20261027_000001_agent_account_compatibility")
-                > position("m20261022_000001_work_task_delivery")
+            position("m20261125_000002_agent_account_compatibility")
+                > position("m20261125_000001_personal_agent")
         );
         position("m20261017_000001_agent_account");
         position("m20261024_000001_agent_account_compatibility");
@@ -654,44 +655,60 @@ mod tests {
             }
         }
 
-        let conn = Database::connect("sqlite::memory:").await.unwrap();
-        ReleasedSchema::up(&conn, None).await.unwrap();
-        let folder = crate::db::service::folder_service::add_folder(&conn, "/released-project")
-            .await
-            .unwrap();
-        conn.execute(Statement::from_sql_and_values(DbBackend::Sqlite,
-            "INSERT INTO conversation (folder_id, agent_type, status, kind, title_locked, external_id, message_count, created_at, updated_at) VALUES (?, 'codex', 'pending_review', 'regular', 0, 'released-session', 0, '2026-10-16T00:00:00Z', '2026-10-16T00:00:00Z')",
-            [folder.id.into()])).await.unwrap();
+        // A fresh install of the current upstream schema already includes the
+        // personal-agent and conversation-selector migrations.
+        struct CurrentMain;
+        #[async_trait::async_trait]
+        impl MigratorTrait for CurrentMain {
+            fn migrations() -> Vec<Box<dyn MigrationTrait>> {
+                migrations_from_fixture(include_str!(
+                    "../../../tests/fixtures/main-eda77d88-migrations.txt"
+                ))
+            }
+        }
 
-        Migrator::up(&conn, None).await.unwrap();
-        let schema = SchemaManager::new(&conn);
-        assert!(schema
-            .has_column("conversation", "assistant_id")
-            .await
-            .unwrap());
-        assert!(schema.has_column("conversation", "source").await.unwrap());
-        assert!(schema.has_table("tool_approval").await.unwrap());
-        assert!(schema
-            .has_column("folder_command", "run_local")
-            .await
-            .unwrap());
-        assert!(schema
-            .has_column("conversation", "agent_account_id")
-            .await
-            .unwrap());
-        let saved = crate::db::entities::conversation::Entity::find()
-            .one(&conn)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(saved.external_id.as_deref(), Some("released-session"));
-        assert!(saved.agent_account_id.is_none());
+        async fn check_upgrade<M: MigratorTrait>() {
+            let conn = Database::connect("sqlite::memory:").await.unwrap();
+            M::up(&conn, None).await.unwrap();
+            let folder = crate::db::service::folder_service::add_folder(&conn, "/released-project")
+                .await
+                .unwrap();
+            conn.execute(Statement::from_sql_and_values(DbBackend::Sqlite,
+                "INSERT INTO conversation (folder_id, agent_type, status, kind, title_locked, external_id, message_count, created_at, updated_at) VALUES (?, 'codex', 'pending_review', 'regular', 0, 'released-session', 0, '2026-10-16T00:00:00Z', '2026-10-16T00:00:00Z')",
+                [folder.id.into()])).await.unwrap();
+
+            Migrator::up(&conn, None).await.unwrap();
+            let schema = SchemaManager::new(&conn);
+            assert!(schema
+                .has_column("conversation", "assistant_id")
+                .await
+                .unwrap());
+            assert!(schema.has_column("conversation", "source").await.unwrap());
+            assert!(schema.has_table("tool_approval").await.unwrap());
+            assert!(schema
+                .has_column("folder_command", "run_local")
+                .await
+                .unwrap());
+            assert!(schema
+                .has_column("conversation", "agent_account_id")
+                .await
+                .unwrap());
+            let saved = crate::db::entities::conversation::Entity::find()
+                .one(&conn)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(saved.external_id.as_deref(), Some("released-session"));
+            assert!(saved.agent_account_id.is_none());
+        }
+        check_upgrade::<ReleasedSchema>().await;
+        check_upgrade::<CurrentMain>().await;
     }
 
     async fn verify_previous_account_schema<M: sea_orm_migration::MigratorTrait>() {
         use crate::db::entities::conversation;
         use crate::db::migration::Migrator;
-        use crate::db::service::{conversation_service, folder_service};
+        use crate::db::service::folder_service;
         use sea_orm::{Database, DbBackend, Statement};
         use sea_orm_migration::MigratorTrait;
 
@@ -704,21 +721,13 @@ mod tests {
         let account = create(&conn, dir.path(), AgentType::Codex, "Work", None)
             .await
             .unwrap();
-        let named = conversation_service::create_inner(
-            &conn,
-            folder.id,
-            AgentType::Codex,
-            None,
-            None,
-            None,
-            conversation::ConversationKind::Regular,
-            Some(account.id.clone()),
-        )
-        .await
-        .unwrap();
-        conversation_service::bind_external_id(&conn, named.id, "previous-session", &[])
-            .await
-            .unwrap();
+        // Seed through the columns the historical build actually had. The
+        // current ActiveModel also names columns the migration will add.
+        let named_id = conn.execute(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "INSERT INTO conversation (folder_id, agent_type, agent_account_id, status, kind, title_locked, external_id, message_count, created_at, updated_at) VALUES (?, 'codex', ?, 'pending_review', 'regular', 0, 'previous-session', 0, '2026-10-18T00:00:00Z', '2026-10-18T00:00:00Z')",
+            [folder.id.into(), account.id.clone().into()],
+        )).await.unwrap().last_insert_id();
         conn.execute(Statement::from_sql_and_values(
             DbBackend::Sqlite,
             "INSERT INTO folder_command (folder_id, name, command, created_at, updated_at) VALUES (?, 'Existing command', 'echo fixture', '2026-10-18T00:00:00Z', '2026-10-18T00:00:00Z')",
@@ -726,7 +735,7 @@ mod tests {
         )).await.unwrap();
 
         Migrator::up(&conn, None).await.unwrap();
-        let saved = conversation::Entity::find_by_id(named.id)
+        let saved = conversation::Entity::find_by_id(i32::try_from(named_id).unwrap())
             .one(&conn)
             .await
             .unwrap()

@@ -12,13 +12,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
 import type {
+  ForgeCheckSummary,
   ForgeIssueRow,
   ForgeLabel,
   ForgeTaskLink,
   WorkTaskStatus,
 } from "@/lib/types"
 
-import { ForgeIssueRowItem } from "./forge-issue-row"
+import {
+  checksFraction,
+  checksMark,
+  ForgeIssueRowItem,
+} from "./forge-issue-row"
 
 /** Uncoloured unless a test cares — most of them are about something else. */
 function label(name: string, color: string | null = null): ForgeLabel {
@@ -96,6 +101,129 @@ describe("ForgeIssueRowItem", () => {
     await user.click(screen.getByRole("button", { name: "Start" }))
     expect(onStart).toHaveBeenCalledTimes(1)
     expect(setRoute).not.toHaveBeenCalled()
+  })
+
+  /** The trigger refuses a merged change whatever the scenario, so the row
+   *  offers nothing that could only end in that refusal — neither Start nor,
+   *  once a task on it finished, a re-trigger. */
+  it("offers no Start on a merged pull request", () => {
+    mount(row({ is_pr: true, state: "merged" }), null)
+    expect(
+      screen.queryByRole("button", { name: "Start" })
+    ).not.toBeInTheDocument()
+    cleanup()
+    mount(row({ is_pr: true, state: "merged" }), link("done"))
+    expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "re-trigger" })
+    ).not.toBeInTheDocument()
+    cleanup()
+    // A closed but unmerged one can be reopened, so it still can be started.
+    mount(row({ is_pr: true, state: "closed" }), null)
+    expect(screen.getByRole("button", { name: "Start" })).toBeInTheDocument()
+  })
+
+  /** A task made from several issues says so on each of their chips — in
+   *  words, for anyone who cannot see the glyph. */
+  it("names the other issues a combined task handles", () => {
+    mount(row({ number: 5 }), { ...link("running"), items: [3, 5, 9] })
+    expect(
+      screen.getByRole("button", {
+        name: "Running Handled together with #3, #9",
+      })
+    ).toBeInTheDocument()
+    cleanup()
+    mount(row({ number: 5 }), { ...link("running"), items: [5] })
+    expect(screen.getByRole("button", { name: "Running" })).toBeInTheDocument()
+  })
+
+  /** The tick box reports whether Shift was held, and a box the page has
+   *  blocked cannot be ticked at all — with the reason where a pointer finds
+   *  it. */
+  it("ticks through the page's selection, Shift included", async () => {
+    const user = userEvent.setup()
+    const onToggle = vi.fn()
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <ForgeIssueRowItem
+          row={row()}
+          link={null}
+          selection={{ checked: false, blockedReason: null, onToggle }}
+          onOpenDetail={onOpenDetail}
+          onStart={vi.fn()}
+        />
+      </NextIntlClientProvider>
+    )
+    const box = screen.getByRole("checkbox", { name: "Select #42" })
+    await user.click(box)
+    await user.keyboard("{Shift>}")
+    await user.click(box)
+    await user.keyboard("{/Shift}")
+    expect(onToggle.mock.calls).toEqual([[false], [true]])
+    // Controlled: the page decides, the box does not flip on its own.
+    expect(box).not.toBeChecked()
+    cleanup()
+
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <ForgeIssueRowItem
+          row={row()}
+          link={link("running")}
+          selection={{
+            checked: false,
+            blockedReason: "busy elsewhere",
+            onToggle,
+          }}
+          onOpenDetail={onOpenDetail}
+          onStart={vi.fn()}
+        />
+      </NextIntlClientProvider>
+    )
+    const blocked = screen.getByRole("checkbox", { name: "Select #42" })
+    expect(blocked).toBeDisabled()
+    expect(blocked.parentElement).toHaveAttribute("title", "busy elsewhere")
+  })
+
+  /** The box has no column of its own: it shares the state glyph's cell,
+   *  faded out at rest and shown on hover or focus, and once ticked it stays
+   *  in place of the glyph. jsdom has no hover, so the classes that carry it
+   *  are what is pinned here. */
+  it("swaps the state glyph for the tick box in one cell", () => {
+    const renderWith = (checked: boolean, blockedReason: string | null) =>
+      render(
+        <NextIntlClientProvider locale="en" messages={enMessages}>
+          <ForgeIssueRowItem
+            row={row()}
+            link={null}
+            selection={{ checked, blockedReason, onToggle: vi.fn() }}
+            onOpenDetail={onOpenDetail}
+            onStart={vi.fn()}
+          />
+        </NextIntlClientProvider>
+      )
+
+    renderWith(false, null)
+    let box = screen.getByRole("checkbox", { name: "Select #42" })
+    let glyph = screen.getByRole("img", { name: "Open" })
+    expect(glyph.parentElement).toBe(box.parentElement)
+    expect(box).toHaveClass("opacity-0", "group-hover/row:opacity-100")
+    expect(glyph).not.toHaveClass("invisible")
+    expect(glyph).toHaveClass("group-hover/row:invisible")
+    cleanup()
+
+    renderWith(true, null)
+    box = screen.getByRole("checkbox", { name: "Select #42" })
+    glyph = screen.getByRole("img", { name: "Open" })
+    expect(box).toHaveClass("opacity-100")
+    expect(box).not.toHaveClass("opacity-0")
+    expect(glyph).toHaveClass("invisible")
+    cleanup()
+
+    // A greyed-out box must not linger at the base half opacity at rest.
+    renderWith(false, "busy elsewhere")
+    box = screen.getByRole("checkbox", { name: "Select #42" })
+    expect(box).toHaveClass("disabled:opacity-0")
+    expect(box).not.toHaveClass("disabled:opacity-50")
   })
 
   it("shows a live status chip that goes to the board, with no re-trigger", async () => {
@@ -376,5 +504,192 @@ describe("ForgeIssueRowItem", () => {
         glyph(row({ is_pr: false, state: "open", draft: true }), "Open")
       ).toHaveClass("lucide-circle-dot")
     })
+  })
+})
+
+/**
+ * The row's CI mark: absent unless the forge said something worth a mark,
+ * one mark for the worst thing in priority order, words for the tooltip and
+ * the accessible name, and a click through to the panel's Checks tab.
+ */
+describe("ForgeIssueRowItem checks mark", () => {
+  function summary(
+    overrides: Partial<ForgeCheckSummary> = {}
+  ): ForgeCheckSummary {
+    return {
+      number: 42,
+      verdict: "success",
+      counts: { passing: 10, failing: 0, pending: 0, neutral: 0, total: 10 },
+      awaiting_approval: 0,
+      ...overrides,
+    }
+  }
+
+  function mountWith(
+    checks: ForgeCheckSummary | null | undefined,
+    onOpenChecks = vi.fn(),
+    compact = false
+  ) {
+    const { container } = render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <ForgeIssueRowItem
+          row={row({ is_pr: true })}
+          link={null}
+          compact={compact}
+          checks={checks}
+          onOpenDetail={onOpenDetail}
+          onOpenChecks={onOpenChecks}
+          onStart={vi.fn()}
+        />
+      </NextIntlClientProvider>
+    )
+    return {
+      onOpenChecks,
+      mark: () => container.querySelector("[data-forge-checks]"),
+    }
+  }
+
+  it("ranks a failure over held workflows over a run still going", () => {
+    expect(checksMark(undefined)).toBeNull()
+    expect(checksMark(summary({ verdict: null }))).toBeNull()
+    expect(
+      checksMark(summary({ verdict: "failure", awaiting_approval: 2 }))
+    ).toBe("failure")
+    expect(
+      checksMark(summary({ verdict: "running", awaiting_approval: 1 }))
+    ).toBe("approval")
+    // A held fork change usually has no checks at all yet.
+    expect(checksMark(summary({ verdict: null, awaiting_approval: 1 }))).toBe(
+      "approval"
+    )
+    expect(checksMark(summary({ verdict: "running" }))).toBe("running")
+    expect(checksMark(summary({ verdict: "neutral" }))).toBe("neutral")
+  })
+
+  it("draws nothing for an unknown summary or a change with no checks", () => {
+    cleanup()
+    expect(mountWith(undefined).mark()).toBeNull()
+    cleanup()
+    expect(
+      mountWith(summary({ verdict: null, counts: null })).mark()
+    ).toBeNull()
+  })
+
+  it("draws the bare, ringless glyph for each verdict", () => {
+    const cases: [ForgeCheckSummary, string][] = [
+      [summary({ verdict: "failure" }), "lucide-x"],
+      [summary({ verdict: "running" }), "lucide-circle"],
+      [summary({ verdict: "success" }), "lucide-check"],
+      [summary({ verdict: "neutral" }), "lucide-minus"],
+    ]
+    for (const [s, cls] of cases) {
+      cleanup()
+      expect(mountWith(s).mark()!.querySelector("svg")).toHaveClass(cls)
+    }
+  })
+
+  it("says the counts and opens the Checks tab", async () => {
+    const user = userEvent.setup()
+    const { onOpenChecks } = mountWith(
+      summary({
+        verdict: "failure",
+        counts: { passing: 9, failing: 1, pending: 2, neutral: 0, total: 12 },
+      })
+    )
+    const mark = screen.getByRole("button", {
+      name: "1 failing · 2 in progress · 9 passing",
+    })
+    expect(mark).toHaveAttribute("data-forge-checks", "failure")
+    expect(mark).toHaveTextContent(/^9\/12$/)
+    await user.click(mark)
+    expect(onOpenChecks).toHaveBeenCalledTimes(1)
+    expect(onOpenDetail).not.toHaveBeenCalled()
+  })
+
+  it("names held workflows in words, compact rows (the side panel) too", () => {
+    const { mark } = mountWith(
+      summary({ verdict: null, counts: null, awaiting_approval: 2 })
+    )
+    expect(mark()).toHaveAttribute("data-forge-checks", "approval")
+    expect(
+      screen.getByRole("button", { name: "2 workflows awaiting approval" })
+    ).toHaveTextContent("Approval needed")
+    cleanup()
+    mountWith(
+      summary({ verdict: null, counts: null, awaiting_approval: 2 }),
+      vi.fn(),
+      true
+    )
+    expect(
+      screen.getByRole("button", { name: "2 workflows awaiting approval" })
+    ).toHaveTextContent("Approval needed")
+  })
+
+  it("counts passes over the total, and only a pass counts", () => {
+    expect(checksFraction(undefined)).toBeNull()
+    expect(checksFraction(summary({ counts: null }))).toBeNull()
+    expect(
+      checksFraction(
+        summary({
+          counts: { passing: 0, failing: 0, pending: 0, neutral: 0, total: 0 },
+        })
+      )
+    ).toBeNull()
+    expect(checksFraction(summary())).toBe("10/10")
+    // A skipped job is not a pass: a green sweep with one reads 9/10, and the
+    // tooltip says what the tenth is.
+    mountWith(
+      summary({
+        counts: { passing: 9, failing: 0, pending: 0, neutral: 1, total: 10 },
+      })
+    )
+    expect(
+      screen.getByRole("button", {
+        name: "9 passing · 1 without a verdict",
+      })
+    ).toHaveTextContent(/^9\/10$/)
+  })
+
+  it("closes the meta line, after the author and time", () => {
+    const { mark } = mountWith(summary())
+    const wrap = mark()!.parentElement!
+    expect(wrap.parentElement!.lastElementChild).toBe(wrap)
+    expect(wrap.previousElementSibling).toHaveTextContent(/^· /)
+  })
+
+  it("puts a separator dot before the mark, outside the button", () => {
+    const { mark } = mountWith(summary())
+    const dot = mark()!.previousElementSibling
+    expect(dot).toHaveTextContent(/^·$/)
+    expect(mark()).not.toHaveTextContent("·")
+  })
+
+  it("holds the place with a skeleton only while there is no mark yet", () => {
+    function mountLoading(checks: ForgeCheckSummary | undefined) {
+      return render(
+        <NextIntlClientProvider locale="en" messages={enMessages}>
+          <ForgeIssueRowItem
+            row={row({ is_pr: true })}
+            link={null}
+            checks={checks}
+            checksLoading
+            onOpenDetail={onOpenDetail}
+            onStart={vi.fn()}
+          />
+        </NextIntlClientProvider>
+      ).container
+    }
+    const first = mountLoading(undefined)
+    expect(first.querySelector("[data-forge-checks-loading]")).not.toBeNull()
+    expect(first.querySelector("[data-forge-checks]")).toBeNull()
+    cleanup()
+    const reread = mountLoading(summary())
+    expect(reread.querySelector("[data-forge-checks-loading]")).toBeNull()
+    expect(reread.querySelector("[data-forge-checks]")).not.toBeNull()
+  })
+
+  it("falls back to the verdict's word without a breakdown", () => {
+    mountWith(summary({ verdict: "running", counts: null }))
+    expect(screen.getByRole("button", { name: "Running" })).toBeInTheDocument()
   })
 })

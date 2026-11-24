@@ -1,3 +1,4 @@
+import { sourceItems } from "@/lib/forge-source-items"
 import type { WorkTask } from "@/lib/types"
 
 /** The query as lower-cased terms. Every term has to match somewhere — a
@@ -23,8 +24,9 @@ export function searchTerms(query: string): string[] {
  * is its item instead — repository, number and the item's own title — and
  * those are searched.
  *
- * `#12` is an exact NUMBER: the task's own id, or its forge item's number.
- * Someone typing `#12` does not mean task #112 or issue #1201.
+ * `#12` is an exact NUMBER: the task's own id, or its forge item's number —
+ * any of them, for a task made from several issues. Someone typing `#12`
+ * does not mean task #112 or issue #1201.
  */
 export function taskMatchesSearch(
   task: WorkTask,
@@ -37,7 +39,11 @@ export function taskMatchesSearch(
     const number = /^#(\d+)$/.exec(term)
     if (number) {
       const wanted = Number(number[1])
-      return task.id === wanted || task.source_meta?.number === wanted
+      return (
+        task.id === wanted ||
+        (task.source_meta != null &&
+          sourceItems(task.source_meta).some((item) => item.number === wanted))
+      )
     }
     return text.includes(term)
   })
@@ -56,12 +62,10 @@ function searchableText(task: WorkTask, folderName: string | null): string {
     task.agent_type,
   ]
   if (meta) {
-    parts.push(
-      meta.owner_repo,
-      `${meta.owner_repo}#${meta.number}`,
-      meta.title,
-      meta.url
-    )
+    parts.push(meta.owner_repo)
+    for (const item of sourceItems(meta)) {
+      parts.push(`${meta.owner_repo}#${item.number}`, item.title, item.url)
+    }
   } else {
     parts.push(task.config?.display_text)
   }

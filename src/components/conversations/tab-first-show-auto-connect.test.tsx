@@ -61,9 +61,17 @@ const stubs = vi.hoisted(() => {
       hasCachedSelectors: false,
       isViewer: false,
       backgroundOutstanding: 0,
+      backgroundTasks: [],
+      asyncTasks: [],
+      remoteControl: null,
+      delegatedChildren: [],
       sessionId: null,
     },
-    acp: { setActiveKey: vi.fn(), touchActivity: vi.fn() },
+    acp: {
+      setActiveKey: vi.fn(),
+      releaseActiveKey: vi.fn(),
+      touchActivity: vi.fn(),
+    },
     tasks: { addTask: vi.fn(), updateTask: vi.fn(), removeTask: vi.fn() },
     t: Object.assign((key: string) => key, { rich: (key: string) => key }),
   }

@@ -1,3 +1,5 @@
+/// <reference lib="es2021.weakref" />
+
 /**
  * `buildActivity`: a reply's adapted parts → the activity timeline's view
  * model (steps, grouped rows, trailing answer, header summary).
@@ -14,8 +16,8 @@ import {
   type AdaptedToolCallPart,
 } from "@/lib/adapters/ai-elements-adapter"
 import { buildBackgroundTaskRows } from "@/lib/background-task"
-import { delegateCallTaskId } from "@/lib/delegation-card"
 import { buildDelegationTaskRows } from "@/lib/delegation-status"
+import { delegationStepTaskId } from "./delegation-task"
 import { describeToolCall } from "./describe-tool-call"
 import { groupActivitySteps } from "./group"
 import { combineStatuses, toolCallStatus, type StepStatus } from "./status"
@@ -199,7 +201,9 @@ function launchesBefore(
  * A delegation's status checks are rows of their own — the agent waiting on
  * the task, right after handing it over or after other work — yet the newest
  * of them says how the delegation stands: hand the delegation step the polls
- * about its task, so its step bar and result read that report.
+ * about its task, so its step bar and result read that report. A resume of
+ * the task is a delegation step too, and the checks after it are about the
+ * run it started — they go to it, not to the call before it.
  */
 function linkLaterDelegationPolls(steps: ActivityStep[]): ActivityStep[] {
   const tasksOf = new Map<AdaptedToolCallPart[], Set<string | null>>()
@@ -211,11 +215,23 @@ function linkLaterDelegationPolls(steps: ActivityStep[]): ActivityStep[] {
     return tasks
   }
   return steps.map((step, index) => {
-    if (step.type !== "tool" || step.tool.kind !== "delegation") return step
-    const taskId = delegateCallTaskId(step.part)
+    if (step.type !== "tool") return step
+    if (
+      step.tool.kind !== "delegation" &&
+      step.tool.kind !== "delegation-resume"
+    )
+      return step
+    const taskId = delegationStepTaskId(step)
     const later: AdaptedToolCallPart[] = []
     if (taskId !== null) {
       for (const next of steps.slice(index + 1)) {
+        if (
+          next.type === "tool" &&
+          next.tool.kind === "delegation-resume" &&
+          delegationStepTaskId(next) === taskId
+        ) {
+          break
+        }
         if (
           next.type === "delegation-polls" &&
           tasksIn(next.polls).has(taskId)
@@ -368,10 +384,9 @@ function collectSteps(
   return steps
 }
 
-/** The last model built for each reply, by the anchor its keys carry — what
- *  its next rebuild keeps from (see `Previous`). A few replies at a time: the
- *  ones streaming now, and those just handed over to history. */
-const lastBuilt = new Map<string, ActivityModel>()
+/** Reuse a recent model while a view or its parts still owns it. This index
+ *  must not keep tool output alive after the original owner releases it. */
+const lastBuilt = new Map<string, WeakRef<ActivityModel>>()
 const LAST_BUILT_MAX = 8
 
 function buildActivityUncached(
@@ -384,7 +399,7 @@ function buildActivityUncached(
     : { body: parts, trailing: [] }
   const anchor = replyAnchor(body)
   const slot = `${splitAnswer ? "reply" : "all"}:${anchor}`
-  const last = lastBuilt.get(slot)
+  const last = lastBuilt.get(slot)?.deref()
   const previous = last ? previousOf(last) : null
   const steps = linkLaterDelegationPolls(
     collectSteps(body, isStreaming, anchor, previous)
@@ -404,10 +419,12 @@ function buildActivityUncached(
         ? { ...summary, recoveredKeys: previous.recoveredKeys }
         : summary,
   }
-  lastBuilt.delete(slot)
-  lastBuilt.set(slot, model)
-  if (lastBuilt.size > LAST_BUILT_MAX) {
-    lastBuilt.delete(lastBuilt.keys().next().value!)
+  if (typeof WeakRef === "function") {
+    lastBuilt.delete(slot)
+    lastBuilt.set(slot, new WeakRef(model))
+    if (lastBuilt.size > LAST_BUILT_MAX) {
+      lastBuilt.delete(lastBuilt.keys().next().value!)
+    }
   }
   return model
 }

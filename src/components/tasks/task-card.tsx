@@ -12,6 +12,7 @@ import {
   FolderX,
   GitMerge,
   Loader2,
+  Sparkles,
 } from "lucide-react"
 import { AgentIcon } from "@/components/agent-icon"
 import { BrowserLink } from "@/components/ui/browser-link"
@@ -212,18 +213,33 @@ export function isLiveStatus(task: WorkTask): boolean {
  *
  * The compaction outranks the agent's own last milestone because it is the
  * more recent truth AND the more surprising one — a card that has sat in
- * 准备中 or 合并中 for minutes has no other explanation on screen. Below it,
+ * 准备中 or 合并中 for minutes has no other explanation on screen. A turn
+ * held open for its background work outranks the milestone for the same
+ * reason: the agent's last word is usually "the tests are still running",
+ * and only this says the board is waiting on them. Below both,
  * `latest_progress` is already scoped to this generation by the backend, so
  * there is nothing here to guard against a previous round's leftovers.
  */
 export function liveNote(
   task: WorkTask,
-  t: (key: "compactingNote") => string
+  t: (
+    key: "compactingNote" | "backgroundWaitNote",
+    values?: { count: number }
+  ) => string
 ): string | null {
   if (!isLiveStatus(task)) return null
   if (task.compacting) return t("compactingNote")
+  if (task.background_wait) {
+    return t("backgroundWaitNote", {
+      count: task.background_wait.tasks.length,
+    })
+  }
   return task.latest_progress ?? null
 }
+
+/** Item links a card made from several issues shows before folding the rest
+ *  into a count — the same four its title names. */
+const SOURCE_LINKS_SHOWN = 4
 
 interface TaskCardProps extends TaskActionHandlers {
   task: WorkTask
@@ -389,6 +405,28 @@ export function ScheduleChip({ task }: { task: WorkTask }) {
 }
 
 /**
+ * A task an assistant dispatched: that it did, and which assistant. It
+ * lands as the board's settings say, like any other task.
+ */
+export function PersonalAgentChip({ task }: { task: WorkTask }) {
+  const t = useTranslations("Tasks")
+  if (task.personal_agent_dispatch_id == null) return null
+  const executor = task.config?.executor_name ?? null
+  const label = executor
+    ? t("badgePersonalAgentExecutor", { executor })
+    : t("badgePersonalAgent")
+  return (
+    <span
+      className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-full bg-violet-500/10 px-1.5 py-0.5 text-[0.625rem] font-medium leading-none text-violet-700 dark:text-violet-300"
+      title={label}
+    >
+      <Sparkles className="size-2.5 shrink-0" aria-hidden="true" />
+      <span className="truncate">{label}</span>
+    </span>
+  )
+}
+
+/**
  * One board card. The whole card opens the detail sheet; the footer carries
  * the shared action set (see `buildTaskActions`): one filled primary on the
  * left, round icon buttons for the secondaries on the right.
@@ -423,6 +461,10 @@ export function TaskCard({
   // `task.source_meta?.url` does not survive into the callback.
   const source = task.source_meta
   const sourceUrl = source?.url ?? null
+  // A task made from several issues links each of them — the first few, then
+  // a count — rather than only the one its snapshot leads with.
+  const combinedItems =
+    source?.items != null && source.items.length > 1 ? source.items : null
 
   const { primary, secondaries } = buildTaskActions(task, t, handlers)
 
@@ -486,6 +528,7 @@ export function TaskCard({
         ) : null}
         {when ? <span className="shrink-0">{when}</span> : null}
         <ScheduleChip task={task} />
+        <PersonalAgentChip task={task} />
         <MergeQueuedChip task={task} rank={mergeQueueRank} />
         <PreflightChip task={task} />
         <WorktreeRemovedChip task={task} />
@@ -512,7 +555,29 @@ export function TaskCard({
           meta line's own mt-1.5) keeps it reading as part of that block.
           inline-block, not block, so the hit area hugs the text — a
           full-width anchor would swallow clicks meant for the card. */}
-      {sourceUrl && source ? (
+      {combinedItems && source ? (
+        <div className="mt-1 flex min-w-0 items-baseline gap-x-1 font-mono text-[0.625rem] text-primary/80">
+          {combinedItems.slice(0, SOURCE_LINKS_SHOWN).map((item) => (
+            <BrowserLink
+              key={item.number}
+              href={item.url}
+              onClick={(e) => e.stopPropagation()}
+              className="shrink-0 hover:underline"
+              title={`${item.url} · ${item.title}`}
+            >
+              #{item.number}
+            </BrowserLink>
+          ))}
+          {combinedItems.length > SOURCE_LINKS_SHOWN ? (
+            <span className="shrink-0">
+              +{combinedItems.length - SOURCE_LINKS_SHOWN}
+            </span>
+          ) : null}
+          <span className="min-w-0 truncate" title={source.owner_repo}>
+            · {source.owner_repo}
+          </span>
+        </div>
+      ) : sourceUrl && source ? (
         <div className="mt-1 min-w-0">
           <BrowserLink
             href={sourceUrl}
@@ -568,7 +633,7 @@ export function TaskCard({
               type="button"
               size="xs"
               className="min-w-0 shrink"
-              title={primary.label}
+              title={primary.hint ?? primary.label}
               onClick={(e) => {
                 // The card itself opens the detail sheet — keep actions local.
                 e.stopPropagation()
@@ -606,7 +671,7 @@ function CardIconAction({ item }: { item: TaskActionItem }) {
       size="icon-xs"
       variant="outline"
       className="rounded-full opacity-0 transition-opacity focus-visible:opacity-100 group-focus-within/card:opacity-100 group-hover/card:opacity-100"
-      title={item.label}
+      title={item.hint ?? item.label}
       aria-label={item.label}
       onClick={(e) => {
         // The card itself opens the detail sheet — keep actions local.

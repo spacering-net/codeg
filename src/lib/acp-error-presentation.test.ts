@@ -72,6 +72,18 @@ describe("routeAcpError", () => {
     expect(routeAcpError("process_exited").opensAgentSettings).toBeFalsy()
   })
 
+  it("carries the agent's account of an empty turn as the second line", () => {
+    // The localized line only says the turn stopped; what the agent said (a
+    // hook that blocked the prompt, …) would otherwise be lost.
+    const route = routeAcpError("turn_failed_empty_hook")
+    expect(route).toEqual({
+      kind: "session",
+      level: "error",
+      rawAsDetail: true,
+    })
+    expect(acpErrorNotifiesDesktop(route)).toBe(true)
+  })
+
   it("keeps a session restored as new as an amber session state", () => {
     expect(routeAcpError("session_load_fallback")).toMatchObject({
       kind: "session",
@@ -145,6 +157,7 @@ describe("isFailedTurnVerdict", () => {
       "turn_failed_empty",
       "turn_failed_empty_protocol",
       "turn_failed_empty_metadata",
+      "turn_failed_empty_hook",
       "turn_failed_unknown",
     ]) {
       expect(isFailedTurnVerdict(code)).toBe(true)

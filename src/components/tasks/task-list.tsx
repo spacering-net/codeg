@@ -22,6 +22,8 @@ interface TaskListProps {
    *  offer to clear it, instead of leaving a dead end. */
   filtered: boolean
   onClearFilter: () => void
+  /** Present when a recent-update window is narrowing the list. */
+  onClearTimeFilter?: () => void
   /** The keyword search narrowing the list, or null when there is none. An
    *  empty list under a search names the query and offers to clear it. */
   searchQuery?: string | null
@@ -48,6 +50,7 @@ export function TaskList({
   mergeQueueRanks,
   filtered,
   onClearFilter,
+  onClearTimeFilter,
   searchQuery = null,
   onClearSearch,
   onOpen,
@@ -97,8 +100,7 @@ export function TaskList({
                 ? t("searchNoResults", { query: searchQuery })
                 : t("listEmpty")}
             </p>
-            {/* A search or a status filter is what can empty a list that has
-                tasks behind it, so those are the ways out worth offering. */}
+            {/* Offer a way out of each filter that can empty this list. */}
             <div className="flex flex-wrap items-center justify-center gap-2">
               {searchQuery && onClearSearch ? (
                 <Button
@@ -118,6 +120,16 @@ export function TaskList({
                   onClick={onClearFilter}
                 >
                   {t("statusFilterAll")}
+                </Button>
+              ) : null}
+              {onClearTimeFilter ? (
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  onClick={onClearTimeFilter}
+                >
+                  {t("timeFilterAll")}
                 </Button>
               ) : null}
             </div>

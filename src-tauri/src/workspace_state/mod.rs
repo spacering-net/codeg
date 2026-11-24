@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
+use notify::event::ModifyKind;
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 use tokio::sync::mpsc;
@@ -274,6 +275,9 @@ struct WorkspaceStreamEntry {
     // with repository size. Shared with the flush task via Arc.
     full_subscribers: Arc<AtomicUsize>,
     state: Arc<Mutex<WorkspaceStateCore>>,
+    // Registration with workspace file search while the watcher is live: its
+    // cached snapshot of this root is kept current from our batches.
+    search_watch: Option<u64>,
 }
 
 static WORKSPACE_STREAMS: LazyLock<Mutex<HashMap<String, WorkspaceStreamEntry>>> =
@@ -282,6 +286,9 @@ static WORKSPACE_STREAMS: LazyLock<Mutex<HashMap<String, WorkspaceStreamEntry>>>
 #[derive(Default)]
 struct WatchEventBatch {
     changed_paths: HashSet<String>,
+    // Subset created, removed or renamed (anything but a content/metadata
+    // change), for workspace file search.
+    structural_paths: HashSet<String>,
     has_create: bool,
     has_remove: bool,
     overflowed: bool,
@@ -290,6 +297,7 @@ struct WatchEventBatch {
 impl WatchEventBatch {
     fn clear(&mut self) {
         self.changed_paths.clear();
+        self.structural_paths.clear();
         self.has_create = false;
         self.has_remove = false;
         self.overflowed = false;
@@ -305,6 +313,16 @@ impl WatchEventBatch {
         git_watch_dirs: &[GitWatchDir],
         event: notify::Event,
     ) {
+        // The OS dropped events (inotify queue overflow, FSEvents
+        // must-scan-subdirs): notify reports that as a successful event with
+        // the rescan flag, usually of kind `Other`, so check before filtering.
+        if event.need_rescan() {
+            self.overflowed = true;
+            self.changed_paths.clear();
+            self.structural_paths.clear();
+            return;
+        }
+
         if !should_emit_watch_event(&event.kind) {
             return;
         }
@@ -313,17 +331,25 @@ impl WatchEventBatch {
             return;
         }
 
+        let structural = !matches!(
+            event.kind,
+            EventKind::Modify(ModifyKind::Data(_) | ModifyKind::Metadata(_))
+        );
         let mut has_relevant_path = false;
         for path in event.paths {
             let Some(relative) = classify_watch_path(&path, root_canonical, git_watch_dirs) else {
                 continue;
             };
 
+            if structural {
+                self.structural_paths.insert(relative.clone());
+            }
             self.changed_paths.insert(relative);
             has_relevant_path = true;
             if self.changed_paths.len() > WATCH_MAX_CHANGED_PATHS {
                 self.overflowed = true;
                 self.changed_paths.clear();
+                self.structural_paths.clear();
                 break;
             }
         }
@@ -904,6 +930,13 @@ async fn flush_watch_batch(
         return;
     }
 
+    crate::commands::workspace_file_search::watch_changed(
+        root_canonical,
+        &batch.changed_paths,
+        &batch.structural_paths,
+        batch.overflowed,
+    );
+
     let event_kind_hint = batch.kind(root_canonical);
     let changed_paths = if batch.overflowed {
         Vec::new()
@@ -1328,6 +1361,7 @@ pub async fn start_workspace_state_stream_core(
     }));
 
     let root_display_for_error = root_path.clone();
+    let root_canonical_for_error = root_canonical.clone();
     let dropped_events_for_callback = Arc::clone(&dropped_events);
     let mut watcher = Some(
         notify::recommended_watcher(
@@ -1344,6 +1378,14 @@ pub async fn start_workspace_state_stream_core(
                         "[workspace-state-watch] failed event for {}: {}",
                         root_display_for_error, err
                     );
+                    // Changes may have been lost: search must not trust its
+                    // event-maintained snapshot of this root.
+                    crate::commands::workspace_file_search::watch_changed(
+                        &root_canonical_for_error,
+                        &HashSet::new(),
+                        &HashSet::new(),
+                        true,
+                    );
                 }
             },
         )
@@ -1353,10 +1395,58 @@ pub async fn start_workspace_state_stream_core(
         })?,
     );
 
-    let watch_result = watcher
-        .as_mut()
-        .ok_or_else(|| AppCommandError::task_execution_failed("Failed to create watcher"))?
-        .watch(&root_canonical, RecursiveMode::Recursive);
+    // Registering a recursive watch is blocking I/O: on Linux `notify`
+    // walks the whole tree to add one inotify watch per directory, and
+    // `watch()` waits for that walk to finish. On a large network mount
+    // (SSHFS) that takes minutes or never ends, so it must not run on an
+    // async worker — doing so starved the runtime and codeg-server stopped
+    // accepting connections (issue #1292).
+    let mut created_watcher = watcher
+        .take()
+        .ok_or_else(|| AppCommandError::task_execution_failed("Failed to create watcher"))?;
+    let watch_root = root_canonical.clone();
+    let watch_git_dirs = git_watch_dirs.clone();
+    let watch_root_display = root_path.clone();
+    let registered = tokio::task::spawn_blocking(move || {
+        let watch_result = created_watcher.watch(&watch_root, RecursiveMode::Recursive);
+        if watch_result.is_ok() {
+            // Root watch is live; also watch the linked worktree's external
+            // git metadata dirs (private index/HEAD + shared refs) so commit /
+            // stage / checkout / ref-move refresh git status. Best-effort per
+            // dir: a failure only loses that refresh path (working-tree edits
+            // still update), so we log and keep the stream healthy rather
+            // than degrading it. Cleanup rides on the watcher's Drop, which
+            // unwatches every registered path — no separate bookkeeping
+            // needed.
+            for dir in &watch_git_dirs {
+                if let Err(err) = created_watcher.watch(&dir.path, RecursiveMode::Recursive) {
+                    tracing::info!(
+                        "[workspace-state-watch] worktree git-dir watch failed for {} ({}): {}",
+                        watch_root_display,
+                        dir.path.display(),
+                        err
+                    );
+                }
+            }
+        }
+        (created_watcher, watch_result)
+    })
+    .await;
+    let watch_result = match registered {
+        Ok((created_watcher, watch_result)) => {
+            watcher = Some(created_watcher);
+            watch_result
+        }
+        Err(err) => {
+            if let Some(created_task) = task.take() {
+                created_task.abort();
+            }
+            return Err(AppCommandError::task_execution_failed(
+                "Failed to register workspace watcher",
+            )
+            .with_detail(err.to_string()));
+        }
+    };
 
     if let Err(err) = watch_result {
         tracing::info!(
@@ -1371,24 +1461,6 @@ pub async fn start_workspace_state_stream_core(
         }
         if let Ok(mut guard) = state.lock() {
             guard.degraded = true;
-        }
-    } else if let Some(active_watcher) = watcher.as_mut() {
-        // Root watch is live; also watch the linked worktree's external git
-        // metadata dirs (private index/HEAD + shared refs) so commit / stage /
-        // checkout / ref-move refresh git status. Best-effort per dir: a failure
-        // only loses that refresh path (working-tree edits still update), so we
-        // log and keep the stream healthy rather than degrading it. Cleanup
-        // rides on the watcher's Drop, which unwatches every registered path —
-        // no separate bookkeeping needed.
-        for dir in &git_watch_dirs {
-            if let Err(err) = active_watcher.watch(&dir.path, RecursiveMode::Recursive) {
-                tracing::info!(
-                    "[workspace-state-watch] worktree git-dir watch failed for {} ({}): {}",
-                    root_path,
-                    dir.path.display(),
-                    err
-                );
-            }
         }
     }
 
@@ -1425,6 +1497,11 @@ pub async fn start_workspace_state_stream_core(
                     )
                 })?
                 .snapshot(None);
+            // Registered under the stream lock, after the watch is live, so
+            // any walk that search starts from here on misses no event.
+            let search_watch = watcher
+                .is_some()
+                .then(|| crate::commands::workspace_file_search::watch_started(&root_canonical));
             streams.insert(
                 key,
                 WorkspaceStreamEntry {
@@ -1435,6 +1512,7 @@ pub async fn start_workspace_state_stream_core(
                     ref_count: 1,
                     full_subscribers: Arc::clone(&full_subscribers),
                     state: Arc::clone(&state),
+                    search_watch,
                 },
             );
             (false, snapshot, None)
@@ -1515,6 +1593,9 @@ pub async fn stop_workspace_state_stream_core(
     drop(streams);
 
     if let Some(mut entry) = removed_entry.take() {
+        if let Some(token) = entry.search_watch.take() {
+            crate::commands::workspace_file_search::watch_stopped(&entry.root_canonical, token);
+        }
         if let Some(mut watcher) = entry.watcher.take() {
             let _ = watcher.unwatch(&entry.root_canonical);
             drop(watcher);
@@ -2020,6 +2101,79 @@ mod tests {
             git_slot.payload.as_slice(),
             [WorkspaceDelta::GitReplace { .. }]
         ));
+    }
+
+    #[test]
+    fn batch_separates_structural_paths_from_content_edits() {
+        let root = PathBuf::from("/repo");
+        let mut batch = WatchEventBatch::default();
+        let event =
+            |kind: EventKind, path: &str| notify::Event::new(kind).add_path(root.join(path));
+        batch.ingest_event(
+            &root,
+            &[],
+            event(
+                EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Content)),
+                "edited.ts",
+            ),
+        );
+        batch.ingest_event(
+            &root,
+            &[],
+            event(
+                EventKind::Modify(ModifyKind::Metadata(notify::event::MetadataKind::Any)),
+                "chmod.ts",
+            ),
+        );
+        batch.ingest_event(
+            &root,
+            &[],
+            event(EventKind::Create(notify::event::CreateKind::File), "new.ts"),
+        );
+        batch.ingest_event(
+            &root,
+            &[],
+            event(
+                EventKind::Modify(ModifyKind::Name(notify::event::RenameMode::Any)),
+                "renamed.ts",
+            ),
+        );
+        batch.ingest_event(
+            &root,
+            &[],
+            event(EventKind::Remove(notify::event::RemoveKind::Any), "gone.ts"),
+        );
+        // Backends that cannot tell what changed count as structural.
+        batch.ingest_event(
+            &root,
+            &[],
+            event(EventKind::Modify(ModifyKind::Any), "any.ts"),
+        );
+        let mut structural: Vec<_> = batch.structural_paths.iter().cloned().collect();
+        structural.sort();
+        assert_eq!(structural, ["any.ts", "gone.ts", "new.ts", "renamed.ts"]);
+        assert_eq!(batch.changed_paths.len(), 6);
+        batch.clear();
+        assert!(batch.structural_paths.is_empty());
+    }
+
+    #[test]
+    fn os_rescan_notices_overflow_the_batch() {
+        let root = PathBuf::from("/repo");
+        let mut batch = WatchEventBatch::default();
+        batch.ingest_event(
+            &root,
+            &[],
+            notify::Event::new(EventKind::Create(notify::event::CreateKind::File))
+                .add_path(root.join("a.ts")),
+        );
+        batch.ingest_event(
+            &root,
+            &[],
+            notify::Event::new(EventKind::Other).set_flag(notify::event::Flag::Rescan),
+        );
+        assert!(batch.overflowed);
+        assert!(batch.changed_paths.is_empty() && batch.structural_paths.is_empty());
     }
 
     // ── Linked-worktree git-status watch coverage ───────────────────────────

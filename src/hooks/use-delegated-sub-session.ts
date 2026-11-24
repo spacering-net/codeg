@@ -65,7 +65,7 @@ export function useDelegatedSubSession(
     fallbackChildConversationId?: number | null
     /**
      * A broker task id to resolve the binding by when `parentToolUseId`
-     * matches none. Set by `ResumedDelegationCard`: `resume_delegation`
+     * matches none. Set by `DelegationResumeRow`: `resume_delegation`
      * re-binds the child to the ORIGINAL `delegate_to_agent` call's
      * tool_use_id, so the resume call's own id is never a binding key — the
      * task id in its arguments is the only handle it has.

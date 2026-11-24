@@ -32,6 +32,7 @@ vi.mock("./link-safety", async (importOriginal) => {
 })
 
 import { MarkdownLink } from "./markdown-link"
+import { SessionLinkOpenerContext } from "./session-link-opener"
 
 describe("MarkdownLink", () => {
   beforeEach(() => {
@@ -181,6 +182,28 @@ describe("MarkdownLink", () => {
       const badge = screen.getByRole("img", { name: "agent: Codex" })
       expect(badge).toHaveAttribute("data-ref-type", "agent")
       expect(badge.querySelector("svg")).not.toBeNull()
+    })
+
+    it("opens a numeric session link where the page provides an opener, and nowhere else", () => {
+      const open = vi.fn()
+      const { unmount } = render(
+        <SessionLinkOpenerContext.Provider value={open}>
+          <MarkdownLink href="codeg://session/88">Refactor parser</MarkdownLink>
+        </SessionLinkOpenerContext.Provider>
+      )
+      const button = screen.getByRole("button")
+      expect(button).toHaveAttribute("data-session-link", "88")
+      expect(button.querySelector("[data-ref-type='session']")).not.toBeNull()
+      fireEvent.click(button)
+      expect(open).toHaveBeenCalledWith(88)
+      unmount()
+      // A legacy id names no conversation of codeg's: the badge stays inert.
+      render(
+        <SessionLinkOpenerContext.Provider value={open}>
+          <MarkdownLink href="codeg://session/codex_abc">Old</MarkdownLink>
+        </SessionLinkOpenerContext.Provider>
+      )
+      expect(screen.queryByRole("button")).toBeNull()
     })
 
     it("leaves a non-reference codeg uri as a normal link", () => {

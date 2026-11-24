@@ -115,6 +115,7 @@ export function DesktopNotificationSettingsSection() {
   const [expanded, setExpanded] = useState(false)
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- browser-only read after mount, keeps the static export hydration-safe
     setPermission(getNotificationPermission())
   }, [])
 

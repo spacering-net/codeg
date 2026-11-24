@@ -186,6 +186,7 @@ export function QoderConfigPanel({
   }, [])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- auth probe on mount; the loader flips its loading flag first
     void refreshAuth()
   }, [refreshAuth])
 

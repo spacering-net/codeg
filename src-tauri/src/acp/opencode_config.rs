@@ -67,7 +67,7 @@ pub(crate) fn config_file() -> Option<PathBuf> {
 /// What OpenCode's parser accepts: JSON plus comments and trailing commas.
 /// The crate's defaults also take JSON5 forms (single quotes, hex numbers, …)
 /// that OpenCode rejects, so those stay off: text codeg accepts must load.
-fn parse_options() -> ParseOptions {
+pub(crate) fn parse_options() -> ParseOptions {
     ParseOptions {
         allow_comments: true,
         allow_trailing_commas: true,
@@ -171,66 +171,10 @@ pub(crate) fn edit_object(text: &str, edit: impl FnOnce(&CstObject)) -> Result<S
 /// MCP server's headers, a provider's `apiKey`), so the temp file is readable
 /// by its owner only while it is written, and a file codeg creates stays so.
 pub(crate) fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
-    let target = resolve_symlinks(path);
-    let parent = target
-        .parent()
-        .ok_or_else(|| format!("{} has no parent directory", target.display()))?;
-    std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
-    let file_name = target
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "opencode.json".to_string());
-    let tmp = parent.join(format!(
-        ".{file_name}.codeg-{}.tmp",
-        uuid::Uuid::new_v4().simple()
-    ));
-    let permissions = std::fs::metadata(&target)
-        .ok()
-        .map(|meta| meta.permissions());
-    let written = write_private(&tmp, text).and_then(|()| match permissions {
-        Some(permissions) => std::fs::set_permissions(&tmp, permissions),
-        None => Ok(()),
-    });
-    if let Err(e) = written {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(format!("write {}: {e}", tmp.display()));
-    }
-    std::fs::rename(&tmp, &target).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        format!("replace {}: {e}", target.display())
-    })
-}
-
-/// The file `path` names once symlinks are followed (a dangling link resolves
-/// to where it points), so a rename replaces that file and keeps the links.
-fn resolve_symlinks(path: &Path) -> PathBuf {
-    let mut current = path.to_path_buf();
-    // A cycle gives up where the OS would (ELOOP), on the last link reached.
-    for _ in 0..40 {
-        let Ok(dest) = std::fs::read_link(&current) else {
-            break;
-        };
-        current = match current.parent() {
-            Some(parent) if dest.is_relative() => parent.join(dest),
-            _ => dest,
-        };
-    }
-    current
-}
-
-/// Create `path`, readable by its owner only on Unix, and write `text` to it.
-fn write_private(path: &Path, text: &str) -> std::io::Result<()> {
-    use std::io::Write;
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(path)?;
-    file.write_all(text.as_bytes())?;
-    file.sync_all()
+    // The one writer every agent config goes through: a sibling temp file,
+    // synced, renamed over the target a symlink resolves to.
+    crate::commands::mcp_engine::fsio::write_atomic(path, text.as_bytes())
+        .map_err(|e| format!("write {}: {e}", path.display()))
 }
 
 #[cfg(test)]

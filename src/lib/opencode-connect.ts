@@ -6,7 +6,8 @@
  *    `opencode.db`), which codeg reads and writes only through OpenCode
  *    (`opencodeListIntegrations` / `opencodeConnectKey` /
  *    `opencodeDisconnectProvider`); no secret ever reaches the frontend.
- *    `auth.json` is read once, when OpenCode 2 first upgrades a 1.x database.
+ *    `auth.json` is read only when OpenCode 2 creates its database: when it
+ *    upgrades a 1.x one, and since 2.2.7 when it starts a fresh one.
  *  - its **definition** lives in the config file under `providers.<id>`:
  *    `name`, `package` (an AI SDK package as `aisdk:<npm>`, or a native
  *    `@opencode/ai/…` entry point), `settings` (`baseURL`, …), `models`.
@@ -156,6 +157,7 @@ export type OpenCodeProviderShape = "native" | "legacy"
 export interface OpenCodeProviderModelView {
   id: string
   name: string
+  disabled: boolean
   /** Keys besides `name` (and 2.x's `modelID` alias), kept as they are. */
   extraFieldCount: number
 }
@@ -182,6 +184,7 @@ function modelViews(
     views[id] = {
       id,
       name: str(model.name),
+      disabled: model.disabled === true,
       extraFieldCount: Object.keys(model).filter(
         (key) => key !== "name" && key !== "modelID" && key !== "id"
       ).length,
@@ -643,6 +646,7 @@ export interface OpenCodeConnectedProvider {
   baseUrl: string
   npm: string
   modelIds: string[]
+  disabledModelIds: string[]
 }
 
 function connectionKindOf(integration: OpenCodeIntegration | undefined): {
@@ -699,6 +703,14 @@ export function buildConnectedProviders(params: {
       baseUrl: block?.baseUrl ?? "",
       npm: block?.npm ?? "",
       modelIds: block?.modelIds ?? [],
+      // OpenCode 2 reads `disabled` on 2.x blocks only; a 1.x block's
+      // model-level `disabled` is dropped when it migrates the block.
+      disabledModelIds:
+        block?.shape === "native"
+          ? Object.values(block.models)
+              .filter((model) => model.disabled)
+              .map((model) => model.id)
+          : [],
     })
   }
   result.sort(
@@ -741,6 +753,7 @@ export function buildConnectedModelOptions(params: {
     const metaById = new Map(catalog?.models.map((m) => [m.id, m]) ?? [])
     const ids = new Set<string>(provider.modelIds)
     if (catalog) for (const model of catalog.models) ids.add(model.id)
+    for (const modelId of provider.disabledModelIds) ids.delete(modelId)
     if (ids.size === 0) continue
     groups.push({
       providerId: provider.id,

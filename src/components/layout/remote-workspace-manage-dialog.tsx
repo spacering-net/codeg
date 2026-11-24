@@ -206,6 +206,7 @@ export function RemoteWorkspaceManageDialog({
 
   useEffect(() => {
     if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset paired with an external fetch on open
       setFormError(null)
       void refresh()
     }
@@ -243,21 +244,27 @@ export function RemoteWorkspaceManageDialog({
     [connections, deleteTargetId]
   )
 
-  useEffect(() => {
+  // Re-seed the editable form whenever the selected connection changes
+  // (including a refresh that returns a new object for it). Adjusted during
+  // render (React's "reset state on prop change" pattern); on mount nothing is
+  // selected yet and the initial state already matches the empty form.
+  const [prevSelected, setPrevSelected] = useState(selected)
+  if (selected !== prevSelected) {
+    setPrevSelected(selected)
     setFormError(null)
     setHeadersOpen((selected?.headers?.length ?? 0) > 0)
-    if (!selected) {
-      setDraft(EMPTY_DRAFT)
-      return
-    }
-    setDraft({
-      id: selected.id,
-      name: selected.name,
-      baseUrl: selected.base_url,
-      token: selected.token,
-      headers: selected.headers ?? [],
-    })
-  }, [selected])
+    setDraft(
+      selected
+        ? {
+            id: selected.id,
+            name: selected.name,
+            baseUrl: selected.base_url,
+            token: selected.token,
+            headers: selected.headers ?? [],
+          }
+        : EMPTY_DRAFT
+    )
+  }
 
   const filteredConnections = useMemo(() => {
     const query = searchQuery.trim().toLowerCase()

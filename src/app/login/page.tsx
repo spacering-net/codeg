@@ -1,8 +1,10 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
+import { workspacePathAfterLogin } from "@/lib/harness-link"
+import { withSrnResultAfterLogin } from "@/lib/srn-account/web-result"
 import { isDesktop } from "@/lib/platform"
 import {
   codegAuthHeaders,
@@ -18,6 +20,20 @@ export default function LoginPage() {
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
 
+  // The workspace, carrying the Harness item it was opened for before it sent
+  // this browser here, if it was, and how an SRN sign-in it had just come
+  // back from ended. Worked out on the first success and kept: what was kept
+  // for after the login is handed out once, so a second success (the proxy
+  // answering while a token goes in) has to go to the same place.
+  const afterLoginRef = useRef<string | null>(null)
+  const afterLogin = useCallback(
+    () =>
+      (afterLoginRef.current ??= withSrnResultAfterLogin(
+        workspacePathAfterLogin()
+      )),
+    []
+  )
+
   useEffect(() => {
     document.title = t("documentTitle")
   }, [t])
@@ -28,12 +44,12 @@ export default function LoginPage() {
     if (isDesktop()) return
     let cancelled = false
     void probeProxyAuthentication().then((result) => {
-      if (!cancelled && result === "proxy") router.replace("/workspace")
+      if (!cancelled && result === "proxy") router.replace(afterLogin())
     })
     return () => {
       cancelled = true
     }
-  }, [router])
+  }, [router, afterLogin])
 
   // Desktop users skip login entirely
   if (isDesktop()) {
@@ -59,7 +75,7 @@ export default function LoginPage() {
 
       if (res.ok) {
         localStorage.setItem("codeg_token", token)
-        router.replace("/workspace")
+        router.replace(afterLogin())
       } else if (
         res.status === 401 &&
         unauthorizedSource(res.headers.get("www-authenticate")) === "proxy"

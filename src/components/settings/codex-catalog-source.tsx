@@ -131,6 +131,7 @@ export function useCodexProviderList(
   useEffect(() => {
     // A request that changed drops the answer to the old one, late or not.
     seq.current += 1
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset paired with invalidating the in-flight request
     setFetching(false)
   }, [key])
   useEffect(

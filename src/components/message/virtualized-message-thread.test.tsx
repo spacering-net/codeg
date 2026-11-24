@@ -32,11 +32,13 @@ vi.mock("virtua", async () => {
   return {
     Virtualizer: ({
       children,
+      data,
       ref,
       onScroll,
       keepMounted,
     }: {
-      children: ReactNode
+      children: ReactNode | ((row: unknown, index: number) => ReactNode)
+      data?: readonly unknown[]
       ref?: Ref<unknown>
       onScroll?: (offset: number) => void
       keepMounted?: readonly number[]
@@ -57,7 +59,14 @@ vi.mock("virtua", async () => {
           return testState.scrollSize
         },
       }))
-      return <>{children}</>
+      // Every row, as virtua draws the rows in view.
+      return (
+        <>
+          {typeof children === "function"
+            ? (data ?? []).map((row, index) => children(row, index))
+            : children}
+        </>
+      )
     },
   }
 })

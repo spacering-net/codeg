@@ -82,7 +82,10 @@ async fn switch_inner(
         .map_err(failure)?
         .filter(|r| r.deleted_at.is_none())
         .ok_or_else(|| failure("Conversation not found."))?;
-    if row.agent_type != AgentType::ClaudeCode.as_wire() || row.parent_id.is_some() {
+    if row.agent_type != AgentType::ClaudeCode.as_wire()
+        || row.parent_id.is_some()
+        || row.kind == crate::db::entities::conversation::ConversationKind::Personal
+    {
         return Err(failure(
             "Account switching is available for Claude conversations.",
         ));
@@ -210,17 +213,28 @@ async fn switch_inner(
         &requested_config,
     )
     .await;
-    if !loaded {
+    let Some(selection) = loaded else {
         manager
             .disconnect_and_wait_for_account_switch(&connection_id)
             .await?;
         roll_back_target(manager, &transfer, &target, &sid).await?;
         return Err(failure("The selected account could not restore this conversation with the selected model. Choose a supported model or another account. The original account and history were kept."));
-    }
-    // One conditional write changes only the binding, preserving title, pin,
+    };
+    // Commit the verified target selection with its binding, preserving title, pin,
     // tags, folder and history. A stale client, deletion, account removal or
     // competing import cannot silently replace a newer binding.
-    let committed = commit_binding(&db.conn, &row, request.target_account_id.as_deref()).await;
+    let committed = manager
+        .selection
+        .commit_binding_change(
+            row.id,
+            commit_binding(
+                &db.conn,
+                &row,
+                request.target_account_id.as_deref(),
+                &selection,
+            ),
+        )
+        .await;
     if let Err(e) = committed {
         manager
             .disconnect_and_wait_for_account_switch(&connection_id)
@@ -232,6 +246,10 @@ async fn switch_inner(
     // them is best effort and never turns a completed switch into an error.
     transfer.discard_staging();
     if let Some(state) = manager.get_state(&connection_id).await {
+        manager
+            .selection
+            .take_authority_on_link(&connection_id, &state, row.id)
+            .await;
         // Use the shared link event: assigning ids alone bypasses lifecycle
         // caching and the other subscribers that track a bound conversation.
         emit_with_state(
@@ -277,27 +295,26 @@ async fn wait_for_restored_options(
     sid: &str,
     account_id: Option<&str>,
     requested: &BTreeMap<String, String>,
-) -> bool {
+) -> Option<crate::models::ConversationSelection> {
     use crate::acp::types::ConnectionStatus;
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(120);
     loop {
-        let Some(state) = manager.get_state(connection_id).await else {
-            return false;
-        };
+        let state = manager.get_state(connection_id).await?;
         let state = state.read().await;
         // SessionStarted precedes preference replay. Wait for the same ready
         // signal the composer uses before comparing the selected model.
         if state.selectors_ready && state.status == ConnectionStatus::Connected {
-            return state.has_restored_session(sid)
+            return (state.has_restored_session(sid)
                 && state.agent_account_id.as_deref() == account_id
-                && requested_model_applied(requested, state.config_options.as_deref());
+                && requested_model_applied(requested, state.config_options.as_deref()))
+            .then(|| crate::acp::selection::selection_snapshot(&state));
         }
         if matches!(
             state.status,
             ConnectionStatus::Error | ConnectionStatus::Disconnected
         ) || tokio::time::Instant::now() >= deadline
         {
-            return false;
+            return None;
         }
         drop(state);
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -327,11 +344,12 @@ async fn commit_binding(
     conn: &impl ConnectionTrait,
     source: &conversation::Model,
     target: Option<&str>,
+    selection: &crate::models::ConversationSelection,
 ) -> Result<(), AcpError> {
     let updated = conn
         .execute(Statement::from_sql_and_values(
             DbBackend::Sqlite,
-            "UPDATE conversation SET agent_account_id = ?, updated_at = ? \
+            "UPDATE conversation SET agent_account_id = ?, selector_state = ?, updated_at = ? \
          WHERE id = ? AND agent_type = ? AND external_id = ? \
          AND agent_account_id IS ? AND deleted_at IS NULL AND folder_id = ? AND origin_cwd IS ? \
          AND NOT EXISTS (SELECT 1 FROM conversation child WHERE child.parent_id = conversation.id AND child.status = 'in_progress') \
@@ -339,6 +357,7 @@ async fn commit_binding(
              WHERE id = ? AND removed = 0 AND agent_type = ?))",
             vec![
                 target.map(str::to_owned).into(),
+                selection.to_json().into(),
                 chrono::Utc::now().into(),
                 source.id.into(),
                 source.agent_type.clone().into(),
@@ -379,7 +398,7 @@ pub async fn acp_switch_conversation_account(
     switch_core(
         &db,
         &manager,
-        &EventEmitter::Tauri(app),
+        &EventEmitter::from_app(&app),
         &data,
         window.label().into(),
         request,
@@ -454,10 +473,16 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        commit_binding(&db.conn, &row, Some(&account.id))
+        let target_selection = crate::models::ConversationSelection {
+            config_values: BTreeMap::from([("model".to_string(), "target-model".to_string())]),
+            ..Default::default()
+        };
+        commit_binding(&db.conn, &row, Some(&account.id), &target_selection)
             .await
             .unwrap();
-        assert!(commit_binding(&db.conn, &row, Some(&account.id))
+        assert_eq!(crate::db::service::conversation_service::get_selector_state(&db.conn, row.id)
+            .await.unwrap(), Some(target_selection.clone()));
+        assert!(commit_binding(&db.conn, &row, Some(&account.id), &target_selection)
             .await
             .is_err());
         let switched = conversation::Entity::find_by_id(id)
@@ -468,11 +493,13 @@ mod tests {
         assert_eq!(switched.external_id, row.external_id);
         assert_eq!(switched.folder_id, row.folder_id);
         assert_eq!(switched.title, row.title);
-        commit_binding(&db.conn, &switched, None).await.unwrap();
+        commit_binding(&db.conn, &switched, None, &target_selection)
+            .await
+            .unwrap();
         agent_account_service::remove(&db.conn, &account.id)
             .await
             .unwrap();
-        assert!(commit_binding(&db.conn, &row, Some(&account.id))
+        assert!(commit_binding(&db.conn, &row, Some(&account.id), &target_selection)
             .await
             .is_err());
     }

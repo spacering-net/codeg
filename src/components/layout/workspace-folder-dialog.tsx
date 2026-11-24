@@ -143,6 +143,9 @@ export function WorkspaceFolderDialog({
   // cancel never shows the previous run's picks.
   useEffect(() => {
     if (!open) return
+    // Kept as an effect so it stays ordered with the links fetch below in the
+    // same commit, exactly as before.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- open-time session reset, ordered with the links fetch effect
     setView(folder ? "links" : "pick-root")
     setRootFolder(folder ?? null)
     setRootPath(folder?.path ?? "")
@@ -171,6 +174,7 @@ export function WorkspaceFolderDialog({
 
   useEffect(() => {
     if (!open || !rootFolder) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- kicks off an async links fetch (flips the loading flag first)
     void refreshLinks(rootFolder.id)
   }, [open, rootFolder, refreshLinks])
 
