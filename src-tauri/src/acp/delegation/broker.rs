@@ -2523,6 +2523,11 @@ impl DelegationBroker {
     /// orthogonal to whether the caller then blocks. The only change vs. the old
     /// `handle_request` is that "park a `oneshot` and await it" becomes "insert a
     /// [`RunningTask`] and return the ack."
+    pub async fn start_delegation(&self, req: DelegationRequest) -> DelegationTaskReport {
+        self.start_delegation_with_delivery(req, "poll".into(), false)
+            .await
+    }
+
     #[tracing::instrument(
         name = "delegation_task",
         skip_all,
@@ -2535,21 +2540,27 @@ impl DelegationBroker {
             task_id = tracing::field::Empty,
         )
     )]
-    pub async fn start_delegation(&self, req: DelegationRequest) -> DelegationTaskReport {
-        self.start_delegation_with_delivery(req, "poll".into(), false)
-            .await
-    }
-
     pub async fn start_delegation_with_delivery(
         &self,
         req: DelegationRequest,
         notify_mode: String,
         follow: bool,
     ) -> DelegationTaskReport {
+        self.start_delegation_with_options(req, notify_mode, follow, Default::default())
+            .await
+    }
+
+    pub async fn start_delegation_with_options(
+        &self,
+        req: DelegationRequest,
+        notify_mode: String,
+        follow: bool,
+        selection: super::models::ModelSelection,
+    ) -> DelegationTaskReport {
         // Every report this call returns — the ack, a setup failure, a
         // setup-window terminal — names the assistant the task runs as.
         let identity = req.assistant.as_ref().map(DelegationAssistant::identity);
-        self.start_delegation_inner(req, notify_mode, follow)
+        self.start_delegation_inner(req, notify_mode, follow, selection)
             .await
             .with_assistant(identity.as_ref())
     }
@@ -2559,6 +2570,7 @@ impl DelegationBroker {
         mut req: DelegationRequest,
         notify_mode: String,
         follow: bool,
+        selection: super::models::ModelSelection,
     ) -> DelegationTaskReport {
         let identity = req.assistant.as_ref().map(DelegationAssistant::identity);
         // Register this setup as the VERY FIRST thing — before the pre-cancel
@@ -2678,6 +2690,15 @@ impl DelegationBroker {
                         }
                     }
                 }
+                if let Some(model) = &selection.model {
+                    raw_input.insert("model".into(), serde_json::Value::String(model.clone()));
+                }
+                if let Some(reasoning) = &selection.reasoning {
+                    raw_input.insert(
+                        "reasoning".into(),
+                        serde_json::Value::String(reasoning.clone()),
+                    );
+                }
                 if let Some(dir) = req.requested_working_dir.as_deref() {
                     raw_input.insert("working_dir".into(), serde_json::Value::String(dir.into()));
                 }
@@ -2762,10 +2783,70 @@ impl DelegationBroker {
         // agent's own value). Otherwise pull the per-agent overrides from the
         // broker config (defaults to empty). Cloning is cheap — at most one
         // Option<String> and a small BTreeMap, consumed by value.
-        let (preferred_mode_id, preferred_config_values) = launch_preferences(
+        let (preferred_mode_id, mut preferred_config_values) = launch_preferences(
             req.assistant.as_ref(),
             cfg.agent_defaults.get(&req.agent_type),
         );
+        // Explicit arguments override the saved launch defaults, using the same
+        // runtime selector ids as the composer. Resolve the model first so the
+        // second probe can return its model-dependent reasoning levels.
+        let explicit_values = if selection.is_empty() {
+            BTreeMap::new()
+        } else {
+            let resolved = async {
+                let snapshot = self
+                    .spawner
+                    .probe_options(
+                        &req.parent_connection_id,
+                        req.agent_type,
+                        req.working_dir.clone(),
+                        preferred_config_values.clone(),
+                    )
+                    .await?;
+                let model_values = super::models::ModelSelection {
+                    model: selection.model.clone(),
+                    reasoning: None,
+                }
+                .resolve(&snapshot.config_options)
+                .map_err(super::spawner::SpawnerError::Spawn)?;
+                preferred_config_values.extend(model_values);
+                let snapshot = if selection.model.is_some() && selection.reasoning.is_some() {
+                    self.spawner
+                        .probe_options(
+                            &req.parent_connection_id,
+                            req.agent_type,
+                            req.working_dir.clone(),
+                            preferred_config_values.clone(),
+                        )
+                        .await?
+                } else {
+                    snapshot
+                };
+                selection
+                    .resolve(&snapshot.config_options)
+                    .map_err(super::spawner::SpawnerError::Spawn)
+            }
+            .await;
+            match resolved {
+                Ok(values) => values,
+                Err(error) => {
+                    self.drop_inflight(inflight_id).await;
+                    return report_err(
+                        req.agent_type,
+                        DelegationError::SpawnFailed(error.to_string()),
+                        None,
+                    );
+                }
+            }
+        };
+        preferred_config_values.extend(explicit_values.clone());
+        if let Some(assistant) = &mut req.assistant {
+            // Persist the actual run's explicit overrides in its frozen snapshot.
+            assistant
+                .agent_options
+                .config_values
+                .extend(explicit_values.clone());
+        }
         // Checkpoint #1 (opportunistic): if a parent cancel already landed
         // during the claim/depth phase, bail before spawning a child the parent
         // has abandoned. No child exists yet, so there's nothing to tear down.
@@ -2814,6 +2895,33 @@ impl DelegationBroker {
                 },
                 None,
             );
+        }
+
+        if !explicit_values.is_empty() {
+            if let Err(error) = self
+                .spawner
+                .validate_configuration(&child_connection_id, &explicit_values)
+                .await
+            {
+                let _ = self.spawner.disconnect(&child_connection_id).await;
+                self.drop_inflight(inflight_id).await;
+                return report_err(
+                    req.agent_type,
+                    DelegationError::SpawnFailed(error.to_string()),
+                    None,
+                );
+            }
+            // Validation waits for startup, during which the parent may cancel.
+            if self.take_inflight_cancel(inflight_id).await {
+                let _ = self.spawner.disconnect(&child_connection_id).await;
+                return report_err(
+                    req.agent_type,
+                    DelegationError::Canceled {
+                        reason: "parent canceled".into(),
+                    },
+                    None,
+                );
+            }
         }
 
         let deliver_first_result = notify_mode == "deliver";
@@ -5278,6 +5386,75 @@ mod tests {
         let got = broker.config_snapshot().await;
         assert!(!got.enabled);
         assert_eq!(got.depth_limit, 5);
+    }
+
+    #[tokio::test]
+    async fn invalid_explicit_model_never_spawns_and_reports_choices() {
+        let mock = Arc::new(MockSpawner::new());
+        *mock.options.lock().await = serde_json::from_value(serde_json::json!({
+            "modes": null,
+            "config_options": [{"id":"model", "name":"Model", "description":null,
+                "category":"model", "kind":{"type":"select", "current_value":"a",
+                    "options":[{"value":"a","name":"Alpha","description":null}], "groups":[]}}]
+        }))
+        .unwrap();
+        let broker =
+            DelegationBroker::new(mock.clone() as Arc<dyn ConnectionSpawner>, shallow_lookup());
+        enable_delegation(&broker).await;
+        let report = broker
+            .start_delegation_with_options(
+                request(1, "pt-invalid-model"),
+                "poll".into(),
+                false,
+                super::super::models::ModelSelection {
+                    model: Some("missing".into()),
+                    reasoning: None,
+                },
+            )
+            .await;
+        assert_eq!(report.status, TaskStatus::Failed);
+        assert!(report.message.unwrap().contains("Alpha (a)"));
+        assert!(mock.spawn_args.lock().await.is_empty());
+        assert_eq!(broker.inflight_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn rejected_explicit_configuration_disconnects_before_first_prompt() {
+        let mock = Arc::new(MockSpawner::new());
+        mock.queue_spawn(Ok("child-selected".into())).await;
+        *mock.options.lock().await = serde_json::from_value(serde_json::json!({
+            "modes": null,
+            "config_options": [{"id":"model", "name":"Model", "description":null,
+                "category":"model", "kind":{"type":"select", "current_value":"a",
+                    "options":[{"value":"a","name":"Alpha","description":null}], "groups":[]}}]
+        }))
+        .unwrap();
+        let broker =
+            DelegationBroker::new(mock.clone() as Arc<dyn ConnectionSpawner>, shallow_lookup());
+        enable_delegation(&broker).await;
+        *mock.validation_error.lock().await =
+            Some("agent rejected model a; available: Alpha (a)".into());
+        let report = broker
+            .start_delegation_with_options(
+                request(1, "pt-selected"),
+                "poll".into(),
+                false,
+                super::super::models::ModelSelection {
+                    model: Some("a".into()),
+                    reasoning: None,
+                },
+            )
+            .await;
+        assert_eq!(report.status, TaskStatus::Failed);
+        assert!(mock.send_args.lock().await.is_empty());
+        assert_eq!(*mock.disconnects.lock().await, vec!["child-selected"]);
+        assert_eq!(
+            mock.spawn_args.lock().await[0]
+                .preferred_config_values
+                .get("model")
+                .map(String::as_str),
+            Some("a")
+        );
     }
 
     #[tokio::test]

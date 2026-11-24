@@ -5052,6 +5052,59 @@ impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpa
         Ok(())
     }
 
+    async fn probe_options(
+        &self,
+        parent_connection_id: &str,
+        agent_type: AgentType,
+        working_dir: Option<String>,
+        preferences: BTreeMap<String, String>,
+    ) -> Result<AgentOptionsSnapshot, crate::acp::delegation::spawner::SpawnerError> {
+        use crate::acp::delegation::spawner::SpawnerError;
+        let state = self
+            .manager
+            .get_state(parent_connection_id)
+            .await
+            .ok_or_else(|| SpawnerError::Spawn("parent connection is unavailable".into()))?;
+        let parent_dir = state
+            .read()
+            .await
+            .working_dir
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned());
+        let runtime_env = crate::commands::acp::build_session_runtime_env(
+            &self.db,
+            agent_type,
+            None,
+            self.data_dir.as_path(),
+        )
+        .await
+        .map_err(|error| SpawnerError::Spawn(error.to_string()))?;
+        self.manager
+            .probe_agent_options(
+                agent_type,
+                working_dir.or(parent_dir),
+                runtime_env,
+                preferences,
+            )
+            .await
+            .map_err(|error| SpawnerError::Spawn(error.to_string()))
+    }
+
+    async fn validate_configuration(
+        &self,
+        connection_id: &str,
+        requested: &BTreeMap<String, String>,
+    ) -> Result<(), crate::acp::delegation::spawner::SpawnerError> {
+        use crate::acp::delegation::spawner::SpawnerError;
+        let snapshot = self
+            .manager
+            .wait_for_session_options(connection_id, Duration::from_secs(60))
+            .await
+            .map_err(|error| SpawnerError::Spawn(error.to_string()))?;
+        crate::acp::delegation::models::validate_config_values(&snapshot.config_options, requested)
+            .map_err(SpawnerError::Spawn)
+    }
+
     async fn spawn(
         &self,
         parent_connection_id: &str,

@@ -1,7 +1,7 @@
 //! Runtime model selection shared by model discovery and explicit launch checks.
 use std::collections::BTreeMap;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::acp::types::{
     SessionConfigKindInfo, SessionConfigOptionInfo, SessionConfigSelectOptionInfo,
@@ -145,6 +145,57 @@ pub(crate) fn validate_create_option_ids(
             "expected model option {:?} and reasoning option {:?}; query list_agent_options for this agent",
             model.map(|option| &option.id), reasoning.map(|option| &option.id)
         )),
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ModelSelection {
+    pub model: Option<String>,
+    pub reasoning: Option<String>,
+}
+
+impl ModelSelection {
+    pub fn is_empty(&self) -> bool {
+        self.model.is_none() && self.reasoning.is_none()
+    }
+
+    /// Resolve public model/reasoning arguments to the agent's actual option ids.
+    /// Probe with the model first: reasoning choices can change with the model.
+    pub fn resolve(
+        &self,
+        options: &[SessionConfigOptionInfo],
+    ) -> Result<BTreeMap<String, String>, String> {
+        let mut result = BTreeMap::new();
+        for (name, value, predicate) in [
+            (
+                "model",
+                &self.model,
+                is_model as fn(&SessionConfigOptionInfo) -> bool,
+            ),
+            (
+                "reasoning",
+                &self.reasoning,
+                is_reasoning as fn(&SessionConfigOptionInfo) -> bool,
+            ),
+        ] {
+            let Some(value) = value else {
+                continue;
+            };
+            let option = options
+                .iter()
+                .find(|option| predicate(option))
+                .ok_or_else(|| {
+                    format!("{name} is not supported by this agent; available options: []")
+                })?;
+            if !choices(option).iter().any(|choice| &choice.value == value) {
+                return Err(format!(
+                    "invalid {name} {value:?}; available options: {}",
+                    available(option)
+                ));
+            }
+            result.insert(option.id.clone(), value.clone());
+        }
+        Ok(result)
     }
 }
 

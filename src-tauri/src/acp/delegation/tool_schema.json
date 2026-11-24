@@ -43,6 +43,14 @@
           "type": "string",
           "description": "Absolute path the sub-agent runs in. Defaults to this session's working directory."
         },
+        "model": {
+          "type": "string",
+          "description": "Optional model slug from list_agent_options."
+        },
+        "reasoning": {
+          "type": "string",
+          "description": "Optional reasoning value supported by the selected model. Query list_agent_options for the available levels."
+        },
         "notify_mode": {
           "type": "string",
           "enum": [

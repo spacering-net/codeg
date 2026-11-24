@@ -100,6 +100,22 @@ pub trait ConnectionSpawner: Send + Sync {
         policy: crate::db::service::turn_delivery_service::DeliveryPolicy,
     ) -> Result<(), SpawnerError>;
 
+    /// Uses the same runtime environment and option probe as the model picker.
+    async fn probe_options(
+        &self,
+        parent_connection_id: &str,
+        agent_type: AgentType,
+        working_dir: Option<String>,
+        preferences: BTreeMap<String, String>,
+    ) -> Result<crate::acp::types::AgentOptionsSnapshot, SpawnerError>;
+
+    /// Verify explicit launch values after startup and before any prompt.
+    async fn validate_configuration(
+        &self,
+        connection_id: &str,
+        requested: &BTreeMap<String, String>,
+    ) -> Result<(), SpawnerError>;
+
     /// Spawn a fresh child ACP connection of `agent_type` in `working_dir`.
     /// Delegation children are always brand-new sessions (no resume), but the
     /// broker may inject per-agent defaults configured in
@@ -212,6 +228,8 @@ pub mod mock {
     /// matches call order.
     #[derive(Default)]
     pub struct MockSpawner {
+        pub options: Mutex<crate::acp::types::AgentOptionsSnapshot>,
+        pub validation_error: Mutex<Option<String>>,
         pub spawn_results: Mutex<VecDeque<Result<String, SpawnerError>>>,
         pub send_results: Mutex<VecDeque<Result<i32, SpawnerError>>>,
         pub cancels: Mutex<Vec<String>>,
@@ -338,6 +356,26 @@ pub mod mock {
             Ok(())
         }
 
+        async fn probe_options(
+            &self,
+            _: &str,
+            _: AgentType,
+            _: Option<String>,
+            _: BTreeMap<String, String>,
+        ) -> Result<crate::acp::types::AgentOptionsSnapshot, SpawnerError> {
+            Ok(self.options.lock().await.clone())
+        }
+        async fn validate_configuration(
+            &self,
+            _: &str,
+            _: &BTreeMap<String, String>,
+        ) -> Result<(), SpawnerError> {
+            match self.validation_error.lock().await.clone() {
+                Some(error) => Err(SpawnerError::Spawn(error)),
+                None => Ok(()),
+            }
+        }
+
         async fn spawn(
             &self,
             parent_connection_id: &str,
@@ -415,9 +453,7 @@ pub mod mock {
                 .lock()
                 .await
                 .pop_front()
-                .unwrap_or_else(|| {
-                    Err(SpawnerError::Spawn("no queued resume spawn result".into()))
-                })
+                .unwrap_or_else(|| Err(SpawnerError::Spawn("no queued resume spawn result".into())))
         }
 
         async fn send_resume_prompt(
