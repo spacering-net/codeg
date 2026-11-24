@@ -334,7 +334,9 @@ function DelegationStepRow({
           {model.model ? (
             <span
               className="max-w-[12rem] truncate font-mono text-xs text-activity-secondary"
-              title={tDelegation("delegationPinnedModel", { model: model.model })}
+              title={tDelegation("delegationPinnedModel", {
+                model: model.model,
+              })}
               dir="auto"
             >
               {model.model}

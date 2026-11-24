@@ -1013,7 +1013,8 @@ function parseCodeModeInput(parsed: unknown): ParsedInput | null {
         : null,
     task: taskAt !== null ? objectTaskValue(code, taskAt) : null,
     workingDir: workingAt !== null ? objectStringValue(code, workingAt) : null,
-    model: pinAt !== null ? objectStringValue(code, pinAt)?.trim() || null : null,
+    model:
+      pinAt !== null ? objectStringValue(code, pinAt)?.trim() || null : null,
   }
 }
 
