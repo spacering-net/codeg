@@ -20,13 +20,16 @@
 //!
 //! The helper runs with a session's launch environment and in an empty
 //! codeg-owned directory, so it opens the same database and global config a
-//! session does while no project's config can add providers to it. Before any
-//! integration call it asks for the default model, which on 2.2.7 still waits
-//! up to 5 s for the plugins to load, though the integration list itself no
-//! longer waits and OpenCode's own CLI now polls the plugin list instead.
-//! Until the first plugin generation has loaded, an
-//! integration declared in the config is not known yet and connecting it
-//! answers 404.
+//! session does while no project's config can add providers to it. Until the
+//! first plugin generation has loaded, the integration list is empty or
+//! partial and connecting an integration answers 404, so before any
+//! integration call it waits for that generation. It asks for the default
+//! model, which through 2.3.x waits up to 5 s for the plugins, then polls the
+//! plugin list until it is non-empty, every 25 ms for up to 5 s, as OpenCode's
+//! own CLI does (`cli/src/services/plugin-startup.ts`). 2.4.0 stopped every
+//! endpoint waiting for plugins, so the default model answers at once (with
+//! `null` until they load) and only the poll still waits; measured on 2.4.1,
+//! the plugin list and the integration list fill at the same moment.
 //!
 //! Secrets travel one way. A key goes to OpenCode in a request body (never on a
 //! command line), and nothing this module returns carries one: the integration
@@ -50,9 +53,14 @@ use crate::models::agent::AgentType;
 /// antivirus scan, or one that migrates a large database, can be slow.
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Bound on each HTTP call. The readiness call waits for the first plugin
-/// generation, which may install plugins.
+/// Bound on each HTTP call. Through 2.3.x the readiness call waits for the
+/// first plugin generation, which may install plugins.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// How often, and for how long, [`ServerClient::ready`] polls the plugin list,
+/// OpenCode's own CLI's numbers (`waitForPlugins`).
+const PLUGIN_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const PLUGIN_POLL_LIMIT: Duration = Duration::from_secs(5);
 
 /// The basic-auth user OpenCode's server expects with `OPENCODE_PASSWORD`.
 const SERVER_USER: &str = "opencode";
@@ -233,11 +241,29 @@ impl ServerClient {
     }
 
     /// Wait for the first plugin generation, so integrations declared in the
-    /// config exist before anything addresses them.
+    /// config exist before anything addresses them. The default model is
+    /// what waits through 2.3.x; the plugin list is polled for 2.4.0 on,
+    /// where nothing waits. Like OpenCode's CLI, the poll gives up quietly:
+    /// a list that stays empty, or an error, leaves the next call to report
+    /// what is missing.
     async fn ready(&self) -> Result<(), AcpError> {
         self.send(reqwest::Method::GET, "/api/model/default", true, None)
-            .await
-            .map(|_| ())
+            .await?;
+        let deadline = tokio::time::Instant::now() + PLUGIN_POLL_LIMIT;
+        loop {
+            let Ok(body) = self
+                .send(reqwest::Method::GET, "/api/plugin", true, None)
+                .await
+            else {
+                return Ok(());
+            };
+            let loaded = serde_json::from_str::<DataEnvelope<Vec<Value>>>(&body)
+                .is_ok_and(|plugins| !plugins.data.is_empty());
+            if loaded || tokio::time::Instant::now() >= deadline {
+                return Ok(());
+            }
+            tokio::time::sleep(PLUGIN_POLL_INTERVAL).await;
+        }
     }
 
     async fn integrations(&self) -> Result<Vec<OpenCodeIntegration>, AcpError> {
@@ -612,6 +638,11 @@ mod tests {
     struct Stub {
         log: Arc<Mutex<Vec<String>>>,
         credentials: Arc<Mutex<Vec<(String, String)>>>,
+        /// How many times the plugin list answers empty before its plugins
+        /// have loaded, as 2.4.0 on answers right after start; `None`: no
+        /// plugin route at all (404).
+        empty_plugin_lists: Option<usize>,
+        plugin_lists: Arc<Mutex<usize>>,
     }
 
     async fn serve_stub(stub: Stub) -> String {
@@ -645,6 +676,28 @@ mod tests {
                         } else {
                             StatusCode::UNAUTHORIZED
                         }
+                    },
+                ),
+            )
+            .route(
+                "/api/plugin",
+                get(
+                    |State(stub): State<Stub>, Query(q): Query<BTreeMap<String, String>>| async move {
+                        stub.log.lock().unwrap().push(format!(
+                            "plugins {}",
+                            q.get("location[directory]").cloned().unwrap_or_default()
+                        ));
+                        let Some(empty) = stub.empty_plugin_lists else {
+                            return (StatusCode::NOT_FOUND, Json(Value::Null));
+                        };
+                        let mut answered = stub.plugin_lists.lock().unwrap();
+                        *answered += 1;
+                        let data = if *answered > empty {
+                            serde_json::json!([{ "id": "opencode.tool.shell" }])
+                        } else {
+                            serde_json::json!([])
+                        };
+                        (StatusCode::OK, Json(serde_json::json!({ "data": data })))
                     },
                 ),
             )
@@ -719,7 +772,10 @@ mod tests {
 
     #[tokio::test]
     async fn the_client_connects_replaces_and_disconnects_through_the_api() {
-        let stub = Stub::default();
+        let stub = Stub {
+            empty_plugin_lists: Some(0),
+            ..Stub::default()
+        };
         let base = serve_stub(stub.clone()).await;
         let client =
             ServerClient::new(&base, "pw", "/data/opencode/credentials-cwd").expect("client");
@@ -768,6 +824,7 @@ mod tests {
 
         let log = stub.log.lock().unwrap().clone();
         assert_eq!(log[0], "ready /data/opencode/credentials-cwd");
+        assert_eq!(log[1], "plugins /data/opencode/credentials-cwd");
         // Compared as values: whether serde_json keeps key order depends on
         // the build's feature set.
         let bodies: Vec<Value> = log
@@ -788,6 +845,41 @@ mod tests {
         );
         assert!(log.contains(&"remove cred_1".to_string()), "{log:?}");
         assert!(log.contains(&"remove cred_2".to_string()), "{log:?}");
+    }
+
+    /// 2.4.0 on answers the default model before the plugins load, and lists
+    /// no integration until they have: readiness waits for a non-empty plugin
+    /// list. A server without that route, or whose list stays empty past the
+    /// limit, is not held up beyond it.
+    #[tokio::test]
+    async fn readiness_waits_for_the_plugins_to_load() {
+        let stub = Stub {
+            empty_plugin_lists: Some(3),
+            ..Stub::default()
+        };
+        let base = serve_stub(stub.clone()).await;
+        let client = ServerClient::new(&base, "pw", "/x").expect("client");
+        client.ready().await.expect("ready");
+        assert_eq!(*stub.plugin_lists.lock().unwrap(), 4);
+        assert_eq!(
+            stub.log.lock().unwrap().clone(),
+            [
+                "ready /x",
+                "plugins /x",
+                "plugins /x",
+                "plugins /x",
+                "plugins /x"
+            ]
+        );
+
+        let without_route = Stub::default();
+        let base = serve_stub(without_route.clone()).await;
+        let client = ServerClient::new(&base, "pw", "/x").expect("client");
+        client.ready().await.expect("ready without a plugin route");
+        assert_eq!(
+            without_route.log.lock().unwrap().clone(),
+            ["ready /x", "plugins /x"]
+        );
     }
 
     #[tokio::test]

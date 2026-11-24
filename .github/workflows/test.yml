@@ -79,6 +79,13 @@ jobs:
       matrix:
         os: [ubuntu-22.04, macos-latest, windows-latest]
         mode: [desktop, server, cli]
+        # macOS only runs the desktop cell; server and cli are covered by
+        # the Linux and Windows cells.
+        exclude:
+          - os: macos-latest
+            mode: server
+          - os: macos-latest
+            mode: cli
         include:
           - mode: desktop
             # `test-utils` exposes test scaffolding (AppState::new_for_test,

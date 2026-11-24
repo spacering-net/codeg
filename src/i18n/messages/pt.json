@@ -247,6 +247,12 @@
         "appliedToast": "Papel de parede aplicado",
         "credit": "Imagens de wallhaven.cc · apenas SFW"
       }
+    },
+    "paAccent": {
+      "title": "Cor de destaque dos assistentes",
+      "description": "A cor das bordas e dos botões dos cartões na conversa de um assistente; os seus balões têm sempre a cor do assistente.",
+      "default": "Padrão",
+      "bot": "Seguir a cor do assistente"
     }
   },
   "SystemSettings": {
@@ -561,6 +567,54 @@
       "zoom_reset": {
         "title": "Redefinir zoom",
         "description": "Restaura o zoom da janela para 100%"
+      },
+      "switch_assistant_1": {
+        "title": "Ir para o assistente 1",
+        "description": "Na página de assistentes: abrir o assistente 1 da lista (o 1 é o principal)"
+      },
+      "switch_assistant_2": {
+        "title": "Ir para o assistente 2",
+        "description": "Na página de assistentes: abrir o assistente 2 da lista (o 1 é o principal)"
+      },
+      "switch_assistant_3": {
+        "title": "Ir para o assistente 3",
+        "description": "Na página de assistentes: abrir o assistente 3 da lista (o 1 é o principal)"
+      },
+      "switch_assistant_4": {
+        "title": "Ir para o assistente 4",
+        "description": "Na página de assistentes: abrir o assistente 4 da lista (o 1 é o principal)"
+      },
+      "switch_assistant_5": {
+        "title": "Ir para o assistente 5",
+        "description": "Na página de assistentes: abrir o assistente 5 da lista (o 1 é o principal)"
+      },
+      "switch_assistant_6": {
+        "title": "Ir para o assistente 6",
+        "description": "Na página de assistentes: abrir o assistente 6 da lista (o 1 é o principal)"
+      },
+      "switch_assistant_7": {
+        "title": "Ir para o assistente 7",
+        "description": "Na página de assistentes: abrir o assistente 7 da lista (o 1 é o principal)"
+      },
+      "switch_assistant_8": {
+        "title": "Ir para o assistente 8",
+        "description": "Na página de assistentes: abrir o assistente 8 da lista (o 1 é o principal)"
+      },
+      "switch_assistant_9": {
+        "title": "Ir para o assistente 9",
+        "description": "Na página de assistentes: abrir o assistente 9 da lista (o 1 é o principal)"
+      },
+      "prev_assistant": {
+        "title": "Assistente anterior",
+        "description": "Na página de assistentes: abrir o assistente acima na lista"
+      },
+      "next_assistant": {
+        "title": "Próximo assistente",
+        "description": "Na página de assistentes: abrir o assistente abaixo na lista"
+      },
+      "cycle_assistant": {
+        "title": "Alternar assistentes",
+        "description": "Na página de assistentes: alternar entre os assistentes abertos mais recentemente"
       }
     }
   },
@@ -816,21 +870,20 @@
       "modelNotSwitched": "O agente não mudou para o modelo selecionado, então estas opções podem ser de outro modelo.",
       "unsavedChanges": "Alterações não salvas",
       "assistants": {
-        "description": "Assistentes são predefinições de delegação que você pode mencionar com @: um agente com todas as opções escolhidas e instruções permanentes. Delegar a um deles executa exatamente essa configuração.",
-        "create": "Novo assistente",
-        "delegationOff": "A colaboração multiagente está desativada, então por enquanto não é possível delegar a assistentes.",
+        "create": "Nova configuração de execução",
+        "delegationOff": "A colaboração multiagente está desativada, então por enquanto não é possível delegar a configurações de execução.",
         "delegationOffAction": "Ir para {tab}",
         "unsavedElsewhere": "{tabs} tem alterações não salvas.",
         "unsavedGoBack": "Voltar",
-        "loadFailed": "Falha ao carregar assistentes: {detail}",
-        "emptyTitle": "Ainda não há assistentes",
-        "empty": "Crie um para dar a um agente uma configuração fixa e instruções permanentes que você pode mencionar com @ em qualquer conversa.",
-        "reorderFailed": "Falha ao reordenar assistentes",
-        "saveFailed": "Falha ao salvar o assistente",
-        "duplicated": "{name} criado",
-        "deleteFailed": "Falha ao excluir o assistente",
+        "loadFailed": "Falha ao carregar configurações de execução: {detail}",
+        "emptyTitle": "Ainda não há configurações de execução",
+        "empty": "Crie uma para dar a um agente uma configuração fixa e instruções permanentes que você pode mencionar com @ em qualquer conversa.",
+        "reorderFailed": "Falha ao reordenar configurações de execução",
+        "saveFailed": "Falha ao salvar a configuração de execução",
+        "duplicated": "{name} criada",
+        "deleteFailed": "Falha ao excluir a configuração de execução",
         "deleteTitle": "Excluir {name}?",
-        "deleteDescription": "Ele some das configurações e do painel de menções e não poderá mais receber delegações. Os cartões de delegação já existentes nas conversas continuam a exibi-lo.",
+        "deleteDescription": "Ela some das configurações e do painel de menções e não poderá mais receber delegações. Os cartões de delegação já existentes nas conversas continuam a exibi-la.",
         "cancel": "Cancelar",
         "delete": "Excluir",
         "duplicate": "Duplicar",
@@ -840,19 +893,19 @@
         "more": "Mais ações para {name}",
         "agentNotInstalled": "não instalado",
         "agentDisabled": "desativado",
-        "createTitle": "Novo assistente",
-        "editTitle": "Editar assistente",
-        "editorDescription": "Delegar a este assistente executa exatamente o agente, as opções e as instruções permanentes definidos aqui.",
+        "createTitle": "Nova configuração de execução",
+        "editTitle": "Editar configuração de execução",
+        "editorDescription": "Delegar a esta configuração de execução usa exatamente o agente, as opções e as instruções permanentes definidos aqui.",
         "nameLabel": "Nome",
         "namePlaceholder": "ex.: Revisor de código",
         "descriptionLabel": "Descrição",
-        "descriptionPlaceholder": "Quando usar este assistente",
-        "descriptionHint": "Aparece no painel de menções e é passada ao agente que delega, para que saiba quando escolher este assistente.",
+        "descriptionPlaceholder": "Quando usar esta configuração de execução",
+        "descriptionHint": "Aparece no painel de menções e é passada ao agente que delega, para que saiba quando escolher esta configuração de execução.",
         "agentLabel": "Agente",
         "agentPlaceholder": "Escolha um agente",
         "agentHint": "Cada uma de suas opções precisa ser escolhida.",
         "instructionsLabel": "Instruções permanentes",
-        "instructionsPlaceholder": "O papel e as regras de trabalho que este assistente segue em cada tarefa",
+        "instructionsPlaceholder": "O papel e as regras de trabalho que o agente segue em cada tarefa",
         "instructionsHint": "Entregues ao agente com cada tarefa delegada. Não aparecem nas mensagens da subsessão.",
         "charCount": "{count} / {max}",
         "save": "Salvar",
@@ -882,23 +935,24 @@
         "avatarUseMonogram": "Usar a letra",
         "avatarEmojiPlaceholder": "Digite ou cole um emoji",
         "avatarEmojiUse": "Usar",
-        "avatarUpload": "Enviar imagem",
-        "avatarUploadHint": "Recortada em quadrado e reduzida para 128×128.",
-        "avatarTooLarge": "A imagem continua grande demais mesmo reduzida. Tente outra.",
-        "avatarUnreadable": "Não foi possível ler este arquivo como imagem.",
         "avatarColor": "Cor",
         "errors": {
-          "emptyName": "Dê um nome ao assistente.",
+          "emptyName": "Dê um nome à configuração de execução.",
           "nameTooLong": "O nome pode ter no máximo {max} caracteres.",
-          "duplicateName": "Já existe um assistente chamado “{name}”.",
+          "duplicateName": "Já existe uma configuração de execução chamada “{name}”.",
           "descriptionTooLong": "A descrição pode ter no máximo {max} caracteres.",
           "instructionsTooLong": "As instruções podem ter no máximo {max} caracteres.",
           "invalidAvatar": "Este avatar não pode ser usado. Escolha outro.",
           "avatarTooLarge": "A imagem do avatar é grande demais.",
-          "invalidAgentOptions": "As opções do agente estão incompletas. Abra o assistente de novo e escolha todas.",
-          "notFound": "Este assistente não existe mais."
-        }
-      }
+          "invalidAgentOptions": "As opções do agente estão incompletas. Abra a configuração de execução de novo e escolha todas.",
+          "notFound": "Esta configuração de execução não existe mais."
+        },
+        "disableTitle": "Desativar {name}?",
+        "disableConfirm": "Desativar"
+      },
+      "assistantsMoved": "Assistentes: no grupo “Agente pessoal” da barra lateral",
+      "assistantsMovedHint": "Os assistentes que você @menciona nas conversas são os seus assistentes: cada um trabalha com o próprio agente e as próprias instruções permanentes.",
+      "assistantsMovedOpen": "Abrir"
     },
     "actions": {
       "saveSystemInstructions": "Salvar instruções do sistema",
@@ -2286,6 +2340,12 @@
       "sectionFolders": "Pastas",
       "sectionChats": "Chat",
       "sectionRecent": "Recentes",
+      "timeGroupPriorities": "Prioridades (Em andamento)",
+      "timeGroupToday": "Hoje",
+      "timeGroupYesterday": "Ontem",
+      "timeGroupPrevious7Days": "Últimos 7 dias",
+      "timeGroupPrevious30Days": "Últimos 30 dias",
+      "timeGroupOlder": "Mais antigos",
       "noChats": "Sem chats",
       "noRecent": "Sem conversas recentes",
       "showMoreRecent": "Mostrar mais ({count})",
@@ -2321,7 +2381,14 @@
       "noRecentChats": "Nenhum chat recente",
       "noRecentFolders": "Nenhuma conversa de pasta recente",
       "noRecentCli": "Nenhuma conversa recente da linha de comando",
-      "recentFilterMenuLabel": "Mostrar em Recentes"
+      "recentFilterMenuLabel": "Mostrar em Recentes",
+      "personalAgent": "Agente pessoal",
+      "personalAgentUnreadBots": "{count, plural, one {# assistente tem mensagens não lidas} other {# assistentes têm mensagens não lidas}}",
+      "personalAgentBadge": "Atribuída pelo agente pessoal",
+      "sectionAssistants": "Agentes pessoais",
+      "timeGroupPrioritiesTooltip": "Inclui sessões atualmente em execução",
+      "recentGroupingModeTime": "Mudar para agrupamento por data",
+      "recentGroupingModeFlat": "Mudar para lista simples"
     },
     "conversation": {
       "reloadFailed": "Falha ao recarregar conversa: {message}",
@@ -2400,6 +2467,19 @@
       "copyField": "Copiar {field}",
       "copiedField": "{field} copiado",
       "assistant": "Assistente"
+    },
+    "askConversations": {
+      "title": "Conversas de perguntas",
+      "total": "{count, plural, one {# conversa} other {# conversas}}",
+      "untitled": "Nova pergunta",
+      "actions": "Mais ações",
+      "open": "Abrir",
+      "convertToRegular": "Converter em conversa normal",
+      "converted": "Convertida em conversa normal",
+      "convertFailed": "Não foi possível converter a conversa",
+      "drawerTitle": "Conversa de pergunta",
+      "drawerDescription": "Uma conversa paralela aberta a partir de uma seleção desta conversa",
+      "pendingFirstMessage": "Sua pergunta está aguardando o agente ficar pronto. Faça isso de novo para descartá-la."
     },
     "conversationCard": {
       "untitledConversation": "Conversa sem título",
@@ -3564,7 +3644,8 @@
         "mentionGroupSession": "Sessões",
         "mentionGroupCommit": "Commits",
         "mentionGroupSkill": "Habilidades",
-        "mentionGroupAssistant": "Assistentes"
+        "mentionGroupAssistant": "Assistentes",
+        "mentionManageAssistants": "Gerenciar assistentes…"
       },
       "messageQueue": {
         "addToQueue": "Adicionar à fila",
@@ -3825,7 +3906,7 @@
         "selectionSaveAsNote": "Nota",
         "selectionAsk": "Perguntar",
         "selectionAskPlaceholder": "Pergunte sobre esta seleção…",
-        "selectionAskSubmit": "Perguntar em uma nova conversa",
+        "selectionAskClose": "Fechar",
         "downloadImage": "Baixar imagem",
         "copyImage": "Copiar imagem",
         "copiedImage": "Imagem copiada",
@@ -3908,13 +3989,13 @@
             "child_rejected": "subagente rejeitou o pedido",
             "child_unknown": "subagente: erro",
             "unknown": "tarefa desconhecida",
-            "assistant_not_found": "assistente não encontrado",
+            "assistant_not_found": "Assistente não encontrado",
             "assistants_unsupported": "requer reinício",
             "assistant_support_unknown": "sem resposta"
           }
         },
         "unknownAssistant": "Assistente #{id}",
-        "deletedAssistant": "(excluído)"
+        "deletedAssistant": "(excluída)"
       },
       "contentParts": {
         "offset": "Deslocamento: {offset}",
@@ -4153,7 +4234,8 @@
           "allowAlways": "sempre permitido",
           "rejected": "recusado",
           "viaChatChannel": "por um canal de chat",
-          "byPolicy": "pela política de permissões da execução"
+          "byPolicy": "pela política de permissões da execução",
+          "byAssistant": "respondido por um assistente por você"
         }
       },
       "messageNav": {
@@ -5128,7 +5210,9 @@
       "statusRunning": "Em execução",
       "statusWaiting": "Aguardando",
       "statusError": "Erro",
-      "subAgentOf": "Subagente de"
+      "subAgentOf": "Subagente de",
+      "askQuestion": "Pergunta para você",
+      "askPlan": "Plano para aprovar"
     },
     "menu": {
       "scale": "Escala",
@@ -5500,6 +5584,7 @@
     "passphrasePlaceholder": "Frase-passe de cifra",
     "passphraseHint": "Fica no porta-chaves desta máquina e nunca é enviada. Introduza a mesma frase-passe nas suas outras máquinas.",
     "assistantsRenamed": "{count, plural, one {# assistente foi renomeado: já havia um com o mesmo nome aqui.} other {# assistentes foram renomeados: já havia outros com os mesmos nomes aqui.}}",
+    "assistantsPersonaKept": "{count, plural, one {# assistente manteve a própria persona: ele já escreveu aqui o seu arquivo de persona, que uma importação não sobrescreve.} other {# assistentes mantiveram as próprias personas: eles já escreveram aqui os seus arquivos de persona, que uma importação não sobrescreve.}}",
     "conflictTitle": "Envio automático pausado",
     "conflictBody": "O servidor tem um instantâneo de {device}, criado em {time}, que esta máquina não restaurou. Enviar o substituiria, e o servidor não guarda nenhuma cópia anterior.",
     "conflictRestore": "Restaurá-lo",
@@ -6581,6 +6666,8 @@
     "deliverPrBackSubmit": "Enviar",
     "deliverPrBackDone": "Enviado ao pull request",
     "deliverPrBackDoneMr": "Enviado ao merge request",
+    "badgePersonalAgent": "Agente pessoal",
+    "badgePersonalAgentExecutor": "Agente pessoal · {executor}",
     "deliverPrUncommitted": "{count, plural, one {Ainda há # arquivo sem commit no worktree desta tarefa. Ele é commitado primeiro em {branch} e depois enviado com o resto.} other {Ainda há # arquivos sem commit no worktree desta tarefa. Eles são commitados primeiro em {branch} e depois enviados com o resto.}}",
     "deliverPrUncommittedFiles": "Arquivos a commitar",
     "deliverPrCommitMessageLabel": "Mensagem do commit",
@@ -10110,6 +10197,2883 @@
         "probeFailed": "O navegador integrado não conseguiu confirmar que alcança o host remoto pelo túnel. Tente novamente em instantes."
       }
     }
+  },
+  "PersonalAgent": {
+    "title": "Agente pessoal",
+    "readOnly": "O agente pessoal roda em outro processo do codeg neste diretório de dados, então esta página é somente leitura aqui.",
+    "viewSession": "Ver sessão",
+    "viewSessionHint": "A transcrição completa da sessão atual, ao vivo.",
+    "sessionTitle": "Sessão {seq} · transcrição completa",
+    "errors": {
+      "engineElsewhere": "O agente pessoal roda em outro processo do codeg neste diretório de dados; esta página é somente leitura aqui."
+    },
+    "state": {
+      "queued": "Na fila",
+      "running": "Em execução",
+      "waiting_input": "Aguardando você",
+      "review": "Em revisão",
+      "completed": "Concluída",
+      "failed": "Falhou",
+      "canceled": "Cancelada",
+      "interrupted": "Interrompida",
+      "handed_over": "Assumida por você"
+    },
+    "mode": {
+      "task": "Tarefa do quadro",
+      "chat": "Chat",
+      "session": "Sessão de trabalho"
+    },
+    "reason": {
+      "first": "primeira sessão",
+      "switch": "troca de cérebro",
+      "option_restart": "configurações de inicialização alteradas",
+      "workdir": "diretório de trabalho movido",
+      "manual": "nova sessão",
+      "recovery": "não foi possível retomar a sessão anterior",
+      "overflow": "estouro de contexto"
+    },
+    "timeline": {
+      "loadOlder": "Carregar anteriores",
+      "empty": "Diga olá ou peça para ele cuidar de algo.",
+      "newMessages": "Novas mensagens",
+      "openTask": "Abrir no quadro",
+      "openConversation": "Abrir a conversa",
+      "viewSession": "Ver conversa",
+      "loading": "Carregando a conversa…"
+    },
+    "work": {
+      "taskNotStarted": "Esta tarefa ainda não começou. A conversa dela aparece aqui assim que começar.",
+      "taskGone": "Não foi possível encontrar esta tarefa — ela pode ter sido excluída."
+    },
+    "composer": {
+      "placeholder": "Mensagem para {name}…",
+      "placeholderBusy": "{name} está trabalhando — sua mensagem vem em seguida",
+      "readOnly": "Somente leitura neste processo",
+      "ariaLabel": "Mensagem para o seu agente pessoal",
+      "send": "Enviar",
+      "queue": "Pôr na fila",
+      "waitForUpload": "Aguarde o envio da imagem terminar."
+    },
+    "aux": {
+      "rename": "Clique para renomear",
+      "title": "Painel do assistente",
+      "waiting": "{count, plural, one {# item aguardando você} other {# itens aguardando você}}"
+    },
+    "status": {
+      "thresholdMark": "{percent}% compactação automática",
+      "elsewhere": "O agente roda em outro processo do codeg; o que você vê aqui é lido do banco de dados.",
+      "model": "Modelo",
+      "mode": "Modo",
+      "session": "Sessão",
+      "started": "Início",
+      "connection": "Conexão",
+      "segmentValue": "n.º {seq} · {reason}",
+      "noSegment": "Ainda não começou",
+      "connected": "Ativa",
+      "disconnected": "Desconectado (reconecta com a próxima mensagem)",
+      "handoff": "Cartão de passagem",
+      "handoffSize": "{size} caracteres",
+      "handoffTrimmed": "cortado para caber",
+      "context": "Contexto",
+      "usageValue": "{percent}% usado ({source})",
+      "usageSource": {
+        "live": "ao vivo",
+        "transcript": "do arquivo da sessão"
+      },
+      "usageUnknown": "Uso desconhecido — este agente não informa",
+      "threshold": "Autocompacta em {percent}%",
+      "thresholdOff": "Autocompactação desligada",
+      "noCommand": "Nenhum comando de compactação conhecido para este agente",
+      "compactions": "Compactações",
+      "compactionCounts": "codeg {auto} · você {manual} · agente {agent}",
+      "lastCheck": "Última verificação",
+      "check": {
+        "below": "Abaixo do limite",
+        "compacted": "Compactado antes de entregar",
+        "disabled": "Autocompactação desligada",
+        "usage_unknown": "Ignorado: uso desconhecido",
+        "no_command": "Ignorado: sem comando de compactação",
+        "paused": "Ignorado: pausado nesta sessão",
+        "skipped_after_attempt": "Entregue logo após uma compactação"
+      },
+      "paused": "Autocompactação pausada nesta sessão",
+      "resume": "Retomar",
+      "queued": "Aguardando",
+      "queuedValue": "{messages} mensagens · {events} atualizações",
+      "dispatchSlots": "Conversas atribuídas",
+      "slotsValue": "{running} de {limit} em execução · {queued} na fila",
+      "slotsUnlimited": "{running} em execução · {queued} na fila",
+      "engine": "Roda em",
+      "engineHere": "este processo",
+      "engineElsewhere": "outro processo do codeg",
+      "workdir": "Diretório de trabalho",
+      "lastError": "Último erro",
+      "compactionStatus": {
+        "ok": "concluída",
+        "failed": "falhou",
+        "canceled": "cancelada",
+        "running": "em andamento"
+      },
+      "usageUnknownOffline": "Uso desconhecido — lido ao reconectar",
+      "copyPath": "Copiar caminho",
+      "copied": "Copiado",
+      "startedValue": "Iniciada em {when}",
+      "pendingValue": "Uma nova sessão começa na próxima mensagem: {reason}",
+      "agent": "Agente",
+      "state": "Estado"
+    },
+    "items": {
+      "waitingAnswer": "Aguardando a resposta de {name}: {text}",
+      "wroteToYou": "{name} escreveu: {text}",
+      "waits": {
+        "owner": "Aguardando você",
+        "agent": "Com o agente",
+        "external": "Em andamento",
+        "time": "Mais tarde",
+        "none": "Outras"
+      },
+      "kind": {
+        "dispatch": "atribuição",
+        "reminder": "lembrete",
+        "followup": "acompanhamento",
+        "question": "pergunta",
+        "when_mentioned": "ao mencionar",
+        "message": "mensagem"
+      },
+      "onDone": "Ao concluir: {text}",
+      "mention": "Quando você mencionar {words} · {times} de {max} vezes · até {until}"
+    },
+    "data": {
+      "inDays": "{count, plural, =0 {Nenhum em {days} dias} one {# em {days} dias} other {# em {days} dias}}",
+      "smallSample": "{count, plural, one {Só # até agora — leia com cautela} other {Só # até agora — leia com cautela}}",
+      "rangeMenu": "Período",
+      "interactions": "Conversa diária",
+      "messages": "Suas mensagens",
+      "replies": "Respostas",
+      "dispatches": "Atribuições diárias",
+      "completed": "Concluídas",
+      "other": "Outras",
+      "failed": "Com falha",
+      "completedHint": "{count} concluídas",
+      "tokens": "Tokens diários",
+      "agentTokens": "Agente pessoal",
+      "dispatchTokens": "Trabalho atribuído",
+      "syncedAt": "Números de tokens da última sincronização de uso, {when}",
+      "notSynced": "Os números de tokens aparecem depois de uma sincronização de uso (página Uso de tokens).",
+      "usageCurve": "Uso do contexto",
+      "noUsage": "Ainda sem leituras.",
+      "empty": "Ainda sem dados",
+      "range": "Últimos {days} dias",
+      "figure": {
+        "conversation": "Mensagens",
+        "conversationSub": "Você {owner} · respostas {replies}",
+        "dispatches": "Atribuições",
+        "dispatchesSub": "Concluídas {completed} · falhas {failed}",
+        "completion": "Taxa de conclusão",
+        "completionSub": "Do que foi atribuído",
+        "tokens": "Tokens",
+        "tokensSub": "Agente {agent} · trabalho {dispatch}",
+        "tokensUnsynced": "Após a próxima sincronização"
+      },
+      "agents": "Por agente"
+    },
+    "settings": {
+      "setupStart": "Converse com seu agente",
+      "setupAskName": "Me dá um nome?",
+      "setupHello": "Oi, eu sou {name}!",
+      "setupRandomName": "Escolher um nome aleatório",
+      "setupNames": "Nova|Juno|Milo|Pixel|Orbit|Mochi|Kiki|Atlas|Luna|Momo|Ziggy|Bean",
+      "setupMoreAgents": "Mais ({count})",
+      "setupFewerAgents": "Menos",
+      "setupNoAgents": "Ainda não há nenhum agente disponível: instale um nas Configurações primeiro.",
+      "setupMissing": "{count, plural, one {Falta escolher # opção do seu agente} other {Faltam escolher # opções do seu agente}}",
+      "setupBrainAgent": "Cérebro: o agente com que pensa",
+      "tabPersona": "Persona e memória",
+      "name": "Nome",
+      "nameHint": "O nome e a imagem com que aparece na própria página e nas mensagens; o agente também sabe o próprio nome. Nome vazio usa o padrão.",
+      "namePlaceholder": "Agente pessoal",
+      "agentHint": "O agente com que conversa com você e pensa nas coisas.",
+      "agentOptions": "Modelo e opções",
+      "switchNote": "Trocar para outro agente inicia uma nova sessão com a sua próxima mensagem. Uma sessão antiga não é retomada; em vez disso, o codeg passa a linha do tempo para a nova sessão.",
+      "autoCompact": "Limite de autocompactação",
+      "autoCompactHint": "Quando o contexto estiver pelo menos tão cheio, o codeg envia o comando de compactação antes da próxima mensagem. 0 desliga. Mantenha abaixo do gatilho do próprio agente.",
+      "compactCommand": "Comando de compactação",
+      "compactCommandHint": "Enviado como digitado. Vazio escolhe o do próprio agente (/compact, /compress…). É limpo quando você troca para outro agente.",
+      "compactionNote": "Compactar mantém a mesma sessão: a próxima mensagem leva um cartão de estado com a persona, as regras e as pendências. Se compactar não ajudar duas vezes seguidas, a autocompactação é pausada nessa sessão.",
+      "concurrency": "Conversas atribuídas ao mesmo tempo",
+      "concurrencyHint": "Atribuições de chat e de sessão de trabalho rodando juntas; o resto espera. 0 é sem limite. As tarefas do quadro seguem o limite do próprio quadro.",
+      "handoffBudget": "Orçamento do cartão de passagem",
+      "handoffBudgetHint": "Caracteres que o cartão de passagem de uma nova sessão pode usar; o que for cortado pode ser relido com as ferramentas do agente.",
+      "skill": "Habilidade integrada",
+      "skillHint": "Ensine ao agente as convenções dele (modos de atribuição, pendências, arquivos de memória) por meio de uma habilidade no diretório de trabalho dele.",
+      "saveFile": "Salvar arquivo",
+      "fileSaved": "{name} salvo.",
+      "cancel": "Cancelar",
+      "save": "Salvar",
+      "fileGroups": {
+        "persona": "Persona",
+        "rules": "Regras",
+        "owner": "Sobre você",
+        "memory": "Memória",
+        "skills": "Skills de processo"
+      },
+      "byOwner": "Mantido por você",
+      "byAgent": "Mantido pelo agente",
+      "soulHint": "Quem o agente é e como fala. Quem escreve é você: o agente só muda isso quando você pede. Ele lê o arquivo inteiro no início de cada sessão.",
+      "rulesHint": "O que o agente deve sempre seguir. Quem escreve é você: o agente só muda isso quando você pede. Ele lê o arquivo inteiro no início de cada sessão.",
+      "userHint": "O que o agente sabe sobre você: sua função, projetos e preferências. Ele atualiza conforme aprende e lê o arquivo inteiro no início de cada sessão.",
+      "memoryHint": "O índice do que o assistente lembra, uma linha por entrada: fatos, referências e lições sobre a própria forma de trabalhar (o que você corrigiu, o que você confirmou). Cada entrada é um arquivo próprio em memory/, com o tipo no início. O assistente mantém os dois. Cada sessão começa com as primeiras 200 linhas do índice; as entradas são lidas quando necessário.",
+      "entryHint": "Uma entrada, lida quando o agente precisa. Excluí-la também remove a linha dela do índice.",
+      "entryType": {
+        "lesson": "Lição",
+        "fact": "Fato",
+        "reference": "Referência"
+      },
+      "deleteEntry": "Excluir",
+      "confirmDelete": "Excluir",
+      "confirmDeleteHint": "Excluir esta entrada e a linha dela no índice?",
+      "entryDeleted": "{name} excluído.",
+      "saved": "Salvo.",
+      "saveFailed": "Não foi possível salvar",
+      "restoreDefaults": "Restaurar padrões",
+      "back": "Voltar à conversa",
+      "viewTitle": "Preferências dos assistentes",
+      "readOnly": "Os assistentes rodam em outro processo do codeg, então aqui as configurações são somente leitura.",
+      "setUpFirst": "Configure primeiro o assistente principal.",
+      "nav": {
+        "identity": "Identidade e cérebro",
+        "persona": "Persona e memória",
+        "notify": "Notificações",
+        "advanced": "Avançado",
+        "communication": "Comunicação",
+        "proactive": "Proatividade e notificações",
+        "automation": "Atribuição e automação",
+        "about": "Sobre você",
+        "projects": "Seus projetos"
+      },
+      "pages": {
+        "communicationNote": "O tom e como chamam você não ficam aqui: escreva isso no SOUL.md de cada assistente e no USER.md do principal.",
+        "proactiveNote": "Os interruptores de cada assistente — avisar-me, silenciar, ocultar — ficam na página Notificações dele. O interruptor geral de notificações do codeg e “ocultar conteúdo” (Configurações → Notificações) valem também para os assistentes.",
+        "byKind": "Ajustar por tipo",
+        "byKindHint": "Quanto cada tipo de novidade pode interromper você. O urgente chega na hora; o normal espera um bom momento; o baixo só vai para Hoje.",
+        "automationNote": "O que espera por você vai para um cartão com exatamente o que será executado, e roda quando você clica."
+      },
+      "prefs": {
+        "default": "(padrão)",
+        "reply_length": {
+          "title": "Tamanho das respostas",
+          "hint": "O tamanho das respostas dos assistentes.",
+          "short": "Curtas",
+          "medium": "Médias",
+          "long": "Detalhadas"
+        },
+        "cards": {
+          "title": "Responder com cartões",
+          "hint": "Se os assistentes respondem com cartões (a habilidade UI-render).",
+          "prefer": "Sempre que ajudar",
+          "decisions": "Só quando você decide",
+          "never": "Sem cartões"
+        },
+        "when_unsure": {
+          "title": "Quando não está claro o que você quer dizer",
+          "hint": "Como os assistentes interpretam suas palavras quando agem por você. As perguntas de um executor são à parte.",
+          "assume": "Fazer o mais provável e dizer a suposição",
+          "ask": "Perguntar antes"
+        },
+        "chat_changes": {
+          "title": "Mudanças que você pede na conversa",
+          "hint": "Configurações que você pede para um assistente mudar.",
+          "apply": "Mudar na hora, o cartão permite desfazer",
+          "show": "Mostrar antes"
+        },
+        "confirm_dispatch": {
+          "title": "Confirmar antes de atribuir",
+          "hint": "Uma atribuição esperando por você é um cartão com todo o conteúdo dela; ela sai quando você clica.",
+          "never": "Não, atribuir direto",
+          "code": "Primeiro mudanças de código",
+          "always": "Sempre"
+        },
+        "followups": {
+          "title": "Acompanhamentos e novas tentativas das atribuições deles",
+          "hint": "Quando um assistente continua ou tenta de novo um trabalho que repassou.",
+          "auto": "Fazer direto",
+          "ask": "Perguntar antes"
+        },
+        "messages": {
+          "title": "Mensagens para outros assistentes",
+          "hint": "Quando um assistente escreve para outro.",
+          "auto": "Enviar direto",
+          "ask": "Perguntar antes"
+        },
+        "loop_rounds": {
+          "title": "Parar conversas sem progresso após",
+          "hint": "Rodadas (duas mensagens cada) que dois assistentes podem trocar sem progresso; um círculo para na hora. 0 é sem limite."
+        },
+        "automation_level": {
+          "title": "Nível de automação",
+          "standard": "Padrão",
+          "ask_more": "Perguntar mais vezes",
+          "custom": "Personalizado",
+          "standardHint": "Tudo roda sozinho e avisa você em um cartão.",
+          "ask_moreHint": "Continuações e novas tentativas, a nova tentativa de trabalho interrompido por um reinício, mensagens para outros assistentes, mudanças que você pede na conversa e delegações que alteram código chegam primeiro como cartão; as perguntas e aprovações de plano das sessões vêm para você.",
+          "customHint": "Alguns dos itens abaixo estão do seu jeito.",
+          "confirmTitle": "Mudar para “{level}”?",
+          "confirmBody": "{count, plural, one {Isso sobrescreve # item que você alterou.} other {Isso sobrescreve # itens que você alterou.}}",
+          "confirm": "Mudar"
+        },
+        "interrupt_retry": {
+          "title": "Trabalho interrompido por um reinício",
+          "hint": "Quando o codeg reinicia no meio de um trabalho que um assistente delegou.",
+          "auto": "Tentar de novo automaticamente",
+          "ask": "Perguntar antes"
+        },
+        "retry_rounds": {
+          "title": "Novas tentativas automáticas do mesmo trabalho",
+          "hint": "Quantas vezes o codeg tenta de novo o mesmo trabalho por conta própria antes de deixar você decidir. 0 é nunca."
+        },
+        "exec_questions": {
+          "title": "Perguntas das sessões delegadas",
+          "hint": "Quando uma sessão que um assistente delegou para e faz uma pergunta. Uma pergunta que pede um segredo sempre vem para você.",
+          "assistant": "O assistente responde e me pergunta quando estiver em dúvida",
+          "owner": "Sempre me perguntar"
+        },
+        "exec_plans": {
+          "title": "Aprovação de planos das sessões delegadas",
+          "hint": "Quando uma sessão que um assistente delegou quer o plano aprovado antes de continuar.",
+          "assistant": "O assistente responde e me pergunta quando estiver em dúvida",
+          "owner": "Sempre me perguntar"
+        },
+        "time_zone": {
+          "title": "Fuso horário",
+          "hint": "Todo horário que os assistentes leem ou escrevem — lembretes, “amanhã de manhã”, a hora que lhes é dita — está neste fuso.",
+          "system": "Seguir o sistema"
+        },
+        "presence": {
+          "title": "Registrar presença e horários",
+          "hint": "Anota os minutos em que você está ativo no codeg (guardados por 60 dias) para aprender quando seu dia costuma começar e terminar. Desligado: nada mais é anotado e seus horários são os padrão.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "disturb_level": {
+          "title": "Interrupções",
+          "quiet": "Menos",
+          "standard": "Padrão",
+          "more": "Mais",
+          "custom": "Personalizado",
+          "quietHint": "Só o urgente e seus lembretes avisam você; o resto espera em Hoje, e o fechamento só vem quando você pede.",
+          "standardHint": "O normal avisa quando você está presente e não está digitando; enquanto digita, espera você parar, e enquanto está fora é reunido para quando voltar.",
+          "moreHint": "O normal avisa até enquanto você digita, e o baixo chega em uma única notificação, no máximo a cada duas horas.",
+          "customHint": "Alguns dos itens abaixo estão do seu jeito.",
+          "confirmTitle": "Mudar para “{level}”?",
+          "confirmBody": "{count, plural, one {Isso sobrescreve # item que você alterou.} other {Isso sobrescreve # itens que você alterou.}}",
+          "confirm": "Mudar"
+        },
+        "level": {
+          "urgent": "Urgente",
+          "normal": "Normal",
+          "low": "Baixo"
+        },
+        "proactive": {
+          "title": "Proatividade",
+          "hint": "Desligada: os assistentes só respondem quando você fala com eles; seus lembretes continuam chegando.",
+          "on": "Ligada",
+          "off": "Desligada"
+        },
+        "urgent_via": {
+          "title": "Novidades urgentes",
+          "hint": "Seus lembretes, uma pergunta que um assistente repassou a você, um assistente esperando sua aprovação, uma sessão esperando você há 10 minutos.",
+          "system_attention": "Notificação do sistema, com o Dock pulando ou a barra de tarefas piscando",
+          "system": "Só notificação do sistema",
+          "in_page": "Só dentro do codeg"
+        },
+        "normal_via": {
+          "title": "Novidades normais",
+          "hint": "Trabalho concluído, uma resposta ao que você pediu, um cartão esperando você.",
+          "system": "Notificação do sistema",
+          "in_page": "Só dentro do codeg",
+          "today": "Só em Hoje"
+        },
+        "low_via": {
+          "title": "Novidades de baixa prioridade",
+          "hint": "Andamento, as mensagens entre os assistentes, configurações alteradas como você pediu.",
+          "today": "Só em Hoje",
+          "digest": "Uma notificação agrupada, no máximo a cada 2 horas"
+        },
+        "focus_wait": {
+          "title": "Enquanto você digita",
+          "hint": "Minutos depois de parar de digitar antes de enviar o normal, agrupado em uma notificação. 0 envia como sempre."
+        },
+        "quiet_hours": {
+          "title": "Horas de silêncio",
+          "hint": "Nas horas de silêncio só chegam seus lembretes; o resto espera você voltar.",
+          "auto": "Fora dos seus horários habituais (22:00–08:00 até aprendê-los)",
+          "fixed": "Um intervalo fixo",
+          "none": "Nenhuma"
+        },
+        "quiet_from": {
+          "title": "Silêncio a partir de",
+          "hint": "Quando começam as horas de silêncio."
+        },
+        "quiet_to": {
+          "title": "Silêncio até",
+          "hint": "Quando terminam as horas de silêncio."
+        },
+        "quiet_lets": {
+          "title": "Nas horas de silêncio",
+          "hint": "O que ainda avisa você nesse período.",
+          "reminders": "Só os lembretes que vencem",
+          "urgent": "Lembretes e novidades urgentes"
+        },
+        "morning": {
+          "title": "“Amanhã de manhã” nos lembretes",
+          "hint": "A hora em que volta um lembrete adiado para amanhã de manhã.",
+          "hours": "Quando seu dia costuma começar",
+          "fixed": "Um horário fixo"
+        },
+        "morning_at": {
+          "title": "Amanhã de manhã às",
+          "hint": "A hora que “amanhã de manhã” significa."
+        },
+        "projects": {
+          "title": "Seus projetos",
+          "hint": "Os projetos que os assistentes acompanham.",
+          "all": "Todos os projetos",
+          "more": "{names} e mais {rest}",
+          "none": "Nenhum"
+        },
+        "level_reminder": {
+          "title": "Lembretes",
+          "hint": "Vence um lembrete que você definiu."
+        },
+        "level_forwarded": {
+          "title": "Repassado a você",
+          "hint": "Uma pergunta ou um plano de uma sessão que um assistente lançou, e que ele repassou a você."
+        },
+        "level_approval": {
+          "title": "Assistente aguarda aprovação",
+          "hint": "Um assistente não pode continuar até você aprovar um passo."
+        },
+        "level_waiting": {
+          "title": "Esperando 10 minutos",
+          "hint": "Uma sessão ou um trabalho atribuído espera sua resposta há 10 minutos."
+        },
+        "level_question": {
+          "title": "Um assistente pergunta",
+          "hint": "A pergunta do próprio assistente, ou o cartão de escolha dele."
+        },
+        "level_confirm": {
+          "title": "Cartões para confirmar",
+          "hint": "Algo que você pediu para confirmar antes, ou uma mudança mostrada a você primeiro."
+        },
+        "level_stuck": {
+          "title": "Travado",
+          "hint": "Um passo que não se sabe se aconteceu, ou uma troca entre assistentes que parou sem progresso."
+        },
+        "level_done": {
+          "title": "Trabalho concluído",
+          "hint": "Um trabalho atribuído por um assistente terminou, falhou ou espera sua revisão."
+        },
+        "level_reply": {
+          "title": "Respostas",
+          "hint": "Um assistente respondeu ao que você pediu."
+        },
+        "level_exchange": {
+          "title": "Entre assistentes",
+          "hint": "As mensagens dos assistentes entre si."
+        },
+        "level_changed": {
+          "title": "Configurações alteradas",
+          "hint": "Uma configuração que um assistente alterou como você pediu."
+        },
+        "level_answered": {
+          "title": "Respondido em seu lugar",
+          "hint": "Uma pergunta de uma sessão atribuída que um assistente respondeu em seu lugar."
+        },
+        "auto_accept": {
+          "title": "Aceitação automática",
+          "hint": "Quando o trabalho de código que um assistente repassou fica pronto para revisão, o agente com que trabalha o verifica (somente leitura) e o assistente o aceita segundo os critérios. Desligado: você mesmo revisa.",
+          "on": "Ligada",
+          "off": "Desligada"
+        },
+        "accept_revise": {
+          "title": "Devolver o trabalho após a verificação",
+          "hint": "Quando o assistente quer mudanças após a verificação.",
+          "auto": "Devolver automaticamente",
+          "ask": "Perguntar antes (no cartão de aceitação)"
+        },
+        "accept_rounds": {
+          "title": "Rodadas de verificação de aceitação",
+          "hint": "Depois de tantas verificações, devolver de novo é decisão sua. 0 não devolve nada sozinho."
+        },
+        "level_acceptance": {
+          "title": "Aceitação",
+          "hint": "Trabalho aceito pelo assistente que você pode mesclar, já mesclado, ou cuja aceitação depende de você."
+        },
+        "level_used_up": {
+          "title": "Rodadas esgotadas, ainda não está certo",
+          "hint": "Trabalho devolvido tantas vezes quanto você permite e ainda não está certo."
+        },
+        "forge_comment": {
+          "title": "Comentários numa forja",
+          "hint": "Quando um assistente comenta numa issue ou num PR.",
+          "auto": "Publicar direto",
+          "ask": "Perguntar antes (cartão de aprovação)"
+        },
+        "issue_close": {
+          "title": "Fechar issues",
+          "hint": "Quando um assistente fecha uma issue numa forja.",
+          "auto": "Fechar direto",
+          "ask": "Perguntar antes (cartão de aprovação)"
+        },
+        "pr_merge": {
+          "title": "Mesclar PRs",
+          "hint": "Só mescla quando o head é a versão a mesclar (a que passou na aceitação, com a aceitação ativa) e as verificações passaram; a proteção de branch do repositório continua valendo. O CNB não mostra verificações nem fixa o head, então um merge lá sempre pergunta.",
+          "auto": "Mesclar quando as verificações passarem",
+          "ask": "Perguntar antes (cartão de aprovação)"
+        },
+        "ci_failure": {
+          "title": "As verificações de um PR acompanhado falham",
+          "hint": "A tarefa corrige: uma continuação enquanto a tarefa que o entregou ainda está em revisão, senão uma nova tarefa no PR. O codeg envia a correção quando for aceita, no máximo as rodadas abaixo.",
+          "fix": "Corrigir automaticamente",
+          "ask": "Perguntar antes (no cartão)",
+          "tell": "Só me avisar"
+        },
+        "pr_conflict": {
+          "title": "Um PR acompanhado tem conflito",
+          "hint": "A tarefa mescla o branch base e resolve o conflito (não é rebase: o codeg nunca força push em um PR).",
+          "auto": "Resolver automaticamente",
+          "ask": "Perguntar antes (no cartão)"
+        },
+        "review_feedback": {
+          "title": "Feedback de revisão de quem pode escrever",
+          "hint": "Uma revisão pedindo mudanças, ou um comentário em uma linha, de quem pode escrever no repositório: vai à tarefa palavra por palavra, para aceitar, esclarecer ou responder com motivos ponto a ponto.",
+          "auto": "Passar para a tarefa",
+          "ask": "Perguntar antes (no cartão)"
+        },
+        "outsider_comments": {
+          "title": "Comentários de quem não pode escrever",
+          "hint": "O assistente vê quem escreveu o quê e decide: passar à tarefa, avisar você ou deixar (bots, ruído).",
+          "auto": "O assistente decide",
+          "ask": "Perguntar antes (no cartão)"
+        },
+        "ci_rounds": {
+          "title": "Rodadas para corrigir um PR",
+          "hint": "Verificações com falha e conflitos contam, entre tarefas. Depois disso, a próxima falha é sua, com urgência e com o que cada rodada mudou. 0 não corrige nada sozinho."
+        },
+        "level_forge": {
+          "title": "Numa forja",
+          "hint": "Um comentário, uma issue fechada ou um PR mesclado por um assistente."
+        },
+        "level_pr_ready": {
+          "title": "Um PR pronto para mesclar",
+          "hint": "Um PR acompanhado com verificações verdes que a forja pode mesclar, ou um que o codeg mesclou sozinho."
+        },
+        "level_pr": {
+          "title": "Outras novidades de PR",
+          "hint": "PRs acompanhados: verificações falharam ou voltaram ao verde, conflito, mesclado, fechado."
+        },
+        "routine_dispatch": {
+          "title": "Trabalho delegado por rotinas",
+          "hint": "O trabalho que uma rotina de delegação passa a cada execução.",
+          "auto": "Delegar direto",
+          "ask": "Perguntar antes toda vez (cartão de confirmação)"
+        },
+        "level_routine": {
+          "title": "Relatórios de rotinas",
+          "hint": "O que uma rotina que você configurou encontrou."
+        },
+        "level_routine_paused": {
+          "title": "Rotina pausada",
+          "hint": "Falhou três vezes seguidas, ou o agente com que trabalha não pode ser usado."
+        },
+        "level_proposal": {
+          "title": "Propostas: o que depende de você",
+          "hint": "Falha sem ninguém cuidando, revisão demorando, PR esperando sua revisão."
+        },
+        "level_proposal_low": {
+          "title": "Outras propostas",
+          "hint": "Alterações não commitadas, assuntos parados, branches atrasados, pedidos repetidos."
+        },
+        "rule_failed": {
+          "title": "Falha sem ninguém cuidando",
+          "hint": "Trabalho delegado ou tarefa do quadro que falhou e ninguém retomou. O cartão aparece no assistente que delegou.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "rule_review": {
+          "title": "Esperando revisão há muito tempo",
+          "hint": "Uma tarefa do quadro em revisão ainda sem rodada de aceite.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "rule_session": {
+          "title": "Uma sessão esperando você",
+          "hint": "Qualquer sessão esperando sua aprovação ou resposta enquanto você não está nela. Urgente.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "rule_pr_review": {
+          "title": "Um PR esperando sua revisão",
+          "hint": "Nos projetos acompanhados; conta desde que o codeg viu o pedido.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "rule_uncommitted": {
+          "title": "Alterações não commitadas",
+          "hint": "Um projeto ou worktree com alterações que ninguém commitou.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "rule_idle": {
+          "title": "Um assunto parado",
+          "hint": "Um assunto aberto sem mudanças.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "rule_behind": {
+          "title": "Branch atrasado",
+          "hint": "Uma tarefa delegada cujo branch ficou atrás do destino e teria conflitos.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "rule_repeat": {
+          "title": "Um pedido repetido",
+          "hint": "Com esse número de pedidos parecidos em 30 dias, sugere virar rotina.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "rule_suggest": {
+          "title": "Sugestões dos assistentes",
+          "hint": "Desligado: os assistentes não sugerem nada, e uma chamada com suggest fica sabendo que você não aceita sugestões agora.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "rule_undo": {
+          "title": "Muitas alterações desfeitas",
+          "hint": "Na revisão semanal: se você desfez muitas das alterações feitas a seu pedido, perguntar se deve mostrá-las primeiro.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "rule_idle_bot": {
+          "title": "Assistentes ociosos",
+          "hint": "Na revisão semanal: um assistente não acordado há duas semanas — pergunta se você quer ocultá-lo ou excluí-lo.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "rule_failed_hours": {
+          "title": "Horas até o cartão de falha",
+          "hint": "Horas até o cartão de falha"
+        },
+        "rule_review_hours": {
+          "title": "Horas até o cartão de revisão",
+          "hint": "Horas até o cartão de revisão"
+        },
+        "rule_session_minutes": {
+          "title": "Minutos até o cartão de sessão",
+          "hint": "Minutos até o cartão de sessão"
+        },
+        "rule_pr_review_days": {
+          "title": "Dias até o cartão de pedido de revisão",
+          "hint": "Dias até o cartão de pedido de revisão"
+        },
+        "rule_uncommitted_hours": {
+          "title": "Horas até o cartão de alterações não commitadas",
+          "hint": "Horas até o cartão de alterações não commitadas"
+        },
+        "rule_idle_days": {
+          "title": "Dias até o cartão de assunto parado",
+          "hint": "Dias até o cartão de assunto parado"
+        },
+        "rule_repeat_count": {
+          "title": "Pedidos até sugerir uma rotina",
+          "hint": "Pedidos até sugerir uma rotina"
+        },
+        "brief": {
+          "title": "Resumo da manhã",
+          "hint": "Todo dia o assistente principal resume o que precisa de você, o que aconteceu desde o último e o plano do dia, e entrega quando você chega.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "brief_time": {
+          "title": "Preparado",
+          "hint": "De qualquer forma, chega quando você aparece.",
+          "hours": "Quinze minutos antes de seu dia costumar começar",
+          "fixed": "Um horário fixo"
+        },
+        "brief_at": {
+          "title": "Preparado às",
+          "hint": "O horário em que o resumo é preparado."
+        },
+        "brief_needs": {
+          "title": "O que precisa de você",
+          "hint": "Tudo o que espera por você, há quanto tempo e por quê.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "brief_night": {
+          "title": "Desde o último resumo",
+          "hint": "Trabalho concluído ou com falha, pull requests que mudaram, relatórios de rotinas, o que os assistentes fizeram por você e como foi o trabalho da noite.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "brief_bots": {
+          "title": "Cada assistente",
+          "hint": "Uma linha por assistente: o que terminou, no que está, onde travou. Os ocultos ficam de fora.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "brief_schedule": {
+          "title": "A agenda de hoje",
+          "hint": "Lembretes e rotinas que ainda vêm hoje.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "brief_loose": {
+          "title": "Pontas soltas",
+          "hint": "Assuntos parados há uma semana, worktrees com mudanças sem commit há um dia, sessões que você deixou pela metade.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "brief_yesterday": {
+          "title": "Seu dia de ontem",
+          "hint": "Os projetos e agentes que você usou ontem e quantas sessões abriu.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "brief_suggestions": {
+          "title": "Sugestões, no máximo",
+          "hint": "Quantas sugestões pode fazer, cada uma com o porquê; 0: nenhuma."
+        },
+        "wrap": {
+          "title": "Fechamento do dia",
+          "hint": "O que foi feito, o que ainda roda, o que precisa de você amanhã e o que os assistentes podem fazer à noite. Você sempre pode pedir: “por hoje é só”.",
+          "auto": "Perto do fim do seu dia habitual",
+          "ask": "Só quando eu disser “por hoje é só”",
+          "off": "Desligado"
+        },
+        "wrap_tonight": {
+          "title": "“Hoje à noite posso”",
+          "hint": "O fechamento oferece trabalho para a noite em cartões que você aprova; o próximo resumo conta como foi.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "keep_awake": {
+          "title": "Manter o computador acordado para o trabalho da noite",
+          "hint": "Enquanto o trabalho escolhido para a noite roda, o computador não dorme sozinho — só ligado na tomada.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "menubar": {
+          "title": "Assistentes ocupados na barra de menus",
+          "hint": "Enquanto um assistente trabalha, o ícone do codeg na barra de menus vira o rosto dele, que pisca de vez em quando. Ao lado, quantos assistentes têm algo não lido; o menu lista os cinco mais recentes.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "dock_badge": {
+          "title": "Indicador no Dock",
+          "hint": "O número no ícone do codeg no Dock ou na barra de tarefas: quantos assistentes têm algo não lido, sem contar os ocultos e silenciados.",
+          "on": "Assistentes com não lidos",
+          "off": "Desligado"
+        },
+        "history_sessions": {
+          "title": "Pesquisar em todas as conversas",
+          "hint": "Cada conversa no codeg também é pesquisada: o que você pediu e a última resposta de cada turno. Desligado, elas saem do índice.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "history_tasks": {
+          "title": "Pesquisar nas tarefas do quadro",
+          "hint": "As tarefas do quadro também são pesquisadas: título, o que foi pedido e o resultado. Desligado, elas saem do índice.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "reactions": {
+          "title": "Aprender com suas respostas aos cartões",
+          "hint": "O codeg conta como você responde a cada tipo de cartão. Um cartão de proposta descartado três vezes seguidas desce um nível, e a revisão semanal avisa. Desligado: nada é rebaixado, e o que foi volta.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "weekly_review": {
+          "title": "Revisão semanal",
+          "hint": "A semana em números: trabalho delegado, perguntas respondidas por você, tokens por dia e por assistente, e o que o codeg ajustou.",
+          "brief": "No primeiro resumo matinal da semana",
+          "wrap": "No fechamento de sexta",
+          "off": "Desligado"
+        },
+        "level_brief": {
+          "title": "Resumo da manhã e fechamento",
+          "hint": "Seu resumo da manhã ou o fechamento está pronto."
+        },
+        "flush": {
+          "title": "Notas antes de organizar",
+          "hint": "Antes de o codeg organizar o contexto de um assistente, ele anota no registro os pontos do dia até agora, para não perder nada que valha guardar. Leva até dois minutos; depois a organização segue de qualquer forma.",
+          "on": "Ligado",
+          "off": "Desligado"
+        },
+        "level_memory": {
+          "title": "Mudanças na memória",
+          "hint": "Um assistente mudou o que lembra, a persona ou as regras — a organização noturna e as skills de processo também."
+        },
+        "plans": {
+          "title": "Planos",
+          "hint": "Trabalho grande que um assistente divide em etapas.",
+          "auto": "Começar assim que estiver pronto",
+          "ask": "Mostrar antes (começa quando eu apertar Iniciar)"
+        },
+        "level_plan": {
+          "title": "Plano concluído",
+          "hint": "Todas as etapas de um plano terminaram."
+        },
+        "level_plan_stuck": {
+          "title": "Plano travado",
+          "hint": "Uma etapa falhou e continuou falhando."
+        },
+        "tidy": {
+          "title": "Organização da memória e skills de processo",
+          "hint": "Toda noite, depois que você para, os assistentes organizam a memória, a persona e as regras; quando uma sequência de trabalho dá certo, o jeito de fazer vira uma skill.",
+          "auto": "Na hora, com desfazer no cartão",
+          "draft": "Mostrar antes (cartão em rascunho, aplicado quando eu disser)",
+          "off": "Não"
+        }
+      },
+      "workdir": {
+        "title": "Diretório de trabalho",
+        "hint": "Onde ele guarda persona, regras e memória, sob git. Agora: {current}. Movê-lo inicia uma nova sessão; o diretório antigo fica como está.",
+        "placeholder": "Padrão: no diretório de dados",
+        "useDefault": "Usar padrão",
+        "apply": "Mover",
+        "saved": "Diretório de trabalho movido."
+      },
+      "changed": {
+        "on": "ativado",
+        "off": "desativado",
+        "default": "padrão"
+      },
+      "brain": "Cérebro",
+      "about": {
+        "followSystem": "Seguir o sistema",
+        "followSystemZone": "Seguir o sistema ({zone})",
+        "zoneSearch": "Buscar fusos horários",
+        "zoneNoMatch": "Nenhum fuso horário corresponde.",
+        "zoneNow": "Lá agora são {time}.",
+        "hoursTitle": "Seus horários habituais segundo o codeg (últimos {days} dias)",
+        "workday": "Dias úteis",
+        "restday": "Fins de semana",
+        "span": "{start}–{end}",
+        "spanOvernight": "{start}–{end} do dia seguinte",
+        "learnedFrom": "{count, plural, one {de # dia} other {de # dias}}",
+        "stillLearning": "ainda aprendendo — por enquanto, os padrão",
+        "recordOff": "O registro está desligado: seus horários são os padrão.",
+        "presentNow": "Você está no codeg agora.",
+        "lastActive": "Última atividade às {time}.",
+        "notSeen": "Sem atividade no codeg desde que ele iniciou.",
+        "note": "Se você está aqui agora continua sendo avaliado na hora — uma janela em foco e atividade nos últimos dois minutos — para decidir quando notificar você; isso nunca é guardado. “Amanhã de manhã” num lembrete é quando seu dia costuma começar.",
+        "history": {
+          "title": "Máquina do tempo",
+          "hint": "O que foi dito e feito antes pode ser pesquisado: por você (a busca ao lado do nome do assistente) e pelos próprios assistentes. As conversas deles e as mensagens entre eles são sempre pesquisadas.",
+          "rebuild": "Reconstruir",
+          "rebuilt": "Reconstruindo o índice…",
+          "reading": "Lendo conversas: {done} de {total} até agora ({documents} entradas).",
+          "ready": "Atualizado: {total} conversas, {documents} entradas.",
+          "readyNoSessions": "{documents} entradas."
+        },
+        "setByYou": "definido por você",
+        "change": "Alterar",
+        "backToLearned": "Voltar ao aprendido ({span})",
+        "backToLearning": "Deixar o codeg aprender",
+        "start": "Início",
+        "end": "Fim",
+        "save": "Salvar",
+        "cancel": "Cancelar",
+        "seen": {
+          "title": "O que o codeg vê",
+          "hint": "A partir das conversas no codeg (sem as dos próprios assistentes), nunca do conteúdo. Um projeto que você pedir para ignorar não é contado aos assistentes e vai para o fim em \"Precisa de você\".",
+          "projects": "Projetos (últimos 7 / 30 dias)",
+          "noProjects": "Nenhum projeto ainda.",
+          "projectCounts": "{recent} / {all} conversas",
+          "mind": "Voltar a considerar",
+          "dontMind": "Ignorar",
+          "agents": "Agentes (últimos 30 dias)"
+        },
+        "reactions": {
+          "none": "Nenhum cartão nos últimos 30 dias.",
+          "off": "Não contado: nada é rebaixado.",
+          "kind": "Cartão",
+          "raised": "Exibidos",
+          "acted": "Tratados",
+          "dismissed": "Descartados",
+          "undone": "Desfeitos",
+          "wait": "Levou",
+          "minutes": "{n} min",
+          "kinds": {
+            "proposal": "Cartões a confirmar",
+            "uncertain": "Passos incertos",
+            "loop": "Trocas interrompidas",
+            "changed": "Alterações",
+            "choice": "Escolhas",
+            "reminder": "Lembretes",
+            "acceptance": "Aceitação",
+            "forge": "Ações na forja",
+            "pr": "Pull requests",
+            "routine": "Rotinas",
+            "rule": "Propostas",
+            "memory": "Memória",
+            "tidy": "Organização da memória",
+            "skill": "Skills de processo"
+          }
+        },
+        "clear": {
+          "title": "Limpar o que o codeg aprendeu",
+          "hint": "Esquece os minutos anotados no codeg e os cartões rebaixados; projetos, agentes e respostas aos cartões contam a partir de agora. O que você definiu fica.",
+          "clearedAt": "Última limpeza: {when}.",
+          "button": "Limpar…",
+          "confirmTitle": "Limpar o que o codeg aprendeu?",
+          "confirmBody": "Seus horários voltam ao padrão até o codeg aprender de novo (os que você definiu ficam), e os cartões de proposta rebaixados voltam. Não pode ser desfeito.",
+          "cancel": "Cancelar",
+          "confirm": "Limpar"
+        }
+      },
+      "notifyPage": {
+        "notify": "Avisar-me",
+        "notifyHint": "Quando terminar algo ou estiver esperando você",
+        "muted": "Silenciar",
+        "mutedHint": "Sem notificações do sistema dele; o que ele diz continua contando como não lido.",
+        "hidden": "Ocultar",
+        "hiddenHint": "Continua rodando, mas nunca avisa você, fica fora da lista e do contador; “N ocultos” no pé da lista o mostra."
+      },
+      "grade": {
+        "firstPass": "de primeira {rate}% ({pass}/{settled})",
+        "average": "{time} em média",
+        "minutes": "{n} min",
+        "hours": "{h} h {m} min",
+        "apart": "Por agente e forma",
+        "byBot": "Por assistente e modo",
+        "someone": "Trabalho anterior",
+        "unjudged": "{count} delegados, nenhum concluído ainda"
+      },
+      "processSkillHint": "Um jeito de fazer algo que o assistente deixou por escrito: quando você pedir, ele segue. O que você mudar aqui vale ao salvar; desativada, não é mais carregada.",
+      "skillOff": "Desativada",
+      "skillTurnOn": "Ativar",
+      "skillTurnOff": "Desativar",
+      "skillTurnedOn": "{name} ativada",
+      "skillTurnedOff": "{name} desativada",
+      "deleteSkill": "Excluir skill",
+      "confirmDeleteSkillHint": "Excluir esta skill de processo? A pasta dela sai do diretório de trabalho.",
+      "skillDeleted": "{name} excluída",
+      "personaUnwritten": "Persona ainda não escrita. Ele a completa sozinho — ao se apresentar, quando você lhe dá trabalho e na arrumação de cada noite — ou você pode escrevê-la aqui.",
+      "projects": {
+        "about": "Os assistentes ficam de olho nesses projetos para PRs que esperam sua revisão, e procuram neles a primeira coisa em que podem ajudar.",
+        "scope": "Quais projetos acompanhar",
+        "all": "Todos os projetos",
+        "allHint": "Os novos também.",
+        "only": "Só os que eu escolher",
+        "onlyHint": "Projetos novos não entram sozinhos; marque-os aqui para acompanhá-los.",
+        "loading": "Lendo seus projetos…",
+        "empty": "O codeg ainda não tem projetos.",
+        "openFolder": "Abrir uma pasta de projeto",
+        "onForge": "No {forge}",
+        "noAccount": "No {forge}, sem conta conectada",
+        "noForge": "Sem hospedagem de código",
+        "connectAccount": "Conectar conta",
+        "note": "Um projeto fechado não é acompanhado; ele volta quando você o abrir de novo."
+      },
+      "workTitle": "Agente para o trabalho",
+      "workHint": "O trabalho que você passa para ele (escrever código, rodar comandos) é feito neste agente.",
+      "workSame": "Igual ao cérebro",
+      "workOther": "Escolher outro",
+      "workSameHint": "Uma cópia do agente do cérebro e de todas as opções. Depois disso, cada um segue por conta própria.",
+      "workUnavailable": "{agent} não pode ser usado (não instalado ou desativado): escolha outro.",
+      "instructionsTitle": "Instruções permanentes para o trabalho",
+      "instructionsHint": "Enviadas toda vez que ele inicia uma sessão de trabalho — trabalho que repassa ou quando é @mencionado numa conversa. O cérebro não as lê.",
+      "instructionsPlaceholder": "Como deve trabalhar: convenções, o que verificar, o que evitar…",
+      "instructionsTooLong": "As instruções permanentes podem ter no máximo {max} caracteres.",
+      "noBrainYet": "Ele ainda não tem cérebro: assim que o assistente principal for configurado, recebe uma cópia do dele."
+    },
+    "statusWord": {
+      "idle": "Ocioso",
+      "replying": "Respondendo…",
+      "compacting": "Organizando o contexto…",
+      "waiting": "Aguardando sua confirmação",
+      "elsewhere": "Roda em outro processo (somente leitura)",
+      "open": "Ver o status",
+      "noting": "Anotando os pontos do dia…"
+    },
+    "menu": {
+      "more": "Mais",
+      "showPanel": "Mostrar o painel lateral",
+      "hidePanel": "Ocultar o painel lateral",
+      "settings": "Configurações do agente pessoal",
+      "viewSession": "Ver a sessão subjacente",
+      "compact": "Compactar o contexto",
+      "compactHint": "Compactar agora o contexto da sessão",
+      "stopCompaction": "Parar a organização",
+      "stopReply": "Parar a resposta",
+      "newSession": "Iniciar uma nova sessão…",
+      "stopAll": "Parar tudo",
+      "stopAllHint": "Para a resposta, o trabalho delegado e as mensagens que ninguém começou",
+      "stoppedAll": "Tudo o que este assistente tinha em andamento foi parado"
+    },
+    "newSession": {
+      "title": "Iniciar uma nova sessão?",
+      "description": "Sua próxima mensagem continua em uma nova sessão subjacente. A personalidade, a memória e os assuntos em aberto são mantidos; a conversa aqui continua como está.",
+      "cancel": "Cancelar",
+      "confirm": "Iniciar uma nova sessão",
+      "queued": "Uma nova sessão começa com sua próxima mensagem."
+    },
+    "time": {
+      "yesterday": "Ontem {time}"
+    },
+    "actions": {
+      "quote": "Citar",
+      "copy": "Copiar",
+      "copySelection": "Copiar seleção",
+      "copied": "Copiado",
+      "copyFailed": "Não foi possível copiar",
+      "stop": "Parar a resposta",
+      "timeTook": "{time} · levou {took}"
+    },
+    "owner": {
+      "unread": "Não lida",
+      "unfinished": "Não concluída",
+      "resend": "Enviar de novo",
+      "resent": "Enviada de novo",
+      "merged": "Incorporada à resposta em andamento",
+      "received": "Recebida",
+      "mentioned": "Você mencionou “{keyword}” — lembrete: {text}"
+    },
+    "quote": {
+      "you": "Você",
+      "dispatch": "Encarregado: {title}",
+      "attachment": "[Anexo]",
+      "noText": "(sem texto)",
+      "unavailable": "A mensagem original não está disponível",
+      "jump": "Ir para a mensagem original",
+      "dismiss": "Remover a citação",
+      "preview": "Mensagem original",
+      "previewHint": "A mensagem citada, antiga demais para ser carregada aqui."
+    },
+    "step": {
+      "awaiting": "Aguardando sua confirmação: {title}",
+      "anAction": "uma ação",
+      "thinking": "Pensando…",
+      "compacting": "Organizando o contexto…",
+      "plan": "Atualizando o plano",
+      "planNamed": "Plano: {title}",
+      "own": {
+        "dispatch": "Encarregando um trabalho",
+        "dispatch_followup": "Dando continuidade a um trabalho",
+        "items": "Atualizando os assuntos em aberto",
+        "timeline_read": "Relendo a conversa",
+        "project_list": "Consultando os projetos"
+      },
+      "kind": {
+        "read": "Lendo um arquivo",
+        "edit": "Editando um arquivo",
+        "delete": "Excluindo um arquivo",
+        "move": "Movendo um arquivo",
+        "search": "Pesquisando",
+        "execute": "Executando um comando",
+        "think": "Pensando…",
+        "fetch": "Abrindo uma página web",
+        "plan": "Atualizando o plano",
+        "compact": "Organizando o contexto…",
+        "question": "Perguntando a você",
+        "other": "Usando uma ferramenta"
+      }
+    },
+    "reply": {
+      "starting": "Começando",
+      "noteDispatched": "{count, plural, one {Encarregou # trabalho} other {Encarregou # trabalhos}}",
+      "noteContinued": "{count, plural, one {Deu continuidade a # trabalho} other {Deu continuidade a # trabalhos}}",
+      "noteNothing": "Feito, sem resposta escrita",
+      "answeredPermission": "Você escolheu: {option}",
+      "answeredQuestion": "Sua resposta: {answer}",
+      "answeredSkipped": "Você pulou a pergunta",
+      "answeredPlan": {
+        "approve": "Você aprovou o plano",
+        "request_changes": "Você pediu mudanças no plano",
+        "abandon": "Você descartou o plano"
+      },
+      "stopped": "Parado",
+      "errorMidway": "A resposta teve um erro: {error}",
+      "interrupted": "Esta resposta não terminou: {reason}",
+      "truncated": "A resposta atingiu o limite de tamanho e foi cortada",
+      "preempted": "Parou para dar lugar à sua mensagem",
+      "resend": "{count, plural, one {Enviar a mensagem de novo} other {Enviar as # mensagens de novo}}",
+      "why": {
+        "connection": "a conexão caiu",
+        "overflow": "o contexto ficou cheio",
+        "rejected": "o agente recusou",
+        "error": "houve um erro",
+        "restart": "o codeg reiniciou",
+        "unknown": "parou inesperadamente"
+      },
+      "requestInputs": "Este turno tratava de várias coisas: {list}"
+    },
+    "dispatchCard": {
+      "continue": "Continuar: {title}",
+      "notSent": "Não enviado",
+      "more": "Mais {count}",
+      "doneWhen": "Pronto quando",
+      "check": "Verificação de aceitação",
+      "checkRound": "Verificação de aceitação · rodada {round}"
+    },
+    "event": {
+      "acceptanceEvidence": "Evidências da aceitação",
+      "someone": "Um assistente",
+      "replacedBy": "Retomado por “{title}”",
+      "more": "Ver tudo",
+      "less": "Ver menos",
+      "source": "Origem",
+      "showText": "Ver original",
+      "hideText": "Ocultar original",
+      "makeRoutine": "Tornar uma rotina…",
+      "note": {
+        "boot": "O codeg reiniciou",
+        "lost": "A conexão da sessão caiu",
+        "gone": "A tarefa foi excluída do quadro"
+      },
+      "retry": {
+        "pending": "Tentando de novo automaticamente (tentativa {attempt} de {max})…",
+        "retried": "Tentado de novo automaticamente (tentativa {attempt} de {max})",
+        "failed": "A nova tentativa automática falhou: {error}",
+        "asked": "Perguntamos se você quer tentar de novo",
+        "exhausted": "{max, plural, one {Já tentado de novo # vez — você decide} other {Já tentado de novo # vezes — você decide}}"
+      }
+    },
+    "overview": {
+      "editBrain": "Mudar o agente em que roda",
+      "lastCompaction": "Última organização: {when}, {outcome}{range}",
+      "runLog": "Registro de execução",
+      "details": "Detalhes",
+      "command": "Comando de compactação"
+    },
+    "runLog": {
+      "empty": "Nada ainda.",
+      "newSession": "Nova sessão iniciada em {agent} ({reason})",
+      "pendingSwitch": "Uma nova sessão começa com a próxima mensagem ({reason})",
+      "reconnected": "Reconectado à mesma sessão",
+      "optionsChanged": "As opções mudaram",
+      "range": " · {before}% → {after}%",
+      "by": {
+        "auto": " automaticamente",
+        "owner": " por você",
+        "agent": " pelo agente"
+      },
+      "compaction": {
+        "ok": "Contexto organizado{who}{range}",
+        "failed": "A organização do contexto{who} falhou{range}",
+        "canceled": "A organização do contexto{who} foi interrompida{range}"
+      },
+      "compactionPaused": "Organização automática pausada nesta sessão: não ajudou duas vezes seguidas",
+      "overflowNewSession": "O contexto transbordou de novo após organizar: uma nova sessão começou",
+      "overflowCompact": "O contexto transbordou: organizado antes da próxima mensagem",
+      "turnStopped": "Uma resposta foi parada",
+      "turnFailed": "Uma resposta falhou: {error}",
+      "turnInterrupted": "Uma resposta não terminou",
+      "turnPreempted": "Uma resposta deu lugar à sua mensagem",
+      "workdirChanged": "O diretório de trabalho foi movido para {path}",
+      "notesFirst": " · antes anotou os pontos do dia"
+    },
+    "matters": {
+      "noneOpen": "Nada em aberto agora.",
+      "origin": "Ir para a mensagem de origem"
+    },
+    "notice": {
+      "open": "Proposta · aguardando você",
+      "acted": "Feito conforme proposto",
+      "dismissed": "Não aceita",
+      "acting": "Em andamento…",
+      "unknown": "Não dá para saber se foi feito",
+      "unknownHint": "O codeg foi interrompido no meio e não consegue saber se teve efeito. Nada foi refeito por conta própria.",
+      "followupOf": "Continuar “{title}”",
+      "intent": {
+        "revise": "Devolver para ajustes",
+        "continue": "Seguir em frente",
+        "question": "Fazer uma pergunta",
+        "verify": "Autoverificação"
+      },
+      "accept": "Fazer assim",
+      "dismiss": "Agora não",
+      "again": "Fazer de novo",
+      "failed": "Não foi possível executar: {error}",
+      "uncertain": {
+        "open": "Não dá para saber se isto chegou",
+        "hint": "O codeg foi interrompido ao enviar este acompanhamento e não consegue saber se o executor o recebeu. Não foi reenviado.",
+        "look": "Ver",
+        "again": "Enviar de novo",
+        "dismiss": "Deixar assim",
+        "acting": "Enviando de novo…",
+        "acted": "Enviado de novo",
+        "dismissed": "Deixado assim",
+        "resolved": "Chegou, sim"
+      },
+      "loop": {
+        "open": "Conversa parada · aguardando você",
+        "noProgress": "{a} e {b} trocaram {count} mensagens sem avançar, então o codeg os parou.",
+        "cycle": "{a} escreveu para {b}, que também esperava resposta nesta conversa: andava em círculos, então o codeg parou.",
+        "refused": "Retido: “{text}”",
+        "look": "Ver a conversa",
+        "goOn": "Deixar continuar",
+        "mine": "Eu cuido disso",
+        "continued": "Liberados para continuar",
+        "takenOver": "Deixado com você"
+      },
+      "stopped": {
+        "this": "Parado, com o que ele iniciou",
+        "all": "Tudo parado",
+        "work": "{count, plural, one {Trabalho parado} other {# trabalhos parados}}",
+        "messages": "{count, plural, one {Mensagem retirada} other {# mensagens retiradas}}",
+        "messageTo": "Para {name}: {text}",
+        "notStopped": "Já em andamento, então não foi parado:",
+        "onIt": "{name} está cuidando de “{text}”",
+        "stopToo": "Parar também o de {name}",
+        "alsoStopped": "Também parado"
+      },
+      "confirm": {
+        "open": "Aguardando sua confirmação",
+        "acted": "Confirmado, foi enviado",
+        "dismissed": "Não enviado",
+        "accept": "Pode enviar",
+        "dismiss": "Não",
+        "messageTo": "Mensagem para {name}"
+      },
+      "changed": {
+        "applied": "Alterado, como você disse",
+        "accepted": "Alterado",
+        "undone": "Desfeito",
+        "dismissed": "Não alterado",
+        "suggested": "Uma alteração sugerida",
+        "show": "A alterar, como você disse · aguardando você",
+        "line": "{name} alterou, como você pediu",
+        "quote": "Você disse: “{quote}”",
+        "reason": "Por quê: {reason}",
+        "kept": "Alterados de novo desde então, por isso ficaram como estão: {items}",
+        "accept": "Alterar",
+        "dismiss": "Agora não",
+        "undo": "Desfazer",
+        "seeSettings": "Ver nas configurações",
+        "team": {
+          "of": "{name} · {field}",
+          "botField": {
+            "name": "nome",
+            "avatar": "rosto",
+            "brain": "cérebro",
+            "notify": "notificações",
+            "muted": "silenciado",
+            "hidden": "oculto",
+            "persona": "persona",
+            "work_agent": "agente com que trabalha"
+          },
+          "avatarOther": "imagem própria",
+          "empty": "(vazio)",
+          "nothingSet": "nada definido",
+          "personaNow": "Agora",
+          "personaNew": "Passa a ser"
+        },
+        "uncheckedQuote": "O assistente principal diz que você disse “{quote}”, mas você não digitou isso nesta rodada"
+      },
+      "retryOf": "Tentar de novo “{title}”",
+      "tonight": {
+        "open": "Hoje à noite posso",
+        "acted": "Para hoje à noite",
+        "dismissed": "Hoje não",
+        "accept": "Fazer hoje à noite",
+        "dismiss": "Agora não",
+        "awake": "O computador fica acordado até esse trabalho terminar."
+      }
+    },
+    "exchange": {
+      "sentTo": "Mensagem enviada para <peer></peer>",
+      "from": "Mensagem de <peer></peer>",
+      "exchanged": "{count, plural, one {# mensagem trocada} other {# mensagens trocadas}} com {names}",
+      "state": {
+        "stopped": "retirada",
+        "looped": "parada: andava em círculos",
+        "canceled": "cancelada"
+      },
+      "sheetTitle": "{a} ⇄ {b}",
+      "openPeer": "Abrir a conversa de {name}",
+      "sheetHint": "Todas as mensagens que os dois assistentes trocaram nesta conversa.",
+      "unavailable": "Não foi possível carregar a conversa: {error}"
+    },
+    "mirror": {
+      "question": "{name} pergunta a você",
+      "permission": "{name} pede sua permissão",
+      "answered": "Respondida",
+      "skipped": "Ignorada",
+      "withdrawn": "Não é mais necessária",
+      "resolved": "Resolvida"
+    },
+    "bots": {
+      "new": "Novo assistente",
+      "copyName": "{name} (cópia)",
+      "copied": "Cópia criada: {name}",
+      "copy": "Duplicar",
+      "deleteAction": "Excluir",
+      "face": {
+        "shape": "Formato",
+        "color": "Cor",
+        "tooLarge": "A imagem é grande demais.",
+        "unreadable": "Não foi possível ler o arquivo como imagem.",
+        "shapes": {
+          "ring": "Anel",
+          "terminal": "Terminal",
+          "braces": "Chaves",
+          "shield": "Escudo",
+          "chip": "Chip",
+          "bug": "Bichinho",
+          "cursor": "Ponteiro",
+          "gear": "Engrenagem",
+          "file": "Arquivo de código",
+          "magnifier": "Lupa",
+          "package": "Pacote",
+          "rocket": "Foguete",
+          "mug": "Caneca"
+        },
+        "colors": {
+          "black": "Preto",
+          "brown": "Marrom",
+          "red": "Vermelho",
+          "orange": "Laranja",
+          "yellow": "Amarelo",
+          "green": "Verde",
+          "teal": "Verde-azulado",
+          "blue": "Azul",
+          "purple": "Roxo",
+          "magenta": "Magenta",
+          "gray": "Cinza"
+        },
+        "edit": "Editar avatar",
+        "reset": "Redefinir",
+        "pages": {
+          "bot": "Bot",
+          "make": "Texto",
+          "upload": "Enviar"
+        },
+        "dropHint": "Arraste ou cole uma imagem",
+        "or": "ou",
+        "pickFile": "Escolher uma imagem local",
+        "dragHint": "Arraste para ajustar",
+        "zoom": "Zoom",
+        "zoomIn": "Aproximar",
+        "zoomOut": "Afastar",
+        "restart": "Recomeçar",
+        "setAvatar": "Definir como avatar",
+        "monogram": "Inicial do nome",
+        "typeOne": "Digite um caractere ou emoji",
+        "useIt": "Usar"
+      },
+      "create": {
+        "title": "Novo assistente",
+        "description": "Um nome e algumas linhas sobre quem ele é; o cérebro é o mesmo do assistente principal.",
+        "name": "Nome",
+        "namePlaceholder": "ex.: Revisão de código",
+        "cancel": "Cancelar",
+        "create": "Criar",
+        "persona": "Persona",
+        "personaPlaceholder": "ex.: Reviso mudanças de código: se estão certas e bem testadas.",
+        "personaHint": "Uma ou duas linhas: quem ele é e que trabalho lhe dar. Pode deixar em branco — ele se apresenta primeiro e depois completa com o que você disser e o trabalho que fizer.",
+        "workSameHint": "O cérebro é o do principal; o trabalho roda numa cópia dele, com as mesmas opções — independente a partir daí. Mude qualquer um na página dele."
+      },
+      "roster": {
+        "title": "Assistentes",
+        "add": "Novo assistente",
+        "pinned": "Fixados",
+        "others": "Outros",
+        "muted": "Silenciado",
+        "handWork": "Em mãos",
+        "awaiting": "Aguardando respostas",
+        "nothing": "Nada em mãos",
+        "groupName": "Nome do grupo",
+        "newGroupTitle": "Novo grupo",
+        "newGroupSave": "Mover",
+        "collapse": "Recolher {name}",
+        "expand": "Expandir {name}",
+        "menu": {
+          "pin": "Fixar",
+          "unpin": "Desafixar",
+          "moveTo": "Mover para um grupo",
+          "newGroup": "Novo grupo…",
+          "noGroup": "Sem grupo",
+          "hide": "Ocultar",
+          "show": "Mostrar",
+          "mute": "Silenciar",
+          "unmute": "Reativar som",
+          "markUnread": "Marcar como não lido",
+          "markRead": "Marcar como lido",
+          "notifyOn": "Avisar-me",
+          "copy": "Duplicar…",
+          "stopAll": "Parar tudo",
+          "delete": "Excluir…",
+          "details": "Ver detalhes"
+        },
+        "mergeable": "#{id} pronta para mesclar: {title}",
+        "prReady": "Pronto para mesclar: {text}",
+        "prFailed": "#{id} verificações falharam: {title}",
+        "prStuck": "#{id} tem um conflito: {title}",
+        "prChecks": "#{id} aguardando verificações {passed}/{total}",
+        "resize": "Redimensionar a lista de assistentes",
+        "dropNewGroup": "Solte aqui para um novo grupo",
+        "switch": "Mudar de assistente",
+        "addShort": "Novo assistente",
+        "opening": "Abrindo {name}…",
+        "noBrainLine": "Configure o assistente principal para conversar com ele",
+        "hiddenMark": "Oculto",
+        "setUpPrimary": "Configurar o assistente principal",
+        "filter": "Filtrar",
+        "showHidden": "Mostrar assistentes ocultos ({count})"
+      },
+      "choice": {
+        "other": "Outro",
+        "otherPlaceholder": "Escreva sua resposta…",
+        "send": "Enviar",
+        "answered": "Você escolheu: {choice}",
+        "answeredOwn": "Você escreveu: {text}",
+        "noProjects": "Nenhum projeto aberto no codeg.",
+        "from": {
+          "given": "como você disse",
+          "other_config": "do trabalho de outro assistente",
+          "agent": "padrão do agente"
+        },
+        "progress": "{at} / {total}",
+        "several": "Escolha várias",
+        "back": "Voltar",
+        "next": "Próxima",
+        "submit": "Enviar",
+        "skip": "Pular",
+        "noLongerAsked": "Não espera mais resposta",
+        "otherWrote": "Outro: {text}"
+      },
+      "changed": {
+        "applied": "Assistente criado",
+        "show": "Criar este assistente? (Você pediu para ver esse tipo de mudança antes.)",
+        "suggested": "Sugestão: criar um novo assistente",
+        "dismissed": "Não criado",
+        "undone": "Desfeito",
+        "open": "Abrir",
+        "undoOne": "Desfazer",
+        "undoneOne": "Desfeito",
+        "quote": "Você disse: “{quote}”",
+        "reason": "Por quê: {reason}",
+        "accept": "Criar",
+        "dismiss": "Agora não",
+        "undo": "Desfazer",
+        "undoAll": "Desfazer tudo",
+        "uncheckedQuote": "O assistente principal diz que você disse “{quote}”, mas você não digitou isso nesta rodada",
+        "persona": "Persona",
+        "workFilled": "Trabalha com {agent}; {count} opções preenchidas",
+        "workOn": "Trabalha com {agent}"
+      },
+      "delete": {
+        "title": "Excluir {name}?",
+        "description": "A memória e a conversa dele são excluídas junto. O assistente principal não pode ser excluído.",
+        "running": "{count, plural, one {# trabalho que ele delegou ainda está} other {# trabalhos que ele delegou ainda estão}} em andamento:",
+        "handOver": "Passá-los ao assistente principal para acompanhar (recomendado)",
+        "stop": "Pará-los",
+        "messages": "{count, plural, one {# mensagem para ele ainda não foi respondida: ela volta para quem a enviou.} other {# mensagens para ele ainda não foram respondidas: elas voltam para quem as enviou.}}",
+        "listJoiner": ", ",
+        "dropWorkdir": "Excluir também o diretório de trabalho dele",
+        "workdirCustom": "Você escolheu este diretório, então o codeg não mexe nele.",
+        "cancel": "Cancelar",
+        "confirm": "Excluir",
+        "plans": "{count, plural, one {O plano dele para} other {Os # planos dele param}}: {titles}.",
+        "planSteps": "{count, plural, one {Uma etapa de outro plano está} other {# etapas de outros planos estão}} com ele: {steps}. Quando chegar a vez, os assistentes desses planos escolhem outro."
+      },
+      "edit": {
+        "name": "Nome"
+      },
+      "personaUnwritten": "Persona ainda não escrita"
+    },
+    "face": {
+      "idle": "livre",
+      "thinking": "pensando",
+      "working": "trabalhando",
+      "waiting": "esperando você",
+      "stuck": "esperando você há um tempo",
+      "done": "acabou de terminar",
+      "failed": "algo deu errado",
+      "sleeping": "dormindo",
+      "unread": "mensagens não lidas",
+      "stale": "Status indisponível no momento",
+      "label": "{name}, {state}",
+      "labelUnread": "{name}, {state}, mensagens não lidas"
+    },
+    "activity": {
+      "think0": "Pensando com calma",
+      "think1": "Matutando",
+      "think2": "Definindo a abordagem",
+      "work0": "Levando adiante",
+      "work1": "Trabalhando nisso",
+      "work2": "Resolvendo",
+      "work3": "Avançando aos poucos",
+      "work4": "Finalizando",
+      "reply": "Escrevendo uma resposta",
+      "read": "Lendo {target}",
+      "readSome": "Lendo arquivos",
+      "edit": "Editando {target}",
+      "editSome": "Editando arquivos",
+      "search": "Pesquisando “{target}”",
+      "searchSome": "Pesquisando",
+      "fetch": "Lendo sobre o assunto",
+      "execute": "Executando alguns comandos",
+      "test": "Executando os testes",
+      "wait": "Aguardando o resultado",
+      "commit": "Fazendo commit",
+      "plan": "Esboçando um plano",
+      "compact": "Organizando o contexto",
+      "dispatch": "Encarregando {target}",
+      "dispatchSome": "Encarregando um trabalho",
+      "followup": "Acompanhando #{id}",
+      "followupSome": "Acompanhando",
+      "message": "Perguntando a {target}",
+      "messageSome": "Perguntando a outro assistente",
+      "awaitingReply": "Aguardando a resposta de {name}",
+      "needsAnswer": "Precisa da sua resposta",
+      "needsApproval": "Precisa da sua aprovação",
+      "workPrefix": "#{id} {title}: {activity}",
+      "notes": "Anotando os pontos do dia antes de organizar"
+    },
+    "did": {
+      "edit": "Editou {target} +{added} −{removed}",
+      "editPlain": "Editou {target}",
+      "editSome": "Editou arquivos",
+      "test": "Executou os testes, aprovados: {passed}",
+      "testFailed": "Executou os testes, aprovados: {passed}, com falha: {failed}",
+      "testExit": "Executou os testes, código de saída {code}",
+      "testBad": "Executou os testes, não passaram",
+      "testPlain": "Executou os testes",
+      "execute": "Executou {target}",
+      "executeExit": "Executou {target}, código de saída {code}",
+      "executeBad": "Executou {target}, falhou",
+      "executeSome": "Executou um comando",
+      "executeSomeBad": "Executou um comando, falhou",
+      "read": "Leu {target}",
+      "readSome": "Leu arquivos",
+      "search": "Pesquisou “{target}”",
+      "searchHits": "Pesquisou “{target}”, resultados: {hits}",
+      "searchSome": "Pesquisou",
+      "commit": "Fez commit: {target}",
+      "commitPlain": "Fez commit",
+      "dispatch": "Encarregou {target}: #{id}",
+      "dispatchPlain": "Encarregou #{id}",
+      "dispatchSome": "Encarregou um trabalho",
+      "followup": "Acompanhou #{id}",
+      "followupSome": "Acompanhou",
+      "message": "Enviou uma mensagem para {target}",
+      "messageSome": "Enviou uma mensagem",
+      "think": "Pensou bem",
+      "reply": "Escreveu uma resposta",
+      "plan": "Esboçou um plano",
+      "compact": "Organizou o contexto",
+      "fetch": "Leu sobre o assunto",
+      "question": "Perguntou a você: {target}",
+      "questionSome": "Perguntou a você",
+      "other": "{target}",
+      "otherPlain": "Deu um passo",
+      "notes": "Anotou os pontos do dia"
+    },
+    "needs": {
+      "answer": "Precisa da sua resposta: {text}",
+      "approval": "Precisa da sua aprovação: {text}",
+      "you": "Precisa de você: {text}",
+      "answerPlain": "Precisa da sua resposta",
+      "approvalPlain": "Precisa da sua aprovação",
+      "youPlain": "Precisa de você",
+      "acceptance": "A aceitação depende de você: {text}",
+      "acceptancePlain": "A aceitação depende de você"
+    },
+    "statusLine": {
+      "steps": "Passos deste turno",
+      "loading": "Carregando os passos…",
+      "empty": "Ainda sem passos",
+      "fold": "Ocultar os passos",
+      "openWork": "Abrir o trabalho"
+    },
+    "sending": {
+      "waking": "Acordando {name}…",
+      "afterTurn": "Aguardando este turno terminar",
+      "yielding": "Dando passagem"
+    },
+    "pills": {
+      "attention": "{count, plural, one {# item precisa de você} other {# itens precisam de você}}",
+      "dismissAttention": "Ocultar até que algo novo precise de você",
+      "newMessages": "Novas mensagens",
+      "toBottom": "Ir para o mais recente"
+    },
+    "detail": {
+      "title": "Detalhes",
+      "close": "Ocultar os detalhes",
+      "tabs": {
+        "activity": "Atividade",
+        "output": "Resultados",
+        "workspace": "Espaço de trabalho",
+        "stats": "Estatísticas"
+      },
+      "sections": {
+        "today": "Hoje",
+        "matters": "Assuntos",
+        "data": "Dados",
+        "routines": "Rotinas"
+      },
+      "notify": "Avisar-me",
+      "notifyHint": "Quando terminar algo ou estiver esperando você",
+      "item": {
+        "done": "Concluído",
+        "later": "Mais tarde",
+        "drop": "Descartar",
+        "in15m": "Em 15 min",
+        "in1h": "Em 1 hora",
+        "tomorrow": "Amanhã de manhã",
+        "untimed": "Sem hora definida",
+        "act": "Faz na hora"
+      },
+      "output": {
+        "allTitle": "Tudo o que produziu",
+        "clear": "Mostrar tudo",
+        "tasksSummary": "{count, plural, one {A última tarefa} other {As últimas # tarefas}}",
+        "outcomeDone": "Concluído",
+        "outcomeFailed": "Falhou",
+        "outcomeClosed": "Fechado",
+        "outcomeOpen": "Pendente",
+        "files": "{count, plural, one {# arquivo} other {# arquivos}}",
+        "moreFiles": "{count, plural, one {mais # arquivo} other {mais # arquivos}}",
+        "all": "Tudo",
+        "tasks": "Tarefas",
+        "reports": "Relatórios",
+        "docs": "Documentos",
+        "empty": "Nada produzido ainda",
+        "doc": "Documento"
+      },
+      "workspace": {
+        "empty": "Nada em execução agora",
+        "open": "Abrir",
+        "emptyHint": "Enquanto o trabalho delegado corre, a sua sessão aparece aqui em direto.",
+        "whose": "Espaço de trabalho de {name}"
+      },
+      "notifyOn": "ativado",
+      "notifyOff": "desativado"
+    },
+    "ladder": {
+      "working": "Em andamento",
+      "waiting_you": "Aguardando você",
+      "mergeable": "Pronta para mesclar",
+      "merging": "Mesclando",
+      "pr_open": "PR aberto",
+      "merged": "Mesclada",
+      "done": "Concluída",
+      "failed": "Falhou",
+      "paused": "Adiada",
+      "canceled": "Cancelada",
+      "handed_over": "Assumida por você",
+      "checking": "Em verificação",
+      "waiting_checks": "Aguardando verificações",
+      "waiting_checks_n": "Verificações {passed}/{total}",
+      "checks_failed": "Verificações falharam",
+      "stuck": "Travado",
+      "pr_closed": "PR fechado"
+    },
+    "taskCard": {
+      "diff": "<add>+{added}</add> <del>−{removed}</del>, {files, plural, one {# arquivo} other {# arquivos}}",
+      "diffOnly": "<add>+{added}</add> <del>−{removed}</del>",
+      "viewPr": "Ver PR",
+      "openSession": "Abrir conversa",
+      "stop": "Parar",
+      "prOpened": "PR aberto",
+      "prNotTracked": "O codeg não está acompanhando",
+      "pastStopping": "Não dá mais para parar: terminou ou está sendo mesclada",
+      "prChecks": "Verificações {passed}/{total} aprovadas",
+      "prChecksFailed": "{n} falharam",
+      "prChecksRunning": "{n} rodando",
+      "prChecksUnknown": "Verificações desconhecidas",
+      "prNoChecks": "Sem verificações",
+      "prWaitsOnForge": "a forja ainda não libera ({state})",
+      "prNoConflict": "sem conflito",
+      "prHead": "head {head}",
+      "prNotWatched": "não é mais acompanhado",
+      "prStale": "O status do PR pode estar desatualizado (última leitura {time})"
+    },
+    "ask": {
+      "heading": {
+        "question": "Uma pergunta do trabalho",
+        "plan": "O trabalho pede que você aprove um plano"
+      },
+      "someone": "O executor",
+      "mirror": "Do trabalho que {name} assumiu por você aqui",
+      "state": {
+        "asking": "{name} está respondendo por você…",
+        "forwarded": "Aguardando sua resposta",
+        "submitting": "Enviando…",
+        "withdrawn": "Retirada — não espera mais resposta"
+      },
+      "why": {
+        "assistant": "{name} não conseguiu decidir e passou para você",
+        "settings": "Suas configurações enviam essas perguntas para você",
+        "secret": "Ela pede um segredo",
+        "no_brain": "Nenhum assistente está configurado para responder",
+        "turn_ended": "{name} encerrou o turno sem responder",
+        "turn_failed": "O turno de {name} falhou antes de responder",
+        "timeout": "Nenhuma resposta de {name} em 10 minutos",
+        "handed_over": "Você assumiu este trabalho"
+      },
+      "suggestion": "{name} tende a: {suggestion}",
+      "reason": "Por quê: {reason}",
+      "openSession": "Abrir sessão",
+      "answer": {
+        "skipped": "pulada",
+        "empty": "sem resposta",
+        "approved": "aprovou o plano",
+        "revised": "pediu mudanças no plano",
+        "revisedWith": "pediu mudanças: {feedback}",
+        "abandoned": "abandonou o plano",
+        "approvedAs": "aprovou o plano ({option})",
+        "sentBackAs": "devolveu o plano ({option})"
+      },
+      "by": {
+        "assistant": "{name} respondeu por você: {answer}",
+        "ownerSession": "Você respondeu na sessão: {answer}",
+        "ownerPage": "Você respondeu na página de assistentes: {answer}",
+        "owner": "Você respondeu: {answer}",
+        "channel": "Respondida por um canal de chat: {answer}",
+        "policy": "Respondida pela política de uma execução: {answer}",
+        "someone": "Respondida: {answer}"
+      },
+      "toast": {
+        "already": "Já respondida — o cartão mostra qual resposta valeu",
+        "withdrawn": "Não espera mais resposta"
+      },
+      "answeredForYou": "{count, plural, one {Respondida por você # vez} other {Respondida por você # vezes}}"
+    },
+    "card": {
+      "stripped": "Ações que rodariam sem seu clique foram removidas",
+      "cancel": "Cancelar",
+      "confirm": "Confirmar",
+      "notFound": "Não está mais disponível",
+      "replyAssistant": "Responder ao assistente",
+      "reply": {
+        "title": "Enviar esta mensagem?",
+        "description": "“{label}” do cartão envia isto como sua mensagem:",
+        "send": "Enviar",
+        "toComposer": "Colocar na caixa de texto"
+      },
+      "drop": {
+        "title": "Descartar este assunto?",
+        "description": "“{summary}” sai dos seus assuntos em aberto.",
+        "confirm": "Descartar"
+      }
+    },
+    "due": {
+      "tomorrow": "Amanhã {time}",
+      "yesterday": "Ontem {time}",
+      "dayTime": "{day} {time}",
+      "duration": {
+        "minutes": "{n} min",
+        "hours": "{n} h",
+        "hoursMinutes": "{h} h {m} min",
+        "days": "{n, plural, one {# dia} other {# dias}}"
+      },
+      "repeat": {
+        "daily": "Todos os dias {time}",
+        "weekdays": "Todo dia útil {time}",
+        "weekly": "Toda {days} {time}",
+        "monthly": "Dia {day} de cada mês, {time}",
+        "until": "{rule}, até {date}",
+        "sep": ", "
+      },
+      "dueAt": "Vence {when}",
+      "overdue": "Atrasado · vencia {when}",
+      "reminded": "Lembrado · vence {when}",
+      "late": "{duration} de atraso",
+      "missed": "{count, plural, one {Perdido # vez} other {Perdido # vezes}}"
+    },
+    "reminder": {
+      "title": "Lembrete",
+      "done": "Concluído",
+      "snooze15m": "Em 15 min",
+      "snooze1h": "Em 1 hora",
+      "snoozeTomorrow": "Amanhã de manhã",
+      "handOver": "Passar ao assistente",
+      "handOverText": "Cuide do lembrete #{id}: {summary}",
+      "state": {
+        "done": "Concluído",
+        "snoozed": "Adiado para {when}",
+        "handed": "Passado ao assistente",
+        "dropped": "Descartado",
+        "expired": "Expirado — chegou de novo",
+        "closed": "Tratado",
+        "woke": "Chegou a hora — o assistente foi acordado para fazer isso"
+      }
+    },
+    "notify": {
+      "open": "Abrir"
+    },
+    "feed": {
+      "groups": {
+        "needs": "Esperando por você",
+        "watching": "Em andamento",
+        "next": "A seguir",
+        "done": "Feito hoje"
+      },
+      "empty": "Nada para você fazer, e nada em execução.",
+      "failed": "Não foi possível ler a atividade agora.",
+      "handed": "Entregue a {name}",
+      "checking": "Em verificação · rodada {round}",
+      "queued": "na fila para mesclar",
+      "waitsAgent": "Aguardando {name} cuidar disso",
+      "routineRunning": "Em execução",
+      "routineLast": "Última execução: {outcome}",
+      "fold": "Ocultar detalhes",
+      "unfold": "Mostrar detalhes",
+      "viewReminder": "Ver o lembrete",
+      "viewCheck": "Ver a sessão de aceitação",
+      "openTask": "Abrir a tarefa",
+      "routineDeleted": "Esta rotina foi excluída."
+    },
+    "today": {
+      "title": "Hoje",
+      "empty": "Nada precisa de você hoje",
+      "yours": "Seu",
+      "open": "Abrir",
+      "undo": "Desfazer",
+      "more": "Mostrar mais {count}",
+      "groups": {
+        "needs": "Precisa de você",
+        "watching": "Acompanhando",
+        "schedule": "Mais tarde hoje",
+        "done": "Feito hoje"
+      },
+      "kind": {
+        "approval": "Precisa da sua aprovação",
+        "forwarded": "Pergunta a você",
+        "question": "Pergunta a você",
+        "confirm": "Aguarda sua confirmação",
+        "stuck": "Não sabe se deu certo",
+        "waiting": "Um trabalho espera por você",
+        "proposal": "Sugere",
+        "failed": "Falhou",
+        "reminder": "Lembrete",
+        "finished": "Concluído",
+        "checked": "Mensagem verificada",
+        "checkCanceled": "Verificação interrompida",
+        "canceled": "Parado",
+        "answered": "Respondido em seu nome",
+        "changed": "Alterado em seu nome",
+        "undone": "Alterado e desfeito",
+        "acceptance": "A aceitação depende de você",
+        "forge": "Feito numa forja",
+        "pr_ready": "Pronto para mesclar",
+        "pr_merged": "PR mesclado",
+        "pr": "PR acompanhado",
+        "memory": "Memorizado",
+        "memoryUndone": "Memorizado e depois desfeito",
+        "plan_stuck": "Plano travado",
+        "routine_paused": "Rotina pausada",
+        "used_up": "Ainda não está certo"
+      },
+      "reason": {
+        "failed": "Falhou",
+        "accepted_queued": "Aceito — na fila para mesclar",
+        "merge_queued": "Na fila para mesclar",
+        "accepted_unchecked": "Passou sem verificação — dê uma olhada",
+        "needs_delivery": "Aceito — a entregar como pull request",
+        "merge_ready": "Aceito — pronto para mesclar",
+        "review": "Aguardando sua revisão",
+        "looking": "Não deu certo — {name} está vendo"
+      },
+      "go": {
+        "merge": "Mesclar…",
+        "board": "Abrir no quadro",
+        "review": "Revisar"
+      },
+      "session": {
+        "permission": "Aguarda sua aprovação",
+        "question": "Pergunta a você",
+        "plan": "Aguarda você aprovar um plano"
+      },
+      "task": {
+        "awaiting_input": "Aguarda sua resposta",
+        "review": "Pronto para revisão",
+        "failed": "Falhou",
+        "preparing": "Preparando",
+        "running": "Em andamento",
+        "merging": "Mesclando",
+        "checking": "Em verificação"
+      },
+      "dispatch": {
+        "queued": "Na fila",
+        "running": "Em andamento",
+        "waiting_input": "O assistente está respondendo",
+        "review": "Aguardando revisão",
+        "handed_over": "Repassado"
+      },
+      "item": {
+        "notify": "Lembrete às {time}",
+        "act": "Faz às {time}"
+      },
+      "pr": {
+        "waiting_checks": "Aguardando verificações",
+        "checks_failed": "Verificações falharam",
+        "conflict": "Tem um conflito",
+        "mergeable": "Pronto para mesclar",
+        "no_conflict": "Sem conflito, verificações desconhecidas",
+        "open": "PR aberto",
+        "merged": "Mesclado",
+        "closed": "Fechado"
+      },
+      "routine": {
+        "at": "Rotina às {time}",
+        "running": "Rotina rodando",
+        "asked": "Rotina aguarda você",
+        "reported": "Relatório da rotina",
+        "silent": "Rotina: sem mudanças"
+      },
+      "preparingBrief": "Preparando seu resumo da manhã…",
+      "preparingWrap": "Preparando o fechamento do dia…",
+      "tidy": {
+        "acted": "Memória organizada",
+        "draft": "Organização esperando por você",
+        "applied": "Organização aplicada",
+        "undone": "Organização desfeita",
+        "discarded": "Organização descartada",
+        "stale": "Rascunho de organização desatualizado"
+      },
+      "skill": {
+        "acted": "Skill de processo",
+        "draft": "Skill de processo esperando por você",
+        "applied": "Skill de processo instalada",
+        "undone": "Alteração de skill desfeita",
+        "discarded": "Skill de processo não instalada",
+        "stale": "Rascunho de skill desatualizado",
+        "deleted": "Skill de processo excluída"
+      },
+      "apply": "Aplicar",
+      "install": "Instalar",
+      "notThis": "Este não"
+    },
+    "meet": {
+      "name": {
+        "heading": "Prazer",
+        "call": "Como devo te chamar?",
+        "name": "Quer me dar um nome?",
+        "systemUser": "Seu nome de usuário neste computador",
+        "currentName": "Meu nome agora",
+        "answered": "Vou te chamar de “{call}”; eu sou “{name}”",
+        "answeredName": "Eu sou “{name}”",
+        "skipped": "Pulamos como nos chamar"
+      },
+      "connect": {
+        "heading": "Uma coisa agora mesmo",
+        "about": "Fico de olho em todos os seus projetos e aviso quando um PR espera sua revisão.",
+        "aboutOnly": "Fico de olho nos projetos que você escolheu e aviso quando um PR espera sua revisão.",
+        "noProjects": "O codeg ainda não tem projetos; abra um e eu fico de olho.",
+        "ask": "Quer que eu procure agora uma coisa em que posso ajudar?",
+        "settingsHint": "Quais projetos eu acompanho você muda nas configurações quando quiser.",
+        "settings": "Configurações",
+        "go": "Procurar agora",
+        "notNow": "Agora não",
+        "openFolder": "Abrir uma pasta de projeto",
+        "accountHint": "Conecte sua conta do {forge} e eu também vejo PRs, CI e issues.",
+        "connectAccount": "Conectar conta",
+        "went": "Certo, vou procurar.",
+        "skipped": "Agora não, então. Me chame quando quiser.",
+        "connected": "Conectados: {projects}",
+        "joiner": ", "
+      },
+      "starter": {
+        "heading": "Posso começar ajudando com isto",
+        "lookingHeading": "Uma coisa já",
+        "noneHeading": "Nada pendente",
+        "looking": "Procurando uma coisa em que posso ajudar já…",
+        "none": "Nada está vermelho agora; vou ficar de olho.",
+        "noMore": "Nada mais por agora; vou ficar de olho.",
+        "handed": "Comigo: {what}",
+        "dismissed": "Agora não: {what}",
+        "handIt": "Deixa comigo",
+        "next": "Outra coisa",
+        "notNow": "Agora não",
+        "lead": {
+          "pr_ci": "O CI do PR #{number} está vermelho ({checks}) — {project}: {title}",
+          "review": "O PR #{number} espera sua revisão — {project}: {title}",
+          "issue": "A issue #{number} está atribuída a você — {project}: {title}",
+          "task": "A tarefa do quadro “{title}” falhou e ninguém está cuidando",
+          "worktree": "A worktree {title} tem mudanças sem commit há mais de um dia"
+        },
+        "hand": {
+          "pr_ci": "Corrija o CI do PR #{number} em {project}: {url}",
+          "review": "Revise o PR #{number} em {project}: {url}",
+          "issue": "Cuide da issue #{number} em {project}: {url}",
+          "task": "Cuide da tarefa do quadro que falhou “{title}” (#{task})",
+          "worktree": "Veja as mudanças sem commit na worktree {path}"
+        }
+      },
+      "promises": {
+        "heading": "O que vou fazer por conta própria",
+        "intro": "Quanto devo tomar a iniciativa? Tudo isto vem ligado; desligue o que preferir fazer você.",
+        "items": {
+          "proactive": {
+            "title": "Avisar quando algo precisar de você",
+            "hint": "Perguntas, aprovações, trabalho concluído e seus lembretes, assim que chegam."
+          },
+          "brief": {
+            "title": "Escrever um resumo toda manhã",
+            "hint": "Quando seu dia começa: o que espera por você, o que rodou à noite e o que há para hoje."
+          },
+          "wrap": {
+            "title": "Fechar o seu dia",
+            "hint": "Antes de você parar: o que foi feito, o que falta e o que pode rodar esta noite."
+          },
+          "exec_questions": {
+            "title": "Responder às perguntas das sessões que distribuo",
+            "hint": "Respondo o que posso e passo para você o que não tenho certeza."
+          },
+          "exec_plans": {
+            "title": "Aprovar os planos das sessões que distribuo",
+            "hint": "Confiro cada plano com o que você pediu; os duvidosos vão para você."
+          },
+          "followups": {
+            "title": "Acompanhar e repetir meu próprio trabalho",
+            "hint": "Se o trabalho distribuído precisar de outra rodada, eu começo."
+          },
+          "ci_failure": {
+            "title": "Corrigir PRs acompanhados que falham",
+            "hint": "Um PR com verificações falhando ou um conflito é corrigido pela sua tarefa, rodada a rodada."
+          },
+          "interrupt_retry": {
+            "title": "Repetir o trabalho cortado por um reinício",
+            "hint": "O trabalho que rodava quando o codeg parou recomeça."
+          },
+          "presence": {
+            "title": "Aprender seus horários",
+            "hint": "Pelo seu tempo no codeg, para te procurar na hora certa."
+          },
+          "auto_accept": {
+            "title": "Verificar e aceitar o trabalho de código que delego",
+            "hint": "O agente com que trabalha verifica em modo leitura; eu julgo pelo que você pediu."
+          }
+        },
+        "prefs": "Ajustar preferências",
+        "pet": "Me pôr na área de trabalho",
+        "petFailed": "Não foi possível abrir o companheiro de área de trabalho",
+        "done": "Concluído",
+        "folded": "O que vou fazer por conta própria · interrupções: {level}",
+        "collapse": "Recolher",
+        "list": "O que faço: {on} de {total} ligadas",
+        "listShow": "Mostrar",
+        "listHide": "Recolher",
+        "unavailable": "Isso se muda onde o assistente roda."
+      }
+    },
+    "acceptance": {
+      "title": "Aceitação · rodada {round}",
+      "titleMax": "Aceitação · rodada {round} de no máximo {max}",
+      "check": "Verificação:",
+      "verdict": {
+        "pass": "Aprovada",
+        "fail": "Reprovada",
+        "unverified": "Não foi possível verificar"
+      },
+      "unchecked": "Sem verificação independente",
+      "notVerified": "Não verificado",
+      "decision": {
+        "accept": "aceitar",
+        "revise": "devolver",
+        "ask_owner": "perguntar a você"
+      },
+      "assistant": "Assistente: {decision}",
+      "assistantWhy": "Assistente: {decision}, porque: {reason}",
+      "fallback": "O assistente não concluiu: o codeg seguiu a verificação",
+      "owner": "Sua decisão: {decision}",
+      "result": "Resultado",
+      "why": "Motivo",
+      "by": {
+        "owner": "sua decisão",
+        "assistant": "decisão do assistente"
+      },
+      "question": "Pergunta a você: {question}",
+      "usedUp": "{count, plural, one {Verificado # vez} other {Verificado # vezes}} — tantas quanto você permite",
+      "wouldSend": "O que a devolução enviaria",
+      "revise": "Devolver como está",
+      "accept": "Aceitar",
+      "recheck": "Verificar de novo",
+      "openTask": "Abrir tarefa",
+      "accepted": "Aceito",
+      "revised": "Devolvido para alteração",
+      "void": "A árvore de trabalho mudou durante a verificação — esta rodada não vale",
+      "changed": "A árvore de trabalho mudou após a verificação — esta aceitação não vale mais",
+      "changedAfterAccept": "A árvore de trabalho mudou depois da aceitação",
+      "superseded": "Já foi verificado de novo",
+      "stale": "Não se aplica mais — nada foi feito",
+      "merged": "Mesclado {commit}",
+      "delivered": "Entregue, commit de cabeça {head}",
+      "history": "Rodadas anteriores",
+      "historyRevised": "Rodada {round}: devolvido — “{message}”",
+      "historyAccepted": "Rodada {round}: aceito",
+      "historyAsked": "Rodada {round}: perguntado a você",
+      "historyChanged": "Rodada {round}: aceito, depois a árvore de trabalho mudou",
+      "historyOpen": "Rodada {round}: em aberto"
+    },
+    "forge": {
+      "heading": {
+        "approve": "Aguardando sua aprovação",
+        "suggested": "Uma sugestão, para você aprovar",
+        "cnb": "Um merge no CNB: sempre aprovado por você",
+        "acting": "Fazendo…",
+        "done": "Feito no {provider}",
+        "refused": "Não feito",
+        "notMerged": "Não mesclado",
+        "failed": "Não deu certo",
+        "unknown": "Não se sabe se deu certo",
+        "not_run": "Não feito: algo mudou",
+        "dismissed": "Deixado sem fazer"
+      },
+      "title": {
+        "comment": "Comentar em {target}",
+        "close": "Fechar {target}",
+        "merge": "Mesclar {target}"
+      },
+      "merge": {
+        "head": "Head {head}",
+        "method": {
+          "merge": "commit de merge",
+          "squash": "squash",
+          "rebase": "rebase"
+        },
+        "checks": {
+          "green": "Verificações: todas aprovadas",
+          "none": "Verificações: nenhuma configurada",
+          "unknown": "Verificações: desconhecidas (o CNB não as mostra)"
+        },
+        "version": {
+          "accepted": "A versão que passou na aceitação",
+          "green": "Verificações aprovadas neste head"
+        },
+        "unguaranteed": "Versão não garantida (o merge não aceita o head)",
+        "commit": "Commit de merge {commit}"
+      },
+      "code": {
+        "merged": "Já foi mesclado",
+        "closed": "Está fechado",
+        "draft": "É um rascunho",
+        "after_acceptance": "O PR tem commits depois da aceitação",
+        "not_accepted": "A aceitação ainda não passou",
+        "not_delivered": "O codeg não entregou neste PR a versão aceita",
+        "checks_unreadable": "O codeg não consegue ler as verificações",
+        "checks_partial": "Algumas verificações não puderam ser lidas",
+        "checks_running": "As verificações ainda estão rodando",
+        "checks_failing": "Algumas verificações estão falhando"
+      },
+      "notRun": "Não feito: {error}",
+      "failed": "A forja recusou: {error}",
+      "unknown": "A forja não respondeu: {error}. O codeg não refaz sozinho; antes confere na forja.",
+      "reason": "Por quê: {reason}",
+      "approve": "Aprovar",
+      "decline": "Recusar",
+      "look": "Ver",
+      "again": "Fazer de novo",
+      "letBe": "Deixar assim",
+      "open": "Abrir"
+    },
+    "pr": {
+      "event": {
+        "checks_failed": "Verificações falharam",
+        "checks_passed": "Verificações verdes de novo",
+        "conflict": "Em conflito com a base",
+        "mergeable": "Pronto para mesclar",
+        "no_conflict": "Sem conflito, verificações desconhecidas",
+        "merged": "Mesclado",
+        "closed": "Fechado sem mesclar",
+        "feedback": "Feedback de revisão"
+      },
+      "head": "Head {head}",
+      "checks": {
+        "unknown": "Verificações desconhecidas",
+        "none": "Sem verificações",
+        "passed": "Verificações {passed}/{total} aprovadas",
+        "running": "{n} rodando",
+        "partial": "nem todas puderam ser lidas"
+      },
+      "more": "…e mais {n}",
+      "noConflictNote": "Esta forja não mostra verificações, então o codeg não o chama de pronto para mesclar.",
+      "mergeState": "A forja diz: {state}",
+      "state": {
+        "later": "Mudou desde então.",
+        "stopped": "Não é mais acompanhado."
+      },
+      "view": "Ver PR",
+      "gotIt": "Entendi",
+      "unwatch": "Parar de acompanhar",
+      "fix": {
+        "followup": {
+          "checks": "A tarefa está corrigindo — rodada {n}, uma continuação.",
+          "conflict": "A tarefa está mesclando a base — rodada {n}, uma continuação."
+        },
+        "task": {
+          "checks": "Uma nova tarefa nele está corrigindo — rodada {n}.",
+          "conflict": "Uma nova tarefa nele está mesclando a base — rodada {n}."
+        },
+        "failed": "O codeg não conseguiu começar a corrigir: {error}",
+        "none": "O codeg não consegue corrigir sozinho: {why}",
+        "busy": "Já há uma rodada em andamento; o codeg olha de novo quando terminar.",
+        "ask": {
+          "checks": "Fazer a tarefa corrigir?",
+          "conflict": "Fazer a tarefa mesclar a base?"
+        },
+        "told": "Só aviso, como dizem suas configurações.",
+        "off": "O codeg não corrige nada sozinho (0 rodadas nas configurações).",
+        "gaveUpHeading": "Corrigido o máximo permitido e ainda falha",
+        "gaveUp": "O codeg corrigiu {n} vezes; agora é com você. O que cada rodada fez:",
+        "round": "Rodada {n}",
+        "cause": {
+          "checks": "verificações com falha",
+          "conflict": "um conflito"
+        },
+        "lines": "{files} arquivos, +{added} −{removed}",
+        "doChecks": "Corrigir",
+        "doConflict": "Mesclar a base"
+      },
+      "feedback": {
+        "kind": {
+          "changes": "pede mudanças",
+          "review": "revisão",
+          "line": "em uma linha",
+          "comment": "comentário"
+        },
+        "someone": "Alguém",
+        "writer": "pode escrever",
+        "outsider": "não pode escrever",
+        "forward": "Passar para a tarefa",
+        "skip": "Não precisa",
+        "forwarded": "Passado para a tarefa.",
+        "waiting": "Vai para a tarefa quando a rodada em andamento terminar."
+      },
+      "round": {
+        "checks": "corrigindo as verificações — rodada {n}",
+        "conflict": "mesclando a base — rodada {n}",
+        "feedback": "o feedback de revisão"
+      },
+      "merge": {
+        "refused": "O codeg não fez o merge sozinho: {why}",
+        "unread": "O codeg não conseguiu ler a forja para fazer o merge: {why}"
+      }
+    },
+    "routines": {
+      "zone": "({zone})",
+      "onEvent": "Quando: {event}",
+      "withLabel": "rótulo {label}",
+      "mineOnly": "só o próprio trabalho",
+      "event": {
+        "dispatch_ended": "Um trabalho delegado termina",
+        "task_status": "Uma tarefa do quadro muda de estado",
+        "session_waiting": "Uma sessão espera por você",
+        "pr_checks_failed": "Verificações de um PR acompanhado falham",
+        "pr_checks_passed": "Verificações de um PR acompanhado ficam verdes de novo",
+        "pr_conflict": "Um PR acompanhado tem conflito",
+        "pr_mergeable": "Um PR acompanhado pode ser mesclado",
+        "pr_no_conflict": "Um PR acompanhado sem conflito (verificações desconhecidas)",
+        "pr_merged": "Um PR acompanhado é mesclado",
+        "pr_closed": "Um PR acompanhado é fechado",
+        "pr_review": "Um PR acompanhado recebe nova revisão",
+        "forge_issue": "Uma issue ou PR novo na forja"
+      },
+      "precheck": {
+        "commits": "só com commits novos em {branch}",
+        "forgeIssue": "só com uma issue nova",
+        "forgePr": "só com um PR novo",
+        "itemsWaiting": "só com assuntos esperando há mais de {hours} h",
+        "changes": "só quando a árvore de trabalho mudou"
+      },
+      "outcome": {
+        "running": "Rodando",
+        "skipped": "Pulada: nada novo",
+        "silent": "Sem mudanças",
+        "reported": "Relatou",
+        "failed": "Falhou",
+        "missed": "Perdida",
+        "asked": "Aguardando você",
+        "declined": "Não confirmada",
+        "stopped": "Parada"
+      },
+      "empty": "Ainda não há rotinas. Peça na conversa para configurar uma.",
+      "new": "Nova rotina",
+      "kind": {
+        "brain": "O assistente verifica",
+        "dispatch": "Delega trabalho"
+      },
+      "paused": {
+        "owner": "Pausada"
+      },
+      "row": {
+        "when": "Quando",
+        "trigger": "Gatilho",
+        "how": "Como",
+        "next": "Próxima",
+        "last": "Última",
+        "why": "Motivo",
+        "runs": "{n, plural, one {# execução} other {# execuções}} no total"
+      },
+      "runNow": "Executar agora",
+      "pause": "Pausar",
+      "resume": "Retomar",
+      "edit": "Editar",
+      "delete": "Excluir",
+      "deleteTitle": "Excluir esta rotina?",
+      "deleteDescription": "“{title}” deixa de rodar. O trabalho já delegado não é afetado.",
+      "cancel": "Cancelar",
+      "reply": "Rotina “{title}” · execução {seq}",
+      "editor": {
+        "titleNew": "Nova rotina",
+        "titleEdit": "Editar rotina",
+        "trialNote": "Ao salvar, roda uma vez como teste; depois o codeg mantém o ritmo.",
+        "editNote": "As mudanças valem a partir da próxima execução.",
+        "name": "Nome",
+        "what": "O que fazer",
+        "whatHint": "Ex.: veja o CI da noite e me diga o que está vermelho",
+        "kind": "Como roda",
+        "kindBrain": "Acordar o assistente",
+        "kindDispatch": "Delegar trabalho direto",
+        "kindBrainHint": "Ele verifica e relata; se não houver nada a dizer, fica quieto.",
+        "kindDispatchHint": "O codeg delega o trabalho abaixo sem acordar o assistente; o resultado volta como sempre.",
+        "mode": "Modo",
+        "modeTask": "Tarefa do quadro",
+        "modeSession": "Sessão de trabalho no projeto",
+        "modeChat": "Chat",
+        "deliverable": "Resultado",
+        "change": "Mudança de código",
+        "report": "Relatório",
+        "project": "Projeto",
+        "pickProject": "Escolha um projeto",
+        "anyProject": "Qualquer projeto",
+        "when": "Quando",
+        "schedule": "Em um horário",
+        "event": "Em um evento",
+        "presetDaily": "Todo dia 9:00",
+        "presetWeekdays": "Dias úteis 9:00",
+        "presetWeekly": "Segundas 9:00",
+        "custom": "Personalizar…",
+        "timezone": "Fuso horário",
+        "ownerZone": "A sua ({zone})",
+        "eventKind": "Evento",
+        "issueOrPr": "Issues ou PRs",
+        "issues": "Issues",
+        "prs": "Pull requests",
+        "label": "Rótulo",
+        "states": "Estados (separados por vírgula)",
+        "mine": "Só o próprio trabalho",
+        "precheck": "Verificar antes",
+        "check": {
+          "none": "Sempre rodar",
+          "commits": "Só com commits novos",
+          "forge_new": "Só com issue ou PR novo",
+          "items_waiting": "Só com assuntos esperando muito",
+          "changes": "Só quando a árvore de trabalho mudou"
+        },
+        "branch": "Branch (padrão: HEAD)",
+        "hours": "Horas",
+        "needTitle": "Dê um nome.",
+        "needWhat": "Diga o que deve fazer.",
+        "needCron": "Defina um horário.",
+        "made": "Rotina criada; o teste começou",
+        "saved": "Rotina salva",
+        "cancel": "Cancelar",
+        "save": "Salvar",
+        "saveRun": "Salvar e rodar uma vez"
+      },
+      "card": {
+        "made": "Rotina criada",
+        "changed": "Rotina alterada",
+        "proposal": "Rotina sugerida",
+        "proposalChange": "Mudança sugerida em uma rotina",
+        "repeat": "Transformar em rotina?",
+        "paused": "Rotina pausada",
+        "undone": "Desfeito",
+        "dismissed": "Agora não",
+        "resumed": "Retomada",
+        "madeNote": "Feito — já está nas rotinas.",
+        "action": {
+          "pause": "pausar",
+          "resume": "retomar",
+          "delete": "excluir",
+          "run_now": "rodar agora",
+          "edit": "alterar"
+        },
+        "repeatBody": "Você pediu algo assim {count} vezes em 30 dias.",
+        "pausedWorkAgent": "O agente com que trabalha não pode ser usado: não está instalado ou foi desativado.",
+        "pausedFailures": "Falhou três vezes seguidas.",
+        "trial": "O teste começou.",
+        "reason": "Por quê: {reason}",
+        "undo": "Desfazer",
+        "edit": "Editar",
+        "accept": "Criar",
+        "acceptChange": "Aplicar",
+        "dismiss": "Agora não",
+        "makeIt": "Transformar em rotina",
+        "resume": "Retomar",
+        "open": "Abrir rotinas",
+        "confirm": "Rotina a confirmar",
+        "confirmChange": "Alteração de rotina a confirmar",
+        "setWorkAgent": "Escolher o agente para o trabalho"
+      },
+      "more": "Mais ações"
+    },
+    "rules": {
+      "mute": "Não sugerir isso",
+      "muted": "Isso não será mais sugerido.",
+      "mutedRestore": "Reativar nas preferências",
+      "notNow": "Agora não",
+      "failed": "Não deu certo: {error}",
+      "since": "desde {when}",
+      "lowered": "Você dispensou as três últimas, então elas não notificam mais.",
+      "loweredNow": "Dispensada. São três seguidas, então não notificam mais (dá para reverter nas preferências).",
+      "dismissed": "Dispensada. Não volta por uma semana.",
+      "expired": "Não é mais preciso: a situação mudou.",
+      "openPr": "Abrir o PR",
+      "byAuthor": "de {author}",
+      "worktreeOf": "worktree de {project}",
+      "behindDetail": "{branch} está atrás de {base} e o merge teria conflitos.",
+      "heading": {
+        "failed": "Falhou e ninguém está cuidando",
+        "review": "Esperando revisão há muito tempo",
+        "session": "Uma sessão está esperando você",
+        "pr_review": "Um PR espera sua revisão",
+        "uncommitted": "Alterações não commitadas",
+        "idle": "Um assunto parado",
+        "behind": "Branch atrasado, com conflitos",
+        "undo": "Alterações que você desfez",
+        "idle_bot": "Assistentes ociosos"
+      },
+      "wait": {
+        "permission": "Aguardando sua aprovação",
+        "question": "Perguntando a você",
+        "plan": "Um plano para aprovar"
+      },
+      "step": {
+        "failed": {
+          "retry": "Tentar de novo",
+          "hand": "Pedir ao assistente para olhar"
+        },
+        "review": {
+          "check": "Pedir ao assistente para aceitar antes",
+          "remind": "Me lembre"
+        },
+        "session": {
+          "open": "Abrir a sessão"
+        },
+        "pr_review": {
+          "summary": "Um resumo da revisão antes"
+        },
+        "uncommitted": {
+          "open": "Abrir",
+          "hand": "Pedir ao assistente para commitar"
+        },
+        "idle": {
+          "hand": "Continuar acompanhando",
+          "close": "Fechar"
+        },
+        "behind": {
+          "rebase": "Pedir um rebase"
+        },
+        "undo": {
+          "ask_first": "Mostrar primeiro"
+        },
+        "idle_bot": {
+          "hide": "Ocultar",
+          "delete": "Excluir…"
+        }
+      },
+      "done": {
+        "handed": "Passado ao assistente.",
+        "retried": "Tentado de novo.",
+        "checking": "Em verificação; o assistente vai concluir.",
+        "reminding": "Lembrete amanhã de manhã.",
+        "opened": "Aberto.",
+        "closed": "Assunto fechado.",
+        "rebasing": "Devolvido para rebase.",
+        "asking_first": "As alterações que você pedir virão primeiro como cartão.",
+        "hidden": "Ocultado. Ele continua entre os assistentes ocultos.",
+        "deleted": "Excluído."
+      },
+      "hand": {
+        "failed": "“{title}” falhou e ninguém pegou. Veja o que deu errado e me diga o que sugere.",
+        "review": "A tarefa do quadro “{title}” espera revisão há muito tempo. Verifique antes: peça para alguém olhar as alterações e me diga a conclusão.",
+        "remind": "Revisar a tarefa do quadro “{title}”",
+        "prReview": "O PR #{number} em {project} espera minha revisão há um tempo. Me dê antes um resumo: {url}",
+        "uncommitted": "{name} ({path}) tem alterações não commitadas há um tempo. Veja e faça commits organizados.",
+        "idle": "O assunto “{summary}” está parado há um tempo. Retome."
+      },
+      "prefs": {
+        "title": "Cartões de proposta",
+        "hint": "O codeg procura isso sozinho, sem modelo, e mostra um cartão com o próximo passo. Cada um pode ser desligado ou ajustado.",
+        "mutedMark": "Desligado com “Não sugerir isso” em um cartão.",
+        "loweredMark": "Você dispensou três seguidas, então não notificam mais.",
+        "putBack": "Restaurar",
+        "counts": "Últimos 30 dias: {raised} cartões, {acted} usados, {dismissed} dispensados",
+        "unit": {
+          "hours": "horas",
+          "minutes": "min",
+          "days": "dias",
+          "times": "pedidos"
+        },
+        "failed": {
+          "title": "Falha sem ninguém cuidando",
+          "hint": "Trabalho delegado ou tarefa do quadro que falhou e ninguém retomou. O cartão aparece no assistente que delegou."
+        },
+        "review": {
+          "title": "Esperando revisão há muito tempo",
+          "hint": "Uma tarefa do quadro em revisão ainda sem rodada de aceite."
+        },
+        "session": {
+          "title": "Uma sessão esperando você",
+          "hint": "Qualquer sessão esperando sua aprovação ou resposta enquanto você não está nela. Urgente."
+        },
+        "pr_review": {
+          "title": "Um PR esperando sua revisão",
+          "hint": "Nos projetos acompanhados; conta desde que o codeg viu o pedido."
+        },
+        "uncommitted": {
+          "title": "Alterações não commitadas",
+          "hint": "Um projeto ou worktree com alterações que ninguém commitou."
+        },
+        "idle": {
+          "title": "Um assunto parado",
+          "hint": "Um assunto aberto sem mudanças."
+        },
+        "behind": {
+          "title": "Branch atrasado",
+          "hint": "Uma tarefa delegada cujo branch ficou atrás do destino e teria conflitos."
+        },
+        "repeat": {
+          "title": "Um pedido repetido",
+          "hint": "Com esse número de pedidos parecidos em 30 dias, sugere virar rotina."
+        },
+        "suggest": {
+          "title": "Sugestões dos assistentes",
+          "hint": "Desligado: os assistentes não sugerem nada, e uma chamada com suggest fica sabendo que você não aceita sugestões agora."
+        },
+        "undo": {
+          "title": "Muitas alterações desfeitas",
+          "hint": "Na revisão semanal: se você desfez muitas das alterações feitas a seu pedido, perguntar se deve mostrá-las primeiro."
+        },
+        "idle_bot": {
+          "title": "Assistentes ociosos",
+          "hint": "Na revisão semanal: um assistente não acordado há duas semanas — pergunta se você quer ocultá-lo ou excluí-lo."
+        }
+      },
+      "undoDetail": "Você desfez {undone} das {made} alterações feitas a seu pedido nas últimas duas semanas.",
+      "idleBotDetail": "Ninguém o acordou em duas semanas."
+    },
+    "brief": {
+      "title": "Resumo da manhã",
+      "byCodeg": "O codeg escreveu a partir dos registros — o assistente não conseguiu.",
+      "part": {
+        "needs": "Precisa de você",
+        "tonight": "O trabalho da noite",
+        "night": "Desde o último resumo",
+        "running": "Acompanhando",
+        "schedule": "Hoje",
+        "bots": "Os assistentes",
+        "loose": "Pontas soltas",
+        "yesterday": "Seu dia de ontem"
+      },
+      "more": "…e mais {count}",
+      "bot": {
+        "done": "terminou {count} ({titles})",
+        "idle": "não terminou nada",
+        "doing": "em {what}",
+        "stuck": "{count} esperando você"
+      },
+      "loose": {
+        "item": "parado há {days, plural, one {# dia} other {# dias}}",
+        "worktree": "mudanças sem commit há {days, plural, one {# dia} other {# dias}}",
+        "session": "pela metade"
+      },
+      "sessions": "{count, plural, one {# sessão} other {# sessões}}",
+      "nothing": "Nada precisa de você hoje.",
+      "replyBrief": "Resumo da manhã",
+      "replyWrap": "Fechamento do dia",
+      "message": {
+        "to": "Para {name}:",
+        "answered": "respondeu: {text}",
+        "open": "ainda sem resposta"
+      },
+      "week": {
+        "title": "Semana passada ({first} – {last})",
+        "titleSoFar": "Esta semana até agora ({first} – {last})",
+        "mode": {
+          "task": "quadro",
+          "chat": "chat",
+          "session": "sessão"
+        },
+        "work": "Delegados {count} ({modes}) · concluídos {completed}, falharam {failed} · de primeira {firstPass} de {settled}",
+        "byBot": "Por assistente: {list}",
+        "doneForYou": "Feito por você: {caught} devolvidos na aceitação · {retried} repetidos · {ciFixed} correções de CI · {routines} rotinas · {merged} mesclados",
+        "asks": "Perguntas do trabalho: {count} · respondidas pelos assistentes {answered} · vieram a você {forwarded}",
+        "between": "Entre assistentes: {messages} mensagens em {threads} conversas · {loops} interrompidas",
+        "unblock": "Você respondeu ao que esperava em {minutes} min em média ({count})",
+        "unblockBefore": "Você respondeu ao que esperava em {minutes} min em média ({count}; semana anterior {before} min)",
+        "held": "Interrupções evitadas: {merged} agrupadas · {deferred} adiadas · {kept} só em Hoje",
+        "proposals": "Propostas: {count} · aceitas {taken} · recusadas {dismissed}",
+        "undone": "Desfeitos: {changesUndone} de {changes} alterações · {memoryUndone} de {memory} na memória",
+        "reminders": "Lembretes: {count} · feitos {done} · adiados {snoozed}",
+        "lowered": "O codeg rebaixou: {rules}",
+        "tokens": "Tokens: {total}",
+        "botTokens": "{total} — próprio {own}, trabalho delegado {handed}"
+      }
+    },
+    "memory": {
+      "title": "Memorizado",
+      "undoneTitle": "Mudança na memória desfeita",
+      "added": "{count, plural, one {# entrada nova} other {# entradas novas}}",
+      "updated": "{count, plural, one {# entrada atualizada} other {# entradas atualizadas}}",
+      "removed": "{count, plural, one {# entrada removida} other {# entradas removidas}}",
+      "changedFile": "{file} alterado(as)",
+      "sep": " · ",
+      "listSep": ", ",
+      "file": {
+        "index": "o índice da memória",
+        "user": "seu perfil",
+        "soul": "sua persona",
+        "rules": "suas regras"
+      },
+      "status": {
+        "added": "Nova",
+        "modified": "Atualizada",
+        "deleted": "Removida"
+      },
+      "kept": "Mantidos como estão (mudaram depois): {files}",
+      "showDiff": "Ver mudanças",
+      "hideDiff": "Ocultar mudanças",
+      "diffCut": "Só o começo das mudanças é mostrado.",
+      "undo": "Desfazer",
+      "used": "Memória usada:"
+    },
+    "history": {
+      "open": "Pesquisar histórico",
+      "title": "Máquina do tempo",
+      "description": "Pesquise o que foi dito e feito: as conversas dos assistentes, as mensagens entre eles, todas as conversas e as tarefas do quadro.",
+      "placeholder": "Por que mudamos X para Y…",
+      "hint": "Todas as palavras devem aparecer. Um ou dois caracteres pesquisam só os últimos 90 dias.",
+      "none": "Nada encontrado.",
+      "short": "Um ou dois caracteres: só os últimos 90 dias foram pesquisados.",
+      "sessionsOff": "Todas as conversas ficam de fora (Sobre você).",
+      "tasksOff": "As tarefas do quadro ficam de fora (Sobre você).",
+      "reading": "Ainda lendo conversas ({done} de {total}): as mais antigas podem não aparecer ainda.",
+      "untitled": "Conversa #{id}",
+      "task": "Tarefa #{id}",
+      "message": "{from} → {to}",
+      "timeline": "Com {name}",
+      "handedOut": "delegada por {name}",
+      "matches": "{count} correspondências",
+      "role": {
+        "owner": "Você",
+        "assistant": "Assistente",
+        "agent": "Agente"
+      },
+      "scope": {
+        "all": "Tudo",
+        "timeline": "Assistentes",
+        "sessions": "Conversas",
+        "tasks": "Tarefas",
+        "messages": "Mensagens"
+      }
+    },
+    "plan": {
+      "title": "Plano",
+      "progress": "{done}/{total} etapas",
+      "sep": ", ",
+      "after": "depois da etapa {steps}",
+      "doneWhen": "Pronto quando:",
+      "changes": "Mudanças",
+      "undo": "Desfazer",
+      "undone": "Desfeita",
+      "undoneKept": "Desfeita — a etapa {steps} já tinha começado e a manteve",
+      "state": {
+        "draft": "esperando você iniciar",
+        "running": "em andamento",
+        "stuck": "travado",
+        "stopped": "parado",
+        "done": "concluído",
+        "canceled": "encerrado"
+      },
+      "step": {
+        "pending": "espera suas etapas",
+        "ready": "prestes a sair",
+        "confirm": "espera sua confirmação",
+        "running": "em andamento",
+        "done": "concluída",
+        "failed": "falhou",
+        "canceled": "cancelada",
+        "stopped": "não começou"
+      },
+      "hint": {
+        "draft": "Nada sai antes de você apertar Iniciar; depois o codeg entrega cada etapa assim que as etapas de que ela depende estiverem prontas.",
+        "stopped": "Parado: nenhuma etapa nova sai; as em andamento vão até o fim.",
+        "stuck": "Travado na etapa {seq} “{title}”: ela falhou e o assistente não conseguiu continuar. As etapas que não dependem dela seguem.",
+        "stuckCanceled": "A etapa {seq} “{title}” foi cancelada: as etapas que dependem dela não vão começar."
+      },
+      "act": {
+        "start": "Iniciar",
+        "change": "Mudar",
+        "cancel": "Cancelar",
+        "stop": "Parar",
+        "resume": "Continuar",
+        "end": "Encerrar plano",
+        "open": "Abrir",
+        "confirm": "Confirmar",
+        "cancelStep": "Cancelar"
+      },
+      "change": {
+        "added": "adicionou a etapa {seq} “{title}”",
+        "removed": "removeu a etapa {seq} “{title}”",
+        "retry": "a etapa {seq} “{title}” sai de novo",
+        "changed": "mudou a etapa {seq} “{title}”: {fields}",
+        "title": "renomeou para “{title}”",
+        "goal": "mudou o objetivo"
+      },
+      "field": {
+        "title": "título",
+        "who": "quem faz",
+        "mode": "modo",
+        "project": "projeto",
+        "deliverable": "entrega",
+        "prompt": "o que fazer",
+        "done_when": "pronto quando",
+        "depends_on": "do que depende",
+        "kind": "tipo de trabalho"
+      },
+      "self": "ele mesmo"
+    },
+    "tidy": {
+      "title": {
+        "acted": "Memória organizada ({day})",
+        "draft": "Organização de {day}, em rascunho",
+        "applied": "Organização de {day}, aplicada",
+        "undone": "Organização de {day}, desfeita",
+        "discarded": "Organização de {day}, descartada",
+        "stale": "Organização de {day}, desatualizada"
+      },
+      "note": {
+        "draft": "Guardado como rascunho: sua memória continua igual até você aplicar.",
+        "applied": "Aplicado: a memória ficou como esta organização deixou.",
+        "discarded": "Descartado: a memória continua como está.",
+        "stale": "A memória mudou depois e este rascunho não se encaixa mais; na próxima noite ela é organizada de novo.",
+        "notAside": "Não foi possível guardar como rascunho ({why}): já está valendo — Desfazer tudo reverte."
+      },
+      "undoAll": "Desfazer tudo",
+      "apply": "Aplicar",
+      "dismiss": "Este não",
+      "lines": "Organizado ontem à noite",
+      "view": "Ver",
+      "line": {
+        "done": "{name} organizou a memória",
+        "draft": "{name} organizou a memória, em rascunho"
+      },
+      "state": {
+        "applied": "Aplicado",
+        "undone": "Desfeito",
+        "discarded": "Descartado",
+        "stale": "Desatualizado — organizado de novo hoje à noite"
+      }
+    },
+    "skill": {
+      "heading": {
+        "added": "Nova skill de processo",
+        "modified": "Skill de processo alterada",
+        "deleted": "Skill de processo removida",
+        "draft": "Skill de processo em rascunho"
+      },
+      "line": {
+        "learned": "Transformei “{title}” em uma skill de processo: da próxima vez que você pedir, eu sigo ela.",
+        "changed": "Alterei a skill de processo “{title}”; já está valendo.",
+        "removed": "Removi a skill de processo “{title}”.",
+        "draft": "Escrevi a skill de processo “{title}”; ela passa a valer quando você instalar."
+      },
+      "when": "Quando: {text}",
+      "note": {
+        "off": "Desativada: não é mais carregada.",
+        "draft": "Nada mudou ainda.",
+        "applied": "Instalada.",
+        "undone": "Alteração desfeita.",
+        "discarded": "Não instalada; continua como estava.",
+        "stale": "Mudou de novo depois; este rascunho não se encaixa mais.",
+        "deleted": "Excluída.",
+        "notAside": "Não foi possível guardar como rascunho ({why}): ficou desativada — Ativar carrega.",
+        "notAsideOn": "Não foi possível guardar como rascunho ({why}) nem desativar: já está valendo — desative ou desfaça."
+      },
+      "show": "Ver conteúdo",
+      "hide": "Ocultar",
+      "view": "Ver",
+      "disable": "Desativar",
+      "enable": "Ativar",
+      "undo": "Desfazer",
+      "delete": "Excluir",
+      "confirmDelete": "Excluir",
+      "cancel": "Cancelar",
+      "install": "Instalar",
+      "dismiss": "Esta não"
+    },
+    "botPage": {
+      "primary": "Assistente principal",
+      "worker": "Assistente",
+      "chat": "Conversar"
+    },
+    "workRanOn": "Feito com {agent}",
+    "workOff": "{agent}, o agente com que trabalha, não pode ser usado (não instalado ou desativado): por enquanto não consegue trabalhar sozinho.",
+    "setWork": "Escolher outro",
+    "noBrain": {
+      "title": "{name} ainda não tem cérebro",
+      "body": "Ele veio das configurações de colaboração. Configure o assistente principal e ele recebe uma cópia do cérebro do principal; aí você pode conversar com ele. Até lá, ainda dá para @mencioná-lo nas conversas.",
+      "setUp": "Configurar o assistente principal"
+    }
+  },
+  "MessageCheck": {
+    "action": "Pedir ao assistente para verificar",
+    "selection": "Verificar",
+    "verdict": {
+      "true": "Verdadeiro",
+      "false": "Não é verdade",
+      "partly": "Parcialmente verdadeiro",
+      "unsure": "Não dá para dizer"
+    },
+    "checking": "Verificando…",
+    "unfinished": "Não terminou",
+    "mark": "Verificado: {verdict}",
+    "markQuote": "“{quote}”: {verdict}",
+    "again": "Verificar de novo",
+    "inAssistant": "Ver na conversa do assistente",
+    "process": "Ver a verificação",
+    "openConversation": "Abrir a conversa",
+    "sentNoName": "Verificando; o resultado aparece abaixo da mensagem.",
+    "startFailed": "Não foi possível começar a verificar: {message}",
+    "evidence": "Evidências",
+    "noEvidence": "Nenhuma evidência dada.",
+    "checkedMessage": "A mensagem verificada",
+    "checkedSentence": "A frase verificada",
+    "asked": "Respondia a",
+    "note": {
+      "no_verdict": "A verificação não deu veredito.",
+      "no_evidence": "A verificação deu um veredito sem evidências, então conta como não dá para dizer.",
+      "restarted": "O codeg reiniciou enquanto ela rodava.",
+      "stopped": "Ela foi interrompida.",
+      "taken_over": "Você assumiu a sessão dela.",
+      "failed": "Falhou: {error}"
+    },
+    "heading": {
+      "checking": "Verificando uma mensagem",
+      "done": "Resultado da verificação",
+      "failed": "Verificação não terminou"
+    },
+    "cardLine": {
+      "checking": "Verificando uma mensagem de {title}",
+      "checkingSentence": "Verificando uma frase de {title}",
+      "done": "Mensagem de {title} verificada: {verdict}",
+      "doneSentence": "Frase de {title} verificada: {verdict}",
+      "failed": "A verificação de uma mensagem de {title} não terminou",
+      "failedSentence": "A verificação de uma frase de {title} não terminou"
+    },
+    "titleQuoted": "“{title}”",
+    "untitled": "uma conversa",
+    "expand": "Ver tudo",
+    "collapse": "Ver menos"
   },
   "SrnAccount": {
     "name": "SRN",

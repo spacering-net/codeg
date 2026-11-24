@@ -1,26 +1,20 @@
 import { useEffect, useMemo } from "react"
 import { create } from "zustand"
-import {
-  assistantCreate,
-  assistantDelete,
-  assistantList,
-  assistantReorder,
-  assistantUpdate,
-} from "@/lib/api"
+import { assistantList } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import { onTransportReconnect, subscribe } from "@/lib/platform"
 import {
   ASSISTANT_CHANGED_EVENT,
   type AssistantChange,
-  type AssistantDraft,
   type AssistantInfo,
-  type AssistantPatch,
 } from "@/lib/types"
 import { registerBackendScopedStoreReset } from "@/stores/backend-scoped-store-reset"
 
 /**
- * The assistants this window knows — tombstones included, so delegation cards
- * and mention badges can still draw an assistant that was deleted.
+ * The collaboration settings' assistants this window knows — tombstones
+ * included — read only: each became one of the owner's personal assistants
+ * on upgrade, and what is kept here draws what still names one of them (a
+ * delegation child from before, an old `codeg://assistant/<id>` link).
  *
  * One merge rule covers every source (the list read, a write's reply, a
  * broadcast): per id, keep whichever copy carries the higher `revision`. The
@@ -45,13 +39,6 @@ export interface AssistantsState {
   applyChange: (change: AssistantChange) => void
   /** Merge whole rows by the revision rule. */
   merge: (rows: readonly AssistantInfo[]) => void
-  create: (draft: AssistantDraft) => Promise<AssistantInfo>
-  update: (id: number, patch: AssistantPatch) => Promise<AssistantInfo>
-  remove: (id: number) => Promise<AssistantInfo>
-  /** Persist the order after a drag (the complete live list, first to last).
-   *  Shows at once; the rows' own order takes over when the latest settles.
-   *  Writes run one at a time, and one superseded while queued is skipped. */
-  reorder: (orderedIds: readonly number[]) => Promise<void>
 }
 
 /** `rows` merged into `current` by the revision rule, or `null` when nothing
@@ -72,9 +59,6 @@ export function mergeAssistantRows(
 
 let fetchSeq = 0
 let lastAppliedFetch = 0
-let reorderSeq = 0
-/** The reorder write in flight, if any: writes run one at a time, in order. */
-let reorderTail: Promise<unknown> = Promise.resolve()
 
 export const useAssistantsStore = create<AssistantsState>()((set, get) => ({
   byId: new Map(),
@@ -114,49 +98,6 @@ export const useAssistantsStore = create<AssistantsState>()((set, get) => ({
       case "resync":
         void get().fetchAll()
         return
-    }
-  },
-
-  create: async (draft) => {
-    const row = await assistantCreate(draft)
-    get().merge([row])
-    return get().byId.get(row.id) ?? row
-  },
-
-  update: async (id, patch) => {
-    const row = await assistantUpdate(id, patch)
-    get().merge([row])
-    return get().byId.get(row.id) ?? row
-  },
-
-  remove: async (id) => {
-    const tombstone = await assistantDelete(id)
-    get().merge([tombstone])
-    return tombstone
-  },
-
-  reorder: async (orderedIds) => {
-    const seq = ++reorderSeq
-    const order = [...orderedIds]
-    set({ pendingOrder: order })
-    // One write at a time, in the order asked: two in flight together could
-    // commit the other way round, and the later move would be lost. A write
-    // still queued when a newer order arrives is skipped — the newer one
-    // already carries it.
-    const write = reorderTail.then(async () => {
-      if (seq !== reorderSeq) return
-      get().merge(await assistantReorder(order))
-    })
-    reorderTail = write.catch(() => {})
-    try {
-      await write
-    } catch (err) {
-      // The rows were never touched; re-read in case the write landed before
-      // its reply was lost.
-      void get().fetchAll()
-      throw err
-    } finally {
-      if (seq === reorderSeq) set({ pendingOrder: null })
     }
   },
 }))
@@ -203,8 +144,6 @@ export function useAssistant(
 export function resetAssistantsStore(): void {
   fetchSeq = 0
   lastAppliedFetch = 0
-  reorderSeq = 0
-  reorderTail = Promise.resolve()
   useAssistantsStore.setState(useAssistantsStore.getInitialState(), true)
 }
 

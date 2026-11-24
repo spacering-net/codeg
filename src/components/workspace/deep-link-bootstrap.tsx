@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef } from "react"
 import { toast } from "sonner"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useTabStore, useTabActions } from "@/contexts/tab-context"
+import { useOptionalWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { takePendingDeepLink, takePendingHarnessLink } from "@/lib/deep-link"
 import { queueHarnessLink } from "@/lib/harness-link"
 import type { AgentType } from "@/lib/types"
@@ -17,6 +18,10 @@ import type { AgentType } from "@/lib/types"
  * the window straight at this query string before the webview exists. (macOS
  * learns about the link too late for that and uses {@link PetFocusBridge}'s
  * parked-target drain instead.)
+ *
+ * The conversations are shown for it: the tab it opens may be the one already
+ * active under the view the window opened on (the assistants page, say),
+ * which an activation alone would leave hidden.
  */
 export function DeepLinkBootstrap() {
   const foldersHydrated = useAppWorkspaceStore((s) => s.foldersHydrated)
@@ -32,6 +37,7 @@ export function DeepLinkBootstrap() {
     (s) => s.conversationsLoading
   )
   const { openTab } = useTabActions()
+  const openConversations = useOptionalWorkbenchRoute()?.openConversations
   const ranRef = useRef(false)
 
   useEffect(() => {
@@ -98,12 +104,19 @@ export function DeepLinkBootstrap() {
           return
         }
 
+        openConversations?.()
         openTab(folderId, conversationId, rawAgent, true)
       } finally {
         clearUrl()
       }
     })()
-  }, [foldersHydrated, tabsHydrated, conversationsLoading, openTab])
+  }, [
+    foldersHydrated,
+    tabsHydrated,
+    conversationsLoading,
+    openTab,
+    openConversations,
+  ])
 
   return null
 }
@@ -132,8 +145,8 @@ type FocusRequest = {
  * A `codeg://harness/install?ref=…` link travels the same way, in a slot of
  * its own, behind the same nudge: every drain here takes both slots. What the
  * Harness slot gives is an item's address, handed on to `HarnessLinkBootstrap`
- * (inside the providers the Harness page needs, which this sits outside of),
- * which opens it once the workspace is ready.
+ * (which may mount after this, or not at all on this route), which opens it
+ * once the workspace is ready.
  *
  * Latest workspace state is held in a ref so the single subscription always
  * sees fresh state without re-subscribing on every change. A request that
@@ -143,13 +156,16 @@ export function PetFocusBridge() {
   const foldersHydrated = useAppWorkspaceStore((s) => s.foldersHydrated)
   const tabsHydrated = useTabStore((s) => s.tabsHydrated)
   const { openTab } = useTabActions()
+  // Shown for each conversation it opens, as DeepLinkBootstrap does.
+  const openConversations = useOptionalWorkbenchRoute()?.openConversations
 
   // Workspace state is read via getState() at attempt time; only the tab
-  // half still needs a ref mirror (it lives in a context, not a store).
-  const stateRef = useRef({ tabsHydrated, openTab })
+  // half (and the route) still needs a ref mirror (they live in contexts,
+  // not stores).
+  const stateRef = useRef({ tabsHydrated, openTab, openConversations })
   useEffect(() => {
-    stateRef.current = { tabsHydrated, openTab }
-  }, [tabsHydrated, openTab])
+    stateRef.current = { tabsHydrated, openTab, openConversations }
+  }, [tabsHydrated, openTab, openConversations])
 
   // Focus requests waiting for the workspace to hydrate. Both producers are
   // one-shot — a pet-panel click is an event with no replay, and a drained
@@ -194,6 +210,7 @@ export function PetFocusBridge() {
           // open the tab directly and let its title/content hydrate. We do NOT
           // gate on the conversations list — it loads independently of folders,
           // and waiting on it (without a ready flag) would drop the request.
+          stateRef.current.openConversations?.()
           stateRef.current.openTab(
             req.folderId,
             req.conversationId,
