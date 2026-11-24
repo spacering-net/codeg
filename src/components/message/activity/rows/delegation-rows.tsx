@@ -334,7 +334,9 @@ function DelegationStepRow({
           {model.permissionMode ? (
             <span
               className="max-w-[12rem] truncate font-mono text-xs text-activity-secondary"
-              title={tDelegation("delegationPinnedMode", { mode: model.permissionMode })}
+              title={tDelegation("delegationPinnedMode", {
+                mode: model.permissionMode,
+              })}
               dir="auto"
             >
               {model.permissionMode}
