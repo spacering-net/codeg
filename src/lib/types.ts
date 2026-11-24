@@ -3497,7 +3497,7 @@ export type AcpEvent =
        *
        * The first three mean the session is gone. `"session_busy"` does not —
        * another live holder has it open (another Codex client — the app, the
-       * CLI or an IDE extension — or, for about a minute after a fork, the
+       * CLI or an IDE extension — or, briefly after a fork, the
        * forking session, until codex unloads the parent it closed; for Kimi
        * Code, another Kimi process on the same home until it has been idle
        * for 3 s), and it clears when that one lets go.

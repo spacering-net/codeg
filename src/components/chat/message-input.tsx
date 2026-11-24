@@ -1659,20 +1659,32 @@ export function MessageInput({
   // stack a duplicate child row behind the first.
   const btwInFlightRef = useRef(false)
 
-  // Async steering must compare against the current draft, including images
-  // added or removed while delivery was awaiting confirmation.
+  // Async sends compare against the latest draft, including attachments.
   const currentComposerRef = useRef({
     buildDraft,
     draftStorageKey: effectiveDraftStorageKey,
   })
-  // Only read after an await in the steer handler, so syncing it after commit
-  // is early enough.
   useLayoutEffect(() => {
     currentComposerRef.current = {
       buildDraft,
       draftStorageKey: effectiveDraftStorageKey,
     }
   })
+
+  const isCurrentDraft = useCallback(
+    (
+      draft: PromptDraft,
+      editor: ReturnType<RichComposerHandle["getEditor"]> | undefined
+    ) => {
+      const current = currentComposerRef.current
+      return (
+        current.draftStorageKey === effectiveDraftStorageKey &&
+        editorRef.current?.getEditor() === editor &&
+        JSON.stringify(current.buildDraft()) === JSON.stringify(draft)
+      )
+    },
+    [effectiveDraftStorageKey]
+  )
 
   const handleSend = useCallback(() => {
     // The editor stays editable while `disabled` (the agent is busy) so the user
@@ -1698,15 +1710,7 @@ export function MessageInput({
       return
     }
 
-    // `/btw <question>`: codeg's own command, intercepted BEFORE the queue
-    // branches — asking while the parent answers is the case it exists for
-    // (the copy fork reads the settled prefix while the parent streams).
-    // Only the client-synthesized entry is intercepted: an agent's own `/btw`
-    // stays forwarded verbatim, and where the backend offers no entry (no
-    // fork+resume) the text flows on like any unknown slash input. A draft
-    // carrying anything but text (images, file mentions) is not a plain side
-    // question — the fork request has nowhere to put an attachment, so it
-    // takes the ordinary send path instead of being silently stripped.
+    // Route text-only client /btw commands before the queue, even mid-turn.
     const btwQuestion = extractBtwQuestion(draft.displayText)
     if (
       btwQuestion !== null &&
@@ -1719,16 +1723,7 @@ export function MessageInput({
       const sentEditor = editorRef.current?.getEditor()
       void onBtw(btwQuestion)
         .then((consumed) => {
-          if (!consumed) return
-          // Same guard as the steer path: the fork RPC takes seconds, and text
-          // typed during that window is unsent — only clear what this Enter
-          // actually submitted (same editor, same draft, same storage key).
-          const current = currentComposerRef.current
-          if (
-            current.draftStorageKey === effectiveDraftStorageKey &&
-            editorRef.current?.getEditor() === sentEditor &&
-            JSON.stringify(current.buildDraft()) === JSON.stringify(draft)
-          ) {
+          if (consumed && isCurrentDraft(draft, sentEditor)) {
             if (effectiveDraftStorageKey) {
               clearMessageInputDraftV2(effectiveDraftStorageKey)
             }
@@ -1775,6 +1770,7 @@ export function MessageInput({
     onEnqueue,
     onBtw,
     slashCommands,
+    isCurrentDraft,
     onSend,
     effectiveModeId,
     showModeSelector,
@@ -1810,14 +1806,7 @@ export function MessageInput({
     // Keep the whole edited draft: appending during delivery can retain text
     // already sent, but clearing or trimming it would discard the user's edits.
     const clearSentDraft = () => {
-      const current = currentComposerRef.current
-      if (
-        current.draftStorageKey === effectiveDraftStorageKey &&
-        editorRef.current?.getEditor() === sentEditor &&
-        JSON.stringify(current.buildDraft()) === JSON.stringify(draft)
-      ) {
-        resetComposer()
-      }
+      if (isCurrentDraft(draft, sentEditor)) resetComposer()
     }
     const enqueueInstead = () => {
       if (!onEnqueue) return
@@ -1853,7 +1842,7 @@ export function MessageInput({
     onEnqueue,
     showModeSelector,
     effectiveModeId,
-    effectiveDraftStorageKey,
+    isCurrentDraft,
     resetComposer,
     steerChannel,
     t,

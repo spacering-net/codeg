@@ -6521,7 +6521,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
               // IDE extension), where freeing it can take quitting that client
               // because closing its tab does not always unload the thread; or
               // a fork codeg just made from it, which closes the parent and
-              // leaves codex to unload it about a minute later. For Kimi Code
+              // leaves Codex to unload it. For Kimi Code
               // the holder is another Kimi process on the same home (its CLI,
               // `kimi web`, another codeg), which lets go 3 s after it goes
               // idle; the same advice holds.

@@ -1043,10 +1043,8 @@ fn merge_antigravity_settings(
 /// every thread it starts, resumes or forks.
 const CODEX_CONFIG_ENV: &str = "CODEX_CONFIG";
 
-/// How long codex keeps a thread loaded after its last subscriber leaves, for
-/// codeg's sessions: codex's own default up to 0.163 (see
-/// [`apply_codex_env_policy`]).
-const CODEX_THREAD_UNLOAD_DELAY_SECS: u64 = 60;
+/// Unload an idle Codex thread as soon as its last subscriber leaves.
+const CODEX_THREAD_UNLOAD_DELAY_SECS: u64 = 0;
 
 /// `current` (the `CODEX_CONFIG` the agent would get) with
 /// `thread_unload_delay_secs` added, or `None` to leave it as it is: when it
@@ -1098,17 +1096,11 @@ fn apply_codex_env_policy(
     merged.retain(|(k, _)| k != key);
     merged.push((key.to_string(), "true".to_string()));
 
-    // Keep a closed thread's lock as short as codeg's fork expects. When a
-    // fork closes its parent (`close_forked_parent`), codex holds the parent
-    // until `thread_unload_delay_secs` pass, and only then can the parent's
-    // own row open it again (the `session_busy` banner says so). codex 0.164
-    // raised that default from 60 s to 30 min, so 60 is set here, through the
-    // config codex-acp hands every thread it starts, resumes or forks
-    // (`CODEX_CONFIG`); codex reads the delay per thread from 0.164 on.
-    // Measured on codex-acp 2.3.0: a sibling's `session/load` of the closed
-    // parent still met the lock 65 s after the close without this, and
-    // succeeded with it. Applies to codeg's sessions only, never to the
-    // Codex CLI or app, and merges into a `CODEX_CONFIG` the user set.
+    // session/close unsubscribes the thread, but its writer lock stays until
+    // Codex unloads it. /btw closes the copy on the original app-server and
+    // immediately resumes it on a new one. The unload delay must be set when
+    // the fork is created, so pass it via CODEX_CONFIG to codex-acp, which
+    // applies it when starting, resuming or forking a thread.
     let current = merged
         .iter()
         .rev()
@@ -13959,9 +13951,8 @@ async fn handle_fork_or_exit(
     //     opening the sibling row fails with `session_busy`. Closing is
     //     `thread/unsubscribe`, which is also what codex's own TUI does to the
     //     thread it forks from. The app-server then unloads the thread, and
-    //     with it the lock, once it has gone `thread_unload_delay_secs` (60,
-    //     which codeg sets: codex 0.164 defaults to 30 min, see
-    //     `apply_codex_env_policy`) without a subscriber or a running turn.
+    //     with it the lock, when it has no subscriber or running turn and
+    //     its configured `thread_unload_delay_secs` has elapsed.
     //   * claude-agent-acp runs each session in a CLI process of its own, so
     //     an open parent is one more process per fork, still able to start a
     //     turn by itself (a background task finishing does) where nothing
@@ -14143,11 +14134,9 @@ fn close_forked_parent(cx: &ConnectionTo<Agent>, parent: &str, child: &str) {
 /// at [`ConnectionCommand::ForkCopy`].
 ///
 /// Codex's `thread/fork` leaves the FORK subscribed to the connection that
-/// made it (see codex-acp `SessionFork.ts`), and a subscribed thread resues
-/// into another app-server only by ignoring the resume's config (#1105). So
-/// for Codex the copy closes its own fork on this connection — the same
-/// best-effort `session/close` an in-place fork sends to the session it
-/// leaves, aimed at the other id. Claude's fork never enters its adapter's
+/// made it (see codex-acp `SessionFork.ts`). The copy closes the fork on
+/// that connection so the app-server can release its writer lock before the
+/// child resumes it. Claude's fork never enters its adapter's
 /// session map (the child's resume goes cold off the file) and OpenCode has no
 /// resume to strand, so the close is scoped to Codex.
 async fn fork_copy_roundtrip(
@@ -14165,18 +14154,12 @@ async fn fork_copy_roundtrip(
     .await?;
     let forked = fork_response.session_id.0.to_string();
     if agent_type == AgentType::Codex && supports_close && forked != sid.0.as_ref() {
-        // Awaited, unlike the in-place fork's fire-and-forget
-        // `close_forked_parent`: the caller spawns a child connection that
-        // resumes THIS thread immediately, and a resume racing a still-
-        // subscribed fork re-opens the #1105 ignored-config hole the close
-        // exists to prevent. Awaiting is free of pump cost because the whole
-        // roundtrip runs on a spawned task (`spawn_fork_copy`).
+        // Finish unsubscribing before the child attempts to resume. The
+        // fork inherits the immediate unload default from CODEX_CONFIG.
         let request = CloseSessionRequest::new(SessionId::new(forked.clone()));
         match cx.send_request_to(Agent, request).block_task().await {
             Ok(_) => tracing::info!("[ACP] copy fork closed {forked} on the parent"),
-            Err(e) => tracing::warn!(
-                "[ACP] copy fork's close of {forked} failed (child resume may ignore its config): {e}"
-            ),
+            Err(e) => tracing::warn!("[ACP] copy fork's close of {forked} failed: {e}"),
         }
     }
     Ok(forked)
@@ -14394,15 +14377,14 @@ fn classify_session_load_failure(
     //  * another Codex client — the Codex app, the CLI or an IDE extension —
     //    with the same session open (its lock can outlive the closed tab until
     //    that process unloads the thread);
-    //  * codeg itself, for about a minute after a fork: `session/fork`
+    //  * codeg itself, while the parent of an in-place fork unloads: `session/fork`
     //    never releases the PARENT's lock (codex-acp 1.8.0–2.1.x unsubscribe
     //    only the child, `threadUnsubscribe({threadId: response.thread.id})`,
     //    and 2.2.0 keeps the child subscribed too), so the sibling row codeg
     //    creates to keep the pre-fork history hits the lock until the forking
     //    connection lets the parent go. It closes the parent right after the
     //    step that resumes the child (`close_forked_parent`), and the
-    //    app-server unloads it `thread_unload_delay_secs` later (60, which
-    //    codeg sets for its sessions; codex 0.164's own default is 30 min).
+    //    app-server unloads it after the configured `thread_unload_delay_secs`.
     // codex-acp ≤2.0.x passes codex's raw "thread <id> already has an active
     // writer" through as a -32603 `data.details`; 2.1.0 (#564) answers -32600
     // with `data.reason: "thread_active_writer"`, which
@@ -32230,8 +32212,7 @@ mod tests {
 
     /// After a codex fork, the sibling row codeg creates to keep the pre-fork
     /// history points at the PARENT thread — whose writer the forking process
-    /// holds until codex unloads the thread, about a minute after codeg closes
-    /// it, because `session/fork` never unsubscribes the parent. Opening it in
+    /// holds until codex unloads the thread after codeg closes it. Opening it in
     /// that window must stop with a banner, never fall through to
     /// `session/new`: that rebinds the row to a fresh empty session and
     /// destroys the only pointer to the history the row exists for.
@@ -33578,16 +33559,14 @@ mod tests {
             .collect()
     }
 
-    /// codex 0.164 holds a closed thread for 30 minutes; codeg's fork closes
-    /// its parent and tells the user the parent's row opens about a minute
-    /// later, so every codex launch asks for codex's old 60 s.
+    /// /btw resumes the fork on a separate app-server immediately after close.
     #[test]
-    fn codex_env_policy_keeps_a_closed_thread_for_a_minute() {
+    fn codex_env_policy_allows_immediate_handoff_after_close() {
         let mut env = vec![("PATH".to_string(), "/usr/bin".to_string())];
         apply_codex_env_policy(AgentType::Codex, &mut env, None, None);
         assert_eq!(
             codex_config_of(&env),
-            vec![serde_json::json!({"thread_unload_delay_secs": 60})]
+            vec![serde_json::json!({"thread_unload_delay_secs": 0})]
         );
 
         for agent in [AgentType::Grok, AgentType::ClaudeCode, AgentType::OpenCode] {
@@ -33610,7 +33589,7 @@ mod tests {
             vec![serde_json::json!({
                 "hooks": {"PreToolUse": []},
                 "model": "gpt-5.5",
-                "thread_unload_delay_secs": 60,
+                "thread_unload_delay_secs": 0,
             })]
         );
 
@@ -33621,7 +33600,7 @@ mod tests {
         apply_codex_env_policy(AgentType::Codex, &mut runtime, None, Some(hooks));
         assert_eq!(
             codex_config_of(&runtime),
-            vec![serde_json::json!({"model": "gpt-6", "thread_unload_delay_secs": 60})],
+            vec![serde_json::json!({"model": "gpt-6", "thread_unload_delay_secs": 0})],
             "the runtime env's value, replaced rather than duplicated"
         );
     }
@@ -33631,7 +33610,7 @@ mod tests {
         // The user's own delay stands, and a value that is not a JSON object
         // is not codeg's to rewrite (codex-acp parses it as written).
         for value in [
-            r#"{"thread_unload_delay_secs":0}"#,
+            r#"{"thread_unload_delay_secs":15}"#,
             "not json",
             "[1,2]",
             "42",
@@ -33659,7 +33638,7 @@ mod tests {
             apply_codex_env_policy(AgentType::Codex, &mut env, None, Some(r#"{"model":"x"}"#));
             assert_eq!(
                 codex_config_of(&env),
-                vec![serde_json::json!({"thread_unload_delay_secs": 60})],
+                vec![serde_json::json!({"thread_unload_delay_secs": 0})],
                 "{blank:?}"
             );
         }

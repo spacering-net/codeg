@@ -79,15 +79,7 @@ pub async fn create_with_delegation(
     .await
 }
 
-/// The row a `/btw` side question gets (see `commands::btw`). A deliberate
-/// sibling of [`create_inner`], not another wrapper over it: this row is born
-/// with its `external_id` (the child connection RESUMES the copy-forked agent
-/// session, never a fresh one), a `title_locked` title (the question is the
-/// name — the auto-title backfill must never rename a side question out from
-/// under the panel that shows it), and the parent's model, so the answer costs
-/// the same as the parent would. Its lineage lives in `parent_id` alone: no
-/// tool-call or delegation ids exist for a user-issued fork, so
-/// `DelegationLink` has nothing to carry.
+/// Create a side question with a locked title and the fork's existing session id.
 #[allow(clippy::too_many_arguments)]
 pub async fn create_btw_fork(
     conn: &DatabaseConnection,
@@ -95,41 +87,21 @@ pub async fn create_btw_fork(
     agent_type: AgentType,
     title: String,
     git_branch: Option<String>,
-    model: Option<String>,
+    parent_model: Option<String>,
     external_id: String,
     parent_id: i32,
 ) -> Result<conversation::Model, DbError> {
-    let at_str = serde_json::to_value(agent_type)
-        .ok()
-        .and_then(|v| v.as_str().map(String::from))
-        .unwrap_or_default();
-    let now = Utc::now();
-    let model = conversation::ActiveModel {
-        id: NotSet,
-        folder_id: Set(folder_id),
-        title: Set(Some(title)),
-        title_locked: Set(true),
-        agent_type: Set(at_str),
-        status: Set(conversation::ConversationStatus::InProgress),
-        kind: Set(conversation::ConversationKind::Btw),
-        model: Set(model),
-        git_branch: Set(git_branch),
-        external_id: Set(Some(external_id)),
-        parent_id: Set(Some(parent_id)),
-        parent_tool_use_id: Set(None),
-        delegation_call_id: Set(None),
-        message_count: Set(0),
-        created_at: Set(now),
-        updated_at: Set(now),
-        deleted_at: Set(None),
-        pinned_at: Set(None),
-        origin_cwd: Set(None),
-        assistant_id: Set(None),
-        assistant_snapshot: Set(None),
-        source: Set(None),
-        btw_promoted: Set(false),
-        selector_state: Set(None),
-    };
+    let mut model = new_conversation(
+        folder_id,
+        agent_type,
+        Some(title),
+        git_branch,
+        ConversationKind::Btw,
+    );
+    model.title_locked = Set(true);
+    model.model = Set(parent_model);
+    model.external_id = Set(Some(external_id));
+    model.parent_id = Set(Some(parent_id));
     Ok(model.insert(conn).await?)
 }
 
@@ -189,11 +161,6 @@ async fn create_inner(
     delegation: Option<crate::acp::delegation::spawner::DelegationLink>,
     kind: ConversationKind,
 ) -> Result<conversation::Model, DbError> {
-    let at_str = serde_json::to_value(agent_type)
-        .ok()
-        .and_then(|v| v.as_str().map(String::from))
-        .unwrap_or_default();
-    let now = Utc::now();
     let (parent_id, parent_tool_use_id, delegation_call_id, assistant) = match delegation {
         Some(link) => (
             Some(link.parent_conversation_id),
@@ -213,7 +180,28 @@ async fn create_inner(
         ),
         None => (None, None),
     };
-    let model = conversation::ActiveModel {
+    let mut model = new_conversation(folder_id, agent_type, title, git_branch, kind);
+    model.parent_id = Set(parent_id);
+    model.parent_tool_use_id = Set(parent_tool_use_id);
+    model.delegation_call_id = Set(delegation_call_id);
+    model.assistant_id = Set(assistant_id);
+    model.assistant_snapshot = Set(assistant_snapshot);
+    Ok(model.insert(conn).await?)
+}
+
+fn new_conversation(
+    folder_id: i32,
+    agent_type: AgentType,
+    title: Option<String>,
+    git_branch: Option<String>,
+    kind: ConversationKind,
+) -> conversation::ActiveModel {
+    let at_str = serde_json::to_value(agent_type)
+        .ok()
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_default();
+    let now = Utc::now();
+    conversation::ActiveModel {
         id: NotSet,
         folder_id: Set(folder_id),
         title: Set(title),
@@ -224,22 +212,21 @@ async fn create_inner(
         model: Set(None),
         git_branch: Set(git_branch),
         external_id: Set(None),
-        parent_id: Set(parent_id),
-        parent_tool_use_id: Set(parent_tool_use_id),
-        delegation_call_id: Set(delegation_call_id),
+        parent_id: Set(None),
+        parent_tool_use_id: Set(None),
+        delegation_call_id: Set(None),
         message_count: Set(0),
         created_at: Set(now),
         updated_at: Set(now),
         deleted_at: Set(None),
         pinned_at: Set(None),
         origin_cwd: Set(None),
-        assistant_id: Set(assistant_id),
-        assistant_snapshot: Set(assistant_snapshot),
+        assistant_id: Set(None),
+        assistant_snapshot: Set(None),
         source: Set(None),
         btw_promoted: Set(false),
         selector_state: Set(None),
-    };
-    Ok(model.insert(conn).await?)
+    }
 }
 
 pub async fn update_status(

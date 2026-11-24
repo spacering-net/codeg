@@ -17,9 +17,8 @@ import {
   RECENT_PAGE_SIZE,
   reuseSelected,
   reuseSet,
-  selectBtwConversationsWithReuse,
-  selectChatConversationsWithReuse,
   selectPinnedWithReuse,
+  selectUnpinnedConversationsByKind,
   selectRecentConversationsWithReuse,
   worktreeChildrenByParent,
   worktreeHeaderAlias,
@@ -1471,7 +1470,7 @@ describe("mergeChildrenById", () => {
   })
 })
 
-describe("selectChatConversationsWithReuse", () => {
+describe("chat sidebar section selection", () => {
   it("selects only chat-kind conversations, newest-updated first, excluding pinned", () => {
     const a = conv(1, 99, { kind: "chat" })
     const b = conv(2, 99, { kind: "chat" }) // higher id → later updated_at
@@ -1480,8 +1479,9 @@ describe("selectChatConversationsWithReuse", () => {
       pinned_at: new Date(5000).toISOString(),
     })
     const folderConv = conv(4, 10)
-    const out = selectChatConversationsWithReuse(
+    const out = selectUnpinnedConversationsByKind(
       [a, b, pinnedChat, folderConv],
+      "chat",
       true,
       []
     )
@@ -1492,12 +1492,12 @@ describe("selectChatConversationsWithReuse", () => {
     const done = conv(1, 99, { kind: "chat", status: "completed" })
     const active = conv(2, 99, { kind: "chat" })
     expect(
-      selectChatConversationsWithReuse([done, active], false, []).map(
+      selectUnpinnedConversationsByKind([done, active], "chat", false, []).map(
         (c) => c.id
       )
     ).toEqual([2])
     expect(
-      selectChatConversationsWithReuse([done, active], true, [])
+      selectUnpinnedConversationsByKind([done, active], "chat", true, [])
         .map((c) => c.id)
         .sort()
     ).toEqual([1, 2])
@@ -1505,8 +1505,8 @@ describe("selectChatConversationsWithReuse", () => {
 
   it("returns the prev array when membership is referentially unchanged", () => {
     const a = conv(1, 99, { kind: "chat" })
-    const first = selectChatConversationsWithReuse([a], true, [])
-    const second = selectChatConversationsWithReuse([a], true, first)
+    const first = selectUnpinnedConversationsByKind([a], "chat", true, [])
+    const second = selectUnpinnedConversationsByKind([a], "chat", true, first)
     expect(second).toBe(first)
   })
 })
@@ -2077,14 +2077,15 @@ describe("buildRows under a tag filter (hideEmptyFolders)", () => {
   })
 })
 
-describe("selectBtwConversationsWithReuse", () => {
+describe("btw sidebar section selection", () => {
   it("takes unpinned btw rows newest-first and nothing else", () => {
     const older = conv(1, 10, { kind: "btw", parent_id: 7 })
     const newer = conv(2, 10, { kind: "btw", parent_id: 7 })
     const pinned = conv(3, 10, { kind: "btw", pinned_at: newer.updated_at })
     const done = conv(4, 10, { kind: "btw", status: "completed" })
-    const out = selectBtwConversationsWithReuse(
+    const out = selectUnpinnedConversationsByKind(
       [conv(0, 10), older, pinned, done, newer],
+      "btw",
       false,
       []
     )
@@ -2093,15 +2094,16 @@ describe("selectBtwConversationsWithReuse", () => {
 
   it("keeps completed forks when the sidebar shows completed", () => {
     const done = conv(4, 10, { kind: "btw", status: "completed" })
-    const out = selectBtwConversationsWithReuse([done], true, [])
+    const out = selectUnpinnedConversationsByKind([done], "btw", true, [])
     expect(out.map((c) => c.id)).toEqual([4])
   })
 
   it("reuses the previous array while the set is unchanged", () => {
     const row = conv(1, 10, { kind: "btw" })
-    const prev = selectBtwConversationsWithReuse([row], false, [])
-    const again = selectBtwConversationsWithReuse(
+    const prev = selectUnpinnedConversationsByKind([row], "btw", false, [])
+    const again = selectUnpinnedConversationsByKind(
       [row, conv(2, 10)],
+      "btw",
       false,
       prev
     )
