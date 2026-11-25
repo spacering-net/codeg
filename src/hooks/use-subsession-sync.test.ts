@@ -54,7 +54,8 @@ function child(
 function useHarness(initial: ChildrenMap) {
   const [childrenByParent, setChildrenByParent] = useState(initial)
   const deletedChildIdsRef = useRef<Set<number>>(new Set())
-  useSubsessionSync({ setChildrenByParent, deletedChildIdsRef })
+  const rootIdsRef = useRef<Set<number>>(new Set())
+  useSubsessionSync({ setChildrenByParent, deletedChildIdsRef, rootIdsRef })
   return childrenByParent
 }
 
@@ -124,6 +125,47 @@ describe("useSubsessionSync", () => {
     const { result } = await setup(new Map())
     act(() => capturedHandler!({ kind: "upsert", summary: child(100, 1) }))
     expect(result.current.size).toBe(0)
+  })
+
+  it("moves a child that became a root out of its parent's array", async () => {
+    // An ask conversation converted into an ordinary one.
+    const sibling = child(200, 2)
+    const { result } = await setup(
+      new Map([
+        [1, [child(101, 1, { kind: "ask" }), child(100, 1)]],
+        [2, [sibling]],
+      ])
+    )
+    act(() =>
+      capturedHandler!({
+        kind: "upsert",
+        summary: child(101, 1, { kind: "regular", parent_id: null }),
+      })
+    )
+    expect(result.current.get(1)!.map((c) => c.id)).toEqual([100])
+    expect(result.current.get(2)![0]).toBe(sibling)
+    // A root never becomes a child again: a late upsert still showing it
+    // nested is stale, and doesn't nest it back.
+    act(() =>
+      capturedHandler!({
+        kind: "upsert",
+        summary: child(101, 1, { kind: "ask" }),
+      })
+    )
+    expect(result.current.get(1)!.map((c) => c.id)).toEqual([100])
+  })
+
+  it("leaves the subtree alone on a root upsert it never held", async () => {
+    const initial = new Map([[1, [child(100, 1)]]])
+    const { result } = await setup(initial)
+    const before = result.current
+    act(() =>
+      capturedHandler!({
+        kind: "upsert",
+        summary: child(300, 1, { kind: "regular", parent_id: null }),
+      })
+    )
+    expect(result.current).toBe(before)
   })
 
   it("removes a deleted child from its parent's array", async () => {

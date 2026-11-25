@@ -561,8 +561,11 @@ export function MessageInput({
   }, [])
 
   // Localized group headings + panel chrome for the `@` mention panel.
-  const { groupLabels: referenceGroupLabels, uiLabels: mentionUiLabels } =
-    useComposerMentionLabels()
+  const {
+    groupLabels: referenceGroupLabels,
+    uiLabels: mentionUiLabels,
+    primaryAssistantName,
+  } = useComposerMentionLabels()
 
   // Live data sources for the unified `@` mention panel. Pre-warmed only while
   // this composer is the active one (`enabled`). Referentially stable.
@@ -570,6 +573,8 @@ export function MessageInput({
     defaultPath: defaultPath ?? null,
     enabled: isActive,
     labels: referenceGroupLabels,
+
+    primaryAssistantName,
   })
 
   // Debounced v2 draft persistence. We snapshot the Tiptap *document* (JSON, not

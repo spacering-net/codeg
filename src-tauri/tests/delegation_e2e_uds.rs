@@ -542,6 +542,7 @@ async fn end_to_end_uds_ask_question_round_trip() {
     let ask_task = tokio::spawn(async move {
         let req = BrokerAskRequest {
             token: "tok".into(),
+            for_input: None,
             questions: vec![QuestionSpec {
                 id: "qa".into(),
                 question: "Which approach?".into(),
@@ -687,6 +688,7 @@ async fn end_to_end_uds_ask_revoked_after_register_declines() {
 
     let req = BrokerAskRequest {
         token: "tok".into(),
+        for_input: None,
         questions: vec![QuestionSpec {
             id: "qa".into(),
             question: "Which approach?".into(),
@@ -715,28 +717,34 @@ async fn end_to_end_uds_ask_revoked_after_register_declines() {
     assert_eq!(resp.outcome["declined"], true);
 }
 
-/// In-memory assistants for the assistant e2e: one usable assistant, 3.
+/// In-memory assistants for the assistant e2e: one usable assistant, its
+/// uid `u-12` (row 12), converted from the collaboration settings' 3.
 struct OneAssistant;
 #[async_trait]
 impl codeg_lib::acp::delegation::assistants::AssistantLookup for OneAssistant {
-    async fn delegatable(&self, id: i32) -> Option<codeg_lib::models::AssistantInfo> {
-        (id == 3).then(reviewer_assistant)
+    async fn by_uid(
+        &self,
+        uid: &str,
+    ) -> Option<codeg_lib::acp::delegation::assistants::DelegatableAssistant> {
+        (uid == "u-12").then(reviewer_assistant)
     }
-    async fn roster(&self) -> Vec<codeg_lib::models::AssistantInfo> {
+    async fn by_legacy_id(
+        &self,
+        legacy_id: i32,
+    ) -> Option<codeg_lib::acp::delegation::assistants::DelegatableAssistant> {
+        (legacy_id == 3).then(reviewer_assistant)
+    }
+    async fn roster(&self) -> Vec<codeg_lib::acp::delegation::assistants::DelegatableAssistant> {
         vec![reviewer_assistant()]
     }
 }
 
-fn reviewer_assistant() -> codeg_lib::models::AssistantInfo {
-    let now = chrono::Utc::now();
-    codeg_lib::models::AssistantInfo {
-        id: 3,
-        uid: "uid-3".into(),
+fn reviewer_assistant() -> codeg_lib::acp::delegation::assistants::DelegatableAssistant {
+    codeg_lib::acp::delegation::assistants::DelegatableAssistant {
+        id: 12,
+        uid: "u-12".into(),
         name: "Reviewer".into(),
-        description: "Reviews diffs".into(),
-        avatar: codeg_lib::models::AssistantAvatar::Monogram {
-            color: "teal".into(),
-        },
+        persona: "Reviews diffs".into(),
         agent_type: AgentType::Codex,
         agent_options: codeg_lib::acp::delegation::types::AgentDelegationDefaults {
             mode_id: Some("read-only".into()),
@@ -746,20 +754,15 @@ fn reviewer_assistant() -> codeg_lib::models::AssistantInfo {
             ]
             .into(),
         },
-        label_snapshot: Default::default(),
         instructions: "Cite file and line for every finding.".into(),
-        enabled: true,
-        sort_order: 1,
-        revision: 1,
-        created_at: now,
-        updated_at: now,
-        deleted_at: None,
+        avatar: codeg_lib::models::personal_agent_bots::BotAvatar::default_for("u-12"),
+        legacy_id: Some(3),
     }
 }
 
 /// The whole assistant path over a real socket, starting where the delegating
-/// agent does — the companion: `tools/list` offers `assistant_id` with the
-/// roster, a `tools/call` naming the assistant is forwarded (the companion
+/// agent does — the companion: `tools/list` offers `bot` with the roster, a
+/// `tools/call` naming the assistant by its uid is forwarded (the companion
 /// probed its parent), and the child launches on the assistant's agent with
 /// every one of its options and none of the per-agent defaults, its brief
 /// riding the first prompt.
@@ -849,7 +852,7 @@ async fn end_to_end_uds_assistant_delegation() {
     };
     let inflight = Arc::new(InflightCalls::new());
 
-    // tools/list: the schema takes `assistant_id` and names the roster.
+    // tools/list: the schema takes `bot` and names the roster by uid.
     let LineAction::Respond(resp) = dispatch_line(
         &ctx,
         inflight.clone(),
@@ -868,17 +871,17 @@ async fn end_to_end_uds_assistant_delegation() {
         .unwrap()
         .clone();
     assert_eq!(delegate["inputSchema"]["required"], json!(["task"]));
-    assert!(delegate["inputSchema"]["properties"]["assistant_id"]["description"]
+    assert!(delegate["inputSchema"]["properties"]["bot"]["description"]
         .as_str()
         .unwrap()
-        .contains("3: Reviewer [Codex CLI] — Reviews diffs"));
+        .contains("u-12: Reviewer [Codex CLI] — Reviews diffs"));
 
     // tools/call naming the assistant (the host also passed a stray agent).
     let call = json!({
         "jsonrpc": "2.0", "id": 2, "method": "tools/call",
         "params": {
             "name": "delegate_to_agent",
-            "arguments": {"assistant_id": 3, "agent_type": "claude_code", "task": "review the diff"}
+            "arguments": {"bot": "u-12", "agent_type": "claude_code", "task": "review the diff"}
         }
     })
     .to_string();
@@ -890,7 +893,8 @@ async fn end_to_end_uds_assistant_delegation() {
     let report = &result["structuredContent"];
     assert_eq!(report["status"], "running");
     assert_eq!(report["agent_type"], "codex");
-    assert_eq!(report["assistant_id"], 3);
+    assert_eq!(report["bot"], "u-12");
+    assert!(report.get("assistant_id").is_none(), "{report}");
     assert_eq!(report["assistant_name"], "Reviewer");
 
     let spawn = mock.spawn_args.lock().await[0].clone();
@@ -909,5 +913,6 @@ async fn end_to_end_uds_assistant_delegation() {
     assert_eq!(send.task, "review the diff");
     let brief = send.brief.expect("the brief rides the first prompt");
     assert!(brief.contains("Cite file and line for every finding."));
-    assert_eq!(send.link.assistant.expect("the child row learns its assistant").id, 3);
+    let link = send.link.assistant.expect("the child row learns its assistant");
+    assert_eq!((link.id, link.bot_uid.as_deref()), (None, Some("u-12")));
 }

@@ -78,13 +78,14 @@ pub struct DbConversationSummary {
     pub agent_type: AgentType,
     pub status: String,
     /// Mirrors `conversation.kind` — drives sidebar visibility/grouping
-    /// (serialized as "regular" | "chat" | "loop" | "delegate").
+    /// (serialized as "regular" | "chat" | "loop" | "delegate" | "ask").
     pub kind: ConversationKind,
     pub model: Option<String>,
     pub git_branch: Option<String>,
     pub external_id: Option<String>,
     pub message_count: u32,
-    /// Number of direct, non-deleted delegation children. Drives the sidebar
+    /// Number of direct, non-deleted children (delegation sub-sessions and
+    /// ask conversations). Drives the sidebar
     /// chevron: a row with `child_count > 0` is expandable into its sub-session
     /// subtree. Not stored on the row — computed by a single GROUP BY aggregate
     /// (`fill_child_counts`) over the returned set, so `child_count > 0` iff
@@ -119,6 +120,10 @@ pub struct DbConversationSummary {
     /// falls back to this one when the assistant row is unknown to it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assistant_name: Option<String>,
+    /// Mirror of `conversation.bot_uid`: the owner's assistant a delegation
+    /// child or a piece of its work ran as. Absent on every other row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bot_uid: Option<String>,
     /// Mirror of `conversation.source`: `"cli"` for a conversation a
     /// `codeg-cli` run started. Absent on every other row.
     #[serde(skip_serializing_if = "Option::is_none")]

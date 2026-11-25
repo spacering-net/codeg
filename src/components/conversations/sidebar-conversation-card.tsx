@@ -22,6 +22,9 @@ import {
   ChevronRight,
   SquareTerminal,
   ListChecks,
+  MessageCircleQuestionMark,
+  ShieldCheck,
+  Unlink,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useImeGuard } from "@/hooks/use-ime-guard"
@@ -79,9 +82,10 @@ import {
 } from "./conversation-tag-picker"
 import { MoveToFolderContextSubmenu } from "./move-to-folder-menu"
 import { AgentIcon } from "@/components/agent-icon"
-import { AssistantAvatar } from "@/components/assistants/assistant-avatar"
+import { useIdentityAssistant } from "@/components/message/delegation-identity"
+import { BotAvatar } from "@/components/personal-agent/bot-avatar"
 import { useBranchChip, useResolvedTags } from "@/hooks/use-conversation-tags"
-import { useAssistant } from "@/stores/assistants-store"
+import { useDetachAskConversation } from "./use-detach-ask-conversation"
 
 /**
  * Horizontal indent added per delegation-nesting level. Chosen so a child's
@@ -251,6 +255,9 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   const tSidebar = useTranslations("Folder.sidebar")
   const tStatus = useTranslations("Folder.statusLabels")
   const tDetails = useTranslations("Folder.sessionDetails")
+  const tAsk = useTranslations("Folder.askConversations")
+  const tCheck = useTranslations("Folder.checkConversations")
+  const detachAsk = useDetachAskConversation()
   const timeLabelClassName = cn(
     "relative shrink-0 tabular-nums text-[0.71875rem]",
     isSelected
@@ -273,6 +280,12 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   // time / running badge then stays visible on hover (nothing swaps in for it).
   // Nor a branch chip, like they get no tags: their parent row carries it.
   const isSubsession = conversation.parent_id != null
+  // An ask conversation ("ask about this selection") nests under the
+  // conversation it was asked from like a sub-agent run, and can be turned
+  // into an ordinary conversation from its menu. So does a check of one of
+  // its messages, under the conversation it checks.
+  const isAsk = conversation.kind === "ask"
+  const isCheck = conversation.kind === "check"
   const branch = useBranchChip(isSubsession ? null : conversation.git_branch)
 
   const handleClick = useCallback(() => {
@@ -459,9 +472,11 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                       }}
                       aria-hidden
                     >
-                      {conversation.assistant_id != null ? (
+                      {conversation.assistant_id != null ||
+                      conversation.bot_uid != null ? (
                         <SubsessionAssistantAvatar
-                          id={conversation.assistant_id}
+                          id={conversation.assistant_id ?? null}
+                          botUid={conversation.bot_uid ?? null}
                           name={conversation.assistant_name ?? ""}
                         />
                       ) : (
@@ -506,7 +521,9 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                       className="relative -ml-[0.25rem] max-w-[calc(100%-3.875rem)] shrink overflow-hidden"
                     />
                     {/* Started by `codeg-cli`: told apart from the window's
-                    own, and found again with the Recent filter. */}
+                    own, and found again with the Recent filter. An ask or a
+                    check conversation is told apart from the sub-agent runs
+                    it nests beside. */}
                     {conversation.source === "cli" ? (
                       <span
                         className="ml-auto inline-flex shrink-0 items-center"
@@ -517,6 +534,28 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                           aria-hidden
                         />
                         <span className="sr-only">{tSidebar("cliBadge")}</span>
+                      </span>
+                    ) : isAsk ? (
+                      <span
+                        className="ml-auto inline-flex shrink-0 items-center"
+                        title={tAsk("title")}
+                      >
+                        <MessageCircleQuestionMark
+                          className="h-3 w-3 text-muted-foreground/60"
+                          aria-hidden
+                        />
+                        <span className="sr-only">{tAsk("title")}</span>
+                      </span>
+                    ) : isCheck ? (
+                      <span
+                        className="ml-auto inline-flex shrink-0 items-center"
+                        title={tCheck("title")}
+                      >
+                        <ShieldCheck
+                          className="h-3 w-3 text-muted-foreground/60"
+                          aria-hidden
+                        />
+                        <span className="sr-only">{tCheck("title")}</span>
                       </span>
                     ) : null}
                     {/* No mark for a conversation re-parented out of a removed
@@ -747,6 +786,12 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
               <AtSign className="h-4 w-4" />
               {t("attachToCurrentSession")}
             </ContextMenuItem>
+            {(isAsk || isCheck) && (
+              <ContextMenuItem onSelect={() => detachAsk(conversation.id)}>
+                <Unlink className="h-4 w-4" />
+                {tAsk("convertToRegular")}
+              </ContextMenuItem>
+            )}
             <ContextMenuSeparator />
             {/* Sub-sessions opt out like they do of pinning: a sub-agent run
                 is not a conversation the user files away, and the sidebar
@@ -900,10 +945,18 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
 /** A sub-session run as an assistant shows the assistant's avatar where the
  *  agent icon goes: its current look from the store, or the generic assistant
  *  glyph for a row the store does not hold. */
-function SubsessionAssistantAvatar({ id, name }: { id: number; name: string }) {
-  const assistant = useAssistant(id)
+function SubsessionAssistantAvatar({
+  id,
+  botUid,
+  name,
+}: {
+  id: number | null
+  botUid: string | null
+  name: string
+}) {
+  const assistant = useIdentityAssistant({ assistantId: id, botUid })
   return (
-    <AssistantAvatar
+    <BotAvatar
       avatar={assistant?.avatar ?? null}
       name={assistant?.name ?? name}
       size={14}

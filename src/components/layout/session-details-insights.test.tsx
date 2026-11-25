@@ -11,6 +11,7 @@ import type { ReactNode } from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
+import type { DbConversationSummary } from "@/lib/types"
 import type { MessageNavEntry } from "@/components/message/conversation-message-nav"
 import {
   publishTranscriptInsights,
@@ -33,7 +34,24 @@ vi.mock("@/contexts/workspace-context", () => ({
 vi.mock("@/contexts/active-folder-context", () => ({
   useActiveFolder: () => ({ activeFolder: { path: "/repo" } }),
 }))
+vi.mock("@/components/agent-icon", () => ({
+  AgentIcon: () => <span data-testid="agent-icon" />,
+}))
+const { mockAsks, mockDetach } = vi.hoisted(() => ({
+  mockAsks: vi.fn<(parentId: number | null, kind: string) => unknown>(
+    () => null
+  ),
+  mockDetach: vi.fn(),
+}))
+vi.mock("@/hooks/use-ask-conversations", () => ({
+  useLinkedConversations: (parentId: number | null, kind: string) =>
+    mockAsks(parentId, kind),
+}))
+vi.mock("@/components/conversations/use-detach-ask-conversation", () => ({
+  useDetachAskConversation: () => mockDetach,
+}))
 
+import { useAskConversationDrawerStore } from "@/stores/ask-conversation-drawer-store"
 import { SessionDetailsInsights } from "./session-details-insights"
 
 const CONVERSATION = 7
@@ -89,7 +107,11 @@ function publish(value: TranscriptInsights) {
 function panel(active = true, conversationId = CONVERSATION) {
   return (
     <NextIntlClientProvider locale="en" messages={enMessages}>
-      <SessionDetailsInsights conversationId={conversationId} active={active} />
+      <SessionDetailsInsights
+        conversationId={conversationId}
+        dbConversationId={null}
+        active={active}
+      />
     </NextIntlClientProvider>
   )
 }
@@ -104,6 +126,9 @@ function navDemand(): number {
 
 beforeEach(() => {
   localStorage.clear()
+  mockAsks.mockReset()
+  mockAsks.mockReturnValue(null)
+  mockDetach.mockReset()
 })
 
 afterEach(() => {
@@ -200,6 +225,198 @@ describe("SessionDetailsInsights", () => {
       expect(
         screen.getByRole("button", { name: /Agent Plan/ })
       ).toHaveTextContent("2/2")
+    })
+  })
+
+  describe("ask conversations", () => {
+    const PARENT = 70
+    const ask = {
+      id: 71,
+      folder_id: 1,
+      title: "What does this do?",
+      title_locked: false,
+      agent_type: "codex",
+      status: "in_progress",
+      kind: "regular",
+      model: null,
+      git_branch: null,
+      external_id: null,
+      message_count: 2,
+      child_count: 0,
+      created_at: "2026-11-25T10:00:00.000Z",
+      updated_at: "2026-11-25T10:00:00.000Z",
+      pinned_at: null,
+      parent_id: PARENT,
+    } as unknown as DbConversationSummary
+
+    function renderAsks() {
+      mockAsks.mockImplementation((id, kind) =>
+        id === PARENT && kind === "ask" ? [ask] : null
+      )
+      return render(
+        <NextIntlClientProvider locale="en" messages={enMessages}>
+          <SessionDetailsInsights
+            conversationId={CONVERSATION}
+            dbConversationId={PARENT}
+            active
+          />
+        </NextIntlClientProvider>
+      )
+    }
+
+    it("puts the agent's icon in the header icon's column, its status a dot on it", () => {
+      renderAsks()
+      const row = screen.getByText("What does this do?").closest("li")!
+      const icon = within(row).getByTestId("agent-icon")
+      // The icon's column is the first thing in the row, as the header's is.
+      const column = icon.closest("span.w-7")!
+      expect(column).toHaveAttribute("aria-hidden", "true")
+      expect(column.nextElementSibling).toHaveTextContent("What does this do?")
+      // The status rides the icon's corner.
+      const dot = icon.parentElement!.querySelector(".absolute.rounded-full")
+      expect(dot).not.toBeNull()
+      expect(dot).toHaveClass("motion-safe:animate-pulse")
+    })
+
+    it("offers converting only, and asks before it does", () => {
+      renderAsks()
+      expect(
+        screen.queryByRole("button", { name: "More actions" })
+      ).not.toBeInTheDocument()
+      fireEvent.click(
+        screen.getByRole("button", { name: "Convert to normal conversation" })
+      )
+      const dialog = screen.getByRole("alertdialog")
+      expect(dialog).toHaveTextContent("What does this do?")
+      expect(mockDetach).not.toHaveBeenCalled()
+      fireEvent.click(within(dialog).getByRole("button", { name: "Convert" }))
+      expect(mockDetach).toHaveBeenCalledWith(71)
+    })
+
+    it("drops a pending confirmation when another conversation takes the panel", () => {
+      const other = { ...ask, id: 81, parent_id: 80 } as DbConversationSummary
+      const { rerender } = renderAsks()
+      mockAsks.mockImplementation((id, kind) =>
+        kind !== "ask"
+          ? null
+          : id === PARENT
+            ? [ask]
+            : id === 80
+              ? [other]
+              : null
+      )
+      fireEvent.click(
+        screen.getByRole("button", { name: "Convert to normal conversation" })
+      )
+      expect(screen.getByRole("alertdialog")).toBeInTheDocument()
+      const at = (parent: number) => (
+        <NextIntlClientProvider locale="en" messages={enMessages}>
+          <SessionDetailsInsights
+            conversationId={CONVERSATION}
+            dbConversationId={parent}
+            active
+          />
+        </NextIntlClientProvider>
+      )
+      rerender(at(80))
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument()
+      // Nor does it come back with the first conversation.
+      rerender(at(PARENT))
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument()
+      expect(mockDetach).not.toHaveBeenCalled()
+    })
+
+    it("converts nothing when the dialog is cancelled", () => {
+      renderAsks()
+      fireEvent.click(
+        screen.getByRole("button", { name: "Convert to normal conversation" })
+      )
+      fireEvent.click(
+        within(screen.getByRole("alertdialog")).getByRole("button", {
+          name: "Cancel",
+        })
+      )
+      expect(mockDetach).not.toHaveBeenCalled()
+    })
+  })
+
+  describe("check conversations", () => {
+    const PARENT = 70
+    const check = {
+      id: 91,
+      folder_id: 1,
+      title: "Check: the cache is cleared on save",
+      title_locked: true,
+      agent_type: "codex",
+      status: "completed",
+      kind: "check",
+      model: null,
+      git_branch: null,
+      external_id: null,
+      message_count: 2,
+      child_count: 0,
+      created_at: "2026-11-25T10:00:00.000Z",
+      updated_at: "2026-11-25T10:00:00.000Z",
+      pinned_at: null,
+      parent_id: PARENT,
+    } as unknown as DbConversationSummary
+
+    function renderChecks() {
+      mockAsks.mockImplementation((id, kind) =>
+        id === PARENT && kind === "check" ? [check] : null
+      )
+      return render(
+        <NextIntlClientProvider locale="en" messages={enMessages}>
+          <SessionDetailsInsights
+            conversationId={CONVERSATION}
+            dbConversationId={PARENT}
+            active
+          />
+        </NextIntlClientProvider>
+      )
+    }
+
+    afterEach(() => {
+      act(() => useAskConversationDrawerStore.setState({ target: null }))
+    })
+
+    it("lists the checks in a card of their own", () => {
+      renderChecks()
+      const header = screen.getByRole("button", {
+        name: /Check conversations/,
+      })
+      expect(header).toHaveTextContent("1 conversation")
+      expect(
+        screen.getByText("Check: the cache is cleared on save")
+      ).toBeInTheDocument()
+      expect(
+        screen.queryByRole("button", { name: /Ask conversations/ })
+      ).not.toBeInTheDocument()
+    })
+
+    it("opens a check in the drawer, as a check", () => {
+      renderChecks()
+      fireEvent.click(screen.getByText("Check: the cache is cleared on save"))
+      expect(useAskConversationDrawerStore.getState().target).toMatchObject({
+        kind: "check",
+        parentConversationId: PARENT,
+        conversationId: 91,
+        agentType: "codex",
+        folderId: 1,
+      })
+    })
+
+    it("converts a check only once confirmed", () => {
+      renderChecks()
+      fireEvent.click(
+        screen.getByRole("button", { name: "Convert to normal conversation" })
+      )
+      fireEvent.click(
+        within(screen.getByRole("alertdialog")).getByRole("button", {
+          name: "Convert",
+        })
+      )
+      expect(mockDetach).toHaveBeenCalledWith(91)
     })
   })
 

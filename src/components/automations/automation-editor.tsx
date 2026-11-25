@@ -158,14 +158,19 @@ export function AutomationEditor({
   // config snapshot scoped to the right folder.
   const folderPathResolving = folderId != null && folderPath == null
 
-  const { groupLabels: referenceGroupLabels, uiLabels: mentionUiLabels } =
-    useComposerMentionLabels()
+  const {
+    groupLabels: referenceGroupLabels,
+    uiLabels: mentionUiLabels,
+    primaryAssistantName,
+  } = useComposerMentionLabels()
   // Live data sources for the @ panel (files/agents/sessions/commits). All
   // transport-only — no live ACP session needed; just the folder path.
   const referenceSearch = useReferenceSearch({
     defaultPath: folderPath,
     enabled: true,
     labels: referenceGroupLabels,
+
+    primaryAssistantName,
   })
 
   // One transient probe feeds both the config selectors and the `/` command menu

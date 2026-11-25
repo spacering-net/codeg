@@ -29,6 +29,9 @@ import {
   useAcpEvent,
 } from "@/contexts/acp-connections-context"
 import { ActivityLiveProvider } from "@/components/message/activity/activity-live-context"
+import { SelectionAskComposer } from "@/components/message/selection-ask-composer"
+import { formatConversationTitle } from "@/lib/conversation-title"
+import { useAskConversationDrawerStore } from "@/stores/ask-conversation-drawer-store"
 import { useAcpAgents } from "@/hooks/use-acp-agents"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
@@ -46,13 +49,7 @@ import {
 import { computeRects, leafIds } from "@/lib/tab-group-layout"
 import { useTaskContext } from "@/contexts/task-context"
 import { cn, copyTextToClipboard, randomUUID } from "@/lib/utils"
-import { buildAskPrompt, buildQuotedMarkdown } from "@/lib/message-quote"
-import {
-  ASK_SELECTION_PARKED_EVENT,
-  consumeAskSelectionPrompts,
-  parkAskSelectionPrompt,
-  type AskSelectionParkedDetail,
-} from "@/lib/ask-selection-handoff"
+import { buildQuotedMarkdown } from "@/lib/message-quote"
 import { useConnectionLifecycle } from "@/hooks/use-connection-lifecycle"
 import { useMessageQueue, type QueuedMessage } from "@/hooks/use-message-queue"
 import { useTouchSelectionMenuGuard } from "@/hooks/use-touch-selection-menu-guard"
@@ -184,6 +181,7 @@ import {
   projectRuntimeSessionDetails,
   resolveActiveSessionDetailsFromSnapshot,
 } from "./active-session-details"
+import { AskConversationDrawer } from "./ask-conversation-drawer"
 import { ConversationDetailHeader } from "./conversation-detail-header"
 import { SessionDetailsDialog } from "./session-details-dialog"
 
@@ -292,6 +290,7 @@ const ConversationTabView = memo(function ConversationTabView({
   const sharedT = useTranslations("Folder.chat.shared")
   const tMessageList = useTranslations("Folder.chat.messageList")
   const tAsyncTasks = useTranslations("Folder.chat.asyncTasks")
+  const tAskConversations = useTranslations("Folder.askConversations")
   const refreshConversations = useAppWorkspaceStore(
     (s) => s.refreshConversations
   )
@@ -1872,92 +1871,76 @@ const ConversationTabView = memo(function ConversationTabView({
   }, [])
 
   /**
-   * "Ask about this selection": start a SEPARATE conversation for the question
-   * rather than appending to this one, so a side question doesn't derail (or
-   * pollute the context of) the thread the user is reading.
+   * "Ask about this selection": the selection bubble opens this conversation's
+   * own composer kind, holding the selection as a quote and a mention of this
+   * conversation, and sending it opens an ASK CONVERSATION in the side drawer —
+   * a separate conversation rather than another turn here, so a side question
+   * neither derails nor pollutes the thread the user is reading. It is linked
+   * to this one, listed under its Session Details rather than in the sidebar.
    *
-   * The new conversation is pinned to THIS conversation's agent — the answer is
-   * a continuation of what that agent just said, so handing it to whichever
-   * agent the folder happens to default to would be wrong. Working dir and
-   * folder are inherited too, so the question lands in the same workspace.
-   *
-   * The composed prompt is parked against the draft tab rather than sent from
-   * here: that tab still has to spawn/connect its agent, and only its own panel
-   * can do the sending. See {@link parkAskSelectionPrompt}.
+   * The ask is pinned to THIS conversation's agent — the answer is a
+   * continuation of what that agent just said — and runs in this
+   * conversation's folder. It needs a persisted row: that is what the mention
+   * names and what the ask is linked to.
    */
-  // Depends on the folder's ID, not the folder OBJECT: branch polling rewrites
-  // that row regularly, and this handler has to stay referentially stable (it is
+  // Depends on primitives, not the folder OBJECT: branch polling rewrites that
+  // row regularly, and the render prop has to stay referentially stable (it is
   // a MessageListView prop).
   const askFolderId = folder?.id ?? null
-  const canAskSelection = askFolderId != null && workingDirForConnection != null
-  const handleAskSelection = useCallback(
-    (selected: string, question: string) => {
-      if (askFolderId == null || workingDirForConnection == null) return
-      const target = openNewConversationTab(
-        askFolderId,
-        workingDirForConnection,
-        { targetGroup: groupId, forceAgent: selectedAgent }
+  const askMainTitle = ownTab?.title ?? null
+  const askPromptCapabilities = conn.promptCapabilities
+  const askModes = effectiveModes?.available_modes ?? null
+  const openAskDrawer = useAskConversationDrawerStore((s) => s.openNew)
+  const canAskSelection =
+    askFolderId != null &&
+    workingDirForConnection != null &&
+    dbConversationId != null
+  const renderAskComposer = useCallback(
+    (selected: string, close: () => void) => {
+      if (askFolderId == null || dbConversationId == null) return null
+      return (
+        <SelectionAskComposer
+          selection={selected}
+          mention={{
+            conversationId: dbConversationId,
+            label:
+              formatConversationTitle(askMainTitle).trim() ||
+              `#${dbConversationId}`,
+          }}
+          agentType={selectedAgent}
+          promptCapabilities={askPromptCapabilities}
+          modes={askModes}
+          defaultPath={workingDirForConnection}
+          onClose={close}
+          onSubmit={(draft, modeId) => {
+            const opened = openAskDrawer({
+              parentConversationId: dbConversationId,
+              agentType: selectedAgent,
+              folderId: askFolderId,
+              workingDir: workingDirForConnection ?? null,
+              initialSend: { draft, modeId },
+            })
+            // The drawer still holds another ask's unsent first message:
+            // keep this one in the bubble rather than dropping either.
+            if (opened) close()
+            else toast.warning(tAskConversations("pendingFirstMessage"))
+            return opened
+          }}
+        />
       )
-      // Park against the identity the store PROMISED that tab, not against what
-      // it looks like right now — reusing a draft from another folder/agent
-      // retargets it asynchronously, and the prompt must not be taken until
-      // that has landed.
-      parkAskSelectionPrompt(target.tabId, {
-        prompt: buildAskPrompt(selected, question),
-        agentType: target.agentType,
-        folderId: target.folderId,
-      })
     },
     [
       askFolderId,
-      groupId,
-      openNewConversationTab,
+      askMainTitle,
+      askModes,
+      askPromptCapabilities,
+      dbConversationId,
+      openAskDrawer,
       selectedAgent,
+      tAskConversations,
       workingDirForConnection,
     ]
   )
-
-  // Receiving end of the hand-off above, for asks aimed at THIS tab. Draining on
-  // mount covers a brand-new draft tab; the event covers the case where the
-  // target draft tab was already open (each split group keeps one, and inactive
-  // tabs stay mounted). The prompt goes into the message queue rather than
-  // straight out: a just-opened draft is still connecting, and the queue is
-  // exactly the "send as soon as the agent is live" path — with the question
-  // visible above the composer, and recoverable by hand, if it never connects.
-  //
-  // `selectedAgent` and `folderId` are BOTH the match key and the dependencies:
-  // a prompt aimed at a reused draft stays parked until that draft's pending
-  // retarget lands, and the identity change is exactly what re-runs this and
-  // releases it. Without that, a still-connected draft on the previous
-  // folder/agent would drain and auto-flush the question to the wrong agent —
-  // its own readiness checks can't see the difference, because in that window
-  // the tab is self-consistently the OLD one.
-  useEffect(() => {
-    const drain = () => {
-      const prompts = consumeAskSelectionPrompts(tabId, {
-        agentType: selectedAgent,
-        folderId,
-      })
-      for (const text of prompts) {
-        // `adoptSendTimeMode`: this tab has no modes yet (it is still
-        // connecting), so the flush stamps the resolved one when it sends.
-        mqEnqueue(
-          { blocks: [{ type: "text", text }], displayText: text },
-          null,
-          { adoptSendTimeMode: true }
-        )
-      }
-    }
-    drain()
-    const onParked = (event: Event) => {
-      const detail = (event as CustomEvent<AskSelectionParkedDetail>).detail
-      if (detail?.tabId !== tabId) return
-      drain()
-    }
-    window.addEventListener(ASK_SELECTION_PARKED_EVENT, onParked)
-    return () =>
-      window.removeEventListener(ASK_SELECTION_PARKED_EVENT, onParked)
-  }, [folderId, mqEnqueue, selectedAgent, tabId])
 
   const canShowDetailErrorActions =
     hasPersistedConversation && dbConversationId != null && !!folder
@@ -2289,7 +2272,10 @@ const ConversationTabView = memo(function ConversationTabView({
           // Asking opens its own conversation, so it needs a folder to open it in
           // rather than a usable composer here — a transcript whose composer is
           // blocked (session/load failure) can still spawn the question elsewhere.
-          onAskSelection={canAskSelection ? handleAskSelection : undefined}
+          renderAskComposer={canAskSelection ? renderAskComposer : undefined}
+          // The ask drawer is mounted beside this transcript (below): a
+          // check's conversation opens in it.
+          checksOpenInDrawer
           // Fork carries no draft, so — unlike a send — a non-empty queue is
           // not at risk of being jumped and needs no guard here. A turn in
           // flight is still rejected, by the backend, which is the only place
@@ -3387,6 +3373,7 @@ export function ConversationDetailPanel() {
         </ContextMenu>
       </div>
       <TabDragGhost />
+      <AskConversationDrawer />
       {activeSessionSummary && (
         <SessionDetailsDialog
           open={detailsOpen}

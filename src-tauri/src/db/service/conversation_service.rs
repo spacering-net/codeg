@@ -27,6 +27,7 @@ pub async fn create(
         git_branch,
         None,
         ConversationKind::Regular,
+        None,
     )
     .await
 }
@@ -50,8 +51,85 @@ pub async fn create_chat(
         git_branch,
         None,
         ConversationKind::Chat,
+        None,
     )
     .await
+}
+
+/// Create the conversation a check of a message ("is this right?") runs in:
+/// a `kind = 'check'` row whose `parent_id` is the conversation the message is
+/// in, so the sidebar nests it under that conversation and its Session Details
+/// lists it, the way an ask is. Linked in the insert itself, so no read of the
+/// list ever sees it as a root row. Always linked: a check of a conversation
+/// that is deleted — before it starts or after — is hidden with it, as the
+/// conversation's asks are (deleting a conversation leaves its children be).
+pub async fn create_check(
+    conn: &DatabaseConnection,
+    checked_conversation_id: i32,
+    folder_id: i32,
+    agent_type: AgentType,
+    title: Option<String>,
+    git_branch: Option<String>,
+) -> Result<conversation::Model, DbError> {
+    create_inner(
+        conn,
+        folder_id,
+        agent_type,
+        title,
+        git_branch,
+        None,
+        ConversationKind::Check,
+        Some(checked_conversation_id),
+    )
+    .await
+}
+
+/// Mirror of [`create`] for one session segment of the personal agent:
+/// `kind = 'personal'`, so it stays out of the sidebar's lists — the agent has
+/// its own page, and its prompts are written by codeg's engine.
+pub async fn create_personal(
+    conn: &DatabaseConnection,
+    folder_id: i32,
+    agent_type: AgentType,
+    title: Option<String>,
+) -> Result<conversation::Model, DbError> {
+    create_inner(
+        conn,
+        folder_id,
+        agent_type,
+        title,
+        None,
+        None,
+        ConversationKind::Personal,
+        None,
+    )
+    .await
+}
+
+/// Stamp a conversation an assistant dispatched: the assistant whose work it
+/// is (what the sidebar draws its avatar and name from), what the work ran
+/// on, and [`conversation::SOURCE_PERSONAL_AGENT`]. Written once, right after
+/// the row is created and before it is first broadcast.
+pub async fn set_dispatch_provenance(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    bot_uid: Option<&str>,
+    snapshot: &AssistantRunSnapshot,
+) -> Result<(), DbError> {
+    use sea_orm::sea_query::Expr;
+    let snapshot = serde_json::to_string(snapshot)
+        .map_err(|e| DbError::Validation(format!("assistant snapshot: {e}")))?;
+    conversation::Entity::update_many()
+        .col_expr(conversation::Column::BotUid, Expr::value(bot_uid))
+        .col_expr(conversation::Column::AssistantSnapshot, Expr::value(snapshot))
+        .col_expr(
+            conversation::Column::Source,
+            Expr::value(conversation::SOURCE_PERSONAL_AGENT),
+        )
+        .filter(conversation::Column::Id.eq(conversation_id))
+        .exec(conn)
+        .await?;
+    Ok(())
 }
 
 /// Mirror of [`create`] plus optional delegation linkage. Used by the
@@ -74,11 +152,95 @@ pub async fn create_with_delegation(
         ConversationKind::Regular
     };
     create_inner(
-        conn, folder_id, agent_type, title, git_branch, delegation, kind,
+        conn, folder_id, agent_type, title, git_branch, delegation, kind, None,
     )
     .await
 }
 
+/// Create an ask conversation in `folder_id`: a `kind = 'ask'` row whose
+/// `parent_id` is the conversation it was asked from, so the sidebar nests it
+/// under that conversation (as it does a delegation child) and the
+/// conversation's Session Details lists it.
+///
+/// `folder_id` is the folder the caller's agent is ALREADY running in (the
+/// main conversation's, when the ask was composed), not re-read off the parent:
+/// the main conversation can move to another project while the ask's agent is
+/// starting, and a row filed elsewhere would send its first prompt to a session
+/// running in the wrong directory.
+///
+/// Asking from inside an ask conversation links the new one to that
+/// conversation's own main conversation, so a conversation's asks are all one
+/// level under it — unless that main conversation is gone, in which case the
+/// ask hangs off the ask it was asked from, the one conversation the user can
+/// still see it under.
+///
+/// A retired hidden chat folder is revived rather than refused (see the body).
+pub async fn create_ask(
+    conn: &DatabaseConnection,
+    parent_conversation_id: i32,
+    folder_id: i32,
+    agent_type: AgentType,
+    title: Option<String>,
+    git_branch: Option<String>,
+) -> Result<conversation::Model, DbError> {
+    let parent = conversation::Entity::find_by_id(parent_conversation_id)
+        .filter(conversation::Column::DeletedAt.is_null())
+        .one(conn)
+        .await?
+        .ok_or_else(|| {
+            DbError::Migration(format!("Conversation not found: {parent_conversation_id}"))
+        })?;
+    let mut root_id = parent.id;
+    if parent.kind == ConversationKind::Ask {
+        if let Some(main_id) = parent.parent_id {
+            let main_live = conversation::Entity::find_by_id(main_id)
+                .filter(conversation::Column::DeletedAt.is_null())
+                .one(conn)
+                .await?
+                .is_some();
+            if main_live {
+                root_id = main_id;
+            }
+        }
+    }
+    let folder = folder::Entity::find_by_id(folder_id)
+        .one(conn)
+        .await?
+        .ok_or_else(|| DbError::Migration(format!("Folder not found: {folder_id}")))?;
+    let in_chat_folder = folder.kind == crate::db::entities::folder::FolderKind::Chat;
+    // A hidden chat folder is retired when its last conversation leaves it —
+    // e.g. the main conversation being moved into a project while this ask's
+    // agent was starting in its scratch directory. The agent is still running
+    // there, so the folder comes back rather than the ask failing.
+    if folder.deleted_at.is_some() {
+        if !in_chat_folder {
+            return Err(DbError::Migration(format!("Folder not found: {folder_id}")));
+        }
+        crate::db::service::folder_service::revive_chat_folder(conn, folder_id).await?;
+    }
+    let row = create_inner(
+        conn,
+        folder_id,
+        agent_type,
+        title,
+        git_branch,
+        None,
+        ConversationKind::Ask,
+        Some(root_id),
+    )
+    .await?;
+    // The same race against the chat folder's retirement: a retirement that
+    // ran between the revive above and the insert found the folder empty. One
+    // that runs after the insert sees this row and leaves the folder alone
+    // (`retire_folder_if_unused` is a single conditional statement), so one
+    // more revive settles it.
+    if in_chat_folder {
+        crate::db::service::folder_service::revive_chat_folder(conn, folder_id).await?;
+    }
+    Ok(row)
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn create_inner(
     conn: &DatabaseConnection,
     folder_id: i32,
@@ -87,6 +249,9 @@ async fn create_inner(
     git_branch: Option<String>,
     delegation: Option<crate::acp::delegation::spawner::DelegationLink>,
     kind: ConversationKind,
+    // The row an ask (or check) conversation hangs off; ignored when
+    // `delegation` is set (a delegation child's parent comes from its link).
+    ask_parent_id: Option<i32>,
 ) -> Result<conversation::Model, DbError> {
     let at_str = serde_json::to_value(agent_type)
         .ok()
@@ -100,17 +265,18 @@ async fn create_inner(
             Some(link.delegation_call_id),
             link.assistant,
         ),
-        None => (None, None, None, None),
+        None => (ask_parent_id, None, None, None),
     };
-    let (assistant_id, assistant_snapshot) = match assistant {
+    let (assistant_id, bot_uid, assistant_snapshot) = match assistant {
         Some(a) => (
-            Some(a.id),
+            a.id,
+            a.bot_uid,
             Some(
                 serde_json::to_string(&a.snapshot)
                     .map_err(|e| DbError::Migration(format!("assistant snapshot: {e}")))?,
             ),
         ),
-        None => (None, None),
+        None => (None, None, None),
     };
     let model = conversation::ActiveModel {
         id: NotSet,
@@ -134,6 +300,7 @@ async fn create_inner(
         origin_cwd: Set(None),
         assistant_id: Set(assistant_id),
         assistant_snapshot: Set(assistant_snapshot),
+        bot_uid: Set(bot_uid),
         source: Set(None),
         selector_state: Set(None),
     };
@@ -940,6 +1107,7 @@ struct CarriedOverRow {
     origin_cwd: Option<String>,
     assistant_id: Option<i32>,
     assistant_snapshot: Option<String>,
+    bot_uid: Option<String>,
     source: Option<String>,
     selector_state: Option<String>,
 }
@@ -984,12 +1152,16 @@ impl CarriedOverRow {
             // so it keeps drawing as it.
             assistant_id: row.assistant_id,
             assistant_snapshot: row.assistant_snapshot.clone(),
+            bot_uid: row.bot_uid.clone(),
             // Carried: the history was started where the conversation was.
             source: row.source.clone(),
             // Carried: the preserved history ran with this selection. A fork
             // overwrites it afterwards with the selection the fork actually
             // inherited (`persist_fork_outcome`).
             selector_state: row.selector_state.clone(),
+            // Carried: the preserved history belongs to the same ask, so it
+            // stays under its main conversation instead of surfacing in the
+            // sidebar.
         }
     }
 
@@ -1021,6 +1193,7 @@ impl CarriedOverRow {
             origin_cwd: Set(self.origin_cwd),
             assistant_id: Set(self.assistant_id),
             assistant_snapshot: Set(self.assistant_snapshot),
+            bot_uid: Set(self.bot_uid),
             source: Set(self.source),
             selector_state: Set(self.selector_state),
         }
@@ -1487,6 +1660,7 @@ fn conv_to_summary(r: conversation::Model) -> DbConversationSummary {
             .as_deref()
             .and_then(AssistantRunSnapshot::name_from_json),
         assistant_id: r.assistant_id,
+        bot_uid: r.bot_uid,
         source: r.source,
         // Backfilled by `fill_summary_extras`, like `child_count`.
         tag_ids: Vec::new(),
@@ -1695,23 +1869,25 @@ pub async fn get_by_delegation_call_id(
     Ok(conv.map(conv_to_summary))
 }
 
-/// The assistant a delegation child ran as, with the snapshot its row was
-/// written with. `None` for any row that is not an assistant child (or no
-/// row); `Some((id, None))` for an assistant child whose snapshot is missing or
-/// no longer parses — the caller must not mistake that for "no options".
+/// The snapshot an assistant delegation child's row was written with — one
+/// of the owner's assistants (`bot_uid`), or a collaboration settings'
+/// assistant from before them (`assistant_id`). `None` for any row that is
+/// not an assistant child (or no row); `Some(None)` for an assistant child
+/// whose snapshot is missing or no longer parses — the caller must not
+/// mistake that for "no options".
 pub async fn get_assistant_run(
     conn: &DatabaseConnection,
     conversation_id: i32,
-) -> Result<Option<(i32, Option<AssistantRunSnapshot>)>, DbError> {
+) -> Result<Option<Option<AssistantRunSnapshot>>, DbError> {
     let Some(row) = conversation::Entity::find_by_id(conversation_id)
         .one(conn)
         .await?
     else {
         return Ok(None);
     };
-    let Some(assistant_id) = row.assistant_id else {
+    if row.assistant_id.is_none() && row.bot_uid.is_none() {
         return Ok(None);
-    };
+    }
     let snapshot = row.assistant_snapshot.as_deref().and_then(|raw| {
         serde_json::from_str::<AssistantRunSnapshot>(raw)
             .map_err(|e| {
@@ -1722,7 +1898,7 @@ pub async fn get_assistant_run(
             })
             .ok()
     });
-    Ok(Some((assistant_id, snapshot)))
+    Ok(Some(snapshot))
 }
 
 pub async fn list_by_folder(
@@ -1797,8 +1973,10 @@ pub async fn list_all(
     let mut query = conversation::Entity::find().filter(conversation::Column::DeletedAt.is_null());
 
     // Loop-engineering runs never surface in the workspace conversation list —
-    // their entry point is the loops workbench.
+    // their entry point is the loops workbench — and neither do the personal
+    // agent's own session segments, which live on its page.
     query = query.filter(conversation::Column::Kind.ne(ConversationKind::Loop));
+    query = query.filter(conversation::Column::Kind.ne(ConversationKind::Personal));
 
     if !include_children {
         query = query.filter(conversation::Column::ParentId.is_null());
@@ -1857,9 +2035,10 @@ pub async fn list_all(
     Ok(summaries)
 }
 
-/// List delegation children of a single parent conversation, newest first
-/// (`created_at` DESC), matching the sidebar's newest-on-top ordering so a
-/// freshly-spawned sub-agent surfaces right under its parent. The only other
+/// List the children of a single parent conversation — delegation sub-sessions
+/// and ask conversations alike — newest first (`created_at` DESC), matching
+/// the sidebar's newest-on-top ordering so a freshly-spawned sub-agent (or a
+/// new ask) surfaces right under its parent. The only other
 /// consumer (`inject_delegation_meta`) keys these by `parent_tool_use_id` and
 /// is order-agnostic. Returns rows where `parent_id == parent_conversation_id`.
 /// Soft-deleted children are filtered out so a removed sub-session stays hidden
@@ -1883,11 +2062,452 @@ pub async fn list_children(
     Ok(summaries)
 }
 
+/// The ask conversations of `parent_conversation_id` — its children of kind
+/// `ask` — newest first (`created_at` DESC, id DESC as the tie-break).
+/// Soft-deleted rows are left out.
+pub async fn list_ask_children(
+    conn: &DatabaseConnection,
+    parent_conversation_id: i32,
+) -> Result<Vec<DbConversationSummary>, DbError> {
+    list_children_of_kind(conn, parent_conversation_id, ConversationKind::Ask).await
+}
+
+/// The check conversations of `parent_conversation_id` — its children of kind
+/// `check` — in the order [`list_ask_children`] lists asks.
+pub async fn list_check_children(
+    conn: &DatabaseConnection,
+    parent_conversation_id: i32,
+) -> Result<Vec<DbConversationSummary>, DbError> {
+    list_children_of_kind(conn, parent_conversation_id, ConversationKind::Check).await
+}
+
+async fn list_children_of_kind(
+    conn: &DatabaseConnection,
+    parent_conversation_id: i32,
+    kind: ConversationKind,
+) -> Result<Vec<DbConversationSummary>, DbError> {
+    let rows = conversation::Entity::find()
+        .filter(conversation::Column::ParentId.eq(parent_conversation_id))
+        .filter(conversation::Column::Kind.eq(kind))
+        .filter(conversation::Column::DeletedAt.is_null())
+        .order_by_desc(conversation::Column::CreatedAt)
+        .order_by_desc(conversation::Column::Id)
+        .all(conn)
+        .await?;
+    let mut summaries: Vec<DbConversationSummary> = rows.into_iter().map(conv_to_summary).collect();
+    fill_summary_extras(conn, &mut summaries).await?;
+    Ok(summaries)
+}
+
+/// Turn a live ask or check conversation into an ordinary one: drop its
+/// `parent_id` and give it the kind of the folder it runs in (`chat` in a
+/// hidden chat folder, `regular` anywhere else), so it becomes a root row of
+/// the sidebar. Never bumps `updated_at` — unlinking is not activity. `None`
+/// for a row that is missing, deleted, or neither an ask nor a check.
+pub async fn detach_ask(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+) -> Result<Option<DetachedAsk>, DbError> {
+    use sea_orm::sea_query::Expr;
+    let Some(row) = conversation::Entity::find_by_id(conversation_id)
+        .filter(conversation::Column::Kind.is_in([ConversationKind::Ask, ConversationKind::Check]))
+        .filter(conversation::Column::DeletedAt.is_null())
+        .one(conn)
+        .await?
+    else {
+        return Ok(None);
+    };
+    let in_chat_folder = folder::Entity::find_by_id(row.folder_id)
+        .one(conn)
+        .await?
+        .is_some_and(|f| f.kind == crate::db::entities::folder::FolderKind::Chat);
+    let kind = if in_chat_folder {
+        ConversationKind::Chat
+    } else {
+        ConversationKind::Regular
+    };
+    // Conditional on the row still being the same live ask (or check) in the
+    // same folder: a concurrent unlink, delete or move leaves it alone.
+    let res = conversation::Entity::update_many()
+        .col_expr(conversation::Column::ParentId, Expr::value(None::<i32>))
+        .col_expr(conversation::Column::Kind, Expr::value(kind))
+        .filter(conversation::Column::Id.eq(conversation_id))
+        .filter(conversation::Column::Kind.eq(row.kind.clone()))
+        .filter(conversation::Column::FolderId.eq(row.folder_id))
+        .filter(conversation::Column::DeletedAt.is_null())
+        .exec(conn)
+        .await?;
+    Ok((res.rows_affected > 0).then_some(DetachedAsk {
+        former_parent_id: row.parent_id,
+    }))
+}
+
+/// What [`detach_ask`] changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DetachedAsk {
+    /// The conversation the ask was linked to — its `child_count` just
+    /// dropped.
+    pub former_parent_id: Option<i32>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::acp::delegation::spawner::DelegationLink;
     use crate::db::test_helpers::{fresh_in_memory_db, seed_folder};
+
+    #[tokio::test]
+    async fn a_check_is_created_under_the_conversation_it_checks_until_converted() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-check-list").await;
+        let main = create(&db.conn, folder, AgentType::ClaudeCode, None, None)
+            .await
+            .expect("main");
+        let ask = create_ask(&db.conn, main.id, folder, AgentType::Codex, None, None)
+            .await
+            .expect("ask");
+        let check = create_check(&db.conn, main.id, folder, AgentType::Codex, None, None)
+            .await
+            .expect("check");
+        assert_eq!(check.kind, ConversationKind::Check);
+        assert_eq!(check.parent_id, Some(main.id));
+        assert_eq!(
+            (check.parent_tool_use_id, check.delegation_call_id),
+            (None, None),
+            "not a delegation"
+        );
+
+        // Nested, apart from the asks.
+        let roots = list_all(&db.conn, None, None, None, None, None, false)
+            .await
+            .expect("list");
+        assert_eq!(
+            roots.iter().map(|s| s.id).collect::<Vec<_>>(),
+            vec![main.id]
+        );
+        assert_eq!(roots[0].child_count, 2);
+        let checks = list_check_children(&db.conn, main.id)
+            .await
+            .expect("checks");
+        assert_eq!(
+            checks.iter().map(|s| s.id).collect::<Vec<_>>(),
+            vec![check.id]
+        );
+        let asks = list_ask_children(&db.conn, main.id).await.expect("asks");
+        assert_eq!(asks.iter().map(|s| s.id).collect::<Vec<_>>(), vec![ask.id]);
+
+        // Converted, it is an ordinary root conversation.
+        assert_eq!(
+            detach_ask(&db.conn, check.id).await.expect("detach"),
+            Some(DetachedAsk {
+                former_parent_id: Some(main.id)
+            })
+        );
+        let row = get_by_id(&db.conn, check.id).await.expect("row");
+        assert_eq!((row.kind, row.parent_id), (ConversationKind::Regular, None));
+        assert!(list_check_children(&db.conn, main.id)
+            .await
+            .expect("checks")
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_check_of_a_deleted_conversation_is_hidden_with_it() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-check-gone").await;
+        let main = create(&db.conn, folder, AgentType::ClaudeCode, None, None)
+            .await
+            .expect("main");
+        soft_delete(&db.conn, main.id).await.expect("delete");
+        let check = create_check(&db.conn, main.id, folder, AgentType::Codex, None, None)
+            .await
+            .expect("check");
+        assert_eq!(
+            (check.kind, check.parent_id),
+            (ConversationKind::Check, Some(main.id))
+        );
+        let roots = list_all(&db.conn, None, None, None, None, None, false)
+            .await
+            .expect("list");
+        assert!(roots.iter().all(|s| s.id != check.id), "not a root row");
+    }
+
+    #[tokio::test]
+    async fn an_ask_is_a_child_of_its_main_conversation_until_converted() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-ask-list").await;
+        let main = create(&db.conn, folder, AgentType::ClaudeCode, None, None)
+            .await
+            .expect("main");
+        let ask = create_ask(&db.conn, main.id, folder, AgentType::Codex, None, None)
+            .await
+            .expect("ask");
+        assert_eq!(ask.kind, ConversationKind::Ask);
+        assert_eq!(ask.parent_id, Some(main.id));
+        assert_eq!(ask.folder_id, folder);
+        assert_eq!(
+            (ask.parent_tool_use_id, ask.delegation_call_id),
+            (None, None),
+            "not a delegation"
+        );
+
+        // Not a root of the workspace list; nested under its main conversation,
+        // which counts it toward its chevron.
+        let roots = list_all(&db.conn, None, None, None, None, None, false)
+            .await
+            .expect("list");
+        assert_eq!(
+            roots.iter().map(|s| s.id).collect::<Vec<_>>(),
+            vec![main.id]
+        );
+        assert_eq!(roots[0].child_count, 1);
+        let children = list_children(&db.conn, main.id).await.expect("children");
+        assert_eq!(
+            children.iter().map(|s| s.id).collect::<Vec<_>>(),
+            vec![ask.id]
+        );
+        let asks = list_ask_children(&db.conn, main.id).await.expect("asks");
+        assert_eq!(asks.iter().map(|s| s.id).collect::<Vec<_>>(), vec![ask.id]);
+
+        // Converted, it is an ordinary root conversation.
+        let detached = detach_ask(&db.conn, ask.id).await.expect("detach");
+        assert_eq!(
+            detached,
+            Some(DetachedAsk {
+                former_parent_id: Some(main.id)
+            })
+        );
+        assert_eq!(
+            detach_ask(&db.conn, ask.id).await.expect("detach twice"),
+            None
+        );
+        let row = get_by_id(&db.conn, ask.id).await.expect("row");
+        assert_eq!((row.kind, row.parent_id), (ConversationKind::Regular, None));
+        let mut ids: Vec<i32> = list_all(&db.conn, None, None, None, None, None, false)
+            .await
+            .expect("list")
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
+        ids.sort();
+        assert_eq!(ids, vec![main.id, ask.id]);
+        assert!(list_ask_children(&db.conn, main.id)
+            .await
+            .expect("asks")
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn only_ask_conversations_convert_and_asks_list_only_asks() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-ask-only-asks").await;
+        let (parent, child) = seed_parent_with_child(&db.conn, folder).await;
+        let ask = create_ask(&db.conn, parent, folder, AgentType::ClaudeCode, None, None)
+            .await
+            .expect("ask");
+        let asks = list_ask_children(&db.conn, parent).await.expect("asks");
+        assert_eq!(asks.iter().map(|s| s.id).collect::<Vec<_>>(), vec![ask.id]);
+        assert_eq!(detach_ask(&db.conn, child).await.expect("delegate"), None);
+        assert_eq!(detach_ask(&db.conn, parent).await.expect("root"), None);
+        let child_row = get_by_id(&db.conn, child).await.expect("child");
+        assert_eq!(child_row.kind, ConversationKind::Delegate);
+        assert_eq!(child_row.parent_id, Some(parent));
+    }
+
+    #[tokio::test]
+    async fn asking_from_an_ask_links_to_the_main_conversation() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-ask-nested").await;
+        let main = create_chat(&db.conn, folder, AgentType::ClaudeCode, None, None)
+            .await
+            .expect("main");
+        let first = create_ask(&db.conn, main.id, folder, AgentType::ClaudeCode, None, None)
+            .await
+            .expect("first");
+        let second = create_ask(
+            &db.conn,
+            first.id,
+            folder,
+            AgentType::ClaudeCode,
+            None,
+            None,
+        )
+        .await
+        .expect("second");
+        assert_eq!(second.parent_id, Some(main.id));
+        let ids: Vec<i32> = list_ask_children(&db.conn, main.id)
+            .await
+            .expect("asks")
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(ids, vec![second.id, first.id], "newest first");
+        assert!(list_ask_children(&db.conn, first.id)
+            .await
+            .expect("asks")
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_ask_is_filed_in_the_folder_it_runs_in_and_unlinks_to_its_routing() {
+        let db = fresh_in_memory_db().await;
+        let project = seed_folder(&db, "/tmp/codeg-ask-route-project").await;
+        let chat = seed_folder(&db, "/tmp/codeg-ask-route-chat").await;
+        folder::Entity::update_many()
+            .col_expr(
+                folder::Column::Kind,
+                sea_orm::sea_query::Expr::value(crate::db::entities::folder::FolderKind::Chat),
+            )
+            .filter(folder::Column::Id.eq(chat))
+            .exec(&db.conn)
+            .await
+            .expect("make chat folder");
+        let main = create_chat(&db.conn, chat, AgentType::ClaudeCode, None, None)
+            .await
+            .expect("main");
+        let in_chat = create_ask(&db.conn, main.id, chat, AgentType::ClaudeCode, None, None)
+            .await
+            .expect("ask in chat folder");
+        assert_eq!(in_chat.kind, ConversationKind::Ask);
+        assert_eq!(in_chat.folder_id, chat);
+        // The main conversation moved to a project while the ask's agent was
+        // starting in the chat folder: the row is filed where that agent runs,
+        // not where the main conversation is now.
+        let moved = create_ask(
+            &db.conn,
+            main.id,
+            project,
+            AgentType::ClaudeCode,
+            None,
+            None,
+        )
+        .await
+        .expect("ask in project");
+        assert_eq!(moved.kind, ConversationKind::Ask);
+        assert_eq!(moved.folder_id, project);
+
+        // Converted, each takes the sidebar routing of its own folder.
+        let detached = detach_ask(&db.conn, in_chat.id).await.expect("detach");
+        assert_eq!(
+            detached,
+            Some(DetachedAsk {
+                former_parent_id: Some(main.id)
+            })
+        );
+        detach_ask(&db.conn, moved.id).await.expect("detach");
+        let find = |id| conversation::Entity::find_by_id(id).one(&db.conn);
+        let in_chat = find(in_chat.id).await.expect("query").expect("row");
+        assert_eq!(
+            (in_chat.kind, in_chat.parent_id),
+            (ConversationKind::Chat, None)
+        );
+        let moved = find(moved.id).await.expect("query").expect("row");
+        assert_eq!(
+            (moved.kind, moved.parent_id),
+            (ConversationKind::Regular, None)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_chat_folder_retired_under_a_starting_ask_comes_back() {
+        use crate::db::service::folder_service;
+        let db = fresh_in_memory_db().await;
+        let chat = seed_folder(&db, "/tmp/codeg-ask-retired-chat").await;
+        folder::Entity::update_many()
+            .col_expr(
+                folder::Column::Kind,
+                sea_orm::sea_query::Expr::value(crate::db::entities::folder::FolderKind::Chat),
+            )
+            .filter(folder::Column::Id.eq(chat))
+            .exec(&db.conn)
+            .await
+            .expect("make chat folder");
+        let main = create_chat(&db.conn, chat, AgentType::ClaudeCode, None, None)
+            .await
+            .expect("main");
+        // In use: the retirement is refused in the same statement.
+        assert!(!folder_service::retire_folder_if_unused(&db.conn, chat)
+            .await
+            .expect("retire in use"));
+        // The main conversation leaves (moved away); the folder retires.
+        soft_delete(&db.conn, main.id).await.expect("leave");
+        assert!(folder_service::retire_folder_if_unused(&db.conn, chat)
+            .await
+            .expect("retire unused"));
+
+        // The ask whose agent was already running in that folder still lands.
+        let other = create(&db.conn, chat, AgentType::ClaudeCode, None, None)
+            .await
+            .expect("another root");
+        let ask = create_ask(&db.conn, other.id, chat, AgentType::ClaudeCode, None, None)
+            .await
+            .expect("ask in the retired chat folder");
+        assert_eq!(ask.kind, ConversationKind::Ask);
+        let row = folder::Entity::find_by_id(chat)
+            .one(&db.conn)
+            .await
+            .expect("query")
+            .expect("folder");
+        assert_eq!(row.deleted_at, None, "the folder is live again");
+        assert!(!folder_service::retire_folder_if_unused(&db.conn, chat)
+            .await
+            .expect("retire with the ask in it"));
+    }
+
+    #[tokio::test]
+    async fn an_ask_is_refused_in_a_removed_project_folder() {
+        use crate::db::service::folder_service;
+        let db = fresh_in_memory_db().await;
+        let project = seed_folder(&db, "/tmp/codeg-ask-removed-project").await;
+        let home = seed_folder(&db, "/tmp/codeg-ask-removed-project-home").await;
+        let main = create(&db.conn, home, AgentType::ClaudeCode, None, None)
+            .await
+            .expect("main");
+        folder_service::soft_delete_folder(&db.conn, project)
+            .await
+            .expect("remove project");
+        assert!(create_ask(
+            &db.conn,
+            main.id,
+            project,
+            AgentType::ClaudeCode,
+            None,
+            None
+        )
+        .await
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn asks_are_left_as_they_are_when_their_main_conversation_is_deleted() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-ask-root-gone").await;
+        let main = create(&db.conn, folder, AgentType::ClaudeCode, None, None)
+            .await
+            .expect("main");
+        let first = create_ask(&db.conn, main.id, folder, AgentType::ClaudeCode, None, None)
+            .await
+            .expect("first");
+        soft_delete(&db.conn, main.id).await.expect("delete main");
+        let row = get_by_id(&db.conn, first.id).await.expect("ask");
+        assert_eq!(
+            (row.kind, row.parent_id),
+            (ConversationKind::Ask, Some(main.id))
+        );
+        // Asked from that ask now, the new one hangs off the ask itself — the
+        // only place left to show it under.
+        let late = create_ask(
+            &db.conn,
+            first.id,
+            folder,
+            AgentType::ClaudeCode,
+            None,
+            None,
+        )
+        .await
+        .expect("late ask");
+        assert_eq!(late.parent_id, Some(first.id));
+    }
 
     /// Build a parent + a delegation child for filter assertions.
     async fn seed_parent_with_child(conn: &DatabaseConnection, folder_id: i32) -> (i32, i32) {

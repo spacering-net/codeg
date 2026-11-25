@@ -16,7 +16,12 @@ import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { Virtualizer, type VirtualizerHandle } from "virtua"
 import {
+  Activity,
   Bot,
+  Calendar1,
+  CalendarDays,
+  CalendarMinus,
+  CalendarRange,
   Check,
   ChevronDown,
   ChevronRight,
@@ -28,6 +33,7 @@ import {
   FolderOpen,
   FolderOpenDot,
   FolderRoot,
+  History,
   Layers,
   LayersPlus,
   Link2,
@@ -42,6 +48,7 @@ import {
   Tag,
   Tags,
   XCircle,
+  type LucideIcon,
 } from "lucide-react"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
@@ -150,6 +157,14 @@ import {
 import { useRemoteWorkspaceConnections } from "@/hooks/use-remote-workspace-connections"
 import { useSubsessionSync } from "@/hooks/use-subsession-sync"
 import { SidebarSectionHeader } from "./sidebar-section-header"
+import {
+  AssistantsSectionActions,
+  AssistantsSectionBadge,
+  SidebarAssistants,
+  useSidebarAssistantsCount,
+  useSidebarRosterDialogs,
+  SHOW_SIDEBAR_ASSISTANTS_EVENT,
+} from "@/components/personal-agent/sidebar-assistants"
 import { SidebarFolderGroupHeader } from "./sidebar-folder-group-header"
 import { ConversationManageDialog } from "./conversation-manage-dialog"
 import { openConversationTagsManager } from "./conversation-tags-manager"
@@ -201,6 +216,20 @@ import { toErrorMessage } from "@/lib/app-error"
 // paint) but a no-op-safe passive effect during the static-export prerender.
 const useIsomorphicLayoutEffect =
   typeof window !== "undefined" ? useLayoutEffect : useEffect
+
+// Leading glyph of each Recent time-group heading — the same slot the
+// "show more" footer puts its chevron in. Running sessions get a live pulse;
+// the date groups stay in one calendar family that widens with the span (a
+// single day → the day before → a range → a month grid), and "older" falls
+// back to history rather than Archive, which would read as archived.
+const RECENT_TIME_GROUP_ICONS: Record<RecentTimeGroupId, LucideIcon> = {
+  priorities: Activity,
+  today: Calendar1,
+  yesterday: CalendarMinus,
+  previous7Days: CalendarRange,
+  previous30Days: CalendarDays,
+  older: History,
+}
 
 // Shared empty merge map used when "Show worktrees" is on: worktree children
 // then keep their own conversation bucket / count / theme instead of being
@@ -948,6 +977,12 @@ export interface SidebarConversationListHandle {
 
 export interface SidebarConversationListProps {
   showCompleted?: boolean
+  /** When off, the conversations the personal agent's assistants started
+   *  (`source === "personal_agent"`) are left out of every section, Pinned
+   *  included.
+   *  Defaults to on here; the Sidebar passes the user's preference, whose
+   *  product default is OFF. */
+  showAssistant?: boolean
   sortMode?: SidebarSortMode
   sectionOrder?: SidebarSectionOrder
   /** When on, each repo's worktree child folders render as indented sub-groups
@@ -966,6 +1001,7 @@ export interface SidebarConversationListProps {
 export function SidebarConversationList({
   ref,
   showCompleted = true,
+  showAssistant = true,
   sortMode = "created",
   sectionOrder = DEFAULT_SECTION_ORDER,
   showWorktrees = false,
@@ -1107,6 +1143,11 @@ export function SidebarConversationList({
   const [sectionCollapsed, setSectionCollapsed] =
     useState<SidebarSectionCollapsed>({})
   const pinnedExpanded = !sectionCollapsed.pinned
+  const assistantsExpanded = !sectionCollapsed.assistants
+  // The personal assistants' section (its count beside its title), and the
+  // dialogs its head's [+] and its rows' menus share.
+  const assistantsCount = useSidebarAssistantsCount()
+  const rosterDialogs = useSidebarRosterDialogs()
   const foldersExpanded = !sectionCollapsed.folders
   const chatsExpanded = !sectionCollapsed.chats
   const recentExpanded = !sectionCollapsed.recent
@@ -1181,11 +1222,15 @@ export function SidebarConversationList({
   // stale fetch snapshot or out-of-order upsert can't resurrect a deleted child —
   // the child-cache analog of the context's root deletion guard.
   const deletedChildIdsRef = useRef<Set<number>>(new Set())
+  // Ids an upsert has shown as roots (FIFO-bounded in the sync hook): a root
+  // never becomes a child, so a stale fetch snapshot can't nest one back (an ask
+  // conversation converted while the fetch was in flight).
+  const rootIdsRef = useRef<Set<number>>(new Set())
 
   // Keep the lazily-loaded sub-session cache live in real time: route child
   // upsert/status/deleted events into `childrenByParent` (roots stay with the
   // AppWorkspace context). child_count converges via backend parent re-emits.
-  useSubsessionSync({ setChildrenByParent, deletedChildIdsRef })
+  useSubsessionSync({ setChildrenByParent, deletedChildIdsRef, rootIdsRef })
   const [removeConfirm, setRemoveConfirm] = useState<{
     folderId: number
     folderName: string
@@ -1271,6 +1316,17 @@ export function SidebarConversationList({
     setRecentFilter(loadRecentFilter())
     setRecentGroupingMode(loadRecentGroupingMode())
     setConversationExpanded(new Set(loadConversationExpanded()))
+  }, [])
+
+  // "Manage assistants" from elsewhere: the assistants' section opened.
+  useEffect(() => {
+    // (Kept already by the one who asked.)
+    const open = () =>
+      setSectionCollapsed((prev) =>
+        prev.assistants ? { ...prev, assistants: false } : prev
+      )
+    window.addEventListener(SHOW_SIDEBAR_ASSISTANTS_EVENT, open)
+    return () => window.removeEventListener(SHOW_SIDEBAR_ASSISTANTS_EVENT, open)
   }, [])
 
   const toggleSection = useCallback((section: SidebarSectionKey) => {
@@ -1455,16 +1511,26 @@ export function SidebarConversationList({
     [conversations, tagFilter, tagFilterActive]
   )
 
+  // What every section lists: without the assistants' conversations unless
+  // they are asked for — pinned ones included.
+  const listedConversations = useMemo(
+    () =>
+      showAssistant
+        ? shownConversations
+        : shownConversations.filter((c) => c.source !== "personal_agent"),
+    [shownConversations, showAssistant]
+  )
+
   // Folder grouping source: pinned conversations are surfaced in the dedicated
   // Pinned section, and folderless chat conversations in the dedicated Chat
   // section, so exclude both here; then apply the completed filter as before.
   const folderConversations = useMemo(() => {
-    const base = shownConversations.filter(
+    const base = listedConversations.filter(
       (c) => c.pinned_at == null && c.kind !== "chat"
     )
     if (showCompleted) return base
     return base.filter((c) => c.status !== "completed")
-  }, [shownConversations, showCompleted])
+  }, [listedConversations, showCompleted])
 
   // Flat "Chat" bucket: folderless chat-mode conversations, most-recently-updated
   // first, with reference reuse (so an unrelated status event doesn't rebuild it
@@ -1473,13 +1539,13 @@ export function SidebarConversationList({
   /* eslint-disable react-hooks/refs -- render-time identity cache: reuses the previous value when equal so memoised children skip work */
   const chatConversations = useMemo(() => {
     const next = selectChatConversationsWithReuse(
-      shownConversations,
+      listedConversations,
       showCompleted,
       chatConvsRef.current
     )
     chatConvsRef.current = next
     return next
-  }, [shownConversations, showCompleted])
+  }, [listedConversations, showCompleted])
   /* eslint-enable react-hooks/refs */
 
   // Pinned bucket: the FULL conversation list (ignores "Show completed" — a
@@ -1488,10 +1554,10 @@ export function SidebarConversationList({
   const pinnedRef = useRef<DbConversationSummary[]>([])
   /* eslint-disable react-hooks/refs -- render-time identity cache: reuses the previous value when equal so memoised children skip work */
   const pinned = useMemo(() => {
-    const next = selectPinnedWithReuse(shownConversations, pinnedRef.current)
+    const next = selectPinnedWithReuse(listedConversations, pinnedRef.current)
     pinnedRef.current = next
     return next
-  }, [shownConversations])
+  }, [listedConversations])
   /* eslint-enable react-hooks/refs */
 
   // Every folder currently open in the workspace (repos and their worktree
@@ -1513,7 +1579,7 @@ export function SidebarConversationList({
   /* eslint-disable react-hooks/refs -- render-time identity cache: reuses the previous value when equal so memoised children skip work */
   const recentConversations = useMemo(() => {
     const next = selectRecentConversationsWithReuse(
-      shownConversations,
+      listedConversations,
       showCompleted,
       openFolderIds,
       recentConvsRef.current,
@@ -1521,7 +1587,7 @@ export function SidebarConversationList({
     )
     recentConvsRef.current = next
     return next
-  }, [shownConversations, showCompleted, openFolderIds, recentFilter])
+  }, [listedConversations, showCompleted, openFolderIds, recentFilter])
   /* eslint-enable react-hooks/refs */
 
   // Maps each open worktree child folder → its (open) root folder. A child is
@@ -1569,16 +1635,19 @@ export function SidebarConversationList({
   // Counts the unfiltered-but-non-pinned conversations per display group, so the
   // empty-hint renderer distinguishes a truly empty folder from one whose rows
   // are merely hidden by the completed filter. Pinned conversations are excluded
-  // (they're not in this folder's bucket), matching `byFolder`.
+  // (they're not in this folder's bucket), matching `byFolder`. So are the
+  // assistants' conversations while they are hidden: a folder holding only
+  // those reads as empty, not as one whose sessions are all finished.
   const folderTotalCounts = useMemo(() => {
     const map = new Map<number, number>()
     for (const conv of conversations) {
       if (conv.pinned_at != null) continue
+      if (!showAssistant && conv.source === "personal_agent") continue
       const groupId = displayChildToParent.get(conv.folder_id) ?? conv.folder_id
       map.set(groupId, (map.get(groupId) ?? 0) + 1)
     }
     return map
-  }, [conversations, displayChildToParent])
+  }, [conversations, displayChildToParent, showAssistant])
 
   // Running (`in_progress`) sessions per display group — what the folder header
   // badge shows. Counted off the FULL conversation list rather than `byFolder`
@@ -1701,10 +1770,13 @@ export function SidebarConversationList({
         layout,
         groupExpanded: folderGroupExpanded,
         hideEmptyFolders: tagFilterActive,
+        assistants: { expanded: assistantsExpanded, count: assistantsCount },
         recentGroupingMode,
         currentTime: recentDayStart,
       }),
     [
+      assistantsExpanded,
+      assistantsCount,
       pinned,
       pinnedExpanded,
       reorderableFolderIds,
@@ -2006,9 +2078,22 @@ export function SidebarConversationList({
         // queried before the soft-delete committed) — then merge the snapshot
         // with live events buffered mid-flight (events win by id) so a child
         // created after the query isn't lost.
+        // Likewise a child that became a root while the fetch was in flight
+        // (an ask conversation converted into an ordinary one): the stale
+        // snapshot must not nest it back. Known as a root either from its
+        // `parent_id`-less upsert or from the root list — a refresh after a
+        // reconnect carries it when the upsert itself was missed.
         const tomb = deletedChildIdsRef.current
-        const liveFetched =
-          tomb.size > 0 ? fetched.filter((c) => !tomb.has(c.id)) : fetched
+        const seenRoots = rootIdsRef.current
+        const listedRoots = new Set(
+          fetched.length > 0
+            ? useAppWorkspaceStore.getState().conversations.map((c) => c.id)
+            : []
+        )
+        const liveFetched = fetched.filter(
+          (c) =>
+            !tomb.has(c.id) && !seenRoots.has(c.id) && !listedRoots.has(c.id)
+        )
         const buffered = prev.get(id)
         const merged =
           buffered && buffered.length > 0
@@ -2876,6 +2961,68 @@ export function SidebarConversationList({
   const showEmptyWorkspaceActions =
     folders.length === 0 && conversations.length === 0
 
+  // The fully empty workspace's way in: under the assistants (the primary's
+  // set-up row among them), a row of the list, so both scroll as one.
+  // Nothing in the workspace yet: the assistants, then the way in.
+  const shownRows = useMemo<SidebarRow[]>(
+    () =>
+      showEmptyWorkspaceActions
+        ? [
+            ...rows.filter(
+              (r) =>
+                r.kind === "assistants" ||
+                (r.kind === "section" && r.section === "assistants")
+            ),
+            { kind: "workspace-empty" },
+          ]
+        : rows,
+    [rows, showEmptyWorkspaceActions]
+  )
+
+  const workspaceEmptyActions = (
+    <div
+      className="flex flex-col items-center justify-center gap-2 px-3 pt-6 pb-3"
+      data-sidebar-workspace-empty
+    >
+      <Button
+        variant="outline"
+        size="sm"
+        className="w-full max-w-[14rem] justify-start"
+        onClick={handleOpenFolderAction}
+      >
+        <FolderOpenDot className="h-3.5 w-3.5 mr-1.5" />
+        {tFolderDropdown("openFolder")}
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        className="w-full max-w-[14rem] justify-start"
+        onClick={handleOpenCloneDialog}
+      >
+        <FolderGit2 className="h-3.5 w-3.5 mr-1.5" />
+        {tFolderDropdown("cloneRepository")}
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        className="w-full max-w-[14rem] justify-start"
+        onClick={handleProjectBoot}
+      >
+        <Rocket className="h-3.5 w-3.5 mr-1.5" />
+        {tFolderDropdown("projectBoot")}
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        className="w-full max-w-[14rem] justify-start"
+        onClick={handleOpenImportWindow}
+      >
+        <Download className="h-3.5 w-3.5 mr-1.5" />
+        {t("importLocalSessions")}
+      </Button>
+    </div>
+  )
+
   // A folder's chosen colour, for the header's colour picker and for the tint
   // its TITLE takes. It used to also drive a per-row `data-theme` wrapper, which
   // re-themed every conversation card under the folder (hover pill, selection,
@@ -3048,6 +3195,27 @@ export function SidebarConversationList({
   }
 
   const renderRow = (row: SidebarRow) => {
+    if (row.kind === "assistants") {
+      return <SidebarAssistants dialogs={rosterDialogs.api} />
+    }
+    if (row.kind === "workspace-empty") return workspaceEmptyActions
+    if (row.kind === "section" && row.section === "assistants") {
+      return (
+        <SidebarSectionHeader
+          section="assistants"
+          expanded={row.expanded}
+          onToggle={toggleSection}
+          labelBadge={row.expanded ? null : <AssistantsSectionBadge />}
+          trailing={(className) => (
+            <AssistantsSectionActions
+              dialogs={rosterDialogs.api}
+              className={className}
+            />
+          )}
+          topGap
+        />
+      )
+    }
     if (row.kind === "section") {
       // Section headers are not folder-scoped, so they skip themeWrap.
       return (
@@ -3254,16 +3422,48 @@ export function SidebarConversationList({
         row.groupId === "priorities"
           ? t("timeGroupPrioritiesTooltip")
           : undefined
+      const GroupIcon = RECENT_TIME_GROUP_ICONS[row.groupId]
+      // A heading, not a control — but it copies the "show more" footer's
+      // geometry so the section reads as one column: the glyph sits on the
+      // rail axis where a card's agent icon does (0.75rem glyph in a 0.875rem
+      // box, centred on the var), the label starts at the card's title inset
+      // (`axis + 0.875rem`), same row height, size and colour. No hover:
+      // nothing here is clickable. Every heading, the first included, gets the
+      // same top gap to set its group off from whatever is above it — the
+      // previous group's rows, or the section header (both 2rem rows) — a
+      // little under the gap between sections, which separates more. Padding,
+      // not margin: the virtualizer measures the row box, and a child's margin
+      // would collapse out of it.
       return (
         <div
           data-recent-time-group={row.groupId}
-          className="flex items-center justify-between px-3 pt-2.5 pb-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground/60 select-none"
+          className="pt-[0.5rem]"
           title={tooltip}
         >
-          <span className="truncate">{label}</span>
-          <span className="font-mono text-[0.625rem] font-normal opacity-70 ml-2 shrink-0">
-            {row.count}
-          </span>
+          {/* 2rem slot holding a 1.9375rem content box, exactly like the
+              footer's wrapper + button, so icon and label share its centre. */}
+          <div className="h-[2rem]">
+            <div
+              className="relative flex h-[1.9375rem] items-center pr-[0.25rem] text-[0.75rem] text-muted-foreground/80 select-none"
+              style={{
+                paddingLeft: "calc(var(--conv-rail-axis, 0.875rem) + 0.875rem)",
+              }}
+            >
+              <span
+                aria-hidden
+                className="pointer-events-none absolute top-1/2 flex items-center justify-center"
+                style={{
+                  left: "var(--conv-rail-axis, 0.875rem)",
+                  width: "0.875rem",
+                  height: "0.875rem",
+                  transform: "translate(-50%, -50%)",
+                }}
+              >
+                <GroupIcon className="h-[0.75rem] w-[0.75rem]" />
+              </span>
+              <span className="truncate">{label}</span>
+            </div>
+          </div>
         </div>
       )
     }
@@ -3411,6 +3611,8 @@ export function SidebarConversationList({
   // prefix to stay distinct from its canonical twin.
   const rowKey = (row: SidebarRow): string => {
     if (row.kind === "section") return `section-${row.section}`
+    if (row.kind === "assistants") return "assistants"
+    if (row.kind === "workspace-empty") return "workspace-empty"
     if (row.kind === "folder-group") return `foldergroup-${row.groupId}`
     if (row.kind === "group-empty") return `groupempty-${row.groupId}`
     if (row.kind === "folder") return `folder-${row.folderId}`
@@ -3430,6 +3632,7 @@ export function SidebarConversationList({
 
   return (
     <div className="relative flex flex-col flex-1 min-h-0">
+      {rosterDialogs.node}
       {(loading || refreshing) && (
         // z-20 keeps the refresh spinner above the sticky header overlay (z-10),
         // which lives in a later sibling and would otherwise paint over it.
@@ -3445,49 +3648,21 @@ export function SidebarConversationList({
           ))}
         </div>
       ) : error ? (
-        <div className="flex-1 flex items-center justify-center px-3">
-          <p className="text-destructive text-xs">
+        // The conversations could not be read: the assistants still can be
+        // (their own store), so they stay, the error under them.
+        <div className="flex-1 min-h-0 overflow-y-auto px-1.5 pb-1.5">
+          {rows
+            .filter(
+              (r) =>
+                r.kind === "assistants" ||
+                (r.kind === "section" && r.section === "assistants")
+            )
+            .map((r) => (
+              <div key={rowKey(r)}>{renderRow(r)}</div>
+            ))}
+          <p className="px-2 py-6 text-center text-destructive text-xs">
             {t("error", { message: error })}
           </p>
-        </div>
-      ) : showEmptyWorkspaceActions ? (
-        <div className="flex-1 flex flex-col items-center justify-center px-3 gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full max-w-[14rem] justify-start"
-            onClick={handleOpenFolderAction}
-          >
-            <FolderOpenDot className="h-3.5 w-3.5 mr-1.5" />
-            {tFolderDropdown("openFolder")}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full max-w-[14rem] justify-start"
-            onClick={handleOpenCloneDialog}
-          >
-            <FolderGit2 className="h-3.5 w-3.5 mr-1.5" />
-            {tFolderDropdown("cloneRepository")}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full max-w-[14rem] justify-start"
-            onClick={handleProjectBoot}
-          >
-            <Rocket className="h-3.5 w-3.5 mr-1.5" />
-            {tFolderDropdown("projectBoot")}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full max-w-[14rem] justify-start"
-            onClick={handleOpenImportWindow}
-          >
-            <Download className="h-3.5 w-3.5 mr-1.5" />
-            {t("importLocalSessions")}
-          </Button>
         </div>
       ) : (
         <ContextMenu>
@@ -3592,7 +3767,7 @@ export function SidebarConversationList({
                   <Virtualizer
                     ref={virtualizerRef}
                     scrollRef={viewportRef}
-                    data={rows}
+                    data={shownRows}
                     itemSize={32}
                     bufferSize={400}
                     onScroll={handleVirtuaScroll}

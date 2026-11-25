@@ -159,54 +159,75 @@ pub async fn send_notification(
     title: String,
     body: String,
 ) -> Result<(), AppCommandError> {
-    #[cfg(target_os = "macos")]
-    {
-        // Must precede the send: this is what assigns the bundle id the OS
-        // attributes the notification to. Its outcome is reported separately
-        // by `notification_identity` — a degraded identity still delivers, so
-        // it is not a reason to fail the send.
-        let _identity = resolve_notification_identity(&app);
-
-        // Since mac-notification-sys 0.6.15 `send` holds its thread until macOS
-        // confirms the delivery, for up to 2 s: a blocking-pool thread's to
-        // hold, not an async worker's.
-        tokio::task::spawn_blocking(move || {
-            mac_notification_sys::Notification::default()
-                .title(&title)
-                .message(&body)
-                .send()
-                .map(|_| ())
-                .map_err(|err| err.to_string())
-        })
+    post_system_notification(&app, title, body, None)
         .await
-        .map_err(|err| AppCommandError::task_execution_failed(err.to_string()))?
         .map_err(|detail| {
             AppCommandError::new(
                 AppErrorCode::ExternalCommandFailed,
                 "Failed to post the system notification",
             )
             .with_detail(detail)
-        })?;
+        })
+}
+
+/// Post one system notification from the backend — the page's test send,
+/// and what the assistants tell the owner (1.13), which goes out whether a
+/// window is open or not. `image` is a PNG shown with it where the platform
+/// takes one: macOS beside the text, elsewhere as its icon.
+#[cfg(feature = "tauri-runtime")]
+pub async fn post_system_notification(
+    #[allow(unused_variables)] app: &AppHandle,
+    title: String,
+    body: String,
+    image: Option<std::path::PathBuf>,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        // Must precede the send: this is what assigns the bundle id the OS
+        // attributes the notification to. Its outcome is reported separately
+        // by `notification_identity` — a degraded identity still delivers, so
+        // it is not a reason to fail the send.
+        let _identity = resolve_notification_identity(app);
+
+        // Since mac-notification-sys 0.6.15 `send` holds its thread until macOS
+        // confirms the delivery, for up to 2 s: a blocking-pool thread's to
+        // hold, not an async worker's.
+        tokio::task::spawn_blocking(move || {
+            let image = image.map(|p| p.to_string_lossy().into_owned());
+            let mut n = mac_notification_sys::Notification::default();
+            n.title(&title).message(&body);
+            if let Some(path) = image.as_deref() {
+                n.content_image(path);
+            }
+            n.send().map(|_| ()).map_err(|err| err.to_string())
+        })
+        .await
+        .map_err(|err| err.to_string())??;
     }
 
     #[cfg(not(target_os = "macos"))]
     {
         use tauri_plugin_notification::NotificationExt;
-        app.notification()
-            .builder()
-            .title(title)
-            .body(body)
-            .show()
-            .map_err(|err| {
-                AppCommandError::new(
-                    AppErrorCode::ExternalCommandFailed,
-                    "Failed to post the system notification",
-                )
-                .with_detail(err.to_string())
-            })?;
+        let mut builder = app.notification().builder().title(title).body(body);
+        if let Some(path) = image {
+            builder = builder.icon(path.to_string_lossy().into_owned());
+        }
+        builder.show().map_err(|err| err.to_string())?;
     }
 
     Ok(())
+}
+
+/// Ask the OS to draw the owner back to codeg: the Dock bounces, the
+/// taskbar entry flashes, until they come.
+#[cfg(feature = "tauri-runtime")]
+pub fn request_attention(app: &AppHandle) {
+    use tauri::Manager;
+    let windows = app.webview_windows();
+    let window = windows.get("main").or_else(|| windows.values().next());
+    if let Some(w) = window {
+        let _ = w.request_user_attention(Some(tauri::UserAttentionType::Critical));
+    }
 }
 
 /// Candidate commands that open the OS pane governing notification permission,
