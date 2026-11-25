@@ -2603,6 +2603,7 @@
         "contextWindow": "Janela de contexto",
         "usedMax": "Usado / Máx",
         "tokenUsage": "Uso de tokens",
+        "tokenUnitShort": "tok",
         "input": "Entrada",
         "output": "Saída",
         "cacheRead": "Leitura de cache",
