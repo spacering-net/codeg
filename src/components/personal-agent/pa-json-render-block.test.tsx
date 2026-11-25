@@ -346,7 +346,8 @@ describe("an assistant's card: pa.item", () => {
         7,
         5,
         "snooze",
-        "1h"
+        "1h",
+        "card"
       )
     )
     await waitFor(() =>
@@ -360,7 +361,13 @@ describe("an assistant's card: pa.item", () => {
     // Without one, it waits on time with no due.
     fireEvent.click(screen.getByRole("button", { name: "Later" }))
     await waitFor(() =>
-      expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(7, 5, "snooze")
+      expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(
+        7,
+        5,
+        "snooze",
+        undefined,
+        "card"
+      )
     )
   })
 
@@ -382,7 +389,14 @@ describe("an assistant's card: pa.item", () => {
         { action: "pa.item", label: "Done", op: "done" }
       )
     )
-    expect(api.personalAgentItemAct).toHaveBeenCalledWith(7, 5, "done")
+    // A card's press is the card's: not taken back from the panel.
+    expect(api.personalAgentItemAct).toHaveBeenCalledWith(
+      7,
+      5,
+      "done",
+      undefined,
+      "card"
+    )
   })
 
   it("asks before dropping one", async () => {
@@ -403,7 +417,13 @@ describe("an assistant's card: pa.item", () => {
       .find((b) => b.hasAttribute("data-pa-card-drop"))!
     fireEvent.click(confirm)
     await waitFor(() =>
-      expect(api.personalAgentItemAct).toHaveBeenCalledWith(7, 5, "drop")
+      expect(api.personalAgentItemAct).toHaveBeenCalledWith(
+        7,
+        5,
+        "drop",
+        undefined,
+        "card"
+      )
     )
   })
 })

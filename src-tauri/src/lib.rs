@@ -1953,6 +1953,7 @@ mod tauri_app {
                 crate::commands::personal_agent::personal_agent_output_read,
                 crate::commands::personal_agent::personal_agent_turn_steps,
                 crate::commands::personal_agent::personal_agent_item_act,
+                crate::commands::personal_agent::personal_agent_item_undo,
                 crate::commands::personal_agent::personal_agent_presence,
                 crate::commands::personal_agent::personal_agent_profile,
                 crate::commands::personal_agent::personal_agent_profile_update,

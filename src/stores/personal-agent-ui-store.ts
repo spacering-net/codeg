@@ -24,6 +24,14 @@ export const ACTIVITY_FOLD: Record<ActivityGroup, string> = {
 /** A row of the activity to bring into view once it is read: the pill's
  *  first (C6), a routine asked for (C4) — its group unfolded, shown whole,
  *  the row scrolled to and opened; `row` `null`, the group's head. */
+/** A question the owner is to answer: the assistant's (`bot`, its id),
+ *  the matter, and what it asks. */
+export interface PendingAnswer {
+  bot: number
+  itemId: number
+  summary: string
+}
+
 export interface ActivityAsk {
   /** Unique for the window's life: one asked again is a new ask. */
   key: number
@@ -198,6 +206,11 @@ interface PersonalAgentUiState {
    *  followed (1.13). */
   pendingJump: { bot: number; row: number } | null
   setPendingJump: (jump: { bot: number; row: number } | null) => void
+  /** One of an assistant's questions the owner is to answer from its
+   *  conversation's composer ([Answer] on the activity, C1): taken by the
+   *  page of that assistant. */
+  pendingAnswer: PendingAnswer | null
+  setPendingAnswer: (answer: PendingAnswer | null) => void
   /** What waits on the owner, brought into view (the primary's pill, C6):
    *  the panel open on its activity, at `first` (a row's key) when given. */
   showWaiting: (first: string | null) => void
@@ -319,6 +332,8 @@ export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
     set((s) => (s.viewing === viewing ? s : { viewing })),
   pendingJump: null,
   setPendingJump: (pendingJump) => set({ pendingJump }),
+  pendingAnswer: null,
+  setPendingAnswer: (pendingAnswer) => set({ pendingAnswer }),
   showWaiting: (first) => set((s) => ask(s, "needs", first, false)),
   searchOpen: false,
   setSearchOpen: (searchOpen) => set({ searchOpen }),

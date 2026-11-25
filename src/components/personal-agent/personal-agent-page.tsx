@@ -93,6 +93,7 @@ import {
   usePersonalAgentUi,
 } from "@/stores/personal-agent-ui-store"
 
+import { useAnswerStanding, type AnsweringQuestion } from "./answer-bar"
 import { BotAvatar, faceColorOf } from "./bot-avatar"
 import {
   HistorySearchButton,
@@ -370,14 +371,24 @@ export function PersonalAgentPage() {
   const pageOver = settingsOpen || botPageOpen
   const [sessionOpen, setSessionOpen] = useState(false)
   const [confirmNew, setConfirmNew] = useState(false)
-  const [quoting, setQuoting] = useState<number | null>(null)
+  const [quoting, setQuotingRow] = useState<number | null>(null)
+  // One of its questions the owner answers ([Answer] on the activity, C1):
+  // kept with the page's store, the assistant's own — a quote or an
+  // answer, never both.
+  const setQuoting = useCallback((rowId: number | null) => {
+    setQuotingRow(rowId)
+    if (rowId != null) usePersonalAgentUi.getState().setPendingAnswer(null)
+  }, [])
   // A card's message the owner wants to edit first (9.2): into the
   // composer, quoting the card.
   const [draft, setDraft] = useState<{ text: string; n: number } | null>(null)
-  const onDraft = useCallback((rowId: number, text: string) => {
-    setQuoting(rowId)
-    setDraft((d) => ({ text, n: (d?.n ?? 0) + 1 }))
-  }, [])
+  const onDraft = useCallback(
+    (rowId: number, text: string) => {
+      setQuoting(rowId)
+      setDraft((d) => ({ text, n: (d?.n ?? 0) + 1 }))
+    },
+    [setQuoting]
+  )
   const jumpRef = useRef<((rowId: number) => void) | null>(null)
   const sentRef = useRef<(() => void) | null>(null)
   // Another assistant shown in the same frame: a quote or a draft meant for
@@ -385,7 +396,7 @@ export function PersonalAgentPage() {
   const [shownBot, setShownBot] = useState(botId)
   if (shownBot !== botId) {
     setShownBot(botId)
-    setQuoting(null)
+    setQuotingRow(null)
     setDraft(null)
   }
 
@@ -459,6 +470,7 @@ export function PersonalAgentPage() {
       liveRowId,
       connectionId,
       agentType,
+      setQuoting,
       onDraft,
       jumpTo,
       rowsById,
@@ -484,6 +496,34 @@ export function PersonalAgentPage() {
     usePersonalAgentUi.getState().setPendingJump(null)
     jumpTo(pendingJump.row)
   }, [pendingJump, agentId, loading, pageOver, jumpTo])
+
+  // A question to answer, asked for from the activity: this assistant's
+  // box answers it.
+  const pendingAnswer = usePersonalAgentUi((s) => s.pendingAnswer)
+  const answering: AnsweringQuestion | null =
+    pendingAnswer && agentId != null && pendingAnswer.bot === agentId
+      ? { itemId: pendingAnswer.itemId, summary: pendingAnswer.summary }
+      : null
+  const clearAnswer = useCallback(
+    () => usePersonalAgentUi.getState().setPendingAnswer(null),
+    []
+  )
+
+  // The question can no longer be answered — settled, gone, or answered
+  // already (from another window): the bar goes, the words stay.
+  const answerStands = useAnswerStanding(answering?.itemId ?? null, agentId)
+  const tAnswer = useTranslations("PersonalAgent.answer")
+  const answeringId = answering?.itemId ?? null
+  useEffect(() => {
+    if (answeringId == null) return
+    if (answerStands === "open" || answerStands === "unknown") return
+    clearAnswer()
+    toast.message(
+      answerStands === "answered"
+        ? tAnswer("alreadyAnswered", { name: agentName })
+        : tAnswer("ended")
+    )
+  }, [answeringId, answerStands, tAnswer, agentName, clearAnswer])
 
   // Read for the first time, or switched to before it was read: the shape of
   // a conversation, waiting.
@@ -587,9 +627,11 @@ export function PersonalAgentPage() {
               agent={agent}
               agentName={agentName}
               status={snapshot.status}
-              quoting={quoting}
+              quoting={answering ? null : quoting}
+              answering={answering}
               draft={draft}
               onClearQuote={() => setQuoting(null)}
+              onClearAnswer={clearAnswer}
               onSent={() => sentRef.current?.()}
             />
           </SwitchVeil>

@@ -41,6 +41,7 @@ import type {
   ConversationTarget,
   DispatchInfo,
   DispatchMode,
+  ItemActResult,
   ItemInfo,
   PersonalAgentDraft,
   PersonalAgentFile,
@@ -2590,7 +2591,9 @@ export async function personalAgentSend(
   replyTo?: number | null,
   bot?: number | null,
   /** The button of the quoted reply's card it came from (9.2). */
-  card?: CardClick | null
+  card?: CardClick | null,
+  /** The assistant's question it answers (`ItemInfo.id`). */
+  answersItem?: number | null
 ): Promise<TimelineRow> {
   return getTransport().call("personal_agent_send", {
     text,
@@ -2598,6 +2601,7 @@ export async function personalAgentSend(
     replyTo: replyTo ?? null,
     botId: bot ?? null,
     card: card ?? null,
+    answersItem: answersItem ?? null,
   })
 }
 
@@ -2687,13 +2691,31 @@ export async function personalAgentItemAct(
   botId: number | null | undefined,
   itemId: number,
   act: "done" | "drop" | "later" | "snooze",
-  until?: "15m" | "1h" | "tomorrow" | (string & {})
-): Promise<ItemInfo> {
+  until?: "15m" | "1h" | "tomorrow" | (string & {}),
+  /** Where the owner did it: the activity panel (taken back with the
+   *  result's `undo`) or a card the assistant drew. */
+  from: "panel" | "card" = "panel"
+): Promise<ItemActResult> {
   return getTransport().call("personal_agent_item_act", {
     botId,
     itemId,
     act,
     until: until ?? null,
+    from,
+  })
+}
+
+/** Take back the owner's act on a matter from the panel (`undo`, the token
+ *  the act gave): within ten minutes, while nothing changed since. */
+export async function personalAgentItemUndo(
+  botId: number | null | undefined,
+  itemId: number,
+  undo: number
+): Promise<ItemInfo> {
+  return getTransport().call("personal_agent_item_undo", {
+    botId,
+    itemId,
+    undo,
   })
 }
 

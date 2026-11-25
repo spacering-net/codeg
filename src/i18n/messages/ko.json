@@ -10340,13 +10340,6 @@
     "items": {
       "waitingAnswer": "{name}의 답변 대기: {text}",
       "wroteToYou": "{name}의 메시지: {text}",
-      "waits": {
-        "owner": "내 응답 대기",
-        "agent": "에이전트 대기",
-        "external": "진행 중",
-        "time": "나중에",
-        "none": "기타"
-      },
       "kind": {
         "dispatch": "배정",
         "reminder": "리마인더",
@@ -11265,7 +11258,8 @@
       "jump": "원본 메시지로 이동",
       "dismiss": "인용 제거",
       "preview": "원본 메시지",
-      "previewHint": "인용된 메시지입니다. 너무 오래되어 여기에 불러오지 않았습니다."
+      "previewHint": "인용된 메시지입니다. 너무 오래되어 여기에 불러오지 않았습니다.",
+      "reminder": "알림: {summary}"
     },
     "step": {
       "awaiting": "확인 대기: {title}",
@@ -11838,13 +11832,6 @@
       "notify": "알림 받기",
       "notifyHint": "일을 끝냈거나 내 응답을 기다릴 때",
       "item": {
-        "done": "완료",
-        "later": "나중에",
-        "drop": "그만두기",
-        "in15m": "15분 후",
-        "in1h": "1시간 후",
-        "tomorrow": "내일 오전",
-        "untimed": "시간 정하지 않음",
         "act": "때가 되면 처리"
       },
       "output": {
@@ -12011,8 +11998,8 @@
       "snooze15m": "15분 후",
       "snooze1h": "1시간 후",
       "snoozeTomorrow": "내일 오전",
-      "handOver": "어시스턴트에게 맡기기",
-      "handOverText": "리마인더 #{id} 처리해 줘: {summary}",
+      "handOver": "{name}에게 맡기기",
+      "handOverText": "이 알림을 처리해 줘: {summary}",
       "state": {
         "done": "완료함",
         "snoozed": "{when}(으)로 미룸",
@@ -12038,7 +12025,6 @@
       "handed": "{name}에게 맡겼습니다",
       "checking": "검수 중 · {round}차",
       "queued": "병합 대기 중",
-      "waitsAgent": "{name}의 처리를 기다리는 중",
       "routineRunning": "실행 중",
       "routineLast": "지난 실행: {outcome}",
       "fold": "세부 정보 숨기기",
@@ -13042,6 +13028,121 @@
       "title": "{name}에게는 아직 두뇌가 없어요",
       "body": "협업 설정에서 옮겨 온 어시스턴트예요. 메인 어시스턴트를 설정하면 메인의 두뇌를 그대로 복사해 받아서 대화할 수 있어요. 그 전에도 대화에서 @할 수는 있어요.",
       "setUp": "메인 어시스턴트 설정"
+    },
+    "matter": {
+      "act": {
+        "done": "완료",
+        "doneThis": "이번만 완료",
+        "doneEarly": "미리 완료",
+        "skipThis": "이번은 건너뛰기",
+        "merged": "병합됨",
+        "ack": "확인",
+        "snooze": "미루기",
+        "setTime": "시간 정하기",
+        "in15m": "15분 후",
+        "in1h": "1시간 후",
+        "tomorrow": "내일 오전",
+        "handOver": "{name}에게 맡기기",
+        "answer": "답하기",
+        "drop": "필요 없음",
+        "stop": "그만 알리기",
+        "undo": "실행 취소"
+      },
+      "hint": {
+        "doneNext": "이번은 완료, 이후는 그대로: {rule}",
+        "skipNext": "이번은 건너뛰고, 이후는 그대로: {rule}",
+        "snoozeNotify": "그때 다시 알려 드려요",
+        "snoozeAct": "그때 {name}이(가) 처리해요",
+        "setTimeNotify": "그때 알려 드려요",
+        "setTimeAct": "그때 {name}이(가) 처리해요",
+        "handOver": "{name}이(가) 처리하도록 맡겨요",
+        "answer": "{name}와(과)의 대화에서 답해요",
+        "drop": "목록에서 빼고, {name}은(는) 더 챙기지 않아요",
+        "dropQuestion": "이 질문에는 답하지 않아도 돼요. {name}에게 알려요",
+        "dropMessage": "이 메시지를 회수해요. 회수할 수 없으면 {name}은(는) {peer}의 답을 더 기다리지 않아요",
+        "stop": "앞으로 알리지 않아요",
+        "merged": "이 PR이 병합됐다고 {name}에게 알려요",
+        "ack": "목록에서 빼요"
+      },
+      "toast": {
+        "done": "완료: {title}",
+        "doneNext": "이번은 완료, 다음은 {when}",
+        "doneEnded": "완료. 이 알림은 여기서 끝나요",
+        "skipNext": "이번은 건너뜀, 다음은 {when}",
+        "skipEnded": "건너뜀. 이 알림은 여기서 끝나요",
+        "snoozeNotify": "{when}에 알려 드려요",
+        "snoozeAct": "{name}이(가) {when}에 처리해요",
+        "dropped": "뺐어요: {title}",
+        "withdrawn": "{peer}에게 보낸 메시지를 회수했어요",
+        "notWithdrawn": "메시지는 회수하지 못했어요. {name}은(는) {peer}의 답을 더 기다리지 않아요",
+        "stopped": "앞으로 알리지 않아요: {title}",
+        "handed": "{name}에게 맡겼어요",
+        "undone": "되돌렸어요"
+      },
+      "meta": {
+        "reminds": "{name}의 알림 · {when} 예정",
+        "remindsLate": "{name}의 알림 · {when} 예정, {late} 지남",
+        "willRemind": "{name}이(가) {when}에 알려요",
+        "willDo": "{name}이(가) {when}에 처리해요",
+        "repeats": "{name}의 알림: {rule} · 다음 {when}",
+        "asks": "{name}의 질문 · {wait}째 기다리는 중",
+        "asked": "{name}의 질문",
+        "answered": "답함 · {name}이(가) 읽기를 기다리는 중",
+        "interrupted": "{name}의 턴이 끝나지 않아 답을 못 읽었을 수 있어요 · 필요하면 다시 답해 주세요",
+        "needsYou": "{name}이(가) 당신을 기다려요 · {wait}",
+        "following": "{name}이(가) 챙기는 중 · {wait}",
+        "external": "{name}이(가) 외부 결과를 기다리는 중 · {wait}",
+        "message": "{name}이(가) {peer}의 답을 기다리는 중 · {wait}",
+        "setAside": "보류 · 시간 없음",
+        "mention": "{words}을(를) 말하면 {name}이(가) 알려요 · {times}/{max}회 · {until}까지",
+        "justNow": "방금",
+        "someone": "상대"
+      },
+      "closed": {
+        "done": "내가 완료 · {time}",
+        "dropped": "내가 뺌 · {time}",
+        "withdrawn": "{peer}에게 보낸 메시지를 회수함 · {time}",
+        "stoppedWaiting": "{peer}의 답을 그만 기다림 · {time}",
+        "agentDone": "{name}이(가) 완료 · {time}",
+        "agentDropped": "{name}이(가) 더 챙기지 않음 · {time}",
+        "answered": "{name}이(가) 내 답을 읽음 · {time}",
+        "replied": "{peer}이(가) 답함 · {time}",
+        "gone": "{peer}이(가) 삭제되어 답이 오지 않음 · {time}",
+        "planCanceled": "계획이 취소되어 {name}은(는) {peer}의 답을 더 기다리지 않음 · {time}",
+        "usedUp": "언급 알림을 다 썼어요 · {time}",
+        "expired": "언급 알림이 만료됐어요 · {time}",
+        "ended": "끝남 · {time}"
+      }
+    },
+    "matterErrors": {
+      "gone": "이 항목은 더 이상 없어요",
+      "settled": "이 항목은 이미 끝났어요",
+      "changed": "방금 바뀌었어요. 다시 확인해 주세요",
+      "workRunning": "이 작업은 아직 진행 중이에요. 멈추려면 작업 막대의 「중지」를 사용하세요",
+      "workNoTime": "맡긴 작업은 시간으로 미룰 수 없어요",
+      "messageNoTime": "이 항목은 {peer}의 답을 기다리고 있어서 시간으로 미룰 수 없어요",
+      "mentionNoTime": "이 항목은 언급할 때 나타나고, 시간으로 알리지 않아요",
+      "notEarlier": "이 항목은 원래 {when}로 정해져 있어요. 미루기는 뒤로만 할 수 있어요",
+      "hasTime": "이 항목은 이미 {when}로 정해져 있어요",
+      "inOtherHands": "이 항목은 {bot}이(가) 맡고 있어서 시간으로 미룰 수 없어요",
+      "badTime": "그 시간을 이해하지 못했어요",
+      "undoNone": "이 작업은 되돌릴 수 없어요",
+      "undoExpired": "10분이 지나 되돌릴 수 없어요",
+      "undoFired": "방금 알림이 갔기 때문에 되돌릴 수 없어요",
+      "undoChanged": "방금 바뀌어서 되돌릴 수 없어요",
+      "undoReplied": "{peer}이(가) 이미 답해서 되돌릴 수 없어요",
+      "undoPeerGone": "{peer}이(가) 삭제되어 되돌릴 수 없어요",
+      "undoAnswerRead": "{bot}이(가) 이미 답을 읽어서 되돌릴 수 없어요",
+      "answerChanged": "이 질문이 방금 바뀌었어요. 메시지는 보내지지 않았고, 내용은 입력창에 남아 있어요",
+      "answerQueued": "이 질문은 {bot}이(가) 처리하도록 대기열에 들어갔어요. 덧붙이려면 「답」을 빼고 그대로 보내세요",
+      "reminderAnswered": "이 알림은 이미 처리됐어요"
+    },
+    "answer": {
+      "bar": "답: {question}",
+      "dismiss": "답으로 보내지 않기",
+      "label": "답: {question}",
+      "ended": "이 질문은 이미 끝났어요. 답하지 않아도 돼요",
+      "alreadyAnswered": "이 질문은 이미 {name}이(가) 읽기를 기다리고 있어요. 다시 답하지 않아도 돼요"
     }
   },
   "MessageCheck": {
