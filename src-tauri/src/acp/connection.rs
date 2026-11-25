@@ -6175,10 +6175,11 @@ const HERMES_MODE_OPTION_ID: &str = "mode";
 const HERMES_SYNTHESIZED_OPTION_IDS: &[&str] = &[HERMES_MODEL_OPTION_ID, HERMES_MODE_OPTION_ID];
 
 /// Hermes lists its models in the session reply's legacy `models` (verified
-/// against 0.21.6, 0.22.2, 0.22.6, 0.22.7, 0.23.0, 0.23.1 and 0.23.3): every
-/// signed-in provider's models and every named endpoint's (`providers:` in
-/// config.yaml, codeg's own `custom:codeg` among them), with `provider:model`
-/// ids — `openrouter:anthropic/claude-opus-5.5`, `custom:codeg:glm-5.2`. Through
+/// against 0.21.6, 0.22.2, 0.22.6, 0.22.7, 0.23.0, 0.23.1, 0.23.3 and
+/// 0.23.4): every signed-in provider's models and every named endpoint's
+/// (`providers:` in config.yaml, codeg's own `custom:codeg` among them), with
+/// `provider:model` ids — `openrouter:anthropic/claude-opus-5.5`,
+/// `custom:codeg:glm-5.2`. Through
 /// 0.22.2 that is the only place: it sends no `configOptions`, and takes a
 /// switch only as `session/set_model`, its `session/set_config_option` storing
 /// whatever it is sent and answering an empty list. From 0.22.6 (0.23.1 is the

@@ -6003,8 +6003,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // Docker / Nix are the supported channels. The npm `hermes-agent`
             // package is a COMMUNITY bridge (wyrtensi/hermes-agent-npm, not
             // Nous Research), pinned here at an exact, audited version: its
-            // postinstall clones the OFFICIAL repo at tag v0.23.3 verifying the
-            // full commit SHA (caafe538…), bootstraps an isolated, uv-managed
+            // postinstall clones the OFFICIAL repo at tag v0.23.4 verifying the
+            // full commit SHA (8fc03744…), bootstraps an isolated, uv-managed
             // Python 3.14 venv with a checksum-pinned uv, and runs `uv sync
             // --frozen --extra all --no-dev` (⊇ the acp+mcp extras) from
             // upstream's lockfile — all inside the npm package directory;
@@ -6026,26 +6026,24 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // hard-compares `rev-parse <tag>^{commit}` against the 40-hex pin
             // before the `checkout --detach`.
             //
-            // 0.23.3 audited (0.23.1 to 0.23.3; 0.23.2 was pinned without its
-            // own audit): at each step only `package.json` moves (version,
-            // description, upstream tag and commit), so `bin/`,
+            // 0.23.4 audited (0.23.3 to 0.23.4): only `package.json` moves
+            // (version, description, upstream tag and commit), so `bin/`,
             // `scripts/postinstall.js` and `lib/` (uv 0.12.13 and its digest
             // table, the first-launch provisioning in `lib/provision.js`) are
-            // 0.23.0's; `pythonVersion` stays 3.14, and the install marker still
-            // keys on the npm version, tag, commit, Python and uv versions, so
-            // upgrading rebuilds the checkout and its venv. The annotated tag
-            // v0.23.3 dereferences to exactly caafe538…, tagged by "Hermes
-            // Release Automation" on 2026-11-20 (unsigned), 9,829 commits after
-            // v0.23.1 and 1,675 after v0.23.2, though upstream calls both patch
-            // releases. `uv.lock` is 0.23.1's at 0.23.2; 0.23.3 moves 13
-            // packages by a patch (oauthlib, tornado, opentelemetry) and adds or
-            // drops none (354 packages), so `--extra all` still installs 103
-            // packages on macOS arm64. npm 12.2.3 runs the postinstall under
-            // codeg's `--allow-scripts`; an install that skipped it is still
-            // provisioned by the first `hermes acp`, with its progress on stderr
-            // only (about 50 s with uv's caches warm, as measured on 0.23.1).
+            // still 0.23.0's; `pythonVersion` stays 3.14, and the install
+            // marker still keys on the npm version, tag, commit, Python and uv
+            // versions, so upgrading rebuilds the checkout and its venv. The
+            // annotated tag v0.23.4 dereferences to exactly 8fc03744…, tagged
+            // by "Hermes Release Automation" on 2026-11-24 (unsigned), 1,122
+            // non-merge commits after v0.23.3, which upstream calls a patch
+            // release. The ACP adapter (`acp_adapter/`), `uv.lock` and
+            // `pyproject.toml` are 0.23.3's byte for byte, so `--extra all`
+            // still installs 103 packages on macOS arm64. npm 12.2.3 runs the
+            // postinstall under codeg's `--allow-scripts`; an install that
+            // skipped it is still provisioned by the first `hermes acp`, with
+            // its progress on stderr only (about 55 s with uv's caches warm).
             //
-            // Known regressions on 0.23.3, both measured and both as on 0.23.1.
+            // Known regressions on 0.23.4, both measured and both as on 0.23.1.
             // From 0.22.3 `hermes acp` is a viewer: sessions, turns and MCP
             // servers run in a shared `gateway run --idle-exit` daemon, which
             // the first viewer for a `HERMES_HOME` starts with its own
@@ -6056,7 +6054,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // session with codeg-mcp injected does, each call to a config.yaml
             // `mcp_servers` entry fails with "MCP server '<name>' is not
             // connected", while the same server answers in a session with none
-            // (upstream issue #143502, still open; the lookup in
+            // (upstream issue #143502, still open and confirmed there on 0.23.4;
+            // its fix, #154438, is not merged; the lookup in
             // `tools/mcp_tool_scope.py` is 0.23.0's byte for byte). codeg hands
             // Hermes the user's own servers only through config.yaml, so on
             // every OS they are cut off whenever codeg-mcp rides along. (2)
@@ -6070,12 +6069,13 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // unknown…" or "Gateway draining: not_ready", by timing), while one
             // sent seconds later works. When launchd takes the job, the daemon
             // runs outside the viewer's tree and the stop reaches only that
-            // viewer (both setups measured on macOS; 0.23.2 reworked the code
-            // that starts the daemon, but it is still spawned detached into its
-            // own session as the viewer's child on POSIX, and through launchd
-            // first on macOS). Re-check both on the next bump.
+            // viewer (both setups measured on macOS; 0.23.4 changed only the
+            // environment the daemon is given, and it is still spawned detached
+            // into its own session as the viewer's child on POSIX, and through
+            // launchd first on macOS). Re-check both on the next bump.
             //
-            // Otherwise 0.23.3 answers as 0.23.1 did, as far as checked:
+            // Otherwise 0.23.4 answers as 0.23.3 and 0.23.1 did, as far as
+            // checked:
             // `initialize` is the same (`protocolVersion: 1`,
             // `agentInfo.version` "0.0.0"); the session reply (legacy `models`
             // and `modes`, and Hermes' own `edit_approval_policy` / `model` /
@@ -6111,8 +6111,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // with every column `parsers::hermes` reads; 0.23.2 added
             // `sessions.prompt_cache_clock` and a `resumable_subagents` table,
             // and 0.23.3 moved Hermes' own store access behind a persistence
-            // interface without moving the file. A session 0.23.2 wrote loads
-            // and continues on 0.23.3, also after its daemon died. Sessions are
+            // interface without moving the file. A session 0.23.3 wrote loads
+            // and continues on 0.23.4 after its daemon died. Sessions are
             // `local-<64 hex>` with `source = 'local'`. Load and resume neither
             // rewrite message rows nor clear `ended_at` (the next prompt does),
             // and a literal `\x00json:` message stays escaped; through 0.22.2
@@ -6122,15 +6122,17 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // source 0.23.1 also takes a turn the provider refused for safety
             // out of the model context (`active = 0`, which `parsers::hermes`
             // skips like a rewound turn), while its own load replay still shows
-            // the refused ask with a notice (not re-checked on 0.23.3). From
+            // the refused ask with a notice (not re-checked since 0.23.1). From
             // 0.23.2 each viewer and the daemon may start a detached
             // default-plugin installer that fetches the plugin catalog; it is
-            // the viewer's child, so codeg's stop ends it too. `hermes
-            // --version` prints `Hermes Agent v0.23.3 (2026.9.24) · stable ·
-            // local caafe5389ae5` first, which is the line codeg parses; the
-            // update check it runs next took 7 s with a route to GitHub and
-            // 11.6 s with the proxy black-holed (11 to 13 s on 0.23.0 and
-            // 0.23.1).
+            // the viewer's child, so codeg's stop ends it too. By its source,
+            // from 0.23.4 a profile that a host plugin marks as run elsewhere
+            // makes `hermes acp` print a refusal to stderr and exit 1 before
+            // `initialize`; codeg's own config never does that. `hermes
+            // --version` prints `Hermes Agent v0.23.4 (2026.9.24) · stable ·
+            // local 8fc037444731` first, which is the line codeg parses; the
+            // update check it runs next took 5 s with a route to GitHub and
+            // 11.4 s with the proxy black-holed (7 s and 11.6 s on 0.23.3).
             //
             // Launch preference: `resolve_npx_command("hermes")` checks PATH,
             // then `~/.local/bin` (the official installer's target), then the
@@ -6140,8 +6142,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `~/.local/bin`. The npm global install is the managed/one-click
             // channel codeg's Install button drives.
             distribution: AgentDistribution::Npx {
-                version: "0.23.3",
-                package: "hermes-agent@0.23.3",
+                version: "0.23.4",
+                package: "hermes-agent@0.23.4",
                 cmd: "hermes",
                 args: &["acp"],
                 env: &[],
@@ -9849,9 +9851,27 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `/design` work are the terminal UI's or the bundled skill's; a
             // sub-agent that hits its turn limit now ends with a status report
             // inside its tool result.
+            //
+            // 1.93.3, after 1.93.2, changes nothing in `package.json` but its
+            // version, and `dist/index.mjs` is unchanged. Installed fresh on
+            // 2026-11-24, 1.93.2 and 1.93.3 resolve the same dependency
+            // versions, and `acp` is still on the updater's skip list. With the
+            // minified names normalized, the ACP server and the model catalog
+            // are unchanged, and `initialize` (`protocolVersion: 1`) and the
+            // signed-out `session/new` answer as 1.93.2 did apart from the
+            // version. The same zero-cost turns match 1.93.2 frame for frame,
+            // still without an `fs/*` or `terminal/*` request, and so do the
+            // modes, the `model` ids and each model's `effort` values, the MCP
+            // sources and the session files; a `session/load` of a 1.93.2
+            // session in 1.93.3 replays it identically. `--effort` now sets the
+            // effort for that launch only, a flag codeg never passes, and
+            // `/connect`, the cloud `/model` fixes and the update error log are
+            // the terminal UI's. Under `CMD_ZDR=1` a custom provider can opt in
+            // with `"zdr": true`, and the refusal for one that has not now names
+            // that opt-in; codeg passes the text through unclassified.
             distribution: AgentDistribution::Npx {
-                version: "1.93.2",
-                package: "command-code@1.93.2",
+                version: "1.93.3",
+                package: "command-code@1.93.3",
                 cmd: "command-code",
                 args: &["acp"],
                 env: &[],
@@ -10445,8 +10465,8 @@ mod tests {
         );
         assert_npx_version(
             AgentType::CommandCode,
-            "1.93.2",
-            "command-code@1.93.2",
+            "1.93.3",
+            "command-code@1.93.3",
             Some("22.0.0"),
         );
         assert_binary_version(AgentType::OpenCode, "2.4.1", "/releases/download/v2.4.1/");
@@ -10456,8 +10476,8 @@ mod tests {
         // audited wrapper code is only what the pinned version ships.
         assert_npx_version(
             AgentType::Hermes,
-            "0.23.3",
-            "hermes-agent@0.23.3",
+            "0.23.4",
+            "hermes-agent@0.23.4",
             Some("20.0.0"),
         );
     }
