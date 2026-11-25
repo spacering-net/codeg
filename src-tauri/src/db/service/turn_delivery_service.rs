@@ -57,7 +57,7 @@ async fn begin_with_state(
             session_message::Entity::find()
                 .filter(session_message::Column::MessageId.eq(id))
                 .filter(session_message::Column::ConversationId.eq(conversation_id))
-                .filter(session_message::Column::Status.eq("in_flight"))
+                .filter(session_message::Column::Status.is_in(["dispatching", "in_flight", "received"]))
                 .one(&txn)
                 .await?
         }
@@ -172,7 +172,7 @@ async fn bind_in_tx<C: ConnectionTrait>(
             Expr::value(turn_id),
         )
         .filter(session_message::Column::Id.eq(message_id))
-        .filter(session_message::Column::Status.eq("in_flight"))
+        .filter(session_message::Column::Status.is_in(["dispatching", "in_flight", "received"]))
         .exec(db)
         .await?;
     Ok(())
@@ -244,7 +244,7 @@ pub async fn unbind(
             Expr::value(None::<String>),
         )
         .filter(session_message::Column::Id.eq(message_id))
-        .filter(session_message::Column::Status.eq("in_flight"))
+        .filter(session_message::Column::Status.is_in(["dispatching", "in_flight", "received"]))
         .exec(&txn)
         .await?;
     conversation_turn::Entity::update_many()
@@ -304,7 +304,9 @@ pub async fn complete(
     let inputs = session_message::Entity::find()
         .filter(session_message::Column::RecipientTurnId.eq(turn_id))
         .filter(session_message::Column::Status.is_in([
+            "dispatching",
             "in_flight",
+            "received",
             "interrupted",
             "completed",
             "failed",
@@ -428,7 +430,7 @@ pub(crate) async fn capture_recovery(
         .map(|turn| turn.turn_id)
         .collect();
     let messages = session_message::Entity::find()
-        .filter(session_message::Column::Status.eq("in_flight"))
+        .filter(session_message::Column::Status.is_in(["dispatching", "in_flight", "received"]))
         .filter(session_message::Column::UpdatedAt.lte(before))
         .all(&txn)
         .await?
@@ -468,12 +470,24 @@ pub(crate) async fn recover_captured(
             .await?;
     }
     if !snapshot.messages.is_empty() {
+        let txn = db.begin().await?;
+        session_message::Entity::update_many()
+            .col_expr(session_message::Column::Status, Expr::value("queued"))
+            .col_expr(session_message::Column::RecipientTurnId, Expr::value(None::<String>))
+            .col_expr(session_message::Column::UpdatedAt, Expr::value(Utc::now()))
+            .filter(session_message::Column::Id.is_in(snapshot.messages.iter().copied()))
+            .filter(session_message::Column::Status.eq("dispatching"))
+            .exec(&txn)
+            .await?;
         session_message::Entity::update_many()
             .col_expr(session_message::Column::Status, Expr::value("interrupted"))
             .col_expr(session_message::Column::Error, Expr::value("delivery unconfirmed: CLI may have accepted it before Codeg stopped; not automatically replayed"))
             .col_expr(session_message::Column::UpdatedAt, Expr::value(Utc::now()))
             .filter(session_message::Column::Id.is_in(snapshot.messages))
-            .filter(session_message::Column::Status.eq("in_flight")).exec(db).await?;
+            .filter(session_message::Column::Status.is_in(["in_flight", "received"]))
+            .exec(&txn)
+            .await?;
+        txn.commit().await?;
     }
     Ok(())
 }
@@ -591,7 +605,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        queue::claim(&db.conn, &row).await.unwrap();
+        queue::claim(&db.conn, &row, true).await.unwrap();
         // No process/connection identity is part of this continuation's binding.
         let next = begin(&db.conn, child, Some(&message_id), None)
             .await
@@ -677,7 +691,7 @@ mod tests {
                 break;
             }
             assert_eq!(message.status, "queued");
-            assert!(queue::claim(&db.conn, &message).await.unwrap());
+            assert!(queue::claim(&db.conn, &message, true).await.unwrap());
             turn = begin(&db.conn, to, Some(&id), None).await.unwrap();
             std::mem::swap(&mut from, &mut to);
         }
@@ -694,7 +708,7 @@ mod tests {
             .await
             .unwrap();
         let input = queue::queued(&db.conn).await.unwrap().remove(0);
-        queue::claim(&db.conn, &input).await.unwrap();
+        queue::claim(&db.conn, &input, true).await.unwrap();
         let turn = begin(&db.conn, b, Some(&id), None).await.unwrap();
         complete(&db.conn, &turn, "end_turn", "answer")
             .await
@@ -717,7 +731,7 @@ mod tests {
                 .await
                 .unwrap();
         let row = queue::queued(&db.conn).await.unwrap().remove(0);
-        queue::claim(&db.conn, &row).await.unwrap();
+        queue::claim(&db.conn, &row, true).await.unwrap();
         let turn = begin(&db.conn, child, Some(&message_id), None)
             .await
             .unwrap();
@@ -753,7 +767,7 @@ mod tests {
             .await
             .unwrap();
         let row = queue::queued(&db.conn).await.unwrap().remove(0);
-        queue::claim(&db.conn, &row).await.unwrap();
+        queue::claim(&db.conn, &row, true).await.unwrap();
         let turn = begin(&db.conn, child, Some(&message), None).await.unwrap();
         db.conn.execute(Statement::from_string(DbBackend::Sqlite,"CREATE TRIGGER reject_delivery BEFORE INSERT ON session_message BEGIN SELECT RAISE(ABORT, 'test'); END".to_owned())).await.unwrap();
         assert!(complete(&db.conn, &turn, "end_turn", "answer")
@@ -787,7 +801,7 @@ mod tests {
         .await
         .unwrap();
         let message = queue::queued(&db.conn).await.unwrap().remove(0);
-        queue::claim(&db.conn, &message).await.unwrap();
+        queue::claim(&db.conn, &message, true).await.unwrap();
         let live = begin(&db.conn, b, Some(&id), None).await.unwrap();
         recover_captured(&db.conn, snapshot).await.unwrap();
         assert_eq!(
@@ -833,7 +847,7 @@ mod tests {
             .await
             .unwrap();
         let row = queue::queued(&db.conn).await.unwrap().remove(0);
-        queue::claim(&db.conn, &row).await.unwrap();
+        queue::claim(&db.conn, &row, true).await.unwrap();
         begin(&db.conn, child, Some(&row.message_id), None)
             .await
             .unwrap();
