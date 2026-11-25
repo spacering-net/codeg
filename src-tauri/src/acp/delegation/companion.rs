@@ -6054,6 +6054,7 @@ mod tests {
         feedback: false,
         ask: false,
         sessions: false,
+        project_knowledge: false,
         tasks: false,
         result: false,
         automations: false,
