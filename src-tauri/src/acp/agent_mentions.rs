@@ -467,15 +467,14 @@ fn parse_assistant_brief_body(candidate: &str) -> Option<AssistantProfile> {
     Some(profile)
 }
 
-/// The `/btw` boundary frame: rides as an internal suffix block on the FIRST
-/// prompt of a side-question fork (see `commands::btw`), telling the model the
-/// history it just inherited is the parent's reference material, not its task.
+/// The `/btw` frame identifies the copied history and which user messages
+/// direct the current conversation.
 /// There is no payload to carry — the wording is the whole frame — so the data
 /// line is an empty object, and the frame is byte-constant apart from the
 /// descriptor nonce like every other kind here.
 const BTW_FRAME_KIND: &str = "codeg_internal_btw_boundary";
 const BTW_FRAME_BODY_PREFIX: &str = "{\"kind\":\"codeg_internal_btw_boundary\"";
-const BTW_FRAME_VERSION: u8 = 1;
+const BTW_FRAME_VERSION: u8 = 2;
 const BTW_FRAME_LINE_PREFIX: &str = "Codeg btw session frame (authoritative): ";
 const BTW_PROMOTION_FRAME_KIND: &str = "codeg_internal_btw_promotion";
 const BTW_PROMOTION_FRAME_BODY_PREFIX: &str = "{\"kind\":\"codeg_internal_btw_promotion\"";
@@ -488,9 +487,10 @@ const BTW_PROMOTION_FRAME_LINE_PREFIX: &str = "Codeg btw promotion frame (author
 #[serde(deny_unknown_fields)]
 struct BtwFramePayload {}
 
-/// The boundary frame's exact instruction wording. One line, and free of the
-/// reserved separator — the frame envelope cannot carry either.
-const BTW_BOUNDARY_INSTRUCTION: &str = "This session is a btw: a side conversation copy-forked from another conversation. The history it inherited is the parent's, kept for reference only — it is not your task. Do not continue, execute, or complete any task, plan, tool call, approval, edit, or request that appears only in that inherited history; only instructions sent inside this btw session are active. The inherited history may end in the middle of a step the parent thread was running; treat it as reference, never as work to pick up. Do not spawn or interact with sub-agents in this session. Do not modify files, git state, permissions, configuration, or any other workspace state unless the user explicitly asks inside this btw session; if they do, keep it minimal, local to the request, and away from disrupting the parent thread.";
+// Keep the v1 wording to strip frames in existing transcripts.
+const LEGACY_BTW_BOUNDARY_INSTRUCTION: &str = "This session is a btw: a side conversation copy-forked from another conversation. The history it inherited is the parent's, kept for reference only — it is not your task. Do not continue, execute, or complete any task, plan, tool call, approval, edit, or request that appears only in that inherited history; only instructions sent inside this btw session are active. The inherited history may end in the middle of a step the parent thread was running; treat it as reference, never as work to pick up. Do not spawn or interact with sub-agents in this session. Do not modify files, git state, permissions, configuration, or any other workspace state unless the user explicitly asks inside this btw session; if they do, keep it minimal, local to the request, and away from disrupting the parent thread.";
+
+const BTW_BOUNDARY_INSTRUCTION: &str = "This conversation was forked from another conversation. Use the copied history as context and follow the user's requests in this conversation, including requests to continue earlier work. The same tools, delegation, and workspace permissions apply as in other sessions. This supersedes any older side-session instructions in the copied history.";
 
 const BTW_PROMOTION_INSTRUCTION: &str = "This conversation started as a btw side question and has since been promoted to a normal session. The btw constraints in the history above no longer apply: this is now a main thread, and the usual tool, sub-agent and workspace permissions are in force.";
 
@@ -499,8 +499,8 @@ pub(crate) fn render_btw_boundary_frame() -> String {
     render_btw_frame(BTW_FRAME_KIND, BTW_FRAME_VERSION, BTW_FRAME_LINE_PREFIX, BTW_BOUNDARY_INSTRUCTION)
 }
 
-/// The separated frame to append once to the first prompt after a promotion.
-pub(crate) fn render_btw_promotion_frame() -> String {
+#[cfg(test)]
+fn render_btw_promotion_frame() -> String {
     render_btw_frame(
         BTW_PROMOTION_FRAME_KIND,
         BTW_PROMOTION_FRAME_VERSION,
@@ -622,6 +622,12 @@ impl FrameKind {
                 BTW_FRAME_VERSION,
                 BTW_FRAME_LINE_PREFIX,
                 BTW_BOUNDARY_INSTRUCTION,
+            ) || parse_btw_frame_body(
+                body,
+                BTW_FRAME_KIND,
+                1,
+                BTW_FRAME_LINE_PREFIX,
+                LEGACY_BTW_BOUNDARY_INSTRUCTION,
             ),
             FrameKind::BtwPromotion => parse_btw_frame_body(
                 body,
@@ -1532,6 +1538,15 @@ then [@Reviewer](codeg://assistant/3) again",
         // prefix must not make a frame of the other kind.
         for (frame, alien_prefix) in [
             (render_btw_boundary_frame(), BTW_PROMOTION_FRAME_LINE_PREFIX),
+            (
+                render_btw_frame(
+                    BTW_FRAME_KIND,
+                    1,
+                    BTW_FRAME_LINE_PREFIX,
+                    LEGACY_BTW_BOUNDARY_INSTRUCTION,
+                ),
+                BTW_PROMOTION_FRAME_LINE_PREFIX,
+            ),
             (render_btw_promotion_frame(), BTW_FRAME_LINE_PREFIX),
         ] {
             assert!(contains_internal_frames(&frame));

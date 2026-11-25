@@ -55,16 +55,15 @@ compensation.
    `fork && resume`; call `session/fork` with no fork point (tail fork),
    insert a child conversation row
    (`kind = btw`, `parent_id` = parent, `folder_id` = parent's), open its ACP
-   connection, and send the first message: the btw boundary instruction
-   (internal frame, adapted from OpenChamber's `BTW_BOUNDARY_INSTRUCTION`)
-   plus the question. The title is `btw: <question>`, truncated.
+   connection, and send the question with an internal frame identifying the
+   copied history as context. The side conversation uses the ordinary tools,
+   delegation, and workspace permissions. The title is `btw: <question>`, truncated.
 3. The fork copies whatever the engine has settled at that instant. No
    in-flight snapshot is taken and no fork point is pinned: an in-progress
    turn's streamed assistant content is never in the copy, and on claude and
    opencode the in-progress turn's user message and finished items may be.
-   This drift is accepted; the boundary instruction's "inherited history is
-   reference only, do not continue any task in it" already covers the
-   misreading risk, including a copy that ends on a tool_use without a result.
+   The user's requests in the side conversation direct the work. They can
+   ask the agent to continue a task from the copied history.
    The fork RPC runs on a spawned task inside the parent's connection, so the
    parent's event pump never stalls for it — a streaming answer keeps
    forwarding tokens while the side question forks.
@@ -106,10 +105,9 @@ several from the same parent) need no special case.
 - **Promote**: one transaction sets `kind = regular` and clears `parent_id`
   and arms `btw_promoted` (migration `m20261121_000001_conversation_btw_promoted`).
   The row moves out of the btw group into the normal list on its own. The
-  connection injects a one-shot promotion notice (OpenChamber's
-  `BTW_PROMOTION_NOTICE` wording, adapted) as an internal frame on the next
-  user message — cleared only once that send succeeds — so the model learns
-  the btw constraints are lifted.
+  next user message carries the current side-session instructions once.
+  The upgrade also sets this flag on existing side conversations to replace
+  the older instructions.
 
 ### Failure policy
 
@@ -149,7 +147,7 @@ schema specifies archive-while-active rules and says nothing for fork). Codeg's
 
 1. A manual claude test forking while a tool call executes, the case the ACP
    session-cursors RFD itself leaves open; if a trailing unresolved tool_use
-   misleads the model, fix it with one added line in the boundary instruction.
+   misleads the model, update the instruction identifying the copied history.
 2. Cold-start timing of the forked session per agent (claude's
    post-fork `session/load` is ~1.9 s on current versions), to set the strip's
    `starting` affordances.

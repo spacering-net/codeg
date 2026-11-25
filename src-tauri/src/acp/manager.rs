@@ -2012,8 +2012,8 @@ impl ConnectionManager {
             };
 
         // The btw-promotion frame (see the `btw_promoted` column): the first
-        // user prompt of a row promoted from `/btw` carries the notice that
-        // lifts the side-question constraints. Read-only here — the flag
+        // user prompt after upgrading an existing `/btw` or promoting it
+        // carries the current side-session instructions. The flag
         // clears ONLY after the prompt reaches the connection loop, so every
         // failure path below (gate refusal, closed channel, exited process)
         // leaves the notice pending for the next prompt rather than
@@ -2034,7 +2034,7 @@ impl ConnectionManager {
         };
         if btw_promotion_pending.is_some() {
             internal_suffix.push(PromptInputBlock::Text {
-                text: crate::acp::agent_mentions::render_btw_promotion_frame(),
+                text: crate::acp::agent_mentions::render_btw_boundary_frame(),
             });
         }
         // Bound conversation id of a row that owes the promotion frame, kept

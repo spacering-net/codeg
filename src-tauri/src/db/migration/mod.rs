@@ -61,6 +61,7 @@ mod m20261112_000001_work_task_writeback_drafts;
 mod m20261116_000001_srn_web;
 mod m20261121_000001_conversation_btw_promoted;
 mod m20261123_000001_conversation_selector_state;
+mod m20261125_000005_refresh_btw_instructions;
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -128,6 +129,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261116_000001_srn_web::Migration),
             Box::new(m20261121_000001_conversation_btw_promoted::Migration),
             Box::new(m20261123_000001_conversation_selector_state::Migration),
+            Box::new(m20261125_000005_refresh_btw_instructions::Migration),
         ]
     }
 }
