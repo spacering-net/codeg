@@ -3536,7 +3536,11 @@ const VIEWER_DETAIL_SYNC_LOAD_WAIT_CAP_MS = 30_000
 // client streamed, so a parse that is still behind greys out their "fork from
 // here" as "not ready yet" for good. Both only recovered by reopening the
 // conversation, which re-renders straight from a fresh parse. So the poll now
-// backs off across ~30s and stops as soon as the transcript has caught up.
+// backs off across ~30s and stops as soon as the transcript has caught up. A
+// windowed response that can never verify for this batch would answer the same
+// empty thing on every one of those rounds, so the schedule ends there with one
+// full read of the transcript instead (`repairFromFullParse` in
+// `syncTurnMetadata`) — the same parse reopening the conversation would do.
 const TURN_METADATA_SYNC_DELAYS_MS = [1500, 3000, 5000, 8000, 13000] as const
 
 // Active viewer-sync polls, keyed by conversationId, so a fresh nudge supersedes
@@ -4949,16 +4953,138 @@ export const useConversationRuntimeStore = create<ConversationRuntimeStore>()((
     // so the allowance is the same wherever in the schedule that state first
     // shows up.
     let usageOnlyRounds = 0
+    // Whether the last-resort full read has already run (see
+    // `repairFromFullParse`). One per sync: the window gate can fail on every
+    // attempt, and a second full parse buys nothing the first did not.
+    let repairRan = false
 
     // Advance the backoff, unless this sync was cancelled, already moved on,
     // or has run out of attempts. Hoisted so the attempt below can call it;
-    // `trySync` is initialized before the first timer is ever armed.
-    function scheduleNext(attempt: number): void {
-      if (cancelled) return
+    // `trySync` is initialized before the first timer is ever armed. Returns
+    // whether another attempt was actually armed, so a caller that has run out
+    // of schedule can tell that from a no-op.
+    function scheduleNext(attempt: number): boolean {
+      if (cancelled) return false
       const next = attempt + 1
-      if (next >= TURN_METADATA_SYNC_DELAYS_MS.length) return
-      if (next <= armed) return
+      if (next >= TURN_METADATA_SYNC_DELAYS_MS.length) return false
+      if (next <= armed) return false
       trySync(next)
+      return true
+    }
+
+    /**
+     * The last resort when the schedule ends with the newest reply still
+     * unpatchable: read the WHOLE transcript once and align from that.
+     *
+     * Two states get here with the reply's stats patched nowhere, and both
+     * survive any number of windowed re-reads:
+     *
+     *  - the window can never verify for this batch (`windowUnverifiableForGood`
+     *    — the boundary fingerprint was captured under a legacy detail, or the
+     *    prefix was rewritten at the same offset by a compaction), so every
+     *    windowed round drops its patches; and
+     *  - the window verified but its rounds paired with nothing for the newest
+     *    reply, because the batch holds no prompt of its own (a viewer that
+     *    attached mid-turn, the sub-agent adopt path): round 0 of the parse is
+     *    the prompt, round 0 here is the reply.
+     *
+     * A full parse sidesteps the fingerprint entirely: the batch is located by
+     * `historyAssistantBaseline` and the boundary cut that still checks out,
+     * neither of which a prefix rewrite can move. The promptless shape has
+     * nothing for that cut to anchor to, so it takes the end-anchored
+     * alignment instead — the one `computeTurnMetadataPatches` documents for
+     * exactly that shape, used here only when the batch holds no user turn, so
+     * no reading of it can be a round off.
+     *
+     * It is METADATA-ONLY — `localTurns` content is never replaced, so this
+     * cannot lose a reply to a read that races the transcript's flush (the
+     * reason `completeTurn` does not refetch). `parseHoldsTheLatestRound` is
+     * required: with the reply not on disk yet an end-anchored alignment would
+     * hand it an EARLIER round's stats, which first-write-wins would then make
+     * permanent.
+     */
+    const repairFromFullParse = (): void => {
+      if (cancelled || repairRan) return
+      repairRan = true
+      const cur = get().byConversationId.get(runtimeId)
+      if (!cur || cur.localTurns.length === 0) return
+      // A prompt is in flight again: patching is unsafe (the schedule skips
+      // such rounds for the same reason), and the next completion starts a
+      // sync of its own.
+      if (cur.syncState === "awaiting_persist") return
+      getFolderConversation(dbConversationId)
+        .then((parsed) => {
+          if (cancelled) return
+          const after = get().byConversationId.get(runtimeId)
+          if (!after || after.localTurns.length === 0) return
+          if (after.syncState === "awaiting_persist") return
+          // A server that windowed the unwindowed request after all: its turn
+          // indices are not the whole transcript's, so the boundary cut below
+          // would be nonsense. Nothing to add.
+          if (isWindowedDetail(parsed)) return
+          if (!parseHoldsTheLatestRound(parsed.turns, after.localTurns)) return
+          const newestIndex = after.localTurns.reduce(
+            (last, turn, i) => (turn.role === "assistant" ? i : last),
+            -1
+          )
+          const align = (
+            parseOpensAtBatch: boolean,
+            parsedTurns: readonly MessageTurn[],
+            persistedAssistantCount: number
+          ) =>
+            computeTurnMetadataPatches({
+              localTurns: after.localTurns,
+              parsedTurns,
+              persistedAssistantCount,
+              parseOpensAtBatch,
+              parseEndsWithAssistant: true,
+            })
+          const coversNewest = (patches: readonly TurnMetadataPatch[]) =>
+            newestIndex >= 0 &&
+            patches.some(
+              (patch) =>
+                patch.index === newestIndex &&
+                (patch.usage != null || patch.completed_at != null)
+            )
+          const baseline = after.historyAssistantBaseline ?? 0
+          const boundaryIndex = after.batchBoundaryIndex
+          const legacyCut =
+            boundaryIndex != null &&
+            boundaryIndex <= parsed.turns.length &&
+            parsed.turns
+              .slice(0, boundaryIndex)
+              .filter((t) => t.role === "assistant").length === baseline
+          let patches = align(
+            legacyCut,
+            legacyCut && boundaryIndex != null
+              ? parsed.turns.slice(boundaryIndex)
+              : parsed.turns,
+            legacyCut ? 0 : baseline
+          )
+          if (
+            !coversNewest(patches) &&
+            !after.localTurns.some((t) => t.role === "user")
+          ) {
+            // `baseline`, not 0: the fold this alignment does must stay inside
+            // the BATCH's rounds. With 0 it would start at the top of the
+            // transcript and hand this one reply the whole conversation's
+            // spend.
+            const tail = align(false, parsed.turns, baseline)
+            if (coversNewest(tail)) patches = tail
+          }
+          if (patches.length === 0 && !parsed.session_stats) return
+          dispatch({
+            type: "PATCH_TURN_METADATA",
+            conversationId: runtimeId,
+            turnPatches: patches,
+            sessionStats: parsed.session_stats,
+          })
+        })
+        .catch(() => {
+          // A failed read changes nothing: the reply's stats stay empty, no
+          // turn is hidden, and reopening the conversation still renders them
+          // straight from disk.
+        })
     }
 
     const trySync = (attempt: number) => {
@@ -5114,6 +5240,11 @@ export const useConversationRuntimeStore = create<ConversationRuntimeStore>()((
             // reports usage at all (Cursor) from polling out the full schedule
             // on every single turn.
             //
+            // The completion clock is judged on its own, not as a rider on
+            // usage: a reply whose tokens landed but whose end-marker did not
+            // would otherwise end the schedule on the spot and leave the
+            // footer's time empty for good (first-write-wins never reopens it).
+            //
             // A SURPLUS — the parser split the reply, or an out-of-turn record
             // landed — is deliberately not a retry signal: it leaves turns
             // unnamed for the rest of the session however long we poll, and it
@@ -5125,12 +5256,21 @@ export const useConversationRuntimeStore = create<ConversationRuntimeStore>()((
               lastLocalAssistantIndex === undefined
                 ? undefined
                 : after?.localTurns[lastLocalAssistantIndex]
-            if (newest != null && newest.usage == null) {
+            if (
+              newest != null &&
+              (newest.usage == null || newest.completed_at == null)
+            ) {
               if (newest.completed_at == null) {
-                if (!windowUnverifiableForGood) scheduleNext(attempt)
-              } else if (usageOnlyRounds < 1) {
+                // Nothing on disk yet (or nothing finalized — deepseek writes
+                // both from one `turn/end`). An unverifiable window has
+                // nothing left to say (its patches are pinned to `[]`), so the
+                // full read takes over at once instead of after 28 more
+                // seconds of the same empty answer.
+                if (windowUnverifiableForGood) repairFromFullParse()
+                else if (!scheduleNext(attempt)) repairFromFullParse()
+              } else if (newest.usage == null && usageOnlyRounds < 1) {
                 usageOnlyRounds += 1
-                scheduleNext(attempt)
+                if (!scheduleNext(attempt)) repairFromFullParse()
               }
             }
           })
