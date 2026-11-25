@@ -11268,6 +11268,7 @@
       "own": {
         "dispatch": "派出一項工作",
         "dispatch_followup": "繼續一項工作",
+        "dispatch_wait": "等派出的工作回來",
         "items": "整理進行中的事項",
         "timeline_read": "翻看對話紀錄",
         "project_list": "查看專案"

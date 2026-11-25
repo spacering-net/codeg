@@ -11268,6 +11268,7 @@
       "own": {
         "dispatch": "يُسند عملًا",
         "dispatch_followup": "يتابع عملًا",
+        "dispatch_wait": "ينتظر نتيجة العمل",
         "items": "يحدّث الأمور المفتوحة",
         "timeline_read": "يراجع المحادثة",
         "project_list": "يراجع المشاريع"

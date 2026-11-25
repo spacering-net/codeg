@@ -11268,6 +11268,7 @@
       "own": {
         "dispatch": "일을 맡기는 중",
         "dispatch_followup": "맡긴 일을 이어가는 중",
+        "dispatch_wait": "맡긴 일의 결과를 기다리는 중",
         "items": "진행 중인 일 정리 중",
         "timeline_read": "대화 기록 확인 중",
         "project_list": "프로젝트 확인 중"

@@ -11268,6 +11268,7 @@
       "own": {
         "dispatch": "作業を依頼中",
         "dispatch_followup": "作業をフォローアップ中",
+        "dispatch_wait": "任せた作業の結果を待っています",
         "items": "進行中の事項を整理中",
         "timeline_read": "会話をさかのぼって確認中",
         "project_list": "プロジェクトを確認中"
