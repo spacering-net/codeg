@@ -11278,6 +11278,7 @@
       "own": {
         "dispatch": "Encargando trabajo",
         "dispatch_followup": "Dando seguimiento a un trabajo",
+        "dispatch_wait": "Esperando el resultado del trabajo",
         "items": "Actualizando los asuntos abiertos",
         "timeline_read": "Repasando la conversación",
         "project_list": "Consultando los proyectos"
@@ -11563,7 +11564,7 @@
         "edit": "Editar avatar",
         "reset": "Restablecer",
         "pages": {
-          "bot": "Bot",
+          "bot": "Modelos",
           "make": "Texto",
           "upload": "Subir"
         },

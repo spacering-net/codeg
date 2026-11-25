@@ -38,6 +38,7 @@ pub mod cards;
 pub mod clock;
 pub mod compaction;
 pub mod dispatch;
+pub mod dispatch_wait;
 pub mod due;
 pub mod engine;
 pub mod fact_check;

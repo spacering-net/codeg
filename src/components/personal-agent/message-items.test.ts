@@ -631,6 +631,117 @@ describe("result cards a reply reported (A1)", () => {
   })
 })
 
+describe("work handed out and reported in the same reply", () => {
+  // The scenario: the owner asks to have something checked and told; the
+  // turn dispatches the check (8), waits for it, and its reply (7) reports
+  // the news (9). Pill and card are one piece of work: the card draws it.
+  const owner = row(5, "owner", { batch_id: 1, status: "answered" })
+  const reply = (covers: number[] | undefined, state = "done") =>
+    row(7, "reply", {
+      batch_id: 1,
+      body: "Not accepted: nothing was changed.",
+      data: { state, ...(covers === undefined ? {} : { covers }) },
+    })
+  const pill = (patch: Partial<TimelineRow> = {}) =>
+    row(8, "dispatch", {
+      batch_id: 1,
+      dispatch_id: 1,
+      body: "Check task #3",
+      data: { mode: "session", done_when: "Say whether it passes." },
+      ...patch,
+    })
+  const news = (id = 9, patch: Partial<TimelineRow> = {}) =>
+    row(id, "result", {
+      dispatch_id: 1,
+      reply_to: 7,
+      data: { state: "completed", excerpt: "Not accepted." },
+      ...patch,
+    })
+  const replyItem = (items: MessageItem[]) =>
+    items.find((i) => i.kind === "reply") as Extract<
+      MessageItem,
+      { kind: "reply" }
+    >
+  const eventItem = (items: MessageItem[], id = 9) =>
+    items.find((i) => i.kind === "event" && i.row.id === id) as Extract<
+      MessageItem,
+      { kind: "event" }
+    >
+
+  it("draws the work once: its card, with the pill's criteria", () => {
+    const items = buildMessageItems([owner, reply([9]), pill(), news()])
+    expect(replyItem(items).reported).toEqual([8])
+    const card = eventItem(items)
+    expect(card.covered).toBe(true)
+    expect(card.pill?.id).toBe(8)
+    // A jump to the pill lands on the card that draws it.
+    const ids = items.map((i) =>
+      i.kind === "time" ? [] : [...drawnRowIds([i])]
+    )
+    expect(ids.find((l) => l.includes(8))).toEqual([9, 8])
+  })
+
+  it("keeps the pill when the news was reported by another reply", () => {
+    const later = row(10, "reply", {
+      batch_id: 2,
+      body: "Not accepted.",
+      data: { state: "done", covers: [9] },
+    })
+    const items = buildMessageItems([owner, reply([]), pill(), news(), later])
+    expect(replyItem(items).reported).toEqual([])
+    expect(eventItem(items).pill).toBeNull()
+    expect(eventItem(items).covered).toBe(true)
+  })
+
+  it("keeps the pill while the reply runs or when it did not finish", () => {
+    for (const r of [
+      reply(undefined, "running"),
+      reply([9], "interrupted"),
+      reply([9], "canceled"),
+    ]) {
+      const items = buildMessageItems([owner, r, pill(), news()])
+      expect(replyItem(items).reported ?? []).toEqual([])
+      expect(eventItem(items).pill).toBeNull()
+    }
+  })
+
+  it("keeps a pill that says more than the card", () => {
+    for (const p of [
+      pill({ data: { mode: "session", check_for: 3, check_round: 1 } }),
+      pill({
+        data: { mode: "task", pr_fix: { label: "#12", cause: "checks", n: 1 } },
+      }),
+      pill({ data: { mode: "session", failed: true } }),
+      pill({ data: { mode: "session", followup: true } }),
+    ]) {
+      const items = buildMessageItems([owner, reply([9]), p, news()])
+      expect(replyItem(items).reported ?? []).toEqual([])
+      expect(eventItem(items).pill).toBeNull()
+    }
+  })
+
+  it("keeps the pill of other work, and news of other work alone", () => {
+    const other = row(11, "result", { dispatch_id: 2 })
+    const items = buildMessageItems([owner, reply([11]), pill(), news(), other])
+    expect(replyItem(items).reported).toEqual([])
+    expect(eventItem(items).pill).toBeNull()
+    expect(eventItem(items, 11).pill).toBeNull()
+  })
+
+  it("lets the newer of two reported news of the work draw it", () => {
+    const items = buildMessageItems([
+      owner,
+      reply([9, 12]),
+      pill(),
+      news(9, { data: { state: "review" } }),
+      news(12),
+    ])
+    expect(replyItem(items).reported).toEqual([8])
+    expect(eventItem(items, 9).pill).toBeNull()
+    expect(eventItem(items, 12).pill?.id).toBe(8)
+  })
+})
+
 describe("the acceptance chain on its work's head (A4)", () => {
   const accepted = {
     notice: "acceptance",

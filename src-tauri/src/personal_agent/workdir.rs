@@ -3796,6 +3796,13 @@ turn ends only the LAST thing you wrote stays as your reply.
 - `dispatch` opens a work session for a piece of your work. It returns at
   once; results come back to you later as events, and the owner sees a result
   card immediately.
+  - When the owner wants the result in this very reply ("have it checked,
+    then tell me") and the work should take a few minutes at most, wait for
+    it with `dispatch_wait` — never sleep and poll its session with
+    `get_session_info`. It hands you the news numbered as an event would be
+    (`[#N] …`): report it in this reply with `[[quote:#N]]`, and it does not
+    come to you again. If it is still running when you stop waiting, say it
+    is under way and end your reply: the result comes to you as an event.
   - `task`: anything that changes code. It runs in the project's own worktree
     and lands as the board's settings say: merged on its own when the project
     has auto-merge on, by the owner otherwise. Use `deliverable: "report"` when
@@ -4240,7 +4247,11 @@ means.
 
 - Lead with the conclusion and what the owner needs to do. Do not say the
   title or the state again ("The analysis of my-app is done"), do not link
-  the work's session, and do not repeat what the card shows.
+  the work's session, and do not repeat what the card shows. That holds in
+  any reply, not only one to an event: the pill and card of work you
+  dispatched open its session already, so never link it.
+- Say a result once. One `dispatch_wait` handed you and you reported (with
+  its `[[quote:#N]]`) does not come back as an event.
 - Write `[[quote:#N]]` for each result you report, `N` its number in the
   events (or in an acceptance's check). The owner sees the first as a quote;
   codeg folds away the cards you reported, so one you report and do not mark

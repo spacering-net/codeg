@@ -146,6 +146,17 @@ function draw(face: Face, pose: FacePose): string {
   return faceMarkup(shape, look, pose, small, face.id)
 }
 
+/** What to watch to know whether `el` is on screen: the outermost `<svg>`
+ *  it is drawn in, the one with a box of its own. WebKit (Safari 27) gives
+ *  an element inside an SVG — the `<g>` a face is drawn into — an empty box
+ *  and never sees it intersect, so a face watched there was always out of
+ *  sight and never drawn: it turned to nothing. */
+function seenBy(el: Element): Element {
+  let at = el
+  while (at.parentElement instanceof SVGElement) at = at.parentElement
+  return at
+}
+
 /** Start moving the face drawn in `el` (its drawing's ids from `id`). */
 export function startFaceMotion(el: Element, id: string): FaceMotion {
   let face: Face | null = null
@@ -159,7 +170,7 @@ export function startFaceMotion(el: Element, id: string): FaceMotion {
           if (face.visible) wake(face)
         })
       : null
-  io?.observe(el)
+  io?.observe(seenBy(el))
   return {
     set(state, drawn) {
       if (gone) return

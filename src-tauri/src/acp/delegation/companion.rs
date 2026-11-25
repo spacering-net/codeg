@@ -305,6 +305,7 @@ impl CompanionFeatures {
             | "dispatch"
             | "dispatch_followup"
             | "dispatch_answer"
+            | "dispatch_wait"
             | "item_list"
             | "item_read"
             | "item_update"
@@ -1816,6 +1817,7 @@ async fn build_tools_call_spawn(
         | "dispatch"
         | "dispatch_followup"
         | "dispatch_answer"
+        | "dispatch_wait"
         | "item_list"
         | "item_read"
         | "item_update"
@@ -6404,11 +6406,12 @@ mod tests {
         computer_clipboard: false,
     };
 
-    const PERSONAL_AGENT_TOOLS: [&str; 33] = [
+    const PERSONAL_AGENT_TOOLS: [&str; 34] = [
         "project_list",
         "dispatch",
         "dispatch_followup",
         "dispatch_answer",
+        "dispatch_wait",
         "item_list",
         "item_read",
         "item_update",
