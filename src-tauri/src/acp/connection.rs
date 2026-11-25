@@ -1428,6 +1428,14 @@ pub enum ConnectionCommand {
         task_id: String,
         reply: tokio::sync::oneshot::Sender<Result<bool, AcpError>>,
     },
+    /// Cut the session back to just before a user message
+    /// (`_session/rewind`, see `crate::acp::rewind`). Between turns only: the
+    /// manager checks `turn_in_flight` first, and the mid-turn arm answers
+    /// `TurnInProgress` rather than dropping the reply.
+    Rewind {
+        cursor_id: String,
+        reply: tokio::sync::oneshot::Sender<Result<crate::acp::rewind::RewindOutcome, AcpError>>,
+    },
     Disconnect,
 }
 
@@ -7738,11 +7746,30 @@ fn build_client_capabilities(
     // until they settle, so their tool calls stream into the Agent card inside
     // the turn; codeg draws a Claude cycle outside a turn from the transcript
     // only. See (iiii) of the claude entry in `registry.rs`.
+    //
+    // claude-agent-acp 0.112.0 and codex-acp 2.12.0 add "sessionRewind": the
+    // `_session/rewind` method behind a user message's "edit and resend"
+    // (`crate::acp::rewind`). Declaring it registers the method and nothing
+    // else — measured live on both, every other frame is unchanged. Its
+    // companion `clientCapabilities.session.cursors` stays out: it would make
+    // both adapters send `cursor_update`, which the schema crate cannot read,
+    // and codeg builds the cursor from the transcript instead.
     if matches!(agent_type, AgentType::ClaudeCode | AgentType::Codex) {
         let capabilities: &[&str] = if agent_type == AgentType::Codex {
-            &["sessionFailure", "asyncTasks", "recommendedValue", "diffPatch"]
+            &[
+                "sessionFailure",
+                "asyncTasks",
+                "recommendedValue",
+                "diffPatch",
+                crate::acp::rewind::SESSION_REWIND_CAPABILITY,
+            ]
         } else {
-            &["sessionFailure", "asyncTasks", "recommendedValue"]
+            &[
+                "sessionFailure",
+                "asyncTasks",
+                "recommendedValue",
+                crate::acp::rewind::SESSION_REWIND_CAPABILITY,
+            ]
         };
         meta.insert(
             "jetbrains".to_string(),
@@ -9534,12 +9561,17 @@ async fn run_connection(
                 .session_capabilities
                 .close
                 .is_some();
+            // Echoed back only to a client that declared it (see
+            // `build_client_capabilities`), so it is the version gate too.
+            let supports_rewind = matches!(agent_type, AgentType::ClaudeCode | AgentType::Codex)
+                && crate::acp::rewind::agent_offers_rewind(init_resp.meta.as_ref());
             tracing::info!(
-                "[ACP] Agent capabilities: load_session={}, fork={}, resume={}, close={}",
+                "[ACP] Agent capabilities: load_session={}, fork={}, resume={}, close={}, rewind={}",
                 init_resp.agent_capabilities.load_session,
                 supports_fork,
                 supports_resume,
-                supports_close
+                supports_close,
+                supports_rewind
             );
 
             // Native live-feedback steering, synthesized ONCE from three gates
@@ -9760,6 +9792,14 @@ async fn run_connection(
                 &emitter_clone,
                 AcpEvent::ForkSupported {
                     supported: supports_fork,
+                },
+            )
+            .await;
+            emit_with_state(
+                &state,
+                &emitter_clone,
+                AcpEvent::RewindSupported {
+                    supported: supports_rewind,
                 },
             )
             .await;
@@ -16852,6 +16892,13 @@ async fn run_conversation_loop(
                                     disconnect_requested = true;
                                     break;
                                 }
+                                Some(ConnectionCommand::Rewind { reply, .. }) => {
+                                    // A rewind needs the turn to have ended
+                                    // (the adapters refuse with `busy` too).
+                                    // Reply — never drop — so the manager's
+                                    // await cannot hang on the oneshot.
+                                    let _ = reply.send(Err(AcpError::TurnInProgress));
+                                }
                                 Some(ConnectionCommand::Prompt { .. }) => {
                                     // Tripwire, not a user-facing case. The
                                     // `turn_in_flight` gate in `send_prompt_inner`
@@ -17001,6 +17048,23 @@ async fn run_conversation_loop(
                 let cx = session.connection();
                 let sid = session.session_id().clone();
                 let _ = reply.send(send_stop_async_task_request(&cx, &sid, &task_id).await);
+            }
+            Some(ConnectionCommand::Rewind { cursor_id, reply }) => {
+                if !state.read().await.rewind_supported {
+                    let _ = reply.send(Err(AcpError::protocol(
+                        "This agent does not support editing a sent message".to_string(),
+                    )));
+                    continue;
+                }
+                let cx = session.connection();
+                let sid = session.session_id().clone();
+                tracing::info!(
+                    "[ACP] Sending _session/rewind for session_id={} cursor_id={cursor_id}",
+                    sid.0
+                );
+                let _ = reply.send(
+                    crate::acp::rewind::send_rewind_request(&cx, &sid, &cursor_id).await,
+                );
             }
             Some(ConnectionCommand::Cancel) => {
                 let cx = session.connection();
@@ -31523,6 +31587,10 @@ mod tests {
             // left out: "rawInputRendering" (it removes the question text a
             // message-only MCP elicitation's permission card shows) and
             // "planFile" (the plan card renders the plan TEXT).
+            //
+            // "sessionRewind" (claude-agent-acp 0.112.0, codex-acp 2.12.0) IS
+            // wanted from both: it only registers `_session/rewind`, the
+            // user message's "edit and resend" (`crate::acp::rewind`).
             let mut expected: Vec<serde_json::Value> = vec![
                 "sessionFailure".into(),
                 "asyncTasks".into(),
@@ -31531,6 +31599,7 @@ mod tests {
             if agent == AgentType::Codex {
                 expected.push("diffPatch".into());
             }
+            expected.push("sessionRewind".into());
             assert_eq!(
                 capabilities, &expected,
                 "{agent:?} advertises an unexpected AIR capability set"

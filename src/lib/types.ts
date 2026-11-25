@@ -5603,6 +5603,12 @@ export type AcpEvent =
       supported: boolean
     }
   | {
+      /** Whether the agent offers `_session/rewind`, behind a sent message's
+       *  "edit and resend" (claude-agent-acp 0.112.0, codex-acp 2.12.0). */
+      type: "rewind_supported"
+      supported: boolean
+    }
+  | {
       type: "mode_changed"
       mode_id: string
     }
@@ -6379,6 +6385,8 @@ export interface LiveSessionSnapshot {
    *  event). Absent when it is off. */
   remote_control?: RemoteControlInfo | null
   fork_supported: boolean
+  /** See the `rewind_supported` event. Omitted when false. */
+  rewind_supported?: boolean
   available_commands: AvailableCommandInfo[]
   selectors_ready: boolean
   /** The composer's pending mode pick (see the `composer_mode_changed`

@@ -512,6 +512,14 @@ pub struct SessionState {
     pub pi_enabled_model_patterns: Option<Vec<String>>,
     pub prompt_capabilities: Option<PromptCapabilitiesInfo>,
     pub fork_supported: bool,
+    /// Whether the agent offers `_session/rewind` (`AcpEvent::RewindSupported`).
+    pub rewind_supported: bool,
+    /// A rewound session waiting for the edited message that replaces what it
+    /// cut (see `crate::acp::rewind::RewindHold`). While it holds, every other
+    /// prompt, fork and rewind on this connection is turned away as busy.
+    ///
+    /// Backend-internal — not serialized, not carried on `to_snapshot()`.
+    pub rewind_hold: Option<crate::acp::rewind::RewindHold>,
     pub available_commands: Vec<AvailableCommandInfo>,
     pub usage: Option<UsageInfo>,
     /// The follow-up prompt the agent last predicted (`AcpEvent::PromptSuggestion`),
@@ -1038,6 +1046,8 @@ impl SessionState {
             pi_enabled_model_patterns: None,
             prompt_capabilities: None,
             fork_supported: false,
+            rewind_supported: false,
+            rewind_hold: None,
             available_commands: Vec::new(),
             usage: None,
             prompt_suggestion: None,
@@ -1421,6 +1431,9 @@ impl SessionState {
             }
             AcpEvent::ForkSupported { supported } => {
                 self.fork_supported = *supported;
+            }
+            AcpEvent::RewindSupported { supported } => {
+                self.rewind_supported = *supported;
             }
             AcpEvent::AvailableCommands { commands } => {
                 self.available_commands = commands.clone();
@@ -2827,6 +2840,7 @@ impl SessionState {
             prompt_suggestion: self.prompt_suggestion.clone(),
             remote_control: self.remote_control.clone(),
             fork_supported: self.fork_supported,
+            rewind_supported: self.rewind_supported,
             available_commands: self.available_commands.clone(),
             selectors_ready: self.selectors_ready,
             composer_mode_id: self.composer_mode_id.clone(),
@@ -3053,6 +3067,10 @@ pub struct LiveSessionSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_control: Option<RemoteControlInfo>,
     pub fork_supported: bool,
+    /// Omitted when false, so the common snapshot keeps its pre-feature wire
+    /// shape; the frontend reads a missing key as false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rewind_supported: bool,
     pub available_commands: Vec<AvailableCommandInfo>,
     pub selectors_ready: bool,
     /// The composer's pending mode pick (see `SessionState.composer_mode_id`).

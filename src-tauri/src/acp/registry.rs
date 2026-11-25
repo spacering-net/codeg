@@ -3756,9 +3756,43 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //     `type` must be absent or "stdio", a boolean config option
             //     needs a boolean value) accepts what codeg sends: codeg's
             //     stdio entry has no `type` key, and it sends booleans typed.
+            //
+            // 0.112.0 (2026-11-24) keeps Claude Agent SDK 0.3.331 (Claude Code
+            // 2.1.331) and `engines.node` ">=22", and moves to ACP SDK 2.12.0.
+            // Measured live with fresh installs of 0.111.0 and 0.112.0, the
+            // twenty-three harness scenarios match after normalization, and so
+            // does a `session/fork` at a mid-thread `_meta.jetbrains.air.fork`
+            // point.
+            //   * #1704 **rewinds the session on an edited message**, and codeg
+            //     takes it: the user message's "edit and resend". The client
+            //     lists AIR capability `sessionRewind`; `_session/rewind
+            //     {sessionId, cursorId}` then closes the query and resumes the
+            //     SAME Claude session at the entry before the message
+            //     (`resumeSessionAt`), model, effort, Fast mode and mode kept.
+            //     The cursor is `before:<uuid of the prompt's JSONL record>`,
+            //     resolved against the stored history, so codeg builds it from
+            //     the transcript (`crate::acp::rewind`) and leaves
+            //     `session.cursors` (live `cursor_update`) undeclared — measured:
+            //     a built cursor rewinds the last and a middle turn, also in a
+            //     process that resumed the session. The first message and a
+            //     slash command have no cursor (-32602, codeg's
+            //     `unavailable`); a running turn answers `{rewound:false,
+            //     reason:"busy"}`. Claude Code deletes nothing: the dropped
+            //     prompt stays in the JSONL as an abandoned branch beside the
+            //     new prompt, and `<session dir>/rewind.json` names it until a
+            //     later resume shows the cut in the CLI's own history.
+            //     `parsers::claude_rewind` hides both shapes — the same shape a
+            //     double-Esc edit in the terminal leaves, which codeg showed
+            //     as two branches back to back until now.
+            //   * Undeclared, nothing else differs: history reads also cut at a
+            //     `rewind.json` (absent unless a rewind ran), and
+            //     `_session/rewind` answers -32601.
+            //   * #1711 ends a sub-agent MCP request's wait when Claude Code
+            //     gives up on it; only `acp`-transport MCP servers go through
+            //     that bridge, and codeg declares none.
             distribution: AgentDistribution::Npx {
-                version: "0.111.0",
-                package: "@agentclientprotocol/claude-agent-acp@0.111.0",
+                version: "0.112.0",
+                package: "@agentclientprotocol/claude-agent-acp@0.112.0",
                 cmd: "claude-agent-acp",
                 args: &[],
                 env: &[],
@@ -5347,9 +5381,37 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // from the rollout, where `parsers::codex` still finds it. #744's
             // v2 work, #795's CRLF terminal output, `customAnswerFields` and
             // the renamed background-task module do not reach a v1 client.
+            //
+            // 2.12.0 (2026-11-24) keeps `@openai/codex` ^0.171.0 (still
+            // 0.171.0) and ACP SDK ~2.9.1. The thirty live scenarios replay as
+            // on 2.11.0 (timing, ordering and hash noise only), and so does a
+            // `session/fork` at a tail or mid-thread `_meta.jetbrains.air.fork`
+            // point.
+            //
+            // (mmm) **In-place rewind** (#801), adopted with claude's #1704 for
+            // the user message's "edit and resend" (`crate::acp::rewind`).
+            // AIR capability `sessionRewind` registers `_session/rewind
+            // {sessionId, cursorId}` (v1 only), which cuts the SAME thread with
+            // app-server `thread/revert {beforeTurnId}`; codex persists the
+            // cut as a new `rollout-…-<thread>_<rollout>.jsonl` whose
+            // `history_base` keeps the turns before it — the layout
+            // `parsers::codex` already reads for Codex Desktop's edit. The
+            // cursor is `before:<turnId>` (the turn's `task_started.turn_id`),
+            // resolved statelessly through `thread/turns/list`, so codeg builds
+            // it from the rollout and leaves `session.cursors` undeclared
+            // (measured: rewinds the last turn, refuses the first with
+            // -32602, answers `busy` during a running turn). codex reloads the
+            // thread on every revert — it restarts the MCP servers, codeg-mcp
+            // included — and the adapter refuses beforehand (`busy`,
+            // `backgroundWork`) wherever that would kill work.
+            //
+            // (nnn) Inert otherwise. Cursors and `cursor_update` go only to a
+            // client declaring `session.cursors` (and to every v2 client), a
+            // `session/fork` `cursorId` is new and optional, and the
+            // `thread/status/changed` suppression only covers a running rewind.
             distribution: AgentDistribution::Npx {
-                version: "2.11.0",
-                package: "@agentclientprotocol/codex-acp@2.11.0",
+                version: "2.12.0",
+                package: "@agentclientprotocol/codex-acp@2.12.0",
                 cmd: "codex-acp",
                 args: &[],
                 env: &[],
@@ -10398,8 +10460,8 @@ mod tests {
     fn registry_pins_current_acp_agent_versions() {
         assert_npx_version(
             AgentType::ClaudeCode,
-            "0.111.0",
-            "@agentclientprotocol/claude-agent-acp@0.111.0",
+            "0.112.0",
+            "@agentclientprotocol/claude-agent-acp@0.112.0",
             Some("22.0.0"),
         );
         assert_npx_version(
@@ -10440,8 +10502,8 @@ mod tests {
         );
         assert_npx_version(
             AgentType::Codex,
-            "2.11.0",
-            "@agentclientprotocol/codex-acp@2.11.0",
+            "2.12.0",
+            "@agentclientprotocol/codex-acp@2.12.0",
             Some("20.3.0"),
         );
         assert_npx_version(AgentType::Pi, "0.0.35", "pi-acp@0.0.35", Some("22.0.0"));

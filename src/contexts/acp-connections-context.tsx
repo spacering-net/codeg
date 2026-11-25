@@ -51,6 +51,7 @@ import {
   acpGetSessionSnapshot,
   acpFindConnectionForConversation,
   openSettingsWindow,
+  type PromptRewindTarget,
 } from "@/lib/api"
 import { denormalizeSnapshot } from "@/lib/snapshot-denormalize"
 import { buildDelegationSeedEnvelopes } from "@/lib/delegation-seed"
@@ -350,6 +351,9 @@ export interface ConnectionState {
   status: ConnectionStatus
   promptCapabilities: PromptCapabilitiesInfo
   supportsFork: boolean
+  /** Whether a sent message can be edited and resent in place
+   *  (`_session/rewind`; see the `rewind_supported` event). */
+  supportsRewind: boolean
   selectorsReady: boolean
   /**
    * The composer's pending mode pick on this connection (codeg#1179): a mode
@@ -866,6 +870,11 @@ type Action =
     }
   | {
       type: "FORK_SUPPORTED"
+      contextKey: string
+      supported: boolean
+    }
+  | {
+      type: "REWIND_SUPPORTED"
       contextKey: string
       supported: boolean
     }
@@ -2097,6 +2106,7 @@ function connectionsReducer(
           embedded_context: false,
         },
         supportsFork: false,
+        supportsRewind: false,
         selectorsReady: false,
         sessionId: null,
         modes: null,
@@ -2165,6 +2175,7 @@ function connectionsReducer(
           embedded_context: false,
         },
         supportsFork: false,
+        supportsRewind: false,
         selectorsReady: true,
         sessionId: null,
         modes: null,
@@ -2239,6 +2250,8 @@ function connectionsReducer(
         action.patch.selectorsReady || current.selectorsReady
       const mergedSupportsFork =
         action.patch.supportsFork || current.supportsFork
+      const mergedSupportsRewind =
+        action.patch.supportsRewind || current.supportsRewind
       const mergedModes = current.modes ?? action.patch.modes
       const mergedConfigOptions =
         current.configOptions ?? action.patch.configOptions
@@ -2308,6 +2321,7 @@ function connectionsReducer(
         if (
           mergedSelectorsReady === current.selectorsReady &&
           mergedSupportsFork === current.supportsFork &&
+          mergedSupportsRewind === current.supportsRewind &&
           mergedModes === current.modes &&
           mergedConfigOptions === current.configOptions &&
           mergedAvailableCommands === current.availableCommands &&
@@ -2328,6 +2342,7 @@ function connectionsReducer(
           promptCapabilities: mergedPromptCapabilities,
           selectorsReady: mergedSelectorsReady,
           supportsFork: mergedSupportsFork,
+          supportsRewind: mergedSupportsRewind,
           hasPrompted: mergedHasPrompted,
           sessionFailures: mergedSessionFailures,
           toolApprovals: mergedToolApprovals,
@@ -2390,6 +2405,7 @@ function connectionsReducer(
         // Current state like `status`: the backend's recorded composer pick.
         composerModeId: action.patch.composerModeId,
         supportsFork: mergedSupportsFork,
+        supportsRewind: mergedSupportsRewind,
         hasPrompted: mergedHasPrompted,
         // Staleness is a current-state field (like status): apply the snapshot's
         // value on the fresh path. `configStaleDismissed` is client-local and
@@ -3170,6 +3186,18 @@ function connectionsReducer(
       return next
     }
 
+    case "REWIND_SUPPORTED": {
+      const conn = state.get(action.contextKey)
+      if (!conn) return state
+      if (conn.supportsRewind === action.supported) return state
+      const next = new Map(state)
+      next.set(action.contextKey, {
+        ...conn,
+        supportsRewind: action.supported,
+      })
+      return next
+    }
+
     case "COMPOSER_MODE_CHANGED": {
       const conn = state.get(action.contextKey)
       if (!conn) return state
@@ -3685,8 +3713,9 @@ export interface AcpActionsValue {
       folderId?: number | null
       conversationId?: number | null
       clientMessageId?: string | null
+      rewind?: PromptRewindTarget | null
     }
-  ): Promise<void>
+  ): Promise<boolean>
   setMode(contextKey: string, modeId: string): Promise<void>
   /**
    * Apply a config option pick. `saveAsDefault` also records it as the
@@ -6077,6 +6106,14 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           flushStreamingQueue(contextKey)
           dispatch({
             type: "FORK_SUPPORTED",
+            contextKey,
+            supported: e.supported,
+          })
+          break
+        case "rewind_supported":
+          flushStreamingQueue(contextKey)
+          dispatch({
+            type: "REWIND_SUPPORTED",
             contextKey,
             supported: e.supported,
           })
@@ -8544,6 +8581,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         folderId?: number | null
         conversationId?: number | null
         clientMessageId?: string | null
+        rewind?: PromptRewindTarget | null
       }
     ) => {
       // Cut-off taken synchronously: only the setters already in flight.
@@ -8554,7 +8592,14 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         await Promise.allSettled(pendingSetters)
       }
       const conn = storeRef.current.connections.get(contextKey)
-      if (!conn) return
+      // Resolves whether the prompt went out: `false` when there is no
+      // connection to send it on (a reconnect removed it meanwhile).
+      if (!conn) {
+        // An edited message must know it did not go out: its caller would
+        // otherwise cut the view for a rewind that never happened.
+        if (opts?.rewind) throw new Error("The connection is gone; try again")
+        return false
+      }
       lastActivityRef.current.set(contextKey, Date.now())
       try {
         await acpPrompt(
@@ -8562,7 +8607,8 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           blocks,
           opts?.folderId ?? null,
           opts?.conversationId ?? null,
-          opts?.clientMessageId ?? null
+          opts?.clientMessageId ?? null,
+          opts?.rewind ?? null
         )
       } catch (e) {
         // Same reasoning as `cancel`: the backend disowning this id proves the
@@ -8574,6 +8620,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         }
         throw e
       }
+      return true
     },
     [markConnectionGone]
   )
