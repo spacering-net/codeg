@@ -1087,10 +1087,27 @@ impl PersonalAgentEngine {
         item_id: i32,
         act: &str,
         until: Option<&str>,
-    ) -> Result<crate::db::entities::personal_agent_item::Model, String> {
+    ) -> Result<crate::db::entities::personal_agent_item::Model, super::refusal::Refusal> {
+        self.settle_item_from(item_id, act, until, super::reminders::OpSource::Panel)
+            .await
+            .map(|a| a.item)
+    }
+
+    /// [`Self::settle_item`], from where the owner did it (`source`), with
+    /// what takes it back.
+    pub async fn settle_item_from(
+        &self,
+        item_id: i32,
+        act: &str,
+        until: Option<&str>,
+        source: super::reminders::OpSource,
+    ) -> Result<super::reminders::ItemActed, super::refusal::Refusal> {
         let (tz, mornings) = self.owner_day().await;
-        let op = super::reminders::ItemOp::parse(act, until, tz, super::clock::now(), mornings)?;
-        self.item_op(item_id, op).await
+        let op = super::reminders::ItemOp::parse(act, until, tz, super::clock::now(), mornings)
+            .map_err(|e| {
+                super::refusal::Refusal::new(super::refusal::keys::BAD_TIME, e)
+            })?;
+        self.item_op(item_id, op, source).await
     }
 }
 

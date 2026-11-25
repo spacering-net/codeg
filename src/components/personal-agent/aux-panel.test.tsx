@@ -770,7 +770,7 @@ describe("the activity", () => {
     expect(usePersonalAgentUi.getState().activityOpen["item:12"]).toBe(true)
   })
 
-  it("settles a matter on its row, at its own assistant: done, put off, later, dropped", async () => {
+  it("settles a matter on its row by whose move it is: answer, put off, not needed (C1)", async () => {
     show({
       needs: [
         matter(
@@ -779,6 +779,7 @@ describe("the activity", () => {
             kind: "question",
             waits_for: "owner",
             summary: "Which branch?",
+            origin_timeline_id: 40,
           }),
           2
         ),
@@ -799,41 +800,91 @@ describe("the activity", () => {
     const question = container.querySelector<HTMLElement>(
       '[data-pa-activity-row="item:11"]'
     )!
-    // [Later] is a menu: a set time, or none — sent to the assistant whose
-    // matter it is, another one's on the primary's page.
+    // The owner's move: [Answer] first; [Put off] a menu of set times only
+    // — sent to the assistant whose matter it is, another one's on the
+    // primary's page.
     await userEvent.click(
-      within(question).getByRole("button", { name: "Later" })
+      within(question).getByRole("button", { name: "Put off" })
     )
+    expect(screen.queryByRole("menuitem", { name: "No set time" })).toBeNull()
     await userEvent.click(
       await screen.findByRole("menuitem", { name: "In 1 hour" })
     )
     expect(api.personalAgentItemAct).toHaveBeenCalledWith(2, 11, "snooze", "1h")
-    await waitFor(() =>
-      expect(
-        within(question)
-          .getByRole("button", { name: "Later" })
-          .hasAttribute("disabled")
-      ).toBe(false)
-    )
-    await userEvent.click(
-      within(question).getByRole("button", { name: "Later" })
-    )
-    await userEvent.click(
-      await screen.findByRole("menuitem", { name: "No set time" })
-    )
-    expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(2, 11, "later")
-    const done = within(question).getByRole("button", { name: "Done" })
-    await waitFor(() => expect(done.hasAttribute("disabled")).toBe(false))
-    fireEvent.click(done)
-    expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(2, 11, "done")
     await waitFor(() => expect(feed.refresh).toHaveBeenCalled())
-    // One already waiting on time has no "later".
+    const notNeeded = within(question).getByRole("button", {
+      name: "Not needed",
+    })
+    await waitFor(() => expect(notNeeded.hasAttribute("disabled")).toBe(false))
+    expect(notNeeded.getAttribute("title")).toMatch(
+      /^No answer needed; .+ is told$/
+    )
+    fireEvent.click(notNeeded)
+    expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(2, 11, "drop")
+    // [Answer]: its assistant's conversation at the reply that asked, the
+    // box set to answer it.
+    const answer = within(question).getByRole("button", { name: "Answer" })
+    await waitFor(() => expect(answer.hasAttribute("disabled")).toBe(false))
+    fireEvent.click(answer)
+    const ui = usePersonalAgentUi.getState()
+    expect(ui.pendingAnswer).toEqual({
+      bot: 2,
+      itemId: 11,
+      summary: "Which branch?",
+    })
+    expect(ui.pendingJump).toEqual({ bot: 2, row: 40 })
+    // Set aside with no time: a time can be set — no "done", no "put off".
     const reminder = container.querySelector<HTMLElement>(
       '[data-pa-activity-row="item:15"]'
     )!
-    expect(within(reminder).queryByRole("button", { name: "Later" })).toBeNull()
-    fireEvent.click(within(reminder).getByRole("button", { name: "Drop" }))
+    expect(
+      within(reminder).queryByRole("button", { name: "Put off" })
+    ).toBeNull()
+    expect(within(reminder).queryByRole("button", { name: "Done" })).toBeNull()
+    expect(
+      within(reminder).getByRole("button", { name: "Set a time" })
+    ).toBeTruthy()
+    expect(reminder.textContent).toContain("Set aside · no time set")
+    fireEvent.click(
+      within(reminder).getByRole("button", { name: "Not needed" })
+    )
     expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(1, 15, "drop")
+  })
+
+  it("has only “not needed” for what waits on someone else, and says on whom", async () => {
+    show({
+      watching: [
+        matter(
+          item({
+            id: 41,
+            kind: "message",
+            status: "waiting",
+            waits_for: "agent",
+            summary: "Waiting for Dev's answer: review the login fix",
+            peer: { id: 2, name: "Dev", avatar: null, gone: false },
+            created_at: new Date(Date.now() - 3 * 60_000).toISOString(),
+          })
+        ),
+      ],
+    })
+    const { container } = draw()
+    const row = await waitFor(
+      () =>
+        container.querySelector<HTMLElement>(
+          '[data-pa-activity-row="item:41"]'
+        )!
+    )
+    // Its title is what was written; who it waits on, on its line.
+    expect(within(row).getByText("review the login fix")).toBeTruthy()
+    expect(row.textContent).toMatch(/waits for Dev's reply · 3 min/)
+    expect(row.textContent).not.toMatch(/message/i)
+    const buttons = within(row)
+      .getAllByRole("button")
+      .filter((b) => b.hasAttribute("data-pa-item-act"))
+    expect(buttons.map((b) => b.textContent)).toEqual(["Not needed"])
+    expect(buttons[0]!.getAttribute("title")).toMatch(
+      /^Takes the message back; if that is too late, .+ stops waiting for Dev's reply$/
+    )
   })
 
   it("says what brings a reminder on a mention up, and puts it off no time (6.8)", async () => {
@@ -861,14 +912,14 @@ describe("the activity", () => {
     await screen.findByText("Update the Homebrew formula first")
     expect(
       screen.getByText(
-        /^When you mention “release”, “发版” · 1 of 3 times · until /
+        /^When you mention “release”, “发版”, .+ reminds you · 1 of 3 times · until /
       )
     ).toBeTruthy()
     const row = container.querySelector<HTMLElement>(
       '[data-pa-activity-row="item:31"]'
     )!
-    expect(within(row).queryByRole("button", { name: "Later" })).toBeNull()
-    fireEvent.click(within(row).getByRole("button", { name: "Drop" }))
+    expect(within(row).queryByRole("button", { name: "Put off" })).toBeNull()
+    fireEvent.click(within(row).getByRole("button", { name: "Stop reminding" }))
     expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(1, 31, "drop")
   })
 
@@ -905,8 +956,10 @@ describe("the activity", () => {
     })
     draw()
     await screen.findByText("Stand-up notes")
-    expect(screen.getByText(/^Due .+ · Every weekday 09:00$/)).toBeTruthy()
-    expect(screen.getByText(/^Reminded · due /)).toBeTruthy()
+    expect(
+      screen.getByText(/ reminds you: Every weekday 09:00 · next .+$/)
+    ).toBeTruthy()
+    expect(screen.getByText(/ reminds you · due .+, 1 h ago$/)).toBeTruthy()
     const row = screen
       .getByText("Stand-up notes")
       .closest<HTMLElement>("[data-pa-activity-row]")!
@@ -914,13 +967,24 @@ describe("the activity", () => {
     expect(row.querySelector("[data-pa-item-on-done]")!.textContent).toContain(
       "Post them in #team"
     )
-    await userEvent.click(within(row).getByRole("button", { name: "Later" }))
+    // Coming up and repeating: skip this time, or stop it.
+    expect(
+      within(row).getByRole("button", { name: "Skip this time" })
+    ).toBeTruthy()
+    expect(
+      within(row).getByRole("button", { name: "Stop reminding" })
+    ).toBeTruthy()
+    // Come due: done, or put off.
+    const due = screen
+      .getByText("Call the bank")
+      .closest<HTMLElement>("[data-pa-activity-row]")!
+    await userEvent.click(within(due).getByRole("button", { name: "Put off" }))
     await userEvent.click(
       await screen.findByRole("menuitem", { name: "Tomorrow morning" })
     )
     expect(api.personalAgentItemAct).toHaveBeenCalledWith(
       1,
-      21,
+      23,
       "snooze",
       "tomorrow"
     )
@@ -1027,7 +1091,7 @@ describe("the activity", () => {
       "PR opened · codeg is not watching it"
     )
     expect(within(pr).queryByRole("button", { name: "Stop" })).toBeNull()
-    fireEvent.click(within(pr).getByRole("button", { name: "Done" }))
+    fireEvent.click(within(pr).getByRole("button", { name: "Merged" }))
     expect(api.personalAgentItemAct).toHaveBeenLastCalledWith(1, 12, "done")
   })
 
