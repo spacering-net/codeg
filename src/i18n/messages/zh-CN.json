@@ -2270,6 +2270,7 @@
       "viewOptions": "显示选项",
       "listOptions": "会话列表",
       "showCompleted": "显示已完成会话",
+      "showAssistant": "显示助手会话",
       "showWorktrees": "显示工作树分支",
       "showRecent": "显示「最近」分组",
       "tabsFollowFolder": "标签页跟随文件夹",
@@ -2474,14 +2475,21 @@
       "title": "提问会话",
       "total": "共 {count} 个",
       "untitled": "新提问",
-      "actions": "更多操作",
-      "open": "打开",
       "convertToRegular": "转为普通会话",
+      "convertConfirmTitle": "转为普通会话？",
+      "convertConfirmDescription": "“{title}”将与当前会话解除关联，作为普通会话列出。此操作不可撤销。",
+      "convertConfirm": "转换",
+      "cancel": "取消",
       "converted": "已转为普通会话",
       "convertFailed": "转为普通会话失败",
       "drawerTitle": "提问会话",
       "drawerDescription": "从此会话选中内容发起的提问会话",
       "pendingFirstMessage": "问题正等待智能体就绪后发送，再操作一次将放弃它。"
+    },
+    "checkConversations": {
+      "title": "核查会话",
+      "untitled": "核查",
+      "drawerDescription": "个人助手核查此会话中消息的过程"
     },
     "conversationCard": {
       "untitledConversation": "未命名会话",

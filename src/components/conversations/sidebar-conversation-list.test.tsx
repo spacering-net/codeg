@@ -6,7 +6,7 @@ import {
   useImperativeHandle,
   useState,
 } from "react"
-import { act, fireEvent, render, within } from "@testing-library/react"
+import { act, fireEvent, render, screen, within } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import { toast } from "sonner"
 import {
@@ -1235,6 +1235,67 @@ describe("SidebarConversationList — worktree grouping (Show worktrees)", () =>
       expect(marked(rootHeader())).toBe(true)
       expect(marked(containerHeader())).toBe(false)
     })
+  })
+})
+
+describe("SidebarConversationList — assistants' conversations", () => {
+  function assistantTree(showAssistant: boolean) {
+    return (
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <SidebarConversationList
+          showCompleted
+          showAssistant={showAssistant}
+          showRecent
+          sortMode="created"
+        />
+      </NextIntlClientProvider>
+    )
+  }
+
+  beforeEach(() => {
+    const folders = [folder(1, "Repo")]
+    store.activeTabId = null
+    store.tabSpec = []
+    useAppWorkspaceStore.setState({
+      folders,
+      allFolders: folders,
+      conversations: [
+        conv(11, 1),
+        conv(12, 1, { source: "personal_agent" }),
+        conv(13, 1, {
+          source: "personal_agent",
+          pinned_at: new Date(FIXED).toISOString(),
+        }),
+      ],
+    })
+  })
+
+  it("leaves them out of every section unless asked for, pinned ones too", () => {
+    render(assistantTree(false))
+    // The owner's own: under its folder and in Recent.
+    expect(screen.getAllByText("conv-11")).toHaveLength(2)
+    expect(screen.queryByText("conv-12")).toBeNull()
+    expect(screen.queryByText("conv-13")).toBeNull()
+  })
+
+  it("lists them like any other when asked for", () => {
+    render(assistantTree(true))
+    expect(screen.getAllByText("conv-12")).toHaveLength(2)
+    // Pinned: in Pinned, and only there.
+    expect(screen.getAllByText("conv-13")).toHaveLength(1)
+  })
+
+  it("reads a folder holding only theirs as empty while they are hidden", () => {
+    useAppWorkspaceStore.setState({
+      conversations: [conv(12, 1, { source: "personal_agent" })],
+    })
+    render(assistantTree(false))
+    expect(
+      screen.getByText(enMessages.Folder.sidebar.emptyFolderHint)
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText(enMessages.Folder.sidebar.noUnfinishedConversations)
+    ).toBeNull()
   })
 })
 

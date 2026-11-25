@@ -2270,6 +2270,7 @@
       "viewOptions": "View options",
       "listOptions": "Conversation list",
       "showCompleted": "Show completed conversations",
+      "showAssistant": "Show assistant conversations",
       "showWorktrees": "Show worktree branches",
       "showRecent": "Show Recent group",
       "tabsFollowFolder": "Tabs follow folder",
@@ -2474,14 +2475,21 @@
       "title": "Ask conversations",
       "total": "{count, plural, one {# conversation} other {# conversations}}",
       "untitled": "New question",
-      "actions": "More actions",
-      "open": "Open",
       "convertToRegular": "Convert to normal conversation",
+      "convertConfirmTitle": "Convert to a normal conversation?",
+      "convertConfirmDescription": "\"{title}\" will be unlinked from this conversation and listed as a normal conversation. This can't be undone.",
+      "convertConfirm": "Convert",
+      "cancel": "Cancel",
       "converted": "Converted to a normal conversation",
       "convertFailed": "Couldn't convert the conversation",
       "drawerTitle": "Ask conversation",
       "drawerDescription": "A side conversation opened from a selection in this conversation",
       "pendingFirstMessage": "Your question is waiting for the agent to be ready. Do that again to discard it."
+    },
+    "checkConversations": {
+      "title": "Check conversations",
+      "untitled": "Check",
+      "drawerDescription": "The personal agent's checks of messages in this conversation"
     },
     "conversationCard": {
       "untitledConversation": "Untitled conversation",

@@ -66,6 +66,7 @@ import {
   loadNavItemVisibility,
   loadTagFilter,
   saveTagFilter,
+  loadShowAssistant,
   loadShowCompleted,
   loadShowRecent,
   loadShowWorktrees,
@@ -73,6 +74,7 @@ import {
   loadSectionOrder,
   moveSectionInOrder,
   saveNavItemVisibility,
+  saveShowAssistant,
   saveShowCompleted,
   saveShowRecent,
   saveShowWorktrees,
@@ -217,11 +219,13 @@ export function Sidebar() {
   // rem-sized overlay buttons. Mobile has no overlay (the sidebar is a Drawer).
   const leftReserve = leftChromeReserve(platformIsMac && isDesktop(), zoomLevel)
 
-  // `showCompleted` defaults OFF; `showWorktrees` and `showRecent` default ON
+  // `showCompleted` and `showAssistant` default OFF; `showWorktrees` and
+  // `showRecent` default ON
   // (the mount effect below reconciles a persisted override). Each initial
   // value matches its own default so the pre-hydration render doesn't flash as
   // the stored preference is applied.
   const [showCompleted, setShowCompleted] = useState(false)
+  const [showAssistant, setShowAssistant] = useState(false)
   const [showWorktrees, setShowWorktrees] = useState(true)
   const [showRecent, setShowRecent] = useState(true)
   // Empty = every nav row shown, which is also the hydrated default — so the
@@ -270,6 +274,7 @@ export function Sidebar() {
     // Hydrate from localStorage after mount to keep SSR/CSR markup consistent.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setShowCompleted(loadShowCompleted())
+    setShowAssistant(loadShowAssistant())
     setShowWorktrees(loadShowWorktrees())
     setShowRecent(loadShowRecent())
     setNavItems(loadNavItemVisibility())
@@ -288,6 +293,11 @@ export function Sidebar() {
   const handleSetShowCompleted = useCallback((value: boolean) => {
     setShowCompleted(value)
     saveShowCompleted(value)
+  }, [])
+
+  const handleSetShowAssistant = useCallback((value: boolean) => {
+    setShowAssistant(value)
+    saveShowAssistant(value)
   }, [])
 
   const handleSetShowWorktrees = useCallback((value: boolean) => {
@@ -506,6 +516,13 @@ export function Sidebar() {
                     onSelect={(event) => event.preventDefault()}
                   >
                     {t("showCompleted")}
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem
+                    checked={showAssistant}
+                    onCheckedChange={handleSetShowAssistant}
+                    onSelect={(event) => event.preventDefault()}
+                  >
+                    {t("showAssistant")}
                   </DropdownMenuCheckboxItem>
                   <DropdownMenuCheckboxItem
                     checked={showWorktrees}
@@ -739,6 +756,7 @@ export function Sidebar() {
         <SidebarConversationList
           ref={listRef}
           showCompleted={showCompleted}
+          showAssistant={showAssistant}
           showWorktrees={showWorktrees}
           showRecent={showRecent}
           sortMode={sortMode}

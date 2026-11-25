@@ -9,10 +9,13 @@ import type { MessageCheck, PersonalAgentChange } from "@/lib/types"
 const api = vi.hoisted(() => ({
   checks: vi.fn(),
   checkMessage: vi.fn(),
+  listChecks: vi.fn(),
 }))
 vi.mock("@/lib/api", () => ({
   personalAgentChecks: (id: number) => api.checks(id),
   personalAgentCheckMessage: (args: unknown) => api.checkMessage(args),
+  listAskConversations: () => Promise.resolve([]),
+  listCheckConversations: (id: number) => api.listChecks(id),
 }))
 
 const bus = vi.hoisted(() => ({
@@ -39,6 +42,7 @@ vi.mock("@/lib/personal-agent-notify", () => ({
   followPersonalAgentLink: (link: unknown) => follow(link),
 }))
 
+import { useAskConversationDrawerStore } from "@/stores/ask-conversation-drawer-store"
 import {
   CheckMarks,
   MessageChecksProvider,
@@ -91,10 +95,17 @@ function Probe({ text, quote }: { text: string; quote?: string }) {
   )
 }
 
-function renderIn(ui: React.ReactNode, conversationId = 42) {
+function renderIn(
+  ui: React.ReactNode,
+  conversationId = 42,
+  openInDrawer = false
+) {
   return render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
-      <MessageChecksProvider conversationId={conversationId}>
+      <MessageChecksProvider
+        conversationId={conversationId}
+        openInDrawer={openInDrawer}
+      >
         {ui}
       </MessageChecksProvider>
     </NextIntlClientProvider>
@@ -107,6 +118,9 @@ beforeEach(() => {
   toasts.success.mockReset()
   toasts.error.mockReset()
   follow.mockReset()
+  api.listChecks.mockReset()
+  api.listChecks.mockResolvedValue([])
+  useAskConversationDrawerStore.setState({ target: null })
   bus.handlers = []
   roster.entries = [{ id: 7, kind: "primary" }]
 })
@@ -153,6 +167,55 @@ describe("MessageChecks (10.3)", () => {
       )
     })
     expect(follow).toHaveBeenCalledWith({ kind: "bot", bot_id: 7, row_id: 11 })
+  })
+
+  it("shows how it was checked in a tab where there is no drawer beside it", async () => {
+    api.checks.mockResolvedValue([check({})])
+    renderIn(<Probe text={REPLY} />)
+    const mark = await screen.findByText("Check: Not true")
+    act(() => {
+      fireEvent.click(mark)
+    })
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "See the check" }))
+    })
+    expect(follow).toHaveBeenCalledWith({
+      kind: "conversation",
+      conversation_id: 77,
+      folder_id: null,
+    })
+    expect(api.listChecks).not.toHaveBeenCalled()
+  })
+
+  it("shows how it was checked in the drawer beside the conversation", async () => {
+    api.checks.mockResolvedValue([check({})])
+    api.listChecks.mockResolvedValue([
+      {
+        id: 77,
+        folder_id: 3,
+        agent_type: "codex",
+        kind: "check",
+        parent_id: 42,
+      },
+    ])
+    renderIn(<Probe text={REPLY} />, 42, true)
+    await waitFor(() => expect(api.listChecks).toHaveBeenCalledWith(42))
+    act(() => {
+      fireEvent.click(screen.getByText("Check: Not true"))
+    })
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "See the check" }))
+    })
+    await waitFor(() =>
+      expect(useAskConversationDrawerStore.getState().target).toMatchObject({
+        kind: "check",
+        parentConversationId: 42,
+        conversationId: 77,
+        agentType: "codex",
+        folderId: 3,
+      })
+    )
+    expect(follow).not.toHaveBeenCalled()
   })
 
   it("asks again for a message checked before: its last conclusion opens, nothing is sent", async () => {

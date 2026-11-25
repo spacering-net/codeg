@@ -275,4 +275,20 @@ describe("SidebarConversationHoverDetails", () => {
 
     expect(screen.queryByText("Original working directory")).toBeNull()
   })
+
+  it("says when the personal agent dispatched the conversation", () => {
+    seed()
+    renderBubble(conv({ source: "personal_agent" }))
+
+    expect(
+      screen.getByText("Dispatched by the personal agent")
+    ).toBeInTheDocument()
+  })
+
+  it("says nothing of a dispatcher for an ordinary conversation", () => {
+    seed()
+    renderBubble(conv())
+
+    expect(screen.queryByText("Dispatched by the personal agent")).toBeNull()
+  })
 })

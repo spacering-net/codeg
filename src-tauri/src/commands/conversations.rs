@@ -2552,6 +2552,35 @@ pub async fn create_conversation_core(
     Ok(model.id)
 }
 
+/// [`create_conversation_core`] for the conversation a check of a message
+/// ("is this right?") runs in: the row is created nested under
+/// `checked_conversation_id` (see [`conversation_service::create_check`]).
+pub async fn create_check_conversation_core(
+    conn: &sea_orm::DatabaseConnection,
+    checked_conversation_id: i32,
+    folder_id: i32,
+    agent_type: AgentType,
+    title: Option<String>,
+) -> Result<conversation::Model, AppCommandError> {
+    let git_branch = match folder_service::get_folder_by_id(conn, folder_id)
+        .await
+        .map_err(AppCommandError::from)?
+    {
+        Some(folder) => detect_git_branch(&folder.path).await,
+        None => None,
+    };
+    conversation_service::create_check(
+        conn,
+        checked_conversation_id,
+        folder_id,
+        agent_type,
+        title,
+        git_branch,
+    )
+    .await
+    .map_err(AppCommandError::from)
+}
+
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn create_conversation(
@@ -2661,12 +2690,32 @@ pub async fn list_ask_conversations(
     list_ask_conversations_core(&db.conn, parent_conversation_id).await
 }
 
-/// Turn an ask conversation into an ordinary one, and tell every client: the
-/// upsert carries no `parent_id` any more, so sidebars move the row from under
-/// the main conversation to the root list and the main conversation's ask
-/// list drops it; the main conversation's own upsert brings its `child_count`
-/// down. Unlinking a row that is not (or no longer) an ask conversation is a
-/// quiet no-op.
+/// The check conversations ("is this right?" run on a message of it) listed
+/// under `parent_conversation_id`'s Session Details, newest first.
+pub async fn list_check_conversations_core(
+    conn: &sea_orm::DatabaseConnection,
+    parent_conversation_id: i32,
+) -> Result<Vec<DbConversationSummary>, AppCommandError> {
+    conversation_service::list_check_children(conn, parent_conversation_id)
+        .await
+        .map_err(AppCommandError::from)
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn list_check_conversations(
+    db: tauri::State<'_, AppDatabase>,
+    parent_conversation_id: i32,
+) -> Result<Vec<DbConversationSummary>, AppCommandError> {
+    list_check_conversations_core(&db.conn, parent_conversation_id).await
+}
+
+/// Turn an ask (or check) conversation into an ordinary one, and tell every
+/// client: the upsert carries no `parent_id` any more, so sidebars move the
+/// row from under the main conversation to the root list and the main
+/// conversation's ask (or check) list drops it; the main conversation's own
+/// upsert brings its `child_count` down. Unlinking a row that is not (or no
+/// longer) an ask or a check is a quiet no-op.
 pub async fn detach_ask_conversation_core(
     emitter: &EventEmitter,
     conn: &sea_orm::DatabaseConnection,
@@ -2907,6 +2956,39 @@ pub async fn create_chat_conversation_core(
     title: Option<String>,
     existing_dir: Option<&str>,
 ) -> Result<CreateChatConversationResult, AppCommandError> {
+    create_chat_conversation_inner(conn, data_dir, agent_type, title, existing_dir, None).await
+}
+
+/// [`create_chat_conversation_core`] for the conversation a check of a
+/// message ("is this right?") of a chat runs in: its own hidden chat folder,
+/// the row nested under `checked_conversation_id` (see
+/// [`conversation_service::create_check`]).
+pub async fn create_chat_check_conversation_core(
+    conn: &sea_orm::DatabaseConnection,
+    data_dir: &std::path::Path,
+    checked_conversation_id: i32,
+    agent_type: AgentType,
+    title: Option<String>,
+) -> Result<CreateChatConversationResult, AppCommandError> {
+    create_chat_conversation_inner(
+        conn,
+        data_dir,
+        agent_type,
+        title,
+        None,
+        Some(checked_conversation_id),
+    )
+    .await
+}
+
+async fn create_chat_conversation_inner(
+    conn: &sea_orm::DatabaseConnection,
+    data_dir: &std::path::Path,
+    agent_type: AgentType,
+    title: Option<String>,
+    existing_dir: Option<&str>,
+    check_of: Option<i32>,
+) -> Result<CreateChatConversationResult, AppCommandError> {
     let path = match existing_dir {
         Some(dir) => {
             std::fs::create_dir_all(dir).map_err(AppCommandError::io)?;
@@ -2926,8 +3008,15 @@ pub async fn create_chat_conversation_core(
     // soft-deleting the just-created hidden folder — otherwise it would linger as
     // an orphan (active, conversation-less, never reached by the delete path) and
     // pollute the active-folder scope.
+    let created = match check_of {
+        Some(checked) => {
+            conversation_service::create_check(conn, checked, folder.id, agent_type, title, None)
+                .await
+        }
+        None => conversation_service::create_chat(conn, folder.id, agent_type, title, None).await,
+    };
     let model =
-        match conversation_service::create_chat(conn, folder.id, agent_type, title, None).await {
+        match created {
             Ok(model) => model,
             Err(create_err) => {
                 if let Err(cleanup_err) = folder_service::remove_folder(conn, &folder.path).await {

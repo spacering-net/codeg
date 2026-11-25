@@ -1027,8 +1027,12 @@ pub struct ElicitationQuestions {
     pub tool_call_id: Option<String>,
     /// codex's `request_user_input_async` (codex-acp 2.6.0, #707): the agent
     /// asked without waiting, and its turn goes on while the form is open.
-    /// codex-acp cancels the form when that turn ends, steers an accepted
-    /// answer into it, and sends nothing for a decline. The form carries no
+    /// codex-acp steers an accepted answer into that turn and sends nothing
+    /// for a decline. Up to 2.10.0 it cancels the form when the turn ends;
+    /// from 2.11.0 the form outlives the turn, and codeg declines it at its
+    /// own `TurnComplete` (`cancel_questions_by_parent`); an answer accepted
+    /// just before that decline, after the adapter's turn ended, starts a new
+    /// turn the adapter owns (no `session/prompt`). The form carries no
     /// `toolCallId`. Read from `_meta.codex.delivery == "async"` for a codex
     /// peer only (see [`ElicitationPeer`]).
     pub async_delivery: bool,

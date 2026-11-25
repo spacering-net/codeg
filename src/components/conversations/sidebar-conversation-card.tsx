@@ -20,10 +20,10 @@ import {
   CheckCircle2,
   Info,
   ChevronRight,
-  Sparkles,
   SquareTerminal,
   ListChecks,
   MessageCircleQuestionMark,
+  ShieldCheck,
   Unlink,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
@@ -256,6 +256,7 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   const tStatus = useTranslations("Folder.statusLabels")
   const tDetails = useTranslations("Folder.sessionDetails")
   const tAsk = useTranslations("Folder.askConversations")
+  const tCheck = useTranslations("Folder.checkConversations")
   const detachAsk = useDetachAskConversation()
   const timeLabelClassName = cn(
     "relative shrink-0 tabular-nums text-[0.71875rem]",
@@ -281,8 +282,10 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   const isSubsession = conversation.parent_id != null
   // An ask conversation ("ask about this selection") nests under the
   // conversation it was asked from like a sub-agent run, and can be turned
-  // into an ordinary conversation from its menu.
+  // into an ordinary conversation from its menu. So does a check of one of
+  // its messages, under the conversation it checks.
   const isAsk = conversation.kind === "ask"
+  const isCheck = conversation.kind === "check"
   const branch = useBranchChip(isSubsession ? null : conversation.git_branch)
 
   const handleClick = useCallback(() => {
@@ -517,26 +520,10 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                       size="xs"
                       className="relative -ml-[0.25rem] max-w-[calc(100%-3.875rem)] shrink overflow-hidden"
                     />
-                    {/* Dispatched by the personal agent: its executor's
-                    avatar already marks the row; this says who sent it. */}
-                    {conversation.source === "personal_agent" ? (
-                      <span
-                        className="ml-auto inline-flex shrink-0 items-center"
-                        title={tSidebar("personalAgentBadge")}
-                      >
-                        <Sparkles
-                          className="h-3 w-3 text-muted-foreground/60"
-                          aria-hidden
-                        />
-                        <span className="sr-only">
-                          {tSidebar("personalAgentBadge")}
-                        </span>
-                      </span>
-                    ) : null}
                     {/* Started by `codeg-cli`: told apart from the window's
-                    own, and found again with the Recent filter. An ask
-                    conversation is told apart from the sub-agent runs it
-                    nests beside. */}
+                    own, and found again with the Recent filter. An ask or a
+                    check conversation is told apart from the sub-agent runs
+                    it nests beside. */}
                     {conversation.source === "cli" ? (
                       <span
                         className="ml-auto inline-flex shrink-0 items-center"
@@ -558,6 +545,17 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                           aria-hidden
                         />
                         <span className="sr-only">{tAsk("title")}</span>
+                      </span>
+                    ) : isCheck ? (
+                      <span
+                        className="ml-auto inline-flex shrink-0 items-center"
+                        title={tCheck("title")}
+                      >
+                        <ShieldCheck
+                          className="h-3 w-3 text-muted-foreground/60"
+                          aria-hidden
+                        />
+                        <span className="sr-only">{tCheck("title")}</span>
                       </span>
                     ) : null}
                     {/* No mark for a conversation re-parented out of a removed
@@ -788,7 +786,7 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
               <AtSign className="h-4 w-4" />
               {t("attachToCurrentSession")}
             </ContextMenuItem>
-            {isAsk && (
+            {(isAsk || isCheck) && (
               <ContextMenuItem onSelect={() => detachAsk(conversation.id)}>
                 <Unlink className="h-4 w-4" />
                 {tAsk("convertToRegular")}
