@@ -1255,20 +1255,7 @@ mod tests {
         .await
         .expect("import");
         let id = find_id(&db.conn, "ext-1").await;
-        use crate::acp::session_info::{
-            SessionInfoAccess, SessionInfoConfig, SessionInfoRuntimeConfig,
-        };
-        let config = SessionInfoRuntimeConfig::new();
-        config.set(SessionInfoConfig { enabled: true }).await;
-        let sessions = crate::commands::session_info::DbSessionInfoLookup::new(
-            std::sync::Arc::new(crate::db::AppDatabase {
-                conn: db.conn.clone(),
-            }),
-            crate::web::event_bridge::EventEmitter::Noop,
-            config,
-        );
-        sessions
-            .rename(id, id, "User Pick".into())
+        conversation_service::update_title(&db.conn, id, "User Pick".into())
             .await
             .expect("rename");
         conversation_service::update_pin(&db.conn, id, true)

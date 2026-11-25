@@ -228,7 +228,9 @@ pub trait SessionInfoAccess: Send + Sync {
     async fn resolve(&self, session_id: i32, max_messages: u32) -> SessionInfo;
 
     /// The listener supplies the caller from its authenticated connection.
-    async fn rename(&self, caller_id: i32, session_id: i32, title: String) -> Result<(), String>;
+    async fn rename(&self, _caller_id: i32, _session_id: i32, _title: String) -> Result<(), String> {
+        Err("Session rename is unavailable".into())
+    }
 
     async fn read_history(
         &self,
