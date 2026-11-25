@@ -11804,7 +11804,10 @@
       "loading": "Schritte werden geladen…",
       "empty": "Noch keine Schritte",
       "fold": "Schritte ausblenden",
-      "openWork": "Arbeit öffnen"
+      "openWork": "Arbeit öffnen",
+      "replied": "Geantwortet",
+      "workDone": "Arbeit erledigt",
+      "notFinished": "Nicht fertig geworden"
     },
     "sending": {
       "waking": "{name} wird geweckt…",

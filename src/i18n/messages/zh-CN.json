@@ -11804,7 +11804,10 @@
       "loading": "正在读步骤…",
       "empty": "还没有步骤",
       "fold": "收起步骤",
-      "openWork": "打开这件活"
+      "openWork": "打开这件活",
+      "replied": "回复完成",
+      "workDone": "工作完成",
+      "notFinished": "没能完成"
     },
     "sending": {
       "waking": "正在唤醒 {name}…",

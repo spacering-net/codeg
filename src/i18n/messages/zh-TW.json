@@ -11804,7 +11804,10 @@
       "loading": "正在讀取步驟…",
       "empty": "還沒有步驟",
       "fold": "收合步驟",
-      "openWork": "開啟這項工作"
+      "openWork": "開啟這項工作",
+      "replied": "回覆完成",
+      "workDone": "工作完成",
+      "notFinished": "沒能完成"
     },
     "sending": {
       "waking": "正在喚醒 {name}…",

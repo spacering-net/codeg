@@ -11804,7 +11804,10 @@
       "loading": "Cargando los pasos…",
       "empty": "Aún no hay pasos",
       "fold": "Ocultar los pasos",
-      "openWork": "Abrir el trabajo"
+      "openWork": "Abrir el trabajo",
+      "replied": "Respondido",
+      "workDone": "Trabajo terminado",
+      "notFinished": "No terminó"
     },
     "sending": {
       "waking": "Despertando a {name}…",

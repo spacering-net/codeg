@@ -573,7 +573,13 @@ export function PersonalAgentPage() {
               </div>
             ) : null}
             <MessageList jumpRef={jumpRef} sentRef={sentRef} />
-            <StatusLine botId={agent.id} name={agentName} />
+            {/* Each assistant's own: how one's turn ended is never shown
+                for another's. */}
+            <StatusLine
+              key={`status-line-${agent.id}`}
+              botId={agent.id}
+              name={agentName}
+            />
             <PersonalAgentComposer
               // Each assistant's own box: what is being written, sent or
               // uploaded for one never lands in another's.

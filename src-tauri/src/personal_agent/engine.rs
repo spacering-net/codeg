@@ -2762,6 +2762,7 @@ impl PersonalAgentEngine {
             st.flush_outcome = None;
             st.last_error = None;
         }
+        self.end_face_flash().await;
         let sent = self
             .manager
             .send_personal_agent_prompt(
@@ -2960,6 +2961,7 @@ impl PersonalAgentEngine {
                 percent: before.map(|b| b.percent),
             });
         }
+        self.end_face_flash().await;
         let sent = self
             .manager
             .send_prompt_linked_with_message_id(
@@ -3668,6 +3670,7 @@ impl PersonalAgentEngine {
             });
             st.last_error = None;
         }
+        self.end_face_flash().await;
         let mut shown: Vec<TimelineRow> = moved.iter().cloned().map(svc::to_row).collect();
         shown.extend(read_cards.into_iter().map(svc::to_row));
         if let Some(r) = reply.as_ref() {

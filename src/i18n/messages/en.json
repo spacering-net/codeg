@@ -11804,7 +11804,10 @@
       "loading": "Reading the steps…",
       "empty": "No steps yet",
       "fold": "Hide the steps",
-      "openWork": "Open the work"
+      "openWork": "Open the work",
+      "replied": "Replied",
+      "workDone": "Work done",
+      "notFinished": "Didn't finish"
     },
     "sending": {
       "waking": "Waking {name}…",

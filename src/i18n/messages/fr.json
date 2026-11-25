@@ -11804,7 +11804,10 @@
       "loading": "Chargement des étapes…",
       "empty": "Pas encore d’étapes",
       "fold": "Masquer les étapes",
-      "openWork": "Ouvrir le travail"
+      "openWork": "Ouvrir le travail",
+      "replied": "Réponse envoyée",
+      "workDone": "Travail terminé",
+      "notFinished": "Pas terminé"
     },
     "sending": {
       "waking": "Réveil de {name}…",

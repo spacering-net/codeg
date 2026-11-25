@@ -11804,7 +11804,10 @@
       "loading": "ステップを読み込み中…",
       "empty": "まだステップはありません",
       "fold": "ステップを折りたたむ",
-      "openWork": "この作業を開く"
+      "openWork": "この作業を開く",
+      "replied": "返信しました",
+      "workDone": "作業が完了しました",
+      "notFinished": "完了できませんでした"
     },
     "sending": {
       "waking": "{name} を起こしています…",

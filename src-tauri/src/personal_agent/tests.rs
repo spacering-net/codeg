@@ -7235,6 +7235,37 @@ async fn running_work_is_busy_for_a_while_and_a_face_says_how_it_ended() {
 }
 
 #[tokio::test]
+async fn a_turn_begun_within_the_last_ones_face_shows_itself() {
+    let (host, _w, _tmp) = hosted().await;
+    let engine = host.primary();
+    host.live.flash(engine.bot().await, FaceState::Done);
+    let live = host.live_of(&primary_row(&host).await).await;
+    assert_eq!(live.flash.unwrap().face, FaceState::Done, "the last turn just ended");
+
+    // The owner writes again at once: the new turn moves the face.
+    let seg = open_segment(&engine).await;
+    let batch = svc::create_batch(&engine.db.conn, engine.bot().await, seg, BatchKind::Delivery, None)
+        .await
+        .unwrap();
+    engine
+        .begin_turn_for_test("pa-conn", seg, batch.id, BatchKind::Delivery, false, false)
+        .await;
+    let live = host.live_of(&primary_row(&host).await).await;
+    assert!(live.flash.is_none(), "no smile held over a turn running");
+    assert_eq!(live.face, FaceState::Thinking);
+
+    // Once that turn has ended (with no face of its own: the owner
+    // stopped it), the last one's does not come back — a turn registered
+    // ends it.
+    engine.clear_turn_for_test().await;
+    let live = host.live_of(&primary_row(&host).await).await;
+    assert!(live.flash.is_some(), "the test's turn was only put on record");
+    engine.end_face_flash().await;
+    let live = host.live_of(&primary_row(&host).await).await;
+    assert!(live.flash.is_none());
+}
+
+#[tokio::test]
 async fn the_owner_arranges_the_roster() {
     let (host, w, _tmp) = hosted().await;
     let conn = host.primary().db.conn.clone();

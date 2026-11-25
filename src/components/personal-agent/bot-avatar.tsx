@@ -13,13 +13,17 @@
  *
  * - **Looks.** idle: at rest, blinking every 2.8–5.5 s (a double blink one
  *   time in seven), half the time a glance left, right or up instead, held
- *   0.5–0.9 s; thinking: looking up and about, its head wandering; working:
+ *   0.5–0.9 s; thinking: looking up and about, its head wandering, tilting
+ *   one way and the other with a little lift (so a face moves all the
+ *   while it replies, the long thinking before its first word too); working:
  *   eyes down and narrowed, nodding over its work, bobbing (the ring's star
  *   running round its band); waiting: turned to face you, breathing deep;
  *   stuck: drowsy, lids half down, swaying; done: eyes curved into a smile,
  *   a turn round and two hops; failed: eyes drooping, a shake of the head;
  *   sleeping: eyes shut, leaning back, breathing slowly, "z z z" rising. A
- *   new look comes through a blink.
+ *   new look comes through a blink. A picture, an emoji or a monogram
+ *   moves whole with its look the same way (no eyes to turn): pondering,
+ *   bobbing, breathing, two hops once done, a shake once failed.
  * - **The pointer.** A face that is alive notices the pointer coming over
  *   it — or over what it is the face of, a row or a tile marked
  *   `data-pa-face-host`: it perks up with a little hop — asleep, it wakes
@@ -335,7 +339,9 @@ function PictureAvatar({
       )}
       style={{ width: rem(size), height: rem(size) }}
     >
-      {plain}
+      {/* What moves with the look (globals.css), the ring and the dot
+          staying put round it. */}
+      <span className="pa-face-pic">{plain}</span>
       {ring ? (
         <span
           aria-hidden

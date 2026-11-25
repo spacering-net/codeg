@@ -11804,7 +11804,10 @@
       "loading": "단계 불러오는 중…",
       "empty": "아직 단계 없음",
       "fold": "단계 접기",
-      "openWork": "작업 열기"
+      "openWork": "작업 열기",
+      "replied": "답장 완료",
+      "workDone": "작업 완료",
+      "notFinished": "끝내지 못했어요"
     },
     "sending": {
       "waking": "{name} 깨우는 중…",
