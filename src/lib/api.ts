@@ -21,6 +21,7 @@ import {
   DEFAULT_FORGE_PAGE_SIZE,
 } from "./forge-list-prefs"
 import { TurnBusyError, isTurnInProgressRejection } from "./turn-busy"
+import { asRewindRefusedError } from "./rewind-refused"
 import { asConversationMovedError } from "./conversation-moved"
 import type { FolderThemeColor } from "./theme-presets"
 import type { FollowUpIntent } from "./task-follow-up"
@@ -393,12 +394,23 @@ export function stripUploadedImagePayloads(
   })
 }
 
+/** An edited message's rewind target, riding on its own prompt: the backend
+ *  cuts the agent's session back to just before the message it replaces and
+ *  admits the prompt in the same step ("edit and resend", claude-agent-acp
+ *  0.112.0 / codex-acp 2.12.0; see `crate::acp::rewind`). The message is
+ *  named by the agent's id for it and checked by its text. */
+export interface PromptRewindTarget {
+  agentMessageId: string
+  text: string
+}
+
 export async function acpPrompt(
   connectionId: string,
   blocks: PromptInputBlock[],
   folderId: number | null = null,
   conversationId: number | null = null,
-  clientMessageId: string | null = null
+  clientMessageId: string | null = null,
+  rewind: PromptRewindTarget | null = null
 ): Promise<void> {
   try {
     await getTransport().call("acp_prompt", {
@@ -412,10 +424,11 @@ export async function acpPrompt(
       folderId,
       conversationId,
       clientMessageId,
+      ...(rewind ? { rewind } : {}),
     })
   } catch (e) {
     if (isTurnInProgressRejection(e)) throw new TurnBusyError()
-    throw asConversationMovedError(e) ?? e
+    throw asConversationMovedError(e) ?? asRewindRefusedError(e) ?? e
   }
 }
 

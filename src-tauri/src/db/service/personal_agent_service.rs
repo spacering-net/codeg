@@ -2318,39 +2318,40 @@ pub async fn settle_waited_events(
         .filter(event::Column::Kind.eq("dispatch_status"))
         .all(conn)
         .await?;
-    use sea_orm::TransactionTrait;
-    let txn = conn.begin().await?;
+    // Read first, then one guarded update — no read-then-write transaction
+    // (see the module docs). The caller holds the pump, so no delivery takes
+    // these events between the read and the write.
     let mut settled: Vec<i32> = Vec::new();
     for e in events {
         let Some(key) = e.coalesce_key.as_deref() else {
             continue;
         };
-        let scope = event::Entity::find()
-            .filter(event::Column::BotId.eq(bot))
-            .filter(event::Column::CoalesceKey.eq(key))
-            .filter(event::Column::State.eq(EventState::Pending))
-            .filter(event::Column::Id.lte(e.id))
-            .all(&txn)
-            .await?
-            .into_iter()
-            .map(|e| e.id)
-            .collect::<Vec<_>>();
-        if scope.is_empty() {
-            continue;
-        }
-        event::Entity::update_many()
-            .col_expr(event::Column::State, Expr::value(EventState::Done))
-            .col_expr(event::Column::BatchId, Expr::value(batch_id))
-            .col_expr(event::Column::UpdatedAt, Expr::value(Utc::now()))
-            .filter(event::Column::Id.is_in(scope.clone()))
-            .filter(event::Column::State.eq(EventState::Pending))
-            .exec(&txn)
-            .await?;
-        settled.extend(scope);
+        settled.extend(
+            event::Entity::find()
+                .filter(event::Column::BotId.eq(bot))
+                .filter(event::Column::CoalesceKey.eq(key))
+                .filter(event::Column::State.eq(EventState::Pending))
+                .filter(event::Column::Id.lte(e.id))
+                .all(conn)
+                .await?
+                .into_iter()
+                .map(|e| e.id),
+        );
     }
-    txn.commit().await?;
     settled.sort_unstable();
     settled.dedup();
+    if settled.is_empty() {
+        return Ok(settled);
+    }
+    event::Entity::update_many()
+        .col_expr(event::Column::State, Expr::value(EventState::Done))
+        .col_expr(event::Column::BatchId, Expr::value(batch_id))
+        .col_expr(event::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(event::Column::BotId.eq(bot))
+        .filter(event::Column::Id.is_in(settled.clone()))
+        .filter(event::Column::State.eq(EventState::Pending))
+        .exec(conn)
+        .await?;
     Ok(settled)
 }
 

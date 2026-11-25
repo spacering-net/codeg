@@ -13,6 +13,8 @@ import {
 } from "@/lib/connection-teardown"
 import { TurnBusyError } from "@/lib/turn-busy"
 import { ConversationMovedError } from "@/lib/conversation-moved"
+import { RewindRefusedError } from "@/lib/rewind-refused"
+import type { PromptRewindTarget } from "@/lib/api"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { type AgentType, type PromptDraft } from "@/lib/types"
 import { getAgentLabel } from "@/lib/custom-agents"
@@ -71,6 +73,18 @@ export interface UseConnectionLifecycleReturn {
       folderId?: number | null
       conversationId?: number | null
       clientMessageId?: string | null
+      /** An edited message's rewind, done with the send (`acpPrompt`). */
+      rewind?: PromptRewindTarget | null
+      /**
+       * Called instead of the error toast when the agent declined the
+       * `rewind`: nothing changed and nothing was sent.
+       */
+      onRewindRefused?: (reason: string) => void
+      /**
+       * Called when nothing was sent because there was no connection to send
+       * on (a reconnect removed it while the send waited for a setter).
+       */
+      onNotSent?: () => void
       /**
        * Called when the backend rejected the send because a turn was already
        * in flight (a second, concurrent prompt). The caller re-queues the
@@ -523,6 +537,9 @@ export function useConnectionLifecycle({
         folderId?: number | null
         conversationId?: number | null
         clientMessageId?: string | null
+        rewind?: PromptRewindTarget | null
+        onRewindRefused?: (reason: string) => void
+        onNotSent?: () => void
         onTurnInProgress?: () => void
         onSendFailed?: (error: unknown) => void
       }
@@ -540,8 +557,12 @@ export function useConnectionLifecycle({
           // calls before CurrentModeUpdate arrives from the agent.
           modeIdRef.current = modeId
         }
-        await sendPrompt(draft.blocks, opts)
+        if (!(await sendPrompt(draft.blocks, opts))) opts?.onNotSent?.()
       })().catch((e: unknown) => {
+        if (e instanceof RewindRefusedError && opts?.onRewindRefused) {
+          opts.onRewindRefused(e.reason)
+          return
+        }
         if (e instanceof TurnBusyError) {
           // A turn was already in flight on the connection (another
           // co-controlling client, or a "prompting" status this client hadn't

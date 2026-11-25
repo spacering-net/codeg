@@ -2130,6 +2130,126 @@ async fn news_waited_for_within_a_turn_is_settled_with_the_reply_that_reports_it
     assert!(!out.ok, "{}", out.text);
 }
 
+/// News of a round that was never told, then a follow-up: waiting for the
+/// follow-up does not hand the earlier round's news as its own — not while
+/// it runs, nor once it ended (the same state) before its news is written.
+#[tokio::test]
+async fn waiting_after_a_follow_up_hands_only_the_news_of_its_round() {
+    use std::time::Duration;
+    let (engine, _tmp) = configured().await;
+    owner_turn(&engine, "pa-wf").await;
+    let id = session_dispatch(&engine, DispatchState::Completed, "conn-wf").await;
+    let d = dispatch_state(&engine, id).await;
+    engine.record_progress(&d, Some("First answer.".into()), None, "turn").await;
+    // A follow-up goes out: the round under way has no news yet.
+    svc::update_dispatch(
+        &engine.db.conn,
+        id,
+        None,
+        DispatchWrite { state: Some(DispatchState::Running), ..Default::default() },
+    )
+    .await
+    .unwrap();
+    let out = engine.dispatch_wait(id, Some(Duration::ZERO)).await;
+    assert_eq!(out.data["waiting"], "timed_out", "{}", out.text);
+    // It asks something (the same round number as the first's news): it
+    // waits on that, and the first's news is not handed as its own.
+    svc::update_dispatch(
+        &engine.db.conn,
+        id,
+        None,
+        DispatchWrite { state: Some(DispatchState::WaitingInput), ..Default::default() },
+    )
+    .await
+    .unwrap();
+    let out = engine.dispatch_wait(id, Some(Duration::ZERO)).await;
+    assert_eq!(out.data["waiting"], "input", "{}", out.text);
+    // It ends as the first did; its news is not written yet.
+    let d = svc::update_dispatch(
+        &engine.db.conn,
+        id,
+        None,
+        DispatchWrite { state: Some(DispatchState::Completed), bump_turns: true, ..Default::default() },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let out = engine.dispatch_wait(id, Some(Duration::ZERO)).await;
+    assert_eq!(out.data["waiting"], "timed_out", "{}", out.text);
+    // Written: that is the news handed.
+    engine.record_progress(&d, Some("Second answer.".into()), None, "turn").await;
+    let out = engine.dispatch_wait(id, Some(Duration::ZERO)).await;
+    assert_eq!(out.data["waiting"], "news", "{}", out.text);
+    assert!(out.text.contains("Second answer."), "{}", out.text);
+}
+
+/// The owner writes again while `dispatch_wait` waits in the turn carrying
+/// their message (folded into it, or left for after it): the wait stops at
+/// once, not after its whole budget. What they wrote before a wait began
+/// does not stop it.
+#[tokio::test]
+async fn a_wait_stops_when_the_owner_writes_again() {
+    use std::time::Duration;
+    let (engine, _tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let (mut rx, state) = live_connection(&engine, seg, "pa-ws").await;
+    engine
+        .send_owner_message("have it checked, then tell me".into(), Vec::new(), None)
+        .await
+        .unwrap();
+    engine.pump().await;
+    let (_, token) = take_prompt(&mut rx);
+    start_prompt(&state, Some(&token)).await;
+    let id = session_dispatch(&engine, DispatchState::Running, "conn-ws").await;
+    let started = std::time::Instant::now();
+    let (out, ()) = tokio::join!(engine.dispatch_wait(id, Some(Duration::from_secs(20))), async {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        engine
+            .send_owner_message("and the footer too".into(), Vec::new(), None)
+            .await
+            .unwrap();
+    });
+    assert_eq!(out.data["waiting"], "stopped", "{}", out.text);
+    assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
+    // Written before this wait: it waits as ever.
+    let out = engine.dispatch_wait(id, Some(Duration::ZERO)).await;
+    assert_eq!(out.data["waiting"], "timed_out", "{}", out.text);
+}
+
+/// An event turn carried one card; `dispatch_wait` handed it another. The
+/// first is no longer all it was given: a reply marking only the second
+/// reports only that one.
+#[tokio::test]
+async fn a_card_a_wait_handed_ends_the_sole_card_rule() {
+    use std::time::Duration;
+    let (engine, _tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let bot = engine.bot().await;
+    let first = session_dispatch(&engine, DispatchState::Completed, "conn-s1").await;
+    let d = dispatch_state(&engine, first).await;
+    engine.record_progress(&d, Some("Done.".into()), None, "turn").await;
+    let (mut rx, state) = live_connection(&engine, seg, "pa-s1").await;
+    engine.pump().await;
+    let (_, token) = take_prompt(&mut rx);
+    start_prompt(&state, Some(&token)).await;
+    let second = session_dispatch(&engine, DispatchState::Completed, "conn-s2").await;
+    let d = dispatch_state(&engine, second).await;
+    engine.record_progress(&d, Some("Not accepted.".into()), None, "turn").await;
+    let card = svc::latest_result_row(&engine.db.conn, second).await.unwrap().unwrap();
+    let out = engine.dispatch_wait(second, Some(Duration::ZERO)).await;
+    assert_eq!(out.data["waiting"], "news", "{}", out.text);
+    emit(&engine, &state, "pa-s1", text(&format!("[[quote:#{}]] Not accepted.", card.id)), true).await;
+    emit(&engine, &state, "pa-s1", turn_complete("end_turn"), true).await;
+    let reply = svc::page(&engine.db.conn, bot, None, 100)
+        .await
+        .unwrap()
+        .0
+        .into_iter()
+        .rfind(|r| r.kind == TimelineKind::Reply)
+        .unwrap();
+    assert_eq!(data_of(&reply)["covers"], json!([card.id]));
+}
+
 /// Interrupted: a put-back event's card is unread again; one put back once
 /// already is settled and stays read. The reply keeps its last checkpoint.
 #[tokio::test]
@@ -11724,6 +11844,39 @@ async fn waiting_on_code_work_under_acceptance_says_it_is_being_checked() {
         .unwrap()
         .unwrap();
     assert_eq!(review.state, EventState::Pending, "left to go out with the verdict");
+}
+
+/// Code work whose check of the version there now concluded — accepted, or
+/// voided (checked again only when the owner asks) — has no verdict on its
+/// way: `dispatch_wait` does not say it is being checked.
+#[tokio::test]
+async fn waiting_on_code_work_whose_check_concluded_does_not_promise_a_verdict() {
+    for void in [false, true] {
+        let (engine, tmp) = configured().await;
+        let w = work_in_review(&engine, &tmp).await;
+        engine.acceptance_tick().await;
+        let check = rounds_of(&engine, w.d.id).await[0].check_dispatch_id.unwrap();
+        if void {
+            // The worktree changes while it is checked: void.
+            std::fs::write(w.wt.join("new.txt"), "x").unwrap();
+        }
+        finish_check(&engine, check, "VERDICT: PASS").await;
+        if !void {
+            let out =
+                call(&engine, "acceptance_decide", json!({ "dispatch_id": w.d.id, "decision": "accept" })).await;
+            assert!(out.ok, "{}", out.text);
+        }
+        owner_turn(&engine, "pa-wc").await;
+        // Its review's news, written when the check was to come, is not
+        // handed as where it stands.
+        engine.record_progress(&dispatch_state(&engine, w.d.id).await, None, None, "task").await;
+        let out = engine.dispatch_wait(w.d.id, Some(std::time::Duration::ZERO)).await;
+        assert!(out.ok, "void {void}: {}", out.text);
+        assert_ne!(out.data["waiting"], "checking", "void {void}: {}", out.text);
+        if void {
+            assert_eq!(out.data["waiting"], "changed", "{}", out.text);
+        }
+    }
 }
 
 #[tokio::test]
