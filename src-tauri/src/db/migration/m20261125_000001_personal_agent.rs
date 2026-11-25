@@ -800,7 +800,12 @@ mod tests {
     #[tokio::test]
     async fn down_removes_everything_it_made() {
         let conn = Database::connect("sqlite::memory:").await.expect("db");
-        Migrator::up(&conn, None).await.expect("migrate");
+        let step = Migrator::migrations()
+            .iter()
+            .position(|m| m.name() == "m20261125_000001_personal_agent")
+            .expect("migration is registered") as u32
+            + 1;
+        Migrator::up(&conn, Some(step)).await.expect("migrate");
         Migrator::down(&conn, Some(1)).await.expect("down");
         let left = names(
             &conn,
