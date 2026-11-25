@@ -14486,7 +14486,8 @@ fn classify_session_load_failure(
     // Kimi Code 2.3.0 hands a session to one process at a time. The holder
     // writes `<KIMI_CODE_HOME>/locks/sessions/<id>.lock` (pid, host, start
     // time) when it opens the session or starts a turn, and gives it up 3 s
-    // after it goes idle; a lock whose process is gone is taken over. Opening
+    // after it goes idle; a lock whose process is gone is taken over (from
+    // 2.8.0 so is one recorded under another hostname). Opening
     // the session from another process meanwhile, by `session/load` or
     // `session/resume`, answers -32603 with Kimi's sentence in
     // `data.details`. 2.3.0 says "This session is in use by another Kimi Code
@@ -22297,6 +22298,8 @@ const KIMI_EXIT_PLAN_MODE_REVIEW_TITLE: &str = "Presenting plan and exiting plan
 /// Only the wording of the result still tells them apart (see
 /// [`crate::parsers::kimi_code::kimi_plan_review_kept_ok`], which history
 /// applies to the same calls), so such a frame is forwarded as `completed`.
+/// From 2.8.0 an approved plan settles `completed` by itself; a dismissed
+/// review still settles `failed`.
 /// `own_title` is the call's own title as [`KimiToolTitles`] tracks it.
 fn kimi_plan_review_misreported_failure(
     own_title: Option<&str>,
@@ -27116,7 +27119,8 @@ async fn emit_conversation_update(
             // Read before the fields are taken apart below.
             let kimi_status = kimi_status_frame(agent_type, &tcu.fields);
             // An answered Kimi plan review settles `failed` whatever the user
-            // chose (see `kimi_plan_review_misreported_failure`).
+            // chose, through 2.7.3; from 2.8.0 only a non-approval does (see
+            // `kimi_plan_review_misreported_failure`).
             if agent_type == AgentType::KimiCode
                 && kimi_plan_review_misreported_failure(
                     cb_state.kimi_tool_titles.own(&tool_call_id),
