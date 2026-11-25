@@ -281,10 +281,13 @@ export function ReplyBubble({ item }: { item: ReplyItem }) {
       replyView({
         row,
         live,
-        attached: item.attached,
+        // Work whose news this reply reported is drawn by that news's card.
+        attached: item.reported?.length
+          ? item.attached.filter((r) => !item.reported!.includes(r.id))
+          : item.attached,
         owners: item.owners,
       }),
-    [row, live, item.attached, item.owners]
+    [row, live, item.attached, item.reported, item.owners]
   )
   const liveTurn = view.running && row != null && row.id === scope.liveRowId
   // While the turn runs, the bubble holds only what it wrote: the other

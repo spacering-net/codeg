@@ -11288,6 +11288,7 @@
       "own": {
         "dispatch": "派出一件活",
         "dispatch_followup": "继续一件活",
+        "dispatch_wait": "等派出的活回来",
         "items": "整理在途事项",
         "timeline_read": "翻看对话记录",
         "project_list": "查看项目"
@@ -11573,7 +11574,7 @@
         "edit": "编辑头像",
         "reset": "重置",
         "pages": {
-          "bot": "Bot",
+          "bot": "模型",
           "make": "文本",
           "upload": "上传"
         },

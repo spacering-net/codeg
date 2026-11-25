@@ -11288,6 +11288,7 @@
       "own": {
         "dispatch": "Handing out work",
         "dispatch_followup": "Following up on work",
+        "dispatch_wait": "Waiting for the work to come back",
         "items": "Updating open matters",
         "timeline_read": "Reading back the conversation",
         "project_list": "Checking the projects"
@@ -11573,7 +11574,7 @@
         "edit": "Edit avatar",
         "reset": "Reset",
         "pages": {
-          "bot": "Bot",
+          "bot": "Models",
           "make": "Text",
           "upload": "Upload"
         },

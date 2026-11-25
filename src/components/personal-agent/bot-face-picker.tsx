@@ -5,7 +5,7 @@
  * avatar" over it under the pointer — it opens under it with three pages
  * and [Reset] at the end of their row:
  *
- * - "Bot": one of the thirteen shapes, in one of the eleven colours, each
+ * - "Models": one of the thirteen shapes, in one of the eleven colours, each
  *   taken at once;
  * - "Text": a face made of a character — its name's first, or an emoji
  *   picked or typed — on one of the ten colours;

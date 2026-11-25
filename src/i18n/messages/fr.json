@@ -11288,6 +11288,7 @@
       "own": {
         "dispatch": "Confie du travail",
         "dispatch_followup": "Relance un travail",
+        "dispatch_wait": "Attend le résultat du travail",
         "items": "Met à jour les sujets en cours",
         "timeline_read": "Relit la conversation",
         "project_list": "Consulte les projets"
@@ -11573,7 +11574,7 @@
         "edit": "Modifier l'avatar",
         "reset": "Réinitialiser",
         "pages": {
-          "bot": "Bot",
+          "bot": "Modèles",
           "make": "Texte",
           "upload": "Importer"
         },

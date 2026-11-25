@@ -117,8 +117,13 @@ pub async fn queued(db: &DatabaseConnection) -> Result<Vec<session_message::Mode
 }
 
 /// Compare-and-set prevents competing dispatchers from accepting the same row.
-pub async fn claim(db: &DatabaseConnection, row: &session_message::Model) -> Result<bool, DbErr> {
-    let result = transition_update(row.id, "queued", "in_flight", None)
+pub async fn claim(
+    db: &DatabaseConnection,
+    row: &session_message::Model,
+    steering: bool,
+) -> Result<bool, DbErr> {
+    let status = if steering { "in_flight" } else { "dispatching" };
+    let result = transition_update(row.id, "queued", status, None)
         .filter(session_message::Column::UpdatedAt.eq(row.updated_at))
         .exec(db)
         .await?;
@@ -160,37 +165,31 @@ fn transition_update(
 }
 
 pub async fn defer_as_queue(db: &DatabaseConnection, id: i32) -> Result<(), DbErr> {
-    session_message::Entity::update_many()
-        .col_expr(
-            session_message::Column::Status,
-            sea_orm::sea_query::Expr::value("queued"),
-        )
+    transition_update(id, "dispatching", "queued", None)
         .col_expr(
             session_message::Column::Mode,
             sea_orm::sea_query::Expr::value("queue"),
         )
-        .col_expr(
-            session_message::Column::UpdatedAt,
-            sea_orm::sea_query::Expr::value(Utc::now()),
-        )
-        .filter(session_message::Column::Id.eq(id))
-        .filter(session_message::Column::Status.eq("in_flight"))
         .exec(db)
         .await?;
     Ok(())
 }
 
 pub async fn interrupt_in_flight(db: &DatabaseConnection) -> Result<(), DbErr> {
-    let observed = session_message::Entity::find()
-        .filter(session_message::Column::Status.eq("in_flight"))
-        .all(db)
-        .await?
-        .into_iter()
-        .map(|message| message.id)
-        .collect::<Vec<_>>();
-    if observed.is_empty() {
-        return Ok(());
-    }
+    let txn = db.begin().await?;
+    // The ACP receipt records the attempt before writing to the agent.
+    session_message::Entity::update_many()
+        .col_expr(
+            session_message::Column::Status,
+            sea_orm::sea_query::Expr::value("queued"),
+        )
+        .col_expr(
+            session_message::Column::UpdatedAt,
+            sea_orm::sea_query::Expr::value(Utc::now()),
+        )
+        .filter(session_message::Column::Status.eq("dispatching"))
+        .exec(&txn)
+        .await?;
     session_message::Entity::update_many()
         .col_expr(
             session_message::Column::Status,
@@ -204,11 +203,10 @@ pub async fn interrupt_in_flight(db: &DatabaseConnection) -> Result<(), DbErr> {
             session_message::Column::UpdatedAt,
             sea_orm::sea_query::Expr::value(Utc::now()),
         )
-        .filter(session_message::Column::Id.is_in(observed))
-        .filter(session_message::Column::Status.eq("in_flight"))
-        .exec(db)
+        .filter(session_message::Column::Status.is_in(["in_flight", "received"]))
+        .exec(&txn)
         .await?;
-    Ok(())
+    txn.commit().await
 }
 
 /// Settle and enqueue the automatic reply in the same transaction.
@@ -255,7 +253,7 @@ pub async fn settle(
             sea_orm::sea_query::Expr::value(Utc::now()),
         )
         .filter(session_message::Column::Id.eq(row.id))
-        .filter(session_message::Column::Status.eq("in_flight"))
+        .filter(session_message::Column::Status.is_in(["dispatching", "in_flight", "received"]))
         .exec(&txn)
         .await?;
     if updated.rows_affected == 1 && reply && reason.is_none() {
@@ -316,7 +314,7 @@ mod tests {
         .await
         .unwrap();
         let row = queued(&db.conn).await.unwrap().remove(0);
-        let (first, second) = tokio::join!(claim(&db.conn, &row), claim(&db.conn, &row));
+        let (first, second) = tokio::join!(claim(&db.conn, &row, false), claim(&db.conn, &row, false));
         assert_ne!(first.unwrap(), second.unwrap());
         assert!(settle(&db.conn, &row, true, Some("answer".into()), None)
             .await
@@ -349,7 +347,7 @@ mod tests {
         .await
         .unwrap();
         let row = queued(&db.conn).await.unwrap().remove(0);
-        claim(&db.conn, &row).await.unwrap();
+        claim(&db.conn, &row, false).await.unwrap();
         db.conn.execute(Statement::from_string(DbBackend::Sqlite, "CREATE TRIGGER reject_reply BEFORE INSERT ON session_message BEGIN SELECT RAISE(ABORT, 'test'); END".to_owned())).await.unwrap();
         assert!(settle(&db.conn, &row, true, Some("answer".into()), None)
             .await
@@ -359,44 +357,51 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(saved.status, "in_flight");
+        assert_eq!(saved.status, "dispatching");
     }
 
     #[tokio::test]
-    async fn restart_interrupts_only_claimed_messages() {
+    async fn restart_requeues_only_messages_known_not_to_have_been_sent() {
         let db = fresh_in_memory_db().await;
         let folder = seed_folder(&db, "/tmp/session-messages-restart").await;
         let sender = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
         let recipient = seed_conversation(&db, folder, AgentType::Codex).await;
-        enqueue(
-            &db.conn,
-            sender,
-            recipient,
-            "first".into(),
-            "queue".into(),
-            false,
-        )
-        .await
-        .unwrap();
-        enqueue(
-            &db.conn,
-            sender,
-            recipient,
-            "second".into(),
-            "queue".into(),
-            false,
-        )
-        .await
-        .unwrap();
-        let first = queued(&db.conn).await.unwrap().remove(0);
-        claim(&db.conn, &first).await.unwrap();
-        interrupt_in_flight(&db.conn).await.unwrap();
-        let saved = session_message::Entity::find_by_id(first.id)
-            .one(&db.conn)
+        for message in ["waiting", "claimed", "attempted", "received", "steered"] {
+            enqueue(
+                &db.conn,
+                sender,
+                recipient,
+                message.into(),
+                "queue".into(),
+                false,
+            )
             .await
-            .unwrap()
             .unwrap();
-        assert_eq!(saved.status, "interrupted");
-        assert_eq!(queued(&db.conn).await.unwrap().len(), 1);
+        }
+        let rows = queued(&db.conn).await.unwrap();
+        for row in &rows[1..4] {
+            assert!(claim(&db.conn, row, false).await.unwrap());
+        }
+        for row in &rows[2..4] {
+            assert!(transition(&db.conn, row.id, "dispatching", "in_flight", None)
+                .await
+                .unwrap());
+        }
+        assert!(transition(&db.conn, rows[3].id, "in_flight", "received", None)
+            .await
+            .unwrap());
+        assert!(claim(&db.conn, &rows[4], true).await.unwrap());
+
+        interrupt_in_flight(&db.conn).await.unwrap();
+
+        let saved = session_message::Entity::find()
+            .order_by_asc(session_message::Column::Id)
+            .all(&db.conn)
+            .await
+            .unwrap();
+        assert_eq!(
+            saved.iter().map(|row| row.status.as_str()).collect::<Vec<_>>(),
+            ["queued", "queued", "interrupted", "interrupted", "interrupted"]
+        );
     }
 }
