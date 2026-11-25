@@ -774,7 +774,8 @@ describe("the activity's list", () => {
     const el = document.querySelector('[data-key="reminder:4"]') as HTMLElement
     fireEvent.click(within(el).getByRole("button", { name: "Done" }))
     await waitFor(() => expect(toasts.success).toHaveBeenCalled())
-    const [text, opts] = toasts.success.mock.calls.at(-1) as [
+    const calls = toasts.success.mock.calls
+    const [text, opts] = calls[calls.length - 1] as [
       string,
       { action?: { label: string; onClick: () => void } },
     ]
