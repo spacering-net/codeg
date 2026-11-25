@@ -231,6 +231,10 @@ struct ActiveTurn {
     /// them as it may its events; their events are settled with it only when
     /// it said in full that it did — otherwise they go out as ever.
     waited: Vec<i32>,
+    /// For a delivery carrying the owner's message: how many more they
+    /// wrote while it ran (folded into it, or left waiting for it to end) —
+    /// a `dispatch_wait` under way stops for them.
+    owner_writes: u32,
     /// For a delivery: the batches whose ledger entries count as its own —
     /// itself, and those it re-delivers what they carried of.
     ledger_scope: Vec<i32>,
@@ -275,6 +279,15 @@ impl Covers {
         }
         out
     }
+}
+
+/// The delivery a `dispatch_wait` call waits in, as it stands now.
+pub(super) struct WaitingTurn {
+    pub(super) batch_id: i32,
+    /// Told to give way to the owner's message (a turn without one).
+    pub(super) preempted: bool,
+    /// How many messages the owner wrote while it ran (a turn with one).
+    pub(super) owner_writes: u32,
 }
 
 /// What an internal turn is for (7.7, 7.8).
@@ -706,6 +719,7 @@ impl PersonalAgentEngine {
             auto_quote: None,
             covers_from: Covers::default(),
             waited: Vec::new(),
+            owner_writes: 0,
             ledger_scope: vec![batch_id],
             preempted: false,
             flush: None,
@@ -755,6 +769,7 @@ impl PersonalAgentEngine {
             auto_quote: None,
             covers_from: Covers::default(),
             waited: Vec::new(),
+            owner_writes: 0,
             ledger_scope: vec![batch_id],
             preempted: false,
             flush: None,
@@ -2733,6 +2748,7 @@ impl PersonalAgentEngine {
                 auto_quote: None,
                 covers_from: Covers::default(),
                 waited: Vec::new(),
+                owner_writes: 0,
                 ledger_scope: vec![batch.id],
                 preempted: false,
                 flush: Some(FlushRun {
@@ -2932,6 +2948,7 @@ impl PersonalAgentEngine {
                 auto_quote: None,
                 covers_from: Covers::default(),
                 waited: Vec::new(),
+                owner_writes: 0,
                 ledger_scope: Vec::new(),
                 preempted: false,
                 flush: None,
@@ -3643,6 +3660,7 @@ impl PersonalAgentEngine {
                 auto_quote,
                 covers_from,
                 waited: Vec::new(),
+                owner_writes: 0,
                 ledger_scope,
                 preempted: false,
                 flush: None,
@@ -4058,10 +4076,15 @@ impl PersonalAgentEngine {
                 // way, said what it meant to (a turn cut off at its request
                 // or token limit, or refused, may have said only "I'll look").
                 // A message the owner steered in is answered too: the card
-                // is no longer all it was given.
+                // is no longer all it was given — nor is it once
+                // `dispatch_wait` handed it another: only its marker says
+                // then.
                 &if said_in_full {
                     Covers {
-                        sole: turn.covers_from.sole.filter(|_| turn.owner_row_ids.is_empty()),
+                        sole: turn
+                            .covers_from
+                            .sole
+                            .filter(|_| turn.owner_row_ids.is_empty() && turn.waited.is_empty()),
                         rows: turn
                             .covers_from
                             .rows
@@ -4702,7 +4725,12 @@ impl PersonalAgentEngine {
         {
             let mut st = self.state.lock().await;
             match st.turn.as_mut() {
-                Some(t) if t.batch_id == batch_id => t.owner_row_ids.push(row.id),
+                Some(t) if t.batch_id == batch_id => {
+                    t.owner_row_ids.push(row.id);
+                    // A `dispatch_wait` under way stops for it, folded in
+                    // or not (then it waits for the turn to end).
+                    t.owner_writes += 1;
+                }
                 _ => return row,
             }
         }
@@ -5516,17 +5544,20 @@ impl PersonalAgentEngine {
             .map(|t| (t.batch_id, t.ledger_scope.clone()))
     }
 
-    /// The delivery a `dispatch_wait` call waits in: its batch, and whether
-    /// it was told to give way to the owner's message — `None` once no
+    /// The delivery a `dispatch_wait` call waits in — `None` once no
     /// delivery runs (it ended, or was never one).
-    pub(super) async fn waiting_turn(&self) -> Option<(i32, bool)> {
+    pub(super) async fn waiting_turn(&self) -> Option<WaitingTurn> {
         self.state
             .lock()
             .await
             .turn
             .as_ref()
             .filter(|t| t.kind == BatchKind::Delivery && t.flush.is_none())
-            .map(|t| (t.batch_id, t.preempted))
+            .map(|t| WaitingTurn {
+                batch_id: t.batch_id,
+                preempted: t.preempted,
+                owner_writes: t.owner_writes,
+            })
     }
 
     /// The result cards the running delivery was given from the start (its
