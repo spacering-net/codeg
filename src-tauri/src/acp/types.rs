@@ -1734,6 +1734,8 @@ pub struct SessionConfigSelectOptionInfo {
     /// existed still deserialize.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_efforts: Option<ModelReasoningEffortsInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
 }
 
 /// One model's reasoning efforts, as its entry of the `model` option names

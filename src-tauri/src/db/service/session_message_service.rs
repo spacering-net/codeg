@@ -1,0 +1,407 @@
+use chrono::Utc;
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait,
+    QueryFilter, QueryOrder, Set, TransactionTrait,
+};
+
+use crate::db::entities::{conversation, session_message};
+
+/// Queue a message only while both conversations still exist and are visible.
+pub async fn enqueue(
+    db: &DatabaseConnection,
+    sender: i32,
+    recipient: i32,
+    message: String,
+    mode: String,
+    reply: bool,
+) -> Result<String, DbErr> {
+    if message.trim().is_empty() || !matches!(mode.as_str(), "queue" | "steer") {
+        return Err(DbErr::Custom("invalid session message".into()));
+    }
+    let txn = db.begin().await?;
+    // Claim SQLite's writer lock before the liveness reads so parallel creation
+    // cannot leave another caller trying to write through a stale read snapshot.
+    txn.execute_unprepared("UPDATE session_message SET id = id WHERE 0").await?;
+    ensure_live(&txn, sender).await?;
+    ensure_live(&txn, recipient).await?;
+    let active = super::turn_delivery_service::active(&txn, sender).await?;
+    let provenance = super::turn_delivery_service::MessageProvenance {
+        result_turn_id: None,
+        cause_message_id: active
+            .as_ref()
+            .and_then(|turn| turn.cause_message_id.clone()),
+        root_id: active
+            .as_ref()
+            .map(|turn| turn.root_id.clone())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+        source_conversation_id: active
+            .as_ref()
+            .map_or(sender, |turn| turn.source_conversation_id),
+        hop: active.as_ref().map_or(1, |turn| turn.hop + 1),
+    };
+    let id = insert_in_tx(
+        &txn,
+        sender,
+        recipient,
+        message,
+        mode,
+        reply,
+        Some(&provenance),
+    )
+    .await?;
+    txn.commit().await?;
+    Ok(id)
+}
+
+async fn ensure_live<C: ConnectionTrait>(db: &C, id: i32) -> Result<(), DbErr> {
+    let row = conversation::Entity::find_by_id(id)
+        .filter(conversation::Column::DeletedAt.is_null())
+        .one(db)
+        .await?;
+    if row.is_none() {
+        return Err(DbErr::Custom(format!(
+            "conversation {id} not found or deleted"
+        )));
+    }
+    Ok(())
+}
+
+pub(crate) async fn insert_in_tx<C: ConnectionTrait>(
+    db: &C,
+    sender: i32,
+    recipient: i32,
+    message: String,
+    mode: String,
+    reply: bool,
+    provenance: Option<&super::turn_delivery_service::MessageProvenance>,
+) -> Result<String, DbErr> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = Utc::now();
+    session_message::ActiveModel {
+        message_id: Set(id.clone()),
+        sender_conversation_id: Set(sender),
+        conversation_id: Set(recipient),
+        message: Set(message),
+        mode: Set(mode),
+        reply_back: Set(reply),
+        status: Set(if provenance.is_some_and(|p| p.hop > 8) {
+            "failed"
+        } else {
+            "queued"
+        }
+        .into()),
+        error: Set(provenance
+            .filter(|p| p.hop > 8)
+            .map(|_| "hop_limit_exceeded".into())),
+        recipient_turn_id: Set(None),
+        result_turn_id: Set(provenance.and_then(|p| p.result_turn_id.clone())),
+        cause_message_id: Set(provenance.and_then(|p| p.cause_message_id.clone())),
+        root_id: Set(provenance.map(|p| p.root_id.clone())),
+        source_conversation_id: Set(provenance.map(|p| p.source_conversation_id)),
+        hop: Set(provenance.map_or(0, |p| p.hop)),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
+    }
+    .insert(db)
+    .await?;
+    Ok(id)
+}
+
+pub async fn queued(db: &DatabaseConnection) -> Result<Vec<session_message::Model>, DbErr> {
+    session_message::Entity::find()
+        .filter(session_message::Column::Status.eq("queued"))
+        .order_by_asc(session_message::Column::Id)
+        .all(db)
+        .await
+}
+
+/// Compare-and-set prevents competing dispatchers from accepting the same row.
+pub async fn claim(
+    db: &DatabaseConnection,
+    row: &session_message::Model,
+    steering: bool,
+) -> Result<bool, DbErr> {
+    let status = if steering { "in_flight" } else { "dispatching" };
+    let result = transition_update(row.id, "queued", status, None)
+        .filter(session_message::Column::UpdatedAt.eq(row.updated_at))
+        .exec(db)
+        .await?;
+    Ok(result.rows_affected == 1)
+}
+
+pub async fn transition(
+    db: &DatabaseConnection,
+    id: i32,
+    from: &str,
+    to: &str,
+    error: Option<String>,
+) -> Result<bool, DbErr> {
+    let result = transition_update(id, from, to, error).exec(db).await?;
+    Ok(result.rows_affected == 1)
+}
+
+fn transition_update(
+    id: i32,
+    from: &str,
+    to: &str,
+    error: Option<String>,
+) -> sea_orm::UpdateMany<session_message::Entity> {
+    session_message::Entity::update_many()
+        .col_expr(
+            session_message::Column::Status,
+            sea_orm::sea_query::Expr::value(to),
+        )
+        .col_expr(
+            session_message::Column::Error,
+            sea_orm::sea_query::Expr::value(error),
+        )
+        .col_expr(
+            session_message::Column::UpdatedAt,
+            sea_orm::sea_query::Expr::value(Utc::now()),
+        )
+        .filter(session_message::Column::Id.eq(id))
+        .filter(session_message::Column::Status.eq(from))
+}
+
+pub async fn defer_as_queue(db: &DatabaseConnection, id: i32) -> Result<(), DbErr> {
+    transition_update(id, "dispatching", "queued", None)
+        .col_expr(
+            session_message::Column::Mode,
+            sea_orm::sea_query::Expr::value("queue"),
+        )
+        .exec(db)
+        .await?;
+    Ok(())
+}
+
+pub async fn interrupt_in_flight(db: &DatabaseConnection) -> Result<(), DbErr> {
+    let txn = db.begin().await?;
+    // The ACP receipt records the attempt before writing to the agent.
+    session_message::Entity::update_many()
+        .col_expr(
+            session_message::Column::Status,
+            sea_orm::sea_query::Expr::value("queued"),
+        )
+        .col_expr(
+            session_message::Column::UpdatedAt,
+            sea_orm::sea_query::Expr::value(Utc::now()),
+        )
+        .filter(session_message::Column::Status.eq("dispatching"))
+        .exec(&txn)
+        .await?;
+    session_message::Entity::update_many()
+        .col_expr(
+            session_message::Column::Status,
+            sea_orm::sea_query::Expr::value("interrupted"),
+        )
+        .col_expr(
+            session_message::Column::Error,
+            sea_orm::sea_query::Expr::value("process restarted during delivery"),
+        )
+        .col_expr(
+            session_message::Column::UpdatedAt,
+            sea_orm::sea_query::Expr::value(Utc::now()),
+        )
+        .filter(session_message::Column::Status.is_in(["in_flight", "received"]))
+        .exec(&txn)
+        .await?;
+    txn.commit().await
+}
+
+/// Settle and enqueue the automatic reply in the same transaction.
+pub async fn settle(
+    db: &DatabaseConnection,
+    row: &session_message::Model,
+    success: bool,
+    result: Option<String>,
+    error: Option<String>,
+) -> Result<bool, DbErr> {
+    let txn = db.begin().await?;
+    let mut reason = error;
+    let reply_text = result.filter(|s| !s.trim().is_empty());
+    let reply = success && row.reply_back && reply_text.is_some();
+    if reply
+        && conversation::Entity::find_by_id(row.sender_conversation_id)
+            .filter(conversation::Column::DeletedAt.is_null())
+            .one(&txn)
+            .await?
+            .is_none()
+    {
+        reason = Some("automatic reply recipient was deleted".into());
+    }
+    if reply
+        && conversation::Entity::find_by_id(row.conversation_id)
+            .filter(conversation::Column::DeletedAt.is_null())
+            .one(&txn)
+            .await?
+            .is_none()
+    {
+        reason = Some("automatic reply sender was deleted".into());
+    }
+    let updated = session_message::Entity::update_many()
+        .col_expr(
+            session_message::Column::Status,
+            sea_orm::sea_query::Expr::value(if success { "completed" } else { "failed" }),
+        )
+        .col_expr(
+            session_message::Column::Error,
+            sea_orm::sea_query::Expr::value(reason.clone()),
+        )
+        .col_expr(
+            session_message::Column::UpdatedAt,
+            sea_orm::sea_query::Expr::value(Utc::now()),
+        )
+        .filter(session_message::Column::Id.eq(row.id))
+        .filter(session_message::Column::Status.is_in(["dispatching", "in_flight", "received"]))
+        .exec(&txn)
+        .await?;
+    if updated.rows_affected == 1 && reply && reason.is_none() {
+        let provenance = super::turn_delivery_service::MessageProvenance {
+            result_turn_id: None,
+            cause_message_id: Some(row.message_id.clone()),
+            root_id: row
+                .root_id
+                .clone()
+                .unwrap_or_else(|| row.message_id.clone()),
+            source_conversation_id: row
+                .source_conversation_id
+                .unwrap_or(row.sender_conversation_id),
+            hop: row.hop + 1,
+        };
+        insert_in_tx(
+            &txn,
+            row.conversation_id,
+            row.sender_conversation_id,
+            format!(
+                "[Automatic reply from session {}; replying to {}]\n\n{}",
+                row.conversation_id,
+                row.message_id,
+                reply_text.unwrap()
+            ),
+            "queue".into(),
+            false,
+            Some(&provenance),
+        )
+        .await?;
+    }
+    txn.commit().await?;
+    Ok(updated.rows_affected == 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder},
+        models::agent::AgentType,
+    };
+
+    #[tokio::test]
+    async fn claim_and_reply_are_idempotent() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/session-messages").await;
+        let sender = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        let recipient = seed_conversation(&db, folder, AgentType::Codex).await;
+        enqueue(
+            &db.conn,
+            sender,
+            recipient,
+            "hello".into(),
+            "queue".into(),
+            true,
+        )
+        .await
+        .unwrap();
+        let row = queued(&db.conn).await.unwrap().remove(0);
+        let (first, second) = tokio::join!(claim(&db.conn, &row, false), claim(&db.conn, &row, false));
+        assert_ne!(first.unwrap(), second.unwrap());
+        assert!(settle(&db.conn, &row, true, Some("answer".into()), None)
+            .await
+            .unwrap());
+        assert!(!settle(&db.conn, &row, true, Some("answer".into()), None)
+            .await
+            .unwrap());
+        let replies = queued(&db.conn).await.unwrap();
+        assert_eq!(replies.len(), 1);
+        assert_eq!(replies[0].conversation_id, sender);
+        assert!(!replies[0].reply_back);
+        assert!(replies[0].message.contains("answer"));
+    }
+
+    #[tokio::test]
+    async fn reply_insert_failure_rolls_back_settlement() {
+        use sea_orm::{DbBackend, Statement};
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/session-messages-rollback").await;
+        let sender = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        let recipient = seed_conversation(&db, folder, AgentType::Codex).await;
+        enqueue(
+            &db.conn,
+            sender,
+            recipient,
+            "hello".into(),
+            "queue".into(),
+            true,
+        )
+        .await
+        .unwrap();
+        let row = queued(&db.conn).await.unwrap().remove(0);
+        claim(&db.conn, &row, false).await.unwrap();
+        db.conn.execute(Statement::from_string(DbBackend::Sqlite, "CREATE TRIGGER reject_reply BEFORE INSERT ON session_message BEGIN SELECT RAISE(ABORT, 'test'); END".to_owned())).await.unwrap();
+        assert!(settle(&db.conn, &row, true, Some("answer".into()), None)
+            .await
+            .is_err());
+        let saved = session_message::Entity::find_by_id(row.id)
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.status, "dispatching");
+    }
+
+    #[tokio::test]
+    async fn restart_requeues_only_messages_known_not_to_have_been_sent() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/session-messages-restart").await;
+        let sender = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        let recipient = seed_conversation(&db, folder, AgentType::Codex).await;
+        for message in ["waiting", "claimed", "attempted", "received", "steered"] {
+            enqueue(
+                &db.conn,
+                sender,
+                recipient,
+                message.into(),
+                "queue".into(),
+                false,
+            )
+            .await
+            .unwrap();
+        }
+        let rows = queued(&db.conn).await.unwrap();
+        for row in &rows[1..4] {
+            assert!(claim(&db.conn, row, false).await.unwrap());
+        }
+        for row in &rows[2..4] {
+            assert!(transition(&db.conn, row.id, "dispatching", "in_flight", None)
+                .await
+                .unwrap());
+        }
+        assert!(transition(&db.conn, rows[3].id, "in_flight", "received", None)
+            .await
+            .unwrap());
+        assert!(claim(&db.conn, &rows[4], true).await.unwrap());
+
+        interrupt_in_flight(&db.conn).await.unwrap();
+
+        let saved = session_message::Entity::find()
+            .order_by_asc(session_message::Column::Id)
+            .all(&db.conn)
+            .await
+            .unwrap();
+        assert_eq!(
+            saved.iter().map(|row| row.status.as_str()).collect::<Vec<_>>(),
+            ["queued", "queued", "interrupted", "interrupted", "interrupted"]
+        );
+    }
+}

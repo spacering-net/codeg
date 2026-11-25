@@ -837,6 +837,8 @@
     "generalConfigDescriptionClaude": "Unterstützt schnelle Konfiguration von API-URL, API-Key und Claude-Modellen und synchronisiert mit der nativen JSON-Konfiguration.",
     "generalConfigDescriptionDefault": "Unterstützt wichtige Konfigurationseingaben (API URL, API Key, Model) und native JSON-Konfigurationsverwaltung.",
     "multiAgent": {
+      "sessionMessaging": "Kommunikation zwischen Sitzungen",
+      "sessionMessagingHint": "Agenten dürfen eigenständige Sitzungen erstellen und Nachrichten austauschen. Verbinde bestehende Sitzungen erneut, um die Werkzeuge zu nutzen.",
       "title": "Multi-Agent-Zusammenarbeit",
       "description": "Erlaubt aktiven Agenten, Teilaufgaben an andere Agenten zu delegieren.",
       "enable": "Delegation aktivieren",
@@ -3889,6 +3891,7 @@
         "downloadFailed": "Herunterladen von {name} fehlgeschlagen"
       },
       "messageList": {
+        "sessionMessageSource": "Von Sitzung: {session}",
         "loading": "Lädt...",
         "loadBackgroundActivity": "Hintergrundaktivität laden",
         "loadEarlier": "Frühere Nachrichten laden",
@@ -4083,6 +4086,13 @@
         "htmlPreviewHide": "Vorschau ausblenden"
       },
       "activity": {
+        "sessionCall": {
+          "sendTo": "Nachricht an {session} senden",
+          "send": "Nachricht an eine Sitzung senden",
+          "create": "Sitzung erstellen",
+          "current": "Aktuelle Sitzung anzeigen",
+          "list": "Sitzungen suchen"
+        },
         "oauth": {
           "waiting": "Warten auf Autorisierung für {server}",
           "reconnecting": "Verbindung zu {server} wird wiederhergestellt…",

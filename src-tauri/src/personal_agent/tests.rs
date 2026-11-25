@@ -4439,7 +4439,7 @@ async fn a_message_folds_into_a_turn_carrying_an_earlier_one_when_the_agent_take
     // The connection loop's part: take the steer.
     let taken = tokio::spawn(async move {
         match rx.recv().await {
-            Some(ConnectionCommand::Steer { blocks, reply }) => {
+            Some(ConnectionCommand::Steer { blocks, reply, .. }) => {
                 let _ = reply.send(Ok(SteerOutcome::Injected));
                 (blocks, rx)
             }
@@ -4539,7 +4539,7 @@ async fn a_folded_message_with_attachments_leads_with_its_text() {
     engine.set_turn_owner_rows_for_test(vec![first.id]).await;
     let taken = tokio::spawn(async move {
         match rx.recv().await {
-            Some(ConnectionCommand::Steer { blocks, reply }) => {
+            Some(ConnectionCommand::Steer { blocks, reply, .. }) => {
                 let _ = reply.send(Ok(SteerOutcome::Injected));
                 blocks
             }
@@ -6731,7 +6731,13 @@ async fn an_inherited_model_is_read_again_for_the_options_that_hang_off_it() {
         sel.current_value = "max".into();
         sel.options = ["max", "xhigh"]
             .iter()
-            .map(|v| crate::acp::types::SessionConfigSelectOptionInfo { value: v.to_string(), name: v.to_uppercase(), description: None, reasoning_efforts: None })
+            .map(|v| crate::acp::types::SessionConfigSelectOptionInfo {
+                value: v.to_string(),
+                name: v.to_uppercase(),
+                description: None,
+                reasoning_efforts: None,
+                context_window: None,
+            })
             .collect();
     }
     super::options::TEST_SNAPSHOTS.with(|m| {
@@ -6797,7 +6803,13 @@ async fn an_option_only_the_inherited_model_offers_can_be_named() {
         sel.current_value = "max".into();
         sel.options = ["max", "xhigh"]
             .iter()
-            .map(|v| crate::acp::types::SessionConfigSelectOptionInfo { value: v.to_string(), name: v.to_uppercase(), description: None, reasoning_efforts: None })
+            .map(|v| crate::acp::types::SessionConfigSelectOptionInfo {
+                value: v.to_string(),
+                name: v.to_uppercase(),
+                description: None,
+                reasoning_efforts: None,
+                context_window: None,
+            })
             .collect();
     }
     super::options::TEST_SNAPSHOTS.with(|m| {
